@@ -44,6 +44,11 @@ def _make_stub_job(
     job.sanitizer = "address"
     job.repo_name = "test-repo"
     job.project_image_prefix = "aixcc-afc"
+    job.inc_image_policy = "pull_only"
+    job.inc_image_registry = "ghcr.io/example/custom"
+    job.inc_image_max_pull_bytes = 123456
+    job.inc_image_pull_timeout = 77
+    job.local_image_prefix = "custom-prefix"
     job.job_id = f"build-single:{benchmark_name}:deltaref:address"
     return job
 
@@ -82,6 +87,17 @@ class TestSerializeBuildJob:
 
         assert isinstance(result["variant_type"], str)
         assert isinstance(result["mode"], str)
+
+    def test_includes_inc_image_runtime_settings(self) -> None:
+        """Serialized dict includes non-default inc-image runtime settings."""
+        job = _make_stub_job()
+        result = serialize_ci_job(job)
+
+        assert result["inc_image_policy"] == "pull_only"
+        assert result["inc_image_registry"] == "ghcr.io/example/custom"
+        assert result["inc_image_max_pull_bytes"] == 123456
+        assert result["inc_image_pull_timeout"] == 77
+        assert result["local_image_prefix"] == "custom-prefix"
 
 
 class TestExecuteCiBuild:
@@ -127,3 +143,10 @@ class TestExecuteCiBuild:
             call_kwargs = mock_cls.call_args
             assert call_kwargs.kwargs.get("patch_id") == "patch_1"
             assert call_kwargs.kwargs.get("pov_id") == "cpv_2"
+            assert call_kwargs.kwargs.get("inc_image_policy") == "pull_only"
+            assert (
+                call_kwargs.kwargs.get("inc_image_registry") == "ghcr.io/example/custom"
+            )
+            assert call_kwargs.kwargs.get("inc_image_max_pull_bytes") == 123456
+            assert call_kwargs.kwargs.get("inc_image_pull_timeout") == 77
+            assert call_kwargs.kwargs.get("local_image_prefix") == "custom-prefix"

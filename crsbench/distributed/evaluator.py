@@ -83,6 +83,12 @@ def _enqueue_pre_builds(
     config,
     experiment_name: str,
     redis_host: str,
+    *,
+    inc_image_policy: str | None = None,
+    inc_image_registry: str | None = None,
+    inc_image_max_pull_bytes: int | None = None,
+    inc_image_pull_timeout: int | None = None,
+    local_image_prefix: str | None = None,
 ) -> int:
     """Enqueue build jobs for all experiment benchmarks at startup.
 
@@ -121,8 +127,27 @@ def _enqueue_pre_builds(
 
     from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
+    inc_image_policy = getattr(config, "inc_image_policy", None)
+    inc_image_registry = getattr(config, "inc_image_registry", None)
+    inc_image_max_pull_bytes = getattr(config, "inc_image_max_pull_bytes", None)
+    inc_image_pull_timeout = getattr(config, "inc_image_pull_timeout_sec", None)
+    local_image_prefix = getattr(config, "project_image_prefix", None)
+
     oss_fuzz_path = Path(ensure_oss_fuzz_root())
     planner = VariantPlanner(oss_fuzz_path, source_mode="pkgs")
+    (
+        inc_image_policy,
+        inc_image_registry,
+        inc_image_max_pull_bytes,
+        inc_image_pull_timeout,
+        local_image_prefix,
+    ) = _resolve_inc_image_runtime_settings(
+        policy=getattr(config, "inc_image_policy", None),
+        registry=getattr(config, "inc_image_registry", None),
+        max_pull_bytes=getattr(config, "inc_image_max_pull_bytes", None),
+        pull_timeout_sec=getattr(config, "inc_image_pull_timeout_sec", None),
+        local_prefix=getattr(config, "project_image_prefix", None),
+    )
 
     from crsbench.distributed.queue import create_redis_connection, resolve_queue_names
 
@@ -147,6 +172,11 @@ def _enqueue_pre_builds(
             benchmark_path,
             use_inc_build=True,
             skip_if_cached=True,
+            inc_image_policy=inc_image_policy,
+            inc_image_registry=inc_image_registry,
+            inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+            inc_image_pull_timeout=inc_image_pull_timeout,
+            local_image_prefix=local_image_prefix,
         )
 
         for job in jobs:
@@ -280,6 +310,11 @@ def run_evaluator_main(
             config,
             experiment_name,
             redis_host,
+            inc_image_policy=resolved_policy,
+            inc_image_registry=resolved_registry,
+            inc_image_max_pull_bytes=resolved_max_pull_bytes,
+            inc_image_pull_timeout=resolved_pull_timeout,
+            local_image_prefix=resolved_local_prefix,
         )
         logger.info(f"Pre-build: enqueued {enqueued} build jobs")
 
@@ -551,6 +586,11 @@ def _enqueue_pre_builds_from_registration(
             benchmark_path,
             use_inc_build=True,
             skip_if_cached=True,
+            inc_image_policy=registration.inc_image_policy,
+            inc_image_registry=registration.inc_image_registry,
+            inc_image_max_pull_bytes=registration.inc_image_max_pull_bytes,
+            inc_image_pull_timeout=registration.inc_image_pull_timeout_sec,
+            local_image_prefix=registration.local_image_prefix,
         )
 
         for job in jobs:

@@ -51,6 +51,11 @@ class VariantPlanner:
         include_coverage: bool = False,
         include_patched: bool = False,
         project_image_prefix: str = "crsbench",
+        inc_image_policy: str | None = None,
+        inc_image_registry: str | None = None,
+        inc_image_max_pull_bytes: int | None = None,
+        inc_image_pull_timeout: int | None = None,
+        local_image_prefix: str | None = None,
     ) -> list[BuildSingleVariantJob]:
         """Create build jobs for all variants of a single benchmark.
 
@@ -131,6 +136,11 @@ class VariantPlanner:
                     sanitizer=sanitizer,
                     repo_name=repo_name,
                     project_image_prefix=project_image_prefix,
+                    inc_image_policy=inc_image_policy,
+                    inc_image_registry=inc_image_registry,
+                    inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+                    inc_image_pull_timeout=inc_image_pull_timeout,
+                    local_image_prefix=local_image_prefix,
                 )
             )
 
@@ -151,6 +161,11 @@ class VariantPlanner:
                     sanitizer=sanitizer,
                     repo_name=repo_name,
                     project_image_prefix=project_image_prefix,
+                    inc_image_policy=inc_image_policy,
+                    inc_image_registry=inc_image_registry,
+                    inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+                    inc_image_pull_timeout=inc_image_pull_timeout,
+                    local_image_prefix=local_image_prefix,
                 )
             )
 
@@ -172,6 +187,11 @@ class VariantPlanner:
                     sanitizer="coverage",
                     repo_name=repo_name,
                     project_image_prefix=project_image_prefix,
+                    inc_image_policy=inc_image_policy,
+                    inc_image_registry=inc_image_registry,
+                    inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+                    inc_image_pull_timeout=inc_image_pull_timeout,
+                    local_image_prefix=local_image_prefix,
                 )
             )
 
@@ -190,6 +210,11 @@ class VariantPlanner:
             skip_if_cached=skip_if_cached,
             repo_name=repo_name,
             project_image_prefix=project_image_prefix,
+            inc_image_policy=inc_image_policy,
+            inc_image_registry=inc_image_registry,
+            inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+            inc_image_pull_timeout=inc_image_pull_timeout,
+            local_image_prefix=local_image_prefix,
         )
         jobs.extend(cpv_jobs)
 
@@ -208,6 +233,11 @@ class VariantPlanner:
                 skip_if_cached=skip_if_cached,
                 repo_name=repo_name,
                 project_image_prefix=project_image_prefix,
+                inc_image_policy=inc_image_policy,
+                inc_image_registry=inc_image_registry,
+                inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+                inc_image_pull_timeout=inc_image_pull_timeout,
+                local_image_prefix=local_image_prefix,
             )
             jobs.extend(patched_jobs)
 
@@ -227,6 +257,11 @@ class VariantPlanner:
         include_coverage: bool = False,
         include_patched: bool = False,
         project_image_prefix: str = "crsbench",
+        inc_image_policy: str | None = None,
+        inc_image_registry: str | None = None,
+        inc_image_max_pull_bytes: int | None = None,
+        inc_image_pull_timeout: int | None = None,
+        local_image_prefix: str | None = None,
     ) -> list[BuildSingleVariantJob]:
         """Create build jobs for multiple benchmarks.
 
@@ -253,6 +288,11 @@ class VariantPlanner:
                     include_coverage=include_coverage,
                     include_patched=include_patched,
                     project_image_prefix=project_image_prefix,
+                    inc_image_policy=inc_image_policy,
+                    inc_image_registry=inc_image_registry,
+                    inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+                    inc_image_pull_timeout=inc_image_pull_timeout,
+                    local_image_prefix=local_image_prefix,
                 )
             )
         return jobs
@@ -301,6 +341,11 @@ class VariantPlanner:
         skip_if_cached: bool,
         repo_name: Optional[str],
         project_image_prefix: str,
+        inc_image_policy: str | None,
+        inc_image_registry: str | None,
+        inc_image_max_pull_bytes: int | None,
+        inc_image_pull_timeout: int | None,
+        local_image_prefix: str | None,
     ) -> list[BuildSingleVariantJob]:
         """Create CPV variant build jobs."""
         from crsbench.benchmark_ci.cli.benchmark_discovery import (
@@ -340,6 +385,11 @@ class VariantPlanner:
                         sanitizer=cpv_sanitizer,
                         repo_name=repo_name,
                         project_image_prefix=project_image_prefix,
+                        inc_image_policy=inc_image_policy,
+                        inc_image_registry=inc_image_registry,
+                        inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+                        inc_image_pull_timeout=inc_image_pull_timeout,
+                        local_image_prefix=local_image_prefix,
                     )
                 )
 
@@ -359,6 +409,11 @@ class VariantPlanner:
         skip_if_cached: bool,
         repo_name: Optional[str],
         project_image_prefix: str,
+        inc_image_policy: str | None,
+        inc_image_registry: str | None,
+        inc_image_max_pull_bytes: int | None,
+        inc_image_pull_timeout: int | None,
+        local_image_prefix: str | None,
     ) -> list[BuildSingleVariantJob]:
         """Create patched variant build jobs for patch verification.
 
@@ -406,6 +461,11 @@ class VariantPlanner:
                             sanitizer=cpv_sanitizer,
                             repo_name=repo_name,
                             project_image_prefix=project_image_prefix,
+                            inc_image_policy=inc_image_policy,
+                            inc_image_registry=inc_image_registry,
+                            inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+                            inc_image_pull_timeout=inc_image_pull_timeout,
+                            local_image_prefix=local_image_prefix,
                         )
                     )
 

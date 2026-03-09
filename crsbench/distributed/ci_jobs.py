@@ -118,6 +118,13 @@ def serialize_ci_job(job: Any) -> dict[str, Any]:
                 "repo_name": job.repo_name,
                 "project_image_prefix": job.project_image_prefix,
                 "prepare_inc_job_id": getattr(job, "prepare_inc_job_id", ""),
+                "inc_image_policy": getattr(job, "inc_image_policy", None),
+                "inc_image_registry": getattr(job, "inc_image_registry", None),
+                "inc_image_max_pull_bytes": getattr(
+                    job, "inc_image_max_pull_bytes", None
+                ),
+                "inc_image_pull_timeout": getattr(job, "inc_image_pull_timeout", None),
+                "local_image_prefix": getattr(job, "local_image_prefix", None),
             }
         )
     elif cls_name == "VerifyCpvPovJob":
@@ -245,6 +252,13 @@ def serialize_ci_job(job: Any) -> dict[str, Any]:
                 "build_job_id": job.build_job_id,
                 "prepare_inc_job_id": getattr(job, "prepare_inc_job_id", ""),
                 "source_mode": job.source_mode,
+                "inc_image_policy": getattr(job, "inc_image_policy", None),
+                "inc_image_registry": getattr(job, "inc_image_registry", None),
+                "inc_image_max_pull_bytes": getattr(
+                    job, "inc_image_max_pull_bytes", None
+                ),
+                "inc_image_pull_timeout": getattr(job, "inc_image_pull_timeout", None),
+                "local_image_prefix": getattr(job, "local_image_prefix", None),
             }
         )
     elif cls_name == "PrepareIncImageJob":
@@ -256,6 +270,13 @@ def serialize_ci_job(job: Any) -> dict[str, Any]:
                 "use_inc_build": job.use_inc_build,
                 "force_rebuild": job.force_rebuild,
                 "source_mode": job.source_mode,
+                "inc_image_policy": getattr(job, "inc_image_policy", None),
+                "inc_image_registry": getattr(job, "inc_image_registry", None),
+                "inc_image_max_pull_bytes": getattr(
+                    job, "inc_image_max_pull_bytes", None
+                ),
+                "inc_image_pull_timeout": getattr(job, "inc_image_pull_timeout", None),
+                "local_image_prefix": getattr(job, "local_image_prefix", None),
             }
         )
 
@@ -308,6 +329,11 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
             repo_name=params.get("repo_name"),
             project_image_prefix=params.get("project_image_prefix", "crsbench"),
             prepare_inc_job_id=params.get("prepare_inc_job_id", ""),
+            inc_image_policy=params.get("inc_image_policy"),
+            inc_image_registry=params.get("inc_image_registry"),
+            inc_image_max_pull_bytes=params.get("inc_image_max_pull_bytes"),
+            inc_image_pull_timeout=params.get("inc_image_pull_timeout"),
+            local_image_prefix=params.get("local_image_prefix"),
         )
     if cls_name == "VerifyCpvPovJob":
         return VerifyCpvPovJob(
@@ -419,6 +445,11 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
             build_job_id=params.get("build_job_id", ""),
             prepare_inc_job_id=params.get("prepare_inc_job_id", ""),
             source_mode=params.get("source_mode", "pkgs"),
+            inc_image_policy=params.get("inc_image_policy"),
+            inc_image_registry=params.get("inc_image_registry"),
+            inc_image_max_pull_bytes=params.get("inc_image_max_pull_bytes"),
+            inc_image_pull_timeout=params.get("inc_image_pull_timeout"),
+            local_image_prefix=params.get("local_image_prefix"),
         )
     if cls_name == "PrepareIncImageJob":
         return PrepareIncImageJob(
@@ -428,6 +459,11 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
             use_inc_build=params.get("use_inc_build", True),
             force_rebuild=params.get("force_rebuild", False),
             source_mode=params.get("source_mode", "pkgs"),
+            inc_image_policy=params.get("inc_image_policy"),
+            inc_image_registry=params.get("inc_image_registry"),
+            inc_image_max_pull_bytes=params.get("inc_image_max_pull_bytes"),
+            inc_image_pull_timeout=params.get("inc_image_pull_timeout"),
+            local_image_prefix=params.get("local_image_prefix"),
         )
 
     raise ValueError(f"Unknown job class: {cls_name}")

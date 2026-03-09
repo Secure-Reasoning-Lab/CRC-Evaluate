@@ -264,6 +264,11 @@ class TestSerializeAllJobTypes:
             sanitizer="address",
             repo_name="test-repo",
             project_image_prefix="aixcc-afc",
+            inc_image_policy="pull_only",
+            inc_image_registry="ghcr.io/example/custom",
+            inc_image_max_pull_bytes=123456,
+            inc_image_pull_timeout=77,
+            local_image_prefix="custom-prefix",
         )
         params = serialize_ci_job(job)
 
@@ -274,6 +279,11 @@ class TestSerializeAllJobTypes:
         assert params["patches"] == ["/patches/p1.diff"]
         assert params["patch_id"] == "patch_0"
         assert params["pov_id"] == "cpv_0"
+        assert params["inc_image_policy"] == "pull_only"
+        assert params["inc_image_registry"] == "ghcr.io/example/custom"
+        assert params["inc_image_max_pull_bytes"] == 123456
+        assert params["inc_image_pull_timeout"] == 77
+        assert params["local_image_prefix"] == "custom-prefix"
 
         restored = _reconstruct_job(params)
         assert type(restored).__name__ == "BuildSingleVariantJob"
@@ -284,6 +294,11 @@ class TestSerializeAllJobTypes:
         assert restored.patches == [Path("/patches/p1.diff")]
         assert restored.sanitizer == "address"
         assert restored.repo_name == "test-repo"
+        assert restored.inc_image_policy == "pull_only"
+        assert restored.inc_image_registry == "ghcr.io/example/custom"
+        assert restored.inc_image_max_pull_bytes == 123456
+        assert restored.inc_image_pull_timeout == 77
+        assert restored.local_image_prefix == "custom-prefix"
 
     def test_build_single_variant_default_use_inc_build_false(self) -> None:
         """BuildSingleVariantJob defaults use_inc_build to True on deserialize."""
@@ -312,6 +327,11 @@ class TestSerializeAllJobTypes:
             sanitizer="address",
             use_inc_build=True,
             source_mode="pkgs",
+            inc_image_policy="pull_only",
+            inc_image_registry="ghcr.io/example/custom",
+            inc_image_max_pull_bytes=123456,
+            inc_image_pull_timeout=77,
+            local_image_prefix="custom-prefix",
         )
         params = serialize_ci_job(job)
         assert params["_job_class"] == "PrepareIncImageJob"
@@ -320,12 +340,22 @@ class TestSerializeAllJobTypes:
         assert params["sanitizer"] == "address"
         assert params["use_inc_build"] is True
         assert params["force_rebuild"] is False
+        assert params["inc_image_policy"] == "pull_only"
+        assert params["inc_image_registry"] == "ghcr.io/example/custom"
+        assert params["inc_image_max_pull_bytes"] == 123456
+        assert params["inc_image_pull_timeout"] == 77
+        assert params["local_image_prefix"] == "custom-prefix"
 
         restored = _reconstruct_job(params)
         assert type(restored).__name__ == "PrepareIncImageJob"
         assert restored.benchmark_name == "test-bench"
         assert restored.sanitizer == "address"
         assert restored.force_rebuild is False
+        assert restored.inc_image_policy == "pull_only"
+        assert restored.inc_image_registry == "ghcr.io/example/custom"
+        assert restored.inc_image_max_pull_bytes == 123456
+        assert restored.inc_image_pull_timeout == 77
+        assert restored.local_image_prefix == "custom-prefix"
 
     def test_patch_variant_test_default_test_mode_full(self) -> None:
         """PatchVariantTestJob defaults test_mode to FULL for legacy payloads."""

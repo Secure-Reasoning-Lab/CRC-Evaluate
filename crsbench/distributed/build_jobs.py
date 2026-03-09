@@ -29,29 +29,9 @@ def execute_ci_build(params: dict[str, Any]) -> dict[str, Any]:
         Dict with job_id, success, error, elapsed_seconds, details
     """
     from crsbench.benchmark_ci.jobs.base import JobContext
-    from crsbench.benchmark_ci.jobs.flat import BuildSingleVariantJob
-    from crsbench.builder.types import BenchmarkMode, VariantType
+    from crsbench.distributed.ci_jobs import _reconstruct_job
 
-    job = BuildSingleVariantJob(
-        benchmark_path=Path(params["benchmark_path"]),
-        benchmark_name=params["benchmark_name"],
-        variant_type=VariantType(params["variant_type"]),
-        commit=params["commit"],
-        main_repo=params["main_repo"],
-        mode=BenchmarkMode(params["mode"]),
-        language=params.get("language", "c"),
-        cpv_num=params.get("cpv_num"),
-        patch_id=params.get("patch_id"),
-        pov_id=params.get("pov_id"),
-        patches=[Path(p) for p in params.get("patches", [])],
-        use_inc_build=params.get("use_inc_build", True),
-        force_rebuild=params.get("force_rebuild", False),
-        skip_if_cached=params.get("skip_if_cached", False),
-        source_mode=params.get("source_mode", "pkgs"),
-        sanitizer=params.get("sanitizer", "address"),
-        repo_name=params.get("repo_name"),
-        project_image_prefix=params.get("project_image_prefix", "crsbench"),
-    )
+    job = _reconstruct_job(params)
 
     context = JobContext()
     output_dir = params.get("output_dir")
