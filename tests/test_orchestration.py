@@ -27,7 +27,6 @@ from crsbench.run_experiment import (
 )
 from crsbench.validation.schemas import (
     POV,
-    AdapterType,
     BenchmarkEntry,
     BenchmarkHarness,
     ExperimentConfig,
@@ -48,10 +47,6 @@ def mock_crs_helpers():
     mock_adapter.get_harness.return_value = mock_harness
 
     with (
-        patch(
-            "crsbench.run_experiment.get_crs_registry_name",
-            side_effect=lambda crs, _: crs,  # Return the CRS name as the registry name
-        ),
         patch(
             "crsbench.run_experiment.get_crs_type",
             return_value="patch",  # Return default CRS type
@@ -79,13 +74,16 @@ class TestConfigLoading:
 experiment: test-experiment
 trials: 3
 mode: delta
-adapter: oss-crs
 max_total_time: 20000
-difficulty_level: 2
+inputs:
+  pov:
+    enabled: true
+    max_variants_per_cpv: 1
 experiment_filestore: /tmp/crsbench/experiment-data
 report_filestore: /tmp/crsbench/report-data
-crses:
-  - atlantis-c
+crs_compose:
+  atlantis-c:
+    num_cores: 1
 benchmarks:
   - curl-delta-02
   - libxml2-delta-03
@@ -96,8 +94,7 @@ benchmarks:
         assert config.experiment == "test-experiment"
         assert config.trials == 3
         assert config.max_total_time == 20000
-        assert config.difficulty_level == 2
-        assert config.crses == ["atlantis-c"]
+        assert config.get_crs_registry_ids() == ["atlantis-c"]
         assert config.benchmarks == ["curl-delta-02", "libxml2-delta-03"]
         assert config.benchmark_suite is None
 
@@ -108,13 +105,16 @@ benchmarks:
 experiment: suite-experiment
 trials: 2
 mode: full
-adapter: oss-crs
 max_total_time: 20000
-difficulty_level: 1
+inputs:
+  pov:
+    enabled: true
+    max_variants_per_cpv: 1
 experiment_filestore: /tmp/crsbench/experiment-data
 report_filestore: /tmp/crsbench/report-data
-crses:
-  - atlantis-c
+crs_compose:
+  atlantis-c:
+    num_cores: 1
 benchmark_suite: crsbench-afc-c
 """)
 
@@ -122,7 +122,7 @@ benchmark_suite: crsbench-afc-c
 
         assert config.experiment == "suite-experiment"
         assert config.trials == 2
-        assert config.crses == ["atlantis-c"]
+        assert config.get_crs_registry_ids() == ["atlantis-c"]
         assert config.benchmark_suite == "crsbench-afc-c"
         assert config.benchmarks is None  # Not set when using suite
 
@@ -133,12 +133,16 @@ benchmark_suite: crsbench-afc-c
 experiment: redis-experiment
 trials: 2
 mode: delta
-adapter: oss-crs
 max_total_time: 20000
-difficulty_level: 1
+inputs:
+  pov:
+    enabled: true
+    max_variants_per_cpv: 1
 experiment_filestore: /tmp/crsbench/experiment-data
 report_filestore: /tmp/crsbench/report-data
-crses: [crs1]
+crs_compose:
+  crs1:
+    num_cores: 1
 benchmarks: [bench1]
 redis_host: localhost
 """)
@@ -154,12 +158,16 @@ redis_host: localhost
 experiment: minimal-experiment
 trials: 1
 mode: delta
-adapter: oss-crs
 max_total_time: 20000
-difficulty_level: 0
+inputs:
+  pov:
+    enabled: true
+    max_variants_per_cpv: 1
 experiment_filestore: /tmp/crsbench/exp
 report_filestore: /tmp/crsbench/rep
-crses: [crs1]
+crs_compose:
+  crs1:
+    num_cores: 1
 benchmarks: [bench1]
 """)
 
@@ -184,12 +192,11 @@ class TestTrialMatrixGeneration:
             experiment="test",
             trials=2,
             mode="delta",
-            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
-            difficulty_level=1,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
-            crses=["crs1"],
+            crs_compose={"crs1": {"num_cores": 1}},
             benchmarks=["bench1", "bench2"],
             only_cpv_harnesses=False,
         )
@@ -207,14 +214,13 @@ class TestTrialMatrixGeneration:
                 harness=HarnessFile(name="harness2", path="/src/harness2.c"),
             ),
         ]
-        crses = ["crs1", "crs2"]
+        crs_registry_ids = ["crs1", "crs2"]
 
         trials = generate_trial_matrix(
             benchmark_harnesses,
-            crses,
+            crs_registry_ids,
             config,
             registry_dir=Path("/tmp/registry"),
-            crs_configs_dir=Path("/tmp/crs-configs"),
         )
 
         # Expected: 2 CRSes × 2 benchmark_harnesses × 2 trials = 8 total
@@ -222,7 +228,7 @@ class TestTrialMatrixGeneration:
 
         # Verify structure
         assert all(isinstance(t, Trial) for t in trials)
-        assert all(t.crs in crses for t in trials)
+        assert all(t.crs in crs_registry_ids for t in trials)
         assert all(t.benchmark_harness.name in ["bench1", "bench2"] for t in trials)
         assert all(
             t.benchmark_harness.harness.name in ["harness1", "harness2"] for t in trials
@@ -235,12 +241,11 @@ class TestTrialMatrixGeneration:
             experiment="test",
             trials=2,
             mode="delta",
-            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
-            difficulty_level=1,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
-            crses=["crs1"],
+            crs_compose={"crs1": {"num_cores": 1}},
             benchmarks=["bench1", "bench2"],
             only_cpv_harnesses=False,
         )
@@ -257,14 +262,13 @@ class TestTrialMatrixGeneration:
                 harness=HarnessFile(name="harness2", path="/src/harness2.c"),
             ),
         ]
-        crses = ["crs1", "crs2"]
+        crs_registry_ids = ["crs1", "crs2"]
 
         trials = generate_trial_matrix(
             benchmark_harnesses,
-            crses,
+            crs_registry_ids,
             config,
             registry_dir=Path("/tmp/registry"),
-            crs_configs_dir=Path("/tmp/crs-configs"),
         )
 
         # Verify ordering: CRS outer loop, BenchmarkHarness middle, trial inner
@@ -296,12 +300,11 @@ class TestTrialMatrixGeneration:
             experiment="test",
             trials=1,
             mode="delta",
-            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
-            difficulty_level=1,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
-            crses=["crs1"],
+            crs_compose={"crs1": {"num_cores": 1}},
             benchmarks=["bench1"],
             only_cpv_harnesses=False,
         )
@@ -312,14 +315,13 @@ class TestTrialMatrixGeneration:
             harness=HarnessFile(name="harness1", path="/src/harness1.c"),
         )
         benchmark_harnesses = [benchmark_harness]
-        crses = ["crs1"]
+        crs_registry_ids = ["crs1"]
 
         trials = generate_trial_matrix(
             benchmark_harnesses,
-            crses,
+            crs_registry_ids,
             config,
             registry_dir=Path("/tmp/registry"),
-            crs_configs_dir=Path("/tmp/crs-configs"),
         )
 
         # Expected: 1 CRS × 1 benchmark_harness × 1 trial = 1 total
@@ -331,7 +333,7 @@ class TestTrialMatrixGeneration:
     def test_trial_matrix_count_formula(self):
         """Test that trial count follows formula: CRSes × BenchmarkHarness count × Trials."""
         test_cases = [
-            # (crses, benchmark_harness_pairs as tuples, trials_per_combo, expected_total)
+            # (crs_registry_ids, benchmark_harness_pairs as tuples, trials_per_combo, expected_total)
             (["crs1"], [("bench1", "h1")], 1, 1),
             (["crs1"], [("bench1", "h1")], 3, 3),
             (["crs1", "crs2"], [("bench1", "h1")], 2, 4),
@@ -345,7 +347,7 @@ class TestTrialMatrixGeneration:
             ),
         ]
 
-        for crses, bh_tuples, trials_count, expected_total in test_cases:
+        for crs_registry_ids, bh_tuples, trials_count, expected_total in test_cases:
             # Convert tuples to BenchmarkHarness objects
             benchmark_harnesses = [
                 BenchmarkHarness(
@@ -360,26 +362,24 @@ class TestTrialMatrixGeneration:
                 experiment="test",
                 trials=trials_count,
                 mode="delta",
-                adapter=AdapterType.OSS_CRS,
                 max_total_time=20000,
-                difficulty_level=1,
+                inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
                 experiment_filestore="/tmp/exp",
                 report_filestore="/tmp/rep",
-                crses=["crs1"],
+                crs_compose={"crs1": {"num_cores": 1}},
                 benchmarks=["dummy"],  # Not used, but required for config
                 only_cpv_harnesses=False,
             )
 
             trials = generate_trial_matrix(
                 benchmark_harnesses,
-                crses,
+                crs_registry_ids,
                 config,
                 registry_dir=Path("/tmp/registry"),
-                crs_configs_dir=Path("/tmp/crs-configs"),
             )
 
             assert len(trials) == expected_total, (
-                f"Expected {expected_total} trials for {len(crses)} CRS × {len(benchmark_harnesses)} harnesses × {trials_count} trials"
+                f"Expected {expected_total} trials for {len(crs_registry_ids)} CRS × {len(benchmark_harnesses)} harnesses × {trials_count} trials"
             )
 
 
@@ -395,12 +395,11 @@ class TestOnlyCpvHarnesses:
             experiment="test",
             trials=1,
             mode="delta",
-            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
-            difficulty_level=1,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
-            crses=["bug-finder"],
+            crs_compose={"bug-finder": {"num_cores": 1}},
             benchmarks=["bench1"],
             only_cpv_harnesses=True,
         )
@@ -441,10 +440,6 @@ class TestOnlyCpvHarnesses:
 
         with (
             patch(
-                "crsbench.run_experiment.get_crs_registry_name",
-                return_value="bug-finder",
-            ),
-            patch(
                 "crsbench.run_experiment.get_crs_type",
                 return_value="bug_finding",
             ),
@@ -458,7 +453,6 @@ class TestOnlyCpvHarnesses:
                 ["bug-finder"],
                 config,
                 registry_dir=Path("/tmp/registry"),
-                crs_configs_dir=Path("/tmp/crs-configs"),
             )
 
         # Only harness_with_cpv should be included
@@ -472,12 +466,11 @@ class TestOnlyCpvHarnesses:
             experiment="test",
             trials=1,
             mode="delta",
-            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
-            difficulty_level=1,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
-            crses=["bug-finder"],
+            crs_compose={"bug-finder": {"num_cores": 1}},
             benchmarks=["bench1"],
             only_cpv_harnesses=False,
         )
@@ -498,10 +491,6 @@ class TestOnlyCpvHarnesses:
 
         with (
             patch(
-                "crsbench.run_experiment.get_crs_registry_name",
-                return_value="bug-finder",
-            ),
-            patch(
                 "crsbench.run_experiment.get_crs_type",
                 return_value="bug_finding",
             ),
@@ -511,7 +500,6 @@ class TestOnlyCpvHarnesses:
                 ["bug-finder"],
                 config,
                 registry_dir=Path("/tmp/registry"),
-                crs_configs_dir=Path("/tmp/crs-configs"),
             )
 
         # All harnesses should be included (no CPV check performed)
@@ -528,12 +516,11 @@ class TestOnlyCpvHarnesses:
             experiment="test",
             trials=1,
             mode="delta",
-            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
-            difficulty_level=1,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
-            crses=["bug-fixer"],
+            crs_compose={"bug-fixer": {"num_cores": 1}},
             benchmarks=["bench1"],
             only_cpv_harnesses=False,  # Even with False, bug-fixing should skip
         )
@@ -573,10 +560,6 @@ class TestOnlyCpvHarnesses:
 
         with (
             patch(
-                "crsbench.run_experiment.get_crs_registry_name",
-                return_value="bug-fixer",
-            ),
-            patch(
                 "crsbench.run_experiment.get_crs_type",
                 return_value="bug-fixing",  # bug-fixing CRS type
             ),
@@ -590,7 +573,6 @@ class TestOnlyCpvHarnesses:
                 ["bug-fixer"],
                 config,
                 registry_dir=Path("/tmp/registry"),
-                crs_configs_dir=Path("/tmp/crs-configs"),
             )
 
         # Bug-fixing CRS should skip harnesses without CPVs regardless of only_cpv_harnesses
@@ -613,12 +595,16 @@ class TestExperimentNameSource:
 experiment: original-name
 trials: 1
 mode: delta
-adapter: oss-crs
 max_total_time: 20000
-difficulty_level: 1
+inputs:
+  pov:
+    enabled: true
+    max_variants_per_cpv: 1
 experiment_filestore: /tmp/crsbench/exp
 report_filestore: /tmp/crsbench/rep
-crses: [crs1]
+crs_compose:
+  crs1:
+    num_cores: 1
 benchmarks: [bench1]
 """)
 
@@ -641,13 +627,16 @@ class TestConfigStorage:
 experiment: test-experiment
 trials: 1
 mode: delta
-adapter: oss-crs
 max_total_time: 20000
-difficulty_level: 1
+inputs:
+  pov:
+    enabled: true
+    max_variants_per_cpv: 1
 experiment_filestore: /tmp/crsbench/exp
 report_filestore: /tmp/crsbench/rep
-crses:
-  - crs1
+crs_compose:
+  crs1:
+    num_cores: 1
 benchmarks:
   - bench1
   - bench2
@@ -660,10 +649,9 @@ benchmarks:
             "experiment": config.experiment,
             "trials": config.trials,
             "max_total_time": config.max_total_time,
-            "difficulty_level": config.difficulty_level,
             "experiment_filestore": str(config.experiment_filestore),
             "report_filestore": str(config.report_filestore),
-            "crses": config.crses,
+            "crs_registry_ids": config.get_crs_registry_ids(),
             "benchmarks": config.benchmarks,
         }
 
@@ -680,7 +668,7 @@ benchmarks:
             stored_config = yaml.safe_load(f)
 
         assert stored_config["experiment"] == "test-experiment"
-        assert stored_config["crses"] == ["crs1"]
+        assert stored_config["crs_registry_ids"] == ["crs1"]
         assert stored_config["benchmarks"] == ["bench1", "bench2"]
 
     def test_stored_config_has_trial_specific_fields(self, tmp_path):
@@ -689,12 +677,11 @@ benchmarks:
             experiment="test-experiment",
             trials=2,
             mode="delta",
-            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
-            difficulty_level=2,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
-            crses=["atlantis-c"],
+            crs_compose={"atlantis-c": {"num_cores": 1}},
             benchmarks=["curl-delta-02"],
             only_cpv_harnesses=False,
         )
@@ -709,10 +696,9 @@ benchmarks:
         ]
         trials = generate_trial_matrix(
             benchmark_harnesses,
-            config.crses,
+            config.get_crs_registry_ids(),
             config,
             registry_dir=Path("/tmp/registry"),
-            crs_configs_dir=Path("/tmp/crs-configs"),
         )
         trial = trials[0]
 
@@ -724,8 +710,7 @@ benchmarks:
             "experiment": config.experiment,
             "trials": config.trials,
             "max_total_time": config.max_total_time,
-            "difficulty_level": config.difficulty_level,
-            "crses": config.crses,
+            "crs_registry_ids": config.get_crs_registry_ids(),
             "benchmarks": config.benchmarks,
             # Trial-specific fields
             "trial_crs": trial.crs,
@@ -761,8 +746,7 @@ benchmarks:
             "experiment": "test-experiment",
             "trials": 2,
             "max_total_time": 20000,
-            "difficulty_level": 2,
-            "crses": ["atlantis-c"],
+            "crs_registry_ids": ["atlantis-c"],
             "benchmarks": ["curl-delta-02"],
             "trial_crs": "atlantis-c",
             "trial_benchmark": "curl-delta-02",
@@ -828,7 +812,7 @@ class TestIntegrationWithSampleConfigs:
         # Verify config loaded correctly
         assert config.experiment == "sanity-test"
         assert config.trials == 1
-        assert len(config.crses) == 1
+        assert len(config.get_crs_registry_ids()) == 1
 
         # Mock BenchmarkHarness objects - in reality these would come from meta.yaml
         # For this test, create one harness per benchmark
@@ -848,10 +832,9 @@ class TestIntegrationWithSampleConfigs:
         # Generate trial matrix
         trials = generate_trial_matrix(
             benchmark_harnesses,
-            config.crses,
+            config.get_crs_registry_ids(),
             config,
             registry_dir=Path("/tmp/registry"),
-            crs_configs_dir=Path("/tmp/crs-configs"),
         )
 
         # Expected: 1 CRS × 2 benchmark_harnesses × 1 trial = 2 total
@@ -866,7 +849,7 @@ class TestIntegrationWithSampleConfigs:
             trial_config = {
                 "experiment": config.experiment,
                 "trials": config.trials,
-                "crses": config.crses,
+                "crs_registry_ids": config.get_crs_registry_ids(),
                 "benchmarks": benchmark_names,
                 "trial_crs": trial.crs,
                 "trial_benchmark": trial.benchmark_harness.name,
@@ -899,7 +882,7 @@ class TestIntegrationWithSampleConfigs:
         config = config.model_copy(update={"only_cpv_harnesses": False})
 
         # CRSes and benchmarks come from config only
-        crses = config.crses
+        crs_registry_ids = config.get_crs_registry_ids()
         benchmarks = config.benchmarks or [
             "sanity-mock-c-delta-01",
             "sanity-mock-java-delta-01",
@@ -918,10 +901,9 @@ class TestIntegrationWithSampleConfigs:
         # Generate trial matrix from config
         trials = generate_trial_matrix(
             benchmark_harnesses,
-            crses,
+            crs_registry_ids,
             config,
             registry_dir=Path("/tmp/registry"),
-            crs_configs_dir=Path("/tmp/crs-configs"),
         )
 
         # Expected: 1 CRS × 2 benchmark_harnesses × 1 trial = 2 total
@@ -934,7 +916,7 @@ class TestIntegrationWithSampleConfigs:
         stored_config = {
             "experiment": config.experiment,
             "trials": config.trials,
-            "crses": crses,
+            "crs_registry_ids": crs_registry_ids,
             "benchmarks": benchmarks,
             "trial_crs": trials[0].crs,
             "trial_benchmark": trials[0].benchmark_harness.name,
@@ -951,7 +933,7 @@ class TestIntegrationWithSampleConfigs:
         # Experiment name comes from config
         assert stored["experiment"] == "sanity-test"
         # CRSes and benchmarks come from config (single source of truth)
-        assert stored["crses"] == config.crses
+        assert stored["crs_registry_ids"] == config.get_crs_registry_ids()
         assert stored["benchmarks"] == benchmarks
 
     def test_benchmark_suite_expansion(self):
@@ -994,12 +976,11 @@ class UnitTestModeSelection:
             experiment="test",
             trials=1,
             mode="delta",
-            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
-            difficulty_level=1,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
-            crses=["crs1"],
+            crs_compose={"crs1": {"num_cores": 1}},
             benchmarks=["bench1"],
         )
 
@@ -1024,12 +1005,11 @@ class UnitTestModeSelection:
             experiment="test",
             trials=2,
             mode="delta",
-            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
-            difficulty_level=1,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
-            crses=["crs1", "crs2"],
+            crs_compose={"crs1": {"num_cores": 1}, "crs2": {"num_cores": 1}},
             benchmarks=["bench1"],
         )
 
@@ -1054,12 +1034,11 @@ class UnitTestModeSelection:
             experiment="test",
             trials=2,
             mode="delta",
-            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
-            difficulty_level=1,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
-            crses=["crs1", "crs2"],
+            crs_compose={"crs1": {"num_cores": 1}, "crs2": {"num_cores": 1}},
             benchmarks=["bench1"],
             redis_host="localhost",
         )
@@ -1085,12 +1064,11 @@ class UnitTestModeSelection:
             experiment="test",
             trials=1,
             mode="delta",
-            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
-            difficulty_level=1,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
-            crses=["crs1"],
+            crs_compose={"crs1": {"num_cores": 1}},
             benchmarks=["bench1"],
         )
 
@@ -1115,12 +1093,11 @@ class UnitTestModeSelection:
             experiment="test",
             trials=1,
             mode="delta",
-            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
-            difficulty_level=1,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
-            crses=["crs1"],
+            crs_compose={"crs1": {"num_cores": 1}},
             benchmarks=["bench1"],
             redis_host="localhost",
         )
@@ -1193,12 +1170,11 @@ class TestSanitizerFiltering:
             experiment="test",
             trials=1,
             mode="delta",
-            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
-            difficulty_level=1,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
-            crses=["crs1"],
+            crs_compose={"crs1": {"num_cores": 1}},
             benchmarks=["bench1"],
             sanitizers=[Sanitizer.ADDRESS, Sanitizer.UNDEFINED],
             only_cpv_harnesses=True,  # Enable CPV checking
@@ -1237,7 +1213,6 @@ class TestSanitizerFiltering:
                 ["crs1"],
                 config,
                 registry_dir=Path("/tmp/registry"),
-                crs_configs_dir=Path("/tmp/crs-configs"),
             )
 
         # Should only generate trials for undefined sanitizer
@@ -1252,12 +1227,11 @@ class TestSanitizerFiltering:
             experiment="test",
             trials=2,
             mode="delta",
-            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
-            difficulty_level=1,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
-            crses=["crs1"],
+            crs_compose={"crs1": {"num_cores": 1}},
             benchmarks=["bench1"],
             sanitizers=[Sanitizer.ADDRESS, Sanitizer.UNDEFINED],
             only_cpv_harnesses=True,
@@ -1298,7 +1272,6 @@ class TestSanitizerFiltering:
                 ["crs1"],
                 config,
                 registry_dir=Path("/tmp/registry"),
-                crs_configs_dir=Path("/tmp/crs-configs"),
             )
 
         # Should generate trials for both sanitizers (2 trials each)
@@ -1315,12 +1288,11 @@ class TestSanitizerFiltering:
             experiment="test",
             trials=2,
             mode="delta",
-            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
-            difficulty_level=1,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
-            crses=["crs1"],
+            crs_compose={"crs1": {"num_cores": 1}},
             benchmarks=["bench1"],
             sanitizers=[Sanitizer.ADDRESS],
             only_cpv_harnesses=False,
@@ -1364,7 +1336,6 @@ class TestSanitizerFiltering:
                 ["crs1"],
                 config,
                 registry_dir=Path("/tmp/registry"),
-                crs_configs_dir=Path("/tmp/crs-configs"),
             )
 
         assert len(trials) == 4  # 2 CPVs x 2 trial_num
@@ -1378,12 +1349,11 @@ class TestSanitizerFiltering:
             experiment="test",
             trials=1,
             mode="delta",
-            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
-            difficulty_level=1,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
-            crses=["crs1"],
+            crs_compose={"crs1": {"num_cores": 1}},
             benchmarks=["bench1"],
             sanitizers=[Sanitizer.ADDRESS, Sanitizer.UNDEFINED],
             only_cpv_harnesses=False,  # Don't check CPVs
@@ -1404,7 +1374,6 @@ class TestSanitizerFiltering:
             ["crs1"],
             config,
             registry_dir=Path("/tmp/registry"),
-            crs_configs_dir=Path("/tmp/crs-configs"),
         )
 
         # Should generate trials for both sanitizers
@@ -1420,12 +1389,11 @@ class TestSanitizerFiltering:
             experiment="test",
             trials=2,
             mode="delta",
-            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
-            difficulty_level=1,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
-            crses=["crs1"],
+            crs_compose={"crs1": {"num_cores": 1}},
             benchmarks=["bench1"],
             sanitizers=[Sanitizer.ADDRESS],
             only_cpv_harnesses=False,
@@ -1470,7 +1438,6 @@ class TestSanitizerFiltering:
                 ["crs1"],
                 config,
                 registry_dir=Path("/tmp/registry"),
-                crs_configs_dir=Path("/tmp/crs-configs"),
             )
 
         assert len(trials) == 2
@@ -1528,12 +1495,11 @@ harness_files:
             experiment="test",
             trials=2,
             mode="delta",
-            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
-            difficulty_level=1,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
-            crses=["crs1"],
+            crs_compose={"crs1": {"num_cores": 1}},
             benchmarks=[{bench_name: {"harness1": ["cpv_1"]}}],
             sanitizers=[Sanitizer.ADDRESS],
             only_cpv_harnesses=False,
@@ -1577,7 +1543,6 @@ harness_files:
                 ["crs1"],
                 config,
                 registry_dir=Path("/tmp/registry"),
-                crs_configs_dir=Path("/tmp/crs-configs"),
             )
 
         assert len(trials) == 2  # only cpv_1, across trial_num=1..2
@@ -1628,12 +1593,11 @@ harness_files:
             experiment="test",
             trials=1,
             mode="delta",
-            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
-            difficulty_level=1,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
-            crses=["crs1"],
+            crs_compose={"crs1": {"num_cores": 1}},
             benchmarks=[{bench_name: {"harness1": ["cpv_missing"]}}],
             sanitizers=[Sanitizer.ADDRESS],
             only_cpv_harnesses=False,
@@ -1672,7 +1636,6 @@ harness_files:
                 ["crs1"],
                 config,
                 registry_dir=Path("/tmp/registry"),
-                crs_configs_dir=Path("/tmp/crs-configs"),
             )
 
         assert trials == []

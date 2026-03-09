@@ -9,6 +9,7 @@ COMPOSE-04, COMPOSE-05.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import threading
 from pathlib import Path
@@ -48,7 +49,6 @@ FACTORY_ARGS = {
     "oss_fuzz_path": Path("/tmp/fake/oss-fuzz"),
     "registry_dir": Path("/tmp/fake/registry"),
     "benchmarks_root": Path("/tmp/fake/benchmarks"),
-    "crs_configs_dir": Path("/tmp/fake/configs"),
 }
 
 
@@ -354,6 +354,68 @@ class TestComposeCommon:
         assert str(seeds) in cmd
 
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
+    def test_run_appends_bug_candidate_args(
+        self, mock_rwgt: MagicMock, tmp_path: Path
+    ) -> None:
+        mock_rwgt.return_value = ("out", "err", 0, False)
+        compose_file = tmp_path / "crs-compose.yaml"
+        work_dir = tmp_path / "work"
+        target = tmp_path / "benchmark"
+        bug_candidate = tmp_path / "candidate.sarif"
+
+        run_oss_crs_run(
+            compose_file,
+            work_dir,
+            target,
+            "harness",
+            timeout=3600,
+            bug_candidate=bug_candidate,
+        )
+
+        cmd = mock_rwgt.call_args[0][0]
+        assert "--bug-candidate" in cmd
+        assert str(bug_candidate) in cmd
+        assert "--bug-candidate-dir" not in cmd
+
+    @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
+    def test_run_appends_bug_candidate_dir_arg(
+        self, mock_rwgt: MagicMock, tmp_path: Path
+    ) -> None:
+        mock_rwgt.return_value = ("out", "err", 0, False)
+        compose_file = tmp_path / "crs-compose.yaml"
+        work_dir = tmp_path / "work"
+        target = tmp_path / "benchmark"
+        bug_candidate_dir = tmp_path / "bug-candidates"
+
+        run_oss_crs_run(
+            compose_file,
+            work_dir,
+            target,
+            "harness",
+            timeout=3600,
+            bug_candidate_dir=bug_candidate_dir,
+        )
+
+        cmd = mock_rwgt.call_args[0][0]
+        assert "--bug-candidate-dir" in cmd
+        assert str(bug_candidate_dir) in cmd
+        assert "--bug-candidate" not in cmd
+
+    def test_run_rejects_mutually_exclusive_bug_candidate_flags(
+        self, tmp_path: Path
+    ) -> None:
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            run_oss_crs_run(
+                tmp_path / "compose.yaml",
+                tmp_path / "work",
+                tmp_path / "bench",
+                "harness",
+                timeout=3600,
+                bug_candidate=tmp_path / "candidate.sarif",
+                bug_candidate_dir=tmp_path / "bug-candidates",
+            )
+
+    @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
     def test_run_omits_optional_args_when_none(
         self, mock_rwgt: MagicMock, tmp_path: Path
     ) -> None:
@@ -372,6 +434,8 @@ class TestComposeCommon:
         assert "--pov-dir" not in cmd
         assert "--diff" not in cmd
         assert "--seed-dir" not in cmd
+        assert "--bug-candidate" not in cmd
+        assert "--bug-candidate-dir" not in cmd
 
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
     def test_run_passes_stop_event(self, mock_rwgt: MagicMock, tmp_path: Path) -> None:
@@ -542,7 +606,6 @@ class TestOssCrsAdapterBugFindFull:
             oss_fuzz_path=tmp_path / "oss-fuzz",
             registry_dir=registry,
             benchmarks_root=tmp_path / "benchmarks",
-            crs_configs_dir=tmp_path / "configs",
             mode="bug-finding",
         )
         adapter.configure(
@@ -824,18 +887,47 @@ class TestOssCrsAdapterBugFindFull:
         assert "other-crs" not in data
 
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
-    def test_configure_crs_services_rejects_missing_current_trial_crs(
+    def test_configure_crs_services_missing_current_trial_crs_falls_back_to_default(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
         adapter = self._make_adapter(tmp_path)
-        with pytest.raises(RuntimeError, match="does not contain current trial CRS"):
-            adapter.configure(
-                {
-                    "crs_services": {
-                        "other-crs": {"num_cores": 1, "mem_limit": "8G"},
-                    }
+        adapter.configure(
+            {
+                "crs_services": {
+                    "other-crs": {"num_cores": 1, "mem_limit": "8G"},
                 }
-            )
+            }
+        )
+        compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
+        data = yaml.safe_load(compose_path.read_text())
+        assert "test-crs" in data
+        assert "other-crs" not in data
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_configure_crs_services_missing_current_resets_stale_override(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"allocated_memory": "8G"})
+        adapter.configure(
+            {
+                "crs_services": {
+                    "test-crs": {"num_cores": 3, "mem_limit": "8G"},
+                }
+            }
+        )
+        adapter.configure(
+            {
+                "crs_services": {
+                    "other-crs": {"num_cores": 1, "mem_limit": "4G"},
+                }
+            }
+        )
+        adapter.configure({"allocated_memory": "10G"})
+        compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
+        data = yaml.safe_load(compose_path.read_text())
+        assert data["test-crs"]["cpuset"] == "0"
+        assert data["test-crs"]["memory"] == "10G"
 
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
     def test_configure_accepts_flat_crs_compose_service_keys(
@@ -1635,7 +1727,6 @@ class TestOssCrsAdapterBugFixFull:
             oss_fuzz_path=tmp_path / "oss-fuzz",
             registry_dir=registry,
             benchmarks_root=tmp_path / "benchmarks",
-            crs_configs_dir=tmp_path / "configs",
             mode="bug-fixing",
         )
         adapter.configure(
@@ -1714,6 +1805,70 @@ class TestOssCrsAdapterBugFixFull:
         cmd = mock_rwgt.call_args[0][0]
         assert "--diff" in cmd
         assert str(diff_path) in cmd
+
+    @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_run_passes_bug_candidate_dir(
+        self,
+        mock_subprocess: MagicMock,
+        mock_rwgt: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        mock_rwgt.return_value = ("out", "", 0, False)
+
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        trial = tmp_path / "trial"
+        trial.mkdir()
+
+        bug_candidates_dir = trial / "bug-candidates"
+        bug_candidates_dir.mkdir()
+        (bug_candidates_dir / "cpv_0.sarif").write_text("{}")
+
+        adapter.build(bench, trial)
+        harness = MagicMock()
+        harness.name = "fuzz_target"
+
+        adapter.run(bench, harness, trial)
+
+        cmd = mock_rwgt.call_args[0][0]
+        assert "--bug-candidate-dir" in cmd
+        assert str(bug_candidates_dir) in cmd
+
+    @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_run_omits_bug_candidate_dir_when_not_present(
+        self,
+        mock_subprocess: MagicMock,
+        mock_rwgt: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        mock_rwgt.return_value = ("out", "", 0, False)
+
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        trial = tmp_path / "trial"
+        trial.mkdir()
+
+        adapter.build(bench, trial)
+        harness = MagicMock()
+        harness.name = "fuzz_target"
+
+        adapter.run(bench, harness, trial)
+
+        cmd = mock_rwgt.call_args[0][0]
+        assert "--bug-candidate-dir" not in cmd
+        assert "--bug-candidate" not in cmd
 
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
@@ -1797,48 +1952,45 @@ class TestExperimentConfigComposeValidation:
             "trials": 1,
             "mode": "delta",
             "max_total_time": 86400,
-            "difficulty_level": 1,
+            "inputs": {"pov": {"enabled": False}},
             "experiment_filestore": Path("/tmp/store"),
             "report_filestore": Path("/tmp/report"),
-            "crses": ["crs1"],
             "benchmarks": ["bench1"],
         }
 
-    def test_accepts_oss_crs_adapter_with_crs_compose(self) -> None:
-        from crsbench.validation.schemas import (
-            AdapterType,
-            CrsComposeConfig,
-            ExperimentConfig,
-        )
+    def test_accepts_strict_contract_with_crs_compose(self) -> None:
+        from crsbench.validation.schemas import ExperimentConfig
 
         cfg = self._base_config()
-        cfg["adapter"] = AdapterType.OSS_CRS
-        cfg["crs_compose"] = CrsComposeConfig(
-            oss_crs_infra={"num_cores": 1, "mem_limit": "8G"},
-            crs_services={"crs1": {"num_cores": 1, "mem_limit": "8G"}},
-        )
+        cfg["crs_compose"] = {
+            "oss_crs_infra": {"num_cores": 1, "mem_limit": "8G"},
+            "crs1": {"num_cores": 1, "mem_limit": "8G"},
+        }
 
         config = ExperimentConfig(**cfg)
         assert config.crs_compose is not None
         assert config.crs_compose.oss_crs_infra.num_cores == 1
 
-    def test_accepts_oss_crs_adapter_without_crs_compose(self) -> None:
-        from crsbench.validation.schemas import AdapterType, ExperimentConfig
-
-        cfg = self._base_config()
-        cfg["adapter"] = AdapterType.OSS_CRS
-
-        config = ExperimentConfig(**cfg)
-        assert config.crs_compose is None
-
-    def test_rejects_invalid_adapter_value(self) -> None:
+    def test_rejects_missing_crs_compose(self) -> None:
         from crsbench.validation.schemas import ExperimentConfig
         from pydantic import ValidationError
 
         cfg = self._base_config()
-        cfg["adapter"] = "crs-compose-bugfind"
+        with pytest.raises(ValidationError, match="crs_compose is required"):
+            ExperimentConfig(**cfg)
 
-        with pytest.raises(ValidationError):
+    def test_rejects_legacy_adapter_field(self) -> None:
+        from crsbench.validation.schemas import ExperimentConfig
+        from pydantic import ValidationError
+
+        cfg = self._base_config()
+        cfg["adapter"] = "oss-crs"
+        cfg["crs_compose"] = {
+            "oss_crs_infra": {"num_cores": 1, "mem_limit": "8G"},
+            "crs1": {"num_cores": 1, "mem_limit": "8G"},
+        }
+
+        with pytest.raises(ValidationError, match="extra_forbidden|Extra inputs"):
             ExperimentConfig(**cfg)
 
 
@@ -2104,6 +2256,223 @@ class TestBugFixInputStaging:
                 benchmark, "fuzz_target", trial_dir, target_cpv_id="cpv_missing"
             )
 
+    def test_prepare_bugfix_runtime_inputs_skips_pov_when_disabled(
+        self, tmp_path: Path
+    ) -> None:
+        benchmark = self._make_benchmark_with_variants(tmp_path)
+        trial_dir = tmp_path / "trial"
+        trial_dir.mkdir()
+        (trial_dir / "povs").mkdir()
+        (trial_dir / "ref.diff").write_text("legacy")
+
+        adapter = MagicMock()
+        adapter.mode = "bug-fixing"
+        runner = BenchmarkRunner(
+            adapter=adapter,
+            snapshot_period=0,
+            pov_input_enabled=False,
+            diff_input_enabled=False,
+            seed_corpus_enabled=False,
+        )
+
+        runner._prepare_bugfix_runtime_inputs(benchmark, "fuzz_target", trial_dir)
+
+        assert not (trial_dir / "povs").exists()
+        assert not (trial_dir / "ref.diff").exists()
+
+    def test_prepare_bugfix_runtime_inputs_stages_seed_and_diff(
+        self, tmp_path: Path
+    ) -> None:
+        benchmark = self._make_benchmark_with_variants(tmp_path)
+        seed_dir = benchmark / ".aixcc" / "fuzz_target" / "seeds"
+        seed_dir.mkdir(parents=True, exist_ok=True)
+        (seed_dir / "seed_a").write_bytes(b"a")
+        (seed_dir / "seed_b").write_bytes(b"b")
+        (seed_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "files": {
+                        "seed_a": {"relative_time": 5},
+                        "seed_b": {"relative_time": 20},
+                    }
+                }
+            )
+        )
+        ref_diff = benchmark / ".aixcc" / "ref.diff"
+        ref_diff.write_text("--- a/f.c\n+++ b/f.c\n")
+
+        trial_dir = tmp_path / "trial"
+        trial_dir.mkdir()
+
+        adapter = MagicMock()
+        adapter.mode = "bug-fixing"
+        runner = BenchmarkRunner(
+            adapter=adapter,
+            snapshot_period=0,
+            pov_input_enabled=False,
+            seed_corpus_enabled=True,
+            seed_corpus_max_time=10,
+            diff_input_enabled=True,
+        )
+
+        runner._prepare_bugfix_runtime_inputs(benchmark, "fuzz_target", trial_dir)
+
+        staged_seed_files = {p.name for p in (trial_dir / "seeds").iterdir()}
+        assert staged_seed_files == {"seed_a"}
+        assert (trial_dir / "ref.diff").exists()
+
+    def test_prepare_bugfix_runtime_inputs_stages_bug_candidates_from_sarif(
+        self, tmp_path: Path
+    ) -> None:
+        benchmark = self._make_benchmark_with_variants(tmp_path)
+        hints_dir = benchmark / ".aixcc" / "fuzz_target" / "cpv_0" / "hints"
+        hints_dir.mkdir(parents=True, exist_ok=True)
+        (hints_dir / "level_1.sarif").write_text('{"version":"2.1.0"}')
+
+        trial_dir = tmp_path / "trial"
+        trial_dir.mkdir()
+
+        adapter = MagicMock()
+        adapter.mode = "bug-fixing"
+        runner = BenchmarkRunner(
+            adapter=adapter,
+            snapshot_period=0,
+            pov_input_enabled=False,
+            seed_corpus_enabled=False,
+            diff_input_enabled=False,
+            sarif_input_enabled=True,
+            sarif_level=1,
+        )
+
+        runner._prepare_bugfix_runtime_inputs(
+            benchmark, "fuzz_target", trial_dir, target_cpv_id="cpv_0"
+        )
+
+        staged = trial_dir / "bug-candidates" / "cpv_0.sarif"
+        assert staged.exists()
+
+    def test_prepare_bugfix_runtime_inputs_cleans_stale_bug_candidates(
+        self, tmp_path: Path
+    ) -> None:
+        benchmark = self._make_benchmark_with_variants(tmp_path)
+        trial_dir = tmp_path / "trial"
+        trial_dir.mkdir()
+        stale_dir = trial_dir / "bug-candidates"
+        stale_dir.mkdir()
+        (stale_dir / "stale.sarif").write_text("{}")
+
+        adapter = MagicMock()
+        adapter.mode = "bug-fixing"
+        runner = BenchmarkRunner(
+            adapter=adapter,
+            snapshot_period=0,
+            pov_input_enabled=False,
+            seed_corpus_enabled=False,
+            diff_input_enabled=False,
+            sarif_input_enabled=False,
+            sarif_level=None,
+        )
+
+        runner._prepare_bugfix_runtime_inputs(benchmark, "fuzz_target", trial_dir)
+
+        assert not stale_dir.exists()
+
+    def test_prepare_bugfix_runtime_inputs_replaces_stale_pov_dirs(
+        self, tmp_path: Path
+    ) -> None:
+        benchmark = self._make_benchmark_with_variants(tmp_path)
+        trial_dir = tmp_path / "trial"
+        trial_dir.mkdir()
+        stale_adapter = trial_dir / "povs"
+        stale_input = trial_dir / "crs-input" / "povs"
+        stale_cpvs = trial_dir / "crs-input" / "cpvs"
+        stale_adapter.mkdir(parents=True)
+        stale_input.mkdir(parents=True)
+        stale_cpvs.mkdir(parents=True)
+        (stale_adapter / "old").write_text("old")
+        (stale_input / "old").write_text("old")
+        (stale_cpvs / "old").mkdir()
+
+        adapter = MagicMock()
+        adapter.mode = "bug-fixing"
+        runner = BenchmarkRunner(
+            adapter=adapter,
+            snapshot_period=0,
+            max_pov_variants_per_cpv=1,
+            pov_input_enabled=True,
+        )
+
+        runner._prepare_bugfix_runtime_inputs(benchmark, "fuzz_target", trial_dir)
+
+        assert not (stale_adapter / "old").exists()
+        assert not (stale_input / "old").exists()
+        assert not (stale_cpvs / "old").exists()
+
+    def test_prepare_bugfix_runtime_inputs_fails_when_sarif_enabled_but_missing(
+        self, tmp_path: Path
+    ) -> None:
+        benchmark = self._make_benchmark_with_variants(tmp_path)
+        trial_dir = tmp_path / "trial"
+        trial_dir.mkdir()
+
+        adapter = MagicMock()
+        adapter.mode = "bug-fixing"
+        runner = BenchmarkRunner(
+            adapter=adapter,
+            snapshot_period=0,
+            pov_input_enabled=False,
+            sarif_input_enabled=True,
+            sarif_level=1,
+        )
+
+        with pytest.raises(
+            EvaluationError, match="SARIF bug-candidate input enabled but no matching"
+        ):
+            runner._prepare_bugfix_runtime_inputs(benchmark, "fuzz_target", trial_dir)
+
+    def test_prepare_bugfix_runtime_inputs_fails_when_seed_enabled_but_missing(
+        self, tmp_path: Path
+    ) -> None:
+        benchmark = self._make_benchmark_with_variants(tmp_path)
+        trial_dir = tmp_path / "trial"
+        trial_dir.mkdir()
+
+        adapter = MagicMock()
+        adapter.mode = "bug-fixing"
+        runner = BenchmarkRunner(
+            adapter=adapter,
+            snapshot_period=0,
+            pov_input_enabled=False,
+            seed_corpus_enabled=True,
+        )
+
+        with pytest.raises(
+            EvaluationError, match="Seed corpus input enabled but unavailable"
+        ):
+            runner._prepare_bugfix_runtime_inputs(benchmark, "fuzz_target", trial_dir)
+
+    def test_prepare_bugfix_runtime_inputs_fails_when_diff_enabled_but_missing(
+        self, tmp_path: Path
+    ) -> None:
+        benchmark = self._make_benchmark_with_variants(tmp_path)
+        trial_dir = tmp_path / "trial"
+        trial_dir.mkdir()
+
+        adapter = MagicMock()
+        adapter.mode = "bug-fixing"
+        runner = BenchmarkRunner(
+            adapter=adapter,
+            snapshot_period=0,
+            pov_input_enabled=False,
+            diff_input_enabled=True,
+        )
+
+        with pytest.raises(
+            EvaluationError,
+            match="Diff input enabled but benchmark ref.diff is missing",
+        ):
+            runner._prepare_bugfix_runtime_inputs(benchmark, "fuzz_target", trial_dir)
+
 
 class TestBugFixPatchStatsCollection:
     """Tests for bug-fixing patch stats collection/reporting."""
@@ -2219,7 +2588,6 @@ class TestStageBenchmark:
             oss_fuzz_path=tmp_path / "oss-fuzz",
             registry_dir=registry,
             benchmarks_root=tmp_path / "benchmarks",
-            crs_configs_dir=tmp_path / "configs",
             mode="bug-finding",
         )
         adapter.configure(

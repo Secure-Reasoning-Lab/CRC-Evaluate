@@ -16,6 +16,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from crsbench.benchmark_ci.cli import add_ci_subparser, dispatch_ci
+from crsbench.benchmark_ci.cli.commands.all_cmd import run_all
+from crsbench.benchmark_ci.cli.commands.build_cmd import run_build
+from crsbench.benchmark_ci.cli.commands.coverage_cmd import run_coverage
+from crsbench.benchmark_ci.cli.commands.patch_cmd import run_patch
+from crsbench.benchmark_ci.cli.commands.pov_cmd import run_pov
 from crsbench.benchmark_ci.models import CheckMode
 
 
@@ -53,6 +58,16 @@ class TestSubcommandRegistration:
         parser = _make_parser()
         args = parser.parse_args(["ci", "pov", "--source", "pkgs", "--all"])
         assert args.source == "pkgs"
+
+    def test_ci_subparser_build_options_help_matches_compat_semantics(self, capsys):
+        parser = _make_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["ci", "all", "--help"])
+        help_text = capsys.readouterr().out
+        assert "--exit-on-error" in help_text
+        assert "Compatibility flag" in help_text
+        assert "--build-workers" in help_text
+        assert "Compatibility knob" in help_text
 
     def test_ci_subparser_all_runs_coverage_by_default(self):
         parser = _make_parser()
@@ -152,6 +167,36 @@ class TestDispatchCi:
             call_args = mock_run_pov.call_args[0][0]
             assert call_args.source == "pkgs"
             assert call_args.build_workers == 8
+
+
+class TestDistributedFlagAlignment:
+    """Distributed mode should reject local worker knobs consistently."""
+
+    @pytest.mark.parametrize(
+        "runner",
+        [run_build, run_pov, run_patch, run_coverage, run_all],
+    )
+    def test_distributed_rejects_local_worker_knobs(self, runner):
+        args = argparse.Namespace(
+            benchmark=None,
+            benchmarks=["dummy-bench"],
+            benchmark_suite=None,
+            all=False,
+            filter=None,
+            source="pkgs",
+            mode="snapshot",
+            force_rebuild=False,
+            distributed=True,
+            redis_host="localhost",
+            build_workers=8,
+            verify_workers=8,
+            output=None,
+            output_dir=None,
+            no_color=True,
+            max_povs_per_cpv=None,
+            inc_coverage=False,
+        )
+        assert runner(args) == 1
 
 
 # --- Test parse subcommand (functional) ---

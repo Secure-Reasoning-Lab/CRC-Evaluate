@@ -36,17 +36,14 @@ def make_bugfind_config_dict(tmp_path: Path, **overrides: Any) -> dict[str, Any]
         "experiment": "e2e-bugfind-test",
         "trials": 1,
         "mode": "full",
-        "adapter": "oss-crs",
         "max_total_time": 86400,
-        "difficulty_level": 1,
+        "inputs": {"pov": {"enabled": False}},
         "experiment_filestore": str(tmp_path / "filestore"),
         "report_filestore": str(tmp_path / "report"),
-        "crses": ["test-crs"],
         "benchmarks": ["test-project"],
         "oss_fuzz_path": str(tmp_path / "oss-fuzz"),
         "registry_dir": str(tmp_path / "registry"),
         "benchmarks_root": str(tmp_path / "benchmarks"),
-        "crs_configs_dir": str(tmp_path / "crs-configs"),
         "snapshot_period": 0,
         "skip_verification": True,
         "skip_litellm": True,
@@ -54,9 +51,7 @@ def make_bugfind_config_dict(tmp_path: Path, **overrides: Any) -> dict[str, Any]
         "run_timeout": 10,
         "crs_compose": {
             "oss_crs_infra": {"num_cores": 1, "mem_limit": "8G"},
-            "crs_services": {
-                "test-crs": {"num_cores": 1, "mem_limit": "8G"},
-            },
+            "test-crs": {"num_cores": 1, "mem_limit": "8G"},
         },
     }
     base.update(overrides)

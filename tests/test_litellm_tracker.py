@@ -1449,27 +1449,25 @@ class TestSetupLlmTrackingBudget:
             "experiment": "test-exp",
             "trials": 1,
             "mode": "delta",
-            "adapter": "oss-crs",
             "max_total_time": 36000,  # Must be > build + run + verify timeouts
             "build_timeout": 3600,
             "run_timeout": 7200,
             "verify_timeout": 7200,
-            "difficulty_level": 0,
+            "inputs": {"pov": {"enabled": False}},
             "experiment_filestore": tmp_path / "experiments",
             "report_filestore": tmp_path / "reports",
-            "crses": ["test-crs"],
             "benchmarks": ["test-bench"],
+            "crs_compose": {
+                "oss_crs_infra": {"num_cores": 1, "mem_limit": "8G"},
+                "test-crs": {"num_cores": 1, "mem_limit": "8G"},
+            },
         }
 
     @patch("crsbench.distributed.jobs.LiteLLMTracker")
     def test_budget_passed_to_generate_key(self, mock_tracker_class, base_config_dict):
-        """Test that cost_budget from config is passed to generate_key()."""
+        """Test that runtime.litellm.cost_budget is passed to generate_key()."""
         from crsbench.distributed.jobs import _setup_llm_tracking
-        from crsbench.validation.schemas import (
-            ExperimentConfig,
-            LitellmResourceConfig,
-            ResourceConfig,
-        )
+        from crsbench.validation.schemas import ExperimentConfig
 
         mock_tracker = MagicMock()
         mock_tracker.generate_key.return_value = "sk-test-key"
@@ -1477,10 +1475,7 @@ class TestSetupLlmTrackingBudget:
         mock_tracker.get_team_info.return_value = {"spend": 10.0, "max_budget": 100.0}
         mock_tracker_class.return_value = mock_tracker
 
-        config = ExperimentConfig(
-            **base_config_dict,
-            resources=ResourceConfig(litellm=LitellmResourceConfig(cost_budget=50.0)),
-        )
+        config = ExperimentConfig(**base_config_dict, litellm_cost_budget=50.0)
 
         tracker, api_key = _setup_llm_tracking(
             config=config,
@@ -1508,7 +1503,7 @@ class TestSetupLlmTrackingBudget:
     def test_no_budget_when_resources_not_configured(
         self, mock_tracker_class, base_config_dict
     ):
-        """Test that max_budget is None when resources.litellm not configured."""
+        """Test that max_budget is None when litellm_cost_budget is unset."""
         from crsbench.distributed.jobs import _setup_llm_tracking
         from crsbench.validation.schemas import ExperimentConfig
 
@@ -1545,9 +1540,9 @@ class TestSetupLlmTrackingBudget:
     def test_no_budget_when_litellm_not_configured(
         self, mock_tracker_class, base_config_dict
     ):
-        """Test that max_budget is None when litellm not in resources."""
+        """Test that max_budget is None when runtime.litellm.cost_budget is null."""
         from crsbench.distributed.jobs import _setup_llm_tracking
-        from crsbench.validation.schemas import ExperimentConfig, ResourceConfig
+        from crsbench.validation.schemas import ExperimentConfig
 
         mock_tracker = MagicMock()
         mock_tracker.generate_key.return_value = "sk-test-key"
@@ -1555,10 +1550,7 @@ class TestSetupLlmTrackingBudget:
         mock_tracker.get_team_info.return_value = {"spend": 10.0, "max_budget": None}
         mock_tracker_class.return_value = mock_tracker
 
-        config = ExperimentConfig(
-            **base_config_dict,
-            resources=ResourceConfig(),  # No litellm configured
-        )
+        config = ExperimentConfig(**base_config_dict, litellm_cost_budget=None)
 
         _setup_llm_tracking(
             config=config,
@@ -1586,24 +1578,15 @@ class TestSetupLlmTrackingBudget:
 
     @patch("crsbench.distributed.jobs.LiteLLMTracker")
     def test_team_from_config(self, mock_tracker_class, base_config_dict):
-        """Test that team config is accepted but team association is disabled."""
+        """Test that litellm_cost_budget config is accepted."""
         from crsbench.distributed.jobs import _setup_llm_tracking
-        from crsbench.validation.schemas import (
-            ExperimentConfig,
-            LitellmResourceConfig,
-            ResourceConfig,
-        )
+        from crsbench.validation.schemas import ExperimentConfig
 
         mock_tracker = MagicMock()
         mock_tracker.generate_key.return_value = "sk-test-key"
         mock_tracker_class.return_value = mock_tracker
 
-        config = ExperimentConfig(
-            **base_config_dict,
-            resources=ResourceConfig(
-                litellm=LitellmResourceConfig(cost_budget=50.0, team="custom-team")
-            ),
-        )
+        config = ExperimentConfig(**base_config_dict, litellm_cost_budget=50.0)
 
         _setup_llm_tracking(
             config=config,
@@ -1614,9 +1597,6 @@ class TestSetupLlmTrackingBudget:
             mode="delta",
             sanitizer="address",
         )
-
-        # Team association disabled (LiteLLM bug #11962)
-        mock_tracker.get_or_create_team.assert_not_called()
 
         mock_tracker.generate_key.assert_called_once_with(
             experiment="test-exp",
@@ -1671,27 +1651,21 @@ class TestSetupLlmTrackingBudget:
     def test_team_config_ignored_key_generated_independently(
         self, mock_tracker_class, base_config_dict
     ):
-        """Test that team/team_max_budget config is ignored; key is independent."""
+        """Test that grouped runtime.litellm.cost_budget is honored."""
         from crsbench.distributed.jobs import _setup_llm_tracking
-        from crsbench.validation.schemas import (
-            ExperimentConfig,
-            LitellmResourceConfig,
-            ResourceConfig,
-        )
+        from crsbench.validation.schemas import ExperimentConfig
 
         mock_tracker = MagicMock()
         mock_tracker.generate_key.return_value = "sk-test-key"
         mock_tracker_class.return_value = mock_tracker
 
-        config = ExperimentConfig(
-            **base_config_dict,
-            resources=ResourceConfig(
-                litellm=LitellmResourceConfig(
-                    cost_budget=50.0,
-                    team="custom-team",
-                    team_max_budget=500.0,
-                )
-            ),
+        config = ExperimentConfig.model_validate(
+            {
+                **base_config_dict,
+                "runtime": {
+                    "litellm": {"cost_budget": 50.0},
+                },
+            }
         )
 
         tracker, api_key = _setup_llm_tracking(
@@ -1705,10 +1679,6 @@ class TestSetupLlmTrackingBudget:
         )
 
         assert api_key == "sk-test-key"
-        # Team association disabled (LiteLLM bug #11962)
-        mock_tracker.get_or_create_team.assert_not_called()
-
-        # Key generated independently without team_id
         mock_tracker.generate_key.assert_called_once_with(
             experiment="test-exp",
             crs="test-crs",

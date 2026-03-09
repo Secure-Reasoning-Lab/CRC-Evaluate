@@ -23,7 +23,6 @@ def base_job_params(tmp_path: Path) -> dict:
         "oss_fuzz_path": tmp_path / "oss-fuzz",
         "registry_dir": tmp_path / "registry",
         "benchmarks_root": tmp_path / "benchmarks",
-        "crs_configs_dir": tmp_path / "crs-configs",
     }
 
 

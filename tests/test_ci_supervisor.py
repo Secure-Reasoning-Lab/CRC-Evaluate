@@ -230,6 +230,59 @@ class TestCiSupervisorQueues:
 
         assert 0.05 in sleep_calls
 
+    def test_non_continuous_cpu_tag_mismatch_exits_without_livelock(self) -> None:
+        """Non-continuous mode should stop after repeated cpu_tag mismatch requeues."""
+        from crsbench.distributed.ci_supervisor import (
+            CPU_TAG_MISMATCH_EXIT_CODE,
+            NON_CONTINUOUS_CPU_MISMATCH_LIMIT,
+            run_ci_supervisor,
+        )
+
+        mock_build_queue = _make_mock_queue("crsbench_ci_build", count=1)
+        mock_verify_queue = _make_mock_queue("crsbench_ci_verify", count=0)
+
+        def queue_factory(name, **_kwargs):
+            if "build" in name:
+                return mock_build_queue
+            return mock_verify_queue
+
+        mock_job = MagicMock()
+        mock_job.id = "test-job-12345678"
+        mock_job.meta = {"cpu_tag": "arm-neon"}
+        mock_job.get_status.return_value = "queued"
+
+        dequeue_count = [0]
+
+        def dequeue_any(_queues, **_kwargs):
+            dequeue_count[0] += 1
+            return (mock_job, mock_build_queue)
+
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch("crsbench.distributed.ci_supervisor.time.sleep"),
+        ):
+            mock_rq.Queue.side_effect = queue_factory
+            mock_rq.Queue.dequeue_any = dequeue_any
+            result = run_ci_supervisor(
+                redis_host="localhost",
+                build_queue_name="crsbench_ci_build",
+                verify_queue_name="crsbench_ci_verify",
+                worker_name="test-worker",
+                build_jobs=1,
+                build_cores_per_job=1,
+                verify_jobs=0,
+                job_runner=lambda _h, _n, _j: None,
+                cpu_tag="x86-avx2",
+                continuous=False,
+            )
+
+        assert result == CPU_TAG_MISMATCH_EXIT_CODE
+        assert dequeue_count[0] == NON_CONTINUOUS_CPU_MISMATCH_LIMIT
+        assert (
+            mock_build_queue.enqueue_job.call_count == NON_CONTINUOUS_CPU_MISMATCH_LIMIT
+        )
+
 
 class TestWorkerTrialAdapter:
     """Test that the worker trial adapter exists and works."""
@@ -686,8 +739,8 @@ class TestSupervisorExitCondition:
 
         mock_process = MagicMock()
         mock_process.pid = 43210
-        # reap check, terminate loop check, force-kill check
-        mock_process.is_alive.side_effect = [True, True, True]
+        # reap check, start-race check, terminate loop check, force-kill check
+        mock_process.is_alive.side_effect = [True, True, True, True]
 
         dequeue_calls = {"n": 0}
 
@@ -745,6 +798,60 @@ class TestSupervisorExitCondition:
         mock_process.kill.assert_called_once()
         mock_pool.release.assert_called_once_with([0])
         mock_cg.assert_called_with(Path("/sys/fs/cgroup/crsbench/build-1"), force=True)
+
+    def test_early_child_exit_requeues_job_at_front(self) -> None:
+        """If child exits before active registration, requeue job at front."""
+        from crsbench.distributed.ci_supervisor import run_ci_supervisor
+
+        mock_build_queue = _make_mock_queue("crsbench_ci_build", count=1)
+        mock_verify_queue = _make_mock_queue("crsbench_ci_verify", count=0)
+
+        def queue_factory(name, **_kwargs):
+            if "build" in name:
+                return mock_build_queue
+            return mock_verify_queue
+
+        mock_job = MagicMock()
+        mock_job.id = "test-job-12345678"
+        mock_job.meta = {}
+        # Child exits before touching RQ state: still queued -> requeue is required.
+        mock_job.get_status.return_value = "queued"
+
+        dequeue_calls = {"n": 0}
+
+        def dequeue_any(_queues, **_kwargs):
+            dequeue_calls["n"] += 1
+            if dequeue_calls["n"] == 1:
+                return (mock_job, mock_build_queue)
+            raise KeyboardInterrupt
+
+        mock_process = MagicMock()
+        mock_process.pid = 12345
+        mock_process.is_alive.return_value = False
+
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor.multiprocessing.Process"
+            ) as mock_proc_cls,
+        ):
+            mock_rq.Queue.side_effect = queue_factory
+            mock_rq.Queue.dequeue_any.side_effect = dequeue_any
+            mock_proc_cls.return_value = mock_process
+            result = run_ci_supervisor(
+                redis_host="localhost",
+                build_queue_name="crsbench_ci_build",
+                verify_queue_name="crsbench_ci_verify",
+                worker_name="test-worker",
+                build_jobs=1,
+                build_cores_per_job=1,
+                verify_jobs=0,
+                job_runner=lambda _h, _n, _j: None,
+            )
+
+        assert result == 0
+        mock_build_queue.enqueue_job.assert_called_once_with(mock_job, at_front=True)
 
 
 class TestMultiQueueSupervisor:
@@ -892,6 +999,55 @@ class TestMultiQueueSupervisor:
         assert result == 0
         assert iterations[0] == 0
 
+    def test_non_continuous_cpu_tag_mismatch_exits_without_livelock(self) -> None:
+        """Multi-queue non-continuous mode should stop repeated mismatch requeues."""
+        from crsbench.distributed.ci_supervisor import (
+            CPU_TAG_MISMATCH_EXIT_CODE,
+            NON_CONTINUOUS_CPU_MISMATCH_LIMIT,
+            run_multi_queue_supervisor,
+        )
+
+        build_q = _make_mock_queue("crsbench_exp1_build", count=1)
+        verify_q = _make_mock_queue("crsbench_exp1_verify", count=0)
+
+        def queue_factory(name, **_kwargs):
+            return build_q if "build" in name else verify_q
+
+        mock_job = MagicMock()
+        mock_job.id = "test-job-12345678"
+        mock_job.meta = {"cpu_tag": "arm-neon"}
+        mock_job.get_status.return_value = "queued"
+
+        dequeue_count = [0]
+
+        def dequeue_any(_queues, **_kwargs):
+            dequeue_count[0] += 1
+            return (mock_job, build_q)
+
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch("crsbench.distributed.ci_supervisor.time.sleep"),
+        ):
+            mock_rq.Queue.side_effect = queue_factory
+            mock_rq.Queue.dequeue_any = dequeue_any
+            result = run_multi_queue_supervisor(
+                redis_host="localhost",
+                build_queue_names=["crsbench_exp1_build"],
+                verify_queue_names=["crsbench_exp1_verify"],
+                worker_name="test-worker",
+                build_jobs=1,
+                build_cores_per_job=1,
+                verify_jobs=0,
+                job_runner=lambda _h, _n, _j: None,
+                cpu_tag="x86-avx2",
+                continuous=False,
+            )
+
+        assert result == CPU_TAG_MISMATCH_EXIT_CODE
+        assert dequeue_count[0] == NON_CONTINUOUS_CPU_MISMATCH_LIMIT
+        assert build_q.enqueue_job.call_count == NON_CONTINUOUS_CPU_MISMATCH_LIMIT
+
     def test_accepts_empty_verify_list(self) -> None:
         """Multi-queue supervisor works with empty verify queue list (worker mode)."""
         from crsbench.distributed.ci_supervisor import run_multi_queue_supervisor
@@ -1026,7 +1182,8 @@ class TestMultiQueueSupervisor:
 
         mock_process = MagicMock()
         mock_process.pid = 12321
-        mock_process.is_alive.side_effect = [True, True, True]
+        # reap check, start-race check, terminate loop check, force-kill check
+        mock_process.is_alive.side_effect = [True, True, True, True]
 
         dequeue_calls = {"n": 0}
 

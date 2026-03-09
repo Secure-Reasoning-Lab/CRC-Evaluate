@@ -32,17 +32,14 @@ def make_bugfix_config_dict(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
         "experiment": "e2e-bugfix-test",
         "trials": 1,
         "mode": "full",
-        "adapter": "oss-crs",
         "max_total_time": 86400,
-        "difficulty_level": 1,
+        "inputs": {"pov": {"enabled": True, "max_variants_per_cpv": 1}},
         "experiment_filestore": str(tmp_path / "filestore"),
         "report_filestore": str(tmp_path / "report"),
-        "crses": ["test-crs"],
         "benchmarks": ["test-project"],
         "oss_fuzz_path": str(tmp_path / "oss-fuzz"),
         "registry_dir": str(tmp_path / "registry"),
         "benchmarks_root": str(tmp_path / "benchmarks"),
-        "crs_configs_dir": str(tmp_path / "crs-configs"),
         "snapshot_period": 0,
         "skip_verification": True,
         "skip_litellm": True,
@@ -50,9 +47,7 @@ def make_bugfix_config_dict(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
         "run_timeout": 10,
         "crs_compose": {
             "oss_crs_infra": {"num_cores": 1, "mem_limit": "8G"},
-            "crs_services": {
-                "test-crs": {"num_cores": 1, "mem_limit": "8G"},
-            },
+            "test-crs": {"num_cores": 1, "mem_limit": "8G"},
         },
     }
     base.update(overrides)
@@ -185,6 +180,12 @@ _RUN_GRACEFUL = "crsbench.evaluation.adapter.compose_common.run_with_graceful_ti
 _ARTIFACTS = "crsbench.evaluation.adapter.oss_crs.run_oss_crs_artifacts"
 
 
+def _validated_payload(raw_config: dict[str, Any]) -> dict[str, Any]:
+    """Validate config and emit serialized payload."""
+    config = ExperimentConfig(**raw_config)
+    return config.model_dump(mode="json")
+
+
 def _artifacts_side_effect_factory(tmp_path: Path, crs_name: str, harness: str) -> Any:
     """Create side_effect for run_oss_crs_artifacts returning correct submit_dir."""
 
@@ -268,8 +269,7 @@ class TestBugFixE2ECompose:
             tmp_path, "test-crs", "fuzz_target"
         )
 
-        config_dict = make_bugfix_config_dict(tmp_path)
-        config = ExperimentConfig(**config_dict)
+        config_payload = _validated_payload(make_bugfix_config_dict(tmp_path))
 
         result = run_crs_trial(
             crs="test-crs",
@@ -278,7 +278,7 @@ class TestBugFixE2ECompose:
             harness_path="/src/project/fuzz_target.c",
             trial_num=1,
             trial_id="trial-bugfix-001",
-            config_dict=config.model_dump(mode="json"),
+            config_dict=config_payload,
             mode="full",
         )
 
@@ -320,8 +320,7 @@ class TestBugFixE2ECompose:
             args=[], returncode=1, stdout="", stderr="prepare error"
         )
 
-        config_dict = make_bugfix_config_dict(tmp_path)
-        config = ExperimentConfig(**config_dict)
+        config_payload = _validated_payload(make_bugfix_config_dict(tmp_path))
 
         result = run_crs_trial(
             crs="test-crs",
@@ -330,7 +329,7 @@ class TestBugFixE2ECompose:
             harness_path="/src/project/fuzz_target.c",
             trial_num=1,
             trial_id="trial-bugfix-fail-001",
-            config_dict=config.model_dump(mode="json"),
+            config_dict=config_payload,
             mode="full",
         )
 
@@ -360,8 +359,7 @@ class TestBugFixE2ECompose:
             tmp_path, "test-crs", "fuzz_target"
         )
 
-        config_dict = make_bugfix_config_dict(tmp_path)
-        config = ExperimentConfig(**config_dict)
+        config_payload = _validated_payload(make_bugfix_config_dict(tmp_path))
 
         result = run_crs_trial(
             crs="test-crs",
@@ -370,7 +368,7 @@ class TestBugFixE2ECompose:
             harness_path="/src/project/fuzz_target.c",
             trial_num=1,
             trial_id="trial-bugfix-timeout-001",
-            config_dict=config.model_dump(mode="json"),
+            config_dict=config_payload,
             mode="full",
         )
 
@@ -403,8 +401,7 @@ class TestBugFixE2ECompose:
             tmp_path, "test-crs", "fuzz_target"
         )
 
-        config_dict = make_bugfix_config_dict(tmp_path)
-        config = ExperimentConfig(**config_dict)
+        config_payload = _validated_payload(make_bugfix_config_dict(tmp_path))
 
         run_crs_trial(
             crs="test-crs",
@@ -413,7 +410,7 @@ class TestBugFixE2ECompose:
             harness_path="/src/project/fuzz_target.c",
             trial_num=1,
             trial_id="trial-bugfix-meta-001",
-            config_dict=config.model_dump(mode="json"),
+            config_dict=config_payload,
             mode="full",
         )
 
@@ -450,8 +447,7 @@ class TestBugFixE2ECompose:
             tmp_path, "test-crs", "fuzz_target"
         )
 
-        config_dict = make_bugfix_config_dict(tmp_path)
-        config = ExperimentConfig(**config_dict)
+        config_payload = _validated_payload(make_bugfix_config_dict(tmp_path))
 
         result = run_crs_trial(
             crs="test-crs",
@@ -460,7 +456,7 @@ class TestBugFixE2ECompose:
             harness_path="/src/project/fuzz_target.c",
             trial_num=1,
             trial_id="trial-bugfix-patches-001",
-            config_dict=config.model_dump(mode="json"),
+            config_dict=config_payload,
             mode="full",
         )
 
@@ -503,8 +499,7 @@ class TestBugFixE2ECompose:
             tmp_path, "test-crs", "fuzz_target"
         )
 
-        config_dict = make_bugfix_config_dict(tmp_path)
-        config = ExperimentConfig(**config_dict)
+        config_payload = _validated_payload(make_bugfix_config_dict(tmp_path))
 
         result = run_crs_trial(
             crs="test-crs",
@@ -513,7 +508,7 @@ class TestBugFixE2ECompose:
             harness_path="/src/project/fuzz_target.c",
             trial_num=1,
             trial_id="trial-bugfix-nopatch-001",
-            config_dict=config.model_dump(mode="json"),
+            config_dict=config_payload,
             mode="full",
         )
 
