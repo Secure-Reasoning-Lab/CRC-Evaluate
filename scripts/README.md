@@ -21,6 +21,6 @@ relevant to CRSBench workflows.
 
 ## See Also
 
-- `docs/experiment-workflow.md`
-- `docs/environment-setup.md`
-- `services/valkey/README.md`
+- [Distributed Experiments](../docs/guides/experiments/distributed.md)
+- [Configuration](../docs/getting-started/configuration.md)
+- [Valkey Service](../services/valkey/README.md)

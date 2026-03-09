@@ -1,70 +1,70 @@
-# CRSBench Documentation Index
+# CRSBench Documentation
 
-This directory is the canonical entry point for CRSBench documentation.
+Use this page as the primary navigation hub.
 
-## Start Here
+## Primary Paths
 
-- Bootstrap prerequisites first: `uv sync && crsbench prepare`
-- [Environment Setup](./environment-setup.md)
-- [Environment Variables](./environment-variables.md)
-- [Experiment Workflow](./experiment-workflow.md)
-- [Benchmark Specification (RFC)](./RFC.md)
+1. Install and configure CRSBench
+   [Getting Started](./getting-started/README.md),
+   [Install](./getting-started/install.md), and
+   [Configuration](./getting-started/configuration.md)
+2. Run your first experiment
+   [First Experiment](./getting-started/first-experiment.md)
+3. Run distributed experiments
+   [Experiment Guides](./guides/experiments/README.md) and
+   [Distributed Experiments](./guides/experiments/distributed.md)
+4. Run benchmark CI
+   [Benchmark CI Guides](./guides/benchmark-ci/README.md) and
+   [Benchmark CI Quickstart](./guides/benchmark-ci/quickstart.md)
 
-## Documentation Governance
+## Guides
 
-- [Documentation Taxonomy and Canonical Map](./documentation-taxonomy.md)
-- [Documentation Inventory and Audit](./documentation-inventory.md)
-- [Documentation Maintenance Guide](./documentation-maintenance.md)
-- [Config Contract Plan](./plan/config-contract/README.md)
+- [Experiments Hub](./guides/experiments/README.md)
+  - [Single Machine](./guides/experiments/single-machine.md)
+  - [Distributed](./guides/experiments/distributed.md)
+  - [Queue and Recovery](./guides/experiments/queue-and-recovery.md)
+  - [Config Reference](./guides/experiments/config-reference.md)
+- [Benchmark CI Hub](./guides/benchmark-ci/README.md)
+  - [Quickstart](./guides/benchmark-ci/quickstart.md)
+  - [Distributed](./guides/benchmark-ci/distributed.md)
+  - [Reference](./guides/benchmark-ci/reference.md)
 
-## Contributor Guides
+## Reference
 
-- [Framework Developer Guide](./framework-developer-guide.md)
-- [Benchmark Developer Guide](./benchmark-developer-guide.md)
-- [Testing Setup](./testing-setup.md)
-- [Coding Standards](./coding-standards.md)
-- [Manual Validation Guideline](./manual-validation-guideline.md)
+- [Reference Hub](./reference/README.md)
+- [Benchmark RFC](./reference/benchmark-rfc.md)
+- [Environment Variables](./reference/environment-variables.md)
+- [OSS-CRS Interface](./reference/oss-crs-interface.md)
+- [Seed Corpus](./reference/seed-corpus.md)
+- [Snapshots](./reference/snapshots.md)
+- [Example Configs](./reference/example-configs.md)
+- [Distributed Experiment Config](./experiment-config-distributed-example.yaml)
 
-## Runtime and Operations
+## Contributors
 
-- [OSS-CRS Interface](./ossfuzz-crs-interface.md)
-- [Evaluator and CI Result Semantics](./design/evaluation/evaluation.md#distributed-evaluator-and-ci-result-semantics)
-- [Logger Usage Guide](./logger-usage-guide.md)
-- [Seed Corpus](./seed-corpus.md)
-- [Snapshot Examples](./snapshot-examples.md)
-- [Distributed Experiment Config (Grouped Contract)](./experiment-config-distributed-example.yaml)
-- Config contract note: declare CRS services under `crs_compose` in experiment YAML.
-- Input contract note: prefer explicit `runtime.inputs` in experiment config (`runtime.inputs.pov`, `runtime.inputs.sarif`, `runtime.inputs.seed`, `runtime.inputs.diff`).
-- Worker override note: use `worker.storage.*` for machine-local storage overrides.
+- [Contributor Guides Hub](./contributors/README.md)
+- [Framework Developer Guide](./contributors/framework-developer-guide.md)
+- [Benchmark Developer Guide](./contributors/benchmark-developer-guide.md)
+- [Testing](./contributors/testing.md)
+- [Coding Standards](./contributors/coding-standards.md)
+- [Manual Validation](./contributors/manual-validation.md)
 
-## Architecture and Design
+## Design and Internals
 
 - [Design Index](./design/README.md)
 - [Architecture Overview](./design/architecture.md)
-- [Distributed Execution](./design/distributed/)
-- [Configless Runtime](./design/distributed/configless-runtime.md)
-- [Evaluation](./design/evaluation/)
-- [Dataset](./design/dataset/dataset.md)
-- [Validation](./design/validation/validation.md)
-- [Reporting](./design/reporting/report-generation.md)
-- [Benchmark CI](./design/benchmark-ci/)
-- [Migration](./design/migration/)
-
-## Module Reference
-
 - [Module Index](./modules/README.md)
 
-## Adjacent Component Readmes
+## Governance
 
+- [Governance Hub](./governance/README.md)
+- [Documentation Taxonomy](./governance/documentation-taxonomy.md)
+- [Documentation Inventory](./governance/documentation-inventory.md)
+
+## Adjacent Repositories and Components
+
+- [experiment-configs/README.md](../experiment-configs/README.md)
 - [scripts/README.md](../scripts/README.md)
 - [benchmark-suites/README.md](../benchmark-suites/README.md)
-- [oss-crs/README.md](../oss-crs/README.md)
-- [experiment-configs/README.md](../experiment-configs/README.md)
-- Smoke and local CI scripts: `scripts/ci-tests/run-local.sh`
-- [snapshot-examples/README.md](../snapshot-examples/README.md)
-- [dashboard/README.md](../dashboard/README.md)
-
-## Integrated Upstream Projects
-
 - [oss-crs/README.md](../oss-crs/README.md)
 - [third_party/oss-fuzz/README.md](../third_party/oss-fuzz/README.md)

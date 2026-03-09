@@ -81,8 +81,8 @@ Machine B/C/...               Machine D (single evaluator)
 - Real-time POV/patch collection is tied to resolved `EXCHANGE_DIR` paths
 - Additional POV dedup strategy `stack-based` is available via `pov_dedup_strategy` in experiment config
 
-See [Experiment Workflow](docs/experiment-workflow.md) for multi-machine setup, core pinning, and
-production deployment. See [Environment Setup](docs/environment-setup.md) for `.env` configuration.
+See [Distributed Experiments](docs/guides/experiments/distributed.md) for multi-machine setup, core pinning, and
+production deployment. See [Configuration](docs/getting-started/configuration.md) for `.env` configuration.
 
 ### CRS Config Resolution (Important)
 
@@ -181,19 +181,20 @@ CRSBench/
 ## Documentation
 
 - Entry point: [docs/README.md](docs/README.md)
-- Benchmark format contract: [docs/RFC.md](docs/RFC.md)
+- Benchmark format contract: [docs/reference/benchmark-rfc.md](docs/reference/benchmark-rfc.md)
 - Documentation governance:
-  - [Taxonomy and Canonical Map](docs/documentation-taxonomy.md)
-  - [Inventory and Audit](docs/documentation-inventory.md)
-  - [Maintenance Guide](docs/documentation-maintenance.md)
+  - [Taxonomy and Canonical Map](docs/governance/documentation-taxonomy.md)
+  - [Inventory and Audit](docs/governance/documentation-inventory.md)
 - Setup and runtime:
-  - [Environment Setup](docs/environment-setup.md)
-  - [Environment Variables](docs/environment-variables.md)
-  - [Experiment Workflow](docs/experiment-workflow.md)
+  - [Install](docs/getting-started/install.md)
+  - [Configuration](docs/getting-started/configuration.md)
+  - [Environment Variables](docs/reference/environment-variables.md)
+  - [First Experiment](docs/getting-started/first-experiment.md)
+  - [Distributed Experiments](docs/guides/experiments/distributed.md)
   - [Distributed Experiment Config Contract (source-of-truth)](docs/experiment-config-distributed-example.yaml)
 - Contributor tracks:
-  - [Framework Developer Guide](docs/framework-developer-guide.md)
-  - [Benchmark Developer Guide](docs/benchmark-developer-guide.md)
+  - [Framework Developer Guide](docs/contributors/framework-developer-guide.md)
+  - [Benchmark Developer Guide](docs/contributors/benchmark-developer-guide.md)
 - Architecture and modules:
   - [Design Docs](docs/design/README.md)
   - [Module Docs](docs/modules/README.md)

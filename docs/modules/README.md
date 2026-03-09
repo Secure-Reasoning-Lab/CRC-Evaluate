@@ -6,7 +6,7 @@ under `docs/design/` instead of duplicating implementation detail.
 
 ## Available Modules
 
-- [Benchmark CI](./benchmark-ci.md)
+- [Benchmark CI](../guides/benchmark-ci/reference.md)
 - [Benchmark](./benchmark/README.md)
 - [Benchmark Generation](./benchmark/generation.md)
 - [Dataset](./dataset.md)

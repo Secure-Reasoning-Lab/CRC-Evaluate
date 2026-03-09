@@ -122,7 +122,7 @@ Then re-run the quality gate command above.
 ## Docs Index (Agent Jump List)
 
 - Start here: `docs/README.md`
-- Environment setup: `docs/environment-setup.md`
+- Install/configuration: `docs/getting-started/install.md`
 - Architecture: `docs/design/architecture.md`
 - Design doc policy: `docs/design/doc-authoring-guidelines.md`
 - Distributed systems: `docs/design/distributed/distributed-evaluation.md`
@@ -130,5 +130,5 @@ Then re-run the quality gate command above.
 - Deployment/cloud: `docs/design/distributed/deployment-guide.md`
 - Configless runtime: `docs/design/distributed/configless-runtime.md`
 - Evaluation flow: `docs/design/evaluation/evaluation.md`
-- Testing setup: `docs/testing-setup.md`
-- Coding standards: `docs/coding-standards.md`
+- Testing setup: `docs/contributors/testing.md`
+- Coding standards: `docs/contributors/coding-standards.md`
