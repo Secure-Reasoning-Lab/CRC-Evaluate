@@ -829,6 +829,141 @@ class TestConfiglessEvaluator:
             tmp_path / benchmark_name,
             use_inc_build=True,
             skip_if_cached=True,
+            inc_image_policy="auto",
+            inc_image_registry="ghcr.io/team-atlanta/crsbench",
+            inc_image_max_pull_bytes=10 * 1024 * 1024 * 1024,
+            inc_image_pull_timeout=300,
+            local_image_prefix="crsbench",
+        )
+
+    @patch("rq.Queue")
+    @patch("crsbench.distributed.queue.create_redis_connection")
+    @patch("crsbench.distributed.ci_jobs.serialize_ci_job")
+    @patch("crsbench.executor.variant_planner.VariantPlanner")
+    @patch("crsbench.utils.benchmark_utils.filter_benchmarks_by_mode")
+    def test_enqueue_pre_builds_from_registration_propagates_inc_image_settings(
+        self,
+        mock_filter: MagicMock,
+        mock_planner_cls: MagicMock,
+        mock_serialize: MagicMock,
+        mock_create_redis: MagicMock,
+        mock_queue_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Configless pre-build helper forwards registration inc-image settings."""
+        from crsbench.distributed.evaluator import _enqueue_pre_builds_from_registration
+        from crsbench.distributed.registry import RuntimeRegistration
+
+        benchmark_name = "afc-mock-full-02"
+        (tmp_path / benchmark_name).mkdir(parents=True, exist_ok=True)
+
+        reg = RuntimeRegistration(
+            experiment="exp-43",
+            trial_queue="crsbench_exp-43",
+            build_queue="crsbench_exp-43_build",
+            verify_queue="crsbench_exp-43_verify",
+            benchmarks=[benchmark_name],
+            modes=["full"],
+            benchmarks_root=str(tmp_path),
+            source_mode="pkgs",
+            build_timeout=3600,
+            inc_image_policy="pull_only",
+            inc_image_registry="ghcr.io/example/custom",
+            inc_image_max_pull_bytes=123456,
+            inc_image_pull_timeout_sec=77,
+            local_image_prefix="custom-prefix",
+        )
+
+        mock_filter.side_effect = lambda names, _mode, _root: names
+        mock_create_redis.return_value = MagicMock()
+        mock_queue_cls.return_value = MagicMock()
+        mock_serialize.return_value = {"kind": "build"}
+
+        mock_planner = MagicMock()
+        job = MagicMock()
+        job.job_id = "job-2"
+        mock_planner.plan_builds.return_value = [job]
+        mock_planner_cls.return_value = mock_planner
+
+        enqueued = _enqueue_pre_builds_from_registration(
+            reg,
+            redis_host="localhost",
+            benchmarks_root=str(tmp_path),
+        )
+
+        assert enqueued == 1
+        mock_planner.plan_builds.assert_called_once_with(
+            tmp_path / benchmark_name,
+            use_inc_build=True,
+            skip_if_cached=True,
+            inc_image_policy="pull_only",
+            inc_image_registry="ghcr.io/example/custom",
+            inc_image_max_pull_bytes=123456,
+            inc_image_pull_timeout=77,
+            local_image_prefix="custom-prefix",
+        )
+
+    @patch("rq.Queue")
+    @patch("crsbench.distributed.queue.create_redis_connection")
+    @patch("crsbench.distributed.ci_jobs.serialize_ci_job")
+    @patch("crsbench.executor.variant_planner.VariantPlanner")
+    @patch("crsbench.distributed.evaluator.filter_benchmarks_by_mode")
+    def test_enqueue_pre_builds_propagates_inc_image_settings(
+        self,
+        mock_filter: MagicMock,
+        mock_planner_cls: MagicMock,
+        mock_serialize: MagicMock,
+        mock_create_redis: MagicMock,
+        mock_queue_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Config-mode pre-build helper forwards resolved inc-image settings."""
+        from types import SimpleNamespace
+
+        from crsbench.distributed.evaluator import _enqueue_pre_builds
+
+        benchmark_name = "afc-mock-full-03"
+        (tmp_path / benchmark_name).mkdir(parents=True, exist_ok=True)
+
+        config = SimpleNamespace(
+            benchmarks_root=tmp_path,
+            mode=SimpleNamespace(value="full"),
+            resources=SimpleNamespace(cpu_tag=None),
+            inc_image_policy="pull_only",
+            inc_image_registry="ghcr.io/example/custom",
+            inc_image_max_pull_bytes=123456,
+            inc_image_pull_timeout_sec=77,
+            project_image_prefix="custom-prefix",
+            get_benchmark_list=lambda: [benchmark_name],
+        )
+
+        mock_filter.side_effect = lambda names, _mode, _root: names
+        mock_create_redis.return_value = MagicMock()
+        mock_queue_cls.return_value = MagicMock()
+        mock_serialize.return_value = {"kind": "build"}
+
+        mock_planner = MagicMock()
+        job = MagicMock()
+        job.job_id = "job-3"
+        mock_planner.plan_builds.return_value = [job]
+        mock_planner_cls.return_value = mock_planner
+
+        enqueued = _enqueue_pre_builds(
+            config,
+            experiment_name="exp-44",
+            redis_host="localhost",
+        )
+
+        assert enqueued == 1
+        mock_planner.plan_builds.assert_called_once_with(
+            tmp_path / benchmark_name,
+            use_inc_build=True,
+            skip_if_cached=True,
+            inc_image_policy="pull_only",
+            inc_image_registry="ghcr.io/example/custom",
+            inc_image_max_pull_bytes=123456,
+            inc_image_pull_timeout=77,
+            local_image_prefix="custom-prefix",
         )
 
     def test_evaluator_cli_configless_mode(self) -> None:
