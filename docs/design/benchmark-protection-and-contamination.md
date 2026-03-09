@@ -336,13 +336,13 @@ crsbench benchmark validate ./libpng-vuln-001
 crsbench benchmark prepare-delta ./libpng-vuln-001
 
 # Bundle single benchmark (creates pkgs/ tarballs)
-crsbench benchmark bundle ./libpng-vuln-001 --output ./dist/
+crsbench benchmark bundle ./libpng-vuln-001
 
 # Bundle entire dataset
-crsbench benchmark bundle-all ./benchmarks/ --output-dir ./dist/
+crsbench benchmark bundle-all ./benchmarks/
 
 # Upload to HuggingFace
-crsbench benchmark upload ./benchmarks/ --dataset-name crsbench
+crsbench benchmark upload --dataset crsbench --benchmarks-dir ./benchmarks
 ```
 
 ### 4.4 Bundle Implementation Details
@@ -703,10 +703,10 @@ crsbench benchmark prepare-delta --all
 crsbench benchmark bundle-all ./benchmarks/
 
 # 2. Validate entire dataset
-crsbench benchmark validate ./benchmarks/
+for b in ./benchmarks/*; do crsbench benchmark validate "$b"; done
 
 # 3. Upload to HuggingFace
-crsbench benchmark upload ./benchmarks/ --dataset-name crsbench
+crsbench benchmark upload --dataset crsbench --benchmarks-dir ./benchmarks
 ```
 
 ### 6.3 Using Benchmarks (Public User)

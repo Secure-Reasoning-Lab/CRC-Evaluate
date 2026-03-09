@@ -97,7 +97,7 @@ crsbench benchmark ci all -s smoke-test-bug-finding
 Build/mode options (`--source`, `--mode`, `--force-rebuild`, `--max-povs-per-cpv`)
 apply to build-oriented execution commands (`build`, `pov`, `patch`, `coverage`,
 `all`, and `retry` where applicable), not `capabilities` or `storage`.
-`retry` defaults to `--mode snapshot` unless overridden.
+`retry` defaults to `--mode full` unless overridden.
 
 ## Local Execution
 

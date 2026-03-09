@@ -725,14 +725,14 @@ jobs:
       - name: Run benchmark CI
         run: |
           uv run crsbench benchmark ci all benchmarks/${{ matrix.benchmark }} \
-            --output results-${{ matrix.benchmark }}.csv
+            --output results-${{ matrix.benchmark }}.json
 
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ci-results-${{ matrix.benchmark }}
-          path: results-${{ matrix.benchmark }}.csv
+          path: results-${{ matrix.benchmark }}.json
 ```
 
 ## Component Reuse Summary

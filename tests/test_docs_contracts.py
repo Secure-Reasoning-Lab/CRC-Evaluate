@@ -55,3 +55,25 @@ def test_distributed_docs_do_not_reference_legacy_rq_version() -> None:
     assert not offenders, (
         f"Legacy RQ version marker '{forbidden}' found in: {', '.join(offenders)}"
     )
+
+
+def test_docs_do_not_use_invalid_benchmark_cli_options() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    docs_root = repo_root / "docs"
+    forbidden = [
+        "--dataset-name",
+        "benchmark upload ./benchmarks/",
+        "benchmark bundle-all ./benchmarks/ --output-dir",
+        "benchmark bundle ./libpng-vuln-001 --output",
+    ]
+
+    offenders: list[str] = []
+    for path in docs_root.rglob("*.md"):
+        text = path.read_text(encoding="utf-8")
+        for token in forbidden:
+            if token in text:
+                offenders.append(f"{path.relative_to(repo_root)} :: {token}")
+
+    assert not offenders, (
+        "Found invalid benchmark command options in docs:\n" + "\n".join(offenders)
+    )
