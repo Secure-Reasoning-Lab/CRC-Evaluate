@@ -72,19 +72,39 @@ documentation-governance source of truth.
 
 ## Placement Rules
 
-1. Add new top-level project behavior docs under `docs/` unless they are repository entry-point content for `README.md` or `CONTRIBUTING.md`.
-2. Put architecture or implementation internals in `docs/design/`.
-3. Put reader-facing operational docs in `docs/getting-started/`, `docs/guides/`, or `docs/reference/`.
-4. Keep `docs/modules/` concise and secondary; do not use it as a parallel primary navigation tree.
-5. Keep each topic owned by one canonical page; other pages should point to it.
-6. Avoid copying large command blocks to multiple pages; link to canonical setup/workflow pages.
+### Root vs Grouped-Docs Policy
+
+- Keep `docs/` root reserved for:
+  - the docs navigation hub: `docs/README.md`
+  - top-level normative specs: `docs/RFC.md`
+  - high-value example/reference artifacts that are intended to be directly discoverable, such as `docs/*.yaml`
+- Put prose documentation under grouped subdirectories by reader/task:
+  - `docs/getting-started/`
+  - `docs/guides/`
+  - `docs/reference/`
+  - `docs/contributors/`
+  - `docs/governance/`
+  - `docs/design/`
+  - `docs/modules/`
+- Do not add root-level moved-page shims or compatibility pointers.
+- Do not create duplicate canonical ownership across a root doc and a grouped doc.
+
+### General Placement Rules
+
+1. Add new user-facing prose docs under the grouped `docs/**` subdirectories unless the file is a root-level hub, normative spec, or high-visibility example artifact.
+2. Keep repository entry-point content in `README.md` or `CONTRIBUTING.md`; do not duplicate full workflows there.
+3. Put architecture or implementation internals in `docs/design/`.
+4. Put reader-facing operational docs in `docs/getting-started/`, `docs/guides/`, or `docs/reference/`.
+5. Keep `docs/modules/` concise and secondary; do not use it as a parallel primary navigation tree.
+6. Keep each topic owned by one canonical page.
+7. Avoid copying large command blocks to multiple pages; link to canonical setup/workflow pages.
 
 ## Redundancy-Control Rules
 
 1. If two pages have the same primary audience and same purpose, merge them.
-2. If one page is needed for backward compatibility, convert it to a pointer page.
-3. If content is outdated and not needed for compatibility, remove it.
-4. If overlap is intentional, keep one short summary and link to the canonical deep page.
+2. If content is outdated and not needed for compatibility, remove it.
+3. If overlap is intentional, keep one short summary and link to the canonical deep page.
+4. Do not reintroduce root-level pointer pages for moved docs.
 
 ## Ownership and Update Triggers
 
