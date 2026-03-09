@@ -1708,6 +1708,183 @@ class TestEnqueueAndPollCiJobs:
         assert queue.enqueue.call_count == 1
         assert results[job.job_id]["success"] is True
 
+    def test_duplicate_fallback_reuses_finished_non_build_for_refresh_stopped_failed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Duplicate fallback should reuse finished verify job for non-refresh policy."""
+        from crsbench.distributed.ci_jobs import enqueue_and_poll_ci_jobs
+
+        existing = self._make_mock_rq_job("verify-cpv-pov/bench/cpv_0", "finished")
+        existing.result = {
+            "job_id": "verify-cpv-pov/bench/cpv_0",
+            "job_type": "verify",
+            "success": True,
+            "elapsed_seconds": 1.0,
+            "details": {"reused": True},
+            "started_at": None,
+            "finished_at": None,
+            "error": None,
+        }
+
+        queue = MagicMock()
+        queue.name = "crsbench_ci_verify"
+        queue.connection = MagicMock()
+        queue.enqueue.side_effect = RuntimeError("duplicate")
+
+        fetch_calls = {"count": 0}
+
+        def _fetch(_job_id, **_kwargs):
+            fetch_calls["count"] += 1
+            if fetch_calls["count"] == 1:
+                raise RuntimeError("not found during prescan")
+            return existing
+
+        monkeypatch.setattr(
+            "crsbench.distributed.queue.create_redis_connection",
+            lambda _host: MagicMock(),
+        )
+        monkeypatch.setattr("rq.Queue", lambda *_args, **_kwargs: queue)
+        monkeypatch.setattr("rq.job.Job.fetch", _fetch)
+        monkeypatch.setattr(
+            "rq.job.Job.fetch_many",
+            lambda pending_ids, **_kwargs: [existing for _ in pending_ids],
+        )
+        monkeypatch.setattr(
+            "crsbench.distributed.ci_jobs.serialize_ci_job", lambda _j: {}
+        )
+
+        job = MagicMock()
+        job.job_type = "verify"
+        job.job_id = "verify-cpv-pov/bench/cpv_0"
+        job.depends_on = []
+
+        results = enqueue_and_poll_ci_jobs(
+            [job],
+            redis_host="localhost",
+            stale_terminal_policy="refresh_stopped_canceled_failed",
+        )
+
+        assert queue.enqueue.call_count == 1
+        assert existing.delete_called is False
+        assert results[job.job_id]["details"] == {"reused": True}
+
+    def test_duplicate_fallback_refresh_failed_deletes_failed_and_reenqueues(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Duplicate fallback should refresh failed terminal jobs for refresh_failed."""
+        from crsbench.distributed.ci_jobs import enqueue_and_poll_ci_jobs
+
+        existing = self._make_mock_rq_job("verify-cpv-pov/bench/cpv_0", "failed")
+        existing.result = {
+            "job_id": "verify-cpv-pov/bench/cpv_0",
+            "job_type": "verify",
+            "success": False,
+            "elapsed_seconds": 1.0,
+            "details": {"stale": True},
+            "started_at": None,
+            "finished_at": None,
+            "error": "old-error",
+        }
+        reenqueued = self._make_mock_rq_job("verify-cpv-pov/bench/cpv_0", "finished")
+        reenqueued.result = {
+            "job_id": "verify-cpv-pov/bench/cpv_0",
+            "job_type": "verify",
+            "success": True,
+            "elapsed_seconds": 2.0,
+            "details": {"rerun": True},
+            "started_at": None,
+            "finished_at": None,
+            "error": None,
+        }
+
+        queue = MagicMock()
+        queue.name = "crsbench_ci_verify"
+        queue.connection = MagicMock()
+        queue.enqueue.side_effect = [RuntimeError("duplicate"), reenqueued]
+
+        fetch_calls = {"count": 0}
+
+        def _fetch(_job_id, **_kwargs):
+            fetch_calls["count"] += 1
+            if fetch_calls["count"] == 1:
+                raise RuntimeError("not found during prescan")
+            return existing
+
+        monkeypatch.setattr(
+            "crsbench.distributed.queue.create_redis_connection",
+            lambda _host: MagicMock(),
+        )
+        monkeypatch.setattr("rq.Queue", lambda *_args, **_kwargs: queue)
+        monkeypatch.setattr("rq.job.Job.fetch", _fetch)
+        monkeypatch.setattr(
+            "rq.job.Job.fetch_many",
+            lambda pending_ids, **_kwargs: [reenqueued for _ in pending_ids],
+        )
+        monkeypatch.setattr(
+            "crsbench.distributed.ci_jobs.serialize_ci_job", lambda _j: {}
+        )
+
+        job = MagicMock()
+        job.job_type = "verify"
+        job.job_id = "verify-cpv-pov/bench/cpv_0"
+        job.depends_on = []
+
+        results = enqueue_and_poll_ci_jobs(
+            [job],
+            redis_host="localhost",
+            stale_terminal_policy="refresh_failed",
+        )
+
+        assert queue.enqueue.call_count == 2
+        assert existing.delete_called is True
+        assert results[job.job_id]["details"] == {"rerun": True}
+
+    def test_duplicate_fallback_quit_policy_raises_for_terminal_duplicate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Duplicate fallback should honor quit policy for terminal duplicates."""
+        from crsbench.distributed.ci_jobs import enqueue_and_poll_ci_jobs
+
+        existing = self._make_mock_rq_job("verify-cpv-pov/bench/cpv_0", "failed")
+
+        queue = MagicMock()
+        queue.name = "crsbench_ci_verify"
+        queue.connection = MagicMock()
+        queue.enqueue.side_effect = RuntimeError("duplicate")
+
+        fetch_calls = {"count": 0}
+
+        def _fetch(_job_id, **_kwargs):
+            fetch_calls["count"] += 1
+            if fetch_calls["count"] == 1:
+                raise RuntimeError("not found during prescan")
+            return existing
+
+        monkeypatch.setattr(
+            "crsbench.distributed.queue.create_redis_connection",
+            lambda _host: MagicMock(),
+        )
+        monkeypatch.setattr("rq.Queue", lambda *_args, **_kwargs: queue)
+        monkeypatch.setattr("rq.job.Job.fetch", _fetch)
+        monkeypatch.setattr(
+            "crsbench.distributed.ci_jobs.serialize_ci_job", lambda _j: {}
+        )
+
+        job = MagicMock()
+        job.job_type = "verify"
+        job.job_id = "verify-cpv-pov/bench/cpv_0"
+        job.depends_on = []
+
+        with pytest.raises(RuntimeError, match="quitting per selected policy"):
+            enqueue_and_poll_ci_jobs(
+                [job],
+                redis_host="localhost",
+                stale_terminal_policy="quit",
+            )
+
+        assert existing.delete_called is False
+        assert queue.enqueue.call_count == 1
+
     @pytest.mark.parametrize("terminal_status", ["stopped", "canceled"])
     def test_poll_drains_terminal_statuses(
         self, monkeypatch: pytest.MonkeyPatch, terminal_status: str
