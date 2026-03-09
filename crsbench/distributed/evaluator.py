@@ -136,11 +136,21 @@ def _enqueue_pre_builds(
         inc_image_pull_timeout,
         local_image_prefix,
     ) = _resolve_inc_image_runtime_settings(
-        policy=getattr(config, "inc_image_policy", None),
-        registry=getattr(config, "inc_image_registry", None),
-        max_pull_bytes=getattr(config, "inc_image_max_pull_bytes", None),
-        pull_timeout_sec=getattr(config, "inc_image_pull_timeout_sec", None),
-        local_prefix=getattr(config, "project_image_prefix", None),
+        policy=inc_image_policy
+        if inc_image_policy is not None
+        else getattr(config, "inc_image_policy", None),
+        registry=inc_image_registry
+        if inc_image_registry is not None
+        else getattr(config, "inc_image_registry", None),
+        max_pull_bytes=inc_image_max_pull_bytes
+        if inc_image_max_pull_bytes is not None
+        else getattr(config, "inc_image_max_pull_bytes", None),
+        pull_timeout_sec=inc_image_pull_timeout
+        if inc_image_pull_timeout is not None
+        else getattr(config, "inc_image_pull_timeout_sec", None),
+        local_prefix=local_image_prefix
+        if local_image_prefix is not None
+        else getattr(config, "project_image_prefix", None),
     )
 
     from crsbench.distributed.queue import create_redis_connection, resolve_queue_names

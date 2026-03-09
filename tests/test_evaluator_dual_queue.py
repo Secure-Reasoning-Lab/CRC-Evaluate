@@ -952,6 +952,11 @@ class TestConfiglessEvaluator:
             config,
             experiment_name="exp-44",
             redis_host="localhost",
+            inc_image_policy="build_only",
+            inc_image_registry="ghcr.io/example/resolved",
+            inc_image_max_pull_bytes=654321,
+            inc_image_pull_timeout=91,
+            local_image_prefix="resolved-prefix",
         )
 
         assert enqueued == 1
@@ -959,11 +964,11 @@ class TestConfiglessEvaluator:
             tmp_path / benchmark_name,
             use_inc_build=True,
             skip_if_cached=True,
-            inc_image_policy="pull_only",
-            inc_image_registry="ghcr.io/example/custom",
-            inc_image_max_pull_bytes=123456,
-            inc_image_pull_timeout=77,
-            local_image_prefix="custom-prefix",
+            inc_image_policy="build_only",
+            inc_image_registry="ghcr.io/example/resolved",
+            inc_image_max_pull_bytes=654321,
+            inc_image_pull_timeout=91,
+            local_image_prefix="resolved-prefix",
         )
 
     def test_evaluator_cli_configless_mode(self) -> None:
