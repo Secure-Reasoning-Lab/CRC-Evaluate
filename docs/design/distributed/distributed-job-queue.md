@@ -448,7 +448,7 @@ The `benchmarks_root` field specifies where to find benchmark directories. Path 
 
 1. **Absolute path**: If benchmark argument is an absolute path, use it directly
 2. **Config root**: If `benchmarks_root` specified, look in `{benchmarks_root}/{benchmark_id}`
-3. **Default root**: Look in `./benchmarks/{benchmark_id}` (relative to repo root)
+3. **Default root**: Look in `./benchmarks/{benchmark_id}` (relative to process CWD)
 4. **Error**: Raise `FileNotFoundError` if benchmark not found
 
 **Usage Examples**:
@@ -514,41 +514,16 @@ benchmarks_root: /opt/crsbench/benchmarks
 
 ### 5.2 Schema Validation Update
 
-**File**: `crsbench/validation/schemas.py`
+Current contract summary (`crsbench/validation/schemas.py`):
 
-```python
-class ExperimentConfig(BaseModel):
-    """Experiment configuration schema."""
-
-    task: Optional[Literal["bugfinding", "bugfixing"]] = Field(default=None)
-    mode: EvaluationMode = Field(...)
-    trials: int = Field(..., ge=1)
-    max_total_time: int = Field(..., ge=1)
-    experiment_filestore: str = Field(...)
-    report_filestore: str = Field(...)
-    redis_host: Optional[str] = Field(
-        default=None,
-        description="Redis server hostname (optional, omit for local mode)"
-    )
-    benchmarks_root: Path = Field(
-        default=Path("benchmarks"),
-        description="Root directory containing benchmarks (defaults to ./benchmarks)"
-    )
-
-    @validator('redis_host')
-    def validate_redis_host(cls, v):
-        if v and v.strip() and v.strip().lower() != 'none':
-            return v.strip()
-        return None  # Treat empty or "none" as None
-
-    @validator('benchmarks_root')
-    def validate_benchmarks_root(cls, v):
-        # Current schema behavior: normalize blank to Path("benchmarks").
-        # Existence and directory checks are applied at runtime usage sites.
-        if isinstance(v, str) and not v.strip():
-            return Path("benchmarks")
-        return v
-```
+- `task`: optional (`bugfinding` | `bugfixing`), defaults to `null`
+- `mode`: required evaluation mode enum (`delta` | `full` | `all` | `auto`)
+- `trials`: required integer `>= 1`
+- `max_total_time`: required integer `>= 1`
+- `experiment_filestore`: required path string
+- `report_filestore`: required path string
+- `redis_host`: optional string (normalized; blank/`none` treated as unset)
+- `benchmarks_root`: optional path (default `benchmarks`, relative to process CWD)
 
 ## 6. Docker Infrastructure
 
