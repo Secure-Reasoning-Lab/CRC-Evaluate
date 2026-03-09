@@ -71,4 +71,4 @@ Use this page as the primary navigation hub.
 - [scripts/README.md](../scripts/README.md)
 - [benchmark-suites/README.md](../benchmark-suites/README.md)
 - [oss-crs/README.md](../oss-crs/README.md)
-- [third_party/oss-fuzz/README.md](../third_party/oss-fuzz/README.md)
+- [OSS-Fuzz README](https://github.com/google/oss-fuzz/blob/master/README.md)
