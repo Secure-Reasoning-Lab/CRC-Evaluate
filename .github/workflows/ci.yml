@@ -171,9 +171,11 @@ jobs:
           SMOKE_BUGFINDING_CONFIG: experiment-configs/sanity-bugfinding/atlantis-multilang-given_fuzzer-default-delta.yaml
           SMOKE_BUGFIXING_CONFIG: experiment-configs/sanity-bugfixing/crs-copilot-cli-gpt-5-3-codex-delta-sanity-mock-c.yaml
           # run-local.sh manages an isolated temporary Valkey on a random port.
-          # Enable cpuset pinning in smoke worker launch.
-          SMOKE_NO_CPUSET: "0"
-          # Keep suites disjoint on a 48-core worker.
+          # GitHub self-hosted runners may use Docker's systemd cgroup driver.
+          # Smoke must avoid cpuset/cgroup mode unless the runner is explicitly
+          # configured for Docker cgroupfs.
+          SMOKE_NO_CPUSET: "1"
+          # Optional cpuset partitioning for dedicated cgroupfs-capable runners.
           SMOKE_CPUSET_BUGFINDING: 0-23
           SMOKE_CPUSET_BUGFIXING: 24-47
           # For smoke, skip expensive verify queue processing.
