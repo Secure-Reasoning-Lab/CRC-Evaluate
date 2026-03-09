@@ -4,7 +4,7 @@ Use this guide when creating or updating CRSBench benchmarks.
 
 ## Start Here
 
-1. [Benchmark Specification (RFC)](../reference/benchmark-rfc.md)  
+1. [Benchmark Specification (RFC)](../RFC.md)  
 Defines required benchmark structure, metadata, and validation rules.
 
 2. [Module Docs: Benchmark](../modules/benchmark/README.md)  

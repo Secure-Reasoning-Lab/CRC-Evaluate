@@ -181,7 +181,7 @@ CRSBench/
 ## Documentation
 
 - Entry point: [docs/README.md](docs/README.md)
-- Benchmark format contract: [docs/reference/benchmark-rfc.md](docs/reference/benchmark-rfc.md)
+- Benchmark format contract: [docs/RFC.md](docs/RFC.md)
 - Documentation governance:
   - [Taxonomy and Canonical Map](docs/governance/documentation-taxonomy.md)
   - [Inventory and Audit](docs/governance/documentation-inventory.md)

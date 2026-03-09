@@ -329,7 +329,7 @@ crsbench/
 User-facing benchmark commands are documented in:
 
 - [docs/contributors/benchmark-developer-guide.md](../contributors/benchmark-developer-guide.md)
-- [docs/reference/benchmark-rfc.md](../reference/benchmark-rfc.md)
+- [docs/RFC.md](../RFC.md)
 
 ### 4.4 Bundle Implementation Details
 

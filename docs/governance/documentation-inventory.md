@@ -40,7 +40,7 @@ artifact, not a policy source of truth.
 | Contributor workflows | `CONTRIBUTING.md`, `docs/contributors/**` |
 | Architecture and rationale | `docs/design/README.md`, `docs/design/architecture.md`, `docs/design/**` |
 | Module reference | `docs/modules/README.md`, `docs/modules/**` |
-| Specifications/contracts | `docs/reference/benchmark-rfc.md`, config examples under `docs/*.yaml` |
+| Specifications/contracts | `docs/RFC.md`, config examples under `docs/*.yaml` |
 
 ## Findings: Staleness, Contradictions, Overlap
 
@@ -52,8 +52,8 @@ artifact, not a policy source of truth.
   - Resolution: keep root as summary entry; keep detailed guidance in `docs/guides/**`.
 - Root `README.md` and `docs/getting-started/**` both describe service/env setup.
   - Resolution: keep root minimal; keep env variable and scenario detail in `docs/getting-started/**`.
-- `docs/benchmark-spec.md` and `docs/reference/benchmark-rfc.md` overlap by topic.
-  - Resolution: retain `docs/benchmark-spec.md` as compatibility pointer only.
+- `docs/RFC.md` is the single canonical benchmark RFC/specification page.
+  - Resolution: keep only `docs/RFC.md` as the canonical owner.
 
 ### Contradictions to watch (review checklist)
 - Installation workflow wording (`uv sync` versus alternative local install patterns).
@@ -65,11 +65,11 @@ artifact, not a policy source of truth.
 1. Root README remains summary-only for setup and runtime links.
 2. `docs/README.md` is the canonical navigation hub.
 3. Design rationale is anchored in `docs/design/architecture.md`.
-4. Pointer-page pattern is retained for benchmark spec legacy links.
+4. Legacy pointer pages were removed after references were updated to canonical paths.
 5. Documentation governance is anchored in `docs/governance/documentation-taxonomy.md`.
 
 ## Remaining Follow-up Candidates
 
 - Sweep adjacent component READMEs to ensure they point to canonical docs and avoid duplicating global setup instructions.
-- Optional automated lint/check for local markdown links in CI.
+- Extend docs contract coverage only when a concrete stale-doc regression appears.
 - Continue reducing procedure-heavy content under `docs/design/**` when a user-facing guide/reference page is the better canonical owner.

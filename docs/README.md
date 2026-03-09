@@ -33,7 +33,7 @@ Use this page as the primary navigation hub.
 ## Reference
 
 - [Reference Hub](./reference/README.md)
-- [Benchmark RFC](./reference/benchmark-rfc.md)
+- [Benchmark RFC](./RFC.md)
 - [Environment Variables](./reference/environment-variables.md)
 - [OSS-CRS Interface](./reference/oss-crs-interface.md)
 - [Seed Corpus](./reference/seed-corpus.md)

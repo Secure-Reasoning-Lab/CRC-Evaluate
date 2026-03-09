@@ -112,45 +112,43 @@ def test_local_markdown_links_resolve() -> None:
     )
 
 
-def test_legacy_pointer_pages_use_single_canonical_target() -> None:
+def test_docs_do_not_reference_removed_legacy_doc_paths() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    pointer_pages = [
-        repo_root / "docs" / "environment-setup.md",
-        repo_root / "docs" / "environment-variables.md",
-        repo_root / "docs" / "experiment-workflow.md",
-        repo_root / "docs" / "framework-developer-guide.md",
-        repo_root / "docs" / "benchmark-developer-guide.md",
-        repo_root / "docs" / "testing-setup.md",
-        repo_root / "docs" / "coding-standards.md",
-        repo_root / "docs" / "manual-validation-guideline.md",
-        repo_root / "docs" / "ossfuzz-crs-interface.md",
-        repo_root / "docs" / "seed-corpus.md",
-        repo_root / "docs" / "snapshot-examples.md",
-        repo_root / "docs" / "logger-usage-guide.md",
-        repo_root / "docs" / "documentation-taxonomy.md",
-        repo_root / "docs" / "documentation-inventory.md",
-        repo_root / "docs" / "documentation-maintenance.md",
-        repo_root / "docs" / "modules" / "benchmark-ci.md",
-        repo_root / "docs" / "RFC.md",
+    markdown_files = list((repo_root / "docs").rglob("*.md")) + [
+        repo_root / "README.md",
+        repo_root / "CONTRIBUTING.md",
+        repo_root / "AGENTS.md",
+        repo_root / "scripts" / "README.md",
+        repo_root / "experiment-configs" / "README.md",
+    ]
+    forbidden = [
+        "docs/environment-setup.md",
+        "docs/environment-variables.md",
+        "docs/experiment-workflow.md",
+        "docs/framework-developer-guide.md",
+        "docs/benchmark-developer-guide.md",
+        "docs/testing-setup.md",
+        "docs/coding-standards.md",
+        "docs/manual-validation-guideline.md",
+        "docs/ossfuzz-crs-interface.md",
+        "docs/seed-corpus.md",
+        "docs/snapshot-examples.md",
+        "docs/logger-usage-guide.md",
+        "docs/documentation-taxonomy.md",
+        "docs/documentation-inventory.md",
+        "docs/documentation-maintenance.md",
+        "docs/modules/benchmark-ci.md",
+        "docs/reference/benchmark-rfc.md",
+        "docs/benchmark-spec.md",
     ]
 
-    target_pattern = re.compile(r"Canonical page:\s+\[([^\]]+)\]\(([^)]+)\)")
     offenders: list[str] = []
-
-    for path in pointer_pages:
+    for path in markdown_files:
         text = path.read_text(encoding="utf-8")
-        matches = target_pattern.findall(text)
-        if len(matches) != 1:
-            offenders.append(
-                f"{path.relative_to(repo_root)} :: expected exactly one canonical target"
-            )
-            continue
-        target = (path.parent / matches[0][1]).resolve()
-        if not target.exists():
-            offenders.append(
-                f"{path.relative_to(repo_root)} :: canonical target missing ({matches[0][1]})"
-            )
+        for token in forbidden:
+            if token in text:
+                offenders.append(f"{path.relative_to(repo_root)} :: {token}")
 
-    assert not offenders, "Legacy pointer pages are inconsistent:\n" + "\n".join(
-        offenders
+    assert not offenders, "Found references to removed legacy doc paths:\n" + "\n".join(
+        sorted(offenders)
     )

@@ -99,7 +99,8 @@ This architecture document focuses on internals and design rationale.
 ## Migration from Standard Logging
 
 Prefer replacing `logging.getLogger(...)` usage with `get_logger(__name__)` from
-`crsbench.utils.logger`. See `docs/reference/logging.md` for complete migration examples.
+`crsbench.utils.logger`. See [Logging Reference](../../reference/logging.md)
+for complete migration examples.
 
 ## Benefits
 

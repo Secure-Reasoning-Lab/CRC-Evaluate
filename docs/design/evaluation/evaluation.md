@@ -308,7 +308,7 @@ result = runner.run_benchmark(
 )
 ```
 
-See [OSS-CRS Integration](./oss-crs-integration.md) and [OSS-Fuzz CRS Interface](../../ossfuzz-crs-interface.md) for complete details.
+See [OSS-CRS Integration](./oss-crs-integration.md) and [OSS-CRS Interface](../../reference/oss-crs-interface.md) for complete details.
 
 ## Error Handling
 
@@ -588,5 +588,5 @@ if validation.metadata["has_delta_mode"]:
 
 - [RFC Specification](../../RFC.md): Benchmark format specification
 - [Architecture](../architecture.md): Overall CRSBench architecture
-- [OSS-Fuzz Interface](../../ossfuzz-crs-interface.md): CRS interface specification
+- [OSS-CRS Interface](../../reference/oss-crs-interface.md): CRS interface specification
 - [Validation Module](../validation/validation.md): Validation module design

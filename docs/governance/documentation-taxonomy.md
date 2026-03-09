@@ -47,7 +47,7 @@ documentation-governance source of truth.
 ### 6. Specification and Data Contracts
 - Goal: Define normative benchmark requirements and example schema data.
 - Canonical entries:
-  - `docs/reference/benchmark-rfc.md`
+  - `docs/RFC.md`
   - `docs/benchmark-suite-example.yaml`
   - `docs/experiment-config-distributed-example.yaml`
   - `docs/meta-example.yaml`
@@ -64,7 +64,7 @@ documentation-governance source of truth.
 |---|---|---|
 | Project overview and quick start | `README.md` | Adjacent package `README.md` files (keep local scope only) |
 | Docs navigation | `docs/README.md` | Root README docs section (summary only) |
-| Benchmark format requirements | `docs/reference/benchmark-rfc.md` | `docs/benchmark-spec.md` (pointer only) |
+| Benchmark format requirements | `docs/RFC.md` | None |
 | Install and environment setup | `docs/getting-started/README.md` | `docs/getting-started/install.md`, `docs/getting-started/configuration.md`, operational snippets in `README.md` |
 | Experiment execution workflow | `docs/guides/experiments/README.md` | `docs/getting-started/first-experiment.md`, command examples in `README.md` |
 | Module operational guidance | `docs/modules/README.md` | `docs/modules/**`, deep implementation detail in design docs |

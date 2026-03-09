@@ -728,6 +728,6 @@ def test_trial_execution_with_mock_crs(tmp_path):
 
 - [oss-crs README](../../../oss-crs/README.md): oss-crs CLI documentation
 - [Evaluation Module Design](./evaluation.md): Runner and adapter orchestration
-- [OSS-Fuzz CRS Interface](../../ossfuzz-crs-interface.md): Interface specification
+- [OSS-CRS Interface](../../reference/oss-crs-interface.md): Interface specification
 - [Repository Manager](../migration/repo-manager.md): Source code management
 - [Orchestration Design](../orchestration.md): Experiment orchestration
