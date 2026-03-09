@@ -347,8 +347,8 @@ def resolve_benchmark_path(benchmark: str, config: Dict[str, Any]) -> Path:
     if Path(benchmark).exists():
         return Path(benchmark)
 
-    # Otherwise, look in standard locations
-    benchmarks_root = Path('/Users/fuyu0425/aixcc/CRSBench/benchmarks')
+    # Otherwise, resolve against configured/default benchmarks root
+    benchmarks_root = Path(config.get("benchmarks_root", "./benchmarks"))
     benchmark_path = benchmarks_root / benchmark
 
     if benchmark_path.exists():
@@ -433,9 +433,10 @@ Add `redis_host` and `benchmarks_root` fields to experiment configuration:
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
+| task | str | Yes | - | Experiment task (`bugfinding` or `bugfixing`) |
+| mode | str | Yes | - | Experiment mode (`full`, `delta`, etc.) |
 | trials | int | Yes | - | Number of trials per CRS-benchmark combination (≥1) |
 | max_total_time | int | Yes | - | Maximum time in seconds per trial (≥1) |
-| difficulty_level | int | Yes | - | Difficulty level (0-4) controlling assistance provided |
 | experiment_filestore | str | Yes | - | Directory for storing experiment data and results |
 | report_filestore | str | Yes | - | Directory for HTML reports and summary data |
 | redis_host | str | No | None | Redis server hostname/IP (omit or set to "none" for local mode) |
@@ -455,18 +456,20 @@ The `benchmarks_root` field specifies where to find benchmark directories. Path 
 ```yaml
 # Example 1: Standard configuration with default benchmarks location
 # Benchmarks expected in ./benchmarks/
+task: bugfixing
+mode: delta
 trials: 1
 max_total_time: 86400
-difficulty_level: 1
 experiment_filestore: /tmp/crsbench/experiment-data
 report_filestore: /tmp/crsbench/report-data
 redis_host: queue-server
 
 # Example 2: Custom benchmarks directory
 # Useful for testing with benchmarks in non-standard location
+task: bugfixing
+mode: delta
 trials: 1
 max_total_time: 86400
-difficulty_level: 1
 experiment_filestore: /tmp/crsbench/experiment-data
 report_filestore: /tmp/crsbench/report-data
 redis_host: queue-server
@@ -474,17 +477,19 @@ benchmarks_root: /custom/path/to/benchmarks
 
 # Example 3: Local mode without Redis (single job)
 # benchmarks_root omitted, uses ./benchmarks/
+task: bugfinding
+mode: full
 trials: 1
 max_total_time: 3600
-difficulty_level: 0
 experiment_filestore: /tmp/crsbench/experiment-data
 report_filestore: /tmp/crsbench/report-data
 # redis_host: none  # Omit for local mode
 
 # Example 4: CI/CD configuration with absolute paths
+task: bugfixing
+mode: delta
 trials: 1
 max_total_time: 1800
-difficulty_level: 1
 experiment_filestore: /var/lib/crsbench/experiments
 report_filestore: /var/lib/crsbench/reports
 benchmarks_root: /opt/crsbench/benchmarks
@@ -515,9 +520,10 @@ benchmarks_root: /opt/crsbench/benchmarks
 class ExperimentConfig(BaseModel):
     """Experiment configuration schema."""
 
+    task: Literal["bugfinding", "bugfixing"] = Field(...)
+    mode: str = Field(...)
     trials: int = Field(..., ge=1)
     max_total_time: int = Field(..., ge=1)
-    difficulty_level: int = Field(..., ge=0, le=4)
     experiment_filestore: str = Field(...)
     report_filestore: str = Field(...)
     redis_host: Optional[str] = Field(
@@ -1063,17 +1069,19 @@ Make `redis_host` optional in experiment config:
 # experiment-config.yaml
 
 # For distributed execution
+task: bugfixing
+mode: delta
 trials: 3
 max_total_time: 86400
-difficulty_level: 1
 experiment_filestore: /tmp/crsbench/experiment-data
 report_filestore: /tmp/crsbench/report-data
 redis_host: queue-server  # OPTIONAL: Omit or set to "none" for local mode
 
 # For local execution (single job)
+task: bugfinding
+mode: full
 trials: 1
 max_total_time: 86400
-difficulty_level: 1
 experiment_filestore: /tmp/crsbench/experiment-data
 report_filestore: /tmp/crsbench/report-data
 # redis_host: none  # Explicit local mode, or simply omit this field
@@ -1085,9 +1093,10 @@ report_filestore: /tmp/crsbench/report-data
 class ExperimentConfig(BaseModel):
     """Experiment configuration schema."""
 
+    task: Literal["bugfinding", "bugfixing"] = Field(...)
+    mode: str = Field(...)
     trials: int = Field(..., ge=1)
     max_total_time: int = Field(..., ge=1)
-    difficulty_level: int = Field(..., ge=0, le=4)
     experiment_filestore: str = Field(...)
     report_filestore: str = Field(...)
     redis_host: Optional[str] = Field(default=None, description="Redis server hostname (optional, omit for local mode)")
@@ -1135,6 +1144,7 @@ crsbench run --local-only \
 3. **Automatic Detection**: Intelligently chooses best mode
 4. **Explicit Control**: `--local-only` flag for manual override
 5. **Graceful Degradation**: Falls back to local if Redis unavailable
+6. **Fail Fast in Local Mode**: Sequential local execution stops on the first failed trial
 
 ### 13.2 Backward Compatibility
 
@@ -1189,7 +1199,7 @@ Queue naming follows the runtime queue model:
   - `crsbench_trial`
   - `crsbench_build`
   - `crsbench_verify`
-- Legacy per-experiment (`CRSBENCH_QUEUE_MODEL=per-experiment`):
+- Per-experiment opt-in (`CRSBENCH_QUEUE_MODEL=per-experiment`):
   - `crsbench_{experiment_name}`
   - `crsbench_{experiment_name}_build`
   - `crsbench_{experiment_name}_verify`

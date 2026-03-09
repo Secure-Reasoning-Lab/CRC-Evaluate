@@ -142,7 +142,7 @@ crsbench evaluator \
 
 The evaluator:
 1. Builds all variant Docker images for the listed benchmarks
-2. Starts listening on the `crsbench_my-distributed-exp_verify` queue
+2. Starts listening on the verify queue (`crsbench_verify` by default)
 3. Processes POV verification jobs as they arrive
 
 ### Step 4: Start workers (Machine B..N)
@@ -166,15 +166,17 @@ crsbench run \
   --distributed
 ```
 
-The orchestrator enqueues trial jobs to `crsbench_my-distributed-exp`. Workers pick them up, run CRS trials, and enqueue POV verification to `crsbench_my-distributed-exp_verify`. Evaluators process the verification queue.
+The orchestrator enqueues trial jobs to `crsbench_trial` by default. Workers pick them up, run CRS trials, and enqueue POV verification to `crsbench_verify`. Evaluators process the verification queue. To opt in to per-experiment queue names, set `CRSBENCH_QUEUE_MODEL=per-experiment` on orchestrator/workers/evaluators.
+
+If you run in local mode (no Redis/distributed), trials execute sequentially and fail fast on the first trial failure.
 
 ### Step 6: Monitor progress
 
 ```bash
 # On Machine A (or any machine with tunnel)
 # Check queue depths
-redis-cli llen crsbench_my-distributed-exp
-redis-cli llen crsbench_my-distributed-exp_verify
+redis-cli llen crsbench_trial
+redis-cli llen crsbench_verify
 
 # Check registered workers
 redis-cli smembers rq:workers
@@ -197,7 +199,8 @@ needs different paths, use shared storage with consistent mount points.
 
 ```yaml
 # Experiment config with worker overrides
-benchmarks_root: /home/orchestrator/benchmarks
+# Illustrative paths only; adjust to your environment.
+benchmarks_root: /srv/crsbench/benchmarks
 
 worker:
   benchmarks_root: /data/benchmarks
@@ -275,7 +278,7 @@ Error: No such image: crsbench-...
 ### Worker override paths
 
 ```
-Error: Benchmark not found: /home/orchestrator/benchmarks/...
+Error: Benchmark not found: /path/to/benchmarks/...  # illustrative example path
 ```
 
 - The serialized config contains the orchestrator's paths. Workers on different machines need overrides.
@@ -285,6 +288,6 @@ Error: Benchmark not found: /home/orchestrator/benchmarks/...
 
 - Verify evaluator queue model matches runtime (`CRSBENCH_QUEUE_MODEL`):
   - Flat default: `crsbench_verify`
-  - Legacy: `crsbench_{experiment_name}_verify`
+  - Per-experiment opt-in: `crsbench_{experiment_name}_verify`
 - Check that the evaluator's variant build succeeded (check logs)
 - Verify Redis connectivity from the evaluator machine

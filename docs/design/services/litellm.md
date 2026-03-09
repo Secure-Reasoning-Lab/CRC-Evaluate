@@ -88,7 +88,7 @@ API keys loaded from `.env` file (env vars take precedence over config):
 | Variable | Purpose | Required |
 |----------|----------|----------|
 | `CRSBENCH_LLM_MASTER_KEY` | Authentication key for local LiteLLM design flows (not the current experiment-runtime default path) | Required for those paths |
-| `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` | Admin key for upstream LiteLLM key-management/tracking | Optional (tracking/key lifecycle) |
+| `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` | Admin key for upstream LiteLLM key-management/tracking | Required when `runtime.litellm.tracking_enabled: true`; optional otherwise if `CRSBENCH_LLM_UPSTREAM_API_KEY` is used |
 | `CRSBENCH_LLM_UPSTREAM_API_KEY` | Runtime key for authenticating with upstream LiteLLM | Required for fixed-key upstream auth |
 | `CRSBENCH_LLM_UPSTREAM_BASE_URL` | URL of central/upstream LiteLLM instance | Required when forwarding to upstream LiteLLM |
 | `OPENAI_API_KEY` | OpenAI API access | No (direct mode only) |
@@ -257,7 +257,9 @@ cmd.extend(["--litellm-base", litellm_url, "--litellm-key", litellm_key])
 
 ## Security Considerations
 
-- Master key required for all API calls
+- Master-key-protected control-plane APIs require `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`.
+- For external runtime mode, `CRSBENCH_LLM_UPSTREAM_BASE_URL` (preferred) or `CRSBENCH_LLM_BASE_URL` must be set.
+- For external runtime mode, `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` is required when `runtime.litellm.tracking_enabled: true`; otherwise `CRSBENCH_LLM_UPSTREAM_API_KEY` or `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` can be used.
 - API keys stored in `.env` file (not committed)
 - Ports not exposed externally by default
 - Per-trial isolation prevents cross-contamination

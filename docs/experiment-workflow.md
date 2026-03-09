@@ -140,15 +140,15 @@ python scripts/valkey-helper.py --password start
 #    Uses config defaults: evaluator.jobs=1, evaluator.cores_per_job=4
 #    (set split overrides only when build and verify need different capacity)
 crsbench evaluator \
-    --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run-1.yaml \
+    --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml \
     --cpuset 112-127
 
 # 3. Run orchestrator (enqueues jobs, monitors progress)
-crsbench run --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run-1.yaml
+crsbench run --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml
 
 # 4. Start worker (cores 0-111; defaults from worker.jobs/cores_per_job, CLI can override)
 crsbench worker \
-    --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run-1.yaml \
+    --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml \
     --cpuset 0-111
 
 # 5. (After completion) Generate CPV report

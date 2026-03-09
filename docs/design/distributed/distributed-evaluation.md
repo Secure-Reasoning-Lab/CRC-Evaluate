@@ -91,8 +91,8 @@ Patch verification runtime source contract:
            ┌──────────────┐
            │ Redis/Valkey  │
            │               │
-           │ Trial queue:  │  crsbench_{exp}
-           │ Verify queue: │  crsbench_{exp}_verify
+           │ Trial queue:  │  crsbench_trial (flat default)
+           │ Verify queue: │  crsbench_verify (flat default)
            │ Job results   │
            └──┬─────────┬──┘
               │         │
@@ -258,8 +258,8 @@ Jobs are batched per-trial: all POVs discovered in one snapshot cycle are bundle
 
 | Queue | Name | Consumers | Purpose |
 |-------|------|-----------|---------|
-| Trial queue | `crsbench_trial` (flat default) / `crsbench_{experiment_name}` (legacy) | Workers | CRS trial execution |
-| Verify queue | `crsbench_verify` (flat default) / `crsbench_{experiment_name}_verify` (legacy) | Evaluators | POV verification |
+| Trial queue | `crsbench_trial` (flat default) / `crsbench_{experiment_name}` (opt-in with `CRSBENCH_QUEUE_MODEL=per-experiment`) | Workers | CRS trial execution |
+| Verify queue | `crsbench_verify` (flat default) / `crsbench_{experiment_name}_verify` (opt-in with `CRSBENCH_QUEUE_MODEL=per-experiment`) | Evaluators | POV verification |
 
 Both queues use the same Redis/Valkey instance. Multiple evaluators can share the same verify queue (RQ handles distribution).
 Queue names are resolved via runtime queue model (`CRSBENCH_QUEUE_MODEL`), not hardcoded by consumers.

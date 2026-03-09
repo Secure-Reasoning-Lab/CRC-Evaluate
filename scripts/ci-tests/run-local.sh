@@ -317,6 +317,16 @@ run_e2e() {
         -e "s|PLACEHOLDER_REPORT|$REPORT_DIR|" \
         scripts/ci-tests/local-e2e-bugfinding.yaml > /tmp/pov-e2e-config.yaml
 
+    echo "Validating generated E2E config..."
+    uv run python - "/tmp/pov-e2e-config.yaml" <<'PY' || fail "E2E config validation failed"
+from pathlib import Path
+import sys
+from crsbench.run_experiment import load_experiment_config
+
+load_experiment_config(Path(sys.argv[1]))
+print(f"validated: {sys.argv[1]}")
+PY
+
     echo "Running E2E experiment (max 30 minutes, early stop enabled)..."
     uv run crsbench run --experiment-config /tmp/pov-e2e-config.yaml || fail "E2E experiment failed"
 

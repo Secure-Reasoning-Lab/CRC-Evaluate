@@ -21,13 +21,6 @@ runtime:
     pov:
       enabled: true
       max_variants_per_cpv: 1
-    sarif:
-      enabled: true
-      level: 3
-    seed:
-      enabled: true
-    diff:
-      enabled: true
 storage:
   experiment_filestore: PLACEHOLDER_EXPERIMENT
   report_filestore: PLACEHOLDER_REPORT

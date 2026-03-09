@@ -20,7 +20,10 @@ Canonical variable index: `docs/environment-variables.md`
 3. **Set required API keys** (at minimum):
    ```bash
    CRSBENCH_LLM_UPSTREAM_BASE_URL=http://your-litellm:4000
-   CRSBENCH_LLM_UPSTREAM_MASTER_KEY=sk-your-master-key
+   # Runtime auth: either upstream API key or upstream master key
+   CRSBENCH_LLM_UPSTREAM_API_KEY=sk-your-api-key
+   # Required when runtime.litellm.tracking_enabled: true
+   # CRSBENCH_LLM_UPSTREAM_MASTER_KEY=sk-your-master-key
    OPENAI_API_KEY=sk-your-openai-key  # Or another LLM provider
    ```
 
@@ -41,7 +44,8 @@ CRSBench prefers canonical `CRSBENCH_LLM_*` variables as the source of truth:
 - `CRSBENCH_LLM_UPSTREAM_BASE_URL`: next-hop/forward target for external mode
 - `CRSBENCH_LLM_MASTER_KEY`: local/self-hosted LiteLLM server credential (not external-mode control plane)
 - `CRSBENCH_LLM_UPSTREAM_API_KEY`: external fixed runtime credential
-- `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`: external LiteLLM key-management credential
+- `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`: external LiteLLM key-management credential (required when `runtime.litellm.tracking_enabled: true`; optional otherwise if `CRSBENCH_LLM_UPSTREAM_API_KEY` is used)
+- External runtime mode requires `CRSBENCH_LLM_UPSTREAM_BASE_URL` (preferred) or `CRSBENCH_LLM_BASE_URL`.
 
 Only `CRSBENCH_LLM_*` names are supported.
 
@@ -263,9 +267,9 @@ python scripts/sync-upstream-models.py
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `CRSBENCH_LLM_MASTER_KEY` | When CRS authenticates to trial/local LiteLLM | - | LiteLLM auth key passed to CRS containers when applicable. |
-| `CRSBENCH_LLM_BASE_URL` | No | `http://localhost:4000` | LiteLLM endpoint URL |
+| `CRSBENCH_LLM_BASE_URL` | No | (unset) | LiteLLM endpoint URL (used when `CRSBENCH_LLM_UPSTREAM_BASE_URL` is unset) |
 | `CRSBENCH_LLM_UPSTREAM_BASE_URL` | For upstream/proxy routing (preferred) | - | URL of external/upstream LiteLLM instance |
-| `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` | For upstream key lifecycle and usage tracking | - | Admin key for upstream LiteLLM key lifecycle and usage APIs |
+| `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` | Required when `runtime.litellm.tracking_enabled: true`; optional otherwise if upstream API key auth is used | - | Admin key for upstream LiteLLM key lifecycle and usage APIs |
 | `CRSBENCH_LLM_UPSTREAM_API_KEY` | For upstream fixed-key runtime auth | - | Runtime API key for external/upstream LiteLLM |
 
 ### LLM Provider Keys

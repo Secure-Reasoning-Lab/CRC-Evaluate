@@ -233,20 +233,43 @@ locations:
 
 ## Integration with CRSBench
 
-When running experiments, users can specify hint levels to provide to CRS systems:
+Hint delivery is controlled via experiment config `runtime.inputs.sarif` and the
+standard `crsbench run` workflow.
 
-```bash
-# Future usage (to be implemented in run_experiment.py)
-crsbench run-experiment \
-  --experiment-config config.yaml \
-  --hint-level 2 \
-  --benchmarks libxml2-delta-03
+```yaml
+experiment:
+  name: my-exp
+  task: bugfixing
+  benchmark_suite: afc-final
+  mode: delta
+
+runtime:
+  trials: 1
+  max_total_time: 28800
+  build_timeout: 3600
+  run_timeout: 14400
+  verify_timeout: 7200
+  inputs:
+    pov:
+      max_variants_per_cpv: 1
+    sarif:
+      level: 2
+
+storage:
+  experiment_filestore: /data/experiments
+  report_filestore: /data/reports
+
+crs_compose:
+  crs-codex:
+    num_cores: 8
 ```
 
-The experiment runner will:
-1. Check for pre-generated hint files in `benchmarks/<name>/.aixcc/html/<cpv_id>/hints/`
-2. Select the appropriate `hint_level_N.sarif` file
-3. Provide it to the CRS during the evaluation
+```bash
+crsbench run --experiment-config config.yaml
+```
+
+At runtime, CRSBench stages matching SARIF files from each benchmark’s `.aixcc`
+metadata for bug-fixing trials and exposes them to the CRS.
 
 ## Adding New CWE Mappings
 
