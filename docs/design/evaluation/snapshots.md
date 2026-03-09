@@ -369,16 +369,25 @@ class ExperimentConfig(BaseModel):
 
 ```yaml
 # experiment-config.yaml
-experiment: "test-experiment"
-trials: 3
-max_total_time: 7200  # 2 hours
-snapshot_period: 600   # Take snapshot every 10 minutes
-difficulty_level: 1
-experiment_filestore: /tmp/crsbench/experiments
-report_filestore: /tmp/crsbench/reports
-crses:
-  - atlantis-c
-benchmark_suite: crsbench-afc-c
+experiment:
+  name: "test-experiment"
+  task: bugfinding
+  mode: full
+  benchmark_suite: crsbench-afc-c
+  sanitizers: [address]
+runtime:
+  trials: 3
+  snapshot_period: 600
+  max_total_time: 7200
+  build_timeout: 1200
+  run_timeout: 3000
+  verify_timeout: 1200
+storage:
+  experiment_filestore: /tmp/crsbench/experiments
+  report_filestore: /tmp/crsbench/reports
+crs_compose:
+  atlantis-c:
+    num_cores: 8
 ```
 
 ### Configuration Propagation
@@ -1513,7 +1522,7 @@ def capture_snapshot(self):
 - [ ] **Schema updates**
   - [ ] Add `snapshot_period` to `ExperimentConfig` in `crsbench/validation/schemas.py`
   - [ ] Add validator for snapshot period (60s minimum)
-  - [ ] Update `docs/experiment-config-example.yaml` with snapshot_period
+  - [ ] Update `docs/experiment-config-distributed-example.yaml` with snapshot_period
 
 - [ ] **Create SnapshotManager**
   - [ ] Create `crsbench/evaluation/snapshot_manager.py`

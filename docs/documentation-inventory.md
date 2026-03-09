@@ -12,7 +12,6 @@ This file records current documentation scope, canonical placement, and cleanup 
 - Adjacent local component READMEs:
   - `scripts/README.md`
   - `benchmark-suites/README.md`
-  - `crses/README.md`
   - `experiment-configs/README.md`
   - `snapshot-examples/README.md`
   - `dashboard/README.md`

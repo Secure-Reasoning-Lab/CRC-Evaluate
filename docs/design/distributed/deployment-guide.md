@@ -99,18 +99,31 @@ redis-server --daemonize yes
 ### Step 2: Create experiment config
 
 ```yaml
-# experiment-config.yaml
-experiment: my-distributed-exp
-experiment_filestore: /data/experiments
-benchmarks_root: /home/user/CRSBench/benchmarks
-max_total_time: 3600
-redis_host: localhost:6379
-benchmarks:
-  - sanity-mock-c-delta-01
-  - afc-curl-delta-01
-crses:
-  - my-crs
-trials: 3
+# Use docs/experiment-config-distributed-example.yaml as the canonical contract.
+# Copy it to your own file, then set experiment/task/benchmarks/CRS/timeouts/paths.
+experiment:
+  name: my-distributed-exp
+  benchmark_suite: sanity
+
+runtime:
+  trials: 3
+  mode: delta
+  redis_host: localhost:6379
+  max_total_time: 28800
+  build_timeout: 3600
+  run_timeout: 14400
+  verify_timeout: 7200
+  inputs:
+    pov:
+      max_variants_per_cpv: 1
+
+storage:
+  experiment_filestore: /data/experiments
+  report_filestore: /data/reports
+
+crs_compose:
+  my-crs:
+    num_cores: 8
 ```
 
 ### Step 3: Start evaluator (Machine C, optional)
@@ -123,7 +136,7 @@ ssh -N -L 6379:localhost:6379 user@machine-a &
 
 # Run evaluator
 crsbench evaluator \
-  --experiment-config experiment-config.yaml \
+  --experiment-config experiment-config.yaml
 
 ```
 
@@ -140,14 +153,14 @@ ssh -N -L 6379:localhost:6379 user@machine-a &
 
 # Run worker (paths come from experiment config YAML worker: section)
 crsbench worker \
-  --experiment-config experiment-config.yaml \
+  --experiment-config experiment-config.yaml
 
 ```
 
 ### Step 5: Start orchestrator (Machine A)
 
 ```bash
-# benchmarks, crses configured in experiment-config.yaml
+# benchmarks, crs_compose configured in experiment-config.yaml
 crsbench run \
   --experiment-config experiment-config.yaml \
   --distributed
@@ -188,7 +201,8 @@ benchmarks_root: /home/orchestrator/benchmarks
 
 worker:
   benchmarks_root: /data/benchmarks
-  experiment_filestore: /data/experiments
+  storage:
+    experiment_filestore: /data/experiments
 ```
 
 ### Evaluator path config
@@ -212,13 +226,16 @@ crsbench benchmark ci build --all \
   --redis-host localhost
 
 # On Machine B (with SSH tunnel)
+# --ci is a compatibility alias for legacy CI queues.
 crsbench evaluator --ci \
   --build-jobs 8 --build-cores-per-job 4 \
   --verify-cores-per-job 2 \
   --idle-timeout 0
 ```
 
-The submitter enqueues jobs to Redis build/verify queues. Evaluators running `crsbench evaluator --ci` dequeue and execute them. See [docs/modules/benchmark-ci.md](../../modules/benchmark-ci.md) for full evaluator options.
+The submitter enqueues jobs to Redis build/verify queues. Evaluators dequeue and
+execute them; for CI legacy queues use `--ci` compatibility alias. See
+[docs/modules/benchmark-ci.md](../../modules/benchmark-ci.md) for full evaluator options.
 
 ## Post-Experiment Evaluation
 

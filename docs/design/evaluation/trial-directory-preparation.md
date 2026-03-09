@@ -390,7 +390,7 @@ def _copy_corpus_files(
     """
     import shutil
 
-    corpus_level = self.config.get("hints_corpus_level", "1h")
+    corpus_level = self.config.get("hint_corpus_level", "1h")
     source_corpus = source_hints / "corpus" / corpus_level
 
     if not source_corpus.exists():
@@ -544,7 +544,7 @@ def _create_metadata(
         "povs": povs_stats,
         "config": {
             "hints_enabled": self.config.get("hints_enabled", False),
-            "hints_corpus_level": self.config.get("hints_corpus_level"),
+            "hint_corpus_level": self.config.get("hint_corpus_level"),
             "target_povs": self.config.get("target_povs")
         }
     }
@@ -872,7 +872,7 @@ def test_prepare_hints(tmp_path):
         experiment_dir=tmp_path,
         benchmarks_root=tmp_path / "benchmarks",
         oss_fuzz_dir=tmp_path / "oss-fuzz",
-        config={"hints_enabled": True, "hints_corpus_level": "1h"}
+        config={"hints_enabled": True, "hint_corpus_level": "1h"}
     )
 
     trial_dir = tmp_path / "trial-0"
@@ -925,7 +925,7 @@ def test_prepare_trial_complete(tmp_path):
         oss_fuzz_dir=tmp_path / "oss-fuzz",
         config={
             "hints_enabled": True,
-            "hints_corpus_level": "1h"
+            "hint_corpus_level": "1h"
         }
     )
 

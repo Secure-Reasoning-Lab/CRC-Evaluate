@@ -10,7 +10,7 @@ This document describes how CRSBench orchestrates CRS execution using the `oss-c
 CRSBench uses the standardized `oss-crs` CLI to:
 - Build CRS Docker images for bug finding
 - Execute CRS trials with isolated output directories
-- Manage CRS registries (testing vs production)
+- Resolve CRS metadata from the canonical registry (`oss-crs/registry`)
 - Control OSS-Fuzz and build directory locations
 - Pre-clone and checkout source code at specific commits
 
@@ -22,7 +22,7 @@ CRSBench Orchestrator
 Trial-Specific Configuration
     ├── --build-dir (unique per trial)
     ├── --oss-fuzz-dir (shared managed checkout)
-    ├── --registry-dir (oss-crs/registry or crses/)
+    ├── --registry-dir (default: oss-crs/registry; override via `registry_dir`)
     ├── --project-path (from benchmarks/)
     └── source-path (pre-cloned by CRSBench)
     ↓
@@ -116,36 +116,21 @@ oss-crs build --oss-fuzz-dir /path/to/CRSBench/third_party/oss-fuzz \
 
 **Purpose**: Specify where CRS metadata and configurations are stored.
 
-**CRSBench Strategy**: Use different registries for testing vs production.
-
-**Testing/Development Mode**:
-```python
-# Use oss-crs/registry submodule for development
-registry_dir = CRSBENCH_ROOT / "oss-crs/registry"
-```
-
-**Production Mode**:
-```python
-# Use crses/ directory for production evaluation
-registry_dir = CRSBENCH_ROOT / "crses"
-```
+**CRSBench Strategy**: Use `oss-crs/registry` as the canonical source.
+`registry_dir` can override this path when needed (for example, workers with
+different mount points), but there is no mode-based registry selection.
 
 **Usage**:
 ```bash
-# Development/testing with oss-crs/registry
+# Canonical registry usage
 oss-crs build --registry-dir /path/to/CRSBench/oss-crs/registry \
               --build-dir /experiments/exp-1/trial-0/build \
               example_configs/atlantis-c-libafl json-c
-
-# Production evaluation with crses/
-oss-crs build --registry-dir /path/to/CRSBench/crses \
-              --build-dir /experiments/exp-1/trial-0/build \
-              example_configs/production-crs json-c
 ```
 
 **Registry Structure**:
 ```
-oss-crs/registry/           # Development/testing
+oss-crs/registry/
 └── crs/
     ├── atlantis-c-libafl/
     │   └── pkg.yaml
@@ -153,36 +138,23 @@ oss-crs/registry/           # Development/testing
     │   └── pkg.yaml
     └── mock-crs/
         └── pkg.yaml
-
-crses/                      # Production evaluation
-└── crs/
-    ├── ensemble-c/
-    │   ├── pkg.yaml
-    │   └── config-crs.yaml
-    └── production-crs/
-        ├── pkg.yaml
-        └── config-crs.yaml
 ```
 
 **Benefits**:
-- Separate development and production CRS configurations
-- Reference implementations in oss-crs/registry
-- Production-ready CRS in crses/
-- Both follow same structure
+- Single canonical CRS metadata source
+- Simpler config contract (no registry mode switches)
+- Consistent behavior across local and distributed workers
 
 **Configuration**:
 ```yaml
 # In experiment config
-crs_registry_mode: "production"  # or "testing"
+registry_dir: ./oss-crs/registry  # optional override; default shown
 ```
 
 **Implementation**:
 ```python
 def get_registry_dir(config):
-    if config.get("crs_registry_mode") == "production":
-        return CRSBENCH_ROOT / "crses"
-    else:
-        return CRSBENCH_ROOT / "oss-crs/registry"
+    return Path(config.get("registry_dir") or CRSBENCH_ROOT / "oss-crs/registry")
 ```
 
 ### 4. Project Path (`--project-path`)
@@ -329,7 +301,7 @@ class SourceManager:
 oss-crs build \
   --build-dir /experiments/exp-1/trial-0/build \
   --oss-fuzz-dir /path/to/CRSBench/third_party/oss-fuzz \
-  --registry-dir /path/to/CRSBench/crses \
+  --registry-dir /path/to/CRSBench/oss-crs/registry \
   --project-path /path/to/CRSBench/benchmarks/json-c-delta-01 \
   example_configs/ensemble-c \
   json-c-delta-01 \
@@ -341,7 +313,7 @@ oss-crs build \
 oss-crs run \
   --build-dir /experiments/exp-1/trial-0/build \
   --oss-fuzz-dir /path/to/CRSBench/third_party/oss-fuzz \
-  --registry-dir /path/to/CRSBench/crses \
+  --registry-dir /path/to/CRSBench/oss-crs/registry \
   example_configs/ensemble-c \
   json-c-delta-01 \
   json_array_fuzzer \
@@ -356,7 +328,7 @@ oss-crs run \
 oss-crs build \
   --build-dir /experiments/exp-1/trial-0/build \
   --oss-fuzz-dir /path/to/CRSBench/third_party/oss-fuzz \
-  --registry-dir /path/to/CRSBench/crses \
+  --registry-dir /path/to/CRSBench/oss-crs/registry \
   --project-path /path/to/CRSBench/benchmarks/json-c-delta-01 \
   example_configs/patch-agent \
   json-c-delta-01 \
@@ -368,7 +340,7 @@ oss-crs build \
 oss-crs run \
   --build-dir /experiments/exp-1/trial-0/build \
   --oss-fuzz-dir /path/to/CRSBench/third_party/oss-fuzz \
-  --registry-dir /path/to/CRSBench/crses \
+  --registry-dir /path/to/CRSBench/oss-crs/registry \
   example_configs/patch-agent \
   json-c-delta-01 \
   --harness json_array_fuzzer \
@@ -428,51 +400,22 @@ oss-crs run \
 - Selective cleanup (keep successful trials)
 - Disk space management
 
-## Registry Mode Selection
+## Registry Directory Selection
 
-### Testing/Development Mode
+CRSBench resolves CRS metadata from `oss-crs/registry` by default.
+Use `registry_dir` only when you need an explicit path override.
 
-**When to Use**:
-- Testing new CRS implementations
-- Development of CRS executors
-- CI/CD pipeline testing
-- Local development
-
-**Configuration**:
-```yaml
-# experiment-config.yaml
-crs_registry_mode: testing
-```
-
-**Registry Location**: `oss-crs/registry/` (git submodule)
-
-**CRS Available**:
-- Reference implementations (crs-libfuzzer, mock-crs)
-- Development versions of atlantis-c, atlantis-java
-- Ensemble configurations
-- Testing/mock CRS
-
-### Production Mode
-
-**When to Use**:
-- Official benchmark evaluations
-- Competition runs
-- Published results
-- Final experiments
+**Typical uses for override**:
+- Worker machines mount CRSBench at different filesystem roots
+- Test harnesses need a temporary forked registry path
+- CI jobs stage registry content in alternate workspaces
 
 **Configuration**:
 ```yaml
 # experiment-config.yaml
-crs_registry_mode: production
+# optional (default: ./oss-crs/registry)
+registry_dir: /opt/oss-crs/registry
 ```
-
-**Registry Location**: `crses/` (committed to repo)
-
-**CRS Available**:
-- Production-ready CRS implementations
-- Validated and tested configurations
-- Official competition CRS
-- Customer-provided CRS
 
 ### Implementation
 
@@ -483,9 +426,8 @@ adapter = create_adapter(
     config=config,
     crs_config_name=crs,
     oss_fuzz_path=oss_fuzz_path,
-    registry_dir=registry_dir,      # resolves to crses/ or oss-crs/registry/
+    registry_dir=registry_dir,      # default oss-crs/registry, optional override
     benchmarks_root=benchmarks_root,
-    crs_configs_dir=crs_configs_dir,
     mode=crs_type,                   # "bug-finding" or "bug-fixing"
 )
 
@@ -590,23 +532,12 @@ def clone_with_retry(repo_url, commit, dest_dir, retries=3):
 
 **Problem**: CRS configuration not in specified registry.
 
-**Solution**: Check both registries, clear error message.
+**Solution**: Validate against the effective registry directory and fail with a clear error.
 
 ```python
 def resolve_crs_config(crs_name, registry_dir):
     crs_dir = registry_dir / "crs" / crs_name
     if not crs_dir.exists():
-        # Try alternative registry
-        alt_registry = CRSBENCH_ROOT / "oss-crs/registry" if registry_dir.name == "crses" else CRSBENCH_ROOT / "crses"
-        alt_dir = alt_registry / "crs" / crs_name
-
-        if alt_dir.exists():
-            logger.warning(
-                f"CRS '{crs_name}' not found in {registry_dir.name} registry, "
-                f"but exists in {alt_registry.name}. "
-                f"Consider updating crs_registry_mode in experiment config."
-            )
-
         raise EvaluationError(
             f"CRS configuration '{crs_name}' not found in registry {registry_dir}. "
             f"Available CRS: {list_available_crs(registry_dir)}"

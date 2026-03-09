@@ -162,32 +162,24 @@ class BenchmarkConfig(BaseModel):
 
 ### ExperimentConfig Model
 
-```python
-class ExperimentConfig(BaseModel):
-    experiment: str                         # Unique experiment identifier
-    trials: int                            # Number of trials (>= 1)
-    max_total_time: int                    # Max time per trial in seconds (>= 1)
-    difficulty_level: int                  # Difficulty level (0-4)
-    experiment_filestore: str              # Experiment data storage path
-    report_filestore: str                  # Report output path
-    crses: List[str]                       # List of CRS to evaluate
-    benchmarks: Optional[List[str]]        # Benchmark IDs (mutually exclusive with benchmark_suite)
-    benchmark_suite: Optional[str]         # Suite name (mutually exclusive with benchmarks)
-    redis_host: Optional[str]              # Redis server for distributed mode
-    benchmarks_root: Optional[str]         # Root directory for benchmarks
-```
+The canonical config contract is documented in:
+- [docs/experiment-config-distributed-example.yaml](/home/dongkwan/CRSBench/docs/experiment-config-distributed-example.yaml)
+
+Current source-of-truth highlights:
+- CRS identity/source selection is declared by `crs_compose` service keys.
+- Benchmarks are selected by exactly one of `experiment.benchmarks` or `experiment.benchmark_suite`.
+- Runtime controls are grouped under `runtime` (`trials`, timeouts, redis, inputs, LiteLLM).
+- Storage controls are grouped under `storage`.
 
 **Validation Rules**:
-- `experiment` cannot be empty
-- `crses` must have at least one CRS, no duplicates, no empty strings
-- `trials` must be >= 1
-- `max_total_time` must be >= 1
-- `difficulty_level` must be 0-4
-- `experiment_filestore` and `report_filestore` cannot be empty
-- **Mutual Exclusivity**: Must specify EITHER `benchmarks` OR `benchmark_suite`, not both
-- **At Least One**: Must specify at least one of `benchmarks` or `benchmark_suite`
-- `redis_host` if "none" is converted to None (local mode)
-- `benchmarks_root` if provided must exist and be a directory
+- `experiment.name` cannot be empty.
+- `crs_compose` is required and must contain at least one CRS service entry.
+- **Mutual Exclusivity**: specify EITHER `experiment.benchmarks` OR `experiment.benchmark_suite`, not both.
+- **At Least One**: one benchmark source must be present.
+- `runtime.trials` must be `>= 1`.
+- `runtime.max_total_time` must be greater than `build_timeout + run_timeout + verify_timeout`.
+- `runtime.inputs` defaults to all-disabled when omitted.
+- `runtime.inputs.sarif` requires `level` when enabled.
 
 **Helper Methods**:
 ```python

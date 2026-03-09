@@ -18,7 +18,7 @@ benchmarks/<project>/.aixcc/<harness>/cpv_N/hints/
 
 ### Existing Config (in use but NOT in schema)
 - `hints_enabled` (bool) - hardcoded in `jobs.py`
-- `hints_corpus_level` ("1h" | "1d") - legacy corpus level
+- `hint_corpus_level` (int 1-5) - placeholder for future corpus-level support
 
 ## Requirements
 
@@ -129,7 +129,7 @@ adapter.configure({
 
 ### Experiment Config Template
 
-File: `docs/experiment-config-example.yaml`
+File: `docs/experiment-config-distributed-example.yaml`
 
 Add:
 ```yaml
@@ -164,7 +164,7 @@ trial-N/
 2. `crsbench/run_experiment.py` - Add CLI arguments for hint overrides
 3. `crsbench/evaluation/trial_preparation.py` - Update `_prepare_hints()` for level-based aggregation
 4. `crsbench/distributed/jobs.py` - Pass hint config to executor
-5. `docs/experiment-config-example.yaml` - Document new config options
+5. `docs/experiment-config-distributed-example.yaml` - Document new config options
 
 ## Future Work
 

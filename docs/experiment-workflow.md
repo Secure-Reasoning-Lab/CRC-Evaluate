@@ -83,7 +83,7 @@ python scripts/valkey-helper.py start
 # 2. Run orchestrator (enqueues jobs and monitors)
 crsbench run --experiment-config config.yaml
 
-# 3. Start worker (separate terminal; job count configured in experiment config under worker.jobs)
+# 3. Start worker (separate terminal; defaults from worker config, CLI can override)
 crsbench worker --experiment-config config.yaml --continuous
 
 # 4. (Optional) Start evaluator for POV verification (separate terminal)
@@ -119,6 +119,15 @@ crsbench queue clean --experiment <experiment-name> --queues trial,verify --yes
 crsbench run --experiment-config config.yaml --queue-mode continue --retry-failed
 ```
 
+## Benchmark CI Flag Semantics
+
+For modular benchmark-ci commands (`crsbench benchmark ci all|build|pov|patch|coverage`):
+
+- `--exit-on-error` is currently a compatibility flag (accepted, no-op).
+- `--build-workers` / `--verify-workers` are compatibility flags (accepted, currently not used by submitter scheduling).
+- With `--distributed`, keep `--build-workers` / `--verify-workers` at defaults; set concurrency on evaluator processes instead (`crsbench evaluator --ci --build-jobs ... --verify-jobs ...`).
+- In `crsbench evaluator --ci`, `--worker-name` defaults to `ci-evaluator` when omitted.
+
 ## Full Workflow Example (Production)
 
 A realistic example on a 128-core machine running 7 trial jobs with an evaluator:
@@ -128,23 +137,19 @@ A realistic example on a 128-core machine running 7 trial jobs with an evaluator
 python scripts/valkey-helper.py --password start
 
 # 2. Start evaluator (cores 112-127, 16 cores)
-#    --build-jobs 4: up to 4 parallel variant builds
-#    --build-cores-per-job 4: 4 cores per build = 16 cores total
-#    --verify-jobs 16: up to 16 parallel POV verifications (1 core each)
+#    Uses config defaults: evaluator.jobs=1, evaluator.cores_per_job=4
+#    (set split overrides only when build and verify need different capacity)
 crsbench evaluator \
-    --experiment-config experiment-configs/experiment-config-afc.yaml \
-    --build-jobs 4 \
-    --build-cores-per-job 4 \
-    --verify-jobs 16 \
-    --cores 112-127
+    --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run-1.yaml \
+    --cpuset 112-127
 
 # 3. Run orchestrator (enqueues jobs, monitors progress)
-crsbench run --experiment-config experiment-configs/experiment-config-afc.yaml
+crsbench run --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run-1.yaml
 
-# 4. Start worker (cores 0-111; job count configured in experiment config under worker.jobs)
+# 4. Start worker (cores 0-111; defaults from worker.jobs/cores_per_job, CLI can override)
 crsbench worker \
-    --experiment-config experiment-configs/experiment-config-afc.yaml \
-    --cores 0-111
+    --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run-1.yaml \
+    --cpuset 0-111
 
 # 5. (After completion) Generate CPV report
 python scripts/cpv_report.py /path/to/experiment-data --csv
@@ -153,7 +158,7 @@ python scripts/cpv_report.py /path/to/experiment-data --csv
 **Core allocation breakdown:**
 ```
 Cores 0-111  (112 cores) → Worker: 7 jobs × 16 cores/trial
-Cores 112-127 (16 cores) → Evaluator: 4 build jobs × 4 cores + 16 verify jobs × 1 core
+Cores 112-127 (16 cores) → Evaluator: 4 jobs × 4 cores/job (unified default)
 ```
 
 ## Configuration
@@ -161,33 +166,40 @@ Cores 112-127 (16 cores) → Evaluator: 4 build jobs × 4 cores + 16 verify jobs
 ### Minimal experiment config
 
 ```yaml
-experiment: my-exp
-trials: 3
-mode: delta
-max_total_time: 28800
-build_timeout: 300
-run_timeout: 300
-verify_timeout: 300
-pov_dedup_strategy: patch-based
-experiment_filestore: /data/experiments
-report_filestore: /data/reports
+experiment:
+  name: my-exp
+  task: bugfixing
+  mode: delta
+  benchmark_suite: afc-final
+  sanitizers: [address, undefined]
 
-redis_host: localhost:6379  # or localhost:6380
+runtime:
+  trials: 3
+  max_total_time: 28800
+  build_timeout: 3600
+  run_timeout: 14400
+  verify_timeout: 7200
+  redis_host: localhost:6379  # or localhost:6380
+  # Optional LiteLLM runtime contract
+  # litellm:
+  #   mode: external
+  #   tracking_enabled: true
+  inputs:
+    pov:
+      max_variants_per_cpv: 1
 
-crses:
-  - atlantis-c
-benchmarks:
-  - libjpeg-turbo
-  # Optional selectors:
-  # - benchmark-only
-  # - benchmark -> harness list
-  # - benchmark -> harness -> cpv list
-  # - afc-libxml2-delta-01:
-  #     - xml
-  # - afc-libxml2-delta-02:
-  #     xml:
-  #       - cpv_0
-  #       - cpv_1
+storage:
+  experiment_filestore: /data/experiments
+  report_filestore: /data/reports
+
+crs_compose:
+  crs-codex:
+    num_cores: 16
+# If you use benchmark_suite, omit benchmarks.
+# Alternatively:
+# experiment:
+#   benchmarks:
+#     - libjpeg-turbo
 
 # No LLM needed for pure fuzzers
 skip_litellm: true
@@ -195,25 +207,86 @@ skip_litellm: true
 resources:
   cores_per_trial: 16
   memory_per_trial: "16G"
-  litellm:
-    max_concurrent_requests: 50
-    cost_budget: 500.0
+
+evaluator:
+  jobs: 4
+  cores_per_job: 4
+  # Optional advanced split overrides:
+  # build_jobs: 4
+  # build_cores_per_job: 4
+  # verify_jobs: 16
+  # verify_cores_per_job: 1
 ```
 
-### Worker path overrides
+### Config File Naming
 
-When workers run on machines with different filesystem layouts, add a `worker` section:
+Experiment config filenames are a repository convention for readability only. CRSBench does not enforce any filename schema; only YAML content is validated.
+
+### Inputs Contract
+
+`runtime.inputs` is the canonical input contract. Define POV/SARIF/seed/diff
+explicitly in config.
+
+Practical input combinations:
+
+```yaml
+# 1) POV-only (bug-fixing)
+runtime:
+  inputs:
+    pov:
+      max_variants_per_cpv: 1
+```
+
+```yaml
+# 2) SARIF level 1 only
+runtime:
+  inputs:
+    sarif:
+      level: 1
+```
+
+```yaml
+# 3) Seed corpus only
+runtime:
+  inputs:
+    seed:
+      max_time: 3600
+```
+
+```yaml
+# 4) Combined inputs (POV + SARIF + seed corpus)
+runtime:
+  inputs:
+    pov:
+      max_variants_per_cpv: 3
+    sarif:
+      level: 1
+    seed:
+      max_time: 3600
+```
+
+Legacy top-level input knobs are compatibility-only; new configs should use
+`runtime.inputs.*`.
+
+### Worker Machine Overrides
+
+When workers run on machines with different filesystem layouts, keep primary roots in top-level `storage`, then add machine-local overrides under `worker.storage`:
 
 ```yaml
 worker:
   jobs: 4
   continuous: true
-  benchmarks_root: /data/benchmarks
-  experiment_filestore: /mnt/shared/experiments
-  report_filestore: /mnt/shared/reports
+  storage:
+    experiment_filestore: /mnt/shared/experiments
+    report_filestore: /mnt/shared/reports
+    # optional:
+    # results_filestore: /mnt/shared/finished
 ```
 
-All path overrides are optional. See [experiment-config-distributed-example.yaml](experiment-config-distributed-example.yaml) for the full list.
+CPU placement is operator-side in distributed mode (CLI on worker/evaluator):
+`--cpuset` and `--skip-cpuset`.
+
+See [experiment-config-distributed-example.yaml](experiment-config-distributed-example.yaml) for the concise contract.
 
 ## Evaluator
 
@@ -222,21 +295,30 @@ The evaluator builds variant Docker images (vulnerable, allpatched, CPV) and ver
 ```bash
 crsbench evaluator \
   --experiment-config config.yaml \
-  --build-jobs 4 \
-  --build-cores-per-job 4 \
-  --verify-jobs 16 \
-  --cores 112-127
+  --cpuset 112-127
 ```
 
 | Argument | Description | Default |
 |----------|-------------|---------|
-| `--experiment-config` | Path to experiment config YAML | Required |
-| `--build-jobs` | Max concurrent build jobs | `1` |
-| `--build-cores-per-job` | CPUs per build job | `1` |
-| `--verify-jobs` | Max concurrent verify jobs | `build-jobs × build-cores-per-job` |
-| `--cores` | CPU cores (count or range, e.g., `112-127`) | All available |
-| `--skip-cpus` | CPUs to exclude (e.g., `0-3,8-11`) | None |
-| `--no-cpuset` | Disable CPU affinity | `false` |
+| `--experiment-config` | Path to experiment config YAML | Optional (configless discovery when omitted) |
+| `--build-jobs` | Max concurrent build jobs | From evaluator config/default policy |
+| `--build-cores-per-job` | CPUs per build job | From evaluator config/default policy |
+| `--verify-jobs` | Advanced split override: max concurrent verify jobs | From config/default policy |
+| `--verify-cores-per-job` | CPUs per verify job | From evaluator config/default policy |
+| `--cpuset` | CPU cores (count or range, e.g., `112-127`) | CPU affinity disabled unless set |
+| `--skip-cpuset` | CPUs to exclude (e.g., `0-3,8-11`) | None |
+| `--cpu-tag` | Run only jobs matching this capability tag | None |
+| `--idle-timeout` | Exit after N idle seconds once queues drain | `0` |
+| `--worker-name` | Evaluator instance name in logs/metadata | Mode-specific auto-generated name (`configless-evaluator` / `ci-evaluator` / `evaluator-<experiment>`) |
+| `--ci` | Use CI queue aliases (`crsbench_ci_*`) | Off |
+
+Config v2 evaluator defaults use unified knobs:
+- `evaluator.jobs` (default: `1`)
+- `evaluator.cores_per_job` (default: `4`)
+
+Optional split overrides are only for asymmetric tuning:
+- `evaluator.build_jobs`, `evaluator.build_cores_per_job`
+- `evaluator.verify_jobs`, `evaluator.verify_cores_per_job`
 
 The evaluator is optional. Without it:
 - Workers still run CRS trials and discover POVs
@@ -250,20 +332,20 @@ Workers pull trial jobs from the queue and execute CRS against benchmarks.
 ```bash
 crsbench worker \
   --experiment-config config.yaml \
-  --cores 0-111 \
+  --cpuset 0-111 \
   --continuous
 ```
 
-Job count is configured in the experiment config YAML under `worker.jobs`.
-
 | Argument | Description | Default |
 |----------|-------------|---------|
-| `--experiment-config` | Path to experiment config YAML | Required |
-| `--cores` | CPU cores (count or range, e.g., `0-111`) | All available |
-| `--skip-cpus` | CPUs to exclude | None |
+| `--experiment-config` | Path to experiment config YAML | Optional (configless discovery when omitted) |
+| `--jobs` | Max concurrent trial jobs in this worker process | From worker config/default policy |
+| `--cores-per-job` | CPUs per trial job | From worker config/default policy |
+| `--cpuset` | CPU cores (count or range, e.g., `0-111`) | CPU affinity disabled unless set |
+| `--skip-cpuset` | CPUs to exclude | None |
+| `--cpu-tag` | Run only jobs matching this capability tag | None |
 | `--continuous` | Keep running after queue empties | `false` |
 | `--worker-name` | Worker name for identification | Hostname |
-| `--no-cpuset` | Disable CPU affinity (only with single job) | `false` |
 
 ## Multi-Machine Setup
 
@@ -276,13 +358,13 @@ python scripts/valkey-helper.py --password start
 
 # Start evaluator
 crsbench evaluator --experiment-config config.yaml \
-    --build-jobs 4 --build-cores-per-job 4 --verify-jobs 16 --cores 112-127
+    --cpuset 112-127
 
 # Run orchestrator
 crsbench run --experiment-config config.yaml
 
 # Start local worker
-crsbench worker --experiment-config config.yaml --cores 0-111
+crsbench worker --experiment-config config.yaml --cpuset 0-111
 ```
 
 **Machine B..N** (Remote Workers):
@@ -418,12 +500,14 @@ Always clean queues before re-running an experiment with the same name or after 
 
 ## CI Smoke Secrets
 
-For GitHub smoke workflows (`ci.yml` and `smoke-crs-regression.yml`) using bug-fixing CRS in external mode, configure these repository secrets:
+For GitHub smoke workflow (`ci.yml`) using bug-fixing CRS in external mode, configure these repository secrets:
 
 - `CRSBENCH_LLM_UPSTREAM_BASE_URL`
-- `CRSBENCH_LLM_UPSTREAM_API_KEY` (or `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`)
+- `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`
 
-Smoke bug-fixing runs use `llm_tracking_enabled: false`, so `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` is optional for smoke.
+If your suite sets `runtime.litellm.tracking_enabled: false`, `CRSBENCH_LLM_UPSTREAM_API_KEY` can be enough for basic runtime requests.
+
+Smoke bug-fixing suites currently run with LiteLLM tracking enabled in the sanity bug-fixing smoke config (`experiment-configs/sanity-bugfixing/...`), so provide the upstream key expected by your LiteLLM deployment.
 
 ## Troubleshooting
 
@@ -433,7 +517,7 @@ Smoke bug-fixing runs use `llm_tracking_enabled: false`, so `CRSBENCH_LLM_UPSTRE
 | "Redis not available" | Valkey not running or wrong host | `python scripts/valkey-helper.py status`; check `redis_host` in config |
 | Workers exit immediately | Queue is empty (burst mode) | Use `--continuous` flag to keep workers running |
 | Stale jobs from previous run | Queue not cleaned | `python scripts/valkey-helper.py clean <experiment>` |
-| `CRSBENCH_LLM_UPSTREAM_BASE_URL not set` | LiteLLM not needed but `litellm_mode` still active | Set `skip_litellm: true` in experiment config |
+| `CRSBENCH_LLM_UPSTREAM_BASE_URL not set` | LiteLLM env contract is incomplete for this trial | Set `skip_litellm: true` when LLM is not needed, or provide required `CRSBENCH_LLM_*` vars |
 
 ## CLI Reference
 
@@ -446,7 +530,7 @@ Smoke bug-fixing runs use `llm_tracking_enabled: false`, so `CRSBENCH_LLM_UPSTRE
 | `crsbench report` | Generate experiment reports |
 | `crsbench verify` | Standalone POV verification |
 | `crsbench patch-verify` | Standalone patch verification |
-| `crsbench coverage` | Collect code coverage |
+| `crsbench coverage` | Collect code coverage (experimental) |
 | `crsbench dashboard` | Launch web dashboard |
 
 ## See Also

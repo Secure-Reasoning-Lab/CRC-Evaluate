@@ -26,6 +26,8 @@ In configless mode, evaluator behavior is:
 Important constraints for configless multi-experiment operation:
 
 - All discovered experiments must have the same `benchmarks_root`.
+- All discovered experiments must have compatible inc-image settings
+  (`inc_image_policy`, `inc_image_registry`, max pull bytes, pull timeout, and image prefix).
 - Evaluator refreshes discovered build/verify queue sets periodically at runtime
   (registry-driven queue refresh).
 - Verifier timeout is shared as the max `per_pov_verify_timeout` across discovered experiments.
@@ -34,8 +36,9 @@ CI hardening behavior (commit `a1c9b038`, 2026-03-06):
 
 - CI DAG enqueue now validates dependencies strictly: unknown dependency IDs and out-of-order dependencies fail fast.
 - Duplicate IDs are handled by deterministic stale-job policy:
-  - `finished` reused by default
-  - `failed`/`stopped`/`canceled` refreshed by default
+  - `finished`/`failed`/`stopped`/`canceled` refreshed by default (`refresh_all`)
+  - build jobs with `finished` are always refreshed
+  - non-build `finished` jobs are reused only with `refresh_stopped_canceled_failed`
   - `queued`/`deferred`/`scheduled` always refreshed
   - active non-terminal jobs are reused
 - Terminal statuses are handled uniformly as done states: `finished`, `failed`, `stopped`, `canceled`.
@@ -456,7 +459,7 @@ evaluator resolves resources with precedence `CLI > registry metadata > defaults
 | Timeout | Verify job killed after configured timeout, marked as failed |
 | Unknown benchmark | Job failed with error message, worker sees failure when polling |
 | CI unknown/unresolved dependency | Enqueue fails fast with validation error (invalid DAG dependency definition/order) |
-| CI duplicate job ID | Deterministic policy: `finished` reused by default; `failed/stopped/canceled` refreshed by default; queued/deferred/scheduled refreshed; active non-terminal reused |
+| CI duplicate job ID | Deterministic policy: terminal statuses refreshed by default (`refresh_all`); build `finished` always refreshed; non-build `finished` reused only with `refresh_stopped_canceled_failed`; queued/deferred/scheduled refreshed; active non-terminal reused |
 | CI missing RQ job metadata during polling | Recorded as infrastructure failure with `error_code=infra_missing_rq_job` |
 | CI stale started job during polling | Recorded as infrastructure failure with `error_code=infra_stale_started_job` (retryable) |
 | Supervisor spawn/cgroup path transient failure | Job is re-enqueued and supervisor continues (no global crash) |

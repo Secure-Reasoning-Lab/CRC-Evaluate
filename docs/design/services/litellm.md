@@ -10,7 +10,9 @@ LiteLLM acts as an OpenAI-compatible proxy for CRSBench, providing:
 
 ## Architecture
 
-### Direct Mode (Default)
+### Direct Mode (Historical/Design-Only)
+
+Note: CRSBench experiment runtime currently supports `runtime.litellm.mode: external` only; `self_hosted` is not implemented.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -85,10 +87,10 @@ API keys loaded from `.env` file (env vars take precedence over config):
 
 | Variable | Purpose | Required |
 |----------|----------|----------|
-| `CRSBENCH_LLM_MASTER_KEY` | Authentication key passed to CRS containers (self_hosted mode) | Self-hosted mode |
-| `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` | Admin key for upstream LiteLLM key-management/tracking (`litellm_mode: external`) | External mode only |
-| `CRSBENCH_LLM_UPSTREAM_API_KEY` | Runtime key for authenticating with upstream LiteLLM (`litellm_mode: external`) | External mode only |
-| `CRSBENCH_LLM_UPSTREAM_BASE_URL` | URL of central/upstream LiteLLM instance (`litellm_mode: external`) | External mode only |
+| `CRSBENCH_LLM_MASTER_KEY` | Authentication key for local LiteLLM design flows (not the current experiment-runtime default path) | Required for those paths |
+| `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` | Admin key for upstream LiteLLM key-management/tracking | Optional (tracking/key lifecycle) |
+| `CRSBENCH_LLM_UPSTREAM_API_KEY` | Runtime key for authenticating with upstream LiteLLM | Required for fixed-key upstream auth |
+| `CRSBENCH_LLM_UPSTREAM_BASE_URL` | URL of central/upstream LiteLLM instance | Required when forwarding to upstream LiteLLM |
 | `OPENAI_API_KEY` | OpenAI API access | No (direct mode only) |
 | `ANTHROPIC_API_KEY` | Anthropic API access | No (direct mode only) |
 | `GOOGLE_API_KEY` | Google AI API access | No (direct mode only) |

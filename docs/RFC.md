@@ -993,22 +993,20 @@ Configuration parameters:
 
 ### Supported CRSes
 
-All supported CRS implementations are stored in the crses directory of the main repository:
+CRSBench resolves supported CRS implementations from the oss-crs registry:
 
 - CRS developers can add their CRS to the benchmark main repository as a submodule
 - To test a private CRS, users can add the CRS repo to a subdirectory in the local environment
 - All CRS implementations and CRS configurations must follow the CRS RFC format
 
 ```example
-crses/[crs-name]/
-├── pkg.yaml                     # Package manager for CRS installation
-└── config-crs.yaml              # CRS configuration
+oss-crs/registry/[crs-name].yaml
 ```
 
-#### CRS Directory Structure
+#### CRS Registry Entry
 
-- **pkg.yaml**: Defines CRS dependencies, installation requirements, and package management
-- **config-crs.yaml**: Specifies CRS-specific configuration, runtime parameters, and evaluation settings
+- **`type`**: CRS category (`bug-fixing` / `bug-finding`) used by orchestration
+- **`source.url` / `source.ref`**: registry source location and revision used at runtime
 
 ### Benchmark Suite
 

@@ -15,6 +15,7 @@ This directory is the canonical entry point for CRSBench documentation.
 - [Documentation Taxonomy and Canonical Map](./documentation-taxonomy.md)
 - [Documentation Inventory and Audit](./documentation-inventory.md)
 - [Documentation Maintenance Guide](./documentation-maintenance.md)
+- [Config Contract Plan](./plan/config-contract/README.md)
 
 ## Contributor Guides
 
@@ -31,8 +32,10 @@ This directory is the canonical entry point for CRSBench documentation.
 - [Logger Usage Guide](./logger-usage-guide.md)
 - [Seed Corpus](./seed-corpus.md)
 - [Snapshot Examples](./snapshot-examples.md)
-- [Experiment Config Example](./experiment-config-example.yaml)
-- [Distributed Config Example](./experiment-config-distributed-example.yaml)
+- [Distributed Experiment Config (Grouped Contract)](./experiment-config-distributed-example.yaml)
+- Config contract note: declare CRS services under `crs_compose` in experiment YAML.
+- Input contract note: prefer explicit `runtime.inputs` in experiment config (`runtime.inputs.pov`, `runtime.inputs.sarif`, `runtime.inputs.seed`, `runtime.inputs.diff`).
+- Worker override note: use `worker.storage.*` for machine-local storage overrides.
 
 ## Architecture and Design
 
@@ -55,7 +58,7 @@ This directory is the canonical entry point for CRSBench documentation.
 
 - [scripts/README.md](../scripts/README.md)
 - [benchmark-suites/README.md](../benchmark-suites/README.md)
-- [crses/README.md](../crses/README.md)
+- [oss-crs/README.md](../oss-crs/README.md)
 - [experiment-configs/README.md](../experiment-configs/README.md)
 - Smoke and local CI scripts: `scripts/ci-tests/run-local.sh`
 - [snapshot-examples/README.md](../snapshot-examples/README.md)

@@ -1,311 +1,171 @@
-# =============================================================================
-# CRSBench Distributed Experiment Configuration Example
-# =============================================================================
-# Comprehensive example showing all configuration options for distributed
-# execution. Copy and modify for your experiment.
+# CRSBench distributed config (source-of-truth, grouped contract).
+# Primary grouped contract:
+# - experiment: identity + benchmark selectors
+# - runtime: trial matrix + execution timing + queue endpoint
+# - storage: experiment/report/result roots + cleanup policy
+# - resources: global compute defaults/tags (fallback for per-CRS runtime sizing)
+# - worker/evaluator: distributed process behavior and capacity profile
 
-# Unique identifier for this experiment run.
-experiment: my-distributed-exp
+experiment:
+  name: my-distributed-exp
+  task: bugfixing
+  mode: delta
+  # Optional (default: true): skip harnesses with no CPVs.
+  # only_cpv_harnesses: true
+  benchmark_suite: afc-final
+  # Use exactly one of benchmark_suite or benchmarks.
+  # benchmarks:
+  #   - libjpeg-turbo                 # all harnesses
+  #   - curl:                         # selected harnesses
+  #       - curl_fuzzer
+  #       - curl_fuzzer_http
+  #   - afc-libxml2-delta-02:         # selected CPVs per harness
+  #       xml:
+  #         - cpv_0
+  #         - cpv_1
+  sanitizers: [address, undefined]
 
-# Number of trials per benchmark-CRS pair. (>= 1)
-trials: 3
+crs_compose:
+  # Optional: path to oss-crs executable (default: "oss-crs" on PATH).
+  # oss_crs_cmd: oss-crs
+  # Optional infra allocation override.
+  # If omitted, CRSBench behaves as:
+  #   oss_crs_infra:
+  #     shared: true
+  # oss_crs_infra:
+  #   # Choose exactly one:
+  #   # 1) shared=true (use union of CRS service cpusets), or
+  #   # 2) num_cores=<N> (dedicated infra cores)
+  #   shared: true
+  #   # num_cores: 8
+  crs-codex:
+    # CRS source is resolved from oss-crs registry entry by default:
+    #   oss-crs/registry/crs-codex.yaml
+    # Typical registry entry fields:
+    #   source:
+    #     url: <git-url>
+    #     ref: <git-ref>
+    #   # or
+    #   source:
+    #     local_path: <existing-local-checkout>
+    num_cores: 8
+    # Optional per-CRS memory limit (e.g., 8G, 16384m).
+    # mem_limit: "16G"
+    # Optional per-CRS environment overrides passed to oss-crs service.
+    # additional_env:
+    #   OPENAI_DEFAULT_MODEL: gpt-5.4
+    #   OPENAI_REASONING_EFFORT: high
 
-# Evaluation mode for benchmark execution.
-# Possible values: "delta" | "full" | "all"
-# "all" means evaluating both delta-mode and full-mode challenges
-mode: delta
-
-# CRS adapter type. Only supported value: "oss-crs" (mode auto-detected from CRS registry).
-adapter: oss-crs
-
-# Maximum time in seconds per trial. Must be > build + run + verify timeouts.
-max_total_time: 28800  # 8 hours
-
-# Maximum time in seconds for CRS build phase.
-build_timeout: 3600  # 1 hour, default: 3600
-
-# Maximum time in seconds for CRS run phase.
-run_timeout: 14400  # 4 hours, default: 7200
-
-# Maximum time in seconds for POV/patch verification phase.
-verify_timeout: 7200  # 2 hours, default: 7200
-
-# Difficulty level controlling assistance. (0-4)
-difficulty_level: 1
-
-# Directory path for experiment data storage.
-experiment_filestore: /data/crsbench/experiments
-
-# Directory path for HTML reports and summary data.
-report_filestore: /data/crsbench/reports
-
-# =============================================================================
-# Cleanup Configuration
-# =============================================================================
-
-# Delete bulky artifacts after experiment completes, keeping only essential files.
-# Essential files include: metadata.json, snapshots, status markers, output/, input directories.
-# Uses whitelist approach - everything not in whitelist is deleted.
-# Default: false
-keep_only_results: false
-
-# Delete bulky artifacts after each trial completes (more aggressive cleanup).
-# Useful for long experiments with many trials to save disk space during execution.
-# Default: false
-cleanup_after_trial: false
-
-# Copy essential files to results_filestore after each trial completes.
-# Requires results_filestore to be set.
-# Copying happens immediately after trial ends and BEFORE cleanup.
-# Useful for preserving results when cleanup_after_trial=true or when workers may be interrupted.
-# Default: false
-copy_results_after_trial: false
-
-# Destination path for copying results (contains experiment-data/ and report-data/).
-# Used by copy_results_after_trial.
-# Dashboard-compatible structure: results_filestore/{folder_name}/experiment-data/ and report-data/
-# results_filestore: /opt/crsbench-finished/my-experiment
-
-# List of CRS implementations to evaluate.
-# Multiple CRS entries are allowed.
-crses:
-  - atlantis-c
-
-# Optional compose/runtime overrides for oss-crs adapter.
-# crs_compose:
-#   oss_crs_infra:
-#     # Choose exactly one CPU mode:
-#     # 1) Dedicated infra cores:
-#     num_cores: 8
-#     # 2) Shared infra cores (union of CRS cpusets):
-#     # shared: true
-#   atlantis-c:
-#     num_cores: 8
-#     additional_env:
-#       ANTHROPIC_MODEL: claude-sonnet-4-5-20250929
-
-# =============================================================================
-# Benchmark Specification (choose ONE of the following)
-# =============================================================================
-
-# Option A: Inline benchmark list.
-# Each entry can be a string (all harnesses) or dict (specific harnesses).
-benchmarks:
-  - libjpeg-turbo                    # all harnesses
-  - libxml2
-  - curl:                            # specific harnesses only
-      - curl_fuzzer
-      - curl_fuzzer_http
-
-# Option B: Load from benchmark suite file.
-# Mutually exclusive with 'benchmarks'.
-# benchmark_suite: core-c            # loads benchmark-suites/core-c.yaml
-
-# Root directory containing benchmark projects.
-# benchmarks_root: ./benchmarks      # default: ./benchmarks
-
-# Root directory containing benchmark suite YAML files.
-# benchmark_suites_root: ./benchmark-suites  # default: ./benchmark-suites
-
-# =============================================================================
-# Distributed Execution
-# =============================================================================
-
-# Redis server hostname for distributed mode.
-# Possible values: null | "none" | "localhost" | "localhost:6380" | "redis" | "<ip>" | "<hostname>" | "<hostname>:<port>"
-# - null or "none": local mode (sequential, no Redis)
-# - "localhost" or "localhost:6379": Redis on same machine
-# - "redis": Docker Compose service name
-# - "<ip>/<hostname>[:port]": remote Redis server
-redis_host: localhost:6379
-
-# Snapshot interval in seconds. (0 to disable, 60-86400 when enabled)
-snapshot_period: 900  # 15 minutes, default: 900
-
-# =============================================================================
-# Resource Allocation
-# =============================================================================
-resources:
-  # CPU cores allocated per trial. (>= 1)
-  cores_per_trial: 8  # default: 4
-
-  # Memory limit per trial in Docker format.
-  # Possible values: null (unlimited) | "4G" | "8G" | "16G" | "32G" | "64G"
-  memory_per_trial: "16G"  # default: null (unlimited)
-
-  # LiteLLM configuration for LLM-based CRS.
+runtime:
+  trials: 3
+  # Canonical grouped redis host.
+  # If both top-level redis_host and runtime redis host are provided,
+  # grouped runtime value takes precedence.
+  redis_host: localhost:6379
+  max_total_time: 28800
+  build_timeout: 3600
+  run_timeout: 14400
+  verify_timeout: 7200
+  # Per-POV verify timeout inside the verify phase.
+  per_pov_verify_timeout: 180
+  # Stop trial early when all CPVs for a harness are confirmed.
+  pov_early_stop: false
+  # LiteLLM wiring (usually external proxy in production).
   litellm:
-    # Maximum concurrent LLM API requests. (>= 1)
-    max_concurrent_requests: 50  # default: 10
+    mode: external
+    tracking_enabled: true
+    # Optional per-trial default budget for LiteLLM key generation/accounting.
+    cost_budget: 10.0
+  # Wait time after run-end before final LLM usage settlement/log capture.
+  # Helps LiteLLM spend/log aggregates converge. Set 0 to disable.
+  # llm_accounting_settle_seconds: 60
+  # Optional: include all POV variants during patch verification.
+  # patch_verify_variants: false
+  # Optional source provenance mode.
+  # pkgs (recommended): use benchmark-bundled tarballs from pkgs/.
+  # main_repo (advanced): clone upstream repository directly.
+  # source_mode: pkgs
+  # Optional snapshot cadence in seconds (0 disables periodic snapshots).
+  snapshot_period: 300
+  # Optional: skip verification phase (debug/throughput only).
+  # skip_verification: false
+  # Optional: skip LiteLLM deployment and force litellm mode/tracking off.
+  # Preferred grouped key:
+  # litellm:
+  #   skip: true
+  # (top-level/runtime skip_litellm is still accepted for compatibility)
+  # Optional incremental-image policy group.
+  # inc_build:
+  #   policy: auto
+  #   registry: local
+  #   max_pull_bytes: 1073741824  # 1 GB (e.g., 1048576=1 MB)
+  #   pull_timeout_sec: 900
+  inputs:
+    pov:
+      # Provide one POV variant per CPV.
+      max_variants_per_cpv: 1
+    # Optional inputs (presence means enabled):
+    # SARIF bug-candidate hints (level 1..5, higher = more detailed).
+    # sarif:
+    #   level: 3
+    # Seed corpus input from imported seeds; max_time is relative-age window (seconds).
+    # seed:
+    #   max_time: 3600
+    # Diff guidance input.
+    # diff: true
 
-    # Cost budget in USD. (>= 0)
-    cost_budget: 500.0  # default: 100.0
+storage:
+  experiment_filestore: /data/crsbench/experiments
+  report_filestore: /data/crsbench/reports
+  keep_only_results: false
+  cleanup_after_trial: false
+  # When true, trial outputs are copied to results_filestore.
+  copy_results_after_trial: false
+  # Used only when copy_results_after_trial=true.
+  # results_filestore: /data/crsbench/finished
 
-    # Team name for grouping API keys in LiteLLM.
-    # If not set, uses experiment name as team name.
-    # Useful for organizing API keys by project or research group.
-    # team: "crsbench"  # default: uses experiment name
+# Optional global compute defaults/tags:
+# - cores_per_trial/memory_per_trial are fallback defaults when a CRS service
+#   does not set num_cores/mem_limit.
+# - cpu_tag is matched by worker/evaluator cpu_tag in distributed scheduling.
+# Precedence for CRS runtime CPU/memory:
+#   crs_compose.<crs>.num_cores/mem_limit
+#   > resources.cores_per_trial/memory_per_trial
+# resources:
+#   cores_per_trial: 8
+#   memory_per_trial: "16G"
+#   # Optional job capability tag (matched by worker/evaluator cpu_tag).
+#   cpu_tag: amd-epyc
 
-    # Maximum budget in USD for the entire team. (>= 0)
-    # Sets a spending cap for all API keys in the team combined.
-    # Useful for controlling total costs across multiple trials in the same experiment.
-    # team_max_budget: 500.0  # default: null (no team-level budget limit)
-
-# =============================================================================
-# Worker Configuration
-# =============================================================================
 worker:
-  # Number of parallel jobs per worker process. (>= 1)
-  jobs: 4  # default: 4
+  jobs: 4
+  cores_per_job: 8
+  continuous: true
+  # Optional stable worker identifier in logs/metadata.
+  # worker_name: worker-a
+  # CPU placement is controlled by worker CLI:
+  #   crsbench worker --cpuset ... --skip-cpuset ...
+  # (not configured in experiment YAML).
+  # Optional worker capability tag for matching cpu_tag jobs.
+  # cpu_tag: amd-epyc
+  # shared_cpus: 112-127
+  # redis_host: localhost:6379  # defaults to runtime.redis_host
+  minimum_disk_size: "10GB"
+  disk_check_interval: 60
+  # Optional machine-local overrides for storage/cleanup.
+  # Use only when this worker machine must diverge from top-level storage.
+  # Unset keys inherit from top-level `storage`.
+  # storage:
+  #   # Example: only override destination for copied final results.
+  #   results_filestore: /mnt/shared/finished
 
-  # Redis server for workers (host or host:port).
-  redis_host: localhost:6379  # default: top-level redis_host
-
-  # Run continuously or exit when queue is empty.
-  continuous: true  # default: false
-
-  # Minimum free disk space required to accept new jobs.
-  # Possible values: "200GB" | "100MB" | "1TB" | etc.
-  minimum_disk_size: "10GB"  # default: "10GB"
-
-  # Interval (seconds) between disk space checks when paused.
-  disk_check_interval: 60  # default: 60
-
-  # ---------------------------------------------------------------------------
-  # Path Overrides (optional)
-  # Use when workers have different filesystem layouts than orchestrator.
-  # ---------------------------------------------------------------------------
-
-  # Override experiment data storage path.
-  # experiment_filestore: /mnt/nfs/experiments
-
-  # Override report storage path.
-  # report_filestore: /mnt/nfs/reports
-
-  # OSS-Fuzz path override is not used in distributed worker runtime.
-  # Workers always resolve the managed checkout via ensure_oss_fuzz_root().
-
-  # Override CRS registry directory.
-  # registry_dir: /opt/oss-crs/registry
-
-  # Override CRS configs directory.
-  # crs_configs_dir: /opt/crses/configs
-
-  # Override number of parallel build workers.
-  # build_workers: 4
-
-  # Override number of parallel verification workers.
-  # verify_workers: 4
-
-  # Override benchmarks root directory.
-  # benchmarks_root: /opt/benchmarks
-
-  # Override benchmark suites root directory.
-  # benchmark_suites_root: /opt/benchmark-suites
-
-  # ---------------------------------------------------------------------------
-  # Cleanup Configuration Overrides (optional)
-  # Use when workers need different cleanup behavior than orchestrator.
-  # ---------------------------------------------------------------------------
-
-  # Override cleanup after experiment completion.
-  # keep_only_results: true
-
-  # Override cleanup after each trial.
-  # cleanup_after_trial: true
-
-  # Override per-trial result copying.
-  # copy_results_after_trial: true
-
-  # Override results destination path (contains experiment-data/ and report-data/).
-  # results_filestore: /mnt/nfs/finished-experiments
-
-# =============================================================================
-# Evaluator Configuration (optional)
-# =============================================================================
 evaluator:
-  # Max concurrent build jobs for distributed evaluator.
-  # build_jobs: 4
-
-  # CPUs per evaluator build job.
-  # build_cores_per_job: 8
-
-  # Max concurrent verify jobs for distributed evaluator.
-  # verify_jobs: 4
-
-  # CPUs per evaluator verify job.
-  # verify_cores_per_job: 8
-
-  # Restrict evaluator CPU pool (cpuset format).
-  # cores: 96-127
-
-  # Exclude specific CPUs from evaluator pool.
-  # skip_cpus: 0-3
-
-  # Exit after idle seconds once queues are drained (0 disables timeout).
+  jobs: 4
+  cores_per_job: 4
+  # CPU placement is controlled by evaluator CLI:
+  #   crsbench evaluator --cpuset ... --skip-cpuset ...
+  # (not configured in experiment YAML).
+  # Optional evaluator capability tag for matching cpu_tag jobs.
+  # cpu_tag: amd-epyc
+  # Optional: exit after N seconds when queues stay empty (0 = never).
   # idle_timeout: 0
-
-# =============================================================================
-# Optional Features
-# =============================================================================
-
-# Managed OSS-Fuzz checkout is resolved automatically in distributed runtime.
-# (No oss_fuzz_path override needed here.)
-
-# Path to CRS registry directory.
-# registry_dir: ./oss-crs/registry  # default: ./oss-crs/registry
-
-# Path to CRS configs directory.
-# crs_configs_dir: ./crses/configs  # default: ./crses/configs
-
-# Enable hints for CRS evaluation.
-hints_enabled: false  # default: false
-
-# SARIF hint level. (1=vague, 5=detailed, null=disabled)
-# hint_sarif_level: 3
-
-# Pre-fuzz corpus level. (1=minimal, 5=comprehensive, null=disabled)
-# hint_corpus_level: null  # PLACEHOLDER - not yet implemented
-
-# LiteLLM mode.
-# Possible values: "external" | "self_hosted"
-# external: use external LiteLLM endpoint directly
-# - uses CRSBENCH_LLM_UPSTREAM_BASE_URL (preferred) or CRSBENCH_LLM_BASE_URL
-# - requires CRSBENCH_LLM_UPSTREAM_API_KEY or CRSBENCH_LLM_UPSTREAM_MASTER_KEY
-# self_hosted: reserved, not implemented yet
-litellm_mode: external  # default: external
-
-# Enable LLM usage tracking via LiteLLM Virtual Keys.
-# Requires CRSBENCH_LLM_* env vars for the selected mode.
-llm_tracking_enabled: true  # default: true
-
-# Docker image prefix for custom project images.
-project_image_prefix: crsbench  # default: crsbench
-
-# Skip POV verification after CRS execution.
-skip_verification: false  # default: false
-
-# Enable coverage collection during trials.
-coverage_enabled: false  # default: false
-
-# Time in seconds without new coverage before saturation.
-coverage_saturation_time: 21600  # 6 hours, default: 21600
-
-# Terminate trial early when coverage saturation is detected. (NOT YET IMPLEMENTED)
-coverage_early_stop: false  # default: false
-
-# Terminate trial early when all CPVs for harness are found.
-pov_early_stop: false  # default: false
-
-# POV deduplication strategy before verification/reporting.
-# Possible values: "patch-based" | "stack-based" | "status-based" | "none"
-pov_dedup_strategy: patch-based  # default: patch-based
-
-# Number of parallel workers for building variants. (>= 1)
-# build_workers: 4  # default: 4
-
-# Number of parallel workers for POV/patch verification. (>= 1)
-# verify_workers: 4  # default: 4
-
-# Skip harnesses without CPVs for bug-finding CRS.
-only_cpv_harnesses: true  # default: true

@@ -89,5 +89,5 @@ Additional notes for bug-finding re-eval:
 
 - [Repository README](../README.md)
 - [Experiment Workflow](./experiment-workflow.md)
-- [Experiment Config Example](./experiment-config-example.yaml)
+- [Experiment Config Example](./experiment-config-distributed-example.yaml)
 - [Design: oss-crs Integration](./design/evaluation/oss-crs-integration.md)

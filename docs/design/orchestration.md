@@ -32,12 +32,12 @@ User runs: crsbench run --experiment-config config.yaml
     ↓
 3. Resolve Parameters (all from config)
     ├── experiment_name: config.experiment
-    ├── crses: config.crses
+    ├── crs_compose services: config.crs_compose
     └── benchmarks: config.benchmarks or config.benchmark_suite
     ↓
 4. Generate Trial Matrix
-    └── trials = crses × benchmarks × config.trials
-    └── Each trial = (crs, benchmark, trial_num)
+    └── trials expand from CRS services × benchmark-harness × sanitizer × mode × trial_num
+    └── Bug-fixing CRS adds CPV-targeted fan-out in delta/full modes
     ↓
 5. Determine Execution Mode
     ├── Local mode if:
@@ -73,6 +73,8 @@ crsbench run \
   --experiment-config CONFIG_FILE \
   [--local-only] \
   [--distributed] \
+  [--queue-mode {fresh,continue,quit}] \
+  [--retry-failed] \
   [--dry-run] \
   [--verbose]
 ```
@@ -86,6 +88,8 @@ crsbench run \
 | `--experiment-config` | Yes | Path | Path to experiment YAML config |
 | `--local-only` | No | Flag | Force local execution |
 | `--distributed` | No | Flag | Force distributed execution |
+| `--queue-mode` | No | Choice | Existing queue policy (`fresh`, `continue`, `quit`) |
+| `--retry-failed` | No | Flag | Requeue failed trials in continue mode |
 | `--dry-run` | No | Flag | Show what would run without executing |
 | `--verbose` / `-v` | No | Flag | Enable verbose output |
 
@@ -93,15 +97,9 @@ Benchmarks, CRSes, benchmark suites, mode, paths, hint settings, and all other e
 
 ### Usage Examples
 
-**Minimal usage (benchmarks, crses, etc. configured in YAML):**
+**Minimal usage (benchmarks, `crs_compose`, etc. configured in YAML):**
 ```bash
 crsbench run --experiment-config my-experiment.yaml
-```
-
-**Override experiment name:**
-```bash
-crsbench run --experiment-config config.yaml \
-
 ```
 
 **Force local execution:**
@@ -121,7 +119,7 @@ crsbench run --experiment-config config.yaml \
 ### Resolution Priority
 
 The orchestration layer reads experiment parameters from the config YAML.
-`experiment_name`, `crses`, `benchmarks`, `benchmark_suite`, and all other
+`experiment_name`, `crs_compose`, `benchmarks`, `benchmark_suite`, and all other
 experiment settings come from config.
 
 ### Resolution Logic
@@ -138,7 +136,7 @@ def main():
     experiment_name = config.experiment
 
     # CRSes from config
-    crses = config.crses
+    crses = list(config.crs_compose.keys())
 
     # Benchmarks from config (benchmarks list or benchmark_suite)
     benchmarks = config.get_benchmark_list()
@@ -150,43 +148,31 @@ def main():
 
 ### Trial Structure
 
-```python
-Trial = namedtuple('Trial', ['crs', 'benchmark', 'trial_num'])
-```
-
-Each trial represents a single execution unit:
-- `crs`: CRS implementation to test
-- `benchmark`: Benchmark project to test against
-- `trial_num`: Trial number (0-indexed)
+Each trial is a concrete execution unit that includes CRS, benchmark harness,
+sanitizer, mode, and trial number, plus optional CPV targeting for bug-fixing CRS.
 
 ### Matrix Generation
 
-```python
-def generate_trial_matrix(benchmarks, crses, config):
-    trials = []
-    for crs in crses:
-        for benchmark in benchmarks:
-            for trial_num in range(config.trials):
-                trials.append(Trial(crs, benchmark, trial_num))
-    return trials
-```
+Matrix construction is schema-driven and expands by benchmark-harness pairs,
+mode/sanitizer combinations, and CPV targeting (for bug-fixing CRS).
 
-**Example**:
-- CRSes: `[atlantis-c, atlantis-multilang]` (2)
-- Benchmarks: `[bench1, bench2, bench3]` (3)
-- Trials: `2` (from config)
-- **Total**: 2 × 3 × 2 = **12 trials**
+**Note**:
+- A simple product estimate (`CRS × benchmark × trials`) is only a lower bound.
+- Actual job counts depend on harness count, sanitizers, mode, and CPV expansion.
 
 ### Trial Ordering
 
 Trials are ordered by:
 1. CRS (outer loop)
-2. Benchmark (middle loop)
-3. Trial number (inner loop)
+2. Benchmark harness
+3. Mode
+4. Sanitizer
+5. CPV target (when applicable)
+6. Trial number
 
 This ordering ensures that:
-- All benchmarks for a CRS are tested together
-- Multiple trials of same CRS+benchmark are grouped
+- All harness variants for a CRS are tested together
+- Multiple trials of same CRS+harness+mode+sanitizer(+CPV) are grouped
 - Results can be easily aggregated by CRS or benchmark
 
 ## Execution Modes
@@ -195,6 +181,18 @@ This ordering ensures that:
 
 ```python
 def should_use_distributed_mode(args, config, total_jobs):
+    if args.local_only and args.distributed:
+        raise ValueError("--local-only and --distributed are mutually exclusive")
+
+    # User explicit distributed override
+    if args.distributed:
+        redis_host = normalize_redis_host(config.redis_host)
+        if redis_host is None:
+            raise RuntimeError("--distributed requires redis_host in config")
+        if not check_redis_available(redis_host):
+            raise RuntimeError("--distributed requested but Redis is unavailable")
+        return True
+
     # User explicit override
     if args.local_only:
         return False
@@ -225,18 +223,27 @@ def should_use_distributed_mode(args, config, total_jobs):
 - No Redis configured
 - Redis connection fails
 
-**Implementation**:
+**Implementation (current shape)**:
 ```python
-def run_experiment_local(experiment_name, config, benchmarks, crses):
-    trials = generate_trial_matrix(benchmarks, crses, config)
+def run_experiment_local(experiment_name, config, trials):
+    # trials already include harness/mode/sanitizer/(optional CPV) expansion
+    trial_suffix = "_" + "".join(...)
 
     results = []
     for trial in trials:
+        bh = trial.benchmark_harness
+        trial_id = build_trial_id(experiment_name, trial, trial_suffix)
         result = run_crs_trial(
             crs=trial.crs,
-            benchmark=trial.benchmark,
+            benchmark=bh.name,
+            harness_name=bh.harness.name,
+            harness_path=bh.harness.path,
+            mode=trial.mode,
+            sanitizer=trial.sanitizer,
             trial_num=trial.trial_num,
-            config=config.to_dict()
+            trial_id=trial_id,
+            config_dict=config.model_dump(),
+            target_cpv_id=trial.target_cpv_id,
         )
         results.append(result)
 
@@ -253,29 +260,49 @@ def run_experiment_local(experiment_name, config, benchmarks, crses):
 ### Distributed Mode
 
 **When Used**:
-- Multiple trials
+- Any expanded trial count other than exactly 1
 - Redis configured and available
 - Not explicitly disabled
 
-**Implementation**:
+**Implementation (current shape)**:
 ```python
-def run_experiment_distributed(experiment_name, config, benchmarks, crses):
-    queue = initialize_queue(config.redis_host, experiment_name)
-    trials = generate_trial_matrix(benchmarks, crses, config)
+def run_experiment_distributed(experiment_name, config, trials):
+    session = DistributedRuntimeSession.for_run(
+        redis_host=normalize_redis_host(config.redis_host),
+        experiment_name=experiment_name,
+    )
+    queue = session.trial_queue
+
+    existing = get_existing_trials(queue, experiment_name=experiment_name)
+    queue_mode = resolve_queue_mode(existing, requested_mode, retry_failed)
+    trials = filter_existing_trials(trials, existing, queue_mode)
+    trials = filter_trials_already_complete_on_disk(trials, config)
+
+    session.register_or_raise(RuntimeRegistration.from_experiment_config(config))
+    trial_suffix = "_" + "".join(...)
 
     jobs = []
     for trial in trials:
+        bh = trial.benchmark_harness
+        trial_id = build_trial_id(experiment_name, trial, trial_suffix)
         job = queue.enqueue(
             'crsbench.distributed.jobs.run_crs_trial',
             crs=trial.crs,
-            benchmark=trial.benchmark,
+            benchmark=bh.name,
+            harness_name=bh.harness.name,
+            mode=trial.mode,
+            sanitizer=trial.sanitizer,
+            target_cpv_id=trial.target_cpv_id,
             trial_num=trial.trial_num,
-            config=config.to_dict(),
+            trial_id=trial_id,
+            harness_path=bh.harness.path,
+            config_dict=config.model_dump(),
             job_timeout=config.max_total_time
         )
         jobs.append(job)
 
-    results = monitor_jobs(queue, jobs, experiment_name)
+    results = monitor_jobs(queue, jobs, experiment_name, config)
+    session.cleanup()
     generate_final_report(results, experiment_name, config)
 ```
 
@@ -382,12 +409,12 @@ Report filestore: /tmp/report-data
 ```python
 def generate_final_report(results, experiment_name, config):
     total_trials = len(results)
-    successful_trials = sum(1 for r in results if r.get('success'))
+    successful_trials = sum(1 for r in results if r.success)
     failed_trials = total_trials - successful_trials
 
     # POV statistics
-    total_povs_found = sum(r.get('povs_found', 0) for r in results if r.get('success'))
-    total_povs_available = sum(r.get('total_povs', 0) for r in results if r.get('success'))
+    total_povs_found = sum(r.povs_found for r in results if r.success)
+    total_povs_available = sum(r.total_povs for r in results if r.success)
 
     if total_povs_available > 0:
         success_rate = total_povs_found / total_povs_available
@@ -430,16 +457,15 @@ try:
     queue = initialize_queue(config.redis_host, experiment_name)
 except Exception as e:
     logger.error(f"Failed to initialize queue: {e}")
-    logger.error("Falling back to local execution mode")
-    run_experiment_local(experiment_name, config, benchmarks, crses)
+    raise RuntimeError("Distributed mode requires a reachable Redis backend") from e
 ```
 
 **Trial execution failure:**
 ```python
 result = run_crs_trial(...)
-if not result.get('success'):
-    logger.error(f"✗ Failed: {result.get('error', 'Unknown error')}")
-    # Continue with next trial
+if not result.success:
+    logger.error(f"✗ Failed: {result.error or 'Unknown error'}")
+    raise RuntimeError(f"Trial failed: {result.error or 'Unknown error'}")
 ```
 
 ## Integration Points
@@ -481,9 +507,15 @@ from crsbench.distributed.jobs import run_crs_trial
 # Execute trial (local or via worker)
 result = run_crs_trial(
     crs=trial.crs,
-    benchmark=trial.benchmark,
+    benchmark=trial.benchmark_harness.name,
+    harness_name=trial.benchmark_harness.harness.name,
+    harness_path=trial.benchmark_harness.harness.path,
     trial_num=trial.trial_num,
-    config=config.to_dict()
+    trial_id=build_trial_id(config.experiment, trial, "_sample"),
+    config_dict=config.model_dump(),
+    mode=trial.mode,
+    sanitizer=trial.sanitizer,
+    target_cpv_id=trial.target_cpv_id,
 )
 ```
 
@@ -496,7 +528,7 @@ result = run_crs_trial(
 **Solution**: Remove CLI overrides for experiment parameters (benchmarks, CRSes, mode, paths, hints, etc.). The config YAML is the single source of truth. Only execution-control flags remain on the CLI.
 
 **Benefits**:
-- Simple, predictable CLI with only 9 flags
+- Simple, predictable CLI with only execution-control flags
 - Config file is self-contained and reproducible
 - No ambiguity about which values are active
 - Consistent with infrastructure-as-code practices
@@ -519,9 +551,9 @@ result = run_crs_trial(
 
 ### Why Trial Matrix Structure?
 
-**Problem**: Need to track all CRS-benchmark-trial combinations.
+**Problem**: Need to track all concrete execution units after harness/mode/sanitizer/CPV expansion.
 
-**Solution**: Generate explicit trial list with namedtuple.
+**Solution**: Generate explicit `Trial` objects from registry IDs and benchmark harness metadata.
 
 **Benefits**:
 - Clear representation of work to be done
@@ -534,7 +566,7 @@ result = run_crs_trial(
 ### Startup Time
 
 - Config validation: <100ms
-- Trial matrix generation: O(n × m × t) where n=CRS, m=benchmarks, t=trials
+- Trial matrix generation scales with expanded dimensions (CRS × harness × mode × sanitizer × trial, plus CPV fan-out for bug-fixing CRS)
 - Redis connection: <50ms
 - **Total startup**: <500ms typical
 
@@ -597,17 +629,20 @@ def test_run_experiment_local_mode(tmp_path):
     config_path.write_text("""
     experiment: test
     trials: 1
-    crses: [test-crs]
+    crs_compose:
+      test-crs:
+        num_cores: 8
     benchmarks: [test-bench]
     ...
     """)
 
-    # Run experiment
-    result = subprocess.run([
-        "crsbench",
-        "--experiment-config", str(config_path),
-        "--local-only"
-    ])
+# Run experiment
+result = subprocess.run([
+    "crsbench",
+    "run",
+    "--experiment-config", str(config_path),
+    "--local-only"
+])
 
     assert result.returncode == 0
 ```
@@ -649,9 +684,11 @@ crsbench run --experiment-config config.yaml \
 benchmarks:
   - bench1
   - bench2
-crses:
-  - crs1
-  - crs2
+crs_compose:
+  crs1:
+    num_cores: 8
+  crs2:
+    num_cores: 8
 ```
 ```bash
 crsbench run --experiment-config config.yaml

@@ -47,7 +47,7 @@ Use it when adding, moving, or removing docs.
   - `docs/RFC.md`
   - `docs/benchmark-spec.md` (compatibility pointer to RFC)
   - `docs/benchmark-suite-example.yaml`
-  - `docs/experiment-config-example.yaml`
+  - `docs/experiment-config-distributed-example.yaml`
   - `docs/experiment-config-distributed-example.yaml`
   - `docs/meta-example.yaml`
 

@@ -1,52 +1,17 @@
-# CRS Configs in CRSBench
+# CRS Configs Directory (`./crses`) — Deprecated Runtime Path
 
-CRSBench uses **oss-crs** as the source of truth for CRS registry entries.
+CRSBench now resolves `oss_crs_registry:` directly from `./oss-crs/registry/`.
 
-## Source of Truth
+## Current Contract
 
-- Canonical registry: `oss-crs/registry`
-- Local deployment configs: `crses/configs`
+- Canonical CRS source: `./oss-crs/registry/`
+- Experiment field `oss_crs_registry` must contain registry IDs
+- `crs_compose.crs_services` is optional; when present, keys must be a subset of `oss_crs_registry`
+- `crs_compose` + experiment-level resources control runtime placement/limits
 
-## Recommended Layout
+## Status of `./crses`
 
-```text
-oss-crs/
-  registry/                  # Canonical CRS entries (*.yaml)
+`./crses` is no longer required for CRSBench runtime resolution.
 
-crses/
-  configs/
-    <config-name>/
-      config-resource.yaml   # Worker placement + resources
-      config-litellm.yaml    # LiteLLM model/provider configuration
-      config-worker.yaml     # Optional per-worker overrides
-      .env                   # Local secrets (gitignored)
-```
-
-## How CRSBench Resolves CRS
-
-1. Experiment config lists CRS config names (for example `crs-libfuzzer`).
-2. CRSBench reads `crses/configs/<name>/config-resource.yaml` to resolve registry name(s).
-3. CRS type/source is loaded from `registry_dir`.
-   - Default: `oss-crs/registry`
-
-## Experiment Config Defaults
-
-- `registry_dir`: `oss-crs/registry`
-- `crs_configs_dir`: `crses/configs`
-
-You can override both in experiment YAML when needed.
-
-## What to Keep in This Repo
-
-Keep in `crses/configs` only:
-- deployment-specific resource placement
-- local environment settings
-- worker-specific overrides
-
-Do **not** duplicate upstream registry definitions unless you intentionally need
-legacy compatibility.
-
-## Important
-
-`crses/registry` is no longer used. CRS registry definitions must come from
-`oss-crs/registry`.
+You may keep it only for local notes/templates during migration. Runtime no longer
+depends on `crses/configs/*/config-resource.yaml`.

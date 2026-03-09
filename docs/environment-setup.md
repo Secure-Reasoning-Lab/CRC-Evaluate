@@ -19,8 +19,8 @@ Canonical variable index: `docs/environment-variables.md`
 
 3. **Set required API keys** (at minimum):
    ```bash
-   CRSBENCH_LLM_MASTER_KEY=sk-your-master-key
-   CRSBENCH_LLM_UPSTREAM_API_KEY=sk-your-api-key
+   CRSBENCH_LLM_UPSTREAM_BASE_URL=http://your-litellm:4000
+   CRSBENCH_LLM_UPSTREAM_MASTER_KEY=sk-your-master-key
    OPENAI_API_KEY=sk-your-openai-key  # Or another LLM provider
    ```
 
@@ -39,10 +39,9 @@ CRSBench prefers canonical `CRSBENCH_LLM_*` variables as the source of truth:
 
 - `CRSBENCH_LLM_BASE_URL`: immediate endpoint called directly
 - `CRSBENCH_LLM_UPSTREAM_BASE_URL`: next-hop/forward target for external mode
-- `CRSBENCH_LLM_MASTER_KEY`: self-hosted key-management and tracking credential
-- `CRSBENCH_LLM_UPSTREAM_API_KEY`: self-hosted model/provider API key
-- `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`: external LiteLLM key-management credential
+- `CRSBENCH_LLM_MASTER_KEY`: local/self-hosted LiteLLM server credential (not external-mode control plane)
 - `CRSBENCH_LLM_UPSTREAM_API_KEY`: external fixed runtime credential
+- `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`: external LiteLLM key-management credential
 
 Only `CRSBENCH_LLM_*` names are supported.
 
@@ -64,8 +63,8 @@ Only `CRSBENCH_LLM_*` names are supported.
 # CRSBENCH_REDIS_HOST=
 
 # LiteLLM with one provider
-CRSBENCH_LLM_MASTER_KEY=sk-dev-key
-CRSBENCH_LLM_UPSTREAM_API_KEY=sk-dev-key
+CRSBENCH_LLM_UPSTREAM_BASE_URL=http://central-litellm:4000
+CRSBENCH_LLM_UPSTREAM_MASTER_KEY=sk-dev-key
 OPENAI_API_KEY=sk-your-openai-key
 ```
 
@@ -76,9 +75,9 @@ python scripts/litellm-helper.py start
 
 **Run experiment:**
 ```bash
-# benchmarks, crses, and other settings are configured in config.yaml
-crsbench run --experiment-config config.yaml \
-
+# benchmarks, crs_compose, and other settings are in
+# docs/experiment-config-distributed-example.yaml (copy/customize for your run)
+crsbench run --experiment-config config.yaml
 ```
 
 ---
@@ -93,8 +92,8 @@ crsbench run --experiment-config config.yaml \
 CRSBENCH_REDIS_HOST=localhost:6379
 
 # LiteLLM configuration
-CRSBENCH_LLM_MASTER_KEY=sk-prod-key
-CRSBENCH_LLM_UPSTREAM_API_KEY=sk-prod-key
+CRSBENCH_LLM_UPSTREAM_BASE_URL=http://central-litellm:4000
+CRSBENCH_LLM_UPSTREAM_MASTER_KEY=sk-prod-key
 OPENAI_API_KEY=sk-your-openai-key
 ANTHROPIC_API_KEY=sk-ant-your-key
 ```
@@ -114,9 +113,9 @@ python scripts/litellm-helper.py status
 
 **Run experiment:**
 ```bash
-# benchmarks, crses, and other settings are configured in config.yaml
-crsbench run --experiment-config config.yaml \
-
+# benchmarks, crs_compose, and other settings are in
+# docs/experiment-config-distributed-example.yaml (copy/customize for your run)
+crsbench run --experiment-config config.yaml
 ```
 
 ---
@@ -172,9 +171,9 @@ ANTHROPIC_API_KEY=sk-ant-your-key
 
 **Run experiment:**
 ```bash
-# On orchestrator (benchmarks, crses configured in config.yaml)
-crsbench run --experiment-config config.yaml \
-
+# On orchestrator (benchmarks, crs_compose configured in your experiment YAML;
+# see docs/experiment-config-distributed-example.yaml)
+crsbench run --experiment-config config.yaml
 
 # On workers (in separate terminals)
 crsbench worker --experiment-config config.yaml --continuous
@@ -263,11 +262,11 @@ python scripts/sync-upstream-models.py
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `CRSBENCH_LLM_MASTER_KEY` | For `litellm_mode: self_hosted` | - | Self-hosted LiteLLM master key (auto-generated if missing). |
+| `CRSBENCH_LLM_MASTER_KEY` | When CRS authenticates to trial/local LiteLLM | - | LiteLLM auth key passed to CRS containers when applicable. |
 | `CRSBENCH_LLM_BASE_URL` | No | `http://localhost:4000` | LiteLLM endpoint URL |
-| `CRSBENCH_LLM_UPSTREAM_BASE_URL` | For `litellm_mode: external` (preferred) | - | URL of external/upstream LiteLLM instance |
-| `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` | For `litellm_mode: external` + tracking | - | Admin key for upstream LiteLLM key lifecycle and usage APIs |
-| `CRSBENCH_LLM_UPSTREAM_API_KEY` | For `litellm_mode: external` fixed-key runtime | - | Runtime API key for external/upstream LiteLLM |
+| `CRSBENCH_LLM_UPSTREAM_BASE_URL` | For upstream/proxy routing (preferred) | - | URL of external/upstream LiteLLM instance |
+| `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` | For upstream key lifecycle and usage tracking | - | Admin key for upstream LiteLLM key lifecycle and usage APIs |
+| `CRSBENCH_LLM_UPSTREAM_API_KEY` | For upstream fixed-key runtime auth | - | Runtime API key for external/upstream LiteLLM |
 
 ### LLM Provider Keys
 
@@ -303,6 +302,9 @@ At least **one** provider key is required:
 
 - Use `experiment` in config to control queue naming.
 - Use `worker.worker_name` in config or `--worker-name` to control worker identity.
+- For benchmark-ci distributed runs, evaluator identity defaults differ by mode:
+  - `crsbench evaluator --ci` defaults `--worker-name` to `ci-evaluator`.
+  - configless evaluator mode defaults `--worker-name` to `configless-evaluator`.
 - Use `--verbose` to enable DEBUG logging.
 
 ### Development
@@ -326,7 +328,8 @@ Settings are applied in this order (highest to lowest priority):
    CRSBENCH_REDIS_HOST=localhost:6379
    ```
 
-3. **Experiment config** - Settings in `experiment-config.yaml`
+3. **Experiment config** - Settings in your experiment YAML
+   (canonical contract: `docs/experiment-config-distributed-example.yaml`)
    ```yaml
    redis_host: localhost:6379
    ```
@@ -507,4 +510,4 @@ CRSBENCH_REDIS_HOST=redis-prod.example.com:6379
 
 - [Experiment Workflow](experiment-workflow.md) - Setting up Valkey and workers
 - [LiteLLM Service](../services/litellm/README.md) - LiteLLM configuration details
-- [Experiment Configuration](experiment-config-example.yaml) - YAML config file format
+- [Experiment Configuration](experiment-config-distributed-example.yaml) - YAML config file format

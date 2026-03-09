@@ -84,6 +84,27 @@ Machine B/C/...               Machine D (single evaluator)
 See [Experiment Workflow](docs/experiment-workflow.md) for multi-machine setup, core pinning, and
 production deployment. See [Environment Setup](docs/environment-setup.md) for `.env` configuration.
 
+### CRS Config Resolution (Important)
+
+CRS services are declared under `crs_compose` in experiment YAML.
+
+Resolution flow:
+1. Add one or more CRS service keys under `crs_compose` (for example `crs-codex`)
+2. Each CRS key resolves to `./oss-crs/registry/<crs>.yaml` by default
+3. Registry YAML defines source (git or `local_path`) and runtime defaults
+
+Example:
+
+```yaml
+crs_compose:
+  crs-codex:
+    num_cores: 8
+```
+
+For LiteLLM in experiment runtime (`runtime.litellm.mode: external`):
+- Tracking enabled (`runtime.litellm.tracking_enabled: true`) requires `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`
+- Tracking disabled (`runtime.litellm.tracking_enabled: false`) requires either `CRSBENCH_LLM_UPSTREAM_API_KEY` or `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`
+
 ### Shell Completion
 
 Enable tab-completion for all `crsbench` subcommands and options:
@@ -104,7 +125,7 @@ fish and other shell setup instructions.
 ```bash
 crsbench verify       benchmarks/project --pov-dir ./povs/
 crsbench patch-verify benchmarks/project --patch-dir ./patches --pov-dir ./povs
-crsbench coverage     benchmarks/project --corpus-dir ./corpus/
+crsbench coverage     benchmarks/project --corpus-dir ./corpus/  # experimental
 ```
 
 ### Results
@@ -149,7 +170,7 @@ CRSBench/
 │   ├── reporting/           #   Reports & dashboard
 │   ├── statistics/          #   Benchmark statistics
 │   └── utils/               #   Shared utilities (logger, YAML, etc.)
-├── crses/                   # CRS configurations for evaluation
+├── oss-crs/registry/        # OSS-CRS registry entries referenced by `crs_compose` keys
 ├── oss-crs/                 # CRS runtime and registry (submodule)
 ├── third_party/oss-fuzz/    # Official OSS-Fuzz (sparse checkout, managed by `crsbench prepare`)
 ├── third_party/patches/     # Local upstream patch set (applied by `crsbench prepare`)
@@ -169,6 +190,7 @@ CRSBench/
   - [Environment Setup](docs/environment-setup.md)
   - [Environment Variables](docs/environment-variables.md)
   - [Experiment Workflow](docs/experiment-workflow.md)
+  - [Distributed Experiment Config Contract (source-of-truth)](docs/experiment-config-distributed-example.yaml)
 - Contributor tracks:
   - [Framework Developer Guide](docs/framework-developer-guide.md)
   - [Benchmark Developer Guide](docs/benchmark-developer-guide.md)

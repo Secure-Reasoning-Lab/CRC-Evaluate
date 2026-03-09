@@ -48,9 +48,9 @@ For Redis/Valkey setup and multi-process runs (`run`, `worker`, `evaluator`):
 - Startup does not enqueue pre-build jobs in configless mode; builds are consumed lazily from build queues.
 - Multi-experiment configless mode requires shared `benchmarks_root` across discovered experiments.
 - Evaluator resource sizing follows `CLI > experiment metadata (registry) > defaults`.
-- Worker cpuset sizing follows the same precedence using `--jobs` / `--cores-per-job` and `worker.*` metadata.
+- Worker sizing follows the same precedence using `--jobs` / `--cores-per-job` and `worker.*` metadata.
 - For numeric metadata conflicts without CLI overrides, runtime uses `max(...)`.
-- For CPU pinning conflicts (`cores`, `skip_cpus`) without CLI overrides, runtime selects values in stable experiment-name order.
+- CPU pinning is CLI-owned in distributed runtime (`--cpuset`, `--skip-cpuset`).
 - Invalid registry numeric metadata is rejected at startup (`worker.* >= 1`, `resources.cores_per_trial >= 1`, `evaluator.build/verify_* >= 1`, `evaluator.idle_timeout >= 0`).
 - `resources.memory_per_trial` default is `null` (unlimited).
 

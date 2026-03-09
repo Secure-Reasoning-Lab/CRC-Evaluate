@@ -99,41 +99,23 @@ This document describes the design and implementation of a distributed job queue
 
 ```python
 def main() -> None:
-    """Main entry point - CLI handler."""
+    """Main entry point."""
     args = parse_arguments()
-    validate_arguments(args)
-
-    # NEW: Redis-based orchestration
     config = load_experiment_config(args.experiment_config)
-    redis_connection = redis.Redis(host=config.redis_host)
+    experiment_name = config.experiment
+    trial_matrix = generate_trial_matrix(...)
+    total_jobs = len(trial_matrix)
 
-    with rq.Connection(redis_connection):
-        run_experiment_with_queue(args, config)
-
-def run_experiment_with_queue(args, config) -> None:
-    """Run experiment using job queue."""
-    trial_q, _build_q, _verify_q = resolve_queue_names(args.experiment_name)
-    queue = rq.Queue(trial_q)
-
-    # Generate trial matrix
-    trials = generate_trial_matrix(args, config)
-
-    # Enqueue jobs
-    job_list = []
-    for trial in trials:
-        job = queue.enqueue(
-            'crsbench.distributed.jobs.run_crs_trial',
-            crs=trial.crs,
-            benchmark=trial.benchmark,
-            trial_num=trial.trial_num,
-            config=config.to_dict(),
-            job_timeout=config.max_total_time,
-            result_ttl=-1
+    if should_use_distributed_mode(args, config, total_jobs):
+        run_experiment_distributed(
+            experiment_name,
+            config,
+            trial_matrix,
+            queue_mode=getattr(args, "queue_mode", None),
+            retry_failed=bool(getattr(args, "retry_failed", False)),
         )
-        job_list.append(job)
-
-    # Monitor progress
-    monitor_jobs(queue, job_list, args.experiment_name)
+    else:
+        run_experiment_local(experiment_name, config, trial_matrix)
 ```
 
 **Integration Points**:
@@ -160,9 +142,9 @@ def run_experiment_with_queue(args, config) -> None:
 
 import os
 import time
-import redis
 import rq
 import logging
+from crsbench.distributed.queue import create_redis_connection
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +155,7 @@ def main():
     experiment_name = 'default'  # Normally provided by config/CLI
 
     logger.info(f"Connecting to Redis at {redis_host}")
-    redis_connection = redis.Redis(host=redis_host)
+    redis_connection = create_redis_connection(redis_host)
 
     with rq.Connection(redis_connection):
         queue_name, _build_q, _verify_q = resolve_queue_names(experiment_name)
@@ -253,20 +235,27 @@ def build_crs_environment(crs: str, benchmark: str, config: Dict[str, Any]) -> b
 def run_crs_trial(
     crs: str,
     benchmark: str,
+    harness_name: str,
+    harness_path: str,
     trial_num: int,
-    config: Dict[str, Any]
-) -> Dict[str, Any]:
+    trial_id: str,
+    config_dict: Dict[str, Any],
+    mode: str,
+    sanitizer: str = "address",
+    results_timestamp: Optional[str] = None,
+    target_cpv_id: str | None = None,
+) -> TrialResult:
     """
     Execute a single CRS trial.
 
     Args:
         crs: CRS implementation name
         benchmark: Benchmark identifier or path
-        trial_num: Trial number for this execution
-        config: Experiment configuration dictionary
+        trial_num: Trial number for this execution (1-indexed)
+        config_dict: Experiment configuration dictionary
 
     Returns:
-        Dict containing trial results and metadata
+        TrialResult containing trial results and metadata
     """
     logger.info(f"Running trial {trial_num} for {crs} on {benchmark}")
 
@@ -377,40 +366,16 @@ def resolve_benchmark_path(benchmark: str, config: Dict[str, Any]) -> Path:
 ```python
 """Utilities for Redis queue management."""
 
-import redis
 import rq
-from typing import List
+
+from crsbench.distributed.queue import create_redis_connection, resolve_queue_names
 
 
 def initialize_queue(redis_host: str, experiment_name: str) -> rq.Queue:
-    """
-    Initialize Redis-backed RQ queue.
-
-    Args:
-        redis_host: Redis server hostname
-        experiment_name: Experiment identifier for queue naming
-
-    Returns:
-        Initialized RQ queue
-    """
+    """Initialize Redis-backed RQ queue."""
     queue_name, _build_q, _verify_q = resolve_queue_names(experiment_name)
-    redis_connection = redis.Redis(host=redis_host)
-    queue = rq.Queue(queue_name, connection=redis_connection)
-    return queue
-
-
-def get_all_jobs(queue: rq.Queue) -> List[rq.job.Job]:
-    """
-    Get all jobs in queue.
-
-    Args:
-        queue: RQ queue instance
-
-    Returns:
-        List of Job objects
-    """
-    job_ids = queue.get_job_ids()
-    return rq.job.Job.fetch_many(job_ids, queue.connection)
+    redis_connection = create_redis_connection(redis_host)
+    return rq.Queue(queue_name, connection=redis_connection)
 ```
 
 ## 4. Data Flow
@@ -445,34 +410,17 @@ def get_all_jobs(queue: rq.Queue) -> List[rq.job.Job]:
 ### 4.2 Trial Matrix Generation
 
 ```python
-def generate_trial_matrix(config):
+def generate_trial_matrix(benchmark_harnesses, crs_services, config, registry_dir):
     """
-    Generate all trial combinations.
-
-    For experiment with:
-    - CRSes: [crs1, crs2]
-    - Benchmarks: [bench1, bench2]
-    - Trials: 3
-
-    Generates 12 trials:
-    (crs1, bench1, trial=0)
-    (crs1, bench1, trial=1)
-    (crs1, bench1, trial=2)
-    (crs1, bench2, trial=0)
+    Generate concrete trial units expanded by:
+    - CRS registry ID
+    - benchmark harness
+    - mode
+    - sanitizer
+    - trial number
+    - CPV fan-out for bug-fixing CRS (when applicable)
+    """
     ...
-    (crs2, bench2, trial=2)
-    """
-    # CRSes and benchmarks are always from the experiment config YAML
-    benchmarks = config.get_benchmark_list()
-    crses = config.crses
-
-    trials = []
-    for crs in crses:
-        for benchmark in benchmarks:
-            for trial_num in range(config.trials):
-                trials.append(Trial(crs, benchmark, trial_num))
-
-    return trials
 ```
 
 ## 5. Configuration Schema Updates
@@ -576,8 +524,8 @@ class ExperimentConfig(BaseModel):
         default=None,
         description="Redis server hostname (optional, omit for local mode)"
     )
-    benchmarks_root: Optional[str] = Field(
-        default=None,
+    benchmarks_root: Path = Field(
+        default=Path("benchmarks"),
         description="Root directory containing benchmarks (defaults to ./benchmarks)"
     )
 
@@ -589,14 +537,11 @@ class ExperimentConfig(BaseModel):
 
     @validator('benchmarks_root')
     def validate_benchmarks_root(cls, v):
-        if v and v.strip():
-            path = Path(v.strip())
-            if not path.exists():
-                raise ValueError(f"Benchmarks root directory does not exist: {v}")
-            if not path.is_dir():
-                raise ValueError(f"Benchmarks root must be a directory: {v}")
-            return str(path.absolute())
-        return None  # Use default if not specified
+        # Current schema behavior: normalize blank to Path("benchmarks").
+        # Existence and directory checks are applied at runtime usage sites.
+        if isinstance(v, str) and not v.strip():
+            return Path("benchmarks")
+        return v
 ```
 
 ## 6. Docker Infrastructure
@@ -742,7 +687,7 @@ for crs in crses:
 # After (distributed)
 for crs in crses:
     for benchmark in benchmarks:
-        job = queue.enqueue(run_crs_trial, crs, benchmark, config)
+        job = queue.enqueue(run_crs_trial, ..., config_dict=config.model_dump())
         jobs.append(job)
 
 # Wait for completion
@@ -805,17 +750,14 @@ def monitor_jobs_rich(queue, job_list, experiment_name):
 ### 9.1 Job Failure Handling
 
 ```python
-def run_crs_trial_with_retry(crs, benchmark, trial_num, config, max_retries=3):
-    """Execute trial with retry logic."""
-    for attempt in range(max_retries):
-        try:
-            return run_crs_trial(crs, benchmark, trial_num, config)
-        except Exception as e:
-            logger.warning(f"Trial attempt {attempt+1} failed: {e}")
-            if attempt == max_retries - 1:
-                logger.error(f"Trial failed after {max_retries} attempts")
-                raise
-            time.sleep(2 ** attempt)  # Exponential backoff
+# Continue mode + retry policy in run_experiment_distributed(...)
+if queue_mode == "continue" and retry_failed:
+    for failed_job in existing["failed"].values():
+        if not _prepare_trial_dir_for_retry(config, failed_job):
+            continue
+        failed_job.meta["force_retry"] = True
+        failed_job.save_meta()
+        queue.enqueue_job(failed_job)
 ```
 
 ### 9.2 Worker Failure Recovery
@@ -825,12 +767,8 @@ def run_crs_trial_with_retry(crs, benchmark, trial_num, config, max_retries=3):
 - Can manually retry failed jobs:
 
 ```python
-def retry_failed_jobs(queue):
-    """Retry all failed jobs."""
-    failed_registry = queue.failed_job_registry
-    for job_id in failed_registry.get_job_ids():
-        job = rq.job.Job.fetch(job_id, connection=queue.connection)
-        job.retry()
+# Failed jobs are retried only when `--retry-failed` is explicitly set.
+# Default continue mode does not auto-retry failed jobs.
 ```
 
 ## 10. Testing Strategy
@@ -841,15 +779,15 @@ def retry_failed_jobs(queue):
 ```python
 def test_run_crs_trial_success():
     """Test successful trial execution."""
-    result = run_crs_trial('test-crs', 'test-benchmark', 0, {})
-    assert result['success'] is True
-    assert 'povs_found' in result
+    result = run_crs_trial('test-crs', 'test-benchmark', 'fuzz', '/tmp/fuzz.c', 1, 'id', {}, 'delta')
+    assert result.success is True
+    assert result.povs_found >= 0
 
 def test_run_crs_trial_failure():
     """Test trial failure handling."""
-    result = run_crs_trial('invalid-crs', 'invalid-benchmark', 0, {})
-    assert result['success'] is False
-    assert 'error' in result
+    result = run_crs_trial('invalid-crs', 'invalid-benchmark', 'fuzz', '/tmp/fuzz.c', 1, 'id', {}, 'delta')
+    assert result.success is False
+    assert result.error is not None
 ```
 
 **test_worker.py**:
@@ -866,7 +804,7 @@ def test_worker_connects_to_redis(mock_redis):
 def test_initialize_queue():
     """Test queue initialization."""
     queue = initialize_queue('localhost', 'test-exp')
-    assert queue.name == 'crsbench_test-exp'
+    assert queue.name == 'crsbench_trial'
 ```
 
 ### 10.2 Integration Tests
@@ -980,23 +918,27 @@ def main() -> None:
 
     config = load_experiment_config(args.experiment_config)
 
+    # Build full trial matrix first (includes harness/mode/sanitizer/CPV expansion)
+    trial_matrix = generate_trial_matrix(...)
+    total_jobs = len(trial_matrix)
+
     # Determine execution mode
-    use_distributed = should_use_distributed_mode(args, config)
+    use_distributed = should_use_distributed_mode(args, config, total_jobs)
 
     if use_distributed:
         logger.info("Using distributed execution mode with Redis")
-        run_experiment_distributed(args, config)
+        run_experiment_distributed(config.experiment, config, trial_matrix)
     else:
         logger.info("Using local execution mode (no Redis)")
-        run_experiment_local(args, config)
+        run_experiment_local(config.experiment, config, trial_matrix)
 
 
-def should_use_distributed_mode(args, config) -> bool:
+def should_use_distributed_mode(args, config, total_jobs) -> bool:
     """
     Determine if distributed mode should be used.
 
     Criteria for local mode:
-    - Only 1 total trial (1 CRS × 1 benchmark × 1 trial)
+    - Only 1 total expanded trial
     - redis_host not specified in config
     - Redis not available (connection check)
     - User explicitly requests local mode via CLI flag
@@ -1004,10 +946,7 @@ def should_use_distributed_mode(args, config) -> bool:
     Returns:
         bool: True if should use distributed mode
     """
-    # Calculate total number of jobs (from config)
-    benchmarks = config.get_benchmark_list()
-    crses = config.crses
-    total_jobs = len(benchmarks) * len(crses) * config.trials
+    # total_jobs is computed from the full expanded trial matrix before this call.
 
     # User explicitly disabled distributed mode
     if hasattr(args, 'local_only') and args.local_only:
@@ -1037,15 +976,13 @@ def should_use_distributed_mode(args, config) -> bool:
 def check_redis_available(redis_host: str) -> bool:
     """Check if Redis server is reachable."""
     try:
-        import redis
-        client = redis.Redis(host=redis_host, socket_connect_timeout=2)
-        client.ping()
+        _ = create_redis_connection(redis_host, socket_connect_timeout=2)
         return True
-    except (ImportError, redis.ConnectionError, redis.TimeoutError):
+    except Exception:
         return False
 
 
-def run_experiment_local(args, config) -> None:
+def run_experiment_local(experiment_name, config, trials) -> None:
     """
     Run experiment locally without Redis queue.
 
@@ -1055,51 +992,49 @@ def run_experiment_local(args, config) -> None:
     logger.info("Running CRSBench in Local Mode (No Redis)")
     logger.info("="*60)
 
-    # CRSes and benchmarks from config YAML
-    benchmarks = config.get_benchmark_list()
-    crses = config.crses
-
-    # Generate trial matrix
-    trials = generate_trial_matrix(config)
-
     logger.info(f"Total trials to execute: {len(trials)}")
-    logger.info(f"CRSes: {', '.join(crses)}")
-    logger.info(f"Benchmarks: {', '.join(benchmarks)}")
-    logger.info(f"Trials per combination: {config.trials}")
     logger.info("="*60)
 
     # Execute trials sequentially
     results = []
     for idx, trial in enumerate(trials, 1):
+        bh = trial.benchmark_harness
         logger.info(f"\n[{idx}/{len(trials)}] Starting trial:")
         logger.info(f"  CRS: {trial.crs}")
-        logger.info(f"  Benchmark: {trial.benchmark}")
+        logger.info(f"  Benchmark: {bh.name}")
         logger.info(f"  Trial: {trial.trial_num}")
 
         # Import and execute job directly
         from crsbench.distributed.jobs import run_crs_trial
+        trial_id = build_trial_id(experiment_name, trial, "_local")
 
         result = run_crs_trial(
             crs=trial.crs,
-            benchmark=trial.benchmark,
+            benchmark=bh.name,
+            harness_name=bh.harness.name,
+            harness_path=bh.harness.path,
             trial_num=trial.trial_num,
-            config=config.to_dict()
+            trial_id=trial_id,
+            config_dict=config.model_dump(),
+            mode=trial.mode,
+            sanitizer=trial.sanitizer,
+            target_cpv_id=trial.target_cpv_id,
         )
 
         results.append(result)
 
         # Log result
-        if result['success']:
-            logger.info(f"  ✓ Success: {result['povs_found']}/{result['total_povs']} POVs found")
+        if result.success:
+            logger.info(f"  ✓ Success: {result.povs_found}/{result.total_povs} POVs found")
         else:
-            logger.error(f"  ✗ Failed: {result.get('error', 'Unknown error')}")
+            logger.error(f"  ✗ Failed: {result.error or 'Unknown error'}")
 
     # Generate final report
     logger.info("\n" + "="*60)
     logger.info("Experiment Complete - Generating Report")
     logger.info("="*60)
 
-    generate_final_report(results, args.experiment_name, config)
+    generate_final_report(results, experiment_name, config)
 ```
 
 **CLI Flag Addition**:
@@ -1218,7 +1153,7 @@ except ImportError:
     REDIS_AVAILABLE = False
     logger.debug("Redis/RQ not installed, distributed mode unavailable")
 
-def should_use_distributed_mode(args, config) -> bool:
+def should_use_distributed_mode(args, config, total_jobs) -> bool:
     """..."""
     if not REDIS_AVAILABLE:
         logger.info("Redis/RQ not installed, using local mode")
@@ -1244,7 +1179,7 @@ def should_use_distributed_mode(args, config) -> bool:
 
 | Variable | Description | Default | Used By |
 |----------|-------------|---------|---------|
-| CRSBENCH_REDIS_HOST | Redis server hostname | localhost | Orchestrator, Worker |
+| CRSBENCH_REDIS_HOST | Redis server hostname (worker process env) | localhost | Worker |
 | PYTHONPATH | Python module path | /app | Worker |
 
 ### 15.2 Queue Naming Convention
@@ -1293,11 +1228,15 @@ CI jobs use deterministic `job_id` values from flat DAG job classes (for
 example `build-single/...`, `verify-cpv-pov/...`, `test-patch-...`).
 
 - Terminal duplicate IDs are handled by `stale_terminal_policy`:
-  - Default: `refresh_stopped_canceled_failed`
-  - `finished` is reused by default
-  - `failed` / `stopped` / `canceled` are refreshed by default
+  - Default: `refresh_all`
+  - `finished` / `failed` / `stopped` / `canceled` are refreshed by default
+  - Build jobs are always refreshed when status is `finished` (never reused)
+  - Non-build `finished` jobs can be reused only with
+    `stale_terminal_policy=refresh_stopped_canceled_failed`
   - Supported values: `refresh_stopped_canceled`, `refresh_failed`,
     `refresh_stopped_canceled_failed`, `refresh_all`, `quit`
+  - Current benchmark-ci CLI uses the default policy; per-run policy override is
+    an internal API knob (not a public CLI option today)
 - Non-terminal duplicates:
   - `queued` / `deferred` / `scheduled` are deleted and re-enqueued
   - other active statuses (for example `started`) are reused for the run

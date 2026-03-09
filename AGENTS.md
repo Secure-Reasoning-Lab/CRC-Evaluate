@@ -42,6 +42,15 @@ When instructions conflict, prioritize in this order:
 - When behavior, interfaces, or workflows change, update the nearest relevant docs under `docs/`.
 - If doc entry points change, update the `Docs Index (Agent Jump List)` in this file.
 
+## Design Doc Authoring Policy (Subagents)
+
+- When creating or editing files under `docs/design/`, follow `docs/design/doc-authoring-guidelines.md`.
+- Treat `docs/design/` as contract-level documentation (invariants, interfaces, state transitions, failure semantics, deployment behavior), not implementation snapshots.
+- Do not paste large implementation code blocks into design docs. If code is needed, keep short pseudocode and link implementation files.
+- Do not add checklist-style implementation tracking (`- [ ]`, `- [x]`), commit-hash narratives, or "current shape" snapshots in design docs.
+- For distributed/queue/worker/evaluator topics, explicitly document non-local behavior and failure/retry semantics.
+- If behavior changes, update the canonical design section in the same PR/commit; do not rely on "historical/outdated" disclaimers.
+
 ## Benchmark Change Logging
 
 - Any change under `benchmarks/<benchmark-name>/` must update that benchmark's `.aixcc/CHANGELOG.md`.
@@ -61,6 +70,7 @@ Before considering work complete:
 - Distributed/non-local validation is completed when applicable.
 - Relevant docs are updated when behavior or workflows changed.
 - Pre-commit quality gate passes: `scripts/ci-tests/run-local.sh checks`.
+- Post-commit review loop is completed: commit -> agent-team review -> fixes -> repeat until no findings.
 
 ## Development Workflow Loop
 
@@ -114,6 +124,7 @@ Then re-run the quality gate command above.
 - Start here: `docs/README.md`
 - Environment setup: `docs/environment-setup.md`
 - Architecture: `docs/design/architecture.md`
+- Design doc policy: `docs/design/doc-authoring-guidelines.md`
 - Distributed systems: `docs/design/distributed/distributed-evaluation.md`
 - Job queue/workers: `docs/design/distributed/distributed-job-queue.md`
 - Deployment/cloud: `docs/design/distributed/deployment-guide.md`

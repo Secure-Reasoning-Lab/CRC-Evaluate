@@ -46,7 +46,6 @@ CRSBench/
 │   └── run_experiment.py     # CLI entrypoint
 ├── docs/                     # User docs, module docs, design docs
 ├── benchmarks/               # Benchmark artifacts
-├── crses/                    # CRS configurations
 ├── experiment-configs/       # Experiment yaml configs
 ├── oss-crs/                  # Integrated upstream project
 └── third_party/oss-fuzz/     # Official OSS-Fuzz (sparse checkout)

@@ -77,7 +77,7 @@ export CRSBENCH_REDIS_HOST=redis-server
 crsbench worker --continuous
 
 # With CPU affinity
-crsbench worker --continuous --cores 16-47
+crsbench worker --continuous --cpuset 16-47
 ```
 
 Resource precedence (when cpuset/cgroup supervisor is enabled):
@@ -85,7 +85,8 @@ Resource precedence (when cpuset/cgroup supervisor is enabled):
 - Otherwise, worker uses experiment metadata from registry (`worker.jobs`, `worker.cores_per_job`).
 - Fallback default is `1` job and `4` cores per job.
 - Numeric conflicts resolve by `max(...)`.
-- For conflicting CPU pinning metadata (`worker.cores`, `worker.skip_cpus`) with no CLI override, selection uses stable experiment-name order.
+- CPU pinning is CLI-owned in configless mode (`--cpuset`, `--skip-cpuset`).
+- Without `--cpuset`/`--skip-cpuset`, CPU affinity is disabled.
 - Invalid numeric metadata values are rejected at startup (`worker.* >= 1`, `resources.cores_per_trial >= 1`).
 
 ### Configless evaluator (default)
@@ -96,11 +97,12 @@ crsbench evaluator --build-jobs 8 --build-cores-per-job 2
 ```
 
 Resource precedence:
-- CLI (`--build-jobs`, `--build-cores-per-job`, `--verify-jobs`, `--verify-cores-per-job`, `--cores`, `--skip-cpus`, `--idle-timeout`) takes highest priority.
+- CLI (`--build-jobs`, `--build-cores-per-job`, `--verify-jobs`, `--verify-cores-per-job`, `--cpuset`, `--skip-cpuset`, `--idle-timeout`) takes highest priority.
 - Otherwise, evaluator uses experiment metadata from registry (`evaluator.*` block in config).
 - Fallback defaults are build jobs `1`, build/verify cores `4`, verify jobs derived from build concurrency, idle timeout `0`.
 - Numeric conflicts resolve by `max(...)`.
-- For conflicting CPU pinning metadata (`evaluator.cores`, `evaluator.skip_cpus`) with no CLI override, selection uses stable experiment-name order.
+- CPU pinning is CLI-owned in configless mode (`--cpuset`, `--skip-cpuset`).
+- Without `--cpuset`/`--skip-cpuset`, CPU affinity is disabled.
 - Invalid numeric metadata values are rejected at startup (`evaluator.build_jobs/build_cores_per_job/verify_jobs/verify_cores_per_job >= 1`, `evaluator.idle_timeout >= 0`).
 
 Resource defaults:
@@ -121,17 +123,22 @@ crsbench worker --experiment-config experiment.yaml --continuous
 crsbench evaluator --experiment-config experiment.yaml --build-jobs 4
 ```
 
-### CI mode
+### CI Legacy Queue Compatibility Mode
 
 ```bash
 crsbench evaluator --ci --build-jobs 4
 ```
+
+`--ci` is a compatibility alias for legacy CI queue names.
 
 ## Limitations
 
 - **Shared paths**: all experiments on a configless evaluator must share the
   same `benchmarks_root`. If different paths are needed,
   run separate evaluator processes or use `--experiment-config`.
+- **Shared inc-image policy**: all experiments on a configless evaluator must
+  have compatible inc-image settings (`inc_image_policy`, `inc_image_registry`,
+  pull-timeout/size limits, and image prefix). If these differ, split evaluators.
 
 ## Implementation
 

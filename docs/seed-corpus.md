@@ -16,7 +16,7 @@ During CRS execution, fuzzers discover new inputs that trigger new code coverage
    └─> crsbench benchmark seed-import <experiment-dir>
 
 3. Reuse in future experiments
-   └─> Enable seed_corpus_enabled in config
+   └─> Enable `runtime.inputs.seed` in config
 ```
 
 ## Collecting Seeds
@@ -83,37 +83,45 @@ The `manifest.json` contains metadata for each file:
 
 Enable seed corpus in your experiment config:
 
-```yaml
-# Enable seed corpus from collected files
-seed_corpus_enabled: true
+Canonical config shape reference: `docs/experiment-config-distributed-example.yaml`
 
-# Optional: only use seeds discovered within first hour
-seed_corpus_max_time: 3600
+```yaml
+runtime:
+  inputs:
+    # Presence enables seed input.
+    seed:
+      # Optional: only use seeds discovered within first hour.
+      max_time: 3600
 ```
 
 ### Configuration Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `seed_corpus_enabled` | bool | `false` | Enable seed corpus |
-| `seed_corpus_max_time` | int | `null` | Max relative time (seconds) for filtering seeds |
+| `runtime.inputs.seed` | object | disabled when absent | Enables seed corpus input when present |
+| `runtime.inputs.seed.max_time` | int | `null` | Max relative time (seconds) for filtering seeds |
 
 ### Time-based Filtering
 
-The `seed_corpus_max_time` option filters seeds based on when they were discovered:
+The `runtime.inputs.seed.max_time` option filters seeds based on when they were discovered:
 
 ```yaml
 # Use all collected seeds
-seed_corpus_enabled: true
-seed_corpus_max_time: null
+runtime:
+  inputs:
+    seed: {}
 
 # Use only seeds from first hour
-seed_corpus_enabled: true
-seed_corpus_max_time: 3600
+runtime:
+  inputs:
+    seed:
+      max_time: 3600
 
 # Use only seeds from first 5 minutes
-seed_corpus_enabled: true
-seed_corpus_max_time: 300
+runtime:
+  inputs:
+    seed:
+      max_time: 300
 ```
 
 This is useful for:
@@ -123,7 +131,7 @@ This is useful for:
 
 ## How It Works
 
-At runtime, when `seed_corpus_enabled: true`:
+At runtime, when `runtime.inputs.seed` is enabled:
 
 1. `SeedCorpusPreparer` reads `manifest.json` from `.aixcc/{harness}/corpus/`
 2. Filters files by `relative_time <= seed_corpus_max_time` (if configured)
@@ -131,6 +139,8 @@ At runtime, when `seed_corpus_enabled: true`:
 4. Passes directory to CRS via `oss-crs run --seed-dir <path>`
 
 The CRS then uses these files as initial fuzzing seeds, potentially finding bugs faster.
+
+Legacy keys (`seed_corpus_enabled`, `seed_corpus_max_time`) remain compatibility-only.
 
 ## Best Practices
 

@@ -50,7 +50,7 @@ crsbench benchmark ci format    # Format validation only (no Docker)
 crsbench benchmark ci build     # Build variants only (no verification)
 crsbench benchmark ci pov       # Build + POV verification
 crsbench benchmark ci patch     # Build + patch verification + unit tests
-crsbench benchmark ci coverage  # Build + coverage collection
+crsbench benchmark ci coverage  # Build + coverage collection (experimental)
 crsbench benchmark ci capabilities  # Show benchmark capabilities (may inspect/pull Docker images)
 crsbench benchmark ci all       # All of the above (coverage with --inc-coverage)
 crsbench benchmark ci parse     # Parse results from a previous run
@@ -61,7 +61,7 @@ crsbench benchmark ci storage   # Show storage usage per benchmark (no Docker)
 ### Benchmark Selection
 
 Benchmark-selection options are supported by:
-`format`, `build`, `pov`, `patch`, `coverage`, `all`, `capabilities`, and `storage`.
+`format`, `build`, `pov`, `patch`, `coverage` (experimental), `all`, `capabilities`, and `storage`.
 
 ```bash
 # Single benchmark (positional)
@@ -128,10 +128,11 @@ crsbench benchmark ci all --all --inc-coverage --output-dir ci-results/
 crsbench benchmark ci all --all --mode full
 ```
 
-**Note**: `--build-workers` and `--verify-workers` are currently compatibility
-flags and are not used by benchmark-ci submitter scheduling (local or distributed).
-Distributed parallelism is controlled by evaluator worker flags (`crsbench evaluator
---ci --build-jobs ... --verify-jobs ...`).
+**Note**: `--build-workers` and `--verify-workers` are compatibility flags in
+modular benchmark-ci commands and are currently not used by submitter
+scheduling. In distributed mode, they must remain default values; distributed
+parallelism is controlled by evaluator worker flags (`crsbench evaluator --ci
+--build-jobs ... --verify-jobs ...`).
 
 ### Execution Flow (Local)
 
@@ -265,10 +266,10 @@ uv run crsbench evaluator --ci --build-jobs 8 --build-cores-per-job 16 \
 | `--build-cores-per-job M` | CPUs per build job | 4 |
 | `--verify-jobs K` | Max concurrent verify/test jobs | build-jobs * build-cores / verify-cores |
 | `--verify-cores-per-job M` | CPUs per verify/test job | 4 |
-| `--cores CORES` | CPU count or cpuset range (e.g., `0-63`) | all |
-| `--skip-cpus CPUSET` | CPUs to exclude (e.g., `0-3`) | none |
+| `--cpuset CPUSET` | CPU count or cpuset range (e.g., `0-63`) | affinity disabled unless set |
+| `--skip-cpuset CPUSET` | CPUs to exclude (e.g., `0-3`) | none |
 | `--idle-timeout N` | Exit after N idle seconds (0 = run indefinitely) | 0 |
-| `--worker-name NAME` | Identifier for this evaluator process | hostname |
+| `--worker-name NAME` | Identifier for this evaluator process | `ci-evaluator` |
 
 #### 3. Submit CI Jobs
 

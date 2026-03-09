@@ -13,6 +13,19 @@ This page is the canonical index for CRSBench environment variables.
 | `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` | Upstream LiteLLM key-management/tracking credential (`external` mode preferred). |
 | `CRSBENCH_LLM_UPSTREAM_API_KEY` | Upstream LiteLLM runtime API key (`external` mode preferred). |
 
+### LiteLLM External Mode Contract
+
+`runtime.litellm.mode: external` is the supported experiment-runtime path.
+
+- When `runtime.litellm.tracking_enabled: true`, set:
+  - `CRSBENCH_LLM_UPSTREAM_BASE_URL` (or `CRSBENCH_LLM_BASE_URL`)
+  - `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`
+- When `runtime.litellm.tracking_enabled: false`, set:
+  - `CRSBENCH_LLM_UPSTREAM_BASE_URL` (or `CRSBENCH_LLM_BASE_URL`)
+  - one of `CRSBENCH_LLM_UPSTREAM_API_KEY` or `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`
+
+`CRSBENCH_LLM_MASTER_KEY` is for local/self-hosted LiteLLM server auth and is not the external-mode tracking control-plane key.
+
 ## Evaluator Resource Propagation (Advanced)
 
 These variables are set by supervisor/resource context for worker job isolation.
