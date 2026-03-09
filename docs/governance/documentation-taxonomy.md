@@ -14,7 +14,11 @@ documentation-governance source of truth.
 
 ### 2. Setup and Operations
 - Goal: Bring users from clone to running experiments safely.
-- Canonical entries:
+- Canonical section hubs:
+  - `docs/getting-started/README.md`
+  - `docs/guides/experiments/README.md`
+  - `docs/guides/benchmark-ci/README.md`
+- Canonical topic pages:
   - `docs/getting-started/install.md`
   - `docs/getting-started/configuration.md`
   - `docs/getting-started/first-experiment.md`
@@ -122,7 +126,7 @@ Update docs in the same PR when any of the following changes happen:
 
 When editing docs, ensure:
 - the canonical page is updated first
-- duplicate text is removed or converted to a pointer page
+- duplicate text is removed or merged into the canonical page
 - navigation links in `README.md` and `docs/README.md` still route correctly
 - commands and config snippets match current repository behavior
 

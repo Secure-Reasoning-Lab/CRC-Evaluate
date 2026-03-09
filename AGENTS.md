@@ -127,7 +127,8 @@ Then re-run the quality gate command above.
 
 - Start here: `docs/README.md`
 - Documentation taxonomy: `docs/governance/documentation-taxonomy.md`
-- Install/configuration: `docs/getting-started/install.md`
+- Install: `docs/getting-started/install.md`
+- Configuration: `docs/getting-started/configuration.md`
 - Normative benchmark spec: `docs/RFC.md`
 - Architecture: `docs/design/architecture.md`
 - Design doc policy: `docs/design/doc-authoring-guidelines.md`
