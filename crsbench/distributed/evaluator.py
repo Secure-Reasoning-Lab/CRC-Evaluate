@@ -127,12 +127,6 @@ def _enqueue_pre_builds(
 
     from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
-    inc_image_policy = getattr(config, "inc_image_policy", None)
-    inc_image_registry = getattr(config, "inc_image_registry", None)
-    inc_image_max_pull_bytes = getattr(config, "inc_image_max_pull_bytes", None)
-    inc_image_pull_timeout = getattr(config, "inc_image_pull_timeout_sec", None)
-    local_image_prefix = getattr(config, "project_image_prefix", None)
-
     oss_fuzz_path = Path(ensure_oss_fuzz_root())
     planner = VariantPlanner(oss_fuzz_path, source_mode="pkgs")
     (

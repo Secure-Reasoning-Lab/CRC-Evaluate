@@ -126,6 +126,50 @@ class TestVariantPlannerDelta:
 
         assert all(not j.use_inc_build for j in jobs)
 
+    @patch(
+        "crsbench.executor.variant_planner.VariantPlanner._check_inc_build_support",
+        return_value=True,
+    )
+    @patch("crsbench.builder.infrastructure.OSSFuzzInfrastructure")
+    @patch("crsbench.executor.variant_planner.VariantPlanner._load_adapter")
+    def test_plan_builds_propagates_inc_image_runtime_settings(
+        self, mock_load_adapter, mock_infra_cls, mock_inc, planner
+    ) -> None:
+        """Explicit inc-image runtime settings are copied onto planned jobs."""
+        adapter = _mock_adapter(ref_commit="abc123")
+        mock_load_adapter.return_value = adapter
+
+        infra = MagicMock()
+        infra.get_all_patches.return_value = []
+        infra.get_patches_except.return_value = []
+        mock_infra_cls.return_value = infra
+
+        with (
+            patch(
+                "crsbench.benchmark_ci.cli.benchmark_discovery.discover_harness_names",
+                return_value=["fuzz_target"],
+            ),
+            patch(
+                "crsbench.benchmark_ci.cli.benchmark_discovery.discover_cpv_ids",
+                return_value=["cpv_0"],
+            ),
+        ):
+            jobs = planner.plan_builds(
+                Path("/benchmarks/test-proj"),
+                inc_image_policy="pull_only",
+                inc_image_registry="ghcr.io/example/custom",
+                inc_image_max_pull_bytes=123456,
+                inc_image_pull_timeout=77,
+                local_image_prefix="custom-prefix",
+            )
+
+        assert jobs
+        assert all(j.inc_image_policy == "pull_only" for j in jobs)
+        assert all(j.inc_image_registry == "ghcr.io/example/custom" for j in jobs)
+        assert all(j.inc_image_max_pull_bytes == 123456 for j in jobs)
+        assert all(j.inc_image_pull_timeout == 77 for j in jobs)
+        assert all(j.local_image_prefix == "custom-prefix" for j in jobs)
+
 
 class TestVariantPlannerFull:
     """Full mode benchmark planning."""

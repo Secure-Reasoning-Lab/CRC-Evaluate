@@ -214,13 +214,28 @@ class TestSerializeAllJobTypes:
             patch_path=Path("/patch.diff"),
             harness="h",
             sanitizer="undefined",
+            inc_image_policy="pull_only",
+            inc_image_registry="ghcr.io/example/custom",
+            inc_image_max_pull_bytes=123456,
+            inc_image_pull_timeout=77,
+            local_image_prefix="custom-prefix",
         )
         params = serialize_ci_job(job)
         assert params["sanitizer"] == "undefined"
+        assert params["inc_image_policy"] == "pull_only"
+        assert params["inc_image_registry"] == "ghcr.io/example/custom"
+        assert params["inc_image_max_pull_bytes"] == 123456
+        assert params["inc_image_pull_timeout"] == 77
+        assert params["local_image_prefix"] == "custom-prefix"
         restored = _reconstruct_job(params)
         assert type(restored).__name__ == "BuildPatchVariantJob"
         assert restored.patch_path == Path("/patch.diff")
         assert restored.sanitizer == "undefined"
+        assert restored.inc_image_policy == "pull_only"
+        assert restored.inc_image_registry == "ghcr.io/example/custom"
+        assert restored.inc_image_max_pull_bytes == 123456
+        assert restored.inc_image_pull_timeout == 77
+        assert restored.local_image_prefix == "custom-prefix"
 
     def test_build_patch_variant_default_sanitizer(self) -> None:
         """BuildPatchVariantJob defaults sanitizer and use_inc_build on deserialize."""
