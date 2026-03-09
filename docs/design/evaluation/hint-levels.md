@@ -28,6 +28,27 @@ detailed location/context information. Higher levels may include more precise
 location metadata, but they must remain bounded by the benchmark's intended hint
 contract.
 
+Representative benchmark artifact layout:
+
+```text
+benchmarks/<project>/.aixcc/<harness>/cpv_N/hints/
+├── level_1.sarif
+├── level_2.sarif
+├── level_3.sarif
+├── level_4.sarif
+└── level_5.sarif
+```
+
+Typical progression:
+- level 1: general vulnerability class
+- level 2: specific CWE-oriented vulnerability type
+- level 3: level 2 plus function-level location
+- level 4: level 2 plus file/line range location
+- level 5: level 4 plus vulnerability name and description
+
+Level 3 commonly relies on SARIF `logicalLocations` plus a file path, while
+level 4 adds precise `physicalLocation.region` information.
+
 ## Staging Invariants
 
 - only the configured SARIF level is delivered for a given staged hint artifact
@@ -55,6 +76,68 @@ This contract should be covered by:
 - experiment-config schema tests for hint input selection
 - hint staging tests for level selection and non-leaky naming
 - trial preparation integration tests
+- direct hint-generation tests for SARIF production across levels
+
+## Example Output Shapes
+
+Examples are illustrative only; exact messages are benchmark-defined.
+
+Level 1:
+
+```json
+{
+  "results": [{
+    "ruleId": "CWE-122",
+    "message": {
+      "text": "Memory Safety Issue: Heap Based Buffer Overflow"
+    }
+  }]
+}
+```
+
+Level 3:
+
+```json
+{
+  "results": [{
+    "ruleId": "CWE-122",
+    "message": {
+      "text": "CWE-122 - Heap-based buffer overflow in function(s): UTF32ToUTF8"
+    },
+    "locations": [{
+      "physicalLocation": {
+        "artifactLocation": {"uri": "xmlIO.c"}
+      },
+      "logicalLocations": [{
+        "name": "UTF32ToUTF8",
+        "kind": "function"
+      }]
+    }]
+  }]
+}
+```
+
+Level 4:
+
+```json
+{
+  "results": [{
+    "ruleId": "CWE-122",
+    "message": {
+      "text": "CWE-122 - Heap-based buffer overflow at: xmlIO.c:2168-2177"
+    },
+    "locations": [{
+      "physicalLocation": {
+        "artifactLocation": {"uri": "xmlIO.c"},
+        "region": {
+          "startLine": 2168,
+          "endLine": 2177
+        }
+      }
+    }]
+  }]
+}
+```
 
 ## Implementation Pointers
 

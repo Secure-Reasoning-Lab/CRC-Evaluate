@@ -134,7 +134,7 @@ This is useful for:
 At runtime, when `runtime.inputs.seed` is enabled:
 
 1. `SeedCorpusPreparer` reads `manifest.json` from `.aixcc/{harness}/corpus/`
-2. Filters files by `relative_time <= seed_corpus_max_time` (if configured)
+2. Filters files by `relative_time <= runtime.inputs.seed.max_time` (if configured)
 3. Copies selected files to `trial_dir/seed_corpus/`
 4. Passes directory to CRS via `oss-crs run --seed-dir <path>`
 

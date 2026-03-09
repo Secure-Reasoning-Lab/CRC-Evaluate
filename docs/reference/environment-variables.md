@@ -8,14 +8,18 @@ This page is the canonical index for CRSBench environment variables.
 |---|---|
 | `CRSBENCH_REDIS_HOST` | Sets the Redis/Valkey queue backend host (`host` or `host:port`; default port is `6379`) for queue-backed worker/evaluator/configless flows and as a runtime default where applicable. |
 | `CRSBENCH_REDIS_PASSWORD` | Password for Redis/Valkey auth (if enabled). |
+| `CRSBENCH_LLM_MASTER_KEY` | Local/self-hosted LiteLLM auth key used by CRS-facing trial services or centralized proxy deployments. |
 | `CRSBENCH_LLM_BASE_URL` | Immediate LiteLLM endpoint called directly. |
 | `CRSBENCH_LLM_UPSTREAM_BASE_URL` | Upstream/forwarding LiteLLM endpoint. |
 | `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` | Upstream LiteLLM key-management/tracking credential (`external` mode preferred). |
 | `CRSBENCH_LLM_UPSTREAM_API_KEY` | Upstream LiteLLM runtime API key (`external` mode preferred). |
+| `PROJECT_REPOS_DIR` | Optional cache directory for cloned upstream project repositories used by migration/source-preparation flows (default: `.crsbench-repos/`). |
 
 ### LiteLLM External Mode Contract
 
 `runtime.litellm.mode: external` is the supported experiment-runtime path.
+
+`runtime.litellm.mode: self_hosted` is reserved but not implemented yet.
 
 - When `runtime.litellm.tracking_enabled: true`, set:
   - `CRSBENCH_LLM_UPSTREAM_BASE_URL` (or `CRSBENCH_LLM_BASE_URL`)
@@ -24,7 +28,24 @@ This page is the canonical index for CRSBench environment variables.
   - `CRSBENCH_LLM_UPSTREAM_BASE_URL` (or `CRSBENCH_LLM_BASE_URL`)
   - one of `CRSBENCH_LLM_UPSTREAM_API_KEY` or `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`
 
-`CRSBENCH_LLM_MASTER_KEY` is for local/self-hosted LiteLLM server auth and is not the external-mode tracking control-plane key.
+`CRSBENCH_LLM_MASTER_KEY` is for local or centrally managed LiteLLM auth
+surfaces and is not the external-mode tracking control-plane key used by
+CRSBench experiment runtime.
+
+### Centralized LiteLLM / Proxy Mode
+
+When a central LiteLLM instance fronts all provider accounts:
+
+- the central LiteLLM host keeps provider keys such as `OPENAI_API_KEY`,
+  `ANTHROPIC_API_KEY`, and `GOOGLE_API_KEY`
+- trial or worker hosts set only:
+  - `CRSBENCH_LLM_UPSTREAM_BASE_URL`
+  - one of:
+    - `CRSBENCH_LLM_UPSTREAM_API_KEY`
+    - `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`
+
+That split keeps provider credentials off experiment runners while preserving
+external-mode tracking and runtime auth.
 
 ## Evaluator Resource Propagation (Advanced)
 
@@ -72,3 +93,5 @@ They are consumed by OSS-Fuzz helper Docker runs and CRSBench direct Docker runs
   `cp .env.example .env`
 - CRSBench uses canonical `CRSBENCH_*` names for framework-owned runtime variables.
 - Runtime controls (experiment/worker identity and log verbosity) are configured via config/CLI, not env vars.
+- `PROJECT_REPOS_DIR` affects repository-cloning helper flows only; it does not
+  change benchmark discovery or worker queue behavior.

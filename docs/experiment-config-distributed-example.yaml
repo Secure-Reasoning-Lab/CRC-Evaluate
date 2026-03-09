@@ -68,6 +68,9 @@ runtime:
   verify_timeout: 7200
   # Per-POV verify timeout inside the verify phase.
   per_pov_verify_timeout: 180
+  # Optional POV deduplication strategy before reporting/verification fan-out.
+  # Example values: patch-based, stack-based, status-based, none
+  # pov_dedup_strategy: patch-based
   # Stop trial early when all CPVs for a harness are confirmed.
   pov_early_stop: false
   # LiteLLM wiring (usually external proxy in production).
@@ -115,6 +118,12 @@ runtime:
     #   max_time: 3600
     # Diff guidance input.
     # diff: true
+  # Compatibility guide for older flat configs:
+  # - litellm_mode -> runtime.litellm.mode
+  # - llm_tracking_enabled -> runtime.litellm.tracking_enabled
+  # - seed_corpus_enabled / seed_corpus_max_time -> runtime.inputs.seed
+  # - hints_enabled / hint_sarif_level -> runtime.inputs.sarif
+  # - top-level trials/timeouts -> runtime.*
 
 storage:
   experiment_filestore: /data/crsbench/experiments
@@ -125,6 +134,9 @@ storage:
   copy_results_after_trial: false
   # Used only when copy_results_after_trial=true.
   # results_filestore: /data/crsbench/finished
+
+# Optional top-level verification/reporting behavior.
+# pov_dedup_strategy: patch-based
 
 # Optional global compute defaults/tags:
 # - cores_per_trial/memory_per_trial are fallback defaults when a CRS service
@@ -151,6 +163,8 @@ worker:
   # Optional worker capability tag for matching cpu_tag jobs.
   # cpu_tag: amd-epyc
   # redis_host: localhost:6379  # defaults to runtime.redis_host
+  # Optional heterogeneous-worker benchmark path override.
+  # benchmarks_root: /mnt/shared/benchmarks
   minimum_disk_size: "10GB"
   disk_check_interval: 60
   # Optional machine-local overrides for storage/cleanup.

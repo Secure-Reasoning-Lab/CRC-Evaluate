@@ -31,6 +31,11 @@ CRSBench experiment runtime currently treats external LiteLLM as the canonical
 supported mode. CRSBench resolves the LiteLLM endpoint and credentials from the
 runtime configuration and `CRSBENCH_LLM_*` environment contract.
 
+Status:
+- supported now: `runtime.litellm.mode: external`
+- supported now: `runtime.litellm.skip: true`
+- planned, not implemented: `runtime.litellm.mode: self_hosted`
+
 ## Contract Boundary
 
 The relevant actors are:
@@ -49,6 +54,10 @@ reference docs. Runtime configuration controls:
 - whether LiteLLM participation is skipped entirely
 - whether usage tracking/accounting is required
 - which endpoint CRSBench should treat as authoritative
+
+This contract is consumed by CRSBench and then projected into the `oss-crs`
+runtime boundary. CRSBench does not currently support managing a self-hosted
+LiteLLM deployment as an experiment-runtime mode.
 
 When usage tracking is enabled, credentials required for upstream key management
 or accounting must be present before execution starts.

@@ -132,12 +132,17 @@ documentation-governance source of truth.
 - Root docs owner: repository maintainers.
 - Design docs owners: maintainers touching corresponding subsystems.
 - Module docs owners: module maintainers and contributors changing those modules.
+- Repository maintainers explicitly own `README.md`, `docs/README.md`, and this
+  governance policy.
 
 Update docs in the same PR when any of the following changes happen:
 - CLI command names/flags or execution flow changes
 - benchmark format/schema or validation behavior changes
 - architecture-level behavior changes
 - required environment variables or service dependencies change
+
+If documentation and implementation disagree, implementation truth wins and the
+docs must be corrected before merge.
 
 ## Maintenance Checklist
 
@@ -157,3 +162,17 @@ For major doc changes, request review across these roles:
 - Security/compliance reviewer: checks data-handling and secret-management guidance.
 
 These reviewer lanes are role-based and can be fulfilled by any qualified maintainer/contributor.
+
+For major doc changes:
+- cover at least three reviewer lanes
+- make reviewer-lane coverage explicit in review notes
+- one qualified reviewer may cover multiple lanes, but the lane coverage must be explicit
+
+## Recommended Review Batches
+
+For large documentation migrations or reorganizations, review in this order:
+
+1. structure and navigation
+2. content refresh and de-duplication
+3. intent and rationale quality
+4. cleanup and validation

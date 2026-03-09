@@ -205,6 +205,9 @@ storage:
   experiment_filestore: /data/experiments
   report_filestore: /data/reports
 
+# Optional top-level verification/reporting behavior:
+# pov_dedup_strategy: patch-based
+
 crs_compose:
   crs-codex:
     num_cores: 16
@@ -286,6 +289,7 @@ When workers run on machines with different filesystem layouts, keep primary roo
 worker:
   jobs: 4
   continuous: true
+  benchmarks_root: /mnt/shared/benchmarks
   storage:
     experiment_filestore: /mnt/shared/experiments
     report_filestore: /mnt/shared/reports
@@ -297,6 +301,26 @@ CPU placement is operator-side in distributed mode (CLI on worker/evaluator):
 `--cpuset` and `--skip-cpuset`.
 
 See [experiment-config-distributed-example.yaml](../../experiment-config-distributed-example.yaml) for the concise contract.
+
+If worker machines do not mount benchmarks at the same path as the orchestrator,
+set `worker.benchmarks_root` to the machine-local path used on that worker.
+Use this only for heterogeneous filesystem layouts; keep shared-storage paths
+uniform when possible.
+
+## Centralized LiteLLM / Proxy Mode
+
+When LiteLLM runs centrally and experiment machines proxy through it:
+
+- central LiteLLM keeps the provider keys
+- trial hosts set only the upstream LiteLLM endpoint and upstream key
+- worker and evaluator hosts do not need provider API keys in that model
+
+If your workflow depends on the upstream-model synchronization helper:
+
+```bash
+uv run python scripts/sync-upstream-models.py --list-only
+uv run python scripts/sync-upstream-models.py
+```
 
 ## Evaluator
 

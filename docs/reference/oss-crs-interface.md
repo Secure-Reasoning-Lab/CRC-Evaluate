@@ -44,7 +44,21 @@ CRSBench stages benchmark files (excluding dot-directories such as `.aixcc/`) be
 - `--seed-dir <dir>` for seed corpus
 - `--diff <file>` for bug-fixing delta context
 - `--pov <file>` or `--pov-dir <dir>` for bug-fixing
-- harness source/hints resolved from benchmark metadata where applicable
+- SARIF bug-candidate hints selected through `runtime.inputs.sarif.level`
+- harness source resolved from benchmark metadata where applicable
+
+### LiteLLM Runtime Contract
+
+CRSBench currently supports only the external LiteLLM model when a run needs
+LLM access.
+
+- supported today: `runtime.litellm.mode: external`
+- supported today: `runtime.litellm.skip: true`
+- not implemented yet: `runtime.litellm.mode: self_hosted`
+
+CRSBench resolves the external LiteLLM endpoint and credentials from the
+canonical `CRSBENCH_LLM_*` environment contract, then passes the resolved
+runtime settings through the generated `oss-crs` execution environment.
 
 ### Expected CRS Outputs
 

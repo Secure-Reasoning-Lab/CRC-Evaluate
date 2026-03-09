@@ -75,6 +75,11 @@ Required only when your run uses external LiteLLM:
 Additionally required when `runtime.litellm.tracking_enabled: true`:
 - `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`
 
+Current support status:
+- supported: `runtime.litellm.mode: external`
+- supported: `runtime.litellm.skip: true`
+- planned, not implemented: `runtime.litellm.mode: self_hosted`
+
 ## When To Use More Advanced Docs
 
 Use the advanced guides when you need:
@@ -87,3 +92,120 @@ Canonical advanced entry points:
 - [Distributed Experiments Guide](../guides/experiments/distributed.md)
 - [Experiment Config Reference](../guides/experiments/config-reference.md)
 - [Environment Variables Reference](../reference/environment-variables.md)
+
+## Deployment Scenarios
+
+### Local Development
+
+Use this when you are iterating on CRSBench itself or running a single host with
+the smallest possible dependency surface.
+
+```bash
+cp .env.example .env
+uv run crsbench prepare
+uv run python scripts/valkey-helper.py start
+uv run python scripts/valkey-helper.py status
+```
+
+If the chosen CRS needs LiteLLM, set:
+
+```bash
+CRSBENCH_LLM_UPSTREAM_BASE_URL=http://localhost:4000
+CRSBENCH_LLM_UPSTREAM_API_KEY=sk-your-api-key
+```
+
+If `runtime.litellm.tracking_enabled: true`, also set:
+
+```bash
+CRSBENCH_LLM_UPSTREAM_MASTER_KEY=sk-your-master-key
+```
+
+### Single-Machine Distributed
+
+Use this when the orchestrator, worker, and optional evaluator all share one
+host but still use the queue-backed distributed model.
+
+```bash
+uv run python scripts/valkey-helper.py start
+uv run crsbench worker --experiment-config config.yaml --continuous
+uv run crsbench run --experiment-config config.yaml
+```
+
+Add an evaluator only when you want build/verify queues to drain in the same
+run:
+
+```bash
+uv run crsbench evaluator --experiment-config config.yaml
+```
+
+### Multi-Machine Distributed
+
+Use this when workers or evaluators run on different hosts.
+
+On the orchestrator host:
+
+```bash
+uv run python scripts/valkey-helper.py --password start
+scp .env user@worker-1:/path/to/CRSBench/.env
+scp .env user@worker-2:/path/to/CRSBench/.env
+```
+
+Worker and evaluator hosts should receive the same Redis settings and then add
+their own runtime secrets if their CRS needs LiteLLM.
+
+### Centralized LiteLLM / Proxy Mode
+
+Use this when LiteLLM is centrally managed and trial hosts should not carry
+provider API keys.
+
+Central LiteLLM host:
+
+```bash
+CRSBENCH_LLM_MASTER_KEY=sk-central-master-key
+OPENAI_API_KEY=sk-org-openai-key
+ANTHROPIC_API_KEY=sk-org-anthropic-key
+GOOGLE_API_KEY=sk-org-google-key
+```
+
+Trial hosts:
+
+```bash
+CRSBENCH_LLM_UPSTREAM_BASE_URL=http://central-litellm.example.com:4000
+# For runs without tracking:
+CRSBENCH_LLM_UPSTREAM_API_KEY=sk-central-runtime-key
+# For runs with runtime.litellm.tracking_enabled: true:
+CRSBENCH_LLM_UPSTREAM_MASTER_KEY=sk-central-master-key
+```
+
+In this layout, provider keys stay on the central LiteLLM instance. Trial hosts
+only need the upstream endpoint plus the upstream runtime or master key.
+
+If your workflow still uses the upstream-model sync helper, run it from the
+trial host checkout:
+
+```bash
+uv run python scripts/sync-upstream-models.py --list-only
+uv run python scripts/sync-upstream-models.py
+```
+
+## Troubleshooting and Configuration Hygiene
+
+- Verify that `.env` is loaded from the repository root before debugging missing
+  runtime credentials.
+- Prefer canonical `CRSBENCH_LLM_*` variables over older aliases.
+- Keep provider keys off worker or trial machines when proxy mode is used.
+- Check Valkey connectivity first:
+
+```bash
+uv run python scripts/valkey-helper.py status
+```
+
+- Check LiteLLM reachability and credentials separately:
+
+```bash
+uv run python scripts/test_litellm.py --mock-only
+```
+
+- If source preparation or migration flows clone external repositories, set
+  `PROJECT_REPOS_DIR` explicitly when you need those clones to live outside the
+  default `.crsbench-repos/` cache directory.
