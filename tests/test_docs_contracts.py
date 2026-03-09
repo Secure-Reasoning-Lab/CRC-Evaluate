@@ -65,6 +65,7 @@ def test_docs_do_not_use_invalid_benchmark_cli_options() -> None:
         "benchmark upload ./benchmarks/",
         "benchmark bundle-all ./benchmarks/ --output-dir",
         "benchmark bundle ./libpng-vuln-001 --output",
+        "benchmark prepare-delta --all",
     ]
 
     offenders: list[str] = []

@@ -453,7 +453,7 @@ tar czf "$dirname.tar.gz" "$dirname"
 | Script | Purpose | Port to |
 |--------|---------|---------|
 | `prepare_sources.py` | Python wrapper for tarball creation | `crsbench/bundling/bundle.py` |
-| `create_ref_diff.py` | Batch ref.diff generation | `crsbench benchmark prepare-delta --all` |
+| `create_ref_diff.py` | Batch ref.diff generation | `for b in ./benchmarks/*; do crsbench benchmark prepare-delta "$b"; done` |
 | `benchmark_execution_validator.py` | Validates benchmark execution | `crsbench benchmark validate` |
 | `benchmark_file_validator.py` | Validates benchmark file format | `crsbench benchmark validate` |
 
@@ -699,7 +699,7 @@ crsbench benchmark bundle ./my-new-vuln
 
 ```bash
 # 1. Ensure all benchmarks have pkgs/ and ref.diff
-crsbench benchmark prepare-delta --all
+for b in ./benchmarks/*; do crsbench benchmark prepare-delta "$b"; done
 crsbench benchmark bundle-all ./benchmarks/
 
 # 2. Validate entire dataset
