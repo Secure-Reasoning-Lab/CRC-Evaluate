@@ -2458,6 +2458,33 @@ class TestBugFixInputStaging:
         assert not (stale_input / "old").exists()
         assert not (stale_cpvs / "old").exists()
 
+    def test_prepare_runtime_inputs_bugfinding_ignores_target_cpv_for_pov_staging(
+        self, tmp_path: Path
+    ) -> None:
+        benchmark = self._make_benchmark_with_variants(tmp_path)
+        trial_dir = tmp_path / "trial"
+        trial_dir.mkdir()
+
+        adapter = MagicMock()
+        adapter.mode = "bug-finding"
+        runner = BenchmarkRunner(
+            adapter=adapter,
+            snapshot_period=0,
+            max_pov_variants_per_cpv=1,
+            pov_input_enabled=True,
+            seed_corpus_enabled=False,
+            diff_input_enabled=False,
+            sarif_input_enabled=False,
+        )
+
+        # target_cpv_id is irrelevant for bug-finding and should not hard-fail.
+        runner._prepare_runtime_inputs(
+            benchmark, "fuzz_target", trial_dir, target_cpv_id="cpv_missing"
+        )
+
+        staged = {p.name for p in (trial_dir / "povs").iterdir()}
+        assert staged == {"cpv_0", "cpv_1"}
+
     def test_prepare_runtime_inputs_fails_when_sarif_enabled_but_missing(
         self, tmp_path: Path
     ) -> None:

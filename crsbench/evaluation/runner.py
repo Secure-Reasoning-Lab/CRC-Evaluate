@@ -828,12 +828,15 @@ class BenchmarkRunner:
         target_cpv_id: str | None = None,
     ) -> None:
         """Stage configured runtime inputs based on effective input settings."""
+        # CPV-targeted POV staging is meaningful only for bug-fixing runs.
+        pov_target_cpv_id = target_cpv_id if self._crs_type == "bug-fixing" else None
+
         if self.pov_input_enabled:
             self._prepare_bugfix_inputs(
                 benchmark_path=benchmark_path,
                 harness_name=harness_name,
                 trial_output_dir=trial_output_dir,
-                target_cpv_id=target_cpv_id,
+                target_cpv_id=pov_target_cpv_id,
             )
         else:
             for stale in [
