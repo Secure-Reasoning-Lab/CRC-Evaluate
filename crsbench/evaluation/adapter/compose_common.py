@@ -66,6 +66,7 @@ def read_crs_source_from_registry(
     return CrsComposeSource(
         url=source.get("url"),
         ref=source.get("ref"),
+        local_path=source.get("local_path"),
     )
 
 
