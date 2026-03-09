@@ -54,7 +54,6 @@ class CRSRunJob(Job):
     oss_fuzz_path: Path
     registry_dir: Path
     benchmarks_root: Path
-    crs_configs_dir: Path
 
     # Optional configuration
     run_timeout: int = 7200
@@ -147,7 +146,6 @@ class CRSRunJob(Job):
                 oss_fuzz_path=self.oss_fuzz_path,
                 registry_dir=self.registry_dir,
                 benchmarks_root=self.benchmarks_root,
-                crs_configs_dir=self.crs_configs_dir,
                 litellm_mode=self.litellm_mode or "external",
                 mode=self.crs_type,
             )

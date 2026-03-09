@@ -895,7 +895,7 @@ def enqueue_and_poll_ci_jobs(
     redis_host: str,
     queue_name: str | Callable[[Any], str] = "crsbench_ci_verify",
     output_dir: str | None = None,
-    stale_terminal_policy: str = "refresh_stopped_canceled_failed",
+    stale_terminal_policy: str = "refresh_all",
 ) -> dict[str, dict[str, Any]]:
     """Enqueue CI jobs to Redis and poll until all complete.
 
@@ -1001,10 +1001,9 @@ def enqueue_and_poll_ci_jobs(
         "quit",
     }:
         logger.warning(
-            f"Unknown stale_terminal_policy={policy!r}; defaulting to "
-            "refresh_stopped_canceled_failed"
+            f"Unknown stale_terminal_policy={policy!r}; defaulting to refresh_all"
         )
-        policy = "refresh_stopped_canceled_failed"
+        policy = "refresh_all"
     if has_stale_terminals:
         logger.warning(
             "Detected stale terminal CI jobs in Redis: "

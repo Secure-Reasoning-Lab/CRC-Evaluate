@@ -19,6 +19,9 @@ Examples:
     # Parallel execution with workers
     crsbench coverage benchmarks/sanity-mock-c-delta-01 --corpus-dir ./corpus/ \
         --build-workers 4 --verify-workers 8
+
+Note:
+    Coverage collection is currently experimental.
 """
 
 import argparse
@@ -49,7 +52,8 @@ def add_coverage_subparser(subparsers: argparse._SubParsersAction) -> None:
         description=(
             "Collect code coverage from corpus files against a benchmark project. "
             "Builds a coverage-instrumented variant ({project}-coverage) and runs "
-            "corpus files against it to measure code coverage."
+            "corpus files against it to measure code coverage. "
+            "This command is currently experimental."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
@@ -129,7 +133,10 @@ Examples:
         "--verify-workers",
         type=int,
         default=None,
-        help="Number of parallel workers for coverage collection (default: 4).",
+        help=(
+            "Experimental compatibility knob for coverage collection. "
+            "Currently not used by CoverageEngine."
+        ),
     )
     parser.add_argument(
         "--source",
@@ -189,6 +196,7 @@ def run_coverage(args: argparse.Namespace) -> int:
 
     logger.info(f"Collecting coverage for benchmark: {args.benchmark_path}")
     logger.info(f"Corpus directory: {args.corpus_dir} ({len(corpus_files)} files)")
+    logger.warning("Coverage collection is experimental.")
 
     # Create engine and collect coverage
     # Note: CoverageEngine processes corpus sequentially; verify_workers

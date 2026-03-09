@@ -18,6 +18,7 @@ from crsbench.benchmark_ci.cli.common_args import (
     create_benchmark_selection_parent,
     create_build_options_parent,
     create_output_options_parent,
+    reject_local_worker_flags_in_distributed,
 )
 from crsbench.benchmark_ci.cli.discovery import resolve_benchmark_paths
 from crsbench.benchmark_ci.cli.output import print_results_table, save_output_dir
@@ -126,6 +127,9 @@ def _run_distributed_build(
 
 def run_build(args: argparse.Namespace) -> int:
     """Run build-only checks on resolved benchmarks."""
+    if not reject_local_worker_flags_in_distributed(args):
+        return 1
+
     paths = resolve_benchmark_paths(
         benchmark_arg=getattr(args, "benchmark", None),
         benchmarks_list=getattr(args, "benchmarks", None),

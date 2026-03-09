@@ -119,6 +119,12 @@ class BenchmarkRunner:
         verify_workers: Optional[int] = None,
         max_pov_variants_per_cpv: Optional[int] = 1,
         patch_verify_variants: bool = False,
+        pov_input_enabled: bool = False,
+        sarif_input_enabled: bool = False,
+        sarif_level: Optional[int] = None,
+        seed_corpus_enabled: bool = False,
+        seed_corpus_max_time: Optional[int] = None,
+        diff_input_enabled: bool = False,
         redis_host: Optional[str] = None,
         experiment_name: Optional[str] = None,
         pov_dedup_strategy: str = "patch-based",
@@ -157,6 +163,12 @@ class BenchmarkRunner:
             patch_verify_variants: For bug-fixing patch verification, verify
                 patches against all benchmark POV variants per CPV. When False
                 (default), verify against a single POV (pov_0-like behavior).
+            pov_input_enabled: Whether to stage/provide explicit bug-fixing POV inputs.
+            sarif_input_enabled: Whether to stage/provide bug-candidate SARIF inputs.
+            sarif_level: SARIF hint level to stage when sarif_input_enabled is true.
+            seed_corpus_enabled: Whether to stage/provide seed corpus input.
+            seed_corpus_max_time: Optional max relative time for staged seed corpus files.
+            diff_input_enabled: Whether to stage/provide ``.aixcc/ref.diff`` as runtime diff input.
             redis_host: Redis server hostname for async POV verification
             experiment_name: Experiment name for async verify queue naming
             pov_dedup_strategy: POV deduplication strategy name
@@ -186,6 +198,12 @@ class BenchmarkRunner:
         self.verify_workers = verify_workers
         self.max_pov_variants_per_cpv = max_pov_variants_per_cpv
         self.patch_verify_variants = patch_verify_variants
+        self.pov_input_enabled = pov_input_enabled
+        self.sarif_input_enabled = sarif_input_enabled
+        self.sarif_level = sarif_level
+        self.seed_corpus_enabled = seed_corpus_enabled
+        self.seed_corpus_max_time = seed_corpus_max_time
+        self.diff_input_enabled = diff_input_enabled
         self.redis_host = redis_host
         self.experiment_name = experiment_name
         self.pov_dedup_strategy = pov_dedup_strategy
@@ -648,7 +666,7 @@ class BenchmarkRunner:
             # For bug-fixing CRS, stage CPV/POV inputs from benchmark .aixcc
             # into the trial directory before managers are initialized.
             if self._crs_type == "bug-fixing":
-                self._prepare_bugfix_inputs(
+                self._prepare_bugfix_runtime_inputs(
                     benchmark_path=benchmark_path,
                     harness_name=harness.name,
                     trial_output_dir=trial_output_dir,
@@ -803,6 +821,111 @@ class BenchmarkRunner:
             patch_verification_manager,
         )
 
+    def _prepare_bugfix_runtime_inputs(
+        self,
+        benchmark_path: Path,
+        harness_name: str,
+        trial_output_dir: Path,
+        target_cpv_id: str | None = None,
+    ) -> None:
+        """Stage bug-fixing runtime inputs based on effective input settings."""
+        if self.pov_input_enabled:
+            self._prepare_bugfix_inputs(
+                benchmark_path=benchmark_path,
+                harness_name=harness_name,
+                trial_output_dir=trial_output_dir,
+                target_cpv_id=target_cpv_id,
+            )
+        else:
+            for stale in [
+                trial_output_dir / "povs",
+                trial_output_dir / "crs-input" / "povs",
+                trial_output_dir / "crs-input" / "cpvs",
+            ]:
+                if stale.is_dir():
+                    shutil.rmtree(stale)
+            self.logger.info("Bug-fixing POV input staging disabled")
+
+        self._prepare_seed_corpus_inputs(
+            benchmark_path=benchmark_path,
+            harness_name=harness_name,
+            trial_output_dir=trial_output_dir,
+        )
+        self._prepare_bug_candidate_inputs(
+            benchmark_path=benchmark_path,
+            harness_name=harness_name,
+            trial_output_dir=trial_output_dir,
+            target_cpv_id=target_cpv_id,
+        )
+        self._prepare_ref_diff_input(
+            benchmark_path=benchmark_path,
+            trial_output_dir=trial_output_dir,
+        )
+
+    def _prepare_bug_candidate_inputs(
+        self,
+        benchmark_path: Path,
+        harness_name: str,
+        trial_output_dir: Path,
+        target_cpv_id: str | None = None,
+    ) -> None:
+        """Stage SARIF bug-candidate inputs into ``trial/bug-candidates`` when enabled."""
+        target_dir = trial_output_dir / "bug-candidates"
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+        if not self.sarif_input_enabled or self.sarif_level is None:
+            return
+
+        from crsbench.validation.meta_adapter import MetaYamlAdapter
+
+        adapter = MetaYamlAdapter.from_benchmark_path(benchmark_path)
+        if adapter is None:
+            raise EvaluationError(
+                "SARIF bug-candidate input enabled but metadata could not be loaded: "
+                f"{benchmark_path}"
+            )
+
+        harness = adapter.get_harness(harness_name)
+        if harness is None or not harness.vulns:
+            raise EvaluationError(
+                "SARIF bug-candidate input enabled but harness/cpvs are unavailable: "
+                f"harness={harness_name}"
+            )
+
+        target_dir.mkdir(parents=True, exist_ok=True)
+        copied = 0
+        for vuln in harness.vulns:
+            cpv_id = vuln.vuln_keyword
+            if target_cpv_id is not None and cpv_id != target_cpv_id:
+                continue
+
+            sarif_path = (
+                benchmark_path
+                / ".aixcc"
+                / harness_name
+                / cpv_id
+                / "hints"
+                / f"level_{self.sarif_level}.sarif"
+            )
+            if not sarif_path.exists():
+                continue
+
+            dest = target_dir / f"{cpv_id}.sarif"
+            shutil.copy2(sarif_path, dest)
+            copied += 1
+
+        if copied == 0 and target_dir.exists():
+            shutil.rmtree(target_dir)
+            raise EvaluationError(
+                "SARIF bug-candidate input enabled but no matching files found: "
+                f"harness={harness_name}, level={self.sarif_level}"
+            )
+
+        self.logger.info(
+            "Prepared bug-candidate inputs: "
+            f"harness={harness_name}, sarif_files={copied}, level={self.sarif_level}"
+        )
+
     def _prepare_bugfix_inputs(
         self,
         benchmark_path: Path,
@@ -841,6 +964,9 @@ class BenchmarkRunner:
         cpvs_dir = trial_output_dir / "crs-input" / "cpvs"
         input_povs_dir = trial_output_dir / "crs-input" / "povs"
         adapter_povs_dir = trial_output_dir / "povs"
+        for stale_dir in (cpvs_dir, input_povs_dir, adapter_povs_dir):
+            if stale_dir.exists():
+                shutil.rmtree(stale_dir)
         cpvs_dir.mkdir(parents=True, exist_ok=True)
         input_povs_dir.mkdir(parents=True, exist_ok=True)
         adapter_povs_dir.mkdir(parents=True, exist_ok=True)
@@ -900,6 +1026,64 @@ class BenchmarkRunner:
             "max_pov_variants_per_cpv="
             f"{self.max_pov_variants_per_cpv if self.max_pov_variants_per_cpv is not None else 'all'}"
         )
+
+    def _prepare_seed_corpus_inputs(
+        self,
+        benchmark_path: Path,
+        harness_name: str,
+        trial_output_dir: Path,
+    ) -> None:
+        """Stage benchmark seed corpus into ``trial/seeds`` when enabled."""
+        target_dir = trial_output_dir / "seeds"
+        if not self.seed_corpus_enabled:
+            if target_dir.exists():
+                shutil.rmtree(target_dir)
+            return
+
+        from crsbench.benchmark.seed import SeedCorpusPreparer
+
+        preparer = SeedCorpusPreparer(benchmark_path, harness_name)
+        if not preparer.has_seed_corpus():
+            if target_dir.exists():
+                shutil.rmtree(target_dir)
+            raise EvaluationError(
+                f"Seed corpus input enabled but unavailable: harness={harness_name}"
+            )
+
+        result = preparer.prepare(
+            target_dir,
+            max_time=self.seed_corpus_max_time,
+            force=True,
+        )
+        self.logger.info(
+            "Prepared seed corpus input: "
+            f"harness={harness_name}, copied={result.copied_files}/{result.total_files}, "
+            f"max_time={self.seed_corpus_max_time}"
+        )
+
+    def _prepare_ref_diff_input(
+        self,
+        benchmark_path: Path,
+        trial_output_dir: Path,
+    ) -> None:
+        """Stage ``.aixcc/ref.diff`` into ``trial/ref.diff`` when enabled."""
+        target = trial_output_dir / "ref.diff"
+        if not self.diff_input_enabled:
+            if target.exists():
+                target.unlink()
+            return
+
+        source = benchmark_path / ".aixcc" / "ref.diff"
+        if not source.exists():
+            if target.exists():
+                target.unlink()
+            raise EvaluationError(
+                f"Diff input enabled but benchmark ref.diff is missing: {source}"
+            )
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        self.logger.info(f"Prepared diff input at: {target}")
 
     def _start_coverage_manager(
         self,

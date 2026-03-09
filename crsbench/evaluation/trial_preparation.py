@@ -26,6 +26,53 @@ from crsbench.validation.ground_truth_paths import GroundTruthPaths
 logger = get_logger(__name__)
 
 
+def _effective_inputs_from_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolve trial input controls from explicit runtime.inputs only."""
+    explicit_inputs = config.get("inputs") or {}
+    if not isinstance(explicit_inputs, dict):
+        explicit_inputs = {}
+    sarif_cfg = explicit_inputs.get("sarif") or {}
+    seed_cfg = explicit_inputs.get("seed") or {}
+    pov_cfg = explicit_inputs.get("pov") or {}
+    diff_cfg = explicit_inputs.get("diff") or {}
+
+    hints_enabled = bool(sarif_cfg.get("enabled", False))
+    hint_sarif_level = sarif_cfg.get("level")
+    hint_corpus_level = None
+    seed_enabled = bool(seed_cfg.get("enabled", False))
+    seed_max_time = seed_cfg.get("max_time")
+    pov_enabled = bool(pov_cfg.get("enabled", False))
+    max_variants = pov_cfg.get("max_variants_per_cpv")
+    diff_enabled = bool(diff_cfg.get("enabled", False))
+
+    return {
+        "source": "inputs",
+        "hints_enabled": hints_enabled,
+        "hint_sarif_level": hint_sarif_level if hints_enabled else None,
+        "hint_corpus_level": hint_corpus_level if hints_enabled else None,
+        "seed_corpus_enabled": seed_enabled,
+        "seed_corpus_max_time": seed_max_time if seed_enabled else None,
+        "pov_input_enabled": pov_enabled,
+        "max_pov_variants_per_cpv": max_variants if pov_enabled else None,
+        "diff_enabled": diff_enabled,
+        "inputs": {
+            "pov": {
+                "enabled": pov_enabled,
+                "max_variants_per_cpv": max_variants if pov_enabled else None,
+            },
+            "sarif": {
+                "enabled": hints_enabled,
+                "level": hint_sarif_level if hints_enabled else None,
+            },
+            "seed": {
+                "enabled": seed_enabled,
+                "max_time": seed_max_time if seed_enabled else None,
+            },
+            "diff": {"enabled": diff_enabled},
+        },
+    }
+
+
 class TrialPreparationError(Exception):
     """Raised when trial preparation fails."""
 
@@ -273,12 +320,14 @@ class TrialDirectoryPreparer:
         Returns:
             Path to prepared hints directory, or None if hints not enabled
         """
-        if not self.config.get("hints_enabled", False):
+        effective_inputs = _effective_inputs_from_config(self.config)
+
+        if not effective_inputs["hints_enabled"]:
             logger.debug("Hints not enabled, skipping")
             return None
 
-        sarif_level = self.config.get("hint_sarif_level")
-        corpus_level = self.config.get("hint_corpus_level")
+        sarif_level = effective_inputs["hint_sarif_level"]
+        corpus_level = effective_inputs["hint_corpus_level"]
 
         if sarif_level is None and corpus_level is None:
             logger.warning("hints_enabled=True but no hint levels configured")
@@ -507,6 +556,7 @@ class TrialDirectoryPreparer:
 
         # Get source commit from git
         source_commit = self._get_git_commit(source_path)
+        effective_inputs = _effective_inputs_from_config(self.config)
 
         # Count files in hints/povs
         hints_stats = self._get_hints_stats(hints_dir) if hints_dir else None
@@ -526,9 +576,15 @@ class TrialDirectoryPreparer:
             "hints": hints_stats,
             "povs": povs_stats,
             "config": {
-                "hints_enabled": self.config.get("hints_enabled", False),
-                "hints_corpus_level": self.config.get("hints_corpus_level"),
-                "target_povs": self.config.get("target_povs"),
+                "hints_enabled": effective_inputs["hints_enabled"],
+                "hints_corpus_level": effective_inputs["hint_corpus_level"],
+                "target_povs": effective_inputs["max_pov_variants_per_cpv"],
+                "hint_sarif_level": effective_inputs["hint_sarif_level"],
+                "seed_corpus_enabled": effective_inputs["seed_corpus_enabled"],
+                "seed_corpus_max_time": effective_inputs["seed_corpus_max_time"],
+                "pov_input_enabled": effective_inputs["pov_input_enabled"],
+                "diff_enabled": effective_inputs["diff_enabled"],
+                "inputs": effective_inputs["inputs"],
             },
             "framework": {
                 "version": version_info["version"],

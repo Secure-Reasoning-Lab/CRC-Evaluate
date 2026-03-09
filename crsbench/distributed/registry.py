@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -34,6 +35,20 @@ REGISTRY_KEY = "crsbench:registry:experiments"
 EVENTS_CHANNEL = "crsbench:registry:events"
 LOCK_KEY_PREFIX = "crsbench:lock:"
 LOCK_TTL = 600  # 10 minutes; renewed by the monitor loop every 60s
+
+_LOCK_RENEW_SCRIPT = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+  return redis.call('expire', KEYS[1], tonumber(ARGV[2]))
+end
+return 0
+"""
+
+_LOCK_UNLOCK_SCRIPT = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+  return redis.call('del', KEYS[1])
+end
+return 0
+"""
 
 
 class RuntimeRegistration(BaseModel):
@@ -58,15 +73,11 @@ class RuntimeRegistration(BaseModel):
     cpu_tag: Optional[str] = None
     worker_jobs: Optional[int] = None
     worker_cores_per_job: Optional[int] = None
-    worker_cores: Optional[str] = None
-    worker_skip_cpus: Optional[str] = None
     worker_cpu_tag: Optional[str] = None
     evaluator_build_jobs: Optional[int] = None
     evaluator_build_cores_per_job: Optional[int] = None
     evaluator_verify_jobs: Optional[int] = None
     evaluator_verify_cores_per_job: Optional[int] = None
-    evaluator_cores: Optional[str] = None
-    evaluator_skip_cpus: Optional[str] = None
     evaluator_idle_timeout: Optional[int] = None
     evaluator_cpu_tag: Optional[str] = None
 
@@ -167,6 +178,31 @@ class RuntimeRegistration(BaseModel):
         if not isinstance(local_image_prefix, str) or not local_image_prefix:
             local_image_prefix = "crsbench"
 
+        evaluator_default_jobs = evaluator_cfg.jobs if evaluator_cfg else None
+        evaluator_default_cores_per_job = (
+            evaluator_cfg.cores_per_job if evaluator_cfg else None
+        )
+        evaluator_build_jobs = (
+            evaluator_cfg.build_jobs
+            if evaluator_cfg and evaluator_cfg.build_jobs is not None
+            else evaluator_default_jobs
+        )
+        evaluator_build_cores_per_job = (
+            evaluator_cfg.build_cores_per_job
+            if evaluator_cfg and evaluator_cfg.build_cores_per_job is not None
+            else evaluator_default_cores_per_job
+        )
+        evaluator_verify_jobs = (
+            evaluator_cfg.verify_jobs
+            if evaluator_cfg and evaluator_cfg.verify_jobs is not None
+            else evaluator_default_jobs
+        )
+        evaluator_verify_cores_per_job = (
+            evaluator_cfg.verify_cores_per_job
+            if evaluator_cfg and evaluator_cfg.verify_cores_per_job is not None
+            else evaluator_default_cores_per_job
+        )
+
         return cls(
             experiment=experiment,
             trial_queue=trial_queue,
@@ -177,19 +213,11 @@ class RuntimeRegistration(BaseModel):
             cpu_tag=cpu_tag,
             worker_jobs=worker_jobs,
             worker_cores_per_job=worker_cores_per_job,
-            worker_cores=worker_cfg.cores if worker_cfg else None,
-            worker_skip_cpus=worker_cfg.skip_cpus if worker_cfg else None,
             worker_cpu_tag=worker_cfg.cpu_tag if worker_cfg else None,
-            evaluator_build_jobs=evaluator_cfg.build_jobs if evaluator_cfg else None,
-            evaluator_build_cores_per_job=(
-                evaluator_cfg.build_cores_per_job if evaluator_cfg else None
-            ),
-            evaluator_verify_jobs=evaluator_cfg.verify_jobs if evaluator_cfg else None,
-            evaluator_verify_cores_per_job=(
-                evaluator_cfg.verify_cores_per_job if evaluator_cfg else None
-            ),
-            evaluator_cores=evaluator_cfg.cores if evaluator_cfg else None,
-            evaluator_skip_cpus=evaluator_cfg.skip_cpus if evaluator_cfg else None,
+            evaluator_build_jobs=evaluator_build_jobs,
+            evaluator_build_cores_per_job=evaluator_build_cores_per_job,
+            evaluator_verify_jobs=evaluator_verify_jobs,
+            evaluator_verify_cores_per_job=evaluator_verify_cores_per_job,
             evaluator_idle_timeout=evaluator_cfg.idle_timeout
             if evaluator_cfg
             else None,
@@ -217,6 +245,7 @@ class RegistryClient:
 
     def __init__(self, connection: Redis) -> None:
         self._conn = connection
+        self._lock_tokens: dict[str, str] = {}
 
     # ---- locking ----
 
@@ -231,8 +260,10 @@ class RegistryClient:
             ``True`` if the lock was acquired, ``False`` if already held.
         """
         key = f"{LOCK_KEY_PREFIX}{experiment}"
-        acquired = self._conn.set(key, "locked", nx=True, ex=LOCK_TTL)
+        token = uuid.uuid4().hex
+        acquired = self._conn.set(key, token, nx=True, ex=LOCK_TTL)
         if acquired:
+            self._lock_tokens[experiment] = token
             logger.info(f"Acquired lock for experiment '{experiment}'")
         return bool(acquired)
 
@@ -244,7 +275,13 @@ class RegistryClient:
             ``False`` if the key no longer exists (lock lost).
         """
         key = f"{LOCK_KEY_PREFIX}{experiment}"
-        result = self._conn.expire(key, LOCK_TTL)
+        token = self._lock_tokens.get(experiment)
+        if not token:
+            logger.warning(
+                f"Lock renewal skipped for '{experiment}' — no local lock token"
+            )
+            return False
+        result = self._conn.eval(_LOCK_RENEW_SCRIPT, 1, key, token, str(LOCK_TTL))
         if not result:
             logger.warning(
                 f"Lock renewal failed for '{experiment}' — lock no longer exists"
@@ -254,8 +291,18 @@ class RegistryClient:
     def unlock(self, experiment: str) -> None:
         """Release the distributed lock for *experiment*."""
         key = f"{LOCK_KEY_PREFIX}{experiment}"
-        self._conn.delete(key)
-        logger.info(f"Released lock for experiment '{experiment}'")
+        token = self._lock_tokens.get(experiment)
+        if not token:
+            logger.warning(f"Unlock skipped for '{experiment}' — no local lock token")
+            return
+        result = self._conn.eval(_LOCK_UNLOCK_SCRIPT, 1, key, token)
+        if result:
+            logger.info(f"Released lock for experiment '{experiment}'")
+        else:
+            logger.warning(
+                f"Unlock skipped for '{experiment}' — lock is missing or owned by another session"
+            )
+        self._lock_tokens.pop(experiment, None)
 
     # ---- write operations ----
 

@@ -656,7 +656,8 @@ def handle_orphaned_jobs(
     """
     Move orphaned started jobs to failed and requeue for retry.
 
-    Orphaned jobs are started jobs with no workers connected (workers died mid-execution).
+    Orphaned jobs are started jobs with no workers connected to this queue
+    (workers died mid-execution).
 
     Args:
         queue: RQ queue instance
@@ -673,10 +674,16 @@ def handle_orphaned_jobs(
     if not REDIS_AVAILABLE:
         raise RuntimeError("Redis and RQ packages are required")
 
-    # Check if any workers are connected
-    stats = get_queue_stats(queue)
-    if stats.get("workers", 0) > 0:
-        logger.debug("Workers exist - not handling started jobs as orphaned")
+    active_workers = rq.Worker.all(connection=queue.connection)  # type: ignore[attr-defined]
+    queue_name = str(queue.name)
+    queue_worker_count = sum(
+        1 for worker in active_workers if _worker_listens_to_queue(worker, queue_name)
+    )
+    if queue_worker_count > 0:
+        logger.debug(
+            f"Workers exist for queue {queue_name} ({queue_worker_count}) - "
+            "not handling started jobs as orphaned"
+        )
         return 0
 
     count = 0
@@ -694,3 +701,53 @@ def handle_orphaned_jobs(
     if count > 0:
         logger.info(f"Handled {count} orphaned jobs (moved to failed + requeued)")
     return count
+
+
+def _worker_listens_to_queue(worker: object, queue_name: str) -> bool:
+    """Return True when worker is subscribed to the given queue name."""
+    if queue_name in _extract_worker_queue_names(worker):
+        return True
+    return False
+
+
+def _extract_worker_queue_names(worker: object) -> set[str]:
+    """Extract worker queue names across RQ versions/mocks."""
+    queue_names: set[str] = set()
+
+    queues = getattr(worker, "queues", None)
+    if isinstance(queues, list | tuple | set):
+        for worker_queue in queues:
+            name = getattr(worker_queue, "name", None)
+            parsed = _normalize_queue_name(name)
+            if parsed:
+                queue_names.add(parsed)
+
+    queue_names_attr = getattr(worker, "queue_names", None)
+    if callable(queue_names_attr):
+        try:
+            queue_names_value = queue_names_attr()
+        except Exception:
+            queue_names_value = None
+    else:
+        queue_names_value = queue_names_attr
+
+    if isinstance(queue_names_value, str | bytes):
+        parsed = _normalize_queue_name(queue_names_value)
+        if parsed:
+            queue_names.add(parsed)
+    elif isinstance(queue_names_value, list | tuple | set):
+        for name in queue_names_value:
+            parsed = _normalize_queue_name(name)
+            if parsed:
+                queue_names.add(parsed)
+
+    return queue_names
+
+
+def _normalize_queue_name(name: object) -> str | None:
+    """Convert queue name values from RQ/Redis formats to a normalized string."""
+    if isinstance(name, bytes):
+        return name.decode("utf-8", errors="ignore")
+    if isinstance(name, str):
+        return name
+    return None

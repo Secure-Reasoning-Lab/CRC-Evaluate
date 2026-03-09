@@ -19,7 +19,6 @@ from crsbench.validation.errors import (
     ValidationResult,
 )
 from crsbench.validation.schemas import (
-    AdapterType,
     BenchmarkConfig,
     BenchmarkSuiteConfig,
     EvaluationMode,
@@ -49,7 +48,15 @@ def _suggest_typo_fields(
             known_fields.add(field_info.alias)
 
     suggestions = []
+    ignored_group_keys: set[str] = set()
+    if model_class is ExperimentConfig:
+        # Grouped contract keys intentionally do not exist as top-level
+        # schema fields but are normalized in model validators.
+        ignored_group_keys = {"runtime", "storage"}
+
     for key in data:
+        if key in ignored_group_keys:
+            continue
         if key not in known_fields:
             matches = difflib.get_close_matches(key, known_fields, n=1, cutoff=0.6)
             if matches:
@@ -522,17 +529,18 @@ def _validate_experiment_schema(
                 field="unknown_field",
             )
         # Return a minimal config to avoid crashes
-        return ExperimentConfig(
-            experiment="dummy",
-            trials=1,
-            mode=EvaluationMode.DELTA,
-            adapter=AdapterType.OSS_CRS,
-            max_total_time=20000,
-            difficulty_level=0,
-            experiment_filestore=Path("/tmp"),
-            report_filestore=Path("/tmp"),
-            crses=["dummy"],
-            benchmarks=["dummy"],
+        return ExperimentConfig.model_validate(
+            {
+                "experiment": "dummy",
+                "trials": 1,
+                "mode": EvaluationMode.DELTA,
+                "max_total_time": 20000,
+                "inputs": {"pov": {"enabled": True, "max_variants_per_cpv": 1}},
+                "experiment_filestore": str(Path("/tmp")),
+                "report_filestore": str(Path("/tmp")),
+                "crs_compose": {"dummy": {"num_cores": 1}},
+                "benchmarks": ["dummy"],
+            }
         )
     except Exception as e:
         result.add_error(
@@ -540,17 +548,18 @@ def _validate_experiment_schema(
             f"Schema validation failed: {str(e)}",
             context={"error": str(e)},
         )
-        return ExperimentConfig(
-            experiment="dummy",
-            trials=1,
-            mode=EvaluationMode.DELTA,
-            adapter=AdapterType.OSS_CRS,
-            max_total_time=1,
-            difficulty_level=0,
-            experiment_filestore=Path("/tmp"),
-            report_filestore=Path("/tmp"),
-            crses=["dummy"],
-            benchmarks=["dummy"],
+        return ExperimentConfig.model_validate(
+            {
+                "experiment": "dummy",
+                "trials": 1,
+                "mode": EvaluationMode.DELTA,
+                "max_total_time": 20000,
+                "inputs": {"pov": {"enabled": True, "max_variants_per_cpv": 1}},
+                "experiment_filestore": str(Path("/tmp")),
+                "report_filestore": str(Path("/tmp")),
+                "crs_compose": {"dummy": {"num_cores": 1}},
+                "benchmarks": ["dummy"],
+            }
         )
 
 
@@ -560,7 +569,6 @@ def _generate_experiment_metadata(config: ExperimentConfig, result: ValidationRe
         {
             "trials": config.trials,
             "max_total_time": config.max_total_time,
-            "difficulty_level": config.difficulty_level,
             "experiment_filestore": config.experiment_filestore,
             "report_filestore": config.report_filestore,
             "redis_host": config.redis_host,

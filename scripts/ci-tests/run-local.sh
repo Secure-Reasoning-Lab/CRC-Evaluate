@@ -10,6 +10,7 @@
 #   ./scripts/ci-tests/run-local.sh sanity       # Stage 2b: all checks (mock-c + mock-java)
 #   ./scripts/ci-tests/run-local.sh e2e          # Stage 3: bug finding E2E
 #   ./scripts/ci-tests/run-local.sh smoke        # Stage 4: parallel smoke (bugfinding + bugfixing)
+#   ./scripts/ci-tests/run-local.sh smoke-validate-config
 #   ./scripts/ci-tests/run-local.sh smoke-bugfinding
 #   ./scripts/ci-tests/run-local.sh smoke-bugfixing
 #
@@ -17,11 +18,19 @@
 #   ./scripts/ci-tests/run-local.sh all          # Run all stages including integration
 #   ./scripts/ci-tests/run-local.sh sanity-real  # Stage 2c: all checks (afc-xz + json-java)
 #   ./scripts/ci-tests/run-local.sh integration  # Local only: real projects (libxml2, commons-compress)
+#
+# Smoke config (config-first):
+#   SMOKE_BUGFINDING_CONFIG=<path>               # defaults to sanity bugfinding config
+#   SMOKE_BUGFIXING_CONFIG=<path>                # defaults to sanity bugfixing config
+#   SMOKE_CPUSET_<SUITE_NAME>=<cpuset>           # optional per-suite cpuset override (e.g. SMOKE_CPUSET_BUGFINDING=0-23)
+#   SMOKE_SKIP_CPUSET_<SUITE_NAME>=<cpuset>      # optional per-suite excluded CPUs
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
+SMOKE_BUGFINDING_CONFIG_DEFAULT="$ROOT_DIR/experiment-configs/sanity-bugfinding/atlantis-multilang-given_fuzzer-default-delta.yaml"
+SMOKE_BUGFIXING_CONFIG_DEFAULT="$ROOT_DIR/experiment-configs/sanity-bugfixing/crs-copilot-cli-gpt-5-3-codex-delta-sanity-mock-c.yaml"
 
 cd "$ROOT_DIR"
 
@@ -159,6 +168,51 @@ cleanup_path() {
     fi
 
     rm -rf "$path" 2>/dev/null || true
+}
+
+smoke_config_for_suite() {
+    local suite="$1"
+    case "$suite" in
+        bugfinding)
+            echo "${SMOKE_BUGFINDING_CONFIG:-$SMOKE_BUGFINDING_CONFIG_DEFAULT}"
+            ;;
+        bugfixing)
+            echo "${SMOKE_BUGFIXING_CONFIG:-$SMOKE_BUGFIXING_CONFIG_DEFAULT}"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+smoke_cpuset_for_suite() {
+    local suite="$1"
+    local normalized env_name default_cpuset
+    normalized=$(echo "$suite" | tr '[:lower:]-' '[:upper:]_')
+    env_name="SMOKE_CPUSET_${normalized}"
+    case "$suite" in
+        bugfinding) default_cpuset="0-23" ;;
+        bugfixing) default_cpuset="24-47" ;;
+        *) default_cpuset="" ;;
+    esac
+
+    echo "${!env_name:-$default_cpuset}"
+}
+
+smoke_skip_cpuset_for_suite() {
+    local suite="$1"
+    local normalized env_name
+    normalized=$(echo "$suite" | tr '[:lower:]-' '[:upper:]_')
+    env_name="SMOKE_SKIP_CPUSET_${normalized}"
+    echo "${!env_name:-}"
+}
+
+smoke_skip_verification_for_suite() {
+    local suite="$1"
+    local normalized env_name
+    normalized=$(echo "$suite" | tr '[:lower:]-' '[:upper:]_')
+    env_name="SMOKE_SKIP_VERIFICATION_${normalized}"
+    echo "${!env_name:-0}"
 }
 
 # Stage 1: Basic checks
@@ -320,116 +374,334 @@ if '$expected_cpv' not in cpvs:
 # Stage 4: smoke checks for default regression CRSs
 # Smoke stages run against an isolated temporary Valkey instance on a random port.
 # The container/volume are cleaned up automatically after each smoke run.
-run_smoke_bugfinding() {
-    run_stage "Stage 4a: Smoke Bugfinding (atlantis-multilang-given_fuzzer)"
-    run_litellm_preflight
-    start_temp_valkey
-    trap cleanup_temp_valkey EXIT
-    local cpuset_flag=()
-    if [ "${SMOKE_NO_CPUSET:-1}" = "1" ]; then
-        cpuset_flag=(--no-cpuset)
-    fi
-    uv run python scripts/ci-tests/smoke_runner.py \
-        --suite bugfinding \
-        "${cpuset_flag[@]}" \
-        --worker-cores 16 \
-        --keep-workspace || fail "Smoke bugfinding failed"
-    trap - EXIT
-    cleanup_temp_valkey
-    success "Smoke bugfinding passed"
-}
-
 run_litellm_preflight() {
+    local require_tracking="${1:-0}"
     echo "Running LiteLLM preflight (health + runtime auth)..."
-    uv run python scripts/ci-tests/litellm_preflight.py --mode external || fail "LiteLLM preflight failed"
+    if [ "$require_tracking" = "1" ]; then
+        uv run python scripts/ci-tests/litellm_preflight.py --mode external --require-tracking || fail "LiteLLM preflight failed"
+    else
+        uv run python scripts/ci-tests/litellm_preflight.py --mode external || fail "LiteLLM preflight failed"
+    fi
     success "LiteLLM preflight passed"
 }
 
-run_smoke_bugfixing() {
-    run_stage "Stage 4b: Smoke Bugfixing (crs-claude-code)"
-    run_litellm_preflight
+suite_requires_litellm() {
+    local suite="$1"
+    local config_path
+    config_path="$(smoke_config_for_suite "$suite")" || return 1
+    uv run python - "$config_path" <<'PY'
+from pathlib import Path
+import sys
+import yaml
+
+def as_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+data = yaml.safe_load(Path(sys.argv[1]).read_text()) or {}
+runtime = data.get("runtime", {})
+litellm = runtime.get("litellm", {}) if isinstance(runtime, dict) else {}
+mode = litellm.get("mode")
+if mode is None:
+    mode = runtime.get("litellm_mode") if isinstance(runtime, dict) else None
+if mode is None:
+    mode = data.get("litellm_mode", "external")
+skip_litellm = as_bool(
+    litellm["skip"]
+    if isinstance(litellm, dict) and "skip" in litellm
+    else (
+        runtime["skip_litellm"]
+        if isinstance(runtime, dict) and "skip_litellm" in runtime
+        else data.get("skip_litellm", False)
+    )
+)
+requires = (mode not in (None, "null")) and not skip_litellm
+print("1" if requires else "0")
+PY
+}
+
+suite_requires_litellm_tracking() {
+    local suite="$1"
+    local config_path
+    config_path="$(smoke_config_for_suite "$suite")" || return 1
+    uv run python - "$config_path" <<'PY'
+from pathlib import Path
+import sys
+import yaml
+
+def as_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+data = yaml.safe_load(Path(sys.argv[1]).read_text()) or {}
+runtime = data.get("runtime", {})
+litellm = runtime.get("litellm", {}) if isinstance(runtime, dict) else {}
+mode = litellm.get("mode")
+if mode is None:
+    mode = runtime.get("litellm_mode") if isinstance(runtime, dict) else None
+if mode is None:
+    mode = data.get("litellm_mode", "external")
+skip_litellm = as_bool(
+    litellm["skip"]
+    if isinstance(litellm, dict) and "skip" in litellm
+    else (
+        runtime["skip_litellm"]
+        if isinstance(runtime, dict) and "skip_litellm" in runtime
+        else data.get("skip_litellm", False)
+    )
+)
+tracking_enabled = as_bool(
+    litellm.get(
+        "tracking_enabled",
+        runtime.get("llm_tracking_enabled", data.get("llm_tracking_enabled", True))
+        if isinstance(runtime, dict)
+        else data.get("llm_tracking_enabled", True),
+    )
+)
+requires = (mode not in (None, "null")) and (not skip_litellm) and tracking_enabled
+print("1" if requires else "0")
+PY
+}
+
+validate_smoke_selection_config() {
+    local bugfinding_cfg bugfixing_cfg
+    bugfinding_cfg="$(smoke_config_for_suite bugfinding)" || fail "Unknown smoke suite bugfinding"
+    bugfixing_cfg="$(smoke_config_for_suite bugfixing)" || fail "Unknown smoke suite bugfixing"
+    [ -f "$bugfinding_cfg" ] || fail "Missing smoke config: $bugfinding_cfg"
+    [ -f "$bugfixing_cfg" ] || fail "Missing smoke config: $bugfixing_cfg"
+    uv run python - "$bugfinding_cfg" "$bugfixing_cfg" <<'PY'
+from pathlib import Path
+import sys
+import yaml
+
+for p in sys.argv[1:]:
+    data = yaml.safe_load(Path(p).read_text())
+    if not isinstance(data, dict):
+        raise SystemExit(f"invalid YAML root in {p}: expected mapping")
+    print(f"[smoke] validated config syntax: {p}")
+PY
+}
+
+render_smoke_config() {
+    local suite="$1"
+    local base_config="$2"
+    local out_config="$3"
+    local exp_dir="$4"
+    local report_dir="$5"
+    local redis_host="$6"
+    local skip_verification="${7:-0}"
+
+    uv run python - "$suite" "$base_config" "$out_config" "$exp_dir" "$report_dir" "$redis_host" "$skip_verification" <<'PY'
+from pathlib import Path
+from datetime import datetime
+import sys
+import yaml
+
+suite, base_path, out_path, exp_dir, report_dir, redis_host, skip_verification = sys.argv[1:]
+data = yaml.safe_load(Path(base_path).read_text()) or {}
+timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+experiment = data.get("experiment")
+if isinstance(experiment, dict):
+    base_name = experiment.get("name", f"smoke-{suite}")
+    experiment["name"] = f"{base_name}-{timestamp}-{suite}"
+elif isinstance(experiment, str):
+    data["experiment"] = f"{experiment}-{timestamp}-{suite}"
+else:
+    data["experiment"] = {"name": f"smoke-{suite}-{timestamp}"}
+
+runtime = data.setdefault("runtime", {})
+runtime["redis_host"] = redis_host
+if str(skip_verification).strip() == "1":
+    runtime["skip_verification"] = True
+
+storage = data.setdefault("storage", {})
+storage["experiment_filestore"] = exp_dir
+storage["report_filestore"] = report_dir
+
+Path(out_path).write_text(yaml.safe_dump(data, sort_keys=False))
+exp_name = data["experiment"]["name"] if isinstance(data["experiment"], dict) else data["experiment"]
+print(exp_name)
+PY
+}
+
+stop_worker_process() {
+    local pid="$1"
+    local label="$2"
+    local signal timeout
+
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+        wait "$pid" >/dev/null 2>&1 || true
+        return 0
+    fi
+
+    for signal in INT TERM KILL; do
+        case "$signal" in
+            INT|TERM) timeout=20 ;;
+            KILL) timeout=5 ;;
+            *) timeout=5 ;;
+        esac
+
+        kill "-$signal" "$pid" >/dev/null 2>&1 || true
+        local elapsed=0
+        while [ "$elapsed" -lt "$timeout" ]; do
+            if ! kill -0 "$pid" >/dev/null 2>&1; then
+                wait "$pid" >/dev/null 2>&1 || true
+                return 0
+            fi
+            sleep 1
+            elapsed=$((elapsed + 1))
+        done
+    done
+
+    echo "[smoke] warning: $label (pid=$pid) did not terminate cleanly"
+    wait "$pid" >/dev/null 2>&1 || true
+    return 1
+}
+
+run_smoke_suite_config() {
+    local suite="$1"
+    local stage_name="$2"
+    local base_config workspace config_path exp_dir report_dir
+    local worker_log run_log worker_pid rc cpuset skip_cpuset skip_verification
+
+    run_stage "$stage_name"
+    base_config="$(smoke_config_for_suite "$suite")" || fail "Unknown smoke suite: $suite"
+    [ -f "$base_config" ] || fail "Missing smoke config: $base_config"
+
+    workspace=$(mktemp -d "/tmp/crsbench-smoke-${suite}-XXXXXX")
+    config_path="$workspace/experiment-config.yaml"
+    exp_dir="$workspace/experiment-data"
+    report_dir="$workspace/report-data"
+    mkdir -p "$exp_dir" "$report_dir"
+
+    skip_verification="$(smoke_skip_verification_for_suite "$suite")"
+    render_smoke_config "$suite" "$base_config" "$config_path" "$exp_dir" "$report_dir" "${CRSBENCH_REDIS_HOST}" "$skip_verification" >/dev/null \
+        || fail "Failed to render smoke config for $suite"
+
+    worker_log="$workspace/worker.log"
+    run_log="$workspace/run.log"
+
+    local worker_cmd=(uv run crsbench worker --experiment-config "$config_path" --continuous)
+    if [ "${SMOKE_NO_CPUSET:-1}" != "1" ]; then
+        cpuset="$(smoke_cpuset_for_suite "$suite")"
+        skip_cpuset="$(smoke_skip_cpuset_for_suite "$suite")"
+        if [ -n "$cpuset" ]; then
+            worker_cmd+=(--cpuset "$cpuset")
+        fi
+        if [ -n "$skip_cpuset" ]; then
+            worker_cmd+=(--skip-cpuset "$skip_cpuset")
+        fi
+    fi
+
+    "${worker_cmd[@]}" >"$worker_log" 2>&1 &
+    worker_pid=$!
+    sleep 3
+    if ! kill -0 "$worker_pid" >/dev/null 2>&1; then
+        echo "=== worker log (tail) ==="
+        tail -n 120 "$worker_log" || true
+        fail "Smoke worker failed to start for suite=$suite"
+    fi
+
+    rc=0
+    uv run crsbench run --experiment-config "$config_path" --distributed --queue-mode fresh >"$run_log" 2>&1 || rc=$?
+
+    if ! stop_worker_process "$worker_pid" "worker[$suite]"; then
+        echo "=== worker log (tail) ==="
+        tail -n 200 "$worker_log" || true
+        fail "Smoke worker did not terminate cleanly for suite=$suite"
+    fi
+
+    if [ "$rc" -ne 0 ]; then
+        echo "=== run log (tail) ==="
+        tail -n 200 "$run_log" || true
+        echo "=== worker log (tail) ==="
+        tail -n 200 "$worker_log" || true
+        fail "Smoke run failed for suite=$suite"
+    fi
+
+    if [ "${SMOKE_KEEP_WORKSPACE:-0}" = "1" ]; then
+        echo "[smoke] kept workspace: $workspace"
+    else
+        cleanup_path "$workspace"
+    fi
+    success "Smoke $suite passed"
+}
+
+run_smoke_bugfinding() {
+    local bugfind_requires_litellm bugfind_requires_tracking
+    bugfind_requires_litellm="$(suite_requires_litellm bugfinding)" || fail "Failed to inspect bugfinding smoke LiteLLM requirements"
+    bugfind_requires_tracking="$(suite_requires_litellm_tracking bugfinding)" || fail "Failed to inspect bugfinding smoke LiteLLM tracking requirements"
+    if [ "$bugfind_requires_litellm" = "1" ]; then
+        run_litellm_preflight "$bugfind_requires_tracking"
+    fi
     start_temp_valkey
     trap cleanup_temp_valkey EXIT
-    local cpuset_flag=()
-    if [ "${SMOKE_NO_CPUSET:-1}" = "1" ]; then
-        cpuset_flag=(--no-cpuset)
-    fi
-    uv run python scripts/ci-tests/smoke_runner.py \
-        --suite bugfixing \
-        "${cpuset_flag[@]}" \
-        --worker-cores 16 \
-        --keep-workspace || fail "Smoke bugfixing failed"
+    run_smoke_suite_config bugfinding "Stage 4a: Smoke Bugfinding (config-first)"
     trap - EXIT
     cleanup_temp_valkey
-    success "Smoke bugfixing passed"
+}
+
+run_smoke_bugfixing() {
+    local bugfix_requires_litellm bugfix_requires_tracking
+    bugfix_requires_litellm="$(suite_requires_litellm bugfixing)" || fail "Failed to inspect bugfixing smoke LiteLLM requirements"
+    bugfix_requires_tracking="$(suite_requires_litellm_tracking bugfixing)" || fail "Failed to inspect bugfixing smoke LiteLLM tracking requirements"
+    if [ "$bugfix_requires_litellm" = "1" ]; then
+        run_litellm_preflight "$bugfix_requires_tracking"
+    fi
+    start_temp_valkey
+    trap cleanup_temp_valkey EXIT
+    run_smoke_suite_config bugfixing "Stage 4b: Smoke Bugfixing (config-first)"
+    trap - EXIT
+    cleanup_temp_valkey
 }
 
 run_smoke_parallel() {
-    run_stage "Stage 4: Parallel Smoke (bugfinding + bugfixing)"
-    run_litellm_preflight
-
-    # Run in parallel with disjoint cpusets by default.
-    # Override with env vars if your machine has a different layout.
-    local bugfinding_cpuset=${SMOKE_CPUSET_BUGFINDING:-0-23}
-    local bugfixing_cpuset=${SMOKE_CPUSET_BUGFIXING:-24-47}
-    local smoke_run_root
-    smoke_run_root=$(mktemp -d /tmp/crsbench-smoke-parallel-XXXXXX)
-    local cpuset_flag=()
-    if [ "${SMOKE_NO_CPUSET:-1}" = "1" ]; then
-        cpuset_flag=(--no-cpuset)
+    run_stage "Stage 4: Parallel Smoke (config-first)"
+    local bugfind_requires_litellm bugfind_requires_tracking
+    local bugfix_requires_litellm bugfix_requires_tracking
+    local parallel_requires_litellm parallel_requires_tracking
+    bugfind_requires_litellm="$(suite_requires_litellm bugfinding)" || fail "Failed to inspect bugfinding smoke LiteLLM requirements"
+    bugfind_requires_tracking="$(suite_requires_litellm_tracking bugfinding)" || fail "Failed to inspect bugfinding smoke LiteLLM tracking requirements"
+    bugfix_requires_litellm="$(suite_requires_litellm bugfixing)" || fail "Failed to inspect bugfixing smoke LiteLLM requirements"
+    bugfix_requires_tracking="$(suite_requires_litellm_tracking bugfixing)" || fail "Failed to inspect bugfixing smoke LiteLLM tracking requirements"
+    parallel_requires_litellm=0
+    parallel_requires_tracking=0
+    if [ "$bugfind_requires_litellm" = "1" ] || [ "$bugfix_requires_litellm" = "1" ]; then
+        parallel_requires_litellm=1
     fi
+    if [ "$bugfind_requires_tracking" = "1" ] || [ "$bugfix_requires_tracking" = "1" ]; then
+        parallel_requires_tracking=1
+    fi
+    if [ "$parallel_requires_litellm" = "1" ]; then
+        run_litellm_preflight "$parallel_requires_tracking"
+    fi
+
     start_temp_valkey
     trap cleanup_temp_valkey EXIT
 
-    uv run python scripts/ci-tests/smoke_runner.py \
-        --suite bugfinding \
-        "${cpuset_flag[@]}" \
-        --worker-cpuset "$bugfinding_cpuset" \
-        --result-root "$smoke_run_root" \
-        --keep-workspace &
-    pid1=$!
+    local pids=()
+    local suites=(bugfinding bugfixing)
+    local suite
+    for suite in "${suites[@]}"; do
+        run_smoke_suite_config "$suite" "Smoke $suite" &
+        pids+=("$!")
+    done
 
-    uv run python scripts/ci-tests/smoke_runner.py \
-        --suite bugfixing \
-        "${cpuset_flag[@]}" \
-        --worker-cpuset "$bugfixing_cpuset" \
-        --result-root "$smoke_run_root" \
-        --keep-workspace &
-    pid2=$!
+    local rc=0
+    for pid in "${pids[@]}"; do
+        wait "$pid" || rc=1
+    done
 
-    wait "$pid1" || fail "Parallel smoke bugfinding failed"
-    wait "$pid2" || fail "Parallel smoke bugfixing failed"
-
-    echo -e "\n${YELLOW}--- Parallel Smoke Summary ---${NC}"
-    local summaries
-    summaries=$(find "$smoke_run_root" -name summary.json -type f | sort || true)
-    if [ -z "$summaries" ]; then
-        fail "Parallel smoke completed but no summary.json files found under $smoke_run_root"
-    fi
-
-    while IFS= read -r summary; do
-        [ -z "$summary" ] && continue
-        python3 - "$summary" <<'PY'
-import json, sys
-from pathlib import Path
-
-summary_path = Path(sys.argv[1])
-data = json.loads(summary_path.read_text())
-suite = data.get("suite", "unknown")
-status = data.get("status", "unknown")
-workspace = data.get("workspace", "unknown")
-successes = data.get("successes", 0)
-total_trials = data.get("total_trials", 0)
-patch_files = data.get("patch_files", 0)
-pov_files = data.get("pov_files", 0)
-print(f"[{suite}] status={status} successes={successes}/{total_trials} patch_files={patch_files} pov_files={pov_files}")
-print(f"[{suite}] workspace={workspace}")
-PY
-    done <<< "$summaries"
-
-    echo "[smoke] summary root: $smoke_run_root"
     trap - EXIT
     cleanup_temp_valkey
+    [ "$rc" -eq 0 ] || fail "Parallel smoke failed"
     success "Parallel smoke passed"
 }
 
@@ -463,6 +735,9 @@ main() {
         smoke)
             run_smoke_parallel
             ;;
+        smoke-validate-config)
+            validate_smoke_selection_config
+            ;;
         smoke-bugfinding)
             run_smoke_bugfinding
             ;;
@@ -488,7 +763,7 @@ main() {
             run_smoke_parallel
             ;;
         *)
-            echo "Usage: $0 [checks|format|sanity|e2e|smoke|smoke-bugfinding|smoke-bugfixing]"
+            echo "Usage: $0 [checks|format|sanity|e2e|smoke|smoke-validate-config|smoke-bugfinding|smoke-bugfixing]"
             echo ""
             echo "  (default)    Run checks + format + sanity-mock + smoke (matches CI)"
             echo "  checks       Stage 1: typecheck, lint, format, unit tests"
@@ -496,8 +771,9 @@ main() {
             echo "  sanity       Stage 2b: all checks (mock-c + mock-java)"
             echo "  e2e          Optional: bug finding E2E (longer/deeper)"
             echo "  smoke        Stage 4: parallel smoke checks (bugfinding + bugfixing)"
-            echo "  smoke-bugfinding  Smoke check for atlantis-multilang-given_fuzzer"
-            echo "  smoke-bugfixing   Smoke check for crs-claude-code"
+            echo "  smoke-validate-config  Validate config-first smoke config files"
+            echo "  smoke-bugfinding  Smoke check for bugfinding sanity config"
+            echo "  smoke-bugfixing   Smoke check for bugfixing sanity config"
             exit 1
             ;;
     esac

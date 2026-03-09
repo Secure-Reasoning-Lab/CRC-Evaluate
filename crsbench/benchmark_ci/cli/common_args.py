@@ -8,6 +8,10 @@ This ensures consistent argument definitions across all subcommands.
 import argparse
 from pathlib import Path
 
+from crsbench.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 def create_benchmark_selection_parent() -> argparse.ArgumentParser:
     """Create parent parser for benchmark selection arguments.
@@ -59,9 +63,9 @@ def create_build_options_parent() -> argparse.ArgumentParser:
 
     Provides:
         --source: Source mode (pkgs or main_repo)
-        --workers / -j: Number of parallel workers (within a benchmark)
-        --exit-on-error: Exit on first failure
-        --parallel / -p: Number of benchmarks to validate concurrently
+        --build-workers/--verify-workers: Compatibility knobs (accepted, but not
+            used by modular benchmark-ci scheduling)
+        --exit-on-error: Compatibility flag (accepted, currently no-op here)
     """
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument(
@@ -75,18 +79,24 @@ def create_build_options_parent() -> argparse.ArgumentParser:
         "--build-workers",
         type=int,
         default=4,
-        help="Number of parallel build workers (default: 4)",
+        help=(
+            "Compatibility knob for local benchmark-ci scheduling "
+            "(currently not used; keep default 4)"
+        ),
     )
     parser.add_argument(
         "--verify-workers",
         type=int,
         default=4,
-        help="Number of parallel verification workers (default: 4)",
+        help=(
+            "Compatibility knob for local benchmark-ci scheduling "
+            "(currently not used; keep default 4)"
+        ),
     )
     parser.add_argument(
         "--exit-on-error",
         action="store_true",
-        help="Exit immediately on first benchmark failure",
+        help="Compatibility flag (currently no-op in modular benchmark-ci subcommands)",
     )
     parser.add_argument(
         "--mode",
@@ -151,3 +161,23 @@ def create_output_options_parent() -> argparse.ArgumentParser:
         help="Disable colored output",
     )
     return parser
+
+
+def reject_local_worker_flags_in_distributed(args: argparse.Namespace) -> bool:
+    """Reject compatibility worker knobs when distributed mode is enabled.
+
+    Returns ``True`` when arguments are valid, ``False`` when caller should exit.
+    """
+    if not getattr(args, "distributed", False):
+        return True
+    build_workers = getattr(args, "build_workers", 4)
+    verify_workers = getattr(args, "verify_workers", 4)
+    if build_workers != 4 or verify_workers != 4:
+        logger.error(
+            "--build-workers/--verify-workers are compatibility flags in modular "
+            "benchmark-ci commands and must remain at default values with "
+            "--distributed. Configure distributed capacity via evaluator flags "
+            "(for example: crsbench evaluator --ci --build-jobs/--verify-jobs)."
+        )
+        return False
+    return True
