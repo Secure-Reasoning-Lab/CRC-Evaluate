@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 from crsbench.validation import (
     validate_benchmark_from_string,
     validate_benchmark_suite_from_string,
@@ -1639,6 +1640,26 @@ class TestIntegrationAllConfigs:
         assert result.metadata["trials"] == 3
         assert result.metadata["max_total_time"] == 28800
         assert "difficulty_level" not in result.metadata
+
+    def test_validate_distributed_source_of_truth_example_yaml(self, monkeypatch):
+        """Validate docs distributed example as the canonical grouped config."""
+        monkeypatch.setenv("CRSBENCH_LLM_BASE_URL", "http://litellm:4000")
+        monkeypatch.setenv("CRSBENCH_LLM_UPSTREAM_BASE_URL", "http://litellm:4000")
+        monkeypatch.setenv("CRSBENCH_LLM_UPSTREAM_MASTER_KEY", "sk-test")
+        monkeypatch.setenv("CRSBENCH_LLM_UPSTREAM_API_KEY", "sk-test")
+
+        repo_root = Path(__file__).resolve().parents[1]
+        exp_path = repo_root / "docs" / "experiment-config-distributed-example.yaml"
+        result = validate_experiment_config(exp_path)
+        config = ExperimentConfig(**yaml.safe_load(exp_path.read_text()))
+
+        assert result.is_valid is True
+        assert config.task == "bugfixing"
+        assert config.mode == EvaluationMode.DELTA
+        assert config.benchmark_suite == "afc-final"
+        assert config.trials == 3
+        assert config.max_total_time == 28800
+        assert config.redis_host == "localhost:6379"
 
     def test_validate_suite_example_format(self):
         """Test validation of benchmark suite with proper format (not placeholders)."""
