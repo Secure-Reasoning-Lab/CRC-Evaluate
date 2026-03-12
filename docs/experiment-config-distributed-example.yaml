@@ -97,12 +97,24 @@ runtime:
   # litellm:
   #   skip: true
   # (top-level/runtime skip_litellm is still accepted for compatibility)
-  # Optional incremental-image policy group.
-  # inc_build:
-  #   policy: auto
-  #   registry: local
-  #   max_pull_bytes: 1073741824  # 1 GB (e.g., 1048576=1 MB)
-  #   pull_timeout_sec: 900
+  # Optional top-level incremental-image settings.
+  # These keys live at experiment-config top level, not under runtime.
+  # Prepare order:
+  #   local image -> remote pull -> local build fallback
+  # Policy meanings:
+  #   auto: local -> pull -> local build fallback
+  #   pull_only: local -> pull only
+  #   build_only: local -> local build only
+  # Size gate:
+  #   max_pull_bytes skips pull only when the known remote image size exceeds
+  #   the cap
+  # Timeout:
+  #   pull_timeout_sec bounds docker pull
+  # Top-level example:
+  # inc_image_policy: auto
+  # inc_image_registry: ghcr.io/team-atlanta/crsbench
+  # inc_image_max_pull_bytes: 1073741824  # 1 GiB
+  # inc_image_pull_timeout_sec: 900
   inputs:
     # runtime.inputs apply to both bugfinding and bugfixing runs.
     # Presence means enabled.

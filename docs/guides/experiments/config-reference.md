@@ -28,6 +28,50 @@ and examples.
 If a key is absent, it is disabled. If present, it is enabled and validated
 according to its fields.
 
+## Incremental Image Settings
+
+Incremental benchmark image settings are top-level experiment-config fields:
+
+- `inc_image_policy`
+- `inc_image_registry`
+- `inc_image_max_pull_bytes`
+- `inc_image_pull_timeout_sec`
+- `project_image_prefix`
+
+These settings control evaluator/build-side snapshot image preparation.
+
+Prepare order:
+
+- use the local inc-build image if already present
+- otherwise, if policy allows pull, try `docker pull`
+- otherwise, or if pull fails and policy allows local build, build locally
+- if incremental image preparation still fails, callers fall back to standard
+  non-inc builds
+
+Policy meanings:
+
+- `auto`: local -> pull -> local build fallback
+- `pull_only`: local -> pull only
+- `build_only`: local -> local build only
+
+Size gate:
+
+- `inc_image_max_pull_bytes` is a remote manifest size cap
+- if the remote size is known and exceeds the cap, CRSBench skips the pull
+- if the remote size cannot be determined, current behavior is fail-open and a
+  pull may still be attempted
+
+Pull timeout:
+
+- `inc_image_pull_timeout_sec` is propagated to the `docker pull` timeout
+
+Evaluator mode note:
+
+- config-pinned evaluator CLI mode normally performs a startup pre-build
+  enqueue phase
+- configless evaluator mode does not enqueue startup pre-builds; it consumes
+  build jobs lazily and verify work may trigger on-demand builds on cache miss
+
 ## Legacy-to-Grouped Field Mapping
 
 Current experiment configs should use the grouped contract. Older flat keys map

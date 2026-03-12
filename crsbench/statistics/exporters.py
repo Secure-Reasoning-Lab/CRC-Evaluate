@@ -67,6 +67,11 @@ def export_benchmarks_csv(
                     )
             elif include_no_vulns:
                 # Write single row for benchmark with no vulnerabilities
+                harness_name = (
+                    ";".join(info.harnesses)
+                    if info.harnesses
+                    else "(no vulnerable harness)"
+                )
                 writer.writerow(
                     [
                         info.name,
@@ -74,7 +79,7 @@ def export_benchmarks_csv(
                         info.repo_url,
                         info.mode,
                         info.language,
-                        "(no harness)",
+                        harness_name,
                         "(no vuln)",
                         0,
                         0,
@@ -107,9 +112,9 @@ def export_summary_csv(benchmarks: Sequence[BenchmarkInfo], output_path: Path) -
                 "Section",
                 "Category",
                 "Subcategory",
-                "# Benchmarks",
-                "# Unique",
-                "# Vulns",
+                "Primary Value",
+                "Secondary Value",
+                "Tertiary Value",
             ]
         )
         writer.writerow(
@@ -123,6 +128,16 @@ def export_summary_csv(benchmarks: Sequence[BenchmarkInfo], output_path: Path) -
             ]
         )
         writer.writerow(["Overall", "Harnesses", "", stats.total_harnesses, "", ""])
+        writer.writerow(
+            [
+                "Overall",
+                "Vulnerable Harnesses",
+                "",
+                stats.total_vulnerable_harnesses,
+                "",
+                "",
+            ]
+        )
         writer.writerow(["Overall", "POVs", "", stats.total_povs, "", ""])
         writer.writerow(["Overall", "Patches", "", stats.total_patches, "", ""])
         writer.writerow([])
@@ -154,7 +169,7 @@ def export_summary_csv(benchmarks: Sequence[BenchmarkInfo], output_path: Path) -
         writer.writerow(
             [
                 "Feature Support",
-                "RTS mode",
+                "RTS mode declared",
                 "",
                 stats.benchmarks_with_rts,
                 "",
@@ -173,10 +188,10 @@ def export_summary_csv(benchmarks: Sequence[BenchmarkInfo], output_path: Path) -
         )
         writer.writerow([])
 
-        # Vulns per Harness
+        # Vulns per vulnerable harness
         writer.writerow(
             [
-                "Vulns per Harness",
+                "Vulns per Vulnerable Harness",
                 "Average",
                 "",
                 f"{stats.avg_vulns_per_harness:.2f}",
@@ -185,17 +200,31 @@ def export_summary_csv(benchmarks: Sequence[BenchmarkInfo], output_path: Path) -
             ]
         )
         writer.writerow(
-            ["Vulns per Harness", "Min", "", stats.min_vulns_per_harness, "", ""]
+            [
+                "Vulns per Vulnerable Harness",
+                "Min",
+                "",
+                stats.min_vulns_per_harness,
+                "",
+                "",
+            ]
         )
         writer.writerow(
-            ["Vulns per Harness", "Max", "", stats.max_vulns_per_harness, "", ""]
+            [
+                "Vulns per Vulnerable Harness",
+                "Max",
+                "",
+                stats.max_vulns_per_harness,
+                "",
+                "",
+            ]
         )
         # Histogram
         for vuln_count in sorted(stats.vulns_per_harness_histogram.keys()):
             num_harnesses = stats.vulns_per_harness_histogram[vuln_count]
             writer.writerow(
                 [
-                    "Vulns per Harness Histogram",
+                    "Vulns per Vulnerable Harness Histogram",
                     f"{vuln_count} vulns",
                     "",
                     num_harnesses,
@@ -206,7 +235,7 @@ def export_summary_csv(benchmarks: Sequence[BenchmarkInfo], output_path: Path) -
         writer.writerow([])
 
         # By Source
-        for source in ["AFC", "ASC", "Team-Atlanta"]:
+        for source in sorted(stats.by_source):
             if source in stats.by_source:
                 cat = stats.by_source[source]
                 writer.writerow(
@@ -222,7 +251,7 @@ def export_summary_csv(benchmarks: Sequence[BenchmarkInfo], output_path: Path) -
         writer.writerow([])
 
         # By Mode
-        for mode in ["delta", "full"]:
+        for mode in sorted(stats.by_mode):
             if mode in stats.by_mode:
                 cat = stats.by_mode[mode]
                 writer.writerow(
@@ -252,39 +281,36 @@ def export_summary_csv(benchmarks: Sequence[BenchmarkInfo], output_path: Path) -
         writer.writerow([])
 
         # By Source x Mode
-        for source in ["AFC", "ASC", "Team-Atlanta"]:
-            for mode in ["delta", "full"]:
-                key = (source, mode)
-                if key in stats.source_mode:
-                    cat = stats.source_mode[key]
-                    writer.writerow(
-                        [
-                            "By Source x Mode",
-                            source,
-                            mode,
-                            cat.benchmarks,
-                            cat.unique_projects,
-                            cat.vulns,
-                        ]
-                    )
+        for source, mode in sorted(stats.source_mode):
+            key = (source, mode)
+            if key in stats.source_mode:
+                cat = stats.source_mode[key]
+                writer.writerow(
+                    [
+                        "By Source x Mode",
+                        source,
+                        mode,
+                        cat.benchmarks,
+                        cat.unique_projects,
+                        cat.vulns,
+                    ]
+                )
 
         # By Source x Language x Mode
-        for source in ["AFC", "ASC", "Team-Atlanta"]:
-            for lang in sorted(stats.by_language.keys()):
-                for mode in ["delta", "full"]:
-                    key = (source, lang, mode)
-                    if key in stats.source_language_mode:
-                        cat = stats.source_language_mode[key]
-                        writer.writerow(
-                            [
-                                "By Source x Language x Mode",
-                                source,
-                                f"{lang} {mode}",
-                                cat.benchmarks,
-                                cat.unique_projects,
-                                cat.vulns,
-                            ]
-                        )
+        for source, lang, mode in sorted(stats.source_language_mode):
+            key = (source, lang, mode)
+            if key in stats.source_language_mode:
+                cat = stats.source_language_mode[key]
+                writer.writerow(
+                    [
+                        "By Source x Language x Mode",
+                        source,
+                        f"{lang} {mode}",
+                        cat.benchmarks,
+                        cat.unique_projects,
+                        cat.vulns,
+                    ]
+                )
         writer.writerow([])
 
         # By CWE (sorted by count descending)
@@ -331,6 +357,7 @@ def print_summary(benchmarks: Sequence[BenchmarkInfo]) -> None:
     logger.info(f"  # of Unique Projects: {stats.unique_projects}")
     logger.info(f"  # of Vulns:           {stats.total_vulns}")
     logger.info(f"  # of Harnesses:       {stats.total_harnesses}")
+    logger.info(f"  # of Vuln Harnesses:  {stats.total_vulnerable_harnesses}")
     logger.info(f"  # of POVs:            {stats.total_povs}")
     logger.info(f"  # of Patches:         {stats.total_patches}")
     logger.info("")
@@ -347,7 +374,7 @@ def print_summary(benchmarks: Sequence[BenchmarkInfo]) -> None:
 
     logger.info("Feature Support:")
     logger.info(
-        f"  RTS mode enabled:        "
+        f"  RTS mode declared:       "
         f"{stats.benchmarks_with_rts}/{stats.total_benchmarks}"
     )
     logger.info(
@@ -363,7 +390,7 @@ def print_summary(benchmarks: Sequence[BenchmarkInfo]) -> None:
         f"  {'Source':<15} {'# Benchmarks':>12} {'# Unique':>10} {'# Vulns':>10}"
     )
     logger.info(f"  {'-' * 15} {'-' * 12} {'-' * 10} {'-' * 10}")
-    for source in ["AFC", "ASC", "Team-Atlanta"]:
+    for source in sorted(stats.by_source):
         if source in stats.by_source:
             cat = stats.by_source[source]
             logger.info(
@@ -380,7 +407,7 @@ def print_summary(benchmarks: Sequence[BenchmarkInfo]) -> None:
     logger.info("-" * 70)
     logger.info(f"  {'Mode':<15} {'# Benchmarks':>12} {'# Unique':>10} {'# Vulns':>10}")
     logger.info(f"  {'-' * 15} {'-' * 12} {'-' * 10} {'-' * 10}")
-    for mode in ["delta", "full"]:
+    for mode in sorted(stats.by_mode):
         if mode in stats.by_mode:
             cat = stats.by_mode[mode]
             logger.info(
@@ -416,14 +443,13 @@ def print_summary(benchmarks: Sequence[BenchmarkInfo]) -> None:
         f"  {'Source':<15} {'Mode':<10} {'# Benchmarks':>12} {'# Unique':>10} {'# Vulns':>10}"
     )
     logger.info(f"  {'-' * 15} {'-' * 10} {'-' * 12} {'-' * 10} {'-' * 10}")
-    for source in ["AFC", "ASC", "Team-Atlanta"]:
-        for mode in ["delta", "full"]:
-            key = (source, mode)
-            if key in stats.source_mode:
-                cat = stats.source_mode[key]
-                logger.info(
-                    f"  {source:<15} {mode:<10} {cat.benchmarks:>12} {cat.unique_projects:>10} {cat.vulns:>10}"
-                )
+    for source, mode in sorted(stats.source_mode):
+        key = (source, mode)
+        if key in stats.source_mode:
+            cat = stats.source_mode[key]
+            logger.info(
+                f"  {source:<15} {mode:<10} {cat.benchmarks:>12} {cat.unique_projects:>10} {cat.vulns:>10}"
+            )
     logger.info(f"  {'-' * 15} {'-' * 10} {'-' * 12} {'-' * 10} {'-' * 10}")
     logger.info(
         f"  {'Total':<15} {'':<10} {stats.total_benchmarks:>12} {stats.unique_projects:>10} {stats.total_vulns:>10}"
@@ -437,16 +463,14 @@ def print_summary(benchmarks: Sequence[BenchmarkInfo]) -> None:
         f"  {'Source':<15} {'Language':<10} {'Mode':<8} {'# Benchmarks':>12} {'# Unique':>10} {'# Vulns':>10}"
     )
     logger.info(f"  {'-' * 15} {'-' * 10} {'-' * 8} {'-' * 12} {'-' * 10} {'-' * 10}")
-    for source in ["AFC", "ASC", "Team-Atlanta"]:
-        for lang in sorted(stats.by_language.keys()):
-            for mode in ["delta", "full"]:
-                key = (source, lang, mode)
-                if key in stats.source_language_mode:
-                    cat = stats.source_language_mode[key]
-                    logger.info(
-                        f"  {source:<15} {lang:<10} {mode:<8} "
-                        f"{cat.benchmarks:>12} {cat.unique_projects:>10} {cat.vulns:>10}"
-                    )
+    for source, lang, mode in sorted(stats.source_language_mode):
+        key = (source, lang, mode)
+        if key in stats.source_language_mode:
+            cat = stats.source_language_mode[key]
+            logger.info(
+                f"  {source:<15} {lang:<10} {mode:<8} "
+                f"{cat.benchmarks:>12} {cat.unique_projects:>10} {cat.vulns:>10}"
+            )
     logger.info(f"  {'-' * 15} {'-' * 10} {'-' * 8} {'-' * 12} {'-' * 10} {'-' * 10}")
     logger.info(
         f"  {'Total':<15} {'':<10} {'':<8} "
@@ -455,13 +479,13 @@ def print_summary(benchmarks: Sequence[BenchmarkInfo]) -> None:
     logger.info("")
 
     logger.info("-" * 70)
-    logger.info("Vulns per Harness:")
+    logger.info("Vulns per Vulnerable Harness:")
     logger.info("-" * 70)
     logger.info(f"  Average: {stats.avg_vulns_per_harness:.2f}")
     logger.info(f"  Min:     {stats.min_vulns_per_harness}")
     logger.info(f"  Max:     {stats.max_vulns_per_harness}")
     logger.info("")
-    logger.info("  Histogram (vulns -> # harnesses):")
+    logger.info("  Histogram (vulns -> # vulnerable harnesses):")
     if stats.vulns_per_harness_histogram:
         max_count = max(stats.vulns_per_harness_histogram.values())
         max_bar_width = 40
