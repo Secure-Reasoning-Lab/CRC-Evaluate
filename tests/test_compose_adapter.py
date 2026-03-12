@@ -2392,6 +2392,7 @@ class TestBugFixInputStaging:
 
         staged_seed_files = {p.name for p in (trial_dir / "seeds").iterdir()}
         assert staged_seed_files == {"seed_a"}
+        assert not (trial_dir / "seeds" / "manifest.json").exists()
         assert (trial_dir / "ref.diff").exists()
 
     def test_prepare_runtime_inputs_stages_bug_candidates_from_sarif(

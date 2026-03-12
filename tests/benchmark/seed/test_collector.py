@@ -381,6 +381,7 @@ class TestCorpusCollectorIntegration:
         assert result.output_dir == benchmark_dir / ".aixcc" / "test-harness" / "seeds"
         assert result.output_dir.exists()
         assert (result.output_dir / "manifest.json").exists()
+        assert not (benchmark_dir / ".aixcc" / "test-harness" / "corpus").exists()
 
     def test_collection_force_overwrite(self, tmp_path: Path):
         """Test that --force overwrites existing corpus."""
@@ -521,6 +522,7 @@ class TestSeedCorpusPreparer:
         assert (output_dir / "hash1").exists()
         assert (output_dir / "hash2").exists()
         assert (output_dir / "hash3").exists()
+        assert not (output_dir / "manifest.json").exists()
 
     def test_prepare_with_time_filter(self, tmp_path: Path):
         """Test preparing corpus files with time filter."""
