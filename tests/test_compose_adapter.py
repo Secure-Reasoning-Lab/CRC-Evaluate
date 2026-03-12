@@ -1576,6 +1576,29 @@ class TestOssCrsAdapterBugFindFull:
         assert (output_dir / "povs" / "crash-001").exists()
         assert (output_dir / "povs" / "crash-002").exists()
 
+    def test_collect_results_copies_seeds_to_canonical_output_path(
+        self, tmp_path: Path
+    ) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+
+        seed_dir = tmp_path / "exchange" / "seed"
+        seed_dir.mkdir(parents=True)
+        (seed_dir / "seed-001").write_bytes(b"abc")
+        (seed_dir / "seed-002").write_bytes(b"xyz")
+
+        adapter._resolved_artifacts = {
+            "exchange_dir": {"seed": str(seed_dir)},
+        }
+        trial = tmp_path / "trial_out"
+
+        metadata = adapter.collect_results(trial, "harness1")
+
+        assert metadata["type"] == "bug-finding"
+        output_dir = Path(metadata["output_dir"])
+        assert (output_dir / "seeds" / "seed-001").exists()
+        assert (output_dir / "seeds" / "seed-002").exists()
+
     def test_collect_results_handles_missing_crs_in_artifacts(
         self, tmp_path: Path
     ) -> None:

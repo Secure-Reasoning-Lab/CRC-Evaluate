@@ -141,6 +141,17 @@ The CRS then uses these files as initial fuzzing seeds, potentially finding bugs
 
 Legacy keys (`seed_corpus_enabled`, `seed_corpus_max_time`) remain compatibility-only.
 
+## Experiment Output Contract
+
+`seed-import` reads corpus files from the trial output directory using:
+
+- current contract: `trial-N/output/seeds/`
+- legacy compatibility: `trial-N/output/corpus/`
+
+It does not scan nested `crs-build/run/...` directories. CRSBench's current
+`oss-crs` integration copies CRS-produced seeds into `trial/output/seeds/`
+before import.
+
 ## Best Practices
 
 1. **Collect from successful runs**: Seeds from runs that found vulnerabilities are most valuable

@@ -269,7 +269,7 @@ class TestCorpusCollector:
             collector._find_trial_dir()
 
     def test_find_corpus_dir_direct(self, tmp_path: Path):
-        """Test finding corpus in output/corpus/."""
+        """Test finding seeds in the canonical output/seeds/ location."""
         trial_dir = tmp_path / "trial-1"
         corpus_dir = trial_dir / "output" / "seeds"
         corpus_dir.mkdir(parents=True)
@@ -280,10 +280,10 @@ class TestCorpusCollector:
 
         assert found == corpus_dir
 
-    def test_find_corpus_dir_crs_build(self, tmp_path: Path):
-        """Test finding corpus in crs-build/run/ structure."""
+    def test_find_corpus_dir_legacy_output_corpus(self, tmp_path: Path):
+        """Test legacy compatibility for output/corpus/."""
         trial_dir = tmp_path / "trial-1"
-        corpus_dir = trial_dir / "crs-build" / "run" / "some" / "path" / "seeds"
+        corpus_dir = trial_dir / "output" / "corpus"
         corpus_dir.mkdir(parents=True)
         (corpus_dir / "file1").write_bytes(b"test")
 
