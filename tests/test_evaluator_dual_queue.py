@@ -1086,6 +1086,52 @@ class TestConfiglessEvaluator:
         assert result == 0
         assert mock_main.call_args.kwargs["verify_jobs"] == 8
 
+    def test_evaluator_cli_config_mode_unified_cli_drives_both_queues(self) -> None:
+        """Unified evaluator CLI flags apply to both build and verify by default."""
+        import argparse
+
+        from crsbench.distributed.cli.evaluator_command import run_evaluator
+
+        args = argparse.Namespace(
+            experiment_config="test.yaml",
+            ci=False,
+            verbose=False,
+            cpuset=None,
+            skip_cpuset=None,
+            cpu_tag=None,
+            jobs=3,
+            cores_per_job=5,
+            build_jobs=None,
+            build_cores_per_job=None,
+            verify_cores_per_job=None,
+            verify_jobs=None,
+            worker_name=None,
+            idle_timeout=None,
+            benchmarks_root=None,
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.evaluator.run_evaluator_main", return_value=0
+            ) as mock_main,
+            patch("crsbench.run_experiment.load_experiment_config") as mock_load,
+        ):
+            mock_config = MagicMock()
+            mock_config.experiment = "exp-1"
+            mock_config.redis_host = "localhost"
+            mock_config.evaluator = None
+            mock_config.resources = None
+            mock_load.return_value = mock_config
+
+            result = run_evaluator(args)
+
+        assert result == 0
+        kwargs = mock_main.call_args.kwargs
+        assert kwargs["build_jobs"] == 3
+        assert kwargs["build_cores_per_job"] == 5
+        assert kwargs["verify_jobs"] == 3
+        assert kwargs["verify_cores_per_job"] == 5
+
     def test_evaluator_cli_config_mode_prefers_unified_jobs_for_verify_fallback(
         self,
     ) -> None:
@@ -1581,6 +1627,26 @@ class TestRunEvaluatorCiMode:
 
 class TestEvaluatorCliValidation:
     """Tests for evaluator CLI argument validation."""
+
+    def test_jobs_rejects_zero(self) -> None:
+        """--jobs must be >= 1."""
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers(dest="command")
+        from crsbench.distributed.cli.evaluator_command import add_evaluator_subparser
+
+        add_evaluator_subparser(subparsers)
+        with pytest.raises(SystemExit):
+            parser.parse_args(["evaluator", "--jobs", "0"])
+
+    def test_cores_per_job_rejects_zero(self) -> None:
+        """--cores-per-job must be >= 1."""
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers(dest="command")
+        from crsbench.distributed.cli.evaluator_command import add_evaluator_subparser
+
+        add_evaluator_subparser(subparsers)
+        with pytest.raises(SystemExit):
+            parser.parse_args(["evaluator", "--cores-per-job", "0"])
 
     def test_build_jobs_rejects_zero(self) -> None:
         """--build-jobs must be >= 1."""

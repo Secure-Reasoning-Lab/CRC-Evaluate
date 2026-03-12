@@ -44,13 +44,13 @@ def add_evaluator_subparser(subparsers) -> None:
         epilog="""
 Examples:
   # Discover experiments from Redis registry (default)
-  %(prog)s --build-jobs 4
+  %(prog)s --jobs 4 --cores-per-job 4
 
   # Focus on a specific experiment
-  %(prog)s --experiment-config experiment-config.yaml --build-jobs 4
+  %(prog)s --experiment-config experiment-config.yaml --jobs 4 --cores-per-job 4
 
   # CI compatibility alias (legacy queues)
-  %(prog)s --ci --build-jobs 4
+  %(prog)s --ci --jobs 4 --cores-per-job 4
         """,
     )
 
@@ -107,11 +107,27 @@ Examples:
     )
 
     evaluator_parser.add_argument(
+        "--jobs",
+        type=_positive_int,
+        default=None,
+        metavar="N",
+        help="Default concurrent evaluator jobs used for both build and verify when split overrides are not set",
+    )
+
+    evaluator_parser.add_argument(
+        "--cores-per-job",
+        type=_positive_int,
+        default=None,
+        metavar="M",
+        help="Default CPUs per evaluator job used for both build and verify when split overrides are not set",
+    )
+
+    evaluator_parser.add_argument(
         "--build-jobs",
         type=_positive_int,
         default=None,
         metavar="N",
-        help="Max concurrent build jobs (default: from config/metadata, else 1)",
+        help="Advanced override for build job concurrency (defaults to --jobs when set)",
     )
 
     evaluator_parser.add_argument(
@@ -119,7 +135,7 @@ Examples:
         type=_positive_int,
         default=None,
         metavar="M",
-        help="CPUs per build job (default: from config/metadata, else 4)",
+        help="Advanced override for build CPUs per job (defaults to --cores-per-job when set)",
     )
 
     evaluator_parser.add_argument(
@@ -127,7 +143,7 @@ Examples:
         type=_positive_int,
         default=None,
         metavar="K",
-        help="Max concurrent verify jobs (default: from config/metadata, else derived from build concurrency)",
+        help="Advanced override for verify job concurrency (defaults to --jobs when set)",
     )
 
     evaluator_parser.add_argument(
@@ -135,7 +151,7 @@ Examples:
         type=_positive_int,
         default=None,
         metavar="M",
-        help="CPUs per verify job (default: from config/metadata, else 4)",
+        help="Advanced override for verify CPUs per job (defaults to --cores-per-job when set)",
     )
 
     evaluator_parser.add_argument(
@@ -184,6 +200,8 @@ def run_evaluator(args: argparse.Namespace) -> int:
     skip_cpus = getattr(args, "skip_cpuset", None)
     use_cpuset = cores is not None or skip_cpus is not None
     cpu_tag = getattr(args, "cpu_tag", None)
+    jobs = getattr(args, "jobs", None)
+    cores_per_job = getattr(args, "cores_per_job", None)
     build_jobs = args.build_jobs
     build_cores_per_job = args.build_cores_per_job
     verify_cores_per_job = args.verify_cores_per_job
@@ -214,10 +232,18 @@ def run_evaluator(args: argparse.Namespace) -> int:
             return run_evaluator_configless(
                 redis_host=redis_host,
                 worker_name=worker_name,
-                build_jobs=build_jobs,
-                build_cores_per_job=build_cores_per_job,
-                verify_jobs=verify_jobs,
-                verify_cores_per_job=verify_cores_per_job,
+                build_jobs=build_jobs if build_jobs is not None else jobs,
+                build_cores_per_job=(
+                    build_cores_per_job
+                    if build_cores_per_job is not None
+                    else cores_per_job
+                ),
+                verify_jobs=verify_jobs if verify_jobs is not None else jobs,
+                verify_cores_per_job=(
+                    verify_cores_per_job
+                    if verify_cores_per_job is not None
+                    else cores_per_job
+                ),
                 use_cpuset=use_cpuset,
                 cores=cores,
                 skip_cpus=skip_cpus,
@@ -244,10 +270,18 @@ def run_evaluator(args: argparse.Namespace) -> int:
             return run_evaluator_ci_mode(
                 redis_host=redis_host,
                 worker_name=worker_name,
-                build_jobs=build_jobs,
-                build_cores_per_job=build_cores_per_job,
-                verify_jobs=verify_jobs,
-                verify_cores_per_job=verify_cores_per_job,
+                build_jobs=build_jobs if build_jobs is not None else jobs,
+                build_cores_per_job=(
+                    build_cores_per_job
+                    if build_cores_per_job is not None
+                    else cores_per_job
+                ),
+                verify_jobs=verify_jobs if verify_jobs is not None else jobs,
+                verify_cores_per_job=(
+                    verify_cores_per_job
+                    if verify_cores_per_job is not None
+                    else cores_per_job
+                ),
                 use_cpuset=use_cpuset,
                 cores=cores,
                 skip_cpus=skip_cpus,
@@ -304,42 +338,58 @@ def run_evaluator(args: argparse.Namespace) -> int:
             build_jobs
             if build_jobs is not None
             else (
-                evaluator_cfg.build_jobs
-                if evaluator_cfg and evaluator_cfg.build_jobs is not None
-                else default_jobs
+                jobs
+                if jobs is not None
+                else (
+                    evaluator_cfg.build_jobs
+                    if evaluator_cfg and evaluator_cfg.build_jobs is not None
+                    else default_jobs
+                )
             )
         )
         resolved_build_cores_per_job = (
             build_cores_per_job
             if build_cores_per_job is not None
             else (
-                evaluator_cfg.build_cores_per_job
-                if evaluator_cfg and evaluator_cfg.build_cores_per_job is not None
-                else default_cores_per_job
+                cores_per_job
+                if cores_per_job is not None
+                else (
+                    evaluator_cfg.build_cores_per_job
+                    if evaluator_cfg and evaluator_cfg.build_cores_per_job is not None
+                    else default_cores_per_job
+                )
             )
         )
         resolved_verify_cores_per_job = (
             verify_cores_per_job
             if verify_cores_per_job is not None
             else (
-                evaluator_cfg.verify_cores_per_job
-                if evaluator_cfg and evaluator_cfg.verify_cores_per_job is not None
-                else default_cores_per_job
+                cores_per_job
+                if cores_per_job is not None
+                else (
+                    evaluator_cfg.verify_cores_per_job
+                    if evaluator_cfg and evaluator_cfg.verify_cores_per_job is not None
+                    else default_cores_per_job
+                )
             )
         )
         resolved_verify_jobs = (
             verify_jobs
             if verify_jobs is not None
             else (
-                evaluator_cfg.verify_jobs
-                if evaluator_cfg and evaluator_cfg.verify_jobs is not None
+                jobs
+                if jobs is not None
                 else (
-                    default_jobs
-                    if evaluator_cfg and evaluator_cfg.jobs is not None
-                    else max(
-                        1,
-                        (resolved_build_jobs * resolved_build_cores_per_job)
-                        // resolved_verify_cores_per_job,
+                    evaluator_cfg.verify_jobs
+                    if evaluator_cfg and evaluator_cfg.verify_jobs is not None
+                    else (
+                        default_jobs
+                        if evaluator_cfg and evaluator_cfg.jobs is not None
+                        else max(
+                            1,
+                            (resolved_build_jobs * resolved_build_cores_per_job)
+                            // resolved_verify_cores_per_job,
+                        )
                     )
                 )
             )

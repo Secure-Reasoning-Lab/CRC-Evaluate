@@ -369,6 +369,34 @@ class TestCiCliFlags:
         args = parser.parse_args(["worker"])
         assert not hasattr(args, "verify_jobs")
 
+    def test_worker_defaults_to_continuous(self) -> None:
+        """Worker defaults to continuous mode unless explicitly disabled."""
+        import argparse
+
+        from crsbench.distributed.cli.worker_command import (
+            add_worker_subparser,
+        )
+
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers()
+        add_worker_subparser(subparsers)
+        args = parser.parse_args(["worker"])
+        assert args.continuous is None
+
+    def test_worker_accepts_no_continuous(self) -> None:
+        """Worker exposes an explicit one-shot mode override."""
+        import argparse
+
+        from crsbench.distributed.cli.worker_command import (
+            add_worker_subparser,
+        )
+
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers()
+        add_worker_subparser(subparsers)
+        args = parser.parse_args(["worker", "--no-continuous"])
+        assert args.continuous is False
+
     def test_evaluator_ci_flag(self) -> None:
         """Evaluator accepts --ci flag."""
         import argparse
@@ -400,6 +428,50 @@ class TestCiCliFlags:
 
 class TestEvaluatorCommandCiFlags:
     """Test evaluator CLI flag changes."""
+
+    def test_jobs_flag_exists(self) -> None:
+        """Unified --jobs flag is available on evaluator."""
+        import argparse
+
+        from crsbench.distributed.cli.evaluator_command import (
+            add_evaluator_subparser,
+        )
+
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers()
+        add_evaluator_subparser(subparsers)
+
+        args = parser.parse_args(
+            [
+                "evaluator",
+                "--experiment-config",
+                "test.yaml",
+                "--jobs",
+                "16",
+            ]
+        )
+        assert args.jobs == 16
+
+    def test_cores_per_job_default(self) -> None:
+        """Unified --cores-per-job is unset by parser and resolved later."""
+        import argparse
+
+        from crsbench.distributed.cli.evaluator_command import (
+            add_evaluator_subparser,
+        )
+
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers()
+        add_evaluator_subparser(subparsers)
+
+        args = parser.parse_args(
+            [
+                "evaluator",
+                "--experiment-config",
+                "test.yaml",
+            ]
+        )
+        assert args.cores_per_job is None
 
     def test_build_jobs_flag_exists(self) -> None:
         """--build-jobs flag is available on evaluator."""
