@@ -14,8 +14,7 @@ Use this page for CI queue topology and evaluator deployment.
 uv run python scripts/valkey-helper.py --password start
 
 uv run crsbench evaluator --ci \
-  --build-jobs 8 --build-cores-per-job 16 \
-  --verify-jobs 8 --verify-cores-per-job 16 \
+  --jobs 8 --cores-per-job 16 \
   --idle-timeout 0
 
 uv run crsbench benchmark ci all --all \

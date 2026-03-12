@@ -60,7 +60,7 @@ If you want a fuller starting point, use:
 In a separate terminal, start at least one worker before submitting the run:
 
 ```bash
-uv run crsbench worker --experiment-config path/to/config.yaml --continuous
+uv run crsbench worker --experiment-config path/to/config.yaml
 ```
 
 ## 4. Submit the Experiment

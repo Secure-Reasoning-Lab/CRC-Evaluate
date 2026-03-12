@@ -83,13 +83,13 @@ uv run python scripts/valkey-helper.py --password start
 uv run python scripts/valkey-helper.py start
 
 # 2. Start worker (separate terminal; required for trial progress)
-uv run crsbench worker --experiment-config config.yaml --continuous
+uv run crsbench worker --experiment-config config.yaml
 
 # 3. Run orchestrator (enqueues jobs and monitors)
 uv run crsbench run --experiment-config config.yaml
 
 # 4. (Optional) Start evaluator for build/verify queue processing
-uv run crsbench evaluator --experiment-config config.yaml
+uv run crsbench evaluator --experiment-config config.yaml --jobs 4 --cores-per-job 4
 
 # 5. (Optional) Generate report after completion
 uv run python scripts/cpv_report.py /path/to/experiment-data --csv
@@ -130,7 +130,7 @@ For modular benchmark-ci commands (`crsbench benchmark ci all|build|pov|patch|co
 
 - `--exit-on-error` is currently a compatibility flag (accepted, no-op).
 - `--build-workers` / `--verify-workers` are compatibility flags (accepted, currently not used by submitter scheduling).
-- With `--distributed`, keep `--build-workers` / `--verify-workers` at defaults; set concurrency on evaluator processes instead (`crsbench evaluator --ci --build-jobs ... --verify-jobs ...`).
+- With `--distributed`, keep `--build-workers` / `--verify-workers` at defaults; set concurrency on evaluator processes instead (`crsbench evaluator --ci --jobs ... --cores-per-job ...`, or split `--build-*` / `--verify-*` only for asymmetric tuning).
 - In `crsbench evaluator --ci`, `--worker-name` defaults to `ci-evaluator` when omitted.
 
 ## Full Workflow Example (Production Example)
@@ -144,19 +144,14 @@ uv run python scripts/valkey-helper.py --password start
 
 # 2. Start worker (cores 0-111; explicit concurrency shown)
 uv run crsbench worker \
-    --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml \
     --jobs 7 \
     --cores-per-job 16 \
-    --cpuset 0-111 \
-    --continuous
+    --cpuset 0-111
 
 # 3. (Optional) Start evaluator (cores 112-127; explicit concurrency shown)
 uv run crsbench evaluator \
-    --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml \
-    --build-jobs 4 \
-    --build-cores-per-job 4 \
-    --verify-jobs 4 \
-    --verify-cores-per-job 4 \
+    --jobs 4 \
+    --cores-per-job 4 \
     --cpuset 112-127
 
 # 4. Run orchestrator (enqueues jobs, monitors progress)
@@ -169,7 +164,7 @@ uv run python scripts/cpv_report.py /path/to/experiment-data --csv
 **Core allocation breakdown:**
 ```
 Cores 0-111  (112 cores) → Worker: 7 jobs × 16 cores/trial
-Cores 112-127 (16 cores) → Evaluator: 4 build jobs × 4 cores/job and 4 verify jobs × 4 cores/job in this example
+Cores 112-127 (16 cores) → Evaluator: 4 jobs × 4 cores/job in this example
 ```
 
 ## Configuration
@@ -329,16 +324,20 @@ The evaluator builds variant Docker images (vulnerable, allpatched, CPV) and ver
 ```bash
 uv run crsbench evaluator \
   --experiment-config config.yaml \
+  --jobs 4 \
+  --cores-per-job 4 \
   --cpuset 112-127
 ```
 
 | Argument | Description | Default |
 |----------|-------------|---------|
 | `--experiment-config` | Path to experiment config YAML | Optional (configless discovery when omitted) |
-| `--build-jobs` | Max concurrent build jobs | From evaluator config/default policy |
-| `--build-cores-per-job` | CPUs per build job | From evaluator config/default policy |
+| `--jobs` | Default concurrent evaluator jobs used for both build and verify when split overrides are not set | From evaluator config/default policy |
+| `--cores-per-job` | Default CPUs per evaluator job used for both build and verify when split overrides are not set | From evaluator config/default policy |
+| `--build-jobs` | Advanced split override: max concurrent build jobs | From evaluator config/default policy |
+| `--build-cores-per-job` | Advanced split override: CPUs per build job | From evaluator config/default policy |
 | `--verify-jobs` | Advanced split override: max concurrent verify jobs | From config/default policy |
-| `--verify-cores-per-job` | CPUs per verify job | From evaluator config/default policy |
+| `--verify-cores-per-job` | Advanced split override: CPUs per verify job | From evaluator config/default policy |
 | `--cpuset` | CPU cores (count or range, e.g., `112-127`) | CPU affinity disabled unless set |
 | `--skip-cpuset` | CPUs to exclude (e.g., `0-3,8-11`) | None |
 | `--cpu-tag` | Run only jobs matching this capability tag | None |
@@ -366,8 +365,7 @@ Workers pull trial jobs from the queue and execute CRS against benchmarks.
 ```bash
 uv run crsbench worker \
   --experiment-config config.yaml \
-  --cpuset 0-111 \
-  --continuous
+  --cpuset 0-111
 ```
 
 | Argument | Description | Default |
@@ -378,7 +376,8 @@ uv run crsbench worker \
 | `--cpuset` | CPU cores (count or range, e.g., `0-111`) | CPU affinity disabled unless set |
 | `--skip-cpuset` | CPUs to exclude | None |
 | `--cpu-tag` | Run only jobs matching this capability tag | None |
-| `--continuous` | Keep running after queue empties | `false` |
+| `--continuous` | Keep running after queue empties | Enabled by default |
+| `--no-continuous` | Exit after the current backlog drains | Off |
 | `--worker-name` | Worker name for identification | Hostname |
 
 ## Multi-Machine Setup
@@ -410,8 +409,7 @@ scp user@machine-a:/path/to/CRSBench/.env /path/to/CRSBench/.env
 scripts/orchestrate-workers.sh setup
 
 # Start worker (set CRSBENCH_REDIS_HOST in .env for Machine A)
-uv run crsbench worker --experiment-config config.yaml \
-    --continuous
+uv run crsbench worker --experiment-config config.yaml
 ```
 
 After all trials complete, collect experiment data back to the orchestrator:
@@ -438,7 +436,7 @@ uv run crsbench run --experiment-config config.yaml
 ssh -N -L 6379:localhost:6379 user@machine-a &
 
 # Start worker (set CRSBENCH_REDIS_HOST=localhost:6379 via tunnel)
-uv run crsbench worker --experiment-config config.yaml --continuous
+uv run crsbench worker --experiment-config config.yaml
 ```
 
 For persistent tunnels during long experiments:
@@ -549,7 +547,7 @@ Smoke bug-fixing suites currently run with LiteLLM tracking enabled in the sanit
 |---------|-------|-----|
 | Workers not picking up jobs | Queue name mismatch | Verify `experiment` in config is identical on orchestrator and workers |
 | "Redis not available" | Valkey not running or wrong host | `uv run python scripts/valkey-helper.py status`; check `redis_host` in config |
-| Workers exit immediately | Queue is empty (burst mode) | Use `--continuous` flag to keep workers running |
+| Workers exit immediately | Worker was started with `--no-continuous` and the queue drained | Omit `--no-continuous` for the default continuous mode |
 | Stale jobs from previous run | Queue not cleaned | `uv run python scripts/valkey-helper.py clean <experiment>` |
 | `CRSBENCH_LLM_UPSTREAM_BASE_URL not set` | LiteLLM env contract is incomplete for this trial | Set `skip_litellm: true` when LLM is not needed, or provide required `CRSBENCH_LLM_*` vars |
 

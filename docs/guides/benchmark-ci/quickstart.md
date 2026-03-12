@@ -18,7 +18,7 @@ uv run crsbench benchmark ci all --all --output-dir ./ci-results
 
 ```bash
 uv run python scripts/valkey-helper.py --password start
-uv run crsbench evaluator --ci --build-jobs 8 --build-cores-per-job 16 --verify-jobs 8 --verify-cores-per-job 16
+uv run crsbench evaluator --ci --jobs 8 --cores-per-job 16
 uv run crsbench benchmark ci all --all --distributed --mode snapshot --output-dir ./ci-output
 ```
 

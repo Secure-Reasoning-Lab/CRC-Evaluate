@@ -24,35 +24,38 @@ crsbench download --all --no-ground-truth   # skip .aixcc/ ground truth
 crsbench download --benchmark-suite sanity  # small test suite
 ```
 
-Production-style single-machine queue-backed example (128 cores):
+Production-style single-machine distributed example (128 cores, AFC bugfixing):
 
 ```bash
-python scripts/valkey-helper.py --password start  # auto-generates password, saved to .env
+uv run python scripts/valkey-helper.py start
 
-# Terminal 1: worker
-crsbench worker \
-  --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml \
-  --jobs 7 \
-  --cores-per-job 16 \
-  --cpuset 0-111 \
-  --continuous
+# Terminal 1: orchestrator
+uv run crsbench run \
+  --experiment-config experiment-configs/afc-final-bugfixing/crs-codex-gpt-5-4-full.yaml \
+  --distributed
 
-# Terminal 2: evaluator (optional for normal CRS runs; use for real-time build/verify processing)
-crsbench evaluator \
-  --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml \
-  --build-jobs 4 \
-  --build-cores-per-job 4 \
-  --verify-jobs 4 \
-  --verify-cores-per-job 4 \
-  --cpuset 112-127
+# Terminal 2: configless worker
+uv run crsbench worker \
+  --jobs 12 \
+  --cores-per-job 8 \
+  --cpuset 0-95
 
-# Terminal 3: orchestrator
-crsbench run \
-  --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml
+# Terminal 3: configless evaluator (optional; use for real-time build/verify processing)
+uv run crsbench evaluator \
+  --jobs 4 \
+  --cores-per-job 8 \
+  --cpuset 96-127
 
 # Clean stale queue state for one experiment (use the `experiment:` name from config)
-crsbench queue clean --experiment sanity-test --yes
+uv run crsbench queue clean --experiment afc-all-crs-codex-gpt-5-4-full --yes
 ```
+
+Notes:
+- In this example, `run --distributed` registers experiment metadata in Redis, and the configless worker/evaluator pick up queue and resource requirements from that registry.
+- For `experiment-configs/afc-final-bugfixing/crs-codex-gpt-5-4-full.yaml`, `resources.cores_per_trial` is `8`, so the worker should use `--cores-per-job 8`.
+- `crsbench worker` is continuous by default. Use `--no-continuous` only when you want it to exit after the current backlog drains.
+- `crsbench evaluator --jobs N --cores-per-job M` is the primary CLI. Split `--build-*` / `--verify-*` flags remain available only for advanced asymmetric setups.
+- Add `--queue-mode fresh` to the `run` command when you want a clean rerun and do not want to resume stale queued or started jobs.
 
 `crsbench prepare` typical duration:
 - warm cache: ~10-60s

@@ -127,7 +127,7 @@ host but still use the queue-backed distributed model.
 
 ```bash
 uv run python scripts/valkey-helper.py start
-uv run crsbench worker --experiment-config config.yaml --continuous
+uv run crsbench worker --experiment-config config.yaml
 uv run crsbench run --experiment-config config.yaml
 ```
 
