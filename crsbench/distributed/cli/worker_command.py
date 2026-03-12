@@ -35,14 +35,14 @@ def add_worker_subparser(subparsers) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Discover experiments from Redis registry (default)
-  %(prog)s --continuous
+  # Discover experiments from Redis registry (default continuous mode)
+  %(prog)s
 
-  # Focus on a specific experiment
-  %(prog)s --experiment-config my-experiment.yaml --continuous
+  # Focus on a specific experiment (default continuous mode)
+  %(prog)s --experiment-config my-experiment.yaml
 
   # With CPU affinity
-  %(prog)s --continuous --cpuset 16-47
+  %(prog)s --cpuset 16-47
         """,
     )
 
@@ -76,10 +76,21 @@ Examples:
         help="CPUs per worker job when cpuset supervisor is used (CLI override)",
     )
 
-    worker_parser.add_argument(
+    continuous_group = worker_parser.add_mutually_exclusive_group()
+
+    continuous_group.add_argument(
         "--continuous",
         action="store_true",
-        help="Run in continuous mode (never exits, keeps processing jobs)",
+        default=None,
+        help="Run in continuous mode (default behavior)",
+    )
+
+    continuous_group.add_argument(
+        "--no-continuous",
+        action="store_false",
+        dest="continuous",
+        default=None,
+        help="Exit after the current backlog drains instead of polling continuously",
     )
 
     worker_parser.add_argument(
@@ -168,7 +179,7 @@ def run_worker(args: argparse.Namespace) -> int:
                 cores=cores,
                 skip_cpus=skip_cpus,
                 cpu_tag=cpu_tag,
-                continuous=args.continuous,
+                continuous=True if args.continuous is not False else False,
                 jobs_override=jobs_override,
                 cores_per_job_override=cores_per_job_override,
                 log_level=log_level,
@@ -244,8 +255,10 @@ def run_worker(args: argparse.Namespace) -> int:
             else default_cores_per_job
         )
     )
-    continuous = args.continuous or (
-        worker_config.continuous if worker_config else False
+    continuous = (
+        args.continuous
+        if args.continuous is not None
+        else (worker_config.continuous if worker_config else True)
     )
     experiment_name = config.experiment
     from crsbench.distributed.queue import resolve_queue_names

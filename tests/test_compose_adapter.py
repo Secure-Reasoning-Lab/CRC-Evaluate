@@ -1470,6 +1470,29 @@ class TestOssCrsAdapterBugFindFull:
         prune_calls = [c for c in all_calls if "prune" in c]
         assert len(prune_calls) == 0
 
+    @patch("crsbench.evaluation.adapter.compose_common.logger.warning")
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_docker_cleanup_warning_interpolates_details(
+        self,
+        mock_run: MagicMock,
+        mock_warning: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        compose_file = tmp_path / "docker-compose.yml"
+        compose_file.write_text("version: '3'")
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=7,
+            stdout="compose stdout",
+            stderr="compose stderr",
+        )
+
+        docker_compose_down_cleanup(tmp_path)
+
+        mock_warning.assert_called_once_with(
+            f"docker compose down failed for {compose_file} (rc=7): compose stderr"
+        )
+
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
     def test_run_passes_stop_event(

@@ -132,7 +132,8 @@ crsbench benchmark ci all --all --mode full
 modular benchmark-ci commands and are currently not used by submitter
 scheduling. In distributed mode, they must remain default values; distributed
 parallelism is controlled by evaluator worker flags (`crsbench evaluator --ci
---build-jobs ... --verify-jobs ...`).
+--jobs ... --cores-per-job ...`, with split `--build-*` / `--verify-*`
+overrides only for asymmetric tuning).
 
 ### Execution Flow (Local)
 
@@ -171,8 +172,7 @@ python scripts/valkey-helper.py --password start
 
 # 2) Start evaluator (single machine, recommended)
 crsbench evaluator --ci \
-  --build-jobs 8 --build-cores-per-job 16 \
-  --verify-jobs 8 --verify-cores-per-job 16 \
+  --jobs 8 --cores-per-job 16 \
   --idle-timeout 0
 
 # 3) Submit CI jobs from submitter machine
@@ -253,8 +253,7 @@ For CI, evaluator runs a dual-queue supervisor that processes build jobs
 
 ```bash
 # Recommended default: single evaluator machine for CI.
-uv run crsbench evaluator --ci --build-jobs 8 --build-cores-per-job 16 \
-  --verify-jobs 8 --verify-cores-per-job 16
+uv run crsbench evaluator --ci --jobs 8 --cores-per-job 16
 ```
 
 **Evaluator options:**
@@ -262,10 +261,12 @@ uv run crsbench evaluator --ci --build-jobs 8 --build-cores-per-job 16 \
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--ci` | Use CI queue mode (build + verify) | Required |
-| `--build-jobs N` | Max concurrent build jobs | 1 |
-| `--build-cores-per-job M` | CPUs per build job | 4 |
-| `--verify-jobs K` | Max concurrent verify/test jobs | build-jobs * build-cores / verify-cores |
-| `--verify-cores-per-job M` | CPUs per verify/test job | 4 |
+| `--jobs N` | Default concurrent evaluator jobs used for both build and verify when split overrides are not set | 1 |
+| `--cores-per-job M` | Default CPUs per evaluator job used for both build and verify when split overrides are not set | 4 |
+| `--build-jobs N` | Advanced split override: max concurrent build jobs | from `--jobs` |
+| `--build-cores-per-job M` | Advanced split override: CPUs per build job | from `--cores-per-job` |
+| `--verify-jobs K` | Advanced split override: max concurrent verify/test jobs | from `--jobs` or derived policy |
+| `--verify-cores-per-job M` | Advanced split override: CPUs per verify/test job | from `--cores-per-job` |
 | `--cpuset CPUSET` | CPU count or cpuset range (e.g., `0-63`) | affinity disabled unless set |
 | `--skip-cpuset CPUSET` | CPUs to exclude (e.g., `0-3`) | none |
 | `--idle-timeout N` | Exit after N idle seconds (0 = run indefinitely) | 0 |

@@ -169,6 +169,40 @@ def test_stop_managers_waits_remaining_llm_settle_time(monkeypatch) -> None:
     snapshot_manager.refresh_final_symlink.assert_called_once()
 
 
+def test_stop_managers_logs_interpolated_llm_settle_time(monkeypatch) -> None:
+    adapter = MagicMock()
+    adapter.mode = "bug-fixing"
+    runner = BenchmarkRunner(
+        adapter=adapter,
+        snapshot_period=0,
+        llm_tracker=MagicMock(),
+        llm_api_key="key",
+        llm_trial_id="trial",
+        llm_accounting_settle_seconds=60,
+    )
+    snapshot_manager = MagicMock()
+    snapshot_thread = MagicMock()
+    snapshot_thread.is_alive.return_value = False
+    logger_info = MagicMock()
+    sleep_mock = MagicMock()
+    runner.logger.info = logger_info
+    monkeypatch.setattr("crsbench.evaluation.runner.time.monotonic", lambda: 130.0)
+    monkeypatch.setattr("crsbench.evaluation.runner.time.sleep", sleep_mock)
+
+    runner._stop_managers(
+        snapshot_manager=snapshot_manager,
+        snapshot_thread=snapshot_thread,
+        coverage_manager=None,
+        coverage_thread=None,
+        harness_name="fuzz_target",
+        crs_run_end_monotonic=100.0,
+    )
+
+    logger_info.assert_any_call(
+        "Waiting 30.0s for LiteLLM accounting to settle before final snapshot"
+    )
+
+
 def test_stop_managers_skips_llm_settle_without_tracking(monkeypatch) -> None:
     runner = _make_runner()
     snapshot_manager = MagicMock()

@@ -907,7 +907,7 @@ class WorkerConfig(BaseModel):
         "Falls back to top-level redis_host if not set.",
     )
     continuous: bool = Field(
-        default=False,
+        default=True,
         description="Whether workers should run continuously or exit after one job",
     )
     worker_name: Optional[str] = Field(

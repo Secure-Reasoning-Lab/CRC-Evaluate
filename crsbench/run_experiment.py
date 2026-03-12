@@ -1283,6 +1283,27 @@ def monitor_jobs(
     )
 
 
+def _get_experiment_queue_stats(queue, experiment_name: str) -> dict:
+    """Return experiment-scoped queue counts plus global worker visibility.
+
+    In flat-queue mode, queue registries may contain jobs from unrelated
+    experiments. The progress monitor should therefore count queued/started/
+    finished/failed jobs only for the target experiment while still reporting
+    the total number of connected workers for operator visibility.
+    """
+    from crsbench.distributed.queue import get_existing_trials, get_queue_stats
+
+    global_stats = get_queue_stats(queue)
+    existing = get_existing_trials(queue, experiment_name=experiment_name)
+    return {
+        "queued": len(existing["queued"]),
+        "started": len(existing["started"]),
+        "finished": len(existing["finished"]),
+        "failed": len(existing["failed"]),
+        "workers": global_stats.get("workers", 0),
+    }
+
+
 def _monitor_jobs_basic(
     queue,
     job_list: List,
@@ -1293,8 +1314,6 @@ def _monitor_jobs_basic(
     registry=None,
 ) -> List[TrialResult]:
     """Basic job monitoring without Rich UI."""
-    from crsbench.distributed.queue import get_queue_stats
-
     last_renew = time.monotonic()
     logger.info(f"\nMonitoring {len(job_list)} jobs for experiment: {experiment_name}")
 
@@ -1302,7 +1321,7 @@ def _monitor_jobs_basic(
     marked_jobs: set[str] = set()
 
     while True:
-        stats = get_queue_stats(queue)
+        stats = _get_experiment_queue_stats(queue, experiment_name)
 
         # Display stats
         log_section(f"Experiment: {experiment_name}", width=60)
@@ -1475,18 +1494,16 @@ def _monitor_jobs_rich(
     from rich.live import Live
     from rich.table import Table
 
-    from crsbench.distributed.queue import get_queue_stats
-
     console = Console()
 
     # Track jobs that have already had markers written
     marked_jobs: set[str] = set()
 
     def generate_status_table():
-        stats = get_queue_stats(queue)
+        stats = _get_experiment_queue_stats(queue, experiment_name)
 
         # Debug: log queue info
-        logger.debug(f"Queue name: crsbench_{experiment_name}, stats: {stats}")
+        logger.debug(f"Experiment queue stats for {experiment_name}: {stats}")
 
         # Queue status table
         table = Table(title=f"Experiment: {experiment_name}")

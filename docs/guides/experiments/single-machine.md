@@ -8,7 +8,7 @@ real-time build/verify processing in the same run environment.
 
 ```bash
 uv run python scripts/valkey-helper.py start
-uv run crsbench worker --experiment-config config.yaml --continuous
+uv run crsbench worker --experiment-config config.yaml
 uv run crsbench run --experiment-config config.yaml
 ```
 
@@ -24,7 +24,7 @@ for example when validating discovered artifacts in real time or when sharing a
 host with benchmark-CI-style workflows.
 
 ```bash
-uv run crsbench evaluator --experiment-config config.yaml
+uv run crsbench evaluator --experiment-config config.yaml --jobs 4 --cores-per-job 4
 ```
 
 ## CPU Allocation

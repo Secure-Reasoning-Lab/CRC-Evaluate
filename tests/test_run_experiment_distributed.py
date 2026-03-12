@@ -8,6 +8,7 @@ from crsbench.distributed.jobs import _build_trial_output_path
 from crsbench.distributed.runtime_session import LockContentionError
 from crsbench.run_experiment import (
     Trial,
+    _get_experiment_queue_stats,
     _monitor_jobs_basic,
     _monitor_jobs_rich,
     _prepare_trial_dir_for_retry,
@@ -502,6 +503,44 @@ def test_monitor_jobs_basic_includes_finished_none_result() -> None:
     assert results[0].success is False
     assert results[0].error_type == "MissingJobResult"
     marker.assert_called_once()
+
+
+def test_get_experiment_queue_stats_uses_experiment_scoped_counts() -> None:
+    """Monitor stats must ignore unrelated jobs in the shared flat queue."""
+    queue = MagicMock()
+
+    with (
+        patch(
+            "crsbench.distributed.queue.get_queue_stats",
+            return_value={
+                "queued": 51,
+                "started": 12,
+                "finished": 3,
+                "failed": 0,
+                "workers": 12,
+            },
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={
+                "queued": {f"q{i}": MagicMock() for i in range(51)},
+                "started": {f"s{i}": MagicMock() for i in range(12)},
+                "finished": {},
+                "failed": {},
+                "deferred": {},
+                "scheduled": {},
+            },
+        ),
+    ):
+        stats = _get_experiment_queue_stats(queue, "afc-all-crs-codex-gpt-5-4-full")
+
+    assert stats == {
+        "queued": 51,
+        "started": 12,
+        "finished": 0,
+        "failed": 0,
+        "workers": 12,
+    }
 
 
 def test_monitor_jobs_rich_includes_finished_none_result() -> None:

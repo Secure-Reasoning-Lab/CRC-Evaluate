@@ -154,7 +154,8 @@ storage:
 worker:
   jobs: 4
   cores_per_job: 8
-  continuous: true
+  # continuous defaults to true; set false only for one-shot drain-and-exit runs.
+  # continuous: true
   # Optional stable worker identifier in logs/metadata.
   # worker_name: worker-a
   # CPU placement is controlled by worker CLI:
@@ -177,8 +178,17 @@ worker:
 evaluator:
   jobs: 4
   cores_per_job: 4
+  # Primary convention: use unified jobs/cores_per_job for symmetric build/verify
+  # capacity. CLI follows the same convention:
+  #   crsbench evaluator --jobs 4 --cores-per-job 4 ...
+  # Advanced asymmetric overrides remain available when build and verify need
+  # different concurrency or CPU sizing:
+  # build_jobs: 4
+  # build_cores_per_job: 4
+  # verify_jobs: 8
+  # verify_cores_per_job: 2
   # CPU placement is controlled by evaluator CLI:
-  #   crsbench evaluator --cpuset ... --skip-cpuset ...
+  #   crsbench evaluator --jobs ... --cores-per-job ... --cpuset ... --skip-cpuset ...
   # (not configured in experiment YAML).
   # Optional evaluator capability tag for matching cpu_tag jobs.
   # cpu_tag: amd-epyc
