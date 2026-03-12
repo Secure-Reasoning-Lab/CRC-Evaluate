@@ -1529,8 +1529,8 @@ class BenchmarkRunner:
             return
 
         self.logger.info(
-            "Waiting %.1fs for LiteLLM accounting to settle before final snapshot",
-            remaining,
+            "Waiting "
+            f"{remaining:.1f}s for LiteLLM accounting to settle before final snapshot"
         )
         time.sleep(remaining)
 

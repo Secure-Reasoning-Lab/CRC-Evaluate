@@ -291,10 +291,8 @@ def docker_compose_down_cleanup(work_dir: Path) -> None:
                 if proc.returncode != 0:
                     detail = proc.stderr or proc.stdout or "<no output>"
                     logger.warning(
-                        "docker compose down failed for %s (rc=%s): %s",
-                        compose_file,
-                        proc.returncode,
-                        detail,
+                        f"docker compose down failed for {compose_file} "
+                        f"(rc={proc.returncode}): {detail}"
                     )
             except (
                 subprocess.TimeoutExpired,
