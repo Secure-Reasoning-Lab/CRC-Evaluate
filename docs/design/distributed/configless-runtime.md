@@ -45,6 +45,20 @@ Runtime registration and queue discovery work as follows:
 - Flat mode allows a single worker/evaluator pool to serve many experiments.
 - Per-experiment mode is still available for strict queue isolation.
 
+## Evaluator Startup Semantics
+
+Configless evaluators use the same build and verify queues as config-pinned
+evaluators, but startup behavior differs:
+
+- config-pinned evaluator CLI mode normally enqueues startup pre-build jobs
+  before entering steady-state supervision
+- configless evaluator mode does not enqueue startup pre-build jobs
+- configless evaluators still consume build queues lazily, and verify work may
+  trigger on-demand builds on cache miss
+
+So configless mode keeps build/verify queue separation, but it does not have
+the same normal startup build-first phase as config-pinned evaluator CLI mode.
+
 ## Resource and Routing Contracts
 
 Resource precedence (when cpuset/cgroup supervisor is enabled):
@@ -89,7 +103,9 @@ legacy CI queue compatibility is documented in:
   run separate evaluator processes or use `--experiment-config`.
 - **Shared inc-image policy**: all experiments on a configless evaluator must
   have compatible inc-image settings (`inc_image_policy`, `inc_image_registry`,
-  pull-timeout/size limits, and image prefix). If these differ, split evaluators.
+  pull-timeout/size limits, and image prefix). These settings affect local
+  image reuse, remote pull attempts, remote size gating, and local build
+  fallback. If these differ, split evaluators.
 
 ## Implementation Pointers
 

@@ -358,6 +358,12 @@ The evaluator is optional. Without it:
 - Verification jobs queue in Redis and can be processed later
 - Use `crsbench re-eval` to verify POVs after the fact
 
+Mode note:
+- config-pinned evaluator CLI mode normally performs a startup pre-build
+  enqueue phase
+- configless evaluator mode skips startup pre-build enqueue and consumes build
+  work lazily; verify work may also trigger on-demand builds on cache miss
+
 ## Worker
 
 Workers pull trial jobs from the queue and execute CRS against benchmarks.
