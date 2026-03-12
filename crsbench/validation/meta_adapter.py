@@ -517,12 +517,12 @@ class MetaYamlAdapter:
     def get_corpus_dir(self, harness_name: Optional[str] = None) -> Optional[Path]:
         """Get the corpus directory for this benchmark.
 
-        Checks known corpus locations under .aixcc/:
-        - .aixcc/{harness}/corpus/ (per-harness corpus)
-        - .aixcc/corpus/ (shared corpus)
+        Checks known seed corpus locations under .aixcc/:
+        - .aixcc/{harness}/seeds/ (per-harness seed corpus)
+        - .aixcc/seeds/ (shared seed corpus)
 
         Args:
-            harness_name: Optional harness name for per-harness corpus.
+            harness_name: Optional harness name for per-harness seed corpus.
 
         Returns:
             Path to corpus directory if found and non-empty, None otherwise.

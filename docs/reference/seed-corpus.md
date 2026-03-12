@@ -33,7 +33,7 @@ crsbench benchmark seed-import <experiment-dir> [--benchmarks <path>] [--force]
 |----------|-------------|
 | `experiment-dir` | Path to experiment output directory (e.g., `./experiment-data/trial-1/`) |
 | `--benchmarks` | Directory containing benchmarks (default: `./benchmarks`) |
-| `--force` | Overwrite existing corpus directory |
+| `--force` | Overwrite existing seeds directory |
 
 ### Example
 
@@ -47,12 +47,12 @@ crsbench benchmark seed-import ./experiment-data/... --benchmarks /path/to/bench
 
 ### Output Structure
 
-Seeds are stored in the benchmark's `.aixcc/{harness}/corpus/` directory:
+Seeds are stored in the benchmark's `.aixcc/{harness}/seeds/` directory:
 
 ```
-benchmarks/afc-curl-delta-02/.aixcc/curl_fuzzer_ws/corpus/
+benchmarks/afc-curl-delta-02/.aixcc/curl_fuzzer_ws/seeds/
 ├── manifest.json       # Metadata for all files
-├── 00c3d860b1a0b8da    # Corpus file (named by content hash)
+├── 00c3d860b1a0b8da    # Seed file (named by content hash)
 ├── 00d6dca7560f6081
 └── ...
 ```
@@ -88,7 +88,6 @@ Canonical config shape reference: `docs/experiment-config-distributed-example.ya
 ```yaml
 runtime:
   inputs:
-    # Presence enables seed input.
     seed:
       # Optional: only use seeds discovered within first hour.
       max_time: 3600
@@ -133,9 +132,9 @@ This is useful for:
 
 At runtime, when `runtime.inputs.seed` is enabled:
 
-1. `SeedCorpusPreparer` reads `manifest.json` from `.aixcc/{harness}/corpus/`
+1. `SeedCorpusPreparer` reads `manifest.json` from `.aixcc/{harness}/seeds/`
 2. Filters files by `relative_time <= runtime.inputs.seed.max_time` (if configured)
-3. Copies selected files to `trial_dir/seed_corpus/`
+3. Copies selected files to `trial_dir/seeds/`
 4. Passes directory to CRS via `oss-crs run --seed-dir <path>`
 
 The CRS then uses these files as initial fuzzing seeds, potentially finding bugs faster.

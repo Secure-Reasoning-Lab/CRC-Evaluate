@@ -1,7 +1,7 @@
-"""Corpus collector for seed import.
+"""Seed corpus collector for seed import.
 
-Collects corpus files from experiment output and stores them with metadata
-for later use as seed corpus in benchmarks.
+Collects seed corpus files from experiment output and stores them with metadata
+for later use in benchmarks.
 """
 
 import hashlib
@@ -41,15 +41,15 @@ class CollectionResult:
 
 
 class CorpusCollector:
-    """Collects corpus files from experiment output.
+    """Collects seed corpus files from experiment output.
 
-    Reads experiment output, extracts corpus files with their timestamps,
+    Reads experiment output, extracts seed corpus files with their timestamps,
     and stores them in the benchmark's .aixcc directory with a manifest.
 
     Output structure:
-        .aixcc/{harness_name}/corpus/
+        .aixcc/{harness_name}/seeds/
         ├── manifest.json     # Metadata for all files
-        ├── {hash1}           # Actual corpus files (named by content hash)
+        ├── {hash1}           # Actual seed files (named by content hash)
         ├── {hash2}
         └── ...
 

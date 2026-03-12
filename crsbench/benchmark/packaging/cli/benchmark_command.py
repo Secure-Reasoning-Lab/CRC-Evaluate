@@ -223,19 +223,19 @@ Registry stored at: ./canary-registry.json (repo root)
     # crsbench benchmark seed-import
     seed_import_parser = benchmark_subparsers.add_parser(
         "seed-import",
-        help="Import corpus from experiment output as seed for benchmark",
+        help="Import seed corpus from experiment output for a benchmark harness",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Collects corpus files from CRS experiment output and stores them
-with metadata in the benchmark's .aixcc/{harness}/corpus/ directory.
+Collects seed corpus files from CRS experiment output and stores them
+with metadata in the benchmark's .aixcc/{harness}/seeds/ directory.
 
 Files are named by content hash (deduplication). A manifest.json
 contains metadata including relative_time (seconds since CRS start).
 
 Output structure:
-  .aixcc/{harness}/corpus/
+  .aixcc/{harness}/seeds/
   ├── manifest.json  # Metadata: crs_run_start_time, files info
-  ├── {hash1}        # Corpus files (named by content hash)
+  ├── {hash1}        # Seed files (named by content hash)
   ├── {hash2}
   └── ...
 
@@ -850,8 +850,8 @@ def handle_list_canaries(args: argparse.Namespace) -> int:
 def handle_seed_import(args: argparse.Namespace) -> int:
     """Handle 'crsbench benchmark seed-import' command.
 
-    Collects corpus files from experiment output and stores them
-    in the benchmark's .aixcc/{harness}/corpus/ directory with a manifest.
+    Collects seed corpus files from experiment output and stores them
+    in the benchmark's .aixcc/{harness}/seeds/ directory with a manifest.
     """
     from crsbench.benchmark.seed import CollectionResult, CorpusCollector
 
