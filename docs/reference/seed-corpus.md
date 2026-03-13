@@ -79,6 +79,23 @@ The `manifest.json` contains metadata for each file:
 - `original_name`: Original filename from fuzzer
 - `size`: File size in bytes
 
+### Timestamp Derivation
+
+`seed-import` does not require the experiment output to store per-seed timestamp
+metadata explicitly.
+
+- current direct trial output (`trial-N/output/seeds/`) does not include a
+  separate manifest
+- legacy `trial-N/output/corpus/` sidecars do not carry `relative_time`
+
+Instead, CRSBench derives `relative_time` during import from:
+
+- the seed file's filesystem `mtime`
+- minus `crs_run_start_time` from the trial metadata
+
+That derived value is then normalized into
+`.aixcc/{harness}/seeds/manifest.json`.
+
 ## Using Seeds in Experiments
 
 Enable seed corpus in your experiment config:
@@ -134,8 +151,13 @@ At runtime, when `runtime.inputs.seed` is enabled:
 
 1. `SeedCorpusPreparer` reads `manifest.json` from `.aixcc/{harness}/seeds/`
 2. Filters files by `relative_time <= runtime.inputs.seed.max_time` (if configured)
-3. Copies selected files to `trial_dir/seeds/`
+3. Copies the seed files that passed the optional time filter to `trial_dir/seeds/`
 4. Passes directory to CRS via `oss-crs run --seed-dir <path>`
+
+Notes:
+- `manifest.json` is not copied into `trial_dir/seeds/`
+- file copies use metadata-preserving copy semantics, so imported seed mtimes
+  remain stable in the staged runtime directory
 
 The CRS then uses these files as initial fuzzing seeds, potentially finding bugs faster.
 
