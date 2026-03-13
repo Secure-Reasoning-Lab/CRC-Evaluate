@@ -370,6 +370,11 @@ Examples:
 
     add_queue_subparser(subparsers)
 
+    # 'cloud' subcommand - cloud experiment lifecycle management
+    from crsbench.cloud.cli.cloud_command import add_cloud_subparser
+
+    add_cloud_subparser(subparsers)
+
     # 'verify' subcommand - POV verification
     from crsbench.evaluation.verification.cli.pov_verify_command import (
         add_verify_subparser,
@@ -2353,6 +2358,11 @@ def main() -> None:
         from crsbench.distributed.cli.queue_command import run_queue
 
         sys.exit(run_queue(args))
+
+    if args.command == "cloud":
+        from crsbench.cloud.cli.cloud_command import run_cloud
+
+        sys.exit(run_cloud(args))
 
     if args.command == "report":
         # Handle report command
