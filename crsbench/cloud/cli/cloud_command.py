@@ -37,6 +37,12 @@ Examples:
     teardown_p.add_argument("experiment", help="Experiment name")
     teardown_p.add_argument("--config", required=True, help="Path to experiment YAML config")
     teardown_p.add_argument("--force", action="store_true", help="Skip confirmation prompt")
+    teardown_p.add_argument(
+        "--remote-dir",
+        required=True,
+        dest="remote_dir",
+        help="Absolute path on workers containing the experiment tree",
+    )
 
     # collect
     collect_p = cloud_subparsers.add_parser("collect", help="Collect artifacts from workers")
@@ -79,8 +85,9 @@ def run_cloud(args: argparse.Namespace) -> int:
         return run_collect(args)
 
     if cmd == "teardown":
-        logger.error("'cloud teardown' is not implemented yet (see Plan 04-02).")
-        return 1
+        from crsbench.cloud.cli._teardown import run_teardown
+
+        return run_teardown(args)
 
     logger.error("Unknown cloud command: %s", cmd)
     return 2

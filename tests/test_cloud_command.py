@@ -229,13 +229,20 @@ class TestArgParsing:
 
     def test_parse_teardown(self):
         parser = self._build_parser()
-        args = parser.parse_args(["cloud", "teardown", "my-exp", "--config", "c.yaml"])
+        args = parser.parse_args([
+            "cloud", "teardown", "my-exp", "--config", "c.yaml",
+            "--remote-dir", "/home/user/experiments/my-exp",
+        ])
         assert args.cloud_command == "teardown"
         assert args.force is False
+        assert args.remote_dir == "/home/user/experiments/my-exp"
 
     def test_parse_teardown_force(self):
         parser = self._build_parser()
-        args = parser.parse_args(["cloud", "teardown", "my-exp", "--config", "c.yaml", "--force"])
+        args = parser.parse_args([
+            "cloud", "teardown", "my-exp", "--config", "c.yaml",
+            "--remote-dir", "/home/user/experiments/my-exp", "--force",
+        ])
         assert args.force is True
 
     def test_parse_collect(self):
