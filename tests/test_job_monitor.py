@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 import json
-import threading
-import time
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
-
+from unittest.mock import MagicMock
 
 # ---------------------------------------------------------------------------
 # Fake Redis (extended from Plan 01 patterns)
@@ -55,7 +52,9 @@ class _FakeRedis:
         return lst[start : stop + 1]
 
     # String ops for lock support
-    def set(self, key: str, value: str, nx: bool = False, ex: int | None = None) -> bool:
+    def set(
+        self, key: str, value: str, *, nx: bool = False, ex: int | None = None
+    ) -> bool:
         if nx and key in self._strings:
             return False
         self._strings[key] = value
@@ -134,7 +133,7 @@ def _make_store_with_job(
 
 def test_stale_heartbeat_detected() -> None:
     """Job with heartbeat >3min old + cloud API confirms dead -> transitions to ORPHANED."""
-    from crsbench.distributed.job_lifecycle import JobLifecycleStore, JobState
+    from crsbench.distributed.job_lifecycle import JobState
     from crsbench.distributed.job_monitor import JobMonitorLoop
 
     fake = _FakeRedis()
@@ -171,7 +170,7 @@ def test_stale_heartbeat_detected() -> None:
 
 def test_alive_instance_not_orphaned() -> None:
     """Job with stale heartbeat but alive cloud instance is NOT orphaned."""
-    from crsbench.distributed.job_lifecycle import JobLifecycleStore, JobState
+    from crsbench.distributed.job_lifecycle import JobState
     from crsbench.distributed.job_monitor import JobMonitorLoop
 
     fake = _FakeRedis()
@@ -201,7 +200,7 @@ def test_alive_instance_not_orphaned() -> None:
 
 def test_grace_period_before_requeue() -> None:
     """First scan flags stale; job is NOT acted on until second scan cycle."""
-    from crsbench.distributed.job_lifecycle import JobLifecycleStore, JobState
+    from crsbench.distributed.job_lifecycle import JobState
     from crsbench.distributed.job_monitor import JobMonitorLoop
 
     fake = _FakeRedis()
@@ -230,7 +229,7 @@ def test_grace_period_before_requeue() -> None:
 
 def test_artifact_check_prevents_requeue() -> None:
     """Orphaned job with published valid artifacts -> COMPLETED, not requeued."""
-    from crsbench.distributed.job_lifecycle import JobLifecycleStore, JobState
+    from crsbench.distributed.job_lifecycle import JobState
     from crsbench.distributed.job_monitor import JobMonitorLoop
 
     fake = _FakeRedis()
@@ -261,7 +260,7 @@ def test_artifact_check_prevents_requeue() -> None:
 
 def test_max_retries_permanently_failed() -> None:
     """Orphaned job with retry_count >= max_retries -> FAILED with appropriate detail."""
-    from crsbench.distributed.job_lifecycle import JobLifecycleStore, JobState
+    from crsbench.distributed.job_lifecycle import JobState
     from crsbench.distributed.job_monitor import JobMonitorLoop
 
     fake = _FakeRedis()
@@ -301,7 +300,7 @@ def test_max_retries_permanently_failed() -> None:
 
 def test_requeue_under_max_retries() -> None:
     """Orphaned job with retry_count < max_retries and no artifacts -> requeued (QUEUED)."""
-    from crsbench.distributed.job_lifecycle import JobLifecycleStore, JobState
+    from crsbench.distributed.job_lifecycle import JobState
     from crsbench.distributed.job_monitor import JobMonitorLoop
 
     fake = _FakeRedis()

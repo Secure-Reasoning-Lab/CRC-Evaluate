@@ -12,8 +12,10 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from crsbench.distributed.job_lifecycle import (
+    JobLifecycleRecord,
     JobLifecycleStore,
     JobState,
+    LifecycleRedisProtocol,
     log_recovery_event,
 )
 from crsbench.utils.logger import get_logger
@@ -54,7 +56,7 @@ class JobMonitorLoop:
         self,
         lifecycle_store: JobLifecycleStore,
         experiment_name: str,
-        connection: object,
+        connection: LifecycleRedisProtocol,
         heartbeat_timeout_seconds: int = 180,
         scan_interval: float = 90.0,
         max_retries: int = 3,
@@ -155,7 +157,7 @@ class JobMonitorLoop:
     # Recovery
     # ------------------------------------------------------------------
 
-    def _recover_orphaned_job(self, record: object) -> None:
+    def _recover_orphaned_job(self, record: JobLifecycleRecord) -> None:
         """Transition a job through orphan recovery based on artifact state and retry count."""
         job_id = record.job_id
         trial_key = record.trial_key

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Optional, cast
+from typing import TYPE_CHECKING, Optional, cast
 
 from crsbench.cloud.readiness import CloudReadinessStore, ReadinessRedisProtocol
-from crsbench.distributed.job_lifecycle import JobLifecycleStore
+from crsbench.distributed.job_lifecycle import JobLifecycleStore, LifecycleRedisProtocol
 from crsbench.distributed.job_monitor import JobMonitorLoop
 from crsbench.distributed.patch_queue import initialize_patch_queues
 from crsbench.distributed.queue import create_redis_connection, initialize_queue
@@ -14,6 +14,8 @@ from crsbench.distributed.registry import RegistryClient, RegistryLease
 from crsbench.distributed.verify_queue import initialize_verify_queue
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import rq
     from redis import Redis
 
@@ -65,7 +67,9 @@ class DistributedRuntimeSession:
             cloud_readiness=CloudReadinessStore(
                 cast("ReadinessRedisProtocol", redis_conn)
             ),
-            lifecycle_store=JobLifecycleStore(cast("object", redis_conn)),
+            lifecycle_store=JobLifecycleStore(
+                cast("LifecycleRedisProtocol", redis_conn)
+            ),
         )
 
     @classmethod
@@ -135,16 +139,19 @@ class DistributedRuntimeSession:
             scan_interval: Seconds between scan cycles.
         """
         if self.lifecycle_store is None:
-            raise RuntimeError("lifecycle_store is not initialized — cannot start monitor")
-        self._monitor = JobMonitorLoop(
+            raise RuntimeError(
+                "lifecycle_store is not initialized — cannot start monitor"
+            )
+        monitor = JobMonitorLoop(
             lifecycle_store=self.lifecycle_store,
             experiment_name=self.experiment_name,
-            connection=self.redis_conn,
+            connection=cast("LifecycleRedisProtocol", self.redis_conn),
             cloud_liveness_checker=cloud_liveness_checker,
             artifact_checker=artifact_checker,
             scan_interval=scan_interval,
         )
-        self._monitor.start()
+        monitor.start()
+        self._monitor = monitor
 
     def stop_monitor(self) -> None:
         """Stop the job monitor background thread if running."""
