@@ -49,6 +49,24 @@ end
 return 0
 """
 
+# Force-take Lua: overwrites the lock if its TTL is below `ttl_threshold`.
+# KEYS[1] = lock key
+# ARGV[1] = new token
+# ARGV[2] = new TTL (seconds)
+# ARGV[3] = TTL threshold (if existing TTL < threshold, overwrite)
+_LOCK_FORCE_TAKE_SCRIPT = """
+local current_ttl = redis.call('ttl', KEYS[1])
+if current_ttl == -2 then
+  -- Key does not exist: acquire normally
+  return redis.call('set', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
+end
+if current_ttl < tonumber(ARGV[3]) then
+  redis.call('set', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
+  return 1
+end
+return 0
+"""
+
 
 class RuntimeRegistration(BaseModel):
     """Metadata published by the orchestrator for a single experiment."""
@@ -287,6 +305,39 @@ class RegistryClient:
             )
         return bool(result)
 
+    def force_take_lock(self, experiment: str, ttl_threshold: int = 120) -> bool:
+        """Force-take an experiment lock when the existing lock's TTL is below threshold.
+
+        This is intended for controller restart scenarios where the old owner stopped
+        renewing the lock but it hasn't fully expired yet.
+
+        Args:
+            experiment: Experiment name.
+            ttl_threshold: If the existing lock's TTL is below this value (seconds),
+                the lock is considered stale and will be overwritten.
+
+        Returns:
+            ``True`` if the lock was taken, ``False`` if the existing lock is still
+            being actively renewed (TTL >= threshold).
+        """
+        key = f"{LOCK_KEY_PREFIX}{experiment}"
+        token = uuid.uuid4().hex
+        result = self._conn.eval(
+            _LOCK_FORCE_TAKE_SCRIPT,
+            1,
+            key,
+            token,
+            str(LOCK_TTL),
+            str(ttl_threshold),
+        )
+        if result:
+            self._lock_tokens[experiment] = token
+            logger.info(
+                "Force-took experiment lock for '%s' (old lock TTL below threshold)",
+                experiment,
+            )
+        return bool(result)
+
     def unlock(self, experiment: str) -> None:
         """Release the distributed lock for *experiment*."""
         key = f"{LOCK_KEY_PREFIX}{experiment}"
@@ -410,6 +461,27 @@ class RegistryLease:
             return True
         self.lock_acquired = self.client.lock(self.experiment)
         return self.lock_acquired
+
+    def try_resume_lock(self) -> bool:
+        """Attempt to reclaim the experiment lock for a restarting controller.
+
+        First tries a normal lock acquisition (in case the old lock expired).
+        If that fails, tries to force-take the lock (in case TTL is below threshold).
+
+        Returns:
+            ``True`` if the lock was acquired by any means, ``False`` otherwise.
+        """
+        if self.lock_acquired:
+            return True
+        # Try normal acquisition first (lock may have expired)
+        if self.client.lock(self.experiment):
+            self.lock_acquired = True
+            return True
+        # Lock still held by old owner but may be stale
+        if self.client.force_take_lock(self.experiment):
+            self.lock_acquired = True
+            return True
+        return False
 
     def register(self, registration: RuntimeRegistration) -> None:
         """Publish registration and track cleanup responsibility."""
