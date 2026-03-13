@@ -61,33 +61,42 @@ class CloudFleetStatusManager:
     ) -> CloudFleetSnapshot:
         """Provision the requested GCE fleet and wait for explicit readiness."""
         self._readiness_store.clear_experiment(experiment_name)
-        workers = self._provisioner.create_workers(
-            experiment_name=experiment_name,
-            fleet=fleet,
-            redis_host=redis_host,
-            registration=registration,
-        )
-
-        for worker in workers:
-            self._readiness_store.record(
-                CloudWorkerStatus(
-                    experiment_name=experiment_name,
-                    instance_id=worker.instance_id,
-                    instance_name=worker.name,
-                    zone=worker.zone,
-                    state=self._initial_state(worker),
-                    provider_status=worker.status,
-                    internal_ip=worker.internal_ip,
-                    external_ip=worker.external_ip,
-                    detail=f"GCE provider status: {worker.status}",
-                )
+        workers: list[GceWorkerRecord] = []
+        try:
+            workers = self._provisioner.create_workers(
+                experiment_name=experiment_name,
+                fleet=fleet,
+                redis_host=redis_host,
+                registration=registration,
             )
 
-        return self.wait_for_gce_workers(
-            experiment_name=experiment_name,
-            workers=workers,
-            timeout_sec=fleet.readiness_timeout_sec,
-        )
+            for worker in workers:
+                self._readiness_store.record(
+                    CloudWorkerStatus(
+                        experiment_name=experiment_name,
+                        instance_id=worker.instance_id,
+                        instance_name=worker.name,
+                        zone=worker.zone,
+                        state=self._initial_state(worker),
+                        provider_status=worker.status,
+                        internal_ip=worker.internal_ip,
+                        external_ip=worker.external_ip,
+                        detail=f"GCE provider status: {worker.status}",
+                    )
+                )
+            return self.wait_for_gce_workers(
+                experiment_name=experiment_name,
+                workers=workers,
+                timeout_sec=fleet.readiness_timeout_sec,
+            )
+        except Exception:
+            if workers:
+                self._teardown_gce_workers(
+                    experiment_name=experiment_name,
+                    fleet=fleet,
+                    workers=workers,
+                )
+            raise
 
     def wait_for_gce_workers(
         self,
@@ -146,3 +155,47 @@ class CloudFleetStatusManager:
         for instance_id in snapshot.missing_instance_ids:
             parts.append(f"{instance_id}=missing (no readiness record)")
         return "; ".join(parts)
+
+    def _teardown_gce_workers(
+        self,
+        *,
+        experiment_name: str,
+        fleet: GceWorkerFleetConfig,
+        workers: list[GceWorkerRecord],
+    ) -> None:
+        for worker in workers:
+            self._readiness_store.record(
+                CloudWorkerStatus(
+                    experiment_name=experiment_name,
+                    instance_id=worker.instance_id,
+                    instance_name=worker.name,
+                    zone=worker.zone,
+                    state=CloudWorkerState.DELETING,
+                    provider_status=worker.status,
+                    internal_ip=worker.internal_ip,
+                    external_ip=worker.external_ip,
+                    detail="Deleting worker after failed bring-up",
+                )
+            )
+
+        try:
+            deleted_workers = self._provisioner.delete_workers(
+                experiment_name=experiment_name,
+                fleet=fleet,
+            )
+        except Exception:
+            return
+        for worker in deleted_workers:
+            self._readiness_store.record(
+                CloudWorkerStatus(
+                    experiment_name=experiment_name,
+                    instance_id=worker.instance_id,
+                    instance_name=worker.name,
+                    zone=worker.zone,
+                    state=CloudWorkerState.DELETED,
+                    provider_status=worker.status,
+                    internal_ip=worker.internal_ip,
+                    external_ip=worker.external_ip,
+                    detail="Deleted after failed bring-up",
+                )
+            )

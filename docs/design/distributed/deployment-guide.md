@@ -43,6 +43,7 @@ When a deployment uses managed GCE workers, the experiment config is the source
 of truth for worker-fleet shape. The cloud contract is:
 
 - worker fleets are declared in `cloud.gce`, not in lab-specific host maps
+- Phase 1 supports zonal fleets only; `cloud.gce.zone` is required
 - provisioned workers carry experiment identity plus operator ownership labels
 - supported operator access remains OS Login-compatible SSH with host
   verification enabled
@@ -50,6 +51,8 @@ of truth for worker-fleet shape. The cloud contract is:
 - worker service accounts must be explicit and least-privileged
 - cloud-worker readiness is a control-plane state distinct from raw VM
   `RUNNING` state and from global Redis worker counts
+- bootstrapped workers use an experiment-pinned runtime path rather than the
+  shared configless worker pool
 - readiness records are keyed by cloud `instance_id`, not by instance name
   alone
 - startup failure evidence must remain retrievable from the control path
@@ -67,6 +70,7 @@ fleet for the current experiment:
 - startup evidence must include per-instance detail so operators can diagnose
   failures without manual SSH
 - stale readiness is scoped away by experiment name plus `instance_id`
+- failed bring-up tears down the matching fleet before the orchestrator returns
 
 ## Path and Storage Contract
 
@@ -95,7 +99,8 @@ fleet for the current experiment:
   mounts make paths resolvable.
 - Queue cleanup must be experiment-scoped in shared flat-queue deployments.
 - Cloud worker timeout or bootstrap failure: orchestrator startup fails before
-  trial enqueue and surfaces per-instance readiness evidence.
+  trial enqueue, tears down the requested fleet, and surfaces per-instance
+  readiness evidence.
 
 ## Benchmark CI Deployment Contract
 

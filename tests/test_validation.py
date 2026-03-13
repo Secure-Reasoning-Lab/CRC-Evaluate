@@ -878,12 +878,11 @@ class TestExperimentConfigSchema:
         assert config.cloud.gce.use_os_login is True
         assert config.cloud.gce.ssh_via_iap is True
 
-    def test_cloud_gce_requires_exactly_one_location(self):
+    def test_cloud_gce_rejects_region_until_supported(self):
         data = self._base_kwargs()
         data["cloud"] = {
             "gce": {
                 "project": "test-project",
-                "zone": "us-central1-a",
                 "region": "us-central1",
                 "worker_count": 2,
                 "machine_type": "e2-standard-4",
@@ -894,7 +893,7 @@ class TestExperimentConfigSchema:
             }
         }
         with pytest.raises(
-            PydanticValidationError, match="exactly one of 'zone' or 'region'"
+            PydanticValidationError, match="cloud.gce.region is not supported yet"
         ):
             ExperimentConfig(**data)
 

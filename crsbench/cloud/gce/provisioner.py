@@ -85,9 +85,10 @@ class _InstancesClientProtocol(Protocol):
 
     def list(
         self,
+        request: object | None = None,
         *,
-        project: str,
-        zone: str,
+        project: str | None = None,
+        zone: str | None = None,
     ) -> Sequence[object]: ...
 
     def delete(
@@ -166,10 +167,15 @@ class GoogleComputeClient:
         zone: str,
         label_selector: dict[str, str],
     ) -> list[dict[str, object]]:
-        del label_selector
         return [
             self._coerce_mapping(instance)
-            for instance in self._instances().list(project=project, zone=zone)
+            for instance in self._instances().list(
+                request={
+                    "project": project,
+                    "zone": zone,
+                    "filter": _build_label_filter(label_selector),
+                }
+            )
         ]
 
     def delete_instance(
@@ -222,6 +228,27 @@ class GoogleComputeClient:
             if isinstance(result, Mapping):
                 return dict(result)
 
+        operation_name = getattr(value, "name", None)
+        if isinstance(operation_name, str) and operation_name:
+            result: dict[str, object] = {"name": operation_name}
+            operation_status = getattr(value, "status", None)
+            if isinstance(operation_status, str) and operation_status:
+                result["status"] = operation_status
+            error_code = getattr(value, "error_code", None)
+            error_message = getattr(value, "error_message", None)
+            if isinstance(error_code, int) and error_code != 0:
+                result["error"] = {
+                    "errors": [
+                        {
+                            "code": str(error_code),
+                            "message": str(
+                                error_message or "Unknown GCE operation failure"
+                            ),
+                        }
+                    ]
+                }
+            return result
+
         raise TypeError(f"Unsupported GCE response type: {type(value)!r}")
 
 
@@ -265,6 +292,14 @@ def _extract_operation_errors(result: Mapping[str, object]) -> list[str]:
         message = normalized_error.get("message") or "Unknown GCE operation failure"
         messages.append(f"{code}: {message}")
     return messages
+
+
+def _build_label_filter(label_selector: Mapping[str, str]) -> str:
+    parts: list[str] = []
+    for key, value in sorted(label_selector.items()):
+        escaped_value = value.replace('"', '\\"')
+        parts.append(f'(labels.{key} = "{escaped_value}")')
+    return " ".join(parts)
 
 
 def _zone_name_from_self_link(value: object) -> str:
@@ -388,38 +423,45 @@ class GceProvisioner:
         registration: RuntimeRegistration,
     ) -> list[GceWorkerRecord]:
         """Create a worker fleet and return normalized provider records."""
-        workers: list[GceWorkerRecord] = []
-        for request in self.build_requests(
+        requests = self.build_requests(
             experiment_name=experiment_name,
             fleet=fleet,
             redis_host=redis_host,
             registration=registration,
-        ):
-            operation = self._client.insert_instance(
-                project=request.project,
-                zone=request.zone,
-                instance_resource=request.to_instance_resource(),
-            )
-            result = self._client.wait_for_zone_operation(
-                project=request.project,
-                zone=request.zone,
-                operation=_extract_operation_name(operation),
-            )
-            errors = _extract_operation_errors(result)
-            if errors:
-                raise GceProvisioningError(
-                    f"Failed to create worker {request.name}: {'; '.join(errors)}"
+        )
+        workers: list[GceWorkerRecord] = []
+        rollback_requests: list[GceInstanceRequest] = []
+        try:
+            for request in requests:
+                operation = self._client.insert_instance(
+                    project=request.project,
+                    zone=request.zone,
+                    instance_resource=request.to_instance_resource(),
                 )
-            workers.append(
-                _normalize_instance(
-                    self._client.get_instance(
-                        project=request.project,
-                        zone=request.zone,
-                        instance=request.name,
+                rollback_requests.append(request)
+                result = self._client.wait_for_zone_operation(
+                    project=request.project,
+                    zone=request.zone,
+                    operation=_extract_operation_name(operation),
+                )
+                errors = _extract_operation_errors(result)
+                if errors:
+                    raise GceProvisioningError(
+                        f"Failed to create worker {request.name}: {'; '.join(errors)}"
+                    )
+                workers.append(
+                    _normalize_instance(
+                        self._client.get_instance(
+                            project=request.project,
+                            zone=request.zone,
+                            instance=request.name,
+                        )
                     )
                 )
-            )
-        return workers
+            return workers
+        except Exception:
+            self._rollback_requests(rollback_requests)
+            raise
 
     def list_workers(
         self,
@@ -440,11 +482,13 @@ class GceProvisioner:
                 label_selector=expected_labels,
             )
         ]
-        experiment_label = expected_labels["crsbench-experiment"]
         return [
             worker
             for worker in workers
-            if worker.labels.get("crsbench-experiment") == experiment_label
+            if all(
+                worker.labels.get(key) == value
+                for key, value in expected_labels.items()
+            )
         ]
 
     def delete_workers(
@@ -479,6 +523,24 @@ class GceProvisioner:
     def _resolve_zone(self, fleet: GceWorkerFleetConfig) -> str:
         if fleet.zone:
             return fleet.zone
-        raise GceProvisioningError(
-            "Regional GCE worker fleets are not supported yet; configure cloud.gce.zone"
-        )
+        if fleet.region:
+            raise GceProvisioningError(
+                "cloud.gce.region is not supported yet; configure cloud.gce.zone"
+            )
+        raise GceProvisioningError("cloud.gce.zone is required for GCE worker fleets")
+
+    def _rollback_requests(self, requests: list[GceInstanceRequest]) -> None:
+        for request in reversed(requests):
+            try:
+                operation = self._client.delete_instance(
+                    project=request.project,
+                    zone=request.zone,
+                    instance=request.name,
+                )
+                self._client.wait_for_zone_operation(
+                    project=request.project,
+                    zone=request.zone,
+                    operation=_extract_operation_name(operation),
+                )
+            except Exception:
+                continue

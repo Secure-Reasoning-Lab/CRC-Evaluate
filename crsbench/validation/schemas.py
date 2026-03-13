@@ -1297,8 +1297,16 @@ class GceWorkerFleetConfig(BaseModel):
         """Enforce the Phase 1 GCE fleet contract."""
         has_zone = self.zone is not None
         has_region = self.region is not None
-        if has_zone == has_region:
-            raise ValueError("cloud.gce requires exactly one of 'zone' or 'region'")
+        if not has_zone:
+            if has_region:
+                raise ValueError(
+                    "cloud.gce.region is not supported yet; configure cloud.gce.zone"
+                )
+            raise ValueError("cloud.gce requires 'zone' for worker placement")
+        if has_region:
+            raise ValueError(
+                "cloud.gce.region is not supported yet; configure cloud.gce.zone"
+            )
 
         has_image = self.image is not None
         has_template = self.instance_template is not None

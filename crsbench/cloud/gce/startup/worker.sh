@@ -1,19 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-METADATA_BASE="http://metadata.google.internal/computeMetadata/v1/instance/attributes"
+INSTANCE_METADATA_BASE="http://metadata.google.internal/computeMetadata/v1/instance"
+ATTRIBUTE_METADATA_BASE="${INSTANCE_METADATA_BASE}/attributes"
 METADATA_HEADER="Metadata-Flavor: Google"
 STATE_DIR="/var/lib/crsbench"
 PAYLOAD_PATH="${STATE_DIR}/bootstrap.json"
+LAUNCHER_PATH="${STATE_DIR}/launch-worker.sh"
 ENV_PATH="/etc/default/crsbench-worker"
 SERVICE_PATH="/etc/systemd/system/crsbench-worker.service"
 
 metadata_get() {
-  curl -fsS -H "${METADATA_HEADER}" "${METADATA_BASE}/$1"
+  curl -fsS -H "${METADATA_HEADER}" "${ATTRIBUTE_METADATA_BASE}/$1"
 }
 
 metadata_get_optional() {
-  curl -fsS -H "${METADATA_HEADER}" "${METADATA_BASE}/$1" 2>/dev/null || true
+  curl -fsS -H "${METADATA_HEADER}" "${ATTRIBUTE_METADATA_BASE}/$1" 2>/dev/null || true
+}
+
+instance_metadata_get() {
+  curl -fsS -H "${METADATA_HEADER}" "${INSTANCE_METADATA_BASE}/$1"
 }
 
 require_cmd() {
@@ -23,6 +29,37 @@ require_cmd() {
   fi
 }
 
+write_env_var() {
+  printf "%s=%q\n" "$1" "$2" >> "${ENV_PATH}"
+}
+
+report_bootstrap_failure() {
+  local evidence="$1"
+  python3 - "${CRSBENCH_REDIS_HOST:-}" "${evidence}" <<'PY' || true
+import sys
+
+try:
+    from crsbench.cloud.runtime import report_cloud_worker_state_from_env
+except Exception:
+    raise SystemExit(0)
+
+redis_host = sys.argv[1]
+if not redis_host:
+    raise SystemExit(0)
+
+report_cloud_worker_state_from_env(
+    redis_host=redis_host,
+    state="bootstrap_failed",
+    detail="GCE worker bootstrap failed",
+    startup_evidence=sys.argv[2],
+)
+PY
+}
+
+on_error() {
+  report_bootstrap_failure "startup script failed at line $1: $2"
+}
+
 require_cmd curl
 require_cmd python3
 require_cmd systemctl
@@ -30,8 +67,8 @@ require_cmd systemctl
 mkdir -p "${STATE_DIR}"
 metadata_get "crsbench-bootstrap-payload" | base64 --decode > "${PAYLOAD_PATH}"
 
-REDIS_HOST="$(
-python3 - "${PAYLOAD_PATH}" <<'PY'
+readarray -t PAYLOAD_FIELDS < <(
+  python3 - "${PAYLOAD_PATH}" <<'PY'
 import json
 import sys
 
@@ -39,20 +76,36 @@ with open(sys.argv[1], encoding="utf-8") as handle:
     payload = json.load(handle)
 
 print(payload["redis_host"])
-PY
-)"
-
-WORKER_NAME="$(
-python3 - "${PAYLOAD_PATH}" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as handle:
-    payload = json.load(handle)
-
 print(payload["worker_name"])
+print(payload["experiment"])
+print(payload.get("worker_jobs") or "")
+print(payload.get("worker_cores_per_job") or "")
+print(payload.get("worker_cpu_tag") or "")
 PY
-)"
+)
+
+REDIS_HOST="${PAYLOAD_FIELDS[0]}"
+WORKER_NAME="${PAYLOAD_FIELDS[1]}"
+EXPERIMENT_NAME="${PAYLOAD_FIELDS[2]}"
+WORKER_JOBS="${PAYLOAD_FIELDS[3]}"
+WORKER_CORES_PER_JOB="${PAYLOAD_FIELDS[4]}"
+WORKER_CPU_TAG="${PAYLOAD_FIELDS[5]}"
+INSTANCE_ID="$(instance_metadata_get "id")"
+ZONE_PATH="$(instance_metadata_get "zone")"
+ZONE="${ZONE_PATH##*/}"
+
+export CRSBENCH_REDIS_HOST="${REDIS_HOST}"
+export CRSBENCH_WORKER_NAME="${WORKER_NAME}"
+export CRSBENCH_EXPERIMENT_NAME="${EXPERIMENT_NAME}"
+export CRSBENCH_WORKER_JOBS="${WORKER_JOBS}"
+export CRSBENCH_WORKER_CORES_PER_JOB="${WORKER_CORES_PER_JOB}"
+export CRSBENCH_WORKER_CPU_TAG="${WORKER_CPU_TAG}"
+export CRSBENCH_CLOUD_EXPERIMENT="${EXPERIMENT_NAME}"
+export CRSBENCH_CLOUD_INSTANCE_ID="${INSTANCE_ID}"
+export CRSBENCH_CLOUD_INSTANCE_NAME="${WORKER_NAME}"
+export CRSBENCH_CLOUD_ZONE="${ZONE}"
+
+trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR
 
 INSTALL_SPEC="$(metadata_get_optional "crsbench-install-spec")"
 if ! command -v crsbench >/dev/null 2>&1; then
@@ -64,11 +117,80 @@ if ! command -v crsbench >/dev/null 2>&1; then
   fi
 fi
 
-cat > "${ENV_PATH}" <<EOF
-CRSBENCH_REDIS_HOST=${REDIS_HOST}
-CRSBENCH_WORKER_NAME=${WORKER_NAME}
-CRSBENCH_LOG_LEVEL=INFO
+: > "${ENV_PATH}"
+write_env_var "CRSBENCH_REDIS_HOST" "${REDIS_HOST}"
+write_env_var "CRSBENCH_WORKER_NAME" "${WORKER_NAME}"
+write_env_var "CRSBENCH_EXPERIMENT_NAME" "${EXPERIMENT_NAME}"
+write_env_var "CRSBENCH_WORKER_JOBS" "${WORKER_JOBS}"
+write_env_var "CRSBENCH_WORKER_CORES_PER_JOB" "${WORKER_CORES_PER_JOB}"
+write_env_var "CRSBENCH_WORKER_CPU_TAG" "${WORKER_CPU_TAG}"
+write_env_var "CRSBENCH_CLOUD_EXPERIMENT" "${EXPERIMENT_NAME}"
+write_env_var "CRSBENCH_CLOUD_INSTANCE_ID" "${INSTANCE_ID}"
+write_env_var "CRSBENCH_CLOUD_INSTANCE_NAME" "${WORKER_NAME}"
+write_env_var "CRSBENCH_CLOUD_ZONE" "${ZONE}"
+write_env_var "CRSBENCH_LOG_LEVEL" "INFO"
+
+cat > "${LAUNCHER_PATH}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+report_bootstrap_failure() {
+  local evidence="$1"
+  python3 - "${CRSBENCH_REDIS_HOST:-}" "${evidence}" <<'PY' || true
+import sys
+
+try:
+    from crsbench.cloud.runtime import report_cloud_worker_state_from_env
+except Exception:
+    raise SystemExit(0)
+
+redis_host = sys.argv[1]
+if not redis_host:
+    raise SystemExit(0)
+
+report_cloud_worker_state_from_env(
+    redis_host=redis_host,
+    state="bootstrap_failed",
+    detail="GCE worker service failed",
+    startup_evidence=sys.argv[2],
+)
+PY
+}
+
+cmd=(
+  /usr/bin/env
+  crsbench
+  worker
+  --experiment-name
+  "${CRSBENCH_EXPERIMENT_NAME}"
+  --worker-name
+  "${CRSBENCH_WORKER_NAME}"
+)
+
+if [[ -n "${CRSBENCH_WORKER_JOBS:-}" ]]; then
+  cmd+=(--jobs "${CRSBENCH_WORKER_JOBS}")
+fi
+
+if [[ -n "${CRSBENCH_WORKER_CORES_PER_JOB:-}" ]]; then
+  cmd+=(--cores-per-job "${CRSBENCH_WORKER_CORES_PER_JOB}")
+fi
+
+if [[ -n "${CRSBENCH_WORKER_CPU_TAG:-}" ]]; then
+  cmd+=(--cpu-tag "${CRSBENCH_WORKER_CPU_TAG}")
+fi
+
+set +e
+"${cmd[@]}"
+exit_code="$?"
+set -e
+if [[ "${exit_code}" -eq 0 ]]; then
+  exit 0
+fi
+
+report_bootstrap_failure "worker service exited with status ${exit_code}"
+exit "${exit_code}"
 EOF
+chmod +x "${LAUNCHER_PATH}"
 
 cat > "${SERVICE_PATH}" <<'EOF'
 [Unit]
@@ -79,7 +201,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/default/crsbench-worker
-ExecStart=/bin/bash -lc '/usr/bin/env crsbench worker --worker-name "$CRSBENCH_WORKER_NAME"'
+ExecStart=/bin/bash /var/lib/crsbench/launch-worker.sh
 Restart=always
 RestartSec=10
 

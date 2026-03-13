@@ -737,6 +737,7 @@ class TestConfiglessWorker:
 
         args = argparse.Namespace(
             experiment_config=None,
+            experiment_name=None,
             verbose=False,
             continuous=False,
             worker_name=None,
@@ -758,6 +759,57 @@ class TestConfiglessWorker:
 
         assert result == 1
         mock_configless.assert_not_called()
+
+    def test_worker_cli_experiment_name_mode_pins_worker_to_one_queue(self):
+        """Cloud workers should target one experiment instead of configless discovery."""
+        from crsbench.distributed.cli.worker_command import run_worker
+
+        args = argparse.Namespace(
+            experiment_config=None,
+            experiment_name="exp-cloud-42",
+            verbose=False,
+            continuous=None,
+            worker_name="gce-worker-001",
+            no_cpuset=True,
+            cores=None,
+            skip_cpus=None,
+            cpu_tag="c3",
+            jobs=3,
+            cores_per_job=6,
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.worker.run_worker_continuous",
+                return_value=None,
+            ) as mock_continuous,
+            patch(
+                "crsbench.distributed.worker.run_worker_configless",
+                return_value=0,
+            ) as mock_configless,
+            patch.dict(
+                "os.environ",
+                {"CRSBENCH_REDIS_HOST": "redis.internal:6380"},
+                clear=False,
+            ),
+        ):
+            result = run_worker(args)
+
+        assert result == 0
+        mock_configless.assert_not_called()
+        mock_continuous.assert_called_once()
+        assert mock_continuous.call_args.kwargs["experiment_name"] == "exp-cloud-42"
+
+    def test_worker_parser_accepts_experiment_name_mode(self):
+        """Worker CLI should expose an experiment-name mode for cloud bootstrap."""
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers(dest="command")
+        from crsbench.distributed.cli.worker_command import add_worker_subparser
+
+        add_worker_subparser(subparsers)
+        args = parser.parse_args(["worker", "--experiment-name", "exp-cloud-42"])
+
+        assert args.experiment_name == "exp-cloud-42"
 
     @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
     def test_configless_worker_cpu_tag_whitespace_falls_back_to_resources_cpu_tag(

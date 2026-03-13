@@ -3,9 +3,10 @@
 This module provides the 'crsbench worker' subcommand for running
 distributed workers that process trial jobs from the Redis queue.
 
-Two modes:
+Modes:
   - Default (no config): discover experiments from Redis registry
-  - --experiment-config: focus on a specific experiment
+  - --experiment-name: focus on one experiment without a config file
+  - --experiment-config: focus on a specific experiment from a config file
 
 For CI build/verify jobs, use 'crsbench evaluator --ci' instead.
 """
@@ -122,6 +123,28 @@ def _check_existing_workers(logger) -> bool:
         return True
 
 
+def _report_cloud_worker_failure(
+    *,
+    redis_host: str | None,
+    detail: str,
+) -> None:
+    """Best-effort bootstrap failure report for cloud-managed workers."""
+    if redis_host is None:
+        return
+
+    from crsbench.cloud.runtime import report_cloud_worker_state_from_env
+
+    try:
+        report_cloud_worker_state_from_env(
+            redis_host=redis_host,
+            state="bootstrap_failed",
+            detail=detail,
+            startup_evidence=detail,
+        )
+    except Exception:
+        return
+
+
 def add_worker_subparser(subparsers) -> None:
     """Add 'worker' subcommand to the CLI.
 
@@ -137,6 +160,9 @@ Examples:
   # Discover experiments from Redis registry (default continuous mode)
   %(prog)s
 
+  # Pin the worker to a single experiment without a config file
+  %(prog)s --experiment-name my-experiment
+
   # Focus on a specific experiment (default continuous mode)
   %(prog)s --experiment-config my-experiment.yaml
 
@@ -145,12 +171,22 @@ Examples:
         """,
     )
 
-    worker_parser.add_argument(
+    mode_group = worker_parser.add_mutually_exclusive_group()
+
+    mode_group.add_argument(
         "--experiment-config",
         type=str,
         default=None,
         metavar="CONFIG_FILE",
         help="Focus on a specific experiment (default: discover all from registry)",
+    )
+
+    mode_group.add_argument(
+        "--experiment-name",
+        type=str,
+        default=None,
+        metavar="EXPERIMENT",
+        help="Focus on a specific experiment using Redis metadata only",
     )
 
     worker_parser.add_argument(
@@ -230,10 +266,12 @@ Examples:
 def run_worker(args: argparse.Namespace) -> int:
     """Execute the worker command.
 
-    Without ``--experiment-config``, discovers experiments from the Redis
-    registry and listens on all discovered trial queues.
+    Without ``--experiment-config`` or ``--experiment-name``, discovers
+    experiments from the Redis registry and listens on all discovered trial
+    queues.
 
-    With ``--experiment-config``, focuses on the specified experiment.
+    With ``--experiment-name`` or ``--experiment-config``, focuses on one
+    specific experiment.
 
     Args:
         args: Parsed command line arguments
@@ -255,15 +293,17 @@ def run_worker(args: argparse.Namespace) -> int:
     cpu_tag = getattr(args, "cpu_tag", None)
     jobs_override = getattr(args, "jobs", None)
     cores_per_job_override = getattr(args, "cores_per_job", None)
+    experiment_name = getattr(args, "experiment_name", None)
+
+    redis_host_from_env = normalize_redis_host(
+        os.environ.get("CRSBENCH_REDIS_HOST", "localhost")
+    )
 
     # --- Configless mode: discover experiments from registry ---
-    if not args.experiment_config:
+    if args.experiment_config is None and experiment_name is None:
         from crsbench.distributed.worker import run_worker_configless
 
-        redis_host = normalize_redis_host(
-            os.environ.get("CRSBENCH_REDIS_HOST", "localhost")
-        )
-        if redis_host is None:
+        if redis_host_from_env is None:
             logger.error(
                 "Distributed worker requires a Redis host; "
                 "set CRSBENCH_REDIS_HOST to a non-empty hostname"
@@ -276,7 +316,7 @@ def run_worker(args: argparse.Namespace) -> int:
 
         try:
             return run_worker_configless(
-                redis_host=redis_host,
+                redis_host=redis_host_from_env,
                 worker_name=args.worker_name,
                 use_cpuset=use_cpuset,
                 cores=cores,
@@ -291,6 +331,70 @@ def run_worker(args: argparse.Namespace) -> int:
             logger.info("Worker interrupted by user")
             return 0
         except Exception as e:
+            logger.error(f"Worker failed: {e}")
+            return 1
+
+    # --- Experiment-name mode: one explicit experiment without a config file ---
+    if experiment_name is not None:
+        from crsbench.distributed.worker import main as worker_main
+        from crsbench.distributed.worker import run_worker_continuous
+
+        if redis_host_from_env is None:
+            logger.error(
+                "Distributed worker requires a Redis host; "
+                "set CRSBENCH_REDIS_HOST to a non-empty hostname"
+            )
+            return 1
+
+        num_workers = jobs_override if jobs_override is not None else 1
+        cores_per_job = (
+            cores_per_job_override if cores_per_job_override is not None else 4
+        )
+        continuous = True if args.continuous is not False else False
+
+        try:
+            if continuous:
+                run_worker_continuous(
+                    redis_host=redis_host_from_env,
+                    experiment_name=experiment_name,
+                    worker_name=args.worker_name,
+                    num_workers=num_workers,
+                    use_cpuset=use_cpuset,
+                    minimum_disk_size="10GB",
+                    disk_check_interval=60,
+                    cores=cores,
+                    skip_cpus=skip_cpus,
+                    cpu_tag=normalize_cpu_tag(cpu_tag),
+                    cores_per_job=cores_per_job,
+                    log_level=log_level,
+                )
+                return 0
+            result = worker_main(
+                redis_host=redis_host_from_env,
+                experiment_name=experiment_name,
+                worker_name=args.worker_name,
+                num_workers=num_workers,
+                use_cpuset=use_cpuset,
+                cores=cores,
+                skip_cpus=skip_cpus,
+                cpu_tag=normalize_cpu_tag(cpu_tag),
+                cores_per_job=cores_per_job,
+                log_level=log_level,
+            )
+            if result != 0:
+                _report_cloud_worker_failure(
+                    redis_host=redis_host_from_env,
+                    detail=f"Worker exited before becoming ready (exit code {result})",
+                )
+            return result
+        except KeyboardInterrupt:
+            logger.info("Worker interrupted by user")
+            return 0
+        except Exception as e:
+            _report_cloud_worker_failure(
+                redis_host=redis_host_from_env,
+                detail=f"Worker failed before becoming ready: {e}",
+            )
             logger.error(f"Worker failed: {e}")
             return 1
 
@@ -431,5 +535,9 @@ def run_worker(args: argparse.Namespace) -> int:
         logger.info("Worker interrupted by user")
         return 0
     except Exception as e:
+        _report_cloud_worker_failure(
+            redis_host=redis_host,
+            detail=f"Worker failed before becoming ready: {e}",
+        )
         logger.error(f"Worker failed: {e}")
         return 1

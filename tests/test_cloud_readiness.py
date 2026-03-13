@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 from crsbench.cloud.gce.models import GceWorkerRecord
@@ -173,3 +174,44 @@ def test_wait_for_gce_workers_surfaces_startup_failure_evidence() -> None:
             workers=[_make_worker()],
             timeout_sec=900,
         )
+
+
+def test_bring_up_gce_workers_deletes_fleet_after_timeout() -> None:
+    """Bring-up timeouts should tear down the worker fleet instead of leaking VMs."""
+    from crsbench.cloud.readiness import CloudReadinessStore
+    from crsbench.cloud.status import CloudFleetBringupError, CloudFleetStatusManager
+
+    class _Provisioner:
+        def __init__(self) -> None:
+            self.deleted: list[str] = []
+
+        def create_workers(self, **_kwargs) -> list[GceWorkerRecord]:
+            return [_make_worker()]
+
+        def delete_workers(
+            self, *, experiment_name: str, fleet
+        ) -> list[GceWorkerRecord]:
+            del fleet
+            self.deleted.append(experiment_name)
+            return [_make_worker()]
+
+    store = CloudReadinessStore(_FakeRedis())
+    provisioner = _Provisioner()
+    timestamps = iter([0.0, 901.0, 901.0])
+    manager = CloudFleetStatusManager(
+        readiness_store=store,
+        provisioner=provisioner,
+        clock=lambda: next(timestamps),
+        sleep=lambda _seconds: None,
+        poll_interval_sec=0.0,
+    )
+
+    with pytest.raises(CloudFleetBringupError, match="timed out waiting for ready"):
+        manager.bring_up_gce_workers(
+            experiment_name="exp-cloud-42",
+            fleet=SimpleNamespace(readiness_timeout_sec=900),
+            redis_host="redis.internal:6380",
+            registration=object(),
+        )
+
+    assert provisioner.deleted == ["exp-cloud-42"]

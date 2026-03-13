@@ -123,6 +123,7 @@ cloud:
 
 Phase 1 contract notes:
 - `cloud.gce` is the canonical GCE worker-fleet declaration surface.
+- Phase 1 supports zonal fleets only; configure `cloud.gce.zone`.
 - Access is OS Login-compatible SSH only; keep host verification enabled.
 - Use a dedicated worker service account rather than default project
   credentials.
@@ -130,12 +131,16 @@ Phase 1 contract notes:
   public SSH.
 - Cloud worker readiness is an explicit control-plane concern and is distinct
   from generic Redis worker visibility.
+- Bootstrapped cloud workers stay pinned to the declaring experiment instead
+  of joining the shared configless worker pool.
 - `crsbench run` waits for the requested fleet to report explicit readiness
   before it enqueues trial jobs.
 - A VM in GCE `RUNNING` state is still non-ready until CRSBench records
   `ready`.
 - Bootstrap failures are surfaced through per-instance startup evidence, so
   normal diagnosis should not require interactive SSH.
+- Failed cloud bring-up tears down the requested fleet before control returns
+  to the operator.
 
 ## Queue Behavior and Cleanup
 

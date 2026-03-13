@@ -112,6 +112,9 @@ def test_load_startup_script_contains_managed_worker_service_bootstrap():
 
     assert "http://metadata.google.internal/computeMetadata/v1/" in startup_script
     assert "CRSBENCH_REDIS_HOST" in startup_script
-    assert "crsbench worker --worker-name" in startup_script
+    assert "CRSBENCH_CLOUD_INSTANCE_ID" in startup_script
+    assert "crsbench" in startup_script
+    assert "--experiment-name" in startup_script
+    assert "bootstrap_failed" in startup_script
     assert "systemctl enable --now crsbench-worker.service" in startup_script
     assert "/etc/default/crsbench-worker" in startup_script

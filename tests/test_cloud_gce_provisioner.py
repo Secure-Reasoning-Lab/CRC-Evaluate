@@ -110,6 +110,11 @@ class _RecordingClient:
         return {"name": f"delete-{instance}"}
 
 
+class _ExtendedOperation:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
 def test_build_requests_include_experiment_identity_labels_and_bootstrap_metadata():
     """Rendered instance requests should carry stable names, labels, and payloads."""
     from crsbench.cloud.gce.metadata import CRSBENCH_BOOTSTRAP_PAYLOAD_KEY
@@ -240,11 +245,31 @@ def test_list_and_delete_workers_use_experiment_scoped_labels():
             "name": "gce-worker-001",
             "status": "RUNNING",
             "zone": "zones/us-central1-a",
-            "labels": {"crsbench-experiment": "exp-cloud-42", "owner": "team-crs"},
+            "labels": {
+                "crsbench-experiment": "exp-cloud-42",
+                "crsbench-role": "worker",
+                "env": "prod",
+                "owner": "team-crs",
+            },
             "serviceAccounts": [
                 {"email": "crsbench-worker@test-project.iam.gserviceaccount.com"}
             ],
-        }
+        },
+        {
+            "id": "2001",
+            "name": "gce-worker-other-owner",
+            "status": "RUNNING",
+            "zone": "zones/us-central1-a",
+            "labels": {
+                "crsbench-experiment": "exp-cloud-42",
+                "crsbench-role": "worker",
+                "env": "prod",
+                "owner": "other-team",
+            },
+            "serviceAccounts": [
+                {"email": "crsbench-worker@test-project.iam.gserviceaccount.com"}
+            ],
+        },
     ]
     provisioner = GceProvisioner(client=client)
 
@@ -260,3 +285,133 @@ def test_list_and_delete_workers_use_experiment_scoped_labels():
     assert [worker.name for worker in workers] == ["gce-worker-001"]
     assert [worker.name for worker in deleted] == ["gce-worker-001"]
     assert client.deleted == [("test-project", "us-central1-a", "gce-worker-001")]
+
+
+def test_create_workers_rolls_back_partial_fleet_on_failure() -> None:
+    """Partial create failures should best-effort delete already-created VMs."""
+    from crsbench.cloud.gce.provisioner import GceProvisioner, GceProvisioningError
+
+    client = _RecordingClient()
+    client.instances_by_name = {
+        "gce-worker-001": {
+            "id": "1001",
+            "name": "gce-worker-001",
+            "status": "RUNNING",
+            "zone": "zones/us-central1-a",
+            "labels": {"crsbench-experiment": "exp-cloud-42", "owner": "team-crs"},
+            "serviceAccounts": [
+                {"email": "crsbench-worker@test-project.iam.gserviceaccount.com"}
+            ],
+        }
+    }
+    client.operation_errors = {
+        "op-gce-worker-002": {
+            "status": "DONE",
+            "error": {
+                "errors": [
+                    {
+                        "code": "ZONE_RESOURCE_POOL_EXHAUSTED",
+                        "message": "No capacity left in zone",
+                    }
+                ]
+            },
+        }
+    }
+    provisioner = GceProvisioner(client=client)
+
+    with pytest.raises(GceProvisioningError, match="ZONE_RESOURCE_POOL_EXHAUSTED"):
+        provisioner.create_workers(
+            experiment_name="Exp.Cloud 42",
+            fleet=_make_fleet(worker_count=2),
+            redis_host="redis.internal:6380",
+            registration=_make_registration(),
+        )
+
+    assert set(client.deleted) == {
+        ("test-project", "us-central1-a", "gce-worker-001"),
+        ("test-project", "us-central1-a", "gce-worker-002"),
+    }
+
+
+def test_google_compute_client_accepts_extended_operation_objects() -> None:
+    """Real GCE insert/delete calls return ExtendedOperation objects, not dicts."""
+    from crsbench.cloud.gce.provisioner import GoogleComputeClient
+
+    class _InstancesClient:
+        def insert(self, **_kwargs) -> object:
+            return _ExtendedOperation("insert-op")
+
+        def get(self, **_kwargs) -> object:
+            return {"id": "1001"}
+
+        def list(self, **_kwargs) -> list[object]:
+            return []
+
+        def delete(self, **_kwargs) -> object:
+            return _ExtendedOperation("delete-op")
+
+    client = GoogleComputeClient(
+        instances_client=_InstancesClient(),
+        zone_operations_client=None,
+    )
+
+    assert client.insert_instance(
+        project="test-project",
+        zone="us-central1-a",
+        instance_resource={"name": "gce-worker-001"},
+    ) == {"name": "insert-op"}
+    assert client.delete_instance(
+        project="test-project",
+        zone="us-central1-a",
+        instance="gce-worker-001",
+    ) == {"name": "delete-op"}
+
+
+def test_google_compute_client_builds_label_filter_for_list_requests() -> None:
+    """Instance listing should pass the full fleet selector to the provider API."""
+    from crsbench.cloud.gce.provisioner import GoogleComputeClient
+
+    class _InstancesClient:
+        def __init__(self) -> None:
+            self.requests: list[object] = []
+
+        def insert(self, **_kwargs) -> object:
+            raise AssertionError("insert not used")
+
+        def get(self, **_kwargs) -> object:
+            raise AssertionError("get not used")
+
+        def list(self, request: object | None = None, **_kwargs) -> list[object]:
+            self.requests.append(request)
+            return []
+
+        def delete(self, **_kwargs) -> object:
+            raise AssertionError("delete not used")
+
+    instances_client = _InstancesClient()
+    client = GoogleComputeClient(
+        instances_client=instances_client,
+        zone_operations_client=None,
+    )
+
+    client.list_instances(
+        project="test-project",
+        zone="us-central1-a",
+        label_selector={
+            "crsbench-experiment": "exp-cloud-42",
+            "crsbench-role": "worker",
+            "owner": "team-crs",
+        },
+    )
+
+    assert instances_client.requests == [
+        {
+            "project": "test-project",
+            "zone": "us-central1-a",
+            "filter": (
+                '(labels.crsbench-experiment = "exp-cloud-42") '
+                '(labels.crsbench-role = "worker") '
+                '(labels.owner = "team-crs")'
+            ),
+        }
+    ]

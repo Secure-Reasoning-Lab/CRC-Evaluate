@@ -1876,6 +1876,7 @@ def run_experiment_distributed(
 
     registration = RuntimeRegistration.from_experiment_config(config)
     lock_acquired = False
+    requeued_failed_jobs = 0
 
     normalized_queue_mode = queue_mode.lower() if queue_mode else None
 
@@ -1953,6 +1954,7 @@ def run_experiment_distributed(
                             f"Failed to requeue failed job {failed_job.id[:8]}: {e}"
                         )
                 if retried > 0:
+                    requeued_failed_jobs = retried
                     logger.info(f"Requeued {retried} failed jobs with clean retry dirs")
 
         # Filter trials if in continue mode
@@ -2005,6 +2007,13 @@ def run_experiment_distributed(
         dump_trial_matrix(trials, config)
 
         logger.info(f"Total trials to enqueue: {len(trials)}")
+        if not trials and not existing["queued"] and not existing["started"]:
+            if requeued_failed_jobs == 0:
+                logger.info(
+                    "No trial work remains after queue and disk filtering; "
+                    "skipping registration and cloud bring-up"
+                )
+                return
         logger.info("=" * 60)
 
         log_section("Enqueuing Trial Jobs", width=60)

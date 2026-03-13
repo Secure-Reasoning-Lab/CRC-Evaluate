@@ -16,6 +16,11 @@ Workers and evaluators support two modes:
 2. **Config mode** (`--experiment-config`): Focus on a specific experiment.
    Useful when you want a dedicated worker/evaluator for one experiment.
 
+Workers also support an experiment-pinned runtime mode via
+`crsbench worker --experiment-name <name>`, which focuses on one experiment
+without requiring a local config file. Managed cloud workers use this mode so
+they stay pinned to the experiment that provisioned them.
+
 ## Architecture
 
 Runtime registration and queue discovery work as follows:
@@ -24,6 +29,7 @@ Runtime registration and queue discovery work as follows:
 - when `cloud.gce` is configured, the orchestrator also records per-instance
   readiness state in Redis and gates trial enqueue on explicit worker readiness
 - configless workers discover trial queues from the registry and may serve multiple experiments
+- experiment-pinned workers serve one experiment queue without loading a config file
 - configless evaluators discover build/verify queues from the registry and may serve multiple experiments
 - config-pinned workers and evaluators use one explicit experiment configuration and one queue set
 
@@ -76,6 +82,8 @@ separate cloud-worker readiness contract:
   reach explicit `ready`
 - startup failure evidence is carried in readiness records so operators can
   inspect bootstrap failures without interactive SSH
+- failed bring-up transitions matching workers through `deleting`/`deleted`
+  and tears the fleet down before returning control to the orchestrator
 
 ## Resource and Routing Contracts
 
@@ -149,6 +157,7 @@ legacy CI queue compatibility is documented in:
 | `crsbench/distributed/registry.py` | `RuntimeRegistration` model + `RegistryClient` |
 | `crsbench/run_experiment.py` | Orchestrator-side registration lifecycle |
 | `crsbench/cloud/readiness.py` | Cloud worker readiness records and fleet snapshots |
+| `crsbench/cloud/runtime.py` | Cloud worker runtime/env bridge for readiness reporting |
 | `crsbench/cloud/status.py` | Cloud bring-up gating and failure reporting |
 | `crsbench/distributed/worker.py` | Worker registry discovery and config-pinned mode entrypoints |
 | `crsbench/distributed/evaluator.py` | Evaluator registry discovery and config-pinned mode entrypoints |

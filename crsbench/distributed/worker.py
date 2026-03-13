@@ -118,6 +118,27 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def _report_cloud_worker_state(
+    redis_host: str,
+    *,
+    state: str,
+    detail: str | None = None,
+    startup_evidence: str | None = None,
+) -> None:
+    """Best-effort readiness update for cloud-managed workers."""
+    from crsbench.cloud.runtime import report_cloud_worker_state_from_env
+
+    try:
+        report_cloud_worker_state_from_env(
+            redis_host=redis_host,
+            state=state,
+            detail=detail,
+            startup_evidence=startup_evidence,
+        )
+    except Exception as exc:
+        logger.warning(f"Failed to update cloud worker readiness state: {exc}")
+
+
 @contextmanager
 def worker_lock(worker_name: str):
     """Acquire an exclusive lock to ensure only one worker process runs at a time.
@@ -334,6 +355,11 @@ def main(
     logger.info(f"Experiment: {experiment_name}")
     logger.info(f"Queue: {queue_name}")
     logger.info("=" * 60)
+    _report_cloud_worker_state(
+        redis_host,
+        state="registering",
+        detail=f"Preparing worker runtime for queue {queue_name}",
+    )
 
     # Single worker mode (use lock)
     if num_workers == 1:
@@ -540,6 +566,11 @@ def _run_worker(
 
     logger.info(f"Worker '{worker_name}' started, listening on queue: {queue_name}")
     logger.info("Waiting for jobs...")
+    _report_cloud_worker_state(
+        redis_host,
+        state="ready",
+        detail=f"Worker process listening on queue {queue_name}",
+    )
 
     # Work in burst mode until queue is empty
     # Burst mode: process available jobs then exit (vs. continuous polling)
@@ -595,6 +626,11 @@ def _run_worker_continuous(
         f"Continuous worker '{worker_name}' started, listening on queue: {queue_name}"
     )
     logger.info("Polling for jobs...")
+    _report_cloud_worker_state(
+        redis_host,
+        state="ready",
+        detail=f"Worker process listening on queue {queue_name}",
+    )
     worker.work(burst=False)
 
 
@@ -653,6 +689,11 @@ def run_worker_continuous(
         experiment_name
     )
     queue_name = queue_name or default_trial_queue
+    _report_cloud_worker_state(
+        redis_host,
+        state="registering",
+        detail=f"Preparing worker runtime for queue {queue_name}",
+    )
 
     # Always use supervisor mode for consistent behavior
     if use_cpuset:
