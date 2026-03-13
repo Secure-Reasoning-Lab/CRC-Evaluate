@@ -44,6 +44,76 @@ logger = get_logger(__name__)
 DEFAULT_TRIAL_CORES_PER_JOB = 4
 
 
+def _terminate_process_tree(pid: int, *, grace_seconds: int = 10) -> None:
+    """Terminate a process and all its descendants.
+
+    Collects the full process tree rooted at *pid* (children-first order),
+    sends SIGTERM to each, waits up to *grace_seconds*, then SIGKILL any
+    survivors.
+    """
+    import signal
+    import subprocess as _sp
+
+    def _descendants(parent: int) -> list[int]:
+        result: list[int] = []
+        try:
+            out = _sp.run(
+                ["ps", "--ppid", str(parent), "-o", "pid", "--no-headers"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            for line in out.stdout.splitlines():
+                child = line.strip()
+                if child:
+                    c = int(child)
+                    result.extend(_descendants(c))
+                    result.append(c)
+        except Exception:
+            pass
+        return result
+
+    # Build kill list: deepest children first, root last
+    all_pids = _descendants(pid)
+    all_pids.append(pid)
+
+    # SIGTERM whole tree
+    for p in all_pids:
+        try:
+            os.kill(p, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    # Wait for graceful exit
+    deadline = time.monotonic() + grace_seconds
+    remaining = list(all_pids)
+    while remaining and time.monotonic() < deadline:
+        time.sleep(0.5)
+        remaining = [p for p in remaining if _pid_alive(p)]
+
+    # SIGKILL stragglers
+    for p in remaining:
+        try:
+            os.kill(p, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    if remaining:
+        logger.warning(
+            f"Sent SIGKILL to {len(remaining)} process(es) that did not exit "
+            f"gracefully under PID {pid}"
+        )
+
+
+def _pid_alive(pid: int) -> bool:
+    """Check whether a process is still alive."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
 @contextmanager
 def worker_lock(worker_name: str):
     """Acquire an exclusive lock to ensure only one worker process runs at a time.
@@ -89,6 +159,52 @@ def worker_lock(worker_name: str):
                 lock_file.close()
             except (OSError, ValueError):
                 pass  # File might already be closed or deleted
+
+
+def _cleanup_stale_rq_workers(redis_host: str, queue_name: str) -> None:
+    """Remove dead RQ workers from the Redis worker registry.
+
+    After terminating worker processes, their RQ worker entries may linger
+    in Redis until the heartbeat TTL expires.  This function proactively
+    deregisters workers whose OS process no longer exists, so that newly
+    spawned workers do not collide with stale entries.
+    """
+    import rq
+
+    from crsbench.distributed.queue import create_redis_connection
+
+    try:
+        conn = create_redis_connection(redis_host)
+        queue = rq.Queue(queue_name, connection=conn)
+        workers = rq.Worker.all(queue=queue)
+    except Exception as exc:
+        logger.warning(f"Failed to fetch RQ workers for cleanup: {exc}")
+        return
+
+    for worker in workers:
+        try:
+            worker.refresh()
+            pid = worker.pid
+            if pid is None:
+                worker.register_death()
+                logger.info(f"Deregistered RQ worker with no PID: {worker.name}")
+                continue
+            # Check whether the process is still alive.
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            # Process does not exist — deregister from Redis.
+            try:
+                worker.register_death()
+                logger.info(f"Deregistered stale RQ worker: {worker.name} (PID {pid})")
+            except Exception as inner:
+                logger.warning(
+                    f"Failed to deregister stale worker {worker.name}: {inner}"
+                )
+        except PermissionError:
+            # Process exists but we lack permission — leave it alone.
+            pass
+        except Exception as exc:
+            logger.debug(f"Skipping worker {worker.name} during cleanup: {exc}")
 
 
 def _trial_job_runner(
@@ -335,19 +451,17 @@ def _spawn_workers(
             return 3
 
         logger.info(f"All {num_workers} worker processes completed successfully")
+        _cleanup_stale_rq_workers(redis_host, queue_name)
         return 0
 
     except KeyboardInterrupt:
         logger.info("\nReceived interrupt signal, terminating workers...")
         for p in processes:
-            if p.is_alive():
-                p.terminate()
+            if p.is_alive() and p.pid is not None:
+                _terminate_process_tree(p.pid)
         for p in processes:
-            p.join(timeout=5)
-            if p.is_alive():
-                logger.warning(f"Force killing worker {p.name}")
-                p.kill()
-                p.join()
+            p.join(timeout=3)
+        _cleanup_stale_rq_workers(redis_host, queue_name)
         return 0
 
 
