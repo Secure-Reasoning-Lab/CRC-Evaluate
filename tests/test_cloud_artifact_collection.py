@@ -6,15 +6,13 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-
 from crsbench.cloud.collection import ArtifactCollectionError, ArtifactCollector
 from crsbench.cloud.gce.models import GceWorkerRecord
 from crsbench.reporting.snapshot_loader import discover_trials
 from crsbench.validation.schemas import GceWorkerFleetConfig
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -39,7 +37,11 @@ def _make_worker(
     )
 
 
-def _make_fleet(ssh_via_iap: bool = False, zone: str = "us-central1-a") -> GceWorkerFleetConfig:
+def _make_fleet(
+    *,
+    ssh_via_iap: bool = False,
+    zone: str = "us-central1-a",
+) -> GceWorkerFleetConfig:
     return GceWorkerFleetConfig(
         project="test-project",
         zone=zone,
@@ -57,6 +59,7 @@ def _build_trial_tree(
     benchmark: str = "curl-delta-01",
     harness: str = "fuzz_http",
     trial_n: int = 1,
+    *,
     include_metadata: bool = True,
     mtime: float | None = None,
 ) -> Path:
@@ -230,7 +233,9 @@ class TestStagingAndPublish:
         fleet = _make_fleet(ssh_via_iap=False)
         collector = ArtifactCollector()
 
-        def _fake_rsync(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
             """Copy source_root/exp-42 contents into the staging_dir."""
             # The staging dir is the last argument to rsync
             staging_dest = Path(cmd[-1].rstrip("/"))
@@ -262,7 +267,9 @@ class TestStagingAndPublish:
         staging_root = experiment_filestore / ".collect-staging"
         if staging_root.exists():
             worker_staging = staging_root / worker.name
-            assert not worker_staging.exists(), "Worker staging dir should be cleaned up"
+            assert not worker_staging.exists(), (
+                "Worker staging dir should be cleaned up"
+            )
 
 
 class TestPartialStagingNotPublished:
@@ -276,13 +283,17 @@ class TestPartialStagingNotPublished:
         # Build a trial tree WITHOUT metadata.json
         source_root = tmp_path / "worker-local"
         source_root.mkdir()
-        _build_trial_tree(source_root, experiment_name="exp-bad", include_metadata=False)
+        _build_trial_tree(
+            source_root, experiment_name="exp-bad", include_metadata=False
+        )
 
         worker = _make_worker()
         fleet = _make_fleet(ssh_via_iap=False)
         collector = ArtifactCollector()
 
-        def _fake_rsync(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
             staging_dest = Path(cmd[-1].rstrip("/"))
             shutil.copytree(
                 source_root / "exp-bad",
@@ -305,7 +316,9 @@ class TestPartialStagingNotPublished:
         final_path = experiment_filestore / "exp-bad"
         if final_path.exists():
             trial_dirs = list(final_path.rglob("trial-*"))
-            assert not trial_dirs, "No trial dirs must be published when staging fails verification"
+            assert not trial_dirs, (
+                "No trial dirs must be published when staging fails verification"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +342,9 @@ class TestReportingCompat:
         fleet = _make_fleet(ssh_via_iap=False)
         collector = ArtifactCollector()
 
-        def _fake_rsync(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
             staging_dest = Path(cmd[-1].rstrip("/"))
             shutil.copytree(
                 source_root / "exp-42",
@@ -348,7 +363,9 @@ class TestReportingCompat:
             )
 
         trials = discover_trials(final_path)
-        assert trials, "discover_trials must return at least one trial from the collected layout"
+        assert trials, (
+            "discover_trials must return at least one trial from the collected layout"
+        )
 
         # Each trial must have metadata
         for trial in trials:
@@ -377,8 +394,12 @@ class TestCollectFullTrialTree:
         )
 
         cmd_str = " ".join(cmd)
-        assert "--include" not in cmd_str, "No --include filters; rsync must copy full tree"
-        assert "--exclude" not in cmd_str, "No --exclude filters; rsync must copy full tree"
+        assert "--include" not in cmd_str, (
+            "No --include filters; rsync must copy full tree"
+        )
+        assert "--exclude" not in cmd_str, (
+            "No --exclude filters; rsync must copy full tree"
+        )
 
         # Source must end with trailing slash (rsync convention for directory contents)
         source = cmd[-2]
