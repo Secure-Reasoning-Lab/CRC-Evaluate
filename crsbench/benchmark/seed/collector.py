@@ -1,7 +1,7 @@
-"""Corpus collector for seed import.
+"""Seed corpus collector for seed import.
 
-Collects corpus files from experiment output and stores them with metadata
-for later use as seed corpus in benchmarks.
+Collects seed corpus files from experiment output and stores them with metadata
+for later use in benchmarks.
 """
 
 import hashlib
@@ -41,15 +41,15 @@ class CollectionResult:
 
 
 class CorpusCollector:
-    """Collects corpus files from experiment output.
+    """Collects seed corpus files from experiment output.
 
-    Reads experiment output, extracts corpus files with their timestamps,
+    Reads experiment output, extracts seed corpus files with their timestamps,
     and stores them in the benchmark's .aixcc directory with a manifest.
 
     Output structure:
-        .aixcc/{harness_name}/corpus/
+        .aixcc/{harness_name}/seeds/
         ├── manifest.json     # Metadata for all files
-        ├── {hash1}           # Actual corpus files (named by content hash)
+        ├── {hash1}           # Actual seed files (named by content hash)
         ├── {hash2}
         └── ...
 
@@ -231,9 +231,9 @@ class CorpusCollector:
     def _find_corpus_dir(self, trial_dir: Path) -> Path:
         """Find the corpus directory within a trial.
 
-        Handles multiple locations:
-        1. trial_dir/output/seeds/
-        2. trial_dir/crs-build/run/.../seeds/ (nested in run directory)
+        Handles the current and legacy direct trial output locations:
+        1. trial_dir/output/seeds/   (current contract)
+        2. trial_dir/output/corpus/  (legacy compatibility)
 
         Args:
             trial_dir: Path to trial directory
@@ -244,24 +244,15 @@ class CorpusCollector:
         Raises:
             FileNotFoundError: If corpus directory not found
         """
-        # Try direct path first
+        # Current contract: direct staged seeds under trial output.
         direct_corpus = trial_dir / "output" / "seeds"
         if direct_corpus.exists():
             return direct_corpus
 
-        # Search in crs-build/run/ subdirectories
-        crs_build_run = trial_dir / "crs-build" / "run"
-        if crs_build_run.exists():
-            for corpus_dir in crs_build_run.rglob("seeds"):
-                if corpus_dir.is_dir():
-                    # Verify it has files (not just an empty directory)
-                    if any(corpus_dir.iterdir()):
-                        return corpus_dir
-
-        # As a last resort, search anywhere under trial_dir
-        for corpus_dir in trial_dir.rglob("seeds"):
-            if corpus_dir.is_dir() and any(corpus_dir.iterdir()):
-                return corpus_dir
+        # Legacy compatibility: some older experiment outputs used output/corpus.
+        legacy_corpus = trial_dir / "output" / "corpus"
+        if legacy_corpus.exists():
+            return legacy_corpus
 
         raise FileNotFoundError(f"No corpus directory found in {trial_dir}")
 

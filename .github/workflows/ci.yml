@@ -146,6 +146,9 @@ jobs:
     needs: [sanity-mock]
     runs-on: [self-hosted, linux, crs]
     timeout-minutes: 90
+    concurrency:
+      group: crsbench-smoke
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
         with:

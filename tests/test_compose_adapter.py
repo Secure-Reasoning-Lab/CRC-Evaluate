@@ -1576,6 +1576,29 @@ class TestOssCrsAdapterBugFindFull:
         assert (output_dir / "povs" / "crash-001").exists()
         assert (output_dir / "povs" / "crash-002").exists()
 
+    def test_collect_results_copies_seeds_to_canonical_output_path(
+        self, tmp_path: Path
+    ) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+
+        seed_dir = tmp_path / "exchange" / "seed"
+        seed_dir.mkdir(parents=True)
+        (seed_dir / "seed-001").write_bytes(b"abc")
+        (seed_dir / "seed-002").write_bytes(b"xyz")
+
+        adapter._resolved_artifacts = {
+            "exchange_dir": {"seed": str(seed_dir)},
+        }
+        trial = tmp_path / "trial_out"
+
+        metadata = adapter.collect_results(trial, "harness1")
+
+        assert metadata["type"] == "bug-finding"
+        output_dir = Path(metadata["output_dir"])
+        assert (output_dir / "seeds" / "seed-001").exists()
+        assert (output_dir / "seeds" / "seed-002").exists()
+
     def test_collect_results_handles_missing_crs_in_artifacts(
         self, tmp_path: Path
     ) -> None:
@@ -1762,6 +1785,36 @@ class TestOssCrsAdapterBugFindFull:
         assert metadata["crs_run_logs_by_crs"] == {
             "other-crs": str(crs_b),
             "test-crs": str(crs_a),
+        }
+
+    def test_collect_results_copies_crs_log_dir_artifacts(self, tmp_path: Path) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+
+        crs_log_dir = tmp_path / "log-dir" / "crs" / "test-crs"
+        crs_log_dir.mkdir(parents=True)
+        (crs_log_dir / "agent.log").write_text("agent-ok")
+        nested = crs_log_dir / "sessions"
+        nested.mkdir(parents=True)
+        (nested / "transcript.jsonl").write_text('{"event":"ok"}')
+
+        adapter._resolved_artifacts = {
+            "crs": {
+                "test-crs": {"log_dir": str(crs_log_dir)},
+            }
+        }
+        trial = tmp_path / "trial_out"
+
+        metadata = adapter.collect_results(trial, "harness1")
+        logs_dir = (
+            Path(metadata["output_dir"]) / "logs" / "crs" / "test-crs" / "log_dir"
+        )
+        assert (logs_dir / "agent.log").read_text() == "agent-ok"
+        assert (
+            logs_dir / "sessions" / "transcript.jsonl"
+        ).read_text() == '{"event":"ok"}'
+        assert metadata["crs_log_dirs_by_crs"] == {
+            "test-crs": str(crs_log_dir),
         }
 
 
@@ -2392,6 +2445,7 @@ class TestBugFixInputStaging:
 
         staged_seed_files = {p.name for p in (trial_dir / "seeds").iterdir()}
         assert staged_seed_files == {"seed_a"}
+        assert not (trial_dir / "seeds" / "manifest.json").exists()
         assert (trial_dir / "ref.diff").exists()
 
     def test_prepare_runtime_inputs_stages_bug_candidates_from_sarif(

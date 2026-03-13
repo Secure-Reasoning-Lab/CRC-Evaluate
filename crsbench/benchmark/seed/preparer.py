@@ -28,7 +28,7 @@ class PrepareResult:
 class SeedCorpusPreparer:
     """Prepares seed corpus for CRS execution.
 
-    Reads collected corpus from benchmark's .aixcc/{harness}/corpus/,
+    Reads collected seed corpus from benchmark's .aixcc/{harness}/seeds/,
     filters by relative time if configured, and copies to trial directory.
     """
 

@@ -72,8 +72,26 @@ Typical collected outputs:
 - Bug-fixing:
   - `SUBMIT_DIR/patches/`
   - optional `SUBMIT_DIR/povs/`
+- Logs:
+  - top-level run logs from `run_logs`
+  - per-CRS run logs from `crs.<name>.run_logs`
+  - per-CRS internal/agent logs from `crs.<name>.log_dir`
 
 CRSBench copies these into trial output directories for verification/reporting.
+
+### Log Preservation Contract
+
+CRSBench preserves resolved `oss-crs artifacts` log paths under:
+
+- `trial/output/logs/docker-compose.stdout.log`
+- `trial/output/logs/docker-compose.stderr.log`
+- `trial/output/logs/services/`
+- `trial/output/logs/crs/<crs>/...` for per-CRS run logs
+- `trial/output/logs/crs/<crs>/log_dir/...` for per-CRS internal/agent logs from `LOG_DIR`
+
+This copied trial output is the durable result location. `cleanup_after_trial`
+removes internal workdirs such as `oss-crs-workdir`, but does not remove
+`trial/output/`, so copied logs remain available after cleanup.
 
 ## Verification and Dedup
 
