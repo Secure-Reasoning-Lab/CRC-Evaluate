@@ -409,11 +409,142 @@ class TestEventsOutput:
 
 
 # ---------------------------------------------------------------------------
-# Collect stub test (Plan 04-02)
+# Collect sub-action tests
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason="cloud collect not implemented until Plan 04-02")
-def test_collect_invokes_collector():
-    """Placeholder: cloud collect will invoke ArtifactCollector per worker."""
-    pass
+def _make_collect_args(
+    experiment: str = "test-exp",
+    config: str = "/tmp/config.yaml",
+    remote_dir: str = "/home/user/crsbench-experiments/test-exp",
+):
+    return argparse.Namespace(
+        experiment=experiment,
+        config=config,
+        remote_dir=remote_dir,
+        cloud_command="collect",
+    )
+
+
+def _make_gce_worker(name: str, zone: str = "us-central1-a", ip: str = "10.0.0.1"):
+    """Build a GceWorkerRecord for testing."""
+    from crsbench.cloud.gce.models import GceWorkerRecord
+
+    return GceWorkerRecord(
+        name=name,
+        instance_id=f"id-{name}",
+        status="RUNNING",
+        zone=zone,
+        internal_ip=ip,
+    )
+
+
+class TestCollect:
+    """Tests for run_collect() sub-action."""
+
+    @patch("crsbench.cloud.cli._collect.ArtifactCollector")
+    @patch("crsbench.cloud.cli._collect.GceProvisioner")
+    @patch("crsbench.cloud.cli._collect.reconnect")
+    def test_collect_invokes_collector(self, mock_reconnect, mock_prov_cls, mock_coll_cls):
+        """run_collect() invokes ArtifactCollector.collect() for each live GCE worker."""
+        workers = [_make_gce_worker("w-1"), _make_gce_worker("w-2")]
+        mock_prov = MagicMock()
+        mock_prov.list_workers.return_value = workers
+        mock_prov_cls.return_value = mock_prov
+
+        mock_coll = MagicMock()
+        mock_coll_cls.return_value = mock_coll
+
+        readiness = MagicMock()
+        readiness.list_workers.return_value = []
+
+        mock_reconnect.return_value = (
+            MagicMock(),  # fleet
+            MagicMock(),  # redis_conn
+            readiness,
+            MagicMock(),  # lifecycle
+            Path("/tmp/filestore"),
+        )
+
+        from crsbench.cloud.cli._collect import run_collect
+
+        rc = run_collect(_make_collect_args())
+        assert rc == 0
+        assert mock_coll.collect.call_count == 2
+
+    @patch("crsbench.cloud.cli._collect.ArtifactCollector")
+    @patch("crsbench.cloud.cli._collect.GceProvisioner")
+    @patch("crsbench.cloud.cli._collect.reconnect")
+    def test_collect_stale_redis_warning(
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls, caplog
+    ):
+        """Warns when Redis has workers not present in GCE."""
+        mock_prov = MagicMock()
+        mock_prov.list_workers.return_value = [_make_gce_worker("w-1")]
+        mock_prov_cls.return_value = mock_prov
+
+        mock_coll = MagicMock()
+        mock_coll_cls.return_value = mock_coll
+
+        # Redis knows about w-1 and w-2, but GCE only has w-1
+        stale_worker = MagicMock()
+        stale_worker.instance_name = "w-2"
+        live_worker = MagicMock()
+        live_worker.instance_name = "w-1"
+        readiness = MagicMock()
+        readiness.list_workers.return_value = [live_worker, stale_worker]
+
+        mock_reconnect.return_value = (
+            MagicMock(),
+            MagicMock(),
+            readiness,
+            MagicMock(),
+            Path("/tmp/filestore"),
+        )
+
+        from crsbench.cloud.cli._collect import run_collect
+
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            rc = run_collect(_make_collect_args())
+
+        assert rc == 0
+        assert any("stale" in msg.lower() or "w-2" in msg for msg in caplog.messages)
+
+    @patch("crsbench.cloud.cli._collect.ArtifactCollector")
+    @patch("crsbench.cloud.cli._collect.GceProvisioner")
+    @patch("crsbench.cloud.cli._collect.reconnect")
+    def test_collect_partial_failure(self, mock_reconnect, mock_prov_cls, mock_coll_cls):
+        """Partial collection failure returns 1 but continues for remaining workers."""
+        from crsbench.cloud.collection import ArtifactCollectionError
+
+        workers = [_make_gce_worker("w-1"), _make_gce_worker("w-2")]
+        mock_prov = MagicMock()
+        mock_prov.list_workers.return_value = workers
+        mock_prov_cls.return_value = mock_prov
+
+        mock_coll = MagicMock()
+        mock_coll.collect.side_effect = [
+            ArtifactCollectionError("rsync failed"),
+            Path("/tmp/out"),
+        ]
+        mock_coll_cls.return_value = mock_coll
+
+        readiness = MagicMock()
+        readiness.list_workers.return_value = []
+
+        mock_reconnect.return_value = (
+            MagicMock(),
+            MagicMock(),
+            readiness,
+            MagicMock(),
+            Path("/tmp/filestore"),
+        )
+
+        from crsbench.cloud.cli._collect import run_collect
+
+        rc = run_collect(_make_collect_args())
+        assert rc == 1
+        # Both workers should have been attempted
+        assert mock_coll.collect.call_count == 2
