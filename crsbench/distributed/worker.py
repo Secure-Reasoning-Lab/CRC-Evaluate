@@ -278,6 +278,13 @@ def _spawn_workers(
     queue_name = queue_name or default_trial_queue
     logger.info(f"Spawning {num_workers} worker processes...")
 
+    # Detach stdin so that child processes (rq work-horse via os.fork +
+    # os.setpgrp) don't receive SIGTTIN when a subprocess such as
+    # "docker compose run" attempts to read from the terminal.
+    devnull = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(devnull, 0)
+    os.close(devnull)
+
     processes = []
     try:
         for i in range(num_workers):
