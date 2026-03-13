@@ -5,6 +5,7 @@ import multiprocessing
 import os
 import tempfile
 import time
+import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -223,6 +224,144 @@ class TestWorkerContinuousMode:
         assert result == 1
 
 
+class TestWorkerStdinDetachment:
+    """Tests for detaching stdin in all worker execution paths."""
+
+    def test_run_worker_detaches_stdin_before_running_rq_worker(self):
+        """Burst worker path should detach stdin before RQ work starts."""
+        from crsbench.distributed.worker import _run_worker
+
+        queue = MagicMock()
+        queue.count = 0
+        queue.deferred_job_registry.count = 0
+        worker = MagicMock()
+        fake_rq = types.SimpleNamespace(
+            Queue=MagicMock(return_value=queue),
+            Worker=MagicMock(return_value=worker),
+        )
+
+        with (
+            patch.dict("sys.modules", {"rq": fake_rq}),
+            patch(
+                "crsbench.distributed.worker._detach_stdin_to_devnull"
+            ) as mock_detach,
+            patch(
+                "crsbench.distributed.queue.create_redis_connection",
+                return_value=MagicMock(),
+            ),
+        ):
+            _run_worker("localhost", "exp", "worker-0", "crsbench_trial")
+
+        mock_detach.assert_called_once_with()
+
+    def test_run_worker_continuous_detaches_stdin_before_running_rq_worker(self):
+        """Continuous worker path should detach stdin before polling."""
+        from crsbench.distributed.worker import _run_worker_continuous
+
+        queue = MagicMock()
+        worker = MagicMock()
+        fake_rq = types.SimpleNamespace(
+            Queue=MagicMock(return_value=queue),
+            Worker=MagicMock(return_value=worker),
+        )
+
+        with (
+            patch.dict("sys.modules", {"rq": fake_rq}),
+            patch(
+                "crsbench.distributed.worker._detach_stdin_to_devnull"
+            ) as mock_detach,
+            patch(
+                "crsbench.distributed.queue.create_redis_connection",
+                return_value=MagicMock(),
+            ),
+        ):
+            _run_worker_continuous("localhost", "exp", "worker-0", "crsbench_trial")
+
+        mock_detach.assert_called_once_with()
+
+    @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
+    def test_main_cpuset_supervisor_detaches_stdin_before_launch(self):
+        """Cpuset worker mode should detach stdin before starting supervisor."""
+        from crsbench.distributed.worker import main
+
+        with (
+            patch(
+                "crsbench.distributed.worker._detach_stdin_to_devnull"
+            ) as mock_detach,
+            patch(
+                "crsbench.distributed.ci_supervisor.run_ci_supervisor",
+                return_value=0,
+            ) as mock_supervisor,
+        ):
+            result = main(
+                redis_host="localhost",
+                experiment_name="exp",
+                worker_name="worker-0",
+                num_workers=2,
+                use_cpuset=True,
+            )
+
+        assert result == 0
+        mock_detach.assert_called_once_with()
+        mock_supervisor.assert_called_once()
+
+    @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
+    def test_run_worker_continuous_cpuset_detaches_stdin_before_launch(self):
+        """Continuous cpuset mode should detach stdin before starting supervisor."""
+        from crsbench.distributed.worker import run_worker_continuous
+
+        with (
+            patch(
+                "crsbench.distributed.worker._detach_stdin_to_devnull"
+            ) as mock_detach,
+            patch(
+                "crsbench.distributed.ci_supervisor.run_ci_supervisor",
+                return_value=0,
+            ) as mock_supervisor,
+        ):
+            run_worker_continuous(
+                redis_host="localhost",
+                experiment_name="exp",
+                worker_name="worker-0",
+                num_workers=2,
+                use_cpuset=True,
+            )
+
+        mock_detach.assert_called_once_with()
+        mock_supervisor.assert_called_once()
+
+    @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
+    def test_spawn_workers_standard_multiworker_detaches_stdin_before_spawn(self):
+        """Standard multi-worker mode should detach stdin before spawning children."""
+        from crsbench.distributed.worker import _spawn_workers
+
+        with (
+            patch("crsbench.distributed.worker.os.open", return_value=42) as mock_open,
+            patch("crsbench.distributed.worker.os.dup2") as mock_dup2,
+            patch("crsbench.distributed.worker.os.close") as mock_close,
+            patch(
+                "crsbench.distributed.worker.multiprocessing.Process"
+            ) as mock_process,
+        ):
+            mock_proc = MagicMock()
+            mock_proc.exitcode = 0
+            mock_process.return_value = mock_proc
+            result = _spawn_workers(
+                redis_host="localhost",
+                experiment_name="exp",
+                worker_name="worker-0",
+                num_workers=2,
+                queue_name="crsbench_trial",
+                continuous=False,
+            )
+
+        assert result == 0
+        mock_open.assert_called_once_with(os.devnull, os.O_RDONLY)
+        mock_dup2.assert_called_once_with(42, 0)
+        mock_close.assert_called_once_with(42)
+        assert mock_process.call_count == 2
+
+
 class TestConfiglessWorker:
     """Tests for configless worker mode (registry discovery)."""
 
@@ -231,6 +370,38 @@ class TestConfiglessWorker:
         from crsbench.distributed.worker import run_worker_configless
 
         assert callable(run_worker_configless)
+
+    @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
+    def test_configless_supervisor_detaches_stdin_before_launch(self):
+        """Configless supervisor mode should detach stdin before queue polling."""
+        from crsbench.distributed.registry import RuntimeRegistration
+        from crsbench.distributed.worker import run_worker_configless
+
+        reg = RuntimeRegistration(
+            experiment="exp-42",
+            trial_queue="crsbench_exp-42",
+            build_queue="crsbench_exp-42_build",
+            verify_queue="crsbench_exp-42_verify",
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.worker.discover_registered_experiments",
+                return_value=(MagicMock(), {"exp-42": reg}),
+            ),
+            patch(
+                "crsbench.distributed.worker._detach_stdin_to_devnull"
+            ) as mock_detach,
+            patch(
+                "crsbench.distributed.ci_supervisor.run_multi_queue_supervisor",
+                return_value=0,
+            ) as mock_supervisor,
+        ):
+            result = run_worker_configless(redis_host="localhost")
+
+        assert result == 0
+        mock_detach.assert_called_once_with()
+        mock_supervisor.assert_called_once()
 
     def test_run_worker_configless_rejects_none_redis_host(self):
         from crsbench.distributed.worker import run_worker_configless
