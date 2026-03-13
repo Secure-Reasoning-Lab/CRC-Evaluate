@@ -147,6 +147,27 @@ storage:
   # Used only when copy_results_after_trial=true.
   # results_filestore: /data/crsbench/finished
 
+cloud:
+  gce:
+    project: example-project
+    zone: us-central1-a
+    worker_count: 4
+    machine_type: e2-standard-16
+    boot_disk_size_gb: 200
+    image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+    service_account_email: crsbench-worker@example-project.iam.gserviceaccount.com
+    owner_label: team-crs
+    use_os_login: true
+    ssh_via_iap: true
+    readiness_timeout_sec: 900
+    # Optional GCE worker-fleet overrides:
+    # worker_name_prefix: gce-worker
+    # network: default
+    # subnetwork: default
+    # startup_script_uri: gs://example-bucket/crsbench/worker.sh
+    # labels:
+    #   env: test
+
 # Optional top-level verification/reporting behavior.
 # pov_dedup_strategy: patch-based
 

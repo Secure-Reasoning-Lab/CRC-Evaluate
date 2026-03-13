@@ -100,6 +100,43 @@ trial jobs can start immediately. The evaluator is optional — without it,
 build/verify work queues harmlessly and can be processed later via
 `crsbench re-eval` or a later evaluator run.
 
+## Cloud Worker Fleets
+
+For cloud-managed workers, declare the worker fleet in the top-level
+`cloud.gce` block instead of relying on host maps or ad hoc SSH setup scripts.
+
+```yaml
+cloud:
+  gce:
+    project: example-project
+    zone: us-central1-a
+    worker_count: 4
+    machine_type: e2-standard-16
+    boot_disk_size_gb: 200
+    image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+    service_account_email: crsbench-worker@example-project.iam.gserviceaccount.com
+    owner_label: team-crs
+    use_os_login: true
+    ssh_via_iap: true
+    readiness_timeout_sec: 900
+```
+
+Phase 1 contract notes:
+- `cloud.gce` is the canonical GCE worker-fleet declaration surface.
+- Access is OS Login-compatible SSH only; keep host verification enabled.
+- Use a dedicated worker service account rather than default project
+  credentials.
+- `ssh_via_iap: true` is the preferred pattern when workers are not exposed on
+  public SSH.
+- Cloud worker readiness is an explicit control-plane concern and is distinct
+  from generic Redis worker visibility.
+- `crsbench run` waits for the requested fleet to report explicit readiness
+  before it enqueues trial jobs.
+- A VM in GCE `RUNNING` state is still non-ready until CRSBench records
+  `ready`.
+- Bootstrap failures are surfaced through per-instance startup evidence, so
+  normal diagnosis should not require interactive SSH.
+
 ## Queue Behavior and Cleanup
 
 Use experiment-scoped queue cleanup (safe in flat shared-queue mode):
@@ -223,6 +260,20 @@ evaluator:
   # build_cores_per_job: 4
   # verify_jobs: 16
   # verify_cores_per_job: 1
+
+cloud:
+  gce:
+    project: example-project
+    zone: us-central1-a
+    worker_count: 4
+    machine_type: e2-standard-16
+    boot_disk_size_gb: 200
+    image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+    service_account_email: crsbench-worker@example-project.iam.gserviceaccount.com
+    owner_label: team-crs
+    use_os_login: true
+    ssh_via_iap: true
+    readiness_timeout_sec: 900
 ```
 
 ### Config File Naming
@@ -388,6 +439,11 @@ uv run crsbench worker \
 | `--worker-name` | Worker name for identification | Hostname |
 
 ## Multi-Machine Setup
+
+The manual SSH/scp workflows below are the legacy operator-managed path. They
+remain useful for existing non-cloud deployments, but they are not the managed
+cloud worker contract. For GCE-backed fleets, declare workers in `cloud.gce`
+instead of encoding hostnames into scripts.
 
 ### Option A: Password Auth (recommended)
 

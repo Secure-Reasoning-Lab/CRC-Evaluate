@@ -2055,6 +2055,28 @@ def run_experiment_distributed(
             )
             return
 
+        cloud_config = getattr(config, "cloud", None)
+        if isinstance(cloud_config, BaseModel) and cloud_config.gce is not None:
+            from crsbench.cloud.status import CloudFleetStatusManager
+
+            if session.cloud_readiness is None:
+                raise RuntimeError(
+                    "Distributed runtime session missing cloud readiness store"
+                )
+
+            fleet_status = CloudFleetStatusManager(
+                readiness_store=session.cloud_readiness
+            ).bring_up_gce_workers(
+                experiment_name=experiment_name,
+                fleet=cloud_config.gce,
+                redis_host=redis_host,
+                registration=registration,
+            )
+            logger.info(
+                "Cloud worker fleet ready: "
+                f"{fleet_status.ready_count}/{fleet_status.requested_count}"
+            )
+
         jobs = []
         for trial in trials:
             bh = trial.benchmark_harness

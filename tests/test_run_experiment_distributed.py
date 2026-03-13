@@ -603,3 +603,139 @@ def test_monitor_jobs_rich_includes_finished_none_result() -> None:
     assert results[0].success is False
     assert results[0].error_type == "MissingJobResult"
     marker.assert_called_once()
+
+
+def test_cloud_fleet_bringup_runs_before_enqueue(tmp_path: Path) -> None:
+    """Cloud-backed runs must wait for bring-up before queueing trial work."""
+    from crsbench.validation.schemas import CloudConfig, GceWorkerFleetConfig
+
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = False
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+    config.crs_compose = None
+    config.max_total_time = 3600
+    config.model_dump.return_value = {"experiment": "exp-test"}
+    config.cloud = CloudConfig(
+        gce=GceWorkerFleetConfig(
+            project="test-project",
+            zone="us-central1-a",
+            worker_count=1,
+            machine_type="e2-standard-16",
+            boot_disk_size_gb=200,
+            image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+            service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+            owner_label="team-crs",
+        )
+    )
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.cloud_readiness = MagicMock()
+    session.register_or_raise.return_value = None
+
+    registration = MagicMock()
+    call_order: list[str] = []
+    manager = MagicMock()
+    manager.bring_up_gce_workers.side_effect = lambda **_kwargs: (
+        call_order.append("bringup") or MagicMock(ready_count=1, requested_count=1)
+    )
+
+    def _enqueue(*args, **kwargs):
+        del args, kwargs
+        assert call_order == ["bringup"]
+        raise RuntimeError("stop after enqueue")
+
+    queue.enqueue.side_effect = _enqueue
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={"queued": {}, "started": {}, "failed": {}, "finished": {}},
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config",
+            return_value=registration,
+        ),
+        patch(
+            "crsbench.cloud.status.CloudFleetStatusManager",
+            return_value=manager,
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="stop after enqueue"):
+            run_experiment_distributed("exp-test", config, [_make_trial(None)])
+
+    manager.bring_up_gce_workers.assert_called_once()
+
+
+def test_cloud_fleet_failure_aborts_before_enqueue(tmp_path: Path) -> None:
+    """Cloud bring-up failures must abort before any trial jobs are queued."""
+    from crsbench.cloud.status import CloudFleetBringupError
+    from crsbench.validation.schemas import CloudConfig, GceWorkerFleetConfig
+
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = False
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+    config.crs_compose = None
+    config.max_total_time = 3600
+    config.model_dump.return_value = {"experiment": "exp-test"}
+    config.cloud = CloudConfig(
+        gce=GceWorkerFleetConfig(
+            project="test-project",
+            zone="us-central1-a",
+            worker_count=1,
+            machine_type="e2-standard-16",
+            boot_disk_size_gb=200,
+            image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+            service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+            owner_label="team-crs",
+        )
+    )
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.cloud_readiness = MagicMock()
+    session.register_or_raise.return_value = None
+
+    manager = MagicMock()
+    manager.bring_up_gce_workers.side_effect = CloudFleetBringupError(
+        "gce-worker-001 bootstrap failed: systemd unit exited",
+    )
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={"queued": {}, "started": {}, "failed": {}, "finished": {}},
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+        patch(
+            "crsbench.cloud.status.CloudFleetStatusManager",
+            return_value=manager,
+        ),
+    ):
+        with pytest.raises(
+            CloudFleetBringupError,
+            match="bootstrap failed: systemd unit exited",
+        ):
+            run_experiment_distributed("exp-test", config, [_make_trial(None)])
+
+    queue.enqueue.assert_not_called()

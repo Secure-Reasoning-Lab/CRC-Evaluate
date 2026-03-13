@@ -34,6 +34,26 @@ def test_for_reeval_wires_verify_and_patch_queues() -> None:
     assert session.trial_queue is verify_queue
     assert session.build_queue is build_queue
     assert session.verify_queue is patch_verify_queue
+    assert session.cloud_readiness is not None
+
+
+def test_for_run_wires_cloud_readiness_store() -> None:
+    trial_queue = MagicMock()
+    redis_conn = MagicMock()
+    trial_queue.connection = redis_conn
+
+    with patch(
+        "crsbench.distributed.runtime_session.initialize_queue",
+        return_value=trial_queue,
+    ):
+        session = DistributedRuntimeSession.for_run(
+            redis_host="localhost",
+            experiment_name="exp",
+        )
+
+    assert session is not None
+    assert session.trial_queue is trial_queue
+    assert session.cloud_readiness is not None
 
 
 def test_register_or_raise_on_lock_contention() -> None:

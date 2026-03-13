@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, cast
 
+from crsbench.cloud.readiness import CloudReadinessStore, ReadinessRedisProtocol
 from crsbench.distributed.patch_queue import initialize_patch_queues
 from crsbench.distributed.queue import create_redis_connection, initialize_queue
 from crsbench.distributed.registry import RegistryClient, RegistryLease
@@ -33,6 +34,7 @@ class DistributedRuntimeSession:
     trial_queue: Optional["rq.Queue"] = None
     build_queue: Optional["rq.Queue"] = None
     verify_queue: Optional["rq.Queue"] = None
+    cloud_readiness: Optional[CloudReadinessStore] = None
 
     @classmethod
     def for_run(
@@ -56,6 +58,9 @@ class DistributedRuntimeSession:
             registry=registry,
             lease=lease,
             trial_queue=trial_queue,
+            cloud_readiness=CloudReadinessStore(
+                cast("ReadinessRedisProtocol", redis_conn)
+            ),
         )
 
     @classmethod
@@ -88,6 +93,9 @@ class DistributedRuntimeSession:
             build_queue=build_queue,
             verify_queue=patch_verify_queue,
             trial_queue=verify_queue,
+            cloud_readiness=CloudReadinessStore(
+                cast("ReadinessRedisProtocol", redis_conn)
+            ),
         )
 
     def register_or_raise(self, registration: "RuntimeRegistration") -> None:

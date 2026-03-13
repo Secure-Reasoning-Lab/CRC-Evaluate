@@ -854,6 +854,91 @@ class TestExperimentConfigSchema:
         ):
             ExperimentConfig(**data)
 
+    def test_cloud_gce_valid(self):
+        data = self._base_kwargs()
+        data["cloud"] = {
+            "gce": {
+                "project": "test-project",
+                "zone": "us-central1-a",
+                "worker_count": 2,
+                "machine_type": "e2-standard-4",
+                "boot_disk_size_gb": 100,
+                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                "owner_label": "team-crs",
+                "ssh_via_iap": True,
+                "readiness_timeout_sec": 1200,
+            }
+        }
+        config = ExperimentConfig(**data)
+        assert config.cloud is not None
+        assert config.cloud.gce.project == "test-project"
+        assert config.cloud.gce.zone == "us-central1-a"
+        assert config.cloud.gce.region is None
+        assert config.cloud.gce.use_os_login is True
+        assert config.cloud.gce.ssh_via_iap is True
+
+    def test_cloud_gce_requires_exactly_one_location(self):
+        data = self._base_kwargs()
+        data["cloud"] = {
+            "gce": {
+                "project": "test-project",
+                "zone": "us-central1-a",
+                "region": "us-central1",
+                "worker_count": 2,
+                "machine_type": "e2-standard-4",
+                "boot_disk_size_gb": 100,
+                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                "owner_label": "team-crs",
+            }
+        }
+        with pytest.raises(
+            PydanticValidationError, match="exactly one of 'zone' or 'region'"
+        ):
+            ExperimentConfig(**data)
+
+    def test_cloud_gce_rejects_image_and_instance_template(self):
+        data = self._base_kwargs()
+        data["cloud"] = {
+            "gce": {
+                "project": "test-project",
+                "zone": "us-central1-a",
+                "worker_count": 2,
+                "machine_type": "e2-standard-4",
+                "boot_disk_size_gb": 100,
+                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                "instance_template": "global/instanceTemplates/crsbench-worker",
+                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                "owner_label": "team-crs",
+            }
+        }
+        with pytest.raises(
+            PydanticValidationError,
+            match="exactly one of 'image' or 'instance_template'",
+        ):
+            ExperimentConfig(**data)
+
+    def test_cloud_gce_rejects_unsupported_access_mode(self):
+        data = self._base_kwargs()
+        data["cloud"] = {
+            "gce": {
+                "project": "test-project",
+                "zone": "us-central1-a",
+                "worker_count": 2,
+                "machine_type": "e2-standard-4",
+                "boot_disk_size_gb": 100,
+                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                "owner_label": "team-crs",
+                "use_os_login": False,
+            }
+        }
+        with pytest.raises(
+            PydanticValidationError, match="use_os_login must remain true"
+        ):
+            ExperimentConfig(**data)
+
     def test_benchmarks_nested_harness_cpvs(self):
         data = self._base_kwargs()
         data["benchmarks"] = [
@@ -1698,6 +1783,10 @@ class TestIntegrationAllConfigs:
         assert config.trials == 3
         assert config.max_total_time == 28800
         assert config.redis_host == "localhost:6379"
+        assert config.cloud is not None
+        assert config.cloud.gce.project == "example-project"
+        assert config.cloud.gce.zone == "us-central1-a"
+        assert config.cloud.gce.use_os_login is True
 
     def test_validate_suite_example_format(self):
         """Test validation of benchmark suite with proper format (not placeholders)."""

@@ -1155,6 +1155,200 @@ class EvaluatorConfig(BaseModel):
     )
 
 
+class GceWorkerFleetConfig(BaseModel):
+    """GCE worker provisioning configuration for cloud-backed experiments."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project: str = Field(..., description="GCP project ID used for worker VMs.")
+    zone: Optional[str] = Field(
+        default=None,
+        description="GCE zone for direct worker VM creation.",
+    )
+    region: Optional[str] = Field(
+        default=None,
+        description="Optional regional placement selector when zone-level targeting is not used.",
+    )
+    worker_count: int = Field(
+        default=1,
+        ge=1,
+        description="Number of worker VMs to provision for the experiment.",
+    )
+    machine_type: Optional[str] = Field(
+        default=None,
+        description="GCE machine type when creating VMs from an image.",
+    )
+    boot_disk_size_gb: Optional[int] = Field(
+        default=None,
+        ge=10,
+        description="Boot disk size in GiB when creating VMs from an image.",
+    )
+    image: Optional[str] = Field(
+        default=None,
+        description="Image or image-family reference used for worker VM creation.",
+    )
+    instance_template: Optional[str] = Field(
+        default=None,
+        description="Existing GCE instance template to use instead of explicit image/machine settings.",
+    )
+    network: Optional[str] = Field(
+        default=None,
+        description="Optional VPC network name for worker instances.",
+    )
+    subnetwork: Optional[str] = Field(
+        default=None,
+        description="Optional subnetwork name for worker instances.",
+    )
+    service_account_email: str = Field(
+        ...,
+        description="Dedicated worker service account email.",
+    )
+    owner_label: Optional[str] = Field(
+        default=None,
+        description="Operator/team ownership label applied to provisioned workers.",
+    )
+    labels: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Additional user-supplied GCE labels for worker instances.",
+    )
+    metadata: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Additional user-supplied instance metadata for worker bootstrap.",
+    )
+    worker_name_prefix: Optional[str] = Field(
+        default=None,
+        description="Optional stable prefix for generated worker instance names.",
+    )
+    startup_script_uri: Optional[str] = Field(
+        default=None,
+        description="Optional URI for a maintained startup script payload.",
+    )
+    use_os_login: bool = Field(
+        default=True,
+        description="Must remain true; Phase 1 supports OS Login-compatible SSH only.",
+    )
+    ssh_via_iap: bool = Field(
+        default=False,
+        description="Whether operators are expected to connect through IAP-backed SSH.",
+    )
+    readiness_timeout_sec: int = Field(
+        default=900,
+        ge=1,
+        description="Maximum time to wait for a worker to report ready before bring-up fails.",
+    )
+
+    @field_validator(
+        "project",
+        "machine_type",
+        "image",
+        "instance_template",
+        "network",
+        "subnetwork",
+        "service_account_email",
+        "owner_label",
+        "worker_name_prefix",
+        "startup_script_uri",
+        "zone",
+        "region",
+    )
+    @classmethod
+    def normalize_optional_strings(cls, value: Optional[str]) -> Optional[str]:
+        """Trim string values and collapse blanks to None."""
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        return normalized
+
+    @field_validator("project", "service_account_email")
+    @classmethod
+    def validate_required_strings(cls, value: Optional[str]) -> str:
+        """Require non-empty strings for mandatory cloud identity fields."""
+        if value is None:
+            raise ValueError("Field is required")
+        return value
+
+    @field_validator("service_account_email")
+    @classmethod
+    def validate_service_account_email(cls, value: str) -> str:
+        """Require an email-like service account identifier."""
+        if "@" not in value:
+            raise ValueError(
+                "cloud.gce.service_account_email must be a service-account email"
+            )
+        return value
+
+    @field_validator("labels", "metadata")
+    @classmethod
+    def validate_string_maps(cls, value: Dict[str, str]) -> Dict[str, str]:
+        """Reject blank keys or values in user-supplied maps."""
+        normalized: dict[str, str] = {}
+        for key, item in value.items():
+            key_str = key.strip()
+            item_str = item.strip()
+            if not key_str or not item_str:
+                raise ValueError("cloud.gce labels/metadata must not contain blanks")
+            normalized[key_str] = item_str
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_gce_contract(self):
+        """Enforce the Phase 1 GCE fleet contract."""
+        has_zone = self.zone is not None
+        has_region = self.region is not None
+        if has_zone == has_region:
+            raise ValueError("cloud.gce requires exactly one of 'zone' or 'region'")
+
+        has_image = self.image is not None
+        has_template = self.instance_template is not None
+        if has_image == has_template:
+            raise ValueError(
+                "cloud.gce requires exactly one of 'image' or 'instance_template'"
+            )
+
+        if not self.use_os_login:
+            raise ValueError(
+                "cloud.gce.use_os_login must remain true for the supported Phase 1 access model"
+            )
+
+        has_owner = self.owner_label is not None or "owner" in self.labels
+        if not has_owner:
+            raise ValueError(
+                "cloud.gce requires owner_label or labels.owner for fleet ownership"
+            )
+
+        if has_image:
+            if self.machine_type is None:
+                raise ValueError(
+                    "cloud.gce.machine_type is required when 'image' is used"
+                )
+            if self.boot_disk_size_gb is None:
+                raise ValueError(
+                    "cloud.gce.boot_disk_size_gb is required when 'image' is used"
+                )
+
+        if has_template and (
+            self.machine_type is not None or self.boot_disk_size_gb is not None
+        ):
+            raise ValueError(
+                "cloud.gce.instance_template cannot be combined with explicit machine_type or boot_disk_size_gb"
+            )
+
+        return self
+
+
+class CloudConfig(BaseModel):
+    """Top-level cloud worker provisioning configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    gce: GceWorkerFleetConfig = Field(
+        ...,
+        description="GCE worker fleet configuration for cloud-backed experiments.",
+    )
+
+
 class ExperimentPovInputs(BaseModel):
     """POV input settings."""
 
@@ -1452,6 +1646,10 @@ class ExperimentConfig(BaseModel):
     )
     resources: Optional[ResourceConfig] = Field(
         default=None, description="Resource allocation configuration for trials"
+    )
+    cloud: Optional[CloudConfig] = Field(
+        default=None,
+        description="Optional cloud worker provisioning configuration.",
     )
     worker: Optional[WorkerConfig] = Field(
         default=None, description="Distributed worker configuration"

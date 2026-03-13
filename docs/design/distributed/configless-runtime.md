@@ -21,6 +21,8 @@ Workers and evaluators support two modes:
 Runtime registration and queue discovery work as follows:
 
 - the orchestrator registers experiment metadata in Redis before enqueueing jobs
+- when `cloud.gce` is configured, the orchestrator also records per-instance
+  readiness state in Redis and gates trial enqueue on explicit worker readiness
 - configless workers discover trial queues from the registry and may serve multiple experiments
 - configless evaluators discover build/verify queues from the registry and may serve multiple experiments
 - config-pinned workers and evaluators use one explicit experiment configuration and one queue set
@@ -31,6 +33,7 @@ Runtime registration and queue discovery work as follows:
 |-----|------|----------|
 | `crsbench:registry:experiments` | Hash | `experiment_name → RuntimeRegistration JSON` |
 | `crsbench:registry:events` | Pub/Sub | `{"event": "register"/"deregister", "experiment": "..."}` |
+| `crsbench:cloud:workers:{experiment}` | Hash | `instance_id → CloudWorkerStatus JSON` |
 
 ## Queue Model
 
@@ -58,6 +61,21 @@ evaluators, but startup behavior differs:
 
 So configless mode keeps build/verify queue separation, but it does not have
 the same normal startup build-first phase as config-pinned evaluator CLI mode.
+
+## Cloud Worker Readiness Contract
+
+When an experiment declares `cloud.gce`, the configless runtime gains a
+separate cloud-worker readiness contract:
+
+- worker readiness records are keyed by cloud `instance_id`; instance name is
+  metadata only
+- allowed states are `provisioning`, `booting`, `registering`, `ready`,
+  `bootstrap_failed`, `deleting`, and `deleted`
+- VM `RUNNING` is not equivalent to schedulable readiness
+- the orchestrator only treats the fleet as usable when all requested workers
+  reach explicit `ready`
+- startup failure evidence is carried in readiness records so operators can
+  inspect bootstrap failures without interactive SSH
 
 ## Resource and Routing Contracts
 
@@ -130,6 +148,8 @@ legacy CI queue compatibility is documented in:
 |--------|------|
 | `crsbench/distributed/registry.py` | `RuntimeRegistration` model + `RegistryClient` |
 | `crsbench/run_experiment.py` | Orchestrator-side registration lifecycle |
+| `crsbench/cloud/readiness.py` | Cloud worker readiness records and fleet snapshots |
+| `crsbench/cloud/status.py` | Cloud bring-up gating and failure reporting |
 | `crsbench/distributed/worker.py` | Worker registry discovery and config-pinned mode entrypoints |
 | `crsbench/distributed/evaluator.py` | Evaluator registry discovery and config-pinned mode entrypoints |
 | `crsbench/distributed/ci_supervisor.py` | Multi-queue supervisor coordination |

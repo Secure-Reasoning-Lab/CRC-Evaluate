@@ -37,6 +37,37 @@ Deployment assumptions:
 - Authentication, tunnels, and firewall policy are operational concerns, not protocol concerns.
 - CRSBench only requires that each process can reach the configured Redis host.
 
+## Cloud Worker Contract
+
+When a deployment uses managed GCE workers, the experiment config is the source
+of truth for worker-fleet shape. The cloud contract is:
+
+- worker fleets are declared in `cloud.gce`, not in lab-specific host maps
+- provisioned workers carry experiment identity plus operator ownership labels
+- supported operator access remains OS Login-compatible SSH with host
+  verification enabled
+- IAP-backed SSH is preferred when workers do not expose public SSH
+- worker service accounts must be explicit and least-privileged
+- cloud-worker readiness is a control-plane state distinct from raw VM
+  `RUNNING` state and from global Redis worker counts
+- readiness records are keyed by cloud `instance_id`, not by instance name
+  alone
+- startup failure evidence must remain retrievable from the control path
+  without interactive VM login
+
+## Cloud Readiness and Evidence
+
+Managed cloud bring-up is successful only when CRSBench sees an explicit ready
+fleet for the current experiment:
+
+- provider states such as `PROVISIONING` or VM `RUNNING` map to non-ready
+  CRSBench states like `provisioning` and `booting`
+- workers become schedulable only after the readiness store records `ready`
+- `bootstrap_failed` and `deleted` are terminal non-ready states during bring-up
+- startup evidence must include per-instance detail so operators can diagnose
+  failures without manual SSH
+- stale readiness is scoped away by experiment name plus `instance_id`
+
 ## Path and Storage Contract
 
 - The orchestrator serializes experiment metadata into queue jobs.
@@ -63,6 +94,8 @@ Deployment assumptions:
 - Path mismatch on remote hosts: jobs fail unless host-local overrides or shared
   mounts make paths resolvable.
 - Queue cleanup must be experiment-scoped in shared flat-queue deployments.
+- Cloud worker timeout or bootstrap failure: orchestrator startup fails before
+  trial enqueue and surfaces per-instance readiness evidence.
 
 ## Benchmark CI Deployment Contract
 
