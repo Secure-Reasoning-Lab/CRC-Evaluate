@@ -33,6 +33,13 @@ The evaluator may operate in:
 These are queue-selection/runtime-discovery differences, not different result
 semantics.
 
+Startup behavior differs between the first two modes:
+
+- config-pinned evaluator CLI mode normally performs a startup pre-build
+  enqueue phase
+- configless mode skips startup pre-build enqueue and relies on lazy build-queue
+  consumption plus on-demand build on verify cache miss
+
 ## Verification Payload Contract
 
 Verification jobs must carry enough benchmark/trial/harness/POV context for an
@@ -52,6 +59,16 @@ inc-image runtime settings needed by the evaluator worker (`inc_image_policy`,
 registry, pull limits, timeout, and local image prefix). Remote evaluators must
 not silently fall back to unrelated local defaults when the originating
 experiment resolved non-default image settings.
+
+Current incremental-image prepare order is:
+
+- local image first
+- then remote pull if policy allows
+- then local image build fallback if policy allows
+
+If `inc_image_max_pull_bytes` is set, evaluators try to read the remote image
+size before pulling and skip pulls whose known remote size exceeds the cap.
+`inc_image_pull_timeout_sec` is propagated to the `docker pull` timeout.
 
 ## Result Contract
 

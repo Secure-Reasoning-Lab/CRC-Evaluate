@@ -105,6 +105,34 @@ class TestBenchmarkStatsNesting:
         assert args.func.__name__ == "run_stats"
 
 
+class TestBenchmarkSeedImportNesting:
+    """Tests for 'crsbench benchmark seed-import' nested subcommand."""
+
+    def test_benchmark_seed_import_parses(self):
+        parser = _make_parser()
+        args = parser.parse_args(["benchmark", "seed-import", "./experiment-output"])
+        assert args.experiment_dir == "./experiment-output"
+        assert args.benchmarks == "./benchmarks"
+        assert args.force is False
+
+    def test_benchmark_seed_import_help_documents_seeds_directory(self):
+        parser = _make_parser()
+        seed_import_parser = None
+        for action in parser._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                benchmark_parser = action.choices["benchmark"]
+                for nested_action in benchmark_parser._actions:
+                    if isinstance(nested_action, argparse._SubParsersAction):
+                        seed_import_parser = nested_action.choices["seed-import"]
+                        break
+                break
+        assert seed_import_parser is not None
+        help_text = seed_import_parser.format_help()
+        assert "seed-import" in help_text
+        assert ".aixcc/{harness}/seeds/" in help_text
+        assert ".aixcc/{harness}/corpus/" not in help_text
+
+
 class TestBenchmarkMigrateNesting:
     """Tests for 'crsbench benchmark migrate' nested subcommand."""
 

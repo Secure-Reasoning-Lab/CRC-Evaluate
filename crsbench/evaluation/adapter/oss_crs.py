@@ -324,7 +324,7 @@ class OssCrsAdapter:
         self,
         output_dir: Path,
     ) -> dict[str, Any]:
-        """Collect compose and per-CRS run logs from resolved artifacts."""
+        """Collect compose, per-CRS run logs, and per-CRS log_dir artifacts."""
         logs_out = output_dir / "logs"
         logs_out.mkdir(parents=True, exist_ok=True)
 
@@ -332,6 +332,7 @@ class OssCrsAdapter:
         compose_stderr = self.compose_stderr_log
         service_logs = self.service_logs_dir
         crs_run_logs_by_crs = self._get_all_crs_artifact_paths("run_logs")
+        crs_log_dirs_by_crs = self._get_all_crs_artifact_paths("log_dir")
 
         if compose_stdout and compose_stdout.exists():
             dst = logs_out / "docker-compose.stdout.log"
@@ -355,6 +356,14 @@ class OssCrsAdapter:
                 shutil.copytree(crs_log_dir, dst, dirs_exist_ok=True)
                 logger.info(f"Copied CRS run logs from {crs_log_dir}")
 
+        if crs_log_dirs_by_crs:
+            for crs_name, crs_log_dir in sorted(crs_log_dirs_by_crs.items()):
+                if not crs_log_dir.exists():
+                    continue
+                dst = logs_out / "crs" / crs_name / "log_dir"
+                shutil.copytree(crs_log_dir, dst, dirs_exist_ok=True)
+                logger.info(f"Copied CRS log_dir artifacts from {crs_log_dir}")
+
         return {
             "run_logs_base_dir": str(self.run_logs_base_dir)
             if self.run_logs_base_dir
@@ -364,6 +373,9 @@ class OssCrsAdapter:
             "service_logs_dir": str(service_logs) if service_logs else None,
             "crs_run_logs_by_crs": {
                 k: str(v) for k, v in sorted(crs_run_logs_by_crs.items())
+            },
+            "crs_log_dirs_by_crs": {
+                k: str(v) for k, v in sorted(crs_log_dirs_by_crs.items())
             },
         }
 

@@ -1,5 +1,6 @@
 """Tests for the statistics module."""
 
+import csv
 from pathlib import Path
 
 from crsbench.statistics import (
@@ -9,6 +10,7 @@ from crsbench.statistics import (
     VulnEntry,
     detect_mode,
     detect_source,
+    export_summary_csv,
 )
 
 
@@ -94,6 +96,7 @@ class TestBenchmarkStats:
         assert stats.total_vulns == 2
         assert stats.total_povs == 4
         assert stats.total_patches == 2
+        assert stats.total_vulnerable_harnesses == 1
 
     def test_by_source(self):
         benchmarks = [
@@ -177,7 +180,7 @@ class TestBenchmarkStats:
                 path=Path(),
                 source="AFC",
                 rts_mode=None,
-                inc_build=False,
+                inc_build=None,
             ),
         ]
         stats = BenchmarkStats.from_benchmarks(benchmarks)
@@ -185,13 +188,68 @@ class TestBenchmarkStats:
         assert stats.benchmarks_with_inc_build == 1
 
     def test_rts_and_inc_build_defaults(self):
-        # Test that defaults are None/True when not specified
+        # Test that current defaults remain aligned with broader CRSBench config
         benchmarks = [
             BenchmarkInfo(name="test-1", path=Path(), source="AFC"),
         ]
         stats = BenchmarkStats.from_benchmarks(benchmarks)
         assert stats.benchmarks_with_rts == 0
-        assert stats.benchmarks_with_inc_build == 1  # inc_build defaults to True
+        assert stats.benchmarks_with_inc_build == 1
+
+    def test_rts_none_is_not_counted_as_enabled(self):
+        benchmarks = [
+            BenchmarkInfo(
+                name="test-1",
+                path=Path(),
+                source="AFC",
+                rts_mode="none",
+                inc_build=True,
+            ),
+        ]
+        stats = BenchmarkStats.from_benchmarks(benchmarks)
+        assert stats.benchmarks_with_rts == 0
+
+    def test_counts_vulnerable_harnesses(self):
+        vuln_a = VulnEntry(
+            benchmark_name="test",
+            source="AFC",
+            repo_url="",
+            mode="delta",
+            language="C/C++",
+            harness_name="fuzz_a",
+            vuln_id="cpv_0",
+        )
+        vuln_b = VulnEntry(
+            benchmark_name="test",
+            source="AFC",
+            repo_url="",
+            mode="delta",
+            language="C/C++",
+            harness_name="fuzz_b",
+            vuln_id="cpv_1",
+        )
+        vuln_c = VulnEntry(
+            benchmark_name="test",
+            source="AFC",
+            repo_url="",
+            mode="delta",
+            language="C/C++",
+            harness_name="fuzz_b",
+            vuln_id="cpv_2",
+        )
+        benchmarks = [
+            BenchmarkInfo(
+                name="afc-test",
+                path=Path(),
+                source="AFC",
+                harnesses=["fuzz_a", "fuzz_b", "fuzz_c"],
+                vulns=[vuln_a, vuln_b, vuln_c],
+            ),
+        ]
+        stats = BenchmarkStats.from_benchmarks(benchmarks)
+        assert stats.total_harnesses == 3
+        assert stats.total_vulnerable_harnesses == 2
+        assert stats.vulns_per_harness == [1, 2]
 
 
 class TestCategoryStats:
@@ -206,3 +264,49 @@ class TestCategoryStats:
         cat = CategoryStats(benchmarks=5, vulns=10)
         assert cat.benchmarks == 5
         assert cat.vulns == 10
+
+
+class TestStatisticsExporters:
+    """Tests for statistics exporters."""
+
+    def test_summary_csv_uses_vulnerable_harness_labels(self, tmp_path: Path):
+        vuln = VulnEntry(
+            benchmark_name="afc-test",
+            source="AFC",
+            repo_url="https://example.com/repo.git",
+            mode="delta",
+            language="C/C++",
+            harness_name="fuzz_a",
+            vuln_id="cpv_0",
+        )
+        benchmarks = [
+            BenchmarkInfo(
+                name="afc-test",
+                path=Path(),
+                source="AFC",
+                mode="delta",
+                language="C/C++",
+                harnesses=["fuzz_a", "fuzz_b"],
+                vulns=[vuln],
+                inc_build=True,
+            ),
+        ]
+
+        output_path = tmp_path / "summary.csv"
+        export_summary_csv(benchmarks, output_path)
+
+        with output_path.open(encoding="utf-8") as f:
+            rows = list(csv.reader(f))
+
+        assert [
+            "Overall",
+            "Vulnerable Harnesses",
+            "",
+            "1",
+            "",
+            "",
+        ] in rows
+        assert any(row and row[0] == "Vulns per Vulnerable Harness" for row in rows)
+        assert any(
+            row and row[0] == "Vulns per Vulnerable Harness Histogram" for row in rows
+        )

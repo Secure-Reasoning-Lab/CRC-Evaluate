@@ -44,7 +44,13 @@ Key entry points:
 - `collect_benchmark_stats(benchmarks_dir)`
 - `BenchmarkStats.from_benchmarks(benchmarks)`
 - `export_benchmarks_csv(benchmarks, output_path)`
+- `export_summary_csv(benchmarks, output_path)`
 - `print_summary(benchmarks)`
+
+`export_summary_csv()` emits a sectioned summary table. Its value columns are
+generic (`Primary Value`, `Secondary Value`, `Tertiary Value`) because
+different sections report different kinds of metrics (counts, ratios, and
+aggregates).
 
 ## Key Classes
 
@@ -54,8 +60,10 @@ Aggregated statistics with a single source of truth for calculations:
 
 ```python
 stats = BenchmarkStats.from_benchmarks(benchmarks)
-stats.total_benchmarks   # Number of projects
+stats.total_benchmarks   # Number of benchmarks
+stats.unique_projects    # Number of unique projects/repos
 stats.total_vulns        # Number of vulnerabilities
+stats.total_vulnerable_harnesses  # Harnesses with at least one vulnerability entry
 stats.by_source          # Dict[str, CategoryStats] by source (AFC, ASC, etc.)
 stats.by_mode            # Dict[str, CategoryStats] by mode (delta, full)
 stats.by_language        # Dict[str, CategoryStats] by language

@@ -68,6 +68,7 @@ class BenchmarkStats:
     total_benchmarks: int = 0
     total_vulns: int = 0
     total_harnesses: int = 0
+    total_vulnerable_harnesses: int = 0
     total_povs: int = 0
     total_patches: int = 0
     unique_projects: int = 0
@@ -133,8 +134,10 @@ class BenchmarkStats:
             vulns_with_vuln_yaml=sum(
                 1 for b in filtered for v in b.vulns if v.has_vuln_yaml
             ),
-            benchmarks_with_rts=sum(1 for b in filtered if b.rts_mode),
-            benchmarks_with_inc_build=sum(1 for b in filtered if b.inc_build),
+            benchmarks_with_rts=sum(
+                1 for b in filtered if b.rts_mode and b.rts_mode != "none"
+            ),
+            benchmarks_with_inc_build=sum(1 for b in filtered if b.inc_build is True),
             total_povs=sum(v.num_povs for b in filtered for v in b.vulns),
             total_patches=sum(v.num_patches for b in filtered for v in b.vulns),
             sanity_count=sanity_count,
@@ -229,6 +232,7 @@ class BenchmarkStats:
                 vulns_per_harness.append(count)
 
         stats.vulns_per_harness = vulns_per_harness
+        stats.total_vulnerable_harnesses = len(vulns_per_harness)
 
         if vulns_per_harness:
             stats.avg_vulns_per_harness = sum(vulns_per_harness) / len(
