@@ -42,6 +42,12 @@ Examples:
     collect_p = cloud_subparsers.add_parser("collect", help="Collect artifacts from workers")
     collect_p.add_argument("experiment", help="Experiment name")
     collect_p.add_argument("--config", required=True, help="Path to experiment YAML config")
+    collect_p.add_argument(
+        "--remote-dir",
+        required=True,
+        dest="remote_dir",
+        help="Absolute path on workers containing the experiment tree",
+    )
 
     # events
     events_p = cloud_subparsers.add_parser("events", help="Show recovery event timeline")
@@ -68,8 +74,9 @@ def run_cloud(args: argparse.Namespace) -> int:
         return run_events(args)
 
     if cmd == "collect":
-        logger.error("'cloud collect' is not implemented yet (see Plan 04-02).")
-        return 1
+        from crsbench.cloud.cli._collect import run_collect
+
+        return run_collect(args)
 
     if cmd == "teardown":
         logger.error("'cloud teardown' is not implemented yet (see Plan 04-02).")

@@ -240,8 +240,12 @@ class TestArgParsing:
 
     def test_parse_collect(self):
         parser = self._build_parser()
-        args = parser.parse_args(["cloud", "collect", "my-exp", "--config", "c.yaml"])
+        args = parser.parse_args([
+            "cloud", "collect", "my-exp", "--config", "c.yaml",
+            "--remote-dir", "/home/user/experiments/my-exp",
+        ])
         assert args.cloud_command == "collect"
+        assert args.remote_dir == "/home/user/experiments/my-exp"
 
 
 # ---------------------------------------------------------------------------
@@ -472,11 +476,12 @@ class TestCollect:
         assert rc == 0
         assert mock_coll.collect.call_count == 2
 
+    @patch("crsbench.cloud.cli._collect.logger")
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
     @patch("crsbench.cloud.cli._collect.GceProvisioner")
     @patch("crsbench.cloud.cli._collect.reconnect")
     def test_collect_stale_redis_warning(
-        self, mock_reconnect, mock_prov_cls, mock_coll_cls, caplog
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_logger
     ):
         """Warns when Redis has workers not present in GCE."""
         mock_prov = MagicMock()
@@ -504,13 +509,14 @@ class TestCollect:
 
         from crsbench.cloud.cli._collect import run_collect
 
-        import logging
-
-        with caplog.at_level(logging.WARNING):
-            rc = run_collect(_make_collect_args())
+        rc = run_collect(_make_collect_args())
 
         assert rc == 0
-        assert any("stale" in msg.lower() or "w-2" in msg for msg in caplog.messages)
+        # Verify logger.warning was called with stale info
+        warning_calls = [
+            str(call) for call in mock_logger.warning.call_args_list
+        ]
+        assert any("w-2" in call for call in warning_calls)
 
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
     @patch("crsbench.cloud.cli._collect.GceProvisioner")
