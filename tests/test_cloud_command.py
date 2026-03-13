@@ -554,3 +554,211 @@ class TestCollect:
         assert rc == 1
         # Both workers should have been attempted
         assert mock_coll.collect.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Teardown sub-action tests
+# ---------------------------------------------------------------------------
+
+
+def _make_teardown_args(
+    experiment: str = "test-exp",
+    config: str = "/tmp/config.yaml",
+    remote_dir: str = "/home/user/crsbench-experiments/test-exp",
+    force: bool = False,
+):
+    return argparse.Namespace(
+        experiment=experiment,
+        config=config,
+        remote_dir=remote_dir,
+        force=force,
+        cloud_command="teardown",
+    )
+
+
+def _setup_teardown_mocks(
+    mock_reconnect,
+    mock_prov_cls,
+    mock_coll_cls,
+    workers=None,
+    redis_workers=None,
+    jobs=None,
+):
+    """Wire up common mock structure for teardown tests."""
+    if workers is None:
+        workers = [_make_gce_worker("w-1"), _make_gce_worker("w-2")]
+
+    mock_prov = MagicMock()
+    mock_prov.list_workers.return_value = workers
+    mock_prov_cls.return_value = mock_prov
+
+    mock_coll = MagicMock()
+    mock_coll_cls.return_value = mock_coll
+
+    readiness = MagicMock()
+    readiness.list_workers.return_value = redis_workers or []
+
+    lifecycle = MagicMock()
+    lifecycle.list_jobs.return_value = jobs or []
+
+    mock_reconnect.return_value = (
+        MagicMock(),  # fleet
+        MagicMock(),  # redis_conn
+        readiness,
+        lifecycle,
+        Path("/tmp/filestore"),
+    )
+
+    return mock_prov, mock_coll, readiness, lifecycle
+
+
+class TestTeardown:
+    """Tests for run_teardown() sub-action."""
+
+    @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
+    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.reconnect")
+    def test_teardown_collect_then_delete(
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls
+    ):
+        """Teardown collects from all workers then deletes them."""
+        mock_prov, mock_coll, _, _ = _setup_teardown_mocks(
+            mock_reconnect, mock_prov_cls, mock_coll_cls
+        )
+
+        from crsbench.cloud.cli._teardown import run_teardown
+
+        rc = run_teardown(_make_teardown_args(force=True))
+        assert rc == 0
+        # Collect called for each worker
+        assert mock_coll.collect.call_count == 2
+        # Delete called after collection
+        mock_prov.delete_workers.assert_called_once()
+        # Verify collect was called BEFORE delete
+        collect_order = mock_coll.collect.call_args_list
+        delete_order = mock_prov.delete_workers.call_args_list
+        assert len(collect_order) == 2
+        assert len(delete_order) == 1
+
+    @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
+    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.reconnect")
+    def test_teardown_aborts_on_collection_failure(
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls
+    ):
+        """If any collection fails, teardown aborts -- delete_workers NOT called."""
+        from crsbench.cloud.collection import ArtifactCollectionError
+
+        mock_prov, mock_coll, _, _ = _setup_teardown_mocks(
+            mock_reconnect, mock_prov_cls, mock_coll_cls
+        )
+        mock_coll.collect.side_effect = ArtifactCollectionError("rsync failed")
+
+        from crsbench.cloud.cli._teardown import run_teardown
+
+        rc = run_teardown(_make_teardown_args(force=True))
+        assert rc == 1
+        mock_prov.delete_workers.assert_not_called()
+
+    @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
+    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.reconnect")
+    def test_teardown_force_flag(self, mock_reconnect, mock_prov_cls, mock_coll_cls):
+        """With --force, no input() call is made."""
+        _setup_teardown_mocks(mock_reconnect, mock_prov_cls, mock_coll_cls)
+
+        from crsbench.cloud.cli._teardown import run_teardown
+
+        with patch("builtins.input") as mock_input:
+            rc = run_teardown(_make_teardown_args(force=True))
+
+        assert rc == 0
+        mock_input.assert_not_called()
+
+    @patch("crsbench.cloud.cli._teardown.logger")
+    @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
+    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.reconnect")
+    def test_teardown_stale_redis_warning(
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_logger
+    ):
+        """When GCE has no workers but Redis does, warn about stale entries."""
+        stale_worker = MagicMock()
+        stale_worker.instance_name = "w-stale"
+
+        _setup_teardown_mocks(
+            mock_reconnect,
+            mock_prov_cls,
+            mock_coll_cls,
+            workers=[],
+            redis_workers=[stale_worker],
+        )
+
+        from crsbench.cloud.cli._teardown import run_teardown
+
+        rc = run_teardown(_make_teardown_args(force=True))
+        assert rc == 0
+        warning_calls = [str(call) for call in mock_logger.warning.call_args_list]
+        assert any("stale" in call.lower() for call in warning_calls)
+
+    @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
+    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.reconnect")
+    def test_teardown_confirmation_prompt_yes(
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls
+    ):
+        """Confirmation prompt with 'yes' proceeds with teardown."""
+        mock_prov, _, _, _ = _setup_teardown_mocks(
+            mock_reconnect, mock_prov_cls, mock_coll_cls
+        )
+
+        from crsbench.cloud.cli._teardown import run_teardown
+
+        with patch("builtins.input", return_value="yes"), \
+             patch("sys.stdin") as mock_stdin:
+            mock_stdin.isatty.return_value = True
+            rc = run_teardown(_make_teardown_args(force=False))
+
+        assert rc == 0
+        mock_prov.delete_workers.assert_called_once()
+
+    @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
+    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.reconnect")
+    def test_teardown_confirmation_prompt_no(
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls
+    ):
+        """Confirmation prompt with non-'yes' cancels teardown."""
+        mock_prov, _, _, _ = _setup_teardown_mocks(
+            mock_reconnect, mock_prov_cls, mock_coll_cls
+        )
+
+        from crsbench.cloud.cli._teardown import run_teardown
+
+        with patch("builtins.input", return_value="no"), \
+             patch("sys.stdin") as mock_stdin:
+            mock_stdin.isatty.return_value = True
+            rc = run_teardown(_make_teardown_args(force=False))
+
+        assert rc == 0
+        mock_prov.delete_workers.assert_not_called()
+
+    @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
+    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.reconnect")
+    def test_teardown_non_tty_without_force(
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls
+    ):
+        """Non-TTY stdin without --force returns 1 with error."""
+        mock_prov, _, _, _ = _setup_teardown_mocks(
+            mock_reconnect, mock_prov_cls, mock_coll_cls
+        )
+
+        from crsbench.cloud.cli._teardown import run_teardown
+
+        with patch("sys.stdin") as mock_stdin:
+            mock_stdin.isatty.return_value = False
+            rc = run_teardown(_make_teardown_args(force=False))
+
+        assert rc == 1
+        mock_prov.delete_workers.assert_not_called()
