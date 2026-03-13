@@ -560,15 +560,18 @@ def run_ci_supervisor(
         _terminate_all(build_active, cpu_pool)
         _terminate_all(verify_active, cpu_pool)
         _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
+        _cleanup_stale_rq_workers(redis_host, build_queue_name, verify_queue_name)
         return 0
     except Exception as e:
         logger.error(f"CI supervisor error: {e}", exc_info=True)
         _terminate_all(build_active, cpu_pool)
         _terminate_all(verify_active, cpu_pool)
         _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
+        _cleanup_stale_rq_workers(redis_host, build_queue_name, verify_queue_name)
         return 3
 
     _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
+    _cleanup_stale_rq_workers(redis_host, build_queue_name, verify_queue_name)
     if cpu_tag_livelock_detected:
         return CPU_TAG_MISMATCH_EXIT_CODE
     return 0
@@ -1104,15 +1107,18 @@ def run_multi_queue_supervisor(
         _terminate_all(build_active, cpu_pool)
         _terminate_all(verify_active, cpu_pool)
         _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
+        _cleanup_stale_rq_workers(redis_host, build_queue_names, verify_queue_names)
         return 0
     except Exception as e:
         logger.error(f"Multi-queue supervisor error: {e}", exc_info=True)
         _terminate_all(build_active, cpu_pool)
         _terminate_all(verify_active, cpu_pool)
         _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
+        _cleanup_stale_rq_workers(redis_host, build_queue_names, verify_queue_names)
         return 3
 
     _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
+    _cleanup_stale_rq_workers(redis_host, build_queue_names, verify_queue_names)
     if cpu_tag_livelock_detected:
         return CPU_TAG_MISMATCH_EXIT_CODE
     return 0
@@ -1257,26 +1263,92 @@ def _force_cleanup_deferred_cgroups(deferred: list[Path]) -> None:
     deferred.extend(remaining)
 
 
+def _cleanup_stale_rq_workers(
+    redis_host: str,
+    *queue_names: Union[str, list[str]],
+) -> None:
+    """Remove dead RQ workers from the Redis worker registry.
+
+    Accepts individual queue name strings and/or lists of queue names.
+    After worker processes are terminated, their RQ entries may linger in
+    Redis until the heartbeat TTL expires.  This helper deregisters any
+    worker whose OS process no longer exists.
+    """
+    if not REDIS_AVAILABLE:
+        return
+
+    from crsbench.distributed.queue import create_redis_connection
+
+    # Flatten mixed str / list[str] arguments.
+    flat_names: list[str] = []
+    for name in queue_names:
+        if isinstance(name, list):
+            flat_names.extend(name)
+        else:
+            flat_names.append(name)
+
+    try:
+        conn = create_redis_connection(redis_host)
+    except Exception as exc:
+        logger.warning(f"Failed to connect to Redis for worker cleanup: {exc}")
+        return
+
+    seen_worker_keys: set[str] = set()
+    for qname in flat_names:
+        try:
+            queue = rq.Queue(qname, connection=conn)
+            workers = rq.Worker.all(queue=queue)
+        except Exception as exc:
+            logger.warning(f"Failed to list RQ workers for queue {qname}: {exc}")
+            continue
+
+        for worker in workers:
+            if worker.key in seen_worker_keys:
+                continue
+            seen_worker_keys.add(worker.key)
+            try:
+                worker.refresh()
+                pid = worker.pid
+                if pid is None:
+                    worker.register_death()
+                    logger.info(f"Deregistered RQ worker with no PID: {worker.name}")
+                    continue
+                # Check whether the process is still alive.
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                try:
+                    worker.register_death()
+                    logger.info(
+                        f"Deregistered stale RQ worker: {worker.name} (PID {pid})"
+                    )
+                except Exception as inner:
+                    logger.warning(
+                        f"Failed to deregister stale worker {worker.name}: {inner}"
+                    )
+            except PermissionError:
+                pass
+            except Exception as exc:
+                logger.debug(f"Skipping worker {worker.name} during cleanup: {exc}")
+
+
 def _terminate_all(
     active: dict[int, WorkerEntry],
     cpu_pool: Optional[object],
 ) -> None:
-    """Terminate and clean up all active workers."""
+    """Terminate and clean up all active workers and their process trees."""
+    from crsbench.distributed.worker import _terminate_process_tree
+
     for entry in active.values():
         try:
-            if entry.process.is_alive():
-                entry.process.terminate()
+            if entry.process.is_alive() and entry.process.pid is not None:
+                _terminate_process_tree(entry.process.pid)
         except Exception as e:
-            logger.warning(f"Failed to terminate worker process: {e}")
+            logger.warning(f"Failed to terminate worker process tree: {e}")
     for pid, entry in active.items():
         try:
-            entry.process.join(timeout=5)
-            if entry.process.is_alive():
-                logger.warning(f"Force killing worker (PID: {pid})")
-                entry.process.kill()
-                entry.process.join()
+            entry.process.join(timeout=3)
         except Exception as e:
-            logger.warning(f"Failed joining/killing worker (PID: {pid}): {e}")
+            logger.warning(f"Failed joining worker (PID: {pid}): {e}")
         if cpu_pool and entry.cpus:
             try:
                 cpu_pool.release(entry.cpus)  # type: ignore[union-attr]
