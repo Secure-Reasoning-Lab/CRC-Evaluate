@@ -242,3 +242,178 @@ class TestArgParsing:
         parser = self._build_parser()
         args = parser.parse_args(["cloud", "collect", "my-exp", "--config", "c.yaml"])
         assert args.cloud_command == "collect"
+
+
+# ---------------------------------------------------------------------------
+# Status sub-action tests
+# ---------------------------------------------------------------------------
+
+
+def _make_status_args(experiment: str = "test-exp", json_output: bool = False):
+    return argparse.Namespace(
+        experiment=experiment,
+        config="/tmp/config.yaml",
+        json_output=json_output,
+        cloud_command="status",
+    )
+
+
+def _make_events_args(
+    experiment: str = "test-exp",
+    json_output: bool = False,
+    event_type: str | None = None,
+):
+    return argparse.Namespace(
+        experiment=experiment,
+        config="/tmp/config.yaml",
+        json_output=json_output,
+        event_type=event_type,
+        cloud_command="events",
+    )
+
+
+class TestStatusOutput:
+    """Tests for run_status() human-readable and JSON output."""
+
+    @patch("crsbench.cloud.cli._status.reconnect")
+    def test_status_output(self, mock_reconnect, fake_redis):
+        """run_status() calls log_table for fleet, job, collection, and events sections."""
+        _populate_fake_redis(fake_redis)
+        from crsbench.cloud.readiness import CloudReadinessStore
+        from crsbench.distributed.job_lifecycle import JobLifecycleStore
+
+        readiness = CloudReadinessStore(fake_redis)
+        lifecycle = JobLifecycleStore(fake_redis)
+        mock_reconnect.return_value = (MagicMock(), fake_redis, readiness, lifecycle, Path("/tmp"))
+
+        from crsbench.cloud.cli._status import run_status
+
+        with patch("crsbench.cloud.cli._status.log_table") as mock_table, \
+             patch("crsbench.cloud.cli._status.log_section"), \
+             patch("crsbench.cloud.cli._status.log_key_value"):
+            rc = run_status(_make_status_args())
+
+        assert rc == 0
+        # Should have called log_table for fleet, jobs, and events sections
+        assert mock_table.call_count >= 3
+
+    @patch("crsbench.cloud.cli._status.reconnect")
+    def test_status_json_output(self, mock_reconnect, fake_redis, capsys):
+        """run_status() with --json prints valid JSON with fleet/jobs/collection/events keys."""
+        _populate_fake_redis(fake_redis)
+        from crsbench.cloud.readiness import CloudReadinessStore
+        from crsbench.distributed.job_lifecycle import JobLifecycleStore
+
+        readiness = CloudReadinessStore(fake_redis)
+        lifecycle = JobLifecycleStore(fake_redis)
+        mock_reconnect.return_value = (MagicMock(), fake_redis, readiness, lifecycle, Path("/tmp"))
+
+        from crsbench.cloud.cli._status import run_status
+
+        rc = run_status(_make_status_args(json_output=True))
+        assert rc == 0
+
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert "fleet" in data
+        assert "jobs" in data
+        assert "collection" in data
+        assert "events" in data
+
+    @patch("crsbench.cloud.cli._status.reconnect")
+    def test_status_job_instance_correlation(self, mock_reconnect, fake_redis, capsys):
+        """Job entries in JSON output include claimed_by for instance correlation (OBS-01)."""
+        _populate_fake_redis(fake_redis)
+        from crsbench.cloud.readiness import CloudReadinessStore
+        from crsbench.distributed.job_lifecycle import JobLifecycleStore
+
+        readiness = CloudReadinessStore(fake_redis)
+        lifecycle = JobLifecycleStore(fake_redis)
+        mock_reconnect.return_value = (MagicMock(), fake_redis, readiness, lifecycle, Path("/tmp"))
+
+        from crsbench.cloud.cli._status import run_status
+
+        rc = run_status(_make_status_args(json_output=True))
+        assert rc == 0
+
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        # At least one job should have claimed_by set
+        claimed_values = [j["claimed_by"] for j in data["jobs"] if j.get("claimed_by")]
+        assert len(claimed_values) > 0
+
+
+# ---------------------------------------------------------------------------
+# Events sub-action tests
+# ---------------------------------------------------------------------------
+
+
+class TestEventsOutput:
+    """Tests for run_events() human-readable and JSON output."""
+
+    @patch("crsbench.cloud.cli._events.reconnect")
+    def test_events_filtering(self, mock_reconnect, fake_redis):
+        """run_events() with --type filters events by type field."""
+        _populate_fake_redis(fake_redis)
+        mock_reconnect.return_value = (MagicMock(), fake_redis, None, None, Path("/tmp"))
+
+        from crsbench.cloud.cli._events import run_events
+
+        with patch("crsbench.cloud.cli._events.log_table") as mock_table:
+            rc = run_events(_make_events_args(event_type="requeued"))
+
+        assert rc == 0
+        # Should have called log_table once for the filtered events
+        assert mock_table.call_count == 1
+        # The rows passed should only contain the "requeued" event
+        _, call_kwargs = mock_table.call_args
+        if not call_kwargs:
+            call_args = mock_table.call_args[0]
+            rows = call_args[1]  # second positional arg = rows
+        else:
+            rows = call_kwargs.get("rows", mock_table.call_args[0][1])
+        assert len(rows) == 1
+
+    @patch("crsbench.cloud.cli._events.reconnect")
+    def test_events_json_output(self, mock_reconnect, fake_redis, capsys):
+        """run_events() with --json prints valid JSON array."""
+        _populate_fake_redis(fake_redis)
+        mock_reconnect.return_value = (MagicMock(), fake_redis, None, None, Path("/tmp"))
+
+        from crsbench.cloud.cli._events import run_events
+
+        rc = run_events(_make_events_args(json_output=True))
+        assert rc == 0
+
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert isinstance(data, list)
+        assert len(data) == 3  # 3 events populated
+
+    @patch("crsbench.cloud.cli._events.reconnect")
+    def test_events_json_with_type_filter(self, mock_reconnect, fake_redis, capsys):
+        """run_events() with --json and --type filters then outputs JSON array."""
+        _populate_fake_redis(fake_redis)
+        mock_reconnect.return_value = (MagicMock(), fake_redis, None, None, Path("/tmp"))
+
+        from crsbench.cloud.cli._events import run_events
+
+        rc = run_events(_make_events_args(json_output=True, event_type="orphan_detected"))
+        assert rc == 0
+
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert isinstance(data, list)
+        assert len(data) == 2  # 2 orphan_detected events
+        assert all(e["type"] == "orphan_detected" for e in data)
+
+
+# ---------------------------------------------------------------------------
+# Collect stub test (Plan 04-02)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skip(reason="cloud collect not implemented until Plan 04-02")
+def test_collect_invokes_collector():
+    """Placeholder: cloud collect will invoke ArtifactCollector per worker."""
+    pass
