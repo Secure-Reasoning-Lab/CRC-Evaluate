@@ -44,6 +44,9 @@ def _make_fleet(ssh_via_iap: bool = False, zone: str = "us-central1-a") -> GceWo
         project="test-project",
         zone=zone,
         ssh_via_iap=ssh_via_iap,
+        service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+        instance_template="projects/test-project/global/instanceTemplates/crsbench-worker",
+        owner_label="team-crs",
     )
 
 
@@ -72,7 +75,19 @@ def _build_trial_tree(
 
     if include_metadata:
         meta = trial_dir / "metadata.json"
-        meta.write_text(json.dumps({"trial": trial_n, "crs": crs}))
+        meta.write_text(
+            json.dumps(
+                {
+                    "timestamp": "2026-03-13T00:00:00Z",
+                    "trial_num": trial_n,
+                    "crs": crs,
+                    "benchmark": benchmark,
+                    "harness": harness,
+                    "mode": "bug_finding",
+                    "source": {"path": "/src/curl", "commit": "abc123"},
+                }
+            )
+        )
 
     # snapshot pair
     snap_archive = trial_dir / "snapshot-0001.tar.gz"
