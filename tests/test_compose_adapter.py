@@ -1787,6 +1787,36 @@ class TestOssCrsAdapterBugFindFull:
             "test-crs": str(crs_a),
         }
 
+    def test_collect_results_copies_crs_log_dir_artifacts(self, tmp_path: Path) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+
+        crs_log_dir = tmp_path / "log-dir" / "crs" / "test-crs"
+        crs_log_dir.mkdir(parents=True)
+        (crs_log_dir / "agent.log").write_text("agent-ok")
+        nested = crs_log_dir / "sessions"
+        nested.mkdir(parents=True)
+        (nested / "transcript.jsonl").write_text('{"event":"ok"}')
+
+        adapter._resolved_artifacts = {
+            "crs": {
+                "test-crs": {"log_dir": str(crs_log_dir)},
+            }
+        }
+        trial = tmp_path / "trial_out"
+
+        metadata = adapter.collect_results(trial, "harness1")
+        logs_dir = (
+            Path(metadata["output_dir"]) / "logs" / "crs" / "test-crs" / "log_dir"
+        )
+        assert (logs_dir / "agent.log").read_text() == "agent-ok"
+        assert (
+            logs_dir / "sessions" / "transcript.jsonl"
+        ).read_text() == '{"event":"ok"}'
+        assert metadata["crs_log_dirs_by_crs"] == {
+            "test-crs": str(crs_log_dir),
+        }
+
 
 # ===========================================================================
 # OssCrsAdapter bug-fixing (ADAPT-02, COMPOSE-03, COMPOSE-04)
