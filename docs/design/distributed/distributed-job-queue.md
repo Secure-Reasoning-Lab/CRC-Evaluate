@@ -91,6 +91,12 @@ The queue layer treats the following as terminal outcomes:
 
 ## Runtime Behavior
 
+### Worker stdin contract
+- distributed worker execution must not depend on an interactive stdin
+- worker entry paths must detach stdin before entering RQ worker or supervisor execution
+- this prevents background or service-managed worker processes from receiving `SIGTTIN` when forked work-horses or their subprocesses attempt terminal reads
+- this requirement applies across burst, continuous, single-worker, and multi-worker execution paths
+
 ### Happy path
 1. orchestrator expands experiment work into concrete jobs
 2. jobs are enqueued with deterministic identities

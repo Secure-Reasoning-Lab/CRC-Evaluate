@@ -102,6 +102,21 @@ def _trial_job_runner(
     _run_single_job(redis_host, job_id, child_name=child_name, execution_role="worker")
 
 
+def _detach_stdin_to_devnull() -> None:
+    """Detach worker stdin from the terminal.
+
+    RQ workers and their forked work-horses may launch subprocesses that try to
+    read inherited stdin. When the worker is backgrounded, that can trigger
+    SIGTTIN. Redirect stdin to ``/dev/null`` before entering worker/supervisor
+    execution so child processes inherit a detached stdin.
+    """
+    devnull = os.open(os.devnull, os.O_RDONLY)
+    try:
+        os.dup2(devnull, 0)
+    finally:
+        os.close(devnull)
+
+
 def main(
     redis_host: Optional[str] = None,
     experiment_name: Optional[str] = None,
@@ -219,6 +234,8 @@ def main(
         # Use ci_supervisor for CPU affinity
         from crsbench.distributed.ci_supervisor import run_ci_supervisor
 
+        _detach_stdin_to_devnull()
+
         return run_ci_supervisor(
             redis_host=redis_host,
             build_queue_name=queue_name,
@@ -277,6 +294,13 @@ def _spawn_workers(
     )
     queue_name = queue_name or default_trial_queue
     logger.info(f"Spawning {num_workers} worker processes...")
+
+    # Detach stdin so that child processes (rq work-horse via os.fork +
+    # os.setpgrp) don't receive SIGTTIN when a subprocess such as
+    # "docker compose run" attempts to read from the terminal.
+    devnull = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(devnull, 0)
+    os.close(devnull)
 
     processes = []
     try:
@@ -372,6 +396,8 @@ def _run_worker(
     """
     import rq
 
+    _detach_stdin_to_devnull()
+
     # Connect to Redis
     logger.info(f"Connecting to Redis at {redis_host}...")
     from crsbench.distributed.queue import create_redis_connection
@@ -427,6 +453,8 @@ def _run_worker_continuous(
 ) -> None:
     """Internal helper to run one RQ worker in continuous polling mode."""
     import rq
+
+    _detach_stdin_to_devnull()
 
     logger.info(f"Connecting to Redis at {redis_host}...")
     from crsbench.distributed.queue import create_redis_connection
@@ -516,6 +544,7 @@ def run_worker_continuous(
         logger.info(
             f"Starting supervisor with {num_workers} workers and CPU affinity for: {experiment_name}"
         )
+        _detach_stdin_to_devnull()
         exit_code = run_ci_supervisor(
             redis_host=redis_host,
             build_queue_name=queue_name,
@@ -797,6 +826,8 @@ def run_worker_configless(
     # Use multi-queue supervisor for both cpuset and non-cpuset modes so
     # configless workers can dynamically adopt queues for new experiments.
     from crsbench.distributed.ci_supervisor import run_multi_queue_supervisor
+
+    _detach_stdin_to_devnull()
 
     return run_multi_queue_supervisor(
         redis_host=redis_host,
