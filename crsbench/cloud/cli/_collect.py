@@ -44,7 +44,9 @@ def run_collect(args: argparse.Namespace) -> int:
         )
 
     if not live_workers:
-        logger.warning("No live GCE instances found for experiment '%s'", args.experiment)
+        logger.warning(
+            "No live GCE instances found for experiment '%s'", args.experiment
+        )
         return 0
 
     remote_experiment_dir = args.remote_dir

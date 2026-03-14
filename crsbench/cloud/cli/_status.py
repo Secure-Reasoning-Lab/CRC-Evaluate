@@ -33,7 +33,9 @@ def run_status(args: argparse.Namespace) -> int:
     syncing = sum(1 for j in jobs if j.state == JobState.SYNCING)
     failed = sum(1 for j in jobs if j.state == JobState.FAILED)
     pending = total_jobs - completed - syncing - failed
-    completion_pct = f"{(completed / total_jobs * 100):.0f}%" if total_jobs > 0 else "0%"
+    completion_pct = (
+        f"{(completed / total_jobs * 100):.0f}%" if total_jobs > 0 else "0%"
+    )
 
     if args.json_output:
         data = {
@@ -72,8 +74,7 @@ def run_status(args: argparse.Namespace) -> int:
     # Human-readable output
     log_section("Fleet Summary")
     fleet_rows = [
-        [w.instance_name, w.state.value, w.zone, w.internal_ip or "-"]
-        for w in workers
+        [w.instance_name, w.state.value, w.zone, w.internal_ip or "-"] for w in workers
     ]
     log_table(["Instance", "State", "Zone", "IP"], fleet_rows)
 
@@ -85,18 +86,25 @@ def run_status(args: argparse.Namespace) -> int:
     log_table(["Job ID", "Trial", "State", "Claimed By", "Retries"], job_rows)
 
     log_section("Collection Summary")
-    log_key_value({
-        "Total": total_jobs,
-        "Completed": completed,
-        "Syncing": syncing,
-        "Pending": pending,
-        "Failed": failed,
-        "Completion": completion_pct,
-    })
+    log_key_value(
+        {
+            "Total": total_jobs,
+            "Completed": completed,
+            "Syncing": syncing,
+            "Pending": pending,
+            "Failed": failed,
+            "Completion": completion_pct,
+        }
+    )
 
     log_section("Recent Recovery Events")
     event_rows = [
-        [e.get("ts", "-"), e.get("type", "-"), e.get("job_id", "-"), e.get("detail", "-")]
+        [
+            e.get("ts", "-"),
+            e.get("type", "-"),
+            e.get("job_id", "-"),
+            e.get("detail", "-"),
+        ]
         for e in recent_events
     ]
     log_table(["Time", "Type", "Job", "Detail"], event_rows)

@@ -10,7 +10,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Fake Redis (reusable fixture)
 # ---------------------------------------------------------------------------
@@ -48,7 +47,7 @@ class _FakeRedis:
         return lst[start : stop + 1]
 
 
-@pytest.fixture()
+@pytest.fixture
 def fake_redis() -> _FakeRedis:
     return _FakeRedis()
 
@@ -119,7 +118,9 @@ def _populate_fake_redis(fake: _FakeRedis, experiment: str = "test-exp") -> None
     # Workers
     for i, state in enumerate(["ready", "ready", "booting"], start=1):
         w = _make_worker_status(f"worker-{i}", state=state, internal_ip=f"10.0.0.{i}")
-        fake.hset(f"crsbench:cloud:workers:{experiment}", f"id-worker-{i}", json.dumps(w))
+        fake.hset(
+            f"crsbench:cloud:workers:{experiment}", f"id-worker-{i}", json.dumps(w)
+        )
 
     # Jobs
     for i, (state, claimed) in enumerate(
@@ -141,7 +142,7 @@ def _populate_fake_redis(fake: _FakeRedis, experiment: str = "test-exp") -> None
 # ---------------------------------------------------------------------------
 
 
-def _mock_config(has_cloud: bool = True):
+def _mock_config(*, has_cloud: bool = True):
     """Build a mock ExperimentConfig."""
     config = MagicMock()
     if has_cloud:
@@ -211,7 +212,9 @@ class TestArgParsing:
 
     def test_parse_status_json(self):
         parser = self._build_parser()
-        args = parser.parse_args(["cloud", "status", "my-exp", "--config", "c.yaml", "--json"])
+        args = parser.parse_args(
+            ["cloud", "status", "my-exp", "--config", "c.yaml", "--json"]
+        )
         assert args.json_output is True
 
     def test_parse_events(self):
@@ -223,34 +226,64 @@ class TestArgParsing:
     def test_parse_events_with_type(self):
         parser = self._build_parser()
         args = parser.parse_args(
-            ["cloud", "events", "my-exp", "--config", "c.yaml", "--type", "orphan_detected"]
+            [
+                "cloud",
+                "events",
+                "my-exp",
+                "--config",
+                "c.yaml",
+                "--type",
+                "orphan_detected",
+            ]
         )
         assert args.event_type == "orphan_detected"
 
     def test_parse_teardown(self):
         parser = self._build_parser()
-        args = parser.parse_args([
-            "cloud", "teardown", "my-exp", "--config", "c.yaml",
-            "--remote-dir", "/home/user/experiments/my-exp",
-        ])
+        args = parser.parse_args(
+            [
+                "cloud",
+                "teardown",
+                "my-exp",
+                "--config",
+                "c.yaml",
+                "--remote-dir",
+                "/home/user/experiments/my-exp",
+            ]
+        )
         assert args.cloud_command == "teardown"
         assert args.force is False
         assert args.remote_dir == "/home/user/experiments/my-exp"
 
     def test_parse_teardown_force(self):
         parser = self._build_parser()
-        args = parser.parse_args([
-            "cloud", "teardown", "my-exp", "--config", "c.yaml",
-            "--remote-dir", "/home/user/experiments/my-exp", "--force",
-        ])
+        args = parser.parse_args(
+            [
+                "cloud",
+                "teardown",
+                "my-exp",
+                "--config",
+                "c.yaml",
+                "--remote-dir",
+                "/home/user/experiments/my-exp",
+                "--force",
+            ]
+        )
         assert args.force is True
 
     def test_parse_collect(self):
         parser = self._build_parser()
-        args = parser.parse_args([
-            "cloud", "collect", "my-exp", "--config", "c.yaml",
-            "--remote-dir", "/home/user/experiments/my-exp",
-        ])
+        args = parser.parse_args(
+            [
+                "cloud",
+                "collect",
+                "my-exp",
+                "--config",
+                "c.yaml",
+                "--remote-dir",
+                "/home/user/experiments/my-exp",
+            ]
+        )
         assert args.cloud_command == "collect"
         assert args.remote_dir == "/home/user/experiments/my-exp"
 
@@ -260,7 +293,7 @@ class TestArgParsing:
 # ---------------------------------------------------------------------------
 
 
-def _make_status_args(experiment: str = "test-exp", json_output: bool = False):
+def _make_status_args(experiment: str = "test-exp", *, json_output: bool = False):
     return argparse.Namespace(
         experiment=experiment,
         config="/tmp/config.yaml",
@@ -271,6 +304,7 @@ def _make_status_args(experiment: str = "test-exp", json_output: bool = False):
 
 def _make_events_args(
     experiment: str = "test-exp",
+    *,
     json_output: bool = False,
     event_type: str | None = None,
 ):
@@ -295,13 +329,21 @@ class TestStatusOutput:
 
         readiness = CloudReadinessStore(fake_redis)
         lifecycle = JobLifecycleStore(fake_redis)
-        mock_reconnect.return_value = (MagicMock(), fake_redis, readiness, lifecycle, Path("/tmp"))
+        mock_reconnect.return_value = (
+            MagicMock(),
+            fake_redis,
+            readiness,
+            lifecycle,
+            Path("/tmp"),
+        )
 
         from crsbench.cloud.cli._status import run_status
 
-        with patch("crsbench.cloud.cli._status.log_table") as mock_table, \
-             patch("crsbench.cloud.cli._status.log_section"), \
-             patch("crsbench.cloud.cli._status.log_key_value"):
+        with (
+            patch("crsbench.cloud.cli._status.log_table") as mock_table,
+            patch("crsbench.cloud.cli._status.log_section"),
+            patch("crsbench.cloud.cli._status.log_key_value"),
+        ):
             rc = run_status(_make_status_args())
 
         assert rc == 0
@@ -317,7 +359,13 @@ class TestStatusOutput:
 
         readiness = CloudReadinessStore(fake_redis)
         lifecycle = JobLifecycleStore(fake_redis)
-        mock_reconnect.return_value = (MagicMock(), fake_redis, readiness, lifecycle, Path("/tmp"))
+        mock_reconnect.return_value = (
+            MagicMock(),
+            fake_redis,
+            readiness,
+            lifecycle,
+            Path("/tmp"),
+        )
 
         from crsbench.cloud.cli._status import run_status
 
@@ -340,7 +388,13 @@ class TestStatusOutput:
 
         readiness = CloudReadinessStore(fake_redis)
         lifecycle = JobLifecycleStore(fake_redis)
-        mock_reconnect.return_value = (MagicMock(), fake_redis, readiness, lifecycle, Path("/tmp"))
+        mock_reconnect.return_value = (
+            MagicMock(),
+            fake_redis,
+            readiness,
+            lifecycle,
+            Path("/tmp"),
+        )
 
         from crsbench.cloud.cli._status import run_status
 
@@ -366,7 +420,13 @@ class TestEventsOutput:
     def test_events_filtering(self, mock_reconnect, fake_redis):
         """run_events() with --type filters events by type field."""
         _populate_fake_redis(fake_redis)
-        mock_reconnect.return_value = (MagicMock(), fake_redis, None, None, Path("/tmp"))
+        mock_reconnect.return_value = (
+            MagicMock(),
+            fake_redis,
+            None,
+            None,
+            Path("/tmp"),
+        )
 
         from crsbench.cloud.cli._events import run_events
 
@@ -389,7 +449,13 @@ class TestEventsOutput:
     def test_events_json_output(self, mock_reconnect, fake_redis, capsys):
         """run_events() with --json prints valid JSON array."""
         _populate_fake_redis(fake_redis)
-        mock_reconnect.return_value = (MagicMock(), fake_redis, None, None, Path("/tmp"))
+        mock_reconnect.return_value = (
+            MagicMock(),
+            fake_redis,
+            None,
+            None,
+            Path("/tmp"),
+        )
 
         from crsbench.cloud.cli._events import run_events
 
@@ -405,11 +471,19 @@ class TestEventsOutput:
     def test_events_json_with_type_filter(self, mock_reconnect, fake_redis, capsys):
         """run_events() with --json and --type filters then outputs JSON array."""
         _populate_fake_redis(fake_redis)
-        mock_reconnect.return_value = (MagicMock(), fake_redis, None, None, Path("/tmp"))
+        mock_reconnect.return_value = (
+            MagicMock(),
+            fake_redis,
+            None,
+            None,
+            Path("/tmp"),
+        )
 
         from crsbench.cloud.cli._events import run_events
 
-        rc = run_events(_make_events_args(json_output=True, event_type="orphan_detected"))
+        rc = run_events(
+            _make_events_args(json_output=True, event_type="orphan_detected")
+        )
         assert rc == 0
 
         captured = capsys.readouterr()
@@ -456,7 +530,9 @@ class TestCollect:
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
     @patch("crsbench.cloud.cli._collect.GceProvisioner")
     @patch("crsbench.cloud.cli._collect.reconnect")
-    def test_collect_invokes_collector(self, mock_reconnect, mock_prov_cls, mock_coll_cls):
+    def test_collect_invokes_collector(
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls
+    ):
         """run_collect() invokes ArtifactCollector.collect() for each live GCE worker."""
         workers = [_make_gce_worker("w-1"), _make_gce_worker("w-2")]
         mock_prov = MagicMock()
@@ -520,15 +596,15 @@ class TestCollect:
 
         assert rc == 0
         # Verify logger.warning was called with stale info
-        warning_calls = [
-            str(call) for call in mock_logger.warning.call_args_list
-        ]
+        warning_calls = [str(call) for call in mock_logger.warning.call_args_list]
         assert any("w-2" in call for call in warning_calls)
 
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
     @patch("crsbench.cloud.cli._collect.GceProvisioner")
     @patch("crsbench.cloud.cli._collect.reconnect")
-    def test_collect_partial_failure(self, mock_reconnect, mock_prov_cls, mock_coll_cls):
+    def test_collect_partial_failure(
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls
+    ):
         """Partial collection failure returns 1 but continues for remaining workers."""
         from crsbench.cloud.collection import ArtifactCollectionError
 
@@ -572,6 +648,7 @@ def _make_teardown_args(
     experiment: str = "test-exp",
     config: str = "/tmp/config.yaml",
     remote_dir: str = "/home/user/crsbench-experiments/test-exp",
+    *,
     force: bool = False,
 ):
     return argparse.Namespace(
@@ -721,8 +798,10 @@ class TestTeardown:
 
         from crsbench.cloud.cli._teardown import run_teardown
 
-        with patch("builtins.input", return_value="yes"), \
-             patch("sys.stdin") as mock_stdin:
+        with (
+            patch("builtins.input", return_value="yes"),
+            patch("sys.stdin") as mock_stdin,
+        ):
             mock_stdin.isatty.return_value = True
             rc = run_teardown(_make_teardown_args(force=False))
 
@@ -742,8 +821,10 @@ class TestTeardown:
 
         from crsbench.cloud.cli._teardown import run_teardown
 
-        with patch("builtins.input", return_value="no"), \
-             patch("sys.stdin") as mock_stdin:
+        with (
+            patch("builtins.input", return_value="no"),
+            patch("sys.stdin") as mock_stdin,
+        ):
             mock_stdin.isatty.return_value = True
             rc = run_teardown(_make_teardown_args(force=False))
 

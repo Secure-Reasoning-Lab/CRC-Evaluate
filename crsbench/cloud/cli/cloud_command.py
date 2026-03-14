@@ -25,18 +25,28 @@ Examples:
     cloud_subparsers = parser.add_subparsers(dest="cloud_command", required=True)
 
     # status
-    status_p = cloud_subparsers.add_parser("status", help="Show experiment fleet and job status")
+    status_p = cloud_subparsers.add_parser(
+        "status", help="Show experiment fleet and job status"
+    )
     status_p.add_argument("experiment", help="Experiment name")
-    status_p.add_argument("--config", required=True, help="Path to experiment YAML config")
-    status_p.add_argument("--json", action="store_true", dest="json_output", help="JSON output")
+    status_p.add_argument(
+        "--config", required=True, help="Path to experiment YAML config"
+    )
+    status_p.add_argument(
+        "--json", action="store_true", dest="json_output", help="JSON output"
+    )
 
     # teardown
     teardown_p = cloud_subparsers.add_parser(
         "teardown", help="Collect artifacts and delete workers"
     )
     teardown_p.add_argument("experiment", help="Experiment name")
-    teardown_p.add_argument("--config", required=True, help="Path to experiment YAML config")
-    teardown_p.add_argument("--force", action="store_true", help="Skip confirmation prompt")
+    teardown_p.add_argument(
+        "--config", required=True, help="Path to experiment YAML config"
+    )
+    teardown_p.add_argument(
+        "--force", action="store_true", help="Skip confirmation prompt"
+    )
     teardown_p.add_argument(
         "--remote-dir",
         required=True,
@@ -45,9 +55,13 @@ Examples:
     )
 
     # collect
-    collect_p = cloud_subparsers.add_parser("collect", help="Collect artifacts from workers")
+    collect_p = cloud_subparsers.add_parser(
+        "collect", help="Collect artifacts from workers"
+    )
     collect_p.add_argument("experiment", help="Experiment name")
-    collect_p.add_argument("--config", required=True, help="Path to experiment YAML config")
+    collect_p.add_argument(
+        "--config", required=True, help="Path to experiment YAML config"
+    )
     collect_p.add_argument(
         "--remote-dir",
         required=True,
@@ -56,11 +70,17 @@ Examples:
     )
 
     # events
-    events_p = cloud_subparsers.add_parser("events", help="Show recovery event timeline")
+    events_p = cloud_subparsers.add_parser(
+        "events", help="Show recovery event timeline"
+    )
     events_p.add_argument("experiment", help="Experiment name")
-    events_p.add_argument("--config", required=True, help="Path to experiment YAML config")
+    events_p.add_argument(
+        "--config", required=True, help="Path to experiment YAML config"
+    )
     events_p.add_argument("--type", dest="event_type", help="Filter by event type")
-    events_p.add_argument("--json", action="store_true", dest="json_output", help="JSON output")
+    events_p.add_argument(
+        "--json", action="store_true", dest="json_output", help="JSON output"
+    )
 
     parser.set_defaults(command="cloud")
 

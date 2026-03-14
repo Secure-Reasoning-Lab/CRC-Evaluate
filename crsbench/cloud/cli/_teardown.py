@@ -65,9 +65,7 @@ def run_teardown(args: argparse.Namespace) -> int:
 
     # Query uncollected jobs
     jobs = lifecycle.list_jobs(args.experiment)
-    uncollected_count = sum(
-        1 for j in jobs if j.state not in ("completed", "failed")
-    )
+    uncollected_count = sum(1 for j in jobs if j.state not in ("completed", "failed"))
 
     # Confirmation prompt
     if not args.force:

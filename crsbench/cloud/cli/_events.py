@@ -18,9 +18,7 @@ def run_events(args: argparse.Namespace) -> int:
         args.config, args.experiment
     )
 
-    raw_events = redis_conn.lrange(
-        f"crsbench:recovery-events:{args.experiment}", 0, -1
-    )
+    raw_events = redis_conn.lrange(f"crsbench:recovery-events:{args.experiment}", 0, -1)
     events = [json.loads(e) for e in raw_events]
 
     # Filter by type if requested
