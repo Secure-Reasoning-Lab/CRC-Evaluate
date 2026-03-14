@@ -23,6 +23,7 @@ belongs in `docs/modules/`.
 - [Reporting Contract](./reporting/report-generation.md)
 - [Benchmark CI Contract](./benchmark-ci/benchmark-ci.md)
 - [Benchmark Lifecycle Contract](./benchmark/benchmark-lifecycle.md)
+- [GCE Cloud Workers](./distributed/gce-cloud-workers.md)
 - [Migration Design](./migration/migration-validation.md)
 - [Logging Contract](./logging/logging-architecture.md)
 - [Services Contract](./services/litellm.md)
@@ -55,3 +56,4 @@ should be applied to the dedicated canonical docs below.
 | Benchmark CI DAG/result aggregation contracts | `benchmark-ci/benchmark-ci.md` |
 | Logging format/semantics contracts | `logging/logging-architecture.md` |
 | Service/backend integration contracts | `services/litellm.md` |
+| GCE cloud worker fleet lifecycle | `distributed/gce-cloud-workers.md` |

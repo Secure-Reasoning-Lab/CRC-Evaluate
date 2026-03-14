@@ -1,0 +1,236 @@
+# GCE Cloud Workers
+
+Guide for provisioning and managing GCE worker fleets in CRSBench experiments.
+
+## Prerequisites
+
+1. **GCP project** with Compute Engine API enabled
+2. **gcloud CLI** authenticated (`gcloud auth login`)
+3. **Service account** for workers with minimal permissions:
+   - `roles/logging.logWriter` (optional, for Cloud Logging)
+   - Access to Redis host (firewall rules or VPC)
+   - Access to any shared storage mounts
+4. **OS Login** enabled on the GCP project (`gcloud compute project-info add-metadata --metadata enable-oslogin=TRUE`)
+5. **IAP** configured if using `ssh_via_iap: true` (firewall rule allowing TCP port 22 from IAP range `35.235.240.0/20`)
+6. **Redis/Valkey** reachable from worker VMs
+7. **rsync** installed on the operator machine (for artifact collection)
+
+## Configuration
+
+Add a `cloud.gce` block to your experiment config YAML:
+
+```yaml
+cloud:
+  gce:
+    project: my-gcp-project
+    zone: us-central1-a
+    worker_count: 4
+    machine_type: e2-standard-16
+    boot_disk_size_gb: 200
+    image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+    service_account_email: crsbench-worker@my-gcp-project.iam.gserviceaccount.com
+    owner_label: my-team
+    use_os_login: true
+    ssh_via_iap: true
+    readiness_timeout_sec: 900
+```
+
+### Configuration Fields
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `project` | yes | -- | GCP project ID |
+| `zone` | yes | -- | GCE zone for all workers |
+| `worker_count` | no | `1` | Number of worker VMs to create |
+| `machine_type` | conditional | -- | Required when using `image` |
+| `boot_disk_size_gb` | conditional | -- | Required when using `image` (min 10) |
+| `image` | conditional | -- | VM image; mutually exclusive with `instance_template` |
+| `instance_template` | conditional | -- | GCE instance template; mutually exclusive with `image` |
+| `service_account_email` | yes | -- | Service account for worker VMs |
+| `owner_label` | yes | -- | Owner label applied to all VMs (or set via `labels.owner`) |
+| `network` | no | default | VPC network |
+| `subnetwork` | no | -- | VPC subnetwork |
+| `labels` | no | `{}` | Additional GCE labels |
+| `metadata` | no | `{}` | Additional instance metadata key-value pairs |
+| `worker_name_prefix` | no | auto | Name prefix for VM instances |
+| `startup_script_uri` | no | bundled | Custom startup script URL (overrides built-in bootstrap) |
+| `use_os_login` | no | `true` | Must be `true` (enforced by validation) |
+| `ssh_via_iap` | no | `false` | Use IAP tunnel for SSH and rsync |
+| `readiness_timeout_sec` | no | `900` | Max seconds to wait for all workers to report ready |
+
+### Using Instance Templates
+
+Instead of specifying `image` + `machine_type` + `boot_disk_size_gb`, you can reference a pre-configured instance template:
+
+```yaml
+cloud:
+  gce:
+    project: my-gcp-project
+    zone: us-central1-a
+    worker_count: 8
+    instance_template: projects/my-gcp-project/global/instanceTemplates/crsbench-worker-v1
+    service_account_email: crsbench-worker@my-gcp-project.iam.gserviceaccount.com
+    owner_label: my-team
+    ssh_via_iap: true
+```
+
+## Launching an Experiment
+
+When `cloud.gce` is present in the config, `crsbench run` automatically provisions the fleet:
+
+```bash
+uv run crsbench run --experiment-config config.yaml
+```
+
+The orchestrator will:
+
+1. Create `worker_count` VMs in the specified zone
+2. Wait for each VM to bootstrap and report `ready` (up to `readiness_timeout_sec`)
+3. Enqueue trial jobs only after the full fleet is ready
+4. If any VM fails to become ready, tear down the entire fleet and exit with an error
+
+Bootstrap failures are reported with per-instance evidence, so you can diagnose issues without SSH-ing into VMs.
+
+## Monitoring
+
+### Fleet and Job Status
+
+```bash
+uv run crsbench cloud status my-experiment --config config.yaml
+```
+
+Shows:
+
+- Fleet summary: each worker's name, state, zone, and IP
+- Job summary: trial progress per job
+- Collection summary: artifact sync progress
+- Recent recovery events
+
+Add `--json` for machine-readable output:
+
+```bash
+uv run crsbench cloud status my-experiment --config config.yaml --json
+```
+
+### Recovery Events
+
+```bash
+# All events
+uv run crsbench cloud events my-experiment --config config.yaml
+
+# Filter by type
+uv run crsbench cloud events my-experiment --config config.yaml --type worker_restart
+
+# JSON output
+uv run crsbench cloud events my-experiment --config config.yaml --json
+```
+
+## Collecting Artifacts
+
+Pull experiment results from all live workers to the local experiment filestore:
+
+```bash
+uv run crsbench cloud collect my-experiment \
+    --config config.yaml \
+    --remote-dir /data/experiments
+```
+
+- Uses rsync (via IAP tunnel or direct SSH depending on config)
+- Stages artifacts in a temporary directory, verifies at least one valid trial exists, then publishes to the experiment filestore
+- Continues to remaining workers if one fails; exits with code 1 on partial failure
+- Safe to run multiple times (incremental rsync)
+
+## Teardown
+
+Remove the worker fleet after collecting results:
+
+```bash
+uv run crsbench cloud teardown my-experiment \
+    --config config.yaml \
+    --remote-dir /data/experiments
+```
+
+The teardown safety flow:
+
+1. Lists live GCE instances for the experiment
+2. Cross-references with Redis readiness records (warns about mismatches)
+3. Prompts for confirmation (interactive TTY required)
+4. Collects artifacts from ALL workers first
+5. Deletes VMs only after all collections succeed
+6. If any collection fails, aborts and leaves workers alive
+
+Use `--force` to skip the confirmation prompt (e.g., in scripts):
+
+```bash
+uv run crsbench cloud teardown my-experiment \
+    --config config.yaml \
+    --remote-dir /data/experiments \
+    --force
+```
+
+## Complete Workflow Example
+
+```bash
+# 1. Start Valkey (accessible from GCE workers)
+uv run python scripts/valkey-helper.py --password start
+
+# 2. Run experiment (provisions fleet, enqueues jobs, monitors)
+uv run crsbench run --experiment-config config.yaml
+
+# 3. Check status during the run
+uv run crsbench cloud status my-experiment --config config.yaml
+
+# 4. After completion, collect artifacts
+uv run crsbench cloud collect my-experiment \
+    --config config.yaml \
+    --remote-dir /data/experiments
+
+# 5. Tear down the fleet
+uv run crsbench cloud teardown my-experiment \
+    --config config.yaml \
+    --remote-dir /data/experiments
+
+# 6. Generate report
+uv run python scripts/cpv_report.py /data/experiments/my-experiment --csv
+```
+
+## SSH Access
+
+For direct access to worker VMs (debugging):
+
+```bash
+# IAP mode
+gcloud compute ssh my-experiment-001 \
+    --project my-gcp-project \
+    --zone us-central1-a \
+    --tunnel-through-iap
+
+# Direct mode (if workers have public IPs)
+ssh my-experiment-001
+```
+
+The worker process runs as a systemd service:
+
+```bash
+# On the worker VM
+sudo systemctl status crsbench-worker.service
+sudo journalctl -u crsbench-worker.service -f
+```
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Bring-up timeout | Workers cannot reach Redis | Check firewall rules; verify `runtime.redis_host` is reachable from the VPC |
+| `bootstrap_failed` in status | Startup script error | Check the evidence field in `cloud status --json` output; inspect VM serial console via GCP Console |
+| Collect fails with rsync error | SSH connectivity issue | Verify OS Login is enabled; check IAP firewall rule if using `ssh_via_iap` |
+| Stale Redis entries warning | VMs were manually deleted | Safe to ignore; Redis records from deleted VMs don't affect new runs |
+| Teardown aborts | Collection failed for a worker | Fix the failing worker (check SSH, disk space), then retry teardown |
+| `use_os_login must be true` | Config validation | OS Login is required; do not set `use_os_login: false` |
+| `exactly one of image or instance_template` | Config validation | Provide either `image` + `machine_type` + `boot_disk_size_gb` or `instance_template`, not both |
+
+## See Also
+
+- [Distributed Experiments](./distributed.md) -- full distributed experiment guide
+- [Configuration Reference](./config-reference.md) -- all experiment config fields
+- [Design: GCE Cloud Workers](../../design/distributed/gce-cloud-workers.md) -- architecture and contracts
