@@ -8,6 +8,7 @@ CPU allocations.
 from __future__ import annotations
 
 import multiprocessing
+import multiprocessing.context
 import os
 import shutil
 import time
@@ -29,6 +30,11 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 DEQUEUE_POLL_TIMEOUT_SECONDS = 1
 NON_CONTINUOUS_CPU_MISMATCH_LIMIT = 3
+
+# Use 'fork' context so child processes inherit module-level state
+# (e.g. _verification_engine, _benchmarks_root) from the parent.
+# Python 3.14 defaults to 'forkserver' which does NOT inherit these.
+_mp_ctx: multiprocessing.context.ForkContext = multiprocessing.get_context("fork")  # type: ignore[assignment]
 CPU_TAG_MISMATCH_EXIT_CODE = 4
 
 # job_runner(redis_host, child_name, job_id) -> None
@@ -39,7 +45,7 @@ type QueueRefresher = Callable[["Redis"], tuple[list[str], list[str]]]
 class WorkerEntry(NamedTuple):
     """Metadata for an active child worker process."""
 
-    process: multiprocessing.Process
+    process: multiprocessing.process.BaseProcess
     cpus: list[int]
     job_id: str
     worker_num: int
@@ -482,7 +488,7 @@ def run_ci_supervisor(
                     os.environ["OSS_FUZZ_CPUSET_CPUS"] = cpuset_str
 
                 # Spawn child process
-                p = multiprocessing.Process(
+                p = _mp_ctx.Process(
                     target=job_runner,
                     args=(redis_host, child_name, job.id),
                     name=f"ci-{queue_label}-{worker_num}",
@@ -1057,7 +1063,7 @@ def run_multi_queue_supervisor(
                     os.environ["OSS_FUZZ_CPUSET_CPUS"] = cpuset_str
 
                 # Spawn child process
-                p = multiprocessing.Process(
+                p = _mp_ctx.Process(
                     target=job_runner,
                     args=(redis_host, child_name, job.id),
                     name=f"mq-{queue_label}-{worker_num}",
