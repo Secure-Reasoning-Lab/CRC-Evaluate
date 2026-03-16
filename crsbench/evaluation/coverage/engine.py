@@ -910,6 +910,7 @@ class CoverageEngine:
             lines_covered=lines_covered,
             lines_total=lines_total,
             lines_percent=lines_percent,
+            totals_available=False,
             functions_covered=functions_covered,
             functions_total=functions_total,
         )

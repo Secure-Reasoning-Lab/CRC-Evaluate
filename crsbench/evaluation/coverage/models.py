@@ -14,7 +14,7 @@ Data Formats:
 from pathlib import Path
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class CoverageConfig(BaseModel):
@@ -93,6 +93,7 @@ class CoverageSummary(BaseModel):
         lines_covered: Number of unique lines covered.
         lines_total: Total number of coverable lines.
         lines_percent: Percentage of lines covered (0.0 to 100.0).
+        totals_available: Whether total line/function denominators are known.
         functions_covered: Number of functions with at least one covered line.
         functions_total: Total number of functions.
         saturation_detected: Whether coverage saturation has been detected.
@@ -105,9 +106,17 @@ class CoverageSummary(BaseModel):
     lines_covered: int = Field(default=0, ge=0)
     lines_total: int = Field(default=0, ge=0)
     lines_percent: float = Field(default=0.0, ge=0.0, le=100.0)
+    totals_available: bool | None = Field(default=None)
     functions_covered: int = Field(default=0, ge=0)
     functions_total: int = Field(default=0, ge=0)
     saturation_detected: bool = False
+
+    @model_validator(mode="after")
+    def _infer_totals_available(self) -> "CoverageSummary":
+        """Fill totals_available when callers rely on legacy implicit behavior."""
+        if self.totals_available is None:
+            self.totals_available = self.lines_total > 0 or self.functions_total > 0
+        return self
 
     def format_lines(self) -> str:
         """Format lines coverage for display.
@@ -116,7 +125,7 @@ class CoverageSummary(BaseModel):
             Formatted string like "10/100 (10.0%)" when total is known,
             or "10 (total N/A)" when total is unknown (e.g., JVM coverage).
         """
-        if self.lines_total > 0:
+        if self.totals_available and self.lines_total > 0:
             return (
                 f"{self.lines_covered}/{self.lines_total} ({self.lines_percent:.1f}%)"
             )
@@ -129,7 +138,7 @@ class CoverageSummary(BaseModel):
             Formatted string like "5/50" when total is known,
             or "5 (total N/A)" when total is unknown.
         """
-        if self.functions_total > 0:
+        if self.totals_available and self.functions_total > 0:
             return f"{self.functions_covered}/{self.functions_total}"
         return f"{self.functions_covered} (total N/A)"
 

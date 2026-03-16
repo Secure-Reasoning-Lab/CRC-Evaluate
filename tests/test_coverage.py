@@ -154,6 +154,7 @@ class TestCoverageModels:
         assert summary.corpus_total == 0
         assert summary.lines_covered == 0
         assert summary.lines_percent == 0.0
+        assert summary.totals_available is False
 
     def test_coverage_summary_with_values(self):
         """Test CoverageSummary with values."""
@@ -169,6 +170,7 @@ class TestCoverageModels:
         )
         assert summary.corpus_total == 10
         assert summary.lines_percent == 50.0
+        assert summary.totals_available is True
 
     def test_coverage_snapshot(self):
         """Test CoverageSnapshot model."""

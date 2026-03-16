@@ -126,6 +126,7 @@ def test_run_post_experiment_coverage_uses_engine_timed_line_coverage(
     assert final_coverage["harness"] == "fuzz_target"
     assert final_coverage["summary"]["lines_covered"] == 7
     assert final_coverage["summary"]["lines_total"] == 11
+    assert final_coverage["summary"]["totals_available"] is True
 
 
 def test_run_post_experiment_coverage_logs_unknown_totals_cleanly(
@@ -184,3 +185,5 @@ def test_run_post_experiment_coverage_logs_unknown_totals_cleanly(
         )
 
     runner.logger.info.assert_any_call("Post-experiment coverage: 7 (total N/A)")
+    final_coverage = json.loads((trial_output_dir / "final_coverage.json").read_text())
+    assert final_coverage["summary"]["totals_available"] is False

@@ -175,13 +175,14 @@ class TestCheckCoverage:
         assert check_coverage(results_file) is False
 
     def test_check_coverage_zero_lines_total(self, tmp_path: Path) -> None:
-        """Test coverage fails when no lines are found."""
+        """Test coverage fails when totals are claimed but invalid."""
         data = {
             "harness": "fuzz_target",
             "summary": {
                 "lines_covered": 0,
                 "lines_total": 0,
                 "lines_percent": 0.0,
+                "totals_available": True,
             },
         }
         results_file = tmp_path / "results.json"
@@ -199,6 +200,7 @@ class TestCheckCoverage:
                 "lines_covered": 7,
                 "lines_total": 0,
                 "lines_percent": 0.0,
+                "totals_available": False,
             },
         }
         results_file = tmp_path / "results.json"
