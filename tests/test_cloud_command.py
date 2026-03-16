@@ -242,6 +242,33 @@ def _make_resolved_cloud_context(launch_state=None):
     )
 
 
+def test_save_launch_state_preserves_existing_file_when_replace_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Atomic launch-state writes should leave the last good file intact on replace failure."""
+    from crsbench.cloud.launch_state import load_launch_state, save_launch_state
+
+    config_path = tmp_path / "config.yaml"
+    state = _make_launch_state().model_copy(update={"config_path": str(config_path)})
+    save_launch_state(config_path, state)
+
+    def _broken_replace(self, target):
+        del self, target
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "replace", _broken_replace)
+
+    with pytest.raises(OSError, match="disk full"):
+        save_launch_state(
+            config_path,
+            state.model_copy(update={"redis_password": "new-secret"}),
+        )
+
+    preserved = load_launch_state(config_path, "test-exp")
+    assert preserved is not None
+    assert preserved.redis_password == "shared-secret"
+
+
 class TestReconnect:
     """Tests for _config_reconnect.reconnect()."""
 
@@ -1307,6 +1334,36 @@ class TestTeardown:
             "/tmp/filestore",
             "test-exp",
         )
+
+    @patch("crsbench.cloud.cli._teardown.delete_launch_state")
+    @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
+    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.reconnect")
+    def test_teardown_ignores_launch_state_cleanup_failures_after_vm_deletion(
+        self,
+        mock_reconnect,
+        mock_prov_cls,
+        mock_coll_cls,
+        mock_resolve_context,
+        mock_delete_state,
+    ):
+        """Local state cleanup should be best-effort after cloud deletion succeeds."""
+        mock_resolve_context.return_value = _make_resolved_cloud_context(
+            _make_launch_state()
+        )
+        mock_prov, _mock_coll, _, _ = _setup_teardown_mocks(
+            mock_reconnect, mock_prov_cls, mock_coll_cls
+        )
+        mock_delete_state.side_effect = OSError("read only")
+
+        from crsbench.cloud.cli._teardown import run_teardown
+
+        rc = run_teardown(_make_teardown_args(force=True))
+
+        assert rc == 0
+        mock_prov.delete_workers.assert_called_once()
+        mock_prov.delete_instance.assert_called_once()
 
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")

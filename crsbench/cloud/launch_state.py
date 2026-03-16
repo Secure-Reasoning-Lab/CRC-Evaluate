@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import json
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
 
 from crsbench.cloud.gce.models import GceWorkerRecord
 from crsbench.validation.schemas import GceWorkerFleetConfig  # noqa: TC001
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 _STATE_DIRNAME = ".crsbench-cloud"
 
@@ -77,8 +75,27 @@ def save_launch_state(
     """Persist launch state with restrictive local file permissions."""
     path = launch_state_path(base_path, state.experiment_name)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state.model_dump(), indent=2), encoding="utf-8")
-    path.chmod(0o600)
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            dir=path.parent,
+            prefix=f"{path.name}.",
+            suffix=".tmp",
+            delete=False,
+            encoding="utf-8",
+        ) as handle:
+            handle.write(json.dumps(state.model_dump(), indent=2))
+            temp_path = Path(handle.name)
+        if temp_path is None:
+            raise RuntimeError("Failed to allocate temporary launch-state path")
+        temp_path.chmod(0o600)
+        temp_path.replace(path)
+        path.chmod(0o600)
+    except Exception:
+        if temp_path is not None and temp_path.exists():
+            temp_path.unlink()
+        raise
     return path
 
 

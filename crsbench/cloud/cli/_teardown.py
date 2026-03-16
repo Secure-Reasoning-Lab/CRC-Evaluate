@@ -163,9 +163,23 @@ def run_teardown(args: argparse.Namespace) -> int:
             deletion_failed = True
 
     if launch_state is not None and not deletion_failed:
-        delete_launch_state(args.config, args.experiment)
+        try:
+            delete_launch_state(args.config, args.experiment)
+        except OSError as exc:
+            logger.warning(
+                "Failed to remove config-adjacent launch state for %s: %s",
+                args.experiment,
+                exc,
+            )
         if launch_state.experiment_filestore:
-            delete_launch_state(launch_state.experiment_filestore, args.experiment)
+            try:
+                delete_launch_state(launch_state.experiment_filestore, args.experiment)
+            except OSError as exc:
+                logger.warning(
+                    "Failed to remove legacy launch state for %s: %s",
+                    args.experiment,
+                    exc,
+                )
 
     if collection_failed or deletion_failed:
         return 1
