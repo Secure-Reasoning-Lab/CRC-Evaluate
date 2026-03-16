@@ -63,7 +63,9 @@ input seed files' relative mtimes, and the y-axis is the cumulative count of
 unique covered lines obtained by merging per-seed `.cov` payloads. Without a
 separate denominator pass, total-line percentages are out of contract for this
 analysis mode and must remain unknown rather than inferred from only the subset
-of source files touched by replay.
+of source files touched by replay. Timeline report artifacts are seed-driven:
+the JSON/CSV outputs store one row per normalized seed rather than bucketed
+time windows, and the PNG is plotted directly from those per-seed rows.
 
 The normalized coverage build output must materialize executable runtime
 artifacts as real files inside the exported build directory. Host-only symlinks

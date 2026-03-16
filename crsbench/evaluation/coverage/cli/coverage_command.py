@@ -17,7 +17,6 @@ from crsbench.evaluation.coverage.reporting import (
     write_timeline_png,
 )
 from crsbench.evaluation.coverage.timeline import (
-    aggregate_line_coverage_buckets,
     load_trial_context,
     normalize_seed_inputs,
 )
@@ -434,11 +433,6 @@ def _build_timeline_report(
         force_rebuild=force_rebuild,
         output_dir=output_dir,
     )
-    buckets = aggregate_line_coverage_buckets(
-        timed_inputs,
-        lines_total=summary.lines_total,
-        bucket_size_seconds=bucket_size_seconds,
-    )
     return CoverageTimelineReport(
         benchmark=benchmark_path.name,
         harness=harness_name,
@@ -450,7 +444,6 @@ def _build_timeline_report(
         ),
         seeds=timed_inputs,
         pov_markers=pov_markers,
-        buckets=buckets,
         final_summary=summary,
     )
 

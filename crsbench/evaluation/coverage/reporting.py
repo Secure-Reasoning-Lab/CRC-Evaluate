@@ -19,35 +19,43 @@ def write_timeline_json(report: CoverageTimelineReport, output_path: Path) -> No
 
 
 def write_timeline_csv(report: CoverageTimelineReport, output_path: Path) -> None:
-    """Write the bucketed coverage curve as CSV."""
+    """Write the per-seed coverage timeline as CSV."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(
             [
-                "bucket_start",
-                "bucket_end",
-                "inputs_seen",
+                "relative_time",
+                "content_hash",
+                "original_name",
+                "size",
                 "lines_covered",
-                "lines_total",
-                "lines_percent",
+                "crashed",
+                "raw_cov_path",
+                "crash_log_path",
             ]
         )
-        for bucket in report.buckets:
+        for seed in sorted(report.seeds, key=lambda item: item.relative_time):
             writer.writerow(
                 [
-                    bucket.bucket_start,
-                    bucket.bucket_end,
-                    bucket.inputs_seen,
-                    bucket.lines_covered,
-                    bucket.lines_total,
-                    bucket.lines_percent,
+                    seed.relative_time,
+                    seed.content_hash,
+                    seed.original_name,
+                    seed.size,
+                    seed.lines_covered,
+                    seed.crashed,
+                    str(seed.raw_cov_path) if seed.raw_cov_path is not None else "",
+                    (
+                        str(seed.crash_log_path)
+                        if seed.crash_log_path is not None
+                        else ""
+                    ),
                 ]
             )
 
 
 def write_timeline_png(report: CoverageTimelineReport, output_path: Path) -> None:
-    """Render a PNG covered-lines-over-time graph with POV markers."""
+    """Render a PNG covered-lines-over-time graph from per-seed replay."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -56,13 +64,14 @@ def write_timeline_png(report: CoverageTimelineReport, output_path: Path) -> Non
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     fig, ax = plt.subplots(figsize=(10, 5))
-    if report.buckets:
-        x_values = [bucket.bucket_end for bucket in report.buckets]
-        y_values = [bucket.lines_covered for bucket in report.buckets]
+    seeds = sorted(report.seeds, key=lambda item: item.relative_time)
+    if seeds:
+        x_values = [seed.relative_time for seed in seeds]
+        y_values = [seed.lines_covered for seed in seeds]
         ax.step(x_values, y_values, where="post", label="Covered lines", linewidth=2)
         ax.set_xlim(left=0)
     if report.pov_markers:
-        marker_y = max([bucket.lines_covered for bucket in report.buckets] or [0.0])
+        marker_y = max([seed.lines_covered for seed in seeds] or [0.0])
         for marker in report.pov_markers:
             ax.axvline(
                 marker.relative_time,
@@ -84,7 +93,7 @@ def write_timeline_png(report: CoverageTimelineReport, output_path: Path) -> Non
     ax.set_ylabel("Covered lines")
     ax.set_ylim(
         0,
-        max(1.0, max((bucket.lines_covered for bucket in report.buckets), default=0.0)),
+        max(1.0, max((seed.lines_covered for seed in seeds), default=0.0)),
     )
     ax.grid(alpha=0.25)
     ax.legend(loc="lower right")

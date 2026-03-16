@@ -171,11 +171,13 @@ crsbench coverage     --seed-dir ./seeds --benchmark project --harness fuzz_targ
 Timeline coverage mode persists raw per-seed artifacts under the target
 coverage directory's `raw/` subdirectory. Each analyzed seed keeps its
 normalized `.cov` result and any captured crash log alongside the JSON/CSV/PNG
-timeline outputs. Relative time is derived from each input seed file's original
-`mtime`, and the PNG timeline plots cumulative covered lines from the per-seed
-warm-runner replay artifacts. The Atlantis timeline path does not run a
-separate whole-corpus denominator pass, so total-line percentages may be
-reported as unavailable.
+timeline outputs. `coverage_timeline.json` stores one row per normalized seed,
+`coverage_timeline.csv` emits one row per normalized seed, and
+`coverage_timeline.png` plots cumulative covered lines directly from those
+per-seed replay results. Relative time is derived from each input seed file's
+original `mtime`. The Atlantis timeline path does not run a separate
+whole-corpus denominator pass, so total-line percentages may be reported as
+unavailable.
 Coverage analysis uses the Atlantis/given_fuzzer warm-runner backend and does
 not accept an `--oss-fuzz-path` override.
 

@@ -17,7 +17,6 @@ from crsbench.evaluation.coverage.cli.coverage_command import (
 from crsbench.evaluation.coverage.models import (
     CoveragePovMarker,
     CoverageSummary,
-    CoverageTimelineBucket,
     CoverageTimelineReport,
     TimedCoverageInput,
 )
@@ -27,7 +26,6 @@ from crsbench.evaluation.coverage.reporting import (
     write_timeline_png,
 )
 from crsbench.evaluation.coverage.timeline import (
-    aggregate_line_coverage_buckets,
     discover_trial_seed_dir,
     load_trial_context,
     normalize_seed_inputs,
@@ -151,81 +149,6 @@ def test_normalize_seed_inputs_uses_earliest_mtime_when_base_missing(
     assert [item.relative_time for item in normalized] == [0.0, 5.0]
 
 
-def test_aggregate_line_coverage_buckets_builds_cumulative_curve() -> None:
-    inputs = [
-        TimedCoverageInput(
-            content_hash="a",
-            original_name="a.bin",
-            path=Path("/tmp/a.bin"),
-            relative_time=0.2,
-            size=1,
-            lines_covered=2,
-        ),
-        TimedCoverageInput(
-            content_hash="b",
-            original_name="b.bin",
-            path=Path("/tmp/b.bin"),
-            relative_time=1.2,
-            size=1,
-            lines_covered=4,
-        ),
-        TimedCoverageInput(
-            content_hash="c",
-            original_name="c.bin",
-            path=Path("/tmp/c.bin"),
-            relative_time=2.0,
-            size=1,
-            lines_covered=4,
-        ),
-    ]
-    buckets = aggregate_line_coverage_buckets(
-        inputs,
-        lines_total=10,
-        bucket_size_seconds=1,
-    )
-
-    assert [(bucket.bucket_start, bucket.inputs_seen) for bucket in buckets] == [
-        (0.0, 1),
-        (1.0, 2),
-        (2.0, 3),
-    ]
-    assert [bucket.lines_covered for bucket in buckets] == [2, 4, 4]
-    assert [bucket.lines_percent for bucket in buckets] == [20.0, 40.0, 40.0]
-
-
-def test_aggregate_line_coverage_buckets_omits_empty_time_gaps() -> None:
-    inputs = [
-        TimedCoverageInput(
-            content_hash="a",
-            original_name="a.bin",
-            path=Path("/tmp/a.bin"),
-            relative_time=0.2,
-            size=1,
-            lines_covered=2,
-        ),
-        TimedCoverageInput(
-            content_hash="b",
-            original_name="b.bin",
-            path=Path("/tmp/b.bin"),
-            relative_time=5.1,
-            size=1,
-            lines_covered=4,
-        ),
-    ]
-
-    buckets = aggregate_line_coverage_buckets(
-        inputs,
-        lines_total=10,
-        bucket_size_seconds=1,
-    )
-
-    assert [(bucket.bucket_start, bucket.inputs_seen) for bucket in buckets] == [
-        (0.0, 1),
-        (5.0, 2),
-    ]
-    assert [bucket.lines_covered for bucket in buckets] == [2, 4]
-
-
 def test_timeline_reporting_writes_json_csv_and_png(tmp_path: Path) -> None:
     report = CoverageTimelineReport(
         benchmark="sanity-mock-c-delta-01",
@@ -245,16 +168,6 @@ def test_timeline_reporting_writes_json_csv_and_png(tmp_path: Path) -> None:
         pov_markers=[
             CoveragePovMarker(cpv_id="cpv_0", pov_hash="hash-a", relative_time=1.5)
         ],
-        buckets=[
-            CoverageTimelineBucket(
-                bucket_start=1.0,
-                bucket_end=2.0,
-                inputs_seen=1,
-                lines_covered=5,
-                lines_total=10,
-                lines_percent=50.0,
-            )
-        ],
         final_summary=CoverageSummary(lines_covered=5, lines_total=10),
     )
 
@@ -266,9 +179,11 @@ def test_timeline_reporting_writes_json_csv_and_png(tmp_path: Path) -> None:
     write_timeline_csv(report, csv_path)
     write_timeline_png(report, png_path)
 
-    assert json.loads(json_path.read_text())["benchmark"] == "sanity-mock-c-delta-01"
+    payload = json.loads(json_path.read_text())
+    assert payload["benchmark"] == "sanity-mock-c-delta-01"
+    assert "buckets" not in payload
     assert csv_path.read_text().startswith(
-        "bucket_start,bucket_end,inputs_seen,lines_covered,lines_total,lines_percent"
+        "relative_time,content_hash,original_name,size,lines_covered,crashed,raw_cov_path,crash_log_path"
     )
     assert png_path.exists()
     assert png_path.stat().st_size > 0
@@ -279,14 +194,14 @@ def test_timeline_png_uses_covered_line_counts_on_y_axis(tmp_path: Path) -> None
         benchmark="sanity-mock-c-delta-01",
         harness="fuzz_parse_buffer_section",
         bucket_size_seconds=1,
-        buckets=[
-            CoverageTimelineBucket(
-                bucket_start=1.0,
-                bucket_end=2.0,
-                inputs_seen=1,
+        seeds=[
+            TimedCoverageInput(
+                content_hash="abc",
+                original_name="a.bin",
+                path=Path("/tmp/a.bin"),
+                relative_time=1.0,
+                size=1,
                 lines_covered=5,
-                lines_total=10,
-                lines_percent=50.0,
             )
         ],
     )
@@ -342,7 +257,7 @@ def test_timeline_png_uses_covered_line_counts_on_y_axis(tmp_path: Path) -> None
         write_timeline_png(report, tmp_path / "timeline.png")
 
     assert observed["step"] == (
-        [2.0],
+        [1.0],
         [5],
         {"where": "post", "label": "Covered lines", "linewidth": 2},
     )
@@ -790,7 +705,6 @@ def test_run_experiment_timeline_uses_jobs_and_cores_per_job(
             time_origin="first_seed_mtime",
             seeds=[],
             pov_markers=[],
-            buckets=[],
             final_summary=CoverageSummary(lines_covered=0, lines_total=0),
         )
 

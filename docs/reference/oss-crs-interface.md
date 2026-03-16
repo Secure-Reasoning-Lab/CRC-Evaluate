@@ -146,8 +146,8 @@ Runtime semantics for coverage:
 
 Post-trial coverage outputs are written under `trial/coverage/` and include:
 
-- `coverage_timeline.json`
-- `coverage_timeline.csv`
+- `coverage_timeline.json` with one entry per normalized seed plus the final summary
+- `coverage_timeline.csv` with one row per normalized seed
 - `coverage_timeline.png`
 - raw per-seed artifacts under `coverage/raw/`
 

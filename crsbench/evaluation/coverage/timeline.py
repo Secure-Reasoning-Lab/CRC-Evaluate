@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Optional
 
 from crsbench.evaluation.coverage.models import (
     CoveragePovMarker,
-    CoverageTimelineBucket,
     TimedCoverageInput,
     TrialCoverageContext,
 )
@@ -116,59 +115,6 @@ def normalize_seed_inputs(
         normalized_by_hash.values(),
         key=lambda item: (item.relative_time, item.original_name, item.content_hash),
     )
-
-
-def aggregate_line_coverage_buckets(
-    inputs: list[TimedCoverageInput],
-    *,
-    lines_total: int,
-    bucket_size_seconds: int,
-) -> list[CoverageTimelineBucket]:
-    """Aggregate cumulative line coverage into fixed-width observed buckets."""
-    if not inputs:
-        return []
-    if bucket_size_seconds <= 0:
-        msg = "bucket_size_seconds must be positive"
-        raise ValueError(msg)
-
-    buckets: list[CoverageTimelineBucket] = []
-
-    inputs = sorted(inputs, key=lambda item: item.relative_time)
-    cumulative_inputs_seen = 0
-    input_index = 0
-
-    while input_index < len(inputs):
-        bucket_index = int(inputs[input_index].relative_time // bucket_size_seconds)
-        bucket_start = float(bucket_index * bucket_size_seconds)
-        bucket_end = bucket_start + float(bucket_size_seconds)
-        cumulative_lines_covered = 0
-        if buckets:
-            cumulative_lines_covered = buckets[-1].lines_covered
-
-        while (
-            input_index < len(inputs) and inputs[input_index].relative_time < bucket_end
-        ):
-            cumulative_inputs_seen += 1
-            cumulative_lines_covered = max(
-                cumulative_lines_covered, inputs[input_index].lines_covered
-            )
-            input_index += 1
-
-        lines_percent = (
-            (cumulative_lines_covered / lines_total) * 100.0 if lines_total > 0 else 0.0
-        )
-        buckets.append(
-            CoverageTimelineBucket(
-                bucket_start=bucket_start,
-                bucket_end=bucket_end,
-                inputs_seen=cumulative_inputs_seen,
-                lines_covered=cumulative_lines_covered,
-                lines_total=lines_total,
-                lines_percent=lines_percent,
-            )
-        )
-
-    return buckets
 
 
 def _hash_file(path: Path) -> str:

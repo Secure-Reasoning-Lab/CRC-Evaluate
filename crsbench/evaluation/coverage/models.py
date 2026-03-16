@@ -226,17 +226,6 @@ class TimedCoverageInput(BaseModel):
     crash_log_path: Optional[Path] = None
 
 
-class CoverageTimelineBucket(BaseModel):
-    """Aggregated cumulative line coverage for one time bucket."""
-
-    bucket_start: float = Field(..., ge=0.0)
-    bucket_end: float = Field(..., ge=0.0)
-    inputs_seen: int = Field(..., ge=0)
-    lines_covered: int = Field(..., ge=0)
-    lines_total: int = Field(..., ge=0)
-    lines_percent: float = Field(..., ge=0.0, le=100.0)
-
-
 class TrialCoverageContext(BaseModel):
     """Resolved trial context for coverage timeline analysis."""
 
@@ -260,5 +249,4 @@ class CoverageTimelineReport(BaseModel):
     )
     seeds: list[TimedCoverageInput] = Field(default_factory=list)
     pov_markers: list[CoveragePovMarker] = Field(default_factory=list)
-    buckets: list[CoverageTimelineBucket] = Field(default_factory=list)
     final_summary: CoverageSummary = Field(default_factory=CoverageSummary)
