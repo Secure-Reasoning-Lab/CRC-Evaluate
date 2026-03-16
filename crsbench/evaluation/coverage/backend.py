@@ -513,6 +513,7 @@ class UniAFLCoverageSession(CoverageSession):
         container_output_root = self._workspace_container_path(output_root)
         cleanup_run_root = False
         try:
+            loaded_results: dict[str, CoverageRunResult] = {}
             result = self._docker_exec(
                 [
                     "python3",
@@ -547,12 +548,11 @@ class UniAFLCoverageSession(CoverageSession):
             )
 
             for corpus_hash in unique_hashes:
-                self._collected_results[corpus_hash] = (
-                    self._load_result_from_output_root(
-                        corpus_hash=corpus_hash,
-                        output_root=output_root,
-                    )
+                loaded_results[corpus_hash] = self._load_result_from_output_root(
+                    corpus_hash=corpus_hash,
+                    output_root=output_root,
                 )
+            self._collected_results.update(loaded_results)
             cleanup_run_root = True
         except Exception as exc:
             cleanup_run_root = self._reset_after_failed_batch(exc)

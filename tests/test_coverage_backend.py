@@ -518,6 +518,82 @@ def test_uniafl_session_resets_container_before_cleaning_timed_out_batch(
         session.close()
 
 
+def test_uniafl_session_discards_partial_batch_results_after_reset(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "coverage"
+    build_output_dir = tmp_path / "build-out"
+    benchmark_dir = tmp_path / "benchmark"
+    repo_dir = build_output_dir / ".crsbench-repo"
+    benchmark_dir.mkdir()
+    build_output_dir.mkdir()
+    repo_dir.mkdir(parents=True)
+    (benchmark_dir / "project.yaml").write_text("language: c\n")
+    (benchmark_dir / ".aixcc").mkdir()
+    seed1 = tmp_path / "seed1"
+    seed2 = tmp_path / "seed2"
+    seed1.write_bytes(b"a")
+    seed2.write_bytes(b"b")
+
+    def fake_run(cmd, **kwargs):
+        del cmd, kwargs
+
+        class Result:
+            returncode = 0
+            stdout = "container-id\n"
+            stderr = ""
+
+        return Result()
+
+    with patch("subprocess.run", side_effect=fake_run):
+        session = UniAFLCoverageSession(
+            project_name="proj-cov-delta-coverage",
+            harness_name="fuzz_target",
+            language="c",
+            benchmark_path=benchmark_dir,
+            source_repo_dir=repo_dir,
+            build_output_dir=build_output_dir,
+            output_dir=output_dir,
+            parse_single_output=lambda _data: {},
+            parse_textcov_output=None,
+            parse_summary=lambda _path: {},
+        )
+
+    try:
+
+        def fake_exec(args, **_kwargs):
+            if args[:3] != ["python3", "/workspace/crsbench_cov_worker.py", "run-dir"]:
+                return subprocess.CompletedProcess(args, 0, "", "")
+            host_seed_root = session.workspace / Path(args[4]).relative_to("/workspace")
+            host_output_root = session.workspace / Path(args[5]).relative_to(
+                "/workspace"
+            )
+            host_output_root.mkdir(parents=True, exist_ok=True)
+            first_seed = sorted(host_seed_root.iterdir())[0]
+            (host_output_root / f"{first_seed.name}.cov").write_text(
+                json.dumps({"main": {"src": "src.c", "lines": [1]}})
+            )
+            (host_output_root / f"{first_seed.name}.status.json").write_text(
+                json.dumps({"crashed": False})
+            )
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        session._docker_exec = fake_exec  # type: ignore[method-assign]
+        session._remove_container = Mock()  # type: ignore[method-assign]
+        session._start_container = Mock()  # type: ignore[method-assign]
+        session._prepare_harness = Mock()  # type: ignore[method-assign]
+
+        with pytest.raises(RuntimeError, match="missing status"):
+            session.collect_many([seed1, seed2])
+
+        assert session._collected_results == {}
+        assert session._remove_container.call_count == 1
+        assert session._start_container.call_count == 1
+        assert session._prepare_harness.call_count == 1
+    finally:
+        session.close()
+
+
 def test_uniafl_session_normalizes_container_source_paths(tmp_path: Path) -> None:
     output_dir = tmp_path / "coverage"
     build_output_dir = tmp_path / "build-out"
