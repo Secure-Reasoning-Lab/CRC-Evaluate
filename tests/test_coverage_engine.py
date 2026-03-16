@@ -129,26 +129,22 @@ class TestCoverageEngine:
         assert "func2" in merged
 
     def test_compute_summary(self, engine: CoverageEngine):
-        """Test summary computation uses totals from batch coverage."""
+        """Test summary computation derives totals from merged per-seed coverage."""
+        src_a = Path("/tmp/test-coverage-engine-a.c")
+        src_b = Path("/tmp/test-coverage-engine-b.c")
+        src_a.write_text("1\n2\n3\n")
+        src_b.write_text("1\n2\n")
         merged = {
-            "func1": {"src": "a.c", "lines": {1, 2, 3}},
-            "func2": {"src": "b.c", "lines": {10, 11}},
+            "func1": {"src": str(src_a), "lines": {1, 2, 3}},
+            "func2": {"src": str(src_b), "lines": {1, 2}},
         }
-        totals = {
-            "lines_covered": 50,
-            "lines_total": 100,
-            "lines_percent": 50.0,
-            "functions_covered": 10,
-            "functions_total": 20,
-        }
-        summary = engine._compute_summary(merged, 10, 8, 6, totals)
+        summary = engine._compute_summary(merged, 10, 8, 6)
 
-        # Values come from totals dict, not merged_coverage
-        assert summary.lines_covered == 50
-        assert summary.lines_total == 100
-        assert summary.lines_percent == 50.0
-        assert summary.functions_covered == 10
-        assert summary.functions_total == 20
+        assert summary.lines_covered == 5
+        assert summary.lines_total == 5
+        assert summary.lines_percent == 100.0
+        assert summary.functions_covered == 2
+        assert summary.functions_total == 0
         assert summary.corpus_total == 10
         assert summary.corpus_contributing == 8
         assert summary.corpus_unique == 6
@@ -157,33 +153,27 @@ class TestCoverageEngine:
     def test_sequential_corpus_processing(
         self,
         mock_create_strategy,
-        mock_oss_fuzz: Path,
         mock_benchmark: Path,
         mock_corpus: Path,
     ):
         """Test corpus files are processed through the warm session backend."""
+        src_file = mock_benchmark / "main.c"
+        src_file.write_text("line1\nline2\nline3\n")
         mock_strategy = MagicMock()
         session = MagicMock()
         session.__enter__.return_value = session
         session.__exit__.return_value = False
         session.collect_many.return_value = {
             corpus_file: CoverageRunResult(
-                coverage_data={"main": {"src": "main.c", "lines": [1, 2, 3]}}
+                coverage_data={"main": {"src": str(src_file), "lines": [1, 2, 3]}}
             )
             for corpus_file in sorted(mock_corpus.iterdir())
-        }
-        session.collect_batch_totals.return_value = {
-            "lines_covered": 10,
-            "lines_total": 100,
-            "lines_percent": 10.0,
-            "functions_covered": 5,
-            "functions_total": 20,
         }
         mock_strategy.open_session.return_value = session
         mock_create_strategy.return_value = mock_strategy
 
         # No verify_workers - parallelism handled by DAGExecutor
-        eng = CoverageEngine(mock_oss_fuzz)
+        eng = CoverageEngine()
 
         with (
             patch.object(
@@ -197,11 +187,85 @@ class TestCoverageEngine:
             report = eng.collect_coverage(mock_benchmark, mock_corpus)
 
         session.collect_many.assert_called_once()
-        session.collect_batch_totals.assert_called_once_with(mock_corpus)
+        session.collect_batch_totals.assert_not_called()
         mock_strategy.collect_single_coverage.assert_not_called()
         assert report.final_summary.corpus_total == 3
-        assert report.final_summary.lines_total == 100
+        assert report.final_summary.lines_covered == 3
+        assert report.final_summary.lines_total == 3
+        assert report.final_summary.lines_percent == 100.0
+        assert report.final_summary.functions_covered == 1
+        assert report.final_summary.functions_total == 0
         assert report.harness_name == "fuzz_target"
+
+    @patch("crsbench.evaluation.coverage.engine.create_coverage_strategy")
+    def test_timed_coverage_summary_uses_per_seed_results_only(
+        self,
+        mock_create_strategy,
+        mock_benchmark: Path,
+    ) -> None:
+        """Timed analysis should not invoke the whole-corpus batch summary path."""
+        src_file = mock_benchmark / "main.c"
+        src_file.write_text("line1\nline2\nline3\nline4\n")
+        seed_a = mock_benchmark / "a.seed"
+        seed_b = mock_benchmark / "b.seed"
+        seed_a.write_bytes(b"a")
+        seed_b.write_bytes(b"b")
+
+        timed_inputs = [
+            TimedCoverageInput(
+                content_hash="aaa",
+                original_name="a.seed",
+                path=seed_a,
+                relative_time=0.0,
+                size=1,
+            ),
+            TimedCoverageInput(
+                content_hash="bbb",
+                original_name="b.seed",
+                path=seed_b,
+                relative_time=10.0,
+                size=1,
+            ),
+        ]
+
+        mock_strategy = MagicMock()
+        session = MagicMock()
+        session.__enter__.return_value = session
+        session.__exit__.return_value = False
+        session.collect_many.return_value = {
+            seed_a: CoverageRunResult(
+                coverage_data={"main": {"src": str(src_file), "lines": [1, 2]}}
+            ),
+            seed_b: CoverageRunResult(
+                coverage_data={"main": {"src": str(src_file), "lines": [1, 2, 4]}}
+            ),
+        }
+        mock_strategy.open_session.return_value = session
+        mock_create_strategy.return_value = mock_strategy
+
+        eng = CoverageEngine()
+
+        with (
+            patch.object(
+                eng,
+                "_build_coverage_variant",
+                return_value="test-benchmark-cov-delta-coverage",
+            ),
+            patch.object(eng.infra, "has_harness", return_value=True),
+            patch.object(eng, "_maybe_open_session", return_value=session),
+        ):
+            processed_inputs, summary = eng.collect_timed_line_coverage(
+                benchmark_path=mock_benchmark,
+                timed_inputs=timed_inputs,
+                harness_filter="fuzz_target",
+            )
+
+        session.collect_many.assert_called_once()
+        session.collect_batch_totals.assert_not_called()
+        assert [item.lines_covered for item in processed_inputs] == [2, 3]
+        assert summary.lines_covered == 3
+        assert summary.lines_total == 4
+        assert summary.lines_percent == 75.0
 
     def test_build_variant_success(self, mock_benchmark: Path, engine: CoverageEngine):
         """Test successful Atlantis-backed coverage variant build."""
@@ -573,12 +637,14 @@ class TestCoverageEngine:
             )
             for path in sorted(mock_corpus.iterdir())
         }
-        session.collect_batch_totals.return_value = {
-            "lines_covered": 1,
-            "lines_total": 10,
-            "lines_percent": 10.0,
-            "functions_covered": 1,
-            "functions_total": 1,
+        src_file = mock_benchmark / "a.c"
+        src_file.write_text("1\n2\n3\n4\n")
+        session.collect_many.return_value = {
+            path: CoverageRunResult(
+                coverage_data={"f": {"src": str(src_file), "lines": [1]}},
+                raw_cov_path=Path("/tmp/f.cov"),
+            )
+            for path in sorted(mock_corpus.iterdir())
         }
 
         class SessionContext:
@@ -612,8 +678,10 @@ class TestCoverageEngine:
         ):
             _, summary = eng.collect_timed_line_coverage(mock_benchmark, timed_inputs)
 
-        assert summary.lines_total == 10
-        session.collect_batch_totals.assert_called_once()
+        assert summary.lines_covered == 1
+        assert summary.lines_total == 4
+        assert summary.lines_percent == 25.0
+        session.collect_batch_totals.assert_not_called()
 
     def test_build_variant_uses_atlantis_build_pipeline(
         self,

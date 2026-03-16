@@ -2,9 +2,11 @@
 
 import argparse
 import json
+import sys
 import threading
 import time
 from pathlib import Path
+from types import ModuleType
 from unittest.mock import patch
 
 from crsbench.evaluation.coverage.cli.coverage_command import (
@@ -191,6 +193,39 @@ def test_aggregate_line_coverage_buckets_builds_cumulative_curve() -> None:
     assert [bucket.lines_percent for bucket in buckets] == [20.0, 40.0, 40.0]
 
 
+def test_aggregate_line_coverage_buckets_omits_empty_time_gaps() -> None:
+    inputs = [
+        TimedCoverageInput(
+            content_hash="a",
+            original_name="a.bin",
+            path=Path("/tmp/a.bin"),
+            relative_time=0.2,
+            size=1,
+            lines_covered=2,
+        ),
+        TimedCoverageInput(
+            content_hash="b",
+            original_name="b.bin",
+            path=Path("/tmp/b.bin"),
+            relative_time=5.1,
+            size=1,
+            lines_covered=4,
+        ),
+    ]
+
+    buckets = aggregate_line_coverage_buckets(
+        inputs,
+        lines_total=10,
+        bucket_size_seconds=1,
+    )
+
+    assert [(bucket.bucket_start, bucket.inputs_seen) for bucket in buckets] == [
+        (0.0, 1),
+        (5.0, 2),
+    ]
+    assert [bucket.lines_covered for bucket in buckets] == [2, 4]
+
+
 def test_timeline_reporting_writes_json_csv_and_png(tmp_path: Path) -> None:
     report = CoverageTimelineReport(
         benchmark="sanity-mock-c-delta-01",
@@ -237,6 +272,81 @@ def test_timeline_reporting_writes_json_csv_and_png(tmp_path: Path) -> None:
     )
     assert png_path.exists()
     assert png_path.stat().st_size > 0
+
+
+def test_timeline_png_uses_covered_line_counts_on_y_axis(tmp_path: Path) -> None:
+    report = CoverageTimelineReport(
+        benchmark="sanity-mock-c-delta-01",
+        harness="fuzz_parse_buffer_section",
+        bucket_size_seconds=1,
+        buckets=[
+            CoverageTimelineBucket(
+                bucket_start=1.0,
+                bucket_end=2.0,
+                inputs_seen=1,
+                lines_covered=5,
+                lines_total=10,
+                lines_percent=50.0,
+            )
+        ],
+    )
+
+    observed: dict[str, object] = {}
+
+    class _FakeAxes:
+        def step(self, x_values, y_values, **kwargs):
+            observed["step"] = (list(x_values), list(y_values), kwargs)
+
+        def set_xlim(self, **kwargs):
+            observed["xlim"] = kwargs
+
+        def set_title(self, value):
+            observed["title"] = value
+
+        def set_xlabel(self, value):
+            observed["xlabel"] = value
+
+        def set_ylabel(self, value):
+            observed["ylabel"] = value
+
+        def set_ylim(self, *args):
+            observed["ylim"] = args
+
+        def grid(self, **kwargs):
+            observed["grid"] = kwargs
+
+        def legend(self, **kwargs):
+            observed["legend"] = kwargs
+
+    class _FakeFigure:
+        def tight_layout(self):
+            observed["tight_layout"] = True
+
+        def savefig(self, path):
+            Path(path).write_bytes(b"fake-png")
+            observed["savefig"] = str(path)
+
+    fake_matplotlib = ModuleType("matplotlib")
+    fake_matplotlib.use = lambda *_args, **_kwargs: None
+    fake_pyplot = ModuleType("matplotlib.pyplot")
+    fake_pyplot.subplots = lambda **_kwargs: (_FakeFigure(), _FakeAxes())
+    fake_pyplot.close = lambda _fig: None
+
+    with patch.dict(
+        sys.modules,
+        {
+            "matplotlib": fake_matplotlib,
+            "matplotlib.pyplot": fake_pyplot,
+        },
+    ):
+        write_timeline_png(report, tmp_path / "timeline.png")
+
+    assert observed["step"] == (
+        [2.0],
+        [5],
+        {"where": "post", "label": "Covered lines", "linewidth": 2},
+    )
+    assert observed["ylabel"] == "Covered lines"
 
 
 def test_run_coverage_rejects_experiment_config_with_benchmarks_and_harness(

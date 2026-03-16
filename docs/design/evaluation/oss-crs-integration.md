@@ -56,6 +56,12 @@ Coverage replay runs one warm container per `(benchmark, harness, shard)`. Each
 container is pinned to a single CPU, and seeds assigned to that shard are run
 sequentially in a fresh libCRS coverage state inside the warm process.
 
+Coverage reporting is derived directly from the per-seed replay artifacts that
+those warm containers emit. CRSBench must not depend on a separate whole-corpus
+summary pass for Atlantis coverage analysis. The timeline x-axis comes from the
+input seed files' relative mtimes, and the y-axis is the cumulative count of
+unique covered lines obtained by merging per-seed `.cov` payloads.
+
 The normalized coverage build output must materialize executable runtime
 artifacts as real files inside the exported build directory. Host-only symlinks
 to Atlantis work directories are out of contract for runtime-mounted `/out`

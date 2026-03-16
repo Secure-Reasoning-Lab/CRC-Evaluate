@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 from typing import TYPE_CHECKING, Optional
 
 from crsbench.evaluation.coverage.models import (
@@ -125,25 +124,27 @@ def aggregate_line_coverage_buckets(
     lines_total: int,
     bucket_size_seconds: int,
 ) -> list[CoverageTimelineBucket]:
-    """Aggregate cumulative line coverage into fixed-width buckets."""
+    """Aggregate cumulative line coverage into fixed-width observed buckets."""
     if not inputs:
         return []
     if bucket_size_seconds <= 0:
         msg = "bucket_size_seconds must be positive"
         raise ValueError(msg)
 
-    max_time = max(item.relative_time for item in inputs)
-    bucket_count = int(math.floor(max_time / bucket_size_seconds)) + 1
     buckets: list[CoverageTimelineBucket] = []
 
     inputs = sorted(inputs, key=lambda item: item.relative_time)
     cumulative_inputs_seen = 0
-    cumulative_lines_covered = 0
     input_index = 0
 
-    for bucket_index in range(bucket_count):
+    while input_index < len(inputs):
+        bucket_index = int(inputs[input_index].relative_time // bucket_size_seconds)
         bucket_start = float(bucket_index * bucket_size_seconds)
         bucket_end = bucket_start + float(bucket_size_seconds)
+        cumulative_lines_covered = 0
+        if buckets:
+            cumulative_lines_covered = buckets[-1].lines_covered
+
         while (
             input_index < len(inputs) and inputs[input_index].relative_time < bucket_end
         ):
@@ -152,6 +153,7 @@ def aggregate_line_coverage_buckets(
                 cumulative_lines_covered, inputs[input_index].lines_covered
             )
             input_index += 1
+
         lines_percent = (
             (cumulative_lines_covered / lines_total) * 100.0 if lines_total > 0 else 0.0
         )

@@ -25,7 +25,6 @@ import fcntl
 import inspect
 import json
 import shutil
-import tempfile
 import threading
 import time
 from contextlib import contextmanager, nullcontext
@@ -318,16 +317,14 @@ class CoverageEngine:
                     session=session,
                 )
             )
-            totals = session.collect_batch_totals(corpus_dir)
         verify_elapsed = time.time() - verify_start
 
-        # Compute summary with totals
+        # Compute summary directly from merged per-seed coverage.
         summary = self._compute_summary(
             merged_coverage,
             len(corpus_files),
             contributing_count,
             unique_count,
-            totals,
         )
 
         logger.info(
@@ -401,7 +398,6 @@ class CoverageEngine:
         session_cm = self._maybe_open_session(
             strategy, harness_name, output_dir=output_dir
         )
-        totals: dict = {}
         with session_cm as session:
             if session is None:
                 msg = "Coverage analysis requires an Atlantis-backed coverage session"
@@ -446,13 +442,6 @@ class CoverageEngine:
                         }
                     )
                 )
-            totals = self._get_timed_coverage_totals(
-                strategy=strategy,
-                harness_name=harness_name,
-                timed_inputs=processed_inputs,
-                output_dir=output_dir,
-                session=session,
-            )
 
         if not processed_inputs:
             msg = (
@@ -465,7 +454,6 @@ class CoverageEngine:
             corpus_count=len(processed_inputs),
             contributing_count=contributing_count,
             unique_count=unique_count,
-            totals=totals,
         )
         summary = summary.model_copy(
             update={
@@ -874,34 +862,49 @@ class CoverageEngine:
         corpus_count: int,
         contributing_count: int,
         unique_count: int,
-        totals: dict,
     ) -> CoverageSummary:
-        """Compute coverage summary from merged data and totals.
+        """Compute coverage summary directly from merged per-seed coverage.
 
         Converts line sets to sorted lists and computes aggregate statistics.
-        Uses totals from batch coverage for accurate lines_total/functions_total.
+        Total lines are estimated from source files referenced by the per-seed
+        coverage payloads when those files are visible on the host. This keeps
+        the Atlantis coverage path self-contained and avoids the separate
+        whole-corpus batch summary helper.
 
         Args:
             merged_coverage: Merged coverage dict with line sets.
             corpus_count: Total number of corpus files.
             contributing_count: Number of corpus files that add new lines.
             unique_count: Number of corpus files with distinct coverage profiles.
-            totals: Dict with totals from parse_llvm_cov_summary().
 
         Returns:
             CoverageSummary with aggregate statistics.
         """
-        # Convert sets back to sorted lists
-        for func_data in merged_coverage.values():
-            if isinstance(func_data.get("lines"), set):
-                func_data["lines"] = sorted(func_data["lines"])
+        merged_lines: set[tuple[str, int]] = set()
+        visible_sources: set[Path] = set()
+        functions_covered = 0
 
-        # Use totals from batch coverage (accurate)
-        lines_covered = int(totals.get("lines_covered", 0))
-        lines_total = int(totals.get("lines_total", 0))
-        lines_percent = float(totals.get("lines_percent", 0.0))
-        functions_covered = int(totals.get("functions_covered", 0))
-        functions_total = int(totals.get("functions_total", 0))
+        for func_data in merged_coverage.values():
+            if not isinstance(func_data, dict):
+                continue
+            src = str(func_data.get("src", ""))
+            raw_lines = func_data.get("lines", [])
+            normalized_lines = sorted({int(line) for line in raw_lines})
+            func_data["lines"] = normalized_lines
+
+            if normalized_lines:
+                functions_covered += 1
+            if src:
+                src_path = Path(src)
+                if src_path.exists():
+                    visible_sources.add(src_path)
+            for line in normalized_lines:
+                merged_lines.add((src, line))
+
+        lines_covered = len(merged_lines)
+        lines_total = self._estimate_visible_source_line_count(visible_sources)
+        lines_percent = (lines_covered / lines_total * 100.0) if lines_total else 0.0
+        functions_total = 0
 
         return CoverageSummary(
             metric="line",
@@ -915,6 +918,16 @@ class CoverageEngine:
             functions_total=functions_total,
         )
 
+    def _estimate_visible_source_line_count(self, sources: set[Path]) -> int:
+        """Estimate total coverable lines from source files visible on the host."""
+        lines_total = 0
+        for src_path in sources:
+            try:
+                lines_total += len(src_path.read_text().splitlines())
+            except OSError:
+                continue
+        return lines_total
+
     def _extract_line_locations(self, cov_data: dict) -> set[tuple[str, int]]:
         """Extract covered line locations from coverage data."""
         line_locations: set[tuple[str, int]] = set()
@@ -925,38 +938,6 @@ class CoverageEngine:
             for line in func_data.get("lines", []):
                 line_locations.add((src, line))
         return line_locations
-
-    def _get_timed_coverage_totals(
-        self,
-        *,
-        strategy: CoverageStrategy,
-        harness_name: str,
-        timed_inputs: list[TimedCoverageInput],
-        output_dir: Optional[Path] = None,
-        session: Optional[CoverageSession] = None,
-    ) -> dict:
-        """Get coverage totals for a timed input set using batch coverage."""
-        if not timed_inputs:
-            return {}
-        with tempfile.TemporaryDirectory(prefix="crsbench-coverage-corpus-") as tmp_dir:
-            temp_corpus_dir = Path(tmp_dir)
-            for timed_input in timed_inputs:
-                shutil.copy2(
-                    timed_input.path,
-                    temp_corpus_dir / timed_input.original_name,
-                )
-            if session is not None:
-                return session.collect_batch_totals(temp_corpus_dir)
-            session_cm = self._maybe_open_session(
-                strategy, harness_name, output_dir=output_dir
-            )
-            with session_cm as opened_session:
-                if opened_session is None:
-                    msg = (
-                        "Coverage analysis requires an Atlantis-backed coverage session"
-                    )
-                    raise CoverageStrategyError(msg)
-                return opened_session.collect_batch_totals(temp_corpus_dir)
 
     def cleanup(self) -> None:
         """Clean up temporary resources.
