@@ -999,3 +999,72 @@ def test_sharded_session_collect_batch_totals_aggregates_all_shards(
         "functions_covered": 2,
         "functions_total": 0,
     }
+
+
+def test_sharded_session_collect_batch_totals_replaces_partial_fallback_from_first_shard(
+    tmp_path: Path,
+) -> None:
+    src_left = tmp_path / "left.py"
+    src_left.write_text("a\nb\n")
+    src_right = tmp_path / "right.py"
+    src_right.write_text("a\nb\nc\n")
+
+    class _FakeSession:
+        def __init__(
+            self,
+            *,
+            coverage_data: dict[str, dict],
+            totals: dict,
+            approximate: bool = False,
+        ) -> None:
+            self._collected_results = {
+                "seed": CoverageRunResult(coverage_data=coverage_data)
+            }
+            self._totals = totals
+            self._last_batch_totals_approximate = approximate
+
+        def collect_many(
+            self, corpus_files: list[Path]
+        ) -> dict[Path, CoverageRunResult]:
+            del corpus_files
+            return {}
+
+        def collect_batch_totals(self, corpus_dir: Path) -> dict:
+            del corpus_dir
+            return dict(self._totals)
+
+        def close(self) -> None:
+            return None
+
+    left = _FakeSession(
+        coverage_data={"func_left": {"src": str(src_left), "lines": [1]}},
+        totals={
+            "lines_covered": 1,
+            "lines_total": 2,
+            "lines_percent": 50.0,
+            "functions_covered": 1,
+            "functions_total": 0,
+        },
+        approximate=True,
+    )
+    right = _FakeSession(
+        coverage_data={"func_right": {"src": str(src_right), "lines": [2, 3]}},
+        totals={
+            "lines_covered": 0,
+            "lines_total": 0,
+            "lines_percent": 0.0,
+            "functions_covered": 0,
+            "functions_total": 0,
+        },
+    )
+    session = ShardedCoverageSession([left, right])
+
+    totals = session.collect_batch_totals(tmp_path)
+
+    assert totals == {
+        "lines_covered": 3,
+        "lines_total": 5,
+        "lines_percent": (3 / 5) * 100.0,
+        "functions_covered": 2,
+        "functions_total": 0,
+    }

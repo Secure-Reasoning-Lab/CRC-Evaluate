@@ -142,6 +142,8 @@ class ShardedCoverageSession(CoverageSession):
         totals = self.sessions[0].collect_batch_totals(corpus_dir)
         if len(self.sessions) == 1:
             return totals
+        if getattr(self.sessions[0], "_last_batch_totals_approximate", False):
+            return self._aggregate_shard_totals(totals)
         if any(
             int(totals.get(key, 0)) > 0
             for key in (
@@ -153,13 +155,16 @@ class ShardedCoverageSession(CoverageSession):
         ):
             return totals
 
+        return self._aggregate_shard_totals(totals)
+
+    def _aggregate_shard_totals(self, default_totals: dict) -> dict:
         shard_results: list[CoverageRunResult] = []
         for session in self.sessions:
             collected_results = getattr(session, "_collected_results", None)
             if isinstance(collected_results, dict):
                 shard_results.extend(collected_results.values())
         if not shard_results:
-            return totals
+            return default_totals
         return _approximate_totals_from_results(shard_results)
 
     def close(self) -> None:
@@ -511,7 +516,9 @@ class UniAFLCoverageSession(CoverageSession):
                 parse_summary=self.parse_summary,
             )
             try:
-                return batch_session.collect_batch_totals(corpus_dir)
+                totals = batch_session.collect_batch_totals(corpus_dir)
+                self._last_batch_totals_approximate = False
+                return totals
             finally:
                 batch_session.close()
         except Exception as exc:
@@ -519,6 +526,7 @@ class UniAFLCoverageSession(CoverageSession):
                 f"Falling back to approximate UniAFL totals for "
                 f"{self.project_name}/{self.harness_name}: {exc}"
             )
+        self._last_batch_totals_approximate = True
         return _approximate_totals_from_results(list(self._collected_results.values()))
 
     def close(self) -> None:
