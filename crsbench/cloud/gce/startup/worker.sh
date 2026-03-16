@@ -108,12 +108,46 @@ export CRSBENCH_CLOUD_ZONE="${ZONE}"
 trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR
 
 INSTALL_SPEC="$(metadata_get_optional "crsbench-install-spec")"
+GITHUB_DEPLOY_KEY="$(metadata_get_optional "crsbench-github-deploy-key")"
+HF_TOKEN="$(metadata_get_optional "crsbench-hf-token")"
+
+# --- GitHub SSH setup (if deploy key provided) ---
+if [[ -n "${GITHUB_DEPLOY_KEY}" ]]; then
+  mkdir -p /root/.ssh
+  chmod 700 /root/.ssh
+  echo "${GITHUB_DEPLOY_KEY}" | base64 --decode > /root/.ssh/id_ed25519
+  chmod 600 /root/.ssh/id_ed25519
+  ssh-keyscan -t ed25519 github.com >> /root/.ssh/known_hosts 2>/dev/null
+  git config --global url."git@github.com:sslab-gatech/".insteadOf "https://github.com/sslab-gatech/"
+fi
+
+# --- HuggingFace token ---
+if [[ -n "${HF_TOKEN}" ]]; then
+  export HF_TOKEN
+fi
+
+# --- Install crsbench ---
 if ! command -v crsbench >/dev/null 2>&1; then
-  if [[ -n "${INSTALL_SPEC}" ]]; then
-    python3 -m pip install --upgrade "${INSTALL_SPEC}"
-  else
+  if [[ -z "${INSTALL_SPEC}" ]]; then
     echo "crsbench CLI not found and no crsbench-install-spec metadata provided" >&2
     exit 1
+  elif [[ "${INSTALL_SPEC}" == git+ssh://* ]]; then
+    # Private repo clone path
+    REPO_URL="${INSTALL_SPEC#git+ssh://}"
+    CLONE_DIR="/opt/crsbench"
+    git clone "ssh://${REPO_URL}" "${CLONE_DIR}"
+    cd "${CLONE_DIR}"
+    git submodule update --init --recursive
+    # Install uv
+    if ! command -v uv >/dev/null 2>&1; then
+      curl -LsSf https://astral.sh/uv/install.sh | sh
+      export PATH="/root/.local/bin:${PATH}"
+    fi
+    uv sync --all-extras
+    uv pip install -e .
+    cd /
+  else
+    python3 -m pip install --upgrade "${INSTALL_SPEC}"
   fi
 fi
 
@@ -129,6 +163,9 @@ write_env_var "CRSBENCH_CLOUD_INSTANCE_ID" "${INSTANCE_ID}"
 write_env_var "CRSBENCH_CLOUD_INSTANCE_NAME" "${WORKER_NAME}"
 write_env_var "CRSBENCH_CLOUD_ZONE" "${ZONE}"
 write_env_var "CRSBENCH_LOG_LEVEL" "INFO"
+if [[ -n "${HF_TOKEN:-}" ]]; then
+  write_env_var "HF_TOKEN" "${HF_TOKEN}"
+fi
 
 cat > "${LAUNCHER_PATH}" <<'EOF'
 #!/usr/bin/env bash
