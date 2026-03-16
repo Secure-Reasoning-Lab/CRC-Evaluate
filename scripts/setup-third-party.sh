@@ -98,11 +98,14 @@ configure_oss_fuzz_sparse_checkout() {
 }
 
 normalize_oss_fuzz_checkout() {
+    git -C "$OSS_FUZZ_DIR" remote set-url origin "$OSS_FUZZ_REPO"
+
     if ! git -C "$OSS_FUZZ_DIR" cat-file -e "${OSS_FUZZ_COMMIT}^{commit}" >/dev/null 2>&1; then
         git -C "$OSS_FUZZ_DIR" fetch --depth 1 origin "$OSS_FUZZ_COMMIT"
     fi
 
     git -C "$OSS_FUZZ_DIR" checkout -f "$OSS_FUZZ_COMMIT"
+    git -C "$OSS_FUZZ_DIR" clean -fdx
     configure_oss_fuzz_sparse_checkout
 }
 

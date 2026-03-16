@@ -159,7 +159,7 @@ def _write_file(path: Path, content: str) -> None:
 
 def _init_fake_oss_fuzz_upstream(tmp_path: Path) -> tuple[Path, str, str]:
     upstream = tmp_path / "oss-fuzz-upstream"
-    upstream.mkdir()
+    upstream.mkdir(parents=True)
     _run(["git", "init"], cwd=upstream)
     _run(["git", "config", "user.name", "Test User"], cwd=upstream)
     _run(["git", "config", "user.email", "test@example.com"], cwd=upstream)
@@ -231,12 +231,53 @@ def test_setup_third_party_repairs_existing_managed_oss_fuzz_checkout(
     _run(["git", "fetch", "--depth", "1", "origin", drift_commit], cwd=managed)
     _run(["git", "checkout", "-f", drift_commit], cwd=managed)
     helper_path.write_text(helper_path.read_text() + "\n# local drift\n")
+    stray = managed / "stray.txt"
+    stray.write_text("leftover\n")
 
     second = _run(["bash", str(script), "--oss-fuzz-only"], cwd=repo_root, env=env)
     assert second.returncode == 0, second.stderr or second.stdout
 
     head = _run(["git", "rev-parse", "HEAD"], cwd=managed).stdout.strip()
     assert head == base_commit
+    assert not stray.exists()
     helper_text = helper_path.read_text()
     assert "_runtime_resource_docker_args" in helper_text
     assert "build_project_image=args.build_image" in helper_text
+
+
+def test_setup_third_party_repoints_existing_managed_oss_fuzz_checkout_origin(
+    tmp_path: Path,
+) -> None:
+    repo_root = _init_fake_crsbench_root(tmp_path)
+    upstream_one, base_commit_one, _ = _init_fake_oss_fuzz_upstream(tmp_path / "one")
+    upstream_two, base_commit_two, _ = _init_fake_oss_fuzz_upstream(tmp_path / "two")
+    script = repo_root / "scripts" / "setup-third-party.sh"
+
+    env_one = os.environ.copy()
+    env_one.update(
+        {
+            "CRSBENCH_OSS_FUZZ_REPO": upstream_one.as_uri(),
+            "CRSBENCH_OSS_FUZZ_COMMIT": base_commit_one,
+        }
+    )
+    first = _run(["bash", str(script), "--oss-fuzz-only"], cwd=repo_root, env=env_one)
+    assert first.returncode == 0, first.stderr or first.stdout
+
+    managed = repo_root / "third_party" / "oss-fuzz"
+
+    env_two = os.environ.copy()
+    env_two.update(
+        {
+            "CRSBENCH_OSS_FUZZ_REPO": upstream_two.as_uri(),
+            "CRSBENCH_OSS_FUZZ_COMMIT": base_commit_two,
+        }
+    )
+    second = _run(["bash", str(script), "--oss-fuzz-only"], cwd=repo_root, env=env_two)
+    assert second.returncode == 0, second.stderr or second.stdout
+
+    head = _run(["git", "rev-parse", "HEAD"], cwd=managed).stdout.strip()
+    origin_url = _run(
+        ["git", "remote", "get-url", "origin"], cwd=managed
+    ).stdout.strip()
+    assert head == base_commit_two
+    assert origin_url == upstream_two.as_uri()
