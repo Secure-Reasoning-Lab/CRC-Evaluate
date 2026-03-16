@@ -61,10 +61,22 @@ on_error() {
 }
 
 require_cmd curl
-require_cmd python3
 require_cmd systemctl
 
 mkdir -p "${STATE_DIR}"
+
+# --- Install system packages ---
+echo "Installing system packages..."
+apt-get update -qq
+apt-get install -y -qq git python3 rsync tar
+
+# Docker via official install script (includes docker compose plugin)
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Installing Docker..."
+  curl -fsSL https://get.docker.com | sh
+  systemctl enable --now docker
+fi
+
 metadata_get "crsbench-bootstrap-payload" | base64 --decode > "${PAYLOAD_PATH}"
 
 readarray -t PAYLOAD_FIELDS < <(
