@@ -146,6 +146,7 @@ if ! command -v crsbench >/dev/null 2>&1; then
     fi
     uv sync --all-extras
     uv pip install -e .
+    VENV_BIN="/opt/crsbench/.venv/bin"
     cd /
   else
     python3 -m pip install --upgrade "${INSTALL_SPEC}"
@@ -166,6 +167,9 @@ write_env_var "CRSBENCH_CLOUD_ZONE" "${ZONE}"
 write_env_var "CRSBENCH_LOG_LEVEL" "INFO"
 if [[ -n "${HF_TOKEN:-}" ]]; then
   write_env_var "HF_TOKEN" "${HF_TOKEN}"
+fi
+if [[ -n "${VENV_BIN:-}" ]]; then
+  write_env_var "PATH" "${VENV_BIN}:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 fi
 
 cat > "${LAUNCHER_PATH}" <<'EOF'
