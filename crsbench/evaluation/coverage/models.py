@@ -234,6 +234,7 @@ class TrialCoverageContext(BaseModel):
     harness: str
     seed_dir: Path
     crs_run_start_time: Optional[float] = None
+    timeline_duration_seconds: Optional[float] = Field(default=None, ge=0.0)
     pov_markers: list[CoveragePovMarker] = Field(default_factory=list)
 
 
@@ -246,6 +247,7 @@ class CoverageTimelineReport(BaseModel):
         default="crs_run_start_time",
         description="Reference used for relative_time values in this report.",
     )
+    timeline_duration_seconds: Optional[float] = Field(default=None, ge=0.0)
     seeds: list[TimedCoverageInput] = Field(default_factory=list)
     pov_markers: list[CoveragePovMarker] = Field(default_factory=list)
     final_summary: CoverageSummary = Field(default_factory=CoverageSummary)

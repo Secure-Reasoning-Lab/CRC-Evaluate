@@ -62,18 +62,23 @@ startup must not race on that file.
 
 Coverage reporting is derived directly from the per-seed replay artifacts that
 those warm containers emit. CRSBench must not depend on a separate whole-corpus
-summary pass for Atlantis coverage analysis. The timeline x-axis comes from the
-input seed files' relative mtimes using the first observed seed `mtime` as the
-time origin for both direct and experiment-mode analysis, and the y-axis is the
+summary pass for Atlantis coverage analysis. The timeline y-axis is the
 cumulative count of unique covered lines obtained by merging per-seed `.cov`
-payloads. POV markers, when present, must be rebased onto that seed-time
-origin, including negative offsets when a POV predates the first retained seed.
-Without a separate denominator pass, total-line percentages are out of contract
-for this analysis mode and must remain unknown rather than inferred from only
-the subset of source files touched by replay. Timeline report artifacts are
-seed-driven: the JSON/CSV outputs store one row per normalized seed rather than
-bucketed time windows, and the PNG is plotted directly from those per-seed
-rows.
+payloads. Timeline report artifacts are seed-driven: the JSON/CSV outputs store
+one row per normalized seed rather than bucketed time windows, and the PNG is
+plotted directly from those per-seed rows.
+
+Timeline origin depends on the coverage entry point:
+- direct `--seed-dir` analysis uses the first retained seed `mtime` as time
+  origin and computes each seed's `relative_time` from that filesystem time
+- `--experiment-dir` and `--experiment-config` use
+  `pov_store.json.crs_run_start_time` as time origin, preserve POV marker times
+  in that same origin, and clamp the PNG x-axis to the trial's recorded
+  duration from `metadata.json`
+
+Without a separate denominator pass, total-line percentages are out of
+contract for this analysis mode and must remain unknown rather than inferred
+from only the subset of source files touched by replay.
 
 The normalized coverage build output must materialize executable runtime
 artifacts as real files inside the exported build directory. Host-only symlinks

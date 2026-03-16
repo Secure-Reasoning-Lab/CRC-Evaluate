@@ -64,7 +64,9 @@ def test_load_trial_context_reads_metadata_and_pov_markers(tmp_path: Path) -> No
           "benchmark": "sanity-mock-c-delta-01",
           "harness": "fuzz_parse_buffer_section",
           "mode": "patch_generation",
-          "source": {"path": "/tmp/source"}
+          "source": {"path": "/tmp/source"},
+          "run_time": 123.5,
+          "experiment_config": {"run_timeout": 21600}
         }
         """
     )
@@ -88,10 +90,37 @@ def test_load_trial_context_reads_metadata_and_pov_markers(tmp_path: Path) -> No
     assert context.harness == "fuzz_parse_buffer_section"
     assert context.seed_dir == seeds_dir
     assert context.crs_run_start_time == 1000.0
+    assert context.timeline_duration_seconds == 123.5
     assert context.pov_markers == [
         CoveragePovMarker(cpv_id="cpv_0", pov_hash="hash-a", relative_time=3.5),
         CoveragePovMarker(cpv_id="cpv_1", pov_hash="hash-b", relative_time=12.0),
     ]
+
+
+def test_load_trial_context_uses_run_timeout_when_run_time_missing(
+    tmp_path: Path,
+) -> None:
+    trial_dir = tmp_path / "trial-1"
+    seeds_dir = trial_dir / "output" / "seeds"
+    seeds_dir.mkdir(parents=True)
+    (trial_dir / "metadata.json").write_text(
+        """
+        {
+          "timestamp": "2026-03-13T00:00:00Z",
+          "trial_num": 1,
+          "crs": "crs-codex",
+          "benchmark": "sanity-mock-c-delta-01",
+          "harness": "fuzz_parse_buffer_section",
+          "mode": "patch_generation",
+          "source": {"path": "/tmp/source"},
+          "experiment_config": {"run_timeout": 1800}
+        }
+        """
+    )
+
+    context = load_trial_context(trial_dir)
+
+    assert context.timeline_duration_seconds == 1800.0
 
 
 def test_normalize_seed_inputs_deduplicates_by_hash_and_keeps_earliest(
@@ -155,6 +184,7 @@ def test_timeline_reporting_writes_json_csv_and_png(tmp_path: Path) -> None:
         benchmark="sanity-mock-c-delta-01",
         harness="fuzz_parse_buffer_section",
         time_origin="crs_run_start_time",
+        timeline_duration_seconds=60.0,
         seeds=[
             TimedCoverageInput(
                 content_hash="abc",
@@ -189,7 +219,7 @@ def test_timeline_reporting_writes_json_csv_and_png(tmp_path: Path) -> None:
     assert png_path.stat().st_size > 0
 
 
-def test_build_timeline_report_uses_seed_mtime_origin_and_rebases_povs(
+def test_build_timeline_report_uses_seed_mtime_origin_for_direct_seed_dir(
     tmp_path: Path,
 ) -> None:
     seed_dir = tmp_path / "seeds"
@@ -217,25 +247,25 @@ def test_build_timeline_report_uses_seed_mtime_origin_and_rebases_povs(
         benchmark_path=tmp_path / "bench",
         harness_name="fuzz_target",
         seed_dir=seed_dir,
-        crs_run_start_time=130.0,
-        pov_markers=[
-            CoveragePovMarker(cpv_id="cpv", pov_hash="hash", relative_time=5.0)
-        ],
+        time_origin_base=None,
+        time_origin="first_seed_mtime",
+        pov_markers=[],
+        timeline_duration_seconds=None,
         force_rebuild=False,
         output_dir=tmp_path / "coverage",
     )
 
     assert report.time_origin == "first_seed_mtime"
+    assert report.timeline_duration_seconds is None
     assert report.seeds[0].relative_time == 0.0
-    assert report.pov_markers == [
-        CoveragePovMarker(cpv_id="cpv", pov_hash="hash", relative_time=35.0)
-    ]
+    assert report.pov_markers == []
 
 
 def test_timeline_png_uses_covered_line_counts_on_y_axis(tmp_path: Path) -> None:
     report = CoverageTimelineReport(
         benchmark="sanity-mock-c-delta-01",
         harness="fuzz_parse_buffer_section",
+        timeline_duration_seconds=12.0,
         seeds=[
             TimedCoverageInput(
                 content_hash="abc",
@@ -303,10 +333,11 @@ def test_timeline_png_uses_covered_line_counts_on_y_axis(tmp_path: Path) -> None
         [5],
         {"where": "post", "label": "Covered lines", "linewidth": 2},
     )
+    assert observed["xlim"] == {"left": 0.0, "right": 12.0}
     assert observed["ylabel"] == "Covered lines"
 
 
-def test_build_timeline_report_preserves_negative_rebased_pov_markers(
+def test_build_timeline_report_uses_crs_run_start_time_for_experiment_context(
     tmp_path: Path,
 ) -> None:
     seed_dir = tmp_path / "seeds"
@@ -327,16 +358,21 @@ def test_build_timeline_report_preserves_negative_rebased_pov_markers(
         benchmark_path=tmp_path / "bench",
         harness_name="fuzz_target",
         seed_dir=seed_dir,
-        crs_run_start_time=90.0,
+        time_origin_base=90.0,
+        time_origin="crs_run_start_time",
         pov_markers=[
             CoveragePovMarker(cpv_id="cpv", pov_hash="hash", relative_time=5.0)
         ],
+        timeline_duration_seconds=30.0,
         force_rebuild=False,
         output_dir=tmp_path / "coverage",
     )
 
+    assert report.time_origin == "crs_run_start_time"
+    assert report.timeline_duration_seconds == 30.0
+    assert report.seeds[0].relative_time == 10.0
     assert report.pov_markers == [
-        CoveragePovMarker(cpv_id="cpv", pov_hash="hash", relative_time=-5.0)
+        CoveragePovMarker(cpv_id="cpv", pov_hash="hash", relative_time=5.0)
     ]
 
 

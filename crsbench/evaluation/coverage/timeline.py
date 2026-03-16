@@ -42,6 +42,7 @@ def load_trial_context(trial_dir: Path) -> TrialCoverageContext:
         msg = f"No seed directory found under {trial_dir}"
         raise FileNotFoundError(msg)
     metadata = TrialMetadata.model_validate(json.loads(metadata_path.read_text()))
+    timeline_duration_seconds = _resolve_trial_duration_seconds(metadata)
 
     pov_markers: list[CoveragePovMarker] = []
     crs_run_start_time: Optional[float] = None
@@ -70,6 +71,7 @@ def load_trial_context(trial_dir: Path) -> TrialCoverageContext:
         harness=metadata.harness,
         seed_dir=seed_dir,
         crs_run_start_time=crs_run_start_time,
+        timeline_duration_seconds=timeline_duration_seconds,
         pov_markers=pov_markers,
     )
 
@@ -124,3 +126,14 @@ def _hash_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(8192), b""):
             hasher.update(chunk)
     return hasher.hexdigest()[:16]
+
+
+def _resolve_trial_duration_seconds(metadata: TrialMetadata) -> Optional[float]:
+    """Return the authoritative timeline duration for a trial, if present."""
+    if metadata.run_time is not None:
+        return float(metadata.run_time)
+    experiment_config = metadata.experiment_config or {}
+    run_timeout = experiment_config.get("run_timeout")
+    if run_timeout is None:
+        return None
+    return float(run_timeout)

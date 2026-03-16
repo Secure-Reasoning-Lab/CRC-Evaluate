@@ -174,10 +174,13 @@ normalized `.cov` result and any captured crash log alongside the JSON/CSV/PNG
 timeline outputs. `coverage_timeline.json` stores one row per normalized seed,
 `coverage_timeline.csv` emits one row per normalized seed, and
 `coverage_timeline.png` plots cumulative covered lines directly from those
-per-seed replay results. Relative time is derived from each input seed file's
-original `mtime`. The Atlantis timeline path does not run a separate
-whole-corpus denominator pass, so total-line percentages may be reported as
-unavailable.
+per-seed replay results. Direct `--seed-dir` mode derives relative time from
+each input seed file's original `mtime` using the first retained seed as the
+origin. `--experiment-dir` and `--experiment-config` instead use
+`crs_run_start_time` from trial metadata as the origin and clamp the x-axis to
+the recorded trial duration. The Atlantis timeline path does not run a
+separate whole-corpus denominator pass, so total-line percentages may be
+reported as unavailable.
 Coverage analysis uses the Atlantis/given_fuzzer warm-runner backend and does
 not accept an `--oss-fuzz-path` override.
 

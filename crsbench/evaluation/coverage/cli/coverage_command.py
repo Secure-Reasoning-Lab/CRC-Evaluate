@@ -382,8 +382,10 @@ def _run_direct_seed_timeline(args: argparse.Namespace) -> int:
             benchmark_path=benchmark_path,
             harness_name=args.harness,
             seed_dir=args.seed_dir,
-            crs_run_start_time=None,
+            time_origin_base=None,
+            time_origin="first_seed_mtime",
             pov_markers=[],
+            timeline_duration_seconds=None,
             force_rebuild=args.force_rebuild,
             output_dir=args.output_dir,
         )
@@ -404,26 +406,18 @@ def _build_timeline_report(
     benchmark_path: Path,
     harness_name: str,
     seed_dir: Path,
-    crs_run_start_time: Optional[float],
+    time_origin_base: Optional[float],
+    time_origin: str,
     pov_markers: list,
+    timeline_duration_seconds: Optional[float],
     force_rebuild: bool,
     output_dir: Path,
 ) -> CoverageTimelineReport:
     """Build a coverage-over-time report for one seed set."""
-    normalized_inputs = normalize_seed_inputs(seed_dir, base_time=None)
+    normalized_inputs = normalize_seed_inputs(seed_dir, base_time=time_origin_base)
     if not normalized_inputs:
         msg = f"No seeds found to analyze in {seed_dir}"
         raise ValueError(msg)
-    first_seed_mtime = min(seed.path.stat().st_mtime for seed in normalized_inputs)
-    rebased_pov_markers = pov_markers
-    if crs_run_start_time is not None and pov_markers:
-        pov_offset = float(crs_run_start_time - first_seed_mtime)
-        rebased_pov_markers = [
-            marker.model_copy(
-                update={"relative_time": marker.relative_time + pov_offset}
-            )
-            for marker in pov_markers
-        ]
     timed_inputs, summary = engine.collect_timed_line_coverage(
         benchmark_path=benchmark_path,
         timed_inputs=normalized_inputs,
@@ -434,9 +428,10 @@ def _build_timeline_report(
     return CoverageTimelineReport(
         benchmark=benchmark_path.name,
         harness=harness_name,
-        time_origin="first_seed_mtime",
+        time_origin=time_origin,
+        timeline_duration_seconds=timeline_duration_seconds,
         seeds=timed_inputs,
-        pov_markers=rebased_pov_markers,
+        pov_markers=pov_markers,
         final_summary=summary,
     )
 
@@ -483,8 +478,10 @@ def _run_single_trial_job(
             benchmark_path=benchmark_path,
             harness_name=context.harness,
             seed_dir=context.seed_dir,
-            crs_run_start_time=context.crs_run_start_time,
+            time_origin_base=context.crs_run_start_time,
+            time_origin="crs_run_start_time",
             pov_markers=context.pov_markers,
+            timeline_duration_seconds=context.timeline_duration_seconds,
             force_rebuild=args.force_rebuild,
             output_dir=trial_dir / "coverage",
         )
