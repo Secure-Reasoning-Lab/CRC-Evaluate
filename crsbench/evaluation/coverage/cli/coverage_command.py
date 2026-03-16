@@ -77,7 +77,7 @@ Examples:
   crsbench coverage --experiment-config ./experiment.yaml
 
   # Analyze seed coverage over time from an experiment output directory
-  crsbench coverage --experiment-dir ./experiment-filestore/my-exp
+  crsbench coverage --experiment-dir ./experiment-filestore/<experiment>
 
   # Analyze a direct seed directory
   crsbench coverage --seed-dir ./seeds --benchmark sanity-mock-c-delta-01 \
