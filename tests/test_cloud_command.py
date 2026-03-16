@@ -153,7 +153,16 @@ def _mock_config(*, has_cloud: bool = True):
     config = MagicMock()
     if has_cloud:
         config.cloud = MagicMock()
-        config.cloud.gce = MagicMock(name="GceWorkerFleetConfig")
+        config.cloud.gce = GceWorkerFleetConfig(
+            project="current-project",
+            zone="us-west1-b",
+            worker_count=9,
+            machine_type="e2-standard-8",
+            boot_disk_size_gb=150,
+            image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+            service_account_email="current-worker@test-project.iam.gserviceaccount.com",
+            owner_label="current-owner",
+        )
         config.cloud.orchestrator = None
     else:
         config.cloud = None
@@ -165,6 +174,7 @@ def _mock_config(*, has_cloud: bool = True):
 def _make_launch_config():
     config = MagicMock()
     config.experiment = "test-exp"
+    config.experiment_filestore = Path("/tmp/filestore")
     config.cloud = CloudConfig(
         gce=GceWorkerFleetConfig(
             project="test-project",
@@ -196,6 +206,7 @@ def _make_launch_state():
     return CloudLaunchState(
         experiment_name="test-exp",
         config_path="/tmp/config.yaml",
+        experiment_filestore="/tmp/filestore",
         redis_host="10.0.0.50:6379",
         redis_password="shared-secret",
         orchestrator_name="gce-orchestrator-test-exp",
@@ -204,6 +215,30 @@ def _make_launch_state():
         orchestrator_internal_ip="10.0.0.50",
         orchestrator_external_ip="34.1.2.50",
         orchestrator_ssh_via_iap=True,
+        worker_fleet_config=GceWorkerFleetConfig(
+            project="test-project",
+            zone="us-central1-a",
+            worker_count=2,
+            machine_type="e2-standard-4",
+            boot_disk_size_gb=100,
+            image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+            service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+            owner_label="team-crs",
+        ),
+    )
+
+
+def _make_resolved_cloud_context(launch_state=None):
+    if launch_state is None:
+        fleet = _mock_config(has_cloud=True).cloud.gce
+        return fleet, None, Path("/tmp/filestore"), "localhost", None
+
+    return (
+        launch_state.worker_fleet_config,
+        launch_state,
+        Path(launch_state.experiment_filestore),
+        launch_state.redis_host,
+        launch_state.redis_password,
     )
 
 
@@ -252,10 +287,15 @@ class TestReconnect:
         from crsbench.cloud.cli._config_reconnect import reconnect
 
         with patch.dict(os.environ, {}, clear=False):
-            reconnect("/path/to/config.yaml", "test-exp")
+            fleet, _redis_conn, _readiness, _lifecycle, filestore = reconnect(
+                "/path/to/config.yaml", "test-exp"
+            )
 
             mock_redis.assert_called_once_with("10.0.0.50:6379")
+            mock_state.assert_called_once_with(Path("/path/to/config.yaml"), "test-exp")
             assert os.environ["CRSBENCH_REDIS_PASSWORD"] == "shared-secret"
+            assert fleet == mock_state.return_value.worker_fleet_config
+            assert filestore == Path("/tmp/filestore")
 
 
 # ---------------------------------------------------------------------------
@@ -418,6 +458,38 @@ class TestLaunch:
         assert rc == 0
         assert call_order == ["orchestrator", "workers"]
         mock_save_state.assert_called_once()
+        assert mock_save_state.call_args.args[0] == Path("/tmp/config.yaml")
+        saved_state = mock_save_state.call_args.args[1]
+        assert saved_state.worker_fleet_config == mock_load.return_value.cloud.gce
+
+    @patch(
+        "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
+    )
+    @patch(
+        "crsbench.cloud.cli._launch.save_launch_state",
+        side_effect=RuntimeError("disk full"),
+    )
+    @patch("crsbench.cloud.cli._launch.GceProvisioner")
+    @patch("crsbench.cloud.cli._launch.load_experiment_config")
+    def test_launch_rolls_back_workers_when_state_persist_fails(
+        self, mock_load, mock_prov_cls, mock_save_state, mock_secret
+    ):
+        del mock_save_state, mock_secret
+        mock_load.return_value = _make_launch_config()
+        mock_prov = MagicMock()
+        mock_prov_cls.return_value = mock_prov
+        mock_prov.create_orchestrator.return_value = _make_gce_worker(
+            "gce-orchestrator-test-exp", ip="10.0.0.50"
+        )
+        mock_prov.create_workers.return_value = [_make_gce_worker("w-1")]
+
+        from crsbench.cloud.cli._launch import run_launch
+
+        rc = run_launch(_make_launch_args())
+
+        assert rc == 1
+        mock_prov.delete_workers.assert_called_once()
+        mock_prov.delete_orchestrators.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -659,19 +731,19 @@ def _make_gce_worker(name: str, zone: str = "us-central1-a", ip: str = "10.0.0.1
 class TestCollect:
     """Tests for run_collect() sub-action."""
 
+    @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
     @patch("crsbench.cloud.cli._collect.GceProvisioner")
-    @patch("crsbench.cloud.cli._collect.load_launch_state")
     @patch("crsbench.cloud.cli._collect.reconnect")
     def test_collect_invokes_collector(
-        self, mock_reconnect, mock_state, mock_prov_cls, mock_coll_cls
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
     ):
         """run_collect() invokes ArtifactCollector.collect() for each live GCE worker."""
         workers = [_make_gce_worker("w-1"), _make_gce_worker("w-2")]
         mock_prov = MagicMock()
         mock_prov.list_workers.return_value = workers
         mock_prov_cls.return_value = mock_prov
-        mock_state.return_value = None
+        mock_resolve_context.return_value = _make_resolved_cloud_context()
 
         mock_coll = MagicMock()
         mock_coll_cls.return_value = mock_coll
@@ -693,19 +765,24 @@ class TestCollect:
         assert rc == 0
         assert mock_coll.collect.call_count == 2
 
+    @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
     @patch("crsbench.cloud.cli._collect.logger")
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
     @patch("crsbench.cloud.cli._collect.GceProvisioner")
-    @patch("crsbench.cloud.cli._collect.load_launch_state")
     @patch("crsbench.cloud.cli._collect.reconnect")
     def test_collect_stale_redis_warning(
-        self, mock_reconnect, mock_state, mock_prov_cls, mock_coll_cls, mock_logger
+        self,
+        mock_reconnect,
+        mock_prov_cls,
+        mock_coll_cls,
+        mock_logger,
+        mock_resolve_context,
     ):
         """Warns when Redis has workers not present in GCE."""
         mock_prov = MagicMock()
         mock_prov.list_workers.return_value = [_make_gce_worker("w-1")]
         mock_prov_cls.return_value = mock_prov
-        mock_state.return_value = None
+        mock_resolve_context.return_value = _make_resolved_cloud_context()
 
         mock_coll = MagicMock()
         mock_coll_cls.return_value = mock_coll
@@ -735,12 +812,12 @@ class TestCollect:
         warning_calls = [str(call) for call in mock_logger.warning.call_args_list]
         assert any("w-2" in call for call in warning_calls)
 
+    @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
     @patch("crsbench.cloud.cli._collect.GceProvisioner")
-    @patch("crsbench.cloud.cli._collect.load_launch_state")
     @patch("crsbench.cloud.cli._collect.reconnect")
     def test_collect_partial_failure(
-        self, mock_reconnect, mock_state, mock_prov_cls, mock_coll_cls
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
     ):
         """Partial collection failure returns 1 but continues for remaining workers."""
         from crsbench.cloud.collection import ArtifactCollectionError
@@ -749,7 +826,7 @@ class TestCollect:
         mock_prov = MagicMock()
         mock_prov.list_workers.return_value = workers
         mock_prov_cls.return_value = mock_prov
-        mock_state.return_value = None
+        mock_resolve_context.return_value = _make_resolved_cloud_context()
 
         mock_coll = MagicMock()
         mock_coll.collect.side_effect = [
@@ -776,19 +853,21 @@ class TestCollect:
         # Both workers should have been attempted
         assert mock_coll.collect.call_count == 2
 
+    @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
     @patch("crsbench.cloud.cli._collect.GceProvisioner")
-    @patch("crsbench.cloud.cli._collect.load_launch_state")
     @patch("crsbench.cloud.cli._collect.reconnect")
     def test_collect_also_collects_orchestrator_when_launch_state_present(
-        self, mock_reconnect, mock_state, mock_prov_cls, mock_coll_cls
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
     ):
         """Remote launches should collect orchestrator artifacts in addition to workers."""
         workers = [_make_gce_worker("w-1"), _make_gce_worker("w-2")]
         mock_prov = MagicMock()
         mock_prov.list_workers.return_value = workers
         mock_prov_cls.return_value = mock_prov
-        mock_state.return_value = _make_launch_state()
+        mock_resolve_context.return_value = _make_resolved_cloud_context(
+            _make_launch_state()
+        )
 
         mock_coll = MagicMock()
         mock_coll_cls.return_value = mock_coll
@@ -811,6 +890,82 @@ class TestCollect:
         assert mock_coll.collect.call_count == 3
         orchestrator_call = mock_coll.collect.call_args_list[-1]
         assert orchestrator_call.kwargs["worker"].name == "gce-orchestrator-test-exp"
+
+    @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._collect.ArtifactCollector")
+    @patch("crsbench.cloud.cli._collect.GceProvisioner")
+    @patch("crsbench.cloud.cli._collect.reconnect")
+    def test_collect_orchestrator_when_no_workers_remain(
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
+    ):
+        """Remote launches should still collect orchestrator artifacts after workers are gone."""
+        mock_prov = MagicMock()
+        mock_prov.list_workers.return_value = []
+        mock_prov_cls.return_value = mock_prov
+        mock_resolve_context.return_value = _make_resolved_cloud_context(
+            _make_launch_state()
+        )
+
+        mock_coll = MagicMock()
+        mock_coll_cls.return_value = mock_coll
+
+        readiness = MagicMock()
+        readiness.list_workers.return_value = []
+
+        mock_reconnect.return_value = (
+            MagicMock(),
+            MagicMock(),
+            readiness,
+            MagicMock(),
+            Path("/tmp/filestore"),
+        )
+
+        from crsbench.cloud.cli._collect import run_collect
+
+        rc = run_collect(_make_collect_args())
+        assert rc == 0
+        assert mock_coll.collect.call_count == 1
+        assert (
+            mock_coll.collect.call_args.kwargs["worker"].name
+            == "gce-orchestrator-test-exp"
+        )
+
+    @patch("crsbench.cloud.cli._collect.resolve_cloud_context", create=True)
+    @patch("crsbench.cloud.cli._collect.ArtifactCollector")
+    @patch("crsbench.cloud.cli._collect.GceProvisioner")
+    @patch(
+        "crsbench.cloud.cli._collect.reconnect", side_effect=RuntimeError("redis down")
+    )
+    def test_collect_can_proceed_when_redis_reconnect_fails(
+        self,
+        mock_reconnect,
+        mock_prov_cls,
+        mock_coll_cls,
+        mock_resolve_context,
+    ):
+        """Collection should still use persisted launch state if Redis is unavailable."""
+        launch_state = _make_launch_state()
+        mock_resolve_context.return_value = (
+            launch_state.worker_fleet_config,
+            launch_state,
+            Path("/tmp/filestore"),
+            launch_state.redis_host,
+            launch_state.redis_password,
+        )
+        mock_prov = MagicMock()
+        mock_prov.list_workers.return_value = [_make_gce_worker("w-1")]
+        mock_prov_cls.return_value = mock_prov
+
+        mock_coll = MagicMock()
+        mock_coll_cls.return_value = mock_coll
+
+        from crsbench.cloud.cli._collect import run_collect
+
+        rc = run_collect(_make_collect_args())
+
+        assert rc == 0
+        mock_reconnect.assert_called_once()
+        mock_coll.collect.assert_called()
 
 
 # ---------------------------------------------------------------------------
@@ -873,15 +1028,15 @@ def _setup_teardown_mocks(
 class TestTeardown:
     """Tests for run_teardown() sub-action."""
 
+    @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
     @patch("crsbench.cloud.cli._teardown.GceProvisioner")
-    @patch("crsbench.cloud.cli._teardown.load_launch_state")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_collect_then_delete(
-        self, mock_reconnect, mock_state, mock_prov_cls, mock_coll_cls
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
     ):
         """Teardown collects from all workers then deletes them."""
-        mock_state.return_value = None
+        mock_resolve_context.return_value = _make_resolved_cloud_context()
         mock_prov, mock_coll, _, _ = _setup_teardown_mocks(
             mock_reconnect, mock_prov_cls, mock_coll_cls
         )
@@ -900,17 +1055,17 @@ class TestTeardown:
         assert len(collect_order) == 2
         assert len(delete_order) == 1
 
+    @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
     @patch("crsbench.cloud.cli._teardown.GceProvisioner")
-    @patch("crsbench.cloud.cli._teardown.load_launch_state")
     @patch("crsbench.cloud.cli._teardown.reconnect")
-    def test_teardown_aborts_on_collection_failure(
-        self, mock_reconnect, mock_state, mock_prov_cls, mock_coll_cls
+    def test_teardown_reports_collection_failure_but_still_deletes(
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
     ):
-        """If any collection fails, teardown aborts -- delete_workers NOT called."""
+        """Collection failures should return 1 but still continue through deletion."""
         from crsbench.cloud.collection import ArtifactCollectionError
 
-        mock_state.return_value = None
+        mock_resolve_context.return_value = _make_resolved_cloud_context()
         mock_prov, mock_coll, _, _ = _setup_teardown_mocks(
             mock_reconnect, mock_prov_cls, mock_coll_cls
         )
@@ -920,17 +1075,17 @@ class TestTeardown:
 
         rc = run_teardown(_make_teardown_args(force=True))
         assert rc == 1
-        mock_prov.delete_workers.assert_not_called()
+        mock_prov.delete_workers.assert_called_once()
 
+    @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
     @patch("crsbench.cloud.cli._teardown.GceProvisioner")
-    @patch("crsbench.cloud.cli._teardown.load_launch_state")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_force_flag(
-        self, mock_reconnect, mock_state, mock_prov_cls, mock_coll_cls
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
     ):
         """With --force, no input() call is made."""
-        mock_state.return_value = None
+        mock_resolve_context.return_value = _make_resolved_cloud_context()
         _setup_teardown_mocks(mock_reconnect, mock_prov_cls, mock_coll_cls)
 
         from crsbench.cloud.cli._teardown import run_teardown
@@ -941,23 +1096,23 @@ class TestTeardown:
         assert rc == 0
         mock_input.assert_not_called()
 
+    @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.logger")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
     @patch("crsbench.cloud.cli._teardown.GceProvisioner")
-    @patch("crsbench.cloud.cli._teardown.load_launch_state")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_stale_redis_warning(
         self,
         mock_reconnect,
-        mock_state,
         mock_prov_cls,
         mock_coll_cls,
         mock_logger,
+        mock_resolve_context,
     ):
         """When GCE has no workers but Redis does, warn about stale entries."""
         stale_worker = MagicMock()
         stale_worker.instance_name = "w-stale"
-        mock_state.return_value = None
+        mock_resolve_context.return_value = _make_resolved_cloud_context()
 
         _setup_teardown_mocks(
             mock_reconnect,
@@ -974,15 +1129,15 @@ class TestTeardown:
         warning_calls = [str(call) for call in mock_logger.warning.call_args_list]
         assert any("stale" in call.lower() for call in warning_calls)
 
+    @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
     @patch("crsbench.cloud.cli._teardown.GceProvisioner")
-    @patch("crsbench.cloud.cli._teardown.load_launch_state")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_confirmation_prompt_yes(
-        self, mock_reconnect, mock_state, mock_prov_cls, mock_coll_cls
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
     ):
         """Confirmation prompt with 'yes' proceeds with teardown."""
-        mock_state.return_value = None
+        mock_resolve_context.return_value = _make_resolved_cloud_context()
         mock_prov, _, _, _ = _setup_teardown_mocks(
             mock_reconnect, mock_prov_cls, mock_coll_cls
         )
@@ -999,15 +1154,15 @@ class TestTeardown:
         assert rc == 0
         mock_prov.delete_workers.assert_called_once()
 
+    @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
     @patch("crsbench.cloud.cli._teardown.GceProvisioner")
-    @patch("crsbench.cloud.cli._teardown.load_launch_state")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_confirmation_prompt_no(
-        self, mock_reconnect, mock_state, mock_prov_cls, mock_coll_cls
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
     ):
         """Confirmation prompt with non-'yes' cancels teardown."""
-        mock_state.return_value = None
+        mock_resolve_context.return_value = _make_resolved_cloud_context()
         mock_prov, _, _, _ = _setup_teardown_mocks(
             mock_reconnect, mock_prov_cls, mock_coll_cls
         )
@@ -1024,15 +1179,15 @@ class TestTeardown:
         assert rc == 0
         mock_prov.delete_workers.assert_not_called()
 
+    @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
     @patch("crsbench.cloud.cli._teardown.GceProvisioner")
-    @patch("crsbench.cloud.cli._teardown.load_launch_state")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_non_tty_without_force(
-        self, mock_reconnect, mock_state, mock_prov_cls, mock_coll_cls
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
     ):
         """Non-TTY stdin without --force returns 1 with error."""
-        mock_state.return_value = None
+        mock_resolve_context.return_value = _make_resolved_cloud_context()
         mock_prov, _, _, _ = _setup_teardown_mocks(
             mock_reconnect, mock_prov_cls, mock_coll_cls
         )
@@ -1046,15 +1201,17 @@ class TestTeardown:
         assert rc == 1
         mock_prov.delete_workers.assert_not_called()
 
+    @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
     @patch("crsbench.cloud.cli._teardown.GceProvisioner")
-    @patch("crsbench.cloud.cli._teardown.load_launch_state")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_collects_and_deletes_orchestrator_when_launch_state_present(
-        self, mock_reconnect, mock_state, mock_prov_cls, mock_coll_cls
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
     ):
         """Remote launches should collect and delete the orchestrator VM too."""
-        mock_state.return_value = _make_launch_state()
+        mock_resolve_context.return_value = _make_resolved_cloud_context(
+            _make_launch_state()
+        )
         mock_prov, mock_coll, _, _ = _setup_teardown_mocks(
             mock_reconnect, mock_prov_cls, mock_coll_cls
         )
@@ -1065,5 +1222,74 @@ class TestTeardown:
 
         assert rc == 0
         assert mock_coll.collect.call_count == 3
+        mock_prov.delete_workers.assert_called_once()
+        mock_prov.delete_instance.assert_called_once()
+
+    @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
+    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.reconnect")
+    def test_teardown_deletes_vms_even_when_collection_fails(
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
+    ):
+        """Collection failures should still proceed to VM deletion to avoid leaks."""
+        from crsbench.cloud.collection import ArtifactCollectionError
+
+        mock_resolve_context.return_value = _make_resolved_cloud_context(
+            _make_launch_state()
+        )
+        mock_prov, mock_coll, _, _ = _setup_teardown_mocks(
+            mock_reconnect, mock_prov_cls, mock_coll_cls
+        )
+        mock_coll.collect.side_effect = [
+            ArtifactCollectionError("worker collect failed"),
+            Path("/tmp/out"),
+            ArtifactCollectionError("orchestrator collect failed"),
+        ]
+
+        from crsbench.cloud.cli._teardown import run_teardown
+
+        rc = run_teardown(_make_teardown_args(force=True))
+
+        assert rc == 1
+        mock_prov.delete_workers.assert_called_once()
+        mock_prov.delete_instance.assert_called_once()
+
+    @patch("crsbench.cloud.cli._teardown.resolve_cloud_context", create=True)
+    @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
+    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch(
+        "crsbench.cloud.cli._teardown.reconnect",
+        side_effect=RuntimeError("orchestrator redis unavailable"),
+    )
+    def test_teardown_proceeds_with_gce_cleanup_when_redis_reconnect_fails(
+        self,
+        mock_reconnect,
+        mock_prov_cls,
+        mock_coll_cls,
+        mock_resolve_context,
+    ):
+        """Teardown should still delete VMs using persisted launch state if Redis is down."""
+        launch_state = _make_launch_state()
+        mock_resolve_context.return_value = (
+            launch_state.worker_fleet_config,
+            launch_state,
+            Path("/tmp/filestore"),
+            launch_state.redis_host,
+            launch_state.redis_password,
+        )
+        mock_prov = MagicMock()
+        mock_prov.list_workers.return_value = [_make_gce_worker("w-1")]
+        mock_prov_cls.return_value = mock_prov
+
+        mock_coll = MagicMock()
+        mock_coll_cls.return_value = mock_coll
+
+        from crsbench.cloud.cli._teardown import run_teardown
+
+        rc = run_teardown(_make_teardown_args(force=True))
+
+        assert rc == 0
+        mock_reconnect.assert_called_once()
         mock_prov.delete_workers.assert_called_once()
         mock_prov.delete_instance.assert_called_once()

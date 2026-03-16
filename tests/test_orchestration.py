@@ -29,7 +29,10 @@ from crsbench.validation.schemas import (
     POV,
     BenchmarkEntry,
     BenchmarkHarness,
+    CloudConfig,
     ExperimentConfig,
+    GceOrchestratorConfig,
+    GceWorkerFleetConfig,
     HarnessFile,
     Vulnerability,
 )
@@ -1134,6 +1137,92 @@ class UnitTestModeSelection:
             match="Cannot specify both --local-only and --distributed flags",
         ):
             should_use_distributed_mode(args, config, total_jobs)
+
+    def test_should_use_distributed_mode_cloud_gce_requires_redis(self):
+        """Cloud worker configs should not silently fall back to local mode."""
+
+        class MockArgs:
+            local_only = False
+            distributed = False
+
+        args = MockArgs()
+
+        config = ExperimentConfig(
+            experiment="test",
+            trials=1,
+            mode="delta",
+            max_total_time=20000,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crs_compose={"crs1": {"num_cores": 1}},
+            benchmarks=["bench1"],
+            cloud=CloudConfig(
+                gce=GceWorkerFleetConfig(
+                    project="test-project",
+                    zone="us-central1-a",
+                    worker_count=1,
+                    machine_type="e2-standard-4",
+                    boot_disk_size_gb=100,
+                    image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                    service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+                    owner_label="team-crs",
+                )
+            ),
+        )
+
+        with pytest.raises(RuntimeError, match="cloud.gce requires Redis"):
+            should_use_distributed_mode(args, config, total_jobs=1)
+
+    def test_should_use_distributed_mode_cloud_gce_forces_distributed_when_redis_ready(
+        self,
+    ):
+        """Cloud worker configs should stay distributed even for a single job."""
+
+        class MockArgs:
+            local_only = False
+            distributed = False
+
+        args = MockArgs()
+
+        config = ExperimentConfig(
+            experiment="test",
+            trials=1,
+            mode="delta",
+            max_total_time=20000,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crs_compose={"crs1": {"num_cores": 1}},
+            benchmarks=["bench1"],
+            redis_host="redis.internal:6379",
+            cloud=CloudConfig(
+                gce=GceWorkerFleetConfig(
+                    project="test-project",
+                    zone="us-central1-a",
+                    worker_count=1,
+                    machine_type="e2-standard-4",
+                    boot_disk_size_gb=100,
+                    image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                    service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+                    owner_label="team-crs",
+                ),
+                orchestrator=GceOrchestratorConfig(
+                    project="test-project",
+                    zone="us-central1-a",
+                    machine_type="e2-standard-4",
+                    boot_disk_size_gb=100,
+                    image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                    service_account_email="crsbench-orchestrator@test-project.iam.gserviceaccount.com",
+                    owner_label="team-crs",
+                ),
+            ),
+        )
+
+        with patch(
+            "crsbench.distributed.queue.check_redis_available", return_value=True
+        ):
+            assert should_use_distributed_mode(args, config, total_jobs=1) is True
 
 
 class TestSanitizerFiltering:

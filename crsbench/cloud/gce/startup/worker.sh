@@ -68,7 +68,7 @@ mkdir -p "${STATE_DIR}"
 # --- Install system packages ---
 echo "Installing system packages..."
 apt-get update -qq
-apt-get install -y -qq git python3 rsync tar
+apt-get install -y -qq git python3 python3-pip rsync tar
 
 # Docker via official install script (includes docker compose plugin)
 if ! command -v docker >/dev/null 2>&1; then
@@ -150,8 +150,9 @@ if ! command -v crsbench >/dev/null 2>&1; then
     # Private repo clone path
     REPO_URL="${INSTALL_SPEC#git+ssh://}"
     CLONE_DIR="/opt/crsbench"
-    git clone -b "${GIT_REF:-main}" "ssh://${REPO_URL}" "${CLONE_DIR}"
+    git clone --no-single-branch "ssh://${REPO_URL}" "${CLONE_DIR}"
     cd "${CLONE_DIR}"
+    git checkout "${GIT_REF:-main}"
     git submodule update --init --recursive
     # Install uv
     if ! command -v uv >/dev/null 2>&1; then

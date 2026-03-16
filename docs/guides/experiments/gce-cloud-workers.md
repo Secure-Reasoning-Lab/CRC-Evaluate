@@ -88,7 +88,7 @@ cloud:
 | `use_os_login` | no | `true` | Must be `true` (enforced by validation) |
 | `ssh_via_iap` | no | `false` | Use IAP tunnel for SSH and rsync |
 | `readiness_timeout_sec` | no | `900` | Max seconds to wait for all workers to report ready |
-| `crsbench_install_spec` | no | -- | How to install crsbench on workers (`git+ssh://...` for private repo clone, or pip spec) |
+| `crsbench_install_spec` | no | -- | How to install crsbench on workers (`git+ssh://...` for private repo clone, or pip spec). Optional when the VM image already has `crsbench` installed. |
 | `crsbench_git_ref` | no | `main` | Git branch, tag, or commit to checkout after cloning (only used with `git+ssh://` install spec) |
 | `github_deploy_key_file` | no | -- | Path to SSH private key for GitHub deploy key access |
 | `hf_token` | no | -- | HuggingFace token for gated dataset access |
@@ -185,12 +185,14 @@ This path:
 1. Provisions one orchestrator VM
 2. Waits for the orchestrator VM to have an internal address
 3. Provisions the worker fleet with Redis host/password metadata targeting that orchestrator VM
-4. Lets the remote orchestrator VM start Valkey and run `crsbench run`
+4. Lets the remote orchestrator VM start Valkey, rewrite the experiment config to use local Redis, wait for the pre-provisioned workers to report ready, and run `crsbench run`
 
-`cloud launch` persists local launch state under the experiment filestore at
+`cloud launch` persists local launch state next to the config file under
 `.crsbench-cloud/<experiment>.json`. Later `cloud status`, `cloud collect`, and
-`cloud teardown` commands reuse that state automatically to reconnect to the
-remote orchestrator's Redis.
+`cloud teardown` commands reuse that state automatically. `cloud status` and
+`cloud events` still reconnect to the remote orchestrator's Redis; `cloud collect`
+and `cloud teardown` can fall back to the persisted VM inventory if Redis is
+unavailable.
 
 Bootstrap failures are reported with per-instance evidence, so you can
 diagnose issues without SSH-ing into VMs.
@@ -243,7 +245,8 @@ uv run crsbench cloud collect my-experiment \
 - Stages artifacts in a temporary directory, verifies at least one valid trial exists, then publishes to the experiment filestore
 - Continues to remaining workers if one fails; exits with code 1 on partial failure
 - Safe to run multiple times (incremental rsync)
-- In remote-orchestrator mode, also collects the orchestrator VM's experiment tree
+- In remote-orchestrator mode, also collects the orchestrator VM's experiment tree, even if the worker VMs have already been deleted
+- If Redis is unavailable, falls back to the persisted launch state plus live GCE inventory
 
 ## Teardown
 
@@ -258,12 +261,12 @@ uv run crsbench cloud teardown my-experiment \
 The teardown safety flow:
 
 1. Lists live GCE instances for the experiment
-2. Cross-references with Redis readiness records (warns about mismatches)
+2. Cross-references with Redis readiness records when Redis is reachable (warns about mismatches)
 3. Prompts for confirmation (interactive TTY required)
 4. Collects artifacts from ALL workers first
 5. In remote-orchestrator mode, also collects the orchestrator VM
-6. Deletes VMs only after all collections succeed
-7. If any collection fails, aborts and leaves cloud VMs alive
+6. Deletes VMs even if some collections fail, to avoid leaking cloud resources
+7. Returns a non-zero exit code if any collection or deletion step failed
 
 Use `--force` to skip the confirmation prompt (e.g., in scripts):
 
@@ -334,16 +337,17 @@ sudo journalctl -u crsbench-worker.service -f
 - Workers must be able to reach the orchestrator VM's Redis/Valkey endpoint.
 - `cloud status` and `cloud events` reconnect to Redis using the persisted launch state in remote-orchestrator mode.
 - The local operator machine still needs network reachability to that Redis endpoint. If the orchestrator VM exposes only a private address, run these commands from a machine with VPC access or add your own tunnel.
+- `cloud collect` and `cloud teardown` can still use the persisted launch state when Redis is temporarily unavailable.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Bring-up timeout | Workers cannot reach Redis | Check firewall rules; verify `runtime.redis_host` is reachable from the VPC |
+| Bring-up timeout | Workers cannot reach Redis | Check firewall rules; verify `redis_host` / `runtime.redis.host` is reachable from the VPC |
 | `bootstrap_failed` in status | Startup script error | Check the evidence field in `cloud status --json` output; inspect VM serial console via GCP Console |
 | Collect fails with rsync error | SSH connectivity issue | Verify OS Login is enabled; check IAP firewall rule if using `ssh_via_iap` |
 | Stale Redis entries warning | VMs were manually deleted | Safe to ignore; Redis records from deleted VMs don't affect new runs |
-| Teardown aborts | Collection failed for a worker | Fix the failing worker (check SSH, disk space), then retry teardown |
+| Teardown returns non-zero | Collection or deletion failed for at least one VM | Check the logged worker/orchestrator errors, then rerun `cloud collect` or `cloud teardown` as needed |
 | `use_os_login must be true` | Config validation | OS Login is required; do not set `use_os_login: false` |
 | `exactly one of image or instance_template` | Config validation | Provide either `image` + `machine_type` + `boot_disk_size_gb` or `instance_template`, not both |
 

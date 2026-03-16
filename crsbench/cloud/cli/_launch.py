@@ -67,10 +67,11 @@ def run_launch(args: argparse.Namespace) -> int:
         )
 
         save_launch_state(
-            config.experiment_filestore,
+            config_path,
             CloudLaunchState(
                 experiment_name=config.experiment,
                 config_path=str(config_path),
+                experiment_filestore=str(config.experiment_filestore),
                 redis_host=redis_host,
                 redis_password=redis_password,
                 orchestrator_name=orchestrator_record.name,
@@ -79,9 +80,21 @@ def run_launch(args: argparse.Namespace) -> int:
                 orchestrator_internal_ip=orchestrator_record.internal_ip,
                 orchestrator_external_ip=orchestrator_record.external_ip,
                 orchestrator_ssh_via_iap=config.cloud.orchestrator.ssh_via_iap,
+                worker_fleet_config=config.cloud.gce,
             ),
         )
     except Exception as exc:
+        if workers:
+            try:
+                provisioner.delete_workers(
+                    experiment_name=config.experiment,
+                    fleet=config.cloud.gce,
+                )
+            except Exception:
+                logger.warning(
+                    "Best-effort rollback failed for worker fleet in experiment %s",
+                    config.experiment,
+                )
         if orchestrator_record is not None:
             try:
                 provisioner.delete_orchestrators(

@@ -51,7 +51,7 @@ echo "=== CRSBench orchestrator bootstrap started at $(date -u) ==="
 # --- Install system packages ---
 echo "Installing system packages..."
 apt-get update -qq
-apt-get install -y -qq git python3 rsync tar
+apt-get install -y -qq git python3 python3-pip rsync tar
 
 # Docker via official install script (includes docker compose plugin)
 if ! command -v docker >/dev/null 2>&1; then
@@ -85,24 +85,27 @@ fi
 
 # --- Install crsbench ---
 CLONE_DIR=""
-if [[ -z "${INSTALL_SPEC}" ]]; then
-  echo "crsbench-install-spec metadata is required for orchestrator" >&2
-  exit 1
-elif [[ "${INSTALL_SPEC}" == git+ssh://* ]]; then
-  REPO_URL="${INSTALL_SPEC#git+ssh://}"
-  CLONE_DIR="/opt/crsbench"
-  git clone -b "${GIT_REF:-main}" "ssh://${REPO_URL}" "${CLONE_DIR}"
-  cd "${CLONE_DIR}"
-  git submodule update --init --recursive
-  if ! command -v uv >/dev/null 2>&1; then
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="/root/.local/bin:${PATH}"
+if ! command -v crsbench >/dev/null 2>&1; then
+  if [[ -z "${INSTALL_SPEC}" ]]; then
+    echo "crsbench CLI not found and no crsbench-install-spec metadata provided" >&2
+    exit 1
+  elif [[ "${INSTALL_SPEC}" == git+ssh://* ]]; then
+    REPO_URL="${INSTALL_SPEC#git+ssh://}"
+    CLONE_DIR="/opt/crsbench"
+    git clone --no-single-branch "ssh://${REPO_URL}" "${CLONE_DIR}"
+    cd "${CLONE_DIR}"
+    git checkout "${GIT_REF:-main}"
+    git submodule update --init --recursive
+    if ! command -v uv >/dev/null 2>&1; then
+      curl -LsSf https://astral.sh/uv/install.sh | sh
+      export PATH="/root/.local/bin:${PATH}"
+    fi
+    uv sync --all-extras
+    uv pip install -e .
+    export PATH="/opt/crsbench/.venv/bin:/root/.local/bin:${PATH}"
+  else
+    python3 -m pip install --upgrade "${INSTALL_SPEC}"
   fi
-  uv sync --all-extras
-  uv pip install -e .
-  export PATH="/opt/crsbench/.venv/bin:/root/.local/bin:${PATH}"
-else
-  python3 -m pip install --upgrade "${INSTALL_SPEC}"
 fi
 
 # --- Start Valkey with password auth on 0.0.0.0:6379 ---
@@ -134,23 +137,15 @@ export CRSBENCH_CLOUD_PREPROVISIONED_WORKERS="1"
 CONFIG_PATH="${STATE_DIR}/experiment-config.yaml"
 echo "${EXPERIMENT_CONFIG_B64}" | base64 --decode > "${CONFIG_PATH}"
 
-# Patch redis_host in the config to point to localhost.
+# Patch redis_host in the config to point to the local Valkey instance.
 python3 - "${CONFIG_PATH}" <<'PY'
 import sys
-from pathlib import Path
 
-config_path = Path(sys.argv[1])
-content = config_path.read_text()
-lines = content.split("\n")
-patched = []
-for line in lines:
-    stripped = line.lstrip()
-    if stripped.startswith("redis_host:"):
-        indent = line[: len(line) - len(stripped)]
-        patched.append(f"{indent}redis_host: localhost:6379")
-    else:
-        patched.append(line)
-config_path.write_text("\n".join(patched))
+from crsbench.cloud.gce.orchestrator_config import (
+    patch_experiment_config_for_local_redis,
+)
+
+patch_experiment_config_for_local_redis(sys.argv[1], redis_host="localhost:6379")
 PY
 
 echo "Patched redis_host in ${CONFIG_PATH}"

@@ -141,7 +141,7 @@ class ArtifactCollector:
         if fleet.ssh_via_iap:
             remote_host = worker.name
         else:
-            remote_host = worker.internal_ip or worker.name
+            remote_host = worker.external_ip or worker.internal_ip or worker.name
 
         source = f"{remote_host}:{remote_experiment_dir}/"
         dest = str(staging_dir) + "/"

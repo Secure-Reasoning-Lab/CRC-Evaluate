@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, ConfigDict
 
 from crsbench.cloud.gce.models import GceWorkerRecord
+from crsbench.validation.schemas import GceWorkerFleetConfig  # noqa: TC001
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -23,6 +24,7 @@ class CloudLaunchState(BaseModel):
 
     experiment_name: str
     config_path: str
+    experiment_filestore: str
     redis_host: str
     redis_password: str
     orchestrator_name: str
@@ -31,6 +33,7 @@ class CloudLaunchState(BaseModel):
     orchestrator_internal_ip: str | None = None
     orchestrator_external_ip: str | None = None
     orchestrator_ssh_via_iap: bool = False
+    worker_fleet_config: GceWorkerFleetConfig
 
     def as_orchestrator_record(self) -> GceWorkerRecord:
         """Build a collector-compatible instance record for the orchestrator VM."""
@@ -53,17 +56,26 @@ class CloudLaunchState(BaseModel):
         )
 
 
-def launch_state_path(experiment_filestore: Path, experiment_name: str) -> Path:
+def _resolve_launch_state_dir(base_path: Path | str) -> Path:
+    from pathlib import Path as _Path
+
+    path = _Path(base_path)
+    if path.is_file():
+        return path.parent / _STATE_DIRNAME
+    return path / _STATE_DIRNAME
+
+
+def launch_state_path(base_path: Path | str, experiment_name: str) -> Path:
     """Return the on-disk path used to persist launch state for one experiment."""
-    return experiment_filestore / _STATE_DIRNAME / f"{experiment_name}.json"
+    return _resolve_launch_state_dir(base_path) / f"{experiment_name}.json"
 
 
 def save_launch_state(
-    experiment_filestore: Path,
+    base_path: Path | str,
     state: CloudLaunchState,
 ) -> Path:
     """Persist launch state with restrictive local file permissions."""
-    path = launch_state_path(experiment_filestore, state.experiment_name)
+    path = launch_state_path(base_path, state.experiment_name)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state.model_dump(), indent=2), encoding="utf-8")
     path.chmod(0o600)
@@ -71,21 +83,21 @@ def save_launch_state(
 
 
 def load_launch_state(
-    experiment_filestore: Path,
+    base_path: Path | str,
     experiment_name: str,
 ) -> CloudLaunchState | None:
     """Load persisted launch state for one experiment if present."""
-    path = launch_state_path(experiment_filestore, experiment_name)
+    path = launch_state_path(base_path, experiment_name)
     if not path.is_file():
         return None
     return CloudLaunchState.model_validate_json(path.read_text(encoding="utf-8"))
 
 
 def delete_launch_state(
-    experiment_filestore: Path,
+    base_path: Path | str,
     experiment_name: str,
 ) -> None:
     """Remove persisted launch state once a cloud experiment is torn down."""
-    path = launch_state_path(experiment_filestore, experiment_name)
+    path = launch_state_path(base_path, experiment_name)
     if path.exists():
         path.unlink()

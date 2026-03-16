@@ -121,6 +121,7 @@ Rollback:
 ## Contract: Bring-up and Readiness Gating
 
 - `CloudFleetStatusManager.bring_up_gce_workers()` clears stale readiness records, creates VMs, records initial state, then polls for readiness
+- `CloudFleetStatusManager.wait_for_existing_gce_workers()` gates a pre-provisioned fleet on the same explicit readiness protocol without creating VMs again
 - Polling uses `CloudReadinessStore.snapshot()` with configurable `poll_interval_sec` (default 5s)
 - Bring-up succeeds only when all workers reach `READY`
 - On timeout or any failure: transitions workers through `DELETING`/`DELETED`, deletes VMs, raises `CloudFleetBringupError` with the snapshot
@@ -131,7 +132,7 @@ Rollback:
 The startup script (`cloud/gce/startup/worker.sh`) runs on the VM:
 
 1. Fetches bootstrap payload from GCE instance metadata API
-2. Installs crsbench (using optional `crsbench-install-spec` metadata)
+2. Installs crsbench (using optional `crsbench-install-spec` metadata) or uses a preinstalled `crsbench` CLI on the VM image
 3. Writes env vars to `/etc/default/crsbench-worker`
 4. Creates and enables `crsbench-worker.service` (systemd, `Restart=always`)
 5. On failure: ERR trap calls `report_cloud_worker_state_from_env()` with `bootstrap_failed` and evidence string
@@ -157,8 +158,8 @@ Retry: `tenacity` exponential backoff (min 2s, max 30s, 3 attempts) on rsync fai
 1. Validate GCE instances exist, cross-reference with Redis readiness records
 2. Warn about stale Redis entries not matching live VMs
 3. Prompt for confirmation (requires TTY unless `--force`)
-4. Collect artifacts from ALL workers; if ANY collection fails, abort entirely (workers left alive)
-5. Delete workers only after all collections succeed
+4. Collect artifacts from ALL workers; collection is best-effort so teardown can still reclaim VMs
+5. Delete workers even if collection reported failures, and return a non-zero exit code when any collection or deletion step failed
 
 ## Contract: CLI Sub-actions
 

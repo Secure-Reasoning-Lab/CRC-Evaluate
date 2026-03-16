@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from crsbench.cloud.cli._config_reconnect import reconnect
-from crsbench.cloud.launch_state import load_launch_state
+from crsbench.cloud.cli._config_reconnect import reconnect, resolve_cloud_context
 
 if TYPE_CHECKING:
     import argparse
@@ -21,9 +20,21 @@ def run_collect(args: argparse.Namespace) -> int:
 
     Returns 0 if all collections succeed, 1 if any failed.
     """
-    fleet, _redis_conn, readiness, _lifecycle, experiment_filestore = reconnect(
-        args.config, args.experiment
+    fleet, launch_state, experiment_filestore, _redis_host, _redis_password = (
+        resolve_cloud_context(args.config, args.experiment)
     )
+    readiness = None
+    try:
+        fleet, _redis_conn, readiness, _lifecycle, experiment_filestore = reconnect(
+            args.config, args.experiment
+        )
+    except Exception as exc:
+        logger.warning(
+            "Redis reconnect unavailable for experiment %s; "
+            "continuing collection with GCE state only: %s",
+            args.experiment,
+            exc,
+        )
 
     provisioner = GceProvisioner()
     collector = ArtifactCollector()
@@ -32,20 +43,20 @@ def run_collect(args: argparse.Namespace) -> int:
     live_workers = provisioner.list_workers(
         experiment_name=args.experiment, fleet=fleet
     )
-    launch_state = load_launch_state(experiment_filestore, args.experiment)
     live_names = {w.name for w in live_workers}
 
     # Cross-reference with Redis readiness state
-    redis_workers = readiness.list_workers(args.experiment)
-    redis_names = {w.instance_name for w in redis_workers}
-    stale_names = redis_names - live_names
-    if stale_names:
-        logger.warning(
-            "Stale Redis entries (no matching GCE instance): %s",
-            ", ".join(sorted(stale_names)),
-        )
+    if readiness is not None:
+        redis_workers = readiness.list_workers(args.experiment)
+        redis_names = {w.instance_name for w in redis_workers}
+        stale_names = redis_names - live_names
+        if stale_names:
+            logger.warning(
+                "Stale Redis entries (no matching GCE instance): %s",
+                ", ".join(sorted(stale_names)),
+            )
 
-    if not live_workers:
+    if not live_workers and launch_state is None:
         logger.warning(
             "No live GCE instances found for experiment '%s'", args.experiment
         )

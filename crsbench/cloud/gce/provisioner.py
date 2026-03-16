@@ -386,11 +386,10 @@ class GceProvisioner:
         startup_script = self._startup_script or load_startup_script()
 
         requests: list[GceInstanceRequest] = []
-        name_prefix = _sanitize_name_fragment(
-            fleet.worker_name_prefix or experiment_name or "worker"
-        )
-        for index in range(1, fleet.worker_count + 1):
-            worker_name = f"{name_prefix}-{index:03d}"
+        for worker_name in self.build_worker_names(
+            experiment_name=experiment_name,
+            fleet=fleet,
+        ):
             metadata = build_instance_metadata(
                 experiment_name=experiment_name,
                 fleet=fleet,
@@ -418,6 +417,20 @@ class GceProvisioner:
                 )
             )
         return requests
+
+    def build_worker_names(
+        self,
+        *,
+        experiment_name: str,
+        fleet: GceWorkerFleetConfig,
+    ) -> list[str]:
+        """Return deterministic worker instance names for one fleet request."""
+        name_prefix = _sanitize_name_fragment(
+            fleet.worker_name_prefix or experiment_name or "worker"
+        )
+        return [
+            f"{name_prefix}-{index:03d}" for index in range(1, fleet.worker_count + 1)
+        ]
 
     def create_workers(
         self,

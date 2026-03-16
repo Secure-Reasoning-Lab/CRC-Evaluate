@@ -67,10 +67,12 @@ operator machine remains the cloud control plane. The deployment contract is:
 - the orchestrator VM runs `crsbench run` but does not create workers again
 - the operator machine generates the Redis/Valkey password for the run
 - workers receive the orchestrator VM's worker-reachable Redis host, never `localhost`
-- local `cloud` commands reconnect through persisted launch state stored under
-  the experiment filestore
-- local `status` and `events` commands therefore still require Redis
-  reachability from the operator machine to the orchestrator VM
+- local `cloud` commands reconnect through persisted launch state stored next to
+  the submitted config file under `.crsbench-cloud/`
+- local `status` and `events` still require Redis reachability from the
+  operator machine to the orchestrator VM
+- local `collect` and `teardown` may fall back to persisted launch state plus
+  GCE inventory when Redis is unavailable
 
 ## Cloud Readiness and Evidence
 

@@ -53,7 +53,7 @@ This flow is additive. The existing local-orchestrator path remains valid.
 - all GCE create/delete/list operations remain callable from the local machine
 - successful launch persists local reconnect state so later `cloud status`,
   `cloud collect`, and `cloud teardown` commands can target the remote
-  orchestrator queue
+  orchestrator queue and worker fleet
 
 ### Redis Contract
 
@@ -65,6 +65,7 @@ This flow is additive. The existing local-orchestrator path remains valid.
 ### Experiment Config Contract
 
 - the orchestrator VM runs a config derived from the operator-supplied experiment config
+- the derived config must rewrite both the compatibility `redis_host` key and the grouped `runtime.redis.host` key to the orchestrator-local Redis endpoint
 - the derived orchestrator config must not trigger worker provisioning again
 - worker fleet declarations remain the source of truth for the remote worker shape
 
@@ -83,7 +84,7 @@ Happy path:
 2. local control plane validates config and creates an orchestrator VM
 3. local control plane waits until the orchestrator VM has a usable internal address
 4. local control plane creates the worker fleet with Redis host/password metadata targeting the orchestrator VM
-5. orchestrator VM bootstraps CRSBench, starts Valkey, rewrites/derives the experiment config for remote-orchestrator mode, and runs `crsbench run`
+5. orchestrator VM bootstraps CRSBench, starts Valkey, rewrites/derives the experiment config for remote-orchestrator mode, waits for the pre-provisioned worker fleet to report ready, and runs `crsbench run`
 6. workers bootstrap, connect to the orchestrator-hosted Redis, and process trial jobs
 7. operator uses local `cloud status`, `cloud collect`, and `cloud teardown`
 
@@ -94,6 +95,7 @@ Failure behavior:
 - orchestrator bootstrap failure: status must surface evidence without requiring SSH
 - worker bootstrap failure: readiness gating remains explicit and per-instance
 - Redis auth mismatch: workers fail bootstrap and surface evidence
+- operator reconnect failure: `cloud status` and `cloud events` fail fast, while `cloud collect` and `cloud teardown` continue from persisted launch state plus GCE inventory
 
 ## Deployment and Distributed Behavior
 
@@ -112,6 +114,7 @@ Failure behavior:
 
 - race between orchestrator creation and worker launch: mitigated by waiting for a usable orchestrator address before creating workers
 - double-provisioning workers from the orchestrator VM: mitigated by deriving an orchestrator-only runtime config
+- job enqueue before workers are actually available: mitigated by explicit readiness waiting for the pre-provisioned worker fleet on the orchestrator VM
 - stale cloud resources after partial launch failure: mitigated by local rollback of both orchestrator and workers
 - secret drift between orchestrator and workers: validated by an end-to-end launch test covering shared Redis auth
 

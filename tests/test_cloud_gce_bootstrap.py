@@ -3,6 +3,7 @@
 import base64
 import json
 
+import yaml
 from crsbench.distributed.registry import RuntimeRegistration
 from crsbench.validation.schemas import GceOrchestratorConfig, GceWorkerFleetConfig
 
@@ -337,6 +338,8 @@ def test_startup_script_contains_git_clone_path():
     assert "crsbench-github-deploy-key" in script
     assert "crsbench-hf-token" in script
     assert "crsbench-git-ref" in script
+    assert "git checkout" in script
+    assert "python3-pip" in script
 
 
 def test_startup_script_sets_venv_path_for_systemd():
@@ -388,3 +391,31 @@ def test_orchestrator_startup_script_consumes_config_payload_and_preprovisioned_
     assert "crsbench-experiment-config-b64" in script
     assert "CRSBENCH_CLOUD_PREPROVISIONED_WORKERS" in script
     assert "crsbench-redis-password" in script
+    assert "python3-pip" in script
+    assert "git checkout" in script
+    assert "command -v crsbench" in script
+
+
+def test_patch_orchestrator_config_adds_top_level_and_nested_runtime_redis_host(
+    tmp_path,
+):
+    """Remote orchestrator bootstrap should rewrite grouped runtime redis config too."""
+    from crsbench.cloud.gce.orchestrator_config import (
+        patch_experiment_config_for_local_redis,
+    )
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+experiment: exp-42
+runtime:
+  redis:
+    host: redis.internal:6379
+""".strip()
+    )
+
+    patch_experiment_config_for_local_redis(config_path, redis_host="localhost:6379")
+
+    patched = yaml.safe_load(config_path.read_text())
+    assert patched["redis_host"] == "localhost:6379"
+    assert patched["runtime"]["redis"]["host"] == "localhost:6379"

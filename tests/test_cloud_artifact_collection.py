@@ -22,6 +22,7 @@ from crsbench.validation.schemas import GceWorkerFleetConfig
 def _make_worker(
     name: str = "gce-worker-001",
     internal_ip: str = "10.0.0.10",
+    external_ip: str | None = None,
     zone: str = "us-central1-a",
 ) -> GceWorkerRecord:
     return GceWorkerRecord(
@@ -30,7 +31,7 @@ def _make_worker(
         status="RUNNING",
         zone=zone,
         internal_ip=internal_ip,
-        external_ip=None,
+        external_ip=external_ip,
         service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
         labels={},
         raw={},
@@ -190,6 +191,22 @@ class TestRsyncCmdDirectIp:
         # The source host must be the worker's internal IP (not name)
         source = cmd[-2]  # second-to-last is source, last is dest
         assert worker.internal_ip in source
+
+    def test_rsync_cmd_prefers_external_ip_when_available(self) -> None:
+        """Direct SSH collection should prefer a public IP when one exists."""
+        worker = _make_worker(internal_ip="10.0.0.10", external_ip="34.1.2.3")
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        cmd = collector._build_rsync_cmd(
+            worker=worker,
+            fleet=fleet,
+            remote_experiment_dir="/data/experiments/exp-42",
+            staging_dir=Path("/tmp/staging"),
+        )
+
+        source = cmd[-2]
+        assert "34.1.2.3" in source
 
 
 class TestRsyncPreservesMtimes:

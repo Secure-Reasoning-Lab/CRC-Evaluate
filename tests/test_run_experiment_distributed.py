@@ -802,7 +802,7 @@ def test_cloud_fleet_bringup_is_skipped_when_no_trials_remain(tmp_path: Path) ->
 def test_cloud_fleet_bringup_is_skipped_for_preprovisioned_remote_orchestrator(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """Remote orchestrator mode should not provision workers again."""
+    """Remote orchestrator mode should wait for existing workers instead of reprovisioning."""
     from crsbench.validation.schemas import CloudConfig, GceWorkerFleetConfig
 
     monkeypatch.setenv("CRSBENCH_CLOUD_PREPROVISIONED_WORKERS", "1")
@@ -864,3 +864,4 @@ def test_cloud_fleet_bringup_is_skipped_for_preprovisioned_remote_orchestrator(
             run_experiment_distributed("exp-test", config, [_make_trial(None)])
 
     manager.bring_up_gce_workers.assert_not_called()
+    manager.wait_for_existing_gce_workers.assert_called_once()

@@ -1025,6 +1025,8 @@ def should_use_distributed_mode(
     from crsbench.distributed.queue import check_redis_available
 
     redis_host = normalize_redis_host(getattr(config, "redis_host", None))
+    cloud_config = getattr(config, "cloud", None)
+    cloud_gce = getattr(cloud_config, "gce", None)
 
     # Check for conflicting flags
     distributed = getattr(args, "distributed", False)
@@ -1056,6 +1058,21 @@ def should_use_distributed_mode(
     if args.local_only:
         logger.info("Local mode explicitly requested via --local-only flag")
         return False
+
+    if cloud_gce is not None:
+        if not redis_host:
+            raise RuntimeError(
+                "cloud.gce requires Redis for distributed execution. "
+                "Set redis_host for local orchestration or ensure the remote "
+                "orchestrator bootstrap patches the experiment config."
+            )
+        if not check_redis_available(redis_host):
+            raise RuntimeError(
+                "cloud.gce requires distributed execution, but Redis is not "
+                f"available at {redis_host}."
+            )
+        logger.info("Cloud worker config detected, using distributed mode")
+        return True
 
     # Only 1 job - use local mode by default
     if total_jobs == 1:
@@ -2071,22 +2088,27 @@ def run_experiment_distributed(
 
         cloud_config = getattr(config, "cloud", None)
         if isinstance(cloud_config, BaseModel) and cloud_config.gce is not None:
+            if session.cloud_readiness is None:
+                raise RuntimeError(
+                    "Distributed runtime session missing cloud readiness store"
+                )
+
+            from crsbench.cloud.status import CloudFleetStatusManager
+
+            fleet_status_manager = CloudFleetStatusManager(
+                readiness_store=session.cloud_readiness
+            )
             if os.environ.get("CRSBENCH_CLOUD_PREPROVISIONED_WORKERS") == "1":
                 logger.info(
-                    "Skipping cloud worker provisioning because "
+                    "Waiting for pre-provisioned cloud workers because "
                     "CRSBENCH_CLOUD_PREPROVISIONED_WORKERS=1"
                 )
+                fleet_status = fleet_status_manager.wait_for_existing_gce_workers(
+                    experiment_name=experiment_name,
+                    fleet=cloud_config.gce,
+                )
             else:
-                from crsbench.cloud.status import CloudFleetStatusManager
-
-                if session.cloud_readiness is None:
-                    raise RuntimeError(
-                        "Distributed runtime session missing cloud readiness store"
-                    )
-
-                fleet_status = CloudFleetStatusManager(
-                    readiness_store=session.cloud_readiness
-                ).bring_up_gce_workers(
+                fleet_status = fleet_status_manager.bring_up_gce_workers(
                     experiment_name=experiment_name,
                     fleet=cloud_config.gce,
                     redis_host=redis_host,

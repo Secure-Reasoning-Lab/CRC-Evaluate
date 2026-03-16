@@ -72,20 +72,10 @@ class CloudFleetStatusManager:
                 registration=registration,
             )
 
-            for worker in workers:
-                self._readiness_store.record(
-                    CloudWorkerStatus(
-                        experiment_name=experiment_name,
-                        instance_id=worker.instance_id,
-                        instance_name=worker.name,
-                        zone=worker.zone,
-                        state=self._initial_state(worker),
-                        provider_status=worker.status,
-                        internal_ip=worker.internal_ip,
-                        external_ip=worker.external_ip,
-                        detail=f"GCE provider status: {worker.status}",
-                    )
-                )
+            self._record_initial_workers(
+                experiment_name=experiment_name,
+                workers=workers,
+            )
             return self.wait_for_gce_workers(
                 experiment_name=experiment_name,
                 workers=workers,
@@ -99,6 +89,52 @@ class CloudFleetStatusManager:
                     workers=workers,
                 )
             raise
+
+    def wait_for_existing_gce_workers(
+        self,
+        *,
+        experiment_name: str,
+        fleet: GceWorkerFleetConfig,
+    ) -> CloudFleetSnapshot:
+        """Wait for a pre-provisioned GCE fleet to appear and report readiness."""
+        expected_names = self._provisioner.build_worker_names(
+            experiment_name=experiment_name,
+            fleet=fleet,
+        )
+        deadline = self._clock() + fleet.readiness_timeout_sec
+
+        while True:
+            workers = self._provisioner.list_workers(
+                experiment_name=experiment_name,
+                fleet=fleet,
+            )
+            workers_by_name = {worker.name: worker for worker in workers}
+            missing_names = [
+                worker_name
+                for worker_name in expected_names
+                if worker_name not in workers_by_name
+            ]
+            if not missing_names:
+                expected_workers = [
+                    workers_by_name[worker_name] for worker_name in expected_names
+                ]
+                self._record_initial_workers(
+                    experiment_name=experiment_name,
+                    workers=expected_workers,
+                )
+                remaining_timeout = max(int(deadline - self._clock()), 1)
+                return self.wait_for_gce_workers(
+                    experiment_name=experiment_name,
+                    workers=expected_workers,
+                    timeout_sec=remaining_timeout,
+                )
+
+            if self._clock() >= deadline:
+                raise CloudFleetBringupError(
+                    "timed out waiting for pre-provisioned GCE workers: "
+                    + ", ".join(missing_names)
+                )
+            self._sleep(self._poll_interval_sec)
 
     def wait_for_gce_workers(
         self,
@@ -141,6 +177,32 @@ class CloudFleetStatusManager:
         if provider_status == "RUNNING":
             return CloudWorkerState.BOOTING
         return CloudWorkerState.PROVISIONING
+
+    def _record_initial_workers(
+        self,
+        *,
+        experiment_name: str,
+        workers: list[GceWorkerRecord],
+    ) -> None:
+        for worker in workers:
+            if (
+                self._readiness_store.get_worker(experiment_name, worker.instance_id)
+                is not None
+            ):
+                continue
+            self._readiness_store.record(
+                CloudWorkerStatus(
+                    experiment_name=experiment_name,
+                    instance_id=worker.instance_id,
+                    instance_name=worker.name,
+                    zone=worker.zone,
+                    state=self._initial_state(worker),
+                    provider_status=worker.status,
+                    internal_ip=worker.internal_ip,
+                    external_ip=worker.external_ip,
+                    detail=f"GCE provider status: {worker.status}",
+                )
+            )
 
     def _format_failure(
         self,
