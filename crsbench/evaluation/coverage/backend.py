@@ -9,7 +9,6 @@ import shlex
 import shutil
 import subprocess
 import tempfile
-import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
@@ -17,10 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from crsbench.evaluation.process_utils import run_with_graceful_timeout
 from crsbench.prepare.uniafl_backend import (
-    default_uniafl_builder_image,
-    default_uniafl_clang_image,
     default_uniafl_root,
     default_uniafl_runtime_image,
 )
@@ -28,9 +24,6 @@ from crsbench.utils.docker import fix_docker_ownership
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
-BASE_RUNNER_IMAGE = "gcr.io/oss-fuzz-base/base-runner"
-NATIVE_COVERAGE_LANGUAGES = {"c", "cpp", "c++", "rust", "go"}
-WARM_WORKER_TIMEOUT_SECONDS = 300
 RUNTIME_OUT_IGNORES = frozenset({".crsbench-repo"})
 
 
@@ -139,23 +132,16 @@ class ShardedCoverageSession(CoverageSession):
         return results
 
     def collect_batch_totals(self, corpus_dir: Path) -> dict:
-        totals = self.sessions[0].collect_batch_totals(corpus_dir)
-        if len(self.sessions) == 1:
-            return totals
-        if getattr(self.sessions[0], "_last_batch_totals_approximate", False):
-            return self._aggregate_shard_totals(totals)
-        if any(
-            int(totals.get(key, 0)) > 0
-            for key in (
-                "lines_covered",
-                "lines_total",
-                "functions_covered",
-                "functions_total",
-            )
-        ):
-            return totals
-
-        return self._aggregate_shard_totals(totals)
+        del corpus_dir
+        return self._aggregate_shard_totals(
+            {
+                "lines_covered": 0,
+                "lines_total": 0,
+                "lines_percent": 0.0,
+                "functions_covered": 0,
+                "functions_total": 0,
+            }
+        )
 
     def _aggregate_shard_totals(self, default_totals: dict) -> dict:
         shard_results: list[CoverageRunResult] = []
@@ -209,8 +195,7 @@ class UniAFLCoverageSession(CoverageSession):
         self.raw_dir = self.output_dir / "raw"
         self.raw_dir.mkdir(parents=True, exist_ok=True)
         self.parse_single_output = parse_single_output
-        self.parse_textcov_output = parse_textcov_output
-        self.parse_summary = parse_summary
+        del parse_textcov_output, parse_summary
         self.uniafl_root = Path(uniafl_root or default_uniafl_root()).resolve()
         self.runtime_image = runtime_image or default_uniafl_runtime_image(
             self.language
@@ -219,6 +204,7 @@ class UniAFLCoverageSession(CoverageSession):
         self.session_label = session_label
         self._tempdir = tempfile.TemporaryDirectory(prefix="crsbench-uniafl-session-")
         self.workspace = Path(self._tempdir.name)
+        self.runtime_benchmark_dir = self.workspace / "benchmark"
         self.runtime_build_output_dir = self.workspace / "out"
         self.worker_script_path = self.workspace / "crsbench_cov_worker.py"
         worker_log_stem = (
@@ -226,18 +212,30 @@ class UniAFLCoverageSession(CoverageSession):
         )
         self.worker_stdout_path = self.raw_dir / f"{worker_log_stem}.stdout.log"
         self.worker_stderr_path = self.raw_dir / f"{worker_log_stem}.stderr.log"
-        self.requests_dir = self.workspace / "requests"
-        self.results_dir = self.workspace / "outputs"
+        self.runs_dir = self.workspace / "runs"
         self.container_name = (
             f"crsbench-uniafl-{self.project_name[:20]}-{uuid.uuid4().hex[:10]}"
         )
         self._collected_results: dict[str, CoverageRunResult] = {}
-        self._worker_process: Optional[subprocess.Popen[str]] = None
         self._write_worker_script()
+        self._prepare_runtime_benchmark()
         self._prepare_runtime_build_output()
         self._start_container()
         self._prepare_harness()
-        self._start_worker()
+
+    def _prepare_runtime_benchmark(self) -> None:
+        self.runtime_benchmark_dir.mkdir(parents=True, exist_ok=True)
+        for child in list(self.runtime_benchmark_dir.iterdir()):
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        shutil.copytree(
+            self.benchmark_path.resolve(),
+            self.runtime_benchmark_dir,
+            dirs_exist_ok=True,
+            symlinks=True,
+        )
 
     def _prepare_runtime_build_output(self) -> None:
         fix_docker_ownership(self.build_output_dir)
@@ -262,21 +260,6 @@ class UniAFLCoverageSession(CoverageSession):
             ignore=_ignore_runtime_entries,
             symlinks=True,
         )
-
-    @property
-    def coverage_out_dir(self) -> Path:
-        """Coverage-specific build output directory for native targets."""
-        return self.build_output_dir / "coverage-out"
-
-    def build_output_mount_dir(self) -> Path:
-        """Return the build output directory the coverage runtime should mount."""
-        if self.language == "jvm":
-            return self.build_output_dir
-        return self.coverage_out_dir
-
-    def build_run_once_command(self, seed_paths: list[Path]) -> list[str]:
-        """Build the fixed-input `run_once` command for the harness."""
-        return ["run_once", self.harness_name] + [str(path) for path in seed_paths]
 
     def _resolve_host_source_path(self, src: str) -> str:
         if not src:
@@ -335,7 +318,7 @@ class UniAFLCoverageSession(CoverageSession):
             "-e",
             "SEED_SHARE_DIR=/shared-seeds",
             "-v",
-            f"{self.benchmark_path}:/src",
+            f"{self.runtime_benchmark_dir.resolve()}:/src",
             "-v",
             f"{self.source_repo_dir}:/src/repo",
             "-v",
@@ -400,54 +383,38 @@ class UniAFLCoverageSession(CoverageSession):
                 stderr or f"Failed to prepare UniAFL coverage for {self.harness_name}"
             )
 
-    def _start_worker(self) -> None:
-        self.requests_dir.mkdir(parents=True, exist_ok=True)
-        self.results_dir.mkdir(parents=True, exist_ok=True)
-        stdout_handle = self.worker_stdout_path.open("w")
-        stderr_handle = self.worker_stderr_path.open("w")
-        per_input_timeout = "300" if self.language == "jvm" else "5"
-        cmd = [
-            "docker",
-            "exec",
-            "-i",
-            "-e",
-            f"CRSBENCH_PER_INPUT_TIMEOUT={per_input_timeout}",
-            self.container_name,
-            "python3",
-            "/workspace/crsbench_cov_worker.py",
-            "serve",
-            self.harness_name,
-            "/workspace/requests",
-            "/workspace/outputs",
-        ]
-        self._worker_process = subprocess.Popen(
-            cmd,
-            stdout=stdout_handle,
-            stderr=stderr_handle,
-            text=True,
+    def _workspace_container_path(self, host_path: Path) -> str:
+        relative = host_path.resolve().relative_to(self.workspace.resolve())
+        return str(Path("/workspace") / relative)
+
+    def _append_worker_logs(self, stdout: str, stderr: str) -> None:
+        if stdout:
+            with self.worker_stdout_path.open("a") as handle:
+                handle.write(stdout)
+        if stderr:
+            with self.worker_stderr_path.open("a") as handle:
+                handle.write(stderr)
+
+    def _per_input_timeout_seconds(self) -> int:
+        return 300 if self.language == "jvm" else 5
+
+    def _batch_timeout_seconds(self, input_count: int) -> int:
+        return max(
+            600 if self.language == "jvm" else 120,
+            self._per_input_timeout_seconds() * max(1, input_count) + 120,
         )
 
-    def _ensure_worker_alive(self) -> None:
-        if self._worker_process is None:
-            raise RuntimeError("UniAFL coverage worker is not running")
-        if self._worker_process.poll() is not None:
+    def _load_result_from_output_root(
+        self,
+        *,
+        corpus_hash: str,
+        output_root: Path,
+    ) -> CoverageRunResult:
+        status_path = output_root / f"{corpus_hash}.status.json"
+        cov_path = output_root / f"{corpus_hash}.cov"
+        if not status_path.exists():
             raise RuntimeError(
-                "UniAFL coverage worker exited unexpectedly. "
-                f"See {self.worker_stdout_path} and {self.worker_stderr_path}"
-            )
-
-    def _wait_for_result(self, corpus_hash: str) -> CoverageRunResult:
-        status_path = self.results_dir / f"{corpus_hash}.status.json"
-        cov_path = self.results_dir / f"{corpus_hash}.cov"
-        deadline = time.monotonic() + WARM_WORKER_TIMEOUT_SECONDS
-        while time.monotonic() < deadline:
-            self._ensure_worker_alive()
-            if status_path.exists():
-                break
-            time.sleep(0.1)
-        else:
-            raise RuntimeError(
-                f"Timed out waiting for UniAFL coverage result for {corpus_hash}"
+                f"UniAFL coverage output missing status for {corpus_hash}"
             )
 
         raw_cov_path = self.raw_dir / f"{corpus_hash}.cov"
@@ -466,7 +433,7 @@ class UniAFLCoverageSession(CoverageSession):
         stderr_path = None
         crash_log_path = None
         for suffix in ("stdout.log", "stderr.log", "crash.log"):
-            candidate = self.results_dir / f"{corpus_hash}.{suffix}"
+            candidate = output_root / f"{corpus_hash}.{suffix}"
             if candidate.exists():
                 dest = self.raw_dir / f"{corpus_hash}.{suffix}"
                 shutil.copy2(candidate, dest)
@@ -486,399 +453,79 @@ class UniAFLCoverageSession(CoverageSession):
             crash_log_path=crash_log_path,
         )
 
-    def collect_single(self, corpus_file: Path) -> CoverageRunResult:
-        corpus_hash = _content_hash(corpus_file)
-        if corpus_hash in self._collected_results:
-            return self._collected_results[corpus_hash]
+    def _run_dir_batch(self, corpus_files: list[Path]) -> None:
+        if not corpus_files:
+            return
 
-        staged_seed = self.requests_dir / corpus_hash
-        shutil.copy2(corpus_file, staged_seed)
-        result = self._wait_for_result(corpus_hash)
-        self._collected_results[corpus_hash] = result
-        return result
+        run_root = self.runs_dir / uuid.uuid4().hex
+        seed_root = run_root / "seeds"
+        output_root = run_root / "outputs"
+        seed_root.mkdir(parents=True, exist_ok=True)
+        output_root.mkdir(parents=True, exist_ok=True)
+
+        unique_hashes: dict[str, Path] = {}
+        for corpus_file in corpus_files:
+            corpus_hash = _content_hash(corpus_file)
+            if corpus_hash in unique_hashes or corpus_hash in self._collected_results:
+                continue
+            unique_hashes[corpus_hash] = corpus_file
+            shutil.copy2(corpus_file, seed_root / corpus_hash)
+
+        if not unique_hashes:
+            return
+
+        container_seed_root = self._workspace_container_path(seed_root)
+        container_output_root = self._workspace_container_path(output_root)
+        result = self._docker_exec(
+            [
+                "python3",
+                "/workspace/crsbench_cov_worker.py",
+                "run-dir",
+                self.harness_name,
+                container_seed_root,
+                container_output_root,
+            ],
+            env={"CRSBENCH_PER_INPUT_TIMEOUT": str(self._per_input_timeout_seconds())},
+            timeout=self._batch_timeout_seconds(len(unique_hashes)),
+        )
+        self._append_worker_logs(result.stdout or "", result.stderr or "")
+        if result.returncode != 0:
+            stderr = result.stderr.strip() or result.stdout.strip()
+            raise RuntimeError(
+                stderr
+                or f"Failed to run coverage shard for {self.project_name}/{self.harness_name}"
+            )
+        self._docker_exec(
+            [
+                "bash",
+                "-lc",
+                (
+                    f"chown -R {os.getuid()}:{os.getgid()} "
+                    f"{shlex.quote(container_output_root)} || true"
+                ),
+            ],
+            timeout=60,
+        )
+
+        for corpus_hash in unique_hashes:
+            self._collected_results[corpus_hash] = self._load_result_from_output_root(
+                corpus_hash=corpus_hash,
+                output_root=output_root,
+            )
+
+    def collect_single(self, corpus_file: Path) -> CoverageRunResult:
+        return self.collect_many([corpus_file])[corpus_file]
 
     def collect_many(self, corpus_files: list[Path]) -> dict[Path, CoverageRunResult]:
+        self._run_dir_batch(corpus_files)
         return {
-            corpus_file: self.collect_single(corpus_file)
+            corpus_file: self._collected_results[_content_hash(corpus_file)]
             for corpus_file in corpus_files
         }
 
     def collect_batch_totals(self, corpus_dir: Path) -> dict:
-        try:
-            batch_session = DockerCoverageSession(
-                project_name=self.project_name,
-                harness_name=self.harness_name,
-                language=self.language,
-                build_output_dir=self.build_output_dir,
-                output_dir=self.output_dir / ".batch-totals",
-                parse_single_output=self.parse_single_output,
-                parse_textcov_output=self.parse_textcov_output,
-                parse_summary=self.parse_summary,
-            )
-            try:
-                totals = batch_session.collect_batch_totals(corpus_dir)
-                self._last_batch_totals_approximate = False
-                return totals
-            finally:
-                batch_session.close()
-        except Exception as exc:
-            logger.warning(
-                f"Falling back to approximate UniAFL totals for "
-                f"{self.project_name}/{self.harness_name}: {exc}"
-            )
-        self._last_batch_totals_approximate = True
+        del corpus_dir
         return _approximate_totals_from_results(list(self._collected_results.values()))
-
-    def close(self) -> None:
-        if self._worker_process is not None and self._worker_process.poll() is None:
-            self._worker_process.terminate()
-            try:
-                self._worker_process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self._worker_process.kill()
-                self._worker_process.wait(timeout=10)
-        subprocess.run(
-            ["docker", "rm", "-f", self.container_name],
-            capture_output=True,
-            text=True,
-        )
-        self._tempdir.cleanup()
-
-
-class DockerCoverageSession(CoverageSession):
-    """Warm Docker-backed session using the base-runner ``coverage`` script."""
-
-    def __init__(
-        self,
-        *,
-        project_name: str,
-        harness_name: str,
-        language: str,
-        build_output_dir: Path,
-        output_dir: Path,
-        parse_single_output: Callable[[Any], CoverageData],
-        parse_textcov_output: Optional[Callable[[Path], CoverageData]],
-        parse_summary: Callable[[Path], dict],
-    ):
-        self.project_name = project_name
-        self.harness_name = harness_name
-        self.language = language.lower()
-        self.build_output_dir = Path(build_output_dir)
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.raw_dir = self.output_dir / "raw"
-        self.raw_dir.mkdir(parents=True, exist_ok=True)
-        self.parse_single_output = parse_single_output
-        self.parse_textcov_output = parse_textcov_output
-        self.parse_summary = parse_summary
-
-        self._tempdir = tempfile.TemporaryDirectory(prefix="crsbench-cov-session-")
-        self.workspace = Path(self._tempdir.name)
-        self.inputs_dir = self.workspace / "inputs"
-        self.outputs_dir = self.workspace / "outputs"
-        self.corpus_root = self.workspace / "corpus"
-        self.toolchain_dir = self.workspace / "toolchain"
-        self.inputs_dir.mkdir(parents=True, exist_ok=True)
-        self.outputs_dir.mkdir(parents=True, exist_ok=True)
-        self.corpus_root.mkdir(parents=True, exist_ok=True)
-        self.toolchain_dir.mkdir(parents=True, exist_ok=True)
-
-        self.container_name = (
-            f"crsbench-cov-{self.project_name[:24]}-{uuid.uuid4().hex[:10]}"
-        )
-        self.image_name = BASE_RUNNER_IMAGE
-        self._prepare_runtime_toolchain()
-        self._start_container()
-
-    @property
-    def fuzzing_language(self) -> str:
-        if self.language == "c":
-            return "c++"
-        return self.language
-
-    def _prepare_runtime_toolchain(self) -> None:
-        if self.language not in NATIVE_COVERAGE_LANGUAGES:
-            return
-
-        tool_bin_dir = self.toolchain_dir / "bin"
-        tool_bin_dir.mkdir(parents=True, exist_ok=True)
-        tool_images = (
-            default_uniafl_builder_image(),
-            default_uniafl_clang_image(),
-        )
-        errors: list[str] = []
-        for tool_image in tool_images:
-            tool_container = f"crsbench-cov-tools-{uuid.uuid4().hex[:10]}"
-            create_cmd = ["docker", "create", "--name", tool_container, tool_image]
-            create_result = subprocess.run(create_cmd, capture_output=True, text=True)
-            if create_result.returncode != 0:
-                errors.append(
-                    f"{tool_image}: {create_result.stderr.strip() or create_result.stdout.strip()}"
-                )
-                continue
-
-            try:
-                for tool_name in ("llvm-profdata", "llvm-cov"):
-                    copy_cmd = [
-                        "docker",
-                        "cp",
-                        f"{tool_container}:/usr/local/bin/{tool_name}",
-                        str(tool_bin_dir / tool_name),
-                    ]
-                    copy_result = subprocess.run(
-                        copy_cmd, capture_output=True, text=True
-                    )
-                    if copy_result.returncode != 0:
-                        raise RuntimeError(
-                            f"Failed to copy {tool_name} from {tool_image}: "
-                            f"{copy_result.stderr.strip()}"
-                        )
-                return
-            except RuntimeError as exc:
-                errors.append(str(exc))
-            finally:
-                subprocess.run(
-                    ["docker", "rm", "-f", tool_container],
-                    capture_output=True,
-                    text=True,
-                )
-
-        raise RuntimeError(
-            "Failed to prepare Atlantis LLVM coverage tools: " + "; ".join(errors)
-        )
-
-    def _start_container(self) -> None:
-        cmd = [
-            "docker",
-            "run",
-            "-d",
-            "--rm",
-            "--name",
-            self.container_name,
-            "-v",
-            f"{self.workspace}:/workspace",
-            "-v",
-            f"{self.build_output_dir}:/out",
-            self.image_name,
-            "sh",
-            "-c",
-            "tail -f /dev/null",
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"Failed to start coverage container {self.image_name}: "
-                f"{result.stderr.strip()}"
-            )
-
-    def _exec(self, script: str, *, timeout: int = 300) -> tuple[str, str, int, bool]:
-        cmd = [
-            "docker",
-            "exec",
-            self.container_name,
-            "bash",
-            "-lc",
-            script,
-        ]
-        return run_with_graceful_timeout(
-            cmd,
-            timeout=timeout,
-            grace_period=30,
-        )
-
-    def _stage_single_input(self, corpus_file: Path) -> tuple[str, Path, Path]:
-        corpus_hash = _content_hash(corpus_file)
-        raw_input_path = self.raw_dir / corpus_hash
-        shutil.copy2(corpus_file, raw_input_path)
-
-        staged_dir = self.corpus_root / self.harness_name
-        shutil.rmtree(staged_dir, ignore_errors=True)
-        staged_dir.mkdir(parents=True, exist_ok=True)
-        staged_input = staged_dir / corpus_file.name
-        shutil.copy2(corpus_file, staged_input)
-        return corpus_hash, raw_input_path, staged_input
-
-    def _stage_batch_inputs(self, corpus_dir: Path) -> Path:
-        staged_dir = self.corpus_root / self.harness_name
-        shutil.rmtree(staged_dir, ignore_errors=True)
-        staged_dir.mkdir(parents=True, exist_ok=True)
-        for path in sorted(corpus_dir.iterdir()):
-            if path.is_file() and not path.name.startswith("."):
-                shutil.copy2(path, staged_dir / path.name)
-        return staged_dir
-
-    def _run_coverage_script(
-        self, output_subdir: str, *, timeout: int
-    ) -> tuple[str, str, int, bool]:
-        path_prefix = ""
-        if self.language in NATIVE_COVERAGE_LANGUAGES:
-            path_prefix = "export PATH=/workspace/toolchain/bin:$PATH; "
-        script = (
-            f"{path_prefix}export CORPUS_DIR=/workspace/corpus; "
-            f"export COVERAGE_OUTPUT_DIR=/workspace/outputs/{shlex.quote(output_subdir)}; "
-            f"export COVERAGE_EXTRA_ARGS=''; "
-            f"export FUZZING_LANGUAGE={shlex.quote(self.fuzzing_language)}; "
-            f"export FUZZING_ENGINE=libfuzzer; "
-            f"export SANITIZER=coverage; "
-            f'rm -rf "$COVERAGE_OUTPUT_DIR"; mkdir -p "$COVERAGE_OUTPUT_DIR"; '
-            f"coverage {shlex.quote(self.harness_name)}"
-        )
-        return self._exec(script, timeout=timeout)
-
-    def _collect_crash_log(
-        self,
-        corpus_hash: str,
-        run_output_dir: Path,
-        stderr_path: Path,
-    ) -> tuple[bool, Optional[Path]]:
-        candidates = sorted(run_output_dir.glob("fuzzer_stats/*_error.log"))
-        if candidates:
-            crash_log_path = self.raw_dir / f"{corpus_hash}.crash.log"
-            shutil.copy2(candidates[0], crash_log_path)
-            return True, crash_log_path
-
-        stderr_text = stderr_path.read_text() if stderr_path.exists() else ""
-        if any(
-            token in stderr_text
-            for token in (
-                "ERROR: AddressSanitizer",
-                "ERROR: libFuzzer",
-                "Java Exception",
-            )
-        ):
-            crash_log_path = self.raw_dir / f"{corpus_hash}.crash.log"
-            crash_log_path.write_text(stderr_text)
-            return True, crash_log_path
-
-        return False, None
-
-    def _export_llvm_json(
-        self,
-        corpus_hash: str,
-        run_output_dir: Path,
-    ) -> tuple[CoverageData, Optional[Path]]:
-        profdata_file = run_output_dir / "dumps" / f"{self.harness_name}.profdata"
-        if not profdata_file.exists():
-            return {}, None
-
-        shared_libs_cmd = (
-            f"shared_libs=$(coverage_helper shared_libs -build-dir=/out "
-            f"-object={shlex.quote(self.harness_name)}); "
-            f"llvm-cov export -instr-profile={shlex.quote(str(Path('/workspace') / 'outputs' / corpus_hash / 'dumps' / f'{self.harness_name}.profdata'))} "
-            f"-object=/out/{shlex.quote(self.harness_name)} "
-            f"$shared_libs -ignore-filename-regex='.*src/libfuzzer/.*'"
-        )
-        stdout, stderr, returncode, timed_out = self._exec(shared_libs_cmd, timeout=300)
-        export_path = self.raw_dir / f"{corpus_hash}.llvm-export.json"
-        export_path.write_text(stdout if stdout else "{}")
-        if timed_out or returncode != 0:
-            logger.warning(
-                f"llvm-cov export failed for "
-                f"{self.project_name}/{self.harness_name}: {stderr[:300]}"
-            )
-            return {}, export_path
-        try:
-            data = json.loads(stdout)
-        except json.JSONDecodeError:
-            return {}, export_path
-        return self.parse_single_output(data), export_path
-
-    def _parse_native_textcov(
-        self,
-        corpus_hash: str,
-        run_output_dir: Path,
-    ) -> tuple[CoverageData, Optional[Path]]:
-        if self.parse_textcov_output is None:
-            return {}, None
-
-        textcov_dir = run_output_dir / "textcov_reports"
-        covreport_files = sorted(textcov_dir.glob("*.covreport"))
-        if not covreport_files:
-            return {}, None
-
-        covreport_path = covreport_files[0]
-        raw_covreport_path = self.raw_dir / f"{corpus_hash}.covreport"
-        shutil.copy2(covreport_path, raw_covreport_path)
-        return self.parse_textcov_output(covreport_path), raw_covreport_path
-
-    def collect_single(self, corpus_file: Path) -> CoverageRunResult:
-        corpus_hash, _, _ = self._stage_single_input(corpus_file)
-        stdout, stderr, returncode, timed_out = self._run_coverage_script(
-            corpus_hash, timeout=300
-        )
-        self._exec(
-            f"chown -R {os.getuid()}:{os.getgid()} /workspace/outputs/{shlex.quote(corpus_hash)} || true",
-            timeout=60,
-        )
-        run_output_dir = self.outputs_dir / corpus_hash
-        artifacts_dir = self.raw_dir / f"{corpus_hash}.artifacts"
-        if artifacts_dir.exists():
-            shutil.rmtree(artifacts_dir)
-        if run_output_dir.exists():
-            shutil.copytree(run_output_dir, artifacts_dir)
-        else:
-            artifacts_dir.mkdir(parents=True, exist_ok=True)
-
-        stdout_path = self.raw_dir / f"{corpus_hash}.stdout.log"
-        stderr_path = self.raw_dir / f"{corpus_hash}.stderr.log"
-        stdout_path.write_text(stdout)
-        stderr_path.write_text(stderr)
-
-        crashed, crash_log_path = self._collect_crash_log(
-            corpus_hash, run_output_dir, stderr_path
-        )
-        crashed = crashed or timed_out or returncode != 0
-
-        raw_cov_path = self.raw_dir / f"{corpus_hash}.cov"
-        if self.language in ("c", "cpp", "c++", "rust", "go"):
-            cov_data, _ = self._parse_native_textcov(corpus_hash, run_output_dir)
-            if not cov_data:
-                cov_data, _ = self._export_llvm_json(corpus_hash, run_output_dir)
-        else:
-            jacoco_xml = run_output_dir / "report" / "linux" / "jacoco.xml"
-            cov_data = (
-                self.parse_single_output(jacoco_xml) if jacoco_xml.exists() else {}
-            )
-        raw_cov_path.write_text(json.dumps(cov_data, indent=2, sort_keys=True))
-
-        return CoverageRunResult(
-            coverage_data=cov_data,
-            raw_cov_path=raw_cov_path,
-            raw_artifacts_dir=artifacts_dir,
-            stdout_path=stdout_path,
-            stderr_path=stderr_path,
-            crashed=crashed,
-            crash_log_path=crash_log_path,
-        )
-
-    def collect_batch_totals(self, corpus_dir: Path) -> dict:
-        self._stage_batch_inputs(corpus_dir)
-        output_subdir = "batch"
-        stdout, stderr, returncode, timed_out = self._run_coverage_script(
-            output_subdir, timeout=7200
-        )
-        self._exec(
-            f"chown -R {os.getuid()}:{os.getgid()} /workspace/outputs/{shlex.quote(output_subdir)} || true",
-            timeout=60,
-        )
-        if timed_out or returncode != 0:
-            raise RuntimeError(
-                f"Batch coverage failed for {self.project_name}/{self.harness_name}: "
-                f"{stderr[:500]}"
-            )
-        if self.language in NATIVE_COVERAGE_LANGUAGES:
-            summary_path = (
-                self.outputs_dir / output_subdir / "report" / "linux" / "summary.json"
-            )
-        else:
-            summary_path = (
-                self.outputs_dir / output_subdir / "report" / "linux" / "jacoco.xml"
-            )
-        if not summary_path.exists():
-            raise RuntimeError(
-                f"Coverage summary not found for {self.project_name}/{self.harness_name}"
-            )
-        return self.parse_summary(summary_path)
 
     def close(self) -> None:
         subprocess.run(
@@ -898,7 +545,6 @@ def _content_hash(path: Path) -> str:
 
 
 _UNIAFL_COVERAGE_WORKER_SCRIPT = r"""#!/usr/bin/env python3
-import base64
 import json
 import os
 import shlex
@@ -906,7 +552,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import yaml
@@ -1148,7 +793,7 @@ def _process_one_input(harness_name: str, harness, blob_path: Path, output_root:
     )
 
 
-def _run(harness_name: str, output_dir: str, inputs: list[str]) -> int:
+def _run_inputs(harness_name: str, output_dir: str, inputs: list[str]) -> int:
     Config(0, 1).load("/crs.config")
     cp = init_cp_in_runner()
     harness = cp.get_harnesses()[harness_name]
@@ -1168,43 +813,17 @@ def _run_dir(harness_name: str, seed_dir: str, output_dir: str) -> int:
         for path in sorted(seed_root.iterdir())
         if path.is_file() and not path.name.startswith(".")
     ]
-    return _run(harness_name, output_dir, inputs)
-
-
-def _serve(harness_name: str, request_dir: str, output_dir: str) -> int:
-    Config(0, 1).load("/crs.config")
-    cp = init_cp_in_runner()
-    harness = cp.get_harnesses()[harness_name]
-    request_root = Path(request_dir)
-    output_root = Path(output_dir)
-    request_root.mkdir(parents=True, exist_ok=True)
-    output_root.mkdir(parents=True, exist_ok=True)
-    while True:
-        for blob_path in sorted(request_root.iterdir()):
-            if not blob_path.is_file() or blob_path.name.startswith("."):
-                continue
-            seed_name = blob_path.name
-            if (output_root / f"{seed_name}.status.json").exists():
-                continue
-            _process_one_input(harness_name, harness, blob_path, output_root)
-            blob_path.unlink(missing_ok=True)
-        time.sleep(0.1)
+    return _run_inputs(harness_name, output_dir, inputs)
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        raise SystemExit(
-            "usage: crsbench_cov_worker.py prepare|run|run-dir|serve <harness> ..."
-        )
+        raise SystemExit("usage: crsbench_cov_worker.py prepare|run-dir <harness> ...")
     command = sys.argv[1]
     harness = sys.argv[2]
     if command == "prepare":
         raise SystemExit(_prepare(harness))
-    if command == "run":
-        raise SystemExit(_run(harness, sys.argv[3], sys.argv[4:]))
     if command == "run-dir":
         raise SystemExit(_run_dir(harness, sys.argv[3], sys.argv[4]))
-    if command == "serve":
-        raise SystemExit(_serve(harness, sys.argv[3], sys.argv[4]))
     raise SystemExit(f"unknown command: {command}")
 """

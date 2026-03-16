@@ -27,6 +27,7 @@ import json
 import shutil
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager, nullcontext
 from datetime import datetime
 from pathlib import Path
@@ -503,20 +504,34 @@ class CoverageEngine:
             raise ValueError(msg)
 
         sessions: list[CoverageSession] = []
+        opened_sessions: list[CoverageSession | None] = [
+            None for _ in range(self.runtime_workers)
+        ]
         try:
-            for index in range(self.runtime_workers):
-                cpu_set = str(self.runtime_cpus[index]) if self.runtime_cpus else None
-                sessions.append(
-                    self._open_strategy_session(
+            with ThreadPoolExecutor(max_workers=self.runtime_workers) as executor:
+                futures = {
+                    executor.submit(
+                        self._open_strategy_session,
                         strategy,
                         harness_name,
                         output_dir=output_dir,
-                        cpu_set=cpu_set,
+                        cpu_set=(
+                            str(self.runtime_cpus[index]) if self.runtime_cpus else None
+                        ),
                         session_label=f"worker-{index}",
-                    )
-                )
+                    ): index
+                    for index in range(self.runtime_workers)
+                }
+                for future in as_completed(futures):
+                    index = futures[future]
+                    opened_sessions[index] = future.result()
+                sessions = [
+                    session for session in opened_sessions if session is not None
+                ]
         except Exception:
-            for session in reversed(sessions):
+            for session in reversed(
+                [session for session in opened_sessions if session is not None]
+            ):
                 session.close()
             raise
 

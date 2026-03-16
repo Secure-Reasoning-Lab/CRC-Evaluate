@@ -9,6 +9,8 @@ Essential tests for:
 """
 
 import json
+import threading
+import time
 from pathlib import Path
 from typing import Generator
 from unittest.mock import MagicMock, patch
@@ -726,6 +728,48 @@ class TestCoverageEngine:
         )
         mock_fix_ownership.assert_called_once_with(build_out)
         mock_write_meta.assert_called_once()
+
+    def test_maybe_open_session_parallelizes_runtime_worker_startup(self) -> None:
+        engine = CoverageEngine(runtime_workers=3, runtime_cpus=[2, 4, 6])
+
+        class _Strategy:
+            def open_session(self, harness_name: str, **kwargs):
+                del harness_name, kwargs
+
+        class _Session:
+            def __init__(self, label: str) -> None:
+                self.label = label
+                self.closed = False
+
+            def close(self) -> None:
+                self.closed = True
+
+        current = 0
+        max_current = 0
+        lock = threading.Lock()
+
+        def fake_open(_strategy, _harness_name, **kwargs):
+            nonlocal current, max_current
+            with lock:
+                current += 1
+                max_current = max(max_current, current)
+            time.sleep(0.05)
+            with lock:
+                current -= 1
+            return _Session(kwargs["session_label"])
+
+        with patch.object(engine, "_open_strategy_session", side_effect=fake_open):
+            sharded = engine._maybe_open_session(_Strategy(), "fuzz_target")
+
+        try:
+            assert max_current >= 2
+            assert [session.label for session in sharded.sessions] == [
+                "worker-0",
+                "worker-1",
+                "worker-2",
+            ]
+        finally:
+            sharded.close()
 
     def test_collect_timed_line_coverage_fails_if_all_inputs_fail(
         self, mock_benchmark: Path, engine: CoverageEngine

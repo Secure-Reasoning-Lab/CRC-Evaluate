@@ -7,7 +7,6 @@ from unittest.mock import patch
 
 from crsbench.evaluation.coverage.backend import (
     CoverageRunResult,
-    DockerCoverageSession,
     ShardedCoverageSession,
     UniAFLCoverageSession,
 )
@@ -15,323 +14,6 @@ from crsbench.evaluation.coverage.strategy import (
     JaCoCoLineStrategy,
     LLVMCovLineStrategy,
 )
-
-
-class _DummyProc:
-    def poll(self):
-        return None
-
-    def terminate(self):
-        return None
-
-    def wait(self, timeout=None):
-        del timeout
-        return 0
-
-    def kill(self):
-        return None
-
-
-def test_docker_session_prepares_matching_llvm_tools_for_native_targets(
-    tmp_path: Path,
-) -> None:
-    output_dir = tmp_path / "coverage"
-    build_output_dir = tmp_path / "build-out"
-    build_output_dir.mkdir()
-
-    calls: list[list[str]] = []
-
-    def fake_run(cmd, **kwargs):
-        del kwargs
-        calls.append(cmd)
-
-        class Result:
-            returncode = 0
-            stdout = "container-id\n"
-            stderr = ""
-
-        return Result()
-
-    with patch("subprocess.run", side_effect=fake_run):
-        session = DockerCoverageSession(
-            project_name="proj-cov-delta-coverage",
-            harness_name="fuzz_target",
-            language="c",
-            build_output_dir=build_output_dir,
-            output_dir=output_dir,
-            parse_single_output=lambda _data: {},
-            parse_textcov_output=None,
-            parse_summary=lambda _path: {},
-        )
-
-    try:
-        create_calls = [
-            call for call in calls if call[:3] == ["docker", "create", "--name"]
-        ]
-        cp_calls = [call for call in calls if call[:2] == ["docker", "cp"]]
-        assert create_calls
-        assert create_calls[0][-1] == "multilang-given_fuzzer-builder:latest"
-        assert cp_calls
-        assert any("/usr/local/bin/llvm-profdata" in call[2] for call in cp_calls)
-        assert any("/usr/local/bin/llvm-cov" in call[2] for call in cp_calls)
-        assert (session.toolchain_dir / "bin").is_dir()
-    finally:
-        session.close()
-
-
-def test_docker_session_uses_matching_llvm_toolchain_in_coverage_script(
-    tmp_path: Path,
-) -> None:
-    output_dir = tmp_path / "coverage"
-    build_output_dir = tmp_path / "build-out"
-    build_output_dir.mkdir()
-
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value.returncode = 0
-        mock_run.return_value.stdout = "container-id\n"
-        mock_run.return_value.stderr = ""
-        session = DockerCoverageSession(
-            project_name="proj-cov-delta-coverage",
-            harness_name="fuzz_target",
-            language="c",
-            build_output_dir=build_output_dir,
-            output_dir=output_dir,
-            parse_single_output=lambda _data: {},
-            parse_textcov_output=None,
-            parse_summary=lambda _path: {},
-        )
-
-    try:
-        observed: list[str] = []
-
-        def fake_exec(script: str, *, timeout: int = 300):
-            del timeout
-            observed.append(script)
-            return "", "", 0, False
-
-        session._exec = fake_exec  # type: ignore[method-assign]
-        session._run_coverage_script("seed-1", timeout=300)
-
-        assert observed
-        assert "PATH=/workspace/toolchain/bin:$PATH" in observed[0]
-        assert "FUZZING_LANGUAGE=c++" in observed[0]
-    finally:
-        session.close()
-
-
-def test_docker_session_falls_back_to_atlantis_clang_for_llvm_tools(
-    tmp_path: Path,
-) -> None:
-    output_dir = tmp_path / "coverage"
-    build_output_dir = tmp_path / "build-out"
-    build_output_dir.mkdir()
-
-    calls: list[list[str]] = []
-
-    def fake_run(cmd, **kwargs):
-        del kwargs
-        calls.append(cmd)
-
-        class Result:
-            returncode = 0
-            stdout = "container-id\n"
-            stderr = ""
-
-        if (
-            cmd[:3] == ["docker", "create", "--name"]
-            and cmd[-1] == "multilang-given_fuzzer-builder:latest"
-        ):
-            result = Result()
-            result.returncode = 1
-            result.stderr = "missing builder"
-            return result
-        return Result()
-
-    with patch("subprocess.run", side_effect=fake_run):
-        session = DockerCoverageSession(
-            project_name="proj-cov-delta-coverage",
-            harness_name="fuzz_target",
-            language="c",
-            build_output_dir=build_output_dir,
-            output_dir=output_dir,
-            parse_single_output=lambda _data: {},
-            parse_textcov_output=None,
-            parse_summary=lambda _path: {},
-        )
-
-    try:
-        create_calls = [
-            call for call in calls if call[:3] == ["docker", "create", "--name"]
-        ]
-        assert [call[-1] for call in create_calls[:2]] == [
-            "multilang-given_fuzzer-builder:latest",
-            "multilang-given_fuzzer-clang:latest",
-        ]
-    finally:
-        session.close()
-
-
-def test_docker_session_uses_jacoco_xml_for_jvm_batch_totals(tmp_path: Path) -> None:
-    output_dir = tmp_path / "coverage"
-    build_output_dir = tmp_path / "build-out"
-    build_output_dir.mkdir()
-    corpus_dir = tmp_path / "corpus"
-    corpus_dir.mkdir()
-    (corpus_dir / "seed").write_bytes(b"a")
-
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value.returncode = 0
-        mock_run.return_value.stdout = "container-id\n"
-        mock_run.return_value.stderr = ""
-        session = DockerCoverageSession(
-            project_name="proj-cov-delta-coverage",
-            harness_name="FuzzTarget",
-            language="jvm",
-            build_output_dir=build_output_dir,
-            output_dir=output_dir,
-            parse_single_output=lambda _data: {},
-            parse_textcov_output=None,
-            parse_summary=lambda path: {"summary_path": path.name},
-        )
-
-    try:
-
-        def fake_run_coverage(output_subdir: str, *, timeout: int):
-            del timeout
-            run_output = session.outputs_dir / output_subdir / "report" / "linux"
-            run_output.mkdir(parents=True, exist_ok=True)
-            (run_output / "jacoco.xml").write_text("<report/>")
-            return "", "", 0, False
-
-        session._run_coverage_script = fake_run_coverage  # type: ignore[method-assign]
-
-        def fake_exec(_script: str, *, timeout: int = 300):
-            del timeout
-            return "", "", 0, False
-
-        session._exec = fake_exec  # type: ignore[method-assign]
-
-        result = session.collect_batch_totals(corpus_dir)
-
-        assert result == {"summary_path": "jacoco.xml"}
-    finally:
-        session.close()
-
-
-def test_docker_session_collect_single_persists_raw_outputs(
-    tmp_path: Path,
-) -> None:
-    output_dir = tmp_path / "coverage"
-    build_output_dir = tmp_path / "build-out"
-    build_output_dir.mkdir()
-    seed = tmp_path / "seed.bin"
-    seed.write_bytes(b"abc")
-
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value.returncode = 0
-        session = DockerCoverageSession(
-            project_name="proj-cov-delta-coverage",
-            harness_name="fuzz_target",
-            language="c",
-            build_output_dir=build_output_dir,
-            output_dir=output_dir,
-            parse_single_output=lambda _data: {
-                "main": {"src": "/src/main.c", "lines": [1, 2]}
-            },
-            parse_textcov_output=None,
-            parse_summary=lambda _path: {"lines_total": 10},
-        )
-
-    try:
-
-        def fake_run_coverage(output_subdir: str, *, timeout: int):
-            del timeout
-            run_output = session.outputs_dir / output_subdir
-            (run_output / "dumps").mkdir(parents=True, exist_ok=True)
-            (run_output / "dumps" / "fuzz_target.profdata").write_text("profdata")
-            (run_output / "fuzzer_stats").mkdir(parents=True, exist_ok=True)
-            (run_output / "fuzzer_stats" / "fuzz_target_error.log").write_text("boom")
-            return "stdout", "stderr", 1, False
-
-        session._run_coverage_script = fake_run_coverage  # type: ignore[method-assign]
-        session._export_llvm_json = lambda corpus_hash, _run_output_dir: (  # type: ignore[method-assign]
-            {"main": {"src": "/src/main.c", "lines": [1, 2]}},
-            session.raw_dir / f"{corpus_hash}.llvm-export.json",
-        )
-
-        result = session.collect_single(seed)
-
-        assert result.crashed is True
-        assert result.raw_cov_path is not None
-        assert result.raw_cov_path.exists()
-        assert result.crash_log_path is not None
-        assert result.crash_log_path.exists()
-        assert json.loads(result.raw_cov_path.read_text()) == {
-            "main": {"src": "/src/main.c", "lines": [1, 2]}
-        }
-        assert (session.raw_dir / f"{result.raw_cov_path.stem}.stdout.log").exists()
-        assert (session.raw_dir / f"{result.raw_cov_path.stem}.stderr.log").exists()
-    finally:
-        session.close()
-
-
-def test_docker_session_collect_single_prefers_native_textcov_reports(
-    tmp_path: Path,
-) -> None:
-    output_dir = tmp_path / "coverage"
-    build_output_dir = tmp_path / "build-out"
-    build_output_dir.mkdir()
-    seed = tmp_path / "seed.bin"
-    seed.write_bytes(b"abc")
-
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value.returncode = 0
-        session = DockerCoverageSession(
-            project_name="proj-cov-delta-coverage",
-            harness_name="fuzz_target",
-            language="c",
-            build_output_dir=build_output_dir,
-            output_dir=output_dir,
-            parse_single_output=lambda _data: {},
-            parse_textcov_output=lambda path: {
-                "from_textcov": {"src": str(path), "lines": [7, 8]}
-            },
-            parse_summary=lambda _path: {"lines_total": 10},
-        )
-
-    try:
-
-        def fake_run_coverage(output_subdir: str, *, timeout: int):
-            del timeout
-            run_output = session.outputs_dir / output_subdir
-            (run_output / "textcov_reports").mkdir(parents=True, exist_ok=True)
-            (run_output / "textcov_reports" / "fuzz_target.covreport").write_text(
-                "main:\n  7|      1|line\n"
-            )
-            return "stdout", "stderr", 0, False
-
-        session._run_coverage_script = fake_run_coverage  # type: ignore[method-assign]
-        session._export_llvm_json = lambda *_args, **_kwargs: (  # type: ignore[method-assign]
-            {"from_export": {"src": "/src/main.c", "lines": [1]}},
-            session.raw_dir / "unexpected.llvm-export.json",
-        )
-
-        result = session.collect_single(seed)
-
-        assert result.coverage_data == {
-            "from_textcov": {
-                "src": str(
-                    session.outputs_dir
-                    / result.raw_cov_path.stem
-                    / "textcov_reports"
-                    / "fuzz_target.covreport"
-                ),
-                "lines": [7, 8],
-            }
-        }
-        assert (session.raw_dir / f"{result.raw_cov_path.stem}.covreport").exists()
-    finally:
-        session.close()
 
 
 def test_native_strategy_opens_uniafl_session(tmp_path: Path) -> None:
@@ -411,19 +93,18 @@ def test_uniafl_session_uses_uniafl_crs_runtime_image_for_jvm(tmp_path: Path) ->
         mock_run.return_value.returncode = 0
         mock_run.return_value.stdout = "container-id\n"
         mock_run.return_value.stderr = ""
-        with patch("subprocess.Popen", return_value=_DummyProc()):
-            session = UniAFLCoverageSession(
-                project_name="proj-cov-delta-coverage",
-                harness_name="ExpanderFuzzer",
-                language="jvm",
-                benchmark_path=benchmark_dir,
-                source_repo_dir=repo_dir,
-                build_output_dir=build_output_dir,
-                output_dir=output_dir,
-                parse_single_output=lambda _data: {},
-                parse_textcov_output=None,
-                parse_summary=lambda _path: {},
-            )
+        session = UniAFLCoverageSession(
+            project_name="proj-cov-delta-coverage",
+            harness_name="ExpanderFuzzer",
+            language="jvm",
+            benchmark_path=benchmark_dir,
+            source_repo_dir=repo_dir,
+            build_output_dir=build_output_dir,
+            output_dir=output_dir,
+            parse_single_output=lambda _data: {},
+            parse_textcov_output=None,
+            parse_summary=lambda _path: {},
+        )
     try:
         assert session.runtime_image == default_uniafl_runtime_image("jvm")
     finally:
@@ -455,19 +136,18 @@ def test_uniafl_session_starts_container_with_run_fuzzer_env(tmp_path: Path) -> 
         return Result()
 
     with patch("subprocess.run", side_effect=fake_run):
-        with patch("subprocess.Popen", return_value=_DummyProc()):
-            session = UniAFLCoverageSession(
-                project_name="proj-cov-delta-coverage",
-                harness_name="ExpanderFuzzer",
-                language="jvm",
-                benchmark_path=benchmark_dir,
-                source_repo_dir=repo_dir,
-                build_output_dir=build_output_dir,
-                output_dir=output_dir,
-                parse_single_output=lambda _data: {},
-                parse_textcov_output=None,
-                parse_summary=lambda _path: {},
-            )
+        session = UniAFLCoverageSession(
+            project_name="proj-cov-delta-coverage",
+            harness_name="ExpanderFuzzer",
+            language="jvm",
+            benchmark_path=benchmark_dir,
+            source_repo_dir=repo_dir,
+            build_output_dir=build_output_dir,
+            output_dir=output_dir,
+            parse_single_output=lambda _data: {},
+            parse_textcov_output=None,
+            parse_summary=lambda _path: {},
+        )
     try:
         docker_run = next(cmd for cmd in seen_cmds if cmd[:2] == ["docker", "run"])
         joined = " ".join(docker_run)
@@ -510,21 +190,20 @@ def test_uniafl_session_pins_container_to_requested_cpu(tmp_path: Path) -> None:
         return Result()
 
     with patch("subprocess.run", side_effect=fake_run):
-        with patch("subprocess.Popen", return_value=_DummyProc()):
-            session = UniAFLCoverageSession(
-                project_name="proj-cov-delta-coverage",
-                harness_name="fuzz_target",
-                language="c",
-                benchmark_path=benchmark_dir,
-                source_repo_dir=repo_dir,
-                build_output_dir=build_output_dir,
-                output_dir=output_dir,
-                parse_single_output=lambda _data: {},
-                parse_textcov_output=None,
-                parse_summary=lambda _path: {},
-                cpu_set="7",
-                session_label="worker-0",
-            )
+        session = UniAFLCoverageSession(
+            project_name="proj-cov-delta-coverage",
+            harness_name="fuzz_target",
+            language="c",
+            benchmark_path=benchmark_dir,
+            source_repo_dir=repo_dir,
+            build_output_dir=build_output_dir,
+            output_dir=output_dir,
+            parse_single_output=lambda _data: {},
+            parse_textcov_output=None,
+            parse_summary=lambda _path: {},
+            cpu_set="7",
+            session_label="worker-0",
+        )
     try:
         docker_run = next(cmd for cmd in seen_cmds if cmd[:2] == ["docker", "run"])
         assert "--cpuset-cpus" in docker_run
@@ -559,32 +238,37 @@ def test_uniafl_session_uses_isolated_runtime_out_dir(tmp_path: Path) -> None:
         return Result()
 
     with patch("subprocess.run", side_effect=fake_run):
-        with patch("subprocess.Popen", return_value=_DummyProc()):
-            session = UniAFLCoverageSession(
-                project_name="proj-cov-delta-coverage",
-                harness_name="fuzz_target",
-                language="c",
-                benchmark_path=benchmark_dir,
-                source_repo_dir=repo_dir,
-                build_output_dir=build_output_dir,
-                output_dir=output_dir,
-                parse_single_output=lambda _data: {},
-                parse_textcov_output=None,
-                parse_summary=lambda _path: {},
-            )
+        session = UniAFLCoverageSession(
+            project_name="proj-cov-delta-coverage",
+            harness_name="fuzz_target",
+            language="c",
+            benchmark_path=benchmark_dir,
+            source_repo_dir=repo_dir,
+            build_output_dir=build_output_dir,
+            output_dir=output_dir,
+            parse_single_output=lambda _data: {},
+            parse_textcov_output=None,
+            parse_summary=lambda _path: {},
+        )
     try:
         docker_run = next(cmd for cmd in seen_cmds if cmd[:2] == ["docker", "run"])
         out_mount = next(
             mount for mount in docker_run if mount.endswith(":/out")
         ).removesuffix(":/out")
+        src_mount = next(
+            mount for mount in docker_run if mount.endswith(":/src")
+        ).removesuffix(":/src")
         assert Path(out_mount) != build_output_dir.resolve()
         assert Path(out_mount).is_dir()
         assert (Path(out_mount) / "fuzz_target").exists()
+        assert Path(src_mount) != benchmark_dir.resolve()
+        assert Path(src_mount).is_dir()
+        assert (Path(src_mount) / ".aixcc").is_dir()
     finally:
         session.close()
 
 
-def test_uniafl_session_collect_many_uses_long_lived_worker_service(
+def test_uniafl_session_collect_many_runs_seed_shard_through_run_dir(
     tmp_path: Path,
 ) -> None:
     output_dir = tmp_path / "coverage"
@@ -602,10 +286,7 @@ def test_uniafl_session_collect_many_uses_long_lived_worker_service(
     seed2.write_bytes(b"b")
 
     def fake_run(cmd, **kwargs):
-        capture_output = kwargs.get("capture_output", False)
-        text = kwargs.get("text", False)
-        timeout = kwargs.get("timeout")
-        del capture_output, text, timeout
+        del kwargs
 
         class Result:
             returncode = 0
@@ -617,57 +298,52 @@ def test_uniafl_session_collect_many_uses_long_lived_worker_service(
             return Result()
         if cmd[:2] == ["docker", "exec"] and "prepare" in cmd:
             return Result()
-        if cmd[:2] == ["docker", "exec"] and "run" in cmd:
-            output_root = Path(cmd[cmd.index("/workspace/outputs")])
-            workspace = Path(cmd[cmd.index("/workspace/outputs")]).parent
-            host_output_root = output_root
-            del workspace
+        if cmd[:2] == ["docker", "exec"] and "run-dir" in cmd:
+            host_seed_root = session.workspace / Path(cmd[-2]).relative_to("/workspace")
+            host_output_root = session.workspace / Path(cmd[-1]).relative_to(
+                "/workspace"
+            )
+            host_output_root.mkdir(parents=True, exist_ok=True)
+            for staged_seed in sorted(host_seed_root.iterdir()):
+                seed_hash = staged_seed.name
+                (host_output_root / f"{seed_hash}.cov").write_text(
+                    json.dumps({"main": {"src": "src.c", "lines": [1]}})
+                )
+                (host_output_root / f"{seed_hash}.status.json").write_text(
+                    json.dumps({"crashed": False})
+                )
             return Result()
         if cmd[:3] == ["docker", "rm", "-f"]:
             return Result()
         return Result()
 
     with patch("subprocess.run", side_effect=fake_run):
-        with patch("subprocess.Popen", return_value=_DummyProc()):
-            session = UniAFLCoverageSession(
-                project_name="proj-cov-delta-coverage",
-                harness_name="fuzz_target",
-                language="c",
-                benchmark_path=benchmark_dir,
-                source_repo_dir=repo_dir,
-                build_output_dir=build_output_dir,
-                output_dir=output_dir,
-                parse_single_output=lambda _data: {},
-                parse_textcov_output=None,
-                parse_summary=lambda _path: {},
-            )
+        session = UniAFLCoverageSession(
+            project_name="proj-cov-delta-coverage",
+            harness_name="fuzz_target",
+            language="c",
+            benchmark_path=benchmark_dir,
+            source_repo_dir=repo_dir,
+            build_output_dir=build_output_dir,
+            output_dir=output_dir,
+            parse_single_output=lambda _data: {},
+            parse_textcov_output=None,
+            parse_summary=lambda _path: {},
+        )
 
         try:
-            recorded_hashes: list[str] = []
-
-            def fake_wait_for_result(corpus_hash: str) -> CoverageRunResult:
-                recorded_hashes.append(corpus_hash)
-                raw_cov_path = session.raw_dir / f"{corpus_hash}.cov"
-                raw_cov_path.write_text(
-                    json.dumps({"main": {"src": "src.c", "lines": [1]}})
-                )
-                return CoverageRunResult(
-                    coverage_data={"main": {"src": "src.c", "lines": [1]}},
-                    raw_cov_path=raw_cov_path,
-                )
-
-            session._wait_for_result = fake_wait_for_result  # type: ignore[method-assign]
             results = session.collect_many([seed1, seed2])
             assert set(results) == {seed1, seed2}
-            assert recorded_hashes == [
-                hashlib.sha256(seed1.read_bytes()).hexdigest()[:16],
+            assert sorted(result.raw_cov_path.stem for result in results.values()) == [
                 hashlib.sha256(seed2.read_bytes()).hexdigest()[:16],
+                hashlib.sha256(seed1.read_bytes()).hexdigest()[:16],
             ]
+            assert all(result.coverage_data for result in results.values())
         finally:
             session.close()
 
 
-def test_uniafl_session_starts_worker_service_with_request_and_result_dirs(
+def test_uniafl_session_invokes_run_dir_with_mounted_workspace_paths(
     tmp_path: Path,
 ) -> None:
     output_dir = tmp_path / "coverage"
@@ -686,34 +362,45 @@ def test_uniafl_session_starts_worker_service_with_request_and_result_dirs(
         mock_run.return_value.returncode = 0
         mock_run.return_value.stdout = "container-id\n"
         mock_run.return_value.stderr = ""
-        with patch(
-            "subprocess.Popen",
-            side_effect=lambda cmd, **_kwargs: recorded_cmds.append(cmd)
-            or _DummyProc(),
-        ):  # type: ignore[arg-type]
-            session = UniAFLCoverageSession(
-                project_name="proj-cov-delta-coverage",
-                harness_name="fuzz_target",
-                language="jvm",
-                benchmark_path=benchmark_dir,
-                source_repo_dir=repo_dir,
-                build_output_dir=build_output_dir,
-                output_dir=output_dir,
-                parse_single_output=lambda _data: {},
-                parse_textcov_output=None,
-                parse_summary=lambda _path: {},
-            )
+        session = UniAFLCoverageSession(
+            project_name="proj-cov-delta-coverage",
+            harness_name="fuzz_target",
+            language="jvm",
+            benchmark_path=benchmark_dir,
+            source_repo_dir=repo_dir,
+            build_output_dir=build_output_dir,
+            output_dir=output_dir,
+            parse_single_output=lambda _data: {},
+            parse_textcov_output=None,
+            parse_summary=lambda _path: {},
+        )
+        session._docker_exec = lambda args, **_kwargs: (  # type: ignore[method-assign]
+            recorded_cmds.append(args) or mock_run.return_value
+        )
 
     try:
-        assert recorded_cmds
-        worker_cmd = next(
-            cmd for cmd in recorded_cmds if cmd[:3] == ["docker", "exec", "-i"]
+        seed = tmp_path / "seed"
+        seed.write_bytes(b"a")
+        with patch.object(
+            session,
+            "_load_result_from_output_root",
+            return_value=CoverageRunResult(coverage_data={}),
+        ):
+            session.collect_many([seed])
+
+        run_dir_cmd = next(
+            cmd
+            for cmd in recorded_cmds
+            if cmd[:3]
+            == [
+                "python3",
+                "/workspace/crsbench_cov_worker.py",
+                "run-dir",
+            ]
         )
-        joined = " ".join(worker_cmd)
-        assert worker_cmd[:3] == ["docker", "exec", "-i"]
-        assert "python3 /workspace/crsbench_cov_worker.py serve fuzz_target" in joined
-        assert "/workspace/requests" in joined
-        assert "/workspace/outputs" in joined
+        assert run_dir_cmd[3] == "fuzz_target"
+        assert run_dir_cmd[4].startswith("/workspace/runs/")
+        assert run_dir_cmd[5].startswith("/workspace/runs/")
     finally:
         session.close()
 
@@ -739,19 +426,18 @@ def test_uniafl_session_batch_totals_match_given_fuzzer_summary_logic(
         mock_run.return_value.returncode = 0
         mock_run.return_value.stdout = "container-id\n"
         mock_run.return_value.stderr = ""
-        with patch("subprocess.Popen", return_value=_DummyProc()):
-            session = UniAFLCoverageSession(
-                project_name="proj-cov-delta-coverage",
-                harness_name="fuzz_target",
-                language="c",
-                benchmark_path=benchmark_dir,
-                source_repo_dir=repo_dir,
-                build_output_dir=build_output_dir,
-                output_dir=output_dir,
-                parse_single_output=lambda _data: {},
-                parse_textcov_output=None,
-                parse_summary=lambda _path: {},
-            )
+        session = UniAFLCoverageSession(
+            project_name="proj-cov-delta-coverage",
+            harness_name="fuzz_target",
+            language="c",
+            benchmark_path=benchmark_dir,
+            source_repo_dir=repo_dir,
+            build_output_dir=build_output_dir,
+            output_dir=output_dir,
+            parse_single_output=lambda _data: {},
+            parse_textcov_output=None,
+            parse_summary=lambda _path: {},
+        )
 
     try:
         session._collected_results = {
@@ -790,19 +476,18 @@ def test_uniafl_session_normalizes_container_source_paths(tmp_path: Path) -> Non
         mock_run.return_value.returncode = 0
         mock_run.return_value.stdout = "container-id\n"
         mock_run.return_value.stderr = ""
-        with patch("subprocess.Popen", return_value=_DummyProc()):
-            session = UniAFLCoverageSession(
-                project_name="proj-cov-delta-coverage",
-                harness_name="ExpanderFuzzer",
-                language="jvm",
-                benchmark_path=benchmark_dir,
-                source_repo_dir=repo_dir,
-                build_output_dir=build_output_dir,
-                output_dir=output_dir,
-                parse_single_output=lambda _data: {},
-                parse_textcov_output=None,
-                parse_summary=lambda _path: {},
-            )
+        session = UniAFLCoverageSession(
+            project_name="proj-cov-delta-coverage",
+            harness_name="ExpanderFuzzer",
+            language="jvm",
+            benchmark_path=benchmark_dir,
+            source_repo_dir=repo_dir,
+            build_output_dir=build_output_dir,
+            output_dir=output_dir,
+            parse_single_output=lambda _data: {},
+            parse_textcov_output=None,
+            parse_summary=lambda _path: {},
+        )
 
     try:
         normalized = session._normalize_coverage_data(  # type: ignore[attr-defined]
@@ -829,6 +514,8 @@ def test_uniafl_worker_script_exposes_seed_directory_mode() -> None:
     script = backend._UNIAFL_COVERAGE_WORKER_SCRIPT
     assert "def _run_dir(" in script
     assert 'if command == "run-dir":' in script
+    assert 'if command == "serve":' not in script
+    assert 'if command == "run":' not in script
 
 
 def test_uniafl_worker_script_falls_back_when_generated_config_is_empty() -> None:
@@ -884,10 +571,6 @@ def test_sharded_session_collect_many_merges_parallel_shards(tmp_path: Path) -> 
         assert left.seen
         assert right.seen
         assert set(left.seen).isdisjoint(set(right.seen))
-        assert session.collect_batch_totals(tmp_path) == {
-            "corpus_dir": tmp_path.name,
-            "worker": "left",
-        }
     finally:
         session.close()
         assert left.closed is True

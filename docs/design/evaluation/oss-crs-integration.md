@@ -55,17 +55,24 @@ contract remains valid.
 Coverage replay runs one warm container per `(benchmark, harness, shard)`. Each
 container is pinned to a single CPU, and seeds assigned to that shard are run
 sequentially in a fresh libCRS coverage state inside the warm process.
+Each session uses its own copied benchmark tree and exported `/out` tree; warm
+coverage workers must not share a writable benchmark mount because Atlantis
+prepare may generate `.aixcc/config.yaml` inside `/src`, and parallel shard
+startup must not race on that file.
 
 Coverage reporting is derived directly from the per-seed replay artifacts that
 those warm containers emit. CRSBench must not depend on a separate whole-corpus
 summary pass for Atlantis coverage analysis. The timeline x-axis comes from the
-input seed files' relative mtimes, and the y-axis is the cumulative count of
-unique covered lines obtained by merging per-seed `.cov` payloads. Without a
-separate denominator pass, total-line percentages are out of contract for this
-analysis mode and must remain unknown rather than inferred from only the subset
-of source files touched by replay. Timeline report artifacts are seed-driven:
-the JSON/CSV outputs store one row per normalized seed rather than bucketed
-time windows, and the PNG is plotted directly from those per-seed rows.
+input seed files' relative mtimes using the first observed seed `mtime` as the
+time origin for both direct and experiment-mode analysis, and the y-axis is the
+cumulative count of unique covered lines obtained by merging per-seed `.cov`
+payloads. POV markers, when present, must be rebased onto that seed-time
+origin. Without a separate denominator pass, total-line percentages are out of
+contract for this analysis mode and must remain unknown rather than inferred
+from only the subset of source files touched by replay. Timeline report
+artifacts are seed-driven: the JSON/CSV outputs store one row per normalized
+seed rather than bucketed time windows, and the PNG is plotted directly from
+those per-seed rows.
 
 The normalized coverage build output must materialize executable runtime
 artifacts as real files inside the exported build directory. Host-only symlinks

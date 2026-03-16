@@ -10,6 +10,7 @@ from types import ModuleType
 from unittest.mock import patch
 
 from crsbench.evaluation.coverage.cli.coverage_command import (
+    _build_timeline_report,
     _run_direct_seed_timeline,
     add_coverage_subparser,
     run_coverage,
@@ -186,6 +187,49 @@ def test_timeline_reporting_writes_json_csv_and_png(tmp_path: Path) -> None:
     )
     assert png_path.exists()
     assert png_path.stat().st_size > 0
+
+
+def test_build_timeline_report_uses_seed_mtime_origin_and_rebases_povs(
+    tmp_path: Path,
+) -> None:
+    seed_dir = tmp_path / "seeds"
+    seed_dir.mkdir()
+    seed = seed_dir / "seed.bin"
+    seed.write_bytes(b"seed")
+    import os
+
+    os.utime(seed, (100.0, 100.0))
+
+    class _FakeEngine:
+        def collect_timed_line_coverage(self, **kwargs):
+            timed_inputs = kwargs["timed_inputs"]
+            return (
+                [
+                    timed_inputs[0].model_copy(
+                        update={"lines_covered": 7, "raw_cov_path": Path("/tmp/a.cov")}
+                    )
+                ],
+                CoverageSummary(lines_covered=7, lines_total=0),
+            )
+
+    report = _build_timeline_report(
+        engine=_FakeEngine(),
+        benchmark_path=tmp_path / "bench",
+        harness_name="fuzz_target",
+        seed_dir=seed_dir,
+        crs_run_start_time=130.0,
+        pov_markers=[
+            CoveragePovMarker(cpv_id="cpv", pov_hash="hash", relative_time=5.0)
+        ],
+        force_rebuild=False,
+        output_dir=tmp_path / "coverage",
+    )
+
+    assert report.time_origin == "first_seed_mtime"
+    assert report.seeds[0].relative_time == 0.0
+    assert report.pov_markers == [
+        CoveragePovMarker(cpv_id="cpv", pov_hash="hash", relative_time=35.0)
+    ]
 
 
 def test_timeline_png_uses_covered_line_counts_on_y_axis(tmp_path: Path) -> None:

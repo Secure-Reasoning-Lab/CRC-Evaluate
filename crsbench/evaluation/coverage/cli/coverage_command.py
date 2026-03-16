@@ -340,7 +340,7 @@ def _run_experiment_timeline(args: argparse.Namespace) -> int:
         logger.info(f"Saved coverage results under {experiment_dir}")
         return 0
     except Exception as e:
-        logger.error(f"Coverage timeline failed: {e}", exc_info=True)
+        logger.error("Coverage timeline failed: {}", e, exc_info=True)
         return 1
 
 
@@ -392,7 +392,7 @@ def _run_direct_seed_timeline(args: argparse.Namespace) -> int:
         logger.info(f"Saved coverage results at {args.output_dir}")
         return 0
     except Exception as e:
-        logger.error(f"Coverage timeline failed: {e}", exc_info=True)
+        logger.error("Coverage timeline failed: {}", e, exc_info=True)
         return 1
     finally:
         engine.cleanup()
@@ -410,10 +410,20 @@ def _build_timeline_report(
     output_dir: Path,
 ) -> CoverageTimelineReport:
     """Build a coverage-over-time report for one seed set."""
-    normalized_inputs = normalize_seed_inputs(seed_dir, base_time=crs_run_start_time)
+    normalized_inputs = normalize_seed_inputs(seed_dir, base_time=None)
     if not normalized_inputs:
         msg = f"No seeds found to analyze in {seed_dir}"
         raise ValueError(msg)
+    first_seed_mtime = min(seed.path.stat().st_mtime for seed in normalized_inputs)
+    rebased_pov_markers = pov_markers
+    if crs_run_start_time is not None and pov_markers:
+        pov_offset = float(crs_run_start_time - first_seed_mtime)
+        rebased_pov_markers = [
+            marker.model_copy(
+                update={"relative_time": marker.relative_time + pov_offset}
+            )
+            for marker in pov_markers
+        ]
     timed_inputs, summary = engine.collect_timed_line_coverage(
         benchmark_path=benchmark_path,
         timed_inputs=normalized_inputs,
@@ -424,13 +434,9 @@ def _build_timeline_report(
     return CoverageTimelineReport(
         benchmark=benchmark_path.name,
         harness=harness_name,
-        time_origin=(
-            "crs_run_start_time"
-            if crs_run_start_time is not None
-            else "first_seed_mtime"
-        ),
+        time_origin="first_seed_mtime",
         seeds=timed_inputs,
-        pov_markers=pov_markers,
+        pov_markers=rebased_pov_markers,
         final_summary=summary,
     )
 
