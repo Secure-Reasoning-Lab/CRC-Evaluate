@@ -118,3 +118,81 @@ def test_load_startup_script_contains_managed_worker_service_bootstrap():
     assert "bootstrap_failed" in startup_script
     assert "systemctl enable --now crsbench-worker.service" in startup_script
     assert "/etc/default/crsbench-worker" in startup_script
+
+
+def test_build_instance_metadata_includes_install_spec_from_fleet_config():
+    """Install spec from fleet config field should appear in instance metadata."""
+    from crsbench.cloud.gce.metadata import build_instance_metadata
+
+    fleet = _make_fleet(
+        crsbench_install_spec="git+ssh://git@github.com/sslab-gatech/CRSBench.git",
+        metadata={"custom-key": "custom-value"},
+    )
+    metadata = build_instance_metadata(
+        experiment_name="exp-42",
+        fleet=fleet,
+        redis_host="redis.internal:6380",
+        registration=_make_registration(),
+        worker_name="gce-worker-001",
+        startup_script="#!/usr/bin/env bash\n",
+    )
+
+    assert (
+        metadata["crsbench-install-spec"]
+        == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+    )
+
+
+def test_build_instance_metadata_omits_install_spec_when_none():
+    """When crsbench_install_spec is None and not in metadata dict, key is absent."""
+    from crsbench.cloud.gce.metadata import build_instance_metadata
+
+    fleet = _make_fleet(
+        crsbench_install_spec=None,
+        metadata={"custom-key": "custom-value"},
+    )
+    metadata = build_instance_metadata(
+        experiment_name="exp-42",
+        fleet=fleet,
+        redis_host="redis.internal:6380",
+        registration=_make_registration(),
+        worker_name="gce-worker-001",
+        startup_script="#!/usr/bin/env bash\n",
+    )
+
+    assert "crsbench-install-spec" not in metadata
+
+
+def test_build_instance_metadata_fleet_config_install_spec_overrides_manual_metadata():
+    """Field-level crsbench_install_spec should override the raw metadata dict value."""
+    from crsbench.cloud.gce.metadata import build_instance_metadata
+
+    fleet = _make_fleet(
+        crsbench_install_spec="git+ssh://git@github.com/sslab-gatech/CRSBench.git",
+        metadata={"crsbench-install-spec": "old-value"},
+    )
+    metadata = build_instance_metadata(
+        experiment_name="exp-42",
+        fleet=fleet,
+        redis_host="redis.internal:6380",
+        registration=_make_registration(),
+        worker_name="gce-worker-001",
+        startup_script="#!/usr/bin/env bash\n",
+    )
+
+    assert (
+        metadata["crsbench-install-spec"]
+        == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+    )
+
+
+def test_startup_script_contains_git_clone_path():
+    """Startup script should include git clone, uv sync, deploy key, and HF token handling."""
+    from crsbench.cloud.gce.metadata import load_startup_script
+
+    script = load_startup_script()
+
+    assert "git clone" in script
+    assert "uv sync" in script
+    assert "crsbench-github-deploy-key" in script
+    assert "crsbench-hf-token" in script
