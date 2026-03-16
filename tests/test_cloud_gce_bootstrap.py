@@ -318,3 +318,17 @@ def test_startup_script_contains_git_clone_path():
     assert "crsbench-github-deploy-key" in script
     assert "crsbench-hf-token" in script
     assert "crsbench-git-ref" in script
+
+
+def test_startup_script_sets_venv_path_for_systemd():
+    """Startup script should write PATH with venv bin dir to systemd env file."""
+    from crsbench.cloud.gce.metadata import load_startup_script
+
+    script = load_startup_script()
+
+    # The git+ssh path should set VENV_BIN pointing to the venv bin directory
+    assert 'VENV_BIN="/opt/crsbench/.venv/bin"' in script
+    # PATH env var should be written to the systemd env file using VENV_BIN
+    assert 'write_env_var "PATH" "${VENV_BIN}' in script
+    # /root/.local/bin must be on PATH for uv-installed tools
+    assert "/root/.local/bin" in script
