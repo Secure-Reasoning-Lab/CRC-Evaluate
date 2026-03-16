@@ -217,6 +217,7 @@ class UniAFLCoverageSession(CoverageSession):
             f"crsbench-uniafl-{self.project_name[:20]}-{uuid.uuid4().hex[:10]}"
         )
         self._collected_results: dict[str, CoverageRunResult] = {}
+        self._session_broken = False
         self._write_worker_script()
         self._prepare_runtime_benchmark()
         self._prepare_runtime_build_output()
@@ -383,6 +384,36 @@ class UniAFLCoverageSession(CoverageSession):
                 stderr or f"Failed to prepare UniAFL coverage for {self.harness_name}"
             )
 
+    def _remove_container(self) -> None:
+        result = subprocess.run(
+            ["docker", "rm", "-f", self.container_name],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return
+        stderr = result.stderr.strip()
+        stdout = result.stdout.strip()
+        if "No such container" in stderr or "No such container" in stdout:
+            return
+        raise RuntimeError(
+            stderr or stdout or "Failed to remove UniAFL coverage container"
+        )
+
+    def _reset_after_failed_batch(self, failure: Exception) -> bool:
+        try:
+            self._remove_container()
+            self._start_container()
+            self._prepare_harness()
+        except Exception as reset_error:
+            self._session_broken = True
+            failure.add_note(
+                "Additionally failed to reset coverage session after batch "
+                f"failure: {reset_error}"
+            )
+            return False
+        return True
+
     def _workspace_container_path(self, host_path: Path) -> str:
         relative = host_path.resolve().relative_to(self.workspace.resolve())
         return str(Path("/workspace") / relative)
@@ -454,6 +485,10 @@ class UniAFLCoverageSession(CoverageSession):
         )
 
     def _run_dir_batch(self, corpus_files: list[Path]) -> None:
+        if self._session_broken:
+            raise RuntimeError(
+                f"Coverage session for {self.project_name}/{self.harness_name} is unavailable"
+            )
         if not corpus_files:
             return
 
@@ -476,6 +511,7 @@ class UniAFLCoverageSession(CoverageSession):
 
         container_seed_root = self._workspace_container_path(seed_root)
         container_output_root = self._workspace_container_path(output_root)
+        cleanup_run_root = False
         try:
             result = self._docker_exec(
                 [
@@ -517,8 +553,13 @@ class UniAFLCoverageSession(CoverageSession):
                         output_root=output_root,
                     )
                 )
+            cleanup_run_root = True
+        except Exception as exc:
+            cleanup_run_root = self._reset_after_failed_batch(exc)
+            raise
         finally:
-            shutil.rmtree(run_root, ignore_errors=True)
+            if cleanup_run_root:
+                shutil.rmtree(run_root, ignore_errors=True)
 
     def collect_single(self, corpus_file: Path) -> CoverageRunResult:
         return self.collect_many([corpus_file])[corpus_file]
@@ -535,11 +576,10 @@ class UniAFLCoverageSession(CoverageSession):
         return _approximate_totals_from_results(list(self._collected_results.values()))
 
     def close(self) -> None:
-        subprocess.run(
-            ["docker", "rm", "-f", self.container_name],
-            capture_output=True,
-            text=True,
-        )
+        try:
+            self._remove_container()
+        except RuntimeError:
+            pass
         self._tempdir.cleanup()
 
 

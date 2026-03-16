@@ -2,9 +2,11 @@
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+import pytest
 from crsbench.evaluation.coverage.backend import (
     CoverageRunResult,
     ShardedCoverageSession,
@@ -458,6 +460,60 @@ def test_uniafl_session_batch_totals_match_given_fuzzer_summary_logic(
             "functions_covered": 2,
             "functions_total": 0,
         }
+    finally:
+        session.close()
+
+
+def test_uniafl_session_resets_container_before_cleaning_timed_out_batch(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "coverage"
+    build_output_dir = tmp_path / "build-out"
+    benchmark_dir = tmp_path / "benchmark"
+    repo_dir = build_output_dir / ".crsbench-repo"
+    benchmark_dir.mkdir()
+    build_output_dir.mkdir()
+    repo_dir.mkdir(parents=True)
+    (benchmark_dir / "project.yaml").write_text("language: jvm\n")
+    (benchmark_dir / ".aixcc").mkdir()
+    seed = tmp_path / "seed"
+    seed.write_bytes(b"seed")
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "container-id\n"
+        mock_run.return_value.stderr = ""
+        session = UniAFLCoverageSession(
+            project_name="proj-cov-delta-coverage",
+            harness_name="fuzz_target",
+            language="jvm",
+            benchmark_path=benchmark_dir,
+            source_repo_dir=repo_dir,
+            build_output_dir=build_output_dir,
+            output_dir=output_dir,
+            parse_single_output=lambda _data: {},
+            parse_textcov_output=None,
+            parse_summary=lambda _path: {},
+        )
+
+    try:
+        session._docker_exec = Mock(  # type: ignore[method-assign]
+            side_effect=subprocess.TimeoutExpired(
+                cmd=["docker", "exec"],
+                timeout=1,
+            )
+        )
+        session._remove_container = Mock()  # type: ignore[method-assign]
+        session._start_container = Mock()  # type: ignore[method-assign]
+        session._prepare_harness = Mock()  # type: ignore[method-assign]
+
+        with pytest.raises(subprocess.TimeoutExpired):
+            session.collect_many([seed])
+
+        assert session._remove_container.call_count == 1
+        assert session._start_container.call_count == 1
+        assert session._prepare_harness.call_count == 1
+        assert list(session.runs_dir.iterdir()) == []
     finally:
         session.close()
 

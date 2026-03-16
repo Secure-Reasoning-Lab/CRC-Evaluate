@@ -306,7 +306,7 @@ def test_timeline_png_uses_covered_line_counts_on_y_axis(tmp_path: Path) -> None
     assert observed["ylabel"] == "Covered lines"
 
 
-def test_build_timeline_report_clamps_rebased_pov_markers_at_zero(
+def test_build_timeline_report_preserves_negative_rebased_pov_markers(
     tmp_path: Path,
 ) -> None:
     seed_dir = tmp_path / "seeds"
@@ -336,7 +336,7 @@ def test_build_timeline_report_clamps_rebased_pov_markers_at_zero(
     )
 
     assert report.pov_markers == [
-        CoveragePovMarker(cpv_id="cpv", pov_hash="hash", relative_time=0.0)
+        CoveragePovMarker(cpv_id="cpv", pov_hash="hash", relative_time=-5.0)
     ]
 
 

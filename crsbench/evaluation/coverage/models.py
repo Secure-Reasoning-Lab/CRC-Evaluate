@@ -209,7 +209,7 @@ class CoveragePovMarker(BaseModel):
 
     cpv_id: str
     pov_hash: str
-    relative_time: float = Field(..., ge=0.0)
+    relative_time: float
 
 
 class TimedCoverageInput(BaseModel):

@@ -420,7 +420,7 @@ def _build_timeline_report(
         pov_offset = float(crs_run_start_time - first_seed_mtime)
         rebased_pov_markers = [
             marker.model_copy(
-                update={"relative_time": max(0.0, marker.relative_time + pov_offset)}
+                update={"relative_time": marker.relative_time + pov_offset}
             )
             for marker in pov_markers
         ]
