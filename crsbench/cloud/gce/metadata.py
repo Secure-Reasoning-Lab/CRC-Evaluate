@@ -14,6 +14,8 @@ if TYPE_CHECKING:
 
 CRSBENCH_BOOTSTRAP_PAYLOAD_KEY = "crsbench-bootstrap-payload"
 CRSBENCH_INSTALL_SPEC_KEY = "crsbench-install-spec"
+CRSBENCH_GITHUB_DEPLOY_KEY = "crsbench-github-deploy-key"
+CRSBENCH_HF_TOKEN_KEY = "crsbench-hf-token"
 CRSBENCH_EXPERIMENT_METADATA_KEY = "crsbench-experiment"
 CRSBENCH_WORKER_NAME_METADATA_KEY = "crsbench-worker-name"
 CRSBENCH_READINESS_TIMEOUT_METADATA_KEY = "crsbench-readiness-timeout-sec"
@@ -126,6 +128,15 @@ def build_instance_metadata(
 
     if fleet.crsbench_install_spec:
         metadata[CRSBENCH_INSTALL_SPEC_KEY] = fleet.crsbench_install_spec
+
+    if fleet.github_deploy_key_file:
+        key_bytes = Path(fleet.github_deploy_key_file).read_bytes()
+        metadata[CRSBENCH_GITHUB_DEPLOY_KEY] = base64.b64encode(key_bytes).decode(
+            "ascii"
+        )
+
+    if fleet.hf_token:
+        metadata[CRSBENCH_HF_TOKEN_KEY] = fleet.hf_token
 
     if fleet.startup_script_uri:
         metadata[GCE_STARTUP_SCRIPT_URL_KEY] = fleet.startup_script_uri

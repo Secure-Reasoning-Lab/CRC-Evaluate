@@ -186,6 +186,76 @@ def test_build_instance_metadata_fleet_config_install_spec_overrides_manual_meta
     )
 
 
+def test_metadata_includes_github_deploy_key(tmp_path):
+    """github_deploy_key_file in fleet config causes base64-encoded key in metadata."""
+    from crsbench.cloud.gce.metadata import CRSBENCH_GITHUB_DEPLOY_KEY, build_instance_metadata
+
+    key_content = b"-----BEGIN OPENSSH PRIVATE KEY-----\nFAKEKEYDATA\n"
+    key_file = tmp_path / "crsbench-deploy"
+    key_file.write_bytes(key_content)
+
+    fleet = _make_fleet(
+        github_deploy_key_file=str(key_file),
+        metadata={"custom-key": "custom-value"},
+    )
+    metadata = build_instance_metadata(
+        experiment_name="exp-42",
+        fleet=fleet,
+        redis_host="redis.internal:6380",
+        registration=_make_registration(),
+        worker_name="gce-worker-001",
+        startup_script="#!/usr/bin/env bash\n",
+    )
+
+    assert CRSBENCH_GITHUB_DEPLOY_KEY in metadata
+    import base64
+
+    decoded = base64.b64decode(metadata[CRSBENCH_GITHUB_DEPLOY_KEY])
+    assert decoded == key_content
+
+
+def test_metadata_includes_hf_token():
+    """hf_token in fleet config causes crsbench-hf-token in metadata."""
+    from crsbench.cloud.gce.metadata import CRSBENCH_HF_TOKEN_KEY, build_instance_metadata
+
+    fleet = _make_fleet(
+        hf_token="hf_test_token_abc123",
+        metadata={"custom-key": "custom-value"},
+    )
+    metadata = build_instance_metadata(
+        experiment_name="exp-42",
+        fleet=fleet,
+        redis_host="redis.internal:6380",
+        registration=_make_registration(),
+        worker_name="gce-worker-001",
+        startup_script="#!/usr/bin/env bash\n",
+    )
+
+    assert metadata[CRSBENCH_HF_TOKEN_KEY] == "hf_test_token_abc123"
+
+
+def test_metadata_omits_secrets_when_not_configured():
+    """Default fleet (no key/token) must not include secret metadata keys."""
+    from crsbench.cloud.gce.metadata import (
+        CRSBENCH_GITHUB_DEPLOY_KEY,
+        CRSBENCH_HF_TOKEN_KEY,
+        build_instance_metadata,
+    )
+
+    fleet = _make_fleet(metadata={"custom-key": "custom-value"})
+    metadata = build_instance_metadata(
+        experiment_name="exp-42",
+        fleet=fleet,
+        redis_host="redis.internal:6380",
+        registration=_make_registration(),
+        worker_name="gce-worker-001",
+        startup_script="#!/usr/bin/env bash\n",
+    )
+
+    assert CRSBENCH_GITHUB_DEPLOY_KEY not in metadata
+    assert CRSBENCH_HF_TOKEN_KEY not in metadata
+
+
 def test_startup_script_contains_git_clone_path():
     """Startup script should include git clone, uv sync, deploy key, and HF token handling."""
     from crsbench.cloud.gce.metadata import load_startup_script
