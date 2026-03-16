@@ -41,7 +41,7 @@ Runtime command usage is documented in the experiment guides.
 `crsbench coverage` supports the Atlantis-backed seed timeline modes:
 
 - `crsbench coverage --experiment-config <config>`
-- `crsbench coverage --experiment-dir <experiment-filestore>/<experiment>`
+- `crsbench coverage --experiment-dir ./experiment-filestore/experiment-name`
 - `crsbench coverage --seed-dir <dir> --benchmarks <root> --benchmark <name> --harness <name> --output-dir <dir>`
 
 The experiment-config and experiment-dir modes read seeds from

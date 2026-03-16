@@ -164,8 +164,8 @@ fish and other shell setup instructions.
 crsbench verify       benchmarks/project --pov-dir ./povs/
 crsbench patch-verify benchmarks/project --patch-dir ./patches --pov-dir ./povs
 crsbench coverage     --experiment-config ./experiment.yaml      # seed coverage over time
-crsbench coverage     --experiment-dir ./experiment-filestore/<experiment>       # seed coverage over time
-crsbench coverage     --experiment-dir ./experiment-filestore/<experiment> --output-dir ./coverage-out
+crsbench coverage     --experiment-dir ./experiment-filestore/experiment-name       # seed coverage over time
+crsbench coverage     --experiment-dir ./experiment-filestore/experiment-name --output-dir ./coverage-out
 crsbench coverage     --seed-dir ./seeds --benchmark project --harness fuzz_target --output-dir ./coverage-out
 crsbench coverage     --seed-dir ./seeds --experiment-start-time 1710000000 --benchmark project --harness fuzz_target --output-dir ./coverage-out
 ```
