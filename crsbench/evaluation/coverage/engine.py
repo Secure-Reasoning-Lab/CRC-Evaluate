@@ -507,6 +507,7 @@ class CoverageEngine:
         opened_sessions: list[CoverageSession | None] = [
             None for _ in range(self.runtime_workers)
         ]
+        futures = {}
         try:
             with ThreadPoolExecutor(max_workers=self.runtime_workers) as executor:
                 futures = {
@@ -529,6 +530,14 @@ class CoverageEngine:
                     session for session in opened_sessions if session is not None
                 ]
         except Exception:
+            for future, index in futures.items():
+                if opened_sessions[index] is not None:
+                    continue
+                if not future.done():
+                    continue
+                if future.cancelled() or future.exception() is not None:
+                    continue
+                opened_sessions[index] = future.result()
             for session in reversed(
                 [session for session in opened_sessions if session is not None]
             ):

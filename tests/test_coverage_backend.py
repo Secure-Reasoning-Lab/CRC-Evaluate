@@ -339,6 +339,7 @@ def test_uniafl_session_collect_many_runs_seed_shard_through_run_dir(
                 hashlib.sha256(seed1.read_bytes()).hexdigest()[:16],
             ]
             assert all(result.coverage_data for result in results.values())
+            assert list(session.runs_dir.iterdir()) == []
         finally:
             session.close()
 

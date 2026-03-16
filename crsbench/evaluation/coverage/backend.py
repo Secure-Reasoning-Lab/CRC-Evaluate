@@ -476,42 +476,49 @@ class UniAFLCoverageSession(CoverageSession):
 
         container_seed_root = self._workspace_container_path(seed_root)
         container_output_root = self._workspace_container_path(output_root)
-        result = self._docker_exec(
-            [
-                "python3",
-                "/workspace/crsbench_cov_worker.py",
-                "run-dir",
-                self.harness_name,
-                container_seed_root,
-                container_output_root,
-            ],
-            env={"CRSBENCH_PER_INPUT_TIMEOUT": str(self._per_input_timeout_seconds())},
-            timeout=self._batch_timeout_seconds(len(unique_hashes)),
-        )
-        self._append_worker_logs(result.stdout or "", result.stderr or "")
-        if result.returncode != 0:
-            stderr = result.stderr.strip() or result.stdout.strip()
-            raise RuntimeError(
-                stderr
-                or f"Failed to run coverage shard for {self.project_name}/{self.harness_name}"
+        try:
+            result = self._docker_exec(
+                [
+                    "python3",
+                    "/workspace/crsbench_cov_worker.py",
+                    "run-dir",
+                    self.harness_name,
+                    container_seed_root,
+                    container_output_root,
+                ],
+                env={
+                    "CRSBENCH_PER_INPUT_TIMEOUT": str(self._per_input_timeout_seconds())
+                },
+                timeout=self._batch_timeout_seconds(len(unique_hashes)),
             )
-        self._docker_exec(
-            [
-                "bash",
-                "-lc",
-                (
-                    f"chown -R {os.getuid()}:{os.getgid()} "
-                    f"{shlex.quote(container_output_root)} || true"
-                ),
-            ],
-            timeout=60,
-        )
+            self._append_worker_logs(result.stdout or "", result.stderr or "")
+            if result.returncode != 0:
+                stderr = result.stderr.strip() or result.stdout.strip()
+                raise RuntimeError(
+                    stderr
+                    or f"Failed to run coverage shard for {self.project_name}/{self.harness_name}"
+                )
+            self._docker_exec(
+                [
+                    "bash",
+                    "-lc",
+                    (
+                        f"chown -R {os.getuid()}:{os.getgid()} "
+                        f"{shlex.quote(container_output_root)} || true"
+                    ),
+                ],
+                timeout=60,
+            )
 
-        for corpus_hash in unique_hashes:
-            self._collected_results[corpus_hash] = self._load_result_from_output_root(
-                corpus_hash=corpus_hash,
-                output_root=output_root,
-            )
+            for corpus_hash in unique_hashes:
+                self._collected_results[corpus_hash] = (
+                    self._load_result_from_output_root(
+                        corpus_hash=corpus_hash,
+                        output_root=output_root,
+                    )
+                )
+        finally:
+            shutil.rmtree(run_root, ignore_errors=True)
 
     def collect_single(self, corpus_file: Path) -> CoverageRunResult:
         return self.collect_many([corpus_file])[corpus_file]

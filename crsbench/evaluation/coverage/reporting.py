@@ -69,7 +69,12 @@ def write_timeline_png(report: CoverageTimelineReport, output_path: Path) -> Non
         x_values = [seed.relative_time for seed in seeds]
         y_values = [seed.lines_covered for seed in seeds]
         ax.step(x_values, y_values, where="post", label="Covered lines", linewidth=2)
-        ax.set_xlim(left=0)
+        min_x = min(x_values)
+        if report.pov_markers:
+            min_x = min(
+                min_x, min(marker.relative_time for marker in report.pov_markers)
+            )
+        ax.set_xlim(left=min(0.0, min_x))
     if report.pov_markers:
         marker_y = max([seed.lines_covered for seed in seeds] or [0.0])
         for marker in report.pov_markers:

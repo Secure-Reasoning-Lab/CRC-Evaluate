@@ -771,6 +771,36 @@ class TestCoverageEngine:
         finally:
             sharded.close()
 
+    def test_maybe_open_session_closes_parallel_sessions_on_partial_failure(self):
+        engine = CoverageEngine(runtime_workers=2, runtime_cpus=[1, 3])
+
+        class _Strategy:
+            def open_session(self, harness_name: str, **kwargs):
+                del harness_name, kwargs
+
+        class _Session:
+            def __init__(self) -> None:
+                self.closed = False
+
+            def close(self) -> None:
+                self.closed = True
+
+        successful_session = _Session()
+
+        def fake_open(_strategy, _harness_name, **kwargs):
+            label = kwargs["session_label"]
+            if label == "worker-0":
+                time.sleep(0.05)
+                return successful_session
+            time.sleep(0.01)
+            raise RuntimeError("boom")
+
+        with patch.object(engine, "_open_strategy_session", side_effect=fake_open):
+            with pytest.raises(RuntimeError, match="boom"):
+                engine._maybe_open_session(_Strategy(), "fuzz_target")
+
+        assert successful_session.closed is True
+
     def test_collect_timed_line_coverage_fails_if_all_inputs_fail(
         self, mock_benchmark: Path, engine: CoverageEngine
     ):
