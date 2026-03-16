@@ -452,10 +452,7 @@ def _build_timeline_report(
     normalized_inputs = normalize_seed_inputs(
         seed_dir,
         base_time=time_origin_base,
-        clamp_negative_to_zero=(
-            time_origin == "crs_run_start_time"
-            or time_origin == "experiment_start_time"
-        ),
+        clamp_negative_to_zero=(time_origin == "crs_run_start_time"),
     )
     if not normalized_inputs:
         msg = f"No seeds found to analyze in {seed_dir}"
