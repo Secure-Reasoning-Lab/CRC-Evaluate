@@ -238,6 +238,7 @@ migration_report.csv
 .crsbench-repos
 .crsbench-mcp
 .crsbench-coverage/
+.crsbench-keys/
 
 # local ci test results
 .ci-results

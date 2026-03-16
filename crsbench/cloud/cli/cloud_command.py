@@ -69,6 +69,27 @@ Examples:
         help="Absolute path on workers containing the experiment tree",
     )
 
+    # keygen
+    keygen_p = cloud_subparsers.add_parser(
+        "keygen", help="Generate an SSH ed25519 deploy key pair"
+    )
+    keygen_p.add_argument(
+        "--output-dir",
+        default=".crsbench-keys/",
+        dest="output_dir",
+        help="Directory to write the key pair into (default: .crsbench-keys/)",
+    )
+    keygen_p.add_argument(
+        "--name",
+        default="crsbench-deploy",
+        help="Base name for key files (default: crsbench-deploy)",
+    )
+    keygen_p.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing key files",
+    )
+
     # events
     events_p = cloud_subparsers.add_parser(
         "events", help="Show recovery event timeline"
@@ -88,6 +109,11 @@ Examples:
 def run_cloud(args: argparse.Namespace) -> int:
     """Dispatch cloud sub-actions."""
     cmd = args.cloud_command
+
+    if cmd == "keygen":
+        from crsbench.cloud.cli._keygen import run_keygen
+
+        return run_keygen(args)
 
     if cmd == "status":
         from crsbench.cloud.cli._status import run_status

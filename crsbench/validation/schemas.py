@@ -1245,6 +1245,21 @@ class GceWorkerFleetConfig(BaseModel):
             "When None, the startup script expects crsbench pre-installed on the image."
         ),
     )
+    github_deploy_key_file: Optional[str] = Field(
+        default=None,
+        description=(
+            "Path to SSH private key file for GitHub deploy key access. "
+            "Contents are base64-encoded and injected as crsbench-github-deploy-key "
+            "instance metadata."
+        ),
+    )
+    hf_token: Optional[str] = Field(
+        default=None,
+        description=(
+            "HuggingFace token for private dataset access. "
+            "Injected as crsbench-hf-token instance metadata."
+        ),
+    )
 
     @field_validator(
         "project",
@@ -1260,6 +1275,7 @@ class GceWorkerFleetConfig(BaseModel):
         "zone",
         "region",
         "crsbench_install_spec",
+        "github_deploy_key_file",
     )
     @classmethod
     def normalize_optional_strings(cls, value: Optional[str]) -> Optional[str]:
