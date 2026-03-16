@@ -164,7 +164,8 @@ fish and other shell setup instructions.
 crsbench verify       benchmarks/project --pov-dir ./povs/
 crsbench patch-verify benchmarks/project --patch-dir ./patches --pov-dir ./povs
 crsbench coverage     --experiment-config ./experiment.yaml      # seed coverage over time
-crsbench coverage     --experiment-dir ./experiment-output       # seed coverage over time
+crsbench coverage     --experiment-dir ./experiment-filestore/my-exp       # seed coverage over time
+crsbench coverage     --experiment-dir ./experiment-filestore/my-exp --output-dir ./coverage-out
 crsbench coverage     --seed-dir ./seeds --benchmark project --harness fuzz_target --output-dir ./coverage-out
 crsbench coverage     --seed-dir ./seeds --experiment-start-time 1710000000 --benchmark project --harness fuzz_target --output-dir ./coverage-out
 ```
@@ -180,7 +181,10 @@ each input seed file's original `mtime` using the first retained seed as the
 origin, unless `--experiment-start-time` is supplied to override the origin
 with an explicit Unix timestamp. `--experiment-dir` and `--experiment-config` instead use
 `povs/pov_store.json.crs_run_start_time` as the origin and clamp the x-axis to
-the recorded trial `run_time` from `metadata.json`. The Atlantis timeline path
+the recorded trial `run_time` from `metadata.json`. When `--output-dir` is
+supplied for experiment-backed coverage, CRSBench mirrors the experiment under
+`<output-dir>/<experiment-name>/.../trial-N/coverage`; otherwise it writes to
+each source trial's in-place `coverage/` directory. The Atlantis timeline path
 does not run a separate whole-corpus denominator pass, so total-line
 percentages may be reported as unavailable.
 Coverage analysis uses the Atlantis/given_fuzzer warm-runner backend and does

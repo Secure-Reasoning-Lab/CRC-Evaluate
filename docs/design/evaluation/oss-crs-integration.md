@@ -77,6 +77,11 @@ Timeline origin depends on the coverage entry point:
   `pov_store.json.crs_run_start_time` as time origin, preserve POV marker times
   in that same origin, clamp negative seed offsets to `0.0` rather than
   dropping those seeds, and clamp the PNG x-axis to `metadata.json.run_time`
+- when `--output-dir` is provided for `--experiment-dir` or
+  `--experiment-config`, CRSBench must mirror the experiment layout under
+  `<output-dir>/<experiment-name>/.../trial-N/coverage` so both entry points
+  produce the same output tree for the same experiment root; when omitted, it
+  writes to the source trial's in-place `coverage/` directory
 
 Experiment-backed coverage must fail if either `crs_run_start_time` or
 `run_time` is missing. Direct `--seed-dir` mode is the only timeline mode that

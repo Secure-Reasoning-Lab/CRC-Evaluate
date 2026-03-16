@@ -41,16 +41,17 @@ Runtime command usage is documented in the experiment guides.
 `crsbench coverage` supports the Atlantis-backed seed timeline modes:
 
 - `crsbench coverage --experiment-config <config>`
-- `crsbench coverage --experiment-dir <experiment-output-dir>`
+- `crsbench coverage --experiment-dir <experiment-filestore>/<experiment>`
 - `crsbench coverage --seed-dir <dir> --benchmarks <root> --benchmark <name> --harness <name> --output-dir <dir>`
 
 The experiment-config and experiment-dir modes read seeds from
 `trial-N/output/seeds/` and also support the legacy `trial-N/output/corpus/`
 layout. Timeline outputs are written under `trial-N/coverage/` as JSON, CSV,
-and PNG artifacts. Per-seed analysis is executed through a warm
-`(benchmark, harness)` coverage worker and persists raw artifacts under
-`trial-N/coverage/raw/`, including the normalized `.cov` output and any
-captured crash log for that input.
+and PNG artifacts unless `--output-dir` is supplied, in which case CRSBench
+mirrors `<experiment-name>/.../trial-N/coverage` under that root. Per-seed
+analysis is executed through a warm `(benchmark, harness)` coverage worker and
+persists raw artifacts under `trial-N/coverage/raw/`, including the normalized
+`.cov` output and any captured crash log for that input.
 
 Coverage execution uses the Atlantis/libCRS UniAFL runtime:
 

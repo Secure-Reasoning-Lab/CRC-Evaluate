@@ -12,6 +12,7 @@ from unittest.mock import patch
 import pytest
 from crsbench.evaluation.coverage.cli.coverage_command import (
     _build_timeline_report,
+    _resolve_trial_coverage_output_dir,
     _run_direct_seed_timeline,
     _run_experiment_timeline,
     add_coverage_subparser,
@@ -895,6 +896,57 @@ def test_run_coverage_allows_experiment_dir_with_benchmarks_override(
     mock_run.assert_called_once_with(args)
 
 
+def test_run_coverage_allows_experiment_dir_with_output_dir(tmp_path: Path) -> None:
+    args = argparse.Namespace(
+        verbose=False,
+        experiment_config=None,
+        experiment_dir=tmp_path / "experiment-output",
+        benchmark_path=None,
+        corpus_dir=None,
+        seed_dir=None,
+        benchmark=None,
+        benchmarks=tmp_path / "benchmarks",
+        harness=None,
+        oss_fuzz_path=None,
+        force_rebuild=False,
+        output=None,
+        format="json",
+        jobs=None,
+        cores_per_job=None,
+        build_workers=None,
+        verify_workers=None,
+        source="pkgs",
+        output_dir=tmp_path / "coverage-out",
+        experiment_start_time=None,
+    )
+
+    with patch(
+        "crsbench.evaluation.coverage.cli.coverage_command._run_experiment_timeline",
+        return_value=0,
+    ) as mock_run:
+        assert run_coverage(args) == 0
+
+    mock_run.assert_called_once_with(args)
+
+
+def test_resolve_trial_coverage_output_dir_mirrors_experiment_under_output_base(
+    tmp_path: Path,
+) -> None:
+    experiment_dir = tmp_path / "afc-delta"
+    trial_dir = experiment_dir / "bench-a" / "harness-a" / "trial-1"
+    output_base = tmp_path / "coverage-out"
+
+    resolved = _resolve_trial_coverage_output_dir(
+        trial_dir=trial_dir,
+        experiment_dir=experiment_dir,
+        output_base=output_base,
+    )
+
+    assert resolved == (
+        output_base / "afc-delta" / "bench-a" / "harness-a" / "trial-1" / "coverage"
+    )
+
+
 def test_run_experiment_timeline_uses_jobs_and_cores_per_job(
     tmp_path: Path,
 ) -> None:
@@ -1021,6 +1073,116 @@ def test_run_experiment_timeline_uses_jobs_and_cores_per_job(
     assert all(len(allocation) == 2 for allocation in allocations)
     assert max_active == 2
     assert set(allocations).issubset({(10, 11), (12, 13)})
+
+
+def test_run_experiment_timeline_uses_output_dir_for_experiment_config(
+    tmp_path: Path,
+) -> None:
+    from crsbench.evaluation.coverage.models import CoverageTimelineReport
+    from crsbench.evaluation.coverage.timeline import TrialCoverageContext
+
+    filestore = tmp_path / "filestore"
+    experiment_dir = filestore / "afc-delta"
+    benchmark_root = tmp_path / "benchmarks"
+    benchmark_dir = benchmark_root / "bench-a"
+    benchmark_dir.mkdir(parents=True)
+    trial_dir = experiment_dir / "bench-a" / "h0" / "trial-0"
+    trial_dir.mkdir(parents=True)
+    (trial_dir / "metadata.json").write_text("{}")
+    seed_dir = trial_dir / "output" / "seeds"
+    seed_dir.mkdir(parents=True)
+
+    config_path = tmp_path / "experiment.yaml"
+    config_path.write_text(
+        f"experiment: afc-delta\nexperiment_filestore: {filestore}\n"
+    )
+
+    args = argparse.Namespace(
+        verbose=False,
+        experiment_config=config_path,
+        experiment_dir=None,
+        benchmark_path=None,
+        corpus_dir=None,
+        seed_dir=None,
+        benchmark=None,
+        benchmarks=None,
+        harness=None,
+        force_rebuild=False,
+        output=None,
+        format="json",
+        jobs=1,
+        cores_per_job=1,
+        build_workers=1,
+        verify_workers=1,
+        source="pkgs",
+        output_dir=tmp_path / "coverage-out",
+        experiment_start_time=None,
+    )
+
+    context = TrialCoverageContext(
+        trial_dir=trial_dir,
+        benchmark="bench-a",
+        harness="h0",
+        seed_dir=seed_dir,
+        crs_run_start_time=100.0,
+        timeline_duration_seconds=120.0,
+        pov_markers=[],
+    )
+
+    written_paths: list[Path] = []
+
+    class _FakeEngine:
+        def __init__(self, **_kwargs):
+            return None
+
+        def cleanup(self) -> None:
+            return None
+
+    with (
+        patch(
+            "crsbench.evaluation.coverage.cli.coverage_command.CoverageEngine",
+            _FakeEngine,
+        ),
+        patch(
+            "crsbench.evaluation.coverage.cli.coverage_command.load_trial_context",
+            return_value=context,
+        ),
+        patch(
+            "crsbench.evaluation.coverage.cli.coverage_command.resolve_benchmark_path",
+            return_value=benchmark_dir,
+        ),
+        patch(
+            "crsbench.evaluation.coverage.cli.coverage_command._build_timeline_report",
+            return_value=CoverageTimelineReport(
+                benchmark="bench-a",
+                harness="h0",
+                time_origin="crs_run_start_time",
+                timeline_duration_seconds=120.0,
+                seeds=[],
+                pov_markers=[],
+                final_summary=CoverageSummary(lines_covered=0, lines_total=0),
+            ),
+        ),
+        patch(
+            "crsbench.evaluation.coverage.cli.coverage_command._write_timeline_outputs",
+            side_effect=lambda _report, output_dir: written_paths.append(output_dir),
+        ),
+        patch(
+            "crsbench.evaluation.coverage.cli.coverage_command._available_coverage_cpus",
+            return_value=[0],
+        ),
+    ):
+        assert _run_experiment_timeline(args) == 0
+
+    assert written_paths == [
+        tmp_path
+        / "coverage-out"
+        / "afc-delta"
+        / "bench-a"
+        / "h0"
+        / "trial-0"
+        / "coverage"
+    ]
 
 
 @pytest.mark.parametrize(

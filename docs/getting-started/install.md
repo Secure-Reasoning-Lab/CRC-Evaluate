@@ -41,6 +41,9 @@ Coverage runtime notes:
 
 - `crsbench coverage --experiment-config ...` and `--experiment-dir ...` use
   Atlantis `oss-crs build-target` outputs for each `(benchmark, harness)` pair.
+- Experiment-backed coverage accepts `--output-dir`; when set, CRSBench writes
+  results under `<output-dir>/<experiment-name>/.../trial-N/coverage` instead
+  of mutating the source experiment tree.
 - `crsbench coverage` does not accept `--oss-fuzz-path`; post-trial coverage
   analysis uses the Atlantis/given_fuzzer backend directly.
 - `--jobs` is the number of parallel `(benchmark, harness)` jobs.

@@ -77,7 +77,7 @@ Examples:
   crsbench coverage --experiment-config ./experiment.yaml
 
   # Analyze seed coverage over time from an experiment output directory
-  crsbench coverage --experiment-dir ./experiment-output/
+  crsbench coverage --experiment-dir ./experiment-filestore/my-exp
 
   # Analyze a direct seed directory
   crsbench coverage --seed-dir ./seeds --benchmark sanity-mock-c-delta-01 \
@@ -118,7 +118,11 @@ Examples:
         "--output-dir",
         type=Path,
         default=None,
-        help="Output directory for direct --seed-dir timeline artifacts",
+        help=(
+            "Output directory for coverage timeline artifacts. Direct --seed-dir "
+            "writes here directly. Experiment modes mirror "
+            "<experiment-name>/.../trial-N/coverage under this root."
+        ),
     )
     parser.add_argument(
         "--experiment-start-time",
@@ -229,7 +233,6 @@ def run_coverage(args: argparse.Namespace) -> int:
         args.seed_dir is not None
         or args.benchmark is not None
         or args.harness is not None
-        or args.output_dir is not None
         or args.experiment_start_time is not None
     )
     if args.experiment_config is not None and args.benchmarks is not None:
@@ -238,8 +241,7 @@ def run_coverage(args: argparse.Namespace) -> int:
     if experiment_timeline_mode and invalid_experiment_args:
         logger.error(
             "--experiment-config/--experiment-dir cannot be combined with "
-            "--seed-dir, --benchmark, --harness, --output-dir, or "
-            "--experiment-start-time. "
+            "--seed-dir, --benchmark, --harness, or --experiment-start-time. "
             "--benchmarks is only supported with --experiment-dir."
         )
         return 1
@@ -346,13 +348,20 @@ def _run_experiment_timeline(args: argparse.Namespace) -> int:
             max_parallel_jobs=max_parallel_jobs,
             cores_per_job=cores_per_job,
             cpu_ids=cpu_ids,
+            experiment_dir=experiment_dir,
         )
         if analyzed_trials == 0:
             logger.error(
                 f"No analyzable trials with seeds found under {experiment_dir}"
             )
             return 1
-        logger.info(f"Saved coverage results under {experiment_dir}")
+        logger.info(
+            "Saved coverage results under %s",
+            _resolve_experiment_output_root(
+                experiment_dir=experiment_dir,
+                output_base=args.output_dir,
+            ),
+        )
         return 0
     except Exception as e:
         logger.error("Coverage timeline failed: {}", e, exc_info=True)
@@ -511,11 +520,17 @@ def _run_single_trial_job(
     *,
     args: argparse.Namespace,
     trial_dir: Path,
+    experiment_dir: Path,
     context,
     benchmark_path: Path,
     allocated_cpus: list[int],
     cores_per_job: int,
 ) -> Path:
+    output_dir = _resolve_trial_coverage_output_dir(
+        trial_dir=trial_dir,
+        experiment_dir=experiment_dir,
+        output_base=args.output_dir,
+    )
     engine = CoverageEngine(
         build_workers=1,
         runtime_workers=cores_per_job,
@@ -533,9 +548,8 @@ def _run_single_trial_job(
             pov_markers=context.pov_markers,
             timeline_duration_seconds=context.timeline_duration_seconds,
             force_rebuild=args.force_rebuild,
-            output_dir=trial_dir / "coverage",
+            output_dir=output_dir,
         )
-        output_dir = trial_dir / "coverage"
         _write_timeline_outputs(report, output_dir)
         logger.info(
             f"Wrote coverage timeline to {output_dir} using CPUs "
@@ -553,6 +567,7 @@ def _run_trial_jobs(
     max_parallel_jobs: int,
     cores_per_job: int,
     cpu_ids: list[int],
+    experiment_dir: Path,
 ) -> int:
     cpu_pool = CPUPool(cores=format_cpuset(cpu_ids))
     pending_jobs = list(trial_jobs)
@@ -570,6 +585,7 @@ def _run_trial_jobs(
                 _run_single_trial_job,
                 args=args,
                 trial_dir=trial_dir,
+                experiment_dir=experiment_dir,
                 context=context,
                 benchmark_path=benchmark_path,
                 allocated_cpus=allocated_cpus,
@@ -597,6 +613,29 @@ def _run_trial_jobs(
     if first_error is not None:
         raise first_error
     return analyzed_trials
+
+
+def _resolve_experiment_output_root(
+    *, experiment_dir: Path, output_base: Optional[Path]
+) -> Path:
+    if output_base is None:
+        return experiment_dir
+    return output_base / experiment_dir.name
+
+
+def _resolve_trial_coverage_output_dir(
+    *, trial_dir: Path, experiment_dir: Path, output_base: Optional[Path]
+) -> Path:
+    if output_base is None:
+        return trial_dir / "coverage"
+    return (
+        _resolve_experiment_output_root(
+            experiment_dir=experiment_dir,
+            output_base=output_base,
+        )
+        / trial_dir.relative_to(experiment_dir)
+        / "coverage"
+    )
 
 
 def _write_timeline_outputs(report: CoverageTimelineReport, output_dir: Path) -> None:
