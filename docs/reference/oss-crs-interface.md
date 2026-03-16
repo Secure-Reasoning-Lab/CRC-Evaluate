@@ -75,6 +75,15 @@ For `crsbench coverage`, CRSBench supplies:
   or direct `--seed-dir`)
 - one pinned CPU per warm coverage container
 
+Timeline origin depends on the entry point:
+
+- direct `--seed-dir` mode uses the first retained seed `mtime` as time origin
+  unless `--experiment-start-time <unix-seconds>` is provided
+- `--experiment-dir` and `--experiment-config` use
+  `povs/pov_store.json.crs_run_start_time`, preserve all normalized seeds by
+  clamping pre-start inputs to `0.0`, and bound the x-axis to
+  `metadata.json.run_time`
+
 `--jobs` controls how many `(benchmark, harness)` coverage jobs run in parallel.
 `--cores-per-job` controls how many one-core warm containers are used for a
 single job; CRSBench splits the seed set into that many shards and runs each

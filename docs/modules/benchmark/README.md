@@ -43,6 +43,7 @@ Runtime command usage is documented in the experiment guides.
 - `crsbench coverage --experiment-config <config>`
 - `crsbench coverage --experiment-dir ./experiment-filestore/experiment-name`
 - `crsbench coverage --seed-dir <dir> --benchmarks <root> --benchmark <name> --harness <name> --output-dir <dir>`
+- `crsbench coverage --seed-dir <dir> --experiment-start-time <unix-seconds> --benchmarks <root> --benchmark <name> --harness <name> --output-dir <dir>`
 
 The experiment-config and experiment-dir modes read seeds from
 `trial-N/output/seeds/` and also support the legacy `trial-N/output/corpus/`
@@ -52,6 +53,14 @@ mirrors `<experiment-name>/.../trial-N/coverage` under that root. Per-seed
 analysis is executed through a warm `(benchmark, harness)` coverage worker and
 persists raw artifacts under `trial-N/coverage/raw/`, including the normalized
 `.cov` output and any captured crash log for that input.
+
+Timeline origin depends on the entry point:
+
+- direct `--seed-dir` mode uses the first retained seed `mtime` as time origin
+  unless `--experiment-start-time` is provided
+- `--experiment-dir` and `--experiment-config` use
+  `povs/pov_store.json.crs_run_start_time`, retain pre-start seeds by clamping
+  them to `0.0`, and bound the graph to `metadata.json.run_time`
 
 Coverage execution uses the Atlantis/libCRS UniAFL runtime:
 
