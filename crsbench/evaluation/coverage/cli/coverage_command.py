@@ -414,7 +414,25 @@ def _build_timeline_report(
     output_dir: Path,
 ) -> CoverageTimelineReport:
     """Build a coverage-over-time report for one seed set."""
-    normalized_inputs = normalize_seed_inputs(seed_dir, base_time=time_origin_base)
+    if time_origin == "crs_run_start_time":
+        if time_origin_base is None:
+            msg = (
+                "Experiment-backed coverage requires crs_run_start_time from "
+                "povs/pov_store.json"
+            )
+            raise ValueError(msg)
+        if timeline_duration_seconds is None:
+            msg = (
+                "Experiment-backed coverage requires run_time in trial metadata to "
+                "bound the timeline"
+            )
+            raise ValueError(msg)
+
+    normalized_inputs = normalize_seed_inputs(
+        seed_dir,
+        base_time=time_origin_base,
+        clamp_negative_to_zero=(time_origin == "crs_run_start_time"),
+    )
     if not normalized_inputs:
         msg = f"No seeds found to analyze in {seed_dir}"
         raise ValueError(msg)

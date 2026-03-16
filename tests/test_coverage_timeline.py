@@ -9,6 +9,7 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import patch
 
+import pytest
 from crsbench.evaluation.coverage.cli.coverage_command import (
     _build_timeline_report,
     _run_direct_seed_timeline,
@@ -97,7 +98,7 @@ def test_load_trial_context_reads_metadata_and_pov_markers(tmp_path: Path) -> No
     ]
 
 
-def test_load_trial_context_uses_run_timeout_when_run_time_missing(
+def test_load_trial_context_leaves_duration_unknown_without_run_time(
     tmp_path: Path,
 ) -> None:
     trial_dir = tmp_path / "trial-1"
@@ -120,7 +121,7 @@ def test_load_trial_context_uses_run_timeout_when_run_time_missing(
 
     context = load_trial_context(trial_dir)
 
-    assert context.timeline_duration_seconds == 1800.0
+    assert context.timeline_duration_seconds is None
 
 
 def test_normalize_seed_inputs_deduplicates_by_hash_and_keeps_earliest(
@@ -175,6 +176,27 @@ def test_normalize_seed_inputs_uses_earliest_mtime_when_base_missing(
     os.utime(second, (2005.0, 2005.0))
 
     normalized = normalize_seed_inputs(seed_dir, base_time=None)
+
+    assert [item.relative_time for item in normalized] == [0.0, 5.0]
+
+
+def test_normalize_seed_inputs_clamps_negative_relative_times_when_requested(
+    tmp_path: Path,
+) -> None:
+    seed_dir = tmp_path / "seeds"
+    seed_dir.mkdir()
+    early = seed_dir / "early.bin"
+    early.write_bytes(b"early")
+    later = seed_dir / "later.bin"
+    later.write_bytes(b"later")
+    import os
+
+    os.utime(early, (95.0, 95.0))
+    os.utime(later, (105.0, 105.0))
+
+    normalized = normalize_seed_inputs(
+        seed_dir, base_time=100.0, clamp_negative_to_zero=True
+    )
 
     assert [item.relative_time for item in normalized] == [0.0, 5.0]
 
@@ -374,6 +396,90 @@ def test_build_timeline_report_uses_crs_run_start_time_for_experiment_context(
     assert report.pov_markers == [
         CoveragePovMarker(cpv_id="cpv", pov_hash="hash", relative_time=5.0)
     ]
+
+
+def test_build_timeline_report_clamps_negative_seed_offsets_for_experiment_context(
+    tmp_path: Path,
+) -> None:
+    seed_dir = tmp_path / "seeds"
+    seed_dir.mkdir()
+    seed = seed_dir / "seed.bin"
+    seed.write_bytes(b"seed")
+    import os
+
+    os.utime(seed, (95.0, 95.0))
+
+    class _FakeEngine:
+        def collect_timed_line_coverage(self, **kwargs):
+            timed_inputs = kwargs["timed_inputs"]
+            return (timed_inputs, CoverageSummary(lines_covered=1, lines_total=0))
+
+    report = _build_timeline_report(
+        engine=_FakeEngine(),
+        benchmark_path=tmp_path / "bench",
+        harness_name="fuzz_target",
+        seed_dir=seed_dir,
+        time_origin_base=100.0,
+        time_origin="crs_run_start_time",
+        pov_markers=[],
+        timeline_duration_seconds=30.0,
+        force_rebuild=False,
+        output_dir=tmp_path / "coverage",
+    )
+
+    assert report.seeds[0].relative_time == 0.0
+
+
+def test_build_timeline_report_requires_crs_run_start_time_for_experiment_context(
+    tmp_path: Path,
+) -> None:
+    seed_dir = tmp_path / "seeds"
+    seed_dir.mkdir()
+    (seed_dir / "seed.bin").write_bytes(b"seed")
+
+    class _FakeEngine:
+        def collect_timed_line_coverage(self, **kwargs):
+            raise AssertionError("engine should not be called")
+
+    with pytest.raises(ValueError, match="crs_run_start_time"):
+        _build_timeline_report(
+            engine=_FakeEngine(),
+            benchmark_path=tmp_path / "bench",
+            harness_name="fuzz_target",
+            seed_dir=seed_dir,
+            time_origin_base=None,
+            time_origin="crs_run_start_time",
+            pov_markers=[],
+            timeline_duration_seconds=30.0,
+            force_rebuild=False,
+            output_dir=tmp_path / "coverage",
+        )
+
+
+def test_build_timeline_report_requires_run_time_for_experiment_context(
+    tmp_path: Path,
+) -> None:
+    seed_dir = tmp_path / "seeds"
+    seed_dir.mkdir()
+    (seed_dir / "seed.bin").write_bytes(b"seed")
+
+    class _FakeEngine:
+        def collect_timed_line_coverage(self, **kwargs):
+            raise AssertionError("engine should not be called")
+
+    with pytest.raises(ValueError, match="run_time"):
+        _build_timeline_report(
+            engine=_FakeEngine(),
+            benchmark_path=tmp_path / "bench",
+            harness_name="fuzz_target",
+            seed_dir=seed_dir,
+            time_origin_base=100.0,
+            time_origin="crs_run_start_time",
+            pov_markers=[],
+            timeline_duration_seconds=None,
+            force_rebuild=False,
+            output_dir=tmp_path / "coverage",
+        )
 
 
 def test_run_coverage_rejects_experiment_config_with_benchmarks_and_harness(

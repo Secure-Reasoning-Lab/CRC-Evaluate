@@ -77,7 +77,7 @@ def load_trial_context(trial_dir: Path) -> TrialCoverageContext:
 
 
 def normalize_seed_inputs(
-    seed_dir: Path, *, base_time: Optional[float]
+    seed_dir: Path, *, base_time: Optional[float], clamp_negative_to_zero: bool = False
 ) -> list[TimedCoverageInput]:
     """Normalize raw seed files into a deduplicated timed list.
 
@@ -100,7 +100,9 @@ def normalize_seed_inputs(
         file_mtime = seed_path.stat().st_mtime
         relative_time = float(file_mtime - base_time)
         if relative_time < 0:
-            continue
+            if not clamp_negative_to_zero:
+                continue
+            relative_time = 0.0
         content_hash = _hash_file(seed_path)
         candidate = TimedCoverageInput(
             content_hash=content_hash,
@@ -132,8 +134,4 @@ def _resolve_trial_duration_seconds(metadata: TrialMetadata) -> Optional[float]:
     """Return the authoritative timeline duration for a trial, if present."""
     if metadata.run_time is not None:
         return float(metadata.run_time)
-    experiment_config = metadata.experiment_config or {}
-    run_timeout = experiment_config.get("run_timeout")
-    if run_timeout is None:
-        return None
-    return float(run_timeout)
+    return None

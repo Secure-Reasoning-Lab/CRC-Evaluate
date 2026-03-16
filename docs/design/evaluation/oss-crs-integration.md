@@ -73,8 +73,12 @@ Timeline origin depends on the coverage entry point:
   origin and computes each seed's `relative_time` from that filesystem time
 - `--experiment-dir` and `--experiment-config` use
   `pov_store.json.crs_run_start_time` as time origin, preserve POV marker times
-  in that same origin, and clamp the PNG x-axis to the trial's recorded
-  duration from `metadata.json`
+  in that same origin, clamp negative seed offsets to `0.0` rather than
+  dropping those seeds, and clamp the PNG x-axis to `metadata.json.run_time`
+
+Experiment-backed coverage must fail if either `crs_run_start_time` or
+`run_time` is missing. Direct `--seed-dir` mode is the only timeline mode that
+uses first-seed `mtime` fallback semantics.
 
 Without a separate denominator pass, total-line percentages are out of
 contract for this analysis mode and must remain unknown rather than inferred
