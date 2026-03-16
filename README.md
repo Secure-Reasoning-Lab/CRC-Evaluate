@@ -173,7 +173,9 @@ coverage directory's `raw/` subdirectory. Each analyzed seed keeps its
 normalized `.cov` result and any captured crash log alongside the JSON/CSV/PNG
 timeline outputs. Relative time is derived from each input seed file's original
 `mtime`, and the PNG timeline plots cumulative covered lines from the per-seed
-warm-runner replay artifacts.
+warm-runner replay artifacts. The Atlantis timeline path does not run a
+separate whole-corpus denominator pass, so total-line percentages may be
+reported as unavailable.
 Coverage analysis uses the Atlantis/given_fuzzer warm-runner backend and does
 not accept an `--oss-fuzz-path` override.
 

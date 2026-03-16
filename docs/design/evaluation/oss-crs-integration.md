@@ -60,7 +60,10 @@ Coverage reporting is derived directly from the per-seed replay artifacts that
 those warm containers emit. CRSBench must not depend on a separate whole-corpus
 summary pass for Atlantis coverage analysis. The timeline x-axis comes from the
 input seed files' relative mtimes, and the y-axis is the cumulative count of
-unique covered lines obtained by merging per-seed `.cov` payloads.
+unique covered lines obtained by merging per-seed `.cov` payloads. Without a
+separate denominator pass, total-line percentages are out of contract for this
+analysis mode and must remain unknown rather than inferred from only the subset
+of source files touched by replay.
 
 The normalized coverage build output must materialize executable runtime
 artifacts as real files inside the exported build directory. Host-only symlinks

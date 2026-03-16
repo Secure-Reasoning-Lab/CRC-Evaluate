@@ -129,20 +129,16 @@ class TestCoverageEngine:
         assert "func2" in merged
 
     def test_compute_summary(self, engine: CoverageEngine):
-        """Test summary computation derives totals from merged per-seed coverage."""
-        src_a = Path("/tmp/test-coverage-engine-a.c")
-        src_b = Path("/tmp/test-coverage-engine-b.c")
-        src_a.write_text("1\n2\n3\n")
-        src_b.write_text("1\n2\n")
+        """Test summary computation leaves totals unknown in per-seed mode."""
         merged = {
-            "func1": {"src": str(src_a), "lines": {1, 2, 3}},
-            "func2": {"src": str(src_b), "lines": {1, 2}},
+            "func1": {"src": "a.c", "lines": {1, 2, 3}},
+            "func2": {"src": "b.c", "lines": {1, 2}},
         }
         summary = engine._compute_summary(merged, 10, 8, 6)
 
         assert summary.lines_covered == 5
-        assert summary.lines_total == 5
-        assert summary.lines_percent == 100.0
+        assert summary.lines_total == 0
+        assert summary.lines_percent == 0.0
         assert summary.functions_covered == 2
         assert summary.functions_total == 0
         assert summary.corpus_total == 10
@@ -191,8 +187,8 @@ class TestCoverageEngine:
         mock_strategy.collect_single_coverage.assert_not_called()
         assert report.final_summary.corpus_total == 3
         assert report.final_summary.lines_covered == 3
-        assert report.final_summary.lines_total == 3
-        assert report.final_summary.lines_percent == 100.0
+        assert report.final_summary.lines_total == 0
+        assert report.final_summary.lines_percent == 0.0
         assert report.final_summary.functions_covered == 1
         assert report.final_summary.functions_total == 0
         assert report.harness_name == "fuzz_target"
@@ -264,8 +260,8 @@ class TestCoverageEngine:
         session.collect_batch_totals.assert_not_called()
         assert [item.lines_covered for item in processed_inputs] == [2, 3]
         assert summary.lines_covered == 3
-        assert summary.lines_total == 4
-        assert summary.lines_percent == 75.0
+        assert summary.lines_total == 0
+        assert summary.lines_percent == 0.0
 
     def test_build_variant_success(self, mock_benchmark: Path, engine: CoverageEngine):
         """Test successful Atlantis-backed coverage variant build."""
@@ -679,8 +675,8 @@ class TestCoverageEngine:
             _, summary = eng.collect_timed_line_coverage(mock_benchmark, timed_inputs)
 
         assert summary.lines_covered == 1
-        assert summary.lines_total == 4
-        assert summary.lines_percent == 25.0
+        assert summary.lines_total == 0
+        assert summary.lines_percent == 0.0
         session.collect_batch_totals.assert_not_called()
 
     def test_build_variant_uses_atlantis_build_pipeline(

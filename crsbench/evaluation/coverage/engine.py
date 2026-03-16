@@ -866,10 +866,11 @@ class CoverageEngine:
         """Compute coverage summary directly from merged per-seed coverage.
 
         Converts line sets to sorted lists and computes aggregate statistics.
-        Total lines are estimated from source files referenced by the per-seed
-        coverage payloads when those files are visible on the host. This keeps
-        the Atlantis coverage path self-contained and avoids the separate
-        whole-corpus batch summary helper.
+        The Atlantis per-seed replay path does not run a separate whole-corpus
+        summary pass, so total coverable lines/functions are not known here.
+        The summary therefore reports covered lines/functions only and leaves
+        total/percent fields unset (zero) rather than inventing a narrower
+        denominator from only the files touched by the replay.
 
         Args:
             merged_coverage: Merged coverage dict with line sets.
@@ -881,7 +882,6 @@ class CoverageEngine:
             CoverageSummary with aggregate statistics.
         """
         merged_lines: set[tuple[str, int]] = set()
-        visible_sources: set[Path] = set()
         functions_covered = 0
 
         for func_data in merged_coverage.values():
@@ -894,16 +894,12 @@ class CoverageEngine:
 
             if normalized_lines:
                 functions_covered += 1
-            if src:
-                src_path = Path(src)
-                if src_path.exists():
-                    visible_sources.add(src_path)
             for line in normalized_lines:
                 merged_lines.add((src, line))
 
         lines_covered = len(merged_lines)
-        lines_total = self._estimate_visible_source_line_count(visible_sources)
-        lines_percent = (lines_covered / lines_total * 100.0) if lines_total else 0.0
+        lines_total = 0
+        lines_percent = 0.0
         functions_total = 0
 
         return CoverageSummary(
@@ -917,16 +913,6 @@ class CoverageEngine:
             functions_covered=functions_covered,
             functions_total=functions_total,
         )
-
-    def _estimate_visible_source_line_count(self, sources: set[Path]) -> int:
-        """Estimate total coverable lines from source files visible on the host."""
-        lines_total = 0
-        for src_path in sources:
-            try:
-                lines_total += len(src_path.read_text().splitlines())
-            except OSError:
-                continue
-        return lines_total
 
     def _extract_line_locations(self, cov_data: dict) -> set[tuple[str, int]]:
         """Extract covered line locations from coverage data."""
