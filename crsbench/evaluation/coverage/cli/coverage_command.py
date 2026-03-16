@@ -323,8 +323,8 @@ def _run_experiment_timeline(args: argparse.Namespace) -> int:
         cpu_ids = _available_coverage_cpus()
         if len(cpu_ids) < cores_per_job:
             logger.error(
-                "Coverage requires %d CPU(s) per benchmark-harness job, but only "
-                "%d CPU(s) are available",
+                "Coverage requires {} CPU(s) per benchmark-harness job, but only "
+                "{} CPU(s) are available",
                 cores_per_job,
                 len(cpu_ids),
             )
@@ -356,7 +356,7 @@ def _run_experiment_timeline(args: argparse.Namespace) -> int:
             )
             return 1
         logger.info(
-            "Saved coverage results under %s",
+            "Saved coverage results under {}",
             _resolve_experiment_output_root(
                 experiment_dir=experiment_dir,
                 output_base=args.output_dir,
@@ -507,8 +507,8 @@ def _allocate_direct_coverage_cpus(cores_per_job: int) -> Optional[list[int]]:
     cpu_ids = _available_coverage_cpus()
     if len(cpu_ids) < cores_per_job:
         logger.error(
-            "Coverage requires %d CPU(s) for this benchmark-harness run, but only "
-            "%d CPU(s) are available",
+            "Coverage requires {} CPU(s) for this benchmark-harness run, but only "
+            "{} CPU(s) are available",
             cores_per_job,
             len(cpu_ids),
         )
