@@ -1,35 +1,6 @@
-"""CLI command for coverage collection.
-
-This module provides the `crsbench coverage` CLI command for collecting
-code coverage from corpus files against benchmark projects.
-
-Usage:
-    crsbench coverage <benchmark_path> --corpus-dir <dir> [options]
-    crsbench coverage --experiment-config experiment.yaml [options]
-    crsbench coverage --experiment-dir experiment-output/ [options]
-    crsbench coverage --seed-dir <dir> --benchmark <name> --harness <name> \
-        --output-dir <dir> [options]
-
-Examples:
-    # Collect coverage for a benchmark
-    crsbench coverage benchmarks/sanity-mock-c-delta-01 --corpus-dir ./corpus/
-
-    # Collect coverage with specific harness
-    crsbench coverage benchmarks/sanity-mock-c-delta-01 --corpus-dir ./corpus/ --harness fuzz_parse
-
-    # Output results to JSON file
-    crsbench coverage benchmarks/sanity-mock-c-delta-01 --corpus-dir ./corpus/ --output report.json
-
-  # Parallel experiment coverage across harness pairs
-  crsbench coverage benchmarks/sanity-mock-c-delta-01 --corpus-dir ./corpus/ \
-      --jobs 4 --cores-per-job 8
-
-Note:
-    Coverage collection is currently experimental.
-"""
+"""CLI command for Atlantis-backed coverage collection."""
 
 import argparse
-import json
 import os
 import sys
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
@@ -39,7 +10,7 @@ from typing import Optional
 import yaml
 
 from crsbench.evaluation.coverage.engine import CoverageEngine
-from crsbench.evaluation.coverage.models import CoverageSummary, CoverageTimelineReport
+from crsbench.evaluation.coverage.models import CoverageTimelineReport
 from crsbench.evaluation.coverage.reporting import (
     write_timeline_csv,
     write_timeline_json,
@@ -96,19 +67,14 @@ def add_coverage_subparser(subparsers: argparse._SubParsersAction) -> None:
     """
     parser = subparsers.add_parser(
         "coverage",
-        help="Collect code coverage from corpus files",
+        help="Analyze coverage timelines from seeds or experiment outputs",
         description=(
-            "Collect code coverage from corpus files against a benchmark project. "
-            "Builds a coverage-instrumented variant ({project}-coverage) and runs "
-            "corpus files against it to measure code coverage. "
-            "This command is currently experimental."
+            "Analyze seed coverage against a benchmark project or experiment "
+            "output using the Atlantis/libCRS warm-runner backend."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Collect direct coverage summary for a benchmark corpus
-  crsbench coverage benchmarks/sanity-mock-c-delta-01 --corpus-dir ./corpus/
-
   # Analyze seed coverage over time from experiment outputs
   crsbench coverage --experiment-config ./experiment.yaml
 
@@ -118,28 +84,7 @@ Examples:
   # Analyze a direct seed directory
   crsbench coverage --seed-dir ./seeds --benchmark sanity-mock-c-delta-01 \
       --harness fuzz_parse_buffer_section --output-dir ./coverage-out
-
-  # Force rebuild of coverage variant
-  crsbench coverage benchmarks/sanity-mock-c-delta-01 --corpus-dir ./corpus/ --force-rebuild
-
-  # Output results as JSON
-  crsbench coverage benchmarks/sanity-mock-c-delta-01 --corpus-dir ./corpus/ --output report.json
         """,
-    )
-
-    # Required arguments
-    parser.add_argument(
-        "benchmark_path",
-        type=Path,
-        nargs="?",
-        help="Path to the benchmark project directory (legacy direct mode)",
-    )
-
-    parser.add_argument(
-        "--corpus-dir",
-        type=Path,
-        default=None,
-        help="Directory containing corpus files to measure coverage (legacy mode)",
     )
     parser.add_argument(
         "--seed-dir",
@@ -203,19 +148,6 @@ Examples:
         help="Force rebuild of coverage variant",
     )
     parser.add_argument(
-        "--output",
-        type=Path,
-        default=None,
-        help="Output file path for results (legacy direct mode)",
-    )
-    parser.add_argument(
-        "--format",
-        type=str,
-        default="json",
-        choices=["json", "yaml", "text"],
-        help="Output format (default: json, legacy direct mode only)",
-    )
-    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -227,8 +159,7 @@ Examples:
         default=None,
         help=(
             "Parallel coverage jobs. In experiment modes, this is the number "
-            "of benchmark-harness jobs; legacy direct mode still passes this "
-            "through as the build worker count."
+            "of benchmark-harness jobs."
         ),
     )
     parser.add_argument(
@@ -284,11 +215,7 @@ def run_coverage(args: argparse.Namespace) -> int:
     log_level = "DEBUG" if args.verbose else "INFO"
     configure_logger(level=log_level)
 
-    direct_seed_mode = (
-        args.seed_dir is not None
-        and args.benchmark_path is None
-        and args.corpus_dir is None
-    )
+    direct_seed_mode = args.seed_dir is not None
     experiment_timeline_mode = (
         args.experiment_config is not None or args.experiment_dir is not None
     )
@@ -297,8 +224,8 @@ def run_coverage(args: argparse.Namespace) -> int:
         logger.error("--bucket-size-seconds must be a positive integer")
         return 1
     try:
-        jobs = _resolve_jobs(args)
-        cores_per_job = _resolve_cores_per_job(args)
+        _resolve_jobs(args)
+        _resolve_cores_per_job(args)
     except ValueError as exc:
         logger.error(str(exc))
         return 1
@@ -308,9 +235,7 @@ def run_coverage(args: argparse.Namespace) -> int:
         return 1
 
     invalid_experiment_args = (
-        args.benchmark_path is not None
-        or args.corpus_dir is not None
-        or args.seed_dir is not None
+        args.seed_dir is not None
         or args.benchmark is not None
         or args.harness is not None
         or args.output_dir is not None
@@ -320,34 +245,9 @@ def run_coverage(args: argparse.Namespace) -> int:
 
     if experiment_timeline_mode and invalid_experiment_args:
         logger.error(
-            "--experiment-config/--experiment-dir cannot be combined with benchmark_path, "
-            "--corpus-dir, --seed-dir, --benchmark, --harness, or --output-dir. "
+            "--experiment-config/--experiment-dir cannot be combined with "
+            "--seed-dir, --benchmark, --harness, or --output-dir. "
             "--benchmarks is only supported with --experiment-dir."
-        )
-        return 1
-
-    if experiment_timeline_mode and (args.output is not None or args.format != "json"):
-        logger.error(
-            "Experiment timeline mode does not support --output or non-default "
-            "--format; it always writes JSON, CSV, and PNG files to the "
-            "per-trial coverage directory"
-        )
-        return 1
-
-    if direct_seed_mode and (
-        args.benchmark_path is not None or args.corpus_dir is not None
-    ):
-        logger.error(
-            "Direct --seed-dir timeline mode cannot be combined with benchmark_path "
-            "or --corpus-dir"
-        )
-        return 1
-
-    if direct_seed_mode and (args.output is not None or args.format != "json"):
-        logger.error(
-            "Direct --seed-dir timeline mode does not support --output or "
-            "non-default --format; it always writes JSON, CSV, and PNG files "
-            "to --output-dir"
         )
         return 1
 
@@ -358,87 +258,11 @@ def run_coverage(args: argparse.Namespace) -> int:
     if direct_seed_mode:
         return _run_direct_seed_timeline(args)
 
-    corpus_dir = args.corpus_dir or args.seed_dir
-    if args.benchmark_path is None:
-        logger.error(
-            "Legacy coverage mode requires benchmark_path and --corpus-dir/--seed-dir, "
-            "or use --experiment-config/--experiment-dir, or use direct --seed-dir with "
-            "--benchmark/--harness/--output-dir."
-        )
-        return 1
-    if not args.benchmark_path.exists():
-        logger.error(f"Benchmark path not found: {args.benchmark_path}")
-        return 1
-    if corpus_dir is None or not corpus_dir.exists():
-        logger.error(f"Corpus directory not found: {corpus_dir}")
-        return 1
-
-    corpus_files = [f for f in corpus_dir.iterdir() if f.is_file()]
-    if not corpus_files:
-        logger.error(f"Corpus directory is empty: {corpus_dir}")
-        return 1
-
-    # Determine oss-fuzz path
-    try:
-        oss_fuzz_path = args.oss_fuzz_path or Path(ensure_oss_fuzz_root())
-    except Exception as e:
-        logger.error(f"Failed to resolve OSS-Fuzz directory: {e}")
-        return 1
-    if not oss_fuzz_path.exists():
-        logger.error(f"OSS-Fuzz directory not found: {oss_fuzz_path}")
-        return 1
-
-    logger.info(f"Collecting coverage for benchmark: {args.benchmark_path}")
-    logger.info(f"Corpus directory: {corpus_dir} ({len(corpus_files)} files)")
-    logger.warning("Coverage collection is experimental.")
-
-    runtime_cpus = _allocate_direct_coverage_cpus(cores_per_job)
-    if runtime_cpus is None:
-        return 1
-
-    # Create engine and collect coverage
-    engine = CoverageEngine(
-        oss_fuzz_path=oss_fuzz_path,
-        build_workers=jobs,
-        runtime_workers=cores_per_job,
-        runtime_cpus=runtime_cpus,
-        source_mode=args.source,
+    logger.error(
+        "Coverage analysis requires --experiment-config, --experiment-dir, or "
+        "--seed-dir with --benchmark, --harness, and --output-dir."
     )
-
-    try:
-        report = engine.collect_coverage(
-            benchmark_path=args.benchmark_path,
-            corpus_dir=corpus_dir,
-            harness_filter=args.harness,
-            force_rebuild=args.force_rebuild,
-        )
-
-        # Check for empty report (indicates failure)
-        if not report.harness_name:
-            logger.error("Coverage collection failed - no harness processed")
-            return 1
-
-        # Check for missing summary
-        if report.final_summary is None:
-            logger.error("Coverage collection failed - no coverage data")
-            return 1
-
-        # Output results
-        output_report(
-            report.harness_name, report.final_summary, args.output, args.format
-        )
-
-        # Print summary
-        print_summary(report.final_summary, report.harness_name)
-
-        return 0
-
-    except Exception as e:
-        logger.error(f"Coverage collection failed: {e}", exc_info=True)
-        return 1
-
-    finally:
-        engine.cleanup()
+    return 1
 
 
 def _run_experiment_timeline(args: argparse.Namespace) -> int:
@@ -523,11 +347,9 @@ def _run_experiment_timeline(args: argparse.Namespace) -> int:
         )
         if max_parallel_jobs < jobs_requested:
             logger.info(
-                "Limiting coverage concurrency to %d job(s) based on %d available "
-                "CPU(s) and %d core(s) per job",
-                max_parallel_jobs,
-                len(cpu_ids),
-                cores_per_job,
+                f"Limiting coverage concurrency to {max_parallel_jobs} job(s) "
+                f"based on {len(cpu_ids)} available CPU(s) and "
+                f"{cores_per_job} core(s) per job"
             )
 
         analyzed_trials = _run_trial_jobs(
@@ -713,9 +535,8 @@ def _run_single_trial_job(
         output_dir = trial_dir / "coverage"
         _write_timeline_outputs(report, output_dir)
         logger.info(
-            "Wrote coverage timeline to %s using CPUs %s",
-            output_dir,
-            format_cpuset(allocated_cpus),
+            f"Wrote coverage timeline to {output_dir} using CPUs "
+            f"{format_cpuset(allocated_cpus)}"
         )
         return trial_dir
     finally:
@@ -783,66 +604,6 @@ def _write_timeline_outputs(report: CoverageTimelineReport, output_dir: Path) ->
     write_timeline_json(report, output_dir / "coverage_timeline.json")
     write_timeline_csv(report, output_dir / "coverage_timeline.csv")
     write_timeline_png(report, output_dir / "coverage_timeline.png")
-
-
-def output_report(
-    harness_name: str,
-    summary: CoverageSummary,
-    output_path: Optional[Path],
-    output_format: str,
-) -> None:
-    """Output coverage report.
-
-    Args:
-        harness_name: Name of the harness
-        summary: CoverageSummary with coverage statistics
-        output_path: Optional output file path
-        output_format: Output format (json, yaml, text)
-    """
-    result = {
-        "harness": harness_name,
-        "summary": summary.model_dump(),
-    }
-
-    if output_format == "json":
-        output = json.dumps(result, indent=2)
-    elif output_format == "yaml":
-        output = yaml.dump(result, default_flow_style=False)
-    else:  # text
-        output = (
-            f"Harness: {harness_name}\n"
-            f"Lines Covered: {summary.format_lines()}\n"
-            f"Functions Covered: {summary.format_functions()}\n"
-            f"Corpus Files: {summary.corpus_total} "
-            f"(contributing: {summary.corpus_contributing}, unique: {summary.corpus_unique})"
-        )
-
-    if output_path:
-        output_path.write_text(output)
-        logger.info(f"Results written to: {output_path}")
-    else:
-        logger.info(output)
-
-
-def print_summary(summary: CoverageSummary, harness_name: str) -> None:
-    """Print a summary of coverage results.
-
-    Args:
-        summary: Coverage summary
-        harness_name: Name of the harness
-    """
-    logger.info("=" * 50)
-    logger.info("COVERAGE SUMMARY")
-    logger.info("=" * 50)
-    logger.info(f"Harness: {harness_name}")
-    logger.info(f"Lines: {summary.format_lines()}")
-    logger.info(f"Functions: {summary.format_functions()}")
-    logger.info(
-        f"Corpus: {summary.corpus_total} total, "
-        f"{summary.corpus_contributing} contributing, "
-        f"{summary.corpus_unique} unique"
-    )
-    logger.info("=" * 50)
 
 
 def main() -> None:

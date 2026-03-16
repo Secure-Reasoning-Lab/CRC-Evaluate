@@ -2190,79 +2190,33 @@ class BenchmarkRunner:
             return
 
         try:
-            import yaml
-
-            from crsbench.builder import VariantType
-            from crsbench.evaluation.coverage.models import CoverageSummary
-            from crsbench.evaluation.coverage.strategy import (
-                create_coverage_strategy,
-                parse_llvm_cov_summary,
-            )
-            from crsbench.validation.meta_adapter import MetaYamlAdapter
-
-            # Load project.yaml for language and main_repo
-            project_yaml = benchmark_path / "project.yaml"
-            language = "c"
-            main_repo = ""
-            repo_name = None
-            if project_yaml.exists():
-                with project_yaml.open() as f:
-                    project_config = yaml.safe_load(f)
-                    language = project_config.get("language", "c")
-                    main_repo = project_config.get("main_repo", "")
-                    repo_name = project_config.get("repo_name")
-
-            # Load benchmark config via MetaYamlAdapter
-            meta_yaml = benchmark_path / ".aixcc" / "meta.yaml"
-            if not meta_yaml.exists():
-                self.logger.error(f"meta.yaml not found: {meta_yaml}")
-                return
-
-            try:
-                adapter = MetaYamlAdapter.from_meta_yaml(
-                    meta_yaml_path=meta_yaml,
-                    benchmark_name=benchmark_path.name,
-                    lang=language,
-                    main_repo=main_repo,
-                    benchmark_path=benchmark_path,
-                    repo_name=repo_name,
-                )
-            except (FileNotFoundError, ValueError) as e:
-                self.logger.error(f"Failed to load meta.yaml: {e}")
-                return
-
-            # Get coverage variant name (uses adapter's mode)
-            coverage_variant = adapter.get_variant_name(VariantType.COVERAGE)
-
             self.logger.info(
                 f"Running post-experiment coverage on {corpus_dir} "
                 f"({len(list(corpus_dir.iterdir()))} files)"
             )
+            from crsbench.evaluation.coverage.engine import CoverageEngine
+            from crsbench.evaluation.coverage.timeline import normalize_seed_inputs
 
-            # Create strategy and collect coverage
-            strategy = create_coverage_strategy(
+            output_dir = trial_output_dir / "coverage"
+            normalized_inputs = normalize_seed_inputs(corpus_dir, base_time=None)
+            if not normalized_inputs:
+                self.logger.info("No analyzable seeds for post-experiment coverage")
+                return
+
+            engine = CoverageEngine(
                 oss_fuzz_path=self.oss_fuzz_path,
-                project_name=coverage_variant,
-                language=language,
+                build_workers=self.build_workers,
+                runtime_workers=self.verify_workers,
             )
-
-            summary_path = strategy.collect_batch_coverage(
-                harness_path=Path(harness_name),
-                corpus_dir=corpus_dir,
-            )
-
-            # Parse and save results
-            cov_stats = parse_llvm_cov_summary(summary_path)
-            summary = CoverageSummary(
-                metric="line",
-                corpus_total=len(list(corpus_dir.iterdir())),
-                corpus_contributing=len(list(corpus_dir.iterdir())),
-                lines_covered=int(cov_stats.get("lines_covered", 0)),
-                lines_total=int(cov_stats.get("lines_total", 0)),
-                lines_percent=float(cov_stats.get("lines_percent", 0.0)),
-                functions_covered=int(cov_stats.get("functions_covered", 0)),
-                functions_total=int(cov_stats.get("functions_total", 0)),
-            )
+            try:
+                _, summary = engine.collect_timed_line_coverage(
+                    benchmark_path=benchmark_path,
+                    timed_inputs=normalized_inputs,
+                    harness_filter=harness_name,
+                    output_dir=output_dir,
+                )
+            finally:
+                engine.cleanup()
 
             # Save final coverage report
             import json

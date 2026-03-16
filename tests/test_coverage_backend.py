@@ -533,6 +533,57 @@ def test_uniafl_session_pins_container_to_requested_cpu(tmp_path: Path) -> None:
         session.close()
 
 
+def test_uniafl_session_uses_isolated_runtime_out_dir(tmp_path: Path) -> None:
+    output_dir = tmp_path / "coverage"
+    build_output_dir = tmp_path / "build-out"
+    benchmark_dir = tmp_path / "benchmark"
+    repo_dir = build_output_dir / ".crsbench-repo"
+    benchmark_dir.mkdir()
+    build_output_dir.mkdir()
+    repo_dir.mkdir(parents=True)
+    (benchmark_dir / "project.yaml").write_text("language: c\n")
+    (benchmark_dir / ".aixcc").mkdir()
+    (build_output_dir / "fuzz_target").write_text("#!/bin/sh\n")
+
+    seen_cmds: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        del kwargs
+        seen_cmds.append(cmd)
+
+        class Result:
+            returncode = 0
+            stdout = "container-id\n"
+            stderr = ""
+
+        return Result()
+
+    with patch("subprocess.run", side_effect=fake_run):
+        with patch("subprocess.Popen", return_value=_DummyProc()):
+            session = UniAFLCoverageSession(
+                project_name="proj-cov-delta-coverage",
+                harness_name="fuzz_target",
+                language="c",
+                benchmark_path=benchmark_dir,
+                source_repo_dir=repo_dir,
+                build_output_dir=build_output_dir,
+                output_dir=output_dir,
+                parse_single_output=lambda _data: {},
+                parse_textcov_output=None,
+                parse_summary=lambda _path: {},
+            )
+    try:
+        docker_run = next(cmd for cmd in seen_cmds if cmd[:2] == ["docker", "run"])
+        out_mount = next(
+            mount for mount in docker_run if mount.endswith(":/out")
+        ).removesuffix(":/out")
+        assert Path(out_mount) != build_output_dir.resolve()
+        assert Path(out_mount).is_dir()
+        assert (Path(out_mount) / "fuzz_target").exists()
+    finally:
+        session.close()
+
+
 def test_uniafl_session_collect_many_uses_long_lived_worker_service(
     tmp_path: Path,
 ) -> None:
@@ -655,8 +706,11 @@ def test_uniafl_session_starts_worker_service_with_request_and_result_dirs(
 
     try:
         assert recorded_cmds
-        joined = " ".join(recorded_cmds[0])
-        assert recorded_cmds[0][:3] == ["docker", "exec", "-i"]
+        worker_cmd = next(
+            cmd for cmd in recorded_cmds if cmd[:3] == ["docker", "exec", "-i"]
+        )
+        joined = " ".join(worker_cmd)
+        assert worker_cmd[:3] == ["docker", "exec", "-i"]
         assert "python3 /workspace/crsbench_cov_worker.py serve fuzz_target" in joined
         assert "/workspace/requests" in joined
         assert "/workspace/outputs" in joined

@@ -38,10 +38,8 @@ Runtime command usage is documented in the experiment guides.
 
 ### Coverage CLI
 
-`crsbench coverage` supports both the legacy direct corpus mode and the new
-seed timeline modes:
+`crsbench coverage` supports the Atlantis-backed seed timeline modes:
 
-- `crsbench coverage <benchmark_path> --corpus-dir <dir>`
 - `crsbench coverage --experiment-config <config>`
 - `crsbench coverage --experiment-dir <experiment-output-dir>`
 - `crsbench coverage --seed-dir <dir> --benchmarks <root> --benchmark <name> --harness <name> --output-dir <dir>`

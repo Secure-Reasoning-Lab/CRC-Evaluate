@@ -1,11 +1,4 @@
-"""Per-input coverage backend for timeline analysis.
-
-This module provides a warm Docker-backed coverage session used by the
-timeline-oriented coverage flows. The session keeps one runtime container
-alive per ``(project, harness)`` and executes the official base-runner
-``coverage`` script repeatedly against staged seed sets, persisting raw
-artifacts per input.
-"""
+"""Per-input Atlantis-backed coverage sessions for timeline analysis."""
 
 from __future__ import annotations
 
@@ -31,12 +24,14 @@ from crsbench.prepare.uniafl_backend import (
     default_uniafl_root,
     default_uniafl_runtime_image,
 )
+from crsbench.utils.docker import fix_docker_ownership
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
 BASE_RUNNER_IMAGE = "gcr.io/oss-fuzz-base/base-runner"
 NATIVE_COVERAGE_LANGUAGES = {"c", "cpp", "c++", "rust", "go"}
 WARM_WORKER_TIMEOUT_SECONDS = 300
+RUNTIME_OUT_IGNORES = frozenset({".crsbench-repo"})
 
 
 CoverageData = dict[str, dict]
@@ -73,41 +68,6 @@ class CoverageSession(AbstractContextManager["CoverageSession"]):
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
-
-
-class SingleShotCoverageSession(CoverageSession):
-    """Fallback session that delegates to the existing strategy methods."""
-
-    def __init__(
-        self,
-        *,
-        harness_name: str,
-        output_dir: Path,
-        collect_single_fn: Callable[[str, Path], CoverageData],
-        collect_batch_fn: Callable[[Path, Path], Path],
-        parse_summary_fn: Callable[[Path], dict],
-    ):
-        self.harness_name = harness_name
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self._raw_dir = self.output_dir / "raw"
-        self._raw_dir.mkdir(parents=True, exist_ok=True)
-        self._collect_single_fn = collect_single_fn
-        self._collect_batch_fn = collect_batch_fn
-        self._parse_summary_fn = parse_summary_fn
-
-    def collect_single(self, corpus_file: Path) -> CoverageRunResult:
-        corpus_hash = _content_hash(corpus_file)
-        stored_input = self._raw_dir / corpus_hash
-        shutil.copy2(corpus_file, stored_input)
-        cov_data = self._collect_single_fn(self.harness_name, corpus_file)
-        raw_cov_path = self._raw_dir / f"{corpus_hash}.cov"
-        raw_cov_path.write_text(json.dumps(cov_data, indent=2, sort_keys=True))
-        return CoverageRunResult(coverage_data=cov_data, raw_cov_path=raw_cov_path)
-
-    def collect_batch_totals(self, corpus_dir: Path) -> dict:
-        summary_path = self._collect_batch_fn(Path(self.harness_name), corpus_dir)
-        return self._parse_summary_fn(summary_path)
 
 
 class ShardedCoverageSession(CoverageSession):
@@ -201,6 +161,7 @@ class UniAFLCoverageSession(CoverageSession):
         self.session_label = session_label
         self._tempdir = tempfile.TemporaryDirectory(prefix="crsbench-uniafl-session-")
         self.workspace = Path(self._tempdir.name)
+        self.runtime_build_output_dir = self.workspace / "out"
         self.worker_script_path = self.workspace / "crsbench_cov_worker.py"
         worker_log_stem = (
             "worker" if session_label is None else f"worker.{session_label}"
@@ -215,9 +176,34 @@ class UniAFLCoverageSession(CoverageSession):
         self._collected_results: dict[str, CoverageRunResult] = {}
         self._worker_process: Optional[subprocess.Popen[str]] = None
         self._write_worker_script()
+        self._prepare_runtime_build_output()
         self._start_container()
         self._prepare_harness()
         self._start_worker()
+
+    def _prepare_runtime_build_output(self) -> None:
+        fix_docker_ownership(self.build_output_dir)
+        self.runtime_build_output_dir.mkdir(parents=True, exist_ok=True)
+        for child in list(self.runtime_build_output_dir.iterdir()):
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+
+        def _ignore_runtime_entries(_directory: str, names: list[str]) -> list[str]:
+            return [
+                name
+                for name in names
+                if name in RUNTIME_OUT_IGNORES or "_corpus" in name
+            ]
+
+        shutil.copytree(
+            self.build_output_dir.resolve(),
+            self.runtime_build_output_dir,
+            dirs_exist_ok=True,
+            ignore=_ignore_runtime_entries,
+            symlinks=True,
+        )
 
     @property
     def coverage_out_dir(self) -> Path:
@@ -295,7 +281,7 @@ class UniAFLCoverageSession(CoverageSession):
             "-v",
             f"{self.source_repo_dir}:/src/repo",
             "-v",
-            f"{self.build_output_dir.resolve()}:/out",
+            f"{self.runtime_build_output_dir.resolve()}:/out",
             "-v",
             f"{self.workspace}:/workspace",
         ]
@@ -477,10 +463,8 @@ class UniAFLCoverageSession(CoverageSession):
                 batch_session.close()
         except Exception as exc:
             logger.warning(
-                "Falling back to approximate UniAFL totals for %s/%s: %s",
-                self.project_name,
-                self.harness_name,
-                exc,
+                f"Falling back to approximate UniAFL totals for "
+                f"{self.project_name}/{self.harness_name}: {exc}"
             )
         merged_lines: set[tuple[str, int]] = set()
         covered_functions: set[str] = set()
@@ -758,10 +742,8 @@ class DockerCoverageSession(CoverageSession):
         export_path.write_text(stdout if stdout else "{}")
         if timed_out or returncode != 0:
             logger.warning(
-                "llvm-cov export failed for %s/%s: %s",
-                self.project_name,
-                self.harness_name,
-                stderr[:300],
+                f"llvm-cov export failed for "
+                f"{self.project_name}/{self.harness_name}: {stderr[:300]}"
             )
             return {}, export_path
         try:

@@ -163,7 +163,6 @@ fish and other shell setup instructions.
 ```bash
 crsbench verify       benchmarks/project --pov-dir ./povs/
 crsbench patch-verify benchmarks/project --patch-dir ./patches --pov-dir ./povs
-crsbench coverage     benchmarks/project --corpus-dir ./corpus/  # experimental
 crsbench coverage     --experiment-config ./experiment.yaml      # seed coverage over time
 crsbench coverage     --experiment-dir ./experiment-output       # seed coverage over time
 crsbench coverage     --seed-dir ./seeds --benchmark project --harness fuzz_target --output-dir ./coverage-out

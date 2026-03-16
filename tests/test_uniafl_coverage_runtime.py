@@ -103,6 +103,58 @@ def test_materialize_atlantis_build_output_allows_skipped_coverage_build(
     assert not (normalized_out / "coverage-out").exists()
 
 
+def test_materialize_atlantis_build_output_repairs_ownership_before_cleanup(
+    tmp_path: Path,
+) -> None:
+    from crsbench.evaluation.coverage.uniafl_runtime import (
+        materialize_atlantis_build_output,
+    )
+
+    atlantis_out = tmp_path / "atlantis-build"
+    (atlantis_out / "uniafl" / "build").mkdir(parents=True)
+    (atlantis_out / "uniafl" / "src").mkdir(parents=True)
+    (atlantis_out / "coverage" / "build").mkdir(parents=True)
+    (atlantis_out / "uniafl" / "build" / "fuzz_target").write_text("#!/bin/sh\n")
+
+    normalized_out = tmp_path / "normalized-out"
+    stale_dir = normalized_out / "stale-root-owned-dir"
+    stale_dir.mkdir(parents=True)
+    (stale_dir / "seed").write_text("old\n")
+
+    call_order: list[str] = []
+
+    def fake_fix(path: Path) -> None:
+        assert path == normalized_out
+        call_order.append("fix")
+
+    def fake_remove(path: Path) -> None:
+        if path == stale_dir:
+            call_order.append("remove")
+        if path.is_dir():
+            import shutil
+
+            shutil.rmtree(path)
+        elif path.exists():
+            path.unlink()
+
+    with (
+        patch(
+            "crsbench.evaluation.coverage.uniafl_runtime.fix_docker_ownership",
+            side_effect=fake_fix,
+        ),
+        patch(
+            "crsbench.evaluation.coverage.uniafl_runtime._remove_path",
+            side_effect=fake_remove,
+        ),
+    ):
+        materialize_atlantis_build_output(
+            atlantis_build_output_dir=atlantis_out,
+            normalized_build_output_dir=normalized_out,
+        )
+
+    assert call_order[:2] == ["fix", "remove"]
+
+
 def test_stage_benchmark_for_coverage_preserves_required_dotfiles(
     tmp_path: Path,
 ) -> None:

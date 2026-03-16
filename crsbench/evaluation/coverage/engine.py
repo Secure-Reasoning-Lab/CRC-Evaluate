@@ -48,7 +48,6 @@ from crsbench.evaluation.coverage.strategy import (
     CoverageStrategy,
     CoverageStrategyError,
     create_coverage_strategy,
-    parse_coverage_summary,
 )
 from crsbench.evaluation.coverage.uniafl_runtime import (
     build_atlantis_coverage_artifacts,
@@ -235,19 +234,16 @@ class CoverageEngine:
         verify_start = time.time()
         session_cm = self._maybe_open_session(strategy, harness_name)
         with session_cm as session:
+            if session is None:
+                msg = "Coverage analysis requires an Atlantis-backed coverage session"
+                raise CoverageStrategyError(msg)
             merged_coverage, success_count, contributing_count, unique_count = (
                 self._collect_coverage_sequential(
                     corpus_files,
-                    strategy,
-                    harness_name,
                     session=session,
                 )
             )
-            totals = (
-                session.collect_batch_totals(corpus_dir)
-                if session is not None
-                else self._get_coverage_totals(strategy, harness_name, corpus_dir)
-            )
+            totals = session.collect_batch_totals(corpus_dir)
         verify_elapsed = time.time() - verify_start
 
         # Compute summary with totals
@@ -332,23 +328,23 @@ class CoverageEngine:
         )
         totals: dict = {}
         with session_cm as session:
+            if session is None:
+                msg = "Coverage analysis requires an Atlantis-backed coverage session"
+                raise CoverageStrategyError(msg)
             batch_results: dict[Path, CoverageRunResult] = {}
-            if session is not None:
-                try:
-                    batch_results = session.collect_many(
-                        [timed_input.path for timed_input in sorted_inputs]
-                    )
-                except Exception as e:
-                    logger.debug(f"Batch timed coverage collection failed: {e}")
-                    batch_results = {}
+            try:
+                batch_results = session.collect_many(
+                    [timed_input.path for timed_input in sorted_inputs]
+                )
+            except Exception as e:
+                logger.debug(f"Batch timed coverage collection failed: {e}")
+                batch_results = {}
             for timed_input in sorted_inputs:
                 result = batch_results.get(
                     timed_input.path
                 ) or self._collect_single_result_safe(
-                    strategy,
-                    harness_name,
                     timed_input.path,
-                    session=session if not batch_results else None,
+                    session=session,
                 )
                 cov_data = result.coverage_data
                 if not cov_data and not (
@@ -496,21 +492,14 @@ class CoverageEngine:
 
     def _collect_single_result_safe(
         self,
-        strategy: CoverageStrategy,
-        harness_name: str,
         corpus_file: Path,
         *,
-        session=None,
+        session: CoverageSession,
     ) -> CoverageRunResult:
         try:
-            if session is not None:
-                return session.collect_single(corpus_file)
-            cov_data = strategy.collect_single_coverage(
-                harness_name, corpus_file, output_dir=self.work_dir
-            )
-            return CoverageRunResult(coverage_data=cov_data)
+            return session.collect_single(corpus_file)
         except CoverageStrategyError as e:
-            logger.debug(f"Coverage strategy error for {corpus_file.name}: {e}")
+            logger.debug(f"Coverage session error for {corpus_file.name}: {e}")
             return CoverageRunResult(coverage_data={})
         except Exception as e:
             logger.debug(f"Unexpected error for {corpus_file.name}: {e}")
@@ -519,10 +508,8 @@ class CoverageEngine:
     def _collect_coverage_sequential(
         self,
         corpus_files: list[Path],
-        strategy: CoverageStrategy,
-        harness_name: str,
         *,
-        session: Optional[CoverageSession] = None,
+        session: CoverageSession,
     ) -> tuple[dict, int, int, int]:
         """Collect coverage for multiple corpus files sequentially.
 
@@ -531,9 +518,6 @@ class CoverageEngine:
 
         Args:
             corpus_files: List of corpus file paths.
-            strategy: CoverageStrategy instance for collection.
-            harness_name: Name of the harness.
-
         Returns:
             Tuple of (merged_coverage_dict, success_count, contributing_count, unique_count).
         """
@@ -547,12 +531,11 @@ class CoverageEngine:
         self._covered_lines.clear()
 
         batch_results: dict[Path, CoverageRunResult] = {}
-        if session is not None:
-            try:
-                batch_results = session.collect_many(corpus_files)
-            except Exception as e:
-                logger.debug(f"Batch coverage collection failed: {e}")
-                batch_results = {}
+        try:
+            batch_results = session.collect_many(corpus_files)
+        except Exception as e:
+            logger.debug(f"Batch coverage collection failed: {e}")
+            batch_results = {}
 
         completed = 0
         for corpus_file in corpus_files:
@@ -561,9 +544,10 @@ class CoverageEngine:
                     corpus_file, CoverageRunResult(coverage_data={})
                 ).coverage_data
             else:
-                cov_data = self._collect_single_safe(
-                    strategy, harness_name, corpus_file
-                )
+                cov_data = self._collect_single_result_safe(
+                    corpus_file,
+                    session=session,
+                ).coverage_data
             if cov_data:
                 is_contributing, is_unique = self._track_corpus_coverage(cov_data)
                 if is_contributing:
@@ -631,36 +615,6 @@ class CoverageEngine:
 
         return is_contributing, is_unique
 
-    def _collect_single_safe(
-        self,
-        strategy: CoverageStrategy,
-        harness_name: str,
-        corpus_file: Path,
-    ) -> dict:
-        """Safely collect coverage for a single corpus file.
-
-        Wrapper around strategy.collect_single_coverage() that handles
-        exceptions gracefully.
-
-        Args:
-            strategy: CoverageStrategy instance.
-            harness_name: Name of the harness.
-            corpus_file: Path to the corpus file.
-
-        Returns:
-            Coverage data dict, or empty dict on failure.
-        """
-        try:
-            return strategy.collect_single_coverage(
-                harness_name, corpus_file, output_dir=self.work_dir
-            )
-        except CoverageStrategyError as e:
-            logger.debug(f"Coverage strategy error for {corpus_file.name}: {e}")
-            return {}
-        except Exception as e:
-            logger.debug(f"Unexpected error for {corpus_file.name}: {e}")
-            return {}
-
     def _merge_coverage_safe(self, merged: dict, new_data: dict) -> None:
         """Merge new coverage data into merged dict (thread-safe).
 
@@ -683,34 +637,6 @@ class CoverageEngine:
                     merged[func_name] = {"src": src, "lines": set(lines)}
                 else:
                     merged[func_name]["lines"].update(lines)
-
-    def _get_coverage_totals(
-        self,
-        strategy: CoverageStrategy,
-        harness_name: str,
-        corpus_dir: Path,
-    ) -> dict:
-        """Get coverage totals by running batch coverage.
-
-        Runs batch coverage to generate summary.json which contains
-        accurate totals (lines_total, functions_total).
-
-        Args:
-            strategy: CoverageStrategy instance.
-            harness_name: Name of the harness.
-            corpus_dir: Directory containing corpus files.
-
-        Returns:
-            Dict with totals: {lines_total, functions_total, lines_percent, ...}
-        """
-        try:
-            summary_path = strategy.collect_batch_coverage(
-                Path(harness_name), corpus_dir
-            )
-            return parse_coverage_summary(summary_path)
-        except CoverageStrategyError as e:
-            logger.warning(f"Failed to get coverage totals: {e}")
-            return {}
 
     def _build_coverage_variant(
         self,
@@ -796,9 +722,7 @@ class CoverageEngine:
                 )
             except Exception as exc:
                 logger.error(
-                    "Atlantis coverage build failed for %s: %s",
-                    variant_name,
-                    exc,
+                    f"Atlantis coverage build failed for {variant_name}: {exc}"
                 )
                 return None
 
@@ -955,9 +879,12 @@ class CoverageEngine:
                 strategy, harness_name, output_dir=output_dir
             )
             with session_cm as opened_session:
-                if opened_session is not None:
-                    return opened_session.collect_batch_totals(temp_corpus_dir)
-            return self._get_coverage_totals(strategy, harness_name, temp_corpus_dir)
+                if opened_session is None:
+                    msg = (
+                        "Coverage analysis requires an Atlantis-backed coverage session"
+                    )
+                    raise CoverageStrategyError(msg)
+                return opened_session.collect_batch_totals(temp_corpus_dir)
 
     def cleanup(self) -> None:
         """Clean up temporary resources.

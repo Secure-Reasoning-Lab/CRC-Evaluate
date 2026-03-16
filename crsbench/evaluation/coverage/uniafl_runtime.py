@@ -28,6 +28,7 @@ from crsbench.prepare.uniafl_backend import (
     prepare_uniafl_backend,
 )
 from crsbench.utils.cpu_pool import format_cpuset
+from crsbench.utils.docker import fix_docker_ownership
 
 ATLANTIS_CRS_NAME = "atlantis-multilang-given_fuzzer"
 DEFAULT_BUILD_TIMEOUT = 3600
@@ -171,6 +172,7 @@ def materialize_atlantis_build_output(
         raise FileNotFoundError(f"Missing Atlantis source output: {source_repo_dir}")
 
     normalized_build_output_dir.mkdir(parents=True, exist_ok=True)
+    fix_docker_ownership(normalized_build_output_dir)
     for child in list(normalized_build_output_dir.iterdir()):
         _remove_path(child)
 

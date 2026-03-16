@@ -239,36 +239,6 @@ def test_timeline_reporting_writes_json_csv_and_png(tmp_path: Path) -> None:
     assert png_path.stat().st_size > 0
 
 
-def test_run_coverage_rejects_experiment_config_with_legacy_inputs(
-    tmp_path: Path,
-) -> None:
-    config_path = tmp_path / "experiment.yaml"
-    config_path.write_text("experiment: test\nexperiment_filestore: /tmp/out\n")
-
-    args = argparse.Namespace(
-        verbose=False,
-        experiment_config=config_path,
-        experiment_dir=None,
-        benchmark_path=tmp_path / "benchmark",
-        corpus_dir=None,
-        seed_dir=None,
-        bucket_size_seconds=1,
-        benchmark=None,
-        benchmarks=None,
-        harness=None,
-        oss_fuzz_path=None,
-        force_rebuild=False,
-        output=None,
-        format="json",
-        build_workers=None,
-        verify_workers=None,
-        source="pkgs",
-        output_dir=None,
-    )
-
-    assert run_coverage(args) == 1
-
-
 def test_run_coverage_rejects_experiment_config_with_benchmarks_and_harness(
     tmp_path: Path,
 ) -> None:
@@ -297,155 +267,6 @@ def test_run_coverage_rejects_experiment_config_with_benchmarks_and_harness(
     )
 
     assert run_coverage(args) == 1
-
-
-def test_run_coverage_rejects_output_overrides_in_experiment_mode(
-    tmp_path: Path,
-) -> None:
-    config_path = tmp_path / "experiment.yaml"
-    config_path.write_text("experiment: test\nexperiment_filestore: /tmp/out\n")
-
-    args = argparse.Namespace(
-        verbose=False,
-        experiment_config=config_path,
-        experiment_dir=None,
-        benchmark_path=None,
-        corpus_dir=None,
-        seed_dir=None,
-        bucket_size_seconds=1,
-        benchmark=None,
-        benchmarks=None,
-        harness=None,
-        oss_fuzz_path=None,
-        force_rebuild=False,
-        output=tmp_path / "report.json",
-        format="yaml",
-        build_workers=None,
-        verify_workers=None,
-        source="pkgs",
-        output_dir=None,
-    )
-
-    assert run_coverage(args) == 1
-
-
-def test_run_coverage_rejects_direct_seed_mode_with_legacy_inputs(
-    tmp_path: Path,
-) -> None:
-    seed_dir = tmp_path / "seeds"
-    seed_dir.mkdir()
-    benchmark_dir = tmp_path / "benchmark"
-    benchmark_dir.mkdir()
-
-    args = argparse.Namespace(
-        verbose=False,
-        experiment_config=None,
-        experiment_dir=None,
-        benchmark_path=benchmark_dir,
-        corpus_dir=None,
-        seed_dir=seed_dir,
-        bucket_size_seconds=1,
-        benchmark="sanity-mock-c-delta-01",
-        benchmarks=None,
-        harness=None,
-        oss_fuzz_path=None,
-        force_rebuild=False,
-        output=None,
-        format="json",
-        jobs=None,
-        cores_per_job=None,
-        build_workers=None,
-        verify_workers=None,
-        source="pkgs",
-        output_dir=tmp_path / "out",
-        atlantis_root=None,
-    )
-
-    # benchmark_path + --seed-dir remains valid legacy direct coverage mode,
-    # but this fixture still fails later because the benchmark is incomplete.
-    assert run_coverage(args) == 1
-
-
-def test_run_coverage_accepts_legacy_benchmark_path_with_seed_dir(
-    tmp_path: Path, monkeypatch
-) -> None:
-    benchmark_dir = tmp_path / "benchmarks" / "sanity-mock-c-delta-01"
-    benchmark_dir.mkdir(parents=True)
-    seed_dir = tmp_path / "seeds"
-    seed_dir.mkdir()
-    (seed_dir / "a.bin").write_bytes(b"a")
-    oss_fuzz_dir = tmp_path / "oss-fuzz"
-    oss_fuzz_dir.mkdir()
-
-    class FakeSummary:
-        def __init__(self) -> None:
-            self.lines_covered = 1
-            self.lines_total = 1
-            self.lines_percent = 100.0
-            self.functions_covered = 1
-            self.functions_total = 1
-            self.corpus_total = 1
-            self.corpus_contributing = 1
-            self.corpus_unique = 1
-
-        def format_lines(self) -> str:
-            return "1/1 (100.0%)"
-
-        def format_functions(self) -> str:
-            return "1/1 (100.0%)"
-
-    class FakeReport:
-        harness_name = "fuzz_parse_buffer_section"
-        final_summary = FakeSummary()
-
-    class FakeEngine:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def collect_coverage(self, **kwargs):
-            return FakeReport()
-
-        def cleanup(self) -> None:
-            pass
-
-    def _noop(*_args, **_kwargs) -> None:
-        return None
-
-    monkeypatch.setattr(
-        "crsbench.evaluation.coverage.cli.coverage_command.CoverageEngine",
-        FakeEngine,
-    )
-    monkeypatch.setattr(
-        "crsbench.evaluation.coverage.cli.coverage_command.output_report",
-        _noop,
-    )
-    monkeypatch.setattr(
-        "crsbench.evaluation.coverage.cli.coverage_command.print_summary",
-        _noop,
-    )
-
-    args = argparse.Namespace(
-        verbose=False,
-        experiment_config=None,
-        experiment_dir=None,
-        benchmark_path=benchmark_dir,
-        corpus_dir=None,
-        seed_dir=seed_dir,
-        bucket_size_seconds=1,
-        benchmark=None,
-        benchmarks=None,
-        harness="fuzz_parse_buffer_section",
-        oss_fuzz_path=oss_fuzz_dir,
-        force_rebuild=False,
-        output=None,
-        format="json",
-        build_workers=None,
-        verify_workers=None,
-        source="pkgs",
-        output_dir=tmp_path / "out",
-    )
-
-    assert run_coverage(args) == 0
 
 
 def test_run_coverage_rejects_non_positive_bucket_size(tmp_path: Path) -> None:
@@ -492,36 +313,6 @@ def test_run_coverage_direct_seed_mode_requires_benchmark(tmp_path: Path) -> Non
         force_rebuild=False,
         output=None,
         format="json",
-        build_workers=None,
-        verify_workers=None,
-        source="pkgs",
-        output_dir=tmp_path / "out",
-    )
-
-    assert run_coverage(args) == 1
-
-
-def test_run_coverage_rejects_output_overrides_in_direct_seed_mode(
-    tmp_path: Path,
-) -> None:
-    seed_dir = tmp_path / "seeds"
-    seed_dir.mkdir()
-
-    args = argparse.Namespace(
-        verbose=False,
-        experiment_config=None,
-        experiment_dir=None,
-        benchmark_path=None,
-        corpus_dir=None,
-        seed_dir=seed_dir,
-        bucket_size_seconds=1,
-        benchmark="sanity-mock-c-delta-01",
-        benchmarks=tmp_path / "benchmarks",
-        harness="fuzz_parse_buffer_section",
-        oss_fuzz_path=None,
-        force_rebuild=False,
-        output=tmp_path / "report.json",
-        format="yaml",
         build_workers=None,
         verify_workers=None,
         source="pkgs",
@@ -647,6 +438,31 @@ def test_coverage_parser_accepts_experiment_config_and_direct_seed_modes() -> No
     assert seed_args.output_dir == Path("/tmp/out")
     assert seed_args.jobs == 3
     assert seed_args.cores_per_job == 2
+    assert not hasattr(seed_args, "benchmark_path")
+    assert not hasattr(seed_args, "corpus_dir")
+    assert not hasattr(seed_args, "output")
+    assert not hasattr(seed_args, "format")
+
+
+def test_coverage_parser_rejects_legacy_direct_mode() -> None:
+    parser = argparse.ArgumentParser(prog="crsbench")
+    subs = parser.add_subparsers(dest="command")
+    add_coverage_subparser(subs)
+
+    with patch.object(parser, "exit", side_effect=SystemExit) as _mock_exit:
+        try:
+            parser.parse_args(
+                [
+                    "coverage",
+                    "benchmarks/sanity-mock-c-delta-01",
+                    "--corpus-dir",
+                    "./corpus",
+                ]
+            )
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError("legacy coverage CLI unexpectedly parsed")
 
 
 def test_coverage_parser_accepts_legacy_worker_aliases() -> None:

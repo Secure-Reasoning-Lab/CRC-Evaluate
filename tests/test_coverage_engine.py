@@ -140,32 +140,34 @@ class TestCoverageEngine:
         assert summary.corpus_contributing == 8
         assert summary.corpus_unique == 6
 
-    @patch("crsbench.evaluation.coverage.engine.parse_coverage_summary")
     @patch("crsbench.evaluation.coverage.engine.create_coverage_strategy")
     def test_sequential_corpus_processing(
         self,
         mock_create_strategy,
-        mock_parse_summary,
         mock_oss_fuzz: Path,
         mock_benchmark: Path,
         mock_corpus: Path,
     ):
-        """Test corpus files are processed sequentially."""
+        """Test corpus files are processed through the warm session backend."""
         mock_strategy = MagicMock()
-        mock_strategy.collect_single_coverage.return_value = {
-            "main": {"src": "main.c", "lines": [1, 2, 3]}
+        session = MagicMock()
+        session.__enter__.return_value = session
+        session.__exit__.return_value = False
+        session.collect_many.return_value = {
+            corpus_file: CoverageRunResult(
+                coverage_data={"main": {"src": "main.c", "lines": [1, 2, 3]}}
+            )
+            for corpus_file in sorted(mock_corpus.iterdir())
         }
-        mock_strategy.collect_batch_coverage.return_value = Path("/tmp/summary.json")
-        mock_create_strategy.return_value = mock_strategy
-
-        # Mock totals from batch coverage
-        mock_parse_summary.return_value = {
+        session.collect_batch_totals.return_value = {
             "lines_covered": 10,
             "lines_total": 100,
             "lines_percent": 10.0,
             "functions_covered": 5,
             "functions_total": 20,
         }
+        mock_strategy.open_session.return_value = session
+        mock_create_strategy.return_value = mock_strategy
 
         # No verify_workers - parallelism handled by DAGExecutor
         eng = CoverageEngine(mock_oss_fuzz)
@@ -177,11 +179,13 @@ class TestCoverageEngine:
                 return_value="test-benchmark-cov-delta-coverage",
             ),
             patch.object(eng.infra, "has_harness", return_value=True),
+            patch.object(eng, "_maybe_open_session", return_value=session),
         ):
             report = eng.collect_coverage(mock_benchmark, mock_corpus)
 
-        # All 3 corpus files should be processed sequentially
-        assert mock_strategy.collect_single_coverage.call_count == 3
+        session.collect_many.assert_called_once()
+        session.collect_batch_totals.assert_called_once_with(mock_corpus)
+        mock_strategy.collect_single_coverage.assert_not_called()
         assert report.final_summary.corpus_total == 3
         assert report.final_summary.lines_total == 100
         assert report.harness_name == "fuzz_target"
@@ -662,6 +666,14 @@ class TestCoverageEngine:
 
         adapter = MagicMock()
         adapter.get_harness_names.return_value = ["fuzz_target"]
+        session = MagicMock()
+        session.__enter__.return_value = session
+        session.__exit__.return_value = False
+        session.collect_many.return_value = {}
+        session.collect_single.return_value = CoverageRunResult(coverage_data={})
+        session.collect_batch_totals.return_value = {}
+        strategy = MagicMock()
+        strategy.open_session.return_value = session
 
         with (
             patch.object(engine, "_load_adapter", return_value=adapter),
@@ -671,12 +683,8 @@ class TestCoverageEngine:
                 return_value="test-benchmark-delta-coverage",
             ),
             patch.object(engine.infra, "has_harness", return_value=True),
-            patch.object(engine, "_get_or_create_strategy", return_value=MagicMock()),
-            patch.object(
-                engine,
-                "_collect_single_result_safe",
-                return_value=CoverageRunResult(coverage_data={}),
-            ),
+            patch.object(engine, "_get_or_create_strategy", return_value=strategy),
+            patch.object(engine, "_maybe_open_session", return_value=session),
         ):
             with pytest.raises(CoverageStrategyError, match="failed for all inputs"):
                 engine.collect_timed_line_coverage(

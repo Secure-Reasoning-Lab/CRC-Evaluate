@@ -468,6 +468,21 @@ class TestOSSFuzzBuilderCoverage:
 class TestCoverageStrategy:
     """Tests for coverage strategies."""
 
+    def test_create_strategy_does_not_require_official_oss_fuzz_helper(self):
+        """Atlantis-backed strategies should not depend on infra/helper.py."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            oss_fuzz = Path(tmp_dir)
+
+            from crsbench.evaluation.coverage.strategy import create_coverage_strategy
+
+            native = create_coverage_strategy(oss_fuzz, "test-project", "c")
+            jvm = create_coverage_strategy(oss_fuzz, "test-project", "jvm")
+
+            assert native.project_name == "test-project"
+            assert native.language == "c"
+            assert jvm.project_name == "test-project"
+            assert jvm.language == "jvm"
+
     def test_create_strategy_c(self):
         """Test creating LLVM strategy for C."""
         with tempfile.TemporaryDirectory() as tmp_dir:
