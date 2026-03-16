@@ -166,6 +166,7 @@ crsbench patch-verify benchmarks/project --patch-dir ./patches --pov-dir ./povs
 crsbench coverage     --experiment-config ./experiment.yaml      # seed coverage over time
 crsbench coverage     --experiment-dir ./experiment-output       # seed coverage over time
 crsbench coverage     --seed-dir ./seeds --benchmark project --harness fuzz_target --output-dir ./coverage-out
+crsbench coverage     --seed-dir ./seeds --experiment-start-time 1710000000 --benchmark project --harness fuzz_target --output-dir ./coverage-out
 ```
 
 Timeline coverage mode persists raw per-seed artifacts under the target
@@ -176,7 +177,8 @@ timeline outputs. `coverage_timeline.json` stores one row per normalized seed,
 `coverage_timeline.png` plots cumulative covered lines directly from those
 per-seed replay results. Direct `--seed-dir` mode derives relative time from
 each input seed file's original `mtime` using the first retained seed as the
-origin. `--experiment-dir` and `--experiment-config` instead use
+origin, unless `--experiment-start-time` is supplied to override the origin
+with an explicit Unix timestamp. `--experiment-dir` and `--experiment-config` instead use
 `povs/pov_store.json.crs_run_start_time` as the origin and clamp the x-axis to
 the recorded trial `run_time` from `metadata.json`. The Atlantis timeline path
 does not run a separate whole-corpus denominator pass, so total-line

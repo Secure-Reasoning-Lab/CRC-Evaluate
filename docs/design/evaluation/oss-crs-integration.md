@@ -70,7 +70,9 @@ plotted directly from those per-seed rows.
 
 Timeline origin depends on the coverage entry point:
 - direct `--seed-dir` analysis uses the first retained seed `mtime` as time
-  origin and computes each seed's `relative_time` from that filesystem time
+  origin and computes each seed's `relative_time` from that filesystem time,
+  unless `--experiment-start-time` overrides the origin with an explicit Unix
+  timestamp for direct replay
 - `--experiment-dir` and `--experiment-config` use
   `pov_store.json.crs_run_start_time` as time origin, preserve POV marker times
   in that same origin, clamp negative seed offsets to `0.0` rather than

@@ -306,6 +306,39 @@ def test_build_timeline_report_uses_seed_mtime_origin_for_direct_seed_dir(
     assert report.pov_markers == []
 
 
+def test_build_timeline_report_uses_explicit_experiment_start_time_for_direct_seed_dir(
+    tmp_path: Path,
+) -> None:
+    seed_dir = tmp_path / "seeds"
+    seed_dir.mkdir()
+    seed = seed_dir / "seed.bin"
+    seed.write_bytes(b"seed")
+    import os
+
+    os.utime(seed, (100.0, 100.0))
+
+    class _FakeEngine:
+        def collect_timed_line_coverage(self, **kwargs):
+            timed_inputs = kwargs["timed_inputs"]
+            return (timed_inputs, CoverageSummary(lines_covered=1, lines_total=0))
+
+    report = _build_timeline_report(
+        engine=_FakeEngine(),
+        benchmark_path=tmp_path / "bench",
+        harness_name="fuzz_target",
+        seed_dir=seed_dir,
+        time_origin_base=90.0,
+        time_origin="experiment_start_time",
+        pov_markers=[],
+        timeline_duration_seconds=None,
+        force_rebuild=False,
+        output_dir=tmp_path / "coverage",
+    )
+
+    assert report.time_origin == "experiment_start_time"
+    assert report.seeds[0].relative_time == 10.0
+
+
 def test_timeline_png_uses_covered_line_counts_on_y_axis(tmp_path: Path) -> None:
     report = CoverageTimelineReport(
         benchmark="sanity-mock-c-delta-01",
@@ -529,6 +562,7 @@ def test_run_coverage_rejects_experiment_config_with_benchmarks_and_harness(
         verify_workers=None,
         source="pkgs",
         output_dir=None,
+        experiment_start_time=None,
     )
 
     assert run_coverage(args) == 1
@@ -556,6 +590,7 @@ def test_run_coverage_direct_seed_mode_requires_benchmark(tmp_path: Path) -> Non
         verify_workers=None,
         source="pkgs",
         output_dir=tmp_path / "out",
+        experiment_start_time=None,
     )
 
     assert run_coverage(args) == 1
@@ -595,6 +630,8 @@ def test_coverage_parser_accepts_experiment_config_and_direct_seed_modes() -> No
             "coverage",
             "--seed-dir",
             "/tmp/seeds",
+            "--experiment-start-time",
+            "1234.5",
             "--benchmarks",
             "benchmarks",
             "--benchmark",
@@ -610,6 +647,7 @@ def test_coverage_parser_accepts_experiment_config_and_direct_seed_modes() -> No
         ]
     )
     assert seed_args.seed_dir == Path("/tmp/seeds")
+    assert seed_args.experiment_start_time == 1234.5
     assert seed_args.benchmarks == Path("benchmarks")
     assert seed_args.benchmark == "sanity-mock-c-delta-01"
     assert seed_args.harness == "fuzz_parse_buffer_section"
@@ -729,6 +767,37 @@ def test_run_coverage_rejects_experiment_config_with_experiment_dir(
         source="pkgs",
         output_dir=None,
         atlantis_root=None,
+        experiment_start_time=None,
+    )
+
+    assert run_coverage(args) == 1
+
+
+def test_run_coverage_rejects_experiment_start_time_with_experiment_dir(
+    tmp_path: Path,
+) -> None:
+    args = argparse.Namespace(
+        verbose=False,
+        experiment_config=None,
+        experiment_dir=tmp_path / "experiment-output",
+        benchmark_path=None,
+        corpus_dir=None,
+        seed_dir=None,
+        benchmark=None,
+        benchmarks=tmp_path / "benchmarks",
+        harness=None,
+        oss_fuzz_path=None,
+        force_rebuild=False,
+        output=None,
+        format="json",
+        jobs=None,
+        cores_per_job=None,
+        build_workers=None,
+        verify_workers=None,
+        source="pkgs",
+        output_dir=None,
+        atlantis_root=None,
+        experiment_start_time=1000.0,
     )
 
     assert run_coverage(args) == 1
@@ -756,6 +825,7 @@ def test_run_coverage_rejects_conflicting_job_flags(tmp_path: Path) -> None:
         source="pkgs",
         output_dir=tmp_path / "out",
         atlantis_root=None,
+        experiment_start_time=None,
     )
 
     assert run_coverage(args) == 1
@@ -783,6 +853,7 @@ def test_run_coverage_rejects_non_positive_cores_per_job(tmp_path: Path) -> None
         source="pkgs",
         output_dir=tmp_path / "out",
         atlantis_root=None,
+        experiment_start_time=None,
     )
 
     assert run_coverage(args) == 1
@@ -812,6 +883,7 @@ def test_run_coverage_allows_experiment_dir_with_benchmarks_override(
         source="pkgs",
         output_dir=None,
         atlantis_root=None,
+        experiment_start_time=None,
     )
 
     with patch(
@@ -860,6 +932,7 @@ def test_run_experiment_timeline_uses_jobs_and_cores_per_job(
         verify_workers=2,
         source="pkgs",
         output_dir=None,
+        experiment_start_time=None,
     )
 
     contexts = {
@@ -1051,6 +1124,7 @@ def test_run_experiment_timeline_rejects_cores_per_job_larger_than_cpu_pool(
         verify_workers=2,
         source="pkgs",
         output_dir=None,
+        experiment_start_time=None,
     )
 
     with patch(
@@ -1117,6 +1191,7 @@ def test_run_direct_seed_timeline_pins_runtime_cpus(
         verify_workers=2,
         source="pkgs",
         output_dir=tmp_path / "coverage-out",
+        experiment_start_time=None,
     )
 
     with (
@@ -1205,6 +1280,7 @@ def test_run_direct_seed_timeline_accepts_legacy_worker_aliases(
         verify_workers=2,
         source="pkgs",
         output_dir=tmp_path / "coverage-out",
+        experiment_start_time=None,
     )
 
     with (

@@ -120,6 +120,15 @@ Examples:
         default=None,
         help="Output directory for direct --seed-dir timeline artifacts",
     )
+    parser.add_argument(
+        "--experiment-start-time",
+        type=float,
+        default=None,
+        help=(
+            "Unix timestamp in seconds used as the direct --seed-dir time origin. "
+            "If omitted, direct mode uses the first retained seed mtime."
+        ),
+    )
     # Optional arguments
     parser.add_argument(
         "--harness",
@@ -221,6 +230,7 @@ def run_coverage(args: argparse.Namespace) -> int:
         or args.benchmark is not None
         or args.harness is not None
         or args.output_dir is not None
+        or args.experiment_start_time is not None
     )
     if args.experiment_config is not None and args.benchmarks is not None:
         invalid_experiment_args = True
@@ -228,7 +238,8 @@ def run_coverage(args: argparse.Namespace) -> int:
     if experiment_timeline_mode and invalid_experiment_args:
         logger.error(
             "--experiment-config/--experiment-dir cannot be combined with "
-            "--seed-dir, --benchmark, --harness, or --output-dir. "
+            "--seed-dir, --benchmark, --harness, --output-dir, or "
+            "--experiment-start-time. "
             "--benchmarks is only supported with --experiment-dir."
         )
         return 1
@@ -381,13 +392,19 @@ def _run_direct_seed_timeline(args: argparse.Namespace) -> int:
         source_mode=args.source,
     )
     try:
+        time_origin_base = args.experiment_start_time
+        time_origin = (
+            "experiment_start_time"
+            if args.experiment_start_time is not None
+            else "first_seed_mtime"
+        )
         report = _build_timeline_report(
             engine=engine,
             benchmark_path=benchmark_path,
             harness_name=args.harness,
             seed_dir=args.seed_dir,
-            time_origin_base=None,
-            time_origin="first_seed_mtime",
+            time_origin_base=time_origin_base,
+            time_origin=time_origin,
             pov_markers=[],
             timeline_duration_seconds=None,
             force_rebuild=args.force_rebuild,
@@ -435,7 +452,10 @@ def _build_timeline_report(
     normalized_inputs = normalize_seed_inputs(
         seed_dir,
         base_time=time_origin_base,
-        clamp_negative_to_zero=(time_origin == "crs_run_start_time"),
+        clamp_negative_to_zero=(
+            time_origin == "crs_run_start_time"
+            or time_origin == "experiment_start_time"
+        ),
     )
     if not normalized_inputs:
         msg = f"No seeds found to analyze in {seed_dir}"
