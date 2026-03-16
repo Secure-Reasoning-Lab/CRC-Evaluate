@@ -92,7 +92,7 @@ def run_launch(args: argparse.Namespace) -> int:
                 )
             except Exception:
                 logger.warning(
-                    "Best-effort rollback failed for worker fleet in experiment %s",
+                    "Best-effort rollback failed for worker fleet in experiment {}",
                     config.experiment,
                 )
         if orchestrator_record is not None:
@@ -103,14 +103,14 @@ def run_launch(args: argparse.Namespace) -> int:
                 )
             except Exception:
                 logger.warning(
-                    "Best-effort rollback failed for orchestrator %s",
+                    "Best-effort rollback failed for orchestrator {}",
                     orchestrator_record.name,
                 )
-        logger.error("Cloud launch failed: %s", exc)
+        logger.error("Cloud launch failed: {}", str(exc))
         return 1
 
     logger.info(
-        "Cloud launch complete: orchestrator=%s redis=%s workers=%d",
+        "Cloud launch complete: orchestrator={} redis={} workers={}",
         orchestrator_record.name,
         f"{orchestrator_record.internal_ip}:6379",
         len(workers),

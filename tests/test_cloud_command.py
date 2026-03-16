@@ -565,9 +565,10 @@ class TestLaunch:
         side_effect=RuntimeError("disk full"),
     )
     @patch("crsbench.cloud.cli._launch.GceProvisioner")
+    @patch("crsbench.cloud.cli._launch.logger")
     @patch("crsbench.cloud.cli._launch.load_experiment_config")
     def test_launch_rolls_back_workers_when_state_persist_fails(
-        self, mock_load, mock_prov_cls, mock_save_state, mock_secret
+        self, mock_load, mock_logger, mock_prov_cls, mock_save_state, mock_secret
     ):
         del mock_save_state, mock_secret
         mock_load.return_value = _make_launch_config()
@@ -585,6 +586,9 @@ class TestLaunch:
         assert rc == 1
         mock_prov.delete_workers.assert_called_once()
         mock_prov.delete_orchestrators.assert_called_once()
+        mock_logger.error.assert_called_once_with(
+            "Cloud launch failed: {}", "disk full"
+        )
 
 
 # ---------------------------------------------------------------------------
