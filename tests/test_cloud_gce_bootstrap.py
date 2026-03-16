@@ -4,7 +4,7 @@ import base64
 import json
 
 from crsbench.distributed.registry import RuntimeRegistration
-from crsbench.validation.schemas import GceWorkerFleetConfig
+from crsbench.validation.schemas import GceOrchestratorConfig, GceWorkerFleetConfig
 
 
 def _make_fleet(**overrides) -> GceWorkerFleetConfig:
@@ -47,6 +47,25 @@ def _make_registration(**overrides) -> RuntimeRegistration:
     }
     data.update(overrides)
     return RuntimeRegistration(**data)
+
+
+def _make_orchestrator(**overrides) -> GceOrchestratorConfig:
+    data = {
+        "project": "test-project",
+        "zone": "us-central1-a",
+        "machine_type": "e2-standard-16",
+        "boot_disk_size_gb": 200,
+        "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+        "service_account_email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com",
+        "owner_label": "team-crs",
+        "labels": {"env": "prod"},
+        "metadata": {"custom-key": "custom-value"},
+        "instance_name_prefix": "gce-orchestrator",
+        "use_os_login": True,
+        "ssh_via_iap": True,
+    }
+    data.update(overrides)
+    return GceOrchestratorConfig(**data)
 
 
 def _decode_payload(encoded: str) -> dict[str, object]:
@@ -332,3 +351,40 @@ def test_startup_script_sets_venv_path_for_systemd():
     assert 'write_env_var "PATH" "${VENV_BIN}' in script
     # /root/.local/bin must be on PATH for uv-installed tools
     assert "/root/.local/bin" in script
+
+
+def test_build_orchestrator_metadata_embeds_config_payload_and_redis_password(tmp_path):
+    """Orchestrator metadata should carry config payload and shared Redis auth."""
+    from crsbench.cloud.gce.metadata import (
+        CRSBENCH_EXPERIMENT_CONFIG_B64_KEY,
+        CRSBENCH_REDIS_PASSWORD_KEY,
+        build_orchestrator_metadata,
+    )
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("experiment:\n  name: exp-42\n")
+
+    metadata = build_orchestrator_metadata(
+        experiment_name="exp-42",
+        orchestrator=_make_orchestrator(),
+        experiment_config_path=config_path,
+        redis_password="shared-secret",
+        startup_script="#!/usr/bin/env bash\necho boot\n",
+    )
+
+    assert metadata[CRSBENCH_REDIS_PASSWORD_KEY] == "shared-secret"
+    assert (
+        base64.b64decode(metadata[CRSBENCH_EXPERIMENT_CONFIG_B64_KEY]).decode("utf-8")
+        == config_path.read_text()
+    )
+
+
+def test_orchestrator_startup_script_consumes_config_payload_and_preprovisioned_mode():
+    """Orchestrator startup should decode config payload and skip worker reprovision."""
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+
+    assert "crsbench-experiment-config-b64" in script
+    assert "CRSBENCH_CLOUD_PREPROVISIONED_WORKERS" in script
+    assert "crsbench-redis-password" in script

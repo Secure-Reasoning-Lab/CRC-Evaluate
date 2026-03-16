@@ -5,7 +5,7 @@ import json
 
 import pytest
 from crsbench.distributed.registry import RuntimeRegistration
-from crsbench.validation.schemas import GceWorkerFleetConfig
+from crsbench.validation.schemas import GceOrchestratorConfig, GceWorkerFleetConfig
 
 
 def _make_fleet(**overrides) -> GceWorkerFleetConfig:
@@ -45,6 +45,25 @@ def _make_registration(**overrides) -> RuntimeRegistration:
     }
     data.update(overrides)
     return RuntimeRegistration(**data)
+
+
+def _make_orchestrator(**overrides) -> GceOrchestratorConfig:
+    data = {
+        "project": "test-project",
+        "zone": "us-central1-a",
+        "machine_type": "e2-standard-16",
+        "boot_disk_size_gb": 200,
+        "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+        "service_account_email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com",
+        "owner_label": "team-crs",
+        "labels": {"env": "prod"},
+        "metadata": {"custom-key": "custom-value"},
+        "instance_name_prefix": "gce-orchestrator",
+        "use_os_login": True,
+        "ssh_via_iap": True,
+    }
+    data.update(overrides)
+    return GceOrchestratorConfig(**data)
 
 
 def _decode_payload(encoded: str) -> dict[str, object]:
@@ -414,4 +433,44 @@ def test_google_compute_client_builds_label_filter_for_list_requests() -> None:
                 '(labels.owner = "team-crs")'
             ),
         }
+    ]
+
+
+def test_create_orchestrator_waits_for_operation_and_returns_instance_record():
+    """Create orchestrator should return the normalized provider record."""
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+
+    client = _RecordingClient()
+    client.instances_by_name = {
+        "gce-orchestrator-exp-cloud-42": {
+            "id": "3001",
+            "name": "gce-orchestrator-exp-cloud-42",
+            "status": "RUNNING",
+            "zone": "zones/us-central1-a",
+            "networkInterfaces": [
+                {
+                    "networkIP": "10.0.0.50",
+                    "accessConfigs": [{"natIP": "34.1.2.50"}],
+                }
+            ],
+            "labels": {"crsbench-experiment": "exp-cloud-42", "owner": "team-crs"},
+            "serviceAccounts": [
+                {"email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com"}
+            ],
+        }
+    }
+    provisioner = GceProvisioner(client=client)
+
+    worker = provisioner.create_orchestrator(
+        experiment_name="Exp.Cloud 42",
+        orchestrator=_make_orchestrator(),
+        experiment_config_path="config.yaml",
+        redis_password="shared-secret",
+    )
+
+    assert worker.name == "gce-orchestrator-exp-cloud-42"
+    assert worker.instance_id == "3001"
+    assert worker.internal_ip == "10.0.0.50"
+    assert client.waited == [
+        ("test-project", "us-central1-a", "op-gce-orchestrator-exp-cloud-42")
     ]

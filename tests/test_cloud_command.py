@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from crsbench.validation.schemas import (
+    CloudConfig,
+    GceOrchestratorConfig,
+    GceWorkerFleetConfig,
+)
 
 # ---------------------------------------------------------------------------
 # Fake Redis (reusable fixture)
@@ -148,11 +154,57 @@ def _mock_config(*, has_cloud: bool = True):
     if has_cloud:
         config.cloud = MagicMock()
         config.cloud.gce = MagicMock(name="GceWorkerFleetConfig")
+        config.cloud.orchestrator = None
     else:
         config.cloud = None
     config.redis_host = "localhost"
     config.experiment_filestore = Path("/tmp/filestore")
     return config
+
+
+def _make_launch_config():
+    config = MagicMock()
+    config.experiment = "test-exp"
+    config.cloud = CloudConfig(
+        gce=GceWorkerFleetConfig(
+            project="test-project",
+            zone="us-central1-a",
+            worker_count=2,
+            machine_type="e2-standard-4",
+            boot_disk_size_gb=100,
+            image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+            service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+            owner_label="team-crs",
+        ),
+        orchestrator=GceOrchestratorConfig(
+            project="test-project",
+            zone="us-central1-a",
+            machine_type="e2-standard-4",
+            boot_disk_size_gb=100,
+            image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+            service_account_email="crsbench-orchestrator@test-project.iam.gserviceaccount.com",
+            owner_label="team-crs",
+            instance_name_prefix="gce-orchestrator",
+        ),
+    )
+    return config
+
+
+def _make_launch_state():
+    from crsbench.cloud.launch_state import CloudLaunchState
+
+    return CloudLaunchState(
+        experiment_name="test-exp",
+        config_path="/tmp/config.yaml",
+        redis_host="10.0.0.50:6379",
+        redis_password="shared-secret",
+        orchestrator_name="gce-orchestrator-test-exp",
+        orchestrator_project="test-project",
+        orchestrator_zone="us-central1-a",
+        orchestrator_internal_ip="10.0.0.50",
+        orchestrator_external_ip="34.1.2.50",
+        orchestrator_ssh_via_iap=True,
+    )
 
 
 class TestReconnect:
@@ -183,6 +235,27 @@ class TestReconnect:
 
         with pytest.raises(SystemExit):
             reconnect("/path/to/config.yaml", "test-exp")
+
+    @patch("crsbench.cloud.cli._config_reconnect.create_redis_connection")
+    @patch("crsbench.cloud.cli._config_reconnect.load_launch_state")
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_reconnect_remote_orchestrator_uses_launch_state(
+        self, mock_load, mock_state, mock_redis
+    ):
+        """Remote orchestrator launches reconnect through persisted launch state."""
+        config = _mock_config(has_cloud=True)
+        config.cloud.orchestrator = MagicMock()
+        mock_load.return_value = config
+        mock_state.return_value = _make_launch_state()
+        mock_redis.return_value = _FakeRedis()
+
+        from crsbench.cloud.cli._config_reconnect import reconnect
+
+        with patch.dict(os.environ, {}, clear=False):
+            reconnect("/path/to/config.yaml", "test-exp")
+
+            mock_redis.assert_called_once_with("10.0.0.50:6379")
+            assert os.environ["CRSBENCH_REDIS_PASSWORD"] == "shared-secret"
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +359,65 @@ class TestArgParsing:
         )
         assert args.cloud_command == "collect"
         assert args.remote_dir == "/home/user/experiments/my-exp"
+
+    def test_parse_launch(self):
+        parser = self._build_parser()
+        args = parser.parse_args(["cloud", "launch", "--config", "c.yaml"])
+        assert args.command == "cloud"
+        assert args.cloud_command == "launch"
+        assert args.config == "c.yaml"
+
+
+def _make_launch_args(config: str = "/tmp/config.yaml"):
+    return argparse.Namespace(
+        config=config,
+        cloud_command="launch",
+    )
+
+
+class TestLaunch:
+    """Tests for run_launch() orchestration."""
+
+    @patch(
+        "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
+    )
+    @patch("crsbench.cloud.cli._launch.save_launch_state")
+    @patch("crsbench.cloud.cli._launch.GceProvisioner")
+    @patch("crsbench.cloud.cli._launch.load_experiment_config")
+    def test_launch_provisions_orchestrator_before_workers(
+        self, mock_load, mock_prov_cls, mock_save_state, mock_secret
+    ):
+        del mock_secret
+        mock_load.return_value = _make_launch_config()
+        mock_prov = MagicMock()
+        call_order: list[str] = []
+
+        orchestrator_record = _make_gce_worker(
+            "gce-orchestrator-test-exp", ip="10.0.0.50"
+        )
+
+        def _create_orchestrator(**kwargs):
+            call_order.append("orchestrator")
+            assert kwargs["redis_password"] == "shared-secret"
+            return orchestrator_record
+
+        def _create_workers(**kwargs):
+            call_order.append("workers")
+            assert kwargs["redis_host"] == "10.0.0.50:6379"
+            assert kwargs["redis_password"] == "shared-secret"
+            return []
+
+        mock_prov.create_orchestrator.side_effect = _create_orchestrator
+        mock_prov.create_workers.side_effect = _create_workers
+        mock_prov_cls.return_value = mock_prov
+
+        from crsbench.cloud.cli._launch import run_launch
+
+        rc = run_launch(_make_launch_args())
+
+        assert rc == 0
+        assert call_order == ["orchestrator", "workers"]
+        mock_save_state.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -529,15 +661,17 @@ class TestCollect:
 
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
     @patch("crsbench.cloud.cli._collect.GceProvisioner")
+    @patch("crsbench.cloud.cli._collect.load_launch_state")
     @patch("crsbench.cloud.cli._collect.reconnect")
     def test_collect_invokes_collector(
-        self, mock_reconnect, mock_prov_cls, mock_coll_cls
+        self, mock_reconnect, mock_state, mock_prov_cls, mock_coll_cls
     ):
         """run_collect() invokes ArtifactCollector.collect() for each live GCE worker."""
         workers = [_make_gce_worker("w-1"), _make_gce_worker("w-2")]
         mock_prov = MagicMock()
         mock_prov.list_workers.return_value = workers
         mock_prov_cls.return_value = mock_prov
+        mock_state.return_value = None
 
         mock_coll = MagicMock()
         mock_coll_cls.return_value = mock_coll
@@ -562,14 +696,16 @@ class TestCollect:
     @patch("crsbench.cloud.cli._collect.logger")
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
     @patch("crsbench.cloud.cli._collect.GceProvisioner")
+    @patch("crsbench.cloud.cli._collect.load_launch_state")
     @patch("crsbench.cloud.cli._collect.reconnect")
     def test_collect_stale_redis_warning(
-        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_logger
+        self, mock_reconnect, mock_state, mock_prov_cls, mock_coll_cls, mock_logger
     ):
         """Warns when Redis has workers not present in GCE."""
         mock_prov = MagicMock()
         mock_prov.list_workers.return_value = [_make_gce_worker("w-1")]
         mock_prov_cls.return_value = mock_prov
+        mock_state.return_value = None
 
         mock_coll = MagicMock()
         mock_coll_cls.return_value = mock_coll
@@ -601,9 +737,10 @@ class TestCollect:
 
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
     @patch("crsbench.cloud.cli._collect.GceProvisioner")
+    @patch("crsbench.cloud.cli._collect.load_launch_state")
     @patch("crsbench.cloud.cli._collect.reconnect")
     def test_collect_partial_failure(
-        self, mock_reconnect, mock_prov_cls, mock_coll_cls
+        self, mock_reconnect, mock_state, mock_prov_cls, mock_coll_cls
     ):
         """Partial collection failure returns 1 but continues for remaining workers."""
         from crsbench.cloud.collection import ArtifactCollectionError
@@ -612,6 +749,7 @@ class TestCollect:
         mock_prov = MagicMock()
         mock_prov.list_workers.return_value = workers
         mock_prov_cls.return_value = mock_prov
+        mock_state.return_value = None
 
         mock_coll = MagicMock()
         mock_coll.collect.side_effect = [
@@ -637,6 +775,42 @@ class TestCollect:
         assert rc == 1
         # Both workers should have been attempted
         assert mock_coll.collect.call_count == 2
+
+    @patch("crsbench.cloud.cli._collect.ArtifactCollector")
+    @patch("crsbench.cloud.cli._collect.GceProvisioner")
+    @patch("crsbench.cloud.cli._collect.load_launch_state")
+    @patch("crsbench.cloud.cli._collect.reconnect")
+    def test_collect_also_collects_orchestrator_when_launch_state_present(
+        self, mock_reconnect, mock_state, mock_prov_cls, mock_coll_cls
+    ):
+        """Remote launches should collect orchestrator artifacts in addition to workers."""
+        workers = [_make_gce_worker("w-1"), _make_gce_worker("w-2")]
+        mock_prov = MagicMock()
+        mock_prov.list_workers.return_value = workers
+        mock_prov_cls.return_value = mock_prov
+        mock_state.return_value = _make_launch_state()
+
+        mock_coll = MagicMock()
+        mock_coll_cls.return_value = mock_coll
+
+        readiness = MagicMock()
+        readiness.list_workers.return_value = []
+
+        mock_reconnect.return_value = (
+            MagicMock(),
+            MagicMock(),
+            readiness,
+            MagicMock(),
+            Path("/tmp/filestore"),
+        )
+
+        from crsbench.cloud.cli._collect import run_collect
+
+        rc = run_collect(_make_collect_args())
+        assert rc == 0
+        assert mock_coll.collect.call_count == 3
+        orchestrator_call = mock_coll.collect.call_args_list[-1]
+        assert orchestrator_call.kwargs["worker"].name == "gce-orchestrator-test-exp"
 
 
 # ---------------------------------------------------------------------------
@@ -701,11 +875,13 @@ class TestTeardown:
 
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
     @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.load_launch_state")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_collect_then_delete(
-        self, mock_reconnect, mock_prov_cls, mock_coll_cls
+        self, mock_reconnect, mock_state, mock_prov_cls, mock_coll_cls
     ):
         """Teardown collects from all workers then deletes them."""
+        mock_state.return_value = None
         mock_prov, mock_coll, _, _ = _setup_teardown_mocks(
             mock_reconnect, mock_prov_cls, mock_coll_cls
         )
@@ -726,13 +902,15 @@ class TestTeardown:
 
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
     @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.load_launch_state")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_aborts_on_collection_failure(
-        self, mock_reconnect, mock_prov_cls, mock_coll_cls
+        self, mock_reconnect, mock_state, mock_prov_cls, mock_coll_cls
     ):
         """If any collection fails, teardown aborts -- delete_workers NOT called."""
         from crsbench.cloud.collection import ArtifactCollectionError
 
+        mock_state.return_value = None
         mock_prov, mock_coll, _, _ = _setup_teardown_mocks(
             mock_reconnect, mock_prov_cls, mock_coll_cls
         )
@@ -746,9 +924,13 @@ class TestTeardown:
 
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
     @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.load_launch_state")
     @patch("crsbench.cloud.cli._teardown.reconnect")
-    def test_teardown_force_flag(self, mock_reconnect, mock_prov_cls, mock_coll_cls):
+    def test_teardown_force_flag(
+        self, mock_reconnect, mock_state, mock_prov_cls, mock_coll_cls
+    ):
         """With --force, no input() call is made."""
+        mock_state.return_value = None
         _setup_teardown_mocks(mock_reconnect, mock_prov_cls, mock_coll_cls)
 
         from crsbench.cloud.cli._teardown import run_teardown
@@ -762,13 +944,20 @@ class TestTeardown:
     @patch("crsbench.cloud.cli._teardown.logger")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
     @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.load_launch_state")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_stale_redis_warning(
-        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_logger
+        self,
+        mock_reconnect,
+        mock_state,
+        mock_prov_cls,
+        mock_coll_cls,
+        mock_logger,
     ):
         """When GCE has no workers but Redis does, warn about stale entries."""
         stale_worker = MagicMock()
         stale_worker.instance_name = "w-stale"
+        mock_state.return_value = None
 
         _setup_teardown_mocks(
             mock_reconnect,
@@ -787,11 +976,13 @@ class TestTeardown:
 
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
     @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.load_launch_state")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_confirmation_prompt_yes(
-        self, mock_reconnect, mock_prov_cls, mock_coll_cls
+        self, mock_reconnect, mock_state, mock_prov_cls, mock_coll_cls
     ):
         """Confirmation prompt with 'yes' proceeds with teardown."""
+        mock_state.return_value = None
         mock_prov, _, _, _ = _setup_teardown_mocks(
             mock_reconnect, mock_prov_cls, mock_coll_cls
         )
@@ -810,11 +1001,13 @@ class TestTeardown:
 
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
     @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.load_launch_state")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_confirmation_prompt_no(
-        self, mock_reconnect, mock_prov_cls, mock_coll_cls
+        self, mock_reconnect, mock_state, mock_prov_cls, mock_coll_cls
     ):
         """Confirmation prompt with non-'yes' cancels teardown."""
+        mock_state.return_value = None
         mock_prov, _, _, _ = _setup_teardown_mocks(
             mock_reconnect, mock_prov_cls, mock_coll_cls
         )
@@ -833,11 +1026,13 @@ class TestTeardown:
 
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
     @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.load_launch_state")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_non_tty_without_force(
-        self, mock_reconnect, mock_prov_cls, mock_coll_cls
+        self, mock_reconnect, mock_state, mock_prov_cls, mock_coll_cls
     ):
         """Non-TTY stdin without --force returns 1 with error."""
+        mock_state.return_value = None
         mock_prov, _, _, _ = _setup_teardown_mocks(
             mock_reconnect, mock_prov_cls, mock_coll_cls
         )
@@ -850,3 +1045,25 @@ class TestTeardown:
 
         assert rc == 1
         mock_prov.delete_workers.assert_not_called()
+
+    @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
+    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.load_launch_state")
+    @patch("crsbench.cloud.cli._teardown.reconnect")
+    def test_teardown_collects_and_deletes_orchestrator_when_launch_state_present(
+        self, mock_reconnect, mock_state, mock_prov_cls, mock_coll_cls
+    ):
+        """Remote launches should collect and delete the orchestrator VM too."""
+        mock_state.return_value = _make_launch_state()
+        mock_prov, mock_coll, _, _ = _setup_teardown_mocks(
+            mock_reconnect, mock_prov_cls, mock_coll_cls
+        )
+
+        from crsbench.cloud.cli._teardown import run_teardown
+
+        rc = run_teardown(_make_teardown_args(force=True))
+
+        assert rc == 0
+        assert mock_coll.collect.call_count == 3
+        mock_prov.delete_workers.assert_called_once()
+        mock_prov.delete_instance.assert_called_once()

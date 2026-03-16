@@ -27,6 +27,7 @@ belongs in `docs/modules/`.
 - [Migration Design](./migration/migration-validation.md)
 - [Logging Contract](./logging/logging-architecture.md)
 - [Services Contract](./services/litellm.md)
+- [GCE Cloud Orchestrator Launch](./distributed/gce-cloud-orchestrator.md)
 
 ## Scope
 
@@ -57,3 +58,4 @@ should be applied to the dedicated canonical docs below.
 | Logging format/semantics contracts | `logging/logging-architecture.md` |
 | Service/backend integration contracts | `services/litellm.md` |
 | GCE cloud worker fleet lifecycle | `distributed/gce-cloud-workers.md` |
+| GCE remote orchestrator launch lifecycle | `distributed/gce-cloud-orchestrator.md` |

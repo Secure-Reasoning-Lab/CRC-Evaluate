@@ -797,3 +797,70 @@ def test_cloud_fleet_bringup_is_skipped_when_no_trials_remain(tmp_path: Path) ->
     session.register_or_raise.assert_not_called()
     manager.bring_up_gce_workers.assert_not_called()
     session.trial_queue.enqueue.assert_not_called()
+
+
+def test_cloud_fleet_bringup_is_skipped_for_preprovisioned_remote_orchestrator(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Remote orchestrator mode should not provision workers again."""
+    from crsbench.validation.schemas import CloudConfig, GceWorkerFleetConfig
+
+    monkeypatch.setenv("CRSBENCH_CLOUD_PREPROVISIONED_WORKERS", "1")
+
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = False
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+    config.crs_compose = None
+    config.max_total_time = 3600
+    config.model_dump.return_value = {"experiment": "exp-test"}
+    config.cloud = CloudConfig(
+        gce=GceWorkerFleetConfig(
+            project="test-project",
+            zone="us-central1-a",
+            worker_count=1,
+            machine_type="e2-standard-16",
+            boot_disk_size_gb=200,
+            image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+            service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+            owner_label="team-crs",
+        )
+    )
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.cloud_readiness = MagicMock()
+    session.register_or_raise.return_value = None
+
+    def _enqueue(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("stop after enqueue")
+
+    queue.enqueue.side_effect = _enqueue
+    manager = MagicMock()
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={"queued": {}, "started": {}, "failed": {}, "finished": {}},
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+        patch(
+            "crsbench.cloud.status.CloudFleetStatusManager",
+            return_value=manager,
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="stop after enqueue"):
+            run_experiment_distributed("exp-test", config, [_make_trial(None)])
+
+    manager.bring_up_gce_workers.assert_not_called()

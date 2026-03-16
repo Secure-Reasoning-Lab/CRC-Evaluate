@@ -6,17 +6,22 @@ import base64
 import json
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from crsbench.distributed.registry import RuntimeRegistration
-    from crsbench.validation.schemas import GceWorkerFleetConfig
+    from crsbench.validation.schemas import (
+        GceOrchestratorConfig,
+        GceWorkerFleetConfig,
+    )
 
 CRSBENCH_BOOTSTRAP_PAYLOAD_KEY = "crsbench-bootstrap-payload"
 CRSBENCH_INSTALL_SPEC_KEY = "crsbench-install-spec"
 CRSBENCH_GIT_REF_KEY = "crsbench-git-ref"
 CRSBENCH_GITHUB_DEPLOY_KEY = "crsbench-github-deploy-key"
 CRSBENCH_HF_TOKEN_KEY = "crsbench-hf-token"
+CRSBENCH_REDIS_PASSWORD_KEY = "crsbench-redis-password"
+CRSBENCH_EXPERIMENT_CONFIG_B64_KEY = "crsbench-experiment-config-b64"
 CRSBENCH_EXPERIMENT_METADATA_KEY = "crsbench-experiment"
 CRSBENCH_WORKER_NAME_METADATA_KEY = "crsbench-worker-name"
 CRSBENCH_READINESS_TIMEOUT_METADATA_KEY = "crsbench-readiness-timeout-sec"
@@ -26,7 +31,20 @@ GCE_STARTUP_SCRIPT_KEY = "startup-script"
 GCE_STARTUP_SCRIPT_URL_KEY = "startup-script-url"
 
 _STARTUP_SCRIPT_PATH = Path(__file__).with_name("startup") / "worker.sh"
+_ORCHESTRATOR_STARTUP_SCRIPT_PATH = (
+    Path(__file__).with_name("startup") / "orchestrator.sh"
+)
 _LABEL_PATTERN = re.compile(r"[^a-z0-9_-]+")
+
+
+class _InstallMetadataConfig(Protocol):
+    metadata: dict[str, str]
+    startup_script_uri: str | None
+    ssh_via_iap: bool
+    crsbench_install_spec: str | None
+    crsbench_git_ref: str
+    github_deploy_key_file: str | None
+    hf_token: str | None
 
 
 def _sanitize_label_key(value: str) -> str:
@@ -60,6 +78,24 @@ def build_worker_labels(
     )
     labels["crsbench-experiment"] = _sanitize_label_value(experiment_name)
     labels["crsbench-role"] = "worker"
+    return labels
+
+
+def build_orchestrator_labels(
+    *,
+    experiment_name: str,
+    orchestrator: GceOrchestratorConfig,
+) -> dict[str, str]:
+    """Render deterministic GCE labels for a CRSBench orchestrator VM."""
+    labels = {
+        _sanitize_label_key(key): _sanitize_label_value(value)
+        for key, value in orchestrator.labels.items()
+    }
+    labels["owner"] = _sanitize_label_value(
+        orchestrator.owner_label or orchestrator.labels.get("owner", "crsbench")
+    )
+    labels["crsbench-experiment"] = _sanitize_label_value(experiment_name)
+    labels["crsbench-role"] = "orchestrator"
     return labels
 
 
@@ -98,11 +134,69 @@ def load_startup_script() -> str:
     return _STARTUP_SCRIPT_PATH.read_text(encoding="utf-8")
 
 
+def load_orchestrator_startup_script() -> str:
+    """Load the bundled orchestrator startup script."""
+    return _ORCHESTRATOR_STARTUP_SCRIPT_PATH.read_text(encoding="utf-8")
+
+
+def _apply_access_metadata(
+    *,
+    metadata: dict[str, str],
+    config: _InstallMetadataConfig,
+) -> None:
+    metadata[GCE_ENABLE_OSLOGIN_KEY] = "TRUE"
+    metadata[GCE_SERIAL_PORT_ENABLE_KEY] = "TRUE"
+    metadata["block-project-ssh-keys"] = "TRUE"
+    if config.ssh_via_iap:
+        metadata["crsbench-ssh-via-iap"] = "TRUE"
+
+
+def _apply_install_metadata(
+    *,
+    metadata: dict[str, str],
+    config: _InstallMetadataConfig,
+) -> None:
+    if config.crsbench_install_spec:
+        metadata[CRSBENCH_INSTALL_SPEC_KEY] = config.crsbench_install_spec
+        metadata[CRSBENCH_GIT_REF_KEY] = config.crsbench_git_ref
+
+    if config.github_deploy_key_file:
+        key_bytes = Path(config.github_deploy_key_file).read_bytes()
+        metadata[CRSBENCH_GITHUB_DEPLOY_KEY] = base64.b64encode(key_bytes).decode(
+            "ascii"
+        )
+
+    if config.hf_token:
+        metadata[CRSBENCH_HF_TOKEN_KEY] = config.hf_token
+
+
+def _apply_startup_script_metadata(
+    *,
+    metadata: dict[str, str],
+    config: _InstallMetadataConfig,
+    startup_script: str,
+) -> None:
+    if config.startup_script_uri:
+        metadata[GCE_STARTUP_SCRIPT_URL_KEY] = config.startup_script_uri
+        metadata.pop(GCE_STARTUP_SCRIPT_KEY, None)
+        return
+    metadata[GCE_STARTUP_SCRIPT_KEY] = startup_script
+    metadata.pop(GCE_STARTUP_SCRIPT_URL_KEY, None)
+
+
+def _read_experiment_config_bytes(experiment_config_path: str | Path) -> bytes:
+    config_path = Path(experiment_config_path)
+    if config_path.is_file():
+        return config_path.read_bytes()
+    return str(experiment_config_path).encode("utf-8")
+
+
 def build_instance_metadata(
     *,
     experiment_name: str,
     fleet: GceWorkerFleetConfig,
     redis_host: str,
+    redis_password: str | None = None,
     registration: RuntimeRegistration,
     worker_name: str,
     startup_script: str,
@@ -121,29 +215,40 @@ def build_instance_metadata(
     metadata[CRSBENCH_EXPERIMENT_METADATA_KEY] = experiment_name
     metadata[CRSBENCH_WORKER_NAME_METADATA_KEY] = worker_name
     metadata[CRSBENCH_READINESS_TIMEOUT_METADATA_KEY] = str(fleet.readiness_timeout_sec)
-    metadata[GCE_ENABLE_OSLOGIN_KEY] = "TRUE"
-    metadata[GCE_SERIAL_PORT_ENABLE_KEY] = "TRUE"
-    metadata["block-project-ssh-keys"] = "TRUE"
-    if fleet.ssh_via_iap:
-        metadata["crsbench-ssh-via-iap"] = "TRUE"
+    if redis_password:
+        metadata[CRSBENCH_REDIS_PASSWORD_KEY] = redis_password
 
-    if fleet.crsbench_install_spec:
-        metadata[CRSBENCH_INSTALL_SPEC_KEY] = fleet.crsbench_install_spec
-        metadata[CRSBENCH_GIT_REF_KEY] = fleet.crsbench_git_ref
+    _apply_access_metadata(metadata=metadata, config=fleet)
+    _apply_install_metadata(metadata=metadata, config=fleet)
+    _apply_startup_script_metadata(
+        metadata=metadata,
+        config=fleet,
+        startup_script=startup_script,
+    )
+    return metadata
 
-    if fleet.github_deploy_key_file:
-        key_bytes = Path(fleet.github_deploy_key_file).read_bytes()
-        metadata[CRSBENCH_GITHUB_DEPLOY_KEY] = base64.b64encode(key_bytes).decode(
-            "ascii"
-        )
 
-    if fleet.hf_token:
-        metadata[CRSBENCH_HF_TOKEN_KEY] = fleet.hf_token
+def build_orchestrator_metadata(
+    *,
+    experiment_name: str,
+    orchestrator: GceOrchestratorConfig,
+    experiment_config_path: str | Path,
+    redis_password: str,
+    startup_script: str,
+) -> dict[str, str]:
+    """Render metadata consumed by the GCE orchestrator bootstrap."""
+    metadata = dict(orchestrator.metadata)
+    metadata[CRSBENCH_EXPERIMENT_METADATA_KEY] = experiment_name
+    metadata[CRSBENCH_REDIS_PASSWORD_KEY] = redis_password
+    metadata[CRSBENCH_EXPERIMENT_CONFIG_B64_KEY] = base64.b64encode(
+        _read_experiment_config_bytes(experiment_config_path)
+    ).decode("ascii")
 
-    if fleet.startup_script_uri:
-        metadata[GCE_STARTUP_SCRIPT_URL_KEY] = fleet.startup_script_uri
-        metadata.pop(GCE_STARTUP_SCRIPT_KEY, None)
-    else:
-        metadata[GCE_STARTUP_SCRIPT_KEY] = startup_script
-        metadata.pop(GCE_STARTUP_SCRIPT_URL_KEY, None)
+    _apply_access_metadata(metadata=metadata, config=orchestrator)
+    _apply_install_metadata(metadata=metadata, config=orchestrator)
+    _apply_startup_script_metadata(
+        metadata=metadata,
+        config=orchestrator,
+        startup_script=startup_script,
+    )
     return metadata

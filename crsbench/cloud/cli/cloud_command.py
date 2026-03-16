@@ -69,6 +69,15 @@ Examples:
         help="Absolute path on workers containing the experiment tree",
     )
 
+    # launch
+    launch_p = cloud_subparsers.add_parser(
+        "launch",
+        help="Launch an orchestrator VM plus worker fleet from this machine",
+    )
+    launch_p.add_argument(
+        "--config", required=True, help="Path to experiment YAML config"
+    )
+
     # keygen
     keygen_p = cloud_subparsers.add_parser(
         "keygen", help="Generate an SSH ed25519 deploy key pair"
@@ -129,6 +138,11 @@ def run_cloud(args: argparse.Namespace) -> int:
         from crsbench.cloud.cli._collect import run_collect
 
         return run_collect(args)
+
+    if cmd == "launch":
+        from crsbench.cloud.cli._launch import run_launch
+
+        return run_launch(args)
 
     if cmd == "teardown":
         from crsbench.cloud.cli._teardown import run_teardown

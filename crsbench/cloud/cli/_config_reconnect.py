@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from crsbench.cloud.launch_state import load_launch_state
 from crsbench.cloud.readiness import CloudReadinessStore
 from crsbench.distributed.job_lifecycle import JobLifecycleStore
 from crsbench.distributed.queue import create_redis_connection
@@ -33,7 +35,18 @@ def reconnect(config_path: str, experiment_name: str):  # noqa: ARG001
         raise SystemExit("Experiment config has no 'cloud' section.")
 
     fleet = config.cloud.gce
-    redis_host = config.redis_host or "localhost"
+    launch_state = load_launch_state(config.experiment_filestore, experiment_name)
+
+    if config.cloud.orchestrator is not None:
+        if launch_state is None:
+            raise SystemExit(
+                "Remote orchestrator launch state not found. "
+                "Run `crsbench cloud launch --config ...` first."
+            )
+        redis_host = launch_state.redis_host
+        os.environ["CRSBENCH_REDIS_PASSWORD"] = launch_state.redis_password
+    else:
+        redis_host = config.redis_host or "localhost"
     redis_conn = create_redis_connection(redis_host)
 
     readiness = CloudReadinessStore(cast("ReadinessRedisProtocol", redis_conn))

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from crsbench.cloud.cli._config_reconnect import reconnect
 from crsbench.cloud.collection import ArtifactCollector
 from crsbench.cloud.gce.provisioner import GceProvisioner
+from crsbench.cloud.launch_state import delete_launch_state, load_launch_state
 from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -34,6 +35,7 @@ def run_teardown(args: argparse.Namespace) -> int:
 
     provisioner = GceProvisioner()
     collector = ArtifactCollector()
+    launch_state = load_launch_state(experiment_filestore, args.experiment)
 
     # Validate GCE state
     live_workers = provisioner.list_workers(
@@ -52,11 +54,11 @@ def run_teardown(args: argparse.Namespace) -> int:
             ", ".join(sorted(stale_names)),
         )
 
-    if not live_workers and not redis_workers:
+    if not live_workers and not redis_workers and launch_state is None:
         logger.info("Nothing to tear down for experiment '%s'", args.experiment)
         return 0
 
-    if not live_workers and redis_workers:
+    if not live_workers and redis_workers and launch_state is None:
         logger.warning(
             "No live GCE instances but Redis has %d worker entries (stale state)",
             len(redis_workers),
@@ -73,10 +75,10 @@ def run_teardown(args: argparse.Namespace) -> int:
             logger.error("Use --force for non-interactive teardown")
             return 1
 
-        worker_count = len(live_workers)
+        worker_count = len(live_workers) + (1 if launch_state is not None else 0)
         logger.info(
-            "This will collect artifacts from %d workers (%d uncollected jobs) "
-            "and delete all workers.",
+            "This will collect artifacts from %d instances (%d uncollected jobs) "
+            "and delete all cloud VMs.",
             worker_count,
             uncollected_count,
         )
@@ -105,7 +107,37 @@ def run_teardown(args: argparse.Namespace) -> int:
             )
             return 1
 
+    if launch_state is not None:
+        orchestrator_worker = launch_state.as_orchestrator_record()
+        try:
+            collector.collect(
+                worker=orchestrator_worker,
+                fleet=launch_state.as_transport_config(),
+                experiment_name=args.experiment,
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir=remote_experiment_dir,
+            )
+            logger.info("Collection succeeded: %s", orchestrator_worker.name)
+        except Exception as exc:
+            logger.error(
+                "Collection failed for %s: %s -- aborting teardown, workers left alive",
+                orchestrator_worker.name,
+                exc,
+            )
+            return 1
+
     # Delete phase -- only reached if all collections succeeded
     provisioner.delete_workers(experiment_name=args.experiment, fleet=fleet)
-    logger.info("Teardown complete: %d workers deleted", len(live_workers))
+    if launch_state is not None:
+        provisioner.delete_instance(
+            project=launch_state.orchestrator_project,
+            zone=launch_state.orchestrator_zone,
+            instance_name=launch_state.orchestrator_name,
+        )
+        delete_launch_state(experiment_filestore, args.experiment)
+    logger.info(
+        "Teardown complete: %d workers deleted%s",
+        len(live_workers),
+        " and orchestrator deleted" if launch_state is not None else "",
+    )
     return 0

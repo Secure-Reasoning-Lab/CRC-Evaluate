@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from crsbench.cloud.cli._config_reconnect import reconnect
+from crsbench.cloud.launch_state import load_launch_state
 
 if TYPE_CHECKING:
     import argparse
@@ -31,6 +32,7 @@ def run_collect(args: argparse.Namespace) -> int:
     live_workers = provisioner.list_workers(
         experiment_name=args.experiment, fleet=fleet
     )
+    launch_state = load_launch_state(experiment_filestore, args.experiment)
     live_names = {w.name for w in live_workers}
 
     # Cross-reference with Redis readiness state
@@ -64,6 +66,21 @@ def run_collect(args: argparse.Namespace) -> int:
             logger.info("Collection succeeded: %s", worker.name)
         except (ArtifactCollectionError, Exception) as exc:
             logger.error("Collection failed for %s: %s", worker.name, exc)
+            failed += 1
+
+    if launch_state is not None:
+        orchestrator_worker = launch_state.as_orchestrator_record()
+        try:
+            collector.collect(
+                worker=orchestrator_worker,
+                fleet=launch_state.as_transport_config(),
+                experiment_name=args.experiment,
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir=remote_experiment_dir,
+            )
+            logger.info("Collection succeeded: %s", orchestrator_worker.name)
+        except (ArtifactCollectionError, Exception) as exc:
+            logger.error("Collection failed for %s: %s", orchestrator_worker.name, exc)
             failed += 1
 
     return 1 if failed else 0

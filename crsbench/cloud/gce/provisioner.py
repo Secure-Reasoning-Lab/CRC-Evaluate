@@ -8,14 +8,17 @@ from typing import TYPE_CHECKING, Protocol, cast
 
 from crsbench.cloud.gce.metadata import (
     build_instance_metadata,
+    build_orchestrator_labels,
+    build_orchestrator_metadata,
     build_worker_labels,
+    load_orchestrator_startup_script,
     load_startup_script,
 )
 from crsbench.cloud.gce.models import GceInstanceRequest, GceWorkerRecord
 
 if TYPE_CHECKING:
     from crsbench.distributed.registry import RuntimeRegistration
-    from crsbench.validation.schemas import GceWorkerFleetConfig
+    from crsbench.validation.schemas import GceOrchestratorConfig, GceWorkerFleetConfig
 
 
 class GceProvisioningError(RuntimeError):
@@ -374,6 +377,7 @@ class GceProvisioner:
         experiment_name: str,
         fleet: GceWorkerFleetConfig,
         redis_host: str,
+        redis_password: str | None = None,
         registration: RuntimeRegistration,
     ) -> list[GceInstanceRequest]:
         """Render instance requests from validated config and runtime metadata."""
@@ -391,6 +395,7 @@ class GceProvisioner:
                 experiment_name=experiment_name,
                 fleet=fleet,
                 redis_host=redis_host,
+                redis_password=redis_password,
                 registration=registration,
                 worker_name=worker_name,
                 startup_script=startup_script,
@@ -420,6 +425,7 @@ class GceProvisioner:
         experiment_name: str,
         fleet: GceWorkerFleetConfig,
         redis_host: str,
+        redis_password: str | None = None,
         registration: RuntimeRegistration,
     ) -> list[GceWorkerRecord]:
         """Create a worker fleet and return normalized provider records."""
@@ -427,6 +433,7 @@ class GceProvisioner:
             experiment_name=experiment_name,
             fleet=fleet,
             redis_host=redis_host,
+            redis_password=redis_password,
             registration=registration,
         )
         workers: list[GceWorkerRecord] = []
@@ -462,6 +469,172 @@ class GceProvisioner:
         except Exception:
             self._rollback_requests(rollback_requests)
             raise
+
+    def build_orchestrator_request(
+        self,
+        *,
+        experiment_name: str,
+        orchestrator: GceOrchestratorConfig,
+        experiment_config_path: str,
+        redis_password: str,
+    ) -> GceInstanceRequest:
+        """Render an instance request for the remote orchestrator VM."""
+        zone = self._resolve_orchestrator_zone(orchestrator)
+        labels = build_orchestrator_labels(
+            experiment_name=experiment_name,
+            orchestrator=orchestrator,
+        )
+        startup_script = self._startup_script or load_orchestrator_startup_script()
+        instance_name = self._build_orchestrator_name(
+            experiment_name=experiment_name,
+            orchestrator=orchestrator,
+        )
+        metadata = build_orchestrator_metadata(
+            experiment_name=experiment_name,
+            orchestrator=orchestrator,
+            experiment_config_path=experiment_config_path,
+            redis_password=redis_password,
+            startup_script=startup_script,
+        )
+        return GceInstanceRequest(
+            project=orchestrator.project,
+            zone=zone,
+            name=instance_name,
+            labels=labels,
+            metadata=metadata,
+            service_account_email=orchestrator.service_account_email,
+            ssh_via_iap=orchestrator.ssh_via_iap,
+            machine_type=orchestrator.machine_type,
+            boot_disk_size_gb=orchestrator.boot_disk_size_gb,
+            image=orchestrator.image,
+            instance_template=orchestrator.instance_template,
+            network=orchestrator.network,
+            subnetwork=orchestrator.subnetwork,
+        )
+
+    def create_orchestrator(
+        self,
+        *,
+        experiment_name: str,
+        orchestrator: GceOrchestratorConfig,
+        experiment_config_path: str,
+        redis_password: str,
+    ) -> GceWorkerRecord:
+        """Create the remote orchestrator VM and return its normalized record."""
+        request = self.build_orchestrator_request(
+            experiment_name=experiment_name,
+            orchestrator=orchestrator,
+            experiment_config_path=experiment_config_path,
+            redis_password=redis_password,
+        )
+        try:
+            operation = self._client.insert_instance(
+                project=request.project,
+                zone=request.zone,
+                instance_resource=request.to_instance_resource(),
+            )
+            result = self._client.wait_for_zone_operation(
+                project=request.project,
+                zone=request.zone,
+                operation=_extract_operation_name(operation),
+            )
+            errors = _extract_operation_errors(result)
+            if errors:
+                raise GceProvisioningError(
+                    f"Failed to create orchestrator {request.name}: {'; '.join(errors)}"
+                )
+            return _normalize_instance(
+                self._client.get_instance(
+                    project=request.project,
+                    zone=request.zone,
+                    instance=request.name,
+                )
+            )
+        except Exception:
+            self._rollback_requests([request])
+            raise
+
+    def list_orchestrators(
+        self,
+        *,
+        experiment_name: str,
+        orchestrator: GceOrchestratorConfig,
+    ) -> list[GceWorkerRecord]:
+        """List orchestrator instances belonging to this experiment."""
+        zone = self._resolve_orchestrator_zone(orchestrator)
+        expected_labels = build_orchestrator_labels(
+            experiment_name=experiment_name,
+            orchestrator=orchestrator,
+        )
+        instances = [
+            _normalize_instance(instance)
+            for instance in self._client.list_instances(
+                project=orchestrator.project,
+                zone=zone,
+                label_selector=expected_labels,
+            )
+        ]
+        return [
+            instance
+            for instance in instances
+            if all(
+                instance.labels.get(key) == value
+                for key, value in expected_labels.items()
+            )
+        ]
+
+    def delete_orchestrators(
+        self,
+        *,
+        experiment_name: str,
+        orchestrator: GceOrchestratorConfig,
+    ) -> list[GceWorkerRecord]:
+        """Delete all orchestrator instances owned by this experiment."""
+        deleted_instances = self.list_orchestrators(
+            experiment_name=experiment_name,
+            orchestrator=orchestrator,
+        )
+        for instance in deleted_instances:
+            operation = self._client.delete_instance(
+                project=orchestrator.project,
+                zone=instance.zone,
+                instance=instance.name,
+            )
+            result = self._client.wait_for_zone_operation(
+                project=orchestrator.project,
+                zone=instance.zone,
+                operation=_extract_operation_name(operation),
+            )
+            errors = _extract_operation_errors(result)
+            if errors:
+                raise GceProvisioningError(
+                    f"Failed to delete orchestrator {instance.name}: {'; '.join(errors)}"
+                )
+        return deleted_instances
+
+    def delete_instance(
+        self,
+        *,
+        project: str,
+        zone: str,
+        instance_name: str,
+    ) -> None:
+        """Delete one named instance and wait for the zonal operation."""
+        operation = self._client.delete_instance(
+            project=project,
+            zone=zone,
+            instance=instance_name,
+        )
+        result = self._client.wait_for_zone_operation(
+            project=project,
+            zone=zone,
+            operation=_extract_operation_name(operation),
+        )
+        errors = _extract_operation_errors(result)
+        if errors:
+            raise GceProvisioningError(
+                f"Failed to delete instance {instance_name}: {'; '.join(errors)}"
+            )
 
     def list_workers(
         self,
@@ -528,6 +701,30 @@ class GceProvisioner:
                 "cloud.gce.region is not supported yet; configure cloud.gce.zone"
             )
         raise GceProvisioningError("cloud.gce.zone is required for GCE worker fleets")
+
+    def _resolve_orchestrator_zone(self, orchestrator: GceOrchestratorConfig) -> str:
+        if orchestrator.zone:
+            return orchestrator.zone
+        if orchestrator.region:
+            raise GceProvisioningError(
+                "cloud.orchestrator.region is not supported yet; configure cloud.orchestrator.zone"
+            )
+        raise GceProvisioningError(
+            "cloud.orchestrator.zone is required for GCE orchestrator instances"
+        )
+
+    def _build_orchestrator_name(
+        self,
+        *,
+        experiment_name: str,
+        orchestrator: GceOrchestratorConfig,
+    ) -> str:
+        prefix = _sanitize_name_fragment(
+            orchestrator.instance_name_prefix or "orchestrator"
+        )
+        experiment_fragment = _sanitize_name_fragment(experiment_name)
+        name = f"{prefix}-{experiment_fragment}"
+        return name[:63].rstrip("-") or "orchestrator"
 
     def _rollback_requests(self, requests: list[GceInstanceRequest]) -> None:
         for request in reversed(requests):

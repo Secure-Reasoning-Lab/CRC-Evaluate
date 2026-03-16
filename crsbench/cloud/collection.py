@@ -14,7 +14,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path  # noqa: TC003
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import tenacity
 
@@ -22,7 +22,15 @@ from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from crsbench.cloud.gce.models import GceWorkerRecord
-    from crsbench.validation.schemas import GceWorkerFleetConfig
+
+
+class SshTransportConfig(Protocol):
+    """Minimal transport settings needed for rsync/SSH collection."""
+
+    project: str
+    zone: str | None
+    ssh_via_iap: bool
+
 
 logger = get_logger(__name__)
 
@@ -40,7 +48,7 @@ class ArtifactCollector:
     def collect(
         self,
         worker: GceWorkerRecord,
-        fleet: GceWorkerFleetConfig,
+        fleet: SshTransportConfig,
         experiment_name: str,
         experiment_filestore: Path,
         remote_experiment_dir: str,
@@ -115,7 +123,7 @@ class ArtifactCollector:
     def _build_rsync_cmd(
         self,
         worker: GceWorkerRecord,
-        fleet: GceWorkerFleetConfig,
+        fleet: SshTransportConfig,
         remote_experiment_dir: str,
         staging_dir: Path,
     ) -> list[str]:
@@ -154,7 +162,7 @@ class ArtifactCollector:
     def _build_ssh_command(
         self,
         worker: GceWorkerRecord,
-        fleet: GceWorkerFleetConfig,
+        fleet: SshTransportConfig,
     ) -> str:
         """Return the ``-e`` argument string for rsync SSH transport.
 

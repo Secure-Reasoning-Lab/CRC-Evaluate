@@ -35,6 +35,37 @@ cloud:
     readiness_timeout_sec: 900
 ```
 
+To launch the orchestrator in GCE as well, add a sibling `cloud.orchestrator`
+block. The local operator machine still owns provisioning; the remote
+orchestrator VM only runs `crsbench run` and hosts the Redis/Valkey queue.
+
+```yaml
+cloud:
+  orchestrator:
+    project: my-gcp-project
+    zone: us-central1-a
+    machine_type: e2-standard-16
+    boot_disk_size_gb: 200
+    image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+    service_account_email: crsbench-orchestrator@my-gcp-project.iam.gserviceaccount.com
+    owner_label: my-team
+    use_os_login: true
+    ssh_via_iap: true
+    crsbench_install_spec: "git+ssh://git@github.com/your-org/CRSBench.git"
+    github_deploy_key_file: .crsbench-keys/crsbench-deploy
+  gce:
+    project: my-gcp-project
+    zone: us-central1-a
+    worker_count: 4
+    machine_type: e2-standard-16
+    boot_disk_size_gb: 200
+    image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+    service_account_email: crsbench-worker@my-gcp-project.iam.gserviceaccount.com
+    owner_label: my-team
+    use_os_login: true
+    ssh_via_iap: true
+```
+
 ### Configuration Fields
 
 | Field | Required | Default | Description |
@@ -124,20 +155,45 @@ as `HF_TOKEN` in the worker environment.
 
 ## Launching an Experiment
 
-When `cloud.gce` is present in the config, `crsbench run` automatically provisions the fleet:
+### Local Orchestrator + GCE Workers
+
+When `cloud.gce` is present and `cloud.orchestrator` is absent, `crsbench run`
+provisions the worker fleet from the local machine:
 
 ```bash
 uv run crsbench run --experiment-config config.yaml
 ```
 
-The orchestrator will:
+The local orchestrator will:
 
 1. Create `worker_count` VMs in the specified zone
 2. Wait for each VM to bootstrap and report `ready` (up to `readiness_timeout_sec`)
 3. Enqueue trial jobs only after the full fleet is ready
 4. If any VM fails to become ready, tear down the entire fleet and exit with an error
 
-Bootstrap failures are reported with per-instance evidence, so you can diagnose issues without SSH-ing into VMs.
+### Remote Orchestrator + GCE Workers
+
+When both `cloud.orchestrator` and `cloud.gce` are present, use `cloud launch`
+from the local operator machine:
+
+```bash
+uv run crsbench cloud launch --config config.yaml
+```
+
+This path:
+
+1. Provisions one orchestrator VM
+2. Waits for the orchestrator VM to have an internal address
+3. Provisions the worker fleet with Redis host/password metadata targeting that orchestrator VM
+4. Lets the remote orchestrator VM start Valkey and run `crsbench run`
+
+`cloud launch` persists local launch state under the experiment filestore at
+`.crsbench-cloud/<experiment>.json`. Later `cloud status`, `cloud collect`, and
+`cloud teardown` commands reuse that state automatically to reconnect to the
+remote orchestrator's Redis.
+
+Bootstrap failures are reported with per-instance evidence, so you can
+diagnose issues without SSH-ing into VMs.
 
 ## Monitoring
 
@@ -180,13 +236,14 @@ Pull experiment results from all live workers to the local experiment filestore:
 ```bash
 uv run crsbench cloud collect my-experiment \
     --config config.yaml \
-    --remote-dir /data/experiments
+    --remote-dir /data/experiments/my-experiment
 ```
 
 - Uses rsync (via IAP tunnel or direct SSH depending on config)
 - Stages artifacts in a temporary directory, verifies at least one valid trial exists, then publishes to the experiment filestore
 - Continues to remaining workers if one fails; exits with code 1 on partial failure
 - Safe to run multiple times (incremental rsync)
+- In remote-orchestrator mode, also collects the orchestrator VM's experiment tree
 
 ## Teardown
 
@@ -195,7 +252,7 @@ Remove the worker fleet after collecting results:
 ```bash
 uv run crsbench cloud teardown my-experiment \
     --config config.yaml \
-    --remote-dir /data/experiments
+    --remote-dir /data/experiments/my-experiment
 ```
 
 The teardown safety flow:
@@ -204,15 +261,16 @@ The teardown safety flow:
 2. Cross-references with Redis readiness records (warns about mismatches)
 3. Prompts for confirmation (interactive TTY required)
 4. Collects artifacts from ALL workers first
-5. Deletes VMs only after all collections succeed
-6. If any collection fails, aborts and leaves workers alive
+5. In remote-orchestrator mode, also collects the orchestrator VM
+6. Deletes VMs only after all collections succeed
+7. If any collection fails, aborts and leaves cloud VMs alive
 
 Use `--force` to skip the confirmation prompt (e.g., in scripts):
 
 ```bash
 uv run crsbench cloud teardown my-experiment \
     --config config.yaml \
-    --remote-dir /data/experiments \
+    --remote-dir /data/experiments/my-experiment \
     --force
 ```
 
@@ -222,26 +280,29 @@ uv run crsbench cloud teardown my-experiment \
 # 0. Generate deploy key (one-time) and add public key to GitHub
 uv run crsbench cloud keygen
 
-# 1. Start Valkey (accessible from GCE workers)
+# 1. Local-orchestrator mode only: start Valkey accessible from GCE workers
 uv run python scripts/valkey-helper.py --password start
 
-# 2. Run experiment (provisions fleet, enqueues jobs, monitors)
+# 2. Local-orchestrator mode: run experiment from this machine
 uv run crsbench run --experiment-config config.yaml
 
-# 3. Check status during the run
+# 3. Remote-orchestrator mode: provision orchestrator + workers from this machine
+uv run crsbench cloud launch --config config.yaml
+
+# 4. Check status during the run
 uv run crsbench cloud status my-experiment --config config.yaml
 
-# 4. After completion, collect artifacts
+# 5. After completion, collect artifacts
 uv run crsbench cloud collect my-experiment \
     --config config.yaml \
-    --remote-dir /data/experiments
+    --remote-dir /data/experiments/my-experiment
 
-# 5. Tear down the fleet
+# 6. Tear down the fleet (and remote orchestrator, if used)
 uv run crsbench cloud teardown my-experiment \
     --config config.yaml \
-    --remote-dir /data/experiments
+    --remote-dir /data/experiments/my-experiment
 
-# 6. Generate report
+# 7. Generate report
 uv run python scripts/cpv_report.py /data/experiments/my-experiment --csv
 ```
 
@@ -268,6 +329,12 @@ sudo systemctl status crsbench-worker.service
 sudo journalctl -u crsbench-worker.service -f
 ```
 
+## Operator Connectivity Notes
+
+- Workers must be able to reach the orchestrator VM's Redis/Valkey endpoint.
+- `cloud status` and `cloud events` reconnect to Redis using the persisted launch state in remote-orchestrator mode.
+- The local operator machine still needs network reachability to that Redis endpoint. If the orchestrator VM exposes only a private address, run these commands from a machine with VPC access or add your own tunnel.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -285,3 +352,4 @@ sudo journalctl -u crsbench-worker.service -f
 - [Distributed Experiments](./distributed.md) -- full distributed experiment guide
 - [Configuration Reference](./config-reference.md) -- all experiment config fields
 - [Design: GCE Cloud Workers](../../design/distributed/gce-cloud-workers.md) -- architecture and contracts
+- [Design: GCE Cloud Orchestrator Launch](../../design/distributed/gce-cloud-orchestrator.md) -- remote-orchestrator launch contract

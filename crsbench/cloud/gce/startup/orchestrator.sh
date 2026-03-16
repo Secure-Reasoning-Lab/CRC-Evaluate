@@ -3,15 +3,17 @@
 #
 # Expected instance metadata:
 #   crsbench-install-spec       git+ssh://... or pip spec (required)
-#   crsbench-experiment-config  repo-relative path to experiment YAML (required)
+#   crsbench-experiment-config-b64  base64-encoded experiment YAML payload (required)
+#   crsbench-redis-password     shared Valkey password (required)
 #   crsbench-git-ref            branch/tag to clone (default: main)
 #   crsbench-github-deploy-key  base64-encoded SSH private key (optional)
 #   crsbench-hf-token           HuggingFace token (optional)
 #
 # The script:
 #   1. Clones CRSBench (same git+ssh path as worker.sh)
-#   2. Installs Docker and starts Valkey with password auth on 0.0.0.0:6379
-#   3. Patches the experiment config redis_host to localhost:6379
+#   2. Installs Docker and starts Valkey with the shared password on 0.0.0.0:6379
+#   3. Decodes the experiment config payload and patches redis_host to localhost:6379
+#   4. Marks workers as pre-provisioned so `crsbench run` does not create them again
 #   4. Runs `crsbench run`
 set -euo pipefail
 
@@ -61,7 +63,8 @@ fi
 # --- Read metadata ---
 INSTALL_SPEC="$(metadata_get_optional "crsbench-install-spec")"
 GIT_REF="$(metadata_get_optional "crsbench-git-ref")"
-EXPERIMENT_CONFIG="$(metadata_get "crsbench-experiment-config")"
+EXPERIMENT_CONFIG_B64="$(metadata_get "crsbench-experiment-config-b64")"
+REDIS_PASSWORD="$(metadata_get "crsbench-redis-password")"
 GITHUB_DEPLOY_KEY="$(metadata_get_optional "crsbench-github-deploy-key")"
 HF_TOKEN="$(metadata_get_optional "crsbench-hf-token")"
 
@@ -104,8 +107,6 @@ fi
 
 # --- Start Valkey with password auth on 0.0.0.0:6379 ---
 echo "Starting Valkey..."
-VALKEY_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
-
 docker run -d \
   --name crsbench-valkey \
   -p "0.0.0.0:6379:6379" \
@@ -114,11 +115,11 @@ docker run -d \
   valkey/valkey:8.0-alpine \
   valkey-server \
   --appendonly yes \
-  --requirepass "${VALKEY_PASSWORD}"
+  --requirepass "${REDIS_PASSWORD}"
 
 # Wait for Valkey to be ready
 for _i in $(seq 1 30); do
-  if docker exec -e "REDISCLI_AUTH=${VALKEY_PASSWORD}" crsbench-valkey \
+  if docker exec -e "REDISCLI_AUTH=${REDIS_PASSWORD}" crsbench-valkey \
        valkey-cli ping 2>/dev/null | grep -q PONG; then
     echo "Valkey is ready"
     break
@@ -126,21 +127,14 @@ for _i in $(seq 1 30); do
   sleep 1
 done
 
-export CRSBENCH_REDIS_PASSWORD="${VALKEY_PASSWORD}"
+export CRSBENCH_REDIS_PASSWORD="${REDIS_PASSWORD}"
+export CRSBENCH_CLOUD_PREPROVISIONED_WORKERS="1"
 
-# --- Resolve experiment config and patch redis_host ---
-if [[ -n "${CLONE_DIR}" ]]; then
-  CONFIG_PATH="${CLONE_DIR}/${EXPERIMENT_CONFIG}"
-else
-  CONFIG_PATH="${EXPERIMENT_CONFIG}"
-fi
+# --- Decode experiment config and patch redis_host ---
+CONFIG_PATH="${STATE_DIR}/experiment-config.yaml"
+echo "${EXPERIMENT_CONFIG_B64}" | base64 --decode > "${CONFIG_PATH}"
 
-if [[ ! -f "${CONFIG_PATH}" ]]; then
-  echo "Experiment config not found: ${CONFIG_PATH}" >&2
-  exit 1
-fi
-
-# Patch redis_host in the config to point to localhost
+# Patch redis_host in the config to point to localhost.
 python3 - "${CONFIG_PATH}" <<'PY'
 import sys
 from pathlib import Path

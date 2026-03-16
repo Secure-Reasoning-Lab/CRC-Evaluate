@@ -57,6 +57,7 @@ class CloudFleetStatusManager:
         experiment_name: str,
         fleet: GceWorkerFleetConfig,
         redis_host: str,
+        redis_password: str | None = None,
         registration: RuntimeRegistration,
     ) -> CloudFleetSnapshot:
         """Provision the requested GCE fleet and wait for explicit readiness."""
@@ -67,6 +68,7 @@ class CloudFleetStatusManager:
                 experiment_name=experiment_name,
                 fleet=fleet,
                 redis_host=redis_host,
+                redis_password=redis_password,
                 registration=registration,
             )
 

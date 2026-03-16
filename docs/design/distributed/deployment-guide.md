@@ -58,6 +58,20 @@ of truth for worker-fleet shape. The cloud contract is:
 - startup failure evidence must remain retrievable from the control path
   without interactive VM login
 
+## Remote GCE Orchestrator Contract
+
+When a deployment uses both `cloud.orchestrator` and `cloud.gce`, the local
+operator machine remains the cloud control plane. The deployment contract is:
+
+- the operator machine provisions exactly one orchestrator VM plus the worker fleet
+- the orchestrator VM runs `crsbench run` but does not create workers again
+- the operator machine generates the Redis/Valkey password for the run
+- workers receive the orchestrator VM's worker-reachable Redis host, never `localhost`
+- local `cloud` commands reconnect through persisted launch state stored under
+  the experiment filestore
+- local `status` and `events` commands therefore still require Redis
+  reachability from the operator machine to the orchestrator VM
+
 ## Cloud Readiness and Evidence
 
 Managed cloud bring-up is successful only when CRSBench sees an explicit ready
