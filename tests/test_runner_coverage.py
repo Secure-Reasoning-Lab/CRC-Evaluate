@@ -8,13 +8,12 @@ from crsbench.evaluation.coverage.models import CoverageSummary, TimedCoverageIn
 from crsbench.evaluation.runner import BenchmarkRunner
 
 
-def _make_runner(oss_fuzz_path: Path) -> BenchmarkRunner:
+def _make_runner() -> BenchmarkRunner:
     adapter = MagicMock()
     adapter.mode = "bug-fixing"
     return BenchmarkRunner(
         adapter=adapter,
         snapshot_period=0,
-        oss_fuzz_path=oss_fuzz_path,
         build_workers=2,
         verify_workers=3,
     )
@@ -30,9 +29,7 @@ def test_run_post_experiment_coverage_uses_engine_timed_line_coverage(
     seed_dir.mkdir(parents=True)
     seed_path = seed_dir / "seed-a"
     seed_path.write_bytes(b"seed")
-    oss_fuzz_path = tmp_path / "oss-fuzz"
-    oss_fuzz_path.mkdir()
-    runner = _make_runner(oss_fuzz_path)
+    runner = _make_runner()
 
     engine_inits: list[dict] = []
     engine_calls: list[dict] = []
@@ -40,7 +37,6 @@ def test_run_post_experiment_coverage_uses_engine_timed_line_coverage(
     class _FakeEngine:
         def __init__(
             self,
-            oss_fuzz_path: Path,
             *,
             build_workers: int | None = None,
             runtime_workers: int | None = None,
@@ -50,7 +46,6 @@ def test_run_post_experiment_coverage_uses_engine_timed_line_coverage(
         ) -> None:
             engine_inits.append(
                 {
-                    "oss_fuzz_path": oss_fuzz_path,
                     "build_workers": build_workers,
                     "runtime_workers": runtime_workers,
                     "runtime_cpus": runtime_cpus,
@@ -113,7 +108,6 @@ def test_run_post_experiment_coverage_uses_engine_timed_line_coverage(
 
     assert engine_inits == [
         {
-            "oss_fuzz_path": oss_fuzz_path,
             "build_workers": 2,
             "runtime_workers": 3,
             "runtime_cpus": None,

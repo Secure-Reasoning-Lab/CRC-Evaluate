@@ -41,6 +41,8 @@ Coverage runtime notes:
 
 - `crsbench coverage --experiment-config ...` and `--experiment-dir ...` use
   Atlantis `oss-crs build-target` outputs for each `(benchmark, harness)` pair.
+- `crsbench coverage` does not accept `--oss-fuzz-path`; post-trial coverage
+  analysis uses the Atlantis/given_fuzzer backend directly.
 - `--jobs` is the number of parallel `(benchmark, harness)` jobs.
 - `--cores-per-job` is the number of warm one-core coverage containers per
   `(benchmark, harness)` job. CRSBench shards seeds across those containers and

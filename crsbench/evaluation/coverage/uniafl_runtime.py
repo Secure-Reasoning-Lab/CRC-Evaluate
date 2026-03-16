@@ -171,6 +171,7 @@ def materialize_atlantis_build_output(
     if not source_repo_dir.is_dir():
         raise FileNotFoundError(f"Missing Atlantis source output: {source_repo_dir}")
 
+    fix_docker_ownership(atlantis_build_output_dir)
     normalized_build_output_dir.mkdir(parents=True, exist_ok=True)
     fix_docker_ownership(normalized_build_output_dir)
     for child in list(normalized_build_output_dir.iterdir()):

@@ -121,15 +121,14 @@ def test_materialize_atlantis_build_output_repairs_ownership_before_cleanup(
     stale_dir.mkdir(parents=True)
     (stale_dir / "seed").write_text("old\n")
 
-    call_order: list[str] = []
+    call_order: list[tuple[str, Path]] = []
 
     def fake_fix(path: Path) -> None:
-        assert path == normalized_out
-        call_order.append("fix")
+        call_order.append(("fix", path))
 
     def fake_remove(path: Path) -> None:
         if path == stale_dir:
-            call_order.append("remove")
+            call_order.append(("remove", path))
         if path.is_dir():
             import shutil
 
@@ -152,7 +151,11 @@ def test_materialize_atlantis_build_output_repairs_ownership_before_cleanup(
             normalized_build_output_dir=normalized_out,
         )
 
-    assert call_order[:2] == ["fix", "remove"]
+    assert call_order[:3] == [
+        ("fix", atlantis_out),
+        ("fix", normalized_out),
+        ("remove", stale_dir),
+    ]
 
 
 def test_stage_benchmark_for_coverage_preserves_required_dotfiles(

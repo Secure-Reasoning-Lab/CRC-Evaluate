@@ -99,6 +99,19 @@ class TestCoverageEngine:
         assert eng.build_workers == 8
         # Note: verify_workers removed - parallelism handled by DAGExecutor
 
+    def test_default_workspace_uses_repo_local_atlantis_cache(self) -> None:
+        """Coverage analysis can run without an OSS-Fuzz checkout."""
+        eng = CoverageEngine(build_workers=1)
+        variant_name = "test-benchmark-cov-delta-coverage"
+        expected = (
+            Path(__file__).resolve().parents[1]
+            / ".crsbench-coverage"
+            / variant_name
+            / "build"
+            / "out"
+        )
+        assert eng.infra.get_build_output_path(variant_name) == expected
+
     def test_merge_overlapping_coverage(self, engine: CoverageEngine):
         """Test merging coverage deduplicates overlapping lines."""
         merged = {"main": {"src": "main.c", "lines": {1, 2, 3}}}

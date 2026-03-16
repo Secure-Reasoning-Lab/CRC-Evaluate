@@ -565,7 +565,6 @@ class BenchmarkRunner:
         # Run post-experiment coverage (only for bug-finding CRS with successful run)
         if (
             self.coverage_enabled
-            and self.oss_fuzz_path
             and harness_result
             and harness_result.run_successful
             and self._crs_type == "bug-finding"
@@ -2181,9 +2180,6 @@ class BenchmarkRunner:
             trial_output_dir: Trial output directory
             harness_name: Name of the harness
         """
-        if not self.oss_fuzz_path:
-            return
-
         corpus_dir = trial_output_dir / "output" / "seeds"
         if not corpus_dir.exists() or not any(corpus_dir.iterdir()):
             self.logger.info("No corpus files for post-experiment coverage")
@@ -2204,7 +2200,6 @@ class BenchmarkRunner:
                 return
 
             engine = CoverageEngine(
-                oss_fuzz_path=self.oss_fuzz_path,
                 build_workers=self.build_workers,
                 runtime_workers=self.verify_workers,
             )

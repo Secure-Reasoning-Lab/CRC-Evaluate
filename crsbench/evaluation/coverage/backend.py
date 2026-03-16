@@ -50,6 +50,42 @@ class CoverageRunResult:
     crash_log_path: Optional[Path] = None
 
 
+def _approximate_totals_from_results(
+    results: list[CoverageRunResult],
+) -> dict[str, float | int]:
+    merged_lines: set[tuple[str, int]] = set()
+    covered_functions: set[str] = set()
+    covered_sources: set[Path] = set()
+
+    for result in results:
+        for function_name, data in result.coverage_data.items():
+            covered_functions.add(function_name)
+            src = data.get("src", "")
+            if src:
+                src_path = Path(src)
+                if src_path.exists():
+                    covered_sources.add(src_path)
+            for line in data.get("lines", []):
+                merged_lines.add((src, int(line)))
+
+    lines_covered = len(merged_lines)
+    lines_total = 0
+    for src_path in covered_sources:
+        try:
+            lines_total += len(src_path.read_text().splitlines())
+        except OSError:
+            continue
+    functions_covered = len(covered_functions)
+    lines_percent = (lines_covered / lines_total * 100.0) if lines_total > 0 else 0.0
+    return {
+        "lines_covered": lines_covered,
+        "lines_total": lines_total,
+        "lines_percent": lines_percent,
+        "functions_covered": functions_covered,
+        "functions_total": 0,
+    }
+
+
 class CoverageSession(AbstractContextManager["CoverageSession"]):
     """Abstract per-input coverage session."""
 
@@ -88,12 +124,8 @@ class ShardedCoverageSession(CoverageSession):
 
     def collect_many(self, corpus_files: list[Path]) -> dict[Path, CoverageRunResult]:
         shards: list[list[Path]] = [[] for _ in self.sessions]
-        ordered_files = sorted(
-            corpus_files,
-            key=lambda corpus_file: (_content_hash(corpus_file), corpus_file.name),
-        )
-        for index, corpus_file in enumerate(ordered_files):
-            shards[index % len(self.sessions)].append(corpus_file)
+        for corpus_file in corpus_files:
+            shards[self._session_index_for(corpus_file)].append(corpus_file)
 
         results: dict[Path, CoverageRunResult] = {}
         with ThreadPoolExecutor(max_workers=len(self.sessions)) as executor:
@@ -107,7 +139,28 @@ class ShardedCoverageSession(CoverageSession):
         return results
 
     def collect_batch_totals(self, corpus_dir: Path) -> dict:
-        return self.sessions[0].collect_batch_totals(corpus_dir)
+        totals = self.sessions[0].collect_batch_totals(corpus_dir)
+        if len(self.sessions) == 1:
+            return totals
+        if any(
+            int(totals.get(key, 0)) > 0
+            for key in (
+                "lines_covered",
+                "lines_total",
+                "functions_covered",
+                "functions_total",
+            )
+        ):
+            return totals
+
+        shard_results: list[CoverageRunResult] = []
+        for session in self.sessions:
+            collected_results = getattr(session, "_collected_results", None)
+            if isinstance(collected_results, dict):
+                shard_results.extend(collected_results.values())
+        if not shard_results:
+            return totals
+        return _approximate_totals_from_results(shard_results)
 
     def close(self) -> None:
         for session in reversed(self.sessions):
@@ -466,37 +519,7 @@ class UniAFLCoverageSession(CoverageSession):
                 f"Falling back to approximate UniAFL totals for "
                 f"{self.project_name}/{self.harness_name}: {exc}"
             )
-        merged_lines: set[tuple[str, int]] = set()
-        covered_functions: set[str] = set()
-        covered_sources: set[Path] = set()
-        for result in self._collected_results.values():
-            for function_name, data in result.coverage_data.items():
-                covered_functions.add(function_name)
-                src = data.get("src", "")
-                if src:
-                    src_path = Path(src)
-                    if src_path.exists():
-                        covered_sources.add(src_path)
-                for line in data.get("lines", []):
-                    merged_lines.add((src, int(line)))
-        lines_covered = len(merged_lines)
-        lines_total = 0
-        for src_path in covered_sources:
-            try:
-                lines_total += len(src_path.read_text().splitlines())
-            except OSError:
-                continue
-        functions_covered = len(covered_functions)
-        lines_percent = (
-            (lines_covered / lines_total * 100.0) if lines_total > 0 else 0.0
-        )
-        return {
-            "lines_covered": lines_covered,
-            "lines_total": lines_total,
-            "lines_percent": lines_percent,
-            "functions_covered": functions_covered,
-            "functions_total": 0,
-        }
+        return _approximate_totals_from_results(list(self._collected_results.values()))
 
     def close(self) -> None:
         if self._worker_process is not None and self._worker_process.poll() is None:

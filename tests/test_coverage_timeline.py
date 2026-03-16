@@ -322,67 +322,6 @@ def test_run_coverage_direct_seed_mode_requires_benchmark(tmp_path: Path) -> Non
     assert run_coverage(args) == 1
 
 
-def test_run_coverage_rejects_missing_oss_fuzz_path_in_experiment_mode(
-    tmp_path: Path,
-) -> None:
-    config_path = tmp_path / "experiment.yaml"
-    config_path.write_text("experiment: test\nexperiment_filestore: /tmp/out\n")
-    args = argparse.Namespace(
-        verbose=False,
-        experiment_config=config_path,
-        experiment_dir=None,
-        benchmark_path=None,
-        corpus_dir=None,
-        seed_dir=None,
-        bucket_size_seconds=1,
-        benchmark=None,
-        benchmarks=None,
-        harness=None,
-        oss_fuzz_path=tmp_path / "missing-oss-fuzz",
-        force_rebuild=False,
-        output=None,
-        format="json",
-        build_workers=None,
-        verify_workers=None,
-        source="pkgs",
-        output_dir=None,
-    )
-
-    assert run_coverage(args) == 1
-
-
-def test_run_coverage_rejects_missing_oss_fuzz_path_in_direct_seed_mode(
-    tmp_path: Path,
-) -> None:
-    seed_dir = tmp_path / "seeds"
-    seed_dir.mkdir()
-    benchmark_dir = tmp_path / "benchmarks" / "sanity-mock-c-delta-01"
-    benchmark_dir.mkdir(parents=True)
-
-    args = argparse.Namespace(
-        verbose=False,
-        experiment_config=None,
-        experiment_dir=None,
-        benchmark_path=None,
-        corpus_dir=None,
-        seed_dir=seed_dir,
-        bucket_size_seconds=1,
-        benchmark="sanity-mock-c-delta-01",
-        benchmarks=tmp_path / "benchmarks",
-        harness="fuzz_parse_buffer_section",
-        oss_fuzz_path=tmp_path / "missing-oss-fuzz",
-        force_rebuild=False,
-        output=None,
-        format="json",
-        build_workers=None,
-        verify_workers=None,
-        source="pkgs",
-        output_dir=tmp_path / "out",
-    )
-
-    assert run_coverage(args) == 1
-
-
 def test_coverage_parser_accepts_experiment_config_and_direct_seed_modes() -> None:
     parser = argparse.ArgumentParser(prog="crsbench")
     subs = parser.add_subparsers(dest="command")
@@ -463,6 +402,34 @@ def test_coverage_parser_rejects_legacy_direct_mode() -> None:
             pass
         else:
             raise AssertionError("legacy coverage CLI unexpectedly parsed")
+
+
+def test_coverage_parser_rejects_legacy_oss_fuzz_override() -> None:
+    parser = argparse.ArgumentParser(prog="crsbench")
+    subs = parser.add_subparsers(dest="command")
+    add_coverage_subparser(subs)
+
+    with patch.object(parser, "exit", side_effect=SystemExit) as _mock_exit:
+        try:
+            parser.parse_args(
+                [
+                    "coverage",
+                    "--seed-dir",
+                    "/tmp/seeds",
+                    "--benchmark",
+                    "sanity-mock-c-delta-01",
+                    "--harness",
+                    "fuzz_parse_buffer_section",
+                    "--output-dir",
+                    "/tmp/out",
+                    "--oss-fuzz-path",
+                    "/tmp/oss-fuzz",
+                ]
+            )
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError("legacy --oss-fuzz-path unexpectedly parsed")
 
 
 def test_coverage_parser_accepts_legacy_worker_aliases() -> None:
@@ -630,9 +597,7 @@ def test_run_experiment_timeline_uses_jobs_and_cores_per_job(
     experiment_dir = tmp_path / "experiment-output"
     benchmark_root = tmp_path / "benchmarks"
     benchmark_dir = benchmark_root / "bench-a"
-    oss_fuzz_dir = tmp_path / "oss-fuzz"
     benchmark_dir.mkdir(parents=True)
-    oss_fuzz_dir.mkdir()
 
     trial_dirs = []
     for index in range(3):
@@ -652,7 +617,6 @@ def test_run_experiment_timeline_uses_jobs_and_cores_per_job(
         benchmark=None,
         benchmarks=benchmark_root,
         harness=None,
-        oss_fuzz_path=oss_fuzz_dir,
         force_rebuild=False,
         output=None,
         format="json",
@@ -662,7 +626,6 @@ def test_run_experiment_timeline_uses_jobs_and_cores_per_job(
         verify_workers=2,
         source="pkgs",
         output_dir=None,
-        atlantis_root=None,
     )
 
     contexts = {
@@ -687,14 +650,13 @@ def test_run_experiment_timeline_uses_jobs_and_cores_per_job(
     class _FakeEngine:
         def __init__(
             self,
-            oss_fuzz_path: Path,
+            *,
             build_workers: int | None = None,
             runtime_workers: int | None = None,
             runtime_cpus: list[int] | None = None,
-            atlantis_root: Path | None = None,
             source_mode: str = "pkgs",
         ):
-            del oss_fuzz_path, build_workers, atlantis_root, source_mode
+            del build_workers, source_mode
             self.runtime_workers = runtime_workers
             self.runtime_cpus = runtime_cpus
 
@@ -760,10 +722,8 @@ def test_run_experiment_timeline_rejects_cores_per_job_larger_than_cpu_pool(
 ) -> None:
     experiment_dir = tmp_path / "experiment-output"
     benchmark_root = tmp_path / "benchmarks"
-    oss_fuzz_dir = tmp_path / "oss-fuzz"
     experiment_dir.mkdir()
     benchmark_root.mkdir()
-    oss_fuzz_dir.mkdir()
     trial_dir = experiment_dir / "trial-0"
     trial_dir.mkdir()
     (trial_dir / "metadata.json").write_text("{}")
@@ -779,7 +739,6 @@ def test_run_experiment_timeline_rejects_cores_per_job_larger_than_cpu_pool(
         benchmark=None,
         benchmarks=benchmark_root,
         harness=None,
-        oss_fuzz_path=oss_fuzz_dir,
         force_rebuild=False,
         output=None,
         format="json",
@@ -789,7 +748,6 @@ def test_run_experiment_timeline_rejects_cores_per_job_larger_than_cpu_pool(
         verify_workers=2,
         source="pkgs",
         output_dir=None,
-        atlantis_root=None,
     )
 
     with patch(
@@ -809,28 +767,23 @@ def test_run_direct_seed_timeline_pins_runtime_cpus(
     benchmark_root = tmp_path / "benchmarks"
     benchmark_dir = benchmark_root / "bench-a"
     benchmark_dir.mkdir(parents=True)
-    oss_fuzz_dir = tmp_path / "oss-fuzz"
-    oss_fuzz_dir.mkdir()
 
     engine_inits: list[dict] = []
 
     class _FakeEngine:
         def __init__(
             self,
-            oss_fuzz_path: Path,
+            *,
             build_workers: int | None = None,
             runtime_workers: int | None = None,
             runtime_cpus: list[int] | None = None,
-            atlantis_root: Path | None = None,
             source_mode: str = "pkgs",
         ):
             engine_inits.append(
                 {
-                    "oss_fuzz_path": oss_fuzz_path,
                     "build_workers": build_workers,
                     "runtime_workers": runtime_workers,
                     "runtime_cpus": runtime_cpus,
-                    "atlantis_root": atlantis_root,
                     "source_mode": source_mode,
                 }
             )
@@ -853,7 +806,6 @@ def test_run_direct_seed_timeline_pins_runtime_cpus(
         benchmark="bench-a",
         benchmarks=benchmark_root,
         harness="fuzz_target",
-        oss_fuzz_path=oss_fuzz_dir,
         force_rebuild=False,
         output=None,
         format="json",
@@ -863,7 +815,6 @@ def test_run_direct_seed_timeline_pins_runtime_cpus(
         verify_workers=2,
         source="pkgs",
         output_dir=tmp_path / "coverage-out",
-        atlantis_root=None,
     )
 
     with (
@@ -887,11 +838,9 @@ def test_run_direct_seed_timeline_pins_runtime_cpus(
 
     assert engine_inits == [
         {
-            "oss_fuzz_path": oss_fuzz_dir,
             "build_workers": 1,
             "runtime_workers": 2,
             "runtime_cpus": [4, 5],
-            "atlantis_root": None,
             "source_mode": "pkgs",
         }
     ]
@@ -907,28 +856,23 @@ def test_run_direct_seed_timeline_accepts_legacy_worker_aliases(
     benchmark_root = tmp_path / "benchmarks"
     benchmark_dir = benchmark_root / "bench-a"
     benchmark_dir.mkdir(parents=True)
-    oss_fuzz_dir = tmp_path / "oss-fuzz"
-    oss_fuzz_dir.mkdir()
 
     engine_inits: list[dict] = []
 
     class _FakeEngine:
         def __init__(
             self,
-            oss_fuzz_path: Path,
+            *,
             build_workers: int | None = None,
             runtime_workers: int | None = None,
             runtime_cpus: list[int] | None = None,
-            atlantis_root: Path | None = None,
             source_mode: str = "pkgs",
         ):
             engine_inits.append(
                 {
-                    "oss_fuzz_path": oss_fuzz_path,
                     "build_workers": build_workers,
                     "runtime_workers": runtime_workers,
                     "runtime_cpus": runtime_cpus,
-                    "atlantis_root": atlantis_root,
                     "source_mode": source_mode,
                 }
             )
@@ -951,7 +895,6 @@ def test_run_direct_seed_timeline_accepts_legacy_worker_aliases(
         benchmark="bench-a",
         benchmarks=benchmark_root,
         harness="fuzz_target",
-        oss_fuzz_path=oss_fuzz_dir,
         force_rebuild=False,
         output=None,
         format="json",
@@ -961,7 +904,6 @@ def test_run_direct_seed_timeline_accepts_legacy_worker_aliases(
         verify_workers=2,
         source="pkgs",
         output_dir=tmp_path / "coverage-out",
-        atlantis_root=None,
     )
 
     with (
@@ -985,11 +927,9 @@ def test_run_direct_seed_timeline_accepts_legacy_worker_aliases(
 
     assert engine_inits == [
         {
-            "oss_fuzz_path": oss_fuzz_dir,
             "build_workers": 3,
             "runtime_workers": 2,
             "runtime_cpus": [6, 7],
-            "atlantis_root": None,
             "source_mode": "pkgs",
         }
     ]

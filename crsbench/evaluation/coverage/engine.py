@@ -5,16 +5,13 @@ from corpus files against benchmark projects, following the same
 patterns as VerificationEngine (POV) and PatchVerificationEngine.
 
 Architecture:
-- Uses OSSFuzzBuilder for building coverage variants (with build_workers)
-- Processes corpus files sequentially (parallelism handled by Redis job queue)
+- Uses Atlantis/given_fuzzer `oss-crs build-target` for coverage builds
+- Processes corpus files sequentially (parallelism handled by warm runners)
 - Uses MetaYamlAdapter for consistent config loading
 - Provides cleanup() method for resource management
 
 Usage:
-    engine = CoverageEngine(
-        oss_fuzz_path=Path("third_party/oss-fuzz"),
-        build_workers=4,
-    )
+    engine = CoverageEngine(build_workers=4)
     try:
         report = engine.collect_coverage(
             benchmark_path=Path("benchmarks/my-project"),
@@ -32,11 +29,10 @@ import tempfile
 import threading
 import time
 from contextlib import contextmanager, nullcontext
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from crsbench.builder import OSSFuzzBuilder
-from crsbench.builder.infrastructure import OSSFuzzInfrastructure
 from crsbench.builder.types import BuildConfig, VariantType
 from crsbench.evaluation.coverage.backend import CoverageRunResult, CoverageSession
 from crsbench.evaluation.coverage.models import (
@@ -63,6 +59,83 @@ from crsbench.validation.meta_adapter import MetaYamlAdapter
 
 logger = get_logger(__name__)
 UNIAFL_BUILD_SENTINEL = ".crsbench-uniafl-build.json"
+BUILD_METADATA_FILE = ".build-meta.json"
+
+
+class _CoverageBuildWorkspace:
+    """Coverage-local build/cache workspace for Atlantis artifacts."""
+
+    def __init__(
+        self,
+        *,
+        legacy_root: Optional[Path],
+        work_dir: Optional[Path],
+    ) -> None:
+        self.legacy_root = Path(legacy_root).resolve() if legacy_root else None
+        self.work_dir = Path(work_dir).resolve() if work_dir else None
+        self.default_root = (
+            Path(__file__).resolve().parents[3] / ".crsbench-coverage"
+        ).resolve()
+
+    def get_build_output_path(self, variant_name: str) -> Path:
+        if self.work_dir:
+            return self.work_dir / variant_name / "build" / "out"
+        if self.legacy_root:
+            return self.legacy_root / "build" / "out" / variant_name
+        return self.default_root / variant_name / "build" / "out"
+
+    def get_control_root(self, variant_name: str) -> Path:
+        if self.work_dir:
+            return self.work_dir / variant_name / "oss-crs"
+        if self.legacy_root:
+            return (
+                self.get_build_output_path(variant_name).parent
+                / f".{variant_name}-oss-crs"
+            )
+        return self.default_root / variant_name / "oss-crs"
+
+    def has_harness(self, variant_name: str, harness_name: str) -> bool:
+        harness_path = self.get_build_output_path(variant_name) / harness_name
+        return harness_path.exists() and harness_path.is_file()
+
+    def cleanup_build_outputs(self, variant_name: str) -> None:
+        targets = [
+            self.get_build_output_path(variant_name),
+            self.get_control_root(variant_name),
+        ]
+        for target in targets:
+            if not target.exists() and not target.is_symlink():
+                continue
+            try:
+                if target.exists():
+                    fix_docker_ownership(target)
+            except Exception:
+                pass
+            if target.is_symlink() or target.is_file():
+                target.unlink(missing_ok=True)
+                continue
+            shutil.rmtree(target, ignore_errors=True)
+
+    def write_build_metadata(
+        self,
+        variant_name: str,
+        *,
+        inc_build: bool = False,
+        sanitizer: str = "address",
+        fallback_used: bool = False,
+    ) -> None:
+        build_path = self.get_build_output_path(variant_name)
+        build_path.mkdir(parents=True, exist_ok=True)
+        metadata = {
+            "inc_build": inc_build,
+            "sanitizer": sanitizer,
+            "timestamp": datetime.now().isoformat(),
+            "fallback_used": fallback_used,
+        }
+        metadata_path = build_path / BUILD_METADATA_FILE
+        temp_path = metadata_path.with_suffix(".tmp")
+        temp_path.write_text(json.dumps(metadata, indent=2))
+        temp_path.replace(metadata_path)
 
 
 class CoverageEngine:
@@ -80,15 +153,14 @@ class CoverageEngine:
     the benchmark level, not within this engine.
 
     Attributes:
-        oss_fuzz_path: Path to oss-fuzz directory.
-        builder: OSSFuzzBuilder instance for building variants.
-        infra: OSSFuzzInfrastructure for low-level operations.
+        oss_fuzz_path: Optional legacy compatibility root for coverage build cache.
+        workspace: Coverage-local build workspace for Atlantis artifacts.
         build_workers: Number of parallel workers for building.
     """
 
     def __init__(
         self,
-        oss_fuzz_path: Path,
+        oss_fuzz_path: Optional[Path] = None,
         *,
         build_workers: Optional[int] = None,
         runtime_workers: Optional[int] = None,
@@ -99,21 +171,24 @@ class CoverageEngine:
         """Initialize the coverage engine.
 
         Args:
-            oss_fuzz_path: Path to oss-fuzz directory.
+            oss_fuzz_path: Optional legacy cache root. Coverage analysis no longer
+                requires a real OSS-Fuzz checkout.
             build_workers: Number of parallel workers for building (default: 4).
             work_dir: Working directory for isolated builds. If None, uses
                 default oss-fuzz/build/out/ location.
             source_mode: Source mode - "pkgs" (bundled, default) or "main_repo" (clone)
         """
-        self.oss_fuzz_path = Path(oss_fuzz_path)
+        self.oss_fuzz_path = Path(oss_fuzz_path).resolve() if oss_fuzz_path else None
         self.work_dir = Path(work_dir) if work_dir else None
         self.build_workers = resolve_build_workers(build_workers)
         self.runtime_workers = max(1, int(runtime_workers or 1))
         self.runtime_cpus = list(runtime_cpus) if runtime_cpus else None
-        self.builder = OSSFuzzBuilder(
-            oss_fuzz_path, max_workers=self.build_workers, source_mode=source_mode
+        self.source_mode = source_mode
+        self.workspace = _CoverageBuildWorkspace(
+            legacy_root=self.oss_fuzz_path,
+            work_dir=self.work_dir,
         )
-        self.infra = OSSFuzzInfrastructure(oss_fuzz_path, work_dir=work_dir)
+        self.infra = self.workspace
 
         # Cache for strategies (keyed by variant_name)
         self._strategies: dict[str, CoverageStrategy] = {}
@@ -192,7 +267,7 @@ class CoverageEngine:
             )
 
         # Verify harness exists in build
-        if not self.infra.has_harness(variant_name, harness_name):
+        if not self.workspace.has_harness(variant_name, harness_name):
             logger.error(
                 f"Harness '{harness_name}' not found in build output for {variant_name}"
             )
@@ -305,7 +380,7 @@ class CoverageEngine:
             msg = f"Failed to build coverage variant for {benchmark_path}"
             raise CoverageStrategyError(msg)
 
-        if not self.infra.has_harness(variant_name, harness_name):
+        if not self.workspace.has_harness(variant_name, harness_name):
             msg = (
                 f"Harness '{harness_name}' not found in build output for {variant_name}"
             )
@@ -681,9 +756,9 @@ class CoverageEngine:
         variant_name = config.variant_name
         with self._acquire_build_lock(variant_name):
             if force_rebuild:
-                self.infra.cleanup_build_outputs(variant_name)
+                self.workspace.cleanup_build_outputs(variant_name)
 
-            build_output_dir = self.infra.get_build_output_path(variant_name)
+            build_output_dir = self.workspace.get_build_output_path(variant_name)
             build_output_dir.mkdir(parents=True, exist_ok=True)
             staged_repo_dir = build_output_dir / ".crsbench-repo"
             coverage_build_dir = build_output_dir / "coverage-out"
@@ -709,11 +784,7 @@ class CoverageEngine:
                 logger.info(f"Reusing existing UniAFL coverage build: {variant_name}")
                 return variant_name
 
-            control_root = (
-                self.work_dir / variant_name / "oss-crs"
-                if self.work_dir
-                else build_output_dir.parent / f".{variant_name}-oss-crs"
-            )
+            control_root = self.workspace.get_control_root(variant_name)
             try:
                 build = build_atlantis_coverage_artifacts(
                     benchmark_path=config.benchmark_path,
@@ -745,7 +816,7 @@ class CoverageEngine:
                 )
             )
 
-            self.infra.write_build_metadata(
+            self.workspace.write_build_metadata(
                 variant_name,
                 inc_build=False,
                 sanitizer="coverage",
@@ -777,6 +848,7 @@ class CoverageEngine:
                 oss_fuzz_path=self.oss_fuzz_path,
                 project_name=variant_name,
                 language=adapter.lang,
+                build_output_dir=self.workspace.get_build_output_path(variant_name),
                 benchmark_path=adapter.benchmark_path,
                 work_dir=self.work_dir,
             )

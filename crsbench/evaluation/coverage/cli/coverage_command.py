@@ -28,7 +28,6 @@ from crsbench.evaluation.trial_paths import (
 )
 from crsbench.utils.cpu_pool import CPUPool, format_cpuset
 from crsbench.utils.logger import get_logger
-from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
 logger = get_logger(__name__)
 
@@ -135,12 +134,6 @@ Examples:
         type=str,
         default=None,
         help="Specific harness name to test (default: first available)",
-    )
-    parser.add_argument(
-        "--oss-fuzz-path",
-        type=Path,
-        default=None,
-        help="Path to oss-fuzz directory (default: managed third_party/oss-fuzz)",
     )
     parser.add_argument(
         "--force-rebuild",
@@ -290,15 +283,6 @@ def _run_experiment_timeline(args: argparse.Namespace) -> int:
     if not experiment_dir.exists():
         logger.error(f"Experiment directory not found: {experiment_dir}")
         return 1
-    try:
-        oss_fuzz_path = args.oss_fuzz_path or Path(ensure_oss_fuzz_root())
-    except Exception as e:
-        logger.error(f"Failed to resolve OSS-Fuzz directory: {e}")
-        return 1
-    if not oss_fuzz_path.exists():
-        logger.error(f"OSS-Fuzz directory not found: {oss_fuzz_path}")
-        return 1
-
     trial_dirs = sorted(
         trial_dir
         for trial_dir in experiment_dir.rglob("trial-*")
@@ -354,7 +338,6 @@ def _run_experiment_timeline(args: argparse.Namespace) -> int:
 
         analyzed_trials = _run_trial_jobs(
             args=args,
-            oss_fuzz_path=oss_fuzz_path,
             trial_jobs=trial_jobs,
             max_parallel_jobs=max_parallel_jobs,
             cores_per_job=cores_per_job,
@@ -394,21 +377,11 @@ def _run_direct_seed_timeline(args: argparse.Namespace) -> int:
         logger.error(f"Benchmark path not found: {benchmark_path}")
         return 1
 
-    try:
-        oss_fuzz_path = args.oss_fuzz_path or Path(ensure_oss_fuzz_root())
-    except Exception as e:
-        logger.error(f"Failed to resolve OSS-Fuzz directory: {e}")
-        return 1
-    if not oss_fuzz_path.exists():
-        logger.error(f"OSS-Fuzz directory not found: {oss_fuzz_path}")
-        return 1
-
     runtime_cpus = _allocate_direct_coverage_cpus(cores_per_job)
     if runtime_cpus is None:
         return 1
 
     engine = CoverageEngine(
-        oss_fuzz_path=oss_fuzz_path,
         build_workers=jobs,
         runtime_workers=cores_per_job,
         runtime_cpus=runtime_cpus,
@@ -506,7 +479,6 @@ def _allocate_direct_coverage_cpus(cores_per_job: int) -> Optional[list[int]]:
 def _run_single_trial_job(
     *,
     args: argparse.Namespace,
-    oss_fuzz_path: Path,
     trial_dir: Path,
     context,
     benchmark_path: Path,
@@ -514,7 +486,6 @@ def _run_single_trial_job(
     cores_per_job: int,
 ) -> Path:
     engine = CoverageEngine(
-        oss_fuzz_path=oss_fuzz_path,
         build_workers=1,
         runtime_workers=cores_per_job,
         runtime_cpus=allocated_cpus,
@@ -546,7 +517,6 @@ def _run_single_trial_job(
 def _run_trial_jobs(
     *,
     args: argparse.Namespace,
-    oss_fuzz_path: Path,
     trial_jobs: list[tuple[Path, object, Path]],
     max_parallel_jobs: int,
     cores_per_job: int,
@@ -567,7 +537,6 @@ def _run_trial_jobs(
             future = executor.submit(
                 _run_single_trial_job,
                 args=args,
-                oss_fuzz_path=oss_fuzz_path,
                 trial_dir=trial_dir,
                 context=context,
                 benchmark_path=benchmark_path,

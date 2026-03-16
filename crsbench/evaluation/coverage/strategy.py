@@ -28,25 +28,32 @@ class CoverageStrategy(ABC):
 
     def __init__(
         self,
-        oss_fuzz_path: Path,
+        oss_fuzz_path: Optional[Path],
         project_name: str,
         language: str = "c",
         *,
+        build_output_dir: Optional[Path] = None,
         benchmark_path: Optional[Path] = None,
         work_dir: Optional[Path] = None,
     ):
-        self.oss_fuzz_path = Path(oss_fuzz_path).resolve()
         self.project_name = project_name
         self.language = language.lower()
         self.benchmark_path = Path(benchmark_path).resolve() if benchmark_path else None
+        if build_output_dir is not None:
+            self.build_output_dir = Path(build_output_dir).resolve()
+        elif oss_fuzz_path is not None:
+            self.build_output_dir = (
+                Path(oss_fuzz_path).resolve() / "build" / "out" / project_name
+            )
+        else:
+            msg = (
+                "CoverageStrategy requires build_output_dir when oss_fuzz_path is unset"
+            )
+            raise CoverageStrategyError(msg)
         if work_dir:
             self._work_dir = Path(work_dir).resolve()
         else:
-            self._work_dir = self.oss_fuzz_path / "build" / "out" / project_name
-
-    @property
-    def build_output_dir(self) -> Path:
-        return self.oss_fuzz_path / "build" / "out" / self.project_name
+            self._work_dir = self.build_output_dir
 
     @abstractmethod
     def open_session(
@@ -285,10 +292,11 @@ class JaCoCoLineStrategy(CoverageStrategy):
 
 
 def create_coverage_strategy(
-    oss_fuzz_path: Path,
+    oss_fuzz_path: Optional[Path],
     project_name: str,
     language: str,
     *,
+    build_output_dir: Optional[Path] = None,
     benchmark_path: Optional[Path] = None,
     work_dir: Optional[Path] = None,
 ) -> CoverageStrategy:
@@ -300,6 +308,7 @@ def create_coverage_strategy(
             oss_fuzz_path,
             project_name,
             normalized,
+            build_output_dir=build_output_dir,
             benchmark_path=benchmark_path,
             work_dir=work_dir,
         )
@@ -308,6 +317,7 @@ def create_coverage_strategy(
             oss_fuzz_path,
             project_name,
             normalized,
+            build_output_dir=build_output_dir,
             benchmark_path=benchmark_path,
             work_dir=work_dir,
         )
