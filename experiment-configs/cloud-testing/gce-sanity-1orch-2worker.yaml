@@ -5,10 +5,10 @@ experiment:
   mode: delta
 runtime:
   trials: 1
-  max_total_time: 1200
-  build_timeout: 300
-  run_timeout: 300
-  verify_timeout: 300
+  max_total_time: 3600
+  build_timeout: 600
+  run_timeout: 600
+  verify_timeout: 600
   redis_host: redis-server:6379
   inputs:
     pov:
@@ -45,4 +45,5 @@ cloud:
     ssh_via_iap: true
     readiness_timeout_sec: 600
     crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+    crsbench_git_ref: feat/gcp
     github_deploy_key_file: .crsbench-keys/crsbench-deploy
