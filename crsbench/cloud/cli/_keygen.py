@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import os
 import stat
 import subprocess
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,7 +29,7 @@ def run_keygen(args: argparse.Namespace) -> int:
     name: str = args.name
 
     try:
-        os.makedirs(output_dir, mode=0o700, exist_ok=True)
+        output_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
     except OSError as exc:
         logger.error("Cannot create output directory %s: %s", output_dir, exc)
         return 1
@@ -45,7 +45,9 @@ def run_keygen(args: argparse.Namespace) -> int:
                 key_path,
             )
             if pub_path.exists():
-                print(pub_path.read_text(encoding="utf-8").strip())
+                sys.stdout.write(
+                    pub_path.read_text(encoding="utf-8").strip() + "\n"
+                )
             return 0
         # Remove existing files before regenerating
         for p in (key_path, pub_path):
@@ -86,14 +88,15 @@ def run_keygen(args: argparse.Namespace) -> int:
 
     pub_key = pub_path.read_text(encoding="utf-8").strip()
 
-    print(pub_key)
-    print("")
-    print(
+    _write = sys.stdout.write
+    _write(pub_key + "\n")
+    _write("\n")
+    _write(
         "Add the public key above as a deploy key on your GitHub repository "
-        "(Settings > Deploy keys > Add deploy key)."
+        "(Settings > Deploy keys > Add deploy key).\n"
     )
-    print("")
-    print(f"Private key path (set github_deploy_key_file in your fleet config):")
-    print(f"  {key_path}")
+    _write("\n")
+    _write("Private key path (set github_deploy_key_file in your fleet config):\n")
+    _write(f"  {key_path}\n")
 
     return 0

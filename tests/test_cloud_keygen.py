@@ -10,7 +10,7 @@ from unittest.mock import patch
 from crsbench.cloud.cli._keygen import run_keygen
 
 
-def _make_args(output_dir: str, name: str = "crsbench-deploy", force: bool = False):
+def _make_args(output_dir: str, name: str = "crsbench-deploy", *, force: bool = False):
     args = argparse.Namespace()
     args.output_dir = output_dir
     args.name = name
@@ -34,7 +34,7 @@ def test_keygen_generates_key_pair(tmp_path):
 
     def fake_run(_cmd, **_kwargs):
         _fake_keygen(output_dir)
-        return None
+        return
 
     with patch("subprocess.run", side_effect=fake_run) as mock_run:
         result = run_keygen(args)
@@ -59,7 +59,7 @@ def test_keygen_respects_custom_name(tmp_path):
 
     def fake_run(_cmd, **_kwargs):
         _fake_keygen(output_dir, name="my-key")
-        return None
+        return
 
     with patch("subprocess.run", side_effect=fake_run):
         result = run_keygen(args)
