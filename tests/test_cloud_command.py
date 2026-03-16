@@ -335,6 +335,36 @@ class TestReconnect:
         assert fleet == config.cloud.gce
         assert filestore == Path("/tmp/filestore")
 
+    @patch("crsbench.cloud.cli._config_reconnect.save_launch_state")
+    @patch("crsbench.cloud.cli._config_reconnect.create_redis_connection")
+    @patch("crsbench.cloud.cli._config_reconnect.load_launch_state")
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_reconnect_uses_legacy_launch_state_even_if_migration_save_fails(
+        self, mock_load, mock_state, mock_redis, mock_save_state
+    ):
+        """Legacy launch state should remain usable if config-adjacent migration cannot be written."""
+        config = _mock_config(has_cloud=True)
+        config.cloud.orchestrator = MagicMock()
+        mock_load.return_value = config
+        legacy_state = _make_launch_state().model_copy(
+            update={
+                "experiment_filestore": None,
+                "worker_fleet_config": None,
+            }
+        )
+        mock_state.side_effect = [None, legacy_state]
+        mock_redis.return_value = _FakeRedis()
+        mock_save_state.side_effect = PermissionError("read only")
+
+        from crsbench.cloud.cli._config_reconnect import reconnect
+
+        fleet, _redis_conn, _readiness, _lifecycle, filestore = reconnect(
+            "/path/to/config.yaml", "test-exp"
+        )
+
+        assert fleet == config.cloud.gce
+        assert filestore == Path("/tmp/filestore")
+
 
 # ---------------------------------------------------------------------------
 # Argument parsing tests
@@ -1239,12 +1269,18 @@ class TestTeardown:
         assert rc == 1
         mock_prov.delete_workers.assert_not_called()
 
+    @patch("crsbench.cloud.cli._teardown.delete_launch_state")
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
     @patch("crsbench.cloud.cli._teardown.GceProvisioner")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_collects_and_deletes_orchestrator_when_launch_state_present(
-        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
+        self,
+        mock_reconnect,
+        mock_prov_cls,
+        mock_coll_cls,
+        mock_resolve_context,
+        mock_delete_state,
     ):
         """Remote launches should collect and delete the orchestrator VM too."""
         mock_resolve_context.return_value = _make_resolved_cloud_context(
@@ -1262,6 +1298,15 @@ class TestTeardown:
         assert mock_coll.collect.call_count == 3
         mock_prov.delete_workers.assert_called_once()
         mock_prov.delete_instance.assert_called_once()
+        assert mock_delete_state.call_count == 2
+        assert mock_delete_state.call_args_list[0].args == (
+            "/tmp/config.yaml",
+            "test-exp",
+        )
+        assert mock_delete_state.call_args_list[1].args == (
+            "/tmp/filestore",
+            "test-exp",
+        )
 
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")

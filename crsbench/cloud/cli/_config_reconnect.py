@@ -15,11 +15,15 @@ from crsbench.cloud.readiness import CloudReadinessStore
 from crsbench.distributed.job_lifecycle import JobLifecycleStore
 from crsbench.distributed.queue import create_redis_connection
 from crsbench.run_experiment import load_experiment_config
+from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from crsbench.cloud.readiness import ReadinessRedisProtocol
     from crsbench.distributed.job_lifecycle import LifecycleRedisProtocol
     from crsbench.validation.schemas import GceWorkerFleetConfig
+
+
+logger = get_logger(__name__)
 
 
 def resolve_cloud_context(
@@ -50,7 +54,14 @@ def resolve_cloud_context(
             launch_state = launch_state.model_copy(update=launch_state_updates)
             launch_state_changed = True
         if loaded_from_legacy_path or launch_state_changed:
-            save_launch_state(Path(config_path), launch_state)
+            try:
+                save_launch_state(Path(config_path), launch_state)
+            except OSError as exc:
+                logger.warning(
+                    "Failed to persist migrated launch state next to config %s: %s",
+                    config_path,
+                    exc,
+                )
 
     if config.cloud.orchestrator is not None:
         if launch_state is None:

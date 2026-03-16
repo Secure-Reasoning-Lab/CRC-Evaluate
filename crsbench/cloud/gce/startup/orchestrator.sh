@@ -51,7 +51,7 @@ echo "=== CRSBench orchestrator bootstrap started at $(date -u) ==="
 # --- Install system packages ---
 echo "Installing system packages..."
 apt-get update -qq
-apt-get install -y -qq git python3 python3-pip rsync tar
+apt-get install -y -qq git python3 python3-pip python3-yaml rsync tar
 
 # Docker via official install script (includes docker compose plugin)
 if ! command -v docker >/dev/null 2>&1; then

@@ -164,6 +164,8 @@ def run_teardown(args: argparse.Namespace) -> int:
 
     if launch_state is not None and not deletion_failed:
         delete_launch_state(args.config, args.experiment)
+        if launch_state.experiment_filestore:
+            delete_launch_state(launch_state.experiment_filestore, args.experiment)
 
     if collection_failed or deletion_failed:
         return 1

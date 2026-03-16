@@ -392,6 +392,7 @@ def test_orchestrator_startup_script_consumes_config_payload_and_preprovisioned_
     assert "CRSBENCH_CLOUD_PREPROVISIONED_WORKERS" in script
     assert "crsbench-redis-password" in script
     assert "python3-pip" in script
+    assert "python3-yaml" in script
     assert "git checkout" in script
     assert "command -v crsbench" in script
     assert "except Exception:" in script
