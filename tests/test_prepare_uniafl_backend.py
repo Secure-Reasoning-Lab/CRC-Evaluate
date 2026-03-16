@@ -198,6 +198,42 @@ def test_prepare_uniafl_backend_reuses_local_images_with_matching_state(
     mock_write_state.assert_not_called()
 
 
+def test_prepare_uniafl_backend_does_not_shortcut_ghcr_for_nonrelease_checkout(
+    tmp_path: Path,
+) -> None:
+    from crsbench.prepare.uniafl_backend import (
+        PREPARE_STATE_FILE,
+        prepare_uniafl_backend,
+    )
+
+    repo_root = tmp_path / "given_fuzzer"
+    _write_uniafl_checkout(repo_root)
+    (repo_root / PREPARE_STATE_FILE).write_text("{}")
+
+    with (
+        patch("crsbench.prepare.uniafl_backend._local_image_exists", return_value=True),
+        patch(
+            "crsbench.prepare.uniafl_backend._checkout_matches_published_release",
+            return_value=False,
+        ),
+        patch(
+            "crsbench.evaluation.coverage.uniafl_runtime.write_coverage_compose_yaml",
+            side_effect=lambda **kwargs: kwargs["compose_path"],
+        ),
+        patch(
+            "crsbench.prepare.uniafl_backend.run_oss_crs_prepare",
+            return_value=("prepared", "", 0),
+        ) as mock_prepare,
+        patch(
+            "crsbench.prepare.uniafl_backend._write_prepare_state"
+        ) as mock_write_state,
+    ):
+        assert prepare_uniafl_backend(repo_root) == 0
+
+    mock_prepare.assert_called_once()
+    mock_write_state.assert_called_once_with(repo_root.resolve())
+
+
 def test_prepare_uniafl_backend_pulls_ghcr_images_before_local_build(
     tmp_path: Path,
 ) -> None:
@@ -210,6 +246,10 @@ def test_prepare_uniafl_backend_pulls_ghcr_images_before_local_build(
         patch(
             "crsbench.prepare.uniafl_backend._prepare_state_matches",
             return_value=False,
+        ),
+        patch(
+            "crsbench.prepare.uniafl_backend._checkout_matches_published_release",
+            return_value=True,
         ),
         patch(
             "crsbench.prepare.uniafl_backend._pull_prepare_images", return_value=[]
@@ -255,6 +295,10 @@ def test_prepare_uniafl_backend_runs_oss_crs_prepare_with_generated_compose(
             "crsbench.prepare.uniafl_backend._local_image_exists", return_value=False
         ),
         patch(
+            "crsbench.prepare.uniafl_backend._checkout_matches_published_release",
+            return_value=False,
+        ),
+        patch(
             "crsbench.prepare.uniafl_backend._pull_prepare_images",
             return_value=["ghcr pull failed"],
         ),
@@ -295,6 +339,10 @@ def test_prepare_uniafl_backend_raises_when_oss_crs_prepare_fails(
     with (
         patch(
             "crsbench.prepare.uniafl_backend._local_image_exists", return_value=False
+        ),
+        patch(
+            "crsbench.prepare.uniafl_backend._checkout_matches_published_release",
+            return_value=False,
         ),
         patch(
             "crsbench.prepare.uniafl_backend._pull_prepare_images",

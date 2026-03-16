@@ -116,6 +116,8 @@ def test_build_atlantis_coverage_artifacts_skips_prepare_when_images_exist(
     control_root = tmp_path / "control"
     resolved_out = tmp_path / "atlantis-build"
     source_repo = tmp_path / "source-repo"
+    atlantis_root = tmp_path / "atlantis"
+    atlantis_root = tmp_path / "atlantis"
 
     with (
         patch(
@@ -129,7 +131,7 @@ def test_build_atlantis_coverage_artifacts_skips_prepare_when_images_exist(
             return_value=True,
         ),
         patch(
-            "crsbench.evaluation.coverage.uniafl_runtime.run_oss_crs_prepare"
+            "crsbench.evaluation.coverage.uniafl_runtime.prepare_uniafl_backend"
         ) as mock_prepare,
         patch(
             "crsbench.evaluation.coverage.uniafl_runtime.run_oss_crs_build_target",
@@ -175,6 +177,7 @@ def test_build_atlantis_coverage_artifacts_refreshes_prepare_state_after_prepare
     control_root = tmp_path / "control"
     resolved_out = tmp_path / "atlantis-build"
     source_repo = tmp_path / "source-repo"
+    atlantis_root = tmp_path / "atlantis"
 
     with (
         patch(
@@ -188,12 +191,9 @@ def test_build_atlantis_coverage_artifacts_refreshes_prepare_state_after_prepare
             return_value=False,
         ),
         patch(
-            "crsbench.evaluation.coverage.uniafl_runtime.run_oss_crs_prepare",
-            return_value=("prepared", "", 0),
+            "crsbench.evaluation.coverage.uniafl_runtime.prepare_uniafl_backend",
+            return_value=0,
         ) as mock_prepare,
-        patch(
-            "crsbench.evaluation.coverage.uniafl_runtime.write_prepare_state"
-        ) as mock_write_state,
         patch(
             "crsbench.evaluation.coverage.uniafl_runtime.run_oss_crs_build_target",
             return_value=("build ok", "", 0),
@@ -211,10 +211,10 @@ def test_build_atlantis_coverage_artifacts_refreshes_prepare_state_after_prepare
             benchmark_path=benchmark_path,
             normalized_build_output_dir=normalized_build_output_dir,
             control_root=control_root,
+            uniafl_root=atlantis_root,
         )
 
-    mock_prepare.assert_called_once()
-    mock_write_state.assert_called_once()
+    mock_prepare.assert_called_once_with(atlantis_root.resolve())
 
 
 def test_load_oss_crs_runtime_classes_matches_repo_layout() -> None:

@@ -13,7 +13,6 @@ from pathlib import Path
 
 from crsbench.evaluation.adapter.compose_common import (
     run_oss_crs_build_target,
-    run_oss_crs_prepare,
 )
 from crsbench.evaluation.adapter.config_gen import (
     CrsComposeCrsEntry,
@@ -26,7 +25,7 @@ from crsbench.prepare.uniafl_backend import (
     default_uniafl_root,
     get_uniafl_prepare_readiness,
     prepare_image_refs,
-    write_prepare_state,
+    prepare_uniafl_backend,
 )
 from crsbench.utils.cpu_pool import format_cpuset
 
@@ -249,7 +248,6 @@ def build_atlantis_coverage_artifacts(
     control_root: Path,
     uniafl_root: Path | None = None,
     oss_crs_cmd: str = "oss-crs",
-    prepare_timeout: int = DEFAULT_BUILD_TIMEOUT,
     build_timeout: int = DEFAULT_BUILD_TIMEOUT,
 ) -> AtlantisCoverageBuild:
     """Run Atlantis oss-crs prepare/build-target and normalize outputs for runtime use."""
@@ -266,16 +264,7 @@ def build_atlantis_coverage_artifacts(
     stage_benchmark_for_coverage(benchmark_path, staged_project_dir)
 
     if not prepare_images_reusable(uniafl_root=resolved_uniafl_root):
-        stdout, stderr, returncode = run_oss_crs_prepare(
-            compose_file,
-            work_dir,
-            oss_crs_cmd=oss_crs_cmd,
-            timeout=prepare_timeout,
-        )
-        if returncode != 0:
-            detail = stderr or stdout
-            raise RuntimeError(f"oss-crs prepare failed (rc={returncode}): {detail}")
-        write_prepare_state(resolved_uniafl_root)
+        prepare_uniafl_backend(resolved_uniafl_root)
 
     stdout, stderr, returncode = run_oss_crs_build_target(
         compose_file,

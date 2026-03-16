@@ -17,6 +17,7 @@ DEFAULT_UNIAFL_ROOT_BASENAME = "atlantis-multilang-given_fuzzer"
 DEFAULT_UNIAFL_RUNTIME_IMAGE_NAME = "multilang-given_fuzzer-crs"
 DEFAULT_UNIAFL_RUNTIME_IMAGE_JVM_NAME = "multilang-given_fuzzer-crs"
 DEFAULT_UNIAFL_BUILDER_IMAGE_NAME = "multilang-given_fuzzer-builder"
+DEFAULT_UNIAFL_RELEASE = "1.0.0"
 DEFAULT_UNIAFL_SETUP_HINT = "scripts/setup-third-party.sh"
 UNIAFL_PREPARE_IMAGES = (
     "multilang-given_fuzzer-clang",
@@ -88,6 +89,25 @@ def _pull_prepare_images(*, image_tag: str = "latest") -> list[str]:
     return failures
 
 
+def _checkout_matches_published_release(repo_root: Path) -> bool:
+    tag = subprocess.run(
+        ["git", "-C", str(repo_root), "describe", "--tags", "--exact-match"],
+        capture_output=True,
+        text=True,
+    )
+    tracked_status = subprocess.run(
+        ["git", "-C", str(repo_root), "status", "--porcelain", "--untracked-files=no"],
+        capture_output=True,
+        text=True,
+    )
+    return (
+        tag.returncode == 0
+        and tag.stdout.strip() == DEFAULT_UNIAFL_RELEASE
+        and tracked_status.returncode == 0
+        and tracked_status.stdout.strip() == ""
+    )
+
+
 def _current_prepare_fingerprint() -> str:
     hasher = hashlib.sha256()
     hasher.update(Path(__file__).resolve().read_bytes())
@@ -129,6 +149,12 @@ def _uniafl_checkout_fingerprint(repo_root: Path) -> str:
             hasher.update(path.name.encode())
             hasher.update(path.read_bytes())
     return hasher.hexdigest()
+
+
+def current_uniafl_checkout_fingerprint(uniafl_root: Path | None = None) -> str:
+    """Return the fingerprint for the selected Atlantis checkout."""
+    repo_root = Path(uniafl_root or default_uniafl_root()).resolve()
+    return _uniafl_checkout_fingerprint(repo_root)
 
 
 def _prepare_state_matches(repo_root: Path) -> bool:
@@ -200,10 +226,11 @@ def prepare_uniafl_backend(uniafl_root: Path | None = None) -> int:
     if not readiness_issues:
         return 0
 
+    published_release_checkout = _checkout_matches_published_release(repo_root)
     missing_image_issues = [
         issue for issue in readiness_issues if issue.startswith("missing local image:")
     ]
-    if missing_image_issues:
+    if missing_image_issues and published_release_checkout:
         logger.info("Pulling canonical Atlantis prepare images from GHCR")
         pull_failures = _pull_prepare_images()
         if not pull_failures:
@@ -218,7 +245,9 @@ def prepare_uniafl_backend(uniafl_root: Path | None = None) -> int:
                 "Falling back to local Atlantis image build after GHCR pull failed: %s",
                 "; ".join(pull_failures),
             )
-    if not any(issue.startswith("missing local image:") for issue in readiness_issues):
+    if published_release_checkout and not any(
+        issue.startswith("missing local image:") for issue in readiness_issues
+    ):
         _write_prepare_state(repo_root)
         return 0
 

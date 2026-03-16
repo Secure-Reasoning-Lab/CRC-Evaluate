@@ -53,6 +53,7 @@ from crsbench.evaluation.coverage.strategy import (
 from crsbench.evaluation.coverage.uniafl_runtime import (
     build_atlantis_coverage_artifacts,
 )
+from crsbench.prepare.uniafl_backend import current_uniafl_checkout_fingerprint
 from crsbench.utils.docker import fix_docker_ownership
 from crsbench.utils.logger import get_logger
 from crsbench.utils.workers import resolve_build_workers
@@ -759,12 +760,20 @@ class CoverageEngine:
             coverage_build_dir = build_output_dir / "coverage-out"
             build_sentinel = build_output_dir / UNIAFL_BUILD_SENTINEL
             has_existing_build = any(build_output_dir.iterdir())
+            sentinel_data: dict[str, object] = {}
+            if build_sentinel.exists():
+                try:
+                    sentinel_data = json.loads(build_sentinel.read_text())
+                except json.JSONDecodeError:
+                    sentinel_data = {}
+            checkout_fingerprint = current_uniafl_checkout_fingerprint()
             if (
                 not force_rebuild
                 and staged_repo_dir.exists()
                 and build_sentinel.exists()
                 and has_existing_build
                 and (adapter.lang == "jvm" or coverage_build_dir.exists())
+                and sentinel_data.get("checkout_fingerprint") == checkout_fingerprint
             ):
                 logger.info(f"Reusing existing UniAFL coverage build: {variant_name}")
                 return variant_name
@@ -800,6 +809,7 @@ class CoverageEngine:
                         "atlantis_build_output_dir": str(
                             build.atlantis_build_output_dir
                         ),
+                        "checkout_fingerprint": checkout_fingerprint,
                     },
                     indent=2,
                 )

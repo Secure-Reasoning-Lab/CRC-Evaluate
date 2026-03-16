@@ -111,6 +111,19 @@ bootstrap_oss_fuzz() {
 
 bootstrap_atlantis() {
     if [ -d "$ATLANTIS_DIR/.git" ]; then
+        local current_ref
+        current_ref="$(git -C "$ATLANTIS_DIR" describe --tags --exact-match 2>/dev/null || true)"
+        if [ "$current_ref" != "$ATLANTIS_REF" ]; then
+            echo "ERROR: Atlantis checkout at $ATLANTIS_DIR is not pinned to tag $ATLANTIS_REF"
+            echo "  Current exact tag: ${current_ref:-<none>}"
+            echo "  Remove the checkout and rerun this script to reprovision the pinned release."
+            return 1
+        fi
+        if [ -n "$(git -C "$ATLANTIS_DIR" status --porcelain --untracked-files=no)" ]; then
+            echo "ERROR: Atlantis checkout at $ATLANTIS_DIR has tracked modifications."
+            echo "  Reset or remove the checkout before rerunning this script."
+            return 1
+        fi
         echo "Atlantis given_fuzzer already checked out at $ATLANTIS_DIR"
         return 0
     fi
