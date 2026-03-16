@@ -226,6 +226,25 @@ class TestCheckCoverage:
 
         assert check_coverage(results_file) is False
 
+    def test_check_coverage_legacy_function_totals_do_not_force_line_total(
+        self, tmp_path: Path
+    ) -> None:
+        """Legacy reports with only function totals still have unknown line totals."""
+        data = {
+            "harness": "fuzz_target",
+            "summary": {
+                "lines_covered": 7,
+                "lines_total": 0,
+                "lines_percent": 0.0,
+                "functions_covered": 3,
+                "functions_total": 11,
+            },
+        }
+        results_file = tmp_path / "results.json"
+        results_file.write_text(json.dumps(data))
+
+        assert check_coverage(results_file) is True
+
     def test_check_coverage_missing_summary(self, tmp_path: Path) -> None:
         """Test coverage fails when summary is missing."""
         data = {"harness": "fuzz_target"}

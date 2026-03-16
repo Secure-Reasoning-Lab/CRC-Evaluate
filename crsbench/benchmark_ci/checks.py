@@ -163,7 +163,7 @@ def check_coverage(results_file: Path) -> bool:
     lines_percent = summary.get("lines_percent", 0.0)
     totals_available = summary.get("totals_available")
     if totals_available is None:
-        totals_available = lines_total > 0 or summary.get("functions_total", 0) > 0
+        totals_available = lines_total > 0
 
     logger.debug(f"Harness: {harness}")
     if totals_available:
@@ -174,14 +174,10 @@ def check_coverage(results_file: Path) -> bool:
             logger.error("Coverage report marked totals as available but lines_total=0")
             return False
     else:
-        if (
-            lines_total > 0
-            or summary.get("functions_total", 0) > 0
-            or lines_percent > 0.0
-        ):
+        if lines_total > 0 or lines_percent > 0.0:
             logger.error(
                 "Coverage report marked totals as unavailable but still populated "
-                "denominators"
+                "line denominators"
             )
             return False
         logger.debug(f"Lines covered: {lines_covered} (total N/A)")
