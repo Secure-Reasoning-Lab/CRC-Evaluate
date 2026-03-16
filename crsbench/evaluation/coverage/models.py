@@ -113,9 +113,18 @@ class CoverageSummary(BaseModel):
 
     @model_validator(mode="after")
     def _infer_totals_available(self) -> "CoverageSummary":
-        """Fill totals_available when callers rely on legacy implicit behavior."""
+        """Fill or validate denominator availability for coverage summaries."""
         if self.totals_available is None:
             self.totals_available = self.lines_total > 0 or self.functions_total > 0
+        elif self.totals_available:
+            if self.lines_total <= 0:
+                msg = "totals_available=True requires lines_total > 0"
+                raise ValueError(msg)
+        elif (
+            self.lines_total > 0 or self.functions_total > 0 or self.lines_percent > 0.0
+        ):
+            msg = "totals_available=False requires zero totals and zero percentage"
+            raise ValueError(msg)
         return self
 
     def format_lines(self) -> str:

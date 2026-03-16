@@ -208,6 +208,24 @@ class TestCheckCoverage:
 
         assert check_coverage(results_file) is True
 
+    def test_check_coverage_unknown_total_rejects_populated_denominators(
+        self, tmp_path: Path
+    ) -> None:
+        """Unknown-total reports must not ship denominator fields."""
+        data = {
+            "harness": "fuzz_target",
+            "summary": {
+                "lines_covered": 7,
+                "lines_total": 11,
+                "lines_percent": 63.6,
+                "totals_available": False,
+            },
+        }
+        results_file = tmp_path / "results.json"
+        results_file.write_text(json.dumps(data))
+
+        assert check_coverage(results_file) is False
+
     def test_check_coverage_missing_summary(self, tmp_path: Path) -> None:
         """Test coverage fails when summary is missing."""
         data = {"harness": "fuzz_target"}

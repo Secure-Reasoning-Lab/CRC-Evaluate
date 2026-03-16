@@ -172,6 +172,16 @@ class TestCoverageModels:
         assert summary.lines_percent == 50.0
         assert summary.totals_available is True
 
+    def test_coverage_summary_rejects_hidden_known_totals(self):
+        """Explicit unknown totals may not carry populated denominators."""
+        with pytest.raises(ValueError, match="totals_available=False"):
+            CoverageSummary(
+                lines_covered=7,
+                lines_total=11,
+                lines_percent=63.6,
+                totals_available=False,
+            )
+
     def test_coverage_snapshot(self):
         """Test CoverageSnapshot model."""
         summary = CoverageSummary(lines_covered=50, lines_total=100)
