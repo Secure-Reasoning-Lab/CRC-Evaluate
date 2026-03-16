@@ -126,3 +126,61 @@ def test_run_post_experiment_coverage_uses_engine_timed_line_coverage(
     assert final_coverage["harness"] == "fuzz_target"
     assert final_coverage["summary"]["lines_covered"] == 7
     assert final_coverage["summary"]["lines_total"] == 11
+
+
+def test_run_post_experiment_coverage_logs_unknown_totals_cleanly(
+    tmp_path: Path,
+) -> None:
+    benchmark_path = tmp_path / "benchmark"
+    benchmark_path.mkdir()
+    trial_output_dir = tmp_path / "trial-1"
+    seed_dir = trial_output_dir / "output" / "seeds"
+    seed_dir.mkdir(parents=True)
+    seed_path = seed_dir / "seed-a"
+    seed_path.write_bytes(b"seed")
+    runner = _make_runner()
+    runner.logger = MagicMock()
+
+    class _FakeEngine:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def collect_timed_line_coverage(
+            self,
+            benchmark_path: Path,
+            timed_inputs: list[TimedCoverageInput],
+            *,
+            harness_filter: str | None = None,
+            force_rebuild: bool = False,
+            use_inc_build: bool = False,
+            output_dir: Path | None = None,
+        ) -> tuple[list[TimedCoverageInput], CoverageSummary]:
+            del benchmark_path, timed_inputs, harness_filter, force_rebuild
+            del use_inc_build, output_dir
+            return (
+                [],
+                CoverageSummary(
+                    metric="line",
+                    corpus_total=1,
+                    lines_covered=7,
+                    lines_total=0,
+                    lines_percent=0.0,
+                    functions_covered=3,
+                    functions_total=0,
+                ),
+            )
+
+        def cleanup(self) -> None:
+            return None
+
+    with patch(
+        "crsbench.evaluation.coverage.engine.CoverageEngine",
+        _FakeEngine,
+    ):
+        runner._run_post_experiment_coverage(
+            benchmark_path=benchmark_path,
+            trial_output_dir=trial_output_dir,
+            harness_name="fuzz_target",
+        )
+
+    runner.logger.info.assert_any_call("Post-experiment coverage: 7 (total N/A)")

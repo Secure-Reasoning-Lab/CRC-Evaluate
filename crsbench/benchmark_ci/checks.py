@@ -163,11 +163,12 @@ def check_coverage(results_file: Path) -> bool:
     lines_percent = summary.get("lines_percent", 0.0)
 
     logger.debug(f"Harness: {harness}")
-    logger.debug(f"Lines covered: {lines_covered}/{lines_total} ({lines_percent:.1f}%)")
-
-    if lines_total == 0:
-        logger.error("No lines found in coverage report")
-        return False
+    if lines_total > 0:
+        logger.debug(
+            f"Lines covered: {lines_covered}/{lines_total} ({lines_percent:.1f}%)"
+        )
+    else:
+        logger.debug(f"Lines covered: {lines_covered} (total N/A)")
 
     if lines_covered == 0:
         logger.error("No lines covered")

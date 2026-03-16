@@ -189,6 +189,23 @@ class TestCheckCoverage:
 
         assert check_coverage(results_file) is False
 
+    def test_check_coverage_unknown_total_with_covered_lines(
+        self, tmp_path: Path
+    ) -> None:
+        """Unknown totals are acceptable when coverage still found lines."""
+        data = {
+            "harness": "fuzz_target",
+            "summary": {
+                "lines_covered": 7,
+                "lines_total": 0,
+                "lines_percent": 0.0,
+            },
+        }
+        results_file = tmp_path / "results.json"
+        results_file.write_text(json.dumps(data))
+
+        assert check_coverage(results_file) is True
+
     def test_check_coverage_missing_summary(self, tmp_path: Path) -> None:
         """Test coverage fails when summary is missing."""
         data = {"harness": "fuzz_target"}

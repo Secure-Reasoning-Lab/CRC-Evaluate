@@ -2227,10 +2227,7 @@ class BenchmarkRunner:
                 )
             )
 
-            self.logger.info(
-                f"Post-experiment coverage: {summary.lines_covered}/{summary.lines_total} "
-                f"lines ({summary.lines_percent:.1f}%)"
-            )
+            self.logger.info(f"Post-experiment coverage: {summary.format_lines()}")
 
         except Exception as e:
             self.logger.error(f"Post-experiment coverage failed: {e}", exc_info=True)
