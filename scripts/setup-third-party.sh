@@ -6,16 +6,16 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 THIRD_PARTY="$REPO_ROOT/third_party"
 PATCH_DIR="$THIRD_PARTY/patches"
 
-OSS_FUZZ_REPO="https://github.com/google/oss-fuzz.git"
-OSS_FUZZ_COMMIT="1f5c75e09c7b8b98a0e4f21859602a89d41602c2"
+OSS_FUZZ_REPO="${CRSBENCH_OSS_FUZZ_REPO:-https://github.com/google/oss-fuzz.git}"
+OSS_FUZZ_COMMIT="${CRSBENCH_OSS_FUZZ_COMMIT:-1f5c75e09c7b8b98a0e4f21859602a89d41602c2}"
 OSS_FUZZ_DIR="$THIRD_PARTY/oss-fuzz"
 OSS_FUZZ_HELPER_PATCHES=(
     "$PATCH_DIR/oss-fuzz-helper-cgroup.patch"
     "$PATCH_DIR/oss-fuzz-helper-build-image.patch"
 )
 
-ATLANTIS_REPO="https://github.com/Team-Atlanta/atlantis-multilang-given_fuzzer.git"
-ATLANTIS_REF="1.0.0"
+ATLANTIS_REPO="${CRSBENCH_ATLANTIS_REPO:-https://github.com/Team-Atlanta/atlantis-multilang-given_fuzzer.git}"
+ATLANTIS_REF="${CRSBENCH_ATLANTIS_REF:-1.0.0}"
 ATLANTIS_DIR="$THIRD_PARTY/atlantis-multilang-given_fuzzer"
 
 usage() {
@@ -86,17 +86,7 @@ apply_helper_patches() {
     done
 }
 
-bootstrap_oss_fuzz() {
-    if [ -d "$OSS_FUZZ_DIR/.git" ]; then
-        echo "oss-fuzz already checked out at $OSS_FUZZ_DIR"
-        apply_helper_patches
-        return 0
-    fi
-
-    echo "Fetching official oss-fuzz via sparse checkout..."
-    mkdir -p "$THIRD_PARTY"
-    git clone --filter=blob:none --sparse "$OSS_FUZZ_REPO" "$OSS_FUZZ_DIR"
-    git -C "$OSS_FUZZ_DIR" checkout "$OSS_FUZZ_COMMIT"
+configure_oss_fuzz_sparse_checkout() {
     git -C "$OSS_FUZZ_DIR" sparse-checkout set --no-cone \
         "/infra/" \
         "/AGENTS.md" \
@@ -105,6 +95,29 @@ bootstrap_oss_fuzz() {
         "/LICENSE" \
         "/README.md"
     mkdir -p "$OSS_FUZZ_DIR/projects"
+}
+
+normalize_oss_fuzz_checkout() {
+    if ! git -C "$OSS_FUZZ_DIR" cat-file -e "${OSS_FUZZ_COMMIT}^{commit}" >/dev/null 2>&1; then
+        git -C "$OSS_FUZZ_DIR" fetch --depth 1 origin "$OSS_FUZZ_COMMIT"
+    fi
+
+    git -C "$OSS_FUZZ_DIR" checkout -f "$OSS_FUZZ_COMMIT"
+    configure_oss_fuzz_sparse_checkout
+}
+
+bootstrap_oss_fuzz() {
+    if [ -d "$OSS_FUZZ_DIR/.git" ]; then
+        echo "oss-fuzz already checked out at $OSS_FUZZ_DIR"
+        normalize_oss_fuzz_checkout
+        apply_helper_patches
+        return 0
+    fi
+
+    echo "Fetching official oss-fuzz via sparse checkout..."
+    mkdir -p "$THIRD_PARTY"
+    git clone --filter=blob:none --sparse "$OSS_FUZZ_REPO" "$OSS_FUZZ_DIR"
+    normalize_oss_fuzz_checkout
     apply_helper_patches
     echo "Done. official oss-fuzz checked out to $OSS_FUZZ_DIR"
 }

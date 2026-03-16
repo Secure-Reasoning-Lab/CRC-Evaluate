@@ -12,7 +12,7 @@ relevant to CRSBench workflows.
 - `merge_experiment_results.py` - merge distributed result shards
 - `orchestrate-workers.sh` - remote worker orchestration
 - `setup-remote-worker.sh` - remote worker bootstrap helper
-- `setup-third-party.sh` - fetch managed `third_party/oss-fuzz` and the pinned Atlantis `third_party/atlantis-multilang-given_fuzzer` checkout
+- `setup-third-party.sh` - fetch managed `third_party/oss-fuzz` and the pinned Atlantis `third_party/atlantis-multilang-given_fuzzer` checkout; reruns normalize the managed `oss-fuzz` checkout back to the pinned commit before reapplying CRSBench helper patches
 - `sync-upstream-models.py` - sync upstream LiteLLM model catalog
 - `check_patch_overlap.py` - patch overlap/debug utility
 - `cleanup-failed-trials.sh` - cleanup helper for failed trial artifacts
