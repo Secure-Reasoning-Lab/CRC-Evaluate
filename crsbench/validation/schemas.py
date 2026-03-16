@@ -1245,6 +1245,10 @@ class GceWorkerFleetConfig(BaseModel):
             "When None, the startup script expects crsbench pre-installed on the image."
         ),
     )
+    crsbench_git_ref: str = Field(
+        default="main",
+        description="Git branch, tag, or commit to checkout after cloning (only used with git+ssh:// install spec).",
+    )
     github_deploy_key_file: Optional[str] = Field(
         default=None,
         description=(

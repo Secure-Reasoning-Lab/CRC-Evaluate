@@ -58,6 +58,7 @@ cloud:
 | `ssh_via_iap` | no | `false` | Use IAP tunnel for SSH and rsync |
 | `readiness_timeout_sec` | no | `900` | Max seconds to wait for all workers to report ready |
 | `crsbench_install_spec` | no | -- | How to install crsbench on workers (`git+ssh://...` for private repo clone, or pip spec) |
+| `crsbench_git_ref` | no | `main` | Git branch, tag, or commit to checkout after cloning (only used with `git+ssh://` install spec) |
 | `github_deploy_key_file` | no | -- | Path to SSH private key for GitHub deploy key access |
 | `hf_token` | no | -- | HuggingFace token for gated dataset access |
 

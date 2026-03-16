@@ -262,6 +262,51 @@ def test_metadata_omits_secrets_when_not_configured():
     assert CRSBENCH_HF_TOKEN_KEY not in metadata
 
 
+def test_metadata_includes_git_ref():
+    """crsbench_git_ref in fleet config is passed as crsbench-git-ref metadata."""
+    from crsbench.cloud.gce.metadata import (
+        CRSBENCH_GIT_REF_KEY,
+        build_instance_metadata,
+    )
+
+    fleet = _make_fleet(
+        crsbench_install_spec="git+ssh://git@github.com/org/Repo.git",
+        crsbench_git_ref="feat/gcp",
+    )
+    metadata = build_instance_metadata(
+        experiment_name="exp-ref",
+        fleet=fleet,
+        redis_host="redis.internal:6380",
+        registration=_make_registration(),
+        worker_name="gce-worker-001",
+        startup_script="#!/usr/bin/env bash\n",
+    )
+
+    assert metadata[CRSBENCH_GIT_REF_KEY] == "feat/gcp"
+
+
+def test_metadata_git_ref_defaults_to_main():
+    """When crsbench_git_ref is not set, it defaults to 'main'."""
+    from crsbench.cloud.gce.metadata import (
+        CRSBENCH_GIT_REF_KEY,
+        build_instance_metadata,
+    )
+
+    fleet = _make_fleet(
+        crsbench_install_spec="git+ssh://git@github.com/org/Repo.git",
+    )
+    metadata = build_instance_metadata(
+        experiment_name="exp-default",
+        fleet=fleet,
+        redis_host="redis.internal:6380",
+        registration=_make_registration(),
+        worker_name="gce-worker-001",
+        startup_script="#!/usr/bin/env bash\n",
+    )
+
+    assert metadata[CRSBENCH_GIT_REF_KEY] == "main"
+
+
 def test_startup_script_contains_git_clone_path():
     """Startup script should include git clone, uv sync, deploy key, and HF token handling."""
     from crsbench.cloud.gce.metadata import load_startup_script
@@ -272,3 +317,4 @@ def test_startup_script_contains_git_clone_path():
     assert "uv sync" in script
     assert "crsbench-github-deploy-key" in script
     assert "crsbench-hf-token" in script
+    assert "crsbench-git-ref" in script

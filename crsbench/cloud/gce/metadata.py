@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 CRSBENCH_BOOTSTRAP_PAYLOAD_KEY = "crsbench-bootstrap-payload"
 CRSBENCH_INSTALL_SPEC_KEY = "crsbench-install-spec"
+CRSBENCH_GIT_REF_KEY = "crsbench-git-ref"
 CRSBENCH_GITHUB_DEPLOY_KEY = "crsbench-github-deploy-key"
 CRSBENCH_HF_TOKEN_KEY = "crsbench-hf-token"
 CRSBENCH_EXPERIMENT_METADATA_KEY = "crsbench-experiment"
@@ -128,6 +129,7 @@ def build_instance_metadata(
 
     if fleet.crsbench_install_spec:
         metadata[CRSBENCH_INSTALL_SPEC_KEY] = fleet.crsbench_install_spec
+        metadata[CRSBENCH_GIT_REF_KEY] = fleet.crsbench_git_ref
 
     if fleet.github_deploy_key_file:
         key_bytes = Path(fleet.github_deploy_key_file).read_bytes()

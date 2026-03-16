@@ -108,6 +108,7 @@ export CRSBENCH_CLOUD_ZONE="${ZONE}"
 trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR
 
 INSTALL_SPEC="$(metadata_get_optional "crsbench-install-spec")"
+GIT_REF="$(metadata_get_optional "crsbench-git-ref")"
 GITHUB_DEPLOY_KEY="$(metadata_get_optional "crsbench-github-deploy-key")"
 HF_TOKEN="$(metadata_get_optional "crsbench-hf-token")"
 
@@ -135,7 +136,7 @@ if ! command -v crsbench >/dev/null 2>&1; then
     # Private repo clone path
     REPO_URL="${INSTALL_SPEC#git+ssh://}"
     CLONE_DIR="/opt/crsbench"
-    git clone "ssh://${REPO_URL}" "${CLONE_DIR}"
+    git clone -b "${GIT_REF:-main}" "ssh://${REPO_URL}" "${CLONE_DIR}"
     cd "${CLONE_DIR}"
     git submodule update --init --recursive
     # Install uv
