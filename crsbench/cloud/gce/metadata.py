@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from crsbench.validation.schemas import GceWorkerFleetConfig
 
 CRSBENCH_BOOTSTRAP_PAYLOAD_KEY = "crsbench-bootstrap-payload"
+CRSBENCH_INSTALL_SPEC_KEY = "crsbench-install-spec"
 CRSBENCH_EXPERIMENT_METADATA_KEY = "crsbench-experiment"
 CRSBENCH_WORKER_NAME_METADATA_KEY = "crsbench-worker-name"
 CRSBENCH_READINESS_TIMEOUT_METADATA_KEY = "crsbench-readiness-timeout-sec"
@@ -122,6 +123,9 @@ def build_instance_metadata(
     metadata["block-project-ssh-keys"] = "TRUE"
     if fleet.ssh_via_iap:
         metadata["crsbench-ssh-via-iap"] = "TRUE"
+
+    if fleet.crsbench_install_spec:
+        metadata[CRSBENCH_INSTALL_SPEC_KEY] = fleet.crsbench_install_spec
 
     if fleet.startup_script_uri:
         metadata[GCE_STARTUP_SCRIPT_URL_KEY] = fleet.startup_script_uri

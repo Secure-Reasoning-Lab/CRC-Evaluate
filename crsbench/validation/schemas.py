@@ -1236,6 +1236,15 @@ class GceWorkerFleetConfig(BaseModel):
         ge=1,
         description="Maximum time to wait for a worker to report ready before bring-up fails.",
     )
+    crsbench_install_spec: Optional[str] = Field(
+        default=None,
+        description=(
+            "How to install crsbench on worker VMs. "
+            "Use 'git+ssh://...' for private repo clone+uv-sync, "
+            "or a pip spec like 'crsbench==1.0' for PyPI install. "
+            "When None, the startup script expects crsbench pre-installed on the image."
+        ),
+    )
 
     @field_validator(
         "project",
@@ -1250,6 +1259,7 @@ class GceWorkerFleetConfig(BaseModel):
         "startup_script_uri",
         "zone",
         "region",
+        "crsbench_install_spec",
     )
     @classmethod
     def normalize_optional_strings(cls, value: Optional[str]) -> Optional[str]:
