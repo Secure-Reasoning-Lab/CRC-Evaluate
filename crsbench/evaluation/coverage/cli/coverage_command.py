@@ -120,13 +120,6 @@ Examples:
         default=None,
         help="Output directory for direct --seed-dir timeline artifacts",
     )
-    parser.add_argument(
-        "--bucket-size-seconds",
-        type=int,
-        default=1,
-        help="Bucket size in seconds for timeline aggregation (default: 1)",
-    )
-
     # Optional arguments
     parser.add_argument(
         "--harness",
@@ -212,9 +205,6 @@ def run_coverage(args: argparse.Namespace) -> int:
         args.experiment_config is not None or args.experiment_dir is not None
     )
 
-    if args.bucket_size_seconds <= 0:
-        logger.error("--bucket-size-seconds must be a positive integer")
-        return 1
     try:
         _resolve_jobs(args)
         _resolve_cores_per_job(args)
@@ -394,7 +384,6 @@ def _run_direct_seed_timeline(args: argparse.Namespace) -> int:
             seed_dir=args.seed_dir,
             crs_run_start_time=None,
             pov_markers=[],
-            bucket_size_seconds=args.bucket_size_seconds,
             force_rebuild=args.force_rebuild,
             output_dir=args.output_dir,
         )
@@ -417,7 +406,6 @@ def _build_timeline_report(
     seed_dir: Path,
     crs_run_start_time: Optional[float],
     pov_markers: list,
-    bucket_size_seconds: int,
     force_rebuild: bool,
     output_dir: Path,
 ) -> CoverageTimelineReport:
@@ -436,7 +424,6 @@ def _build_timeline_report(
     return CoverageTimelineReport(
         benchmark=benchmark_path.name,
         harness=harness_name,
-        bucket_size_seconds=bucket_size_seconds,
         time_origin=(
             "crs_run_start_time"
             if crs_run_start_time is not None
@@ -492,7 +479,6 @@ def _run_single_trial_job(
             seed_dir=context.seed_dir,
             crs_run_start_time=context.crs_run_start_time,
             pov_markers=context.pov_markers,
-            bucket_size_seconds=args.bucket_size_seconds,
             force_rebuild=args.force_rebuild,
             output_dir=trial_dir / "coverage",
         )

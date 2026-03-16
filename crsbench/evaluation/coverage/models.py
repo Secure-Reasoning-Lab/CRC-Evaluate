@@ -242,7 +242,6 @@ class CoverageTimelineReport(BaseModel):
 
     benchmark: str
     harness: str
-    bucket_size_seconds: int = Field(..., ge=1)
     time_origin: str = Field(
         default="crs_run_start_time",
         description="Reference used for relative_time values in this report.",

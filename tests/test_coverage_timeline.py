@@ -153,7 +153,6 @@ def test_timeline_reporting_writes_json_csv_and_png(tmp_path: Path) -> None:
     report = CoverageTimelineReport(
         benchmark="sanity-mock-c-delta-01",
         harness="fuzz_parse_buffer_section",
-        bucket_size_seconds=1,
         time_origin="crs_run_start_time",
         seeds=[
             TimedCoverageInput(
@@ -193,7 +192,6 @@ def test_timeline_png_uses_covered_line_counts_on_y_axis(tmp_path: Path) -> None
     report = CoverageTimelineReport(
         benchmark="sanity-mock-c-delta-01",
         harness="fuzz_parse_buffer_section",
-        bucket_size_seconds=1,
         seeds=[
             TimedCoverageInput(
                 content_hash="abc",
@@ -277,35 +275,9 @@ def test_run_coverage_rejects_experiment_config_with_benchmarks_and_harness(
         benchmark_path=None,
         corpus_dir=None,
         seed_dir=None,
-        bucket_size_seconds=1,
         benchmark=None,
         benchmarks=tmp_path / "benchmarks",
         harness="fuzz_parse_buffer_section",
-        oss_fuzz_path=None,
-        force_rebuild=False,
-        output=None,
-        format="json",
-        build_workers=None,
-        verify_workers=None,
-        source="pkgs",
-        output_dir=None,
-    )
-
-    assert run_coverage(args) == 1
-
-
-def test_run_coverage_rejects_non_positive_bucket_size(tmp_path: Path) -> None:
-    args = argparse.Namespace(
-        verbose=False,
-        experiment_config=tmp_path / "experiment.yaml",
-        experiment_dir=None,
-        benchmark_path=None,
-        corpus_dir=None,
-        seed_dir=None,
-        bucket_size_seconds=0,
-        benchmark=None,
-        benchmarks=None,
-        harness=None,
         oss_fuzz_path=None,
         force_rebuild=False,
         output=None,
@@ -330,7 +302,6 @@ def test_run_coverage_direct_seed_mode_requires_benchmark(tmp_path: Path) -> Non
         benchmark_path=None,
         corpus_dir=None,
         seed_dir=seed_dir,
-        bucket_size_seconds=1,
         benchmark=None,
         benchmarks=None,
         harness="fuzz_parse_buffer_section",
@@ -501,7 +472,6 @@ def test_run_coverage_rejects_experiment_config_with_experiment_dir(
         benchmark_path=None,
         corpus_dir=None,
         seed_dir=None,
-        bucket_size_seconds=1,
         benchmark=None,
         benchmarks=None,
         harness=None,
@@ -529,7 +499,6 @@ def test_run_coverage_rejects_conflicting_job_flags(tmp_path: Path) -> None:
         benchmark_path=None,
         corpus_dir=None,
         seed_dir=tmp_path / "seeds",
-        bucket_size_seconds=1,
         benchmark="bench-a",
         benchmarks=tmp_path / "benchmarks",
         harness="h0",
@@ -557,7 +526,6 @@ def test_run_coverage_rejects_non_positive_cores_per_job(tmp_path: Path) -> None
         benchmark_path=None,
         corpus_dir=None,
         seed_dir=tmp_path / "seeds",
-        bucket_size_seconds=1,
         benchmark="bench-a",
         benchmarks=tmp_path / "benchmarks",
         harness="h0",
@@ -587,7 +555,6 @@ def test_run_coverage_allows_experiment_dir_with_benchmarks_override(
         benchmark_path=None,
         corpus_dir=None,
         seed_dir=None,
-        bucket_size_seconds=1,
         benchmark=None,
         benchmarks=tmp_path / "benchmarks",
         harness=None,
@@ -638,7 +605,6 @@ def test_run_experiment_timeline_uses_jobs_and_cores_per_job(
         benchmark_path=None,
         corpus_dir=None,
         seed_dir=None,
-        bucket_size_seconds=1,
         benchmark=None,
         benchmarks=benchmark_root,
         harness=None,
@@ -701,7 +667,6 @@ def test_run_experiment_timeline_uses_jobs_and_cores_per_job(
         return CoverageTimelineReport(
             benchmark="bench-a",
             harness=kwargs["harness_name"],
-            bucket_size_seconds=1,
             time_origin="first_seed_mtime",
             seeds=[],
             pov_markers=[],
@@ -759,7 +724,6 @@ def test_run_experiment_timeline_rejects_cores_per_job_larger_than_cpu_pool(
         benchmark_path=None,
         corpus_dir=None,
         seed_dir=None,
-        bucket_size_seconds=1,
         benchmark=None,
         benchmarks=benchmark_root,
         harness=None,
@@ -826,7 +790,6 @@ def test_run_direct_seed_timeline_pins_runtime_cpus(
         benchmark_path=None,
         corpus_dir=None,
         seed_dir=seed_dir,
-        bucket_size_seconds=1,
         benchmark="bench-a",
         benchmarks=benchmark_root,
         harness="fuzz_target",
@@ -915,7 +878,6 @@ def test_run_direct_seed_timeline_accepts_legacy_worker_aliases(
         benchmark_path=None,
         corpus_dir=None,
         seed_dir=seed_dir,
-        bucket_size_seconds=1,
         benchmark="bench-a",
         benchmarks=benchmark_root,
         harness="fuzz_target",
