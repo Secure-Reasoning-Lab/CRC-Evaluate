@@ -7,8 +7,6 @@ import stat
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from crsbench.cloud.cli._keygen import run_keygen
 
 
@@ -34,7 +32,7 @@ def test_keygen_generates_key_pair(tmp_path):
     output_dir = tmp_path / "keys"
     args = _make_args(str(output_dir))
 
-    def fake_run(cmd, **kwargs):
+    def fake_run(_cmd, **_kwargs):
         _fake_keygen(output_dir)
         return None
 
@@ -59,7 +57,7 @@ def test_keygen_respects_custom_name(tmp_path):
     output_dir = tmp_path / "keys"
     args = _make_args(str(output_dir), name="my-key")
 
-    def fake_run(cmd, **kwargs):
+    def fake_run(_cmd, **_kwargs):
         _fake_keygen(output_dir, name="my-key")
         return None
 
@@ -97,7 +95,7 @@ def test_keygen_force_overwrites_existing_key(tmp_path):
 
     new_pub_content = "ssh-ed25519 BBBBB crsbench-deploy-key\n"
 
-    def fake_run(cmd, **kwargs):
+    def fake_run(_cmd, **_kwargs):
         key_path = output_dir / "crsbench-deploy"
         pub_path = Path(str(key_path) + ".pub")
         key_path.write_text(
