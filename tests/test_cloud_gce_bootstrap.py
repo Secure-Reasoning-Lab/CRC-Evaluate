@@ -188,7 +188,10 @@ def test_build_instance_metadata_fleet_config_install_spec_overrides_manual_meta
 
 def test_metadata_includes_github_deploy_key(tmp_path):
     """github_deploy_key_file in fleet config causes base64-encoded key in metadata."""
-    from crsbench.cloud.gce.metadata import CRSBENCH_GITHUB_DEPLOY_KEY, build_instance_metadata
+    from crsbench.cloud.gce.metadata import (
+        CRSBENCH_GITHUB_DEPLOY_KEY,
+        build_instance_metadata,
+    )
 
     key_content = b"-----BEGIN OPENSSH PRIVATE KEY-----\nFAKEKEYDATA\n"
     key_file = tmp_path / "crsbench-deploy"
@@ -216,7 +219,10 @@ def test_metadata_includes_github_deploy_key(tmp_path):
 
 def test_metadata_includes_hf_token():
     """hf_token in fleet config causes crsbench-hf-token in metadata."""
-    from crsbench.cloud.gce.metadata import CRSBENCH_HF_TOKEN_KEY, build_instance_metadata
+    from crsbench.cloud.gce.metadata import (
+        CRSBENCH_HF_TOKEN_KEY,
+        build_instance_metadata,
+    )
 
     fleet = _make_fleet(
         hf_token="hf_test_token_abc123",

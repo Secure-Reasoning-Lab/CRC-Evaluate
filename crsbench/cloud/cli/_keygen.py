@@ -45,9 +45,7 @@ def run_keygen(args: argparse.Namespace) -> int:
                 key_path,
             )
             if pub_path.exists():
-                sys.stdout.write(
-                    pub_path.read_text(encoding="utf-8").strip() + "\n"
-                )
+                sys.stdout.write(pub_path.read_text(encoding="utf-8").strip() + "\n")
             return 0
         # Remove existing files before regenerating
         for p in (key_path, pub_path):
