@@ -11,6 +11,7 @@
   - `afc-final-bugfixing/`
   - `sanity-bugfinding/`
   - `sanity-bugfixing/`
+  - `cloud-testing/`
 
 ## Naming Convention
 

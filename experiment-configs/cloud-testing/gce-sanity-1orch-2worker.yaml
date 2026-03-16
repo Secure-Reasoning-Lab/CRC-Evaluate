@@ -1,0 +1,48 @@
+experiment:
+  name: gce-sanity-1orch-2worker
+  task: bugfinding
+  benchmark_suite: sanity
+  mode: delta
+runtime:
+  trials: 1
+  max_total_time: 1200
+  build_timeout: 300
+  run_timeout: 300
+  verify_timeout: 300
+  redis_host: redis-server:6379
+  inputs:
+    pov:
+      max_variants_per_cpv: 1
+  litellm:
+    skip: true
+storage:
+  experiment_filestore: /tmp/crsbench/experiment-data
+  report_filestore: /tmp/crsbench/report-data
+resources:
+  cores_per_trial: 2
+  memory_per_trial: 4G
+worker:
+  storage:
+    cleanup_after_trial: true
+  cores_per_job: 2
+crs_compose:
+  oss_crs_infra:
+    shared: true
+  atlantis-multilang-given_fuzzer:
+    num_cores: 2
+evaluator:
+  cores_per_job: 4
+cloud:
+  gce:
+    project: aixcc-426805
+    zone: us-east1-b
+    worker_count: 2
+    machine_type: e2-standard-4
+    boot_disk_size_gb: 50
+    image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+    service_account_email: crsbench-worker@aixcc-426805.iam.gserviceaccount.com
+    owner_label: yufu
+    ssh_via_iap: true
+    readiness_timeout_sec: 600
+    crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+    github_deploy_key_file: .crsbench-keys/crsbench-deploy
