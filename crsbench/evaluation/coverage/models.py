@@ -11,6 +11,7 @@ Data Formats:
 - CoverageConfig: Configuration for coverage collection
 """
 
+from pathlib import Path
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -183,3 +184,63 @@ class CoverageReport(BaseModel):
     build_time: float = 0.0
     verify_time: float = 0.0
     success: bool = True
+
+
+class CoveragePovMarker(BaseModel):
+    """POV discovery marker to overlay on a coverage timeline."""
+
+    cpv_id: str
+    pov_hash: str
+    relative_time: float = Field(..., ge=0.0)
+
+
+class TimedCoverageInput(BaseModel):
+    """Normalized timed input for coverage timeline analysis."""
+
+    content_hash: str
+    original_name: str
+    path: Path
+    relative_time: float = Field(..., ge=0.0)
+    size: int = Field(..., ge=0)
+    lines_covered: int = Field(default=0, ge=0)
+    crashed: bool = False
+    raw_cov_path: Optional[Path] = None
+    crash_log_path: Optional[Path] = None
+
+
+class CoverageTimelineBucket(BaseModel):
+    """Aggregated cumulative line coverage for one time bucket."""
+
+    bucket_start: float = Field(..., ge=0.0)
+    bucket_end: float = Field(..., ge=0.0)
+    inputs_seen: int = Field(..., ge=0)
+    lines_covered: int = Field(..., ge=0)
+    lines_total: int = Field(..., ge=0)
+    lines_percent: float = Field(..., ge=0.0, le=100.0)
+
+
+class TrialCoverageContext(BaseModel):
+    """Resolved trial context for coverage timeline analysis."""
+
+    trial_dir: Path
+    benchmark: str
+    harness: str
+    seed_dir: Path
+    crs_run_start_time: Optional[float] = None
+    pov_markers: list[CoveragePovMarker] = Field(default_factory=list)
+
+
+class CoverageTimelineReport(BaseModel):
+    """Coverage-over-time report for one analysis target."""
+
+    benchmark: str
+    harness: str
+    bucket_size_seconds: int = Field(..., ge=1)
+    time_origin: str = Field(
+        default="crs_run_start_time",
+        description="Reference used for relative_time values in this report.",
+    )
+    seeds: list[TimedCoverageInput] = Field(default_factory=list)
+    pov_markers: list[CoveragePovMarker] = Field(default_factory=list)
+    buckets: list[CoverageTimelineBucket] = Field(default_factory=list)
+    final_summary: CoverageSummary = Field(default_factory=CoverageSummary)

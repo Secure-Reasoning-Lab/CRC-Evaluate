@@ -124,21 +124,12 @@ echo "[6/9] Bundling benchmarks..."
 uv run crsbench benchmark bundle-all --force --workers 20 benchmarks/
 echo "  Benchmarks bundled"
 
-# ----- Step 7: Prepare CRS Docker images -----
+# ----- Step 7: Prepare coverage dependencies -----
 echo ""
-echo "[7/9] Preparing CRS (atlantis-multilang-given_fuzzer)..."
-# Remove stale OSS-CRS work/cache dirs to force fresh image builds
-if [ -d "$INSTALL_DIR/.oss-crs-workdir" ]; then
-    echo "  Removing stale .oss-crs-workdir cache..."
-    rm -rf "$INSTALL_DIR/.oss-crs-workdir"
-fi
-# Legacy cache path cleanup for older setups
-if [ -d "$INSTALL_DIR/.oss-bugfind" ]; then
-    echo "  Removing legacy .oss-bugfind cache..."
-    rm -rf "$INSTALL_DIR/.oss-bugfind"
-fi
-uv run oss-crs prepare atlantis-multilang-given_fuzzer
-echo "  CRS prepared"
+echo "[7/9] Preparing coverage dependencies..."
+./scripts/setup-third-party.sh
+uv run crsbench prepare --coverage
+echo "  Coverage dependencies prepared"
 
 # ----- Step 8: Verify config file exists -----
 echo ""

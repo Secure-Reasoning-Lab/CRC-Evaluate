@@ -15,6 +15,24 @@ Execution lifecycle per trial:
 
 CRSBench generates trial-local compose/work directories, resolves deterministic artifact paths using `--run-id`, then collects outputs from resolved paths.
 
+## Coverage Lifecycle
+
+`crsbench coverage` intentionally uses a narrower `oss-crs` contract than trial
+execution:
+
+1. `crsbench prepare --coverage` runs Atlantis `oss-crs prepare` against the
+   repository-local Team Atlanta `third_party/atlantis-multilang-given_fuzzer`
+   checkout only when the canonical GHCR images are not already available.
+2. The first coverage request for a benchmark runs Atlantis
+   `oss-crs build-target` and normalizes the build output into the layout the
+   warm coverage runtime expects.
+3. CRSBench then starts one warm coverage container per
+   `(benchmark, harness, shard)` and drives libCRS/UniAFL directly for per-seed
+   coverage collection.
+
+Coverage mode does not use `oss-crs artifacts` or `oss-crs run`. Those phases
+remain part of the trial execution contract for bug-finding and bug-fixing.
+
 ## Command Model
 
 CRSBench invokes `oss-crs` with these core arguments:
@@ -47,6 +65,22 @@ CRSBench stages benchmark files (excluding dot-directories such as `.aixcc/`) be
 - SARIF bug-candidate hints selected through `runtime.inputs.sarif.level`
 - harness source resolved from benchmark metadata where applicable
 
+### Coverage Runtime Inputs
+
+For `crsbench coverage`, CRSBench supplies:
+
+- the normalized Atlantis build output for the selected benchmark
+- the harness name from trial metadata or direct CLI input
+- a mounted seed directory (`trial/output/seeds/`, legacy `trial/output/corpus/`,
+  or direct `--seed-dir`)
+- one pinned CPU per warm coverage container
+
+`--jobs` controls how many `(benchmark, harness)` coverage jobs run in parallel.
+`--cores-per-job` controls how many one-core warm containers are used for a
+single job; CRSBench splits the seed set into that many shards and runs each
+shard sequentially inside its own warm runner. `--build-workers` and
+`--verify-workers` remain hidden compatibility aliases.
+
 ### LiteLLM Runtime Contract
 
 CRSBench currently supports only the external LiteLLM model when a run needs
@@ -78,6 +112,44 @@ Typical collected outputs:
   - per-CRS internal/agent logs from `crs.<name>.log_dir`
 
 CRSBench copies these into trial output directories for verification/reporting.
+
+Coverage runs additionally persist per-seed raw artifacts under
+`trial/coverage/raw/`, including:
+
+- `<seed-hash>.cov`
+- `<seed-hash>.stdout.log`
+- `<seed-hash>.stderr.log`
+- optional `<seed-hash>.crash.log`
+- worker logs such as `worker.stdout.log` or `worker.worker-<n>.stdout.log`
+
+## Coverage Workflow
+
+`crsbench coverage` uses a thinner `oss-crs` contract than full CRS runs:
+
+1. `crsbench prepare --coverage` writes a single-CRS compose file that points at
+   the repository-local Atlantis checkout and runs `oss-crs prepare` only as a
+   fallback after GHCR image resolution.
+2. Coverage collection lazily stages each benchmark and runs
+   `oss-crs build-target`.
+3. CRSBench resolves the Atlantis build output from the `oss-crs` workdir,
+   normalizes it into the legacy runtime layout, then starts warm coverage
+   containers directly for per-seed execution.
+
+Runtime semantics for coverage:
+
+- One warm container is pinned to one CPU.
+- `--jobs` controls how many `(benchmark, harness)` jobs run in parallel.
+- `--cores-per-job` controls how many warm containers are started for the same
+  `(benchmark, harness)` job; CRSBench shards the seed corpus across them.
+- Seeds remain sequential inside each warm container so libCRS/UniAFL state is
+  reused safely.
+
+Post-trial coverage outputs are written under `trial/coverage/` and include:
+
+- `coverage_timeline.json`
+- `coverage_timeline.csv`
+- `coverage_timeline.png`
+- raw per-seed artifacts under `coverage/raw/`
 
 ### Log Preservation Contract
 

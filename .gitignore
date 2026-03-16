@@ -219,6 +219,7 @@ conversation_history/
 
 # Builder specific
 third_party/oss-fuzz/
+third_party/atlantis-multilang-given_fuzzer/
 builder_workspace/
 ossfuzz_builds/
 *.build

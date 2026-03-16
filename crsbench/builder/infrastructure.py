@@ -4,6 +4,7 @@ This module provides OSSFuzzInfrastructure, which wraps OSS-Fuzz's helper.py
 for building fuzzers and reproducing crashes.
 """
 
+import fcntl
 import hashlib
 import json
 import os
@@ -16,6 +17,7 @@ import tempfile
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -70,6 +72,11 @@ _CRASH_MARKERS = (
     "== Java Exception:",
     "Exception in thread",
 )
+
+
+def _coverage_lock_token(value: str) -> str:
+    token = re.sub(r"[^a-zA-Z0-9._-]+", "-", value).strip("-")
+    return token or "unknown"
 
 
 def _is_leak_only_exit(output: str) -> bool:
@@ -447,6 +454,24 @@ class OSSFuzzInfrastructure:
             raise FileNotFoundError(
                 f"OSS-Fuzz helper.py not found: {self._helper_script}"
             )
+
+    def _coverage_lock_file_path(self, project_name: str) -> Path:
+        lock_dir = Path(
+            os.environ.get("CRSBENCH_COVERAGE_LOCK_DIR", "/tmp")
+        ).expanduser()
+        project = _coverage_lock_token(project_name)
+        return lock_dir / f"crsbench-coverage-{project}.lock"
+
+    @contextmanager
+    def _acquire_coverage_lock(self, project_name: str):
+        lock_path = self._coverage_lock_file_path(project_name)
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("w") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     def _ensure_replay_hooks_in_image(self, image_name: str, policy) -> bool:
         """Install replay hook files into an image via docker run+commit."""
@@ -1962,8 +1987,9 @@ class OSSFuzzInfrastructure:
     ) -> tuple[bool, Path]:
         """Run coverage collection using OSS-Fuzz helper.py.
 
-        Uses --coverage-output-dir to output results to a custom directory,
-        enabling parallel coverage collection with shared coverage binaries.
+        Uses OSS-Fuzz's native coverage command, which writes coverage artifacts
+        into the project's build output directory. Those artifacts are then
+        copied into ``output_dir`` so callers have a stable per-run location.
 
         Args:
             project_name: Coverage variant name (e.g., "benchmark-coverage")
@@ -1979,60 +2005,81 @@ class OSSFuzzInfrastructure:
             - Java: output_dir/report/linux/jacoco.xml
         """
         output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        project_output_dir = self.oss_fuzz_path / "build" / "out" / project_name
+        report_src = project_output_dir / "report"
+        dumps_src = project_output_dir / "dumps"
+        with self._acquire_coverage_lock(project_name):
+            # helper.py coverage writes report/ and dumps/ directly into the shared
+            # project build output. Clear any previous coverage artifacts so each
+            # run sees isolated results before we copy them into output_dir.
+            docker_rmtree(report_src)
+            docker_rmtree(dumps_src)
+            if output_dir.exists():
+                shutil.rmtree(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
 
-        cmd = [
-            "python3",
-            str(self._helper_script),
-            "coverage",
-            "--coverage-output-dir",
-            str(output_dir),
-            "--corpus-dir",
-            str(corpus_dir),
-            "--fuzz-target",
-            harness,
-            "--timeout",
-            f"{timeout}s",
-            "--no-serve",
-            project_name,
-        ]
+            cmd = [
+                "python3",
+                str(self._helper_script),
+                "coverage",
+                "--corpus-dir",
+                str(corpus_dir),
+                "--fuzz-target",
+                harness,
+                "--no-serve",
+                "--port",
+                "",
+                project_name,
+            ]
 
-        logger.debug(f"Running coverage: {' '.join(cmd)}")
+            logger.debug(f"Running coverage: {' '.join(cmd)}")
 
-        try:
-            result = run_with_timeout(
-                cmd,
-                timeout=timeout,
-                cwd=self.oss_fuzz_path,
-            )
-
-            if result.returncode != 0:
-                logger.warning(
-                    f"Coverage failed for {project_name}/{harness}: "
-                    f"{result.stderr[:500]}"
+            try:
+                result = run_with_timeout(
+                    cmd,
+                    timeout=timeout,
+                    cwd=self.oss_fuzz_path,
                 )
+
+                if result.returncode != 0:
+                    logger.warning(
+                        f"Coverage failed for {project_name}/{harness}: "
+                        f"{result.stderr[:500]}"
+                    )
+                    return False, output_dir
+
+                # Docker writes coverage artifacts into the project build output as
+                # root-owned files. Normalize ownership before copying them out.
+                fix_docker_ownership(report_src)
+                fix_docker_ownership(dumps_src)
+
+                # Copy OSS-Fuzz coverage artifacts from the project's build output
+                # into the requested per-run output location.
+                if report_src.exists():
+                    shutil.copytree(report_src, output_dir / "report")
+                if dumps_src.exists():
+                    shutil.copytree(dumps_src, output_dir / "dumps")
+
+                # Verify output was generated (check report dir exists)
+                report_dir = output_dir / "report" / "linux"
+                if not report_dir.exists():
+                    logger.warning(f"Coverage report not found: {report_dir}")
+                    return False, output_dir
+
+                # Fix ownership of coverage output (Docker creates root-owned files)
+                # Note: build output ownership is already fixed at build time
+                fix_docker_ownership(output_dir)
+
+                return True, output_dir
+
+            except subprocess.TimeoutExpired:
+                logger.warning(f"Coverage timeout for {project_name}/{harness}")
+                fix_docker_ownership(output_dir)
                 return False, output_dir
-
-            # Verify output was generated (check report dir exists)
-            report_dir = output_dir / "report" / "linux"
-            if not report_dir.exists():
-                logger.warning(f"Coverage report not found: {report_dir}")
+            except Exception as e:
+                logger.error(f"Coverage error for {project_name}/{harness}: {e}")
+                fix_docker_ownership(output_dir)
                 return False, output_dir
-
-            # Fix ownership of coverage output (Docker creates root-owned files)
-            # Note: build output ownership is already fixed at build time
-            fix_docker_ownership(output_dir)
-
-            return True, output_dir
-
-        except subprocess.TimeoutExpired:
-            logger.warning(f"Coverage timeout for {project_name}/{harness}")
-            fix_docker_ownership(output_dir)
-            return False, output_dir
-        except Exception as e:
-            logger.error(f"Coverage error for {project_name}/{harness}: {e}")
-            fix_docker_ownership(output_dir)
-            return False, output_dir
 
     # =========================================================================
     # Inc-build image support for patch verification

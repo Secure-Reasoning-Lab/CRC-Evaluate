@@ -23,6 +23,11 @@ from pathlib import Path
 from typing import Optional
 
 from crsbench.builder.infrastructure import OSSFuzzInfrastructure
+from crsbench.evaluation.coverage.backend import (
+    CoverageSession,
+    SingleShotCoverageSession,
+    UniAFLCoverageSession,
+)
 from crsbench.evaluation.process_utils import run_with_graceful_timeout
 from crsbench.utils.logger import get_logger
 
@@ -52,6 +57,7 @@ class CoverageStrategy(ABC):
         project_name: str,
         language: str = "c",
         *,
+        benchmark_path: Optional[Path] = None,
         work_dir: Optional[Path] = None,
     ):
         """Initialize coverage strategy.
@@ -67,6 +73,7 @@ class CoverageStrategy(ABC):
         self.oss_fuzz_path = Path(oss_fuzz_path).resolve()
         self.project_name = project_name
         self.language = language.lower()
+        self.benchmark_path = Path(benchmark_path).resolve() if benchmark_path else None
         self._helper_path = self.oss_fuzz_path / "infra" / "helper.py"
 
         # Work directory for coverage output (build, dumps, reports)
@@ -159,6 +166,27 @@ class CoverageStrategy(ABC):
             Returns empty dict if coverage collection fails.
         """
 
+    def open_session(
+        self,
+        harness_name: str,
+        *,
+        output_dir: Optional[Path] = None,
+        cpu_set: Optional[str] = None,
+        session_label: Optional[str] = None,
+    ) -> CoverageSession:
+        """Open a coverage session for repeated per-input collection."""
+        del cpu_set, session_label
+        session_output = output_dir if output_dir else self._work_dir
+        return SingleShotCoverageSession(
+            harness_name=harness_name,
+            output_dir=session_output,
+            collect_single_fn=lambda h, corpus: self.collect_single_coverage(
+                h, corpus, output_dir=session_output
+            ),
+            collect_batch_fn=self.collect_batch_coverage,
+            parse_summary_fn=parse_llvm_cov_summary,
+        )
+
     def _run_helper_command(
         self,
         args: list[str],
@@ -203,6 +231,7 @@ class LLVMCovLineStrategy(CoverageStrategy):
         project_name: str,
         language: str = "c",
         *,
+        benchmark_path: Optional[Path] = None,
         work_dir: Optional[Path] = None,
     ):
         """Initialize LLVM coverage strategy.
@@ -213,7 +242,13 @@ class LLVMCovLineStrategy(CoverageStrategy):
             language: Programming language (default: "c").
             work_dir: Working directory for coverage output. If None, uses default.
         """
-        super().__init__(oss_fuzz_path, project_name, language, work_dir=work_dir)
+        super().__init__(
+            oss_fuzz_path,
+            project_name,
+            language,
+            benchmark_path=benchmark_path,
+            work_dir=work_dir,
+        )
         self._coverage_output_dir: Optional[Path] = None
 
     def build_with_coverage(self) -> bool:
@@ -256,6 +291,31 @@ class LLVMCovLineStrategy(CoverageStrategy):
 
         logger.info(f"Coverage build succeeded for {self.project_name}")
         return True
+
+    def open_session(
+        self,
+        harness_name: str,
+        *,
+        output_dir: Optional[Path] = None,
+        cpu_set: Optional[str] = None,
+        session_label: Optional[str] = None,
+    ) -> CoverageSession:
+        session_output = output_dir if output_dir else self._work_dir
+        build_output_dir = self.oss_fuzz_path / "build" / "out" / self.project_name
+        return UniAFLCoverageSession(
+            project_name=self.project_name,
+            harness_name=harness_name,
+            language=self.language,
+            benchmark_path=self.benchmark_path or Path(),
+            source_repo_dir=build_output_dir / ".crsbench-repo",
+            build_output_dir=build_output_dir,
+            output_dir=session_output,
+            parse_single_output=self._parse_llvm_detailed_coverage_data,
+            parse_textcov_output=self._parse_covreport,
+            parse_summary=parse_llvm_cov_summary,
+            cpu_set=cpu_set,
+            session_label=session_label,
+        )
 
     def collect_batch_coverage(self, harness_path: Path, corpus_dir: Path) -> Path:
         """Collect coverage for all corpus files.
@@ -863,6 +923,7 @@ class JaCoCoLineStrategy(CoverageStrategy):
         project_name: str,
         language: str = "jvm",
         *,
+        benchmark_path: Optional[Path] = None,
         work_dir: Optional[Path] = None,
     ):
         """Initialize JaCoCo coverage strategy.
@@ -873,7 +934,13 @@ class JaCoCoLineStrategy(CoverageStrategy):
             language: Programming language (default: "jvm").
             work_dir: Working directory for coverage output. If None, uses default.
         """
-        super().__init__(oss_fuzz_path, project_name, language, work_dir=work_dir)
+        super().__init__(
+            oss_fuzz_path,
+            project_name,
+            language,
+            benchmark_path=benchmark_path,
+            work_dir=work_dir,
+        )
         self._coverage_output_dir: Optional[Path] = None
 
     def build_with_coverage(self) -> bool:
@@ -919,6 +986,31 @@ class JaCoCoLineStrategy(CoverageStrategy):
 
         logger.info(f"Coverage build succeeded for {self.project_name}")
         return True
+
+    def open_session(
+        self,
+        harness_name: str,
+        *,
+        output_dir: Optional[Path] = None,
+        cpu_set: Optional[str] = None,
+        session_label: Optional[str] = None,
+    ) -> CoverageSession:
+        session_output = output_dir if output_dir else self._work_dir
+        build_output_dir = self.oss_fuzz_path / "build" / "out" / self.project_name
+        return UniAFLCoverageSession(
+            project_name=self.project_name,
+            harness_name=harness_name,
+            language=self.language,
+            benchmark_path=self.benchmark_path or Path(),
+            source_repo_dir=build_output_dir / ".crsbench-repo",
+            build_output_dir=build_output_dir,
+            output_dir=session_output,
+            parse_single_output=self._parse_jacoco_xml,
+            parse_textcov_output=None,
+            parse_summary=parse_jacoco_summary,
+            cpu_set=cpu_set,
+            session_label=session_label,
+        )
 
     def collect_batch_coverage(self, harness_path: Path, corpus_dir: Path) -> Path:
         """Collect coverage for all corpus files.
@@ -969,17 +1061,15 @@ class JaCoCoLineStrategy(CoverageStrategy):
         if not success:
             raise CoverageStrategyError(f"Coverage collection failed for {target_name}")
 
-        # Find summary.json in the custom output directory
-        # With --coverage-output-dir: output_dir/report/linux/summary.json
-        summary_path = output_dir / "report" / "linux" / "summary.json"
+        summary_path = output_dir / "report" / "linux" / "jacoco.xml"
 
         if not summary_path.exists():
             raise CoverageStrategyError(
-                f"Coverage summary not found at {summary_path}. "
+                f"JaCoCo coverage report not found at {summary_path}. "
                 f"Check helper.py coverage output for errors."
             )
 
-        logger.info(f"Coverage summary generated at: {summary_path}")
+        logger.info(f"JaCoCo coverage report generated at: {summary_path}")
         self._coverage_output_dir = summary_path.parent.parent
 
         return summary_path
@@ -1188,6 +1278,7 @@ def create_coverage_strategy(
     project_name: str,
     language: str,
     *,
+    benchmark_path: Optional[Path] = None,
     work_dir: Optional[Path] = None,
 ) -> CoverageStrategy:
     """Factory function to create appropriate coverage strategy.
@@ -1210,11 +1301,19 @@ def create_coverage_strategy(
 
     if language in ("c", "c++", "cpp"):
         return LLVMCovLineStrategy(
-            oss_fuzz_path, project_name, language, work_dir=work_dir
+            oss_fuzz_path,
+            project_name,
+            language,
+            benchmark_path=benchmark_path,
+            work_dir=work_dir,
         )
     if language in ("jvm", "java"):
         return JaCoCoLineStrategy(
-            oss_fuzz_path, project_name, language, work_dir=work_dir
+            oss_fuzz_path,
+            project_name,
+            language,
+            benchmark_path=benchmark_path,
+            work_dir=work_dir,
         )
 
     raise CoverageStrategyError(
@@ -1307,3 +1406,59 @@ def parse_llvm_cov_summary(summary_path: Path | str) -> dict[str, int | float]:
         # Return empty result rather than failing
 
     return result
+
+
+def parse_jacoco_summary(summary_path: Path | str) -> dict[str, int | float]:
+    """Parse JaCoCo XML counters into CRSBench summary totals."""
+    summary_path = Path(summary_path)
+    try:
+        tree = ET.parse(summary_path)
+        root = tree.getroot()
+    except ET.ParseError as e:
+        raise CoverageStrategyError(f"Failed to parse JaCoCo XML: {e}") from e
+    except FileNotFoundError as e:
+        raise CoverageStrategyError(f"Summary file not found: {summary_path}") from e
+
+    result: dict[str, int | float] = {
+        "lines_covered": 0,
+        "lines_total": 0,
+        "lines_percent": 0.0,
+        "functions_covered": 0,
+        "functions_total": 0,
+        "functions_percent": 0.0,
+        "regions_covered": 0,
+        "regions_total": 0,
+        "regions_percent": 0.0,
+    }
+
+    counters: dict[str, ET.Element] = {
+        counter.get("type", ""): counter for counter in root.findall("counter")
+    }
+
+    line_counter = counters.get("LINE")
+    if line_counter is not None:
+        missed = int(line_counter.get("missed", "0"))
+        covered = int(line_counter.get("covered", "0"))
+        total = missed + covered
+        result["lines_covered"] = covered
+        result["lines_total"] = total
+        result["lines_percent"] = (covered / total * 100.0) if total else 0.0
+
+    method_counter = counters.get("METHOD")
+    if method_counter is not None:
+        missed = int(method_counter.get("missed", "0"))
+        covered = int(method_counter.get("covered", "0"))
+        total = missed + covered
+        result["functions_covered"] = covered
+        result["functions_total"] = total
+        result["functions_percent"] = (covered / total * 100.0) if total else 0.0
+
+    return result
+
+
+def parse_coverage_summary(summary_path: Path | str) -> dict[str, int | float]:
+    """Parse either LLVM summary.json or JaCoCo XML summary data."""
+    summary_path = Path(summary_path)
+    if summary_path.suffix == ".xml":
+        return parse_jacoco_summary(summary_path)
+    return parse_llvm_cov_summary(summary_path)

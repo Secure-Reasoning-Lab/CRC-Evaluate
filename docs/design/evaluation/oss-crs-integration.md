@@ -31,6 +31,51 @@ Depending on workflow, CRSBench may provide:
 - staged hints or POV inputs
 - registry/config references for CRS selection
 
+## Coverage-Specific Contract
+
+Coverage analysis uses `oss-crs` as a build contract, not as the runtime
+executor. The coverage path is:
+
+1. Atlantis GHCR prepare/runtime images or, if unavailable, Atlantis `oss-crs prepare`
+   against the repository-local Team Atlanta checkout
+2. Atlantis `oss-crs build-target` for the selected benchmark
+3. CRSBench-managed warm libCRS/UniAFL coverage sessions for per-seed replay
+
+CRSBench invokes the Team Atlanta Atlantis prepare flow as-is. It must not
+mutate Atlantis prepare sources as part of the prepare phase.
+
+When the canonical Atlantis prepare image set is already available locally and
+the recorded Atlantis prepare state still matches the current checkout,
+coverage builds may skip the Atlantis `prepare` phase and proceed directly to
+`build-target`. The runtime contract is still the same Atlantis image set; the
+skip only removes redundant image preparation work when the checkout/image
+contract remains valid.
+
+Coverage replay runs one warm container per `(benchmark, harness, shard)`. Each
+container is pinned to a single CPU, and seeds assigned to that shard are run
+sequentially in a fresh libCRS coverage state inside the warm process.
+
+The normalized coverage build output must materialize executable runtime
+artifacts as real files inside the exported build directory. Host-only symlinks
+to Atlantis work directories are out of contract for runtime-mounted `/out`
+paths because remote or containerized workers must be able to execute the
+exported harness binaries without additional host path context.
+
+If Atlantis emits an empty `.aixcc/config.yaml` during coverage worker startup
+but the mounted `/out` directory already contains valid harness binaries,
+CRSBench must fall back to binary-derived harness discovery rather than failing
+the warm coverage session.
+
+### Prepared Image Publication
+
+The Atlantis prepare phase is complete only after both of the following hold:
+- the canonical Atlantis prepare image set exists locally
+- CRSBench writes the prepare sentinel for the selected Atlantis checkout
+
+After that point, operators may publish the prepared image set to a remote
+registry without rebuilding it. Publication is owned by the Atlantis
+repository; CRSBench only consumes the canonical Team Atlanta image contract.
+
 ## Invariants
 
 - the prepared trial/build context must correspond to the selected benchmark,
@@ -38,6 +83,9 @@ Depending on workflow, CRSBench may provide:
 - staged source and input artifacts must be reproducible from benchmark metadata
 - integration failures must remain attributable to either CRSBench staging or
   downstream `oss-crs` execution
+- coverage builds must come from the Atlantis/AIxCC `oss-crs` lineage used by
+  the warm runtime; mixed `oss-fuzz` lineages are out of contract
+- coverage shards must not share a CPU or a warm runner instance
 
 ## Failure Semantics
 
@@ -52,6 +100,15 @@ Depending on workflow, CRSBench may provide:
 In distributed execution, workers and evaluators may consume previously staged or
 cached artifacts. The integration contract must not assume a single long-lived
 local process with in-memory state.
+
+Coverage-specific distributed implications:
+
+- the normalized Atlantis build output must be sufficient for a different worker
+  to start the warm coverage runtime without rerunning `oss-crs build-target`
+- shard allocation is local-worker state only; distributed workers must derive
+  CPU pinning from their own available CPU set
+- post-trial coverage artifacts are trial-level outputs and must remain valid
+  even when no snapshot `coverage.json` exists
 
 ## Validation
 

@@ -12,7 +12,9 @@ First-time users should start with [docs/getting-started/first-experiment.md](do
 # Install
 git clone https://github.com/sslab-gatech/CRSBench.git && cd CRSBench
 uv sync
-crsbench prepare                           # bootstrap managed OSS-Fuzz + pull base images (OSS-Fuzz + AIXCC)
+./scripts/setup-third-party.sh             # clone managed oss-fuzz + Atlantis checkouts
+uv run crsbench prepare                    # pull OSS-Fuzz + AIxCC base images
+uv run crsbench prepare --coverage         # pull Atlantis GHCR coverage images (or build locally as fallback)
 
 # Download benchmarks from HuggingFace (gated — requires access)
 #   1. Create a token at https://huggingface.co/settings/tokens
@@ -61,6 +63,12 @@ Notes:
 - warm cache: ~10-60s
 - first run (image pulls): ~3-15m
 - with `--build-base-images`: 20m+ (can be significantly longer)
+
+`crsbench prepare --coverage` prepares the separate Atlantis/given_fuzzer
+coverage pipeline used by `crsbench coverage`. It reads the checkout from
+`third_party/atlantis-multilang-given_fuzzer`, prefers the published Team
+Atlanta GHCR images, and falls back to local `oss-crs prepare` only when those
+images are unavailable.
 
 If your virtual environment is not activated, prefix CLI commands with `uv run`
 (for example, `uv run crsbench download --all`).
@@ -155,7 +163,15 @@ fish and other shell setup instructions.
 crsbench verify       benchmarks/project --pov-dir ./povs/
 crsbench patch-verify benchmarks/project --patch-dir ./patches --pov-dir ./povs
 crsbench coverage     benchmarks/project --corpus-dir ./corpus/  # experimental
+crsbench coverage     --experiment-config ./experiment.yaml      # seed coverage over time
+crsbench coverage     --experiment-dir ./experiment-output       # seed coverage over time
+crsbench coverage     --seed-dir ./seeds --benchmark project --harness fuzz_target --output-dir ./coverage-out
 ```
+
+Timeline coverage mode persists raw per-seed artifacts under the target
+coverage directory's `raw/` subdirectory. Each analyzed seed keeps its
+normalized `.cov` result and any captured crash log alongside the JSON/CSV/PNG
+timeline outputs.
 
 ### Results
 
@@ -202,7 +218,7 @@ CRSBench/
 ├── oss-crs/registry/        # OSS-CRS registry entries referenced by `crs_compose` keys
 ├── oss-crs/                 # CRS runtime and registry (submodule)
 ├── third_party/oss-fuzz/    # Official OSS-Fuzz (sparse checkout, managed by `crsbench prepare`)
-├── third_party/patches/     # Local upstream patch set (applied by `crsbench prepare`)
+├── third_party/patches/     # Local upstream patch sets consumed during prepare/build
 ├── docs/                    # Documentation hub (user + design docs)
 └── docs/design/             # Internal architecture docs
 ```

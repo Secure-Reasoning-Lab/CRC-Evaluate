@@ -153,6 +153,7 @@ def create_snapshot_archive(temp_dir):
         patch_count: int = 1,
         *,
         complete: bool = True,
+        include_coverage_json: bool = False,
     ) -> Path:
         """Create a snapshot archive with test data."""
         # Create snapshot directory
@@ -201,6 +202,8 @@ def create_snapshot_archive(temp_dir):
 
         # Create CRS log
         (snapshot_dir / "crs-output.log").write_text(f"CRS log for cycle {cycle}")
+        if include_coverage_json:
+            (snapshot_dir / "coverage.json").write_text('{"lines_covered": 1}')
 
         # Create tar.gz archive
         archive_path = temp_dir / f"snapshot-{cycle:04d}.tar.gz"
@@ -310,6 +313,74 @@ class TestSnapshotLoader:
         assert len(snapshots) == 2
         assert snapshots[0].cycle == 1
         assert snapshots[1].cycle == 3
+
+    def test_load_snapshot_marks_post_trial_timeline_as_coverage(
+        self, temp_dir, create_snapshot_archive
+    ):
+        archive_path = create_snapshot_archive(cycle=1, include_coverage_json=False)
+        coverage_dir = temp_dir / "coverage"
+        coverage_dir.mkdir()
+        (coverage_dir / "coverage_timeline.json").write_text("{}")
+
+        loader = SnapshotLoader()
+        snapshot = loader.load_snapshot(archive_path, temp_dir)
+
+        assert snapshot.has_coverage is True
+
+    def test_load_snapshot_marks_final_coverage_summary_as_coverage(
+        self, temp_dir, create_snapshot_archive
+    ):
+        archive_path = create_snapshot_archive(cycle=1, include_coverage_json=False)
+        (temp_dir / "final_coverage.json").write_text("{}")
+
+        loader = SnapshotLoader()
+        snapshot = loader.load_snapshot(archive_path, temp_dir)
+
+        assert snapshot.has_coverage is True
+
+    def test_load_snapshot_marks_has_coverage_from_snapshot_file(
+        self, temp_dir, create_snapshot_archive
+    ):
+        archive_path = create_snapshot_archive(cycle=1, include_coverage_json=True)
+
+        loader = SnapshotLoader()
+        snapshot = loader.load_snapshot(archive_path, temp_dir)
+
+        assert snapshot.has_coverage is True
+
+    def test_load_snapshot_marks_has_coverage_from_trial_timeline(
+        self, temp_dir, create_snapshot_archive
+    ):
+        archive_path = create_snapshot_archive(cycle=1)
+        coverage_dir = temp_dir / "coverage"
+        coverage_dir.mkdir()
+        (coverage_dir / "coverage_timeline.json").write_text("{}")
+
+        loader = SnapshotLoader()
+        snapshot = loader.load_snapshot(archive_path, temp_dir)
+
+        assert snapshot.has_coverage is True
+
+    def test_load_snapshot_marks_has_coverage_from_final_coverage(
+        self, temp_dir, create_snapshot_archive
+    ):
+        archive_path = create_snapshot_archive(cycle=1)
+        (temp_dir / "final_coverage.json").write_text("{}")
+
+        loader = SnapshotLoader()
+        snapshot = loader.load_snapshot(archive_path, temp_dir)
+
+        assert snapshot.has_coverage is True
+
+    def test_load_snapshot_keeps_has_coverage_false_without_coverage_artifacts(
+        self, temp_dir, create_snapshot_archive
+    ):
+        archive_path = create_snapshot_archive(cycle=1)
+
+        loader = SnapshotLoader()
+        snapshot = loader.load_snapshot(archive_path, temp_dir)
+
+        assert snapshot.has_coverage is False
 
 
 class TestMetricsAggregator:

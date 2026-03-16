@@ -1,0 +1,247 @@
+"""Preparation helpers for the Atlantis/UniAFL coverage backend."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+from pathlib import Path
+
+from crsbench.evaluation.adapter.compose_common import run_oss_crs_prepare
+from crsbench.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+DEFAULT_UNIAFL_IMAGE_PREFIX = "ghcr.io/team-atlanta"
+DEFAULT_UNIAFL_ROOT_BASENAME = "atlantis-multilang-given_fuzzer"
+DEFAULT_UNIAFL_RUNTIME_IMAGE_NAME = "multilang-given_fuzzer-crs"
+DEFAULT_UNIAFL_RUNTIME_IMAGE_JVM_NAME = "multilang-given_fuzzer-crs"
+DEFAULT_UNIAFL_BUILDER_IMAGE_NAME = "multilang-given_fuzzer-builder"
+DEFAULT_UNIAFL_SETUP_HINT = "scripts/setup-third-party.sh"
+UNIAFL_PREPARE_IMAGES = (
+    "multilang-given_fuzzer-clang",
+    "multilang-given_fuzzer-builder",
+    "multilang-given_fuzzer-builder-jvm",
+    "multilang-given_fuzzer-c-archive",
+    "multilang-given_fuzzer-jvm-archive",
+    "multilang-given_fuzzer-crs",
+)
+PREPARE_STATE_FILE = ".crsbench-uniafl-prepare.json"
+
+
+def default_uniafl_root() -> Path:
+    """Return the repository-local Atlantis checkout path."""
+    repo_root = Path(__file__).resolve().parents[2]
+    return repo_root / "third_party" / DEFAULT_UNIAFL_ROOT_BASENAME
+
+
+def default_uniafl_image_prefix() -> str:
+    """Return the registry/repository prefix for Atlantis images."""
+    return DEFAULT_UNIAFL_IMAGE_PREFIX
+
+
+def qualify_uniafl_image(image_name: str, *, tag: str = "latest") -> str:
+    """Return the fully qualified Atlantis image reference."""
+    return f"{default_uniafl_image_prefix()}/{image_name}:{tag}"
+
+
+def prepare_image_refs(*, image_tag: str = "latest") -> tuple[str, ...]:
+    """Return the canonical Atlantis prepare image references."""
+    return tuple(
+        qualify_uniafl_image(image_name, tag=image_tag)
+        for image_name in UNIAFL_PREPARE_IMAGES
+    )
+
+
+def default_uniafl_runtime_image(language: str | None = None) -> str:
+    """Return the default Atlantis runtime image reference for coverage runs."""
+    if language and language.lower() == "jvm":
+        return qualify_uniafl_image(DEFAULT_UNIAFL_RUNTIME_IMAGE_JVM_NAME)
+    return qualify_uniafl_image(DEFAULT_UNIAFL_RUNTIME_IMAGE_NAME)
+
+
+def default_uniafl_builder_image() -> str:
+    """Return the default Atlantis builder image reference for coverage builds."""
+    return qualify_uniafl_image(DEFAULT_UNIAFL_BUILDER_IMAGE_NAME)
+
+
+def _local_image_exists(image_ref: str) -> bool:
+    inspect = subprocess.run(
+        ["docker", "image", "inspect", image_ref],
+        capture_output=True,
+        text=True,
+    )
+    return inspect.returncode == 0
+
+
+def _pull_prepare_images(*, image_tag: str = "latest") -> list[str]:
+    failures: list[str] = []
+    for image_ref in prepare_image_refs(image_tag=image_tag):
+        pull = subprocess.run(
+            ["docker", "pull", image_ref],
+            capture_output=True,
+            text=True,
+        )
+        if pull.returncode != 0:
+            detail = pull.stderr.strip() or pull.stdout.strip() or "unknown error"
+            failures.append(f"{image_ref}: {detail}")
+    return failures
+
+
+def _current_prepare_fingerprint() -> str:
+    hasher = hashlib.sha256()
+    hasher.update(Path(__file__).resolve().read_bytes())
+    return hasher.hexdigest()
+
+
+def _prepare_state_path(repo_root: Path) -> Path:
+    return repo_root / PREPARE_STATE_FILE
+
+
+def _uniafl_checkout_fingerprint(repo_root: Path) -> str:
+    git_head = subprocess.run(
+        ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+    )
+    git_status = subprocess.run(
+        ["git", "-C", str(repo_root), "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+    )
+    if git_head.returncode == 0 and git_status.returncode == 0:
+        filtered_status = []
+        for line in git_status.stdout.splitlines():
+            path_text = line[3:] if len(line) > 3 else ""
+            if path_text == PREPARE_STATE_FILE:
+                continue
+            filtered_status.append(line)
+        return f"git:{git_head.stdout.strip()}:{'\n'.join(filtered_status)}"
+
+    hasher = hashlib.sha256()
+    fallback_files = [
+        repo_root / "oss-crs" / "crs.yaml",
+        repo_root / "oss-crs" / "docker-bake.hcl",
+        repo_root / "bin" / "compile_target",
+    ]
+    for path in fallback_files:
+        if path.exists():
+            hasher.update(path.name.encode())
+            hasher.update(path.read_bytes())
+    return hasher.hexdigest()
+
+
+def _prepare_state_matches(repo_root: Path) -> bool:
+    state_path = _prepare_state_path(repo_root)
+    if not state_path.exists():
+        return False
+    try:
+        state = json.loads(state_path.read_text())
+    except json.JSONDecodeError:
+        return False
+    return state.get("fingerprint") == _current_prepare_fingerprint() and state.get(
+        "checkout_fingerprint"
+    ) == _uniafl_checkout_fingerprint(repo_root)
+
+
+def _write_prepare_state(repo_root: Path) -> None:
+    _prepare_state_path(repo_root).write_text(
+        json.dumps(
+            {
+                "fingerprint": _current_prepare_fingerprint(),
+                "checkout_fingerprint": _uniafl_checkout_fingerprint(repo_root),
+            },
+            indent=2,
+        )
+    )
+
+
+def write_prepare_state(repo_root: Path) -> None:
+    """Record that the local Atlantis prepare image contract matches this checkout."""
+    _write_prepare_state(repo_root)
+
+
+def get_uniafl_prepare_readiness(
+    uniafl_root: Path | None = None,
+    *,
+    image_tag: str = "latest",
+) -> tuple[Path, list[str]]:
+    """Return the selected Team Atlanta Atlantis checkout and readiness issues."""
+    repo_root = Path(uniafl_root or default_uniafl_root()).resolve()
+    issues: list[str] = []
+
+    state_path = _prepare_state_path(repo_root)
+    if not _prepare_state_matches(repo_root):
+        if state_path.exists():
+            issues.append(f"stale prepare state: {state_path}")
+        else:
+            issues.append(f"missing prepare state: {state_path}")
+
+    missing_images = [
+        image_ref
+        for image_ref in prepare_image_refs(image_tag=image_tag)
+        if not _local_image_exists(image_ref)
+    ]
+    issues.extend(f"missing local image: {image_ref}" for image_ref in missing_images)
+    return repo_root, issues
+
+
+def prepare_uniafl_backend(uniafl_root: Path | None = None) -> int:
+    """Prepare the Atlantis coverage backend via oss-crs prepare."""
+    repo_root = Path(uniafl_root or default_uniafl_root()).resolve()
+    if not (repo_root / "oss-crs" / "crs.yaml").exists():
+        raise FileNotFoundError(
+            "Atlantis checkout not found or incomplete: "
+            f"{repo_root}. Run {DEFAULT_UNIAFL_SETUP_HINT} first."
+        )
+
+    logger.info(f"Preparing UniAFL coverage backend from {repo_root}")
+    _, readiness_issues = get_uniafl_prepare_readiness(repo_root)
+    if not readiness_issues:
+        return 0
+
+    missing_image_issues = [
+        issue for issue in readiness_issues if issue.startswith("missing local image:")
+    ]
+    if missing_image_issues:
+        logger.info("Pulling canonical Atlantis prepare images from GHCR")
+        pull_failures = _pull_prepare_images()
+        if not pull_failures:
+            _, readiness_issues = get_uniafl_prepare_readiness(repo_root)
+            if not any(
+                issue.startswith("missing local image:") for issue in readiness_issues
+            ):
+                _write_prepare_state(repo_root)
+                return 0
+        else:
+            logger.warning(
+                "Falling back to local Atlantis image build after GHCR pull failed: %s",
+                "; ".join(pull_failures),
+            )
+    if not any(issue.startswith("missing local image:") for issue in readiness_issues):
+        _write_prepare_state(repo_root)
+        return 0
+
+    control_root = repo_root / ".crsbench-oss-crs-prepare"
+    compose_file = control_root / "crs-compose.yaml"
+    work_dir = control_root / "oss-crs-workdir"
+
+    from crsbench.evaluation.coverage.uniafl_runtime import write_coverage_compose_yaml
+
+    write_coverage_compose_yaml(
+        compose_path=compose_file,
+        uniafl_root=repo_root,
+    )
+
+    stdout, stderr, returncode = run_oss_crs_prepare(
+        compose_file,
+        work_dir,
+        oss_crs_cmd="oss-crs",
+        timeout=3600,
+    )
+    if returncode != 0:
+        detail = stderr or stdout
+        raise RuntimeError(f"oss-crs prepare failed (rc={returncode}): {detail}")
+
+    _write_prepare_state(repo_root)
+    return 0
