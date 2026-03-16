@@ -53,7 +53,10 @@ from crsbench.evaluation.coverage.strategy import (
 from crsbench.evaluation.coverage.uniafl_runtime import (
     build_atlantis_coverage_artifacts,
 )
-from crsbench.prepare.uniafl_backend import current_uniafl_checkout_fingerprint
+from crsbench.prepare.uniafl_backend import (
+    current_prepare_image_ids,
+    current_uniafl_checkout_fingerprint,
+)
 from crsbench.utils.docker import fix_docker_ownership
 from crsbench.utils.logger import get_logger
 from crsbench.utils.workers import resolve_build_workers
@@ -767,6 +770,7 @@ class CoverageEngine:
                 except json.JSONDecodeError:
                     sentinel_data = {}
             checkout_fingerprint = current_uniafl_checkout_fingerprint()
+            prepare_image_ids = current_prepare_image_ids()
             if (
                 not force_rebuild
                 and staged_repo_dir.exists()
@@ -774,6 +778,7 @@ class CoverageEngine:
                 and has_existing_build
                 and (adapter.lang == "jvm" or coverage_build_dir.exists())
                 and sentinel_data.get("checkout_fingerprint") == checkout_fingerprint
+                and sentinel_data.get("prepare_image_ids") == prepare_image_ids
             ):
                 logger.info(f"Reusing existing UniAFL coverage build: {variant_name}")
                 return variant_name
@@ -810,6 +815,7 @@ class CoverageEngine:
                             build.atlantis_build_output_dir
                         ),
                         "checkout_fingerprint": checkout_fingerprint,
+                        "prepare_image_ids": prepare_image_ids,
                     },
                     indent=2,
                 )

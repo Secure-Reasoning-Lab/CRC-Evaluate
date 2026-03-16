@@ -96,8 +96,11 @@ def _remove_path(path: Path) -> None:
         shutil.rmtree(path)
 
 
-def _ignore_dotfiles(_directory: str, contents: list[str]) -> list[str]:
-    return [entry for entry in contents if entry.startswith(".")]
+COVERAGE_STAGE_IGNORES = frozenset({".aixcc", ".agent", ".git"})
+
+
+def _ignore_coverage_metadata(_directory: str, contents: list[str]) -> list[str]:
+    return [entry for entry in contents if entry in COVERAGE_STAGE_IGNORES]
 
 
 def stage_benchmark_for_coverage(
@@ -110,7 +113,7 @@ def stage_benchmark_for_coverage(
     shutil.copytree(
         Path(benchmark_path),
         staged_project_dir,
-        ignore=_ignore_dotfiles,
+        ignore=_ignore_coverage_metadata,
     )
     (staged_project_dir / ".dockerignore").write_text(
         ".aixcc\n**/.aixcc\n.agent\n**/.agent\n"
@@ -264,7 +267,11 @@ def build_atlantis_coverage_artifacts(
     stage_benchmark_for_coverage(benchmark_path, staged_project_dir)
 
     if not prepare_images_reusable(uniafl_root=resolved_uniafl_root):
-        prepare_uniafl_backend(resolved_uniafl_root)
+        prepare_uniafl_backend(
+            resolved_uniafl_root,
+            oss_crs_cmd=oss_crs_cmd,
+            timeout=build_timeout,
+        )
 
     stdout, stderr, returncode = run_oss_crs_build_target(
         compose_file,

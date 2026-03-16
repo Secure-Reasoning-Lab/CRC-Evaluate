@@ -17,7 +17,9 @@ DEFAULT_UNIAFL_ROOT_BASENAME = "atlantis-multilang-given_fuzzer"
 DEFAULT_UNIAFL_RUNTIME_IMAGE_NAME = "multilang-given_fuzzer-crs"
 DEFAULT_UNIAFL_RUNTIME_IMAGE_JVM_NAME = "multilang-given_fuzzer-crs"
 DEFAULT_UNIAFL_BUILDER_IMAGE_NAME = "multilang-given_fuzzer-builder"
+DEFAULT_UNIAFL_CLANG_IMAGE_NAME = "multilang-given_fuzzer-clang"
 DEFAULT_UNIAFL_RELEASE = "1.0.0"
+DEFAULT_UNIAFL_LOCAL_IMAGE_TAG = "latest"
 DEFAULT_UNIAFL_SETUP_HINT = "scripts/setup-third-party.sh"
 UNIAFL_PREPARE_IMAGES = (
     "multilang-given_fuzzer-clang",
@@ -41,13 +43,32 @@ def default_uniafl_image_prefix() -> str:
     return DEFAULT_UNIAFL_IMAGE_PREFIX
 
 
-def qualify_uniafl_image(image_name: str, *, tag: str = "latest") -> str:
+def qualify_uniafl_image(image_name: str, *, tag: str = DEFAULT_UNIAFL_RELEASE) -> str:
     """Return the fully qualified Atlantis image reference."""
     return f"{default_uniafl_image_prefix()}/{image_name}:{tag}"
 
 
-def prepare_image_refs(*, image_tag: str = "latest") -> tuple[str, ...]:
-    """Return the canonical Atlantis prepare image references."""
+def local_uniafl_image(
+    image_name: str, *, tag: str = DEFAULT_UNIAFL_LOCAL_IMAGE_TAG
+) -> str:
+    """Return the canonical local Atlantis image reference."""
+    return f"{image_name}:{tag}"
+
+
+def prepare_image_refs(
+    *, image_tag: str = DEFAULT_UNIAFL_LOCAL_IMAGE_TAG
+) -> tuple[str, ...]:
+    """Return the canonical local Atlantis prepare image references."""
+    return tuple(
+        local_uniafl_image(image_name, tag=image_tag)
+        for image_name in UNIAFL_PREPARE_IMAGES
+    )
+
+
+def published_prepare_image_refs(
+    *, image_tag: str = DEFAULT_UNIAFL_RELEASE
+) -> tuple[str, ...]:
+    """Return the published Atlantis prepare image references."""
     return tuple(
         qualify_uniafl_image(image_name, tag=image_tag)
         for image_name in UNIAFL_PREPARE_IMAGES
@@ -57,13 +78,18 @@ def prepare_image_refs(*, image_tag: str = "latest") -> tuple[str, ...]:
 def default_uniafl_runtime_image(language: str | None = None) -> str:
     """Return the default Atlantis runtime image reference for coverage runs."""
     if language and language.lower() == "jvm":
-        return qualify_uniafl_image(DEFAULT_UNIAFL_RUNTIME_IMAGE_JVM_NAME)
-    return qualify_uniafl_image(DEFAULT_UNIAFL_RUNTIME_IMAGE_NAME)
+        return local_uniafl_image(DEFAULT_UNIAFL_RUNTIME_IMAGE_JVM_NAME)
+    return local_uniafl_image(DEFAULT_UNIAFL_RUNTIME_IMAGE_NAME)
 
 
 def default_uniafl_builder_image() -> str:
     """Return the default Atlantis builder image reference for coverage builds."""
-    return qualify_uniafl_image(DEFAULT_UNIAFL_BUILDER_IMAGE_NAME)
+    return local_uniafl_image(DEFAULT_UNIAFL_BUILDER_IMAGE_NAME)
+
+
+def default_uniafl_clang_image() -> str:
+    """Return the default Atlantis clang image reference for coverage tools."""
+    return local_uniafl_image(DEFAULT_UNIAFL_CLANG_IMAGE_NAME)
 
 
 def _local_image_exists(image_ref: str) -> bool:
@@ -75,17 +101,56 @@ def _local_image_exists(image_ref: str) -> bool:
     return inspect.returncode == 0
 
 
-def _pull_prepare_images(*, image_tag: str = "latest") -> list[str]:
-    failures: list[str] = []
+def _local_image_id(image_ref: str) -> str | None:
+    inspect = subprocess.run(
+        ["docker", "image", "inspect", "--format", "{{.Id}}", image_ref],
+        capture_output=True,
+        text=True,
+    )
+    if inspect.returncode != 0:
+        return None
+    image_id = inspect.stdout.strip()
+    return image_id or None
+
+
+def current_prepare_image_ids(
+    *, image_tag: str = DEFAULT_UNIAFL_LOCAL_IMAGE_TAG
+) -> dict[str, str]:
+    """Return the local image IDs for the canonical Atlantis prepare images."""
+    image_ids: dict[str, str] = {}
     for image_ref in prepare_image_refs(image_tag=image_tag):
+        image_id = _local_image_id(image_ref)
+        if image_id is not None:
+            image_ids[image_ref] = image_id
+    return image_ids
+
+
+def _pull_prepare_images(*, image_tag: str = DEFAULT_UNIAFL_RELEASE) -> list[str]:
+    failures: list[str] = []
+    for image_name in UNIAFL_PREPARE_IMAGES:
+        published_ref = qualify_uniafl_image(image_name, tag=image_tag)
+        local_ref = local_uniafl_image(image_name)
         pull = subprocess.run(
-            ["docker", "pull", image_ref],
+            ["docker", "pull", published_ref],
             capture_output=True,
             text=True,
         )
         if pull.returncode != 0:
             detail = pull.stderr.strip() or pull.stdout.strip() or "unknown error"
-            failures.append(f"{image_ref}: {detail}")
+            failures.append(f"{published_ref}: {detail}")
+            continue
+        tag_result = subprocess.run(
+            ["docker", "tag", published_ref, local_ref],
+            capture_output=True,
+            text=True,
+        )
+        if tag_result.returncode != 0:
+            detail = (
+                tag_result.stderr.strip()
+                or tag_result.stdout.strip()
+                or "unknown error"
+            )
+            failures.append(f"{published_ref} -> {local_ref}: {detail}")
     return failures
 
 
@@ -110,7 +175,16 @@ def _checkout_matches_published_release(repo_root: Path) -> bool:
 
 def _current_prepare_fingerprint() -> str:
     hasher = hashlib.sha256()
-    hasher.update(Path(__file__).resolve().read_bytes())
+    tracked_files = (
+        Path(__file__).resolve(),
+        Path(__file__).resolve().parents[1]
+        / "evaluation"
+        / "coverage"
+        / "uniafl_runtime.py",
+    )
+    for path in tracked_files:
+        hasher.update(path.name.encode())
+        hasher.update(path.read_bytes())
     return hasher.hexdigest()
 
 
@@ -165,9 +239,11 @@ def _prepare_state_matches(repo_root: Path) -> bool:
         state = json.loads(state_path.read_text())
     except json.JSONDecodeError:
         return False
-    return state.get("fingerprint") == _current_prepare_fingerprint() and state.get(
-        "checkout_fingerprint"
-    ) == _uniafl_checkout_fingerprint(repo_root)
+    return (
+        state.get("fingerprint") == _current_prepare_fingerprint()
+        and state.get("checkout_fingerprint") == _uniafl_checkout_fingerprint(repo_root)
+        and state.get("image_ids") == current_prepare_image_ids()
+    )
 
 
 def _write_prepare_state(repo_root: Path) -> None:
@@ -176,6 +252,7 @@ def _write_prepare_state(repo_root: Path) -> None:
             {
                 "fingerprint": _current_prepare_fingerprint(),
                 "checkout_fingerprint": _uniafl_checkout_fingerprint(repo_root),
+                "image_ids": current_prepare_image_ids(),
             },
             indent=2,
         )
@@ -190,7 +267,7 @@ def write_prepare_state(repo_root: Path) -> None:
 def get_uniafl_prepare_readiness(
     uniafl_root: Path | None = None,
     *,
-    image_tag: str = "latest",
+    image_tag: str = DEFAULT_UNIAFL_LOCAL_IMAGE_TAG,
 ) -> tuple[Path, list[str]]:
     """Return the selected Team Atlanta Atlantis checkout and readiness issues."""
     repo_root = Path(uniafl_root or default_uniafl_root()).resolve()
@@ -212,7 +289,12 @@ def get_uniafl_prepare_readiness(
     return repo_root, issues
 
 
-def prepare_uniafl_backend(uniafl_root: Path | None = None) -> int:
+def prepare_uniafl_backend(
+    uniafl_root: Path | None = None,
+    *,
+    oss_crs_cmd: str = "oss-crs",
+    timeout: int = 3600,
+) -> int:
     """Prepare the Atlantis coverage backend via oss-crs prepare."""
     repo_root = Path(uniafl_root or default_uniafl_root()).resolve()
     if not (repo_root / "oss-crs" / "crs.yaml").exists():
@@ -265,8 +347,8 @@ def prepare_uniafl_backend(uniafl_root: Path | None = None) -> int:
     stdout, stderr, returncode = run_oss_crs_prepare(
         compose_file,
         work_dir,
-        oss_crs_cmd="oss-crs",
-        timeout=3600,
+        oss_crs_cmd=oss_crs_cmd,
+        timeout=timeout,
     )
     if returncode != 0:
         detail = stderr or stdout

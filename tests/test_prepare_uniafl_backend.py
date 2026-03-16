@@ -59,22 +59,25 @@ def test_prepare_image_refs_use_default_registry_prefix() -> None:
     from crsbench.prepare.uniafl_backend import prepare_image_refs
 
     assert prepare_image_refs(image_tag="stable")[:2] == (
+        "multilang-given_fuzzer-clang:stable",
+        "multilang-given_fuzzer-builder:stable",
+    )
+
+
+def test_published_prepare_image_refs_use_default_registry_prefix() -> None:
+    from crsbench.prepare.uniafl_backend import published_prepare_image_refs
+
+    assert published_prepare_image_refs(image_tag="stable")[:2] == (
         "ghcr.io/team-atlanta/multilang-given_fuzzer-clang:stable",
         "ghcr.io/team-atlanta/multilang-given_fuzzer-builder:stable",
     )
 
 
-def test_default_uniafl_runtime_image_uses_jvm_specific_tag() -> None:
+def test_default_uniafl_runtime_image_uses_local_canonical_tag() -> None:
     from crsbench.prepare.uniafl_backend import default_uniafl_runtime_image
 
-    assert (
-        default_uniafl_runtime_image()
-        == "ghcr.io/team-atlanta/multilang-given_fuzzer-crs:latest"
-    )
-    assert (
-        default_uniafl_runtime_image("jvm")
-        == "ghcr.io/team-atlanta/multilang-given_fuzzer-crs:latest"
-    )
+    assert default_uniafl_runtime_image() == "multilang-given_fuzzer-crs:latest"
+    assert default_uniafl_runtime_image("jvm") == "multilang-given_fuzzer-crs:latest"
 
 
 def test_prepare_uniafl_backend_requires_checkout(tmp_path: Path) -> None:
@@ -102,10 +105,7 @@ def test_get_uniafl_prepare_readiness_reports_missing_state_and_images(
         f"missing prepare state: {repo_root.resolve() / '.crsbench-uniafl-prepare.json'}"
         in issues
     )
-    assert (
-        "missing local image: ghcr.io/team-atlanta/multilang-given_fuzzer-clang:latest"
-        in issues
-    )
+    assert "missing local image: multilang-given_fuzzer-clang:latest" in issues
 
 
 def test_get_uniafl_prepare_readiness_reports_stale_state(
@@ -168,9 +168,17 @@ def test_prepare_state_roundtrip_ignores_state_file_in_git_status(
     control_dir.mkdir()
     (control_dir / "compose.yaml").write_text("crs: []\n")
 
-    _write_prepare_state(repo_root)
+    with patch(
+        "crsbench.prepare.uniafl_backend.current_prepare_image_ids",
+        return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
+    ):
+        _write_prepare_state(repo_root)
 
-    assert _prepare_state_matches(repo_root) is True
+    with patch(
+        "crsbench.prepare.uniafl_backend.current_prepare_image_ids",
+        return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
+    ):
+        assert _prepare_state_matches(repo_root) is True
 
 
 def test_prepare_uniafl_backend_reuses_local_images_with_matching_state(
@@ -191,6 +199,10 @@ def test_prepare_uniafl_backend_reuses_local_images_with_matching_state(
         patch(
             "crsbench.prepare.uniafl_backend._write_prepare_state"
         ) as mock_write_state,
+        patch(
+            "crsbench.prepare.uniafl_backend.current_prepare_image_ids",
+            return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
+        ),
     ):
         assert prepare_uniafl_backend(repo_root) == 0
 
@@ -227,6 +239,10 @@ def test_prepare_uniafl_backend_does_not_shortcut_ghcr_for_nonrelease_checkout(
         patch(
             "crsbench.prepare.uniafl_backend._write_prepare_state"
         ) as mock_write_state,
+        patch(
+            "crsbench.prepare.uniafl_backend.current_prepare_image_ids",
+            return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
+        ),
     ):
         assert prepare_uniafl_backend(repo_root) == 0
 
@@ -262,6 +278,10 @@ def test_prepare_uniafl_backend_pulls_ghcr_images_before_local_build(
         patch(
             "crsbench.prepare.uniafl_backend._write_prepare_state"
         ) as mock_write_state,
+        patch(
+            "crsbench.prepare.uniafl_backend.current_prepare_image_ids",
+            return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
+        ),
     ):
         assert prepare_uniafl_backend(repo_root) == 0
 
@@ -314,7 +334,7 @@ def test_prepare_uniafl_backend_runs_oss_crs_prepare_with_generated_compose(
             "crsbench.prepare.uniafl_backend._write_prepare_state"
         ) as mock_write_state,
     ):
-        assert prepare_uniafl_backend(repo_root) == 0
+        assert prepare_uniafl_backend(repo_root, oss_crs_cmd="/opt/oss-crs") == 0
 
     control_root = repo_root / ".crsbench-oss-crs-prepare"
     assert generated["compose_path"] == control_root / "crs-compose.yaml"
@@ -322,7 +342,7 @@ def test_prepare_uniafl_backend_runs_oss_crs_prepare_with_generated_compose(
     mock_prepare.assert_called_once_with(
         control_root / "crs-compose.yaml",
         control_root / "oss-crs-workdir",
-        oss_crs_cmd="oss-crs",
+        oss_crs_cmd="/opt/oss-crs",
         timeout=3600,
     )
     mock_write_state.assert_called_once_with(repo_root.resolve())
@@ -391,6 +411,10 @@ def test_prepare_uniafl_backend_leaves_llvm_checkout_script_unchanged(
             side_effect=_assert_unmodified,
         ),
         patch("crsbench.prepare.uniafl_backend._write_prepare_state"),
+        patch(
+            "crsbench.prepare.uniafl_backend.current_prepare_image_ids",
+            return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
+        ),
     ):
         prepare_uniafl_backend(repo_root)
 

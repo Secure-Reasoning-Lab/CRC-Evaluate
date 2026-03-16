@@ -212,6 +212,10 @@ class TestCoverageEngine:
                 return_value="fingerprint-1",
             ),
             patch(
+                "crsbench.evaluation.coverage.engine.current_prepare_image_ids",
+                return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
+            ),
+            patch(
                 "crsbench.evaluation.coverage.engine.fix_docker_ownership"
             ) as mock_fix_ownership,
             patch.object(engine.infra, "write_build_metadata") as mock_write_meta,
@@ -228,6 +232,9 @@ class TestCoverageEngine:
         assert sentinel["variant_name"] == variant_name
         assert sentinel["build_id"] == "build-123"
         assert sentinel["checkout_fingerprint"] == "fingerprint-1"
+        assert sentinel["prepare_image_ids"] == {
+            "multilang-given_fuzzer-crs:latest": "sha256:test"
+        }
         mock_fix_ownership.assert_called_once_with(build_output_dir)
         mock_write_meta.assert_called_once()
 
@@ -254,6 +261,10 @@ class TestCoverageEngine:
             patch(
                 "crsbench.evaluation.coverage.engine.current_uniafl_checkout_fingerprint",
                 return_value="fingerprint-1",
+            ),
+            patch(
+                "crsbench.evaluation.coverage.engine.current_prepare_image_ids",
+                return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
             ),
             patch("crsbench.evaluation.coverage.engine.fix_docker_ownership"),
             patch.object(eng.infra, "write_build_metadata"),
@@ -290,6 +301,10 @@ class TestCoverageEngine:
                 "crsbench.evaluation.coverage.engine.current_uniafl_checkout_fingerprint",
                 return_value="fingerprint-1",
             ),
+            patch(
+                "crsbench.evaluation.coverage.engine.current_prepare_image_ids",
+                return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
+            ),
             patch("crsbench.evaluation.coverage.engine.fix_docker_ownership"),
             patch.object(engine.infra, "write_build_metadata"),
         ):
@@ -311,6 +326,10 @@ class TestCoverageEngine:
                 "crsbench.evaluation.coverage.engine.current_uniafl_checkout_fingerprint",
                 return_value="fingerprint-1",
             ),
+            patch(
+                "crsbench.evaluation.coverage.engine.current_prepare_image_ids",
+                return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
+            ),
         ):
             result = engine._build_coverage_variant(adapter)
 
@@ -327,7 +346,14 @@ class TestCoverageEngine:
         build_output_dir.mkdir(parents=True, exist_ok=True)
         (build_output_dir / ".crsbench-repo").mkdir()
         (build_output_dir / UNIAFL_BUILD_SENTINEL).write_text(
-            json.dumps({"checkout_fingerprint": "fingerprint-1"})
+            json.dumps(
+                {
+                    "checkout_fingerprint": "fingerprint-1",
+                    "prepare_image_ids": {
+                        "multilang-given_fuzzer-crs:latest": "sha256:test"
+                    },
+                }
+            )
         )
         (build_output_dir / "fuzz_target").write_text("wrapper")
 
@@ -338,6 +364,10 @@ class TestCoverageEngine:
             patch(
                 "crsbench.evaluation.coverage.engine.current_uniafl_checkout_fingerprint",
                 return_value="fingerprint-1",
+            ),
+            patch(
+                "crsbench.evaluation.coverage.engine.current_prepare_image_ids",
+                return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
             ),
         ):
             result = engine._build_coverage_variant(adapter)
@@ -355,7 +385,14 @@ class TestCoverageEngine:
         build_output_dir.mkdir(parents=True, exist_ok=True)
         (build_output_dir / ".crsbench-repo").mkdir()
         (build_output_dir / UNIAFL_BUILD_SENTINEL).write_text(
-            json.dumps({"checkout_fingerprint": "fingerprint-1"})
+            json.dumps(
+                {
+                    "checkout_fingerprint": "fingerprint-1",
+                    "prepare_image_ids": {
+                        "multilang-given_fuzzer-crs:latest": "sha256:test"
+                    },
+                }
+            )
         )
         (build_output_dir / "coverage-out").mkdir()
 
@@ -366,6 +403,10 @@ class TestCoverageEngine:
             patch(
                 "crsbench.evaluation.coverage.engine.current_uniafl_checkout_fingerprint",
                 return_value="fingerprint-1",
+            ),
+            patch(
+                "crsbench.evaluation.coverage.engine.current_prepare_image_ids",
+                return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
             ),
         ):
             result = engine._build_coverage_variant(adapter)
@@ -383,7 +424,14 @@ class TestCoverageEngine:
         build_output_dir.mkdir(parents=True, exist_ok=True)
         (build_output_dir / ".crsbench-repo").mkdir()
         (build_output_dir / UNIAFL_BUILD_SENTINEL).write_text(
-            json.dumps({"checkout_fingerprint": "old-fingerprint"})
+            json.dumps(
+                {
+                    "checkout_fingerprint": "old-fingerprint",
+                    "prepare_image_ids": {
+                        "multilang-given_fuzzer-crs:latest": "sha256:test"
+                    },
+                }
+            )
         )
         (build_output_dir / "coverage-out").mkdir()
 
@@ -391,6 +439,57 @@ class TestCoverageEngine:
             patch(
                 "crsbench.evaluation.coverage.engine.current_uniafl_checkout_fingerprint",
                 return_value="new-fingerprint",
+            ),
+            patch(
+                "crsbench.evaluation.coverage.engine.current_prepare_image_ids",
+                return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
+            ),
+            patch(
+                "crsbench.evaluation.coverage.engine.build_atlantis_coverage_artifacts",
+                return_value=MagicMock(
+                    build_id="build-123",
+                    compose_file=Path("/tmp/compose.yaml"),
+                    control_root=Path("/tmp/control"),
+                    atlantis_build_output_dir=Path("/tmp/out"),
+                ),
+            ) as mock_build,
+            patch("crsbench.evaluation.coverage.engine.fix_docker_ownership"),
+            patch.object(engine.infra, "write_build_metadata"),
+        ):
+            result = engine._build_coverage_variant(adapter)
+
+        assert result == variant_name
+        mock_build.assert_called_once()
+
+    def test_build_variant_rebuilds_when_prepare_image_ids_change(
+        self, mock_benchmark: Path, engine: CoverageEngine
+    ):
+        adapter = engine._load_adapter(mock_benchmark)
+        assert adapter is not None
+        variant_name = "test-benchmark-cov-delta-coverage"
+        build_output_dir = engine.infra.get_build_output_path(variant_name)
+        build_output_dir.mkdir(parents=True, exist_ok=True)
+        (build_output_dir / ".crsbench-repo").mkdir()
+        (build_output_dir / UNIAFL_BUILD_SENTINEL).write_text(
+            json.dumps(
+                {
+                    "checkout_fingerprint": "fingerprint-1",
+                    "prepare_image_ids": {
+                        "multilang-given_fuzzer-crs:latest": "sha256:old"
+                    },
+                }
+            )
+        )
+        (build_output_dir / "coverage-out").mkdir()
+
+        with (
+            patch(
+                "crsbench.evaluation.coverage.engine.current_uniafl_checkout_fingerprint",
+                return_value="fingerprint-1",
+            ),
+            patch(
+                "crsbench.evaluation.coverage.engine.current_prepare_image_ids",
+                return_value={"multilang-given_fuzzer-crs:latest": "sha256:new"},
             ),
             patch(
                 "crsbench.evaluation.coverage.engine.build_atlantis_coverage_artifacts",
@@ -430,6 +529,10 @@ class TestCoverageEngine:
                     atlantis_build_output_dir=Path("/tmp/out"),
                 ),
             ) as mock_build,
+            patch(
+                "crsbench.evaluation.coverage.engine.current_prepare_image_ids",
+                return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
+            ),
             patch("crsbench.evaluation.coverage.engine.fix_docker_ownership"),
             patch.object(engine.infra, "write_build_metadata"),
         ):
@@ -519,6 +622,14 @@ class TestCoverageEngine:
                 "crsbench.evaluation.coverage.engine.build_atlantis_coverage_artifacts",
                 return_value=build,
             ) as mock_build,
+            patch(
+                "crsbench.evaluation.coverage.engine.current_uniafl_checkout_fingerprint",
+                return_value="fingerprint-1",
+            ),
+            patch(
+                "crsbench.evaluation.coverage.engine.current_prepare_image_ids",
+                return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
+            ),
             patch(
                 "crsbench.evaluation.coverage.engine.fix_docker_ownership"
             ) as mock_fix_ownership,

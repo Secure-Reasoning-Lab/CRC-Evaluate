@@ -67,8 +67,9 @@ Notes:
 `crsbench prepare --coverage` prepares the separate Atlantis/given_fuzzer
 coverage pipeline used by `crsbench coverage`. It reads the checkout from
 `third_party/atlantis-multilang-given_fuzzer`, prefers the published Team
-Atlanta GHCR images, and falls back to local `oss-crs prepare` only when those
-images are unavailable.
+Atlanta GHCR `1.0.0` images, retags them onto the canonical local Atlantis
+image names, and falls back to local `oss-crs prepare` only when those images
+are unavailable.
 
 If your virtual environment is not activated, prefix CLI commands with `uv run`
 (for example, `uv run crsbench download --all`).

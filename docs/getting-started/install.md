@@ -31,8 +31,9 @@ pulls the base images CRSBench relies on for benchmark evaluation.
 
 `crsbench prepare --coverage` prepares the Atlantis/given_fuzzer coverage
 backend from that fixed checkout. It first pulls the canonical Team Atlanta
-GHCR prepare/runtime images, and falls back to local `oss-crs prepare` only if
-those images are unavailable. Benchmark-specific coverage builds remain lazy;
+GHCR `1.0.0` prepare/runtime images, retags them onto the canonical local
+Atlantis image names, and falls back to local `oss-crs prepare` only if those
+images are unavailable. Benchmark-specific coverage builds remain lazy;
 `crsbench coverage` runs Atlantis `oss-crs build-target` on first use and
 reuses the normalized build output afterward.
 

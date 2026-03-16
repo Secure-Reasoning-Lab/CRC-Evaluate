@@ -66,7 +66,12 @@ def test_docker_session_prepares_matching_llvm_tools_for_native_targets(
         )
 
     try:
+        create_calls = [
+            call for call in calls if call[:3] == ["docker", "create", "--name"]
+        ]
         cp_calls = [call for call in calls if call[:2] == ["docker", "cp"]]
+        assert create_calls
+        assert create_calls[0][-1] == "multilang-given_fuzzer-builder:latest"
         assert cp_calls
         assert any("/usr/local/bin/llvm-profdata" in call[2] for call in cp_calls)
         assert any("/usr/local/bin/llvm-cov" in call[2] for call in cp_calls)
@@ -111,6 +116,58 @@ def test_docker_session_uses_matching_llvm_toolchain_in_coverage_script(
         assert observed
         assert "PATH=/workspace/toolchain/bin:$PATH" in observed[0]
         assert "FUZZING_LANGUAGE=c++" in observed[0]
+    finally:
+        session.close()
+
+
+def test_docker_session_falls_back_to_atlantis_clang_for_llvm_tools(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "coverage"
+    build_output_dir = tmp_path / "build-out"
+    build_output_dir.mkdir()
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        del kwargs
+        calls.append(cmd)
+
+        class Result:
+            returncode = 0
+            stdout = "container-id\n"
+            stderr = ""
+
+        if (
+            cmd[:3] == ["docker", "create", "--name"]
+            and cmd[-1] == "multilang-given_fuzzer-builder:latest"
+        ):
+            result = Result()
+            result.returncode = 1
+            result.stderr = "missing builder"
+            return result
+        return Result()
+
+    with patch("subprocess.run", side_effect=fake_run):
+        session = DockerCoverageSession(
+            project_name="proj-cov-delta-coverage",
+            harness_name="fuzz_target",
+            language="c",
+            build_output_dir=build_output_dir,
+            output_dir=output_dir,
+            parse_single_output=lambda _data: {},
+            parse_textcov_output=None,
+            parse_summary=lambda _path: {},
+        )
+
+    try:
+        create_calls = [
+            call for call in calls if call[:3] == ["docker", "create", "--name"]
+        ]
+        assert [call[-1] for call in create_calls[:2]] == [
+            "multilang-given_fuzzer-builder:latest",
+            "multilang-given_fuzzer-clang:latest",
+        ]
     finally:
         session.close()
 

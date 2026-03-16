@@ -103,6 +103,31 @@ def test_materialize_atlantis_build_output_allows_skipped_coverage_build(
     assert not (normalized_out / "coverage-out").exists()
 
 
+def test_stage_benchmark_for_coverage_preserves_required_dotfiles(
+    tmp_path: Path,
+) -> None:
+    from crsbench.evaluation.coverage.uniafl_runtime import stage_benchmark_for_coverage
+
+    benchmark = tmp_path / "benchmark"
+    (benchmark / ".cargo").mkdir(parents=True)
+    (benchmark / ".cargo" / "config.toml").write_text("[build]\n")
+    (benchmark / ".mvn").mkdir()
+    (benchmark / ".mvn" / "jvm.config").write_text("-Xmx1g\n")
+    (benchmark / ".aixcc").mkdir()
+    (benchmark / ".aixcc" / "meta.yaml").write_text("meta: true\n")
+    (benchmark / ".agent").mkdir()
+    (benchmark / ".agent" / "state.json").write_text("{}")
+    (benchmark / "src.txt").write_text("ok\n")
+
+    staged = stage_benchmark_for_coverage(benchmark, tmp_path / "staged")
+
+    assert (staged / ".cargo" / "config.toml").exists()
+    assert (staged / ".mvn" / "jvm.config").exists()
+    assert not (staged / ".aixcc").exists()
+    assert not (staged / ".agent").exists()
+    assert (staged / "src.txt").exists()
+
+
 def test_build_atlantis_coverage_artifacts_skips_prepare_when_images_exist(
     tmp_path: Path,
 ) -> None:
@@ -212,9 +237,14 @@ def test_build_atlantis_coverage_artifacts_refreshes_prepare_state_after_prepare
             normalized_build_output_dir=normalized_build_output_dir,
             control_root=control_root,
             uniafl_root=atlantis_root,
+            oss_crs_cmd="/opt/oss-crs",
         )
 
-    mock_prepare.assert_called_once_with(atlantis_root.resolve())
+    mock_prepare.assert_called_once_with(
+        atlantis_root.resolve(),
+        oss_crs_cmd="/opt/oss-crs",
+        timeout=3600,
+    )
 
 
 def test_load_oss_crs_runtime_classes_matches_repo_layout() -> None:

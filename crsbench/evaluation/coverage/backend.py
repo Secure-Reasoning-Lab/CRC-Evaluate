@@ -26,6 +26,8 @@ from typing import Any, Callable, Optional
 
 from crsbench.evaluation.process_utils import run_with_graceful_timeout
 from crsbench.prepare.uniafl_backend import (
+    default_uniafl_builder_image,
+    default_uniafl_clang_image,
     default_uniafl_root,
     default_uniafl_runtime_image,
 )
@@ -33,7 +35,6 @@ from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
 BASE_RUNNER_IMAGE = "gcr.io/oss-fuzz-base/base-runner"
-PROJECT_IMAGE_REPO = "gcr.io/oss-fuzz"
 NATIVE_COVERAGE_LANGUAGES = {"c", "cpp", "c++", "rust", "go"}
 WARM_WORKER_TIMEOUT_SECONDS = 300
 
@@ -586,36 +587,50 @@ class DockerCoverageSession(CoverageSession):
 
         tool_bin_dir = self.toolchain_dir / "bin"
         tool_bin_dir.mkdir(parents=True, exist_ok=True)
-        project_image = f"{PROJECT_IMAGE_REPO}/{self.project_name}:latest"
-        tool_container = f"crsbench-cov-tools-{uuid.uuid4().hex[:10]}"
-        create_cmd = ["docker", "create", "--name", tool_container, project_image]
-        create_result = subprocess.run(create_cmd, capture_output=True, text=True)
-        if create_result.returncode != 0:
-            raise RuntimeError(
-                f"Failed to create toolchain container for {project_image}: "
-                f"{create_result.stderr.strip()}"
-            )
+        tool_images = (
+            default_uniafl_builder_image(),
+            default_uniafl_clang_image(),
+        )
+        errors: list[str] = []
+        for tool_image in tool_images:
+            tool_container = f"crsbench-cov-tools-{uuid.uuid4().hex[:10]}"
+            create_cmd = ["docker", "create", "--name", tool_container, tool_image]
+            create_result = subprocess.run(create_cmd, capture_output=True, text=True)
+            if create_result.returncode != 0:
+                errors.append(
+                    f"{tool_image}: {create_result.stderr.strip() or create_result.stdout.strip()}"
+                )
+                continue
 
-        try:
-            for tool_name in ("llvm-profdata", "llvm-cov"):
-                copy_cmd = [
-                    "docker",
-                    "cp",
-                    f"{tool_container}:/usr/local/bin/{tool_name}",
-                    str(tool_bin_dir / tool_name),
-                ]
-                copy_result = subprocess.run(copy_cmd, capture_output=True, text=True)
-                if copy_result.returncode != 0:
-                    raise RuntimeError(
-                        f"Failed to copy {tool_name} from {project_image}: "
-                        f"{copy_result.stderr.strip()}"
+            try:
+                for tool_name in ("llvm-profdata", "llvm-cov"):
+                    copy_cmd = [
+                        "docker",
+                        "cp",
+                        f"{tool_container}:/usr/local/bin/{tool_name}",
+                        str(tool_bin_dir / tool_name),
+                    ]
+                    copy_result = subprocess.run(
+                        copy_cmd, capture_output=True, text=True
                     )
-        finally:
-            subprocess.run(
-                ["docker", "rm", "-f", tool_container],
-                capture_output=True,
-                text=True,
-            )
+                    if copy_result.returncode != 0:
+                        raise RuntimeError(
+                            f"Failed to copy {tool_name} from {tool_image}: "
+                            f"{copy_result.stderr.strip()}"
+                        )
+                return
+            except RuntimeError as exc:
+                errors.append(str(exc))
+            finally:
+                subprocess.run(
+                    ["docker", "rm", "-f", tool_container],
+                    capture_output=True,
+                    text=True,
+                )
+
+        raise RuntimeError(
+            "Failed to prepare Atlantis LLVM coverage tools: " + "; ".join(errors)
+        )
 
     def _start_container(self) -> None:
         cmd = [

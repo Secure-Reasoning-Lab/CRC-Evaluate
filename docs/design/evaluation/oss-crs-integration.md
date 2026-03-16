@@ -36,7 +36,8 @@ Depending on workflow, CRSBench may provide:
 Coverage analysis uses `oss-crs` as a build contract, not as the runtime
 executor. The coverage path is:
 
-1. Atlantis GHCR prepare/runtime images or, if unavailable, Atlantis `oss-crs prepare`
+1. Atlantis GHCR `1.0.0` prepare/runtime images, retagged onto the canonical
+   local Atlantis image names, or, if unavailable, Atlantis `oss-crs prepare`
    against the repository-local Team Atlanta checkout
 2. Atlantis `oss-crs build-target` for the selected benchmark
 3. CRSBench-managed warm libCRS/UniAFL coverage sessions for per-seed replay
