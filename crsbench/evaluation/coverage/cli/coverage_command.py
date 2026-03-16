@@ -289,6 +289,10 @@ def _run_experiment_timeline(args: argparse.Namespace) -> int:
             except FileNotFoundError:
                 logger.debug(f"Skipping trial without seeds: {trial_dir}")
                 continue
+            timing_error = _validate_experiment_timeline_context(context)
+            if timing_error is not None:
+                logger.error(f"{trial_dir}: {timing_error}")
+                return 1
             trial_jobs.append(
                 (
                     trial_dir,
@@ -452,6 +456,17 @@ def _build_timeline_report(
         pov_markers=pov_markers,
         final_summary=summary,
     )
+
+
+def _validate_experiment_timeline_context(context: object) -> Optional[str]:
+    """Return an error message when experiment timeline metadata is incomplete."""
+    crs_run_start_time = getattr(context, "crs_run_start_time", None)
+    if crs_run_start_time is None:
+        return "missing crs_run_start_time in povs/pov_store.json"
+    timeline_duration_seconds = getattr(context, "timeline_duration_seconds", None)
+    if timeline_duration_seconds is None:
+        return "missing run_time in metadata.json"
+    return None
 
 
 def _available_coverage_cpus() -> list[int]:

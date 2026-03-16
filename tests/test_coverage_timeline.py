@@ -13,6 +13,7 @@ import pytest
 from crsbench.evaluation.coverage.cli.coverage_command import (
     _build_timeline_report,
     _run_direct_seed_timeline,
+    _run_experiment_timeline,
     add_coverage_subparser,
     run_coverage,
 )
@@ -199,6 +200,28 @@ def test_normalize_seed_inputs_clamps_negative_relative_times_when_requested(
     )
 
     assert [item.relative_time for item in normalized] == [0.0, 5.0]
+
+
+def test_normalize_seed_inputs_keeps_earliest_file_after_negative_clamp(
+    tmp_path: Path,
+) -> None:
+    seed_dir = tmp_path / "seeds"
+    seed_dir.mkdir()
+    first = seed_dir / "b.bin"
+    first.write_bytes(b"same")
+    second = seed_dir / "a.bin"
+    second.write_bytes(b"same")
+    import os
+
+    os.utime(first, (95.0, 95.0))
+    os.utime(second, (96.0, 96.0))
+
+    normalized = normalize_seed_inputs(
+        seed_dir, base_time=100.0, clamp_negative_to_zero=True
+    )
+
+    assert len(normalized) == 1
+    assert normalized[0].original_name == "b.bin"
 
 
 def test_timeline_reporting_writes_json_csv_and_png(tmp_path: Path) -> None:
@@ -845,7 +868,8 @@ def test_run_experiment_timeline_uses_jobs_and_cores_per_job(
             benchmark="bench-a",
             harness=f"h{index}",
             seed_dir=trial_dir / "output" / "seeds",
-            crs_run_start_time=None,
+            crs_run_start_time=100.0,
+            timeline_duration_seconds=120.0,
             pov_markers=[],
         )
         for index, trial_dir in enumerate(trial_dirs)
@@ -924,6 +948,77 @@ def test_run_experiment_timeline_uses_jobs_and_cores_per_job(
     assert all(len(allocation) == 2 for allocation in allocations)
     assert max_active == 2
     assert set(allocations).issubset({(10, 11), (12, 13)})
+
+
+@pytest.mark.parametrize(
+    ("missing_start", "missing_duration"),
+    [(True, False), (False, True)],
+)
+def test_run_experiment_timeline_rejects_missing_timing_metadata_before_scheduling(
+    tmp_path: Path,
+    missing_start: bool,
+    missing_duration: bool,
+) -> None:
+    from crsbench.evaluation.coverage.timeline import TrialCoverageContext
+
+    experiment_dir = tmp_path / "experiment-output"
+    benchmark_root = tmp_path / "benchmarks"
+    benchmark_dir = benchmark_root / "bench-a"
+    benchmark_dir.mkdir(parents=True)
+    trial_dir = experiment_dir / "trial-0"
+    trial_dir.mkdir(parents=True)
+    (trial_dir / "metadata.json").write_text("{}")
+
+    seed_dir = trial_dir / "output" / "seeds"
+    seed_dir.mkdir(parents=True)
+
+    args = argparse.Namespace(
+        verbose=False,
+        experiment_config=None,
+        experiment_dir=experiment_dir,
+        benchmark_path=None,
+        corpus_dir=None,
+        seed_dir=None,
+        benchmark=None,
+        benchmarks=benchmark_root,
+        harness=None,
+        force_rebuild=False,
+        output=None,
+        format="json",
+        jobs=1,
+        cores_per_job=1,
+        build_workers=1,
+        verify_workers=1,
+        source="pkgs",
+        output_dir=None,
+    )
+
+    context = TrialCoverageContext(
+        trial_dir=trial_dir,
+        benchmark="bench-a",
+        harness="h0",
+        seed_dir=seed_dir,
+        crs_run_start_time=None if missing_start else 100.0,
+        timeline_duration_seconds=None if missing_duration else 120.0,
+        pov_markers=[],
+    )
+
+    with (
+        patch(
+            "crsbench.evaluation.coverage.cli.coverage_command.load_trial_context",
+            return_value=context,
+        ),
+        patch(
+            "crsbench.evaluation.coverage.cli.coverage_command.resolve_benchmark_path",
+            return_value=benchmark_dir,
+        ),
+        patch(
+            "crsbench.evaluation.coverage.cli.coverage_command._run_trial_jobs"
+        ) as mock_run_trial_jobs,
+    ):
+        assert _run_experiment_timeline(args) == 1
+
+    mock_run_trial_jobs.assert_not_called()
 
 
 def test_run_experiment_timeline_rejects_cores_per_job_larger_than_cpu_pool(

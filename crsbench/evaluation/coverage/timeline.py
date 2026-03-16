@@ -89,6 +89,7 @@ def normalize_seed_inputs(
         for path in seed_dir.iterdir()
         if path.is_file() and not path.name.startswith(".")
     ]
+    visible_files.sort(key=lambda path: (path.stat().st_mtime, path.name))
     if not visible_files:
         return []
 
