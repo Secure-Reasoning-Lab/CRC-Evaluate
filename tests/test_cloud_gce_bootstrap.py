@@ -342,6 +342,28 @@ def test_startup_script_contains_git_clone_path():
     assert "python3-pip" in script
 
 
+def test_startup_script_supports_public_git_clone_specs():
+    """Worker bootstrap should treat any git+ URL as a clone-based install path."""
+    from crsbench.cloud.gce.metadata import load_startup_script
+
+    script = load_startup_script()
+
+    assert 'elif [[ "${INSTALL_SPEC}" == git+* ]]; then' in script
+    assert 'REPO_URL="${INSTALL_SPEC#git+}"' in script
+
+
+def test_startup_script_uses_isolated_venv_for_non_git_install_specs():
+    """Worker bootstrap should install non-git specs in a venv, not system pip."""
+    from crsbench.cloud.gce.metadata import load_startup_script
+
+    script = load_startup_script()
+
+    assert "python3-venv" in script
+    assert "python3 -m venv" in script
+    assert 'VENV_DIR="/opt/crsbench-install"' in script
+    assert 'python3 -m pip install --upgrade "${INSTALL_SPEC}"' not in script
+
+
 def test_startup_script_sets_venv_path_for_systemd():
     """Startup script should write PATH with venv bin dir to systemd env file."""
     from crsbench.cloud.gce.metadata import load_startup_script
@@ -397,6 +419,28 @@ def test_orchestrator_startup_script_consumes_config_payload_and_preprovisioned_
     assert "command -v crsbench" in script
     assert "except Exception:" in script
     assert "yaml.safe_load" in script
+
+
+def test_orchestrator_startup_script_supports_public_git_clone_specs():
+    """Orchestrator bootstrap should treat any git+ URL as a clone-based install path."""
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+
+    assert 'elif [[ "${INSTALL_SPEC}" == git+* ]]; then' in script
+    assert 'REPO_URL="${INSTALL_SPEC#git+}"' in script
+
+
+def test_orchestrator_startup_script_uses_isolated_venv_for_non_git_install_specs():
+    """Orchestrator bootstrap should install non-git specs in a venv, not system pip."""
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+
+    assert "python3-venv" in script
+    assert "python3 -m venv" in script
+    assert 'VENV_DIR="/opt/crsbench-install"' in script
+    assert 'python3 -m pip install --upgrade "${INSTALL_SPEC}"' not in script
 
 
 def test_patch_orchestrator_config_adds_top_level_and_nested_runtime_redis_host(

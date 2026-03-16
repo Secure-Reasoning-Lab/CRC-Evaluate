@@ -2,7 +2,7 @@
 # Startup script for a GCE orchestrator VM.
 #
 # Expected instance metadata:
-#   crsbench-install-spec       git+ssh://... or pip spec (required)
+#   crsbench-install-spec       git+https://..., git+ssh://..., or pip spec (required)
 #   crsbench-experiment-config-b64  base64-encoded experiment YAML payload (required)
 #   crsbench-redis-password     shared Valkey password (required)
 #   crsbench-git-ref            branch/tag to clone (default: main)
@@ -51,7 +51,7 @@ echo "=== CRSBench orchestrator bootstrap started at $(date -u) ==="
 # --- Install system packages ---
 echo "Installing system packages..."
 apt-get update -qq
-apt-get install -y -qq git python3 python3-pip python3-yaml rsync tar
+apt-get install -y -qq git python3 python3-pip python3-venv python3-yaml rsync tar
 
 # Docker via official install script (includes docker compose plugin)
 if ! command -v docker >/dev/null 2>&1; then
@@ -85,14 +85,15 @@ fi
 
 # --- Install crsbench ---
 CLONE_DIR=""
+VENV_BIN=""
 if ! command -v crsbench >/dev/null 2>&1; then
   if [[ -z "${INSTALL_SPEC}" ]]; then
     echo "crsbench CLI not found and no crsbench-install-spec metadata provided" >&2
     exit 1
-  elif [[ "${INSTALL_SPEC}" == git+ssh://* ]]; then
-    REPO_URL="${INSTALL_SPEC#git+ssh://}"
+  elif [[ "${INSTALL_SPEC}" == git+* ]]; then
+    REPO_URL="${INSTALL_SPEC#git+}"
     CLONE_DIR="/opt/crsbench"
-    git clone --no-single-branch "ssh://${REPO_URL}" "${CLONE_DIR}"
+    git clone --no-single-branch "${REPO_URL}" "${CLONE_DIR}"
     cd "${CLONE_DIR}"
     git checkout "${GIT_REF:-main}"
     git submodule update --init --recursive
@@ -102,9 +103,15 @@ if ! command -v crsbench >/dev/null 2>&1; then
     fi
     uv sync --all-extras
     uv pip install -e .
-    export PATH="/opt/crsbench/.venv/bin:/root/.local/bin:${PATH}"
+    VENV_BIN="/opt/crsbench/.venv/bin"
+    export PATH="${VENV_BIN}:/root/.local/bin:${PATH}"
   else
-    python3 -m pip install --upgrade "${INSTALL_SPEC}"
+    VENV_DIR="/opt/crsbench-install"
+    python3 -m venv "${VENV_DIR}"
+    "${VENV_DIR}/bin/pip" install --upgrade pip
+    "${VENV_DIR}/bin/pip" install --upgrade "${INSTALL_SPEC}"
+    VENV_BIN="${VENV_DIR}/bin"
+    export PATH="${VENV_BIN}:${PATH}"
   fi
 fi
 

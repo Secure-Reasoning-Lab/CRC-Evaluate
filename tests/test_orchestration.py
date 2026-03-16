@@ -823,6 +823,34 @@ class TestIntegrationWithSampleConfigs:
         assert config.crs_compose is not None
         assert config.crs_compose.services["crs-copilot-cli"].num_cores == 8
 
+    def test_remote_gce_sample_config_loads_for_cloud_launch(self):
+        """The checked-in GCE sanity config should exercise remote-orchestrator launch."""
+        config_path = Path(
+            "experiment-configs/cloud-testing/gce-sanity-1orch-2worker.yaml"
+        )
+
+        if not config_path.exists():
+            pytest.skip("GCE sanity config not found, skipping integration test")
+
+        config = load_experiment_config(config_path)
+
+        assert config.cloud is not None
+        assert config.cloud.gce is not None
+        assert config.cloud.orchestrator is not None
+        assert (
+            config.cloud.gce.crsbench_install_spec
+            == "git+https://github.com/sslab-gatech/CRSBench.git"
+        )
+        assert config.cloud.gce.github_deploy_key_file is None
+        assert (
+            config.cloud.gce.service_account_email
+            == "153298433405-compute@developer.gserviceaccount.com"
+        )
+        assert (
+            config.cloud.orchestrator.service_account_email
+            == "153298433405-compute@developer.gserviceaccount.com"
+        )
+
     def test_e2e_with_sample_config_single_crs(self, tmp_path):
         """Test end-to-end workflow with a sample single-CRS config."""
         config_path = Path("experiment-configs/experiment-config-sanity.yaml")

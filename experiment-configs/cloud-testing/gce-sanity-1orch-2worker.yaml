@@ -33,6 +33,17 @@ crs_compose:
 evaluator:
   cores_per_job: 4
 cloud:
+  orchestrator:
+    project: aixcc-426805
+    zone: us-east1-b
+    machine_type: e2-standard-4
+    boot_disk_size_gb: 50
+    image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+    service_account_email: 153298433405-compute@developer.gserviceaccount.com
+    owner_label: yufu
+    ssh_via_iap: true
+    crsbench_install_spec: "git+https://github.com/sslab-gatech/CRSBench.git"
+    crsbench_git_ref: feat/gcp
   gce:
     project: aixcc-426805
     zone: us-east1-b
@@ -40,10 +51,9 @@ cloud:
     machine_type: e2-standard-4
     boot_disk_size_gb: 50
     image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
-    service_account_email: crsbench-worker@aixcc-426805.iam.gserviceaccount.com
+    service_account_email: 153298433405-compute@developer.gserviceaccount.com
     owner_label: yufu
     ssh_via_iap: true
     readiness_timeout_sec: 600
-    crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+    crsbench_install_spec: "git+https://github.com/sslab-gatech/CRSBench.git"
     crsbench_git_ref: feat/gcp
-    github_deploy_key_file: .crsbench-keys/crsbench-deploy

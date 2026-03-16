@@ -68,7 +68,7 @@ mkdir -p "${STATE_DIR}"
 # --- Install system packages ---
 echo "Installing system packages..."
 apt-get update -qq
-apt-get install -y -qq git python3 python3-pip rsync tar
+apt-get install -y -qq git python3 python3-pip python3-venv rsync tar
 
 # Docker via official install script (includes docker compose plugin)
 if ! command -v docker >/dev/null 2>&1; then
@@ -142,15 +142,16 @@ if [[ -n "${HF_TOKEN}" ]]; then
 fi
 
 # --- Install crsbench ---
+VENV_BIN=""
 if ! command -v crsbench >/dev/null 2>&1; then
   if [[ -z "${INSTALL_SPEC}" ]]; then
     echo "crsbench CLI not found and no crsbench-install-spec metadata provided" >&2
     exit 1
-  elif [[ "${INSTALL_SPEC}" == git+ssh://* ]]; then
-    # Private repo clone path
-    REPO_URL="${INSTALL_SPEC#git+ssh://}"
+  elif [[ "${INSTALL_SPEC}" == git+* ]]; then
+    # Git repo clone path (public HTTPS or private SSH)
+    REPO_URL="${INSTALL_SPEC#git+}"
     CLONE_DIR="/opt/crsbench"
-    git clone --no-single-branch "ssh://${REPO_URL}" "${CLONE_DIR}"
+    git clone --no-single-branch "${REPO_URL}" "${CLONE_DIR}"
     cd "${CLONE_DIR}"
     git checkout "${GIT_REF:-main}"
     git submodule update --init --recursive
@@ -162,9 +163,15 @@ if ! command -v crsbench >/dev/null 2>&1; then
     uv sync --all-extras
     uv pip install -e .
     VENV_BIN="/opt/crsbench/.venv/bin"
+    export PATH="${VENV_BIN}:/root/.local/bin:${PATH}"
     cd /
   else
-    python3 -m pip install --upgrade "${INSTALL_SPEC}"
+    VENV_DIR="/opt/crsbench-install"
+    python3 -m venv "${VENV_DIR}"
+    "${VENV_DIR}/bin/pip" install --upgrade pip
+    "${VENV_DIR}/bin/pip" install --upgrade "${INSTALL_SPEC}"
+    VENV_BIN="${VENV_DIR}/bin"
+    export PATH="${VENV_BIN}:${PATH}"
   fi
 fi
 
