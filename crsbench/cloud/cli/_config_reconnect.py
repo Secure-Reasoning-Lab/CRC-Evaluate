@@ -6,7 +6,11 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from crsbench.cloud.launch_state import CloudLaunchState, load_launch_state
+from crsbench.cloud.launch_state import (
+    CloudLaunchState,
+    load_launch_state,
+    save_launch_state,
+)
 from crsbench.cloud.readiness import CloudReadinessStore
 from crsbench.distributed.job_lifecycle import JobLifecycleStore
 from crsbench.distributed.queue import create_redis_connection
@@ -28,12 +32,39 @@ def resolve_cloud_context(
         raise SystemExit("Experiment config has no 'cloud' section.")
 
     launch_state = load_launch_state(Path(config_path), experiment_name)
+    loaded_from_legacy_path = False
+    if launch_state is None:
+        launch_state = load_launch_state(config.experiment_filestore, experiment_name)
+        loaded_from_legacy_path = launch_state is not None
+
+    launch_state_changed = False
+    if launch_state is not None:
+        launch_state_updates: dict[str, object] = {}
+        if launch_state.experiment_filestore is None:
+            launch_state_updates["experiment_filestore"] = str(
+                config.experiment_filestore
+            )
+        if launch_state.worker_fleet_config is None and config.cloud.gce is not None:
+            launch_state_updates["worker_fleet_config"] = config.cloud.gce
+        if launch_state_updates:
+            launch_state = launch_state.model_copy(update=launch_state_updates)
+            launch_state_changed = True
+        if loaded_from_legacy_path or launch_state_changed:
+            save_launch_state(Path(config_path), launch_state)
 
     if config.cloud.orchestrator is not None:
         if launch_state is None:
             raise SystemExit(
                 "Remote orchestrator launch state not found. "
                 "Run `crsbench cloud launch --config ...` first."
+            )
+        if launch_state.experiment_filestore is None:
+            raise SystemExit(
+                "Remote orchestrator launch state missing experiment filestore"
+            )
+        if launch_state.worker_fleet_config is None:
+            raise SystemExit(
+                "Remote orchestrator launch state missing worker fleet config"
             )
         return (
             launch_state.worker_fleet_config,

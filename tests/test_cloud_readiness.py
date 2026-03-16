@@ -115,7 +115,7 @@ def test_wait_for_gce_workers_requires_explicit_ready_not_running_vm() -> None:
         )
     )
 
-    timestamps = iter([0.0, 901.0, 901.0])
+    timestamps = iter([0.0, 0.0, 0.0, 901.0])
     manager = CloudFleetStatusManager(
         readiness_store=store,
         provisioner=None,
@@ -197,7 +197,7 @@ def test_bring_up_gce_workers_deletes_fleet_after_timeout() -> None:
 
     store = CloudReadinessStore(_FakeRedis())
     provisioner = _Provisioner()
-    timestamps = iter([0.0, 901.0, 901.0])
+    timestamps = iter([0.0, 0.0, 0.0, 901.0])
     manager = CloudFleetStatusManager(
         readiness_store=store,
         provisioner=provisioner,
@@ -215,3 +215,51 @@ def test_bring_up_gce_workers_deletes_fleet_after_timeout() -> None:
         )
 
     assert provisioner.deleted == ["exp-cloud-42"]
+
+
+def test_wait_for_existing_gce_workers_ignores_stale_other_instance_records() -> None:
+    """Pre-provisioned waits should key off current instance ids, not stale history."""
+    from crsbench.cloud.readiness import (
+        CloudReadinessStore,
+        CloudWorkerState,
+        CloudWorkerStatus,
+    )
+    from crsbench.cloud.status import CloudFleetBringupError, CloudFleetStatusManager
+
+    class _Provisioner:
+        def build_worker_names(self, **_kwargs) -> list[str]:
+            return ["gce-worker-001"]
+
+        def list_workers(self, **_kwargs) -> list[GceWorkerRecord]:
+            return [_make_worker()]
+
+    store = CloudReadinessStore(_FakeRedis())
+    store.record(
+        CloudWorkerStatus(
+            experiment_name="exp-cloud-42",
+            instance_id="stale-1001",
+            instance_name="gce-worker-001",
+            zone="us-central1-a",
+            state=CloudWorkerState.READY,
+            provider_status="RUNNING",
+        )
+    )
+
+    timestamps = iter([0.0, 0.0, 0.0, 901.0])
+    manager = CloudFleetStatusManager(
+        readiness_store=store,
+        provisioner=_Provisioner(),
+        clock=lambda: next(timestamps),
+        sleep=lambda _seconds: None,
+        poll_interval_sec=0.0,
+    )
+
+    with pytest.raises(CloudFleetBringupError, match="timed out waiting for ready"):
+        manager.wait_for_existing_gce_workers(
+            experiment_name="exp-cloud-42",
+            fleet=SimpleNamespace(
+                worker_count=1,
+                worker_name_prefix="gce-worker",
+                readiness_timeout_sec=900,
+            ),
+        )

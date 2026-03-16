@@ -394,6 +394,8 @@ def test_orchestrator_startup_script_consumes_config_payload_and_preprovisioned_
     assert "python3-pip" in script
     assert "git checkout" in script
     assert "command -v crsbench" in script
+    assert "except Exception:" in script
+    assert "yaml.safe_load" in script
 
 
 def test_patch_orchestrator_config_adds_top_level_and_nested_runtime_redis_host(

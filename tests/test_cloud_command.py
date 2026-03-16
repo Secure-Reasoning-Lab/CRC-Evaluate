@@ -297,6 +297,44 @@ class TestReconnect:
             assert fleet == mock_state.return_value.worker_fleet_config
             assert filestore == Path("/tmp/filestore")
 
+    @patch("crsbench.cloud.cli._config_reconnect.save_launch_state")
+    @patch("crsbench.cloud.cli._config_reconnect.create_redis_connection")
+    @patch("crsbench.cloud.cli._config_reconnect.load_launch_state")
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_reconnect_migrates_legacy_launch_state_from_filestore(
+        self, mock_load, mock_state, mock_redis, mock_save_state
+    ):
+        """Legacy launch state should still load and migrate to the config-adjacent path."""
+        config = _mock_config(has_cloud=True)
+        config.cloud.orchestrator = MagicMock()
+        mock_load.return_value = config
+        legacy_state = _make_launch_state().model_copy(
+            update={
+                "experiment_filestore": None,
+                "worker_fleet_config": None,
+            }
+        )
+        mock_state.side_effect = [None, legacy_state]
+        mock_redis.return_value = _FakeRedis()
+
+        from crsbench.cloud.cli._config_reconnect import reconnect
+
+        fleet, _redis_conn, _readiness, _lifecycle, filestore = reconnect(
+            "/path/to/config.yaml", "test-exp"
+        )
+
+        assert mock_state.call_args_list[0].args == (
+            Path("/path/to/config.yaml"),
+            "test-exp",
+        )
+        assert mock_state.call_args_list[1].args == (Path("/tmp/filestore"), "test-exp")
+        mock_save_state.assert_called_once()
+        migrated_state = mock_save_state.call_args.args[1]
+        assert migrated_state.experiment_filestore == "/tmp/filestore"
+        assert migrated_state.worker_fleet_config == config.cloud.gce
+        assert fleet == config.cloud.gce
+        assert filestore == Path("/tmp/filestore")
+
 
 # ---------------------------------------------------------------------------
 # Argument parsing tests

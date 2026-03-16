@@ -24,7 +24,7 @@ class CloudLaunchState(BaseModel):
 
     experiment_name: str
     config_path: str
-    experiment_filestore: str
+    experiment_filestore: str | None = None
     redis_host: str
     redis_password: str
     orchestrator_name: str
@@ -33,7 +33,7 @@ class CloudLaunchState(BaseModel):
     orchestrator_internal_ip: str | None = None
     orchestrator_external_ip: str | None = None
     orchestrator_ssh_via_iap: bool = False
-    worker_fleet_config: GceWorkerFleetConfig
+    worker_fleet_config: GceWorkerFleetConfig | None = None
 
     def as_orchestrator_record(self) -> GceWorkerRecord:
         """Build a collector-compatible instance record for the orchestrator VM."""
