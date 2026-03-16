@@ -48,9 +48,6 @@ crsbench = "crsbench.run_experiment:main"
 [tool.setuptools.packages.find]
 include = ["crsbench*"]
 
-[tool.setuptools.package-data]
-"crsbench.prepare" = ["jazzer_patches/*.md", "jazzer_patches/*.patch"]
-
 [tool.uv]
 package = true
 

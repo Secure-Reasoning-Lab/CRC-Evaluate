@@ -8,7 +8,6 @@ from unittest.mock import patch
 from crsbench.evaluation.coverage.backend import (
     CoverageRunResult,
     DockerCoverageSession,
-    JazzerWarmCoverageSession,
     ShardedCoverageSession,
     UniAFLCoverageSession,
 )
@@ -335,57 +334,6 @@ def test_docker_session_collect_single_prefers_native_textcov_reports(
         session.close()
 
 
-def test_jvm_warm_session_processes_multiple_inputs_without_restart(
-    tmp_path: Path,
-) -> None:
-    output_dir = tmp_path / "coverage"
-    build_output_dir = tmp_path / "build-out"
-    build_output_dir.mkdir()
-    (build_output_dir / "ExpanderFuzzer").write_text("#!/bin/sh\n")
-    seed1 = tmp_path / "seed1.bin"
-    seed2 = tmp_path / "seed2.bin"
-    seed1.write_bytes(b"a")
-    seed2.write_bytes(b"b")
-
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value.returncode = 0
-        mock_run.return_value.stdout = "container-id\n"
-        mock_run.return_value.stderr = ""
-        session = JazzerWarmCoverageSession(
-            project_name="proj-cov-delta-coverage",
-            harness_name="ExpanderFuzzer",
-            language="jvm",
-            build_output_dir=build_output_dir,
-            output_dir=output_dir,
-            parse_single_output=lambda _data: {},
-            parse_summary=lambda _path: {},
-        )
-
-    try:
-
-        def fake_collect(corpus_hash: str, corpus_file: Path) -> CoverageRunResult:
-            raw_cov_path = session.raw_dir / f"{corpus_hash}.cov"
-            raw_cov_path.write_text(
-                json.dumps(
-                    {"input": corpus_file.name, "main": {"src": "A.java", "lines": [1]}}
-                )
-            )
-            return CoverageRunResult(
-                coverage_data={"main": {"src": "A.java", "lines": [1]}},
-                raw_cov_path=raw_cov_path,
-            )
-
-        session._collect_single_from_worker = fake_collect  # type: ignore[method-assign]
-
-        result1 = session.collect_single(seed1)
-        result2 = session.collect_single(seed2)
-
-        assert result1.raw_cov_path != result2.raw_cov_path
-        assert session.worker_start_count == 1
-    finally:
-        session.close()
-
-
 def test_native_strategy_opens_uniafl_session(tmp_path: Path) -> None:
     oss_fuzz = tmp_path / "oss-fuzz"
     (oss_fuzz / "infra").mkdir(parents=True)
@@ -581,49 +529,6 @@ def test_uniafl_session_pins_container_to_requested_cpu(tmp_path: Path) -> None:
         docker_run = next(cmd for cmd in seen_cmds if cmd[:2] == ["docker", "run"])
         assert "--cpuset-cpus" in docker_run
         assert docker_run[docker_run.index("--cpuset-cpus") + 1] == "7"
-    finally:
-        session.close()
-
-
-def test_jvm_warm_session_starts_worker_from_build_output_script(
-    tmp_path: Path,
-) -> None:
-    output_dir = tmp_path / "coverage"
-    build_output_dir = tmp_path / "build-out"
-    build_output_dir.mkdir()
-    harness_wrapper = build_output_dir / "ExpanderFuzzer"
-    harness_wrapper.write_text("#!/bin/sh\n")
-    recorded_cmds: list[list[str]] = []
-
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value.returncode = 0
-        mock_run.return_value.stdout = "container-id\n"
-        mock_run.return_value.stderr = ""
-        session = JazzerWarmCoverageSession(
-            project_name="proj-cov-delta-coverage",
-            harness_name="ExpanderFuzzer",
-            language="jvm",
-            build_output_dir=build_output_dir,
-            output_dir=output_dir,
-            parse_single_output=lambda _data: {},
-            parse_summary=lambda _path: {},
-        )
-
-    try:
-        with patch(
-            "subprocess.Popen",
-            side_effect=lambda cmd, **_kwargs: recorded_cmds.append(cmd)
-            or _DummyProc(),
-        ):  # type: ignore[arg-type]
-            session._ensure_worker_started()
-        assert recorded_cmds
-        assert recorded_cmds[0][:3] == ["docker", "exec", "-i"]
-        joined = " ".join(recorded_cmds[0])
-        assert "/out/ExpanderFuzzer" in joined
-        assert "--crsbench_warm_coverage" in joined
-        assert "--crsbench_request_dir=/workspace/worker-requests" in joined
-        assert "--crsbench_result_dir=/workspace/worker-results" in joined
-        assert session.worker_start_count == 1
     finally:
         session.close()
 
@@ -860,58 +765,6 @@ def test_uniafl_session_normalizes_container_source_paths(tmp_path: Path) -> Non
                 "lines": [1, 2],
             }
         }
-    finally:
-        session.close()
-
-
-def test_jvm_warm_session_collect_single_consumes_result_files(
-    tmp_path: Path,
-) -> None:
-    output_dir = tmp_path / "coverage"
-    build_output_dir = tmp_path / "build-out"
-    build_output_dir.mkdir()
-    (build_output_dir / "ExpanderFuzzer").write_text("#!/bin/sh\n")
-    seed = tmp_path / "seed.bin"
-    seed.write_bytes(b"a")
-
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value.returncode = 0
-        mock_run.return_value.stdout = "container-id\n"
-        mock_run.return_value.stderr = ""
-        with patch("subprocess.Popen", return_value=_DummyProc()):
-            session = JazzerWarmCoverageSession(
-                project_name="proj-cov-delta-coverage",
-                harness_name="ExpanderFuzzer",
-                language="jvm",
-                build_output_dir=build_output_dir,
-                output_dir=output_dir,
-                parse_single_output=lambda _data: {},
-                parse_summary=lambda _path: {},
-            )
-
-    try:
-
-        def fake_wait(corpus_hash: str):
-            cov_path = session.results_dir / f"{corpus_hash}.cov"
-            status_path = session.results_dir / f"{corpus_hash}.status.json"
-            cov_path.write_text(
-                json.dumps({"A.java": {"src": "A.java", "lines": [1, 2]}})
-            )
-            status_path.write_text(json.dumps({"crashed": True}))
-            crash_path = session.results_dir / f"{corpus_hash}.crash.log"
-            crash_path.write_text("boom")
-            return cov_path, status_path, crash_path
-
-        session._wait_for_worker_artifacts = fake_wait  # type: ignore[method-assign]
-        result = session.collect_single(seed)
-
-        assert result.coverage_data == {"A.java": {"src": "A.java", "lines": [1, 2]}}
-        assert result.crashed is True
-        assert result.raw_cov_path is not None
-        assert result.raw_cov_path.exists()
-        assert result.crash_log_path is not None
-        assert result.crash_log_path.exists()
-        assert session.worker_start_count == 1
     finally:
         session.close()
 
