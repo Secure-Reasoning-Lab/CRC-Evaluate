@@ -43,7 +43,7 @@ def build_local_rehearsal_layout(
     experiment_config_path: Path,
     repo_mount_path: str,
     worker_count: int = 2,
-    git_ref: str = "main",
+    git_ref: str,
     zone: str = DEFAULT_LOCAL_ZONE,
     redis_password: str = DEFAULT_LOCAL_REDIS_PASSWORD,
 ) -> LocalRehearsalLayout:

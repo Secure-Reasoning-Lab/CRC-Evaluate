@@ -4,7 +4,7 @@ Guide for provisioning and managing remote orchestrator plus worker VMs for
 CRSBench experiments on GCE.
 
 For a local preflight of the same startup scripts before touching GCE, use
-[Local Cloud Rehearsal](/workspace/CRSBench/docs/guides/experiments/local-cloud-rehearsal.md).
+[Local Cloud Rehearsal](./local-cloud-rehearsal.md).
 
 ## Prerequisites
 

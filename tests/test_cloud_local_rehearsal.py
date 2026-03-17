@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+from pathlib import Path
 
 
 def test_build_local_rehearsal_layout_writes_file_backed_metadata(tmp_path) -> None:
@@ -52,6 +53,7 @@ crs_compose:
         experiment_config_path=config_path,
         repo_mount_path="/src/CRSBench",
         worker_count=2,
+        git_ref="test-ref",
     )
 
     orchestrator_root = layout.orchestrator_metadata_dir
@@ -73,3 +75,26 @@ crs_compose:
     assert payload["prepare_mode"] == "full"
     assert payload["download_benchmarks"] == "auto"
     assert (worker_root / "id").read_text(encoding="utf-8").startswith("local-worker-")
+    assert len(layout.worker_metadata_dirs) == 2
+
+
+def test_rehearsal_compose_uses_file_metadata_and_foreground_workers() -> None:
+    """Compose harness should wire the startup-script overrides it documents."""
+    compose_text = Path("scripts/cloud-rehearsal/docker-compose.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "CRSBENCH_METADATA_ROOT_DIR: /metadata-root" in compose_text
+    assert "CRSBENCH_SERVICE_MANAGER: foreground" in compose_text
+    assert "/metadata-root/instance:ro" in compose_text
+
+
+def test_rehearsal_wrapper_only_resets_state_for_bringup() -> None:
+    """Read-only compose subcommands should not wipe the previous rehearsal state."""
+    wrapper_text = Path("scripts/cloud-rehearsal/run-local-rehearsal.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "if [[ $# -eq 0 ]]; then" in wrapper_text
+    assert 'if [[ "$1" == "up" ]]; then' in wrapper_text
+    assert "CRSBENCH_LOCAL_REHEARSAL_GIT_REF" in wrapper_text

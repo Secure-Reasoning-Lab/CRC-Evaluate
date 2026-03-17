@@ -16,6 +16,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--experiment-config", type=Path, required=True)
     parser.add_argument("--repo-mount-path", default="/src/CRSBench")
     parser.add_argument("--source-repo-path", type=Path, required=True)
+    parser.add_argument("--git-ref", default=None)
     parser.add_argument("--worker-count", type=int, default=2)
     return parser.parse_args()
 
@@ -39,7 +40,7 @@ def main() -> int:
         experiment_config_path=args.experiment_config,
         repo_mount_path=args.repo_mount_path,
         worker_count=args.worker_count,
-        git_ref=detect_git_ref(args.source_repo_path),
+        git_ref=args.git_ref or detect_git_ref(args.source_repo_path),
     )
     print(f"Rendered local rehearsal metadata under {layout.output_dir}")
     return 0

@@ -500,7 +500,7 @@ exit "${exit_code}"
 EOF
 chmod +x "${LAUNCHER_PATH}"
 
-cat > "${SERVICE_PATH}" <<'EOF'
+cat > "${SERVICE_PATH}" <<EOF
 [Unit]
 Description=CRSBench worker service
 After=network-online.target
@@ -509,8 +509,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/default/crsbench-worker
-WorkingDirectory=/opt/crsbench
-ExecStart=/bin/bash /var/lib/crsbench/launch-worker.sh
+WorkingDirectory=${CLONE_DIR}
+ExecStart=/bin/bash ${LAUNCHER_PATH}
 Restart=always
 RestartSec=10
 

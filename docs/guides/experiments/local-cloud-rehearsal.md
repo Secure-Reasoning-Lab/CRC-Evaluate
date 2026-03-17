@@ -45,17 +45,19 @@ scripts/cloud-rehearsal/run-local-rehearsal.sh down -v
 
 Default rehearsal config:
 
-- [`scripts/cloud-rehearsal/local-experiment.yaml`](/workspace/CRSBench/scripts/cloud-rehearsal/local-experiment.yaml)
+- [`scripts/cloud-rehearsal/local-experiment.yaml`](../../../scripts/cloud-rehearsal/local-experiment.yaml)
 
 Default topology:
 
 - orchestrator service name: `orchestrator`
-- workers: `local-worker-1`, `local-worker-2`
+- worker compose services: `worker-1`, `worker-2`
+- worker runtime names reported to CRSBench: `local-worker-1`, `local-worker-2`
 - repo mount inside containers: `/src/CRSBench`
 
 Override knobs:
 
 - `CRSBENCH_LOCAL_REHEARSAL_EXPERIMENT_CONFIG`
+- `CRSBENCH_LOCAL_REHEARSAL_GIT_REF`
 - `CRSBENCH_LOCAL_REHEARSAL_STATE_DIR`
 
 ## Startup Script Overrides Used By The Harness

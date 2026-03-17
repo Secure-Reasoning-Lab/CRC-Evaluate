@@ -444,7 +444,8 @@ def test_startup_script_runs_shared_vm_bootstrap_from_repo_checkout():
     assert "bootstrap_inputs_from_payload" in script
     assert "run_cloud_vm_bootstrap" in script
     assert 'CLONE_DIR="${CRSBENCH_CLONE_DIR:-/opt/crsbench}"' in script
-    assert "WorkingDirectory=/opt/crsbench" in script
+    assert "WorkingDirectory=${CLONE_DIR}" in script
+    assert "ExecStart=/bin/bash ${LAUNCHER_PATH}" in script
     assert 'write_env_var "PATH" "${VENV_BIN}' in script
     assert "/root/.local/bin" in script
 
