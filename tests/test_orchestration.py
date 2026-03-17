@@ -796,6 +796,32 @@ benchmarks:
 class TestIntegrationWithSampleConfigs:
     """Test integration with actual sample configs from experiment-configs/."""
 
+    def test_sanity_bugfinding_smoke_config_enables_pov_early_stop(self):
+        """Smoke bug-finding preset should enable POV early termination explicitly."""
+        config = load_experiment_config(
+            Path(
+                "experiment-configs/sanity-bugfinding/"
+                "atlantis-multilang-given_fuzzer-default-delta.yaml"
+            )
+        )
+
+        assert config.pov_early_stop is True
+        assert config.resources is not None
+        assert config.resources.cores_per_trial == 2
+
+    def test_sanity_bugfixing_smoke_config_relies_on_compose_cpu_limit(self):
+        """Smoke bug-fixing preset should not inject a trial CPU fallback."""
+        config = load_experiment_config(
+            Path(
+                "experiment-configs/sanity-bugfixing/"
+                "crs-copilot-cli-gpt-5-3-codex-delta-sanity-mock-c.yaml"
+            )
+        )
+
+        assert config.resources is None or config.resources.cores_per_trial is None
+        assert config.crs_compose is not None
+        assert config.crs_compose.services["crs-copilot-cli"].num_cores == 8
+
     def test_e2e_with_sample_config_single_crs(self, tmp_path):
         """Test end-to-end workflow with a sample single-CRS config."""
         config_path = Path("experiment-configs/experiment-config-sanity.yaml")

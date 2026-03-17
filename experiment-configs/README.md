@@ -63,6 +63,10 @@ Preferred `crs_compose` shape:
   - `mem_limit`
   - `additional_env`
 
+Smoke/CI bug-finding presets may explicitly set `runtime.pov_early_stop: true`
+to terminate once all expected CPVs for a harness are confirmed. Keep the
+global/default behavior `false` for non-smoke experiment configs.
+
 ## Validation
 
 - Validate config schema via local checks:

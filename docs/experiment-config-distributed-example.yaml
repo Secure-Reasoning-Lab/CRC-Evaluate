@@ -153,10 +153,14 @@ storage:
 # Optional global compute defaults/tags:
 # - cores_per_trial/memory_per_trial are fallback defaults when a CRS service
 #   does not set num_cores/mem_limit.
+# - When both crs_compose and resources omit a CPU/memory limit, CRSBench
+#   treats that as unconstrained and materializes the full visible runtime
+#   CPU affinity / memory envelope for oss-crs.
 # - cpu_tag is matched by worker/evaluator cpu_tag in distributed scheduling.
 # Precedence for CRS runtime CPU/memory:
 #   crs_compose.<crs>.num_cores/mem_limit
 #   > resources.cores_per_trial/memory_per_trial
+#   > current visible runtime envelope (when both are omitted)
 # resources:
 #   cores_per_trial: 8
 #   memory_per_trial: "16G"
@@ -164,7 +168,11 @@ storage:
 #   cpu_tag: amd-epyc
 
 worker:
+  # Optional. When omitted, CRSBench runs one worker job and lets that job
+  # use the visible runtime CPU envelope unless narrower limits are configured.
   jobs: 4
+  # Optional. When omitted, CRSBench materializes per-job CPUs from the
+  # current visible runtime CPU envelope instead of using a hidden fallback.
   cores_per_job: 8
   # continuous defaults to true; set false only for one-shot drain-and-exit runs.
   # continuous: true
@@ -189,6 +197,8 @@ worker:
 
 evaluator:
   jobs: 4
+  # Optional. When omitted, CRSBench materializes per-job CPUs from the
+  # current visible runtime CPU envelope instead of using a hidden fallback.
   cores_per_job: 4
   # Primary convention: use unified jobs/cores_per_job for symmetric build/verify
   # capacity. CLI follows the same convention:

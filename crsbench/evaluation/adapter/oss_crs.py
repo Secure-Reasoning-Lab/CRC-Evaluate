@@ -63,12 +63,12 @@ def _normalize_optional_text(value: Any) -> Optional[str]:
 
 
 def _default_memory_limit() -> str:
-    """Return a conservative default memory string for oss-crs compose.
+    """Return the visible runtime memory envelope for oss-crs compose.
 
     Priority:
-    1. ``CRSBENCH_OSS_CRS_DEFAULT_MEMORY`` (when set and non-empty)
-    2. 90% of host MemTotal from ``/proc/meminfo`` (in MB)
-    3. ``65536MB`` fallback
+    1. ``CRSBENCH_OSS_CRS_DEFAULT_MEMORY`` (explicit operator override)
+    2. Minimum of current cgroup-remaining memory and ``MemAvailable``
+    3. ``SC_AVPHYS_PAGES`` fallback when available
     """
     env_override = _normalize_optional_text(
         os.environ.get("CRSBENCH_OSS_CRS_DEFAULT_MEMORY")
@@ -76,25 +76,113 @@ def _default_memory_limit() -> str:
     if env_override:
         return env_override
 
+    visible_bytes = _visible_memory_bytes()
+    if visible_bytes is None:
+        raise RuntimeError(
+            "Unable to determine visible runtime memory for oss-crs compose. "
+            "Set crs_compose.<crs>.mem_limit/resources.memory_per_trial or "
+            "CRSBENCH_OSS_CRS_DEFAULT_MEMORY explicitly."
+        )
+    visible_mb = max(1, visible_bytes // (1024 * 1024))
+    return f"{visible_mb}MB"
+
+
+def _read_meminfo_value_kb(field: str) -> Optional[int]:
+    """Read a ``/proc/meminfo`` field in kB."""
     try:
         meminfo = Path("/proc/meminfo")
         if meminfo.exists():
             for line in meminfo.read_text().splitlines():
-                if not line.startswith("MemTotal:"):
+                if not line.startswith(f"{field}:"):
                     continue
                 parts = line.split()
                 if len(parts) < 2:
                     continue
-                total_kb = int(parts[1])
-                # Keep headroom for host + sibling processes.
-                total_mb = max(1024, int(total_kb * 0.9 / 1024))
-                return f"{total_mb}MB"
+                return int(parts[1])
     except Exception:
         logger.debug(
-            "Failed to derive host memory default from /proc/meminfo", exc_info=True
+            "Failed to read %s from /proc/meminfo",
+            field,
+            exc_info=True,
         )
+    return None
 
-    return "65536MB"
+
+def _read_cgroup_memory_available_bytes() -> Optional[int]:
+    """Return remaining memory inside the current cgroup, when constrained."""
+    try:
+        proc_self_cgroup = Path("/proc/self/cgroup")
+        if not proc_self_cgroup.exists():
+            return None
+
+        relative_path = ""
+        for line in proc_self_cgroup.read_text().splitlines():
+            parts = line.split(":", 2)
+            if len(parts) != 3:
+                continue
+            hierarchy, _controllers, path = parts
+            if hierarchy == "0":
+                relative_path = path.lstrip("/")
+                break
+        cgroup_dir = Path("/sys/fs/cgroup")
+        if relative_path:
+            cgroup_dir = cgroup_dir / relative_path
+
+        limit_file = cgroup_dir / "memory.max"
+        current_file = cgroup_dir / "memory.current"
+        if not limit_file.exists():
+            return None
+
+        limit_text = limit_file.read_text().strip()
+        if limit_text == "" or limit_text == "max":
+            return None
+        current_text = (
+            current_file.read_text().strip() if current_file.exists() else "0"
+        )
+        limit_bytes = int(limit_text)
+        current_bytes = int(current_text or "0")
+        return max(limit_bytes - current_bytes, 1)
+    except Exception:
+        logger.debug("Failed to derive cgroup memory limit", exc_info=True)
+        return None
+
+
+def _visible_memory_bytes() -> Optional[int]:
+    """Return memory available to the current runtime environment."""
+    candidates: list[int] = []
+
+    mem_available_kb = _read_meminfo_value_kb("MemAvailable")
+    if mem_available_kb is None:
+        mem_available_kb = _read_meminfo_value_kb("MemTotal")
+    if mem_available_kb is not None:
+        candidates.append(mem_available_kb * 1024)
+
+    cgroup_available = _read_cgroup_memory_available_bytes()
+    if cgroup_available is not None:
+        candidates.append(cgroup_available)
+
+    if candidates:
+        return min(candidates)
+
+    try:
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        available_pages = os.sysconf("SC_AVPHYS_PAGES")
+        if isinstance(page_size, int) and isinstance(available_pages, int):
+            return max(page_size * available_pages, 1)
+    except (AttributeError, OSError, ValueError):
+        logger.debug("Failed to derive visible memory via sysconf", exc_info=True)
+
+    return None
+
+
+def _available_cpuset() -> str:
+    """Return the current visible CPU affinity as a cpuset string."""
+    try:
+        cpus = sorted(os.sched_getaffinity(0))
+    except AttributeError:
+        total = os.cpu_count() or 1
+        cpus = list(range(total))
+    return format_cpuset(cpus) or "0"
 
 
 class OssCrsAdapter:
@@ -127,7 +215,7 @@ class OssCrsAdapter:
         self._work_dir: Optional[Path] = None
         self._oss_crs_cmd: str = "oss-crs"
         self._docker_registry: str = ""
-        self._oss_crs_infra_cpuset: str = "0-3"
+        self._oss_crs_infra_cpuset: Optional[str] = None
         self._allocated_cpus: Optional[str] = None
         self._fuzzing_language: str = "c"
         self._infra_num_cores: int = 0
@@ -136,7 +224,7 @@ class OssCrsAdapter:
         self._infra_mem_explicit: bool = False
         self._crs_service_configs: dict[str, dict[str, Any]] = {
             self._crs_config_name: {
-                "num_cores": 1,
+                "num_cores": None,
                 "mem_limit": None,
                 "additional_env": {},
             }
@@ -483,8 +571,11 @@ class OssCrsAdapter:
                     if isinstance(additional_env_raw, dict)
                     else {}
                 )
+                raw_num_cores = raw_service.get("num_cores")
                 service_configs[str(name)] = {
-                    "num_cores": int(raw_service.get("num_cores", 1)),
+                    "num_cores": int(raw_num_cores)
+                    if raw_num_cores is not None
+                    else None,
                     "mem_limit": _normalize_optional_text(raw_service.get("mem_limit")),
                     "additional_env": additional_env,
                 }
@@ -499,7 +590,7 @@ class OssCrsAdapter:
                     # stale values from a previous configure() call.
                     self._crs_service_configs = {
                         self._crs_config_name: {
-                            "num_cores": 1,
+                            "num_cores": None,
                             "mem_limit": None,
                             "additional_env": {},
                         }
@@ -510,7 +601,7 @@ class OssCrsAdapter:
             service = self._crs_service_configs.get(self._crs_config_name)
             if service is None:
                 self._crs_service_configs[self._crs_config_name] = {
-                    "num_cores": 1,
+                    "num_cores": None,
                     "mem_limit": self._infra_mem_limit,
                     "additional_env": merged,
                 }
@@ -579,36 +670,52 @@ class OssCrsAdapter:
     def _assign_cpusets(self) -> tuple[str, dict[str, str]]:
         """Assign cpusets for infra and each CRS service from allocated CPU pool."""
         service_names = list(self._crs_service_configs.keys())
-        service_required = sum(
-            int(cfg["num_cores"]) for cfg in self._crs_service_configs.values()
+        explicit_service_required = 0
+        unbounded_services: list[str] = []
+        for name, cfg in self._crs_service_configs.items():
+            raw_count = cfg.get("num_cores")
+            if raw_count is None:
+                unbounded_services.append(name)
+                continue
+            explicit_service_required += int(raw_count)
+
+        if len(unbounded_services) > 1:
+            raise RuntimeError(
+                "Multiple oss-crs services omit num_cores. Set num_cores explicitly "
+                "for all but one service so CRSBench can materialize cpusets."
+            )
+
+        minimum_required = explicit_service_required + (
+            0 if self._infra_shared else self._infra_num_cores
         )
-        required = (
-            service_required
-            if self._infra_shared
-            else self._infra_num_cores + service_required
-        )
-        if required < 1:
+        if unbounded_services:
+            minimum_required += 1
+        if minimum_required < 1:
             raise RuntimeError(
                 "Invalid CPU configuration: total required cores must be >= 1"
             )
 
-        if self._allocated_cpus:
-            pool = sorted(set(parse_cpuset(self._allocated_cpus)))
-        elif _normalize_optional_text(self._oss_crs_infra_cpuset):
-            pool = sorted(set(parse_cpuset(self._oss_crs_infra_cpuset)))
-        else:
-            pool = list(range(required))
+        pool_spec = self._allocated_cpus or _normalize_optional_text(
+            self._oss_crs_infra_cpuset
+        )
+        pool = sorted(
+            set(
+                parse_cpuset(
+                    pool_spec if pool_spec is not None else _available_cpuset()
+                )
+            )
+        )
 
-        if len(pool) < required:
+        if len(pool) < minimum_required:
             service_summary = ", ".join(
-                f"{name}:{self._crs_service_configs[name]['num_cores']}"
+                f"{name}:{self._crs_service_configs[name].get('num_cores') or 'all-visible'}"
                 for name in service_names
             )
             raise RuntimeError(
                 "Insufficient allocated CPUs for oss-crs compose: "
-                f"required={required} (infra={'shared' if self._infra_shared else self._infra_num_cores}, "
+                f"required>={minimum_required} (infra={'shared' if self._infra_shared else self._infra_num_cores}, "
                 f"services={{{service_summary}}}), "
-                f"available={len(pool)} from '{self._allocated_cpus or format_cpuset(pool)}'"
+                f"available={len(pool)} from '{pool_spec or format_cpuset(pool)}'"
             )
 
         cursor = 0
@@ -619,10 +726,23 @@ class OssCrsAdapter:
 
         service_cpusets: dict[str, str] = {}
         for name in service_names:
-            count = int(self._crs_service_configs[name]["num_cores"])
+            raw_count = self._crs_service_configs[name].get("num_cores")
+            if raw_count is None:
+                continue
+            count = int(raw_count)
             slice_ = pool[cursor : cursor + count]
             cursor += count
             service_cpusets[name] = format_cpuset(slice_)
+
+        if unbounded_services:
+            unbounded_name = unbounded_services[0]
+            slice_ = pool[cursor:]
+            if not slice_:
+                raise RuntimeError(
+                    "Unable to materialize an unconstrained oss-crs service CPU set "
+                    f"for {unbounded_name}: no CPUs remain after dedicated allocations"
+                )
+            service_cpusets[unbounded_name] = format_cpuset(slice_)
 
         if self._infra_shared:
             if service_names:
@@ -631,12 +751,12 @@ class OssCrsAdapter:
                     infra_cpus.update(parse_cpuset(cpuset))
                 infra_cpuset = format_cpuset(sorted(infra_cpus))
             else:
-                infra_cpuset = format_cpuset(pool[:1])
+                infra_cpuset = format_cpuset(pool)
         elif self._infra_num_cores == 0:
             if service_names:
                 infra_cpuset = service_cpusets[service_names[0]]
             else:
-                infra_cpuset = format_cpuset(pool[:1])
+                infra_cpuset = format_cpuset(pool)
         else:
             infra_cpuset = format_cpuset(infra_slice)
 

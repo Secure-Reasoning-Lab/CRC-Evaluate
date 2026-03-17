@@ -9,6 +9,7 @@ runtime:
   build_timeout: 300
   run_timeout: 300
   verify_timeout: 300
+  pov_early_stop: true
   redis_host: localhost
   inputs:
     pov:

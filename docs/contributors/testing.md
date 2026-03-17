@@ -54,7 +54,8 @@ For Redis/Valkey setup and multi-process runs (`run`, `worker`, `evaluator`):
 - For numeric metadata conflicts without CLI overrides, runtime uses `max(...)`.
 - CPU pinning is CLI-owned in distributed runtime (`--cpuset`, `--skip-cpuset`).
 - Invalid registry numeric metadata is rejected at startup (`worker.* >= 1`, `resources.cores_per_trial >= 1`, `evaluator.build/verify_* >= 1`, `evaluator.idle_timeout >= 0`).
-- `resources.memory_per_trial` default is `null` (unlimited).
+- `resources.cores_per_trial` and `resources.memory_per_trial` both default to
+  `null`, so they do not impose hidden trial limits unless explicitly set.
 
 ## Integration Test Scripts
 

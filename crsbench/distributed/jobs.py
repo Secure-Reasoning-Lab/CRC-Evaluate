@@ -939,7 +939,11 @@ def run_crs_trial(
         # Fall back to config.resources for local execution (no RQ job)
         # Note: In local mode, we use CPUs 0 to N-1 (e.g., cores_per_trial=16 -> cpuset "0-15").
         # In distributed mode, workers allocate specific CPU cores via job metadata.
-        if allocated_cpus is None and config.resources:
+        if (
+            allocated_cpus is None
+            and config.resources
+            and config.resources.cores_per_trial is not None
+        ):
             # Convert core count to cpuset range (e.g., 16 -> "0-15")
             from crsbench.utils.cpu_pool import format_cpuset
 

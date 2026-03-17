@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Callable, NamedTuple, Optional, Union
 
 from crsbench.distributed.common import normalize_cpu_tag
 from crsbench.distributed.queue import REDIS_AVAILABLE
+from crsbench.utils.cpu_pool import auto_cores_per_job, visible_cpu_count
 from crsbench.utils.logger import get_logger
 
 if REDIS_AVAILABLE:
@@ -95,11 +96,11 @@ def run_ci_supervisor(
     verify_queue_name: str,
     worker_name: str,
     build_jobs: int,
-    build_cores_per_job: int,
+    build_cores_per_job: Optional[int],
     verify_jobs: int,
     job_runner: JobRunner,
     *,
-    verify_cores_per_job: int = 1,
+    verify_cores_per_job: Optional[int] = None,
     use_cpuset: bool = False,
     use_cgroups: bool = False,
     cores: Optional[str] = None,
@@ -144,12 +145,31 @@ def run_ci_supervisor(
     from crsbench.utils.size_parser import parse_size_to_bytes
 
     os.environ["CRSBENCH_SUPERVISOR"] = "1"
+    resolved_build_cores_per_job = (
+        build_cores_per_job
+        if build_cores_per_job is not None
+        else (
+            auto_cores_per_job(build_jobs, cores=cores, skip_cpus=skip_cpus)
+            if use_cpuset
+            else visible_cpu_count(cores=cores, skip_cpus=skip_cpus)
+        )
+    )
+    resolved_verify_cores_per_job = (
+        verify_cores_per_job
+        if verify_cores_per_job is not None
+        else (
+            auto_cores_per_job(max(verify_jobs, 1), cores=cores, skip_cpus=skip_cpus)
+            if use_cpuset
+            else visible_cpu_count(cores=cores, skip_cpus=skip_cpus)
+        )
+    )
+
     logger.info("Starting CI dual-queue supervisor...")
     logger.info(
-        f"Build concurrency: {build_jobs} jobs x {build_cores_per_job} CPUs each"
+        f"Build concurrency: {build_jobs} jobs x {resolved_build_cores_per_job} CPUs each"
     )
     logger.info(
-        f"Verify concurrency: {verify_jobs} jobs x {verify_cores_per_job} CPUs each"
+        f"Verify concurrency: {verify_jobs} jobs x {resolved_verify_cores_per_job} CPUs each"
     )
     if cpu_tag:
         logger.info(f"CPU tag filter enabled: {cpu_tag}")
@@ -403,7 +423,11 @@ def run_ci_supervisor(
             mismatch_queue_names.clear()
             is_build = queue_obj.name == build_queue_name
             queue_label = "build" if is_build else "verify"
-            cpu_count = build_cores_per_job if is_build else verify_cores_per_job
+            cpu_count = (
+                resolved_build_cores_per_job
+                if is_build
+                else resolved_verify_cores_per_job
+            )
 
             # Allocate CPUs
             cpus = cpu_pool.allocate(cpu_count) if cpu_pool else None
@@ -588,11 +612,11 @@ def run_multi_queue_supervisor(
     verify_queue_names: list[str],
     worker_name: str,
     build_jobs: int,
-    build_cores_per_job: int,
+    build_cores_per_job: Optional[int],
     verify_jobs: int,
     job_runner: JobRunner,
     *,
-    verify_cores_per_job: int = 1,
+    verify_cores_per_job: Optional[int] = None,
     use_cpuset: bool = False,
     use_cgroups: bool = False,
     cores: Optional[str] = None,
@@ -643,14 +667,33 @@ def run_multi_queue_supervisor(
     from crsbench.utils.size_parser import parse_size_to_bytes
 
     os.environ["CRSBENCH_SUPERVISOR"] = "1"
+    resolved_build_cores_per_job = (
+        build_cores_per_job
+        if build_cores_per_job is not None
+        else (
+            auto_cores_per_job(build_jobs, cores=cores, skip_cpus=skip_cpus)
+            if use_cpuset
+            else visible_cpu_count(cores=cores, skip_cpus=skip_cpus)
+        )
+    )
+    resolved_verify_cores_per_job = (
+        verify_cores_per_job
+        if verify_cores_per_job is not None
+        else (
+            auto_cores_per_job(max(verify_jobs, 1), cores=cores, skip_cpus=skip_cpus)
+            if use_cpuset
+            else visible_cpu_count(cores=cores, skip_cpus=skip_cpus)
+        )
+    )
+
     logger.info("Starting multi-queue supervisor...")
     logger.info(f"Build queues: {build_queue_names}")
     logger.info(f"Verify queues: {verify_queue_names}")
     logger.info(
-        f"Build concurrency: {build_jobs} jobs x {build_cores_per_job} CPUs each"
+        f"Build concurrency: {build_jobs} jobs x {resolved_build_cores_per_job} CPUs each"
     )
     logger.info(
-        f"Verify concurrency: {verify_jobs} jobs x {verify_cores_per_job} CPUs each"
+        f"Verify concurrency: {verify_jobs} jobs x {resolved_verify_cores_per_job} CPUs each"
     )
     if cpu_tag:
         logger.info(f"CPU tag filter enabled: {cpu_tag}")
@@ -957,7 +1000,11 @@ def run_multi_queue_supervisor(
             mismatch_queue_names.clear()
             is_build = queue_obj.name in build_queue_name_set
             queue_label = "build" if is_build else "verify"
-            cpu_count = build_cores_per_job if is_build else verify_cores_per_job
+            cpu_count = (
+                resolved_build_cores_per_job
+                if is_build
+                else resolved_verify_cores_per_job
+            )
 
             # Allocate CPUs
             cpus = cpu_pool.allocate(cpu_count) if cpu_pool else None

@@ -824,8 +824,10 @@ class ResourceConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    cores_per_trial: int = Field(
-        default=4, ge=1, description="Number of CPU cores allocated per trial"
+    cores_per_trial: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Optional fallback number of CPU cores allocated per trial",
     )
     memory_per_trial: Optional[str] = Field(
         default=None,
@@ -894,12 +896,18 @@ class WorkerConfig(BaseModel):
         def normalize_optional_paths(cls, v):
             return _normalize_optional_path_override(v)
 
-    jobs: int = Field(default=4, ge=1, description="Number of parallel jobs per worker")
+    jobs: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Concurrent jobs per worker. When unset, CRSBench runs a "
+        "single worker job and lets that job use the visible runtime CPU envelope "
+        "unless narrower limits are configured.",
+    )
     cores_per_job: Optional[int] = Field(
         default=None,
         ge=1,
         description="CPUs per worker job when using cpuset/cgroup supervisor. "
-        "Falls back to resources.cores_per_trial when not set.",
+        "When unset, CRSBench materializes this from the visible runtime CPU envelope.",
     )
     redis_host: Optional[str] = Field(
         default=None,

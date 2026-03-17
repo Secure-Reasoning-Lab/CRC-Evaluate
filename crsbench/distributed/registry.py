@@ -35,7 +35,6 @@ REGISTRY_KEY = "crsbench:registry:experiments"
 EVENTS_CHANNEL = "crsbench:registry:events"
 LOCK_KEY_PREFIX = "crsbench:lock:"
 LOCK_TTL = 600  # 10 minutes; renewed by the monitor loop every 60s
-
 _LOCK_RENEW_SCRIPT = """
 if redis.call('get', KEYS[1]) == ARGV[1] then
   return redis.call('expire', KEYS[1], tonumber(ARGV[2]))
@@ -68,7 +67,7 @@ class RuntimeRegistration(BaseModel):
     verify_queue: str = ""
 
     # Resource admission
-    cores_per_trial: int = 4
+    cores_per_trial: Optional[int] = None
     memory_per_trial: Optional[str] = None
     cpu_tag: Optional[str] = None
     worker_jobs: Optional[int] = None
@@ -127,7 +126,7 @@ class RuntimeRegistration(BaseModel):
         modes = [config.mode.value]
 
         resources = getattr(config, "resources", None)
-        cores_per_trial = resources.cores_per_trial if resources else 4
+        cores_per_trial = resources.cores_per_trial if resources else None
         memory_per_trial = resources.memory_per_trial if resources else None
         cpu_tag = getattr(resources, "cpu_tag", None) if resources else None
         if cpu_tag is not None and not isinstance(cpu_tag, str):
@@ -145,8 +144,8 @@ class RuntimeRegistration(BaseModel):
         worker_jobs = worker_cfg.jobs if worker_cfg else None
         worker_cores_per_job = (
             worker_cfg.cores_per_job
-            if worker_cfg and worker_cfg.cores_per_job
-            else cores_per_trial
+            if worker_cfg and worker_cfg.cores_per_job is not None
+            else None
         )
 
         trial_queue, build_queue, verify_queue = resolve_queue_names(experiment)
