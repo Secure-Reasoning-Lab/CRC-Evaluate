@@ -13,8 +13,13 @@ CRSBench experiments on GCE.
    - `roles/logging.logWriter` (optional, for Cloud Logging)
    - Access to Redis host (firewall rules or VPC)
    - Access to any shared storage mounts
-4. **OS Login** enabled on the GCP project (`gcloud compute project-info add-metadata --metadata enable-oslogin=TRUE`)
-5. **IAP** configured if using `ssh_via_iap: true` (firewall rule allowing TCP port 22 from IAP range `35.235.240.0/20`)
+4. **OS Login** available for operator SSH access. Project-level OS Login
+   metadata is a common setup (`gcloud compute project-info add-metadata
+   --metadata enable-oslogin=TRUE`), and CRSBench also enables OS Login on the
+   VMs it provisions.
+5. **IAP** configured if using `ssh_via_iap: true`:
+   - firewall rule allowing TCP port 22 from IAP range `35.235.240.0/20`
+   - operator IAM permissions to open IAP TCP tunnels and log in over SSH
 6. **Redis/Valkey** reachable from worker VMs
 7. **rsync** installed on the operator machine (for artifact collection)
 
@@ -111,9 +116,9 @@ benchmarks from HuggingFace. When the repo or dataset is private, the
 provisioner injects credentials via GCE instance metadata so the startup
 script can authenticate automatically.
 
-<!-- TODO: When the CRSBench repo and HuggingFace dataset become public,
-     these fields become optional. Keep them supported for adopters who
-     fork to a private repo or host a private dataset mirror. -->
+These credential fields stay supported even when you use a public CRSBench
+repository or a public dataset mirror, because downstream adopters may still
+need private forks or gated datasets.
 
 ### Generate a deploy key
 
@@ -134,16 +139,41 @@ cloud:
   providers:
     gce:
       instance_profiles:
-        worker-n2d:
-          # Install crsbench from a public repo via git clone + uv sync
+        orchestrator-n2d:
+          # Install CRSBench from a public repo via git clone + uv sync
           crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
 
           # For a private repo, switch to git+ssh://... and provide a deploy key:
+          # crsbench_install_spec: "git+ssh://git@github.com/your-org/CRSBench.git"
+          # github_deploy_key_file: .crsbench-keys/crsbench-deploy
+
+        worker-n2d:
+          # Install CRSBench from a public repo via git clone + uv sync
+          crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
+
+          # For a private repo, switch to git+ssh://... and provide a deploy key:
+          # crsbench_install_spec: "git+ssh://git@github.com/your-org/CRSBench.git"
           # github_deploy_key_file: .crsbench-keys/crsbench-deploy
 
           # HuggingFace token for gated dataset downloads (optional)
           hf_token: "hf_..."
 ```
+
+If you switch to the private `git+ssh` path, run:
+
+```bash
+uv run crsbench cloud keygen
+```
+
+Expected result:
+
+- `.crsbench-keys/crsbench-deploy` and `.crsbench-keys/crsbench-deploy.pub`
+  exist locally
+- the command prints the public key to add under GitHub
+  `Settings -> Deploy keys`
+
+Add the public key to the repository that the VMs will clone. Read-only access
+is sufficient for smoke testing.
 
 When `github_deploy_key_file` is set, the provisioner reads the private key
 file at provision time, base64-encodes it, and sets it as
@@ -321,8 +351,9 @@ gcloud compute ssh my-experiment-001 \
     --zone us-central1-a \
     --tunnel-through-iap
 
-# Direct mode (only if the VM has a public IP and your firewall allows your source IP)
-ssh my-experiment-001
+# Direct mode (only if the VM has a public IP, your firewall allows your source IP,
+# and you connect to a routable address or a local SSH alias you created separately)
+ssh 203.0.113.10
 ```
 
 If your firewall only allows SSH from the IAP range `35.235.240.0/20`, direct

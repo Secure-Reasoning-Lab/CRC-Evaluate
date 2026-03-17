@@ -87,6 +87,28 @@ Expected result:
 - private SSH path: a manual `git clone` / `git ls-remote` with the deploy key
   should succeed
 
+If you switch to the private `git+ssh` path, add a deploy key:
+
+```bash
+uv run crsbench cloud keygen
+```
+
+Expected result:
+
+- `.crsbench-keys/crsbench-deploy` and `.crsbench-keys/crsbench-deploy.pub`
+  exist locally
+- the command prints the public key you need to add under GitHub
+  `Settings -> Deploy keys`
+
+Then update the instance profiles in the config to use SSH plus the private key:
+
+```yaml
+crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+github_deploy_key_file: .crsbench-keys/crsbench-deploy
+```
+
+If you keep a public `git+https` install path, you can skip the deploy-key step.
+
 4. Confirm quota is sufficient for this exact layout:
 
 - `us-east5`: 32 `n2d` vCPUs
