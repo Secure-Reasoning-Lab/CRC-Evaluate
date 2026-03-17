@@ -365,17 +365,27 @@ def run_ci_supervisor(
                 continue
 
             # Dequeue with build priority (build queue first in list)
-            result = rq.Queue.dequeue_any(
-                queues_with_capacity,
-                timeout=DEQUEUE_POLL_TIMEOUT_SECONDS,
-                connection=redis_conn,
-            )
+            try:
+                result = rq.Queue.dequeue_any(
+                    queues_with_capacity,
+                    timeout=DEQUEUE_POLL_TIMEOUT_SECONDS,
+                    connection=redis_conn,
+                )
+            except Exception as dequeue_err:
+                logger.warning(f"Transient dequeue error (will retry): {dequeue_err}")
+                time.sleep(1)
+                continue
 
             if not result:
                 time.sleep(0.5)
                 continue
 
-            job, queue_obj = result
+            try:
+                job, queue_obj = result
+            except (TypeError, ValueError) as unpack_err:
+                logger.warning(f"Unexpected dequeue result {result!r}: {unpack_err}")
+                time.sleep(0.5)
+                continue
 
             # Skip jobs that are already finished or failed (stale queue entries)
             job_status = job.get_status()
@@ -942,17 +952,27 @@ def run_multi_queue_supervisor(
                 continue
 
             # Dequeue with build priority
-            result = rq.Queue.dequeue_any(
-                queues_with_capacity,
-                timeout=DEQUEUE_POLL_TIMEOUT_SECONDS,
-                connection=redis_conn,
-            )
+            try:
+                result = rq.Queue.dequeue_any(
+                    queues_with_capacity,
+                    timeout=DEQUEUE_POLL_TIMEOUT_SECONDS,
+                    connection=redis_conn,
+                )
+            except Exception as dequeue_err:
+                logger.warning(f"Transient dequeue error (will retry): {dequeue_err}")
+                time.sleep(1)
+                continue
 
             if not result:
                 time.sleep(0.5)
                 continue
 
-            job, queue_obj = result
+            try:
+                job, queue_obj = result
+            except (TypeError, ValueError) as unpack_err:
+                logger.warning(f"Unexpected dequeue result {result!r}: {unpack_err}")
+                time.sleep(0.5)
+                continue
 
             # Skip stale jobs
             job_status = job.get_status()

@@ -715,20 +715,67 @@ stop_worker_process() {
     return 1
 }
 
-run_smoke_suite_config() {
+# Workspace marker: stores the workspace path so post-verify can find it.
+SMOKE_WORKSPACE_DIR="/tmp/crsbench-smoke-workspaces"
+
+# Print a compact summary of smoke run results from log files.
+_smoke_run_summary() {
+    local suite="$1" workspace="$2"
+    local run_log="$workspace/run.log"
+    local worker_log="$workspace/worker.log"
+    echo ""
+    echo -e "${YELLOW}--- Smoke run summary: $suite ---${NC}"
+    if [ -f "$run_log" ]; then
+        grep -E "Total trials:|Successful:|Failed:|Total POVs found:" "$run_log" | sed 's/^.*| /  /' || true
+    fi
+    # Show per-trial completion lines from worker log
+    if [ -f "$worker_log" ]; then
+        grep -E "\[Trial [0-9]+\] Completed" "$worker_log" | sed 's/^.*| /  /' || true
+    fi
+    echo -e "${YELLOW}--- workspace: $workspace ---${NC}"
+    echo ""
+}
+
+# Print a compact summary of smoke post-verify results.
+_smoke_verify_summary() {
+    local suite="$1" workspace="$2"
+    local post_verify_log="$workspace/post-verify.log"
+    echo ""
+    echo -e "${YELLOW}--- Smoke verify summary: $suite ---${NC}"
+    if [ -f "$post_verify_log" ]; then
+        grep -E "VERIFICATION SUMMARY|Total POVs verified:|CPVs triggered:|Smoke post-verification passed|patch.*valid|patch.*PASS|patch.*FAIL" "$post_verify_log" | sed 's/^.*| /  /' || true
+    fi
+    echo -e "${YELLOW}------${NC}"
+    echo ""
+}
+
+_smoke_workspace_marker() {
+    printf '%s/%s' "$SMOKE_WORKSPACE_DIR" "$1"
+}
+
+_save_smoke_workspace() {
+    mkdir -p "$SMOKE_WORKSPACE_DIR"
+    printf '%s\n' "$2" > "$(_smoke_workspace_marker "$1")"
+}
+
+_load_smoke_workspace() {
+    local marker
+    marker="$(_smoke_workspace_marker "$1")"
+    [ -f "$marker" ] || { echo ""; return 1; }
+    cat "$marker"
+}
+
+# Phase 1: Run worker + evaluator + orchestrator.  Leaves workspace intact
+# for post-verify.  Writes workspace path to marker file.
+run_smoke_suite_run() {
     local suite="$1"
     local stage_name="$2"
     local base_config workspace config_path exp_dir report_dir
-    local worker_log evaluator_log run_log post_verify_log worker_pid evaluator_pid rc cpuset skip_cpuset skip_verification
+    local worker_log evaluator_log run_log worker_pid evaluator_pid rc cpuset skip_cpuset skip_verification
 
-    # Ensure worker/evaluator process trees are always killed on exit
-    # (including fail/error paths and when running as a background subshell).
-    # Background commands are started with setsid so they become process
-    # group leaders. Kill the entire group with kill -- -PGID.
     _smoke_kill_tree() {
         local pid="$1"
         [ -n "$pid" ] || return 0
-        # Kill the entire process group (pid == pgid due to setsid)
         kill -TERM -- -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
         sleep 2
         kill -KILL -- -"$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
@@ -737,7 +784,6 @@ run_smoke_suite_config() {
     _smoke_suite_cleanup() {
         _smoke_kill_tree "${worker_pid:-}"
         _smoke_kill_tree "${evaluator_pid:-}"
-        # Clean up streaming pipelines for both worker and evaluator
         [ -n "${_worker_logger_pid:-}" ] && kill "${_worker_logger_pid}" 2>/dev/null || true
         [ -n "${_evaluator_logger_pid:-}" ] && kill "${_evaluator_logger_pid}" 2>/dev/null || true
         cleanup_smoke_bg_logging
@@ -758,10 +804,12 @@ run_smoke_suite_config() {
     render_smoke_config "$suite" "$base_config" "$config_path" "$exp_dir" "$report_dir" "${CRSBENCH_REDIS_HOST}" "$skip_verification" >/dev/null \
         || fail "Failed to render smoke config for $suite"
 
+    # Save workspace path for post-verify phase
+    _save_smoke_workspace "$suite" "$workspace"
+
     worker_log="$workspace/worker.log"
     evaluator_log="$workspace/evaluator.log"
     run_log="$workspace/run.log"
-    post_verify_log="$workspace/post-verify.log"
 
     local worker_cmd=(uv run crsbench worker --experiment-config "$config_path" --continuous)
     if [ "${SMOKE_NO_CPUSET:-1}" != "1" ]; then
@@ -779,9 +827,6 @@ run_smoke_suite_config() {
     worker_pid="$SMOKE_BG_PID"
     _worker_logger_pid="$SMOKE_BG_LOGGER_PID"
 
-    # Start evaluator — builds variant images and consumes build/verify
-    # queues.  Bugfinding: async POV verification + early stop.
-    # Bugfixing: distributed patch build + verify.
     local evaluator_cmd=(uv run crsbench evaluator --experiment-config "$config_path" --idle-timeout 0)
     start_smoke_logged_command_bg "$evaluator_log" "smoke:${suite}:evaluator" "${evaluator_cmd[@]}"
     evaluator_pid="$SMOKE_BG_PID"
@@ -812,10 +857,6 @@ run_smoke_suite_config() {
         fail "Smoke worker did not terminate cleanly for suite=$suite"
     fi
 
-    # Stop evaluator after run completes.  With --idle-timeout 0 it stays
-    # alive until killed.  The worker is already stopped so no new verify
-    # jobs will arrive; stop_worker_process gives 20s grace for SIGINT to
-    # let the evaluator drain remaining verify work.
     if ! stop_worker_process "$evaluator_pid" "evaluator[$suite]"; then
         echo "=== evaluator log (tail) ==="
         tail -n 200 "$evaluator_log" || true
@@ -832,6 +873,28 @@ run_smoke_suite_config() {
         fail "Smoke run failed for suite=$suite"
     fi
 
+    _smoke_run_summary "$suite" "$workspace"
+    success "Smoke run $suite passed"
+}
+
+# Phase 2: Post-verify outputs from a previous run phase.
+# Reads workspace path from marker file, runs crsbench verify / patch-verify,
+# then cleans up the workspace.
+run_smoke_suite_verify() {
+    local suite="$1"
+    local stage_name="$2"
+    local workspace exp_dir post_verify_log rc skip_verification
+
+    run_stage "$stage_name"
+
+    workspace="$(_load_smoke_workspace "$suite")" \
+        || fail "No smoke workspace found for suite=$suite (run phase first)"
+    [ -d "$workspace" ] || fail "Smoke workspace disappeared: $workspace"
+
+    exp_dir="$workspace/experiment-data"
+    post_verify_log="$workspace/post-verify.log"
+    skip_verification="$(smoke_skip_verification_for_suite "$suite")"
+
     if [ "$skip_verification" = "1" ]; then
         echo "[smoke] skipping post-run verification for suite=$suite"
     else
@@ -845,18 +908,28 @@ run_smoke_suite_config() {
         if [ "$rc" -ne 0 ]; then
             echo "=== post-verify log (tail) ==="
             tail -n 200 "$post_verify_log" || true
-            echo "=== run log (tail) ==="
-            tail -n 200 "$run_log" || true
             fail "Smoke post-verification failed for suite=$suite"
         fi
     fi
+
+    _smoke_verify_summary "$suite" "$workspace"
 
     if [ "${SMOKE_KEEP_WORKSPACE:-0}" = "1" ]; then
         echo "[smoke] kept workspace: $workspace"
     else
         cleanup_path "$workspace"
     fi
-    success "Smoke $suite passed"
+    # Clean up marker
+    rm -f "$(_smoke_workspace_marker "$suite")"
+    success "Smoke verify $suite passed"
+}
+
+# Combined: run + verify (backward compatible).
+run_smoke_suite_config() {
+    local suite="$1"
+    local stage_name="$2"
+    run_smoke_suite_run "$suite" "$stage_name"
+    run_smoke_suite_verify "$suite" "Post-verify: $suite"
 }
 
 run_smoke_bugfinding() {
@@ -889,8 +962,7 @@ run_smoke_bugfixing() {
     cleanup_temp_valkey
 }
 
-run_smoke_parallel() {
-    run_stage "Stage 4: Parallel Smoke (config-first)"
+_smoke_parallel_preflight() {
     local bugfind_requires_litellm bugfind_requires_tracking
     local bugfix_requires_litellm bugfix_requires_tracking
     local parallel_requires_litellm parallel_requires_tracking
@@ -910,6 +982,61 @@ run_smoke_parallel() {
     if [ "$parallel_requires_litellm" = "1" ]; then
         run_litellm_preflight "$parallel_requires_tracking"
     fi
+}
+
+# Phase 1 only: run worker + evaluator + orchestrator for all suites in parallel.
+# Workspaces are preserved for smoke-post-verify.
+run_smoke_run() {
+    run_stage "Stage 4a: Parallel Smoke Run (worker + evaluator + orchestrator)"
+    _smoke_parallel_preflight
+
+    start_temp_valkey
+    trap cleanup_temp_valkey EXIT
+
+    local pids=()
+    local suites=(bugfinding bugfixing)
+    local suite
+    for suite in "${suites[@]}"; do
+        run_smoke_suite_run "$suite" "Smoke run $suite" &
+        pids+=("$!")
+    done
+
+    local rc=0
+    for pid in "${pids[@]}"; do
+        wait "$pid" || rc=1
+    done
+
+    trap - EXIT
+    cleanup_temp_valkey
+    [ "$rc" -eq 0 ] || fail "Parallel smoke run failed"
+    success "Parallel smoke run passed"
+}
+
+# Phase 2 only: post-verify outputs from a previous smoke-run.
+run_smoke_post_verify() {
+    run_stage "Stage 4b: Parallel Smoke Post-Verify"
+
+    local pids=()
+    local suites=(bugfinding bugfixing)
+    local suite
+    for suite in "${suites[@]}"; do
+        run_smoke_suite_verify "$suite" "Smoke verify $suite" &
+        pids+=("$!")
+    done
+
+    local rc=0
+    for pid in "${pids[@]}"; do
+        wait "$pid" || rc=1
+    done
+
+    [ "$rc" -eq 0 ] || fail "Parallel smoke post-verify failed"
+    success "Parallel smoke post-verify passed"
+}
+
+# Combined: run + verify (default for `smoke` subcommand).
+run_smoke_parallel() {
+    run_stage "Stage 4: Parallel Smoke (config-first)"
+    _smoke_parallel_preflight
 
     start_temp_valkey
     trap cleanup_temp_valkey EXIT
@@ -966,6 +1093,12 @@ main() {
         smoke-validate-config)
             validate_smoke_selection_config
             ;;
+        smoke-run)
+            run_smoke_run
+            ;;
+        smoke-post-verify)
+            run_smoke_post_verify
+            ;;
         smoke-bugfinding)
             run_smoke_bugfinding
             ;;
@@ -991,7 +1124,7 @@ main() {
             run_smoke_parallel
             ;;
         *)
-            echo "Usage: $0 [checks|format|sanity|e2e|smoke|smoke-validate-config|smoke-bugfinding|smoke-bugfixing]"
+            echo "Usage: $0 [checks|format|sanity|e2e|smoke|smoke-run|smoke-post-verify|smoke-validate-config|smoke-bugfinding|smoke-bugfixing]"
             echo ""
             echo "  (default)    Run checks + format + sanity-mock + smoke (matches CI)"
             echo "  checks       Stage 1: typecheck, lint, format, unit tests"

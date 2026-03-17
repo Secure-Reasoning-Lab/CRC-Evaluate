@@ -168,11 +168,11 @@ jobs:
         run: |
           ./scripts/ci-tests/run-local.sh smoke-validate-config
 
-      - name: Run smoke suites (config-first, parallel)
+      - name: Run smoke suites (worker + evaluator + orchestrator)
         env:
           # Source-of-truth smoke configs:
           SMOKE_BUGFINDING_CONFIG: experiment-configs/sanity-bugfinding/atlantis-multilang-given_fuzzer-default-delta.yaml
-          SMOKE_BUGFIXING_CONFIG: experiment-configs/sanity-bugfixing/crs-copilot-cli-gpt-5-3-codex-delta-sanity-mock-c.yaml
+          SMOKE_BUGFIXING_CONFIG: experiment-configs/sanity-bugfixing/crs-claude-code-delta-sanity-smoke.yaml
           # run-local.sh manages an isolated temporary Valkey on a random port.
           # GitHub self-hosted runners may use Docker's systemd cgroup driver.
           # Smoke must avoid cpuset/cgroup mode unless the runner is explicitly
@@ -181,9 +181,6 @@ jobs:
           # Optional cpuset partitioning for dedicated cgroupfs-capable runners.
           SMOKE_CPUSET_BUGFINDING: 0-23
           SMOKE_CPUSET_BUGFIXING: 24-47
-          # For smoke, skip expensive verify queue processing.
-          SMOKE_SKIP_VERIFICATION_BUGFINDING: "1"
-          SMOKE_SKIP_VERIFICATION_BUGFIXING: "1"
           # External LiteLLM endpoint for bugfixing CRS smoke.
           CRSBENCH_LLM_UPSTREAM_BASE_URL: ${{ secrets.CRSBENCH_LLM_UPSTREAM_BASE_URL }}
           # Optional explicit control-plane endpoint (defaults to upstream URL in runtime resolver).
@@ -192,4 +189,8 @@ jobs:
           CRSBENCH_LLM_UPSTREAM_MASTER_KEY: ${{ secrets.CRSBENCH_LLM_UPSTREAM_MASTER_KEY }}
           CRSBENCH_LLM_UPSTREAM_API_KEY: ${{ secrets.CRSBENCH_LLM_UPSTREAM_API_KEY }}
         run: |
-          ./scripts/ci-tests/run-local.sh smoke
+          ./scripts/ci-tests/run-local.sh smoke-run
+
+      - name: Post-verify smoke results (crsbench verify + patch-verify)
+        run: |
+          ./scripts/ci-tests/run-local.sh smoke-post-verify

@@ -28,8 +28,6 @@ storage:
 crs_compose:
   crs-claude-code:
     num_cores: 8
-resources:
-  cores_per_trial: 8
 worker:
   cores_per_job: 8
   storage:
