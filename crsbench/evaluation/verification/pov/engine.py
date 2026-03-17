@@ -73,18 +73,11 @@ class VerificationEngine:
 
     Coordinates the entire verification workflow:
     1. Load and parse benchmark configuration
-    2. Build all required variant projects (parallel with build_workers)
-    3. Run POVs against each variant (parallel with verify_workers)
+    2. Build all required variant projects (parallel, controlled by jobs)
+    3. Run POVs against each variant (parallel, controlled by cores_per_job)
     4. Collect and analyze crash results
     5. Determine final verdicts
     6. Apply deduplication
-
-    Attributes:
-        oss_fuzz_path: Path to oss-fuzz directory
-        builder: OSSFuzzBuilder instance
-        dedup_strategy: Deduplication strategy to use
-        timeout: Timeout for reproduce operations
-        verify_workers: Number of parallel workers for verification
     """
 
     def __init__(

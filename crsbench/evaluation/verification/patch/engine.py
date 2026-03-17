@@ -94,8 +94,8 @@ class PatchVerificationEngine:
         timeout: Timeout for reproduce operations
         build_timeout: Timeout for build operations
         test_timeout: Timeout for unit test execution
-        build_workers: Number of parallel workers for patch builds
-        verify_workers: Number of parallel workers for POV variant testing
+        build_workers: Parallel build jobs (resolved from jobs param)
+        verify_workers: Per-job parallelism (resolved from cores_per_job param)
         work_dir: Working directory for isolated builds
     """
 

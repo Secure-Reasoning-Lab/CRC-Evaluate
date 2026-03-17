@@ -806,8 +806,6 @@ class TestIntegrationWithSampleConfigs:
         )
 
         assert config.pov_early_stop is True
-        assert config.resources is not None
-        assert config.resources.cores_per_trial == 2
 
     def test_sanity_bugfixing_smoke_config_relies_on_compose_cpu_limit(self):
         """Smoke bug-fixing preset should not inject a trial CPU fallback."""
