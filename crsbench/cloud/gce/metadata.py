@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
+    from crsbench.cloud.bootstrap import CloudVmBootstrapInputs
     from crsbench.distributed.registry import RuntimeRegistration
     from crsbench.validation.schemas import (
         GceOrchestratorConfig,
@@ -106,9 +107,10 @@ def build_bootstrap_payload(
     redis_host: str,
     registration: RuntimeRegistration,
     fleet: GceWorkerFleetConfig,
+    bootstrap_inputs: CloudVmBootstrapInputs | None = None,
 ) -> dict[str, object]:
     """Build the minimal configless-worker payload consumed at VM boot."""
-    return {
+    payload: dict[str, object] = {
         "experiment": experiment_name,
         "worker_name": worker_name,
         "redis_host": redis_host,
@@ -120,6 +122,25 @@ def build_bootstrap_payload(
         "benchmarks_root": registration.benchmarks_root,
         "readiness_timeout_sec": fleet.readiness_timeout_sec,
     }
+    if bootstrap_inputs is None:
+        return payload
+
+    selector = bootstrap_inputs.selector
+    payload.update(
+        {
+            "prepare_mode": bootstrap_inputs.prepare_mode,
+            "download_benchmarks": bootstrap_inputs.download_benchmarks,
+            "benchmarks_root": str(selector.effective_benchmarks_root()),
+        }
+    )
+    if selector.benchmark_suite is not None:
+        payload["benchmark_suite"] = selector.benchmark_suite
+        payload["benchmark_suites_root"] = str(
+            selector.effective_benchmark_suites_root()
+        )
+    if selector.benchmarks is not None:
+        payload["benchmarks"] = selector.benchmarks
+    return payload
 
 
 def encode_bootstrap_payload(payload: dict[str, object]) -> str:
@@ -198,6 +219,7 @@ def build_instance_metadata(
     redis_host: str,
     redis_password: str | None = None,
     registration: RuntimeRegistration,
+    bootstrap_inputs: CloudVmBootstrapInputs | None = None,
     worker_name: str,
     startup_script: str,
 ) -> dict[str, str]:
@@ -210,6 +232,7 @@ def build_instance_metadata(
             redis_host=redis_host,
             registration=registration,
             fleet=fleet,
+            bootstrap_inputs=bootstrap_inputs,
         )
     )
     metadata[CRSBENCH_EXPERIMENT_METADATA_KEY] = experiment_name

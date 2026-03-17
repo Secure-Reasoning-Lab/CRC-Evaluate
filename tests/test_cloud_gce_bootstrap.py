@@ -2,8 +2,10 @@
 
 import base64
 import json
+from pathlib import Path
 
 import yaml
+from crsbench.cloud.bootstrap import CloudVmBootstrapInputs
 from crsbench.distributed.registry import RuntimeRegistration
 from crsbench.validation.schemas import GceOrchestratorConfig, GceWorkerFleetConfig
 
@@ -100,6 +102,38 @@ def test_build_instance_metadata_embeds_startup_script_and_bootstrap_payload():
     assert payload["worker_jobs"] == 3
     assert payload["worker_cores_per_job"] == 6
     assert payload["readiness_timeout_sec"] == 900
+
+
+def test_build_instance_metadata_includes_vm_bootstrap_policy_and_selector():
+    """Worker payload should include prepare/download policy and benchmark selectors."""
+    from crsbench.cloud.gce.metadata import (
+        CRSBENCH_BOOTSTRAP_PAYLOAD_KEY,
+        build_instance_metadata,
+    )
+
+    metadata = build_instance_metadata(
+        experiment_name="Exp.Cloud 42",
+        fleet=_make_fleet(),
+        redis_host="redis.internal:6380",
+        registration=_make_registration(),
+        bootstrap_inputs=CloudVmBootstrapInputs(
+            prepare_mode="skip_base_images",
+            download_benchmarks="always",
+            benchmark_suite="afc-final",
+            benchmarks_root=Path("/srv/benchmarks"),
+            benchmark_suites_root=Path("/srv/benchmark-suites"),
+        ),
+        worker_name="gce-worker-001",
+        startup_script="#!/usr/bin/env bash\necho boot\n",
+    )
+
+    payload = _decode_payload(metadata[CRSBENCH_BOOTSTRAP_PAYLOAD_KEY])
+
+    assert payload["prepare_mode"] == "skip_base_images"
+    assert payload["download_benchmarks"] == "always"
+    assert payload["benchmark_suite"] == "afc-final"
+    assert payload["benchmarks_root"] == "/srv/benchmarks"
+    assert payload["benchmark_suites_root"] == "/srv/benchmark-suites"
 
 
 def test_build_instance_metadata_uses_startup_script_url_when_configured():

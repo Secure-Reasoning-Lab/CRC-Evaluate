@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from crsbench.validation.schemas import (
+    CloudBootstrapConfig,
     CloudConfig,
     ExperimentConfig,
     GceOrchestratorConfig,
@@ -993,6 +994,10 @@ class TestLaunch:
     ):
         del mock_secret
         config = _make_provider_neutral_experiment_config()
+        config.cloud.bootstrap = CloudBootstrapConfig(
+            prepare_mode="skip_base_images",
+            download_benchmarks="always",
+        )
         mock_load.return_value = config
 
         launch_plan = MagicMock()
@@ -1030,10 +1035,16 @@ class TestLaunch:
                 ip="10.0.0.50",
             )
         )
-        mock_adapter.create_workers.side_effect = lambda **_kwargs: (
+
+        def _create_workers(**kwargs):
+            bootstrap_inputs = kwargs["bootstrap_inputs"]
+            assert bootstrap_inputs.prepare_mode == "skip_base_images"
+            assert bootstrap_inputs.download_benchmarks == "always"
+            assert bootstrap_inputs.benchmark_suite == "sanity"
             call_order.append("create-workers")
-            or [_make_gce_worker("worker-east5"), _make_gce_worker("worker-east1")]
-        )
+            return [_make_gce_worker("worker-east5"), _make_gce_worker("worker-east1")]
+
+        mock_adapter.create_workers.side_effect = _create_workers
 
         from crsbench.cloud.cli._launch import run_launch
 

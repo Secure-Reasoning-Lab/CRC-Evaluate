@@ -19,7 +19,12 @@ from crsbench.run_experiment import (
     get_crs_memory,
     run_experiment_distributed,
 )
-from crsbench.validation.schemas import BenchmarkHarness, ExperimentConfig, HarnessFile
+from crsbench.validation.schemas import (
+    BenchmarkHarness,
+    CloudBootstrapConfig,
+    ExperimentConfig,
+    HarnessFile,
+)
 
 
 def test_register_failure_cleans_registry_lease() -> None:
@@ -848,6 +853,10 @@ def test_provider_neutral_cloud_workers_validate_quota_before_bringup(
 ) -> None:
     """Local orchestrator runs should validate quota before multi-zone worker bring-up."""
     config = _make_provider_neutral_run_config(tmp_path)
+    config.cloud.bootstrap = CloudBootstrapConfig(
+        prepare_mode="skip_base_images",
+        download_benchmarks="always",
+    )
 
     session = MagicMock()
     queue = MagicMock()
@@ -870,9 +879,16 @@ def test_provider_neutral_cloud_workers_validate_quota_before_bringup(
             f"validate:{plan.experiment_name}:include_orchestrator={include_orchestrator}"
         )
     )
-    manager.bring_up_workers.side_effect = lambda **_kwargs: (
-        call_order.append("bringup") or MagicMock(ready_count=3, requested_count=3)
-    )
+
+    def _bring_up_workers(**kwargs):
+        bootstrap_inputs = kwargs["bootstrap_inputs"]
+        assert bootstrap_inputs.prepare_mode == "skip_base_images"
+        assert bootstrap_inputs.download_benchmarks == "always"
+        assert bootstrap_inputs.benchmark_suite == "sanity"
+        call_order.append("bringup")
+        return MagicMock(ready_count=3, requested_count=3)
+
+    manager.bring_up_workers.side_effect = _bring_up_workers
 
     def _enqueue(*args, **kwargs):
         del args, kwargs

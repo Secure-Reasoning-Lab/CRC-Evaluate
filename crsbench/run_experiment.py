@@ -40,6 +40,7 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
+from crsbench.cloud.bootstrap import CloudVmBootstrapInputs
 from crsbench.distributed.jobs import (
     _build_trial_output_path,
     _check_existing_trial,
@@ -1898,6 +1899,11 @@ def run_experiment_distributed(
     from crsbench.distributed.registry import RuntimeRegistration
 
     registration = RuntimeRegistration.from_experiment_config(config)
+    bootstrap_inputs = (
+        CloudVmBootstrapInputs.from_experiment_config(config)
+        if isinstance(config, BaseModel)
+        else None
+    )
     lock_acquired = False
     requeued_failed_jobs = 0
 
@@ -2144,6 +2150,7 @@ def run_experiment_distributed(
                         redis_host=redis_host,
                         redis_password=os.environ.get("CRSBENCH_REDIS_PASSWORD"),
                         registration=registration,
+                        bootstrap_inputs=bootstrap_inputs,
                     )
                     logger.info(
                         "Cloud worker placements ready: "
@@ -2178,6 +2185,7 @@ def run_experiment_distributed(
                         redis_host=redis_host,
                         redis_password=os.environ.get("CRSBENCH_REDIS_PASSWORD"),
                         registration=registration,
+                        bootstrap_inputs=bootstrap_inputs,
                     )
                     logger.info(
                         "Cloud worker fleet ready: "

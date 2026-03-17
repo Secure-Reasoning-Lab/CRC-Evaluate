@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, cast
 
 from pydantic import BaseModel
 
+from crsbench.cloud.bootstrap import CloudVmBootstrapInputs
 from crsbench.cloud.gce.launch_preflight import prepare_gce_launch_inputs
 from crsbench.cloud.gce.provider import GceProviderAdapter
 from crsbench.cloud.gce.provisioner import GceProvisioner, GceProvisioningError
@@ -40,6 +41,11 @@ def run_launch(args: argparse.Namespace) -> int:
 
     registration = (
         RuntimeRegistration.from_experiment_config(config)
+        if isinstance(config, BaseModel)
+        else None
+    )
+    bootstrap_inputs = (
+        CloudVmBootstrapInputs.from_experiment_config(config)
         if isinstance(config, BaseModel)
         else None
     )
@@ -131,6 +137,7 @@ def run_launch(args: argparse.Namespace) -> int:
                 redis_host=redis_host,
                 redis_password=redis_password,
                 registration=registration,
+                bootstrap_inputs=bootstrap_inputs,
             )
         else:
             assert resolved_legacy_fleet is not None
@@ -141,6 +148,7 @@ def run_launch(args: argparse.Namespace) -> int:
                 redis_host=redis_host,
                 redis_password=redis_password,
                 registration=registration,
+                bootstrap_inputs=bootstrap_inputs,
             )
 
         worker_fleet_configs: list[GceWorkerFleetConfig]

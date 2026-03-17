@@ -20,6 +20,7 @@ from crsbench.cloud.models import (
 from crsbench.validation.schemas import GceOrchestratorConfig, GceWorkerFleetConfig
 
 if TYPE_CHECKING:
+    from crsbench.cloud.bootstrap import CloudVmBootstrapInputs
     from crsbench.cloud.gce.models import GceWorkerRecord
     from crsbench.distributed.registry import RuntimeRegistration
 
@@ -248,6 +249,7 @@ class GceProviderAdapter:
         redis_host: str,
         redis_password: str | None,
         registration: "RuntimeRegistration",
+        bootstrap_inputs: "CloudVmBootstrapInputs | None" = None,
     ) -> list["GceWorkerRecord"]:
         """Create workers across all zonal placements in the launch plan."""
         workers: list[GceWorkerRecord] = []
@@ -259,6 +261,7 @@ class GceProviderAdapter:
                     redis_host=redis_host,
                     redis_password=redis_password,
                     registration=registration,
+                    bootstrap_inputs=bootstrap_inputs,
                 )
             )
         return workers

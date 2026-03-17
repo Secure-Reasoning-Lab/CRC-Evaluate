@@ -16,6 +16,7 @@ from crsbench.cloud.readiness import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from crsbench.cloud.bootstrap import CloudVmBootstrapInputs
     from crsbench.cloud.gce.models import GceWorkerRecord
     from crsbench.cloud.gce.provider import GceProviderAdapter
     from crsbench.cloud.models import CloudLaunchPlan
@@ -61,6 +62,7 @@ class CloudFleetStatusManager:
         redis_host: str,
         redis_password: str | None = None,
         registration: RuntimeRegistration,
+        bootstrap_inputs: "CloudVmBootstrapInputs | None" = None,
     ) -> CloudFleetSnapshot:
         """Provision the requested GCE fleet and wait for explicit readiness."""
         self._readiness_store.clear_experiment(experiment_name)
@@ -72,6 +74,7 @@ class CloudFleetStatusManager:
                 redis_host=redis_host,
                 redis_password=redis_password,
                 registration=registration,
+                bootstrap_inputs=bootstrap_inputs,
             )
 
             self._record_initial_workers(
@@ -274,6 +277,7 @@ class CloudFleetStatusManager:
         redis_host: str,
         redis_password: str | None = None,
         registration: "RuntimeRegistration",
+        bootstrap_inputs: "CloudVmBootstrapInputs | None" = None,
     ) -> CloudFleetSnapshot:
         """Provision workers across all placements in a launch plan and wait for readiness."""
         self._readiness_store.clear_experiment(plan.experiment_name)
@@ -284,6 +288,7 @@ class CloudFleetStatusManager:
                 redis_host=redis_host,
                 redis_password=redis_password,
                 registration=registration,
+                bootstrap_inputs=bootstrap_inputs,
             )
             self._record_initial_workers(
                 experiment_name=plan.experiment_name,

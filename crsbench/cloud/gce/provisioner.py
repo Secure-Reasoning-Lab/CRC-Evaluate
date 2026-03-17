@@ -17,6 +17,7 @@ from crsbench.cloud.gce.metadata import (
 from crsbench.cloud.gce.models import GceInstanceRequest, GceWorkerRecord
 
 if TYPE_CHECKING:
+    from crsbench.cloud.bootstrap import CloudVmBootstrapInputs
     from crsbench.distributed.registry import RuntimeRegistration
     from crsbench.validation.schemas import GceOrchestratorConfig, GceWorkerFleetConfig
 
@@ -379,6 +380,7 @@ class GceProvisioner:
         redis_host: str,
         redis_password: str | None = None,
         registration: RuntimeRegistration,
+        bootstrap_inputs: CloudVmBootstrapInputs | None = None,
     ) -> list[GceInstanceRequest]:
         """Render instance requests from validated config and runtime metadata."""
         zone = self._resolve_zone(fleet)
@@ -396,6 +398,7 @@ class GceProvisioner:
                 redis_host=redis_host,
                 redis_password=redis_password,
                 registration=registration,
+                bootstrap_inputs=bootstrap_inputs,
                 worker_name=worker_name,
                 startup_script=startup_script,
             )
@@ -440,6 +443,7 @@ class GceProvisioner:
         redis_host: str,
         redis_password: str | None = None,
         registration: RuntimeRegistration,
+        bootstrap_inputs: CloudVmBootstrapInputs | None = None,
     ) -> list[GceWorkerRecord]:
         """Create a worker fleet and return normalized provider records."""
         requests = self.build_requests(
@@ -448,6 +452,7 @@ class GceProvisioner:
             redis_host=redis_host,
             redis_password=redis_password,
             registration=registration,
+            bootstrap_inputs=bootstrap_inputs,
         )
         workers: list[GceWorkerRecord] = []
         rollback_requests: list[GceInstanceRequest] = []
