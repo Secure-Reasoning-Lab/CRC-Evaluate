@@ -10,9 +10,9 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from crsbench.validation.schemas import ExperimentConfig
 from crsbench.validation.schemas import (
     CloudConfig,
+    ExperimentConfig,
     GceOrchestratorConfig,
     GceWorkerFleetConfig,
 )

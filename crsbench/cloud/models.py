@@ -7,10 +7,9 @@ from typing import Any
 
 from crsbench.validation.schemas import (
     CloudOrchestratorPlacementConfig,
-    CloudWorkerPlacementConfig,
     ExperimentConfig,
-    GceProviderConfig,
     GceInstanceProfileConfig,
+    GceProviderConfig,
 )
 
 
