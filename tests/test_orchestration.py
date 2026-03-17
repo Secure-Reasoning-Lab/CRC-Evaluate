@@ -843,13 +843,25 @@ class TestIntegrationWithSampleConfigs:
             config.cloud.providers.gce.instance_profiles[
                 "worker-n2d"
             ].crsbench_install_spec
-            == "git+https://github.com/sslab-gatech/CRSBench.git"
+            == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
         )
         assert (
             config.cloud.providers.gce.instance_profiles[
                 "worker-n2d"
             ].github_deploy_key_file
-            is None
+            == ".crsbench-keys/crsbench-deploy"
+        )
+        assert (
+            config.cloud.providers.gce.instance_profiles[
+                "orchestrator-n2d"
+            ].crsbench_install_spec
+            == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+        )
+        assert (
+            config.cloud.providers.gce.instance_profiles[
+                "orchestrator-n2d"
+            ].github_deploy_key_file
+            == ".crsbench-keys/crsbench-deploy"
         )
         assert (
             config.cloud.providers.gce.instance_profiles[

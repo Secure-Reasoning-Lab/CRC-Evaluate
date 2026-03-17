@@ -65,29 +65,25 @@ Expected result:
 - the second command prints exactly
   `153298433405-compute@developer.gserviceaccount.com`
 
-3. Make sure the repo ref in the config is reachable from the VM install path.
+3. Make sure the private repo install path in the config is usable from the VM bootstrap.
 
 The checked-in config currently uses:
 
-- `crsbench_install_spec: git+https://github.com/sslab-gatech/CRSBench.git`
+- `crsbench_install_spec: git+ssh://git@github.com/sslab-gatech/CRSBench.git`
 - `crsbench_git_ref: feat/gcp`
+- `github_deploy_key_file: .crsbench-keys/crsbench-deploy`
 
-That only works if `feat/gcp` is publicly reachable on GitHub. If it is not,
-either:
+That only works if:
 
-- push `feat/gcp` to the public repo, or
-- switch the config to an authenticated `git+ssh://...` install plus
-  `github_deploy_key_file`, or
-- change `crsbench_git_ref` to an existing public tag or branch that contains
-  the cloud-launch code you want to test
+- `.crsbench-keys/crsbench-deploy` exists on this machine
+- the matching public key was added under GitHub `Settings -> Deploy keys`
+- `feat/gcp` exists in the repository the VMs will clone
 
 Expected result:
 
-- public HTTPS path: a ref check should succeed instead of returning `404`
-- private SSH path: a manual `git clone` / `git ls-remote` with the deploy key
-  should succeed
+- a manual `git clone` / `git ls-remote` with the deploy key succeeds
 
-If you switch to the private `git+ssh` path, add a deploy key:
+Generate the deploy key if you have not already:
 
 ```bash
 uv run crsbench cloud keygen
@@ -100,14 +96,12 @@ Expected result:
 - the command prints the public key you need to add under GitHub
   `Settings -> Deploy keys`
 
-Then update the instance profiles in the config to use SSH plus the private key:
+The checked-in config already points at that private key:
 
 ```yaml
 crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
 github_deploy_key_file: .crsbench-keys/crsbench-deploy
 ```
-
-If you keep a public `git+https` install path, you can skip the deploy-key step.
 
 4. Confirm quota is sufficient for this exact layout:
 

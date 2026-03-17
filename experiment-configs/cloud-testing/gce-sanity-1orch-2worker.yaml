@@ -45,8 +45,9 @@ cloud:
           service_account_email: 153298433405-compute@developer.gserviceaccount.com
           owner_label: yufu
           readiness_timeout_sec: 600
-          crsbench_install_spec: "git+https://github.com/sslab-gatech/CRSBench.git"
+          crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
           crsbench_git_ref: feat/gcp
+          github_deploy_key_file: .crsbench-keys/crsbench-deploy
         worker-n2d:
           machine_type: n2d-standard-16
           boot_disk_size_gb: 50
@@ -54,8 +55,9 @@ cloud:
           service_account_email: 153298433405-compute@developer.gserviceaccount.com
           owner_label: yufu
           readiness_timeout_sec: 600
-          crsbench_install_spec: "git+https://github.com/sslab-gatech/CRSBench.git"
+          crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
           crsbench_git_ref: feat/gcp
+          github_deploy_key_file: .crsbench-keys/crsbench-deploy
   orchestrator:
     provider: gce
     zone: us-east5-b
