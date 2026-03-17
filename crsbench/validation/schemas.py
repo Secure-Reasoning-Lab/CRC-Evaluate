@@ -1584,19 +1584,453 @@ class GceOrchestratorConfig(BaseModel):
         return self
 
 
+class GceInstanceProfileConfig(BaseModel):
+    """Reusable GCE instance profile referenced by provider-neutral cloud roles."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    machine_type: Optional[str] = Field(
+        default=None,
+        description="GCE machine type when creating instances from an image.",
+    )
+    boot_disk_size_gb: Optional[int] = Field(
+        default=None,
+        ge=10,
+        description="Boot disk size in GiB when creating instances from an image.",
+    )
+    image: Optional[str] = Field(
+        default=None,
+        description="Image or image-family reference used for VM creation.",
+    )
+    instance_template: Optional[str] = Field(
+        default=None,
+        description="Existing GCE instance template to use instead of explicit image/machine settings.",
+    )
+    network: Optional[str] = Field(
+        default=None,
+        description="Optional VPC network name for instances using this profile.",
+    )
+    subnetwork: Optional[str] = Field(
+        default=None,
+        description="Optional subnetwork name for instances using this profile.",
+    )
+    service_account_email: str = Field(
+        ...,
+        description="Service account email used for instances with this profile.",
+    )
+    owner_label: Optional[str] = Field(
+        default=None,
+        description="Ownership label applied to instances using this profile.",
+    )
+    labels: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Additional GCE labels applied to instances using this profile.",
+    )
+    metadata: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Additional GCE metadata applied to instances using this profile.",
+    )
+    startup_script_uri: Optional[str] = Field(
+        default=None,
+        description="Optional URI for a maintained startup script payload.",
+    )
+    use_os_login: bool = Field(
+        default=True,
+        description="Must remain true; Phase 1 supports OS Login-compatible SSH only.",
+    )
+    ssh_via_iap: bool = Field(
+        default=False,
+        description="Whether operators are expected to connect through IAP-backed SSH.",
+    )
+    readiness_timeout_sec: int = Field(
+        default=900,
+        ge=1,
+        description="Maximum time to wait for a worker to report ready before bring-up fails.",
+    )
+    crsbench_install_spec: Optional[str] = Field(
+        default=None,
+        description=(
+            "How to install crsbench on instances using this profile. "
+            "Use 'git+ssh://...' for private repo clone+uv-sync, "
+            "or a pip spec like 'crsbench==1.0' for PyPI install."
+        ),
+    )
+    crsbench_git_ref: str = Field(
+        default="main",
+        description="Git branch, tag, or commit to checkout after cloning (only used with git+ssh:// install spec).",
+    )
+    github_deploy_key_file: Optional[str] = Field(
+        default=None,
+        description=(
+            "Path to SSH private key file for GitHub deploy key access. "
+            "Contents are base64-encoded and injected as instance metadata."
+        ),
+    )
+    hf_token: Optional[str] = Field(
+        default=None,
+        description="HuggingFace token for private dataset access.",
+    )
+
+    @field_validator(
+        "machine_type",
+        "image",
+        "instance_template",
+        "network",
+        "subnetwork",
+        "service_account_email",
+        "owner_label",
+        "startup_script_uri",
+        "crsbench_install_spec",
+        "github_deploy_key_file",
+    )
+    @classmethod
+    def normalize_optional_strings(cls, value: Optional[str]) -> Optional[str]:
+        """Trim string values and collapse blanks to None."""
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        return normalized
+
+    @field_validator("service_account_email")
+    @classmethod
+    def validate_service_account_email(cls, value: Optional[str]) -> str:
+        """Require an email-like service account identifier."""
+        if value is None:
+            raise ValueError("Field is required")
+        if "@" not in value:
+            raise ValueError(
+                "cloud.providers.gce.instance_profiles service_account_email must be a service-account email"
+            )
+        return value
+
+    @field_validator("labels", "metadata")
+    @classmethod
+    def validate_string_maps(cls, value: Dict[str, str]) -> Dict[str, str]:
+        """Reject blank keys or values in user-supplied maps."""
+        normalized: dict[str, str] = {}
+        for key, item in value.items():
+            key_str = key.strip()
+            item_str = item.strip()
+            if not key_str or not item_str:
+                raise ValueError(
+                    "cloud.providers.gce.instance_profiles labels/metadata must not contain blanks"
+                )
+            normalized[key_str] = item_str
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_profile_contract(self):
+        """Enforce the supported GCE instance profile contract."""
+        has_image = self.image is not None
+        has_template = self.instance_template is not None
+        if has_image == has_template:
+            raise ValueError(
+                "cloud.providers.gce.instance_profiles require exactly one of 'image' or 'instance_template'"
+            )
+
+        if not self.use_os_login:
+            raise ValueError(
+                "cloud.providers.gce.instance_profiles.use_os_login must remain true for the supported Phase 1 access model"
+            )
+
+        has_owner = self.owner_label is not None or "owner" in self.labels
+        if not has_owner:
+            raise ValueError(
+                "cloud.providers.gce.instance_profiles require owner_label or labels.owner for ownership"
+            )
+
+        if has_image:
+            if self.machine_type is None:
+                raise ValueError(
+                    "cloud.providers.gce.instance_profiles.machine_type is required when 'image' is used"
+                )
+            if self.boot_disk_size_gb is None:
+                raise ValueError(
+                    "cloud.providers.gce.instance_profiles.boot_disk_size_gb is required when 'image' is used"
+                )
+
+        if has_template and (
+            self.machine_type is not None or self.boot_disk_size_gb is not None
+        ):
+            raise ValueError(
+                "cloud.providers.gce.instance_profiles.instance_template cannot be combined with explicit machine_type or boot_disk_size_gb"
+            )
+
+        return self
+
+
+class GceProviderConfig(BaseModel):
+    """Provider-native GCE configuration for provider-neutral cloud launches."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project: str = Field(..., description="GCP project ID used for GCE resources.")
+    network: Optional[str] = Field(
+        default=None,
+        description="Optional default VPC network name for GCE resources.",
+    )
+    subnetwork: Optional[str] = Field(
+        default=None,
+        description="Optional default VPC subnetwork for GCE resources.",
+    )
+    ssh_via_iap: bool = Field(
+        default=False,
+        description="Whether operators are expected to connect through IAP-backed SSH by default.",
+    )
+    instance_profiles: Dict[str, GceInstanceProfileConfig] = Field(
+        default_factory=dict,
+        description="Named GCE instance profiles referenced by orchestrator and worker placements.",
+    )
+
+    @field_validator("project", "network", "subnetwork")
+    @classmethod
+    def normalize_optional_strings(cls, value: Optional[str]) -> Optional[str]:
+        """Trim string values and collapse blanks to None."""
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        return normalized
+
+    @field_validator("project")
+    @classmethod
+    def validate_required_project(cls, value: Optional[str]) -> str:
+        """Require a non-empty GCP project id."""
+        if value is None:
+            raise ValueError("Field is required")
+        return value
+
+    @field_validator("instance_profiles")
+    @classmethod
+    def validate_instance_profiles(
+        cls, value: Dict[str, GceInstanceProfileConfig]
+    ) -> Dict[str, GceInstanceProfileConfig]:
+        """Reject blank instance-profile names."""
+        normalized: dict[str, GceInstanceProfileConfig] = {}
+        for key, item in value.items():
+            key_str = key.strip()
+            if not key_str:
+                raise ValueError(
+                    "cloud.providers.gce.instance_profiles keys must not be blank"
+                )
+            normalized[key_str] = item
+        return normalized
+
+
+class CloudProvidersConfig(BaseModel):
+    """Provider catalog for provider-neutral cloud configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    gce: Optional[GceProviderConfig] = Field(
+        default=None,
+        description="GCE provider-specific backing configuration.",
+    )
+
+
+class CloudOrchestratorPlacementConfig(BaseModel):
+    """Provider-neutral orchestrator placement declaration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str = Field(..., description="Cloud provider used for the orchestrator.")
+    zone: str = Field(..., description="Explicit zone for the orchestrator.")
+    instance_profile: str = Field(
+        ..., description="Named provider instance profile for the orchestrator."
+    )
+
+    @field_validator("provider", "zone", "instance_profile")
+    @classmethod
+    def validate_required_strings(cls, value: str) -> str:
+        """Require non-empty strings for placement references."""
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Field is required")
+        return normalized
+
+
+class CloudWorkerPlacementConfig(BaseModel):
+    """Provider-neutral worker placement declaration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str = Field(..., description="Cloud provider used for this placement.")
+    zone: Optional[str] = Field(
+        default=None,
+        description="Explicit zone for this worker placement.",
+    )
+    worker_count: int = Field(
+        default=1,
+        ge=1,
+        description="Number of workers to create in this placement.",
+    )
+    instance_profile: str = Field(
+        ..., description="Named provider instance profile for this placement."
+    )
+
+    @field_validator("provider", "instance_profile")
+    @classmethod
+    def validate_required_strings(cls, value: str) -> str:
+        """Require non-empty strings for placement references."""
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Field is required")
+        return normalized
+
+    @field_validator("zone")
+    @classmethod
+    def normalize_zone(cls, value: Optional[str]) -> Optional[str]:
+        """Trim zone strings and collapse blanks to None."""
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_zonal_contract(self):
+        """Require explicit zonal worker placements in v1."""
+        if self.zone is None:
+            raise ValueError("cloud.workers.placements require explicit zone in v1")
+        return self
+
+
+class CloudWorkersConfig(BaseModel):
+    """Provider-neutral worker placement configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    placements: List[CloudWorkerPlacementConfig] = Field(
+        default_factory=list,
+        description="Explicit worker placements for the experiment.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_unsupported_fields(cls, value: object) -> object:
+        """Reject unsupported quota toggles in the public config surface."""
+        if isinstance(value, dict):
+            for field_name in ("quota_validation", "mode"):
+                if field_name in value:
+                    raise ValueError(
+                        f"cloud.workers.{field_name} is not supported in v1"
+                    )
+        return value
+
+    @model_validator(mode="after")
+    def validate_worker_contract(self):
+        """Require at least one worker placement."""
+        if not self.placements:
+            raise ValueError("cloud.workers.placements must not be empty")
+        return self
+
+
 class CloudConfig(BaseModel):
     """Top-level cloud provisioning configuration."""
 
     model_config = ConfigDict(extra="forbid")
 
-    gce: GceWorkerFleetConfig = Field(
-        ...,
-        description="GCE worker fleet configuration for cloud-backed experiments.",
-    )
-    orchestrator: Optional[GceOrchestratorConfig] = Field(
+    providers: Optional[CloudProvidersConfig] = Field(
         default=None,
-        description="Optional GCE orchestrator VM configuration for remote-orchestrator launches.",
+        description="Provider-specific backing configuration for cloud launches.",
     )
+    orchestrator: Optional[
+        Union[CloudOrchestratorPlacementConfig, GceOrchestratorConfig]
+    ] = Field(
+        default=None,
+        description="Provider-neutral orchestrator placement or legacy GCE orchestrator VM configuration.",
+    )
+    workers: Optional[CloudWorkersConfig] = Field(
+        default=None,
+        description="Provider-neutral worker placement configuration.",
+    )
+    gce: Optional[GceWorkerFleetConfig] = Field(
+        default=None,
+        description="Legacy GCE worker fleet configuration for backward compatibility during migration.",
+    )
+
+    @model_validator(mode="after")
+    def validate_cloud_contract(self):
+        """Enforce either the new provider-neutral cloud surface or the legacy one."""
+        uses_provider_neutral = (
+            self.providers is not None
+            or self.workers is not None
+            or isinstance(self.orchestrator, CloudOrchestratorPlacementConfig)
+        )
+        uses_legacy = self.gce is not None or isinstance(
+            self.orchestrator, GceOrchestratorConfig
+        )
+
+        if uses_provider_neutral and uses_legacy:
+            raise ValueError(
+                "cloud legacy gce/orchestrator fields cannot be mixed with provider-neutral providers/workers config"
+            )
+
+        if uses_provider_neutral:
+            if self.providers is None:
+                raise ValueError(
+                    "cloud.providers is required for provider-neutral cloud config"
+                )
+            if not isinstance(self.orchestrator, CloudOrchestratorPlacementConfig):
+                raise ValueError(
+                    "cloud.orchestrator must use provider, zone, and instance_profile in provider-neutral cloud config"
+                )
+            if self.workers is None:
+                raise ValueError(
+                    "cloud.workers is required for provider-neutral cloud config"
+                )
+            self._validate_provider_neutral_references()
+            return self
+
+        if self.gce is None:
+            raise ValueError(
+                "cloud requires either legacy cloud.gce or provider-neutral cloud.providers/cloud.workers configuration"
+            )
+
+        return self
+
+    def _validate_provider_neutral_references(self) -> None:
+        """Ensure placement provider and profile references resolve cleanly."""
+        if self.providers is None or self.workers is None:
+            return
+
+        if (
+            isinstance(self.orchestrator, CloudOrchestratorPlacementConfig)
+            and self.orchestrator.provider == "gce"
+        ):
+            if self.providers.gce is None:
+                raise ValueError(
+                    "cloud.providers.gce is required when cloud.orchestrator.provider is 'gce'"
+                )
+            if (
+                self.orchestrator.instance_profile
+                not in self.providers.gce.instance_profiles
+            ):
+                raise ValueError(
+                    "cloud.orchestrator.instance_profile "
+                    f"'{self.orchestrator.instance_profile}' was not found under "
+                    "cloud.providers.gce.instance_profiles"
+                )
+
+        for placement in self.workers.placements:
+            if placement.provider != "gce":
+                raise ValueError(
+                    f"cloud.workers.placements provider '{placement.provider}' is not supported yet"
+                )
+            if self.providers.gce is None:
+                raise ValueError(
+                    "cloud.providers.gce is required when cloud.workers.placements use provider 'gce'"
+                )
+            if placement.instance_profile not in self.providers.gce.instance_profiles:
+                raise ValueError(
+                    "cloud.workers.placements instance_profile "
+                    f"'{placement.instance_profile}' was not found under "
+                    "cloud.providers.gce.instance_profiles"
+                )
 
 
 class ExperimentPovInputs(BaseModel):

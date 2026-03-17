@@ -10,6 +10,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from crsbench.validation.schemas import ExperimentConfig
 from crsbench.validation.schemas import (
     CloudConfig,
     GceOrchestratorConfig,
@@ -239,6 +240,101 @@ def _make_resolved_cloud_context(launch_state=None):
         Path(launch_state.experiment_filestore),
         launch_state.redis_host,
         launch_state.redis_password,
+    )
+
+
+def _make_provider_neutral_experiment_config() -> ExperimentConfig:
+    return ExperimentConfig.model_validate(
+        {
+            "experiment": "test-exp",
+            "task": "bugfinding",
+            "benchmark_suite": "sanity",
+            "mode": "delta",
+            "trials": 2,
+            "max_total_time": 20000,
+            "inputs": {"pov": {"max_variants_per_cpv": 1}},
+            "redis_host": "localhost:6379",
+            "experiment_filestore": "/tmp/filestore",
+            "report_filestore": "/tmp/reports",
+            "cloud": {
+                "providers": {
+                    "gce": {
+                        "project": "test-project",
+                        "instance_profiles": {
+                            "orchestrator-n2d": {
+                                "machine_type": "n2d-standard-16",
+                                "boot_disk_size_gb": 50,
+                                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                                "service_account_email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com",
+                                "owner_label": "team-crs",
+                            },
+                            "worker-n2d": {
+                                "machine_type": "n2d-standard-16",
+                                "boot_disk_size_gb": 50,
+                                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                                "owner_label": "team-crs",
+                            },
+                        },
+                    }
+                },
+                "orchestrator": {
+                    "provider": "gce",
+                    "zone": "us-east5-b",
+                    "instance_profile": "orchestrator-n2d",
+                },
+                "workers": {
+                    "placements": [
+                        {
+                            "provider": "gce",
+                            "zone": "us-east5-b",
+                            "worker_count": 150,
+                            "instance_profile": "worker-n2d",
+                        },
+                        {
+                            "provider": "gce",
+                            "zone": "us-east5-c",
+                            "worker_count": 100,
+                            "instance_profile": "worker-n2d",
+                        },
+                    ]
+                },
+            },
+            "crs_compose": {"test-crs": {"num_cores": 1}},
+        }
+    )
+
+
+def test_build_cloud_launch_plan_resolves_profiles_for_orchestrator_and_workers():
+    from crsbench.cloud.models import build_cloud_launch_plan
+
+    config = _make_provider_neutral_experiment_config()
+
+    plan = build_cloud_launch_plan(config)
+
+    assert plan.orchestrator.provider == "gce"
+    assert plan.orchestrator.zone == "us-east5-b"
+    assert plan.orchestrator.instance_profile.name == "orchestrator-n2d"
+    assert plan.orchestrator.instance_profile.provider == "gce"
+    assert (
+        plan.orchestrator.instance_profile.provider_config["project"] == "test-project"
+    )
+    assert len(plan.worker_placements) == 2
+    assert [placement.zone for placement in plan.worker_placements] == [
+        "us-east5-b",
+        "us-east5-c",
+    ]
+    assert [placement.worker_count for placement in plan.worker_placements] == [
+        150,
+        100,
+    ]
+    assert all(
+        placement.instance_profile.name == "worker-n2d"
+        for placement in plan.worker_placements
+    )
+    assert all(
+        placement.instance_profile.provider_config["project"] == "test-project"
+        for placement in plan.worker_placements
     )
 
 

@@ -970,6 +970,219 @@ class TestExperimentConfigSchema:
         ):
             ExperimentConfig(**data)
 
+    def test_cloud_provider_contract_parses_worker_placements(self):
+        data = self._base_kwargs()
+        data["cloud"] = {
+            "providers": {
+                "gce": {
+                    "project": "test-project",
+                    "instance_profiles": {
+                        "orchestrator-n2d": {
+                            "machine_type": "n2d-standard-16",
+                            "boot_disk_size_gb": 50,
+                            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                            "service_account_email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com",
+                            "owner_label": "team-crs",
+                        },
+                        "worker-n2d": {
+                            "machine_type": "n2d-standard-16",
+                            "boot_disk_size_gb": 50,
+                            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                            "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                            "owner_label": "team-crs",
+                        },
+                    },
+                }
+            },
+            "orchestrator": {
+                "provider": "gce",
+                "zone": "us-east5-b",
+                "instance_profile": "orchestrator-n2d",
+            },
+            "workers": {
+                "placements": [
+                    {
+                        "provider": "gce",
+                        "zone": "us-east5-b",
+                        "worker_count": 150,
+                        "instance_profile": "worker-n2d",
+                    },
+                    {
+                        "provider": "gce",
+                        "zone": "us-east5-c",
+                        "worker_count": 100,
+                        "instance_profile": "worker-n2d",
+                    },
+                ]
+            },
+        }
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.providers.gce is not None
+        assert config.cloud.providers.gce.project == "test-project"
+        assert config.cloud.orchestrator is not None
+        assert config.cloud.orchestrator.provider == "gce"
+        assert config.cloud.orchestrator.instance_profile == "orchestrator-n2d"
+        assert [placement.zone for placement in config.cloud.workers.placements] == [
+            "us-east5-b",
+            "us-east5-c",
+        ]
+        assert [
+            placement.worker_count for placement in config.cloud.workers.placements
+        ] == [
+            150,
+            100,
+        ]
+        assert all(
+            placement.instance_profile == "worker-n2d"
+            for placement in config.cloud.workers.placements
+        )
+
+    def test_cloud_provider_contract_requires_worker_placement_zone(self):
+        data = self._base_kwargs()
+        data["cloud"] = {
+            "providers": {
+                "gce": {
+                    "project": "test-project",
+                    "instance_profiles": {
+                        "worker-n2d": {
+                            "machine_type": "n2d-standard-16",
+                            "boot_disk_size_gb": 50,
+                            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                            "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                            "owner_label": "team-crs",
+                        },
+                        "orchestrator-n2d": {
+                            "machine_type": "n2d-standard-16",
+                            "boot_disk_size_gb": 50,
+                            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                            "service_account_email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com",
+                            "owner_label": "team-crs",
+                        },
+                    },
+                }
+            },
+            "orchestrator": {
+                "provider": "gce",
+                "zone": "us-east5-b",
+                "instance_profile": "orchestrator-n2d",
+            },
+            "workers": {
+                "placements": [
+                    {
+                        "provider": "gce",
+                        "worker_count": 150,
+                        "instance_profile": "worker-n2d",
+                    }
+                ]
+            },
+        }
+
+        with pytest.raises(
+            PydanticValidationError,
+            match="cloud.workers.placements require explicit zone in v1",
+        ):
+            ExperimentConfig(**data)
+
+    @pytest.mark.parametrize(
+        ("field_name", "field_value"),
+        [
+            ("quota_validation", {"enabled": False}),
+            ("mode", "disabled"),
+        ],
+    )
+    def test_cloud_provider_contract_rejects_quota_validation_surface(
+        self, field_name: str, field_value: object
+    ):
+        data = self._base_kwargs()
+        data["cloud"] = {
+            "providers": {
+                "gce": {
+                    "project": "test-project",
+                    "instance_profiles": {
+                        "worker-n2d": {
+                            "machine_type": "n2d-standard-16",
+                            "boot_disk_size_gb": 50,
+                            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                            "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                            "owner_label": "team-crs",
+                        },
+                        "orchestrator-n2d": {
+                            "machine_type": "n2d-standard-16",
+                            "boot_disk_size_gb": 50,
+                            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                            "service_account_email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com",
+                            "owner_label": "team-crs",
+                        },
+                    },
+                }
+            },
+            "orchestrator": {
+                "provider": "gce",
+                "zone": "us-east5-b",
+                "instance_profile": "orchestrator-n2d",
+            },
+            "workers": {
+                "placements": [
+                    {
+                        "provider": "gce",
+                        "zone": "us-east5-b",
+                        "worker_count": 150,
+                        "instance_profile": "worker-n2d",
+                    }
+                ]
+            },
+        }
+        data["cloud"]["workers"][field_name] = field_value
+
+        with pytest.raises(
+            PydanticValidationError,
+            match="cloud.workers\\.(quota_validation|mode) is not supported in v1",
+        ):
+            ExperimentConfig(**data)
+
+    def test_cloud_provider_contract_rejects_missing_instance_profile(self):
+        data = self._base_kwargs()
+        data["cloud"] = {
+            "providers": {
+                "gce": {
+                    "project": "test-project",
+                    "instance_profiles": {
+                        "worker-n2d": {
+                            "machine_type": "n2d-standard-16",
+                            "boot_disk_size_gb": 50,
+                            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                            "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                            "owner_label": "team-crs",
+                        }
+                    },
+                }
+            },
+            "orchestrator": {
+                "provider": "gce",
+                "zone": "us-east5-b",
+                "instance_profile": "orchestrator-n2d",
+            },
+            "workers": {
+                "placements": [
+                    {
+                        "provider": "gce",
+                        "zone": "us-east5-b",
+                        "worker_count": 150,
+                        "instance_profile": "worker-n2d",
+                    }
+                ]
+            },
+        }
+
+        with pytest.raises(
+            PydanticValidationError,
+            match="cloud.orchestrator.instance_profile 'orchestrator-n2d' was not found under cloud.providers.gce.instance_profiles",
+        ):
+            ExperimentConfig(**data)
+
     def test_benchmarks_nested_harness_cpvs(self):
         data = self._base_kwargs()
         data["benchmarks"] = [
