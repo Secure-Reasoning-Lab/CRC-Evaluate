@@ -23,6 +23,7 @@ METADATA_HEADER="Metadata-Flavor: Google"
 STATE_DIR="/var/lib/crsbench"
 LOG_PATH="${STATE_DIR}/orchestrator.log"
 CLONE_DIR="/opt/crsbench"
+CLONE_GIT_SSH_COMMAND=""
 
 metadata_get() {
   curl -fsS -H "${METADATA_HEADER}" "${ATTRIBUTE_METADATA_BASE}/$1"
@@ -70,6 +71,16 @@ require_cmd() {
   fi
 }
 
+clone_repo() {
+  local repo_url="$1"
+  local clone_dir="$2"
+  if [[ -n "${CLONE_GIT_SSH_COMMAND}" ]]; then
+    GIT_SSH_COMMAND="${CLONE_GIT_SSH_COMMAND}" git clone --no-single-branch "${repo_url}" "${clone_dir}"
+    return
+  fi
+  git clone --no-single-branch "${repo_url}" "${clone_dir}"
+}
+
 require_cmd curl
 require_cmd systemctl
 
@@ -108,7 +119,7 @@ if [[ -n "${GITHUB_DEPLOY_KEY}" ]]; then
   echo "${GITHUB_DEPLOY_KEY}" | base64 --decode > /root/.ssh/id_ed25519
   chmod 600 /root/.ssh/id_ed25519
   ssh-keyscan -t ed25519 github.com >> /root/.ssh/known_hosts 2>/dev/null
-  git config --global url."git@github.com:sslab-gatech/".insteadOf "https://github.com/sslab-gatech/"
+  CLONE_GIT_SSH_COMMAND="ssh -F /dev/null -i /root/.ssh/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=/root/.ssh/known_hosts -o StrictHostKeyChecking=yes"
 fi
 
 # --- HuggingFace token ---
@@ -124,7 +135,7 @@ if [[ -z "${INSTALL_SPEC}" || "${INSTALL_SPEC}" != git+* ]]; then
 fi
 REPO_URL="${INSTALL_SPEC#git+}"
 rm -rf "${CLONE_DIR}"
-git clone --no-single-branch "${REPO_URL}" "${CLONE_DIR}"
+clone_repo "${REPO_URL}" "${CLONE_DIR}"
 cd "${CLONE_DIR}"
 git checkout "${GIT_REF:-main}"
 git submodule update --init --recursive

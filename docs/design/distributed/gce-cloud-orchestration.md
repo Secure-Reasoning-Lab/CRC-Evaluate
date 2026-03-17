@@ -153,6 +153,8 @@ The startup script (`cloud/gce/startup/worker.sh`) runs on the VM:
 
 1. Fetches bootstrap payload from GCE instance metadata API
 2. Requires a `git+...` `crsbench-install-spec`, clones CRSBench into `/opt/crsbench`, and installs the checkout
+   - when a deploy key is configured, SSH is scoped to the top-level CRSBench clone only
+   - submodules continue to use the URLs declared in `.gitmodules`, so public submodules can remain on HTTPS
 3. Runs `crsbench prepare` from that checkout and optionally downloads benchmarks according to `cloud.bootstrap`
 4. Imports operator-approved passthrough env vars plus runtime-managed vars and writes them to `/etc/default/crsbench-worker`
 5. Creates and enables `crsbench-worker.service` with `WorkingDirectory=/opt/crsbench` (`Restart=always`)

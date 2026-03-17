@@ -85,6 +85,12 @@ That only works if:
 - `.crsbench-keys/crsbench-deploy` exists on this machine
 - the matching public key was added under GitHub `Settings -> Deploy keys`
 - `feat/gcp` exists in the repository the VMs will clone
+- if the main CRSBench repository is private, the deploy key can read that
+  repository
+
+The VM bootstrap uses that deploy key only for the top-level CRSBench clone.
+Submodules still use their declared URLs. In this repository, the public
+`oss-crs` submodule stays on HTTPS and does not need the deploy key.
 
 Expected result:
 

@@ -446,6 +446,19 @@ def test_startup_script_runs_shared_vm_bootstrap_from_repo_checkout():
     assert "/root/.local/bin" in script
 
 
+def test_startup_script_does_not_globally_rewrite_sslab_gatech_https_urls():
+    """Worker bootstrap should leave public submodule URLs on their declared transport."""
+    from crsbench.cloud.gce.metadata import load_startup_script
+
+    script = load_startup_script()
+
+    assert (
+        'git config --global url."git@github.com:sslab-gatech/".insteadOf '
+        '"https://github.com/sslab-gatech/"'
+    ) not in script
+    assert "GIT_SSH_COMMAND" in script
+
+
 def test_build_orchestrator_metadata_embeds_config_payload_and_redis_password(tmp_path):
     """Orchestrator metadata should carry config payload and shared Redis auth."""
     from crsbench.cloud.gce.metadata import (
@@ -532,6 +545,19 @@ def test_orchestrator_startup_script_runs_shared_vm_bootstrap_from_repo_checkout
     assert "run_cloud_vm_bootstrap" in script
     assert 'CLONE_DIR="/opt/crsbench"' in script
     assert 'cd "${CLONE_DIR}"' in script
+
+
+def test_orchestrator_startup_script_does_not_globally_rewrite_sslab_gatech_https_urls():
+    """Orchestrator bootstrap should leave public submodule URLs on their declared transport."""
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+
+    assert (
+        'git config --global url."git@github.com:sslab-gatech/".insteadOf '
+        '"https://github.com/sslab-gatech/"'
+    ) not in script
+    assert "GIT_SSH_COMMAND" in script
 
 
 def test_patch_orchestrator_config_adds_top_level_and_nested_runtime_redis_host(

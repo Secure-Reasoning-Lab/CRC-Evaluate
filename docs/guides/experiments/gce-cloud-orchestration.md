@@ -235,7 +235,10 @@ is sufficient for smoke testing.
 When `github_deploy_key_file` is set, the provisioner reads the private key
 file at provision time, base64-encodes it, and sets it as
 `crsbench-github-deploy-key` instance metadata. The startup script writes it to
-`/root/.ssh/id_ed25519` and configures git SSH access. The `hf_token` is
+`/root/.ssh/id_ed25519` and uses it only for the top-level CRSBench clone.
+Submodules continue to use the URLs declared in `.gitmodules`, so public
+submodules such as `oss-crs` can stay on HTTPS and do not require the deploy
+key. The `hf_token` is
 passed as `crsbench-hf-token` metadata and exported as `HF_TOKEN` in the worker
 environment. Secret references are resolved once on the operator before VM
 creation; the original experiment config payload sent to the remote orchestrator
