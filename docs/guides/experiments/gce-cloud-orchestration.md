@@ -1,6 +1,7 @@
-# GCE Cloud Workers
+# GCE Cloud Orchestration
 
-Guide for provisioning and managing GCE worker fleets in CRSBench experiments.
+Guide for provisioning and managing remote orchestrator plus worker VMs for
+CRSBench experiments on GCE.
 
 ## Prerequisites
 
@@ -311,7 +312,7 @@ uv run python scripts/cpv_report.py /data/experiments/my-experiment --csv
 
 ## SSH Access
 
-For direct access to worker VMs (debugging):
+For VM access during debugging:
 
 ```bash
 # IAP mode
@@ -320,9 +321,13 @@ gcloud compute ssh my-experiment-001 \
     --zone us-central1-a \
     --tunnel-through-iap
 
-# Direct mode (if workers have public IPs)
+# Direct mode (only if the VM has a public IP and your firewall allows your source IP)
 ssh my-experiment-001
 ```
+
+If your firewall only allows SSH from the IAP range `35.235.240.0/20`, direct
+`ssh <vm>` from your machine will not work. In that setup, use
+`gcloud compute ssh --tunnel-through-iap ...` instead.
 
 The worker process runs as a systemd service:
 
@@ -355,5 +360,5 @@ sudo journalctl -u crsbench-worker.service -f
 
 - [Distributed Experiments](./distributed.md) -- full distributed experiment guide
 - [Configuration Reference](./config-reference.md) -- all experiment config fields
-- [Design: GCE Cloud Workers](../../design/distributed/gce-cloud-workers.md) -- architecture and contracts
+- [Design: GCE Cloud Orchestration](../../design/distributed/gce-cloud-orchestration.md) -- architecture and contracts
 - [Design: GCE Cloud Orchestrator Launch](../../design/distributed/gce-cloud-orchestrator.md) -- remote-orchestrator launch contract

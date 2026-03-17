@@ -4,9 +4,9 @@
 - Scope: local-machine launch of one orchestrator VM plus a worker fleet for a single experiment run
 - Related:
   - [Deployment Guide](./deployment-guide.md)
-  - [GCE Cloud Workers](./gce-cloud-workers.md)
+  - [GCE Cloud Orchestration](./gce-cloud-orchestration.md)
   - [Configless Runtime](./configless-runtime.md)
-  - [User Guide: GCE Cloud Workers](../../guides/experiments/gce-cloud-workers.md)
+  - [User Guide: GCE Cloud Orchestration](../../guides/experiments/gce-cloud-orchestration.md)
 
 ## Goals and Non-goals
 

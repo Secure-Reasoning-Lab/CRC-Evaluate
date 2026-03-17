@@ -1,20 +1,20 @@
-# GCE Cloud Worker Fleet
+# GCE Cloud Orchestration
 
 - Audience: contributors changing cloud provisioning, readiness, artifact collection, or CLI behavior
-- Scope: GCE worker fleet lifecycle from provisioning through teardown
+- Scope: GCE orchestrator plus worker lifecycle from provisioning through teardown
 - Related:
   - [Deployment Guide](./deployment-guide.md)
   - [Configless Runtime](./configless-runtime.md)
   - [Distributed Evaluation](./distributed-evaluation.md)
-  - [User Guide: GCE Cloud Workers](../../guides/experiments/gce-cloud-workers.md)
+  - [User Guide: GCE Cloud Orchestration](../../guides/experiments/gce-cloud-orchestration.md)
 
 ## Goals and Non-goals
 
 Goals:
 
-- Declarative worker fleet provisioning from experiment config
+- Declarative orchestrator and worker provisioning from experiment config
 - Explicit readiness gating before trial enqueue
-- Safe artifact collection and fleet teardown
+- Safe artifact collection and VM teardown
 - Operator visibility into fleet, job, and recovery state
 
 Non-goals:
@@ -29,7 +29,7 @@ Non-goals:
 - IAP tunneling is the preferred SSH transport for workers without public IPs
 - Service accounts must be explicit and least-privileged
 - Readiness is a control-plane concept distinct from GCE VM `RUNNING` state
-- Cloud workers are experiment-pinned and do not join the shared configless pool
+- Cloud VMs are experiment-pinned and do not join the shared configless pool
 
 ## Architecture
 
@@ -107,10 +107,11 @@ Invariants:
 ## Contract: VM Provisioning
 
 - Worker names follow the pattern `{prefix}-{NNN}` (zero-padded, e.g., `my-exp-001`)
+- Orchestrator names are distinct and labeled with `crsbench-role=orchestrator`
 - Two creation modes: explicit `image` + `machine_type` + `boot_disk_size_gb`, or `instance_template`
 - Network: external NAT when `ssh_via_iap=False`; private-only when `ssh_via_iap=True`
 - OS Login enabled via metadata (`enable-oslogin=TRUE`, `block-project-ssh-keys=TRUE`)
-- Labels always include `owner`, `crsbench-experiment`, `crsbench-role=worker`
+- Labels always include `owner` and `crsbench-experiment`; role-specific labels distinguish orchestrator and workers
 - Bootstrap payload delivered as base64-encoded JSON in instance metadata
 
 Rollback:
@@ -125,7 +126,7 @@ Rollback:
 - `CloudFleetStatusManager.wait_for_existing_gce_workers()` remains the legacy pre-provisioned path
 - `CloudFleetStatusManager.wait_for_existing_workers()` gates pre-provisioned workers across all declared placements on the same explicit readiness protocol without creating VMs again
 - Polling uses `CloudReadinessStore.snapshot()` with configurable `poll_interval_sec` (default 5s)
-- Bring-up succeeds only when all workers reach `READY`
+- Remote launch succeeds only when the orchestrator is reachable and all workers reach `READY`
 - On timeout or any failure: transitions workers through `DELETING`/`DELETED`, deletes VMs, raises `CloudFleetBringupError` with the snapshot
 - Trial enqueue is gated on successful bring-up
 
@@ -161,7 +162,8 @@ Retry: `tenacity` exponential backoff (min 2s, max 30s, 3 attempts) on rsync fai
 2. Warn about stale Redis entries not matching live VMs
 3. Prompt for confirmation (requires TTY unless `--force`)
 4. Collect artifacts from ALL workers; collection is best-effort so teardown can still reclaim VMs
-5. Delete workers even if collection reported failures, and return a non-zero exit code when any collection or deletion step failed
+5. In remote-orchestrator mode, also collect the orchestrator VM
+6. Delete workers and orchestrator even if collection reported failures, and return a non-zero exit code when any collection or deletion step failed
 
 ## Contract: CLI Sub-actions
 
