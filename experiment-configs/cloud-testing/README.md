@@ -121,6 +121,12 @@ For the checked-in smoke config, `HF_TOKEN` is still required because launch
 preflight resolves that env secret before provisioning even though `sanity`
 auto-skips the VM-side download step.
 
+If you launch through the normal CRSBench CLI, this can come from either:
+
+- your shell environment
+- a `.env` file loaded by CRSBench before launch preflight resolves
+  `os.environ/...` references
+
 Expected result:
 
 - `echo "$HF_TOKEN"` prints a non-empty token when you intend to use gated
@@ -146,6 +152,14 @@ Expected result:
 
 - missing or empty configured env vars fail launch before any VM is created
 - runtime-managed vars such as `CRSBENCH_REDIS_HOST` are rejected in config validation
+
+The checked-in `gce-sanity-1orch-2worker.yaml` now includes:
+
+- `CRSBENCH_LLM_UPSTREAM_BASE_URL`
+- `CRSBENCH_LLM_MASTER_KEY`
+
+So the operator must export those before launch in addition to `HF_TOKEN`.
+Using a `.env` file is also fine when you launch through the CRSBench CLI.
 
 4. Confirm quota is sufficient for this exact layout:
 

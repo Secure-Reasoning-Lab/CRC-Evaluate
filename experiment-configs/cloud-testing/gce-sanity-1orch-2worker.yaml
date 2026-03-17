@@ -36,6 +36,10 @@ cloud:
   bootstrap:
     prepare_mode: full
     download_benchmarks: auto
+    env_passthrough:
+      common:
+        - CRSBENCH_LLM_UPSTREAM_BASE_URL
+        - CRSBENCH_LLM_MASTER_KEY
   providers:
     gce:
       project: aixcc-426805

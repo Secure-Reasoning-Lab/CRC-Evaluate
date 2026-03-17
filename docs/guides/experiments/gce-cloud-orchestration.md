@@ -169,7 +169,10 @@ Semantics:
 - `common` is copied to both the orchestrator VM and all worker VMs
 - `orchestrator` adds orchestrator-only variables
 - `workers` adds worker-only variables
-- values are resolved from the operator `os.environ` before provisioning
+- values are resolved from the operator environment before provisioning
+- when you launch through the CRSBench CLI, `.env` is loaded first, so
+  `os.environ/...` references and `env_passthrough` can come from either the
+  shell environment or `.env`
 - missing or empty configured variables fail launch before any VM is created
 - runtime-managed variables such as `CRSBENCH_REDIS_HOST` and
   `CRSBENCH_REDIS_PASSWORD` are rejected and must not be passed through
