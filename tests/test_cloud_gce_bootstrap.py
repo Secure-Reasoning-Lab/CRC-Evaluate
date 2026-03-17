@@ -728,6 +728,20 @@ def test_orchestrator_startup_script_configures_timezone_and_docker_cgroupfs():
     assert "systemctl restart docker" in script
 
 
+def test_orchestrator_startup_script_binds_valkey_to_loopback_and_internal_ip():
+    """Valkey should listen on loopback plus the discovered internal/container IP, not 0.0.0.0."""
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+
+    assert 'CRSBENCH_REDIS_BIND_HOST="${CRSBENCH_REDIS_BIND_HOST:-}"' in script
+    assert 'instance_metadata_get "network-interfaces/0/ip"' in script
+    assert 'write_env_var "CRSBENCH_REDIS_BIND_HOST" "${REDIS_BIND_HOST}"' in script
+    assert '-p "127.0.0.1:6379:6379"' in script
+    assert '-p "\\${CRSBENCH_REDIS_BIND_HOST}:6379:6379"' in script
+    assert "0.0.0.0:6379:6379" not in script
+
+
 def test_orchestrator_startup_script_does_not_globally_rewrite_sslab_gatech_https_urls():
     """Orchestrator bootstrap should leave public submodule URLs on their declared transport."""
     from crsbench.cloud.gce.metadata import load_orchestrator_startup_script

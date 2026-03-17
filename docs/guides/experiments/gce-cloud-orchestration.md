@@ -104,6 +104,10 @@ Cloud VMs always run `crsbench prepare`. `download_benchmarks: auto` skips the
 VM-side download only when `benchmark_suite: sanity`; other suites download
 before the worker joins Redis.
 
+On the remote orchestrator, the startup script binds Valkey on `127.0.0.1` for
+the local `crsbench run` path and on the VM's discovered internal address for
+workers. It does not expose Redis on `0.0.0.0`.
+
 ### Using Instance Templates
 
 Instead of specifying `image` + `machine_type` + `boot_disk_size_gb`, you can reference a pre-configured instance template:

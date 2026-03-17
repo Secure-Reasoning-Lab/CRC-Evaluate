@@ -24,6 +24,7 @@ CRSBENCH_SERVICE_MANAGER="${CRSBENCH_SERVICE_MANAGER:-auto}"
 CRSBENCH_TIMEZONE="${CRSBENCH_TIMEZONE:-America/New_York}"
 CRSBENCH_USER="${CRSBENCH_USER:-crsbench}"
 CRSBENCH_USER_HOME="${CRSBENCH_USER_HOME:-/home/${CRSBENCH_USER}}"
+CRSBENCH_REDIS_BIND_HOST="${CRSBENCH_REDIS_BIND_HOST:-}"
 STATE_DIR="${CRSBENCH_STATE_DIR:-/var/lib/crsbench}"
 LOG_PATH="${STATE_DIR}/orchestrator.log"
 CONFIG_PATH="${STATE_DIR}/experiment-config.yaml"
@@ -76,6 +77,83 @@ metadata_get() {
 
 metadata_get_optional() {
   metadata_fetch "instance/attributes/$1" 1 || true
+}
+
+instance_metadata_get() {
+  metadata_fetch "instance/$1"
+}
+
+discover_redis_bind_host() {
+  if [[ -n "${CRSBENCH_REDIS_BIND_HOST}" ]]; then
+    printf '%s\n' "${CRSBENCH_REDIS_BIND_HOST}"
+    return 0
+  fi
+
+  local metadata_ip=""
+  metadata_ip="$(instance_metadata_get "network-interfaces/0/ip" 2>/dev/null || true)"
+  if [[ -n "${metadata_ip}" ]]; then
+    printf '%s\n' "${metadata_ip}"
+    return 0
+  fi
+
+  python3 <<'PY'
+import socket
+
+
+def is_usable_ipv4(value: str) -> bool:
+    return bool(value) and "." in value and not value.startswith("127.") and value != "0.0.0.0"
+
+
+def emit(value: str) -> None:
+    if is_usable_ipv4(value):
+        print(value)
+        raise SystemExit(0)
+
+
+probe = None
+try:
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    probe.connect(("8.8.8.8", 80))
+    emit(probe.getsockname()[0])
+except OSError:
+    pass
+finally:
+    if probe is not None:
+        probe.close()
+
+
+def candidate_ips() -> list[str]:
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: str) -> None:
+        if value and value not in seen:
+            seen.add(value)
+            candidates.append(value)
+
+    for hostname in (socket.gethostname(), socket.getfqdn()):
+        try:
+            _, _, addresses = socket.gethostbyname_ex(hostname)
+        except OSError:
+            continue
+        for address in addresses:
+            add(address)
+
+    for value in candidates:
+        if is_usable_ipv4(value):
+            return [value]
+    return []
+
+
+matches = candidate_ips()
+if matches:
+    print(matches[0])
+    raise SystemExit(0)
+
+raise SystemExit(
+    "Unable to determine non-loopback IPv4 address for Valkey bind host"
+)
+PY
 }
 
 for_each_passthrough_env() {
@@ -567,6 +645,7 @@ REDIS_PASSWORD="$(metadata_get "crsbench-redis-password")"
 GITHUB_DEPLOY_KEY="$(metadata_get_optional "crsbench-github-deploy-key")"
 HF_TOKEN="$(metadata_get_optional "crsbench-hf-token")"
 ENV_PASSTHROUGH_B64="$(metadata_get_optional "crsbench-env-passthrough-b64")"
+REDIS_BIND_HOST="$(discover_redis_bind_host)"
 
 # --- GitHub SSH setup (if deploy key provided) ---
 configure_clone_ssh "${GITHUB_DEPLOY_KEY}"
@@ -661,6 +740,7 @@ setup_oss_crs_for_crsbench
 
 : > "${ENV_PATH}"
 write_env_var "CRSBENCH_REDIS_PASSWORD" "${REDIS_PASSWORD}"
+write_env_var "CRSBENCH_REDIS_BIND_HOST" "${REDIS_BIND_HOST}"
 write_env_var "CRSBENCH_CLOUD_PREPROVISIONED_WORKERS" "1"
 write_env_var "CONFIG_PATH" "${CONFIG_PATH}"
 write_env_var "LOG_PATH" "${LOG_PATH}"
@@ -688,6 +768,13 @@ echo "=== CRSBench orchestrator bootstrap started at \$(date -u) ==="
 ensure_valkey_running() {
   local container_name="crsbench-valkey"
   local volume_name="valkey_valkey-data"
+  local -a publish_args=(
+    -p "127.0.0.1:6379:6379"
+  )
+
+  if [[ -n "\${CRSBENCH_REDIS_BIND_HOST:-}" && "\${CRSBENCH_REDIS_BIND_HOST}" != "127.0.0.1" ]]; then
+    publish_args+=(-p "\${CRSBENCH_REDIS_BIND_HOST}:6379:6379")
+  fi
 
   if docker inspect "\${container_name}" >/dev/null 2>&1; then
     if docker inspect --format '{{.State.Running}}' "\${container_name}" 2>/dev/null | grep -q true; then
@@ -699,7 +786,7 @@ ensure_valkey_running() {
   echo "Starting Valkey..."
   docker run -d \
     --name "\${container_name}" \
-    -p "0.0.0.0:6379:6379" \
+    "\${publish_args[@]}" \
     -v "\${volume_name}:/data" \
     --restart unless-stopped \
     valkey/valkey:8.0-alpine \

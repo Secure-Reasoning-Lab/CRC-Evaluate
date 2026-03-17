@@ -19,6 +19,8 @@ The rehearsal runs:
   Docker harness under the non-root `crsbench` user
 - the startup scripts work with file-backed metadata, not only the GCE metadata
   endpoint
+- the orchestrator binds Valkey on loopback plus the discovered container IP, so
+  workers can still reach `orchestrator:6379` without exposing `0.0.0.0`
 
 ## Quickstart
 
