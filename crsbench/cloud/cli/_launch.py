@@ -164,6 +164,26 @@ def run_launch(args: argparse.Namespace) -> int:
                 f"Provisioned orchestrator {orchestrator_record.name} has no internal IP"
             )
 
+        if uses_provider_neutral_cloud:
+            assert resolved_orchestrator_config is not None
+            orchestrator_project = resolved_orchestrator_config.project
+        else:
+            assert resolved_legacy_orchestrator is not None
+            orchestrator_project = resolved_legacy_orchestrator.project
+
+        append_created_instance_records(
+            config_path,
+            experiment_name=config.experiment,
+            records=[
+                CreatedCloudInstanceRecord(
+                    provider="gce",
+                    project=orchestrator_project,
+                    zone=orchestrator_record.zone,
+                    instance_name=orchestrator_record.name,
+                )
+            ],
+        )
+
         redis_host = f"{orchestrator_record.internal_ip}:6379"
         if uses_provider_neutral_cloud:
             assert adapter is not None
@@ -194,26 +214,18 @@ def run_launch(args: argparse.Namespace) -> int:
             assert resolved_orchestrator_config is not None
             assert preflight.redacted_worker_fleets is not None
             worker_fleet_configs = preflight.redacted_worker_fleets
-            orchestrator_project = resolved_orchestrator_config.project
             orchestrator_ssh_via_iap = resolved_orchestrator_config.ssh_via_iap
         else:
             assert resolved_legacy_orchestrator is not None
             assert preflight.redacted_worker_fleets is not None
             worker_fleet_configs = preflight.redacted_worker_fleets
-            orchestrator_project = resolved_legacy_orchestrator.project
             orchestrator_ssh_via_iap = resolved_legacy_orchestrator.ssh_via_iap
 
-        append_created_instance_records(
-            config_path,
-            experiment_name=config.experiment,
-            records=[
-                CreatedCloudInstanceRecord(
-                    provider="gce",
-                    project=orchestrator_project,
-                    zone=orchestrator_record.zone,
-                    instance_name=orchestrator_record.name,
-                ),
-                *[
+        if workers:
+            append_created_instance_records(
+                config_path,
+                experiment_name=config.experiment,
+                records=[
                     CreatedCloudInstanceRecord(
                         provider="gce",
                         project=_project_for_worker_record(
@@ -226,8 +238,7 @@ def run_launch(args: argparse.Namespace) -> int:
                     )
                     for worker in workers
                 ],
-            ],
-        )
+            )
 
         save_launch_state(
             config_path,

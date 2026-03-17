@@ -1029,12 +1029,24 @@ class TestLaunch:
 
         assert rc == 0
         assert call_order == ["orchestrator", "workers"]
-        mock_append_instances.assert_called_once()
-        assert mock_append_instances.call_args.args[0] == Path("/tmp/config.yaml")
-        assert mock_append_instances.call_args.kwargs["experiment_name"] == "test-exp"
-        recorded_instances = mock_append_instances.call_args.kwargs["records"]
-        assert [record.instance_name for record in recorded_instances] == [
+        assert mock_append_instances.call_count == 2
+        assert mock_append_instances.call_args_list[0].args[0] == Path(
+            "/tmp/config.yaml"
+        )
+        assert (
+            mock_append_instances.call_args_list[0].kwargs["experiment_name"]
+            == "test-exp"
+        )
+        assert [
+            record.instance_name
+            for record in mock_append_instances.call_args_list[0].kwargs["records"]
+        ] == [
             "gce-orchestrator-test-exp",
+        ]
+        assert [
+            record.instance_name
+            for record in mock_append_instances.call_args_list[1].kwargs["records"]
+        ] == [
             "w-1",
         ]
         mock_save_state.assert_called_once()
@@ -1076,11 +1088,58 @@ class TestLaunch:
         rc = run_launch(_make_launch_args())
 
         assert rc == 1
-        mock_append_instances.assert_called_once()
+        assert mock_append_instances.call_count == 2
+        assert [
+            record.instance_name
+            for record in mock_append_instances.call_args_list[0].kwargs["records"]
+        ] == ["gce-orchestrator-test-exp"]
+        assert [
+            record.instance_name
+            for record in mock_append_instances.call_args_list[1].kwargs["records"]
+        ] == ["w-1"]
         mock_prov.delete_workers.assert_called_once()
         mock_prov.delete_orchestrators.assert_called_once()
         mock_logger.error.assert_called_once_with(
             "Cloud launch failed: {}", "disk full"
+        )
+
+    @patch(
+        "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
+    )
+    @patch("crsbench.cloud.cli._launch.append_created_instance_records")
+    @patch("crsbench.cloud.cli._launch.GceProvisioner")
+    @patch("crsbench.cloud.cli._launch.logger")
+    @patch("crsbench.cloud.cli._launch.load_experiment_config")
+    def test_launch_records_orchestrator_before_worker_provisioning_failure(
+        self,
+        mock_load,
+        mock_logger,
+        mock_prov_cls,
+        mock_append_instances,
+        mock_secret,
+    ):
+        del mock_secret
+        mock_load.return_value = _make_launch_config()
+        mock_prov = MagicMock()
+        mock_prov_cls.return_value = mock_prov
+        mock_prov.create_orchestrator.return_value = _make_gce_worker(
+            "gce-orchestrator-test-exp", ip="10.0.0.50"
+        )
+        mock_prov.create_workers.side_effect = RuntimeError("worker boom")
+
+        from crsbench.cloud.cli._launch import run_launch
+
+        rc = run_launch(_make_launch_args())
+
+        assert rc == 1
+        mock_append_instances.assert_called_once()
+        assert [
+            record.instance_name
+            for record in mock_append_instances.call_args.kwargs["records"]
+        ] == ["gce-orchestrator-test-exp"]
+        mock_prov.delete_orchestrators.assert_called_once()
+        mock_logger.error.assert_called_once_with(
+            "Cloud launch failed: {}", "worker boom"
         )
 
     @patch(
