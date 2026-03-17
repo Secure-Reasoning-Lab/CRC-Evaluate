@@ -160,11 +160,16 @@ class GceProviderAdapter:
             )
         return fleets
 
-    def quota_requirements(self, plan: CloudLaunchPlan) -> list[tuple[str, str, int]]:
+    def quota_requirements(
+        self,
+        plan: CloudLaunchPlan,
+        *,
+        include_orchestrator: bool = True,
+    ) -> list[tuple[str, str, int]]:
         """Return aggregated regional quota demand as `(region, family, required)`."""
         requirements: dict[tuple[str, str], int] = {}
 
-        if plan.orchestrator.provider == "gce":
+        if include_orchestrator and plan.orchestrator.provider == "gce":
             resolved = self.resolve_instance_profile(plan.orchestrator.instance_profile)
             _accumulate_requirement(
                 requirements=requirements,
@@ -189,13 +194,21 @@ class GceProviderAdapter:
             for (region, family), required in sorted(requirements.items())
         ]
 
-    def quota_shortages(self, plan: CloudLaunchPlan) -> list[QuotaShortage]:
+    def quota_shortages(
+        self,
+        plan: CloudLaunchPlan,
+        *,
+        include_orchestrator: bool = True,
+    ) -> list[QuotaShortage]:
         """Return normalized quota shortages for the GCE portions of a plan."""
         project = self.resolve_instance_profile(
             plan.orchestrator.instance_profile
         ).project
         shortages: list[QuotaShortage] = []
-        for region, family, required in self.quota_requirements(plan):
+        for region, family, required in self.quota_requirements(
+            plan,
+            include_orchestrator=include_orchestrator,
+        ):
             available = self._quota_client.get_available_capacity(
                 project=project,
                 region=region,

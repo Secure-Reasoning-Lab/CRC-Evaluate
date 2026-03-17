@@ -2126,7 +2126,10 @@ def run_experiment_distributed(
                         adapter=adapter,
                     )
                 else:
-                    QuotaValidator(adapters={"gce": adapter}).validate(launch_plan)
+                    QuotaValidator(adapters={"gce": adapter}).validate(
+                        launch_plan,
+                        include_orchestrator=False,
+                    )
                     fleet_status = fleet_status_manager.bring_up_workers(
                         plan=launch_plan,
                         adapter=adapter,

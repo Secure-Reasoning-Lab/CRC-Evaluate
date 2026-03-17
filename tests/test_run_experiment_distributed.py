@@ -761,8 +761,10 @@ def test_provider_neutral_cloud_workers_validate_quota_before_bringup(
     manager = MagicMock()
     call_order: list[str] = []
 
-    validator.validate.side_effect = lambda plan: (
-        call_order.append(f"validate:{plan.experiment_name}")
+    validator.validate.side_effect = lambda plan, *, include_orchestrator=True: (
+        call_order.append(
+            f"validate:{plan.experiment_name}:include_orchestrator={include_orchestrator}"
+        )
     )
     manager.bring_up_workers.side_effect = lambda **_kwargs: (
         call_order.append("bringup") or MagicMock(ready_count=3, requested_count=3)
@@ -770,7 +772,10 @@ def test_provider_neutral_cloud_workers_validate_quota_before_bringup(
 
     def _enqueue(*args, **kwargs):
         del args, kwargs
-        assert call_order == ["validate:exp-test", "bringup"]
+        assert call_order == [
+            "validate:exp-test:include_orchestrator=False",
+            "bringup",
+        ]
         raise RuntimeError("stop after enqueue")
 
     queue.enqueue.side_effect = _enqueue
@@ -809,7 +814,7 @@ def test_provider_neutral_cloud_workers_validate_quota_before_bringup(
         with pytest.raises(RuntimeError, match="stop after enqueue"):
             run_experiment_distributed("exp-test", config, [_make_trial(None)])
 
-    validator.validate.assert_called_once_with(launch_plan)
+    validator.validate.assert_called_once_with(launch_plan, include_orchestrator=False)
     manager.bring_up_workers.assert_called_once()
     manager.bring_up_gce_workers.assert_not_called()
 

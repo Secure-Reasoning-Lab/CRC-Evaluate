@@ -611,6 +611,28 @@ class TestReconnect:
         assert context.launch_state == launch_state
         assert context.redis_host == "10.0.0.50:6379"
 
+    @patch("crsbench.cloud.cli._config_reconnect.load_launch_state")
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_resolve_cloud_context_uses_config_for_provider_neutral_local_runs(
+        self, mock_load, mock_state
+    ):
+        """Provider-neutral configs without launch state should still reconnect for local runs."""
+        config = _make_provider_neutral_experiment_config()
+        mock_load.return_value = config
+        mock_state.side_effect = [None, None]
+
+        from crsbench.cloud.cli._config_reconnect import resolve_cloud_context
+
+        context = resolve_cloud_context("/tmp/config.yaml", "test-exp")
+
+        assert context.launch_state is None
+        assert [fleet.zone for fleet in context.worker_fleet_configs] == [
+            "us-east5-b",
+            "us-east5-c",
+        ]
+        assert context.redis_host == "localhost:6379"
+        assert context.experiment_filestore == Path("/tmp/filestore")
+
 
 # ---------------------------------------------------------------------------
 # Argument parsing tests

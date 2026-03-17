@@ -101,12 +101,7 @@ def resolve_cloud_context(
                     exc,
                 )
 
-    if config.cloud.orchestrator is not None:
-        if launch_state is None:
-            raise SystemExit(
-                "Remote orchestrator launch state not found. "
-                "Run `crsbench cloud launch --config ...` first."
-            )
+    if launch_state is not None and config.cloud.orchestrator is not None:
         if launch_state.experiment_filestore is None:
             raise SystemExit(
                 "Remote orchestrator launch state missing experiment filestore"
@@ -122,6 +117,12 @@ def resolve_cloud_context(
             redis_host=launch_state.redis_host,
             redis_password=launch_state.redis_password,
             launch_plan=launch_plan,
+        )
+
+    if config.cloud.orchestrator is not None and not uses_provider_neutral_cloud:
+        raise SystemExit(
+            "Remote orchestrator launch state not found. "
+            "Run `crsbench cloud launch --config ...` first."
         )
 
     if not derived_worker_fleets:

@@ -39,19 +39,25 @@ class QuotaValidator:
     def __init__(self, *, adapters: Mapping[str, object]) -> None:
         self._adapters = dict(adapters)
 
-    def validate(self, plan: CloudLaunchPlan) -> None:
+    def validate(
+        self, plan: CloudLaunchPlan, *, include_orchestrator: bool = True
+    ) -> None:
         """Raise if any provider cannot satisfy its part of the launch plan."""
         shortages: list[QuotaShortage] = []
-        provider_names = {plan.orchestrator.provider}
-        provider_names.update(
-            placement.provider for placement in plan.worker_placements
-        )
+        provider_names = {placement.provider for placement in plan.worker_placements}
+        if include_orchestrator:
+            provider_names.add(plan.orchestrator.provider)
         for provider_name in sorted(provider_names):
             adapter = self._adapters.get(provider_name)
             if adapter is None:
                 raise ValueError(
                     f"No quota adapter registered for provider {provider_name!r}"
                 )
-            shortages.extend(adapter.quota_shortages(plan))
+            shortages.extend(
+                adapter.quota_shortages(
+                    plan,
+                    include_orchestrator=include_orchestrator,
+                )
+            )
         if shortages:
             raise CloudQuotaValidationError(shortages)
