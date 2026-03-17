@@ -859,6 +859,12 @@ class TestIntegrationWithSampleConfigs:
         )
         assert (
             config.cloud.providers.gce.instance_profiles[
+                "worker-n2d"
+            ].readiness_timeout_sec
+            == 1200
+        )
+        assert (
+            config.cloud.providers.gce.instance_profiles[
                 "orchestrator-n2d"
             ].crsbench_install_spec
             == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
@@ -872,6 +878,12 @@ class TestIntegrationWithSampleConfigs:
         assert (
             config.cloud.providers.gce.instance_profiles["orchestrator-n2d"].hf_token
             == "os.environ/HF_TOKEN"
+        )
+        assert (
+            config.cloud.providers.gce.instance_profiles[
+                "orchestrator-n2d"
+            ].readiness_timeout_sec
+            == 1200
         )
         assert (
             config.cloud.providers.gce.instance_profiles[

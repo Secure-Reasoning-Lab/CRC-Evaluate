@@ -33,6 +33,8 @@ This smoke config uses the checkout-first cloud bootstrap path:
 - every VM runs `crsbench prepare`
 - `download_benchmarks: auto` is set, so this `benchmark_suite: sanity` run
   skips the VM-side benchmark download
+- both GCE instance profiles use `readiness_timeout_sec: 1200` so cold-image
+  bootstrap and Redis startup have a 20-minute bring-up window
 
 ## Preflight
 
@@ -203,7 +205,7 @@ Expected result:
 - both workers eventually show as `ready`
 - zones should include `us-east5-b` and `us-east1-b`
 - `ready` only happens after checkout, `crsbench prepare`, the skipped-or-run
-  download step, and Redis queue-listener startup complete
+  download step, worker-side Redis polling, and Redis queue-listener startup complete
 - job counts should move from queued/running to completed as the smoke run finishes
 
 Watch recovery events:

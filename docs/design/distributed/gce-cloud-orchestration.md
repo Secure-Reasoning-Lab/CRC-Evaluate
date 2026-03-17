@@ -158,8 +158,9 @@ The startup script (`cloud/gce/startup/worker.sh`) runs on the VM:
 3. Runs `crsbench prepare` from that checkout and optionally downloads benchmarks according to `cloud.bootstrap`
 4. Imports operator-approved passthrough env vars plus runtime-managed vars and writes them to `/etc/default/crsbench-worker`
 5. Creates and enables `crsbench-worker.service` with `WorkingDirectory=/opt/crsbench` (`Restart=always`)
-6. Only after bootstrap succeeds does the worker connect to Redis and report readiness
-7. On failure: ERR trap calls `report_cloud_worker_state_from_env()` with `bootstrap_failed` and evidence string
+6. The managed launcher polls the configured Redis endpoint up to `readiness_timeout_sec` before starting `crsbench worker`
+7. Only after bootstrap succeeds and Redis becomes reachable does the worker connect to Redis and report readiness
+8. On failure: ERR trap or launcher timeout calls `report_cloud_worker_state_from_env()` with `bootstrap_failed` and evidence string
 
 Passthrough env contract:
 

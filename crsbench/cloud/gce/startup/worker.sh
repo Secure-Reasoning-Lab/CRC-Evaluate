@@ -146,6 +146,7 @@ print(payload["experiment"])
 print(payload.get("worker_jobs") or "")
 print(payload.get("worker_cores_per_job") or "")
 print(payload.get("worker_cpu_tag") or "")
+print(payload.get("readiness_timeout_sec") or "")
 PY
 )
 
@@ -155,6 +156,7 @@ EXPERIMENT_NAME="${PAYLOAD_FIELDS[2]}"
 WORKER_JOBS="${PAYLOAD_FIELDS[3]}"
 WORKER_CORES_PER_JOB="${PAYLOAD_FIELDS[4]}"
 WORKER_CPU_TAG="${PAYLOAD_FIELDS[5]}"
+READINESS_TIMEOUT_SEC="${PAYLOAD_FIELDS[6]}"
 REDIS_PASSWORD="$(metadata_get_optional "crsbench-redis-password")"
 INSTANCE_ID="$(instance_metadata_get "id")"
 ZONE_PATH="$(instance_metadata_get "zone")"
@@ -167,6 +169,7 @@ export CRSBENCH_EXPERIMENT_NAME="${EXPERIMENT_NAME}"
 export CRSBENCH_WORKER_JOBS="${WORKER_JOBS}"
 export CRSBENCH_WORKER_CORES_PER_JOB="${WORKER_CORES_PER_JOB}"
 export CRSBENCH_WORKER_CPU_TAG="${WORKER_CPU_TAG}"
+export CRSBENCH_READINESS_TIMEOUT_SEC="${READINESS_TIMEOUT_SEC}"
 export CRSBENCH_CLOUD_EXPERIMENT="${EXPERIMENT_NAME}"
 export CRSBENCH_CLOUD_INSTANCE_ID="${INSTANCE_ID}"
 export CRSBENCH_CLOUD_INSTANCE_NAME="${WORKER_NAME}"
@@ -240,6 +243,7 @@ write_env_var "CRSBENCH_EXPERIMENT_NAME" "${EXPERIMENT_NAME}"
 write_env_var "CRSBENCH_WORKER_JOBS" "${WORKER_JOBS}"
 write_env_var "CRSBENCH_WORKER_CORES_PER_JOB" "${WORKER_CORES_PER_JOB}"
 write_env_var "CRSBENCH_WORKER_CPU_TAG" "${WORKER_CPU_TAG}"
+write_env_var "CRSBENCH_READINESS_TIMEOUT_SEC" "${READINESS_TIMEOUT_SEC}"
 write_env_var "CRSBENCH_CLOUD_EXPERIMENT" "${EXPERIMENT_NAME}"
 write_env_var "CRSBENCH_CLOUD_INSTANCE_ID" "${INSTANCE_ID}"
 write_env_var "CRSBENCH_CLOUD_INSTANCE_NAME" "${WORKER_NAME}"
@@ -280,6 +284,39 @@ report_cloud_worker_state_from_env(
 PY
 }
 
+wait_for_redis() {
+  local timeout_sec="${CRSBENCH_READINESS_TIMEOUT_SEC:-900}"
+  local poll_interval_sec=5
+  local start_time="${SECONDS}"
+
+  if [[ -z "${CRSBENCH_REDIS_HOST:-}" ]]; then
+    report_bootstrap_failure "Timed out waiting for Redis: CRSBENCH_REDIS_HOST is unset"
+    return 1
+  fi
+
+  echo "Waiting for Redis at ${CRSBENCH_REDIS_HOST} for up to ${timeout_sec}s..."
+  while true; do
+    if /usr/bin/env python3 - "${CRSBENCH_REDIS_HOST}" <<'PY'
+import sys
+
+from crsbench.distributed.queue import check_redis_available
+
+raise SystemExit(0 if check_redis_available(sys.argv[1], timeout=2) else 1)
+PY
+    then
+      echo "Redis at ${CRSBENCH_REDIS_HOST} is ready"
+      return 0
+    fi
+
+    if (( SECONDS - start_time >= timeout_sec )); then
+      report_bootstrap_failure \
+        "Timed out waiting for Redis at ${CRSBENCH_REDIS_HOST} after ${timeout_sec}s"
+      return 1
+    fi
+    sleep "${poll_interval_sec}"
+  done
+}
+
 cmd=(
   /usr/bin/env
   crsbench
@@ -301,6 +338,8 @@ fi
 if [[ -n "${CRSBENCH_WORKER_CPU_TAG:-}" ]]; then
   cmd+=(--cpu-tag "${CRSBENCH_WORKER_CPU_TAG}")
 fi
+
+wait_for_redis
 
 set +e
 "${cmd[@]}"

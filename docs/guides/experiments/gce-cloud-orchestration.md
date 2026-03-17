@@ -297,6 +297,13 @@ instance as running. Size `readiness_timeout_sec` for package install, repo
 checkout, `crsbench prepare`, optional benchmark download, and Redis/queue
 listener startup.
 
+Worker bootstrap now polls the configured Redis endpoint before starting the
+managed `crsbench worker` process. That closes the gap where workers could
+terminally fail before the remote orchestrator had finished starting Valkey.
+The checked-in smoke config uses `readiness_timeout_sec: 1200` for both
+orchestrator and worker instance profiles to give clean Ubuntu images more room
+to finish bootstrap.
+
 ## Monitoring
 
 ### Fleet and Job Status

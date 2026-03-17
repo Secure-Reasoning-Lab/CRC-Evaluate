@@ -459,6 +459,19 @@ def test_startup_script_does_not_globally_rewrite_sslab_gatech_https_urls():
     assert "GIT_SSH_COMMAND" in script
 
 
+def test_startup_script_waits_for_redis_before_starting_worker_service():
+    """Worker launcher should poll Redis readiness before entering terminal bootstrap failure."""
+    from crsbench.cloud.gce.metadata import load_startup_script
+
+    script = load_startup_script()
+
+    assert "check_redis_available" in script
+    assert "CRSBENCH_READINESS_TIMEOUT_SEC" in script
+    assert "wait_for_redis()" in script
+    assert "Waiting for Redis at ${CRSBENCH_REDIS_HOST}" in script
+    assert "Timed out waiting for Redis" in script
+
+
 def test_build_orchestrator_metadata_embeds_config_payload_and_redis_password(tmp_path):
     """Orchestrator metadata should carry config payload and shared Redis auth."""
     from crsbench.cloud.gce.metadata import (
