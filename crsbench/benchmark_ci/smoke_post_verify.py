@@ -112,6 +112,7 @@ def discover_smoke_verification_tasks(
         benchmark_name = metadata.get("benchmark")
         harness = metadata.get("harness")
         if not isinstance(benchmark_name, str) or not isinstance(harness, str):
+            logger.warning(f"Skipping {metadata_path}: missing benchmark or harness field")
             continue
 
         tasks.append(
@@ -128,7 +129,7 @@ def discover_smoke_verification_tasks(
 
 
 def _run_command(command: list[str]) -> int:
-    completed = subprocess.run(command, check=False)
+    completed = subprocess.run(command, check=False, timeout=1800)
     return int(completed.returncode)
 
 

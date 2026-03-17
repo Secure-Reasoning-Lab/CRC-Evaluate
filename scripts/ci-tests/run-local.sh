@@ -738,23 +738,34 @@ run_smoke_suite_config() {
 
     # Ensure worker/evaluator process trees are always killed on exit
     # (including fail/error paths and when running as a background subshell).
-    # crsbench worker with jobs>1 spawns child RQ workers, so we must kill
-    # the entire process tree, not just the parent.
+    # crsbench worker with jobs>1 spawns child RQ workers, so we must
+    # recursively kill the entire process tree, not just the parent.
     _smoke_kill_tree() {
         local pid="$1"
         [ -n "$pid" ] || return 0
         kill -0 "$pid" 2>/dev/null || return 0
-        # Kill all descendants first, then the parent
-        pkill -TERM -P "$pid" 2>/dev/null || true
+        # Recursively collect all descendant PIDs (children, grandchildren, ...)
+        local descendants
+        descendants=$(ps -o pid= --ppid "$pid" 2>/dev/null || true)
+        for child in $descendants; do
+            _smoke_kill_tree "$child"
+        done
         kill -TERM "$pid" 2>/dev/null || true
-        sleep 2
-        pkill -KILL -P "$pid" 2>/dev/null || true
+        local elapsed=0
+        while [ "$elapsed" -lt 5 ]; do
+            kill -0 "$pid" 2>/dev/null || return 0
+            sleep 1
+            elapsed=$((elapsed + 1))
+        done
         kill -KILL "$pid" 2>/dev/null || true
         wait "$pid" 2>/dev/null || true
     }
     _smoke_suite_cleanup() {
         _smoke_kill_tree "${worker_pid:-}"
         _smoke_kill_tree "${evaluator_pid:-}"
+        # Clean up streaming pipelines for both worker and evaluator
+        [ -n "${_worker_logger_pid:-}" ] && kill "${_worker_logger_pid}" 2>/dev/null || true
+        [ -n "${_evaluator_logger_pid:-}" ] && kill "${_evaluator_logger_pid}" 2>/dev/null || true
         cleanup_smoke_bg_logging
     }
     trap _smoke_suite_cleanup EXIT
@@ -792,6 +803,7 @@ run_smoke_suite_config() {
 
     start_smoke_logged_command_bg "$worker_log" "smoke:${suite}:worker" "${worker_cmd[@]}"
     worker_pid="$SMOKE_BG_PID"
+    _worker_logger_pid="$SMOKE_BG_LOGGER_PID"
 
     # Start evaluator — builds variant images and consumes build/verify
     # queues.  Bugfinding: async POV verification + early stop.
@@ -799,14 +811,20 @@ run_smoke_suite_config() {
     local evaluator_cmd=(uv run crsbench evaluator --experiment-config "$config_path" --idle-timeout 0)
     start_smoke_logged_command_bg "$evaluator_log" "smoke:${suite}:evaluator" "${evaluator_cmd[@]}"
     evaluator_pid="$SMOKE_BG_PID"
+    _evaluator_logger_pid="$SMOKE_BG_LOGGER_PID"
 
     sleep 3
     if ! kill -0 "$worker_pid" >/dev/null 2>&1; then
-        stop_worker_process "$evaluator_pid" "evaluator[$suite]" || true
-        cleanup_smoke_bg_logging
+        _smoke_suite_cleanup
         echo "=== worker log (tail) ==="
         tail -n 120 "$worker_log" || true
         fail "Smoke worker failed to start for suite=$suite"
+    fi
+    if ! kill -0 "$evaluator_pid" >/dev/null 2>&1; then
+        _smoke_suite_cleanup
+        echo "=== evaluator log (tail) ==="
+        tail -n 120 "$evaluator_log" || true
+        fail "Smoke evaluator failed to start for suite=$suite"
     fi
 
     rc=0
