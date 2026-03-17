@@ -112,16 +112,16 @@ Examples:
         help="Source mode for builds (default: pkgs)",
     )
     parser.add_argument(
-        "--build-workers",
+        "--jobs",
         type=int,
         default=None,
-        help="Number of parallel build workers",
+        help="Number of parallel build jobs",
     )
     parser.add_argument(
-        "--verify-workers",
+        "--cores-per-job",
         type=int,
         default=None,
-        help="Number of parallel verify workers",
+        help="Number of cores per verification job",
     )
     parser.add_argument(
         "--force-rebuild",
@@ -295,8 +295,8 @@ def _reeval_bug_finding(
     harness: str,
     dest_dir: Path,
     source_mode: str,
-    build_workers: Optional[int],
-    verify_workers: Optional[int],
+    jobs: Optional[int],
+    cores_per_job: Optional[int],
     per_pov_verify_timeout: int = 180,
     *,
     sanitizer: Optional[str] = None,
@@ -312,8 +312,8 @@ def _reeval_bug_finding(
         harness: Harness name
         dest_dir: Where to write results
         source_mode: Source mode (pkgs/main_repo)
-        build_workers: Parallel build workers
-        verify_workers: Parallel verify workers
+        jobs: Parallel build jobs
+        cores_per_job: Cores per verification job
         force_rebuild: Force variant rebuild
         use_inc_build: Use incremental builds
         sanitizer: Optional sanitizer to scope build selection
@@ -333,8 +333,8 @@ def _reeval_bug_finding(
     engine = VerificationEngine(
         oss_fuzz_path=oss_fuzz_path,
         timeout=per_pov_verify_timeout,
-        jobs=build_workers,
-        cores_per_job=verify_workers,
+        jobs=jobs,
+        cores_per_job=cores_per_job,
         source_mode=source_mode,
     )
 
@@ -1035,8 +1035,8 @@ def _reeval_patch_generation(
     dest_dir: Path,
     source_mode: str,
     sanitizer: Optional[str],
-    build_workers: Optional[int],
-    verify_workers: Optional[int],
+    jobs: Optional[int],
+    cores_per_job: Optional[int],
     per_pov_verify_timeout: int = 180,
     *,
     patch_verify_variants: bool = False,
@@ -1052,8 +1052,8 @@ def _reeval_patch_generation(
         harness: Harness name
         dest_dir: Where to write results
         source_mode: Source mode (pkgs/main_repo)
-        build_workers: Parallel build workers
-        verify_workers: Parallel verify workers
+        jobs: Parallel build jobs
+        cores_per_job: Cores per verification job
         patch_verify_variants: Whether to verify patches against all POV
             variants per CPV (False = single POV)
         force_rebuild: Force variant rebuild
@@ -1088,8 +1088,8 @@ def _reeval_patch_generation(
         log_dir=work_dir,
         force_rebuild=force_rebuild,
         use_inc_build=use_inc_build,
-        jobs=build_workers,
-        cores_per_job=verify_workers,
+        jobs=jobs,
+        cores_per_job=cores_per_job,
         verify_variants=patch_verify_variants,
         source_mode=source_mode,
     )
@@ -1301,8 +1301,8 @@ def run_reeval(args: argparse.Namespace) -> int:
                         harness=harness,
                         dest_dir=dest_dir,
                         source_mode=source_mode,
-                        build_workers=args.build_workers,
-                        verify_workers=args.verify_workers,
+                        jobs=args.jobs,
+                        cores_per_job=args.cores_per_job,
                         per_pov_verify_timeout=per_pov_verify_timeout,
                         sanitizer=trial_sanitizer,
                         force_rebuild=args.force_rebuild,
@@ -1337,8 +1337,8 @@ def run_reeval(args: argparse.Namespace) -> int:
                         dest_dir=dest_dir,
                         source_mode=source_mode,
                         sanitizer=trial_sanitizer,
-                        build_workers=args.build_workers,
-                        verify_workers=args.verify_workers,
+                        jobs=args.jobs,
+                        cores_per_job=args.cores_per_job,
                         per_pov_verify_timeout=per_pov_verify_timeout,
                         patch_verify_variants=patch_verify_variants,
                         force_rebuild=args.force_rebuild,

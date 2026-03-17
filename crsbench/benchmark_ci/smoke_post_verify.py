@@ -112,7 +112,9 @@ def discover_smoke_verification_tasks(
         benchmark_name = metadata.get("benchmark")
         harness = metadata.get("harness")
         if not isinstance(benchmark_name, str) or not isinstance(harness, str):
-            logger.warning(f"Skipping {metadata_path}: missing benchmark or harness field")
+            logger.warning(
+                f"Skipping {metadata_path}: missing benchmark or harness field"
+            )
             continue
 
         tasks.append(

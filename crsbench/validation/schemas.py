@@ -935,16 +935,6 @@ class WorkerConfig(BaseModel):
         default=None,
         description="Override registry directory for workers on different machines",
     )
-    build_workers: Optional[int] = Field(
-        default=None,
-        ge=1,
-        description="Override build_workers for workers on different machines",
-    )
-    verify_workers: Optional[int] = Field(
-        default=None,
-        ge=1,
-        description="Override verify_workers for workers on different machines",
-    )
     benchmarks_root: Optional[Path] = Field(
         default=None,
         description="Override benchmarks root directory for workers on different machines",
@@ -1453,16 +1443,6 @@ class ExperimentConfig(BaseModel):
         description="For bug-fixing patch verification, whether to verify patches against all benchmark POV variants "
         "for each CPV (default: False). When False, verifies against a single POV (pov_0-like behavior), "
         "equivalent to passing --no-variants in patch-verify.",
-    )
-    build_workers: Optional[int] = Field(
-        default=None,
-        ge=1,
-        description="Number of parallel workers for building variants (default: 4).",
-    )
-    verify_workers: Optional[int] = Field(
-        default=None,
-        ge=1,
-        description="Number of parallel workers for POV/patch verification (default: 4).",
     )
     only_cpv_harnesses: bool = Field(
         default=True,

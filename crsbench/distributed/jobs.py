@@ -796,13 +796,6 @@ def _apply_worker_overrides(config: ExperimentConfig) -> None:
                 setattr(config, field, value)
                 logger.info(f"Worker storage override applied: {field} = {value}")
 
-    int_fields = ["build_workers", "verify_workers"]
-    for field in int_fields:
-        value = getattr(wc, field, None)
-        if value is not None:
-            setattr(config, field, value)
-            logger.info(f"Worker override applied: {field} = {value}")
-
     if storage_overrides:
         storage_bool_fields = [
             "keep_only_results",
@@ -1125,8 +1118,6 @@ def run_crs_trial(
             llm_api_key=llm_api_key,
             llm_trial_id=trial_id,
             llm_accounting_settle_seconds=config.llm_accounting_settle_seconds,
-            build_workers=config.build_workers,
-            verify_workers=config.verify_workers,
             max_pov_variants_per_cpv=effective_inputs.max_pov_variants_per_cpv,
             patch_verify_variants=effective_inputs.patch_verify_variants,
             pov_input_enabled=effective_inputs.pov_enabled,

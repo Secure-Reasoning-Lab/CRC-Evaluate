@@ -559,8 +559,8 @@ def test_run_coverage_rejects_experiment_config_with_benchmarks_and_harness(
         force_rebuild=False,
         output=None,
         format="json",
-        build_workers=None,
-        verify_workers=None,
+        jobs=None,
+        cores_per_job=None,
         source="pkgs",
         output_dir=None,
         experiment_start_time=None,
@@ -587,8 +587,8 @@ def test_run_coverage_direct_seed_mode_requires_benchmark(tmp_path: Path) -> Non
         force_rebuild=False,
         output=None,
         format="json",
-        build_workers=None,
-        verify_workers=None,
+        jobs=None,
+        cores_per_job=None,
         source="pkgs",
         output_dir=tmp_path / "out",
         experiment_start_time=None,
@@ -710,37 +710,6 @@ def test_coverage_parser_rejects_legacy_oss_fuzz_override() -> None:
             raise AssertionError("legacy --oss-fuzz-path unexpectedly parsed")
 
 
-def test_coverage_parser_accepts_legacy_worker_aliases() -> None:
-    parser = argparse.ArgumentParser(prog="crsbench")
-    subs = parser.add_subparsers(dest="command")
-    add_coverage_subparser(subs)
-
-    args = parser.parse_args(
-        [
-            "coverage",
-            "--seed-dir",
-            "/tmp/seeds",
-            "--benchmarks",
-            "benchmarks",
-            "--benchmark",
-            "sanity-mock-c-delta-01",
-            "--harness",
-            "fuzz_parse_buffer_section",
-            "--output-dir",
-            "/tmp/out",
-            "--build-workers",
-            "4",
-            "--verify-workers",
-            "2",
-        ]
-    )
-
-    assert args.jobs is None
-    assert args.cores_per_job is None
-    assert args.build_workers == 4
-    assert args.verify_workers == 2
-
-
 def test_run_coverage_rejects_experiment_config_with_experiment_dir(
     tmp_path: Path,
 ) -> None:
@@ -763,8 +732,6 @@ def test_run_coverage_rejects_experiment_config_with_experiment_dir(
         format="json",
         jobs=None,
         cores_per_job=None,
-        build_workers=None,
-        verify_workers=None,
         source="pkgs",
         output_dir=None,
         atlantis_root=None,
@@ -793,40 +760,10 @@ def test_run_coverage_rejects_experiment_start_time_with_experiment_dir(
         format="json",
         jobs=None,
         cores_per_job=None,
-        build_workers=None,
-        verify_workers=None,
         source="pkgs",
         output_dir=None,
         atlantis_root=None,
         experiment_start_time=1000.0,
-    )
-
-    assert run_coverage(args) == 1
-
-
-def test_run_coverage_rejects_conflicting_job_flags(tmp_path: Path) -> None:
-    args = argparse.Namespace(
-        verbose=False,
-        experiment_config=None,
-        experiment_dir=None,
-        benchmark_path=None,
-        corpus_dir=None,
-        seed_dir=tmp_path / "seeds",
-        benchmark="bench-a",
-        benchmarks=tmp_path / "benchmarks",
-        harness="h0",
-        oss_fuzz_path=None,
-        force_rebuild=False,
-        output=None,
-        format="json",
-        jobs=2,
-        cores_per_job=1,
-        build_workers=3,
-        verify_workers=1,
-        source="pkgs",
-        output_dir=tmp_path / "out",
-        atlantis_root=None,
-        experiment_start_time=None,
     )
 
     assert run_coverage(args) == 1
@@ -849,8 +786,6 @@ def test_run_coverage_rejects_non_positive_cores_per_job(tmp_path: Path) -> None
         format="json",
         jobs=1,
         cores_per_job=0,
-        build_workers=None,
-        verify_workers=None,
         source="pkgs",
         output_dir=tmp_path / "out",
         atlantis_root=None,
@@ -879,8 +814,6 @@ def test_run_coverage_allows_experiment_dir_with_benchmarks_override(
         format="json",
         jobs=None,
         cores_per_job=None,
-        build_workers=None,
-        verify_workers=None,
         source="pkgs",
         output_dir=None,
         atlantis_root=None,
@@ -913,8 +846,6 @@ def test_run_coverage_allows_experiment_dir_with_output_dir(tmp_path: Path) -> N
         format="json",
         jobs=None,
         cores_per_job=None,
-        build_workers=None,
-        verify_workers=None,
         source="pkgs",
         output_dir=tmp_path / "coverage-out",
         experiment_start_time=None,
@@ -980,8 +911,6 @@ def test_run_experiment_timeline_uses_jobs_and_cores_per_job(
         format="json",
         jobs=2,
         cores_per_job=2,
-        build_workers=2,
-        verify_workers=2,
         source="pkgs",
         output_dir=None,
         experiment_start_time=None,
@@ -1011,12 +940,12 @@ def test_run_experiment_timeline_uses_jobs_and_cores_per_job(
         def __init__(
             self,
             *,
-            build_workers: int | None = None,
+            jobs: int | None = None,
             runtime_workers: int | None = None,
             runtime_cpus: list[int] | None = None,
             source_mode: str = "pkgs",
         ):
-            del build_workers, source_mode
+            del jobs, source_mode
             self.runtime_workers = runtime_workers
             self.runtime_cpus = runtime_cpus
 
@@ -1112,8 +1041,6 @@ def test_run_experiment_timeline_uses_output_dir_for_experiment_config(
         format="json",
         jobs=1,
         cores_per_job=1,
-        build_workers=1,
-        verify_workers=1,
         source="pkgs",
         output_dir=tmp_path / "coverage-out",
         experiment_start_time=None,
@@ -1222,8 +1149,6 @@ def test_run_experiment_timeline_rejects_missing_timing_metadata_before_scheduli
         format="json",
         jobs=1,
         cores_per_job=1,
-        build_workers=1,
-        verify_workers=1,
         source="pkgs",
         output_dir=None,
     )
@@ -1282,8 +1207,6 @@ def test_run_experiment_timeline_rejects_cores_per_job_larger_than_cpu_pool(
         format="json",
         jobs=1,
         cores_per_job=2,
-        build_workers=1,
-        verify_workers=2,
         source="pkgs",
         output_dir=None,
         experiment_start_time=None,
@@ -1313,14 +1236,14 @@ def test_run_direct_seed_timeline_pins_runtime_cpus(
         def __init__(
             self,
             *,
-            build_workers: int | None = None,
+            jobs: int | None = None,
             runtime_workers: int | None = None,
             runtime_cpus: list[int] | None = None,
             source_mode: str = "pkgs",
         ):
             engine_inits.append(
                 {
-                    "build_workers": build_workers,
+                    "jobs": jobs,
                     "runtime_workers": runtime_workers,
                     "runtime_cpus": runtime_cpus,
                     "source_mode": source_mode,
@@ -1349,8 +1272,6 @@ def test_run_direct_seed_timeline_pins_runtime_cpus(
         format="json",
         jobs=1,
         cores_per_job=2,
-        build_workers=1,
-        verify_workers=2,
         source="pkgs",
         output_dir=tmp_path / "coverage-out",
         experiment_start_time=None,
@@ -1377,98 +1298,9 @@ def test_run_direct_seed_timeline_pins_runtime_cpus(
 
     assert engine_inits == [
         {
-            "build_workers": 1,
+            "jobs": 1,
             "runtime_workers": 2,
             "runtime_cpus": [4, 5],
-            "source_mode": "pkgs",
-        }
-    ]
-
-
-def test_run_direct_seed_timeline_accepts_legacy_worker_aliases(
-    tmp_path: Path,
-) -> None:
-    seed_dir = tmp_path / "seeds"
-    seed_dir.mkdir()
-    (seed_dir / "a.bin").write_bytes(b"a")
-
-    benchmark_root = tmp_path / "benchmarks"
-    benchmark_dir = benchmark_root / "bench-a"
-    benchmark_dir.mkdir(parents=True)
-
-    engine_inits: list[dict] = []
-
-    class _FakeEngine:
-        def __init__(
-            self,
-            *,
-            build_workers: int | None = None,
-            runtime_workers: int | None = None,
-            runtime_cpus: list[int] | None = None,
-            source_mode: str = "pkgs",
-        ):
-            engine_inits.append(
-                {
-                    "build_workers": build_workers,
-                    "runtime_workers": runtime_workers,
-                    "runtime_cpus": runtime_cpus,
-                    "source_mode": source_mode,
-                }
-            )
-
-        def collect_timed_line_coverage(self, *args, **kwargs):
-            del args, kwargs
-            return [], CoverageSummary(lines_covered=0, lines_total=0)
-
-        def cleanup(self) -> None:
-            return None
-
-    args = argparse.Namespace(
-        verbose=False,
-        experiment_config=None,
-        experiment_dir=None,
-        benchmark_path=None,
-        corpus_dir=None,
-        seed_dir=seed_dir,
-        benchmark="bench-a",
-        benchmarks=benchmark_root,
-        harness="fuzz_target",
-        force_rebuild=False,
-        output=None,
-        format="json",
-        jobs=None,
-        cores_per_job=None,
-        build_workers=3,
-        verify_workers=2,
-        source="pkgs",
-        output_dir=tmp_path / "coverage-out",
-        experiment_start_time=None,
-    )
-
-    with (
-        patch(
-            "crsbench.evaluation.coverage.cli.coverage_command.CoverageEngine",
-            _FakeEngine,
-        ),
-        patch(
-            "crsbench.evaluation.coverage.cli.coverage_command.resolve_benchmark_path",
-            return_value=benchmark_dir,
-        ),
-        patch(
-            "crsbench.evaluation.coverage.cli.coverage_command._write_timeline_outputs"
-        ),
-        patch(
-            "crsbench.evaluation.coverage.cli.coverage_command._available_coverage_cpus",
-            return_value=[6, 7, 8, 9],
-        ),
-    ):
-        assert _run_direct_seed_timeline(args) == 0
-
-    assert engine_inits == [
-        {
-            "build_workers": 3,
-            "runtime_workers": 2,
-            "runtime_cpus": [6, 7],
             "source_mode": "pkgs",
         }
     ]

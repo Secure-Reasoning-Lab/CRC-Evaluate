@@ -115,8 +115,6 @@ class BenchmarkRunner:
         llm_api_key: Optional[str] = None,
         llm_trial_id: Optional[str] = None,
         llm_accounting_settle_seconds: int = 60,
-        build_workers: Optional[int] = None,
-        verify_workers: Optional[int] = None,
         max_pov_variants_per_cpv: Optional[int] = 1,
         patch_verify_variants: bool = False,
         pov_input_enabled: bool = False,
@@ -155,8 +153,6 @@ class BenchmarkRunner:
             llm_accounting_settle_seconds: Minimum time to wait after CRS run end
                 before final LLM usage/log capture. Remaining wait is computed after
                 manager shutdown work; set to 0 to disable.
-            build_workers: Number of parallel workers for building variants
-            verify_workers: Number of parallel workers for POV/patch verification
             max_pov_variants_per_cpv: Max POV variants per CPV for bug-fixing input
                 staging.
                 1 = single POV per CPV (default), N = multiple, None = all.
@@ -194,8 +190,6 @@ class BenchmarkRunner:
                 f"got {llm_accounting_settle_seconds}"
             )
         self.llm_accounting_settle_seconds = llm_accounting_settle_seconds
-        self.build_workers = build_workers
-        self.verify_workers = verify_workers
         self.max_pov_variants_per_cpv = max_pov_variants_per_cpv
         self.patch_verify_variants = patch_verify_variants
         self.pov_input_enabled = pov_input_enabled
@@ -1258,8 +1252,6 @@ class BenchmarkRunner:
                 oss_fuzz_path=self.oss_fuzz_path,
                 timeout=self.per_pov_verify_timeout,
                 dedup_strategy=get_dedup_strategy(self.pov_dedup_strategy),
-                jobs=self.build_workers,
-                cores_per_job=self.verify_workers,
                 inc_image_policy=self.inc_image_policy,
                 inc_image_registry=self.inc_image_registry,
                 inc_image_max_pull_bytes=self.inc_image_max_pull_bytes,
@@ -1632,8 +1624,6 @@ class BenchmarkRunner:
                 test_timeout=1800,
                 log_dir=patch_artifacts_dir,
                 force_rebuild=True,  # Always rebuild for fresh verification
-                jobs=self.build_workers,
-                cores_per_job=self.verify_workers,
                 verify_variants=self.patch_verify_variants,
                 inc_image_policy=self.inc_image_policy,
                 inc_image_registry=self.inc_image_registry,
@@ -2199,10 +2189,7 @@ class BenchmarkRunner:
                 self.logger.info("No analyzable seeds for post-experiment coverage")
                 return
 
-            engine = CoverageEngine(
-                build_workers=self.build_workers,
-                runtime_workers=self.verify_workers,
-            )
+            engine = CoverageEngine()
             try:
                 _, summary = engine.collect_timed_line_coverage(
                     benchmark_path=benchmark_path,

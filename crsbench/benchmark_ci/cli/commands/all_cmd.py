@@ -25,7 +25,6 @@ from crsbench.benchmark_ci.cli.common_args import (
     create_benchmark_selection_parent,
     create_build_options_parent,
     create_output_options_parent,
-    reject_local_worker_flags_in_distributed,
 )
 from crsbench.benchmark_ci.cli.discovery import resolve_benchmark_paths
 from crsbench.benchmark_ci.cli.output import print_results_table, save_output_dir
@@ -614,9 +613,6 @@ def _aggregate_benchmark(
 
 def run_all(args: argparse.Namespace) -> int:
     """Run all checks on resolved benchmarks with shared build via flat DAG."""
-    if not reject_local_worker_flags_in_distributed(args):
-        return 1
-
     paths = resolve_benchmark_paths(
         benchmark_arg=getattr(args, "benchmark", None),
         benchmarks_list=getattr(args, "benchmarks", None),
@@ -626,8 +622,6 @@ def run_all(args: argparse.Namespace) -> int:
     )
 
     source_mode = getattr(args, "source", "pkgs")
-    build_workers = getattr(args, "build_workers", 4)
-    verify_workers = getattr(args, "verify_workers", 4)
     mode = getattr(args, "mode", "snapshot")
     use_snapshot = mode == "snapshot"
     force_rebuild = getattr(args, "force_rebuild", False)
@@ -639,7 +633,6 @@ def run_all(args: argparse.Namespace) -> int:
     exec_mode = f", distributed (redis={redis_host})" if distributed else ""
     logger.info(
         f"Running all: {len(paths)} benchmark(s), "
-        f"build-workers={build_workers}, verify-workers={verify_workers}, "
         f"{build_mode}, {rebuild_mode}{exec_mode}"
     )
 

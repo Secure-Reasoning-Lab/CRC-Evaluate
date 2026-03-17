@@ -117,8 +117,6 @@ class BenchmarkValidator:
         oss_fuzz_path: Optional[Path] = None,
         *,
         pov_timeout: int = 120,
-        build_workers: int = 4,
-        verify_workers: int = 4,
         source_mode: str = "pkgs",
         max_povs_per_cpv: Optional[int] = None,
     ):
@@ -127,15 +125,11 @@ class BenchmarkValidator:
         Args:
             oss_fuzz_path: Path to OSS-Fuzz directory (auto-detected if None)
             pov_timeout: Timeout for POV verification in seconds
-            build_workers: Number of parallel build workers
-            verify_workers: Number of parallel verification workers
             source_mode: Source mode - "pkgs" (bundled, default) or "main_repo" (clone)
             max_povs_per_cpv: Limit POVs verified per CPV (None = no limit)
         """
         self.oss_fuzz_path = Path(oss_fuzz_path or ensure_oss_fuzz_root())
         self.pov_timeout = pov_timeout
-        self.build_workers = build_workers
-        self.verify_workers = verify_workers
         self.source_mode = source_mode
         self.max_povs_per_cpv = max_povs_per_cpv
 
@@ -205,8 +199,6 @@ class BenchmarkValidator:
             engine = VerificationEngine(
                 oss_fuzz_path=self.oss_fuzz_path,
                 timeout=self.pov_timeout,
-                jobs=self.build_workers,
-                cores_per_job=self.verify_workers,
                 source_mode=self.source_mode,
                 max_povs_per_cpv=self.max_povs_per_cpv,
             )
@@ -327,8 +319,6 @@ class BenchmarkValidator:
             engine = PatchVerificationEngine(
                 oss_fuzz_path=self.oss_fuzz_path,
                 timeout=self.pov_timeout,
-                jobs=self.build_workers,
-                cores_per_job=self.verify_workers,
                 force_rebuild=force_rebuild,
                 use_inc_build=use_inc_build,
                 source_mode=self.source_mode,
@@ -465,7 +455,6 @@ class BenchmarkValidator:
         try:
             engine = CoverageEngine(
                 oss_fuzz_path=self.oss_fuzz_path,
-                build_workers=self.build_workers,
                 source_mode=self.source_mode,
             )
 
