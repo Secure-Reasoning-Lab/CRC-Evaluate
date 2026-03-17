@@ -508,6 +508,20 @@ def _add_secret_refs_to_provider_neutral_run_config(
     return config
 
 
+def _with_env_passthrough(
+    config: ExperimentConfig,
+    *,
+    common: list[str] | None = None,
+    orchestrator: list[str] | None = None,
+    workers: list[str] | None = None,
+) -> ExperimentConfig:
+    config = config.model_copy(deep=True)
+    config.cloud.bootstrap.env_passthrough.common = list(common or [])
+    config.cloud.bootstrap.env_passthrough.orchestrator = list(orchestrator or [])
+    config.cloud.bootstrap.env_passthrough.workers = list(workers or [])
+    return config
+
+
 def test_build_trial_id_includes_target_cpv_id() -> None:
     cpv_trial = _make_trial("cpv_7")
     trial_id = build_trial_id("exp", cpv_trial, "_abc123")
@@ -1041,6 +1055,101 @@ def test_provider_neutral_cloud_workers_resolve_secret_refs_before_bringup(
             os.chdir(original_cwd)
 
     validator.validate.assert_called_once_with(launch_plan, include_orchestrator=False)
+    manager.bring_up_workers.assert_called_once()
+
+
+def test_provider_neutral_cloud_workers_pass_role_specific_env_passthrough(
+    tmp_path: Path,
+) -> None:
+    """Local cloud-worker bring-up should pass only common+worker env vars to VMs."""
+    config = _with_env_passthrough(
+        _make_provider_neutral_run_config(tmp_path),
+        common=["CRSBENCH_LLM_UPSTREAM_BASE_URL"],
+        orchestrator=["CRSBENCH_LLM_MASTER_KEY"],
+        workers=["OPENAI_API_KEY"],
+    )
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.cloud_readiness = MagicMock()
+    session.register_or_raise.return_value = None
+
+    registration = MagicMock()
+    adapter = MagicMock()
+    validator = MagicMock()
+    manager = MagicMock()
+    launch_plan = build_cloud_launch_plan(config)
+    resolved_plan = MagicMock()
+    resolved_plan.experiment_name = "exp-test"
+
+    def _bring_up_workers(**kwargs):
+        assert kwargs["env_passthrough"] == {
+            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+            "OPENAI_API_KEY": "openai-key",
+        }
+        raise RuntimeError("stop after env passthrough")
+
+    manager.bring_up_workers.side_effect = _bring_up_workers
+
+    with (
+        patch.dict(
+            os.environ,
+            {
+                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "CRSBENCH_LLM_MASTER_KEY": "master-key",
+                "OPENAI_API_KEY": "openai-key",
+            },
+            clear=False,
+        ),
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={"queued": {}, "started": {}, "failed": {}, "finished": {}},
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config",
+            return_value=registration,
+        ),
+        patch(
+            "crsbench.cloud.models.build_cloud_launch_plan",
+            return_value=launch_plan,
+        ),
+        patch(
+            "crsbench.cloud.gce.launch_preflight.prepare_gce_launch_inputs",
+            return_value=MagicMock(
+                resolved_plan=resolved_plan,
+                worker_env={
+                    "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                    "OPENAI_API_KEY": "openai-key",
+                },
+            ),
+        ) as mock_preflight,
+        patch(
+            "crsbench.cloud.gce.provider.GceProviderAdapter",
+            return_value=adapter,
+        ),
+        patch(
+            "crsbench.cloud.quota.QuotaValidator",
+            return_value=validator,
+        ),
+        patch(
+            "crsbench.cloud.status.CloudFleetStatusManager",
+            return_value=manager,
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="stop after env passthrough"):
+            run_experiment_distributed("exp-test", config, [_make_trial(None)])
+
+    mock_preflight.assert_called_once_with(
+        plan=launch_plan,
+        bootstrap=config.cloud.bootstrap,
+        cwd=Path.cwd(),
+    )
     manager.bring_up_workers.assert_called_once()
 
 

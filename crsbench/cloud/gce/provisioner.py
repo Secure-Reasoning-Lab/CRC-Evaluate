@@ -381,6 +381,7 @@ class GceProvisioner:
         redis_password: str | None = None,
         registration: RuntimeRegistration,
         bootstrap_inputs: CloudVmBootstrapInputs | None = None,
+        env_passthrough: dict[str, str] | None = None,
     ) -> list[GceInstanceRequest]:
         """Render instance requests from validated config and runtime metadata."""
         zone = self._resolve_zone(fleet)
@@ -399,6 +400,7 @@ class GceProvisioner:
                 redis_password=redis_password,
                 registration=registration,
                 bootstrap_inputs=bootstrap_inputs,
+                env_passthrough=env_passthrough,
                 worker_name=worker_name,
                 startup_script=startup_script,
             )
@@ -444,6 +446,7 @@ class GceProvisioner:
         redis_password: str | None = None,
         registration: RuntimeRegistration,
         bootstrap_inputs: CloudVmBootstrapInputs | None = None,
+        env_passthrough: dict[str, str] | None = None,
     ) -> list[GceWorkerRecord]:
         """Create a worker fleet and return normalized provider records."""
         requests = self.build_requests(
@@ -453,6 +456,7 @@ class GceProvisioner:
             redis_password=redis_password,
             registration=registration,
             bootstrap_inputs=bootstrap_inputs,
+            env_passthrough=env_passthrough,
         )
         workers: list[GceWorkerRecord] = []
         rollback_requests: list[GceInstanceRequest] = []
@@ -494,6 +498,7 @@ class GceProvisioner:
         experiment_name: str,
         orchestrator: GceOrchestratorConfig,
         experiment_config_path: str,
+        env_passthrough: dict[str, str] | None = None,
         redis_password: str,
     ) -> GceInstanceRequest:
         """Render an instance request for the remote orchestrator VM."""
@@ -511,6 +516,7 @@ class GceProvisioner:
             experiment_name=experiment_name,
             orchestrator=orchestrator,
             experiment_config_path=experiment_config_path,
+            env_passthrough=env_passthrough,
             redis_password=redis_password,
             startup_script=startup_script,
         )
@@ -536,6 +542,7 @@ class GceProvisioner:
         experiment_name: str,
         orchestrator: GceOrchestratorConfig,
         experiment_config_path: str,
+        env_passthrough: dict[str, str] | None = None,
         redis_password: str,
     ) -> GceWorkerRecord:
         """Create the remote orchestrator VM and return its normalized record."""
@@ -543,6 +550,7 @@ class GceProvisioner:
             experiment_name=experiment_name,
             orchestrator=orchestrator,
             experiment_config_path=experiment_config_path,
+            env_passthrough=env_passthrough,
             redis_password=redis_password,
         )
         try:

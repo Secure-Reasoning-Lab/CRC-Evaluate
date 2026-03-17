@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping, Sequence
 
+from crsbench.cloud.env_passthrough import (
+    merge_env_passthrough,
+    resolve_env_passthrough,
+)
 from crsbench.cloud.gce.provider import GceProviderAdapter
 from crsbench.cloud.launch_state import redact_worker_fleet_config
 from crsbench.cloud.models import (
@@ -17,7 +21,11 @@ from crsbench.cloud.models import (
 from crsbench.cloud.secret_refs import resolve_secret_path, resolve_secret_text
 
 if TYPE_CHECKING:
-    from crsbench.validation.schemas import GceOrchestratorConfig, GceWorkerFleetConfig
+    from crsbench.validation.schemas import (
+        CloudBootstrapConfig,
+        GceOrchestratorConfig,
+        GceWorkerFleetConfig,
+    )
 
 
 @dataclass(frozen=True)
@@ -28,6 +36,8 @@ class GceLaunchPreflight:
     resolved_orchestrator: GceOrchestratorConfig | None = None
     resolved_worker_fleets: list[GceWorkerFleetConfig] | None = None
     redacted_worker_fleets: list[GceWorkerFleetConfig] | None = None
+    orchestrator_env: dict[str, str] = field(default_factory=dict)
+    worker_env: dict[str, str] = field(default_factory=dict)
 
 
 def prepare_gce_launch_inputs(
@@ -35,12 +45,17 @@ def prepare_gce_launch_inputs(
     plan: CloudLaunchPlan | None = None,
     orchestrator: GceOrchestratorConfig | None = None,
     worker_fleets: Sequence[GceWorkerFleetConfig] | None = None,
+    bootstrap: CloudBootstrapConfig | None = None,
     cwd: Path | str | None = None,
     env: Mapping[str, str] | None = None,
 ) -> GceLaunchPreflight:
     """Resolve GCE secret-bearing fields once on the operator before provisioning."""
     base_cwd = Path.cwd() if cwd is None else Path(cwd)
     fleets = list(worker_fleets or [])
+    orchestrator_env, worker_env = _resolve_env_passthrough(
+        bootstrap=bootstrap,
+        env=env,
+    )
 
     if plan is not None:
         adapter = GceProviderAdapter()
@@ -53,6 +68,8 @@ def prepare_gce_launch_inputs(
             redacted_worker_fleets=[
                 redact_worker_fleet_config(fleet) for fleet in resolved_worker_fleets
             ],
+            orchestrator_env=orchestrator_env,
+            worker_env=worker_env,
         )
 
     resolved_orchestrator = (
@@ -73,6 +90,36 @@ def prepare_gce_launch_inputs(
         redacted_worker_fleets=[
             redact_worker_fleet_config(fleet) for fleet in resolved_worker_fleets
         ],
+        orchestrator_env=orchestrator_env,
+        worker_env=worker_env,
+    )
+
+
+def _resolve_env_passthrough(
+    *,
+    bootstrap: CloudBootstrapConfig | None,
+    env: Mapping[str, str] | None,
+) -> tuple[dict[str, str], dict[str, str]]:
+    if bootstrap is None:
+        return {}, {}
+
+    common = list(bootstrap.env_passthrough.common)
+    orchestrator_names = merge_env_passthrough(
+        common,
+        bootstrap.env_passthrough.orchestrator,
+    )
+    worker_names = merge_env_passthrough(common, bootstrap.env_passthrough.workers)
+    return (
+        resolve_env_passthrough(
+            orchestrator_names,
+            field_path="cloud.bootstrap.env_passthrough.orchestrator",
+            env=env,
+        ),
+        resolve_env_passthrough(
+            worker_names,
+            field_path="cloud.bootstrap.env_passthrough.workers",
+            env=env,
+        ),
     )
 
 

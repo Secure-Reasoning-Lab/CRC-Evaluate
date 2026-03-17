@@ -75,7 +75,11 @@ def run_launch(args: argparse.Namespace) -> int:
                 )
 
             launch_plan = build_cloud_launch_plan(config)
-            preflight = prepare_gce_launch_inputs(plan=launch_plan, cwd=Path.cwd())
+            preflight = prepare_gce_launch_inputs(
+                plan=launch_plan,
+                bootstrap=config.cloud.bootstrap,
+                cwd=Path.cwd(),
+            )
             provisioning_plan = preflight.resolved_plan
             assert provisioning_plan is not None
             assert preflight.redacted_worker_fleets is not None
@@ -89,6 +93,7 @@ def run_launch(args: argparse.Namespace) -> int:
             orchestrator_record = adapter.create_orchestrator(
                 plan=provisioning_plan,
                 experiment_config_path=str(config_path),
+                env_passthrough=preflight.orchestrator_env,
                 redis_password=redis_password,
             )
         else:
@@ -108,6 +113,7 @@ def run_launch(args: argparse.Namespace) -> int:
             preflight = prepare_gce_launch_inputs(
                 orchestrator=legacy_orchestrator,
                 worker_fleets=[legacy_fleet],
+                bootstrap=config.cloud.bootstrap,
                 cwd=Path.cwd(),
             )
             resolved_legacy_orchestrator = preflight.resolved_orchestrator
@@ -120,6 +126,7 @@ def run_launch(args: argparse.Namespace) -> int:
                 experiment_name=config.experiment,
                 orchestrator=resolved_legacy_orchestrator,
                 experiment_config_path=str(config_path),
+                env_passthrough=preflight.orchestrator_env,
                 redis_password=redis_password,
             )
 
@@ -138,6 +145,7 @@ def run_launch(args: argparse.Namespace) -> int:
                 redis_password=redis_password,
                 registration=registration,
                 bootstrap_inputs=bootstrap_inputs,
+                env_passthrough=preflight.worker_env,
             )
         else:
             assert resolved_legacy_fleet is not None
@@ -149,6 +157,7 @@ def run_launch(args: argparse.Namespace) -> int:
                 redis_password=redis_password,
                 registration=registration,
                 bootstrap_inputs=bootstrap_inputs,
+                env_passthrough=preflight.worker_env,
             )
 
         worker_fleet_configs: list[GceWorkerFleetConfig]

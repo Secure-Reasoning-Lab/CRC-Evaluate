@@ -31,6 +31,7 @@ Non-goals:
 - Readiness is a control-plane concept distinct from GCE VM `RUNNING` state
 - Cloud VMs are experiment-pinned and do not join the shared configless pool
 - Cloud VM bootstrap runs from a cloned CRSBench checkout; non-`git+` install specs are outside this contract
+- Operator-selected remote environment passthrough is explicit; runtime-managed vars such as Redis host/password remain owned by the VM bootstrap
 
 ## Architecture
 
@@ -128,6 +129,7 @@ Timeout contract:
 - OS Login enabled via metadata (`enable-oslogin=TRUE`, `block-project-ssh-keys=TRUE`)
 - Labels always include `owner` and `crsbench-experiment`; role-specific labels distinguish orchestrator and workers
 - Bootstrap payload delivered as base64-encoded JSON in instance metadata
+- Operator-selected remote env vars are delivered separately as base64-encoded JSON metadata after operator-side validation; they are not persisted in launch-state files
 
 Rollback:
 
@@ -152,10 +154,18 @@ The startup script (`cloud/gce/startup/worker.sh`) runs on the VM:
 1. Fetches bootstrap payload from GCE instance metadata API
 2. Requires a `git+...` `crsbench-install-spec`, clones CRSBench into `/opt/crsbench`, and installs the checkout
 3. Runs `crsbench prepare` from that checkout and optionally downloads benchmarks according to `cloud.bootstrap`
-4. Writes env vars to `/etc/default/crsbench-worker`
+4. Imports operator-approved passthrough env vars plus runtime-managed vars and writes them to `/etc/default/crsbench-worker`
 5. Creates and enables `crsbench-worker.service` with `WorkingDirectory=/opt/crsbench` (`Restart=always`)
 6. Only after bootstrap succeeds does the worker connect to Redis and report readiness
 7. On failure: ERR trap calls `report_cloud_worker_state_from_env()` with `bootstrap_failed` and evidence string
+
+Passthrough env contract:
+
+- Experiment config may declare `cloud.bootstrap.env_passthrough.common`, `.orchestrator`, and `.workers`
+- Values are names only; actual values are resolved from the operator environment before provisioning
+- Missing or empty configured variables fail launch before any VM is created
+- Reserved runtime-managed names such as `CRSBENCH_REDIS_HOST` and `CRSBENCH_REDIS_PASSWORD` are rejected during config validation
+- If both `hf_token` and `HF_TOKEN` passthrough are configured, the dedicated `hf_token` metadata wins and the duplicate passthrough entry is dropped
 
 ## Contract: Artifact Collection
 

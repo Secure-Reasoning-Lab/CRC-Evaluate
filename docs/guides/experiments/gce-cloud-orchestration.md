@@ -149,6 +149,31 @@ checkout source. The VM bootstrap clones CRSBench into `/opt/crsbench`,
 changes into that checkout, runs `crsbench prepare`, optionally downloads
 benchmarks, and only then starts the orchestrator or worker runtime.
 
+If remote VMs need API keys or upstream URLs from the operator environment,
+configure `cloud.bootstrap.env_passthrough`:
+
+```yaml
+cloud:
+  bootstrap:
+    env_passthrough:
+      common:
+        - CRSBENCH_LLM_UPSTREAM_BASE_URL
+      orchestrator:
+        - CRSBENCH_LLM_MASTER_KEY
+      workers:
+        - OPENAI_API_KEY
+```
+
+Semantics:
+
+- `common` is copied to both the orchestrator VM and all worker VMs
+- `orchestrator` adds orchestrator-only variables
+- `workers` adds worker-only variables
+- values are resolved from the operator `os.environ` before provisioning
+- missing or empty configured variables fail launch before any VM is created
+- runtime-managed variables such as `CRSBENCH_REDIS_HOST` and
+  `CRSBENCH_REDIS_PASSWORD` are rejected and must not be passed through
+
 ### Generate a deploy key
 
 ```bash
@@ -211,7 +236,9 @@ file at provision time, base64-encodes it, and sets it as
 passed as `crsbench-hf-token` metadata and exported as `HF_TOKEN` in the worker
 environment. Secret references are resolved once on the operator before VM
 creation; the original experiment config payload sent to the remote orchestrator
-is not rewritten with resolved secret values.
+is not rewritten with resolved secret values. `cloud.bootstrap.env_passthrough`
+uses the same operator-side resolution rule, but copies named environment
+variables instead of inline secret refs.
 
 ## Launching an Experiment
 

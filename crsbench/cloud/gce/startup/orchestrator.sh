@@ -32,6 +32,37 @@ metadata_get_optional() {
   curl -fsS -H "${METADATA_HEADER}" "${ATTRIBUTE_METADATA_BASE}/$1" 2>/dev/null || true
 }
 
+for_each_passthrough_env() {
+  local encoded="$1"
+  if [[ -z "${encoded}" ]]; then
+    return 0
+  fi
+  python3 - "${encoded}" <<'PY'
+import base64
+import json
+import sys
+
+encoded = sys.argv[1]
+if not encoded:
+    raise SystemExit(0)
+
+data = json.loads(base64.b64decode(encoded).decode("utf-8"))
+for key, value in data.items():
+    encoded_value = base64.b64encode(str(value).encode("utf-8")).decode("ascii")
+    print(f"{key}\t{encoded_value}")
+PY
+}
+
+export_passthrough_env() {
+  local encoded="$1"
+  while IFS=$'\t' read -r env_name env_value_b64; do
+    [[ -z "${env_name}" ]] && continue
+    local env_value
+    env_value="$(printf "%s" "${env_value_b64}" | base64 --decode)"
+    export "${env_name}=${env_value}"
+  done < <(for_each_passthrough_env "${encoded}")
+}
+
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "missing required command: $1" >&2
@@ -68,6 +99,7 @@ EXPERIMENT_CONFIG_B64="$(metadata_get "crsbench-experiment-config-b64")"
 REDIS_PASSWORD="$(metadata_get "crsbench-redis-password")"
 GITHUB_DEPLOY_KEY="$(metadata_get_optional "crsbench-github-deploy-key")"
 HF_TOKEN="$(metadata_get_optional "crsbench-hf-token")"
+ENV_PASSTHROUGH_B64="$(metadata_get_optional "crsbench-env-passthrough-b64")"
 
 # --- GitHub SSH setup (if deploy key provided) ---
 if [[ -n "${GITHUB_DEPLOY_KEY}" ]]; then
@@ -83,6 +115,7 @@ fi
 if [[ -n "${HF_TOKEN}" ]]; then
   export HF_TOKEN
 fi
+export_passthrough_env "${ENV_PASSTHROUGH_B64}"
 
 # --- Install crsbench from a repo checkout ---
 if [[ -z "${INSTALL_SPEC}" || "${INSTALL_SPEC}" != git+* ]]; then

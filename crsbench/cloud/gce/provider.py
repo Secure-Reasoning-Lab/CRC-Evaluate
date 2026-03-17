@@ -232,6 +232,7 @@ class GceProviderAdapter:
         *,
         plan: CloudLaunchPlan,
         experiment_config_path: str,
+        env_passthrough: dict[str, str] | None = None,
         redis_password: str,
     ) -> "GceWorkerRecord":
         """Create the remote orchestrator VM for a provider-neutral launch plan."""
@@ -239,6 +240,7 @@ class GceProviderAdapter:
             experiment_name=plan.experiment_name,
             orchestrator=self.build_orchestrator_config(plan),
             experiment_config_path=experiment_config_path,
+            env_passthrough=env_passthrough,
             redis_password=redis_password,
         )
 
@@ -250,6 +252,7 @@ class GceProviderAdapter:
         redis_password: str | None,
         registration: "RuntimeRegistration",
         bootstrap_inputs: "CloudVmBootstrapInputs | None" = None,
+        env_passthrough: dict[str, str] | None = None,
     ) -> list["GceWorkerRecord"]:
         """Create workers across all zonal placements in the launch plan."""
         workers: list[GceWorkerRecord] = []
@@ -262,6 +265,7 @@ class GceProviderAdapter:
                     redis_password=redis_password,
                     registration=registration,
                     bootstrap_inputs=bootstrap_inputs,
+                    env_passthrough=env_passthrough,
                 )
             )
         return workers

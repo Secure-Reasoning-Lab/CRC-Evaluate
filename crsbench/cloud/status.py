@@ -63,6 +63,7 @@ class CloudFleetStatusManager:
         redis_password: str | None = None,
         registration: RuntimeRegistration,
         bootstrap_inputs: "CloudVmBootstrapInputs | None" = None,
+        env_passthrough: dict[str, str] | None = None,
     ) -> CloudFleetSnapshot:
         """Provision the requested GCE fleet and wait for explicit readiness."""
         self._readiness_store.clear_experiment(experiment_name)
@@ -75,6 +76,7 @@ class CloudFleetStatusManager:
                 redis_password=redis_password,
                 registration=registration,
                 bootstrap_inputs=bootstrap_inputs,
+                env_passthrough=env_passthrough,
             )
 
             self._record_initial_workers(
@@ -278,6 +280,7 @@ class CloudFleetStatusManager:
         redis_password: str | None = None,
         registration: "RuntimeRegistration",
         bootstrap_inputs: "CloudVmBootstrapInputs | None" = None,
+        env_passthrough: dict[str, str] | None = None,
     ) -> CloudFleetSnapshot:
         """Provision workers across all placements in a launch plan and wait for readiness."""
         self._readiness_store.clear_experiment(plan.experiment_name)
@@ -289,6 +292,7 @@ class CloudFleetStatusManager:
                 redis_password=redis_password,
                 registration=registration,
                 bootstrap_inputs=bootstrap_inputs,
+                env_passthrough=env_passthrough,
             )
             self._record_initial_workers(
                 experiment_name=plan.experiment_name,

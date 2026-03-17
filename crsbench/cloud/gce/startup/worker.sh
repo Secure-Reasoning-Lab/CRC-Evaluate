@@ -34,6 +34,47 @@ write_env_var() {
   printf "%s=%q\n" "$1" "$2" >> "${ENV_PATH}"
 }
 
+for_each_passthrough_env() {
+  local encoded="$1"
+  if [[ -z "${encoded}" ]]; then
+    return 0
+  fi
+  python3 - "${encoded}" <<'PY'
+import base64
+import json
+import sys
+
+encoded = sys.argv[1]
+if not encoded:
+    raise SystemExit(0)
+
+data = json.loads(base64.b64decode(encoded).decode("utf-8"))
+for key, value in data.items():
+    encoded_value = base64.b64encode(str(value).encode("utf-8")).decode("ascii")
+    print(f"{key}\t{encoded_value}")
+PY
+}
+
+export_passthrough_env() {
+  local encoded="$1"
+  while IFS=$'\t' read -r env_name env_value_b64; do
+    [[ -z "${env_name}" ]] && continue
+    local env_value
+    env_value="$(printf "%s" "${env_value_b64}" | base64 --decode)"
+    export "${env_name}=${env_value}"
+  done < <(for_each_passthrough_env "${encoded}")
+}
+
+write_passthrough_env_vars() {
+  local encoded="$1"
+  while IFS=$'\t' read -r env_name env_value_b64; do
+    [[ -z "${env_name}" ]] && continue
+    local env_value
+    env_value="$(printf "%s" "${env_value_b64}" | base64 --decode)"
+    write_env_var "${env_name}" "${env_value}"
+  done < <(for_each_passthrough_env "${encoded}")
+}
+
 report_bootstrap_failure() {
   local evidence="$1"
   python3 - "${CRSBENCH_REDIS_HOST:-}" "${evidence}" <<'PY' || true
@@ -126,6 +167,7 @@ INSTALL_SPEC="$(metadata_get_optional "crsbench-install-spec")"
 GIT_REF="$(metadata_get_optional "crsbench-git-ref")"
 GITHUB_DEPLOY_KEY="$(metadata_get_optional "crsbench-github-deploy-key")"
 HF_TOKEN="$(metadata_get_optional "crsbench-hf-token")"
+ENV_PASSTHROUGH_B64="$(metadata_get_optional "crsbench-env-passthrough-b64")"
 
 # --- GitHub SSH setup (if deploy key provided) ---
 if [[ -n "${GITHUB_DEPLOY_KEY}" ]]; then
@@ -141,6 +183,7 @@ fi
 if [[ -n "${HF_TOKEN}" ]]; then
   export HF_TOKEN
 fi
+export_passthrough_env "${ENV_PASSTHROUGH_B64}"
 
 # --- Install crsbench from a repo checkout ---
 if [[ -z "${INSTALL_SPEC}" || "${INSTALL_SPEC}" != git+* ]]; then
@@ -194,6 +237,7 @@ write_env_var "CRSBENCH_LOG_LEVEL" "INFO"
 if [[ -n "${HF_TOKEN:-}" ]]; then
   write_env_var "HF_TOKEN" "${HF_TOKEN}"
 fi
+write_passthrough_env_vars "${ENV_PASSTHROUGH_B64}"
 if [[ -n "${VENV_BIN:-}" ]]; then
   write_env_var "PATH" "${VENV_BIN}:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 fi

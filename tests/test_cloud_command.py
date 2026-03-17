@@ -394,6 +394,20 @@ def _add_secret_refs_to_provider_neutral_config(
     return config
 
 
+def _with_env_passthrough(
+    config: ExperimentConfig,
+    *,
+    common: list[str] | None = None,
+    orchestrator: list[str] | None = None,
+    workers: list[str] | None = None,
+) -> ExperimentConfig:
+    config = config.model_copy(deep=True)
+    config.cloud.bootstrap.env_passthrough.common = list(common or [])
+    config.cloud.bootstrap.env_passthrough.orchestrator = list(orchestrator or [])
+    config.cloud.bootstrap.env_passthrough.workers = list(workers or [])
+    return config
+
+
 def test_build_cloud_launch_plan_resolves_profiles_for_orchestrator_and_workers():
     from crsbench.cloud.models import build_cloud_launch_plan
 
@@ -468,6 +482,57 @@ def test_prepare_gce_launch_inputs_resolves_provider_neutral_secret_refs(
     ] == str(key_path)
     assert preflight.redacted_worker_fleets[0].hf_token is None
     assert preflight.redacted_worker_fleets[0].github_deploy_key_file is None
+
+
+def test_prepare_gce_launch_inputs_resolves_env_passthrough_for_roles() -> None:
+    from crsbench.cloud.gce.launch_preflight import prepare_gce_launch_inputs
+    from crsbench.cloud.models import build_cloud_launch_plan
+
+    config = _with_env_passthrough(
+        _make_provider_neutral_experiment_config(),
+        common=["CRSBENCH_LLM_UPSTREAM_BASE_URL"],
+        orchestrator=["CRSBENCH_LLM_MASTER_KEY"],
+        workers=["OPENAI_API_KEY"],
+    )
+    launch_plan = build_cloud_launch_plan(config)
+
+    preflight = prepare_gce_launch_inputs(
+        plan=launch_plan,
+        bootstrap=config.cloud.bootstrap,
+        env={
+            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+            "CRSBENCH_LLM_MASTER_KEY": "master-key",
+            "OPENAI_API_KEY": "openai-key",
+        },
+    )
+
+    assert preflight.orchestrator_env == {
+        "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+        "CRSBENCH_LLM_MASTER_KEY": "master-key",
+    }
+    assert preflight.worker_env == {
+        "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+        "OPENAI_API_KEY": "openai-key",
+    }
+
+
+def test_prepare_gce_launch_inputs_rejects_empty_env_passthrough_value() -> None:
+    from crsbench.cloud.env_passthrough import CloudEnvPassthroughError
+    from crsbench.cloud.gce.launch_preflight import prepare_gce_launch_inputs
+    from crsbench.cloud.models import build_cloud_launch_plan
+
+    config = _with_env_passthrough(
+        _make_provider_neutral_experiment_config(),
+        common=["CRSBENCH_LLM_MASTER_KEY"],
+    )
+    launch_plan = build_cloud_launch_plan(config)
+
+    with pytest.raises(CloudEnvPassthroughError, match="CRSBENCH_LLM_MASTER_KEY"):
+        prepare_gce_launch_inputs(
+            plan=launch_plan,
+            bootstrap=config.cloud.bootstrap,
+            env={"CRSBENCH_LLM_MASTER_KEY": ""},
+        )
 
 
 def test_prepare_gce_launch_inputs_rejects_missing_secret_before_provisioning(
@@ -923,6 +988,8 @@ class TestLaunch:
             resolved_orchestrator=resolved_orchestrator,
             resolved_worker_fleets=[resolved_fleet],
             redacted_worker_fleets=[redacted_fleet],
+            orchestrator_env={},
+            worker_env={},
         )
 
         orchestrator_record = _make_gce_worker(
@@ -934,6 +1001,7 @@ class TestLaunch:
             assert kwargs["redis_password"] == "shared-secret"
             assert kwargs["experiment_config_path"] == "/tmp/config.yaml"
             assert kwargs["orchestrator"] == resolved_orchestrator
+            assert kwargs["env_passthrough"] == {}
             return orchestrator_record
 
         def _create_workers(**kwargs):
@@ -941,6 +1009,7 @@ class TestLaunch:
             assert kwargs["redis_host"] == "10.0.0.50:6379"
             assert kwargs["redis_password"] == "shared-secret"
             assert kwargs["fleet"] == resolved_fleet
+            assert kwargs["env_passthrough"] == {}
             return []
 
         mock_prov.create_orchestrator.side_effect = _create_orchestrator
@@ -1032,6 +1101,8 @@ class TestLaunch:
                 redacted_worker_fleets=(
                     _make_provider_neutral_launch_state().worker_fleet_configs
                 ),
+                orchestrator_env={},
+                worker_env={},
             )
         )
         mock_validator = mock_validator_cls.return_value
@@ -1059,6 +1130,7 @@ class TestLaunch:
             assert bootstrap_inputs.prepare_mode == "skip_base_images"
             assert bootstrap_inputs.download_benchmarks == "always"
             assert bootstrap_inputs.benchmark_suite == "sanity"
+            assert kwargs["env_passthrough"] == {}
             call_order.append("create-workers")
             return [_make_gce_worker("worker-east5"), _make_gce_worker("worker-east1")]
 
@@ -1079,9 +1151,89 @@ class TestLaunch:
             plan=resolved_plan,
             experiment_config_path="/tmp/config.yaml",
             redis_password="shared-secret",
+            env_passthrough={},
         )
         mock_adapter.create_workers.assert_called_once()
         assert mock_adapter.create_workers.call_args.kwargs["plan"] is resolved_plan
+
+    @patch(
+        "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
+    )
+    @patch("crsbench.cloud.cli._launch.save_launch_state")
+    @patch("crsbench.cloud.cli._launch.prepare_gce_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._launch.QuotaValidator")
+    @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
+    @patch("crsbench.cloud.cli._launch.load_experiment_config")
+    def test_provider_neutral_launch_passes_role_specific_env_passthrough(
+        self,
+        mock_load,
+        mock_build_plan,
+        mock_validator_cls,
+        mock_adapter_cls,
+        mock_preflight,
+        mock_save_state,
+        mock_secret,
+    ):
+        del mock_secret
+        config = _with_env_passthrough(
+            _make_provider_neutral_experiment_config(),
+            common=["CRSBENCH_LLM_UPSTREAM_BASE_URL"],
+            orchestrator=["CRSBENCH_LLM_MASTER_KEY"],
+            workers=["OPENAI_API_KEY"],
+        )
+        mock_load.return_value = config
+
+        launch_plan = MagicMock()
+        launch_plan.experiment_name = "test-exp"
+        resolved_plan = MagicMock()
+        resolved_plan.experiment_name = "test-exp"
+        expected_worker_fleets = (
+            _make_provider_neutral_launch_state().worker_fleet_configs
+        )
+        mock_build_plan.return_value = launch_plan
+        mock_preflight.return_value = MagicMock(
+            resolved_plan=resolved_plan,
+            redacted_worker_fleets=expected_worker_fleets,
+            orchestrator_env={
+                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "CRSBENCH_LLM_MASTER_KEY": "master-key",
+            },
+            worker_env={
+                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "OPENAI_API_KEY": "openai-key",
+            },
+        )
+        mock_validator_cls.return_value.validate.return_value = None
+
+        mock_adapter = mock_adapter_cls.return_value
+        mock_adapter.build_orchestrator_config.return_value.project = "test-project"
+        mock_adapter.build_orchestrator_config.return_value.ssh_via_iap = True
+        mock_adapter.create_orchestrator.return_value = _make_gce_worker(
+            "gce-orchestrator-test-exp",
+            zone="us-east5-b",
+            ip="10.0.0.50",
+        )
+        mock_adapter.create_workers.return_value = [_make_gce_worker("worker-east5")]
+
+        from crsbench.cloud.cli._launch import run_launch
+
+        rc = run_launch(_make_launch_args())
+
+        assert rc == 0
+        mock_preflight.assert_called_once_with(
+            plan=launch_plan,
+            bootstrap=config.cloud.bootstrap,
+            cwd=Path.cwd(),
+        )
+        assert mock_adapter.create_orchestrator.call_args.kwargs["env_passthrough"] == {
+            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+            "CRSBENCH_LLM_MASTER_KEY": "master-key",
+        }
+        assert mock_adapter.create_workers.call_args.kwargs["env_passthrough"] == {
+            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+            "OPENAI_API_KEY": "openai-key",
+        }
         mock_save_state.assert_called_once()
         saved_state = mock_save_state.call_args.args[1]
         assert saved_state.worker_fleet_configs == expected_worker_fleets

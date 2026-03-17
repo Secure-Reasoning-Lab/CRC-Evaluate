@@ -21,6 +21,7 @@ CRSBENCH_INSTALL_SPEC_KEY = "crsbench-install-spec"
 CRSBENCH_GIT_REF_KEY = "crsbench-git-ref"
 CRSBENCH_GITHUB_DEPLOY_KEY = "crsbench-github-deploy-key"
 CRSBENCH_HF_TOKEN_KEY = "crsbench-hf-token"
+CRSBENCH_ENV_PASSTHROUGH_B64_KEY = "crsbench-env-passthrough-b64"
 CRSBENCH_REDIS_PASSWORD_KEY = "crsbench-redis-password"
 CRSBENCH_EXPERIMENT_CONFIG_B64_KEY = "crsbench-experiment-config-b64"
 CRSBENCH_EXPERIMENT_METADATA_KEY = "crsbench-experiment"
@@ -176,6 +177,7 @@ def _apply_install_metadata(
     *,
     metadata: dict[str, str],
     config: _InstallMetadataConfig,
+    env_passthrough: dict[str, str] | None = None,
 ) -> None:
     if config.crsbench_install_spec:
         metadata[CRSBENCH_INSTALL_SPEC_KEY] = config.crsbench_install_spec
@@ -189,6 +191,19 @@ def _apply_install_metadata(
 
     if config.hf_token:
         metadata[CRSBENCH_HF_TOKEN_KEY] = config.hf_token
+
+    filtered_env_passthrough = _filter_env_passthrough(
+        env_passthrough,
+        skip_keys={"HF_TOKEN"} if config.hf_token else set(),
+    )
+    if filtered_env_passthrough:
+        metadata[CRSBENCH_ENV_PASSTHROUGH_B64_KEY] = base64.b64encode(
+            json.dumps(
+                filtered_env_passthrough,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).decode("ascii")
 
 
 def _apply_startup_script_metadata(
@@ -212,6 +227,20 @@ def _read_experiment_config_bytes(experiment_config_path: str | Path) -> bytes:
     return str(experiment_config_path).encode("utf-8")
 
 
+def _filter_env_passthrough(
+    env_passthrough: dict[str, str] | None,
+    *,
+    skip_keys: set[str],
+) -> dict[str, str]:
+    if not env_passthrough:
+        return {}
+    return {
+        str(key): str(value)
+        for key, value in env_passthrough.items()
+        if str(key) not in skip_keys
+    }
+
+
 def build_instance_metadata(
     *,
     experiment_name: str,
@@ -220,6 +249,7 @@ def build_instance_metadata(
     redis_password: str | None = None,
     registration: RuntimeRegistration,
     bootstrap_inputs: CloudVmBootstrapInputs | None = None,
+    env_passthrough: dict[str, str] | None = None,
     worker_name: str,
     startup_script: str,
 ) -> dict[str, str]:
@@ -242,7 +272,11 @@ def build_instance_metadata(
         metadata[CRSBENCH_REDIS_PASSWORD_KEY] = redis_password
 
     _apply_access_metadata(metadata=metadata, config=fleet)
-    _apply_install_metadata(metadata=metadata, config=fleet)
+    _apply_install_metadata(
+        metadata=metadata,
+        config=fleet,
+        env_passthrough=env_passthrough,
+    )
     _apply_startup_script_metadata(
         metadata=metadata,
         config=fleet,
@@ -256,6 +290,7 @@ def build_orchestrator_metadata(
     experiment_name: str,
     orchestrator: GceOrchestratorConfig,
     experiment_config_path: str | Path,
+    env_passthrough: dict[str, str] | None = None,
     redis_password: str,
     startup_script: str,
 ) -> dict[str, str]:
@@ -268,7 +303,11 @@ def build_orchestrator_metadata(
     ).decode("ascii")
 
     _apply_access_metadata(metadata=metadata, config=orchestrator)
-    _apply_install_metadata(metadata=metadata, config=orchestrator)
+    _apply_install_metadata(
+        metadata=metadata,
+        config=orchestrator,
+        env_passthrough=env_passthrough,
+    )
     _apply_startup_script_metadata(
         metadata=metadata,
         config=orchestrator,

@@ -127,6 +127,26 @@ Expected result:
   datasets
 - the token is not written back into `.crsbench-cloud/*.json`
 
+If your CRS/LLM path also needs operator-side env vars on the remote VMs,
+declare them in `cloud.bootstrap.env_passthrough`. Example:
+
+```yaml
+cloud:
+  bootstrap:
+    env_passthrough:
+      common:
+        - CRSBENCH_LLM_UPSTREAM_BASE_URL
+      orchestrator:
+        - CRSBENCH_LLM_MASTER_KEY
+      workers:
+        - OPENAI_API_KEY
+```
+
+Expected result:
+
+- missing or empty configured env vars fail launch before any VM is created
+- runtime-managed vars such as `CRSBENCH_REDIS_HOST` are rejected in config validation
+
 4. Confirm quota is sufficient for this exact layout:
 
 - `us-east5`: 32 `n2d` vCPUs

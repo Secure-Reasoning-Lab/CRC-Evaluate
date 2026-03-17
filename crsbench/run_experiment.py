@@ -2116,6 +2116,7 @@ def run_experiment_distributed(
                 readiness_store=session.cloud_readiness
             )
             if uses_provider_neutral_cloud:
+                assert cloud_config is not None
                 from crsbench.cloud.gce.launch_preflight import (
                     prepare_gce_launch_inputs,
                 )
@@ -2137,6 +2138,7 @@ def run_experiment_distributed(
                 else:
                     preflight = prepare_gce_launch_inputs(
                         plan=launch_plan,
+                        bootstrap=cloud_config.bootstrap,
                         cwd=Path.cwd(),
                     )
                     assert preflight.resolved_plan is not None
@@ -2151,6 +2153,7 @@ def run_experiment_distributed(
                         redis_password=os.environ.get("CRSBENCH_REDIS_PASSWORD"),
                         registration=registration,
                         bootstrap_inputs=bootstrap_inputs,
+                        env_passthrough=preflight.worker_env,
                     )
                     logger.info(
                         "Cloud worker placements ready: "
@@ -2176,6 +2179,7 @@ def run_experiment_distributed(
 
                     preflight = prepare_gce_launch_inputs(
                         worker_fleets=[legacy_cloud_gce],
+                        bootstrap=cloud_config.bootstrap,
                         cwd=Path.cwd(),
                     )
                     assert preflight.resolved_worker_fleets is not None
@@ -2186,6 +2190,7 @@ def run_experiment_distributed(
                         redis_password=os.environ.get("CRSBENCH_REDIS_PASSWORD"),
                         registration=registration,
                         bootstrap_inputs=bootstrap_inputs,
+                        env_passthrough=preflight.worker_env,
                     )
                     logger.info(
                         "Cloud worker fleet ready: "
