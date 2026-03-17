@@ -2,6 +2,8 @@
 
 import base64
 import json
+import shlex
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -472,6 +474,70 @@ def test_startup_script_waits_for_redis_before_starting_worker_service():
     assert "Waiting for Redis at ${CRSBENCH_REDIS_HOST}" in script
     assert "Fatal Redis bootstrap error" in script
     assert "Timed out waiting for Redis" in script
+
+
+def test_wait_for_redis_fails_fast_on_fatal_probe_error(tmp_path):
+    """Launcher should stop immediately on fatal Redis auth/config probe failures."""
+    from crsbench.cloud.gce.metadata import load_startup_script
+
+    script = load_startup_script()
+    function_start = script.index("wait_for_redis() {")
+    function_end = script.index("\n\ncmd=(", function_start)
+    wait_for_redis = script[function_start:function_end]
+
+    stub_root = tmp_path / "stubs"
+    distributed_pkg = stub_root / "crsbench" / "distributed"
+    distributed_pkg.mkdir(parents=True)
+    (stub_root / "crsbench" / "__init__.py").write_text("", encoding="utf-8")
+    (distributed_pkg / "__init__.py").write_text("", encoding="utf-8")
+    (distributed_pkg / "queue.py").write_text(
+        """
+from enum import StrEnum
+
+
+class RedisConnectionProbe(StrEnum):
+    READY = "ready"
+    RETRYABLE = "retryable"
+    FATAL = "fatal"
+
+
+def probe_redis_connection(redis_host: str, timeout: int = 2):
+    return RedisConnectionProbe.FATAL, "bad password"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    report_path = tmp_path / "report.txt"
+    harness_path = tmp_path / "wait-for-redis.sh"
+    harness_path.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                "set -euo pipefail",
+                f"REPORT_PATH={shlex.quote(str(report_path))}",
+                'report_bootstrap_failure() { printf "%s\\n" "$1" > "${REPORT_PATH}"; }',
+                wait_for_redis,
+                f"export PYTHONPATH={shlex.quote(str(stub_root))}",
+                "export CRSBENCH_REDIS_HOST=redis.internal:6379",
+                "export CRSBENCH_READINESS_TIMEOUT_SEC=30",
+                "wait_for_redis",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", str(harness_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=tmp_path,
+        timeout=2,
+    )
+
+    assert result.returncode == 1
+    assert "Fatal Redis bootstrap error" in report_path.read_text(encoding="utf-8")
+    assert "bad password" in report_path.read_text(encoding="utf-8")
 
 
 def test_build_orchestrator_metadata_embeds_config_payload_and_redis_password(tmp_path):
