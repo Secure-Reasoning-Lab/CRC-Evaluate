@@ -116,6 +116,20 @@ def test_rehearsal_dockerfile_uses_ubuntu_24_dind_base() -> None:
     assert 'CMD ["/bin/bash"]' in dockerfile_text
 
 
+def test_default_rehearsal_experiment_config_is_valid() -> None:
+    """The checked-in default rehearsal config should pass experiment validation."""
+    from crsbench.run_experiment import load_experiment_config
+
+    config = load_experiment_config(
+        Path("scripts/cloud-rehearsal/local-experiment.yaml")
+    )
+
+    assert config.experiment == "local-cloud-rehearsal"
+    assert config.max_total_time > (
+        config.build_timeout + config.run_timeout + config.verify_timeout
+    )
+
+
 def test_rehearsal_wrapper_only_resets_state_for_bringup() -> None:
     """Read-only compose subcommands should not wipe the previous rehearsal state."""
     wrapper_text = Path("scripts/cloud-rehearsal/run-local-rehearsal.sh").read_text(

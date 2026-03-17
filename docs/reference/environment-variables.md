@@ -26,7 +26,9 @@ local rehearsal or non-GCE bring-up.
 | `CRSBENCH_METADATA_BASE_URL` | Override the metadata-service base URL when not using the default GCE endpoint. |
 | `CRSBENCH_METADATA_HEADER_NAME` | Override the metadata-service header name (default `Metadata-Flavor`). |
 | `CRSBENCH_METADATA_HEADER_VALUE` | Override the metadata-service header value (default `Google`). |
-| `CRSBENCH_SERVICE_MANAGER` | Worker startup mode: `auto` (default), `systemd`, or `foreground`. |
+| `CRSBENCH_SERVICE_MANAGER` | Worker/orchestrator startup mode: `auto` (default), `systemd`, or `foreground`. |
+| `CRSBENCH_USER` | Non-root account created by the startup scripts for checkout/install/runtime handoff (default `crsbench`). |
+| `CRSBENCH_TIMEZONE` | Host timezone enforced during startup (default `America/New_York`). |
 | `CRSBENCH_STATE_DIR` | Override the startup-script state directory (default `/var/lib/crsbench`). |
 | `CRSBENCH_CLONE_DIR` | Override the checkout target directory used during startup (default `/opt/crsbench`). |
 

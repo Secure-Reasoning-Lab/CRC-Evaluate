@@ -161,20 +161,24 @@ def test_build_instance_metadata_uses_startup_script_url_when_configured():
 
 
 def test_load_startup_script_contains_managed_worker_service_bootstrap():
-    """Bundled startup script should install an env file and a managed worker service."""
+    """Bundled startup script should hand off the worker to a managed crsbench user service."""
     from crsbench.cloud.gce.metadata import load_startup_script
 
     startup_script = load_startup_script()
 
     assert "CRSBENCH_METADATA_BASE_URL" in startup_script
     assert "metadata.google.internal/computeMetadata/v1" in startup_script
+    assert 'CRSBENCH_USER="${CRSBENCH_USER:-crsbench}"' in startup_script
     assert "CRSBENCH_REDIS_HOST" in startup_script
     assert "CRSBENCH_CLOUD_INSTANCE_ID" in startup_script
     assert "crsbench" in startup_script
     assert "--experiment-name" in startup_script
     assert "bootstrap_failed" in startup_script
-    assert "systemctl enable --now crsbench-worker.service" in startup_script
-    assert "/etc/default/crsbench-worker" in startup_script
+    assert "loginctl enable-linger" in startup_script
+    assert "NOPASSWD:ALL" in startup_script
+    assert "systemctl --user enable --now crsbench-worker.service" in startup_script
+    assert "/etc/systemd/system/crsbench-worker.service" not in startup_script
+    assert "/etc/default/crsbench-worker" not in startup_script
 
 
 def test_build_instance_metadata_includes_install_spec_from_fleet_config():
@@ -444,12 +448,17 @@ def test_startup_script_runs_shared_vm_bootstrap_from_repo_checkout():
     assert "bootstrap_inputs_from_payload" in script
     assert "run_cloud_vm_bootstrap" in script
     assert 'CLONE_DIR="${CRSBENCH_CLONE_DIR:-/opt/crsbench}"' in script
+    assert 'CRSBENCH_USER="${CRSBENCH_USER:-crsbench}"' in script
+    assert 'sudo -H -u "${CRSBENCH_USER}"' in script
     assert "WorkingDirectory=${CLONE_DIR}" in script
     assert "ExecStart=/bin/bash ${LAUNCHER_PATH}" in script
     assert 'git config --global --add safe.directory "${repo_path}"' in script
     assert 'git config --global --add safe.directory "${repo_path}/.git"' in script
     assert 'write_env_var "PATH" "${VENV_BIN}' in script
-    assert "/root/.local/bin" in script
+    assert (
+        'CRSBENCH_USER_HOME="${CRSBENCH_USER_HOME:-/home/${CRSBENCH_USER}}"' in script
+    )
+    assert "${CRSBENCH_USER_HOME}/.local/bin" in script
 
 
 def test_startup_script_supports_file_backed_metadata_and_foreground_service_mode():
@@ -466,7 +475,7 @@ def test_startup_script_supports_file_backed_metadata_and_foreground_service_mod
     assert 'if [[ -n "${CRSBENCH_METADATA_ROOT_DIR}" ]]; then' in script
     assert 'CRSBENCH_SERVICE_MANAGER="${CRSBENCH_SERVICE_MANAGER:-auto}"' in script
     assert "[[ -d /run/systemd/system ]]" in script
-    assert 'exec /bin/bash "${LAUNCHER_PATH}"' in script
+    assert 'exec sudo -H -u "${CRSBENCH_USER}" /bin/bash "${LAUNCHER_PATH}"' in script
 
 
 def test_startup_script_supports_apt_and_apk_bootstrap_dependencies():
@@ -623,15 +632,19 @@ def test_build_orchestrator_metadata_embeds_config_payload_and_redis_password(tm
 
 
 def test_orchestrator_startup_script_consumes_config_payload_and_preprovisioned_mode():
-    """Orchestrator startup should decode config payload and skip worker reprovision."""
+    """Orchestrator startup should decode config payload and run under the crsbench user."""
     from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
 
     script = load_orchestrator_startup_script()
 
+    assert 'CRSBENCH_USER="${CRSBENCH_USER:-crsbench}"' in script
     assert "crsbench-experiment-config-b64" in script
     assert "crsbench-env-passthrough-b64" in script
     assert "CRSBENCH_CLOUD_PREPROVISIONED_WORKERS" in script
     assert "crsbench-redis-password" in script
+    assert "loginctl enable-linger" in script
+    assert "NOPASSWD:ALL" in script
+    assert "systemctl --user enable --now crsbench-orchestrator.service" in script
     assert "python3-pip" in script
     assert "python3-yaml" in script
     assert "git checkout" in script
@@ -669,23 +682,27 @@ def test_orchestrator_startup_script_runs_shared_vm_bootstrap_from_repo_checkout
     assert "CloudVmBootstrapInputs.from_experiment_config" in script
     assert "run_cloud_vm_bootstrap" in script
     assert 'CLONE_DIR="${CRSBENCH_CLONE_DIR:-/opt/crsbench}"' in script
+    assert 'CRSBENCH_USER="${CRSBENCH_USER:-crsbench}"' in script
+    assert 'sudo -H -u "${CRSBENCH_USER}"' in script
     assert 'git config --global --add safe.directory "${repo_path}"' in script
     assert 'git config --global --add safe.directory "${repo_path}/.git"' in script
     assert 'cd "${CLONE_DIR}"' in script
 
 
 def test_orchestrator_startup_script_supports_file_backed_metadata_sources():
-    """Orchestrator bootstrap should not require the GCE metadata endpoint in local rehearsal."""
+    """Orchestrator bootstrap should support local rehearsal without systemd."""
     from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
 
     script = load_orchestrator_startup_script()
 
+    assert 'CRSBENCH_SERVICE_MANAGER="${CRSBENCH_SERVICE_MANAGER:-auto}"' in script
     assert 'CRSBENCH_METADATA_ROOT_DIR="${CRSBENCH_METADATA_ROOT_DIR:-}"' in script
     assert (
         'CRSBENCH_METADATA_BASE_URL="${CRSBENCH_METADATA_BASE_URL:-'
         'http://metadata.google.internal/computeMetadata/v1}"'
     ) in script
     assert 'if [[ -n "${CRSBENCH_METADATA_ROOT_DIR}" ]]; then' in script
+    assert 'exec sudo -H -u "${CRSBENCH_USER}" /bin/bash "${LAUNCHER_PATH}"' in script
 
 
 def test_orchestrator_startup_script_supports_apt_and_apk_bootstrap_dependencies():

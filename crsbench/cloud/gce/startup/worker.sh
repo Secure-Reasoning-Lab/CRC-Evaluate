@@ -7,15 +7,24 @@ CRSBENCH_METADATA_HEADER_NAME="${CRSBENCH_METADATA_HEADER_NAME:-Metadata-Flavor}
 CRSBENCH_METADATA_HEADER_VALUE="${CRSBENCH_METADATA_HEADER_VALUE:-Google}"
 CRSBENCH_SERVICE_MANAGER="${CRSBENCH_SERVICE_MANAGER:-auto}"
 CRSBENCH_TIMEZONE="${CRSBENCH_TIMEZONE:-America/New_York}"
+CRSBENCH_USER="${CRSBENCH_USER:-crsbench}"
+CRSBENCH_USER_HOME="${CRSBENCH_USER_HOME:-/home/${CRSBENCH_USER}}"
 STATE_DIR="${CRSBENCH_STATE_DIR:-/var/lib/crsbench}"
 PAYLOAD_PATH="${STATE_DIR}/bootstrap.json"
 LAUNCHER_PATH="${STATE_DIR}/launch-worker.sh"
-ENV_PATH="/etc/default/crsbench-worker"
-SERVICE_PATH="/etc/systemd/system/crsbench-worker.service"
+ENV_PATH="${STATE_DIR}/worker.env"
 CLONE_DIR="${CRSBENCH_CLONE_DIR:-/opt/crsbench}"
 DOCKER_DAEMON_CONFIG_PATH="${CRSBENCH_DOCKER_DAEMON_CONFIG_PATH:-/etc/docker/daemon.json}"
 DOCKER_CGROUP_DRIVER_OPT="${CRSBENCH_DOCKER_CGROUP_DRIVER_OPT:-native.cgroupdriver=cgroupfs}"
+USER_SERVICE_DIR="${CRSBENCH_USER_HOME}/.config/systemd/user"
+SERVICE_PATH="${USER_SERVICE_DIR}/crsbench-worker.service"
 CLONE_GIT_SSH_COMMAND=""
+CRSBENCH_USER_UID=""
+CRSBENCH_USER_GID=""
+CRSBENCH_USER_RUNTIME_DIR=""
+CRSBENCH_USER_DBUS_ADDRESS=""
+CRSBENCH_USER_LOCAL_BIN=""
+CRSBENCH_USER_PATH=""
 
 metadata_fetch() {
   local relative_path="$1"
@@ -84,6 +93,7 @@ ensure_system_packages() {
     && command -v rsync >/dev/null 2>&1 \
     && command -v tar >/dev/null 2>&1 \
     && command -v ssh-keyscan >/dev/null 2>&1 \
+    && command -v sudo >/dev/null 2>&1 \
     && [[ -e /usr/share/zoneinfo/UTC ]]; then
     return 0
   fi
@@ -94,7 +104,7 @@ ensure_system_packages() {
     return 0
   fi
   if command -v apk >/dev/null 2>&1; then
-    install_packages git python3 py3-pip rsync tar bash coreutils openssh-client tzdata sudo
+    install_packages git python3 py3-pip rsync tar bash coreutils openssh-client tzdata sudo shadow
     return 0
   fi
   echo "Unsupported base image: cannot install git/python/runtime dependencies" >&2
@@ -117,28 +127,6 @@ ensure_timezone() {
   fi
   ln -snf "${zoneinfo_path}" /etc/localtime
   printf '%s\n' "${CRSBENCH_TIMEZONE}" > /etc/timezone
-}
-
-clone_repo() {
-  local repo_url="$1"
-  local clone_dir="$2"
-  if [[ "${repo_url}" == file://* ]]; then
-    local repo_path="${repo_url#file://}"
-    if [[ "${repo_path}" == localhost/* ]]; then
-      repo_path="/${repo_path#localhost/}"
-    fi
-    if [[ -d "${repo_path}" ]]; then
-      git config --global --add safe.directory "${repo_path}" || true
-      if [[ -d "${repo_path}/.git" ]]; then
-        git config --global --add safe.directory "${repo_path}/.git" || true
-      fi
-    fi
-  fi
-  if [[ -n "${CLONE_GIT_SSH_COMMAND}" ]]; then
-    GIT_SSH_COMMAND="${CLONE_GIT_SSH_COMMAND}" git clone --no-single-branch "${repo_url}" "${clone_dir}"
-    return
-  fi
-  git clone --no-single-branch "${repo_url}" "${clone_dir}"
 }
 
 wait_for_docker() {
@@ -285,37 +273,186 @@ supports_systemd() {
   command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]
 }
 
-start_worker_runtime() {
+service_manager_uses_systemd() {
   case "${CRSBENCH_SERVICE_MANAGER}" in
     auto)
-      if supports_systemd; then
-        systemctl daemon-reload
-        systemctl enable --now crsbench-worker.service
-        return 0
-      fi
+      supports_systemd
       ;;
     systemd)
-      if ! supports_systemd; then
-        echo "CRSBENCH_SERVICE_MANAGER=systemd requires a running systemd host" >&2
-        exit 1
-      fi
-      systemctl daemon-reload
-      systemctl enable --now crsbench-worker.service
       return 0
       ;;
     foreground)
+      return 1
       ;;
     *)
       echo "Unsupported CRSBENCH_SERVICE_MANAGER: ${CRSBENCH_SERVICE_MANAGER}" >&2
       exit 1
       ;;
   esac
+}
 
-  # shellcheck disable=SC1090
-  set -a
-  source "${ENV_PATH}"
-  set +a
-  exec /bin/bash "${LAUNCHER_PATH}"
+lookup_user_home() {
+  python3 - "$1" <<'PY'
+import pwd
+import sys
+
+print(pwd.getpwnam(sys.argv[1]).pw_dir)
+PY
+}
+
+ensure_crsbench_user() {
+  if ! id -u "${CRSBENCH_USER}" >/dev/null 2>&1; then
+    if command -v useradd >/dev/null 2>&1; then
+      useradd --create-home --home-dir "${CRSBENCH_USER_HOME}" --shell /bin/bash "${CRSBENCH_USER}"
+    elif command -v adduser >/dev/null 2>&1; then
+      adduser -D -h "${CRSBENCH_USER_HOME}" -s /bin/bash "${CRSBENCH_USER}"
+    else
+      echo "No supported user creation tool found (need useradd or adduser)" >&2
+      exit 1
+    fi
+  fi
+
+  CRSBENCH_USER_HOME="$(lookup_user_home "${CRSBENCH_USER}")"
+  USER_SERVICE_DIR="${CRSBENCH_USER_HOME}/.config/systemd/user"
+  SERVICE_PATH="${USER_SERVICE_DIR}/crsbench-worker.service"
+  CRSBENCH_USER_UID="$(id -u "${CRSBENCH_USER}")"
+  CRSBENCH_USER_GID="$(id -g "${CRSBENCH_USER}")"
+  CRSBENCH_USER_RUNTIME_DIR="/run/user/${CRSBENCH_USER_UID}"
+  CRSBENCH_USER_DBUS_ADDRESS="unix:path=${CRSBENCH_USER_RUNTIME_DIR}/bus"
+  CRSBENCH_USER_LOCAL_BIN="${CRSBENCH_USER_HOME}/.local/bin"
+  CRSBENCH_USER_PATH="${CRSBENCH_USER_LOCAL_BIN}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+  install -d -o "${CRSBENCH_USER}" -g "${CRSBENCH_USER}" -m 0755 "${CRSBENCH_USER_HOME}"
+  install -d -o "${CRSBENCH_USER}" -g "${CRSBENCH_USER}" -m 0755 "${CRSBENCH_USER_HOME}/.config"
+  install -d -o "${CRSBENCH_USER}" -g "${CRSBENCH_USER}" -m 0755 "${USER_SERVICE_DIR}"
+  install -d -o "${CRSBENCH_USER}" -g "${CRSBENCH_USER}" -m 0755 "${STATE_DIR}"
+}
+
+ensure_passwordless_sudo() {
+  install -d -m 0755 /etc/sudoers.d
+  printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${CRSBENCH_USER}" > "/etc/sudoers.d/90-${CRSBENCH_USER}"
+  chmod 0440 "/etc/sudoers.d/90-${CRSBENCH_USER}"
+}
+
+ensure_docker_group_membership() {
+  if ! getent group docker >/dev/null 2>&1; then
+    if command -v groupadd >/dev/null 2>&1; then
+      groupadd --force docker
+    elif command -v addgroup >/dev/null 2>&1; then
+      addgroup -S docker >/dev/null 2>&1 || true
+    fi
+  fi
+
+  if command -v usermod >/dev/null 2>&1; then
+    usermod -aG docker "${CRSBENCH_USER}"
+  elif command -v addgroup >/dev/null 2>&1; then
+    addgroup "${CRSBENCH_USER}" docker >/dev/null 2>&1 || true
+  fi
+}
+
+run_as_crsbench() {
+  sudo -H -u "${CRSBENCH_USER}" "$@"
+}
+
+run_crsbench_shell() {
+  run_as_crsbench env PATH="${CRSBENCH_USER_PATH}" HOME="${CRSBENCH_USER_HOME}" /bin/bash -lc "$1"
+}
+
+prepare_clone_dir() {
+  rm -rf "${CLONE_DIR}"
+  install -d -o "${CRSBENCH_USER}" -g "${CRSBENCH_USER}" -m 0755 "${CLONE_DIR}"
+}
+
+configure_clone_ssh() {
+  local deploy_key_b64="$1"
+  if [[ -z "${deploy_key_b64}" ]]; then
+    return 0
+  fi
+
+  install -d -o "${CRSBENCH_USER}" -g "${CRSBENCH_USER}" -m 0700 "${CRSBENCH_USER_HOME}/.ssh"
+  printf '%s' "${deploy_key_b64}" | base64 --decode > "${CRSBENCH_USER_HOME}/.ssh/id_ed25519"
+  chown "${CRSBENCH_USER}:${CRSBENCH_USER}" "${CRSBENCH_USER_HOME}/.ssh/id_ed25519"
+  chmod 0600 "${CRSBENCH_USER_HOME}/.ssh/id_ed25519"
+  touch "${CRSBENCH_USER_HOME}/.ssh/known_hosts"
+  chown "${CRSBENCH_USER}:${CRSBENCH_USER}" "${CRSBENCH_USER_HOME}/.ssh/known_hosts"
+  chmod 0600 "${CRSBENCH_USER_HOME}/.ssh/known_hosts"
+  run_crsbench_shell "ssh-keyscan -t ed25519 github.com >> ${CRSBENCH_USER_HOME}/.ssh/known_hosts 2>/dev/null"
+  CLONE_GIT_SSH_COMMAND="ssh -F /dev/null -i ${CRSBENCH_USER_HOME}/.ssh/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=${CRSBENCH_USER_HOME}/.ssh/known_hosts -o StrictHostKeyChecking=yes"
+}
+
+clone_repo_as_crsbench() {
+  local repo_url="$1"
+  local clone_dir="$2"
+  if [[ "${repo_url}" == file://* ]]; then
+    local repo_path="${repo_url#file://}"
+    if [[ "${repo_path}" == localhost/* ]]; then
+      repo_path="/${repo_path#localhost/}"
+    fi
+    if [[ -d "${repo_path}" ]]; then
+      run_as_crsbench git config --global --add safe.directory "${repo_path}" || true
+      if [[ -d "${repo_path}/.git" ]]; then
+        run_as_crsbench git config --global --add safe.directory "${repo_path}/.git" || true
+      fi
+    fi
+  fi
+
+  if [[ -n "${CLONE_GIT_SSH_COMMAND}" ]]; then
+    sudo -H -u "${CRSBENCH_USER}" env GIT_SSH_COMMAND="${CLONE_GIT_SSH_COMMAND}" git clone --no-single-branch "${repo_url}" "${clone_dir}"
+    return
+  fi
+  run_as_crsbench git clone --no-single-branch "${repo_url}" "${clone_dir}"
+}
+
+ensure_uv_for_crsbench() {
+  if run_crsbench_shell 'command -v uv >/dev/null 2>&1'; then
+    return 0
+  fi
+  run_crsbench_shell 'curl -LsSf https://astral.sh/uv/install.sh | sh'
+}
+
+setup_user_systemd_runtime() {
+  if ! service_manager_uses_systemd; then
+    return 0
+  fi
+  if ! supports_systemd; then
+    echo "CRSBENCH_SERVICE_MANAGER=systemd requires a running systemd host" >&2
+    exit 1
+  fi
+  require_cmd loginctl
+
+  install -d -m 0755 /etc/systemd/system/user@.service.d
+  cat > /etc/systemd/system/user@.service.d/delegate.conf <<'EOF'
+[Service]
+Delegate=cpuset memory
+EOF
+  systemctl daemon-reload
+  loginctl enable-linger "${CRSBENCH_USER}"
+  systemctl start "user@${CRSBENCH_USER_UID}.service"
+
+  for _i in $(seq 1 30); do
+    if [[ -S "${CRSBENCH_USER_RUNTIME_DIR}/bus" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "systemd user manager did not become ready for ${CRSBENCH_USER}" >&2
+  exit 1
+}
+
+run_user_systemctl() {
+  sudo -H -u "${CRSBENCH_USER}" env \
+    XDG_RUNTIME_DIR="${CRSBENCH_USER_RUNTIME_DIR}" \
+    DBUS_SESSION_BUS_ADDRESS="${CRSBENCH_USER_DBUS_ADDRESS}" \
+    systemctl --user "$@"
+}
+
+setup_oss_crs_for_crsbench() {
+  if ! service_manager_uses_systemd; then
+    return 0
+  fi
+  run_crsbench_shell "cd $(printf '%q' "${CLONE_DIR}") && ${CLONE_DIR}/.venv/bin/oss-crs setup --yes"
+  run_crsbench_shell "cd $(printf '%q' "${CLONE_DIR}") && ${CLONE_DIR}/.venv/bin/oss-crs setup --check"
 }
 
 write_env_var() {
@@ -390,6 +527,41 @@ on_error() {
   report_bootstrap_failure "startup script failed at line $1: $2"
 }
 
+start_worker_runtime() {
+  case "${CRSBENCH_SERVICE_MANAGER}" in
+    auto)
+      if supports_systemd; then
+        run_user_systemctl daemon-reload
+        sudo -H -u "${CRSBENCH_USER}" env \
+          XDG_RUNTIME_DIR="${CRSBENCH_USER_RUNTIME_DIR}" \
+          DBUS_SESSION_BUS_ADDRESS="${CRSBENCH_USER_DBUS_ADDRESS}" \
+          systemctl --user enable --now crsbench-worker.service
+        return 0
+      fi
+      ;;
+    systemd)
+      if ! supports_systemd; then
+        echo "CRSBENCH_SERVICE_MANAGER=systemd requires a running systemd host" >&2
+        exit 1
+      fi
+      run_user_systemctl daemon-reload
+      sudo -H -u "${CRSBENCH_USER}" env \
+        XDG_RUNTIME_DIR="${CRSBENCH_USER_RUNTIME_DIR}" \
+        DBUS_SESSION_BUS_ADDRESS="${CRSBENCH_USER_DBUS_ADDRESS}" \
+        systemctl --user enable --now crsbench-worker.service
+      return 0
+      ;;
+    foreground)
+      ;;
+    *)
+      echo "Unsupported CRSBENCH_SERVICE_MANAGER: ${CRSBENCH_SERVICE_MANAGER}" >&2
+      exit 1
+      ;;
+  esac
+
+  exec sudo -H -u "${CRSBENCH_USER}" /bin/bash "${LAUNCHER_PATH}"
+}
+
 require_cmd curl
 
 mkdir -p "${STATE_DIR}"
@@ -398,6 +570,9 @@ mkdir -p "${STATE_DIR}"
 ensure_system_packages
 ensure_timezone
 ensure_docker_ready
+ensure_crsbench_user
+ensure_passwordless_sudo
+ensure_docker_group_membership
 
 metadata_get "crsbench-bootstrap-payload" | base64 --decode > "${PAYLOAD_PATH}"
 
@@ -453,14 +628,7 @@ HF_TOKEN="$(metadata_get_optional "crsbench-hf-token")"
 ENV_PASSTHROUGH_B64="$(metadata_get_optional "crsbench-env-passthrough-b64")"
 
 # --- GitHub SSH setup (if deploy key provided) ---
-if [[ -n "${GITHUB_DEPLOY_KEY}" ]]; then
-  mkdir -p /root/.ssh
-  chmod 700 /root/.ssh
-  echo "${GITHUB_DEPLOY_KEY}" | base64 --decode > /root/.ssh/id_ed25519
-  chmod 600 /root/.ssh/id_ed25519
-  ssh-keyscan -t ed25519 github.com >> /root/.ssh/known_hosts 2>/dev/null
-  CLONE_GIT_SSH_COMMAND="ssh -F /dev/null -i /root/.ssh/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=/root/.ssh/known_hosts -o StrictHostKeyChecking=yes"
-fi
+configure_clone_ssh "${GITHUB_DEPLOY_KEY}"
 
 # --- HuggingFace token ---
 if [[ -n "${HF_TOKEN}" ]]; then
@@ -474,33 +642,30 @@ if [[ -z "${INSTALL_SPEC}" || "${INSTALL_SPEC}" != git+* ]]; then
   exit 1
 fi
 REPO_URL="${INSTALL_SPEC#git+}"
-rm -rf "${CLONE_DIR}"
-clone_repo "${REPO_URL}" "${CLONE_DIR}"
-cd "${CLONE_DIR}"
-git checkout "${GIT_REF:-main}"
-git submodule update --init --recursive
-if ! command -v uv >/dev/null 2>&1; then
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-  export PATH="/root/.local/bin:${PATH}"
-fi
-uv sync --all-extras
-uv pip install -e .
+prepare_clone_dir
+clone_repo_as_crsbench "${REPO_URL}" "${CLONE_DIR}"
+run_crsbench_shell "cd $(printf '%q' "${CLONE_DIR}") && git checkout $(printf '%q' "${GIT_REF:-main}") && git submodule update --init --recursive"
+ensure_uv_for_crsbench
+run_crsbench_shell "cd $(printf '%q' "${CLONE_DIR}") && uv sync --all-extras && uv pip install -e ."
 VENV_BIN="${CLONE_DIR}/.venv/bin"
-export PATH="${VENV_BIN}:/root/.local/bin:${PATH}"
+CRSBENCH_USER_PATH="${VENV_BIN}:${CRSBENCH_USER_HOME}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-python3 - "${PAYLOAD_PATH}" <<'PY'
+run_as_crsbench env PATH="${CRSBENCH_USER_PATH}" HOME="${CRSBENCH_USER_HOME}" /bin/bash -lc "cd $(printf '%q' "${CLONE_DIR}") && python3 - $(printf '%q' "${PAYLOAD_PATH}") <<'PY'
 import json
 import sys
 from pathlib import Path
 
 from crsbench.cloud.bootstrap import bootstrap_inputs_from_payload, run_cloud_vm_bootstrap
 
-payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+payload = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
 run_cloud_vm_bootstrap(
     bootstrap_inputs_from_payload(payload),
     cwd=Path.cwd(),
 )
-PY
+PY"
+
+setup_user_systemd_runtime
+setup_oss_crs_for_crsbench
 
 : > "${ENV_PATH}"
 write_env_var "CRSBENCH_REDIS_HOST" "${REDIS_HOST}"
@@ -523,12 +688,19 @@ if [[ -n "${HF_TOKEN:-}" ]]; then
 fi
 write_passthrough_env_vars "${ENV_PASSTHROUGH_B64}"
 if [[ -n "${VENV_BIN:-}" ]]; then
-  write_env_var "PATH" "${VENV_BIN}:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  write_env_var "PATH" "${VENV_BIN}:${CRSBENCH_USER_HOME}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 fi
 
 cat > "${LAUNCHER_PATH}" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
+CRSBENCH_ENV_PATH="__CRSBENCH_ENV_PATH__"
+
+# shellcheck disable=SC1090
+set -a
+source "${CRSBENCH_ENV_PATH}"
+set +a
 
 report_bootstrap_failure() {
   local evidence="$1"
@@ -641,7 +813,19 @@ fi
 report_bootstrap_failure "worker service exited with status ${exit_code}"
 exit "${exit_code}"
 EOF
+python3 - "${LAUNCHER_PATH}" "${ENV_PATH}" <<'PY'
+from pathlib import Path
+import sys
+
+launcher_path = Path(sys.argv[1])
+env_path = sys.argv[2]
+launcher_path.write_text(
+    launcher_path.read_text(encoding="utf-8").replace("__CRSBENCH_ENV_PATH__", env_path),
+    encoding="utf-8",
+)
+PY
 chmod +x "${LAUNCHER_PATH}"
+chown "${CRSBENCH_USER}:${CRSBENCH_USER}" "${PAYLOAD_PATH}" "${ENV_PATH}" "${LAUNCHER_PATH}"
 
 cat > "${SERVICE_PATH}" <<EOF
 [Unit]
@@ -651,14 +835,15 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=/etc/default/crsbench-worker
+EnvironmentFile=${ENV_PATH}
 WorkingDirectory=${CLONE_DIR}
 ExecStart=/bin/bash ${LAUNCHER_PATH}
 Restart=always
 RestartSec=10
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
 EOF
+chown "${CRSBENCH_USER}:${CRSBENCH_USER}" "${SERVICE_PATH}"
 
 start_worker_runtime

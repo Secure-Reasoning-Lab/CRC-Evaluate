@@ -15,7 +15,8 @@ The rehearsal runs:
 
 - startup metadata is decoded correctly
 - checkout-first bootstrap works from a real repo clone
-- worker bootstrap can run in forced foreground mode inside the Docker harness
+- orchestrator and worker bootstrap can run in forced foreground mode inside the
+  Docker harness under the non-root `crsbench` user
 - the startup scripts work with file-backed metadata, not only the GCE metadata
   endpoint
 
@@ -72,12 +73,14 @@ The local rehearsal depends on these startup-script env overrides:
 - `CRSBENCH_METADATA_ROOT_DIR`
   - reads metadata from mounted files instead of `metadata.google.internal`
 - `CRSBENCH_SERVICE_MANAGER=foreground`
-  - worker-only; skips `systemd` and `exec`s the launcher directly
+  - set for both orchestrator and workers; skips `systemd` and `exec`s the
+    launcher directly as `crsbench`
 
 The scripts still keep the VM behavior by default:
 
 - GCE metadata remains the fallback when `CRSBENCH_METADATA_ROOT_DIR` is unset
-- `systemd` remains the preferred worker manager when it is available
+- `systemd --user` under `crsbench` remains the preferred VM runtime when it is
+  available
 
 ## Notes
 

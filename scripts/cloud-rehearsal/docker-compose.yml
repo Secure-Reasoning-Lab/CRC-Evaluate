@@ -6,6 +6,7 @@ services:
     privileged: true
     environment:
       CRSBENCH_METADATA_ROOT_DIR: /metadata-root
+      CRSBENCH_SERVICE_MANAGER: foreground
     volumes:
       - ${CRSBENCH_LOCAL_REHEARSAL_REPO_ROOT}:/src/CRSBench:ro
       - ${CRSBENCH_LOCAL_REHEARSAL_STATE_DIR}/metadata/orchestrator:/metadata-root/instance:ro

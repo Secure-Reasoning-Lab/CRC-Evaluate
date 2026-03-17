@@ -307,8 +307,11 @@ Transport-level connection failures are retried until the readiness timeout,
 while fatal Redis auth/config errors still fail immediately with bootstrap
 evidence.
 The same startup scripts also support local rehearsal via file-backed metadata
-and a foreground worker mode for non-`systemd` containers; the default GCE
-runtime path is unchanged.
+and a foreground launcher mode for non-`systemd` containers. On real GCE VMs,
+the scripts now create a dedicated `crsbench` user, grant passwordless `sudo`
+for disposable-host bootstrap, enforce Docker `cgroupfs`, and run the long-lived
+orchestrator/worker processes as `systemd --user` services so `oss-crs` can use
+its delegated user-cgroup path.
 The checked-in smoke config uses `readiness_timeout_sec: 1200` for both
 orchestrator and worker instance profiles to give clean Ubuntu images more room
 to finish bootstrap.
@@ -445,18 +448,26 @@ If your firewall only allows SSH from the IAP range `35.235.240.0/20`, direct
 `ssh <vm>` from your machine will not work. In that setup, use
 `gcloud compute ssh --tunnel-through-iap ...` instead.
 
-The worker process runs as a systemd service:
+The worker process now runs as a `crsbench` user service:
 
 ```bash
 # On the worker VM
-sudo systemctl status crsbench-worker.service
-sudo journalctl -u crsbench-worker.service -f
+sudo -iu crsbench XDG_RUNTIME_DIR=/run/user/$(id -u crsbench) \
+  systemctl --user status crsbench-worker.service
+sudo -iu crsbench XDG_RUNTIME_DIR=/run/user/$(id -u crsbench) \
+  journalctl --user -u crsbench-worker.service -f
 ```
 
 During bootstrap, both orchestrator and worker VMs also normalize the host
 timezone to `America/New_York` and configure Docker to use the `cgroupfs`
 driver expected by `oss-crs`. If you inspect a VM manually, verify these with
 `timedatectl`, `cat /etc/timezone`, and `docker info --format '{{.CgroupDriver}}'`.
+You can also verify the delegated cgroup setup that `oss-crs` depends on with:
+
+```bash
+sudo -iu crsbench XDG_RUNTIME_DIR=/run/user/$(id -u crsbench) \
+  /opt/crsbench/.venv/bin/oss-crs setup --check
+```
 
 ## Operator Connectivity Notes
 
