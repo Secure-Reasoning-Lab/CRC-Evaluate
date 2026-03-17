@@ -164,7 +164,7 @@ uv run crsbench run --experiment-config config.yaml
 
 The local orchestrator will:
 
-1. Validate live quota for the orchestrator placement plus all worker placements
+1. Validate live quota for the requested worker placements
 2. Create the requested worker VMs across the configured zones
 3. Wait for each VM to bootstrap and report `ready`
 4. Enqueue trial jobs only after the full fleet is ready
