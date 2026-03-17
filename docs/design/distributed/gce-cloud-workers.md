@@ -19,7 +19,7 @@ Goals:
 
 Non-goals:
 
-- Multi-region or multi-zone fleet distribution (Phase 1 is zonal only)
+- region-level selectors or automatic placement decisions
 - Auto-scaling worker count based on queue depth
 - Non-GCE cloud providers
 
@@ -120,8 +120,10 @@ Rollback:
 
 ## Contract: Bring-up and Readiness Gating
 
-- `CloudFleetStatusManager.bring_up_gce_workers()` clears stale readiness records, creates VMs, records initial state, then polls for readiness
-- `CloudFleetStatusManager.wait_for_existing_gce_workers()` gates a pre-provisioned fleet on the same explicit readiness protocol without creating VMs again
+- `CloudFleetStatusManager.bring_up_gce_workers()` remains the legacy single-fleet path
+- `CloudFleetStatusManager.bring_up_workers()` clears stale readiness records, creates VMs across all declared placements, records initial state, then polls for readiness
+- `CloudFleetStatusManager.wait_for_existing_gce_workers()` remains the legacy pre-provisioned path
+- `CloudFleetStatusManager.wait_for_existing_workers()` gates pre-provisioned workers across all declared placements on the same explicit readiness protocol without creating VMs again
 - Polling uses `CloudReadinessStore.snapshot()` with configurable `poll_interval_sec` (default 5s)
 - Bring-up succeeds only when all workers reach `READY`
 - On timeout or any failure: transitions workers through `DELETING`/`DELETED`, deletes VMs, raises `CloudFleetBringupError` with the snapshot
@@ -200,7 +202,7 @@ Retry: `tenacity` exponential backoff (min 2s, max 30s, 3 attempts) on rsync fai
 
 ## Decisions and Tradeoffs
 
-- **Zonal only (Phase 1)**: simplifies label-based instance listing and avoids cross-zone networking complexity
+- **Explicit zone placements**: keeps placement intent declarative while still allowing quota-driven multi-zone or multi-region splits
 - **OS Login only**: eliminates project-level SSH key management; IAP adds network-level isolation
 - **Sequential VM creation**: enables clean rollback ordering; parallelism is a future optimization
 - **Stage-then-publish**: prevents partial artifact trees from appearing in experiment results

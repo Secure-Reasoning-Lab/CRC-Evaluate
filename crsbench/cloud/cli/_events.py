@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 def run_events(args: argparse.Namespace) -> int:
     """Show chronological recovery event timeline."""
-    _fleet, redis_conn, _readiness, _lifecycle, _filestore = reconnect(
+    _context, redis_conn, _readiness, _lifecycle, _filestore = reconnect(
         args.config, args.experiment
     )
 

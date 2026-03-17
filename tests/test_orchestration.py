@@ -835,21 +835,38 @@ class TestIntegrationWithSampleConfigs:
         config = load_experiment_config(config_path)
 
         assert config.cloud is not None
-        assert config.cloud.gce is not None
+        assert config.cloud.providers is not None
+        assert config.cloud.providers.gce is not None
+        assert config.cloud.workers is not None
         assert config.cloud.orchestrator is not None
         assert (
-            config.cloud.gce.crsbench_install_spec
+            config.cloud.providers.gce.instance_profiles[
+                "worker-n2d"
+            ].crsbench_install_spec
             == "git+https://github.com/sslab-gatech/CRSBench.git"
         )
-        assert config.cloud.gce.github_deploy_key_file is None
         assert (
-            config.cloud.gce.service_account_email
+            config.cloud.providers.gce.instance_profiles[
+                "worker-n2d"
+            ].github_deploy_key_file
+            is None
+        )
+        assert (
+            config.cloud.providers.gce.instance_profiles[
+                "worker-n2d"
+            ].service_account_email
             == "153298433405-compute@developer.gserviceaccount.com"
         )
         assert (
-            config.cloud.orchestrator.service_account_email
+            config.cloud.providers.gce.instance_profiles[
+                "orchestrator-n2d"
+            ].service_account_email
             == "153298433405-compute@developer.gserviceaccount.com"
         )
+        assert [placement.zone for placement in config.cloud.workers.placements] == [
+            "us-east5-b",
+            "us-east1-b",
+        ]
 
     def test_e2e_with_sample_config_single_crs(self, tmp_path):
         """Test end-to-end workflow with a sample single-CRS config."""
@@ -1199,7 +1216,9 @@ class UnitTestModeSelection:
             ),
         )
 
-        with pytest.raises(RuntimeError, match="cloud.gce requires Redis"):
+        with pytest.raises(
+            RuntimeError, match="cloud worker provisioning requires Redis"
+        ):
             should_use_distributed_mode(args, config, total_jobs=1)
 
     def test_should_use_distributed_mode_cloud_gce_forces_distributed_when_redis_ready(

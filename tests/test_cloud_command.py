@@ -210,6 +210,7 @@ def _make_launch_state():
         experiment_filestore="/tmp/filestore",
         redis_host="10.0.0.50:6379",
         redis_password="shared-secret",
+        orchestrator_provider="gce",
         orchestrator_name="gce-orchestrator-test-exp",
         orchestrator_project="test-project",
         orchestrator_zone="us-central1-a",
@@ -229,17 +230,85 @@ def _make_launch_state():
     )
 
 
+def _make_provider_neutral_launch_state():
+    from crsbench.cloud.launch_state import CloudLaunchState
+
+    return CloudLaunchState(
+        experiment_name="test-exp",
+        config_path="/tmp/config.yaml",
+        experiment_filestore="/tmp/filestore",
+        redis_host="10.0.0.50:6379",
+        redis_password="shared-secret",
+        orchestrator_provider="gce",
+        orchestrator_name="gce-orchestrator-test-exp",
+        orchestrator_project="test-project",
+        orchestrator_zone="us-east5-b",
+        orchestrator_internal_ip="10.0.0.50",
+        orchestrator_external_ip="34.1.2.50",
+        orchestrator_ssh_via_iap=True,
+        worker_fleet_configs=[
+            GceWorkerFleetConfig(
+                project="test-project",
+                zone="us-east5-b",
+                worker_count=2,
+                machine_type="n2d-standard-16",
+                boot_disk_size_gb=100,
+                image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+                owner_label="team-crs",
+                worker_name_prefix="test-exp-us-east5-b",
+            ),
+            GceWorkerFleetConfig(
+                project="test-project",
+                zone="us-east1-b",
+                worker_count=1,
+                machine_type="n2d-standard-16",
+                boot_disk_size_gb=100,
+                image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+                owner_label="team-crs",
+                worker_name_prefix="test-exp-us-east1-b",
+            ),
+        ],
+    )
+
+
+def _make_provider_neutral_operational_context(*, include_launch_state: bool):
+    from crsbench.cloud.cli._config_reconnect import ResolvedCloudContext
+
+    launch_state = (
+        _make_provider_neutral_launch_state() if include_launch_state else None
+    )
+    worker_fleet_configs = _make_provider_neutral_launch_state().worker_fleet_configs
+    return ResolvedCloudContext(
+        worker_fleet_configs=worker_fleet_configs,
+        launch_state=launch_state,
+        experiment_filestore=Path("/tmp/filestore"),
+        redis_host="10.0.0.50:6379",
+        redis_password="shared-secret",
+        launch_plan=MagicMock(experiment_name="test-exp"),
+    )
+
+
 def _make_resolved_cloud_context(launch_state=None):
+    from crsbench.cloud.cli._config_reconnect import ResolvedCloudContext
+
     if launch_state is None:
         fleet = _mock_config(has_cloud=True).cloud.gce
-        return fleet, None, Path("/tmp/filestore"), "localhost", None
+        return ResolvedCloudContext(
+            worker_fleet_configs=[fleet],
+            launch_state=None,
+            experiment_filestore=Path("/tmp/filestore"),
+            redis_host="localhost",
+            redis_password=None,
+        )
 
-    return (
-        launch_state.worker_fleet_config,
-        launch_state,
-        Path(launch_state.experiment_filestore),
-        launch_state.redis_host,
-        launch_state.redis_password,
+    return ResolvedCloudContext(
+        worker_fleet_configs=launch_state.resolved_worker_fleets(),
+        launch_state=launch_state,
+        experiment_filestore=Path(launch_state.experiment_filestore),
+        redis_host=launch_state.redis_host,
+        redis_password=launch_state.redis_password,
     )
 
 
@@ -399,7 +468,7 @@ class TestReconnect:
     @patch("crsbench.cloud.cli._config_reconnect.create_redis_connection")
     @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
     def test_reconnect_valid_config(self, mock_load, mock_redis):
-        """reconnect() returns tuple of (fleet, redis_conn, readiness, lifecycle, filestore)."""
+        """reconnect() returns tuple of (context, redis_conn, readiness, lifecycle, filestore)."""
         mock_load.return_value = _mock_config(has_cloud=True)
         mock_redis.return_value = _FakeRedis()
 
@@ -407,8 +476,8 @@ class TestReconnect:
 
         result = reconnect("/path/to/config.yaml", "test-exp")
         assert len(result) == 5
-        fleet, redis_conn, readiness, lifecycle, filestore = result
-        assert fleet is not None
+        context, redis_conn, readiness, lifecycle, filestore = result
+        assert context.worker_fleet_config is not None
         assert redis_conn is not None
         assert filestore == Path("/tmp/filestore")
 
@@ -438,14 +507,17 @@ class TestReconnect:
         from crsbench.cloud.cli._config_reconnect import reconnect
 
         with patch.dict(os.environ, {}, clear=False):
-            fleet, _redis_conn, _readiness, _lifecycle, filestore = reconnect(
+            context, _redis_conn, _readiness, _lifecycle, filestore = reconnect(
                 "/path/to/config.yaml", "test-exp"
             )
 
             mock_redis.assert_called_once_with("10.0.0.50:6379")
             mock_state.assert_called_once_with(Path("/path/to/config.yaml"), "test-exp")
             assert os.environ["CRSBENCH_REDIS_PASSWORD"] == "shared-secret"
-            assert fleet == mock_state.return_value.worker_fleet_config
+            assert (
+                context.worker_fleet_config
+                == mock_state.return_value.worker_fleet_config
+            )
             assert filestore == Path("/tmp/filestore")
 
     @patch("crsbench.cloud.cli._config_reconnect.save_launch_state")
@@ -463,6 +535,7 @@ class TestReconnect:
             update={
                 "experiment_filestore": None,
                 "worker_fleet_config": None,
+                "worker_fleet_configs": [],
             }
         )
         mock_state.side_effect = [None, legacy_state]
@@ -470,7 +543,7 @@ class TestReconnect:
 
         from crsbench.cloud.cli._config_reconnect import reconnect
 
-        fleet, _redis_conn, _readiness, _lifecycle, filestore = reconnect(
+        context, _redis_conn, _readiness, _lifecycle, filestore = reconnect(
             "/path/to/config.yaml", "test-exp"
         )
 
@@ -483,7 +556,7 @@ class TestReconnect:
         migrated_state = mock_save_state.call_args.args[1]
         assert migrated_state.experiment_filestore == "/tmp/filestore"
         assert migrated_state.worker_fleet_config == config.cloud.gce
-        assert fleet == config.cloud.gce
+        assert context.worker_fleet_config == config.cloud.gce
         assert filestore == Path("/tmp/filestore")
 
     @patch("crsbench.cloud.cli._config_reconnect.save_launch_state")
@@ -501,6 +574,7 @@ class TestReconnect:
             update={
                 "experiment_filestore": None,
                 "worker_fleet_config": None,
+                "worker_fleet_configs": [],
             }
         )
         mock_state.side_effect = [None, legacy_state]
@@ -509,12 +583,33 @@ class TestReconnect:
 
         from crsbench.cloud.cli._config_reconnect import reconnect
 
-        fleet, _redis_conn, _readiness, _lifecycle, filestore = reconnect(
+        context, _redis_conn, _readiness, _lifecycle, filestore = reconnect(
             "/path/to/config.yaml", "test-exp"
         )
 
-        assert fleet == config.cloud.gce
+        assert context.worker_fleet_config == config.cloud.gce
         assert filestore == Path("/tmp/filestore")
+
+    @patch("crsbench.cloud.cli._config_reconnect.load_launch_state")
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_resolve_cloud_context_preserves_all_provider_neutral_worker_fleets(
+        self, mock_load, mock_state
+    ):
+        """Provider-neutral reconnect should keep all placement fleets, not collapse to one."""
+        mock_load.return_value = _make_provider_neutral_experiment_config()
+        launch_state = _make_provider_neutral_launch_state()
+        mock_state.return_value = launch_state
+
+        from crsbench.cloud.cli._config_reconnect import resolve_cloud_context
+
+        context = resolve_cloud_context("/tmp/config.yaml", "test-exp")
+
+        assert [fleet.zone for fleet in context.worker_fleet_configs] == [
+            "us-east5-b",
+            "us-east1-b",
+        ]
+        assert context.launch_state == launch_state
+        assert context.redis_host == "10.0.0.50:6379"
 
 
 # ---------------------------------------------------------------------------
@@ -713,6 +808,71 @@ class TestLaunch:
         mock_logger.error.assert_called_once_with(
             "Cloud launch failed: {}", "disk full"
         )
+
+    @patch(
+        "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
+    )
+    @patch("crsbench.cloud.cli._launch.save_launch_state")
+    @patch("crsbench.cloud.cli._launch.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._launch.QuotaValidator")
+    @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
+    @patch("crsbench.cloud.cli._launch.load_experiment_config")
+    def test_provider_neutral_launch_validates_quota_before_provisioning(
+        self,
+        mock_load,
+        mock_build_plan,
+        mock_validator_cls,
+        mock_adapter_cls,
+        mock_save_state,
+        mock_secret,
+    ):
+        del mock_secret
+        config = _make_provider_neutral_experiment_config()
+        mock_load.return_value = config
+
+        launch_plan = MagicMock()
+        launch_plan.experiment_name = "test-exp"
+        mock_build_plan.return_value = launch_plan
+
+        call_order: list[str] = []
+        mock_validator = mock_validator_cls.return_value
+        mock_validator.validate.side_effect = lambda plan: (
+            call_order.append(f"validate:{plan.experiment_name}")
+        )
+
+        mock_adapter = mock_adapter_cls.return_value
+        expected_worker_fleets = (
+            _make_provider_neutral_launch_state().worker_fleet_configs
+        )
+        mock_adapter.build_worker_fleets.return_value = expected_worker_fleets
+        mock_adapter.build_orchestrator_config.return_value.project = "test-project"
+        mock_adapter.build_orchestrator_config.return_value.ssh_via_iap = True
+        mock_adapter.create_orchestrator.side_effect = lambda **_kwargs: (
+            call_order.append("create-orchestrator")
+            or _make_gce_worker(
+                "gce-orchestrator-test-exp",
+                zone="us-east5-b",
+                ip="10.0.0.50",
+            )
+        )
+        mock_adapter.create_workers.side_effect = lambda **_kwargs: (
+            call_order.append("create-workers")
+            or [_make_gce_worker("worker-east5"), _make_gce_worker("worker-east1")]
+        )
+
+        from crsbench.cloud.cli._launch import run_launch
+
+        rc = run_launch(_make_launch_args())
+
+        assert rc == 0
+        assert call_order == [
+            "validate:test-exp",
+            "create-orchestrator",
+            "create-workers",
+        ]
+        mock_save_state.assert_called_once()
+        saved_state = mock_save_state.call_args.args[1]
+        assert saved_state.worker_fleet_configs == expected_worker_fleets
 
 
 # ---------------------------------------------------------------------------
@@ -1168,13 +1328,7 @@ class TestCollect:
     ):
         """Collection should still use persisted launch state if Redis is unavailable."""
         launch_state = _make_launch_state()
-        mock_resolve_context.return_value = (
-            launch_state.worker_fleet_config,
-            launch_state,
-            Path("/tmp/filestore"),
-            launch_state.redis_host,
-            launch_state.redis_password,
-        )
+        mock_resolve_context.return_value = _make_resolved_cloud_context(launch_state)
         mock_prov = MagicMock()
         mock_prov.list_workers.return_value = [_make_gce_worker("w-1")]
         mock_prov_cls.return_value = mock_prov
@@ -1189,6 +1343,50 @@ class TestCollect:
         assert rc == 0
         mock_reconnect.assert_called_once()
         mock_coll.collect.assert_called()
+
+    @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._collect.ArtifactCollector")
+    @patch("crsbench.cloud.cli._collect.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._collect.GceProvisioner")
+    @patch("crsbench.cloud.cli._collect.reconnect")
+    def test_collect_provider_neutral_context_uses_adapter_for_multi_zone_workers(
+        self,
+        mock_reconnect,
+        mock_prov_cls,
+        mock_adapter_cls,
+        mock_coll_cls,
+        mock_resolve_context,
+    ):
+        """Provider-neutral collection should list workers across placements via the adapter."""
+        del mock_prov_cls
+        context = _make_provider_neutral_operational_context(include_launch_state=True)
+        mock_resolve_context.return_value = context
+
+        adapter = mock_adapter_cls.return_value
+        adapter.list_workers.return_value = [
+            _make_gce_worker("test-exp-us-east5-b-001", zone="us-east5-b"),
+            _make_gce_worker("test-exp-us-east1-b-001", zone="us-east1-b"),
+        ]
+
+        mock_coll = MagicMock()
+        mock_coll_cls.return_value = mock_coll
+        readiness = MagicMock()
+        readiness.list_workers.return_value = []
+        mock_reconnect.return_value = (
+            MagicMock(),
+            MagicMock(),
+            readiness,
+            MagicMock(),
+            Path("/tmp/filestore"),
+        )
+
+        from crsbench.cloud.cli._collect import run_collect
+
+        rc = run_collect(_make_collect_args())
+
+        assert rc == 0
+        adapter.list_workers.assert_called_once_with(plan=context.launch_plan)
+        assert mock_coll.collect.call_count == 3
 
 
 # ---------------------------------------------------------------------------
@@ -1539,13 +1737,7 @@ class TestTeardown:
     ):
         """Teardown should still delete VMs using persisted launch state if Redis is down."""
         launch_state = _make_launch_state()
-        mock_resolve_context.return_value = (
-            launch_state.worker_fleet_config,
-            launch_state,
-            Path("/tmp/filestore"),
-            launch_state.redis_host,
-            launch_state.redis_password,
-        )
+        mock_resolve_context.return_value = _make_resolved_cloud_context(launch_state)
         mock_prov = MagicMock()
         mock_prov.list_workers.return_value = [_make_gce_worker("w-1")]
         mock_prov_cls.return_value = mock_prov
@@ -1561,3 +1753,56 @@ class TestTeardown:
         mock_reconnect.assert_called_once()
         mock_prov.delete_workers.assert_called_once()
         mock_prov.delete_instance.assert_called_once()
+
+    @patch("crsbench.cloud.cli._teardown.delete_launch_state")
+    @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
+    @patch("crsbench.cloud.cli._teardown.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.reconnect")
+    def test_teardown_provider_neutral_context_deletes_multi_zone_workers_via_adapter(
+        self,
+        mock_reconnect,
+        mock_prov_cls,
+        mock_adapter_cls,
+        mock_coll_cls,
+        mock_resolve_context,
+        mock_delete_state,
+    ):
+        """Provider-neutral teardown should delete all placements through the adapter before cleanup."""
+        context = _make_provider_neutral_operational_context(include_launch_state=True)
+        mock_resolve_context.return_value = context
+
+        adapter = mock_adapter_cls.return_value
+        adapter.list_workers.return_value = [
+            _make_gce_worker("test-exp-us-east5-b-001", zone="us-east5-b"),
+            _make_gce_worker("test-exp-us-east1-b-001", zone="us-east1-b"),
+        ]
+        adapter.delete_workers.return_value = adapter.list_workers.return_value
+
+        mock_coll = MagicMock()
+        mock_coll_cls.return_value = mock_coll
+        readiness = MagicMock()
+        readiness.list_workers.return_value = []
+        lifecycle = MagicMock()
+        lifecycle.list_jobs.return_value = []
+        mock_reconnect.return_value = (
+            MagicMock(),
+            MagicMock(),
+            readiness,
+            lifecycle,
+            Path("/tmp/filestore"),
+        )
+
+        mock_prov = MagicMock()
+        mock_prov_cls.return_value = mock_prov
+
+        from crsbench.cloud.cli._teardown import run_teardown
+
+        rc = run_teardown(_make_teardown_args(force=True))
+
+        assert rc == 0
+        adapter.list_workers.assert_called_once_with(plan=context.launch_plan)
+        adapter.delete_workers.assert_called_once_with(plan=context.launch_plan)
+        mock_prov.delete_instance.assert_called_once()
+        assert mock_delete_state.call_count == 2

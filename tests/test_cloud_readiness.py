@@ -263,3 +263,60 @@ def test_wait_for_existing_gce_workers_ignores_stale_other_instance_records() ->
                 readiness_timeout_sec=900,
             ),
         )
+
+
+def test_bring_up_workers_deletes_all_provider_neutral_placements_after_timeout() -> (
+    None
+):
+    """Provider-neutral bring-up should tear down all created workers after a timeout."""
+    from crsbench.cloud.readiness import CloudReadinessStore
+    from crsbench.cloud.status import CloudFleetBringupError, CloudFleetStatusManager
+
+    class _Adapter:
+        def __init__(self) -> None:
+            self.deleted: list[object] = []
+
+        def create_workers(self, **_kwargs) -> list[GceWorkerRecord]:
+            return [
+                _make_worker(),
+                replace(
+                    _make_worker(),
+                    name="gce-worker-002",
+                    instance_id="1002",
+                    zone="us-east1-b",
+                    internal_ip="10.0.1.10",
+                ),
+            ]
+
+        def delete_workers(self, *, plan) -> list[GceWorkerRecord]:
+            self.deleted.append(plan)
+            return []
+
+        def build_worker_fleets(self, plan) -> list[SimpleNamespace]:
+            del plan
+            return [
+                SimpleNamespace(readiness_timeout_sec=900),
+                SimpleNamespace(readiness_timeout_sec=900),
+            ]
+
+    store = CloudReadinessStore(_FakeRedis())
+    adapter = _Adapter()
+    plan = SimpleNamespace(experiment_name="exp-cloud-42")
+    timestamps = iter([0.0, 0.0, 0.0, 901.0])
+    manager = CloudFleetStatusManager(
+        readiness_store=store,
+        provisioner=None,
+        clock=lambda: next(timestamps),
+        sleep=lambda _seconds: None,
+        poll_interval_sec=0.0,
+    )
+
+    with pytest.raises(CloudFleetBringupError, match="timed out waiting for ready"):
+        manager.bring_up_workers(
+            plan=plan,
+            adapter=adapter,
+            redis_host="redis.internal:6379",
+            registration=object(),
+        )
+
+    assert adapter.deleted == [plan]

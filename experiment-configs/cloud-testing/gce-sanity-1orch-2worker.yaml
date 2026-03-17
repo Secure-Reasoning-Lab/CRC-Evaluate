@@ -33,27 +33,40 @@ crs_compose:
 evaluator:
   cores_per_job: 4
 cloud:
+  providers:
+    gce:
+      project: aixcc-426805
+      ssh_via_iap: true
+      instance_profiles:
+        orchestrator-n2d:
+          machine_type: n2d-standard-16
+          boot_disk_size_gb: 50
+          image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+          service_account_email: 153298433405-compute@developer.gserviceaccount.com
+          owner_label: yufu
+          readiness_timeout_sec: 600
+          crsbench_install_spec: "git+https://github.com/sslab-gatech/CRSBench.git"
+          crsbench_git_ref: feat/gcp
+        worker-n2d:
+          machine_type: n2d-standard-16
+          boot_disk_size_gb: 50
+          image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+          service_account_email: 153298433405-compute@developer.gserviceaccount.com
+          owner_label: yufu
+          readiness_timeout_sec: 600
+          crsbench_install_spec: "git+https://github.com/sslab-gatech/CRSBench.git"
+          crsbench_git_ref: feat/gcp
   orchestrator:
-    project: aixcc-426805
-    zone: us-east1-b
-    machine_type: e2-standard-4
-    boot_disk_size_gb: 50
-    image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
-    service_account_email: 153298433405-compute@developer.gserviceaccount.com
-    owner_label: yufu
-    ssh_via_iap: true
-    crsbench_install_spec: "git+https://github.com/sslab-gatech/CRSBench.git"
-    crsbench_git_ref: feat/gcp
-  gce:
-    project: aixcc-426805
-    zone: us-east1-b
-    worker_count: 2
-    machine_type: e2-standard-4
-    boot_disk_size_gb: 50
-    image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
-    service_account_email: 153298433405-compute@developer.gserviceaccount.com
-    owner_label: yufu
-    ssh_via_iap: true
-    readiness_timeout_sec: 600
-    crsbench_install_spec: "git+https://github.com/sslab-gatech/CRSBench.git"
-    crsbench_git_ref: feat/gcp
+    provider: gce
+    zone: us-east5-b
+    instance_profile: orchestrator-n2d
+  workers:
+    placements:
+      - provider: gce
+        zone: us-east5-b
+        worker_count: 1
+        instance_profile: worker-n2d
+      - provider: gce
+        zone: us-east1-b
+        worker_count: 1
+        instance_profile: worker-n2d

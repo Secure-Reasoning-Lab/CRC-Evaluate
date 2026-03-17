@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from crsbench.cloud.gce.models import GceWorkerRecord
 from crsbench.validation.schemas import GceWorkerFleetConfig  # noqa: TC001
@@ -25,13 +25,24 @@ class CloudLaunchState(BaseModel):
     experiment_filestore: str | None = None
     redis_host: str
     redis_password: str
+    orchestrator_provider: str = "gce"
     orchestrator_name: str
     orchestrator_project: str
     orchestrator_zone: str
     orchestrator_internal_ip: str | None = None
     orchestrator_external_ip: str | None = None
     orchestrator_ssh_via_iap: bool = False
+    worker_fleet_configs: list[GceWorkerFleetConfig] = Field(default_factory=list)
     worker_fleet_config: GceWorkerFleetConfig | None = None
+
+    @model_validator(mode="after")
+    def populate_worker_fleet_configs(self) -> "CloudLaunchState":
+        """Preserve backward compatibility for legacy single-fleet launch state."""
+        if self.worker_fleet_configs:
+            return self
+        if self.worker_fleet_config is not None:
+            self.worker_fleet_configs = [self.worker_fleet_config]
+        return self
 
     def as_orchestrator_record(self) -> GceWorkerRecord:
         """Build a collector-compatible instance record for the orchestrator VM."""
@@ -52,6 +63,10 @@ class CloudLaunchState(BaseModel):
             zone=self.orchestrator_zone,
             ssh_via_iap=self.orchestrator_ssh_via_iap,
         )
+
+    def resolved_worker_fleets(self) -> list[GceWorkerFleetConfig]:
+        """Return all worker fleet configs recorded for this launch."""
+        return list(self.worker_fleet_configs)
 
 
 def _resolve_launch_state_dir(base_path: Path | str) -> Path:

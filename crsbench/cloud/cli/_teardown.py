@@ -7,12 +7,16 @@ from typing import TYPE_CHECKING
 
 from crsbench.cloud.cli._config_reconnect import reconnect, resolve_cloud_context
 from crsbench.cloud.collection import ArtifactCollector
+from crsbench.cloud.gce.provider import GceProviderAdapter
 from crsbench.cloud.gce.provisioner import GceProvisioner
 from crsbench.cloud.launch_state import delete_launch_state
 from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
     import argparse
+
+    from crsbench.cloud.cli._config_reconnect import ResolvedCloudContext
+    from crsbench.cloud.gce.models import GceWorkerRecord
 
 logger = get_logger(__name__)
 
@@ -29,13 +33,13 @@ def run_teardown(args: argparse.Namespace) -> int:
 
     Returns 0 on success, 1 on failure/abort.
     """
-    fleet, launch_state, experiment_filestore, _redis_host, _redis_password = (
-        resolve_cloud_context(args.config, args.experiment)
-    )
+    context = resolve_cloud_context(args.config, args.experiment)
+    launch_state = context.launch_state
+    experiment_filestore = context.experiment_filestore
     readiness = None
     lifecycle = None
     try:
-        fleet, _redis_conn, readiness, lifecycle, experiment_filestore = reconnect(
+        _context, _redis_conn, readiness, lifecycle, experiment_filestore = reconnect(
             args.config, args.experiment
         )
     except Exception as exc:
@@ -50,9 +54,7 @@ def run_teardown(args: argparse.Namespace) -> int:
     collector = ArtifactCollector()
 
     # Validate GCE state
-    live_workers = provisioner.list_workers(
-        experiment_name=args.experiment, fleet=fleet
-    )
+    live_workers = _list_live_workers(context, args.experiment, provisioner)
     live_names = {w.name for w in live_workers}
 
     # Cross-reference with Redis readiness state
@@ -106,7 +108,7 @@ def run_teardown(args: argparse.Namespace) -> int:
         try:
             collector.collect(
                 worker=worker,
-                fleet=fleet,
+                fleet=_resolve_worker_fleet(context, worker),
                 experiment_name=args.experiment,
                 experiment_filestore=experiment_filestore,
                 remote_experiment_dir=remote_experiment_dir,
@@ -141,7 +143,7 @@ def run_teardown(args: argparse.Namespace) -> int:
 
     deletion_failed = False
     try:
-        provisioner.delete_workers(experiment_name=args.experiment, fleet=fleet)
+        _delete_live_workers(context, args.experiment, provisioner)
     except Exception as exc:
         logger.error(
             "Worker deletion failed for experiment %s: %s", args.experiment, exc
@@ -190,3 +192,64 @@ def run_teardown(args: argparse.Namespace) -> int:
         " and orchestrator deleted" if launch_state is not None else "",
     )
     return 0
+
+
+def _list_live_workers(
+    context: "ResolvedCloudContext",
+    experiment_name: str,
+    provisioner: GceProvisioner,
+) -> list["GceWorkerRecord"]:
+    if context.launch_plan is not None:
+        return GceProviderAdapter(provisioner=provisioner).list_workers(
+            plan=context.launch_plan
+        )
+
+    workers: list[GceWorkerRecord] = []
+    for fleet in context.worker_fleet_configs:
+        workers.extend(
+            provisioner.list_workers(experiment_name=experiment_name, fleet=fleet)
+        )
+    return workers
+
+
+def _delete_live_workers(
+    context: "ResolvedCloudContext",
+    experiment_name: str,
+    provisioner: GceProvisioner,
+) -> None:
+    if context.launch_plan is not None:
+        GceProviderAdapter(provisioner=provisioner).delete_workers(
+            plan=context.launch_plan
+        )
+        return
+
+    for fleet in context.worker_fleet_configs:
+        provisioner.delete_workers(experiment_name=experiment_name, fleet=fleet)
+
+
+def _resolve_worker_fleet(
+    context: "ResolvedCloudContext",
+    worker: "GceWorkerRecord",
+):
+    prefix_matches = [
+        fleet
+        for fleet in context.worker_fleet_configs
+        if fleet.zone == worker.zone
+        and fleet.worker_name_prefix
+        and worker.name.startswith(fleet.worker_name_prefix)
+    ]
+    if prefix_matches:
+        return prefix_matches[0]
+
+    zone_matches = [
+        fleet for fleet in context.worker_fleet_configs if fleet.zone == worker.zone
+    ]
+    if zone_matches:
+        return zone_matches[0]
+
+    if context.worker_fleet_config is not None:
+        return context.worker_fleet_config
+
+    raise RuntimeError(
+        f"No worker fleet config matched instance {worker.name} in zone {worker.zone}"
+    )

@@ -17,7 +17,7 @@ from crsbench.run_experiment import (
     get_crs_memory,
     run_experiment_distributed,
 )
-from crsbench.validation.schemas import BenchmarkHarness, HarnessFile
+from crsbench.validation.schemas import BenchmarkHarness, ExperimentConfig, HarnessFile
 
 
 def test_register_failure_cleans_registry_lease() -> None:
@@ -419,6 +419,71 @@ def _make_trial(target_cpv_id: str | None) -> Trial:
     )
 
 
+def _make_provider_neutral_run_config(tmp_path: Path) -> ExperimentConfig:
+    return ExperimentConfig.model_validate(
+        {
+            "experiment": "exp-test",
+            "task": "bugfinding",
+            "benchmark_suite": "sanity",
+            "mode": "delta",
+            "trials": 1,
+            "max_total_time": 20000,
+            "redis_host": "localhost:6379",
+            "experiment_filestore": str(tmp_path),
+            "report_filestore": str(tmp_path / "reports"),
+            "build_timeout": 600,
+            "run_timeout": 600,
+            "verify_timeout": 600,
+            "inputs": {"pov": {"max_variants_per_cpv": 1}},
+            "cloud": {
+                "providers": {
+                    "gce": {
+                        "project": "test-project",
+                        "instance_profiles": {
+                            "orchestrator-n2d": {
+                                "machine_type": "n2d-standard-16",
+                                "boot_disk_size_gb": 50,
+                                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                                "service_account_email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com",
+                                "owner_label": "team-crs",
+                            },
+                            "worker-n2d": {
+                                "machine_type": "n2d-standard-16",
+                                "boot_disk_size_gb": 50,
+                                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                                "owner_label": "team-crs",
+                            },
+                        },
+                    }
+                },
+                "orchestrator": {
+                    "provider": "gce",
+                    "zone": "us-east5-b",
+                    "instance_profile": "orchestrator-n2d",
+                },
+                "workers": {
+                    "placements": [
+                        {
+                            "provider": "gce",
+                            "zone": "us-east5-b",
+                            "worker_count": 2,
+                            "instance_profile": "worker-n2d",
+                        },
+                        {
+                            "provider": "gce",
+                            "zone": "us-east1-b",
+                            "worker_count": 1,
+                            "instance_profile": "worker-n2d",
+                        },
+                    ]
+                },
+            },
+            "crs_compose": {"crs-a": {"num_cores": 1}},
+        }
+    )
+
+
 def test_build_trial_id_includes_target_cpv_id() -> None:
     cpv_trial = _make_trial("cpv_7")
     trial_id = build_trial_id("exp", cpv_trial, "_abc123")
@@ -674,6 +739,79 @@ def test_cloud_fleet_bringup_runs_before_enqueue(tmp_path: Path) -> None:
             run_experiment_distributed("exp-test", config, [_make_trial(None)])
 
     manager.bring_up_gce_workers.assert_called_once()
+
+
+def test_provider_neutral_cloud_workers_validate_quota_before_bringup(
+    tmp_path: Path,
+) -> None:
+    """Local orchestrator runs should validate quota before multi-zone worker bring-up."""
+    config = _make_provider_neutral_run_config(tmp_path)
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.cloud_readiness = MagicMock()
+    session.register_or_raise.return_value = None
+
+    registration = MagicMock()
+    launch_plan = MagicMock()
+    launch_plan.experiment_name = "exp-test"
+    adapter = MagicMock()
+    validator = MagicMock()
+    manager = MagicMock()
+    call_order: list[str] = []
+
+    validator.validate.side_effect = lambda plan: (
+        call_order.append(f"validate:{plan.experiment_name}")
+    )
+    manager.bring_up_workers.side_effect = lambda **_kwargs: (
+        call_order.append("bringup") or MagicMock(ready_count=3, requested_count=3)
+    )
+
+    def _enqueue(*args, **kwargs):
+        del args, kwargs
+        assert call_order == ["validate:exp-test", "bringup"]
+        raise RuntimeError("stop after enqueue")
+
+    queue.enqueue.side_effect = _enqueue
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={"queued": {}, "started": {}, "failed": {}, "finished": {}},
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config",
+            return_value=registration,
+        ),
+        patch(
+            "crsbench.cloud.models.build_cloud_launch_plan",
+            return_value=launch_plan,
+        ),
+        patch(
+            "crsbench.cloud.gce.provider.GceProviderAdapter",
+            return_value=adapter,
+        ),
+        patch(
+            "crsbench.cloud.quota.QuotaValidator",
+            return_value=validator,
+        ),
+        patch(
+            "crsbench.cloud.status.CloudFleetStatusManager",
+            return_value=manager,
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="stop after enqueue"):
+            run_experiment_distributed("exp-test", config, [_make_trial(None)])
+
+    validator.validate.assert_called_once_with(launch_plan)
+    manager.bring_up_workers.assert_called_once()
+    manager.bring_up_gce_workers.assert_not_called()
 
 
 def test_cloud_fleet_failure_aborts_before_enqueue(tmp_path: Path) -> None:

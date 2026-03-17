@@ -26,7 +26,7 @@ they stay pinned to the experiment that provisioned them.
 Runtime registration and queue discovery work as follows:
 
 - the orchestrator registers experiment metadata in Redis before enqueueing jobs
-- when `cloud.gce` is configured, the orchestrator also records per-instance
+- when managed cloud workers are configured, the orchestrator also records per-instance
   readiness state in Redis and gates trial enqueue on explicit worker readiness
 - configless workers discover trial queues from the registry and may serve multiple experiments
 - experiment-pinned workers serve one experiment queue without loading a config file
@@ -70,7 +70,7 @@ the same normal startup build-first phase as config-pinned evaluator CLI mode.
 
 ## Cloud Worker Readiness Contract
 
-When an experiment declares `cloud.gce`, the configless runtime gains a
+When an experiment declares managed cloud workers, the configless runtime gains a
 separate cloud-worker readiness contract:
 
 - worker readiness records are keyed by cloud `instance_id`; instance name is

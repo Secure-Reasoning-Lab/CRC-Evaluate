@@ -2,25 +2,48 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from crsbench.cloud.gce.provider import GceProviderAdapter
 from crsbench.cloud.launch_state import (
     CloudLaunchState,
     load_launch_state,
     save_launch_state,
 )
+from crsbench.cloud.models import CloudLaunchPlan, build_cloud_launch_plan
 from crsbench.cloud.readiness import CloudReadinessStore
 from crsbench.distributed.job_lifecycle import JobLifecycleStore
 from crsbench.distributed.queue import create_redis_connection
 from crsbench.run_experiment import load_experiment_config
 from crsbench.utils.logger import get_logger
+from crsbench.validation.schemas import CloudOrchestratorPlacementConfig
 
 if TYPE_CHECKING:
     from crsbench.cloud.readiness import ReadinessRedisProtocol
     from crsbench.distributed.job_lifecycle import LifecycleRedisProtocol
     from crsbench.validation.schemas import GceWorkerFleetConfig
+
+
+@dataclasses.dataclass(frozen=True)
+class ResolvedCloudContext:
+    """Resolved cloud runtime context for standalone operational commands."""
+
+    worker_fleet_configs: list["GceWorkerFleetConfig"]
+    launch_state: CloudLaunchState | None
+    experiment_filestore: Path
+    redis_host: str
+    redis_password: str | None
+    launch_plan: CloudLaunchPlan | None = None
+
+    @property
+    def worker_fleet_config(self) -> "GceWorkerFleetConfig | None":
+        """Return the lone fleet for legacy callers when only one exists."""
+        if len(self.worker_fleet_configs) == 1:
+            return self.worker_fleet_configs[0]
+        return None
 
 
 logger = get_logger(__name__)
@@ -29,11 +52,24 @@ logger = get_logger(__name__)
 def resolve_cloud_context(
     config_path: str,
     experiment_name: str,
-) -> tuple["GceWorkerFleetConfig", CloudLaunchState | None, Path, str, str | None]:
+) -> ResolvedCloudContext:
     """Resolve cloud command context without requiring a live Redis connection."""
     config = load_experiment_config(Path(config_path))
     if config.cloud is None:
         raise SystemExit("Experiment config has no 'cloud' section.")
+
+    launch_plan: CloudLaunchPlan | None = None
+    derived_worker_fleets: list["GceWorkerFleetConfig"] = []
+    uses_provider_neutral_cloud = (
+        config.cloud.providers is not None
+        and config.cloud.workers is not None
+        and isinstance(config.cloud.orchestrator, CloudOrchestratorPlacementConfig)
+    )
+    if uses_provider_neutral_cloud:
+        launch_plan = build_cloud_launch_plan(config)
+        derived_worker_fleets = GceProviderAdapter().build_worker_fleets(launch_plan)
+    elif config.cloud.gce is not None:
+        derived_worker_fleets = [config.cloud.gce]
 
     launch_state = load_launch_state(Path(config_path), experiment_name)
     loaded_from_legacy_path = False
@@ -48,8 +84,10 @@ def resolve_cloud_context(
             launch_state_updates["experiment_filestore"] = str(
                 config.experiment_filestore
             )
-        if launch_state.worker_fleet_config is None and config.cloud.gce is not None:
-            launch_state_updates["worker_fleet_config"] = config.cloud.gce
+        if not launch_state.worker_fleet_configs and derived_worker_fleets:
+            launch_state_updates["worker_fleet_configs"] = derived_worker_fleets
+        if launch_state.worker_fleet_config is None and len(derived_worker_fleets) == 1:
+            launch_state_updates["worker_fleet_config"] = derived_worker_fleets[0]
         if launch_state_updates:
             launch_state = launch_state.model_copy(update=launch_state_updates)
             launch_state_changed = True
@@ -73,27 +111,29 @@ def resolve_cloud_context(
             raise SystemExit(
                 "Remote orchestrator launch state missing experiment filestore"
             )
-        if launch_state.worker_fleet_config is None:
+        if not launch_state.worker_fleet_configs:
             raise SystemExit(
                 "Remote orchestrator launch state missing worker fleet config"
             )
-        return (
-            launch_state.worker_fleet_config,
-            launch_state,
-            Path(launch_state.experiment_filestore),
-            launch_state.redis_host,
-            launch_state.redis_password,
+        return ResolvedCloudContext(
+            worker_fleet_configs=launch_state.resolved_worker_fleets(),
+            launch_state=launch_state,
+            experiment_filestore=Path(launch_state.experiment_filestore),
+            redis_host=launch_state.redis_host,
+            redis_password=launch_state.redis_password,
+            launch_plan=launch_plan,
         )
 
-    if config.cloud.gce is None:
-        raise SystemExit("Experiment config has no 'cloud.gce' section.")
+    if not derived_worker_fleets:
+        raise SystemExit("Experiment config has no supported cloud worker config.")
 
-    return (
-        config.cloud.gce,
-        launch_state,
-        Path(config.experiment_filestore),
-        config.redis_host or "localhost",
-        os.environ.get("CRSBENCH_REDIS_PASSWORD"),
+    return ResolvedCloudContext(
+        worker_fleet_configs=derived_worker_fleets,
+        launch_state=launch_state,
+        experiment_filestore=Path(config.experiment_filestore),
+        redis_host=config.redis_host or "localhost",
+        redis_password=os.environ.get("CRSBENCH_REDIS_PASSWORD"),
+        launch_plan=launch_plan,
     )
 
 
@@ -110,21 +150,15 @@ def reconnect(config_path: str, experiment_name: str):  # noqa: ARG001
     Raises:
         SystemExit: If the config has no ``cloud`` section.
     """
-    (
-        fleet,
-        _launch_state,
-        experiment_filestore,
-        redis_host,
-        redis_password,
-    ) = resolve_cloud_context(config_path, experiment_name)
+    context = resolve_cloud_context(config_path, experiment_name)
 
-    if redis_password:
-        os.environ["CRSBENCH_REDIS_PASSWORD"] = redis_password
+    if context.redis_password:
+        os.environ["CRSBENCH_REDIS_PASSWORD"] = context.redis_password
     else:
         os.environ.pop("CRSBENCH_REDIS_PASSWORD", None)
-    redis_conn = create_redis_connection(redis_host)
+    redis_conn = create_redis_connection(context.redis_host)
 
     readiness = CloudReadinessStore(cast("ReadinessRedisProtocol", redis_conn))
     lifecycle = JobLifecycleStore(cast("LifecycleRedisProtocol", redis_conn))
 
-    return fleet, redis_conn, readiness, lifecycle, experiment_filestore
+    return context, redis_conn, readiness, lifecycle, context.experiment_filestore

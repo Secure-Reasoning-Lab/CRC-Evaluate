@@ -102,28 +102,43 @@ build/verify work queues harmlessly and can be processed later via
 
 ## Cloud Worker Fleets
 
-For cloud-managed workers, declare the worker fleet in the top-level
-`cloud.gce` block instead of relying on host maps or ad hoc SSH setup scripts.
+For cloud-managed workers, declare provider-native details in
+`cloud.providers.gce`, then place workers with `cloud.workers.placements`
+instead of relying on host maps or ad hoc SSH setup scripts.
 
 ```yaml
 cloud:
-  gce:
-    project: example-project
-    zone: us-central1-a
-    worker_count: 4
-    machine_type: e2-standard-16
-    boot_disk_size_gb: 200
-    image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
-    service_account_email: crsbench-worker@example-project.iam.gserviceaccount.com
-    owner_label: team-crs
-    use_os_login: true
-    ssh_via_iap: true
-    readiness_timeout_sec: 900
+  providers:
+    gce:
+      project: example-project
+      ssh_via_iap: true
+      instance_profiles:
+        worker-n2d:
+          machine_type: n2d-standard-16
+          boot_disk_size_gb: 200
+          image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+          service_account_email: crsbench-worker@example-project.iam.gserviceaccount.com
+          owner_label: team-crs
+          readiness_timeout_sec: 900
+  orchestrator:
+    provider: gce
+    zone: us-east5-b
+    instance_profile: worker-n2d
+  workers:
+    placements:
+      - provider: gce
+        zone: us-east5-b
+        worker_count: 3
+        instance_profile: worker-n2d
+      - provider: gce
+        zone: us-east1-b
+        worker_count: 1
+        instance_profile: worker-n2d
 ```
 
 Phase 1 contract notes:
-- `cloud.gce` is the canonical GCE worker-fleet declaration surface.
-- Phase 1 supports zonal fleets only; configure `cloud.gce.zone`.
+- `cloud.providers.gce` plus `cloud.workers.placements` is the canonical GCE declaration surface.
+- Phase 1 supports explicit zone placements only; region selectors are not supported.
 - Access is OS Login-compatible SSH only; keep host verification enabled.
 - Use a dedicated worker service account rather than default project
   credentials.
@@ -267,18 +282,28 @@ evaluator:
   # verify_cores_per_job: 1
 
 cloud:
-  gce:
-    project: example-project
-    zone: us-central1-a
-    worker_count: 4
-    machine_type: e2-standard-16
-    boot_disk_size_gb: 200
-    image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
-    service_account_email: crsbench-worker@example-project.iam.gserviceaccount.com
-    owner_label: team-crs
-    use_os_login: true
-    ssh_via_iap: true
-    readiness_timeout_sec: 900
+  providers:
+    gce:
+      project: example-project
+      ssh_via_iap: true
+      instance_profiles:
+        worker-n2d:
+          machine_type: n2d-standard-16
+          boot_disk_size_gb: 200
+          image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+          service_account_email: crsbench-worker@example-project.iam.gserviceaccount.com
+          owner_label: team-crs
+          readiness_timeout_sec: 900
+  orchestrator:
+    provider: gce
+    zone: us-east5-b
+    instance_profile: worker-n2d
+  workers:
+    placements:
+      - provider: gce
+        zone: us-east5-b
+        worker_count: 4
+        instance_profile: worker-n2d
 ```
 
 ### Config File Naming
@@ -447,8 +472,9 @@ uv run crsbench worker \
 
 The manual SSH/scp workflows below are the legacy operator-managed path. They
 remain useful for existing non-cloud deployments, but they are not the managed
-cloud worker contract. For GCE-backed fleets, declare workers in `cloud.gce`
-instead of encoding hostnames into scripts.
+cloud worker contract. For GCE-backed fleets, declare workers in
+`cloud.providers.gce` plus `cloud.workers.placements` instead of encoding
+hostnames into scripts.
 
 ### Option A: Password Auth (recommended)
 

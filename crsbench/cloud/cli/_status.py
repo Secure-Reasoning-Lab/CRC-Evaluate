@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 def run_status(args: argparse.Namespace) -> int:
     """Show experiment fleet, job, collection, and recovery event summary."""
-    fleet, redis_conn, readiness, lifecycle, _filestore = reconnect(
+    _context, redis_conn, readiness, lifecycle, _filestore = reconnect(
         args.config, args.experiment
     )
 

@@ -17,6 +17,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from crsbench.cloud.gce.models import GceWorkerRecord
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+    from crsbench.cloud.models import CloudLaunchPlan
     from crsbench.distributed.registry import RuntimeRegistration
     from crsbench.validation.schemas import GceWorkerFleetConfig
 
@@ -253,6 +255,137 @@ class CloudFleetStatusManager:
             self._readiness_store.record(
                 CloudWorkerStatus(
                     experiment_name=experiment_name,
+                    instance_id=worker.instance_id,
+                    instance_name=worker.name,
+                    zone=worker.zone,
+                    state=CloudWorkerState.DELETED,
+                    provider_status=worker.status,
+                    internal_ip=worker.internal_ip,
+                    external_ip=worker.external_ip,
+                    detail="Deleted after failed bring-up",
+                )
+            )
+
+    def bring_up_workers(
+        self,
+        *,
+        plan: "CloudLaunchPlan",
+        adapter: "GceProviderAdapter",
+        redis_host: str,
+        redis_password: str | None = None,
+        registration: "RuntimeRegistration",
+    ) -> CloudFleetSnapshot:
+        """Provision workers across all placements in a launch plan and wait for readiness."""
+        self._readiness_store.clear_experiment(plan.experiment_name)
+        workers: list[GceWorkerRecord] = []
+        try:
+            workers = adapter.create_workers(
+                plan=plan,
+                redis_host=redis_host,
+                redis_password=redis_password,
+                registration=registration,
+            )
+            self._record_initial_workers(
+                experiment_name=plan.experiment_name,
+                workers=workers,
+            )
+            return self.wait_for_gce_workers(
+                experiment_name=plan.experiment_name,
+                workers=workers,
+                timeout_sec=self._max_readiness_timeout(adapter, plan),
+            )
+        except Exception:
+            if workers:
+                self._teardown_workers(plan=plan, adapter=adapter, workers=workers)
+            raise
+
+    def wait_for_existing_workers(
+        self,
+        *,
+        plan: "CloudLaunchPlan",
+        adapter: "GceProviderAdapter",
+    ) -> CloudFleetSnapshot:
+        """Wait for all pre-provisioned workers in a launch plan to appear and report ready."""
+        expected_names: list[str] = []
+        timeout_sec = self._max_readiness_timeout(adapter, plan)
+        for fleet in adapter.build_worker_fleets(plan):
+            expected_names.extend(
+                self._provisioner.build_worker_names(
+                    experiment_name=plan.experiment_name,
+                    fleet=fleet,
+                )
+            )
+
+        deadline = self._clock() + timeout_sec
+        while True:
+            workers = adapter.list_workers(plan=plan)
+            workers_by_name = {worker.name: worker for worker in workers}
+            missing_names = [
+                worker_name
+                for worker_name in expected_names
+                if worker_name not in workers_by_name
+            ]
+            if not missing_names:
+                expected_workers = [
+                    workers_by_name[worker_name] for worker_name in expected_names
+                ]
+                self._record_initial_workers(
+                    experiment_name=plan.experiment_name,
+                    workers=expected_workers,
+                )
+                remaining_timeout = max(int(deadline - self._clock()), 1)
+                return self.wait_for_gce_workers(
+                    experiment_name=plan.experiment_name,
+                    workers=expected_workers,
+                    timeout_sec=remaining_timeout,
+                )
+
+            if self._clock() >= deadline:
+                raise CloudFleetBringupError(
+                    "timed out waiting for pre-provisioned cloud workers: "
+                    + ", ".join(missing_names)
+                )
+            self._sleep(self._poll_interval_sec)
+
+    def _max_readiness_timeout(
+        self,
+        adapter: "GceProviderAdapter",
+        plan: "CloudLaunchPlan",
+    ) -> int:
+        return max(
+            fleet.readiness_timeout_sec for fleet in adapter.build_worker_fleets(plan)
+        )
+
+    def _teardown_workers(
+        self,
+        *,
+        plan: "CloudLaunchPlan",
+        adapter: "GceProviderAdapter",
+        workers: list[GceWorkerRecord],
+    ) -> None:
+        for worker in workers:
+            self._readiness_store.record(
+                CloudWorkerStatus(
+                    experiment_name=plan.experiment_name,
+                    instance_id=worker.instance_id,
+                    instance_name=worker.name,
+                    zone=worker.zone,
+                    state=CloudWorkerState.DELETING,
+                    provider_status=worker.status,
+                    internal_ip=worker.internal_ip,
+                    external_ip=worker.external_ip,
+                    detail="Deleting worker after failed bring-up",
+                )
+            )
+
+        try:
+            deleted_workers = adapter.delete_workers(plan=plan)
+        except Exception:
+            return
+        for worker in deleted_workers:
+            self._readiness_store.record(
+                CloudWorkerStatus(
+                    experiment_name=plan.experiment_name,
                     instance_id=worker.instance_id,
                     instance_name=worker.name,
                     zone=worker.zone,

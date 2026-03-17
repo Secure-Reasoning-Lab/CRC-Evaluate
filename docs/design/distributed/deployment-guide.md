@@ -42,8 +42,8 @@ Deployment assumptions:
 When a deployment uses managed GCE workers, the experiment config is the source
 of truth for worker-fleet shape. The cloud contract is:
 
-- worker fleets are declared in `cloud.gce`, not in lab-specific host maps
-- Phase 1 supports zonal fleets only; `cloud.gce.zone` is required
+- worker fleets are declared through `cloud.providers.gce` plus `cloud.workers.placements`, not in lab-specific host maps
+- Phase 1 supports explicit zone placements only; region selectors are not supported
 - provisioned workers carry experiment identity plus operator ownership labels
 - supported operator access remains OS Login-compatible SSH with host
   verification enabled
@@ -60,7 +60,8 @@ of truth for worker-fleet shape. The cloud contract is:
 
 ## Remote GCE Orchestrator Contract
 
-When a deployment uses both `cloud.orchestrator` and `cloud.gce`, the local
+When a deployment uses `cloud.orchestrator` plus GCE-backed
+`cloud.workers.placements`, the local
 operator machine remains the cloud control plane. The deployment contract is:
 
 - the operator machine provisions exactly one orchestrator VM plus the worker fleet

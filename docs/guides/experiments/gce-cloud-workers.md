@@ -5,7 +5,9 @@ Guide for provisioning and managing GCE worker fleets in CRSBench experiments.
 ## Prerequisites
 
 1. **GCP project** with Compute Engine API enabled
-2. **gcloud CLI** authenticated (`gcloud auth login`)
+2. **gcloud CLI** authenticated:
+   - `gcloud auth login` for operator CLI use
+   - `gcloud auth application-default login` for CRSBench's Python GCE client
 3. **Service account** for workers with minimal permissions:
    - `roles/logging.logWriter` (optional, for Cloud Logging)
    - Access to Redis host (firewall rules or VPC)
@@ -17,80 +19,66 @@ Guide for provisioning and managing GCE worker fleets in CRSBench experiments.
 
 ## Configuration
 
-Add a `cloud.gce` block to your experiment config YAML:
+Declare provider-native GCE details under `cloud.providers.gce`, then reference
+those instance profiles from `cloud.orchestrator` and `cloud.workers.placements`:
 
 ```yaml
 cloud:
-  gce:
-    project: my-gcp-project
-    zone: us-central1-a
-    worker_count: 4
-    machine_type: e2-standard-16
-    boot_disk_size_gb: 200
-    image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
-    service_account_email: crsbench-worker@my-gcp-project.iam.gserviceaccount.com
-    owner_label: my-team
-    use_os_login: true
-    ssh_via_iap: true
-    readiness_timeout_sec: 900
-```
-
-To launch the orchestrator in GCE as well, add a sibling `cloud.orchestrator`
-block. The local operator machine still owns provisioning; the remote
-orchestrator VM only runs `crsbench run` and hosts the Redis/Valkey queue.
-
-```yaml
-cloud:
+  providers:
+    gce:
+      project: my-gcp-project
+      ssh_via_iap: true
+      instance_profiles:
+        orchestrator-n2d:
+          machine_type: n2d-standard-16
+          boot_disk_size_gb: 50
+          image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+          service_account_email: crsbench-orchestrator@my-gcp-project.iam.gserviceaccount.com
+          owner_label: my-team
+          readiness_timeout_sec: 900
+          crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
+        worker-n2d:
+          machine_type: n2d-standard-16
+          boot_disk_size_gb: 50
+          image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+          service_account_email: crsbench-worker@my-gcp-project.iam.gserviceaccount.com
+          owner_label: my-team
+          readiness_timeout_sec: 900
+          crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
   orchestrator:
-    project: my-gcp-project
-    zone: us-central1-a
-    machine_type: e2-standard-16
-    boot_disk_size_gb: 200
-    image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
-    service_account_email: crsbench-orchestrator@my-gcp-project.iam.gserviceaccount.com
-    owner_label: my-team
-    use_os_login: true
-    ssh_via_iap: true
-    crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
-  gce:
-    project: my-gcp-project
-    zone: us-central1-a
-    worker_count: 4
-    machine_type: e2-standard-16
-    boot_disk_size_gb: 200
-    image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
-    service_account_email: crsbench-worker@my-gcp-project.iam.gserviceaccount.com
-    owner_label: my-team
-    use_os_login: true
-    ssh_via_iap: true
+    provider: gce
+    zone: us-east5-b
+    instance_profile: orchestrator-n2d
+  workers:
+    placements:
+      - provider: gce
+        zone: us-east5-b
+        worker_count: 3
+        instance_profile: worker-n2d
+      - provider: gce
+        zone: us-east1-b
+        worker_count: 1
+        instance_profile: worker-n2d
 ```
 
 ### Configuration Fields
 
-| Field | Required | Default | Description |
-|---|---|---|---|
-| `project` | yes | -- | GCP project ID |
-| `zone` | yes | -- | GCE zone for all workers |
-| `worker_count` | no | `1` | Number of worker VMs to create |
-| `machine_type` | conditional | -- | Required when using `image` |
-| `boot_disk_size_gb` | conditional | -- | Required when using `image` (min 10) |
-| `image` | conditional | -- | VM image; mutually exclusive with `instance_template` |
-| `instance_template` | conditional | -- | GCE instance template; mutually exclusive with `image` |
-| `service_account_email` | yes | -- | Service account for worker VMs |
-| `owner_label` | yes | -- | Owner label applied to all VMs (or set via `labels.owner`) |
-| `network` | no | default | VPC network |
-| `subnetwork` | no | -- | VPC subnetwork |
-| `labels` | no | `{}` | Additional GCE labels |
-| `metadata` | no | `{}` | Additional instance metadata key-value pairs |
-| `worker_name_prefix` | no | auto | Name prefix for VM instances |
-| `startup_script_uri` | no | bundled | Custom startup script URL (overrides built-in bootstrap) |
-| `use_os_login` | no | `true` | Must be `true` (enforced by validation) |
-| `ssh_via_iap` | no | `false` | Use IAP tunnel for SSH and rsync |
-| `readiness_timeout_sec` | no | `900` | Max seconds to wait for all workers to report ready |
-| `crsbench_install_spec` | no | -- | How to install crsbench on workers (`git+https://...` or `git+ssh://...` for repo clone, or a pip spec). Optional when the VM image already has `crsbench` installed. |
-| `crsbench_git_ref` | no | `main` | Git branch, tag, or commit to checkout after cloning (used with any `git+...` install spec) |
-| `github_deploy_key_file` | no | -- | Path to SSH private key for GitHub deploy key access when using a private `git+ssh://...` install spec |
-| `hf_token` | no | -- | HuggingFace token for gated dataset access |
+| Field | Required | Description |
+|---|---|---|
+| `cloud.providers.gce.project` | yes | GCP project ID used for all referenced GCE resources |
+| `cloud.providers.gce.instance_profiles.<name>` | yes | Reusable machine/image/service-account bundle for orchestrator or workers |
+| `cloud.orchestrator.provider` | yes | Provider for the remote orchestrator VM (`gce` in v1) |
+| `cloud.orchestrator.zone` | yes | Explicit orchestrator zone |
+| `cloud.orchestrator.instance_profile` | yes | Instance profile name for the orchestrator VM |
+| `cloud.workers.placements[].zone` | yes | Explicit worker placement zone (zone selectors only in v1) |
+| `cloud.workers.placements[].worker_count` | no | Number of workers to create in that placement |
+| `cloud.workers.placements[].instance_profile` | yes | Instance profile name for that placement |
+
+Instance profiles carry the per-VM details such as `machine_type`,
+`boot_disk_size_gb`, `image` or `instance_template`, `service_account_email`,
+`owner_label`, `labels`, `metadata`, `ssh_via_iap`, `readiness_timeout_sec`,
+`crsbench_install_spec`, `crsbench_git_ref`, `github_deploy_key_file`, and
+`hf_token`.
 
 ### Using Instance Templates
 
@@ -98,14 +86,21 @@ Instead of specifying `image` + `machine_type` + `boot_disk_size_gb`, you can re
 
 ```yaml
 cloud:
-  gce:
-    project: my-gcp-project
-    zone: us-central1-a
-    worker_count: 8
-    instance_template: projects/my-gcp-project/global/instanceTemplates/crsbench-worker-v1
-    service_account_email: crsbench-worker@my-gcp-project.iam.gserviceaccount.com
-    owner_label: my-team
-    ssh_via_iap: true
+  providers:
+    gce:
+      project: my-gcp-project
+      ssh_via_iap: true
+      instance_profiles:
+        worker-template:
+          instance_template: projects/my-gcp-project/global/instanceTemplates/crsbench-worker-v1
+          service_account_email: crsbench-worker@my-gcp-project.iam.gserviceaccount.com
+          owner_label: my-team
+  workers:
+    placements:
+      - provider: gce
+        zone: us-central1-a
+        worker_count: 8
+        instance_profile: worker-template
 ```
 
 ## Private Repository & Dataset Access
@@ -135,15 +130,18 @@ public key. Add it to your GitHub repository:
 
 ```yaml
 cloud:
-  gce:
-    # Install crsbench from a public repo via git clone + uv sync
-    crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
+  providers:
+    gce:
+      instance_profiles:
+        worker-n2d:
+          # Install crsbench from a public repo via git clone + uv sync
+          crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
 
-    # For a private repo, switch to git+ssh://... and provide a deploy key:
-    # github_deploy_key_file: .crsbench-keys/crsbench-deploy
+          # For a private repo, switch to git+ssh://... and provide a deploy key:
+          # github_deploy_key_file: .crsbench-keys/crsbench-deploy
 
-    # HuggingFace token for gated dataset downloads (optional)
-    hf_token: "hf_..."
+          # HuggingFace token for gated dataset downloads (optional)
+          hf_token: "hf_..."
 ```
 
 When `github_deploy_key_file` is set, the provisioner reads the private key
@@ -157,8 +155,8 @@ environment.
 
 ### Local Orchestrator + GCE Workers
 
-When `cloud.gce` is present and `cloud.orchestrator` is absent, `crsbench run`
-provisions the worker fleet from the local machine:
+When you run `crsbench run --experiment-config ...`, CRSBench can provision the
+declared `cloud.workers.placements` from the local machine:
 
 ```bash
 uv run crsbench run --experiment-config config.yaml
@@ -166,15 +164,16 @@ uv run crsbench run --experiment-config config.yaml
 
 The local orchestrator will:
 
-1. Create `worker_count` VMs in the specified zone
-2. Wait for each VM to bootstrap and report `ready` (up to `readiness_timeout_sec`)
-3. Enqueue trial jobs only after the full fleet is ready
-4. If any VM fails to become ready, tear down the entire fleet and exit with an error
+1. Validate live quota for the orchestrator placement plus all worker placements
+2. Create the requested worker VMs across the configured zones
+3. Wait for each VM to bootstrap and report `ready`
+4. Enqueue trial jobs only after the full fleet is ready
+5. If any VM fails to become ready, tear down the entire fleet and exit with an error
 
 ### Remote Orchestrator + GCE Workers
 
-When both `cloud.orchestrator` and `cloud.gce` are present, use `cloud launch`
-from the local operator machine:
+When you use `cloud launch`, the local operator machine provisions the
+orchestrator VM and the worker placements declared in the same config:
 
 ```bash
 uv run crsbench cloud launch --config config.yaml
@@ -182,10 +181,11 @@ uv run crsbench cloud launch --config config.yaml
 
 This path:
 
-1. Provisions one orchestrator VM
-2. Waits for the orchestrator VM to have an internal address
-3. Provisions the worker fleet with Redis host/password metadata targeting that orchestrator VM
-4. Lets the remote orchestrator VM start Valkey, rewrite the experiment config to use local Redis, wait for the pre-provisioned workers to report ready, and run `crsbench run`
+1. Validates live GCE quota for the orchestrator zone plus all worker placement regions
+2. Provisions one orchestrator VM
+3. Waits for the orchestrator VM to have an internal address
+4. Provisions workers across all `cloud.workers.placements`, passing the orchestrator Redis host/password
+5. Lets the remote orchestrator VM start Valkey, rewrite the experiment config to use local Redis, wait for the pre-provisioned workers to report ready, and run `crsbench run`
 
 `cloud launch` persists local launch state next to the config file under
 `.crsbench-cloud/<experiment>.json`. Later `cloud status`, `cloud collect`, and

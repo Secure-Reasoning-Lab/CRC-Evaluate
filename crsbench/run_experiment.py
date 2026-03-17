@@ -1027,6 +1027,7 @@ def should_use_distributed_mode(
     redis_host = normalize_redis_host(getattr(config, "redis_host", None))
     cloud_config = getattr(config, "cloud", None)
     cloud_gce = getattr(cloud_config, "gce", None)
+    cloud_workers = getattr(cloud_config, "workers", None)
 
     # Check for conflicting flags
     distributed = getattr(args, "distributed", False)
@@ -1059,16 +1060,16 @@ def should_use_distributed_mode(
         logger.info("Local mode explicitly requested via --local-only flag")
         return False
 
-    if cloud_gce is not None:
+    if cloud_gce is not None or cloud_workers is not None:
         if not redis_host:
             raise RuntimeError(
-                "cloud.gce requires Redis for distributed execution. "
+                "cloud worker provisioning requires Redis for distributed execution. "
                 "Set redis_host for local orchestration or ensure the remote "
                 "orchestrator bootstrap patches the experiment config."
             )
         if not check_redis_available(redis_host):
             raise RuntimeError(
-                "cloud.gce requires distributed execution, but Redis is not "
+                "cloud worker provisioning requires distributed execution, but Redis is not "
                 f"available at {redis_host}."
             )
         logger.info("Cloud worker config detected, using distributed mode")
@@ -2087,7 +2088,17 @@ def run_experiment_distributed(
             return
 
         cloud_config = getattr(config, "cloud", None)
-        if isinstance(cloud_config, BaseModel) and cloud_config.gce is not None:
+        uses_provider_neutral_cloud = (
+            isinstance(cloud_config, BaseModel)
+            and cloud_config.providers is not None
+            and cloud_config.workers is not None
+            and cloud_config.orchestrator is not None
+        )
+        if (
+            uses_provider_neutral_cloud
+            or isinstance(cloud_config, BaseModel)
+            and cloud_config.gce is not None
+        ):
             if session.cloud_readiness is None:
                 raise RuntimeError(
                     "Distributed runtime session missing cloud readiness store"
@@ -2098,27 +2109,60 @@ def run_experiment_distributed(
             fleet_status_manager = CloudFleetStatusManager(
                 readiness_store=session.cloud_readiness
             )
-            if os.environ.get("CRSBENCH_CLOUD_PREPROVISIONED_WORKERS") == "1":
-                logger.info(
-                    "Waiting for pre-provisioned cloud workers because "
-                    "CRSBENCH_CLOUD_PREPROVISIONED_WORKERS=1"
-                )
-                fleet_status = fleet_status_manager.wait_for_existing_gce_workers(
-                    experiment_name=experiment_name,
-                    fleet=cloud_config.gce,
-                )
+            if uses_provider_neutral_cloud:
+                from crsbench.cloud.gce.provider import GceProviderAdapter
+                from crsbench.cloud.models import build_cloud_launch_plan
+                from crsbench.cloud.quota import QuotaValidator
+
+                launch_plan = build_cloud_launch_plan(config)
+                adapter = GceProviderAdapter()
+                if os.environ.get("CRSBENCH_CLOUD_PREPROVISIONED_WORKERS") == "1":
+                    logger.info(
+                        "Waiting for pre-provisioned cloud workers because "
+                        "CRSBENCH_CLOUD_PREPROVISIONED_WORKERS=1"
+                    )
+                    fleet_status = fleet_status_manager.wait_for_existing_workers(
+                        plan=launch_plan,
+                        adapter=adapter,
+                    )
+                else:
+                    QuotaValidator(adapters={"gce": adapter}).validate(launch_plan)
+                    fleet_status = fleet_status_manager.bring_up_workers(
+                        plan=launch_plan,
+                        adapter=adapter,
+                        redis_host=redis_host,
+                        redis_password=os.environ.get("CRSBENCH_REDIS_PASSWORD"),
+                        registration=registration,
+                    )
+                    logger.info(
+                        "Cloud worker placements ready: "
+                        f"{fleet_status.ready_count}/{fleet_status.requested_count}"
+                    )
             else:
-                fleet_status = fleet_status_manager.bring_up_gce_workers(
-                    experiment_name=experiment_name,
-                    fleet=cloud_config.gce,
-                    redis_host=redis_host,
-                    redis_password=os.environ.get("CRSBENCH_REDIS_PASSWORD"),
-                    registration=registration,
-                )
-                logger.info(
-                    "Cloud worker fleet ready: "
-                    f"{fleet_status.ready_count}/{fleet_status.requested_count}"
-                )
+                assert cloud_config is not None
+                legacy_cloud_gce = cloud_config.gce
+                assert legacy_cloud_gce is not None
+                if os.environ.get("CRSBENCH_CLOUD_PREPROVISIONED_WORKERS") == "1":
+                    logger.info(
+                        "Waiting for pre-provisioned cloud workers because "
+                        "CRSBENCH_CLOUD_PREPROVISIONED_WORKERS=1"
+                    )
+                    fleet_status = fleet_status_manager.wait_for_existing_gce_workers(
+                        experiment_name=experiment_name,
+                        fleet=legacy_cloud_gce,
+                    )
+                else:
+                    fleet_status = fleet_status_manager.bring_up_gce_workers(
+                        experiment_name=experiment_name,
+                        fleet=legacy_cloud_gce,
+                        redis_host=redis_host,
+                        redis_password=os.environ.get("CRSBENCH_REDIS_PASSWORD"),
+                        registration=registration,
+                    )
+                    logger.info(
+                        "Cloud worker fleet ready: "
+                        f"{fleet_status.ready_count}/{fleet_status.requested_count}"
+                    )
 
         jobs = []
         for trial in trials:

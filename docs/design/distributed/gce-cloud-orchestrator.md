@@ -42,7 +42,12 @@ explicit flow:
 3. the operator machine creates the worker fleet with metadata pointing at that orchestrator-hosted Redis
 4. the orchestrator VM runs the experiment against the pre-created worker fleet
 
-This flow is additive. The existing local-orchestrator path remains valid.
+This flow is additive. The existing local-orchestrator path remains valid, and
+both paths use the same provider-neutral cloud surface:
+
+- `cloud.providers.gce` for provider-native backing details
+- `cloud.orchestrator` for orchestrator placement
+- `cloud.workers.placements` for worker placement fanout
 
 ## Contract
 
@@ -67,7 +72,7 @@ This flow is additive. The existing local-orchestrator path remains valid.
 - the orchestrator VM runs a config derived from the operator-supplied experiment config
 - the derived config must rewrite both the compatibility `redis_host` key and the grouped `runtime.redis.host` key to the orchestrator-local Redis endpoint
 - the derived orchestrator config must not trigger worker provisioning again
-- worker fleet declarations remain the source of truth for the remote worker shape
+- worker placement declarations remain the source of truth for the remote worker shape
 
 ### Role Discovery Contract
 

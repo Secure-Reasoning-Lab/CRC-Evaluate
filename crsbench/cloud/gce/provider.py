@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from crsbench.cloud.gce.provisioner import GceProvisioner
 from crsbench.cloud.gce.quota import (
@@ -56,7 +56,7 @@ class GceProviderAdapter:
         self,
         *,
         provisioner: GceProvisioner | None = None,
-        quota_client: object | None = None,
+        quota_client: GceRegionalQuotaClient | None = None,
     ) -> None:
         self._provisioner = provisioner or GceProvisioner()
         self._quota_client = quota_client or GceRegionalQuotaClient()
@@ -69,19 +69,19 @@ class GceProviderAdapter:
         profile_config = instance_profile.profile_config
         return ResolvedGceInstanceProfile(
             project=str(provider_config["project"]),
-            machine_type=_get_value(profile_config, "machine_type"),
-            boot_disk_size_gb=_get_value(profile_config, "boot_disk_size_gb"),
-            image=_get_value(profile_config, "image"),
-            instance_template=_get_value(profile_config, "instance_template"),
-            network=_get_value(profile_config, "network")
-            or _get_value(provider_config, "network"),
-            subnetwork=_get_value(profile_config, "subnetwork")
-            or _get_value(provider_config, "subnetwork"),
+            machine_type=_get_optional_str(profile_config, "machine_type"),
+            boot_disk_size_gb=_get_optional_int(profile_config, "boot_disk_size_gb"),
+            image=_get_optional_str(profile_config, "image"),
+            instance_template=_get_optional_str(profile_config, "instance_template"),
+            network=_get_optional_str(profile_config, "network")
+            or _get_optional_str(provider_config, "network"),
+            subnetwork=_get_optional_str(profile_config, "subnetwork")
+            or _get_optional_str(provider_config, "subnetwork"),
             service_account_email=str(profile_config["service_account_email"]),
-            owner_label=_get_value(profile_config, "owner_label"),
-            labels=dict(_get_value(profile_config, "labels") or {}),
-            metadata=dict(_get_value(profile_config, "metadata") or {}),
-            startup_script_uri=_get_value(profile_config, "startup_script_uri"),
+            owner_label=_get_optional_str(profile_config, "owner_label"),
+            labels=_get_string_map(profile_config, "labels"),
+            metadata=_get_string_map(profile_config, "metadata"),
+            startup_script_uri=_get_optional_str(profile_config, "startup_script_uri"),
             use_os_login=bool(profile_config.get("use_os_login", True)),
             ssh_via_iap=bool(
                 profile_config.get(
@@ -90,10 +90,14 @@ class GceProviderAdapter:
                 )
             ),
             readiness_timeout_sec=int(profile_config.get("readiness_timeout_sec", 900)),
-            crsbench_install_spec=_get_value(profile_config, "crsbench_install_spec"),
+            crsbench_install_spec=_get_optional_str(
+                profile_config, "crsbench_install_spec"
+            ),
             crsbench_git_ref=str(profile_config.get("crsbench_git_ref", "main")),
-            github_deploy_key_file=_get_value(profile_config, "github_deploy_key_file"),
-            hf_token=_get_value(profile_config, "hf_token"),
+            github_deploy_key_file=_get_optional_str(
+                profile_config, "github_deploy_key_file"
+            ),
+            hf_token=_get_optional_str(profile_config, "hf_token"),
         )
 
     def build_orchestrator_config(self, plan: CloudLaunchPlan) -> GceOrchestratorConfig:
@@ -289,5 +293,22 @@ def _accumulate_requirement(
     )
 
 
-def _get_value(data: dict[str, object], key: str) -> object | None:
-    return data.get(key)
+def _get_optional_str(data: dict[str, Any], key: str) -> str | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    return str(value)
+
+
+def _get_optional_int(data: dict[str, Any], key: str) -> int | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    return int(value)
+
+
+def _get_string_map(data: dict[str, Any], key: str) -> dict[str, str]:
+    value = data.get(key)
+    if not isinstance(value, dict):
+        return {}
+    return {str(map_key): str(map_value) for map_key, map_value in value.items()}

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 _MACHINE_TYPE_VCPU_PATTERN = re.compile(r"-(\d+)$")
-_QUOTA_METRIC_BY_FAMILY = {
+_QUOTA_METRIC_BY_FAMILY: dict[str, str] = {
     "a2": "A2_CPUS",
     "c2": "C2_CPUS",
     "c2d": "C2D_CPUS",
@@ -29,10 +29,10 @@ def zone_to_region(zone: str) -> str:
 def machine_type_to_family(machine_type: str) -> str:
     """Return the quota family key for a GCE machine type string."""
     normalized = machine_type.strip().lower()
-    for family in sorted(_QUOTA_METRIC_BY_FAMILY, key=len, reverse=True):
+    for family in sorted(_QUOTA_METRIC_BY_FAMILY.keys(), key=len, reverse=True):
         prefix = f"{family}-"
         if normalized.startswith(prefix):
-            return family
+            return str(family)
     return "cpus"
 
 

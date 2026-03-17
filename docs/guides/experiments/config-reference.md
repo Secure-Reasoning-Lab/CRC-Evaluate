@@ -15,6 +15,26 @@ and examples.
 - `crs_compose`: CRS services and per-CRS runtime resources
 - `worker` and `evaluator`: machine-local execution defaults
 - `resources`: fallback per-trial resource defaults
+- `cloud`: optional provider-neutral cloud placement contract
+
+## Cloud Contract
+
+Managed cloud execution uses a provider-neutral top-level shape:
+
+- `cloud.providers.<provider>`: provider-native backing details such as GCE
+  project and reusable instance profiles
+- `cloud.orchestrator`: provider, zone, and instance-profile reference for the
+  remote orchestrator VM
+- `cloud.workers.placements[]`: explicit worker placements with zone,
+  `worker_count`, and `instance_profile`
+
+For GCE in v1:
+
+- use `cloud.providers.gce`
+- placements must use explicit zones
+- live quota validation is mandatory before launch
+- the checked-in example is
+  `experiment-configs/cloud-testing/gce-sanity-1orch-2worker.yaml`
 
 ## Input Contract
 
