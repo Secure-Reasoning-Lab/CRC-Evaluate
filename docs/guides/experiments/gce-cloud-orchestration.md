@@ -295,6 +295,9 @@ This path:
 `cloud events` still reconnect to the remote orchestrator's Redis; `cloud collect`
 and `cloud teardown` can fall back to the persisted VM inventory if Redis is
 unavailable.
+CRSBench also appends every created VM name to
+`.crsbench-cloud/created-instances.cache` as local JSONL history so you still
+have a garbage-collection ledger even if you forget to tear down a prior run.
 
 Bootstrap failures are reported with per-instance evidence, so you can
 diagnose issues without SSH-ing into VMs.

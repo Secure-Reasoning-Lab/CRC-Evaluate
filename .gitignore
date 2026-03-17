@@ -240,7 +240,9 @@ migration_report.csv
 .crsbench-coverage/
 .crsbench-keys/
 .crsbench-local-rehearsal/
+# Local cloud control-plane state and append-only instance ledger
 .crsbench-cloud/
+.crsbench-cloud/*.cache
 
 # local ci test results
 .ci-results

@@ -958,12 +958,19 @@ class TestLaunch:
     @patch(
         "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
     )
+    @patch("crsbench.cloud.cli._launch.append_created_instance_records")
     @patch("crsbench.cloud.cli._launch.save_launch_state")
     @patch("crsbench.cloud.cli._launch.prepare_gce_launch_inputs")
     @patch("crsbench.cloud.cli._launch.GceProvisioner")
     @patch("crsbench.cloud.cli._launch.load_experiment_config")
     def test_launch_provisions_orchestrator_before_workers(
-        self, mock_load, mock_prov_cls, mock_preflight, mock_save_state, mock_secret
+        self,
+        mock_load,
+        mock_prov_cls,
+        mock_preflight,
+        mock_save_state,
+        mock_append_instances,
+        mock_secret,
     ):
         del mock_secret
         mock_load.return_value = _make_launch_config()
@@ -1010,7 +1017,7 @@ class TestLaunch:
             assert kwargs["redis_password"] == "shared-secret"
             assert kwargs["fleet"] == resolved_fleet
             assert kwargs["env_passthrough"] == {}
-            return []
+            return [_make_gce_worker("w-1")]
 
         mock_prov.create_orchestrator.side_effect = _create_orchestrator
         mock_prov.create_workers.side_effect = _create_workers
@@ -1022,6 +1029,14 @@ class TestLaunch:
 
         assert rc == 0
         assert call_order == ["orchestrator", "workers"]
+        mock_append_instances.assert_called_once()
+        assert mock_append_instances.call_args.args[0] == Path("/tmp/config.yaml")
+        assert mock_append_instances.call_args.kwargs["experiment_name"] == "test-exp"
+        recorded_instances = mock_append_instances.call_args.kwargs["records"]
+        assert [record.instance_name for record in recorded_instances] == [
+            "gce-orchestrator-test-exp",
+            "w-1",
+        ]
         mock_save_state.assert_called_once()
         assert mock_save_state.call_args.args[0] == Path("/tmp/config.yaml")
         saved_state = mock_save_state.call_args.args[1]
@@ -1030,6 +1045,7 @@ class TestLaunch:
     @patch(
         "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
     )
+    @patch("crsbench.cloud.cli._launch.append_created_instance_records")
     @patch(
         "crsbench.cloud.cli._launch.save_launch_state",
         side_effect=RuntimeError("disk full"),
@@ -1038,7 +1054,13 @@ class TestLaunch:
     @patch("crsbench.cloud.cli._launch.logger")
     @patch("crsbench.cloud.cli._launch.load_experiment_config")
     def test_launch_rolls_back_workers_when_state_persist_fails(
-        self, mock_load, mock_logger, mock_prov_cls, mock_save_state, mock_secret
+        self,
+        mock_load,
+        mock_logger,
+        mock_prov_cls,
+        mock_save_state,
+        mock_append_instances,
+        mock_secret,
     ):
         del mock_save_state, mock_secret
         mock_load.return_value = _make_launch_config()
@@ -1054,6 +1076,7 @@ class TestLaunch:
         rc = run_launch(_make_launch_args())
 
         assert rc == 1
+        mock_append_instances.assert_called_once()
         mock_prov.delete_workers.assert_called_once()
         mock_prov.delete_orchestrators.assert_called_once()
         mock_logger.error.assert_called_once_with(
@@ -1289,6 +1312,68 @@ def test_save_launch_state_redacts_secret_bearing_worker_fields(tmp_path: Path) 
     assert loaded_state is not None
     assert loaded_state.worker_fleet_configs[0].github_deploy_key_file is None
     assert loaded_state.worker_fleet_configs[0].hf_token is None
+
+
+def test_append_created_instance_records_appends_jsonl_entries(tmp_path: Path) -> None:
+    from crsbench.cloud.launch_state import (
+        CreatedCloudInstanceRecord,
+        append_created_instance_records,
+        created_instance_cache_path,
+    )
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("experiment: test-exp\n", encoding="utf-8")
+
+    first_path = append_created_instance_records(
+        config_path,
+        experiment_name="test-exp",
+        records=[
+            CreatedCloudInstanceRecord(
+                provider="gce",
+                project="test-project",
+                zone="us-east5-b",
+                instance_name="gce-orchestrator-test-exp",
+            ),
+            CreatedCloudInstanceRecord(
+                provider="gce",
+                project="test-project",
+                zone="us-east5-b",
+                instance_name="worker-east5-001",
+            ),
+        ],
+    )
+    second_path = append_created_instance_records(
+        config_path,
+        experiment_name="test-exp",
+        records=[
+            CreatedCloudInstanceRecord(
+                provider="gce",
+                project="test-project",
+                zone="us-east1-b",
+                instance_name="worker-east1-001",
+            )
+        ],
+    )
+
+    assert first_path == created_instance_cache_path(config_path)
+    assert second_path == first_path
+
+    entries = [
+        json.loads(line)
+        for line in first_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [entry["instance_name"] for entry in entries] == [
+        "gce-orchestrator-test-exp",
+        "worker-east5-001",
+        "worker-east1-001",
+    ]
+    assert all(entry["experiment_name"] == "test-exp" for entry in entries)
+    assert entries[0]["project"] == "test-project"
+    assert entries[1]["zone"] == "us-east5-b"
+    assert entries[2]["zone"] == "us-east1-b"
+    assert all(entry["provider"] == "gce" for entry in entries)
+    assert all(entry["created_at"] for entry in entries)
 
 
 # ---------------------------------------------------------------------------

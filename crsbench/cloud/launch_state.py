@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import tempfile
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,6 +15,17 @@ from crsbench.cloud.gce.models import GceWorkerRecord
 from crsbench.validation.schemas import GceWorkerFleetConfig  # noqa: TC001
 
 _STATE_DIRNAME = ".crsbench-cloud"
+_INSTANCE_CACHE_BASENAME = "created-instances.cache"
+
+
+@dataclass(frozen=True)
+class CreatedCloudInstanceRecord:
+    """Append-only local ledger entry for a provisioned cloud instance."""
+
+    provider: str
+    instance_name: str
+    zone: str
+    project: str | None = None
 
 
 class CloudLaunchState(BaseModel):
@@ -109,6 +122,41 @@ def _resolve_launch_state_dir(base_path: Path | str) -> Path:
 def launch_state_path(base_path: Path | str, experiment_name: str) -> Path:
     """Return the on-disk path used to persist launch state for one experiment."""
     return _resolve_launch_state_dir(base_path) / f"{experiment_name}.json"
+
+
+def created_instance_cache_path(base_path: Path | str) -> Path:
+    """Return the append-only cache path tracking created cloud instance names."""
+    return _resolve_launch_state_dir(base_path) / _INSTANCE_CACHE_BASENAME
+
+
+def append_created_instance_records(
+    base_path: Path | str,
+    *,
+    experiment_name: str,
+    records: list[CreatedCloudInstanceRecord],
+) -> Path:
+    """Append provisioned instance records to the local cloud cache."""
+    path = created_instance_cache_path(base_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    created_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    with path.open("a", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(
+                json.dumps(
+                    {
+                        "created_at": created_at,
+                        "experiment_name": experiment_name,
+                        "provider": record.provider,
+                        "project": record.project,
+                        "zone": record.zone,
+                        "instance_name": record.instance_name,
+                    },
+                    sort_keys=True,
+                )
+            )
+            handle.write("\n")
+    path.chmod(0o600)
+    return path
 
 
 def save_launch_state(

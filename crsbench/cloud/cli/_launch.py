@@ -12,7 +12,12 @@ from crsbench.cloud.bootstrap import CloudVmBootstrapInputs
 from crsbench.cloud.gce.launch_preflight import prepare_gce_launch_inputs
 from crsbench.cloud.gce.provider import GceProviderAdapter
 from crsbench.cloud.gce.provisioner import GceProvisioner, GceProvisioningError
-from crsbench.cloud.launch_state import CloudLaunchState, save_launch_state
+from crsbench.cloud.launch_state import (
+    CloudLaunchState,
+    CreatedCloudInstanceRecord,
+    append_created_instance_records,
+    save_launch_state,
+)
 from crsbench.cloud.models import build_cloud_launch_plan
 from crsbench.cloud.quota import CloudQuotaValidationError, QuotaValidator
 from crsbench.distributed.registry import RuntimeRegistration
@@ -28,6 +33,30 @@ if TYPE_CHECKING:
     import argparse
 
 logger = get_logger(__name__)
+
+
+def _project_for_worker_record(
+    worker_name: str,
+    *,
+    worker_zone: str,
+    worker_fleet_configs: list[GceWorkerFleetConfig],
+) -> str | None:
+    zone_projects = {
+        fleet.project for fleet in worker_fleet_configs if fleet.zone == worker_zone
+    }
+    if len(zone_projects) == 1:
+        return next(iter(zone_projects))
+
+    all_projects = {fleet.project for fleet in worker_fleet_configs}
+    if len(all_projects) == 1:
+        return next(iter(all_projects))
+
+    logger.warning(
+        "Created instance cache could not determine a unique project for worker {} in zone {}",
+        worker_name,
+        worker_zone,
+    )
+    return None
 
 
 def run_launch(args: argparse.Namespace) -> int:
@@ -173,6 +202,32 @@ def run_launch(args: argparse.Namespace) -> int:
             worker_fleet_configs = preflight.redacted_worker_fleets
             orchestrator_project = resolved_legacy_orchestrator.project
             orchestrator_ssh_via_iap = resolved_legacy_orchestrator.ssh_via_iap
+
+        append_created_instance_records(
+            config_path,
+            experiment_name=config.experiment,
+            records=[
+                CreatedCloudInstanceRecord(
+                    provider="gce",
+                    project=orchestrator_project,
+                    zone=orchestrator_record.zone,
+                    instance_name=orchestrator_record.name,
+                ),
+                *[
+                    CreatedCloudInstanceRecord(
+                        provider="gce",
+                        project=_project_for_worker_record(
+                            worker.name,
+                            worker_zone=worker.zone,
+                            worker_fleet_configs=worker_fleet_configs,
+                        ),
+                        zone=worker.zone,
+                        instance_name=worker.name,
+                    )
+                    for worker in workers
+                ],
+            ],
+        )
 
         save_launch_state(
             config_path,
