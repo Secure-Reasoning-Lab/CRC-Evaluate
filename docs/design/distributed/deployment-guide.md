@@ -82,12 +82,19 @@ fleet for the current experiment:
 
 - provider states such as `PROVISIONING` or VM `RUNNING` map to non-ready
   CRSBench states like `provisioning` and `booting`
+- `registering` means the worker runtime can report to Redis but is not yet
+  listening for trial work
 - workers become schedulable only after the readiness store records `ready`
+- `ready` means the worker connected to Redis and is listening on the
+  experiment queue; it is not just a VM boot-complete signal
 - `bootstrap_failed` and `deleted` are terminal non-ready states during bring-up
 - startup evidence must include per-instance detail so operators can diagnose
   failures without manual SSH
 - stale readiness is scoped away by experiment name plus `instance_id`
 - failed bring-up tears down the matching fleet before the orchestrator returns
+- `readiness_timeout_sec` covers clean-image bootstrap, CRSBench install,
+  service startup, Redis reachability, and queue-listener registration; it
+  must not be sized as a bare GCE boot timeout
 
 ## Path and Storage Contract
 

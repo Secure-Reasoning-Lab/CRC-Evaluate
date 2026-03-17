@@ -104,6 +104,20 @@ Invariants:
 - Each record carries `state`, `instance_name`, `zone`, `updated_at`, `ready_at`, and optional `evidence`
 - `CloudFleetSnapshot` categorizes workers into ready/pending/failed/missing buckets
 
+State semantics:
+
+- `PROVISIONING`: the control plane requested the VM, but the worker has not yet reached a provider-observed running state
+- `BOOTING`: GCE reports the VM as running, but the startup script may still be installing packages, cloning CRSBench, or writing the worker service
+- `REGISTERING`: the worker runtime has started far enough to report into the readiness store, but it is not yet counted as schedulable
+- `READY`: the worker has connected to Redis, created the trial-queue consumer, and is listening for experiment work; this is the only success state counted by bring-up gating
+
+Timeout contract:
+
+- `readiness_timeout_sec` measures wall-clock time spent waiting for workers to reach `READY`, not just time until the VM kernel boots or the GCE provider reports `RUNNING`
+- In the create-and-wait flow, the timeout starts after instance creation completes and initial non-ready state is recorded; it therefore includes package installation, checkout/install of CRSBench, systemd launch, Redis reachability, and queue-listener startup
+- In the pre-provisioned wait flow used by the remote orchestrator, the timeout starts when the orchestrator begins waiting for the expected worker instances and includes both instance discovery and the remaining time until each worker reaches `READY`
+- Operators should size the timeout for clean-image bootstrap plus first Redis/queue registration, not for bare VM boot alone
+
 ## Contract: VM Provisioning
 
 - Worker names follow the pattern `{prefix}-{NNN}` (zero-padded, e.g., `my-exp-001`)
