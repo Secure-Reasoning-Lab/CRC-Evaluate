@@ -734,7 +734,7 @@ run_smoke_suite_config() {
     local suite="$1"
     local stage_name="$2"
     local base_config workspace config_path exp_dir report_dir
-    local worker_log run_log post_verify_log worker_pid rc cpuset skip_cpuset skip_verification
+    local worker_log evaluator_log run_log post_verify_log worker_pid evaluator_pid rc cpuset skip_cpuset skip_verification
 
     run_stage "$stage_name"
     base_config="$(smoke_config_for_suite "$suite")" || fail "Unknown smoke suite: $suite"
@@ -751,6 +751,7 @@ run_smoke_suite_config() {
         || fail "Failed to render smoke config for $suite"
 
     worker_log="$workspace/worker.log"
+    evaluator_log="$workspace/evaluator.log"
     run_log="$workspace/run.log"
     post_verify_log="$workspace/post-verify.log"
 
@@ -768,8 +769,17 @@ run_smoke_suite_config() {
 
     start_smoke_logged_command_bg "$worker_log" "smoke:${suite}:worker" "${worker_cmd[@]}"
     worker_pid="$SMOKE_BG_PID"
+
+    # Start evaluator — builds variant images and consumes build/verify
+    # queues.  Bugfinding: async POV verification + early stop.
+    # Bugfixing: distributed patch build + verify.
+    local evaluator_cmd=(uv run crsbench evaluator --experiment-config "$config_path" --idle-timeout 0)
+    start_smoke_logged_command_bg "$evaluator_log" "smoke:${suite}:evaluator" "${evaluator_cmd[@]}"
+    evaluator_pid="$SMOKE_BG_PID"
+
     sleep 3
     if ! kill -0 "$worker_pid" >/dev/null 2>&1; then
+        stop_worker_process "$evaluator_pid" "evaluator[$suite]" || true
         cleanup_smoke_bg_logging
         echo "=== worker log (tail) ==="
         tail -n 120 "$worker_log" || true
@@ -783,7 +793,18 @@ run_smoke_suite_config() {
     if ! stop_worker_process "$worker_pid" "worker[$suite]"; then
         echo "=== worker log (tail) ==="
         tail -n 200 "$worker_log" || true
+        stop_worker_process "$evaluator_pid" "evaluator[$suite]" || true
         fail "Smoke worker did not terminate cleanly for suite=$suite"
+    fi
+
+    # Stop evaluator after run completes.  With --idle-timeout 0 it stays
+    # alive until killed.  The worker is already stopped so no new verify
+    # jobs will arrive; stop_worker_process gives 20s grace for SIGINT to
+    # let the evaluator drain remaining verify work.
+    if ! stop_worker_process "$evaluator_pid" "evaluator[$suite]"; then
+        echo "=== evaluator log (tail) ==="
+        tail -n 200 "$evaluator_log" || true
+        echo "[smoke] evaluator[$suite] did not terminate cleanly"
     fi
 
     if [ "$rc" -ne 0 ]; then
@@ -791,6 +812,8 @@ run_smoke_suite_config() {
         tail -n 200 "$run_log" || true
         echo "=== worker log (tail) ==="
         tail -n 200 "$worker_log" || true
+        echo "=== evaluator log (tail) ==="
+        tail -n 200 "$evaluator_log" || true
         fail "Smoke run failed for suite=$suite"
     fi
 
