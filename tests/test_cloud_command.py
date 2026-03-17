@@ -338,6 +338,34 @@ def test_build_cloud_launch_plan_resolves_profiles_for_orchestrator_and_workers(
     )
 
 
+def test_run_launch_fails_on_quota_shortage_before_creating_instances(tmp_path: Path):
+    from crsbench.cloud.cli._launch import run_launch
+    from crsbench.cloud.quota import CloudQuotaValidationError
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("experiment: ignored\n", encoding="utf-8")
+    args = argparse.Namespace(config=str(config_path))
+
+    with (
+        patch(
+            "crsbench.cloud.cli._launch.load_experiment_config",
+            return_value=_make_provider_neutral_experiment_config(),
+        ),
+        patch("crsbench.cloud.cli._launch.GceProviderAdapter") as mock_adapter_cls,
+        patch("crsbench.cloud.cli._launch.QuotaValidator") as mock_validator_cls,
+    ):
+        mock_adapter = mock_adapter_cls.return_value
+        mock_validator = mock_validator_cls.return_value
+        mock_validator.validate.side_effect = CloudQuotaValidationError(
+            "quota shortfall for us-east5 n2d"
+        )
+
+        assert run_launch(args) == 1
+        mock_validator.validate.assert_called_once()
+        mock_adapter.create_orchestrator.assert_not_called()
+        mock_adapter.create_workers.assert_not_called()
+
+
 def test_save_launch_state_preserves_existing_file_when_replace_fails(
     tmp_path: Path, monkeypatch
 ) -> None:

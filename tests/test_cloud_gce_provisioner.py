@@ -4,8 +4,13 @@ import base64
 import json
 
 import pytest
+from crsbench.cloud.models import build_cloud_launch_plan
 from crsbench.distributed.registry import RuntimeRegistration
-from crsbench.validation.schemas import GceOrchestratorConfig, GceWorkerFleetConfig
+from crsbench.validation.schemas import (
+    ExperimentConfig,
+    GceOrchestratorConfig,
+    GceWorkerFleetConfig,
+)
 
 
 def _make_fleet(**overrides) -> GceWorkerFleetConfig:
@@ -134,6 +139,69 @@ class _ExtendedOperation:
         self.name = name
 
 
+def _make_provider_neutral_experiment_config() -> ExperimentConfig:
+    return ExperimentConfig.model_validate(
+        {
+            "experiment": "exp-cloud-42",
+            "task": "bugfinding",
+            "benchmark_suite": "sanity",
+            "mode": "delta",
+            "trials": 1,
+            "max_total_time": 20000,
+            "inputs": {"pov": {"max_variants_per_cpv": 1}},
+            "redis_host": "localhost:6379",
+            "experiment_filestore": "/tmp/filestore",
+            "report_filestore": "/tmp/reports",
+            "cloud": {
+                "providers": {
+                    "gce": {
+                        "project": "test-project",
+                        "instance_profiles": {
+                            "orchestrator-n2d": {
+                                "machine_type": "n2d-standard-16",
+                                "boot_disk_size_gb": 50,
+                                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                                "service_account_email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com",
+                                "owner_label": "team-crs",
+                            },
+                            "worker-n2d": {
+                                "machine_type": "n2d-standard-16",
+                                "boot_disk_size_gb": 50,
+                                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                                "owner_label": "team-crs",
+                                "ssh_via_iap": True,
+                            },
+                        },
+                    }
+                },
+                "orchestrator": {
+                    "provider": "gce",
+                    "zone": "us-east5-b",
+                    "instance_profile": "orchestrator-n2d",
+                },
+                "workers": {
+                    "placements": [
+                        {
+                            "provider": "gce",
+                            "zone": "us-east5-b",
+                            "worker_count": 2,
+                            "instance_profile": "worker-n2d",
+                        },
+                        {
+                            "provider": "gce",
+                            "zone": "us-east1-b",
+                            "worker_count": 1,
+                            "instance_profile": "worker-n2d",
+                        },
+                    ]
+                },
+            },
+            "crs_compose": {"test-crs": {"num_cores": 1}},
+        }
+    )
+
+
 def test_build_requests_include_experiment_identity_labels_and_bootstrap_metadata():
     """Rendered instance requests should carry stable names, labels, and payloads."""
     from crsbench.cloud.gce.metadata import CRSBENCH_BOOTSTRAP_PAYLOAD_KEY
@@ -167,6 +235,35 @@ def test_build_requests_include_experiment_identity_labels_and_bootstrap_metadat
     assert payload["worker_jobs"] == 3
     assert payload["worker_cores_per_job"] == 6
     assert payload["worker_cpu_tag"] == "c3"
+
+
+def test_gce_provider_adapter_resolves_named_instance_profile():
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+
+    plan = build_cloud_launch_plan(_make_provider_neutral_experiment_config())
+    adapter = GceProviderAdapter()
+
+    resolved = adapter.resolve_instance_profile(plan.orchestrator.instance_profile)
+
+    assert resolved.project == "test-project"
+    assert resolved.machine_type == "n2d-standard-16"
+    assert (
+        resolved.service_account_email
+        == "crsbench-orchestrator@test-project.iam.gserviceaccount.com"
+    )
+
+
+def test_gce_provider_adapter_builds_worker_fleets_per_placement():
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+
+    plan = build_cloud_launch_plan(_make_provider_neutral_experiment_config())
+    adapter = GceProviderAdapter()
+
+    fleets = adapter.build_worker_fleets(plan)
+
+    assert [fleet.zone for fleet in fleets] == ["us-east5-b", "us-east1-b"]
+    assert [fleet.worker_count for fleet in fleets] == [2, 1]
+    assert all(fleet.project == "test-project" for fleet in fleets)
 
 
 def test_create_workers_waits_for_operations_and_normalizes_provider_instances():
