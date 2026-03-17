@@ -327,6 +327,8 @@ class BenchmarkValidator:
             engine = PatchVerificationEngine(
                 oss_fuzz_path=self.oss_fuzz_path,
                 timeout=self.pov_timeout,
+                jobs=self.build_workers,
+                cores_per_job=self.verify_workers,
                 force_rebuild=force_rebuild,
                 use_inc_build=use_inc_build,
                 source_mode=self.source_mode,
