@@ -736,6 +736,15 @@ run_smoke_suite_config() {
     local base_config workspace config_path exp_dir report_dir
     local worker_log evaluator_log run_log post_verify_log worker_pid evaluator_pid rc cpuset skip_cpuset skip_verification
 
+    # Ensure worker/evaluator processes are always killed on exit (including
+    # fail/error paths and when running as a background subshell).
+    _smoke_suite_cleanup() {
+        [ -n "${worker_pid:-}" ] && kill "$worker_pid" 2>/dev/null && wait "$worker_pid" 2>/dev/null
+        [ -n "${evaluator_pid:-}" ] && kill "$evaluator_pid" 2>/dev/null && wait "$evaluator_pid" 2>/dev/null
+        cleanup_smoke_bg_logging
+    }
+    trap _smoke_suite_cleanup EXIT
+
     run_stage "$stage_name"
     base_config="$(smoke_config_for_suite "$suite")" || fail "Unknown smoke suite: $suite"
     [ -f "$base_config" ] || fail "Missing smoke config: $base_config"
