@@ -14,6 +14,7 @@ from crsbench.cloud.bootstrap import (
     run_prepare,
     should_download_benchmarks,
 )
+from crsbench.validation.schemas import ExperimentConfig
 
 
 def test_auto_skips_download_for_sanity_suite():
@@ -204,3 +205,34 @@ def test_run_benchmark_download_uses_python_download_api_for_explicit_benchmarks
         )
     ]
     assert result == [Path("/srv/benchmarks")]
+
+
+def test_from_experiment_config_restores_repo_default_roots() -> None:
+    config = ExperimentConfig(
+        experiment="cloud-bootstrap-test",
+        trials=1,
+        mode="delta",
+        max_total_time=20000,
+        inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
+        experiment_filestore="/tmp/exp",
+        report_filestore="/tmp/rep",
+        benchmark_suite="sanity",
+        crs_compose={"test-crs": {"num_cores": 1}},
+        cloud={
+            "gce": {
+                "project": "test-project",
+                "zone": "us-central1-a",
+                "worker_count": 1,
+                "machine_type": "e2-standard-4",
+                "boot_disk_size_gb": 100,
+                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                "owner_label": "team-crs",
+            }
+        },
+    )
+
+    inputs = CloudVmBootstrapInputs.from_experiment_config(config)
+
+    assert inputs.benchmarks_root == Path("benchmarks")
+    assert inputs.benchmark_suites_root == Path("benchmark-suites")

@@ -118,8 +118,14 @@ class CloudVmBootstrapInputs:
             ),
             benchmark_suite=config.benchmark_suite,
             benchmarks=config.benchmarks,
-            benchmarks_root=Path(config.benchmarks_root),
-            benchmark_suites_root=Path(config.benchmark_suites_root),
+            benchmarks_root=_restore_default_root(
+                Path(config.benchmarks_root),
+                default_path=DEFAULT_BENCHMARKS_ROOT,
+            ),
+            benchmark_suites_root=_restore_default_root(
+                Path(config.benchmark_suites_root),
+                default_path=DEFAULT_BENCHMARK_SUITES_ROOT,
+            ),
         )
 
 
@@ -245,4 +251,13 @@ def _normalize_override_path(
     path = Path(value)
     if path == default_path:
         return None
+    return path
+
+
+def _restore_default_root(path: Path, *, default_path: Path) -> Path:
+    try:
+        if path.resolve() == default_path.resolve():
+            return default_path
+    except OSError:
+        pass
     return path
