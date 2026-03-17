@@ -1,7 +1,9 @@
 experiment:
   name: sanity-test
   task: bugfixing
-  benchmark_suite: sanity
+  benchmarks:
+  - sanity-mock-c-delta-01
+  - sanity-mock-java-delta-01
   mode: delta
 runtime:
   trials: 1
@@ -15,7 +17,7 @@ runtime:
     pov:
       max_variants_per_cpv: 1
     sarif:
-      level: 3
+      level: 5
     diff: {}
   litellm:
     cost_budget: 2
