@@ -192,9 +192,9 @@ start_smoke_logged_command_bg() {
         SMOKE_BG_LOGGER_PID=$!
         SMOKE_BG_STREAM_DIR="$stream_dir"
         SMOKE_BG_STREAM_FIFO="$fifo"
-        stdbuf -oL -eL "$@" >"$fifo" 2>&1 </dev/null &
+        setsid stdbuf -oL -eL "$@" >"$fifo" 2>&1 </dev/null &
     else
-        "$@" >"$logfile" 2>&1 </dev/null &
+        setsid "$@" >"$logfile" 2>&1 </dev/null &
     fi
     SMOKE_BG_PID=$!
 }
@@ -738,26 +738,15 @@ run_smoke_suite_config() {
 
     # Ensure worker/evaluator process trees are always killed on exit
     # (including fail/error paths and when running as a background subshell).
-    # crsbench worker with jobs>1 spawns child RQ workers, so we must
-    # recursively kill the entire process tree, not just the parent.
+    # Background commands are started with setsid so they become process
+    # group leaders. Kill the entire group with kill -- -PGID.
     _smoke_kill_tree() {
         local pid="$1"
         [ -n "$pid" ] || return 0
-        kill -0 "$pid" 2>/dev/null || return 0
-        # Recursively collect all descendant PIDs (children, grandchildren, ...)
-        local descendants
-        descendants=$(ps -o pid= --ppid "$pid" 2>/dev/null || true)
-        for child in $descendants; do
-            _smoke_kill_tree "$child"
-        done
-        kill -TERM "$pid" 2>/dev/null || true
-        local elapsed=0
-        while [ "$elapsed" -lt 5 ]; do
-            kill -0 "$pid" 2>/dev/null || return 0
-            sleep 1
-            elapsed=$((elapsed + 1))
-        done
-        kill -KILL "$pid" 2>/dev/null || true
+        # Kill the entire process group (pid == pgid due to setsid)
+        kill -TERM -- -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+        sleep 2
+        kill -KILL -- -"$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
         wait "$pid" 2>/dev/null || true
     }
     _smoke_suite_cleanup() {
