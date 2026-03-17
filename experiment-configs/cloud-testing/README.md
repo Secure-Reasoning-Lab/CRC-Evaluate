@@ -39,6 +39,13 @@ gcloud auth application-default login
 gcloud config set project aixcc-426805
 ```
 
+Expected result:
+
+- `gcloud auth login` finishes in the browser and `gcloud auth list` shows your
+  email as the active account
+- `gcloud auth application-default login` completes without error
+- `gcloud config set project aixcc-426805` prints `Updated property [core/project].`
+
 2. Confirm required GCP pieces exist:
 
 ```bash
@@ -51,6 +58,12 @@ gcloud iam service-accounts describe \
   --project aixcc-426805 \
   --format='value(email)'
 ```
+
+Expected result:
+
+- the first command prints exactly `compute.googleapis.com`
+- the second command prints exactly
+  `153298433405-compute@developer.gserviceaccount.com`
 
 3. Make sure the repo ref in the config is reachable from the VM install path.
 
@@ -68,6 +81,12 @@ either:
 - change `crsbench_git_ref` to an existing public tag or branch that contains
   the cloud-launch code you want to test
 
+Expected result:
+
+- public HTTPS path: a ref check should succeed instead of returning `404`
+- private SSH path: a manual `git clone` / `git ls-remote` with the deploy key
+  should succeed
+
 4. Confirm quota is sufficient for this exact layout:
 
 - `us-east5`: 32 `n2d` vCPUs
@@ -84,6 +103,14 @@ uv run crsbench cloud launch \
   --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker.yaml
 ```
 
+Expected result:
+
+- exit code `0`
+- log line similar to
+  `Cloud launch complete: orchestrator=<name> redis=<internal-ip>:6379 workers=2`
+- three VMs visible in GCP:
+  one orchestrator, two workers
+
 Watch status:
 
 ```bash
@@ -91,12 +118,23 @@ uv run crsbench cloud status gce-sanity-1orch-2worker \
   --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker.yaml
 ```
 
+Expected result:
+
+- both workers eventually show as `ready`
+- zones should include `us-east5-b` and `us-east1-b`
+- job counts should move from queued/running to completed as the smoke run finishes
+
 Watch recovery events:
 
 ```bash
 uv run crsbench cloud events gce-sanity-1orch-2worker \
   --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker.yaml
 ```
+
+Expected result:
+
+- often no output for a healthy smoke run
+- if output appears, it should be informational recovery events rather than repeated worker bootstrap failures
 
 Collect results after completion:
 
@@ -106,6 +144,12 @@ uv run crsbench cloud collect gce-sanity-1orch-2worker \
   --remote-dir /tmp/crsbench/experiment-data/gce-sanity-1orch-2worker
 ```
 
+Expected result:
+
+- exit code `0`
+- `Collection succeeded:` lines for the two workers and the orchestrator
+- local experiment data appears under your configured experiment filestore
+
 Tear everything down:
 
 ```bash
@@ -114,6 +158,13 @@ uv run crsbench cloud teardown gce-sanity-1orch-2worker \
   --remote-dir /tmp/crsbench/experiment-data/gce-sanity-1orch-2worker \
   --force
 ```
+
+Expected result:
+
+- exit code `0`
+- log line similar to
+  `Teardown complete: 2 workers deleted and orchestrator deleted`
+- `gcloud compute instances list` no longer shows the smoke-test VMs
 
 ## Current Readiness
 
