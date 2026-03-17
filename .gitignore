@@ -240,6 +240,7 @@ migration_report.csv
 .crsbench-coverage/
 .crsbench-keys/
 .crsbench-local-rehearsal/
+.crsbench-cloud/
 
 # local ci test results
 .ci-results

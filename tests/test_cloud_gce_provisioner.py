@@ -90,7 +90,9 @@ class _RecordingClient:
         project: str,
         zone: str,
         instance_resource: dict[str, object],
+        source_instance_template: str | None = None,
     ) -> dict[str, object]:
+        del source_instance_template
         name = str(instance_resource["name"])
         self.inserted.append((project, zone, instance_resource))
         return {"name": f"op-{name}"}
@@ -235,6 +237,34 @@ def test_build_requests_include_experiment_identity_labels_and_bootstrap_metadat
     assert payload["worker_jobs"] == 3
     assert payload["worker_cores_per_job"] == 6
     assert payload["worker_cpu_tag"] == "c3"
+
+
+def test_instance_request_renders_compute_proto_field_names() -> None:
+    """Rendered instance resources must match compute_v1.Instance field names."""
+    from crsbench.cloud.gce.models import GceInstanceRequest
+    from google.cloud.compute_v1.types import Instance
+
+    request = GceInstanceRequest(
+        project="test-project",
+        zone="us-central1-a",
+        name="gce-worker-001",
+        labels={"owner": "team-crs"},
+        metadata={"startup-script": "#!/bin/bash"},
+        service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+        ssh_via_iap=True,
+        machine_type="e2-standard-16",
+        boot_disk_size_gb=200,
+        image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+    )
+
+    resource = request.to_instance_resource()
+    instance = Instance(resource)
+
+    assert instance.service_accounts[0].email == request.service_account_email
+    assert instance.machine_type == "zones/us-central1-a/machineTypes/e2-standard-16"
+    assert instance.network_interfaces == [Instance(resource).network_interfaces[0]]
+    assert instance.disks[0].initialize_params.source_image == request.image
+    assert instance.disks[0].initialize_params.disk_size_gb == 200
 
 
 def test_gce_provider_adapter_resolves_named_instance_profile():
@@ -530,6 +560,166 @@ def test_google_compute_client_builds_label_filter_for_list_requests() -> None:
                 '(labels.owner = "team-crs")'
             ),
         }
+    ]
+
+
+def test_google_compute_client_passes_source_instance_template_separately() -> None:
+    """Instance templates belong on InsertInstanceRequest, not Instance."""
+    from crsbench.cloud.gce.provisioner import GoogleComputeClient
+    from google.cloud.compute_v1.types import InsertInstanceRequest, Instance
+
+    class _InstancesClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[object | None, dict[str, object]]] = []
+
+        def insert(self, request: object | None = None, **kwargs) -> object:
+            self.calls.append((request, kwargs))
+            return _ExtendedOperation("insert-op")
+
+        def get(self, **_kwargs) -> object:
+            raise AssertionError("get not used")
+
+        def list(self, **_kwargs) -> list[object]:
+            raise AssertionError("list not used")
+
+        def delete(self, **_kwargs) -> object:
+            raise AssertionError("delete not used")
+
+    instances_client = _InstancesClient()
+    client = GoogleComputeClient(
+        instances_client=instances_client,
+        zone_operations_client=None,
+    )
+
+    client.insert_instance(
+        project="test-project",
+        zone="us-central1-a",
+        instance_resource={
+            "name": "gce-worker-001",
+            "metadata": {"items": [{"key": "startup-script", "value": "#!/bin/bash"}]},
+            "service_accounts": [
+                {
+                    "email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                    "scopes": ["https://www.googleapis.com/auth/cloud-platform"],
+                }
+            ],
+            "network_interfaces": [{}],
+        },
+        source_instance_template="global/instanceTemplates/crsbench-template",
+    )
+
+    assert instances_client.calls == [
+        (
+            InsertInstanceRequest(
+                {
+                    "project": "test-project",
+                    "zone": "us-central1-a",
+                    "instance_resource": Instance(
+                        {
+                            "name": "gce-worker-001",
+                            "metadata": {
+                                "items": [
+                                    {
+                                        "key": "startup-script",
+                                        "value": "#!/bin/bash",
+                                    }
+                                ]
+                            },
+                            "service_accounts": [
+                                {
+                                    "email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                                    "scopes": [
+                                        "https://www.googleapis.com/auth/cloud-platform"
+                                    ],
+                                }
+                            ],
+                            "network_interfaces": [{}],
+                        }
+                    ),
+                    "source_instance_template": "global/instanceTemplates/crsbench-template",
+                }
+            ),
+            {},
+        )
+    ]
+
+
+def test_google_compute_client_omits_empty_source_instance_template() -> None:
+    """Image-based launches must not serialize an empty template URL."""
+    from crsbench.cloud.gce.provisioner import GoogleComputeClient
+    from google.cloud.compute_v1.types import InsertInstanceRequest, Instance
+
+    class _InstancesClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[object | None, dict[str, object]]] = []
+
+        def insert(self, request: object | None = None, **kwargs) -> object:
+            self.calls.append((request, kwargs))
+            return _ExtendedOperation("insert-op")
+
+        def get(self, **_kwargs) -> object:
+            raise AssertionError("get not used")
+
+        def list(self, **_kwargs) -> list[object]:
+            raise AssertionError("list not used")
+
+        def delete(self, **_kwargs) -> object:
+            raise AssertionError("delete not used")
+
+    instances_client = _InstancesClient()
+    client = GoogleComputeClient(
+        instances_client=instances_client,
+        zone_operations_client=None,
+    )
+
+    client.insert_instance(
+        project="test-project",
+        zone="us-central1-a",
+        instance_resource={
+            "name": "gce-worker-001",
+            "metadata": {"items": [{"key": "startup-script", "value": "#!/bin/bash"}]},
+            "service_accounts": [
+                {
+                    "email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                    "scopes": ["https://www.googleapis.com/auth/cloud-platform"],
+                }
+            ],
+            "network_interfaces": [{}],
+        },
+    )
+
+    assert instances_client.calls == [
+        (
+            InsertInstanceRequest(
+                {
+                    "project": "test-project",
+                    "zone": "us-central1-a",
+                    "instance_resource": Instance(
+                        {
+                            "name": "gce-worker-001",
+                            "metadata": {
+                                "items": [
+                                    {
+                                        "key": "startup-script",
+                                        "value": "#!/bin/bash",
+                                    }
+                                ]
+                            },
+                            "service_accounts": [
+                                {
+                                    "email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                                    "scopes": [
+                                        "https://www.googleapis.com/auth/cloud-platform"
+                                    ],
+                                }
+                            ],
+                            "network_interfaces": [{}],
+                        }
+                    ),
+                }
+            ),
+            {},
+        )
     ]
 
 

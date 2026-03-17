@@ -6,7 +6,7 @@ experiment:
 runtime:
   trials: 1
   max_total_time: 3600
-  build_timeout: 600
+  build_timeout: 1200
   run_timeout: 600
   verify_timeout: 600
   redis_host: redis-server:6379
@@ -22,6 +22,7 @@ resources:
   cores_per_trial: 2
   memory_per_trial: 4G
 worker:
+  jobs: 1
   storage:
     cleanup_after_trial: true
   cores_per_job: 2

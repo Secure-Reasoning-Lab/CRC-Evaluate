@@ -35,6 +35,7 @@ class GceApiClient(Protocol):
         project: str,
         zone: str,
         instance_resource: dict[str, object],
+        source_instance_template: str | None = None,
     ) -> dict[str, object]: ...
 
     def wait_for_zone_operation(
@@ -73,10 +74,8 @@ class GceApiClient(Protocol):
 class _InstancesClientProtocol(Protocol):
     def insert(
         self,
-        *,
-        project: str,
-        zone: str,
-        instance_resource: dict[str, object],
+        request: object | None = None,
+        **kwargs,
     ) -> object: ...
 
     def get(
@@ -132,11 +131,23 @@ class GoogleComputeClient:
         project: str,
         zone: str,
         instance_resource: dict[str, object],
+        source_instance_template: str | None = None,
     ) -> dict[str, object]:
+        from google.cloud import compute_v1
+
+        request_kwargs: dict[str, object] = {
+            "project": project,
+            "zone": zone,
+            "instance_resource": compute_v1.Instance(instance_resource),
+        }
+        if source_instance_template:
+            request_kwargs["source_instance_template"] = source_instance_template
+
+        request = compute_v1.InsertInstanceRequest(
+            request_kwargs,
+        )
         operation = self._instances().insert(
-            project=project,
-            zone=zone,
-            instance_resource=instance_resource,
+            request=request,
         )
         return self._coerce_mapping(operation)
 
@@ -466,6 +477,7 @@ class GceProvisioner:
                     project=request.project,
                     zone=request.zone,
                     instance_resource=request.to_instance_resource(),
+                    source_instance_template=request.instance_template,
                 )
                 rollback_requests.append(request)
                 result = self._client.wait_for_zone_operation(
@@ -558,6 +570,7 @@ class GceProvisioner:
                 project=request.project,
                 zone=request.zone,
                 instance_resource=request.to_instance_resource(),
+                source_instance_template=request.instance_template,
             )
             result = self._client.wait_for_zone_operation(
                 project=request.project,

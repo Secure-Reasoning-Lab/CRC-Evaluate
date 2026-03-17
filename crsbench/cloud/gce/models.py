@@ -41,7 +41,7 @@ class GceInstanceRequest:
                     for key, value in sorted(self.metadata.items())
                 ]
             },
-            "serviceAccounts": [
+            "service_accounts": [
                 {
                     "email": self.service_account_email,
                     "scopes": list(self.service_account_scopes),
@@ -49,23 +49,21 @@ class GceInstanceRequest:
             ],
         }
 
-        if self.instance_template:
-            resource["sourceInstanceTemplate"] = self.instance_template
-        else:
+        if not self.instance_template:
             if self.machine_type is None or self.image is None:
                 raise ValueError(
                     "machine_type and image are required when no instance template is set"
                 )
-            resource["machineType"] = (
+            resource["machine_type"] = (
                 f"zones/{self.zone}/machineTypes/{self.machine_type}"
             )
             resource["disks"] = [
                 {
                     "boot": True,
-                    "autoDelete": True,
-                    "initializeParams": {
-                        "sourceImage": self.image,
-                        "diskSizeGb": str(self.boot_disk_size_gb),
+                    "auto_delete": True,
+                    "initialize_params": {
+                        "source_image": self.image,
+                        "disk_size_gb": str(self.boot_disk_size_gb),
                     },
                 }
             ]
@@ -76,10 +74,10 @@ class GceInstanceRequest:
         if self.subnetwork:
             network_interface["subnetwork"] = self.subnetwork
         if not self.ssh_via_iap:
-            network_interface["accessConfigs"] = [
+            network_interface["access_configs"] = [
                 {"name": "External NAT", "type": "ONE_TO_ONE_NAT"}
             ]
-        resource["networkInterfaces"] = [network_interface]
+        resource["network_interfaces"] = [network_interface]
 
         return resource
 
