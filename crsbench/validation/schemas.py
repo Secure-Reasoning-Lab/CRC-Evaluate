@@ -1252,15 +1252,17 @@ class GceWorkerFleetConfig(BaseModel):
     github_deploy_key_file: Optional[str] = Field(
         default=None,
         description=(
-            "Path to SSH private key file for GitHub deploy key access. "
-            "Contents are base64-encoded and injected as crsbench-github-deploy-key "
-            "instance metadata."
+            "SSH private key path for GitHub deploy key access. Supports a plain path, "
+            "'file:...' path reference, or 'os.environ/NAME' at launch time. "
+            "The resolved file contents are base64-encoded and injected as "
+            "crsbench-github-deploy-key instance metadata."
         ),
     )
     hf_token: Optional[str] = Field(
         default=None,
         description=(
-            "HuggingFace token for private dataset access. "
+            "HuggingFace token for private dataset access. Supports a literal token, "
+            "'file:...' secret file, or 'os.environ/NAME' at launch time. "
             "Injected as crsbench-hf-token instance metadata."
         ),
     )
@@ -1462,13 +1464,18 @@ class GceOrchestratorConfig(BaseModel):
     github_deploy_key_file: Optional[str] = Field(
         default=None,
         description=(
-            "Path to SSH private key file for GitHub deploy key access. "
-            "Contents are base64-encoded and injected as instance metadata."
+            "SSH private key path for GitHub deploy key access. Supports a plain path, "
+            "'file:...' path reference, or 'os.environ/NAME' at launch time. "
+            "The resolved file contents are base64-encoded and injected as "
+            "instance metadata."
         ),
     )
     hf_token: Optional[str] = Field(
         default=None,
-        description="HuggingFace token for private dataset access.",
+        description=(
+            "HuggingFace token for private dataset access. Supports a literal token, "
+            "'file:...' secret file, or 'os.environ/NAME' at launch time."
+        ),
     )
 
     @field_validator(
@@ -1662,13 +1669,18 @@ class GceInstanceProfileConfig(BaseModel):
     github_deploy_key_file: Optional[str] = Field(
         default=None,
         description=(
-            "Path to SSH private key file for GitHub deploy key access. "
-            "Contents are base64-encoded and injected as instance metadata."
+            "SSH private key path for GitHub deploy key access. Supports a plain path, "
+            "'file:...' path reference, or 'os.environ/NAME' at launch time. "
+            "The resolved file contents are base64-encoded and injected as "
+            "instance metadata."
         ),
     )
     hf_token: Optional[str] = Field(
         default=None,
-        description="HuggingFace token for private dataset access.",
+        description=(
+            "HuggingFace token for private dataset access. Supports a literal token, "
+            "'file:...' secret file, or 'os.environ/NAME' at launch time."
+        ),
     )
 
     @field_validator(

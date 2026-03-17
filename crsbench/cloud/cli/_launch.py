@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, cast
 
 from pydantic import BaseModel
 
+from crsbench.cloud.gce.launch_preflight import prepare_gce_launch_inputs
 from crsbench.cloud.gce.provider import GceProviderAdapter
 from crsbench.cloud.gce.provisioner import GceProvisioner, GceProvisioningError
 from crsbench.cloud.launch_state import CloudLaunchState, save_launch_state
@@ -46,10 +47,13 @@ def run_launch(args: argparse.Namespace) -> int:
     orchestrator_record = None
     workers = []
     launch_plan = None
+    provisioning_plan = None
     adapter = None
     resolved_orchestrator_config = None
     legacy_orchestrator = None
     legacy_fleet = None
+    resolved_legacy_orchestrator = None
+    resolved_legacy_fleet = None
 
     uses_provider_neutral_cloud = (
         config.cloud.providers is not None
@@ -65,15 +69,19 @@ def run_launch(args: argparse.Namespace) -> int:
                 )
 
             launch_plan = build_cloud_launch_plan(config)
+            preflight = prepare_gce_launch_inputs(plan=launch_plan, cwd=Path.cwd())
+            provisioning_plan = preflight.resolved_plan
+            assert provisioning_plan is not None
+            assert preflight.redacted_worker_fleets is not None
             adapter = GceProviderAdapter()
             resolved_orchestrator_config = adapter.build_orchestrator_config(
-                launch_plan
+                provisioning_plan
             )
             validator = QuotaValidator(adapters={"gce": adapter})
             validator.validate(launch_plan)
 
             orchestrator_record = adapter.create_orchestrator(
-                plan=launch_plan,
+                plan=provisioning_plan,
                 experiment_config_path=str(config_path),
                 redis_password=redis_password,
             )
@@ -91,10 +99,20 @@ def run_launch(args: argparse.Namespace) -> int:
             legacy_orchestrator = cast(
                 "GceOrchestratorConfig", config.cloud.orchestrator
             )
+            preflight = prepare_gce_launch_inputs(
+                orchestrator=legacy_orchestrator,
+                worker_fleets=[legacy_fleet],
+                cwd=Path.cwd(),
+            )
+            resolved_legacy_orchestrator = preflight.resolved_orchestrator
+            assert resolved_legacy_orchestrator is not None
+            assert preflight.resolved_worker_fleets is not None
+            assert preflight.redacted_worker_fleets is not None
+            resolved_legacy_fleet = preflight.resolved_worker_fleets[0]
             provisioner = GceProvisioner()
             orchestrator_record = provisioner.create_orchestrator(
                 experiment_name=config.experiment,
-                orchestrator=legacy_orchestrator,
+                orchestrator=resolved_legacy_orchestrator,
                 experiment_config_path=str(config_path),
                 redis_password=redis_password,
             )
@@ -107,19 +125,19 @@ def run_launch(args: argparse.Namespace) -> int:
         redis_host = f"{orchestrator_record.internal_ip}:6379"
         if uses_provider_neutral_cloud:
             assert adapter is not None
-            assert launch_plan is not None
+            assert provisioning_plan is not None
             workers = adapter.create_workers(
-                plan=launch_plan,
+                plan=provisioning_plan,
                 redis_host=redis_host,
                 redis_password=redis_password,
                 registration=registration,
             )
         else:
-            assert legacy_fleet is not None
+            assert resolved_legacy_fleet is not None
             provisioner = GceProvisioner()
             workers = provisioner.create_workers(
                 experiment_name=config.experiment,
-                fleet=legacy_fleet,
+                fleet=resolved_legacy_fleet,
                 redis_host=redis_host,
                 redis_password=redis_password,
                 registration=registration,
@@ -127,18 +145,17 @@ def run_launch(args: argparse.Namespace) -> int:
 
         worker_fleet_configs: list[GceWorkerFleetConfig]
         if uses_provider_neutral_cloud:
-            assert adapter is not None
-            assert launch_plan is not None
             assert resolved_orchestrator_config is not None
-            worker_fleet_configs = adapter.build_worker_fleets(launch_plan)
+            assert preflight.redacted_worker_fleets is not None
+            worker_fleet_configs = preflight.redacted_worker_fleets
             orchestrator_project = resolved_orchestrator_config.project
             orchestrator_ssh_via_iap = resolved_orchestrator_config.ssh_via_iap
         else:
-            assert legacy_fleet is not None
-            assert legacy_orchestrator is not None
-            worker_fleet_configs = [legacy_fleet]
-            orchestrator_project = legacy_orchestrator.project
-            orchestrator_ssh_via_iap = legacy_orchestrator.ssh_via_iap
+            assert resolved_legacy_orchestrator is not None
+            assert preflight.redacted_worker_fleets is not None
+            worker_fleet_configs = preflight.redacted_worker_fleets
+            orchestrator_project = resolved_legacy_orchestrator.project
+            orchestrator_ssh_via_iap = resolved_legacy_orchestrator.ssh_via_iap
 
         save_launch_state(
             config_path,
@@ -169,13 +186,13 @@ def run_launch(args: argparse.Namespace) -> int:
             try:
                 if uses_provider_neutral_cloud:
                     assert adapter is not None
-                    assert launch_plan is not None
-                    adapter.delete_workers(plan=launch_plan)
+                    assert provisioning_plan is not None
+                    adapter.delete_workers(plan=provisioning_plan)
                 else:
-                    assert legacy_fleet is not None
+                    assert resolved_legacy_fleet is not None
                     GceProvisioner().delete_workers(
                         experiment_name=config.experiment,
-                        fleet=legacy_fleet,
+                        fleet=resolved_legacy_fleet,
                     )
             except Exception:
                 logger.warning(
@@ -186,7 +203,6 @@ def run_launch(args: argparse.Namespace) -> int:
             try:
                 if uses_provider_neutral_cloud:
                     assert adapter is not None
-                    assert launch_plan is not None
                     assert resolved_orchestrator_config is not None
                     GceProvisioner().delete_instance(
                         project=resolved_orchestrator_config.project,
@@ -194,10 +210,10 @@ def run_launch(args: argparse.Namespace) -> int:
                         instance_name=orchestrator_record.name,
                     )
                 else:
-                    assert legacy_orchestrator is not None
+                    assert resolved_legacy_orchestrator is not None
                     GceProvisioner().delete_orchestrators(
                         experiment_name=config.experiment,
-                        orchestrator=legacy_orchestrator,
+                        orchestrator=resolved_legacy_orchestrator,
                     )
             except Exception:
                 logger.warning(

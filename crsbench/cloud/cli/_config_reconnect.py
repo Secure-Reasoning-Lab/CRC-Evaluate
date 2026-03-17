@@ -11,6 +11,7 @@ from crsbench.cloud.gce.provider import GceProviderAdapter
 from crsbench.cloud.launch_state import (
     CloudLaunchState,
     load_launch_state,
+    redact_worker_fleet_config,
     save_launch_state,
 )
 from crsbench.cloud.models import CloudLaunchPlan, build_cloud_launch_plan
@@ -85,9 +86,13 @@ def resolve_cloud_context(
                 config.experiment_filestore
             )
         if not launch_state.worker_fleet_configs and derived_worker_fleets:
-            launch_state_updates["worker_fleet_configs"] = derived_worker_fleets
+            launch_state_updates["worker_fleet_configs"] = [
+                redact_worker_fleet_config(fleet) for fleet in derived_worker_fleets
+            ]
         if launch_state.worker_fleet_config is None and len(derived_worker_fleets) == 1:
-            launch_state_updates["worker_fleet_config"] = derived_worker_fleets[0]
+            launch_state_updates["worker_fleet_config"] = redact_worker_fleet_config(
+                derived_worker_fleets[0]
+            )
         if launch_state_updates:
             launch_state = launch_state.model_copy(update=launch_state_updates)
             launch_state_changed = True

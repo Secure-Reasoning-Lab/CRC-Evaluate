@@ -849,7 +849,7 @@ class TestIntegrationWithSampleConfigs:
             config.cloud.providers.gce.instance_profiles[
                 "worker-n2d"
             ].github_deploy_key_file
-            == ".crsbench-keys/crsbench-deploy"
+            == "file:.crsbench-keys/crsbench-deploy"
         )
         assert (
             config.cloud.providers.gce.instance_profiles[
@@ -861,7 +861,7 @@ class TestIntegrationWithSampleConfigs:
             config.cloud.providers.gce.instance_profiles[
                 "orchestrator-n2d"
             ].github_deploy_key_file
-            == ".crsbench-keys/crsbench-deploy"
+            == "file:.crsbench-keys/crsbench-deploy"
         )
         assert (
             config.cloud.providers.gce.instance_profiles[

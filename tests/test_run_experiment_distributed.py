@@ -1,9 +1,11 @@
 """Regression tests for distributed run orchestration."""
 
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from crsbench.cloud.models import build_cloud_launch_plan
 from crsbench.distributed.jobs import _build_trial_output_path
 from crsbench.distributed.runtime_session import LockContentionError
 from crsbench.run_experiment import (
@@ -484,6 +486,21 @@ def _make_provider_neutral_run_config(tmp_path: Path) -> ExperimentConfig:
     )
 
 
+def _add_secret_refs_to_provider_neutral_run_config(
+    config: ExperimentConfig,
+    *,
+    deploy_key_ref: str = "file:.crsbench-keys/crsbench-deploy",
+    hf_token_ref: str = "os.environ/HF_TOKEN",
+) -> ExperimentConfig:
+    config = config.model_copy(deep=True)
+    profiles = config.cloud.providers.gce.instance_profiles
+    profiles["orchestrator-n2d"].github_deploy_key_file = deploy_key_ref
+    profiles["orchestrator-n2d"].hf_token = hf_token_ref
+    profiles["worker-n2d"].github_deploy_key_file = deploy_key_ref
+    profiles["worker-n2d"].hf_token = hf_token_ref
+    return config
+
+
 def test_build_trial_id_includes_target_cpv_id() -> None:
     cpv_trial = _make_trial("cpv_7")
     trial_id = build_trial_id("exp", cpv_trial, "_abc123")
@@ -741,6 +758,91 @@ def test_cloud_fleet_bringup_runs_before_enqueue(tmp_path: Path) -> None:
     manager.bring_up_gce_workers.assert_called_once()
 
 
+def test_legacy_cloud_workers_resolve_secret_refs_before_bringup(
+    tmp_path: Path,
+) -> None:
+    """Legacy GCE bring-up should resolve secret refs before provisioning."""
+    from crsbench.validation.schemas import CloudConfig, GceWorkerFleetConfig
+
+    key_dir = tmp_path / ".crsbench-keys"
+    key_dir.mkdir()
+    expected_key_path = str((key_dir / "crsbench-deploy").resolve())
+    (key_dir / "crsbench-deploy").write_text("PRIVATE KEY", encoding="utf-8")
+    original_cwd = Path.cwd()
+
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = False
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+    config.crs_compose = None
+    config.max_total_time = 3600
+    config.model_dump.return_value = {"experiment": "exp-test"}
+    config.cloud = CloudConfig(
+        gce=GceWorkerFleetConfig(
+            project="test-project",
+            zone="us-central1-a",
+            worker_count=1,
+            machine_type="e2-standard-16",
+            boot_disk_size_gb=200,
+            image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+            service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+            owner_label="team-crs",
+            github_deploy_key_file="file:.crsbench-keys/crsbench-deploy",
+            hf_token="os.environ/HF_TOKEN",
+        )
+    )
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.cloud_readiness = MagicMock()
+    session.register_or_raise.return_value = None
+
+    manager = MagicMock()
+    registration = MagicMock()
+
+    def _bring_up_gce_workers(**kwargs):
+        fleet = kwargs["fleet"]
+        assert fleet.github_deploy_key_file == expected_key_path
+        assert fleet.hf_token == "hf_secret_value"
+        raise RuntimeError("stop after resolved legacy bringup")
+
+    manager.bring_up_gce_workers.side_effect = _bring_up_gce_workers
+
+    with (
+        patch.dict(os.environ, {"HF_TOKEN": "hf_secret_value"}, clear=False),
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={"queued": {}, "started": {}, "failed": {}, "finished": {}},
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config",
+            return_value=registration,
+        ),
+        patch(
+            "crsbench.cloud.status.CloudFleetStatusManager",
+            return_value=manager,
+        ),
+    ):
+        os.chdir(tmp_path)
+        try:
+            with pytest.raises(
+                RuntimeError, match="stop after resolved legacy bringup"
+            ):
+                run_experiment_distributed("exp-test", config, [_make_trial(None)])
+        finally:
+            os.chdir(original_cwd)
+
+    manager.bring_up_gce_workers.assert_called_once()
+
+
 def test_provider_neutral_cloud_workers_validate_quota_before_bringup(
     tmp_path: Path,
 ) -> None:
@@ -760,6 +862,8 @@ def test_provider_neutral_cloud_workers_validate_quota_before_bringup(
     validator = MagicMock()
     manager = MagicMock()
     call_order: list[str] = []
+    resolved_plan = MagicMock()
+    resolved_plan.experiment_name = "exp-test"
 
     validator.validate.side_effect = lambda plan, *, include_orchestrator=True: (
         call_order.append(
@@ -799,6 +903,10 @@ def test_provider_neutral_cloud_workers_validate_quota_before_bringup(
             return_value=launch_plan,
         ),
         patch(
+            "crsbench.cloud.gce.launch_preflight.prepare_gce_launch_inputs",
+            return_value=MagicMock(resolved_plan=resolved_plan),
+        ),
+        patch(
             "crsbench.cloud.gce.provider.GceProviderAdapter",
             return_value=adapter,
         ),
@@ -817,6 +925,173 @@ def test_provider_neutral_cloud_workers_validate_quota_before_bringup(
     validator.validate.assert_called_once_with(launch_plan, include_orchestrator=False)
     manager.bring_up_workers.assert_called_once()
     manager.bring_up_gce_workers.assert_not_called()
+
+
+def test_provider_neutral_cloud_workers_resolve_secret_refs_before_bringup(
+    tmp_path: Path,
+) -> None:
+    """Local bring-up should use a resolved launch plan without mutating the original."""
+    config = _add_secret_refs_to_provider_neutral_run_config(
+        _make_provider_neutral_run_config(tmp_path)
+    )
+
+    key_dir = tmp_path / ".crsbench-keys"
+    key_dir.mkdir()
+    (key_dir / "crsbench-deploy").write_text("PRIVATE KEY", encoding="utf-8")
+    original_cwd = Path.cwd()
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.cloud_readiness = MagicMock()
+    session.register_or_raise.return_value = None
+
+    registration = MagicMock()
+    adapter = MagicMock()
+    validator = MagicMock()
+    manager = MagicMock()
+    launch_plan = build_cloud_launch_plan(config)
+    expected_key_path = str((key_dir / "crsbench-deploy").resolve())
+
+    def _bring_up_workers(**kwargs):
+        resolved_plan = kwargs["plan"]
+        assert (
+            resolved_plan.worker_placements[0].instance_profile.profile_config[
+                "hf_token"
+            ]
+            == "hf_secret_value"
+        )
+        assert (
+            resolved_plan.worker_placements[0].instance_profile.profile_config[
+                "github_deploy_key_file"
+            ]
+            == expected_key_path
+        )
+        assert (
+            launch_plan.worker_placements[0].instance_profile.profile_config["hf_token"]
+            == "os.environ/HF_TOKEN"
+        )
+        assert (
+            launch_plan.worker_placements[0].instance_profile.profile_config[
+                "github_deploy_key_file"
+            ]
+            == "file:.crsbench-keys/crsbench-deploy"
+        )
+        raise RuntimeError("stop after resolved bringup")
+
+    manager.bring_up_workers.side_effect = _bring_up_workers
+
+    with (
+        patch.dict(os.environ, {"HF_TOKEN": "hf_secret_value"}, clear=False),
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={"queued": {}, "started": {}, "failed": {}, "finished": {}},
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config",
+            return_value=registration,
+        ),
+        patch(
+            "crsbench.cloud.models.build_cloud_launch_plan",
+            return_value=launch_plan,
+        ),
+        patch(
+            "crsbench.cloud.gce.provider.GceProviderAdapter",
+            return_value=adapter,
+        ),
+        patch(
+            "crsbench.cloud.quota.QuotaValidator",
+            return_value=validator,
+        ),
+        patch(
+            "crsbench.cloud.status.CloudFleetStatusManager",
+            return_value=manager,
+        ),
+    ):
+        os.chdir(tmp_path)
+        try:
+            with pytest.raises(RuntimeError, match="stop after resolved bringup"):
+                run_experiment_distributed("exp-test", config, [_make_trial(None)])
+        finally:
+            os.chdir(original_cwd)
+
+    validator.validate.assert_called_once_with(launch_plan, include_orchestrator=False)
+    manager.bring_up_workers.assert_called_once()
+
+
+def test_provider_neutral_preprovisioned_wait_does_not_resolve_secret_refs_again(
+    tmp_path: Path,
+) -> None:
+    """Remote orchestrator wait path must not require operator-only secret sources."""
+    config = _add_secret_refs_to_provider_neutral_run_config(
+        _make_provider_neutral_run_config(tmp_path)
+    )
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.cloud_readiness = MagicMock()
+    session.register_or_raise.return_value = None
+
+    registration = MagicMock()
+    launch_plan = build_cloud_launch_plan(config)
+    adapter = MagicMock()
+    manager = MagicMock()
+
+    def _wait_for_existing_workers(**kwargs):
+        unresolved_plan = kwargs["plan"]
+        assert (
+            unresolved_plan.worker_placements[0].instance_profile.profile_config[
+                "hf_token"
+            ]
+            == "os.environ/HF_TOKEN"
+        )
+        raise RuntimeError("stop after existing-worker wait")
+
+    manager.wait_for_existing_workers.side_effect = _wait_for_existing_workers
+
+    with (
+        patch.dict(
+            os.environ,
+            {"CRSBENCH_CLOUD_PREPROVISIONED_WORKERS": "1"},
+            clear=False,
+        ),
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={"queued": {}, "started": {}, "failed": {}, "finished": {}},
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config",
+            return_value=registration,
+        ),
+        patch(
+            "crsbench.cloud.models.build_cloud_launch_plan",
+            return_value=launch_plan,
+        ),
+        patch(
+            "crsbench.cloud.gce.provider.GceProviderAdapter",
+            return_value=adapter,
+        ),
+        patch(
+            "crsbench.cloud.status.CloudFleetStatusManager",
+            return_value=manager,
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="stop after existing-worker wait"):
+            run_experiment_distributed("exp-test", config, [_make_trial(None)])
+
+    manager.wait_for_existing_workers.assert_called_once()
+    manager.bring_up_workers.assert_not_called()
 
 
 def test_cloud_fleet_failure_aborts_before_enqueue(tmp_path: Path) -> None:

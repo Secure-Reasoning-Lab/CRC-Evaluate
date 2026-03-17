@@ -120,6 +120,15 @@ These credential fields stay supported even when you use a public CRSBench
 repository or a public dataset mirror, because downstream adopters may still
 need private forks or gated datasets.
 
+Cloud secret-bearing fields accept three forms at launch time:
+
+- literal values
+- `os.environ/NAME`
+- `file:relative/or/absolute/path`
+
+`file:` paths resolve relative to the operator command's current working
+directory when they are not absolute.
+
 ### Generate a deploy key
 
 ```bash
@@ -145,7 +154,7 @@ cloud:
 
           # For a private repo, switch to git+ssh://... and provide a deploy key:
           # crsbench_install_spec: "git+ssh://git@github.com/your-org/CRSBench.git"
-          # github_deploy_key_file: .crsbench-keys/crsbench-deploy
+          # github_deploy_key_file: file:.crsbench-keys/crsbench-deploy
 
         worker-n2d:
           # Install CRSBench from a public repo via git clone + uv sync
@@ -153,10 +162,10 @@ cloud:
 
           # For a private repo, switch to git+ssh://... and provide a deploy key:
           # crsbench_install_spec: "git+ssh://git@github.com/your-org/CRSBench.git"
-          # github_deploy_key_file: .crsbench-keys/crsbench-deploy
+          # github_deploy_key_file: file:.crsbench-keys/crsbench-deploy
 
           # HuggingFace token for gated dataset downloads (optional)
-          hf_token: "hf_..."
+          hf_token: os.environ/HF_TOKEN
 ```
 
 If you switch to the private `git+ssh` path, run:
@@ -180,7 +189,9 @@ file at provision time, base64-encodes it, and sets it as
 `crsbench-github-deploy-key` instance metadata. The startup script writes it to
 `/root/.ssh/id_ed25519` and configures git SSH access. The `hf_token` is
 passed as `crsbench-hf-token` metadata and exported as `HF_TOKEN` in the worker
-environment.
+environment. Secret references are resolved once on the operator before VM
+creation; the original experiment config payload sent to the remote orchestrator
+is not rewritten with resolved secret values.
 
 ## Launching an Experiment
 

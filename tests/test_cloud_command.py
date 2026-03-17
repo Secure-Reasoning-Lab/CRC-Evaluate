@@ -374,6 +374,21 @@ def _make_provider_neutral_experiment_config() -> ExperimentConfig:
     )
 
 
+def _add_secret_refs_to_provider_neutral_config(
+    config: ExperimentConfig,
+    *,
+    deploy_key_ref: str = "file:.crsbench-keys/crsbench-deploy",
+    hf_token_ref: str = "os.environ/HF_TOKEN",
+) -> ExperimentConfig:
+    config = config.model_copy(deep=True)
+    profiles = config.cloud.providers.gce.instance_profiles
+    profiles["orchestrator-n2d"].github_deploy_key_file = deploy_key_ref
+    profiles["orchestrator-n2d"].hf_token = hf_token_ref
+    profiles["worker-n2d"].github_deploy_key_file = deploy_key_ref
+    profiles["worker-n2d"].hf_token = hf_token_ref
+    return config
+
+
 def test_build_cloud_launch_plan_resolves_profiles_for_orchestrator_and_workers():
     from crsbench.cloud.models import build_cloud_launch_plan
 
@@ -405,6 +420,108 @@ def test_build_cloud_launch_plan_resolves_profiles_for_orchestrator_and_workers(
         placement.instance_profile.provider_config["project"] == "test-project"
         for placement in plan.worker_placements
     )
+
+
+def test_prepare_gce_launch_inputs_resolves_provider_neutral_secret_refs(
+    tmp_path: Path,
+) -> None:
+    from crsbench.cloud.gce.launch_preflight import prepare_gce_launch_inputs
+    from crsbench.cloud.models import build_cloud_launch_plan
+
+    key_dir = tmp_path / ".crsbench-keys"
+    key_dir.mkdir()
+    key_path = key_dir / "crsbench-deploy"
+    key_path.write_text("PRIVATE KEY", encoding="utf-8")
+
+    config = _add_secret_refs_to_provider_neutral_config(
+        _make_provider_neutral_experiment_config()
+    )
+    launch_plan = build_cloud_launch_plan(config)
+
+    preflight = prepare_gce_launch_inputs(
+        plan=launch_plan,
+        cwd=tmp_path,
+        env={"HF_TOKEN": "hf_secret_value"},
+    )
+
+    assert (
+        launch_plan.orchestrator.instance_profile.profile_config["hf_token"]
+        == "os.environ/HF_TOKEN"
+    )
+    assert (
+        launch_plan.worker_placements[0].instance_profile.profile_config[
+            "github_deploy_key_file"
+        ]
+        == "file:.crsbench-keys/crsbench-deploy"
+    )
+    assert (
+        preflight.resolved_plan.orchestrator.instance_profile.profile_config["hf_token"]
+        == "hf_secret_value"
+    )
+    assert preflight.resolved_plan.worker_placements[0].instance_profile.profile_config[
+        "github_deploy_key_file"
+    ] == str(key_path)
+    assert preflight.redacted_worker_fleets[0].hf_token is None
+    assert preflight.redacted_worker_fleets[0].github_deploy_key_file is None
+
+
+def test_prepare_gce_launch_inputs_rejects_missing_secret_before_provisioning(
+    tmp_path: Path,
+) -> None:
+    from crsbench.cloud.gce.launch_preflight import prepare_gce_launch_inputs
+    from crsbench.cloud.models import build_cloud_launch_plan
+    from crsbench.cloud.secret_refs import CloudSecretReferenceError
+
+    key_dir = tmp_path / ".crsbench-keys"
+    key_dir.mkdir()
+    (key_dir / "crsbench-deploy").write_text("PRIVATE KEY", encoding="utf-8")
+
+    config = _add_secret_refs_to_provider_neutral_config(
+        _make_provider_neutral_experiment_config()
+    )
+    launch_plan = build_cloud_launch_plan(config)
+
+    with pytest.raises(CloudSecretReferenceError, match="HF_TOKEN"):
+        prepare_gce_launch_inputs(plan=launch_plan, cwd=tmp_path, env={})
+
+
+def test_prepare_gce_launch_inputs_resolves_legacy_gce_secret_refs(
+    tmp_path: Path,
+) -> None:
+    from crsbench.cloud.gce.launch_preflight import prepare_gce_launch_inputs
+
+    key_dir = tmp_path / ".crsbench-keys"
+    key_dir.mkdir()
+    key_path = key_dir / "crsbench-deploy"
+    key_path.write_text("PRIVATE KEY", encoding="utf-8")
+
+    launch_config = _make_launch_config()
+    launch_config.cloud.gce = launch_config.cloud.gce.model_copy(
+        update={
+            "github_deploy_key_file": "file:.crsbench-keys/crsbench-deploy",
+            "hf_token": "os.environ/HF_TOKEN",
+        }
+    )
+    launch_config.cloud.orchestrator = launch_config.cloud.orchestrator.model_copy(
+        update={
+            "github_deploy_key_file": "file:.crsbench-keys/crsbench-deploy",
+            "hf_token": "os.environ/HF_TOKEN",
+        }
+    )
+
+    preflight = prepare_gce_launch_inputs(
+        orchestrator=launch_config.cloud.orchestrator,
+        worker_fleets=[launch_config.cloud.gce],
+        cwd=tmp_path,
+        env={"HF_TOKEN": "hf_secret_value"},
+    )
+
+    assert preflight.resolved_orchestrator.hf_token == "hf_secret_value"
+    assert preflight.resolved_orchestrator.github_deploy_key_file == str(key_path)
+    assert preflight.resolved_worker_fleets[0].hf_token == "hf_secret_value"
+    assert preflight.resolved_worker_fleets[0].github_deploy_key_file == str(key_path)
+    assert preflight.redacted_worker_fleets[0].hf_token is None
+    assert preflight.redacted_worker_fleets[0].github_deploy_key_file is None
 
 
 def test_run_launch_fails_on_quota_shortage_before_creating_instances(tmp_path: Path):
@@ -758,15 +875,36 @@ class TestLaunch:
         "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
     )
     @patch("crsbench.cloud.cli._launch.save_launch_state")
+    @patch("crsbench.cloud.cli._launch.prepare_gce_launch_inputs")
     @patch("crsbench.cloud.cli._launch.GceProvisioner")
     @patch("crsbench.cloud.cli._launch.load_experiment_config")
     def test_launch_provisions_orchestrator_before_workers(
-        self, mock_load, mock_prov_cls, mock_save_state, mock_secret
+        self, mock_load, mock_prov_cls, mock_preflight, mock_save_state, mock_secret
     ):
         del mock_secret
         mock_load.return_value = _make_launch_config()
         mock_prov = MagicMock()
         call_order: list[str] = []
+        resolved_orchestrator = _make_launch_config().cloud.orchestrator.model_copy(
+            update={
+                "hf_token": "hf_secret_value",
+                "github_deploy_key_file": "/tmp/crsbench-deploy",
+            }
+        )
+        resolved_fleet = _make_launch_config().cloud.gce.model_copy(
+            update={
+                "hf_token": "hf_secret_value",
+                "github_deploy_key_file": "/tmp/crsbench-deploy",
+            }
+        )
+        redacted_fleet = resolved_fleet.model_copy(
+            update={"hf_token": None, "github_deploy_key_file": None}
+        )
+        mock_preflight.return_value = MagicMock(
+            resolved_orchestrator=resolved_orchestrator,
+            resolved_worker_fleets=[resolved_fleet],
+            redacted_worker_fleets=[redacted_fleet],
+        )
 
         orchestrator_record = _make_gce_worker(
             "gce-orchestrator-test-exp", ip="10.0.0.50"
@@ -775,12 +913,15 @@ class TestLaunch:
         def _create_orchestrator(**kwargs):
             call_order.append("orchestrator")
             assert kwargs["redis_password"] == "shared-secret"
+            assert kwargs["experiment_config_path"] == "/tmp/config.yaml"
+            assert kwargs["orchestrator"] == resolved_orchestrator
             return orchestrator_record
 
         def _create_workers(**kwargs):
             call_order.append("workers")
             assert kwargs["redis_host"] == "10.0.0.50:6379"
             assert kwargs["redis_password"] == "shared-secret"
+            assert kwargs["fleet"] == resolved_fleet
             return []
 
         mock_prov.create_orchestrator.side_effect = _create_orchestrator
@@ -796,7 +937,7 @@ class TestLaunch:
         mock_save_state.assert_called_once()
         assert mock_save_state.call_args.args[0] == Path("/tmp/config.yaml")
         saved_state = mock_save_state.call_args.args[1]
-        assert saved_state.worker_fleet_config == mock_load.return_value.cloud.gce
+        assert saved_state.worker_fleet_config == redacted_fleet
 
     @patch(
         "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
@@ -835,6 +976,7 @@ class TestLaunch:
         "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
     )
     @patch("crsbench.cloud.cli._launch.save_launch_state")
+    @patch("crsbench.cloud.cli._launch.prepare_gce_launch_inputs")
     @patch("crsbench.cloud.cli._launch.GceProviderAdapter")
     @patch("crsbench.cloud.cli._launch.QuotaValidator")
     @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
@@ -845,6 +987,7 @@ class TestLaunch:
         mock_build_plan,
         mock_validator_cls,
         mock_adapter_cls,
+        mock_preflight,
         mock_save_state,
         mock_secret,
     ):
@@ -855,8 +998,19 @@ class TestLaunch:
         launch_plan = MagicMock()
         launch_plan.experiment_name = "test-exp"
         mock_build_plan.return_value = launch_plan
+        resolved_plan = MagicMock()
+        resolved_plan.experiment_name = "test-exp"
 
         call_order: list[str] = []
+        mock_preflight.side_effect = lambda **_kwargs: (
+            call_order.append("preflight")
+            or MagicMock(
+                resolved_plan=resolved_plan,
+                redacted_worker_fleets=(
+                    _make_provider_neutral_launch_state().worker_fleet_configs
+                ),
+            )
+        )
         mock_validator = mock_validator_cls.return_value
         mock_validator.validate.side_effect = lambda plan: (
             call_order.append(f"validate:{plan.experiment_name}")
@@ -866,7 +1020,6 @@ class TestLaunch:
         expected_worker_fleets = (
             _make_provider_neutral_launch_state().worker_fleet_configs
         )
-        mock_adapter.build_worker_fleets.return_value = expected_worker_fleets
         mock_adapter.build_orchestrator_config.return_value.project = "test-project"
         mock_adapter.build_orchestrator_config.return_value.ssh_via_iap = True
         mock_adapter.create_orchestrator.side_effect = lambda **_kwargs: (
@@ -888,13 +1041,73 @@ class TestLaunch:
 
         assert rc == 0
         assert call_order == [
+            "preflight",
             "validate:test-exp",
             "create-orchestrator",
             "create-workers",
         ]
+        mock_adapter.create_orchestrator.assert_called_once_with(
+            plan=resolved_plan,
+            experiment_config_path="/tmp/config.yaml",
+            redis_password="shared-secret",
+        )
+        mock_adapter.create_workers.assert_called_once()
+        assert mock_adapter.create_workers.call_args.kwargs["plan"] is resolved_plan
         mock_save_state.assert_called_once()
         saved_state = mock_save_state.call_args.args[1]
         assert saved_state.worker_fleet_configs == expected_worker_fleets
+
+
+def test_save_launch_state_redacts_secret_bearing_worker_fields(tmp_path: Path) -> None:
+    from crsbench.cloud.launch_state import (
+        CloudLaunchState,
+        load_launch_state,
+        save_launch_state,
+    )
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("experiment: test-exp\n", encoding="utf-8")
+    state = CloudLaunchState(
+        experiment_name="test-exp",
+        config_path=str(config_path),
+        experiment_filestore="/tmp/filestore",
+        redis_host="10.0.0.50:6379",
+        redis_password="shared-secret",
+        orchestrator_provider="gce",
+        orchestrator_name="gce-orchestrator-test-exp",
+        orchestrator_project="test-project",
+        orchestrator_zone="us-east5-b",
+        worker_fleet_configs=[
+            GceWorkerFleetConfig(
+                project="test-project",
+                zone="us-east5-b",
+                worker_count=1,
+                machine_type="n2d-standard-16",
+                boot_disk_size_gb=100,
+                image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+                owner_label="team-crs",
+                worker_name_prefix="test-exp-us-east5-b",
+                github_deploy_key_file="file:.crsbench-keys/crsbench-deploy",
+                hf_token="hf_inline_secret",
+            )
+        ],
+    )
+
+    save_launch_state(config_path, state)
+
+    raw_state = json.loads(
+        (config_path.parent / ".crsbench-cloud" / "test-exp.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert raw_state["worker_fleet_configs"][0]["github_deploy_key_file"] is None
+    assert raw_state["worker_fleet_configs"][0]["hf_token"] is None
+
+    loaded_state = load_launch_state(config_path, "test-exp")
+    assert loaded_state is not None
+    assert loaded_state.worker_fleet_configs[0].github_deploy_key_file is None
+    assert loaded_state.worker_fleet_configs[0].hf_token is None
 
 
 # ---------------------------------------------------------------------------

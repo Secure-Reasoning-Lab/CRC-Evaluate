@@ -71,7 +71,7 @@ The checked-in config currently uses:
 
 - `crsbench_install_spec: git+ssh://git@github.com/sslab-gatech/CRSBench.git`
 - `crsbench_git_ref: feat/gcp`
-- `github_deploy_key_file: .crsbench-keys/crsbench-deploy`
+- `github_deploy_key_file: file:.crsbench-keys/crsbench-deploy`
 
 That only works if:
 
@@ -100,8 +100,21 @@ The checked-in config already points at that private key:
 
 ```yaml
 crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
-github_deploy_key_file: .crsbench-keys/crsbench-deploy
+github_deploy_key_file: file:.crsbench-keys/crsbench-deploy
 ```
+
+`file:` paths resolve relative to the directory where you run the launch
+command, so run the smoke test from the repo root if you keep the checked-in
+relative path.
+
+Optional: if your dataset access requires Hugging Face credentials, export a
+token before launch and point the config at `hf_token: os.environ/HF_TOKEN`.
+
+Expected result:
+
+- `echo "$HF_TOKEN"` prints a non-empty token when you intend to use gated
+  datasets
+- the token is not written back into `.crsbench-cloud/*.json`
 
 4. Confirm quota is sufficient for this exact layout:
 

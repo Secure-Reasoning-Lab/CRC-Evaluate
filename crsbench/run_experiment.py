@@ -2110,6 +2110,9 @@ def run_experiment_distributed(
                 readiness_store=session.cloud_readiness
             )
             if uses_provider_neutral_cloud:
+                from crsbench.cloud.gce.launch_preflight import (
+                    prepare_gce_launch_inputs,
+                )
                 from crsbench.cloud.gce.provider import GceProviderAdapter
                 from crsbench.cloud.models import build_cloud_launch_plan
                 from crsbench.cloud.quota import QuotaValidator
@@ -2126,12 +2129,17 @@ def run_experiment_distributed(
                         adapter=adapter,
                     )
                 else:
+                    preflight = prepare_gce_launch_inputs(
+                        plan=launch_plan,
+                        cwd=Path.cwd(),
+                    )
+                    assert preflight.resolved_plan is not None
                     QuotaValidator(adapters={"gce": adapter}).validate(
                         launch_plan,
                         include_orchestrator=False,
                     )
                     fleet_status = fleet_status_manager.bring_up_workers(
-                        plan=launch_plan,
+                        plan=preflight.resolved_plan,
                         adapter=adapter,
                         redis_host=redis_host,
                         redis_password=os.environ.get("CRSBENCH_REDIS_PASSWORD"),
@@ -2155,9 +2163,18 @@ def run_experiment_distributed(
                         fleet=legacy_cloud_gce,
                     )
                 else:
+                    from crsbench.cloud.gce.launch_preflight import (
+                        prepare_gce_launch_inputs,
+                    )
+
+                    preflight = prepare_gce_launch_inputs(
+                        worker_fleets=[legacy_cloud_gce],
+                        cwd=Path.cwd(),
+                    )
+                    assert preflight.resolved_worker_fleets is not None
                     fleet_status = fleet_status_manager.bring_up_gce_workers(
                         experiment_name=experiment_name,
-                        fleet=legacy_cloud_gce,
+                        fleet=preflight.resolved_worker_fleets[0],
                         redis_host=redis_host,
                         redis_password=os.environ.get("CRSBENCH_REDIS_PASSWORD"),
                         registration=registration,

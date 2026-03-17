@@ -69,6 +69,34 @@ class CloudLaunchState(BaseModel):
         return list(self.worker_fleet_configs)
 
 
+def redact_worker_fleet_config(fleet: GceWorkerFleetConfig) -> GceWorkerFleetConfig:
+    """Return a fleet config safe to persist in local launch state."""
+    return fleet.model_copy(
+        update={
+            "github_deploy_key_file": None,
+            "hf_token": None,
+        }
+    )
+
+
+def redact_launch_state(state: CloudLaunchState) -> CloudLaunchState:
+    """Return a launch state copy with secret-bearing worker fields removed."""
+    redacted_fleets = [
+        redact_worker_fleet_config(fleet) for fleet in state.worker_fleet_configs
+    ]
+    redacted_single = (
+        redact_worker_fleet_config(state.worker_fleet_config)
+        if state.worker_fleet_config is not None
+        else None
+    )
+    return state.model_copy(
+        update={
+            "worker_fleet_configs": redacted_fleets,
+            "worker_fleet_config": redacted_single,
+        }
+    )
+
+
 def _resolve_launch_state_dir(base_path: Path | str) -> Path:
     from pathlib import Path as _Path
 
@@ -88,6 +116,7 @@ def save_launch_state(
     state: CloudLaunchState,
 ) -> Path:
     """Persist launch state with restrictive local file permissions."""
+    state = redact_launch_state(state)
     path = launch_state_path(base_path, state.experiment_name)
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path: Path | None = None
