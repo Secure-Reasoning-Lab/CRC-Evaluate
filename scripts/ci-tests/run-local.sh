@@ -24,6 +24,8 @@
 #   SMOKE_BUGFIXING_CONFIG=<path>                # defaults to sanity bugfixing config
 #   SMOKE_CPUSET_<SUITE_NAME>=<cpuset>           # optional per-suite cpuset override (e.g. SMOKE_CPUSET_BUGFINDING=0-23)
 #   SMOKE_SKIP_CPUSET_<SUITE_NAME>=<cpuset>      # optional per-suite excluded CPUs
+#   SMOKE_STREAM_LOGS=1                          # stream smoke worker/run logs live while also saving worker.log/run.log
+#   CRSBENCH_RUN_LOCAL_ENV_FILE=<path>           # optional .env file to load for smoke runs (defaults to <repo>/.env)
 
 set -e
 
@@ -51,6 +53,112 @@ success() {
 fail() {
     echo -e "${RED}$1${NC}"
     exit 1
+}
+
+smoke_stream_logs_enabled() {
+    [ "${SMOKE_STREAM_LOGS:-1}" = "1" ]
+}
+
+smoke_can_stream_logs() {
+    smoke_stream_logs_enabled && command -v stdbuf >/dev/null 2>&1
+}
+
+smoke_env_file() {
+    printf '%s\n' "${CRSBENCH_RUN_LOCAL_ENV_FILE:-$ROOT_DIR/.env}"
+}
+
+load_smoke_env_file() {
+    local env_file
+    env_file="$(smoke_env_file)"
+    [ -f "$env_file" ] || return 0
+
+    eval "$(
+        uv run python - "$env_file" <<'PY'
+import os
+import shlex
+import sys
+
+from dotenv import dotenv_values
+
+for key, value in dotenv_values(sys.argv[1]).items():
+    if value is None or key in os.environ:
+        continue
+    print(f"export {key}={shlex.quote(value)}")
+PY
+    )"
+}
+
+create_smoke_stream_fifo_dir() {
+    mktemp -d "${TMPDIR:-/tmp}/crsbench-smoke-stream-XXXXXX"
+}
+
+run_smoke_logged_command() {
+    local logfile="$1"
+    local label="$2"
+    local stream_dir fifo logger_pid cmd_rc
+    shift 2
+
+    : > "$logfile"
+    if smoke_can_stream_logs; then
+        stream_dir="$(create_smoke_stream_fifo_dir)"
+        fifo="$stream_dir/stream"
+        mkfifo "$fifo"
+        (stdbuf -oL tee -a "$logfile" <"$fifo" | stdbuf -oL sed "s/^/[${label}] /") &
+        logger_pid=$!
+        stdbuf -oL -eL "$@" >"$fifo" 2>&1
+        cmd_rc=$?
+        wait "$logger_pid"
+        rm -f "$fifo"
+        rmdir "$stream_dir"
+        return "$cmd_rc"
+    else
+        "$@" >"$logfile" 2>&1
+    fi
+}
+
+SMOKE_BG_PID=""
+SMOKE_BG_LOGGER_PID=""
+SMOKE_BG_STREAM_DIR=""
+SMOKE_BG_STREAM_FIFO=""
+
+cleanup_smoke_bg_logging() {
+    if [ -n "$SMOKE_BG_LOGGER_PID" ]; then
+        wait "$SMOKE_BG_LOGGER_PID"
+    fi
+    if [ -n "$SMOKE_BG_STREAM_FIFO" ]; then
+        rm -f "$SMOKE_BG_STREAM_FIFO"
+    fi
+    if [ -n "$SMOKE_BG_STREAM_DIR" ]; then
+        rmdir "$SMOKE_BG_STREAM_DIR" >/dev/null 2>&1 || true
+    fi
+    SMOKE_BG_LOGGER_PID=""
+    SMOKE_BG_STREAM_FIFO=""
+    SMOKE_BG_STREAM_DIR=""
+}
+
+start_smoke_logged_command_bg() {
+    local logfile="$1"
+    local label="$2"
+    local stream_dir fifo
+    shift 2
+
+    : > "$logfile"
+    SMOKE_BG_LOGGER_PID=""
+    SMOKE_BG_STREAM_DIR=""
+    SMOKE_BG_STREAM_FIFO=""
+    if smoke_can_stream_logs; then
+        stream_dir="$(create_smoke_stream_fifo_dir)"
+        fifo="$stream_dir/stream"
+        mkfifo "$fifo"
+        (stdbuf -oL tee -a "$logfile" <"$fifo" | stdbuf -oL sed "s/^/[${label}] /") &
+        SMOKE_BG_LOGGER_PID=$!
+        SMOKE_BG_STREAM_DIR="$stream_dir"
+        SMOKE_BG_STREAM_FIFO="$fifo"
+        stdbuf -oL -eL "$@" >"$fifo" 2>&1 &
+    else
+        "$@" >"$logfile" 2>&1 &
+    fi
+    SMOKE_BG_PID=$!
 }
 
 SMOKE_VALKEY_CONTAINER=""
@@ -548,6 +656,9 @@ stop_worker_process() {
 
     if ! kill -0 "$pid" >/dev/null 2>&1; then
         wait "$pid" >/dev/null 2>&1 || true
+        if [ "$pid" = "$SMOKE_BG_PID" ]; then
+            cleanup_smoke_bg_logging
+        fi
         return 0
     fi
 
@@ -563,6 +674,9 @@ stop_worker_process() {
         while [ "$elapsed" -lt "$timeout" ]; do
             if ! kill -0 "$pid" >/dev/null 2>&1; then
                 wait "$pid" >/dev/null 2>&1 || true
+                if [ "$pid" = "$SMOKE_BG_PID" ]; then
+                    cleanup_smoke_bg_logging
+                fi
                 return 0
             fi
             sleep 1
@@ -572,6 +686,9 @@ stop_worker_process() {
 
     echo "[smoke] warning: $label (pid=$pid) did not terminate cleanly"
     wait "$pid" >/dev/null 2>&1 || true
+    if [ "$pid" = "$SMOKE_BG_PID" ]; then
+        cleanup_smoke_bg_logging
+    fi
     return 1
 }
 
@@ -610,17 +727,19 @@ run_smoke_suite_config() {
         fi
     fi
 
-    "${worker_cmd[@]}" >"$worker_log" 2>&1 &
-    worker_pid=$!
+    start_smoke_logged_command_bg "$worker_log" "smoke:${suite}:worker" "${worker_cmd[@]}"
+    worker_pid="$SMOKE_BG_PID"
     sleep 3
     if ! kill -0 "$worker_pid" >/dev/null 2>&1; then
+        cleanup_smoke_bg_logging
         echo "=== worker log (tail) ==="
         tail -n 120 "$worker_log" || true
         fail "Smoke worker failed to start for suite=$suite"
     fi
 
     rc=0
-    uv run crsbench run --experiment-config "$config_path" --distributed --queue-mode fresh >"$run_log" 2>&1 || rc=$?
+    run_smoke_logged_command "$run_log" "smoke:${suite}:run" \
+        uv run crsbench run --experiment-config "$config_path" --distributed --queue-mode fresh || rc=$?
 
     if ! stop_worker_process "$worker_pid" "worker[$suite]"; then
         echo "=== worker log (tail) ==="
@@ -646,6 +765,7 @@ run_smoke_suite_config() {
 
 run_smoke_bugfinding() {
     local bugfind_requires_litellm bugfind_requires_tracking
+    load_smoke_env_file
     bugfind_requires_litellm="$(suite_requires_litellm bugfinding)" || fail "Failed to inspect bugfinding smoke LiteLLM requirements"
     bugfind_requires_tracking="$(suite_requires_litellm_tracking bugfinding)" || fail "Failed to inspect bugfinding smoke LiteLLM tracking requirements"
     if [ "$bugfind_requires_litellm" = "1" ]; then
@@ -660,6 +780,7 @@ run_smoke_bugfinding() {
 
 run_smoke_bugfixing() {
     local bugfix_requires_litellm bugfix_requires_tracking
+    load_smoke_env_file
     bugfix_requires_litellm="$(suite_requires_litellm bugfixing)" || fail "Failed to inspect bugfixing smoke LiteLLM requirements"
     bugfix_requires_tracking="$(suite_requires_litellm_tracking bugfixing)" || fail "Failed to inspect bugfixing smoke LiteLLM tracking requirements"
     if [ "$bugfix_requires_litellm" = "1" ]; then
@@ -677,6 +798,7 @@ run_smoke_parallel() {
     local bugfind_requires_litellm bugfind_requires_tracking
     local bugfix_requires_litellm bugfix_requires_tracking
     local parallel_requires_litellm parallel_requires_tracking
+    load_smoke_env_file
     bugfind_requires_litellm="$(suite_requires_litellm bugfinding)" || fail "Failed to inspect bugfinding smoke LiteLLM requirements"
     bugfind_requires_tracking="$(suite_requires_litellm_tracking bugfinding)" || fail "Failed to inspect bugfinding smoke LiteLLM tracking requirements"
     bugfix_requires_litellm="$(suite_requires_litellm bugfixing)" || fail "Failed to inspect bugfixing smoke LiteLLM requirements"
@@ -791,4 +913,6 @@ main() {
     echo -e "\n${GREEN}Completed successfully!${NC}"
 }
 
-main "$@"
+if [ "${CRSBENCH_RUN_LOCAL_SOURCE_ONLY:-0}" != "1" ]; then
+    main "$@"
+fi

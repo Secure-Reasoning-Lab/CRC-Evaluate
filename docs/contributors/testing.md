@@ -59,3 +59,4 @@ For Redis/Valkey setup and multi-process runs (`run`, `worker`, `evaluator`):
 ## Integration Test Scripts
 
 - Smoke/local CI runner: `scripts/ci-tests/run-local.sh`
+- Smoke suites load `<repo>/.env` automatically when present, unless `CRSBENCH_RUN_LOCAL_ENV_FILE` points to a different env file. Existing exported variables still take precedence.
