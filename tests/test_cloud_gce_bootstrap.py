@@ -166,7 +166,8 @@ def test_load_startup_script_contains_managed_worker_service_bootstrap():
 
     startup_script = load_startup_script()
 
-    assert "http://metadata.google.internal/computeMetadata/v1/" in startup_script
+    assert "CRSBENCH_METADATA_BASE_URL" in startup_script
+    assert "metadata.google.internal/computeMetadata/v1" in startup_script
     assert "CRSBENCH_REDIS_HOST" in startup_script
     assert "CRSBENCH_CLOUD_INSTANCE_ID" in startup_script
     assert "crsbench" in startup_script
@@ -442,10 +443,38 @@ def test_startup_script_runs_shared_vm_bootstrap_from_repo_checkout():
     assert "crsbench-env-passthrough-b64" in script
     assert "bootstrap_inputs_from_payload" in script
     assert "run_cloud_vm_bootstrap" in script
-    assert 'CLONE_DIR="/opt/crsbench"' in script
+    assert 'CLONE_DIR="${CRSBENCH_CLONE_DIR:-/opt/crsbench}"' in script
     assert "WorkingDirectory=/opt/crsbench" in script
     assert 'write_env_var "PATH" "${VENV_BIN}' in script
     assert "/root/.local/bin" in script
+
+
+def test_startup_script_supports_file_backed_metadata_and_foreground_service_mode():
+    """Worker bootstrap should run outside GCE/systemd for local Docker rehearsal."""
+    from crsbench.cloud.gce.metadata import load_startup_script
+
+    script = load_startup_script()
+
+    assert 'CRSBENCH_METADATA_ROOT_DIR="${CRSBENCH_METADATA_ROOT_DIR:-}"' in script
+    assert (
+        'CRSBENCH_METADATA_BASE_URL="${CRSBENCH_METADATA_BASE_URL:-'
+        'http://metadata.google.internal/computeMetadata/v1}"'
+    ) in script
+    assert 'if [[ -n "${CRSBENCH_METADATA_ROOT_DIR}" ]]; then' in script
+    assert 'CRSBENCH_SERVICE_MANAGER="${CRSBENCH_SERVICE_MANAGER:-auto}"' in script
+    assert "[[ -d /run/systemd/system ]]" in script
+    assert 'exec /bin/bash "${LAUNCHER_PATH}"' in script
+
+
+def test_startup_script_supports_apt_and_apk_bootstrap_dependencies():
+    """Worker bootstrap should install missing dependencies on Debian or Alpine hosts."""
+    from crsbench.cloud.gce.metadata import load_startup_script
+
+    script = load_startup_script()
+
+    assert "apt-get install -y -qq" in script
+    assert "apk add --no-cache" in script
+    assert "Docker daemon is unavailable after waiting" in script
 
 
 def test_startup_script_does_not_globally_rewrite_sslab_gatech_https_urls():
@@ -624,8 +653,33 @@ def test_orchestrator_startup_script_runs_shared_vm_bootstrap_from_repo_checkout
 
     assert "CloudVmBootstrapInputs.from_experiment_config" in script
     assert "run_cloud_vm_bootstrap" in script
-    assert 'CLONE_DIR="/opt/crsbench"' in script
+    assert 'CLONE_DIR="${CRSBENCH_CLONE_DIR:-/opt/crsbench}"' in script
     assert 'cd "${CLONE_DIR}"' in script
+
+
+def test_orchestrator_startup_script_supports_file_backed_metadata_sources():
+    """Orchestrator bootstrap should not require the GCE metadata endpoint in local rehearsal."""
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+
+    assert 'CRSBENCH_METADATA_ROOT_DIR="${CRSBENCH_METADATA_ROOT_DIR:-}"' in script
+    assert (
+        'CRSBENCH_METADATA_BASE_URL="${CRSBENCH_METADATA_BASE_URL:-'
+        'http://metadata.google.internal/computeMetadata/v1}"'
+    ) in script
+    assert 'if [[ -n "${CRSBENCH_METADATA_ROOT_DIR}" ]]; then' in script
+
+
+def test_orchestrator_startup_script_supports_apt_and_apk_bootstrap_dependencies():
+    """Orchestrator bootstrap should install missing dependencies on Debian or Alpine hosts."""
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+
+    assert "apt-get install -y -qq" in script
+    assert "apk add --no-cache" in script
+    assert "Docker daemon is unavailable after waiting" in script
 
 
 def test_orchestrator_startup_script_does_not_globally_rewrite_sslab_gatech_https_urls():

@@ -1,0 +1,51 @@
+services:
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    privileged: true
+    environment:
+      CRSBENCH_METADATA_ROOT_DIR: /metadata-root
+    volumes:
+      - ${CRSBENCH_LOCAL_REHEARSAL_REPO_ROOT}:/src/CRSBench:ro
+      - ${CRSBENCH_LOCAL_REHEARSAL_STATE_DIR}/metadata/orchestrator:/metadata-root/instance:ro
+      - ${CRSBENCH_LOCAL_REHEARSAL_STATE_DIR}/state/orchestrator:/var/lib/crsbench
+    command:
+      - /bin/bash
+      - /src/CRSBench/crsbench/cloud/gce/startup/orchestrator.sh
+
+  worker-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    privileged: true
+    depends_on:
+      - orchestrator
+    environment:
+      CRSBENCH_METADATA_ROOT_DIR: /metadata-root
+      CRSBENCH_SERVICE_MANAGER: foreground
+    volumes:
+      - ${CRSBENCH_LOCAL_REHEARSAL_REPO_ROOT}:/src/CRSBench:ro
+      - ${CRSBENCH_LOCAL_REHEARSAL_STATE_DIR}/metadata/local-worker-1:/metadata-root/instance:ro
+      - ${CRSBENCH_LOCAL_REHEARSAL_STATE_DIR}/state/local-worker-1:/var/lib/crsbench
+    command:
+      - /bin/bash
+      - /src/CRSBench/crsbench/cloud/gce/startup/worker.sh
+
+  worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    privileged: true
+    depends_on:
+      - orchestrator
+    environment:
+      CRSBENCH_METADATA_ROOT_DIR: /metadata-root
+      CRSBENCH_SERVICE_MANAGER: foreground
+    volumes:
+      - ${CRSBENCH_LOCAL_REHEARSAL_REPO_ROOT}:/src/CRSBench:ro
+      - ${CRSBENCH_LOCAL_REHEARSAL_STATE_DIR}/metadata/local-worker-2:/metadata-root/instance:ro
+      - ${CRSBENCH_LOCAL_REHEARSAL_STATE_DIR}/state/local-worker-2:/var/lib/crsbench
+    command:
+      - /bin/bash
+      - /src/CRSBench/crsbench/cloud/gce/startup/worker.sh

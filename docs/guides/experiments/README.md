@@ -8,4 +8,5 @@ Start here based on what you need:
 - [Distributed experiments](./distributed.md)
 - [Queue cleanup and recovery](./queue-and-recovery.md)
 - [GCE cloud orchestration](./gce-cloud-orchestration.md)
+- [Local cloud rehearsal](./local-cloud-rehearsal.md)
 - [Configuration reference](./config-reference.md)

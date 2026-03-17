@@ -3,6 +3,9 @@
 Guide for provisioning and managing remote orchestrator plus worker VMs for
 CRSBench experiments on GCE.
 
+For a local preflight of the same startup scripts before touching GCE, use
+[Local Cloud Rehearsal](/workspace/CRSBench/docs/guides/experiments/local-cloud-rehearsal.md).
+
 ## Prerequisites
 
 1. **GCP project** with Compute Engine API enabled
@@ -303,6 +306,9 @@ terminally fail before the remote orchestrator had finished starting Valkey.
 Transport-level connection failures are retried until the readiness timeout,
 while fatal Redis auth/config errors still fail immediately with bootstrap
 evidence.
+The same startup scripts also support local rehearsal via file-backed metadata
+and a foreground worker mode for non-`systemd` containers; the default GCE
+runtime path is unchanged.
 The checked-in smoke config uses `readiness_timeout_sec: 1200` for both
 orchestrator and worker instance profiles to give clean Ubuntu images more room
 to finish bootstrap.

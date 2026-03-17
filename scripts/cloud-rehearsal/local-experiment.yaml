@@ -1,0 +1,33 @@
+experiment:
+  name: local-cloud-rehearsal
+  task: bugfinding
+  benchmark_suite: sanity
+  mode: delta
+runtime:
+  trials: 1
+  max_total_time: 2400
+  build_timeout: 600
+  run_timeout: 600
+  verify_timeout: 600
+  redis_host: ignored:6379
+  litellm:
+    skip: true
+  inputs:
+    pov:
+      max_variants_per_cpv: 1
+storage:
+  experiment_filestore: /tmp/crsbench/experiment-data
+  report_filestore: /tmp/crsbench/report-data
+resources:
+  cores_per_trial: 2
+  memory_per_trial: 4G
+worker:
+  jobs: 1
+  cores_per_job: 2
+  storage:
+    cleanup_after_trial: true
+crs_compose:
+  oss_crs_infra:
+    shared: true
+  atlantis-multilang-given_fuzzer:
+    num_cores: 2

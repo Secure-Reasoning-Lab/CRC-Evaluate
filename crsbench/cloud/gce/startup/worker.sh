@@ -1,27 +1,57 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTANCE_METADATA_BASE="http://metadata.google.internal/computeMetadata/v1/instance"
-ATTRIBUTE_METADATA_BASE="${INSTANCE_METADATA_BASE}/attributes"
-METADATA_HEADER="Metadata-Flavor: Google"
-STATE_DIR="/var/lib/crsbench"
+CRSBENCH_METADATA_ROOT_DIR="${CRSBENCH_METADATA_ROOT_DIR:-}"
+CRSBENCH_METADATA_BASE_URL="${CRSBENCH_METADATA_BASE_URL:-http://metadata.google.internal/computeMetadata/v1}"
+CRSBENCH_METADATA_HEADER_NAME="${CRSBENCH_METADATA_HEADER_NAME:-Metadata-Flavor}"
+CRSBENCH_METADATA_HEADER_VALUE="${CRSBENCH_METADATA_HEADER_VALUE:-Google}"
+CRSBENCH_SERVICE_MANAGER="${CRSBENCH_SERVICE_MANAGER:-auto}"
+STATE_DIR="${CRSBENCH_STATE_DIR:-/var/lib/crsbench}"
 PAYLOAD_PATH="${STATE_DIR}/bootstrap.json"
 LAUNCHER_PATH="${STATE_DIR}/launch-worker.sh"
 ENV_PATH="/etc/default/crsbench-worker"
 SERVICE_PATH="/etc/systemd/system/crsbench-worker.service"
-CLONE_DIR="/opt/crsbench"
+CLONE_DIR="${CRSBENCH_CLONE_DIR:-/opt/crsbench}"
 CLONE_GIT_SSH_COMMAND=""
 
+metadata_fetch() {
+  local relative_path="$1"
+  local optional="${2:-0}"
+  if [[ -n "${CRSBENCH_METADATA_ROOT_DIR}" ]]; then
+    local metadata_path="${CRSBENCH_METADATA_ROOT_DIR%/}/${relative_path}"
+    if [[ -f "${metadata_path}" ]]; then
+      cat "${metadata_path}"
+      return 0
+    fi
+    if [[ "${optional}" == "1" ]]; then
+      return 1
+    fi
+    echo "missing metadata file: ${metadata_path}" >&2
+    return 1
+  fi
+
+  local metadata_url="${CRSBENCH_METADATA_BASE_URL%/}/${relative_path}"
+  local -a curl_args=(-fsS)
+  if [[ -n "${CRSBENCH_METADATA_HEADER_NAME}" && -n "${CRSBENCH_METADATA_HEADER_VALUE}" ]]; then
+    curl_args+=(-H "${CRSBENCH_METADATA_HEADER_NAME}: ${CRSBENCH_METADATA_HEADER_VALUE}")
+  fi
+  if [[ "${optional}" == "1" ]]; then
+    curl "${curl_args[@]}" "${metadata_url}" 2>/dev/null || return 1
+    return 0
+  fi
+  curl "${curl_args[@]}" "${metadata_url}"
+}
+
 metadata_get() {
-  curl -fsS -H "${METADATA_HEADER}" "${ATTRIBUTE_METADATA_BASE}/$1"
+  metadata_fetch "instance/attributes/$1"
 }
 
 metadata_get_optional() {
-  curl -fsS -H "${METADATA_HEADER}" "${ATTRIBUTE_METADATA_BASE}/$1" 2>/dev/null || true
+  metadata_fetch "instance/attributes/$1" 1 || true
 }
 
 instance_metadata_get() {
-  curl -fsS -H "${METADATA_HEADER}" "${INSTANCE_METADATA_BASE}/$1"
+  metadata_fetch "instance/$1"
 }
 
 require_cmd() {
@@ -29,6 +59,42 @@ require_cmd() {
     echo "missing required command: $1" >&2
     exit 1
   fi
+}
+
+install_packages() {
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq
+    apt-get install -y -qq "$@"
+    return
+  fi
+  if command -v apk >/dev/null 2>&1; then
+    apk add --no-cache "$@"
+    return
+  fi
+  echo "No supported package manager found (need apt-get or apk)" >&2
+  exit 1
+}
+
+ensure_system_packages() {
+  if command -v git >/dev/null 2>&1 \
+    && command -v python3 >/dev/null 2>&1 \
+    && command -v rsync >/dev/null 2>&1 \
+    && command -v tar >/dev/null 2>&1 \
+    && command -v ssh-keyscan >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "Installing system packages..."
+  if command -v apt-get >/dev/null 2>&1; then
+    install_packages git python3 python3-pip python3-venv rsync tar bash coreutils openssh-client
+    return 0
+  fi
+  if command -v apk >/dev/null 2>&1; then
+    install_packages git python3 py3-pip rsync tar bash coreutils openssh-client
+    return 0
+  fi
+  echo "Unsupported base image: cannot install git/python/runtime dependencies" >&2
+  exit 1
 }
 
 clone_repo() {
@@ -39,6 +105,75 @@ clone_repo() {
     return
   fi
   git clone --no-single-branch "${repo_url}" "${clone_dir}"
+}
+
+ensure_docker_ready() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "Installing Docker..."
+    if command -v apt-get >/dev/null 2>&1; then
+      curl -fsSL https://get.docker.com | sh
+    elif command -v apk >/dev/null 2>&1; then
+      install_packages docker docker-cli-compose
+    else
+      echo "Docker is required but no supported installation path is available" >&2
+      exit 1
+    fi
+  fi
+
+  if docker info >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+    systemctl enable --now docker || true
+  fi
+
+  for _i in $(seq 1 60); do
+    if docker info >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "Docker daemon is unavailable after waiting" >&2
+  exit 1
+}
+
+supports_systemd() {
+  command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]
+}
+
+start_worker_runtime() {
+  case "${CRSBENCH_SERVICE_MANAGER}" in
+    auto)
+      if supports_systemd; then
+        systemctl daemon-reload
+        systemctl enable --now crsbench-worker.service
+        return 0
+      fi
+      ;;
+    systemd)
+      if ! supports_systemd; then
+        echo "CRSBENCH_SERVICE_MANAGER=systemd requires a running systemd host" >&2
+        exit 1
+      fi
+      systemctl daemon-reload
+      systemctl enable --now crsbench-worker.service
+      return 0
+      ;;
+    foreground)
+      ;;
+    *)
+      echo "Unsupported CRSBENCH_SERVICE_MANAGER: ${CRSBENCH_SERVICE_MANAGER}" >&2
+      exit 1
+      ;;
+  esac
+
+  # shellcheck disable=SC1090
+  set -a
+  source "${ENV_PATH}"
+  set +a
+  exec /bin/bash "${LAUNCHER_PATH}"
 }
 
 write_env_var() {
@@ -114,21 +249,12 @@ on_error() {
 }
 
 require_cmd curl
-require_cmd systemctl
 
 mkdir -p "${STATE_DIR}"
 
 # --- Install system packages ---
-echo "Installing system packages..."
-apt-get update -qq
-apt-get install -y -qq git python3 python3-pip python3-venv rsync tar
-
-# Docker via official install script (includes docker compose plugin)
-if ! command -v docker >/dev/null 2>&1; then
-  echo "Installing Docker..."
-  curl -fsSL https://get.docker.com | sh
-  systemctl enable --now docker
-fi
+ensure_system_packages
+ensure_docker_ready
 
 metadata_get "crsbench-bootstrap-payload" | base64 --decode > "${PAYLOAD_PATH}"
 
@@ -392,5 +518,4 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
 
-systemctl daemon-reload
-systemctl enable --now crsbench-worker.service
+start_worker_runtime

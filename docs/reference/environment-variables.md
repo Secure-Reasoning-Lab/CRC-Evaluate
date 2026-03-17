@@ -15,6 +15,21 @@ This page is the canonical index for CRSBench environment variables.
 | `CRSBENCH_LLM_UPSTREAM_API_KEY` | Upstream LiteLLM runtime API key (`external` mode preferred). |
 | `PROJECT_REPOS_DIR` | Optional cache directory for cloned upstream project repositories used by migration/source-preparation flows (default: `.crsbench-repos/`). |
 
+## Cloud Startup Overrides (Advanced)
+
+These variables are consumed by the cloud startup scripts and are primarily for
+local rehearsal or non-GCE bring-up.
+
+| Variable | Purpose |
+|---|---|
+| `CRSBENCH_METADATA_ROOT_DIR` | Read instance metadata from mounted files instead of an HTTP metadata service. |
+| `CRSBENCH_METADATA_BASE_URL` | Override the metadata-service base URL when not using the default GCE endpoint. |
+| `CRSBENCH_METADATA_HEADER_NAME` | Override the metadata-service header name (default `Metadata-Flavor`). |
+| `CRSBENCH_METADATA_HEADER_VALUE` | Override the metadata-service header value (default `Google`). |
+| `CRSBENCH_SERVICE_MANAGER` | Worker startup mode: `auto` (default), `systemd`, or `foreground`. |
+| `CRSBENCH_STATE_DIR` | Override the startup-script state directory (default `/var/lib/crsbench`). |
+| `CRSBENCH_CLONE_DIR` | Override the checkout target directory used during startup (default `/opt/crsbench`). |
+
 ### LiteLLM External Mode Contract
 
 `runtime.litellm.mode: external` is the supported experiment-runtime path.
