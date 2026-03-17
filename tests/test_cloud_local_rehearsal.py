@@ -3,8 +3,24 @@
 from __future__ import annotations
 
 import base64
+import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+
+def _load_render_metadata_module():
+    module_path = Path("scripts/cloud-rehearsal/render_metadata.py")
+    spec = importlib.util.spec_from_file_location(
+        "cloud_rehearsal_render_metadata", module_path
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_build_local_rehearsal_layout_writes_file_backed_metadata(tmp_path) -> None:
@@ -98,3 +114,32 @@ def test_rehearsal_wrapper_only_resets_state_for_bringup() -> None:
     assert "if [[ $# -eq 0 ]]; then" in wrapper_text
     assert 'if [[ "$1" == "up" ]]; then' in wrapper_text
     assert "CRSBENCH_LOCAL_REHEARSAL_GIT_REF" in wrapper_text
+
+
+def test_render_metadata_detect_git_ref_uses_checked_out_head(monkeypatch) -> None:
+    """The rehearsal renderer should pin containers to the current local checkout."""
+    render_metadata = _load_render_metadata_module()
+
+    def fake_run(*_args, **_kwargs):
+        return SimpleNamespace(returncode=0, stdout="abc123\n", stderr="")
+
+    monkeypatch.setattr(render_metadata.subprocess, "run", fake_run)
+
+    assert render_metadata.detect_git_ref(Path("/tmp/repo")) == "abc123"
+
+
+def test_render_metadata_detect_git_ref_requires_explicit_override_on_failure(
+    monkeypatch,
+) -> None:
+    """The renderer should fail fast instead of silently rehearsing the wrong ref."""
+    render_metadata = _load_render_metadata_module()
+
+    def fake_run(*_args, **_kwargs):
+        return SimpleNamespace(
+            returncode=1, stdout="", stderr="fatal: not a git repository"
+        )
+
+    monkeypatch.setattr(render_metadata.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="CRSBENCH_LOCAL_REHEARSAL_GIT_REF"):
+        render_metadata.detect_git_ref(Path("/tmp/repo"))

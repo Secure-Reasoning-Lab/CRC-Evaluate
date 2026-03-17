@@ -29,8 +29,20 @@ def detect_git_ref(repo_path: Path) -> str:
         check=False,
     )
     if result.returncode != 0:
-        return "main"
-    return result.stdout.strip() or "main"
+        detail = result.stderr.strip() or result.stdout.strip() or "unknown git error"
+        raise RuntimeError(
+            "Unable to detect the local rehearsal git ref from "
+            f"{repo_path}: {detail}. Pass --git-ref or set "
+            "CRSBENCH_LOCAL_REHEARSAL_GIT_REF."
+        )
+    git_ref = result.stdout.strip()
+    if not git_ref:
+        raise RuntimeError(
+            "Unable to detect the local rehearsal git ref from "
+            f"{repo_path}: git rev-parse returned an empty value. Pass --git-ref "
+            "or set CRSBENCH_LOCAL_REHEARSAL_GIT_REF."
+        )
+    return git_ref
 
 
 def main() -> int:

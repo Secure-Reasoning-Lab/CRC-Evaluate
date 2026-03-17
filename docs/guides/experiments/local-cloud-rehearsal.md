@@ -58,6 +58,8 @@ Override knobs:
 
 - `CRSBENCH_LOCAL_REHEARSAL_EXPERIMENT_CONFIG`
 - `CRSBENCH_LOCAL_REHEARSAL_GIT_REF`
+  - defaults to the current local `HEAD`; set it explicitly if the repo checkout
+    is unavailable or you want to rehearse another ref
 - `CRSBENCH_LOCAL_REHEARSAL_STATE_DIR`
 
 ## Startup Script Overrides Used By The Harness
