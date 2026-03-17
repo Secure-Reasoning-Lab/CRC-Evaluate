@@ -651,6 +651,21 @@ class TestExperimentConfigSchema:
             "crs_compose": {"test-crs": {"num_cores": 1}},
         }
 
+    @staticmethod
+    def _legacy_cloud_kwargs() -> dict:
+        return {
+            "gce": {
+                "project": "test-project",
+                "zone": "us-central1-a",
+                "worker_count": 2,
+                "machine_type": "e2-standard-4",
+                "boot_disk_size_gb": 100,
+                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                "owner_label": "team-crs",
+            }
+        }
+
     def test_experiment_config_valid(self):
         config = ExperimentConfig(**self._base_kwargs())
         assert config.trials == 1
@@ -856,20 +871,9 @@ class TestExperimentConfigSchema:
 
     def test_cloud_gce_valid(self):
         data = self._base_kwargs()
-        data["cloud"] = {
-            "gce": {
-                "project": "test-project",
-                "zone": "us-central1-a",
-                "worker_count": 2,
-                "machine_type": "e2-standard-4",
-                "boot_disk_size_gb": 100,
-                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
-                "owner_label": "team-crs",
-                "ssh_via_iap": True,
-                "readiness_timeout_sec": 1200,
-            }
-        }
+        data["cloud"] = self._legacy_cloud_kwargs()
+        data["cloud"]["gce"]["ssh_via_iap"] = True
+        data["cloud"]["gce"]["readiness_timeout_sec"] = 1200
         config = ExperimentConfig(**data)
         assert config.cloud is not None
         assert config.cloud.gce.project == "test-project"
@@ -879,6 +883,30 @@ class TestExperimentConfigSchema:
         assert config.cloud.gce.ssh_via_iap is True
         assert config.cloud.bootstrap.prepare_mode == "full"
         assert config.cloud.bootstrap.download_benchmarks == "auto"
+
+    @pytest.mark.parametrize("prepare_mode", ["full", "skip_base_images"])
+    def test_cloud_bootstrap_prepare_mode_valid(self, prepare_mode: str):
+        data = self._base_kwargs()
+        data["cloud"] = self._legacy_cloud_kwargs()
+        data["cloud"]["bootstrap"] = {"prepare_mode": prepare_mode}
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.bootstrap.prepare_mode == prepare_mode
+        assert config.cloud.bootstrap.download_benchmarks == "auto"
+
+    @pytest.mark.parametrize("download_benchmarks", ["auto", "always", "never"])
+    def test_cloud_bootstrap_download_policy_valid(self, download_benchmarks: str):
+        data = self._base_kwargs()
+        data["cloud"] = self._legacy_cloud_kwargs()
+        data["cloud"]["bootstrap"] = {"download_benchmarks": download_benchmarks}
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.bootstrap.prepare_mode == "full"
+        assert config.cloud.bootstrap.download_benchmarks == download_benchmarks
 
     def test_cloud_gce_with_orchestrator_valid(self):
         data = self._base_kwargs()
@@ -936,6 +964,27 @@ class TestExperimentConfigSchema:
         assert config.cloud is not None
         assert config.cloud.bootstrap.prepare_mode == "skip_base_images"
         assert config.cloud.bootstrap.download_benchmarks == "never"
+
+    def test_cloud_bootstrap_always_download_policy_valid(self):
+        data = self._base_kwargs()
+        data["cloud"] = {
+            "bootstrap": {"download_benchmarks": "always"},
+            "gce": {
+                "project": "test-project",
+                "zone": "us-central1-a",
+                "worker_count": 2,
+                "machine_type": "e2-standard-4",
+                "boot_disk_size_gb": 100,
+                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                "owner_label": "team-crs",
+            },
+        }
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.bootstrap.download_benchmarks == "always"
 
     def test_cloud_bootstrap_invalid_prepare_mode_rejected(self):
         data = self._base_kwargs()
