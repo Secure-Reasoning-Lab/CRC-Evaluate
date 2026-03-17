@@ -51,7 +51,7 @@ Coverage runtime notes:
   `(benchmark, harness)` job. CRSBench shards seeds across those containers and
   keeps each shard sequential inside its warm runner.
 - `--build-workers` and `--verify-workers` remain hidden compatibility aliases
-  for the old interface.
+  in the `verify` and `patch-verify` commands only.
 
 ## Next Steps
 
