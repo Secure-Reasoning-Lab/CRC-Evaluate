@@ -453,6 +453,11 @@ sudo systemctl status crsbench-worker.service
 sudo journalctl -u crsbench-worker.service -f
 ```
 
+During bootstrap, both orchestrator and worker VMs also normalize the host
+timezone to `America/New_York` and configure Docker to use the `cgroupfs`
+driver expected by `oss-crs`. If you inspect a VM manually, verify these with
+`timedatectl`, `cat /etc/timezone`, and `docker info --format '{{.CgroupDriver}}'`.
+
 ## Operator Connectivity Notes
 
 - Workers must be able to reach the orchestrator VM's Redis/Valkey endpoint.

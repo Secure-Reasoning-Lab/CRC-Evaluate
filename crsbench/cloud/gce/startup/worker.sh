@@ -6,12 +6,15 @@ CRSBENCH_METADATA_BASE_URL="${CRSBENCH_METADATA_BASE_URL:-http://metadata.google
 CRSBENCH_METADATA_HEADER_NAME="${CRSBENCH_METADATA_HEADER_NAME:-Metadata-Flavor}"
 CRSBENCH_METADATA_HEADER_VALUE="${CRSBENCH_METADATA_HEADER_VALUE:-Google}"
 CRSBENCH_SERVICE_MANAGER="${CRSBENCH_SERVICE_MANAGER:-auto}"
+CRSBENCH_TIMEZONE="${CRSBENCH_TIMEZONE:-America/New_York}"
 STATE_DIR="${CRSBENCH_STATE_DIR:-/var/lib/crsbench}"
 PAYLOAD_PATH="${STATE_DIR}/bootstrap.json"
 LAUNCHER_PATH="${STATE_DIR}/launch-worker.sh"
 ENV_PATH="/etc/default/crsbench-worker"
 SERVICE_PATH="/etc/systemd/system/crsbench-worker.service"
 CLONE_DIR="${CRSBENCH_CLONE_DIR:-/opt/crsbench}"
+DOCKER_DAEMON_CONFIG_PATH="${CRSBENCH_DOCKER_DAEMON_CONFIG_PATH:-/etc/docker/daemon.json}"
+DOCKER_CGROUP_DRIVER_OPT="${CRSBENCH_DOCKER_CGROUP_DRIVER_OPT:-native.cgroupdriver=cgroupfs}"
 CLONE_GIT_SSH_COMMAND=""
 
 metadata_fetch() {
@@ -80,21 +83,40 @@ ensure_system_packages() {
     && command -v python3 >/dev/null 2>&1 \
     && command -v rsync >/dev/null 2>&1 \
     && command -v tar >/dev/null 2>&1 \
-    && command -v ssh-keyscan >/dev/null 2>&1; then
+    && command -v ssh-keyscan >/dev/null 2>&1 \
+    && [[ -e /usr/share/zoneinfo/UTC ]]; then
     return 0
   fi
 
   echo "Installing system packages..."
   if command -v apt-get >/dev/null 2>&1; then
-    install_packages git python3 python3-pip python3-venv rsync tar bash coreutils openssh-client
+    install_packages git python3 python3-pip python3-venv rsync tar bash coreutils openssh-client tzdata sudo
     return 0
   fi
   if command -v apk >/dev/null 2>&1; then
-    install_packages git python3 py3-pip rsync tar bash coreutils openssh-client
+    install_packages git python3 py3-pip rsync tar bash coreutils openssh-client tzdata sudo
     return 0
   fi
   echo "Unsupported base image: cannot install git/python/runtime dependencies" >&2
   exit 1
+}
+
+ensure_timezone() {
+  if [[ -z "${CRSBENCH_TIMEZONE}" ]]; then
+    return 0
+  fi
+  local zoneinfo_path="/usr/share/zoneinfo/${CRSBENCH_TIMEZONE}"
+  if [[ ! -e "${zoneinfo_path}" ]]; then
+    echo "Timezone data not found: ${CRSBENCH_TIMEZONE}" >&2
+    exit 1
+  fi
+  export TZ="${CRSBENCH_TIMEZONE}"
+  if command -v timedatectl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+    timedatectl set-timezone "${CRSBENCH_TIMEZONE}"
+    return 0
+  fi
+  ln -snf "${zoneinfo_path}" /etc/localtime
+  printf '%s\n' "${CRSBENCH_TIMEZONE}" > /etc/timezone
 }
 
 clone_repo() {
@@ -119,6 +141,111 @@ clone_repo() {
   git clone --no-single-branch "${repo_url}" "${clone_dir}"
 }
 
+wait_for_docker() {
+  for _i in $(seq 1 60); do
+    if docker info >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+start_docker_service() {
+  if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+    systemctl enable --now docker || true
+    return 0
+  fi
+  if command -v service >/dev/null 2>&1; then
+    service docker start >/dev/null 2>&1 || true
+  fi
+}
+
+restart_docker_service() {
+  if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+    systemctl restart docker
+    return 0
+  fi
+  if command -v service >/dev/null 2>&1; then
+    service docker restart
+    return 0
+  fi
+  echo "Docker cgroup driver update requires a supported restart path" >&2
+  return 1
+}
+
+ensure_docker_cgroupfs() {
+  local current_driver
+  current_driver="$(docker info --format '{{.CgroupDriver}}' 2>/dev/null || true)"
+  if [[ "${current_driver}" == "cgroupfs" ]]; then
+    return 0
+  fi
+
+  mkdir -p "$(dirname "${DOCKER_DAEMON_CONFIG_PATH}")"
+  local changed
+  changed="$(
+    python3 - "${DOCKER_DAEMON_CONFIG_PATH}" "${DOCKER_CGROUP_DRIVER_OPT}" <<'PY'
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+config_path = Path(sys.argv[1])
+desired_opt = sys.argv[2]
+config: dict[str, object]
+if config_path.exists():
+    try:
+        loaded = json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"Invalid Docker daemon config at {config_path}: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+    if not isinstance(loaded, dict):
+        print(
+            f"Invalid Docker daemon config at {config_path}: expected JSON object",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    config = loaded
+else:
+    config = {}
+
+exec_opts = config.get("exec-opts", [])
+if exec_opts is None:
+    exec_opts = []
+if not isinstance(exec_opts, list):
+    print(
+        f"Invalid Docker daemon config at {config_path}: exec-opts must be a list",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+
+normalized = [str(item) for item in exec_opts if str(item) != desired_opt]
+normalized.append(desired_opt)
+config["exec-opts"] = normalized
+rendered = json.dumps(config, indent=2, sort_keys=True) + "\n"
+
+current = None
+if config_path.exists():
+    current = config_path.read_text(encoding="utf-8")
+if current == rendered:
+    print("0")
+    raise SystemExit(0)
+
+fd, tmp_path = tempfile.mkstemp(prefix=f"{config_path.name}.", dir=config_path.parent)
+os.close(fd)
+tmp_file = Path(tmp_path)
+tmp_file.write_text(rendered, encoding="utf-8")
+os.replace(tmp_file, config_path)
+print("1")
+PY
+  )"
+
+  if [[ "${changed}" == "1" ]]; then
+    restart_docker_service
+  fi
+}
+
 ensure_docker_ready() {
   if ! command -v docker >/dev/null 2>&1; then
     echo "Installing Docker..."
@@ -132,23 +259,26 @@ ensure_docker_ready() {
     fi
   fi
 
-  if docker info >/dev/null 2>&1; then
-    return 0
-  fi
-
-  if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
-    systemctl enable --now docker || true
-  fi
-
-  for _i in $(seq 1 60); do
-    if docker info >/dev/null 2>&1; then
-      return 0
+  if ! docker info >/dev/null 2>&1; then
+    start_docker_service
+    if ! wait_for_docker; then
+      echo "Docker daemon is unavailable after waiting" >&2
+      exit 1
     fi
-    sleep 1
-  done
+  fi
 
-  echo "Docker daemon is unavailable after waiting" >&2
-  exit 1
+  ensure_docker_cgroupfs
+  if ! wait_for_docker; then
+    echo "Docker daemon is unavailable after waiting" >&2
+    exit 1
+  fi
+
+  local final_driver
+  final_driver="$(docker info --format '{{.CgroupDriver}}' 2>/dev/null || true)"
+  if [[ "${final_driver}" != "cgroupfs" ]]; then
+    echo "Docker must use the cgroupfs cgroup driver for oss-crs" >&2
+    exit 1
+  fi
 }
 
 supports_systemd() {
@@ -266,6 +396,7 @@ mkdir -p "${STATE_DIR}"
 
 # --- Install system packages ---
 ensure_system_packages
+ensure_timezone
 ensure_docker_ready
 
 metadata_get "crsbench-bootstrap-payload" | base64 --decode > "${PAYLOAD_PATH}"

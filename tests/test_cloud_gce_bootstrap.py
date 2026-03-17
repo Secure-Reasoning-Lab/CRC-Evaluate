@@ -480,6 +480,18 @@ def test_startup_script_supports_apt_and_apk_bootstrap_dependencies():
     assert "Docker daemon is unavailable after waiting" in script
 
 
+def test_startup_script_configures_timezone_and_docker_cgroupfs():
+    """Worker bootstrap should align VM timezone and Docker cgroup driver for oss-crs."""
+    from crsbench.cloud.gce.metadata import load_startup_script
+
+    script = load_startup_script()
+
+    assert "America/New_York" in script
+    assert "/etc/docker/daemon.json" in script
+    assert "native.cgroupdriver=cgroupfs" in script
+    assert "systemctl restart docker" in script
+
+
 def test_startup_script_does_not_globally_rewrite_sslab_gatech_https_urls():
     """Worker bootstrap should leave public submodule URLs on their declared transport."""
     from crsbench.cloud.gce.metadata import load_startup_script
@@ -685,6 +697,18 @@ def test_orchestrator_startup_script_supports_apt_and_apk_bootstrap_dependencies
     assert "apt-get install -y -qq" in script
     assert "apk add --no-cache" in script
     assert "Docker daemon is unavailable after waiting" in script
+
+
+def test_orchestrator_startup_script_configures_timezone_and_docker_cgroupfs():
+    """Orchestrator bootstrap should align VM timezone and Docker cgroup driver for oss-crs."""
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+
+    assert "America/New_York" in script
+    assert "/etc/docker/daemon.json" in script
+    assert "native.cgroupdriver=cgroupfs" in script
+    assert "systemctl restart docker" in script
 
 
 def test_orchestrator_startup_script_does_not_globally_rewrite_sslab_gatech_https_urls():
