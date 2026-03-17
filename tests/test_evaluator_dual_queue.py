@@ -389,6 +389,62 @@ class TestConfiglessEvaluator:
         assert mock_auto_cores_per_job.call_args_list[1].args[0] == 3
 
     @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
+    def test_configless_refresh_keeps_cli_verify_jobs_override_compatible(
+        self,
+    ) -> None:
+        """Refresh must not reject experiments when CLI verify_jobs is lower than auto(build_jobs)."""
+        from crsbench.distributed.evaluator import run_evaluator_configless
+        from crsbench.distributed.registry import RuntimeRegistration
+
+        reg = RuntimeRegistration(
+            experiment="exp-42",
+            trial_queue="crsbench_exp-42",
+            build_queue="crsbench_exp-42_build",
+            verify_queue="crsbench_exp-42_verify",
+            benchmarks=[],
+            benchmarks_root="/tmp/benchmarks",
+            per_pov_verify_timeout=180,
+            evaluator_build_jobs=2,
+        )
+
+        def _run_supervisor(**kwargs):
+            refresher = kwargs["queue_refresher"]
+            with patch("crsbench.distributed.registry.RegistryClient") as mock_registry:
+                mock_client = MagicMock()
+                mock_client.list_experiments.return_value = {"exp-42": reg}
+                mock_registry.return_value = mock_client
+                refreshed_build, refreshed_verify = refresher(MagicMock())
+            assert refreshed_build == ["crsbench_exp-42_build"]
+            assert refreshed_verify == ["crsbench_exp-42_verify"]
+            return 0
+
+        with (
+            patch(
+                "crsbench.distributed.evaluator.discover_registered_experiments",
+                return_value=(MagicMock(), {"exp-42": reg}),
+            ),
+            patch("crsbench.evaluation.verification.pov.engine.VerificationEngine"),
+            patch("crsbench.distributed.evaluator_jobs.set_engine"),
+            patch("crsbench.distributed.evaluator_jobs.set_benchmarks_root"),
+            patch(
+                "crsbench.distributed.evaluator.auto_cores_per_job",
+                side_effect=[4, 2],
+            ),
+            patch(
+                "crsbench.distributed.ci_supervisor.run_multi_queue_supervisor",
+                side_effect=_run_supervisor,
+            ),
+        ):
+            result = run_evaluator_configless(
+                redis_host="localhost",
+                use_cpuset=True,
+                build_jobs=2,
+                verify_jobs=3,
+            )
+
+        assert result == 0
+
+    @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
     def test_configless_does_not_enqueue_startup_prebuilds(self) -> None:
         """Configless evaluator does not enqueue pre-builds at startup."""
         from crsbench.distributed.evaluator import run_evaluator_configless

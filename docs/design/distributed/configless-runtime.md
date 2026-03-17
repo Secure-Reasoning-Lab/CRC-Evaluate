@@ -78,18 +78,26 @@ Resource precedence:
 - CLI (`--build-jobs`, `--build-cores-per-job`, `--verify-jobs`, `--verify-cores-per-job`, `--cpuset`, `--skip-cpuset`, `--idle-timeout`) takes highest priority.
 - Otherwise, evaluator uses experiment metadata from registry (`evaluator.*` block in config).
 - Fallback defaults are build jobs `1`, build/verify cores derived from the
-  visible runtime CPU envelope when unset, verify jobs derived from build
-  concurrency, idle timeout `0`.
+  visible runtime CPU envelope when unset, verify jobs derived from the running
+  evaluator profile when not explicitly pinned, idle timeout `0`.
+- In cpuset mode, explicit `--verify-jobs` changes the auto-sized effective
+  verify CPU width because unset `verify_cores_per_job` is derived against the
+  resolved verify concurrency.
 - Numeric conflicts resolve by `max(...)`.
 - CPU pinning is CLI-owned in configless mode (`--cpuset`, `--skip-cpuset`).
 - Without `--cpuset`/`--skip-cpuset`, CPU affinity is disabled.
-- Invalid numeric metadata values are rejected at startup (`evaluator.build_jobs/build_cores_per_job/verify_jobs/verify_cores_per_job >= 1`, `evaluator.idle_timeout >= 0`).
+- Invalid numeric evaluator metadata values are rejected at startup
+  (`evaluator.build_jobs/build_cores_per_job/verify_jobs/verify_cores_per_job >= 1`,
+  `evaluator.idle_timeout >= 0`).
 
 Resource defaults:
 - `resources.cores_per_trial` defaults to `null` (unconstrained).
 - `resources.memory_per_trial` defaults to `null` (unlimited).
 - Unconstrained trial resources materialize to the current visible runtime
   envelope only when an adapter needs a concrete CPU set or memory limit.
+- For `oss-crs`, unconstrained CPU materialization is valid only when the
+  compose layout can map that envelope deterministically; multi-service layouts
+  still require explicit service CPU widths.
 
 CPU tag routing:
 - Jobs can carry an optional `cpu_tag` (from `resources.cpu_tag`).

@@ -205,8 +205,8 @@ class BenchmarkValidator:
             engine = VerificationEngine(
                 oss_fuzz_path=self.oss_fuzz_path,
                 timeout=self.pov_timeout,
-                build_workers=self.build_workers,
-                verify_workers=self.verify_workers,
+                jobs=self.build_workers,
+                cores_per_job=self.verify_workers,
                 source_mode=self.source_mode,
                 max_povs_per_cpv=self.max_povs_per_cpv,
             )

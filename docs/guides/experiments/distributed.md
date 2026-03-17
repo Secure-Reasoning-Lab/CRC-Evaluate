@@ -346,8 +346,10 @@ uv run crsbench evaluator \
 | `--ci` | Use CI queue aliases (`crsbench_ci_*`) | Off |
 
 Config v2 evaluator defaults use unified knobs:
-- `evaluator.jobs` (default: `1`)
-- `evaluator.cores_per_job` (default: `4`)
+- `evaluator.jobs` (default: unset; runtime falls back to one build job when no
+  explicit build concurrency is configured)
+- `evaluator.cores_per_job` (default: unset; runtime derives effective CPU width
+  from the current visible CPU envelope / cpuset policy)
 
 Optional split overrides are only for asymmetric tuning:
 - `evaluator.build_jobs`, `evaluator.build_cores_per_job`

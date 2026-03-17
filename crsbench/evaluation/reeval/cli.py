@@ -333,8 +333,8 @@ def _reeval_bug_finding(
     engine = VerificationEngine(
         oss_fuzz_path=oss_fuzz_path,
         timeout=per_pov_verify_timeout,
-        build_workers=build_workers,
-        verify_workers=verify_workers,
+        jobs=build_workers,
+        cores_per_job=verify_workers,
         source_mode=source_mode,
     )
 
@@ -1088,8 +1088,8 @@ def _reeval_patch_generation(
         log_dir=work_dir,
         force_rebuild=force_rebuild,
         use_inc_build=use_inc_build,
-        build_workers=build_workers,
-        verify_workers=verify_workers,
+        jobs=build_workers,
+        cores_per_job=verify_workers,
         verify_variants=patch_verify_variants,
         source_mode=source_mode,
     )

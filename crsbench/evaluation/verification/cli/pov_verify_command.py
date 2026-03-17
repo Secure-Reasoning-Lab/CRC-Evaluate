@@ -37,6 +37,11 @@ from crsbench.evaluation.verification import (
     VerificationEngine,
     get_dedup_strategy,
 )
+from crsbench.evaluation.verification.cli.parallelism import (
+    add_parallelism_arguments,
+    resolve_cores_per_job,
+    resolve_jobs,
+)
 from crsbench.utils.logger import get_logger
 from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
@@ -158,18 +163,7 @@ Examples:
         action="store_true",
         help="Enable verbose output",
     )
-    parser.add_argument(
-        "--build-workers",
-        type=int,
-        default=None,
-        help="Number of parallel workers for building variants (default: 4).",
-    )
-    parser.add_argument(
-        "--verify-workers",
-        type=int,
-        default=None,
-        help="Number of parallel workers for POV verification (default: 4).",
-    )
+    add_parallelism_arguments(parser)
 
     parser.set_defaults(func=run_verify)
 
@@ -188,6 +182,13 @@ def run_verify(args: argparse.Namespace) -> int:
 
     log_level = "DEBUG" if args.verbose else "INFO"
     configure_logger(level=log_level)
+
+    try:
+        jobs = resolve_jobs(args)
+        cores_per_job = resolve_cores_per_job(args)
+    except ValueError as exc:
+        logger.error(str(exc))
+        return 1
 
     # Validate benchmark path
     if not args.benchmark_path.exists():
@@ -221,8 +222,8 @@ def run_verify(args: argparse.Namespace) -> int:
         oss_fuzz_path=oss_fuzz_path,
         timeout=args.timeout,
         dedup_strategy=dedup_strategy,
-        build_workers=args.build_workers,
-        verify_workers=args.verify_workers,
+        jobs=jobs,
+        cores_per_job=cores_per_job,
         source_mode=args.source,
     )
 

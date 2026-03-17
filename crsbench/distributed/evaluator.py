@@ -1053,14 +1053,7 @@ def run_evaluator_configless(
             required_verify_jobs = (
                 reg_verify_jobs_values[0]
                 if reg_verify_jobs_values
-                else max(
-                    1,
-                    (
-                        required_build_jobs
-                        * (required_build_cores or effective_build_cores_per_job)
-                    )
-                    // (required_verify_cores or effective_verify_cores_per_job),
-                )
+                else resolved_verify_jobs
             )
             required_idle_timeout = (
                 reg_idle_timeout_values[0] if reg_idle_timeout_values else 0

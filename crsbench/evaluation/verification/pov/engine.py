@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Iterable, Optional
 
 from crsbench.builder import BenchmarkMode, BuildResult, OSSFuzzBuilder, VariantType
 from crsbench.evaluation.verification.dedup import (
@@ -91,9 +92,9 @@ class VerificationEngine:
         oss_fuzz_path: Path,
         timeout: int = 180,
         dedup_strategy: DeduplicationStrategy | None = None,
-        build_workers: Optional[int] = None,
-        verify_workers: Optional[int] = None,
         *,
+        jobs: Optional[int] = None,
+        cores_per_job: Optional[int] = None,
         source_mode: str = "pkgs",
         max_povs_per_cpv: Optional[int] = None,
         inc_image_policy: Optional[str] = None,
@@ -108,19 +109,19 @@ class VerificationEngine:
             oss_fuzz_path: Path to oss-fuzz directory
             timeout: Timeout for reproduce operations in seconds
             dedup_strategy: Deduplication strategy instance (defaults to PatchBasedDedup)
-            build_workers: Maximum number of parallel workers for building
-            verify_workers: Maximum number of parallel workers for verification
+            jobs: Parallel verification jobs (controls build and reproduce parallelism).
+            cores_per_job: CPUs per verification job (controls per-job parallelism).
             source_mode: Source mode - "pkgs" (bundled, default) or "main_repo" (clone)
             max_povs_per_cpv: Limit POVs verified per CPV (None = no limit).
                 When set to 1, only pov_0.blob is used per CPV.
         """
         self.oss_fuzz_path = Path(oss_fuzz_path)
         self.timeout = timeout
-        self.verify_workers = resolve_verify_workers(verify_workers)
+        self.verify_workers = resolve_verify_workers(cores_per_job)
         self.max_povs_per_cpv = max_povs_per_cpv
         self.builder = OSSFuzzBuilder(
             oss_fuzz_path,
-            max_workers=resolve_build_workers(build_workers),
+            max_workers=resolve_build_workers(jobs),
             source_mode=source_mode,
             inc_image_policy=inc_image_policy,
             inc_image_registry=inc_image_registry,
@@ -285,6 +286,20 @@ class VerificationEngine:
             stderr=stderr,
         )
 
+    def _run_reproduce_tasks(
+        self,
+        tasks: list[ReproduceTask],
+    ) -> Iterable[ReproduceResult]:
+        """Execute reproduce tasks using the configured verify parallelism."""
+        if len(tasks) <= 1 or self.verify_workers <= 1:
+            for task in tasks:
+                yield self._execute_reproduce(task)
+            return
+
+        max_workers = min(self.verify_workers, len(tasks))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            yield from executor.map(self._execute_reproduce, tasks)
+
     def verify_pov(
         self,
         request: PovVerificationRequest,
@@ -339,8 +354,7 @@ class VerificationEngine:
         stderr_logs: dict[str, str] = {}  # variant_name -> stderr log
         variant_crashed: dict[str, bool] = {}  # variant_name -> crashed
 
-        for task in tasks:
-            result = self._execute_reproduce(task)
+        for result in self._run_reproduce_tasks(tasks):
             if result.variant_type == VariantType.CPV and result.cpv_num is not None:
                 cpv_crash_map[result.cpv_num] = result.crashed
             else:
@@ -452,8 +466,7 @@ class VerificationEngine:
         last_report_time = start_time
         report_interval = 60  # Report every minute for parallel execution
 
-        for task in tasks:
-            result = self._execute_reproduce(task)
+        for result in self._run_reproduce_tasks(tasks):
             key = (result.pov_id, result.harness)
             crash_results, cpv_crash_map, stdout_logs, stderr_logs = (
                 results_by_pov_harness[key]
