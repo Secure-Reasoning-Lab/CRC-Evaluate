@@ -73,3 +73,5 @@ global/default behavior `false` for non-smoke experiment configs.
   - `scripts/ci-tests/run-local.sh checks`
 - Smoke selected scenarios:
   - `scripts/ci-tests/run-local.sh smoke`
+  - successful smoke suites also rerun top-level `verify` / `patch-verify`
+    against the generated trial outputs before the suite is marked passed

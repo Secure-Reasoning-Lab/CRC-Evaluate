@@ -69,27 +69,60 @@ smoke_env_file() {
 
 load_smoke_env_file() {
     local env_file
+    local had_xtrace=0
+    local load_rc=0
     env_file="$(smoke_env_file)"
     [ -f "$env_file" ] || return 0
 
-    eval "$(
+    case "$-" in
+        *x*)
+            had_xtrace=1
+            set +x
+            ;;
+    esac
+
+    if ! eval "$(
         uv run python - "$env_file" <<'PY'
 import os
+import re
 import shlex
 import sys
 
 from dotenv import dotenv_values
 
+shell_identifier = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 for key, value in dotenv_values(sys.argv[1]).items():
     if value is None or key in os.environ:
         continue
+    if not shell_identifier.match(key):
+        print(
+            f"Skipping non-shell-safe key from smoke env file: {key}",
+            file=sys.stderr,
+        )
+        continue
     print(f"export {key}={shlex.quote(value)}")
 PY
-    )"
+    )"; then
+        load_rc=$?
+    fi
+
+    if [ "$had_xtrace" -eq 1 ]; then
+        set -x
+    fi
+
+    return "$load_rc"
 }
 
 create_smoke_stream_fifo_dir() {
     mktemp -d "${TMPDIR:-/tmp}/crsbench-smoke-stream-XXXXXX"
+}
+
+cleanup_smoke_stream_dir() {
+    local stream_dir="$1"
+    local fifo="$2"
+    rm -f "$fifo"
+    rmdir "$stream_dir" >/dev/null 2>&1 || true
 }
 
 run_smoke_logged_command() {
@@ -105,14 +138,19 @@ run_smoke_logged_command() {
         mkfifo "$fifo"
         (stdbuf -oL tee -a "$logfile" <"$fifo" | stdbuf -oL sed "s/^/[${label}] /") &
         logger_pid=$!
-        stdbuf -oL -eL "$@" >"$fifo" 2>&1
-        cmd_rc=$?
+        if stdbuf -oL -eL "$@" >"$fifo" 2>&1; then
+            cmd_rc=0
+        else
+            cmd_rc=$?
+        fi
         wait "$logger_pid"
-        rm -f "$fifo"
-        rmdir "$stream_dir"
+        cleanup_smoke_stream_dir "$stream_dir" "$fifo"
         return "$cmd_rc"
     else
-        "$@" >"$logfile" 2>&1
+        if "$@" >"$logfile" 2>&1; then
+            return 0
+        fi
+        return $?
     fi
 }
 
@@ -154,9 +192,9 @@ start_smoke_logged_command_bg() {
         SMOKE_BG_LOGGER_PID=$!
         SMOKE_BG_STREAM_DIR="$stream_dir"
         SMOKE_BG_STREAM_FIFO="$fifo"
-        stdbuf -oL -eL "$@" >"$fifo" 2>&1 &
+        stdbuf -oL -eL "$@" >"$fifo" 2>&1 </dev/null &
     else
-        "$@" >"$logfile" 2>&1 &
+        "$@" >"$logfile" 2>&1 </dev/null &
     fi
     SMOKE_BG_PID=$!
 }
@@ -696,7 +734,7 @@ run_smoke_suite_config() {
     local suite="$1"
     local stage_name="$2"
     local base_config workspace config_path exp_dir report_dir
-    local worker_log run_log worker_pid rc cpuset skip_cpuset skip_verification
+    local worker_log run_log post_verify_log worker_pid rc cpuset skip_cpuset skip_verification
 
     run_stage "$stage_name"
     base_config="$(smoke_config_for_suite "$suite")" || fail "Unknown smoke suite: $suite"
@@ -714,6 +752,7 @@ run_smoke_suite_config() {
 
     worker_log="$workspace/worker.log"
     run_log="$workspace/run.log"
+    post_verify_log="$workspace/post-verify.log"
 
     local worker_cmd=(uv run crsbench worker --experiment-config "$config_path" --continuous)
     if [ "${SMOKE_NO_CPUSET:-1}" != "1" ]; then
@@ -753,6 +792,25 @@ run_smoke_suite_config() {
         echo "=== worker log (tail) ==="
         tail -n 200 "$worker_log" || true
         fail "Smoke run failed for suite=$suite"
+    fi
+
+    if [ "$skip_verification" = "1" ]; then
+        echo "[smoke] skipping post-run verification for suite=$suite"
+    else
+        rc=0
+        run_smoke_logged_command "$post_verify_log" "smoke:${suite}:verify" \
+            uv run python -m crsbench.benchmark_ci.smoke_post_verify \
+                --suite "$suite" \
+                --experiment-dir "$exp_dir" \
+                --benchmarks-root "$ROOT_DIR/benchmarks" || rc=$?
+
+        if [ "$rc" -ne 0 ]; then
+            echo "=== post-verify log (tail) ==="
+            tail -n 200 "$post_verify_log" || true
+            echo "=== run log (tail) ==="
+            tail -n 200 "$run_log" || true
+            fail "Smoke post-verification failed for suite=$suite"
+        fi
     fi
 
     if [ "${SMOKE_KEEP_WORKSPACE:-0}" = "1" ]; then
