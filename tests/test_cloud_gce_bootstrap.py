@@ -446,6 +446,7 @@ def test_startup_script_runs_shared_vm_bootstrap_from_repo_checkout():
     assert 'CLONE_DIR="${CRSBENCH_CLONE_DIR:-/opt/crsbench}"' in script
     assert "WorkingDirectory=${CLONE_DIR}" in script
     assert "ExecStart=/bin/bash ${LAUNCHER_PATH}" in script
+    assert 'git config --global --add safe.directory "${repo_path}"' in script
     assert 'write_env_var "PATH" "${VENV_BIN}' in script
     assert "/root/.local/bin" in script
 
@@ -655,6 +656,7 @@ def test_orchestrator_startup_script_runs_shared_vm_bootstrap_from_repo_checkout
     assert "CloudVmBootstrapInputs.from_experiment_config" in script
     assert "run_cloud_vm_bootstrap" in script
     assert 'CLONE_DIR="${CRSBENCH_CLONE_DIR:-/opt/crsbench}"' in script
+    assert 'git config --global --add safe.directory "${repo_path}"' in script
     assert 'cd "${CLONE_DIR}"' in script
 
 

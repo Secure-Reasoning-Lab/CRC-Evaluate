@@ -8,13 +8,14 @@ The rehearsal runs:
 - one orchestrator container
 - two worker containers
 - the same `crsbench/cloud/gce/startup/*.sh` scripts used on GCE
-- a DinD-based image so the bootstrap path can run Docker-backed CRS prep
+- an Ubuntu 24.04 DinD-based image so the bootstrap path can run Docker-backed
+  CRS prep against a base that matches the default GCE VM family more closely
 
 ## What It Proves
 
 - startup metadata is decoded correctly
 - checkout-first bootstrap works from a real repo clone
-- worker bootstrap can run without `systemd` by falling back to foreground mode
+- worker bootstrap can run in forced foreground mode inside the Docker harness
 - the startup scripts work with file-backed metadata, not only the GCE metadata
   endpoint
 
@@ -58,9 +59,10 @@ Override knobs:
 
 - `CRSBENCH_LOCAL_REHEARSAL_EXPERIMENT_CONFIG`
 - `CRSBENCH_LOCAL_REHEARSAL_GIT_REF`
-  - defaults to the current local `HEAD`; set it explicitly only to pin a
-    different ref that already exists in the mounted checkout. The rehearsal
-    still requires that checkout to be a usable Git clone.
+  - defaults to the current local `HEAD`; set it explicitly to bypass host-side
+    `HEAD` autodetection or pin a different ref that already exists in the
+    mounted checkout. The rehearsal still requires that checkout to be a
+    clonable Git repository or worktree.
 - `CRSBENCH_LOCAL_REHEARSAL_STATE_DIR`
 
 ## Startup Script Overrides Used By The Harness
@@ -82,7 +84,9 @@ The scripts still keep the VM behavior by default:
 - The compose topology is a local rehearsal harness, not a replacement for real
   cloud launch/collect/teardown commands.
 - The DinD image is there so the bootstrap path has a real Docker daemon inside
-  each rehearsal container.
+  each rehearsal container. The current Dockerfile uses
+  `cruizba/ubuntu-dind:noble-latest` to stay on Ubuntu 24.04 like the GCE
+  startup target.
 - `oss-crs` still expects privileged Docker behavior. Keep the compose services
   privileged if you want the local rehearsal to match the VM bootstrap
   assumptions.

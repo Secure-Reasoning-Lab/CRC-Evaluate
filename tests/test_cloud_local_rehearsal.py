@@ -105,6 +105,17 @@ def test_rehearsal_compose_uses_file_metadata_and_foreground_workers() -> None:
     assert "/metadata-root/instance:ro" in compose_text
 
 
+def test_rehearsal_dockerfile_uses_ubuntu_24_dind_base() -> None:
+    """The rehearsal container should mirror the Ubuntu 24.04 GCE image family."""
+    dockerfile_text = Path("scripts/cloud-rehearsal/Dockerfile").read_text(
+        encoding="utf-8"
+    )
+
+    assert "cruizba/ubuntu-dind:noble-latest" in dockerfile_text
+    assert "apt-get install -y --no-install-recommends" in dockerfile_text
+    assert 'CMD ["/bin/bash"]' in dockerfile_text
+
+
 def test_rehearsal_wrapper_only_resets_state_for_bringup() -> None:
     """Read-only compose subcommands should not wipe the previous rehearsal state."""
     wrapper_text = Path("scripts/cloud-rehearsal/run-local-rehearsal.sh").read_text(

@@ -100,6 +100,15 @@ ensure_system_packages() {
 clone_repo() {
   local repo_url="$1"
   local clone_dir="$2"
+  if [[ "${repo_url}" == file://* ]]; then
+    local repo_path="${repo_url#file://}"
+    if [[ -d "${repo_path}" ]]; then
+      git config --global --add safe.directory "${repo_path}" || true
+      if [[ -d "${repo_path}/.git" ]]; then
+        git config --global --add safe.directory "${repo_path}/.git" || true
+      fi
+    fi
+  fi
   if [[ -n "${CLONE_GIT_SSH_COMMAND}" ]]; then
     GIT_SSH_COMMAND="${CLONE_GIT_SSH_COMMAND}" git clone --no-single-branch "${repo_url}" "${clone_dir}"
     return
