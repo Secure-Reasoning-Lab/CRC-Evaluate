@@ -6,6 +6,7 @@ for distributed CRS trial execution.
 
 import os
 import re
+from enum import StrEnum
 from typing import List, Optional
 
 from crsbench.utils.logger import get_logger
@@ -114,6 +115,14 @@ def resolve_queue_names(experiment_name: str) -> tuple[str, str, str]:
 # Cache for auth detection: avoids extra connection attempt per call.
 # None = not determined yet, True = password required, False = no password.
 _auth_required: Optional[bool] = None
+
+
+class RedisConnectionProbe(StrEnum):
+    """Outcome classification for Redis connection checks."""
+
+    READY = "ready"
+    RETRYABLE = "retryable"
+    FATAL = "fatal"
 
 
 def _resolve_redis_endpoint(redis_host: str) -> tuple[str, int]:
@@ -234,6 +243,36 @@ def create_redis_connection(
         ) from None
 
 
+def probe_redis_connection(
+    redis_host: str,
+    timeout: int = 2,
+) -> tuple[RedisConnectionProbe, str | None]:
+    """Classify Redis probe results for startup retry logic."""
+    if not REDIS_AVAILABLE:
+        detail = "Redis and RQ packages are required for distributed execution."
+        logger.warning(detail)
+        return RedisConnectionProbe.FATAL, detail
+
+    connection = None
+    try:
+        connection = create_redis_connection(redis_host, socket_connect_timeout=timeout)
+        logger.debug(f"Redis server at {redis_host} is reachable")
+        return RedisConnectionProbe.READY, None
+    except redis.AuthenticationError as exc:
+        logger.error(f"Redis authentication failed for {redis_host}: {exc}")
+        return RedisConnectionProbe.FATAL, str(exc)
+    except (redis.ConnectionError, redis.TimeoutError) as exc:
+        logger.debug(f"Redis server at {redis_host} is not reachable: {exc}")
+        return RedisConnectionProbe.RETRYABLE, str(exc)
+    except Exception as exc:
+        logger.warning(f"Unexpected Redis probe error for {redis_host}: {exc}")
+        return RedisConnectionProbe.FATAL, str(exc)
+    finally:
+        close = getattr(connection, "close", None)
+        if callable(close):
+            close()
+
+
 def check_redis_available(redis_host: str, timeout: int = 2) -> bool:
     """
     Check if Redis server is reachable.
@@ -249,20 +288,8 @@ def check_redis_available(redis_host: str, timeout: int = 2) -> bool:
         >>> if check_redis_available('localhost'):
         ...     print("Redis is available")
     """
-    if not REDIS_AVAILABLE:
-        logger.debug("Redis/RQ packages not installed")
-        return False
-
-    try:
-        create_redis_connection(redis_host, socket_connect_timeout=timeout)
-        logger.debug(f"Redis server at {redis_host} is reachable")
-        return True
-    except (redis.ConnectionError, redis.TimeoutError) as e:
-        logger.debug(f"Redis server at {redis_host} is not reachable: {e}")
-        return False
-    except Exception as e:
-        logger.warning(f"Unexpected error checking Redis availability: {e}")
-        return False
+    probe_state, _detail = probe_redis_connection(redis_host, timeout=timeout)
+    return probe_state is RedisConnectionProbe.READY
 
 
 def initialize_queue(redis_host: str, experiment_name: str) -> Optional["rq.Queue"]:

@@ -300,6 +300,9 @@ listener startup.
 Worker bootstrap now polls the configured Redis endpoint before starting the
 managed `crsbench worker` process. That closes the gap where workers could
 terminally fail before the remote orchestrator had finished starting Valkey.
+Transport-level connection failures are retried until the readiness timeout,
+while fatal Redis auth/config errors still fail immediately with bootstrap
+evidence.
 The checked-in smoke config uses `readiness_timeout_sec: 1200` for both
 orchestrator and worker instance profiles to give clean Ubuntu images more room
 to finish bootstrap.

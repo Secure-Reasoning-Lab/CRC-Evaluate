@@ -465,10 +465,12 @@ def test_startup_script_waits_for_redis_before_starting_worker_service():
 
     script = load_startup_script()
 
-    assert "check_redis_available" in script
+    assert "probe_redis_connection" in script
+    assert "RedisConnectionProbe" in script
     assert "CRSBENCH_READINESS_TIMEOUT_SEC" in script
     assert "wait_for_redis()" in script
     assert "Waiting for Redis at ${CRSBENCH_REDIS_HOST}" in script
+    assert "Fatal Redis bootstrap error" in script
     assert "Timed out waiting for Redis" in script
 
 

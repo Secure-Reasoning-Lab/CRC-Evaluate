@@ -296,16 +296,29 @@ wait_for_redis() {
 
   echo "Waiting for Redis at ${CRSBENCH_REDIS_HOST} for up to ${timeout_sec}s..."
   while true; do
-    if /usr/bin/env python3 - "${CRSBENCH_REDIS_HOST}" <<'PY'
+    local probe_output=""
+    if probe_output="$(/usr/bin/env python3 - "${CRSBENCH_REDIS_HOST}" <<'PY'
 import sys
 
-from crsbench.distributed.queue import check_redis_available
+from crsbench.distributed.queue import RedisConnectionProbe, probe_redis_connection
 
-raise SystemExit(0 if check_redis_available(sys.argv[1], timeout=2) else 1)
+probe_state, detail = probe_redis_connection(sys.argv[1], timeout=2)
+if probe_state is RedisConnectionProbe.READY:
+    raise SystemExit(0)
+if probe_state is RedisConnectionProbe.RETRYABLE:
+    raise SystemExit(1)
+print(detail or "Redis bootstrap probe failed", file=sys.stderr)
+raise SystemExit(2)
 PY
-    then
+    2>&1)"; then
       echo "Redis at ${CRSBENCH_REDIS_HOST} is ready"
       return 0
+    fi
+    local probe_exit="$?"
+    if [[ "${probe_exit}" -eq 2 ]]; then
+      report_bootstrap_failure \
+        "Fatal Redis bootstrap error for ${CRSBENCH_REDIS_HOST}: ${probe_output}"
+      return 1
     fi
 
     if (( SECONDS - start_time >= timeout_sec )); then
