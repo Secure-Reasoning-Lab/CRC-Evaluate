@@ -48,6 +48,7 @@ cloud:
           crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
           crsbench_git_ref: feat/gcp
           github_deploy_key_file: file:.crsbench-keys/crsbench-deploy
+          hf_token: os.environ/HF_TOKEN
         worker-n2d:
           machine_type: n2d-standard-16
           boot_disk_size_gb: 50
@@ -58,6 +59,7 @@ cloud:
           crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
           crsbench_git_ref: feat/gcp
           github_deploy_key_file: file:.crsbench-keys/crsbench-deploy
+          hf_token: os.environ/HF_TOKEN
   orchestrator:
     provider: gce
     zone: us-east5-b

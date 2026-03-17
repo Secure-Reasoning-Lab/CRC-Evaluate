@@ -852,6 +852,10 @@ class TestIntegrationWithSampleConfigs:
             == "file:.crsbench-keys/crsbench-deploy"
         )
         assert (
+            config.cloud.providers.gce.instance_profiles["worker-n2d"].hf_token
+            == "os.environ/HF_TOKEN"
+        )
+        assert (
             config.cloud.providers.gce.instance_profiles[
                 "orchestrator-n2d"
             ].crsbench_install_spec
@@ -862,6 +866,10 @@ class TestIntegrationWithSampleConfigs:
                 "orchestrator-n2d"
             ].github_deploy_key_file
             == "file:.crsbench-keys/crsbench-deploy"
+        )
+        assert (
+            config.cloud.providers.gce.instance_profiles["orchestrator-n2d"].hf_token
+            == "os.environ/HF_TOKEN"
         )
         assert (
             config.cloud.providers.gce.instance_profiles[
