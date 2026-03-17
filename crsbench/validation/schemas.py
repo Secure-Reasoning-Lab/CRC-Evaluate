@@ -1941,11 +1941,30 @@ class CloudWorkersConfig(BaseModel):
         return self
 
 
+class CloudBootstrapConfig(BaseModel):
+    """Provider-neutral cloud VM bootstrap policy."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    prepare_mode: Literal["full", "skip_base_images"] = Field(
+        default="full",
+        description="How cloud VMs run `crsbench prepare` before joining runtime.",
+    )
+    download_benchmarks: Literal["auto", "always", "never"] = Field(
+        default="auto",
+        description="Whether cloud VMs download benchmarks before runtime startup.",
+    )
+
+
 class CloudConfig(BaseModel):
     """Top-level cloud provisioning configuration."""
 
     model_config = ConfigDict(extra="forbid")
 
+    bootstrap: CloudBootstrapConfig = Field(
+        default_factory=CloudBootstrapConfig,
+        description="Provider-neutral bootstrap policy for cloud VMs.",
+    )
     providers: Optional[CloudProvidersConfig] = Field(
         default=None,
         description="Provider-specific backing configuration for cloud launches.",

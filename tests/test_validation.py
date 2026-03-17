@@ -877,6 +877,8 @@ class TestExperimentConfigSchema:
         assert config.cloud.gce.region is None
         assert config.cloud.gce.use_os_login is True
         assert config.cloud.gce.ssh_via_iap is True
+        assert config.cloud.bootstrap.prepare_mode == "full"
+        assert config.cloud.bootstrap.download_benchmarks == "auto"
 
     def test_cloud_gce_with_orchestrator_valid(self):
         data = self._base_kwargs()
@@ -909,6 +911,69 @@ class TestExperimentConfigSchema:
         assert config.cloud.orchestrator.zone == "us-central1-a"
         assert config.cloud.orchestrator.use_os_login is True
         assert config.cloud.orchestrator.ssh_via_iap is True
+
+    def test_cloud_bootstrap_custom_values_valid(self):
+        data = self._base_kwargs()
+        data["cloud"] = {
+            "bootstrap": {
+                "prepare_mode": "skip_base_images",
+                "download_benchmarks": "never",
+            },
+            "gce": {
+                "project": "test-project",
+                "zone": "us-central1-a",
+                "worker_count": 2,
+                "machine_type": "e2-standard-4",
+                "boot_disk_size_gb": 100,
+                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                "owner_label": "team-crs",
+            },
+        }
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.bootstrap.prepare_mode == "skip_base_images"
+        assert config.cloud.bootstrap.download_benchmarks == "never"
+
+    def test_cloud_bootstrap_invalid_prepare_mode_rejected(self):
+        data = self._base_kwargs()
+        data["cloud"] = {
+            "bootstrap": {"prepare_mode": "partial"},
+            "gce": {
+                "project": "test-project",
+                "zone": "us-central1-a",
+                "worker_count": 2,
+                "machine_type": "e2-standard-4",
+                "boot_disk_size_gb": 100,
+                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                "owner_label": "team-crs",
+            },
+        }
+
+        with pytest.raises(PydanticValidationError, match="prepare_mode"):
+            ExperimentConfig(**data)
+
+    def test_cloud_bootstrap_invalid_download_policy_rejected(self):
+        data = self._base_kwargs()
+        data["cloud"] = {
+            "bootstrap": {"download_benchmarks": "sometimes"},
+            "gce": {
+                "project": "test-project",
+                "zone": "us-central1-a",
+                "worker_count": 2,
+                "machine_type": "e2-standard-4",
+                "boot_disk_size_gb": 100,
+                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                "owner_label": "team-crs",
+            },
+        }
+
+        with pytest.raises(PydanticValidationError, match="download_benchmarks"):
+            ExperimentConfig(**data)
 
     def test_cloud_gce_rejects_region_until_supported(self):
         data = self._base_kwargs()
