@@ -690,43 +690,28 @@ PY
 stop_worker_process() {
     local pid="$1"
     local label="$2"
-    local signal timeout
 
     if ! kill -0 "$pid" >/dev/null 2>&1; then
         wait "$pid" >/dev/null 2>&1 || true
-        if [ "$pid" = "$SMOKE_BG_PID" ]; then
-            cleanup_smoke_bg_logging
-        fi
         return 0
     fi
 
-    for signal in INT TERM KILL; do
-        case "$signal" in
-            INT|TERM) timeout=20 ;;
-            KILL) timeout=5 ;;
-            *) timeout=5 ;;
-        esac
-
-        kill "-$signal" "$pid" >/dev/null 2>&1 || true
-        local elapsed=0
-        while [ "$elapsed" -lt "$timeout" ]; do
-            if ! kill -0 "$pid" >/dev/null 2>&1; then
-                wait "$pid" >/dev/null 2>&1 || true
-                if [ "$pid" = "$SMOKE_BG_PID" ]; then
-                    cleanup_smoke_bg_logging
-                fi
-                return 0
-            fi
-            sleep 1
-            elapsed=$((elapsed + 1))
-        done
+    # Send SIGTERM to the process group (covers setsid children)
+    kill -TERM -- -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+    local elapsed=0
+    while [ "$elapsed" -lt 20 ]; do
+        if ! kill -0 "$pid" >/dev/null 2>&1; then
+            wait "$pid" 2>/dev/null || true
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
     done
 
-    echo "[smoke] warning: $label (pid=$pid) did not terminate cleanly"
-    wait "$pid" >/dev/null 2>&1 || true
-    if [ "$pid" = "$SMOKE_BG_PID" ]; then
-        cleanup_smoke_bg_logging
-    fi
+    # Escalate to SIGKILL
+    kill -KILL -- -"$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    echo "[smoke] warning: $label (pid=$pid) required SIGKILL"
     return 1
 }
 
