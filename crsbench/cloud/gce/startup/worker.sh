@@ -335,7 +335,7 @@ ensure_passwordless_sudo() {
 }
 
 ensure_docker_group_membership() {
-  if ! getent group docker >/dev/null 2>&1; then
+  if ! grep -q '^docker:' /etc/group 2>/dev/null; then
     if command -v groupadd >/dev/null 2>&1; then
       groupadd --force docker
     elif command -v addgroup >/dev/null 2>&1; then

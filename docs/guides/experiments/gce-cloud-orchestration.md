@@ -452,9 +452,13 @@ The worker process now runs as a `crsbench` user service:
 
 ```bash
 # On the worker VM
-sudo -iu crsbench XDG_RUNTIME_DIR=/run/user/$(id -u crsbench) \
+sudo -iu crsbench env \
+  XDG_RUNTIME_DIR=/run/user/$(id -u crsbench) \
+  DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u crsbench)/bus \
   systemctl --user status crsbench-worker.service
-sudo -iu crsbench XDG_RUNTIME_DIR=/run/user/$(id -u crsbench) \
+sudo -iu crsbench env \
+  XDG_RUNTIME_DIR=/run/user/$(id -u crsbench) \
+  DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u crsbench)/bus \
   journalctl --user -u crsbench-worker.service -f
 ```
 
@@ -465,7 +469,9 @@ driver expected by `oss-crs`. If you inspect a VM manually, verify these with
 You can also verify the delegated cgroup setup that `oss-crs` depends on with:
 
 ```bash
-sudo -iu crsbench XDG_RUNTIME_DIR=/run/user/$(id -u crsbench) \
+sudo -iu crsbench env \
+  XDG_RUNTIME_DIR=/run/user/$(id -u crsbench) \
+  DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u crsbench)/bus \
   /opt/crsbench/.venv/bin/oss-crs setup --check
 ```
 
