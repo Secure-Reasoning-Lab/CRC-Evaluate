@@ -12,7 +12,9 @@ First-time users should start with [docs/getting-started/first-experiment.md](do
 # Install
 git clone https://github.com/sslab-gatech/CRSBench.git && cd CRSBench
 uv sync
-crsbench prepare                           # bootstrap managed OSS-Fuzz + pull base images (OSS-Fuzz + AIXCC)
+./scripts/setup-third-party.sh             # clone managed oss-fuzz + Atlantis checkouts
+uv run crsbench prepare                    # pull OSS-Fuzz + AIxCC base images
+uv run crsbench prepare --coverage         # pull Atlantis GHCR coverage images (or build locally as fallback)
 
 # Download benchmarks from HuggingFace (gated — requires access)
 #   1. Create a token at https://huggingface.co/settings/tokens
@@ -61,6 +63,13 @@ Notes:
 - warm cache: ~10-60s
 - first run (image pulls): ~3-15m
 - with `--build-base-images`: 20m+ (can be significantly longer)
+
+`crsbench prepare --coverage` prepares the separate Atlantis/given_fuzzer
+coverage pipeline used by `crsbench coverage`. It reads the checkout from
+`third_party/atlantis-multilang-given_fuzzer`, prefers the published Team
+Atlanta GHCR `1.0.0` images, retags them onto the canonical local Atlantis
+image names, and falls back to local `oss-crs prepare` only when those images
+are unavailable.
 
 If your virtual environment is not activated, prefix CLI commands with `uv run`
 (for example, `uv run crsbench download --all`).
@@ -154,8 +163,32 @@ fish and other shell setup instructions.
 ```bash
 crsbench verify       benchmarks/project --pov-dir ./povs/
 crsbench patch-verify benchmarks/project --patch-dir ./patches --pov-dir ./povs
-crsbench coverage     benchmarks/project --corpus-dir ./corpus/  # experimental
+crsbench coverage     --experiment-config ./experiment.yaml      # seed coverage over time
+crsbench coverage     --experiment-dir ./experiment-filestore/experiment-name       # seed coverage over time
+crsbench coverage     --experiment-dir ./experiment-filestore/experiment-name --output-dir ./coverage-out
+crsbench coverage     --seed-dir ./seeds --benchmark project --harness fuzz_target --output-dir ./coverage-out
+crsbench coverage     --seed-dir ./seeds --experiment-start-time 1710000000 --benchmark project --harness fuzz_target --output-dir ./coverage-out
 ```
+
+Timeline coverage mode persists raw per-seed artifacts under the target
+coverage directory's `raw/` subdirectory. Each analyzed seed keeps its
+normalized `.cov` result and any captured crash log alongside the JSON/CSV/PNG
+timeline outputs. `coverage_timeline.json` stores one row per normalized seed,
+`coverage_timeline.csv` emits one row per normalized seed, and
+`coverage_timeline.png` plots cumulative covered lines directly from those
+per-seed replay results. Direct `--seed-dir` mode derives relative time from
+each input seed file's original `mtime` using the first retained seed as the
+origin, unless `--experiment-start-time` is supplied to override the origin
+with an explicit Unix timestamp. `--experiment-dir` and `--experiment-config` instead use
+`povs/pov_store.json.crs_run_start_time` as the origin and clamp the x-axis to
+the recorded trial `run_time` from `metadata.json`. When `--output-dir` is
+supplied for experiment-backed coverage, CRSBench mirrors the experiment under
+`<output-dir>/<experiment-name>/.../trial-N/coverage`; otherwise it writes to
+each source trial's in-place `coverage/` directory. The Atlantis timeline path
+does not run a separate whole-corpus denominator pass, so total-line
+percentages may be reported as unavailable.
+Coverage analysis uses the Atlantis/given_fuzzer warm-runner backend and does
+not accept an `--oss-fuzz-path` override.
 
 ### Results
 
@@ -202,7 +235,7 @@ CRSBench/
 ├── oss-crs/registry/        # OSS-CRS registry entries referenced by `crs_compose` keys
 ├── oss-crs/                 # CRS runtime and registry (submodule)
 ├── third_party/oss-fuzz/    # Official OSS-Fuzz (sparse checkout, managed by `crsbench prepare`)
-├── third_party/patches/     # Local upstream patch set (applied by `crsbench prepare`)
+├── third_party/patches/     # Local upstream patch sets consumed during prepare/build
 ├── docs/                    # Documentation hub (user + design docs)
 └── docs/design/             # Internal architecture docs
 ```

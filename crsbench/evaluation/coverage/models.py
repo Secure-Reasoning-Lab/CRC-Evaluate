@@ -11,9 +11,10 @@ Data Formats:
 - CoverageConfig: Configuration for coverage collection
 """
 
+from pathlib import Path
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class CoverageConfig(BaseModel):
@@ -92,6 +93,7 @@ class CoverageSummary(BaseModel):
         lines_covered: Number of unique lines covered.
         lines_total: Total number of coverable lines.
         lines_percent: Percentage of lines covered (0.0 to 100.0).
+        totals_available: Whether total line/function denominators are known.
         functions_covered: Number of functions with at least one covered line.
         functions_total: Total number of functions.
         saturation_detected: Whether coverage saturation has been detected.
@@ -104,9 +106,26 @@ class CoverageSummary(BaseModel):
     lines_covered: int = Field(default=0, ge=0)
     lines_total: int = Field(default=0, ge=0)
     lines_percent: float = Field(default=0.0, ge=0.0, le=100.0)
+    totals_available: bool | None = Field(default=None)
     functions_covered: int = Field(default=0, ge=0)
     functions_total: int = Field(default=0, ge=0)
     saturation_detected: bool = False
+
+    @model_validator(mode="after")
+    def _infer_totals_available(self) -> "CoverageSummary":
+        """Fill or validate denominator availability for coverage summaries."""
+        if self.totals_available is None:
+            self.totals_available = self.lines_total > 0 or self.functions_total > 0
+        elif self.totals_available:
+            if self.lines_total <= 0:
+                msg = "totals_available=True requires lines_total > 0"
+                raise ValueError(msg)
+        elif (
+            self.lines_total > 0 or self.functions_total > 0 or self.lines_percent > 0.0
+        ):
+            msg = "totals_available=False requires zero totals and zero percentage"
+            raise ValueError(msg)
+        return self
 
     def format_lines(self) -> str:
         """Format lines coverage for display.
@@ -115,7 +134,7 @@ class CoverageSummary(BaseModel):
             Formatted string like "10/100 (10.0%)" when total is known,
             or "10 (total N/A)" when total is unknown (e.g., JVM coverage).
         """
-        if self.lines_total > 0:
+        if self.totals_available and self.lines_total > 0:
             return (
                 f"{self.lines_covered}/{self.lines_total} ({self.lines_percent:.1f}%)"
             )
@@ -128,7 +147,7 @@ class CoverageSummary(BaseModel):
             Formatted string like "5/50" when total is known,
             or "5 (total N/A)" when total is unknown.
         """
-        if self.functions_total > 0:
+        if self.totals_available and self.functions_total > 0:
             return f"{self.functions_covered}/{self.functions_total}"
         return f"{self.functions_covered} (total N/A)"
 
@@ -183,3 +202,52 @@ class CoverageReport(BaseModel):
     build_time: float = 0.0
     verify_time: float = 0.0
     success: bool = True
+
+
+class CoveragePovMarker(BaseModel):
+    """POV discovery marker to overlay on a coverage timeline."""
+
+    cpv_id: str
+    pov_hash: str
+    relative_time: float
+
+
+class TimedCoverageInput(BaseModel):
+    """Normalized timed input for coverage timeline analysis."""
+
+    content_hash: str
+    original_name: str
+    path: Path
+    relative_time: float = Field(..., ge=0.0)
+    size: int = Field(..., ge=0)
+    lines_covered: int = Field(default=0, ge=0)
+    crashed: bool = False
+    raw_cov_path: Optional[Path] = None
+    crash_log_path: Optional[Path] = None
+
+
+class TrialCoverageContext(BaseModel):
+    """Resolved trial context for coverage timeline analysis."""
+
+    trial_dir: Path
+    benchmark: str
+    harness: str
+    seed_dir: Path
+    crs_run_start_time: Optional[float] = None
+    timeline_duration_seconds: Optional[float] = Field(default=None, ge=0.0)
+    pov_markers: list[CoveragePovMarker] = Field(default_factory=list)
+
+
+class CoverageTimelineReport(BaseModel):
+    """Coverage-over-time report for one analysis target."""
+
+    benchmark: str
+    harness: str
+    time_origin: str = Field(
+        default="crs_run_start_time",
+        description="Reference used for relative_time values in this report.",
+    )
+    timeline_duration_seconds: Optional[float] = Field(default=None, ge=0.0)
+    seeds: list[TimedCoverageInput] = Field(default_factory=list)
+    pov_markers: list[CoveragePovMarker] = Field(default_factory=list)
+    final_summary: CoverageSummary = Field(default_factory=CoverageSummary)

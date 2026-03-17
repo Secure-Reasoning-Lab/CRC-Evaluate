@@ -86,6 +86,15 @@ class SnapshotLoader:
             extract_dir = Path(tmpdir)
             return self._extract_and_parse(archive_path, extract_dir, trial_dir)
 
+    def _trial_has_post_trial_coverage(self, trial_dir: Path) -> bool:
+        return any(
+            path.exists()
+            for path in (
+                trial_dir / "coverage" / "coverage_timeline.json",
+                trial_dir / "final_coverage.json",
+            )
+        )
+
     def _discover_complete_snapshots(self, trial_dir: Path) -> list[Path]:
         """Discover complete snapshots in trial directory.
 
@@ -236,7 +245,9 @@ class SnapshotLoader:
         has_config = (extract_dir / "config.yaml").exists()
         has_execution = (extract_dir / "execution.json").exists()
         has_crs_log = (extract_dir / "crs-output.log").exists()
-        has_coverage = (extract_dir / "coverage.json").exists()
+        has_coverage = (extract_dir / "coverage.json").exists() or (
+            self._trial_has_post_trial_coverage(trial_dir)
+        )
 
         return SnapshotData(
             trial_dir=trial_dir,

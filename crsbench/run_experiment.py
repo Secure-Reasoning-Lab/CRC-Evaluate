@@ -14,7 +14,7 @@ Usage:
     # Verify POVs / patches / coverage
     crsbench verify benchmarks/afc-curl-delta-01 --pov-dir ./povs/
     crsbench patch-verify benchmarks/afc-curl-delta-01 --patch-dir ./patches --pov-dir ./povs
-    crsbench coverage benchmarks/afc-curl-delta-01 --corpus-dir ./corpus/
+    crsbench coverage --experiment-config ./experiment.yaml
 
     # Benchmark management (validate, bundle, CI, stats)
     crsbench benchmark validate ./benchmarks/afc-curl-delta-01
@@ -307,8 +307,8 @@ Examples:
   # Verify CRS-generated patches
   %(prog)s patch-verify benchmarks/afc-curl-delta-01 --patch-dir ./patches --pov-dir ./povs
 
-  # Collect code coverage
-  %(prog)s coverage benchmarks/afc-curl-delta-01 --corpus-dir ./corpus/
+  # Collect code coverage timelines
+  %(prog)s coverage --experiment-config ./experiment.yaml
 
   # Generate reports and start dashboard
   %(prog)s report --experiment my-experiment

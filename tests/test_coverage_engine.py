@@ -8,13 +8,22 @@ Essential tests for:
 - Variant building
 """
 
+import json
+import threading
+import time
 from pathlib import Path
 from typing import Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
-from crsbench.evaluation.coverage.engine import CoverageEngine
+from crsbench.evaluation.coverage.backend import CoverageRunResult
+from crsbench.evaluation.coverage.engine import UNIAFL_BUILD_SENTINEL, CoverageEngine
+from crsbench.evaluation.coverage.models import TimedCoverageInput
+from crsbench.evaluation.coverage.strategy import (
+    CoverageStrategyError,
+    JaCoCoLineStrategy,
+)
 
 
 @pytest.fixture
@@ -92,6 +101,19 @@ class TestCoverageEngine:
         assert eng.build_workers == 8
         # Note: verify_workers removed - parallelism handled by DAGExecutor
 
+    def test_default_workspace_uses_repo_local_atlantis_cache(self) -> None:
+        """Coverage analysis can run without an OSS-Fuzz checkout."""
+        eng = CoverageEngine(build_workers=1)
+        variant_name = "test-benchmark-cov-delta-coverage"
+        expected = (
+            Path(__file__).resolve().parents[1]
+            / ".crsbench-coverage"
+            / variant_name
+            / "build"
+            / "out"
+        )
+        assert eng.infra.get_build_output_path(variant_name) == expected
+
     def test_merge_overlapping_coverage(self, engine: CoverageEngine):
         """Test merging coverage deduplicates overlapping lines."""
         merged = {"main": {"src": "main.c", "lines": {1, 2, 3}}}
@@ -109,98 +131,872 @@ class TestCoverageEngine:
         assert "func2" in merged
 
     def test_compute_summary(self, engine: CoverageEngine):
-        """Test summary computation uses totals from batch coverage."""
+        """Test summary computation leaves totals unknown in per-seed mode."""
         merged = {
             "func1": {"src": "a.c", "lines": {1, 2, 3}},
-            "func2": {"src": "b.c", "lines": {10, 11}},
+            "func2": {"src": "b.c", "lines": {1, 2}},
         }
-        totals = {
-            "lines_covered": 50,
-            "lines_total": 100,
-            "lines_percent": 50.0,
-            "functions_covered": 10,
-            "functions_total": 20,
-        }
-        summary = engine._compute_summary(merged, 10, 8, 6, totals)
+        summary = engine._compute_summary(merged, 10, 8, 6)
 
-        # Values come from totals dict, not merged_coverage
-        assert summary.lines_covered == 50
-        assert summary.lines_total == 100
-        assert summary.lines_percent == 50.0
-        assert summary.functions_covered == 10
-        assert summary.functions_total == 20
+        assert summary.lines_covered == 5
+        assert summary.lines_total == 0
+        assert summary.lines_percent == 0.0
+        assert summary.functions_covered == 2
+        assert summary.functions_total == 0
         assert summary.corpus_total == 10
         assert summary.corpus_contributing == 8
         assert summary.corpus_unique == 6
 
-    @patch("crsbench.evaluation.coverage.engine.parse_llvm_cov_summary")
     @patch("crsbench.evaluation.coverage.engine.create_coverage_strategy")
     def test_sequential_corpus_processing(
         self,
         mock_create_strategy,
-        mock_parse_summary,
-        mock_oss_fuzz: Path,
         mock_benchmark: Path,
         mock_corpus: Path,
     ):
-        """Test corpus files are processed sequentially."""
+        """Test corpus files are processed through the warm session backend."""
+        src_file = mock_benchmark / "main.c"
+        src_file.write_text("line1\nline2\nline3\n")
         mock_strategy = MagicMock()
-        mock_strategy.collect_single_coverage.return_value = {
-            "main": {"src": "main.c", "lines": [1, 2, 3]}
+        session = MagicMock()
+        session.__enter__.return_value = session
+        session.__exit__.return_value = False
+        session.collect_many.return_value = {
+            corpus_file: CoverageRunResult(
+                coverage_data={"main": {"src": str(src_file), "lines": [1, 2, 3]}}
+            )
+            for corpus_file in sorted(mock_corpus.iterdir())
         }
-        mock_strategy.collect_batch_coverage.return_value = Path("/tmp/summary.json")
+        mock_strategy.open_session.return_value = session
         mock_create_strategy.return_value = mock_strategy
 
-        # Mock totals from batch coverage
-        mock_parse_summary.return_value = {
-            "lines_covered": 10,
-            "lines_total": 100,
-            "lines_percent": 10.0,
-            "functions_covered": 5,
-            "functions_total": 20,
-        }
-
         # No verify_workers - parallelism handled by DAGExecutor
-        eng = CoverageEngine(mock_oss_fuzz)
+        eng = CoverageEngine()
 
-        with patch.object(eng.builder, "build_single") as mock_build:
-            mock_result = MagicMock()
-            mock_result.success = True
-            mock_result.variant_name = "test-benchmark-delta-coverage"
-            mock_build.return_value = mock_result
+        with (
+            patch.object(
+                eng,
+                "_build_coverage_variant",
+                return_value="test-benchmark-cov-delta-coverage",
+            ),
+            patch.object(eng.infra, "has_harness", return_value=True),
+            patch.object(eng, "_maybe_open_session", return_value=session),
+        ):
+            report = eng.collect_coverage(mock_benchmark, mock_corpus)
 
-            with patch.object(eng.infra, "has_harness", return_value=True):
-                report = eng.collect_coverage(mock_benchmark, mock_corpus)
-
-        # All 3 corpus files should be processed sequentially
-        assert mock_strategy.collect_single_coverage.call_count == 3
+        session.collect_many.assert_called_once()
+        session.collect_batch_totals.assert_not_called()
+        mock_strategy.collect_single_coverage.assert_not_called()
         assert report.final_summary.corpus_total == 3
-        assert report.final_summary.lines_total == 100
+        assert report.final_summary.lines_covered == 3
+        assert report.final_summary.lines_total == 0
+        assert report.final_summary.lines_percent == 0.0
+        assert report.final_summary.functions_covered == 1
+        assert report.final_summary.functions_total == 0
         assert report.harness_name == "fuzz_target"
 
+    @patch("crsbench.evaluation.coverage.engine.create_coverage_strategy")
+    def test_timed_coverage_summary_uses_per_seed_results_only(
+        self,
+        mock_create_strategy,
+        mock_benchmark: Path,
+    ) -> None:
+        """Timed analysis should not invoke the whole-corpus batch summary path."""
+        src_file = mock_benchmark / "main.c"
+        src_file.write_text("line1\nline2\nline3\nline4\n")
+        seed_a = mock_benchmark / "a.seed"
+        seed_b = mock_benchmark / "b.seed"
+        seed_a.write_bytes(b"a")
+        seed_b.write_bytes(b"b")
+
+        timed_inputs = [
+            TimedCoverageInput(
+                content_hash="aaa",
+                original_name="a.seed",
+                path=seed_a,
+                relative_time=0.0,
+                size=1,
+            ),
+            TimedCoverageInput(
+                content_hash="bbb",
+                original_name="b.seed",
+                path=seed_b,
+                relative_time=10.0,
+                size=1,
+            ),
+        ]
+
+        mock_strategy = MagicMock()
+        session = MagicMock()
+        session.__enter__.return_value = session
+        session.__exit__.return_value = False
+        session.collect_many.return_value = {
+            seed_a: CoverageRunResult(
+                coverage_data={"main": {"src": str(src_file), "lines": [1, 2]}}
+            ),
+            seed_b: CoverageRunResult(
+                coverage_data={"main": {"src": str(src_file), "lines": [1, 2, 4]}}
+            ),
+        }
+        mock_strategy.open_session.return_value = session
+        mock_create_strategy.return_value = mock_strategy
+
+        eng = CoverageEngine()
+
+        with (
+            patch.object(
+                eng,
+                "_build_coverage_variant",
+                return_value="test-benchmark-cov-delta-coverage",
+            ),
+            patch.object(eng.infra, "has_harness", return_value=True),
+            patch.object(eng, "_maybe_open_session", return_value=session),
+        ):
+            processed_inputs, summary = eng.collect_timed_line_coverage(
+                benchmark_path=mock_benchmark,
+                timed_inputs=timed_inputs,
+                harness_filter="fuzz_target",
+            )
+
+        session.collect_many.assert_called_once()
+        session.collect_batch_totals.assert_not_called()
+        assert [item.lines_covered for item in processed_inputs] == [2, 3]
+        assert summary.lines_covered == 3
+        assert summary.lines_total == 0
+        assert summary.lines_percent == 0.0
+
     def test_build_variant_success(self, mock_benchmark: Path, engine: CoverageEngine):
-        """Test successful coverage variant build."""
+        """Test successful Atlantis-backed coverage variant build."""
         adapter = engine._load_adapter(mock_benchmark)
+        assert adapter is not None
+        variant_name = "test-benchmark-cov-delta-coverage"
+        build_output_dir = engine.infra.get_build_output_path(variant_name)
+        control_root = build_output_dir.parent / f".{variant_name}-oss-crs"
+        atlantis_out = build_output_dir.parent / "atlantis-build"
 
-        with patch.object(engine.builder, "build_single") as mock_build:
-            mock_result = MagicMock()
-            mock_result.success = True
-            mock_result.variant_name = "test-benchmark-delta-coverage"
-            mock_build.return_value = mock_result
+        build = MagicMock(
+            build_id="build-123",
+            compose_file=control_root / "crs-compose.yaml",
+            control_root=control_root,
+            atlantis_build_output_dir=atlantis_out,
+        )
 
+        with (
+            patch(
+                "crsbench.evaluation.coverage.engine.build_atlantis_coverage_artifacts",
+                return_value=build,
+            ) as mock_build,
+            patch(
+                "crsbench.evaluation.coverage.engine.current_uniafl_checkout_fingerprint",
+                return_value="fingerprint-1",
+            ),
+            patch(
+                "crsbench.evaluation.coverage.engine.current_prepare_image_ids",
+                return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
+            ),
+            patch(
+                "crsbench.evaluation.coverage.engine.fix_docker_ownership"
+            ) as mock_fix_ownership,
+            patch.object(engine.infra, "write_build_metadata") as mock_write_meta,
+        ):
             result = engine._build_coverage_variant(adapter)
 
-        assert result == "test-benchmark-delta-coverage"
+        assert result == variant_name
+        mock_build.assert_called_once_with(
+            benchmark_path=mock_benchmark,
+            normalized_build_output_dir=build_output_dir,
+            control_root=control_root,
+        )
+        sentinel = json.loads((build_output_dir / UNIAFL_BUILD_SENTINEL).read_text())
+        assert sentinel["variant_name"] == variant_name
+        assert sentinel["build_id"] == "build-123"
+        assert sentinel["checkout_fingerprint"] == "fingerprint-1"
+        assert sentinel["prepare_image_ids"] == {
+            "multilang-given_fuzzer-crs:latest": "sha256:test"
+        }
+        mock_fix_ownership.assert_called_once_with(build_output_dir)
+        mock_write_meta.assert_called_once()
+
+    def test_build_variant_uses_default_atlantis_checkout(
+        self, mock_benchmark: Path, mock_oss_fuzz: Path
+    ):
+        eng = CoverageEngine(mock_oss_fuzz)
+        adapter = eng._load_adapter(mock_benchmark)
+        assert adapter is not None
+        variant_name = "test-benchmark-cov-delta-coverage"
+        build_output_dir = eng.infra.get_build_output_path(variant_name)
+        control_root = build_output_dir.parent / f".{variant_name}-oss-crs"
+
+        with (
+            patch(
+                "crsbench.evaluation.coverage.engine.build_atlantis_coverage_artifacts",
+                return_value=MagicMock(
+                    build_id="build-123",
+                    compose_file=Path("/tmp/compose.yaml"),
+                    control_root=control_root,
+                    atlantis_build_output_dir=Path("/tmp/out"),
+                ),
+            ) as mock_build,
+            patch(
+                "crsbench.evaluation.coverage.engine.current_uniafl_checkout_fingerprint",
+                return_value="fingerprint-1",
+            ),
+            patch(
+                "crsbench.evaluation.coverage.engine.current_prepare_image_ids",
+                return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
+            ),
+            patch("crsbench.evaluation.coverage.engine.fix_docker_ownership"),
+            patch.object(eng.infra, "write_build_metadata"),
+        ):
+            result = eng._build_coverage_variant(adapter)
+
+        assert result == variant_name
+        mock_build.assert_called_once_with(
+            benchmark_path=mock_benchmark,
+            normalized_build_output_dir=build_output_dir,
+            control_root=control_root,
+        )
+
+    def test_build_variant_uses_standard_coverage_variant_suffix(
+        self,
+        mock_benchmark: Path,
+        engine: CoverageEngine,
+    ):
+        """Coverage builds must keep the standard cov/mode/coverage suffix."""
+        adapter = engine._load_adapter(mock_benchmark)
+        assert adapter is not None
+
+        with (
+            patch(
+                "crsbench.evaluation.coverage.engine.build_atlantis_coverage_artifacts",
+                return_value=MagicMock(
+                    build_id="build-123",
+                    compose_file=Path("/tmp/compose.yaml"),
+                    control_root=Path("/tmp/control"),
+                    atlantis_build_output_dir=Path("/tmp/out"),
+                ),
+            ),
+            patch(
+                "crsbench.evaluation.coverage.engine.current_uniafl_checkout_fingerprint",
+                return_value="fingerprint-1",
+            ),
+            patch(
+                "crsbench.evaluation.coverage.engine.current_prepare_image_ids",
+                return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
+            ),
+            patch("crsbench.evaluation.coverage.engine.fix_docker_ownership"),
+            patch.object(engine.infra, "write_build_metadata"),
+        ):
+            result = engine._build_coverage_variant(adapter)
+
+        assert result == "test-benchmark-cov-delta-coverage"
 
     def test_build_variant_failure(self, mock_benchmark: Path, engine: CoverageEngine):
         """Test failed build returns None."""
         adapter = engine._load_adapter(mock_benchmark)
+        assert adapter is not None
 
-        with patch.object(engine.builder, "build_single") as mock_build:
-            mock_result = MagicMock()
-            mock_result.success = False
-            mock_build.return_value = mock_result
-
+        with (
+            patch(
+                "crsbench.evaluation.coverage.engine.build_atlantis_coverage_artifacts",
+                side_effect=RuntimeError("boom"),
+            ),
+            patch(
+                "crsbench.evaluation.coverage.engine.current_uniafl_checkout_fingerprint",
+                return_value="fingerprint-1",
+            ),
+            patch(
+                "crsbench.evaluation.coverage.engine.current_prepare_image_ids",
+                return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
+            ),
+        ):
             result = engine._build_coverage_variant(adapter)
 
         assert result is None
+
+    def test_build_variant_reuses_existing_jvm_build(
+        self, mock_benchmark: Path, engine: CoverageEngine
+    ):
+        """Reuse an existing UniAFL JVM build instead of recompiling."""
+        adapter = engine._load_adapter(mock_benchmark)
+        adapter.lang = "jvm"
+        variant_name = "test-benchmark-cov-delta-coverage"
+        build_output_dir = engine.infra.get_build_output_path(variant_name)
+        build_output_dir.mkdir(parents=True, exist_ok=True)
+        (build_output_dir / ".crsbench-repo").mkdir()
+        (build_output_dir / UNIAFL_BUILD_SENTINEL).write_text(
+            json.dumps(
+                {
+                    "checkout_fingerprint": "fingerprint-1",
+                    "prepare_image_ids": {
+                        "multilang-given_fuzzer-crs:latest": "sha256:test"
+                    },
+                }
+            )
+        )
+        (build_output_dir / "fuzz_target").write_text("wrapper")
+
+        with (
+            patch(
+                "crsbench.evaluation.coverage.engine.build_atlantis_coverage_artifacts"
+            ) as mock_build,
+            patch(
+                "crsbench.evaluation.coverage.engine.current_uniafl_checkout_fingerprint",
+                return_value="fingerprint-1",
+            ),
+            patch(
+                "crsbench.evaluation.coverage.engine.current_prepare_image_ids",
+                return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
+            ),
+        ):
+            result = engine._build_coverage_variant(adapter)
+
+        assert result == variant_name
+        mock_build.assert_not_called()
+
+    def test_build_variant_reuses_existing_native_build(
+        self, mock_benchmark: Path, engine: CoverageEngine
+    ):
+        """Reuse an existing UniAFL native build only when coverage-out exists."""
+        adapter = engine._load_adapter(mock_benchmark)
+        variant_name = "test-benchmark-cov-delta-coverage"
+        build_output_dir = engine.infra.get_build_output_path(variant_name)
+        build_output_dir.mkdir(parents=True, exist_ok=True)
+        (build_output_dir / ".crsbench-repo").mkdir()
+        (build_output_dir / UNIAFL_BUILD_SENTINEL).write_text(
+            json.dumps(
+                {
+                    "checkout_fingerprint": "fingerprint-1",
+                    "prepare_image_ids": {
+                        "multilang-given_fuzzer-crs:latest": "sha256:test"
+                    },
+                }
+            )
+        )
+        (build_output_dir / "coverage-out").mkdir()
+
+        with (
+            patch(
+                "crsbench.evaluation.coverage.engine.build_atlantis_coverage_artifacts"
+            ) as mock_build,
+            patch(
+                "crsbench.evaluation.coverage.engine.current_uniafl_checkout_fingerprint",
+                return_value="fingerprint-1",
+            ),
+            patch(
+                "crsbench.evaluation.coverage.engine.current_prepare_image_ids",
+                return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
+            ),
+        ):
+            result = engine._build_coverage_variant(adapter)
+
+        assert result == variant_name
+        mock_build.assert_not_called()
+
+    def test_build_variant_rebuilds_when_checkout_fingerprint_changes(
+        self, mock_benchmark: Path, engine: CoverageEngine
+    ):
+        adapter = engine._load_adapter(mock_benchmark)
+        assert adapter is not None
+        variant_name = "test-benchmark-cov-delta-coverage"
+        build_output_dir = engine.infra.get_build_output_path(variant_name)
+        build_output_dir.mkdir(parents=True, exist_ok=True)
+        (build_output_dir / ".crsbench-repo").mkdir()
+        (build_output_dir / UNIAFL_BUILD_SENTINEL).write_text(
+            json.dumps(
+                {
+                    "checkout_fingerprint": "old-fingerprint",
+                    "prepare_image_ids": {
+                        "multilang-given_fuzzer-crs:latest": "sha256:test"
+                    },
+                }
+            )
+        )
+        (build_output_dir / "coverage-out").mkdir()
+
+        with (
+            patch(
+                "crsbench.evaluation.coverage.engine.current_uniafl_checkout_fingerprint",
+                return_value="new-fingerprint",
+            ),
+            patch(
+                "crsbench.evaluation.coverage.engine.current_prepare_image_ids",
+                return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
+            ),
+            patch(
+                "crsbench.evaluation.coverage.engine.build_atlantis_coverage_artifacts",
+                return_value=MagicMock(
+                    build_id="build-123",
+                    compose_file=Path("/tmp/compose.yaml"),
+                    control_root=Path("/tmp/control"),
+                    atlantis_build_output_dir=Path("/tmp/out"),
+                ),
+            ) as mock_build,
+            patch("crsbench.evaluation.coverage.engine.fix_docker_ownership"),
+            patch.object(engine.infra, "write_build_metadata"),
+        ):
+            result = engine._build_coverage_variant(adapter)
+
+        assert result == variant_name
+        mock_build.assert_called_once()
+
+    def test_build_variant_rebuilds_when_prepare_image_ids_change(
+        self, mock_benchmark: Path, engine: CoverageEngine
+    ):
+        adapter = engine._load_adapter(mock_benchmark)
+        assert adapter is not None
+        variant_name = "test-benchmark-cov-delta-coverage"
+        build_output_dir = engine.infra.get_build_output_path(variant_name)
+        build_output_dir.mkdir(parents=True, exist_ok=True)
+        (build_output_dir / ".crsbench-repo").mkdir()
+        (build_output_dir / UNIAFL_BUILD_SENTINEL).write_text(
+            json.dumps(
+                {
+                    "checkout_fingerprint": "fingerprint-1",
+                    "prepare_image_ids": {
+                        "multilang-given_fuzzer-crs:latest": "sha256:old"
+                    },
+                }
+            )
+        )
+        (build_output_dir / "coverage-out").mkdir()
+
+        with (
+            patch(
+                "crsbench.evaluation.coverage.engine.current_uniafl_checkout_fingerprint",
+                return_value="fingerprint-1",
+            ),
+            patch(
+                "crsbench.evaluation.coverage.engine.current_prepare_image_ids",
+                return_value={"multilang-given_fuzzer-crs:latest": "sha256:new"},
+            ),
+            patch(
+                "crsbench.evaluation.coverage.engine.build_atlantis_coverage_artifacts",
+                return_value=MagicMock(
+                    build_id="build-123",
+                    compose_file=Path("/tmp/compose.yaml"),
+                    control_root=Path("/tmp/control"),
+                    atlantis_build_output_dir=Path("/tmp/out"),
+                ),
+            ) as mock_build,
+            patch("crsbench.evaluation.coverage.engine.fix_docker_ownership"),
+            patch.object(engine.infra, "write_build_metadata"),
+        ):
+            result = engine._build_coverage_variant(adapter)
+
+        assert result == variant_name
+        mock_build.assert_called_once()
+
+    def test_build_variant_does_not_reuse_partial_jvm_build_without_sentinel(
+        self, mock_benchmark: Path, engine: CoverageEngine
+    ):
+        adapter = engine._load_adapter(mock_benchmark)
+        adapter.lang = "jvm"
+        variant_name = "test-benchmark-cov-delta-coverage"
+        build_output_dir = engine.infra.get_build_output_path(variant_name)
+        build_output_dir.mkdir(parents=True, exist_ok=True)
+        (build_output_dir / ".crsbench-repo").mkdir()
+        (build_output_dir / "fuzz_target").write_text("wrapper")
+
+        with (
+            patch(
+                "crsbench.evaluation.coverage.engine.build_atlantis_coverage_artifacts",
+                return_value=MagicMock(
+                    build_id="build-123",
+                    compose_file=Path("/tmp/compose.yaml"),
+                    control_root=Path("/tmp/control"),
+                    atlantis_build_output_dir=Path("/tmp/out"),
+                ),
+            ) as mock_build,
+            patch(
+                "crsbench.evaluation.coverage.engine.current_prepare_image_ids",
+                return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
+            ),
+            patch("crsbench.evaluation.coverage.engine.fix_docker_ownership"),
+            patch.object(engine.infra, "write_build_metadata"),
+        ):
+            result = engine._build_coverage_variant(adapter)
+
+        assert result == variant_name
+        mock_build.assert_called_once()
+        assert (build_output_dir / UNIAFL_BUILD_SENTINEL).exists()
+
+    def test_timed_totals_reuse_existing_session(
+        self, mock_oss_fuzz: Path, mock_benchmark: Path, mock_corpus: Path
+    ):
+        eng = CoverageEngine(mock_oss_fuzz)
+        adapter = eng._load_adapter(mock_benchmark)
+        strategy = MagicMock()
+        session = MagicMock()
+        session.collect_many.return_value = {
+            path: CoverageRunResult(
+                coverage_data={"f": {"src": "a.c", "lines": [1]}},
+                raw_cov_path=Path("/tmp/f.cov"),
+            )
+            for path in sorted(mock_corpus.iterdir())
+        }
+        src_file = mock_benchmark / "a.c"
+        src_file.write_text("1\n2\n3\n4\n")
+        session.collect_many.return_value = {
+            path: CoverageRunResult(
+                coverage_data={"f": {"src": str(src_file), "lines": [1]}},
+                raw_cov_path=Path("/tmp/f.cov"),
+            )
+            for path in sorted(mock_corpus.iterdir())
+        }
+
+        class SessionContext:
+            def __enter__(self):
+                return session
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        timed_inputs = [
+            TimedCoverageInput(
+                path=path,
+                relative_time=float(i),
+                original_name=path.name,
+                input_hash=f"h{i}",
+                content_hash=f"c{i}",
+                size=path.stat().st_size,
+            )
+            for i, path in enumerate(sorted(mock_corpus.iterdir()))
+        ]
+
+        with (
+            patch.object(
+                eng,
+                "_build_coverage_variant",
+                return_value="test-benchmark-cov-delta-coverage",
+            ),
+            patch.object(eng.infra, "has_harness", return_value=True),
+            patch.object(eng, "_get_or_create_strategy", return_value=strategy),
+            patch.object(eng, "_maybe_open_session", return_value=SessionContext()),
+        ):
+            _, summary = eng.collect_timed_line_coverage(mock_benchmark, timed_inputs)
+
+        assert summary.lines_covered == 1
+        assert summary.lines_total == 0
+        assert summary.lines_percent == 0.0
+        session.collect_batch_totals.assert_not_called()
+
+    def test_build_variant_uses_atlantis_build_pipeline(
+        self,
+        mock_benchmark: Path,
+        engine: CoverageEngine,
+    ):
+        """Coverage variant build should use the Atlantis oss-crs pipeline."""
+        adapter = engine._load_adapter(mock_benchmark)
+        assert adapter is not None
+        build_out = engine.infra.get_build_output_path(
+            "test-benchmark-cov-delta-coverage"
+        )
+        control_root = build_out.parent / ".test-benchmark-cov-delta-coverage-oss-crs"
+        build = MagicMock(
+            build_id="build-123",
+            compose_file=control_root / "crs-compose.yaml",
+            control_root=control_root,
+            atlantis_build_output_dir=control_root / "out",
+        )
+
+        with (
+            patch(
+                "crsbench.evaluation.coverage.engine.build_atlantis_coverage_artifacts",
+                return_value=build,
+            ) as mock_build,
+            patch(
+                "crsbench.evaluation.coverage.engine.current_uniafl_checkout_fingerprint",
+                return_value="fingerprint-1",
+            ),
+            patch(
+                "crsbench.evaluation.coverage.engine.current_prepare_image_ids",
+                return_value={"multilang-given_fuzzer-crs:latest": "sha256:test"},
+            ),
+            patch(
+                "crsbench.evaluation.coverage.engine.fix_docker_ownership"
+            ) as mock_fix_ownership,
+            patch.object(engine.infra, "write_build_metadata") as mock_write_meta,
+        ):
+            result = engine._build_coverage_variant(adapter)
+
+        assert result == "test-benchmark-cov-delta-coverage"
+        mock_build.assert_called_once_with(
+            benchmark_path=mock_benchmark,
+            normalized_build_output_dir=build_out,
+            control_root=control_root,
+        )
+        mock_fix_ownership.assert_called_once_with(build_out)
+        mock_write_meta.assert_called_once()
+
+    def test_maybe_open_session_parallelizes_runtime_worker_startup(self) -> None:
+        engine = CoverageEngine(runtime_workers=3, runtime_cpus=[2, 4, 6])
+
+        class _Strategy:
+            def open_session(self, harness_name: str, **kwargs):
+                del harness_name, kwargs
+
+        class _Session:
+            def __init__(self, label: str) -> None:
+                self.label = label
+                self.closed = False
+
+            def close(self) -> None:
+                self.closed = True
+
+        current = 0
+        max_current = 0
+        lock = threading.Lock()
+
+        def fake_open(_strategy, _harness_name, **kwargs):
+            nonlocal current, max_current
+            with lock:
+                current += 1
+                max_current = max(max_current, current)
+            time.sleep(0.05)
+            with lock:
+                current -= 1
+            return _Session(kwargs["session_label"])
+
+        with patch.object(engine, "_open_strategy_session", side_effect=fake_open):
+            sharded = engine._maybe_open_session(_Strategy(), "fuzz_target")
+
+        try:
+            assert max_current >= 2
+            assert [session.label for session in sharded.sessions] == [
+                "worker-0",
+                "worker-1",
+                "worker-2",
+            ]
+        finally:
+            sharded.close()
+
+    def test_maybe_open_session_closes_parallel_sessions_on_partial_failure(self):
+        engine = CoverageEngine(runtime_workers=2, runtime_cpus=[1, 3])
+
+        class _Strategy:
+            def open_session(self, harness_name: str, **kwargs):
+                del harness_name, kwargs
+
+        class _Session:
+            def __init__(self) -> None:
+                self.closed = False
+
+            def close(self) -> None:
+                self.closed = True
+
+        successful_session = _Session()
+
+        def fake_open(_strategy, _harness_name, **kwargs):
+            label = kwargs["session_label"]
+            if label == "worker-0":
+                time.sleep(0.05)
+                return successful_session
+            time.sleep(0.01)
+            raise RuntimeError("boom")
+
+        with patch.object(engine, "_open_strategy_session", side_effect=fake_open):
+            with pytest.raises(RuntimeError, match="boom"):
+                engine._maybe_open_session(_Strategy(), "fuzz_target")
+
+        assert successful_session.closed is True
+
+    def test_collect_timed_line_coverage_fails_if_all_inputs_fail(
+        self, mock_benchmark: Path, engine: CoverageEngine
+    ):
+        """Timed coverage should fail instead of reporting an empty success."""
+        timed_inputs = [
+            TimedCoverageInput(
+                content_hash="abc",
+                original_name="a.bin",
+                path=Path("/tmp/a.bin"),
+                relative_time=1.0,
+                size=1,
+            )
+        ]
+
+        adapter = MagicMock()
+        adapter.get_harness_names.return_value = ["fuzz_target"]
+        session = MagicMock()
+        session.__enter__.return_value = session
+        session.__exit__.return_value = False
+        session.collect_many.return_value = {}
+        session.collect_single.return_value = CoverageRunResult(coverage_data={})
+        session.collect_batch_totals.return_value = {}
+        strategy = MagicMock()
+        strategy.open_session.return_value = session
+
+        with (
+            patch.object(engine, "_load_adapter", return_value=adapter),
+            patch.object(
+                engine,
+                "_build_coverage_variant",
+                return_value="test-benchmark-delta-coverage",
+            ),
+            patch.object(engine.infra, "has_harness", return_value=True),
+            patch.object(engine, "_get_or_create_strategy", return_value=strategy),
+            patch.object(engine, "_maybe_open_session", return_value=session),
+        ):
+            with pytest.raises(CoverageStrategyError, match="failed for all inputs"):
+                engine.collect_timed_line_coverage(
+                    mock_benchmark,
+                    timed_inputs,
+                    harness_filter="fuzz_target",
+                )
+
+    def test_collect_timed_line_coverage_records_raw_artifact_metadata(
+        self, mock_benchmark: Path, engine: CoverageEngine, tmp_path: Path
+    ):
+        seed_path = tmp_path / "a.bin"
+        seed_path.write_bytes(b"a")
+        timed_input = TimedCoverageInput(
+            content_hash="abc",
+            original_name="a.bin",
+            path=seed_path,
+            relative_time=1.0,
+            size=1,
+        )
+
+        adapter = MagicMock()
+        adapter.get_harness_names.return_value = ["fuzz_target"]
+
+        class _Session:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def collect_single(self, corpus_file: Path):
+                return CoverageRunResult(
+                    coverage_data={"main": {"src": "/src/a.c", "lines": [1, 2]}},
+                    raw_cov_path=tmp_path / "raw" / "abc.cov",
+                    crashed=True,
+                    crash_log_path=tmp_path / "raw" / "abc.crash.log",
+                )
+
+            def collect_batch_totals(self, corpus_dir: Path):
+                return {
+                    "lines_covered": 2,
+                    "lines_total": 10,
+                    "lines_percent": 20.0,
+                    "functions_covered": 1,
+                    "functions_total": 5,
+                }
+
+        class _Strategy:
+            def open_session(self, harness_name: str, *, output_dir=None):
+                return _Session()
+
+        with (
+            patch.object(engine, "_load_adapter", return_value=adapter),
+            patch.object(
+                engine,
+                "_build_coverage_variant",
+                return_value="test-benchmark-delta-coverage",
+            ),
+            patch.object(engine.infra, "has_harness", return_value=True),
+            patch.object(engine, "_get_or_create_strategy", return_value=_Strategy()),
+        ):
+            seeds, summary = engine.collect_timed_line_coverage(
+                mock_benchmark,
+                [timed_input],
+                harness_filter="fuzz_target",
+                output_dir=tmp_path / "coverage",
+            )
+
+        assert summary.lines_covered == 2
+        assert len(seeds) == 1
+        assert seeds[0].lines_covered == 2
+        assert seeds[0].crashed is True
+        assert seeds[0].raw_cov_path == tmp_path / "raw" / "abc.cov"
+        assert seeds[0].crash_log_path == tmp_path / "raw" / "abc.crash.log"
+
+    def test_collect_timed_line_coverage_retains_crash_only_inputs(
+        self, mock_benchmark: Path, engine: CoverageEngine, tmp_path: Path
+    ):
+        seed_path = tmp_path / "crash.bin"
+        seed_path.write_bytes(b"boom")
+        timed_input = TimedCoverageInput(
+            content_hash="crash",
+            original_name="crash.bin",
+            path=seed_path,
+            relative_time=2.0,
+            size=4,
+        )
+
+        adapter = MagicMock()
+        adapter.get_harness_names.return_value = ["fuzz_target"]
+
+        class _Session:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def collect_single(self, corpus_file: Path):
+                del corpus_file
+                return CoverageRunResult(
+                    coverage_data={},
+                    raw_cov_path=tmp_path / "raw" / "crash.cov",
+                    crashed=True,
+                    crash_log_path=tmp_path / "raw" / "crash.crash.log",
+                )
+
+            def collect_batch_totals(self, corpus_dir: Path):
+                del corpus_dir
+                return {
+                    "lines_covered": 0,
+                    "lines_total": 10,
+                    "lines_percent": 0.0,
+                    "functions_covered": 0,
+                    "functions_total": 5,
+                }
+
+        class _Strategy:
+            def open_session(self, harness_name: str, *, output_dir=None):
+                del harness_name, output_dir
+                return _Session()
+
+        with (
+            patch.object(engine, "_load_adapter", return_value=adapter),
+            patch.object(
+                engine,
+                "_build_coverage_variant",
+                return_value="test-benchmark-delta-coverage",
+            ),
+            patch.object(engine.infra, "has_harness", return_value=True),
+            patch.object(engine, "_get_or_create_strategy", return_value=_Strategy()),
+        ):
+            seeds, summary = engine.collect_timed_line_coverage(
+                mock_benchmark,
+                [timed_input],
+                harness_filter="fuzz_target",
+                output_dir=tmp_path / "coverage",
+            )
+
+        assert summary.lines_covered == 0
+        assert len(seeds) == 1
+        assert seeds[0].lines_covered == 0
+        assert seeds[0].crashed is True
+        assert seeds[0].raw_cov_path == tmp_path / "raw" / "crash.cov"
+        assert seeds[0].crash_log_path == tmp_path / "raw" / "crash.crash.log"
+
+    def test_jacoco_strategy_uses_uniafl_session(
+        self, mock_oss_fuzz: Path, tmp_path: Path
+    ):
+        project_name = "proj-cov-delta-coverage"
+        build_output_dir = mock_oss_fuzz / "build" / "out" / project_name
+        build_output_dir.mkdir(parents=True)
+        (build_output_dir / "ExpanderFuzzer").write_text("#!/bin/sh\n")
+        strategy = JaCoCoLineStrategy(mock_oss_fuzz, project_name, work_dir=tmp_path)
+
+        with patch(
+            "crsbench.evaluation.coverage.strategy.UniAFLCoverageSession"
+        ) as mock_session_cls:
+            session = strategy.open_session(
+                "ExpanderFuzzer", output_dir=tmp_path / "out"
+            )
+
+        assert session is mock_session_cls.return_value
