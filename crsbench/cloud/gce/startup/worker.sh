@@ -102,6 +102,9 @@ clone_repo() {
   local clone_dir="$2"
   if [[ "${repo_url}" == file://* ]]; then
     local repo_path="${repo_url#file://}"
+    if [[ "${repo_path}" == localhost/* ]]; then
+      repo_path="/${repo_path#localhost/}"
+    fi
     if [[ -d "${repo_path}" ]]; then
       git config --global --add safe.directory "${repo_path}" || true
       if [[ -d "${repo_path}/.git" ]]; then

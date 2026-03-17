@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-start-docker.sh >/var/log/dockerd.log 2>&1
+start-docker.sh >/var/log/dockerd.log 2>&1 &
 
 tries=0
 until docker info >/dev/null 2>&1; do
