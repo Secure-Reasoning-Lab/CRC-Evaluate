@@ -58,9 +58,9 @@ Override knobs:
 
 - `CRSBENCH_LOCAL_REHEARSAL_EXPERIMENT_CONFIG`
 - `CRSBENCH_LOCAL_REHEARSAL_GIT_REF`
-  - defaults to the current local `HEAD`; set it explicitly if `git rev-parse
-    HEAD` is unavailable for the mounted checkout or you want to rehearse a
-    different ref that exists in that checkout
+  - defaults to the current local `HEAD`; set it explicitly only to pin a
+    different ref that already exists in the mounted checkout. The rehearsal
+    still requires that checkout to be a usable Git clone.
 - `CRSBENCH_LOCAL_REHEARSAL_STATE_DIR`
 
 ## Startup Script Overrides Used By The Harness
