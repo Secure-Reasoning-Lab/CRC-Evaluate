@@ -339,9 +339,7 @@ class TestWorkerStdinDetachment:
             patch("crsbench.distributed.worker.os.open", return_value=42) as mock_open,
             patch("crsbench.distributed.worker.os.dup2") as mock_dup2,
             patch("crsbench.distributed.worker.os.close") as mock_close,
-            patch(
-                "crsbench.distributed.worker.multiprocessing.Process"
-            ) as mock_process,
+            patch("crsbench.distributed.worker._mp_ctx.Process") as mock_process,
         ):
             mock_proc = MagicMock()
             mock_proc.exitcode = 0

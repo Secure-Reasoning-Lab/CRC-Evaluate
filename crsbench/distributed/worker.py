@@ -11,6 +11,7 @@ A file-based lock ensures only one worker process runs at a time.
 
 import fcntl
 import multiprocessing
+import multiprocessing.context
 import os
 import socket
 import sys
@@ -40,6 +41,10 @@ DEFAULT_LOCK_DIR = "/tmp"
 LOCK_DIR = Path(os.environ.get("CRSBENCH_WORKER_LOCK_DIR", DEFAULT_LOCK_DIR))
 
 logger = get_logger(__name__)
+
+# Use 'fork' context so child processes inherit module-level state.
+# Python 3.14 defaults to 'forkserver' which does NOT inherit these.
+_mp_ctx: multiprocessing.context.ForkContext = multiprocessing.get_context("fork")  # type: ignore[assignment]
 
 
 def _terminate_process_tree(pid: int, *, grace_seconds: int = 10) -> None:
@@ -423,7 +428,7 @@ def _spawn_workers(
             name = f"{worker_name}-{i}"
 
             # Create worker process
-            p = multiprocessing.Process(
+            p = _mp_ctx.Process(
                 target=_run_single_worker,
                 args=(redis_host, experiment_name, name),
                 kwargs={
