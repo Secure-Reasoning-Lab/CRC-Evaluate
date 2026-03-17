@@ -736,11 +736,25 @@ run_smoke_suite_config() {
     local base_config workspace config_path exp_dir report_dir
     local worker_log evaluator_log run_log post_verify_log worker_pid evaluator_pid rc cpuset skip_cpuset skip_verification
 
-    # Ensure worker/evaluator processes are always killed on exit (including
-    # fail/error paths and when running as a background subshell).
+    # Ensure worker/evaluator process trees are always killed on exit
+    # (including fail/error paths and when running as a background subshell).
+    # crsbench worker with jobs>1 spawns child RQ workers, so we must kill
+    # the entire process tree, not just the parent.
+    _smoke_kill_tree() {
+        local pid="$1"
+        [ -n "$pid" ] || return 0
+        kill -0 "$pid" 2>/dev/null || return 0
+        # Kill all descendants first, then the parent
+        pkill -TERM -P "$pid" 2>/dev/null || true
+        kill -TERM "$pid" 2>/dev/null || true
+        sleep 2
+        pkill -KILL -P "$pid" 2>/dev/null || true
+        kill -KILL "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+    }
     _smoke_suite_cleanup() {
-        [ -n "${worker_pid:-}" ] && kill "$worker_pid" 2>/dev/null && wait "$worker_pid" 2>/dev/null
-        [ -n "${evaluator_pid:-}" ] && kill "$evaluator_pid" 2>/dev/null && wait "$evaluator_pid" 2>/dev/null
+        _smoke_kill_tree "${worker_pid:-}"
+        _smoke_kill_tree "${evaluator_pid:-}"
         cleanup_smoke_bg_logging
     }
     trap _smoke_suite_cleanup EXIT
