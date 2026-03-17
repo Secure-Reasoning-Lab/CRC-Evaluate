@@ -453,6 +453,7 @@ def _make_provider_neutral_run_config(tmp_path: Path) -> ExperimentConfig:
                                 "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
                                 "service_account_email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com",
                                 "owner_label": "team-crs",
+                                "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
                             },
                             "worker-n2d": {
                                 "machine_type": "n2d-standard-16",
@@ -460,6 +461,7 @@ def _make_provider_neutral_run_config(tmp_path: Path) -> ExperimentConfig:
                                 "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
                                 "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
                                 "owner_label": "team-crs",
+                                "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
                             },
                         },
                     }
@@ -715,6 +717,7 @@ def test_cloud_fleet_bringup_runs_before_enqueue(tmp_path: Path) -> None:
             image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
             service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
             owner_label="team-crs",
+            crsbench_install_spec="git+ssh://git@github.com/sslab-gatech/CRSBench.git",
         )
     )
 
@@ -794,6 +797,7 @@ def test_legacy_cloud_workers_resolve_secret_refs_before_bringup(
             image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
             service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
             owner_label="team-crs",
+            crsbench_install_spec="git+ssh://git@github.com/sslab-gatech/CRSBench.git",
             github_deploy_key_file="file:.crsbench-keys/crsbench-deploy",
             hf_token="os.environ/HF_TOKEN",
         )
@@ -1134,6 +1138,7 @@ def test_cloud_fleet_failure_aborts_before_enqueue(tmp_path: Path) -> None:
             image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
             service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
             owner_label="team-crs",
+            crsbench_install_spec="git+ssh://git@github.com/sslab-gatech/CRSBench.git",
         )
     )
 
@@ -1198,6 +1203,7 @@ def test_cloud_fleet_bringup_is_skipped_when_no_trials_remain(tmp_path: Path) ->
             image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
             service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
             owner_label="team-crs",
+            crsbench_install_spec="git+ssh://git@github.com/sslab-gatech/CRSBench.git",
         )
     )
 
@@ -1260,6 +1266,7 @@ def test_cloud_fleet_bringup_is_skipped_for_preprovisioned_remote_orchestrator(
             image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
             service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
             owner_label="team-crs",
+            crsbench_install_spec="git+ssh://git@github.com/sslab-gatech/CRSBench.git",
         )
     )
 

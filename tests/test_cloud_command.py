@@ -187,6 +187,7 @@ def _make_launch_config():
             image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
             service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
             owner_label="team-crs",
+            crsbench_install_spec="git+ssh://git@github.com/sslab-gatech/CRSBench.git",
         ),
         orchestrator=GceOrchestratorConfig(
             project="test-project",
@@ -197,6 +198,7 @@ def _make_launch_config():
             service_account_email="crsbench-orchestrator@test-project.iam.gserviceaccount.com",
             owner_label="team-crs",
             instance_name_prefix="gce-orchestrator",
+            crsbench_install_spec="git+ssh://git@github.com/sslab-gatech/CRSBench.git",
         ),
     )
     return config
@@ -337,6 +339,7 @@ def _make_provider_neutral_experiment_config() -> ExperimentConfig:
                                 "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
                                 "service_account_email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com",
                                 "owner_label": "team-crs",
+                                "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
                             },
                             "worker-n2d": {
                                 "machine_type": "n2d-standard-16",
@@ -344,6 +347,7 @@ def _make_provider_neutral_experiment_config() -> ExperimentConfig:
                                 "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
                                 "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
                                 "owner_label": "team-crs",
+                                "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
                             },
                         },
                     }
@@ -484,6 +488,20 @@ def test_prepare_gce_launch_inputs_rejects_missing_secret_before_provisioning(
 
     with pytest.raises(CloudSecretReferenceError, match="HF_TOKEN"):
         prepare_gce_launch_inputs(plan=launch_plan, cwd=tmp_path, env={})
+
+
+def test_prepare_gce_launch_inputs_rejects_non_git_install_spec_for_checkout_mode():
+    from crsbench.cloud.gce.launch_preflight import prepare_gce_launch_inputs
+    from crsbench.cloud.models import build_cloud_launch_plan
+
+    config = _make_provider_neutral_experiment_config()
+    config.cloud.providers.gce.instance_profiles[
+        "worker-n2d"
+    ].crsbench_install_spec = "crsbench==0.1.0"
+    launch_plan = build_cloud_launch_plan(config)
+
+    with pytest.raises(ValueError, match="git\\+"):
+        prepare_gce_launch_inputs(plan=launch_plan, cwd=Path.cwd(), env={})
 
 
 def test_prepare_gce_launch_inputs_resolves_legacy_gce_secret_refs(

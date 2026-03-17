@@ -30,6 +30,9 @@ those instance profiles from `cloud.orchestrator` and `cloud.workers.placements`
 
 ```yaml
 cloud:
+  bootstrap:
+    prepare_mode: full
+    download_benchmarks: auto
   providers:
     gce:
       project: my-gcp-project
@@ -86,6 +89,18 @@ Instance profiles carry the per-VM details such as `machine_type`,
 `crsbench_install_spec`, `crsbench_git_ref`, `github_deploy_key_file`, and
 `hf_token`.
 
+### Bootstrap Policy
+
+`cloud.bootstrap` controls the VM bootstrap steps that run before a worker or
+remote orchestrator is counted as ready:
+
+- `prepare_mode: full | skip_base_images`
+- `download_benchmarks: auto | always | never`
+
+Cloud VMs always run `crsbench prepare`. `download_benchmarks: auto` skips the
+VM-side download only when `benchmark_suite: sanity`; other suites download
+before the worker joins Redis.
+
 ### Using Instance Templates
 
 Instead of specifying `image` + `machine_type` + `boot_disk_size_gb`, you can reference a pre-configured instance template:
@@ -128,6 +143,11 @@ Cloud secret-bearing fields accept three forms at launch time:
 
 `file:` paths resolve relative to the operator command's current working
 directory when they are not absolute.
+
+Cloud orchestration requires `crsbench_install_spec` to use a `git+...`
+checkout source. The VM bootstrap clones CRSBench into `/opt/crsbench`,
+changes into that checkout, runs `crsbench prepare`, optionally downloads
+benchmarks, and only then starts the orchestrator or worker runtime.
 
 ### Generate a deploy key
 
@@ -227,7 +247,7 @@ This path:
 2. Provisions one orchestrator VM
 3. Waits for the orchestrator VM to have an internal address
 4. Provisions workers across all `cloud.workers.placements`, passing the orchestrator Redis host/password
-5. Lets the remote orchestrator VM start Valkey, rewrite the experiment config to use local Redis, wait for the pre-provisioned workers to report ready, and run `crsbench run`
+5. Lets the remote orchestrator VM clone CRSBench, run `crsbench prepare`, optionally download benchmarks, start Valkey, rewrite the experiment config to use local Redis, wait for the pre-provisioned workers to report ready, and run `crsbench run`
 
 `cloud launch` persists local launch state next to the config file under
 `.crsbench-cloud/<experiment>.json`. Later `cloud status`, `cloud collect`, and
@@ -238,6 +258,11 @@ unavailable.
 
 Bootstrap failures are reported with per-instance evidence, so you can
 diagnose issues without SSH-ing into VMs.
+
+`ready` means the whole VM bootstrap finished, not just that GCE reported the
+instance as running. Size `readiness_timeout_sec` for package install, repo
+checkout, `crsbench prepare`, optional benchmark download, and Redis/queue
+listener startup.
 
 ## Monitoring
 

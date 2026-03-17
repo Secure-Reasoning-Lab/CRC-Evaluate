@@ -45,6 +45,7 @@ def prepare_gce_launch_inputs(
     if plan is not None:
         adapter = GceProviderAdapter()
         resolved_plan = _resolve_launch_plan(plan, cwd=base_cwd, env=env)
+        _validate_checkout_install_specs_for_plan(resolved_plan)
         resolved_worker_fleets = adapter.build_worker_fleets(resolved_plan)
         return GceLaunchPreflight(
             resolved_plan=resolved_plan,
@@ -62,6 +63,10 @@ def prepare_gce_launch_inputs(
     resolved_worker_fleets = [
         _resolve_worker_fleet_config(fleet, cwd=base_cwd, env=env) for fleet in fleets
     ]
+    _validate_checkout_install_specs_for_legacy_configs(
+        resolved_orchestrator=resolved_orchestrator,
+        resolved_worker_fleets=resolved_worker_fleets,
+    )
     return GceLaunchPreflight(
         resolved_orchestrator=resolved_orchestrator,
         resolved_worker_fleets=resolved_worker_fleets,
@@ -176,3 +181,50 @@ def _resolve_worker_fleet_config(
             ),
         }
     )
+
+
+def _validate_checkout_install_specs_for_plan(plan: CloudLaunchPlan) -> None:
+    _validate_checkout_install_spec(
+        plan.orchestrator.instance_profile.profile_config.get("crsbench_install_spec"),
+        field_path=(
+            "cloud.providers.gce.instance_profiles."
+            f"{plan.orchestrator.instance_profile.name}.crsbench_install_spec"
+        ),
+    )
+    for placement in plan.worker_placements:
+        _validate_checkout_install_spec(
+            placement.instance_profile.profile_config.get("crsbench_install_spec"),
+            field_path=(
+                "cloud.providers.gce.instance_profiles."
+                f"{placement.instance_profile.name}.crsbench_install_spec"
+            ),
+        )
+
+
+def _validate_checkout_install_specs_for_legacy_configs(
+    *,
+    resolved_orchestrator: GceOrchestratorConfig | None,
+    resolved_worker_fleets: Sequence[GceWorkerFleetConfig],
+) -> None:
+    if resolved_orchestrator is not None:
+        _validate_checkout_install_spec(
+            resolved_orchestrator.crsbench_install_spec,
+            field_path="cloud.orchestrator.crsbench_install_spec",
+        )
+    for fleet in resolved_worker_fleets:
+        _validate_checkout_install_spec(
+            fleet.crsbench_install_spec,
+            field_path=f"cloud.gce[{fleet.zone}].crsbench_install_spec",
+        )
+
+
+def _validate_checkout_install_spec(value: object, *, field_path: str) -> None:
+    if value is None or not str(value).strip():
+        raise ValueError(
+            f"{field_path} is required for cloud VM bootstrap and must use a git+ checkout install spec"
+        )
+    install_spec = str(value).strip()
+    if not install_spec.startswith("git+"):
+        raise ValueError(
+            f"{field_path} must use a git+ checkout install spec for cloud VM bootstrap, got {install_spec!r}"
+        )

@@ -27,6 +27,13 @@ validation. In the remote-orchestrator flow, the orchestrator VM rewrites its
 own config to `localhost:6379`, and workers are provisioned with the
 orchestrator VM's internal Redis address.
 
+This smoke config uses the checkout-first cloud bootstrap path:
+
+- cloud VMs clone CRSBench from `crsbench_install_spec`
+- every VM runs `crsbench prepare`
+- `download_benchmarks: auto` is set, so this `benchmark_suite: sanity` run
+  skips the VM-side benchmark download
+
 ## Preflight
 
 Before running the smoke test:
@@ -110,6 +117,10 @@ relative path.
 Optional: if your dataset access requires Hugging Face credentials, export a
 token before launch and point the config at `hf_token: os.environ/HF_TOKEN`.
 
+For the checked-in smoke config, `HF_TOKEN` is still required because launch
+preflight resolves that env secret before provisioning even though `sanity`
+auto-skips the VM-side download step.
+
 Expected result:
 
 - `echo "$HF_TOKEN"` prints a non-empty token when you intend to use gated
@@ -151,6 +162,8 @@ Expected result:
 
 - both workers eventually show as `ready`
 - zones should include `us-east5-b` and `us-east1-b`
+- `ready` only happens after checkout, `crsbench prepare`, the skipped-or-run
+  download step, and Redis queue-listener startup complete
 - job counts should move from queued/running to completed as the smoke run finishes
 
 Watch recovery events:

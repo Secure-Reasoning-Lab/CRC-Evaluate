@@ -382,33 +382,32 @@ def test_startup_script_supports_public_git_clone_specs():
 
     script = load_startup_script()
 
-    assert 'elif [[ "${INSTALL_SPEC}" == git+* ]]; then' in script
+    assert 'if [[ -z "${INSTALL_SPEC}" || "${INSTALL_SPEC}" != git+* ]]; then' in script
     assert 'REPO_URL="${INSTALL_SPEC#git+}"' in script
 
 
-def test_startup_script_uses_isolated_venv_for_non_git_install_specs():
-    """Worker bootstrap should install non-git specs in a venv, not system pip."""
+def test_startup_script_requires_git_checkout_install_spec():
+    """Worker bootstrap should reject non-git install specs for checkout-first runs."""
     from crsbench.cloud.gce.metadata import load_startup_script
 
     script = load_startup_script()
 
-    assert "python3-venv" in script
-    assert "python3 -m venv" in script
-    assert 'VENV_DIR="/opt/crsbench-install"' in script
-    assert 'python3 -m pip install --upgrade "${INSTALL_SPEC}"' not in script
+    assert 'if [[ -z "${INSTALL_SPEC}" || "${INSTALL_SPEC}" != git+* ]]; then' in script
+    assert "cloud worker bootstrap requires git+ install spec" in script
+    assert "python3 -m venv" not in script
 
 
-def test_startup_script_sets_venv_path_for_systemd():
-    """Startup script should write PATH with venv bin dir to systemd env file."""
+def test_startup_script_runs_shared_vm_bootstrap_from_repo_checkout():
+    """Worker bootstrap should run the shared prepare/download helper from the repo root."""
     from crsbench.cloud.gce.metadata import load_startup_script
 
     script = load_startup_script()
 
-    # The git+ssh path should set VENV_BIN pointing to the venv bin directory
-    assert 'VENV_BIN="/opt/crsbench/.venv/bin"' in script
-    # PATH env var should be written to the systemd env file using VENV_BIN
+    assert "bootstrap_inputs_from_payload" in script
+    assert "run_cloud_vm_bootstrap" in script
+    assert 'CLONE_DIR="/opt/crsbench"' in script
+    assert "WorkingDirectory=/opt/crsbench" in script
     assert 'write_env_var "PATH" "${VENV_BIN}' in script
-    # /root/.local/bin must be on PATH for uv-installed tools
     assert "/root/.local/bin" in script
 
 
@@ -450,7 +449,6 @@ def test_orchestrator_startup_script_consumes_config_payload_and_preprovisioned_
     assert "python3-pip" in script
     assert "python3-yaml" in script
     assert "git checkout" in script
-    assert "command -v crsbench" in script
     assert "except Exception:" in script
     assert "yaml.safe_load" in script
 
@@ -461,20 +459,31 @@ def test_orchestrator_startup_script_supports_public_git_clone_specs():
 
     script = load_orchestrator_startup_script()
 
-    assert 'elif [[ "${INSTALL_SPEC}" == git+* ]]; then' in script
+    assert 'if [[ -z "${INSTALL_SPEC}" || "${INSTALL_SPEC}" != git+* ]]; then' in script
     assert 'REPO_URL="${INSTALL_SPEC#git+}"' in script
 
 
-def test_orchestrator_startup_script_uses_isolated_venv_for_non_git_install_specs():
-    """Orchestrator bootstrap should install non-git specs in a venv, not system pip."""
+def test_orchestrator_startup_script_requires_git_checkout_install_spec():
+    """Orchestrator bootstrap should reject non-git install specs for checkout-first runs."""
     from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
 
     script = load_orchestrator_startup_script()
 
-    assert "python3-venv" in script
-    assert "python3 -m venv" in script
-    assert 'VENV_DIR="/opt/crsbench-install"' in script
-    assert 'python3 -m pip install --upgrade "${INSTALL_SPEC}"' not in script
+    assert 'if [[ -z "${INSTALL_SPEC}" || "${INSTALL_SPEC}" != git+* ]]; then' in script
+    assert "cloud orchestrator bootstrap requires git+ install spec" in script
+    assert "python3 -m venv" not in script
+
+
+def test_orchestrator_startup_script_runs_shared_vm_bootstrap_from_repo_checkout():
+    """Orchestrator bootstrap should prepare/download from the cloned checkout first."""
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+
+    assert "CloudVmBootstrapInputs.from_experiment_config" in script
+    assert "run_cloud_vm_bootstrap" in script
+    assert 'CLONE_DIR="/opt/crsbench"' in script
+    assert 'cd "${CLONE_DIR}"' in script
 
 
 def test_patch_orchestrator_config_adds_top_level_and_nested_runtime_redis_host(

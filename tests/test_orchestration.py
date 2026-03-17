@@ -835,6 +835,8 @@ class TestIntegrationWithSampleConfigs:
         config = load_experiment_config(config_path)
 
         assert config.cloud is not None
+        assert config.cloud.bootstrap.prepare_mode == "full"
+        assert config.cloud.bootstrap.download_benchmarks == "auto"
         assert config.cloud.providers is not None
         assert config.cloud.providers.gce is not None
         assert config.cloud.workers is not None

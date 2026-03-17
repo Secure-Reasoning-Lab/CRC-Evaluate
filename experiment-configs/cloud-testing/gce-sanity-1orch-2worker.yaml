@@ -33,6 +33,9 @@ crs_compose:
 evaluator:
   cores_per_job: 4
 cloud:
+  bootstrap:
+    prepare_mode: full
+    download_benchmarks: auto
   providers:
     gce:
       project: aixcc-426805

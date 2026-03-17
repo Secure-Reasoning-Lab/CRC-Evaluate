@@ -9,6 +9,7 @@ PAYLOAD_PATH="${STATE_DIR}/bootstrap.json"
 LAUNCHER_PATH="${STATE_DIR}/launch-worker.sh"
 ENV_PATH="/etc/default/crsbench-worker"
 SERVICE_PATH="/etc/systemd/system/crsbench-worker.service"
+CLONE_DIR="/opt/crsbench"
 
 metadata_get() {
   curl -fsS -H "${METADATA_HEADER}" "${ATTRIBUTE_METADATA_BASE}/$1"
@@ -141,39 +142,39 @@ if [[ -n "${HF_TOKEN}" ]]; then
   export HF_TOKEN
 fi
 
-# --- Install crsbench ---
-VENV_BIN=""
-if ! command -v crsbench >/dev/null 2>&1; then
-  if [[ -z "${INSTALL_SPEC}" ]]; then
-    echo "crsbench CLI not found and no crsbench-install-spec metadata provided" >&2
-    exit 1
-  elif [[ "${INSTALL_SPEC}" == git+* ]]; then
-    # Git repo clone path (public HTTPS or private SSH)
-    REPO_URL="${INSTALL_SPEC#git+}"
-    CLONE_DIR="/opt/crsbench"
-    git clone --no-single-branch "${REPO_URL}" "${CLONE_DIR}"
-    cd "${CLONE_DIR}"
-    git checkout "${GIT_REF:-main}"
-    git submodule update --init --recursive
-    # Install uv
-    if ! command -v uv >/dev/null 2>&1; then
-      curl -LsSf https://astral.sh/uv/install.sh | sh
-      export PATH="/root/.local/bin:${PATH}"
-    fi
-    uv sync --all-extras
-    uv pip install -e .
-    VENV_BIN="/opt/crsbench/.venv/bin"
-    export PATH="${VENV_BIN}:/root/.local/bin:${PATH}"
-    cd /
-  else
-    VENV_DIR="/opt/crsbench-install"
-    python3 -m venv "${VENV_DIR}"
-    "${VENV_DIR}/bin/pip" install --upgrade pip
-    "${VENV_DIR}/bin/pip" install --upgrade "${INSTALL_SPEC}"
-    VENV_BIN="${VENV_DIR}/bin"
-    export PATH="${VENV_BIN}:${PATH}"
-  fi
+# --- Install crsbench from a repo checkout ---
+if [[ -z "${INSTALL_SPEC}" || "${INSTALL_SPEC}" != git+* ]]; then
+  echo "cloud worker bootstrap requires git+ install spec metadata" >&2
+  exit 1
 fi
+REPO_URL="${INSTALL_SPEC#git+}"
+rm -rf "${CLONE_DIR}"
+git clone --no-single-branch "${REPO_URL}" "${CLONE_DIR}"
+cd "${CLONE_DIR}"
+git checkout "${GIT_REF:-main}"
+git submodule update --init --recursive
+if ! command -v uv >/dev/null 2>&1; then
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="/root/.local/bin:${PATH}"
+fi
+uv sync --all-extras
+uv pip install -e .
+VENV_BIN="${CLONE_DIR}/.venv/bin"
+export PATH="${VENV_BIN}:/root/.local/bin:${PATH}"
+
+python3 - "${PAYLOAD_PATH}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+from crsbench.cloud.bootstrap import bootstrap_inputs_from_payload, run_cloud_vm_bootstrap
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+run_cloud_vm_bootstrap(
+    bootstrap_inputs_from_payload(payload),
+    cwd=Path.cwd(),
+)
+PY
 
 : > "${ENV_PATH}"
 write_env_var "CRSBENCH_REDIS_HOST" "${REDIS_HOST}"
@@ -268,6 +269,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/default/crsbench-worker
+WorkingDirectory=/opt/crsbench
 ExecStart=/bin/bash /var/lib/crsbench/launch-worker.sh
 Restart=always
 RestartSec=10

@@ -22,6 +22,7 @@ ATTRIBUTE_METADATA_BASE="${INSTANCE_METADATA_BASE}/attributes"
 METADATA_HEADER="Metadata-Flavor: Google"
 STATE_DIR="/var/lib/crsbench"
 LOG_PATH="${STATE_DIR}/orchestrator.log"
+CLONE_DIR="/opt/crsbench"
 
 metadata_get() {
   curl -fsS -H "${METADATA_HEADER}" "${ATTRIBUTE_METADATA_BASE}/$1"
@@ -83,62 +84,25 @@ if [[ -n "${HF_TOKEN}" ]]; then
   export HF_TOKEN
 fi
 
-# --- Install crsbench ---
-CLONE_DIR=""
-VENV_BIN=""
-if ! command -v crsbench >/dev/null 2>&1; then
-  if [[ -z "${INSTALL_SPEC}" ]]; then
-    echo "crsbench CLI not found and no crsbench-install-spec metadata provided" >&2
-    exit 1
-  elif [[ "${INSTALL_SPEC}" == git+* ]]; then
-    REPO_URL="${INSTALL_SPEC#git+}"
-    CLONE_DIR="/opt/crsbench"
-    git clone --no-single-branch "${REPO_URL}" "${CLONE_DIR}"
-    cd "${CLONE_DIR}"
-    git checkout "${GIT_REF:-main}"
-    git submodule update --init --recursive
-    if ! command -v uv >/dev/null 2>&1; then
-      curl -LsSf https://astral.sh/uv/install.sh | sh
-      export PATH="/root/.local/bin:${PATH}"
-    fi
-    uv sync --all-extras
-    uv pip install -e .
-    VENV_BIN="/opt/crsbench/.venv/bin"
-    export PATH="${VENV_BIN}:/root/.local/bin:${PATH}"
-  else
-    VENV_DIR="/opt/crsbench-install"
-    python3 -m venv "${VENV_DIR}"
-    "${VENV_DIR}/bin/pip" install --upgrade pip
-    "${VENV_DIR}/bin/pip" install --upgrade "${INSTALL_SPEC}"
-    VENV_BIN="${VENV_DIR}/bin"
-    export PATH="${VENV_BIN}:${PATH}"
-  fi
+# --- Install crsbench from a repo checkout ---
+if [[ -z "${INSTALL_SPEC}" || "${INSTALL_SPEC}" != git+* ]]; then
+  echo "cloud orchestrator bootstrap requires git+ install spec metadata" >&2
+  exit 1
 fi
-
-# --- Start Valkey with password auth on 0.0.0.0:6379 ---
-echo "Starting Valkey..."
-docker run -d \
-  --name crsbench-valkey \
-  -p "0.0.0.0:6379:6379" \
-  -v valkey_valkey-data:/data \
-  --restart unless-stopped \
-  valkey/valkey:8.0-alpine \
-  valkey-server \
-  --appendonly yes \
-  --requirepass "${REDIS_PASSWORD}"
-
-# Wait for Valkey to be ready
-for _i in $(seq 1 30); do
-  if docker exec -e "REDISCLI_AUTH=${REDIS_PASSWORD}" crsbench-valkey \
-       valkey-cli ping 2>/dev/null | grep -q PONG; then
-    echo "Valkey is ready"
-    break
-  fi
-  sleep 1
-done
-
-export CRSBENCH_REDIS_PASSWORD="${REDIS_PASSWORD}"
-export CRSBENCH_CLOUD_PREPROVISIONED_WORKERS="1"
+REPO_URL="${INSTALL_SPEC#git+}"
+rm -rf "${CLONE_DIR}"
+git clone --no-single-branch "${REPO_URL}" "${CLONE_DIR}"
+cd "${CLONE_DIR}"
+git checkout "${GIT_REF:-main}"
+git submodule update --init --recursive
+if ! command -v uv >/dev/null 2>&1; then
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="/root/.local/bin:${PATH}"
+fi
+uv sync --all-extras
+uv pip install -e .
+VENV_BIN="${CLONE_DIR}/.venv/bin"
+export PATH="${VENV_BIN}:/root/.local/bin:${PATH}"
 
 # --- Decode experiment config and patch redis_host ---
 CONFIG_PATH="${STATE_DIR}/experiment-config.yaml"
@@ -194,10 +158,51 @@ PY
 
 echo "Patched redis_host in ${CONFIG_PATH}"
 
+cd "${CLONE_DIR}"
+
+python3 - "${CONFIG_PATH}" <<'PY'
+import sys
+from pathlib import Path
+
+from crsbench.cloud.bootstrap import CloudVmBootstrapInputs, run_cloud_vm_bootstrap
+from crsbench.run_experiment import load_experiment_config
+
+config = load_experiment_config(Path(sys.argv[1]))
+run_cloud_vm_bootstrap(
+    CloudVmBootstrapInputs.from_experiment_config(config),
+    cwd=Path.cwd(),
+)
+PY
+
+# --- Start Valkey with password auth on 0.0.0.0:6379 ---
+echo "Starting Valkey..."
+docker run -d \
+  --name crsbench-valkey \
+  -p "0.0.0.0:6379:6379" \
+  -v valkey_valkey-data:/data \
+  --restart unless-stopped \
+  valkey/valkey:8.0-alpine \
+  valkey-server \
+  --appendonly yes \
+  --requirepass "${REDIS_PASSWORD}"
+
+# Wait for Valkey to be ready
+for _i in $(seq 1 30); do
+  if docker exec -e "REDISCLI_AUTH=${REDIS_PASSWORD}" crsbench-valkey \
+       valkey-cli ping 2>/dev/null | grep -q PONG; then
+    echo "Valkey is ready"
+    break
+  fi
+  sleep 1
+done
+
+export CRSBENCH_REDIS_PASSWORD="${REDIS_PASSWORD}"
+export CRSBENCH_CLOUD_PREPROVISIONED_WORKERS="1"
+
 # --- Run orchestrator ---
 echo "=== Starting crsbench run at $(date -u) ==="
 echo "Config: ${CONFIG_PATH}"
 
-cd "${CLONE_DIR:-/}"
+cd "${CLONE_DIR}"
 
 crsbench run --experiment-config "${CONFIG_PATH}"

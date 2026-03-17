@@ -30,6 +30,7 @@ Non-goals:
 - Service accounts must be explicit and least-privileged
 - Readiness is a control-plane concept distinct from GCE VM `RUNNING` state
 - Cloud VMs are experiment-pinned and do not join the shared configless pool
+- Cloud VM bootstrap runs from a cloned CRSBench checkout; non-`git+` install specs are outside this contract
 
 ## Architecture
 
@@ -50,7 +51,7 @@ Experiment YAML
 │                 GCE Worker VM (×N)                        │
 │  startup/worker.sh                                       │
 │    ├── fetch bootstrap payload from instance metadata    │
-│    ├── install crsbench                                  │
+│    ├── clone CRSBench checkout + run prepare/download    │
 │    ├── create systemd service crsbench-worker.service    │
 │    └── on failure: report bootstrap_failed to Redis      │
 └─────────────────────┬────────────────────────────────────┘
@@ -149,10 +150,12 @@ Rollback:
 The startup script (`cloud/gce/startup/worker.sh`) runs on the VM:
 
 1. Fetches bootstrap payload from GCE instance metadata API
-2. Installs crsbench (using optional `crsbench-install-spec` metadata) or uses a preinstalled `crsbench` CLI on the VM image
-3. Writes env vars to `/etc/default/crsbench-worker`
-4. Creates and enables `crsbench-worker.service` (systemd, `Restart=always`)
-5. On failure: ERR trap calls `report_cloud_worker_state_from_env()` with `bootstrap_failed` and evidence string
+2. Requires a `git+...` `crsbench-install-spec`, clones CRSBench into `/opt/crsbench`, and installs the checkout
+3. Runs `crsbench prepare` from that checkout and optionally downloads benchmarks according to `cloud.bootstrap`
+4. Writes env vars to `/etc/default/crsbench-worker`
+5. Creates and enables `crsbench-worker.service` with `WorkingDirectory=/opt/crsbench` (`Restart=always`)
+6. Only after bootstrap succeeds does the worker connect to Redis and report readiness
+7. On failure: ERR trap calls `report_cloud_worker_state_from_env()` with `bootstrap_failed` and evidence string
 
 ## Contract: Artifact Collection
 

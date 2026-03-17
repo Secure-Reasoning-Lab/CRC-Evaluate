@@ -9,6 +9,7 @@ import pytest
 from crsbench.cloud.bootstrap import (
     CloudBenchmarkSelector,
     CloudVmBootstrapInputs,
+    bootstrap_inputs_from_payload,
     prepare_command_args,
     run_benchmark_download,
     run_prepare,
@@ -102,6 +103,25 @@ def test_selector_shape_preserves_non_default_roots():
 
     assert selector.benchmarks_root == Path("custom-benchmarks")
     assert selector.benchmark_suites_root == Path("/srv/custom-suites")
+
+
+def test_bootstrap_inputs_from_payload_restores_defaults_and_explicit_fields():
+    inputs = bootstrap_inputs_from_payload(
+        {
+            "prepare_mode": "skip_base_images",
+            "download_benchmarks": "always",
+            "benchmark_suite": "afc-final",
+            "benchmarks_root": "benchmarks",
+            "benchmark_suites_root": "benchmark-suites-custom",
+        }
+    )
+
+    assert inputs.prepare_mode == "skip_base_images"
+    assert inputs.download_benchmarks == "always"
+    assert inputs.benchmark_suite == "afc-final"
+    assert inputs.benchmarks is None
+    assert inputs.benchmarks_root == Path("benchmarks")
+    assert inputs.benchmark_suites_root == Path("benchmark-suites-custom")
 
 
 @pytest.mark.parametrize(

@@ -6,7 +6,7 @@ import subprocess
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Any, Callable, Literal, cast
 
 from crsbench.dataset.download import download_dataset, download_suite
 from crsbench.dataset.registry import resolve_prefix
@@ -129,6 +129,28 @@ class CloudVmBootstrapInputs:
         )
 
 
+def bootstrap_inputs_from_payload(payload: dict[str, Any]) -> CloudVmBootstrapInputs:
+    """Decode VM bootstrap inputs from the worker metadata payload."""
+    return CloudVmBootstrapInputs(
+        prepare_mode=_coerce_prepare_mode(payload.get("prepare_mode")),
+        download_benchmarks=_coerce_download_benchmarks_mode(
+            payload.get("download_benchmarks")
+        ),
+        benchmark_suite=_normalize_optional_string(
+            _coerce_optional_string(payload.get("benchmark_suite"))
+        ),
+        benchmarks=payload.get("benchmarks"),
+        benchmarks_root=_coerce_root_path(
+            payload.get("benchmarks_root"),
+            default_path=DEFAULT_BENCHMARKS_ROOT,
+        ),
+        benchmark_suites_root=_coerce_root_path(
+            payload.get("benchmark_suites_root"),
+            default_path=DEFAULT_BENCHMARK_SUITES_ROOT,
+        ),
+    )
+
+
 def should_download_benchmarks(inputs: CloudVmBootstrapInputs) -> bool:
     """Resolve the effective benchmark-download policy for a VM bootstrap."""
     policy = inputs.download_benchmarks
@@ -241,6 +263,34 @@ def _normalize_optional_string(value: str | None) -> str | None:
         return None
     normalized = value.strip()
     return normalized or None
+
+
+def _coerce_optional_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _coerce_root_path(value: Any, *, default_path: Path) -> Path:
+    if value is None:
+        return default_path
+    return Path(str(value))
+
+
+def _coerce_prepare_mode(value: Any) -> PrepareMode:
+    mode = str(value or "full")
+    if mode not in ("full", "skip_base_images"):
+        raise ValueError(f"Unsupported prepare mode in cloud bootstrap payload: {mode}")
+    return cast("PrepareMode", mode)
+
+
+def _coerce_download_benchmarks_mode(value: Any) -> DownloadBenchmarksMode:
+    mode = str(value or "auto")
+    if mode not in ("auto", "always", "never"):
+        raise ValueError(
+            f"Unsupported benchmark download mode in cloud bootstrap payload: {mode}"
+        )
+    return cast("DownloadBenchmarksMode", mode)
 
 
 def _normalize_override_path(
