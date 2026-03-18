@@ -8,6 +8,7 @@ from typing import Any
 from crsbench.cloud.readiness import CloudInstanceRole
 from crsbench.cloud.types import CloudProvider
 from crsbench.validation.schemas import (
+    CloudLaunchDefaultsConfig,
     CloudOrchestratorPlacementConfig,
     ExperimentConfig,
     GceProviderConfig,
@@ -25,12 +26,27 @@ class ResolvedInstanceProfile:
 
 
 @dataclass(frozen=True)
+class CloudLaunchDefaults:
+    """Merged launch/bootstrap defaults for one resolved provider."""
+
+    readiness_timeout_sec: int | None = None
+    readiness_timeout_sec_field_path: str = "cloud.defaults.readiness_timeout_sec"
+    crsbench_install_spec: str | None = None
+    crsbench_install_spec_field_path: str = "cloud.defaults.crsbench_install_spec"
+    crsbench_git_ref: str | None = None
+    crsbench_git_ref_field_path: str = "cloud.defaults.crsbench_git_ref"
+    github_deploy_key_file: str | None = None
+    github_deploy_key_file_field_path: str = "cloud.defaults.github_deploy_key_file"
+
+
+@dataclass(frozen=True)
 class CloudOrchestratorPlan:
     """Resolved orchestrator placement for one cloud launch."""
 
     provider: CloudProvider
     zone: str
     instance_profile: ResolvedInstanceProfile
+    launch_defaults: CloudLaunchDefaults = field(default_factory=CloudLaunchDefaults)
     env: dict[str, str] = field(default_factory=dict)
 
 
@@ -43,6 +59,7 @@ class CloudPlacementPlan:
     zone: str
     count: int
     instance_profile: ResolvedInstanceProfile
+    launch_defaults: CloudLaunchDefaults = field(default_factory=CloudLaunchDefaults)
     env: dict[str, str] = field(default_factory=dict)
 
 
@@ -128,6 +145,10 @@ def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
             provider=orchestrator_profile.provider,
             zone=config.cloud.orchestrator.zone,
             instance_profile=orchestrator_profile,
+            launch_defaults=_resolve_launch_defaults(
+                config=config,
+                provider=orchestrator_profile.provider,
+            ),
             env=_merge_env_layers(
                 config.cloud.env,
                 _profile_env(orchestrator_profile),
@@ -196,6 +217,10 @@ def _build_placement_plan(
         zone=zone,
         count=count,
         instance_profile=instance_profile,
+        launch_defaults=_resolve_launch_defaults(
+            config=config,
+            provider=instance_profile.provider,
+        ),
         env=_merge_env_layers(
             config.cloud.env if config.cloud is not None else {},
             _profile_env(instance_profile),
@@ -211,8 +236,123 @@ def _profile_env(profile: ResolvedInstanceProfile) -> dict[str, str]:
     }
 
 
+def _resolve_launch_defaults(
+    *,
+    config: ExperimentConfig,
+    provider: CloudProvider,
+) -> CloudLaunchDefaults:
+    cloud = config.cloud
+    if cloud is None:
+        return CloudLaunchDefaults()
+
+    provider_defaults: CloudLaunchDefaultsConfig | None = None
+    if provider is CloudProvider.GCE:
+        provider_config = cloud.providers.gce if cloud.providers is not None else None
+        provider_defaults = (
+            provider_config.defaults if provider_config is not None else None
+        )
+
+    return CloudLaunchDefaults(
+        readiness_timeout_sec=_get_launch_default_int(
+            cloud.defaults,
+            provider_defaults,
+            "readiness_timeout_sec",
+        ),
+        readiness_timeout_sec_field_path=_get_launch_default_field_path(
+            provider=provider,
+            global_defaults=cloud.defaults,
+            provider_defaults=provider_defaults,
+            field_name="readiness_timeout_sec",
+        ),
+        crsbench_install_spec=_get_launch_default_str(
+            cloud.defaults,
+            provider_defaults,
+            "crsbench_install_spec",
+        ),
+        crsbench_install_spec_field_path=_get_launch_default_field_path(
+            provider=provider,
+            global_defaults=cloud.defaults,
+            provider_defaults=provider_defaults,
+            field_name="crsbench_install_spec",
+        ),
+        crsbench_git_ref=_get_launch_default_str(
+            cloud.defaults,
+            provider_defaults,
+            "crsbench_git_ref",
+        ),
+        crsbench_git_ref_field_path=_get_launch_default_field_path(
+            provider=provider,
+            global_defaults=cloud.defaults,
+            provider_defaults=provider_defaults,
+            field_name="crsbench_git_ref",
+        ),
+        github_deploy_key_file=_get_launch_default_str(
+            cloud.defaults,
+            provider_defaults,
+            "github_deploy_key_file",
+        ),
+        github_deploy_key_file_field_path=_get_launch_default_field_path(
+            provider=provider,
+            global_defaults=cloud.defaults,
+            provider_defaults=provider_defaults,
+            field_name="github_deploy_key_file",
+        ),
+    )
+
+
 def _merge_env_layers(*layers: dict[str, str]) -> dict[str, str]:
     merged: dict[str, str] = {}
     for layer in layers:
         merged.update({str(key): str(value) for key, value in layer.items()})
     return merged
+
+
+def _get_optional_int(mapping: dict[str, Any], field_name: str) -> int | None:
+    value = mapping.get(field_name)
+    return int(value) if value is not None else None
+
+
+def _get_optional_str(mapping: dict[str, Any], field_name: str) -> str | None:
+    value = mapping.get(field_name)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _get_launch_default_int(
+    global_defaults: CloudLaunchDefaultsConfig,
+    provider_defaults: CloudLaunchDefaultsConfig | None,
+    field_name: str,
+) -> int | None:
+    provider_value = getattr(provider_defaults, field_name, None)
+    if provider_value is not None:
+        return int(provider_value)
+    global_value = getattr(global_defaults, field_name, None)
+    return int(global_value) if global_value is not None else None
+
+
+def _get_launch_default_str(
+    global_defaults: CloudLaunchDefaultsConfig,
+    provider_defaults: CloudLaunchDefaultsConfig | None,
+    field_name: str,
+) -> str | None:
+    provider_value = getattr(provider_defaults, field_name, None)
+    if provider_value is not None:
+        return str(provider_value)
+    global_value = getattr(global_defaults, field_name, None)
+    return str(global_value) if global_value is not None else None
+
+
+def _get_launch_default_field_path(
+    *,
+    provider: CloudProvider,
+    global_defaults: CloudLaunchDefaultsConfig,
+    provider_defaults: CloudLaunchDefaultsConfig | None,
+    field_name: str,
+) -> str:
+    if getattr(provider_defaults, field_name, None) is not None:
+        return f"cloud.providers.{provider.value}.defaults.{field_name}"
+    if getattr(global_defaults, field_name, None) is not None:
+        return f"cloud.defaults.{field_name}"
+    return f"cloud.defaults.{field_name}"

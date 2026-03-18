@@ -44,10 +44,6 @@ class ResolvedGceInstanceProfile:
     startup_script_uri: str | None
     use_os_login: bool
     ssh_via_iap: bool
-    readiness_timeout_sec: int
-    crsbench_install_spec: str | None
-    crsbench_git_ref: str
-    github_deploy_key_file: str | None
 
 
 class GceProviderAdapter:
@@ -90,14 +86,6 @@ class GceProviderAdapter:
                     provider_config.get("ssh_via_iap", False),
                 )
             ),
-            readiness_timeout_sec=int(profile_config.get("readiness_timeout_sec", 900)),
-            crsbench_install_spec=_get_optional_str(
-                profile_config, "crsbench_install_spec"
-            ),
-            crsbench_git_ref=str(profile_config.get("crsbench_git_ref", "main")),
-            github_deploy_key_file=_get_optional_str(
-                profile_config, "github_deploy_key_file"
-            ),
         )
 
     def build_orchestrator_config(self, plan: CloudLaunchPlan) -> GceOrchestratorConfig:
@@ -119,9 +107,10 @@ class GceProviderAdapter:
             startup_script_uri=resolved.startup_script_uri,
             use_os_login=resolved.use_os_login,
             ssh_via_iap=resolved.ssh_via_iap,
-            crsbench_install_spec=resolved.crsbench_install_spec,
-            crsbench_git_ref=resolved.crsbench_git_ref,
-            github_deploy_key_file=resolved.github_deploy_key_file,
+            crsbench_install_spec=plan.orchestrator.launch_defaults.crsbench_install_spec,
+            crsbench_git_ref=plan.orchestrator.launch_defaults.crsbench_git_ref
+            or "main",
+            github_deploy_key_file=plan.orchestrator.launch_defaults.github_deploy_key_file,
         )
 
     def build_worker_fleets(self, plan: CloudLaunchPlan) -> list[GceWorkerFleetConfig]:
@@ -155,10 +144,12 @@ class GceProviderAdapter:
                     startup_script_uri=resolved.startup_script_uri,
                     use_os_login=resolved.use_os_login,
                     ssh_via_iap=resolved.ssh_via_iap,
-                    readiness_timeout_sec=resolved.readiness_timeout_sec,
-                    crsbench_install_spec=resolved.crsbench_install_spec,
-                    crsbench_git_ref=resolved.crsbench_git_ref,
-                    github_deploy_key_file=resolved.github_deploy_key_file,
+                    readiness_timeout_sec=placement.launch_defaults.readiness_timeout_sec
+                    or 900,
+                    crsbench_install_spec=placement.launch_defaults.crsbench_install_spec,
+                    crsbench_git_ref=placement.launch_defaults.crsbench_git_ref
+                    or "main",
+                    github_deploy_key_file=placement.launch_defaults.github_deploy_key_file,
                 )
             )
             next_index_by_zone[placement.zone] = start_index + placement.count
@@ -198,10 +189,12 @@ class GceProviderAdapter:
                     startup_script_uri=resolved.startup_script_uri,
                     use_os_login=resolved.use_os_login,
                     ssh_via_iap=resolved.ssh_via_iap,
-                    readiness_timeout_sec=resolved.readiness_timeout_sec,
-                    crsbench_install_spec=resolved.crsbench_install_spec,
-                    crsbench_git_ref=resolved.crsbench_git_ref,
-                    github_deploy_key_file=resolved.github_deploy_key_file,
+                    readiness_timeout_sec=placement.launch_defaults.readiness_timeout_sec
+                    or 900,
+                    crsbench_install_spec=placement.launch_defaults.crsbench_install_spec,
+                    crsbench_git_ref=placement.launch_defaults.crsbench_git_ref
+                    or "main",
+                    github_deploy_key_file=placement.launch_defaults.github_deploy_key_file,
                 )
             )
             next_index_by_zone[placement.zone] = start_index + placement.count

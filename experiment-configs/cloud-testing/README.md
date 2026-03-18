@@ -38,8 +38,8 @@ This smoke config uses the checkout-first cloud bootstrap path:
 - every VM runs `crsbench prepare`
 - `download_benchmarks: auto` is set, so this `benchmark_suite: sanity` run
   skips the VM-side benchmark download
-- all three GCE instance profiles use `readiness_timeout_sec: 1200` so cold-image
-  bootstrap and Redis startup have a 20-minute bring-up window
+- `cloud.defaults.readiness_timeout_sec: 1200` gives the whole fleet a
+  20-minute bring-up window for cold-image bootstrap and Redis startup
 
 ## Preflight
 
@@ -83,9 +83,9 @@ Expected result:
 
 The checked-in config currently uses:
 
-- `crsbench_install_spec: git+ssh://git@github.com/sslab-gatech/CRSBench.git`
-- `crsbench_git_ref: feat/gcp`
-- `github_deploy_key_file: file:.crsbench-keys/crsbench-deploy`
+- `cloud.defaults.crsbench_install_spec: git+ssh://git@github.com/sslab-gatech/CRSBench.git`
+- `cloud.defaults.crsbench_git_ref: feat/gcp`
+- `cloud.defaults.github_deploy_key_file: file:.crsbench-keys/crsbench-deploy`
 
 That only works if:
 
@@ -119,8 +119,10 @@ Expected result:
 The checked-in config already points at that private key:
 
 ```yaml
-crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
-github_deploy_key_file: file:.crsbench-keys/crsbench-deploy
+cloud:
+  defaults:
+    crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+    github_deploy_key_file: file:.crsbench-keys/crsbench-deploy
 ```
 
 `file:` paths resolve relative to the directory where you run the launch

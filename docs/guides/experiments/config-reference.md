@@ -22,7 +22,11 @@ and examples.
 Managed cloud execution uses a provider-neutral top-level shape:
 
 - `cloud.providers.<provider>`: provider-native backing details such as GCE
-  project, reusable instance profiles, and optional `profile_defaults`
+  project, reusable instance profiles, optional provider `defaults`, and
+  optional `profile_defaults`
+- `cloud.defaults`: provider-agnostic launch/bootstrap defaults such as
+  `readiness_timeout_sec`, `crsbench_install_spec`, `crsbench_git_ref`, and
+  `github_deploy_key_file`
 - `cloud.env`: global environment variables merged into all launched cloud roles
 - `cloud.orchestrator`: zone and instance-profile reference for the remote
   orchestrator VM, plus optional orchestrator-only `env`
@@ -37,6 +41,8 @@ Managed cloud execution uses a provider-neutral top-level shape:
 For GCE in v1:
 
 - use `cloud.providers.gce`
+- launch/bootstrap defaults merge as
+  `cloud.defaults -> cloud.providers.gce.defaults`
 - provider-neutral configs do not repeat `provider` on orchestrator or
   placements; CRSBench resolves the provider from the owning
   `cloud.providers.<provider>.instance_profiles` catalog

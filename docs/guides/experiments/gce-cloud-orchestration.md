@@ -34,6 +34,10 @@ optional `cloud.evaluators`:
 
 ```yaml
 cloud:
+  defaults:
+    readiness_timeout_sec: 900
+    crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
+    crsbench_git_ref: main
   bootstrap:
     prepare_mode: full
     download_benchmarks: auto
@@ -47,8 +51,6 @@ cloud:
         image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
         service_account_email: crsbench@my-gcp-project.iam.gserviceaccount.com
         owner_label: my-team
-        readiness_timeout_sec: 900
-        crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
       instance_profiles:
         gce-orchestrator-n2d: {}
         gce-worker-n2d: {}
@@ -77,7 +79,9 @@ cloud:
 
 | Field | Required | Description |
 |---|---|---|
+| `cloud.defaults` | no | Provider-agnostic launch/bootstrap defaults merged into every cloud role |
 | `cloud.providers.gce.project` | yes | GCP project ID used for all referenced GCE resources |
+| `cloud.providers.gce.defaults` | no | Provider-specific overrides for `cloud.defaults` |
 | `cloud.providers.gce.profile_defaults` | no | Default instance-profile fields merged into every named GCE profile |
 | `cloud.providers.gce.instance_profiles.<name>` | yes | Reusable machine/image/service-account bundle for orchestrator or workers |
 | `cloud.orchestrator.zone` | yes | Explicit orchestrator zone |
@@ -100,8 +104,17 @@ mix providers across orchestrator, workers, and evaluators.
 
 Instance profiles carry the per-VM details such as `machine_type`,
 `boot_disk_size_gb`, `image` or `instance_template`, `service_account_email`,
-`owner_label`, `labels`, `metadata`, `ssh_via_iap`, `readiness_timeout_sec`,
-`crsbench_install_spec`, `crsbench_git_ref`, and `github_deploy_key_file`.
+`owner_label`, `labels`, `metadata`, and `ssh_via_iap`.
+
+Launch/bootstrap defaults live outside instance profiles:
+
+- `cloud.defaults.readiness_timeout_sec`
+- `cloud.defaults.crsbench_install_spec`
+- `cloud.defaults.crsbench_git_ref`
+- `cloud.defaults.github_deploy_key_file`
+
+Provider-specific overrides can replace those values through
+`cloud.providers.<provider>.defaults`.
 
 By default, provisioned instance names sort naturally in the GCP console:
 `crsbench-<experiment>-<zone>-orch`,
@@ -192,6 +205,8 @@ cloud:
       profile_defaults:
         env:
           HTTPS_PROXY: os.environ/HTTPS_PROXY
+      defaults:
+        crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
       instance_profiles:
         gce-orchestrator-n2d:
           env:
@@ -255,17 +270,14 @@ public key. Add it to your GitHub repository:
 
 ```yaml
 cloud:
+  defaults:
+    crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
   env:
     HF_TOKEN: os.environ/HF_TOKEN
   providers:
     gce:
-      profile_defaults:
-        crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
       instance_profiles:
-        # Inherit the public git+https install path from profile_defaults.
-        # For a private repo, override on the specific profile:
-        #   crsbench_install_spec: "git+ssh://git@github.com/your-org/CRSBench.git"
-        #   github_deploy_key_file: file:.crsbench-keys/crsbench-deploy
+        # Inherit the public git+https install path from cloud.defaults.
         gce-orchestrator-n2d: {}
         gce-worker-n2d: {}
 ```
@@ -371,10 +383,10 @@ orchestrator/worker processes as `systemd --user` services while pre-creating
 the delegated `user@<uid>.service/crsbench` and
 `user@<uid>.service/oss-crs` cgroup hierarchies expected by the CRSBench
 runtime and the `oss-crs` CLI.
-The checked-in smoke config uses `readiness_timeout_sec: 1200` for both
-orchestrator and worker instance profiles, `boot_disk_size_gb: 100` for both VM
-roles, and `runtime.build_timeout: 3600` so fresh-image smoke runs have room to
-finish bootstrap plus a real CRS prepare/build cycle.
+The checked-in smoke config uses `cloud.defaults.readiness_timeout_sec: 1200`,
+`boot_disk_size_gb: 100` via `cloud.providers.gce.profile_defaults`, and
+`runtime.build_timeout: 3600` so fresh-image smoke runs have room to finish
+bootstrap plus a real CRS prepare/build cycle.
 
 ## Monitoring
 

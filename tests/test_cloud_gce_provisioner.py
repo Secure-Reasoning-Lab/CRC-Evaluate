@@ -155,6 +155,11 @@ def _make_provider_neutral_experiment_config() -> ExperimentConfig:
             "experiment_filestore": "/tmp/filestore",
             "report_filestore": "/tmp/reports",
             "cloud": {
+                "defaults": {
+                    "readiness_timeout_sec": 1200,
+                    "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
+                    "crsbench_git_ref": "feat/gcp",
+                },
                 "providers": {
                     "gce": {
                         "project": "test-project",
@@ -377,6 +382,13 @@ def test_gce_provider_adapter_builds_worker_fleets_per_placement():
     assert [fleet.zone for fleet in fleets] == ["us-east5-b", "us-east1-b"]
     assert [fleet.worker_count for fleet in fleets] == [2, 1]
     assert all(fleet.project == "test-project" for fleet in fleets)
+    assert all(fleet.readiness_timeout_sec == 1200 for fleet in fleets)
+    assert all(
+        fleet.crsbench_install_spec
+        == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+        for fleet in fleets
+    )
+    assert all(fleet.crsbench_git_ref == "feat/gcp" for fleet in fleets)
     assert [fleet.worker_name_prefix for fleet in fleets] == [
         "crsbench-exp-cloud-42-us-east5-b-work",
         "crsbench-exp-cloud-42-us-east1-b-work",
@@ -429,6 +441,28 @@ def test_gce_provider_adapter_builds_evaluator_fleets_per_placement():
         "crsbench-exp-cloud-42-us-east5-b-eval",
         "crsbench-exp-cloud-42-us-east1-b-eval",
     ]
+
+
+def test_gce_provider_adapter_applies_provider_launch_defaults_override():
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+
+    config = _make_provider_neutral_experiment_config()
+    assert config.cloud is not None
+    assert config.cloud.providers is not None
+    assert config.cloud.providers.gce is not None
+    config.cloud.providers.gce.defaults.readiness_timeout_sec = 1500
+    config.cloud.providers.gce.defaults.crsbench_git_ref = "provider-ref"
+    config = ExperimentConfig.model_validate(
+        config.model_dump(mode="json", exclude_none=True)
+    )
+
+    plan = build_cloud_launch_plan(config)
+    adapter = GceProviderAdapter()
+
+    fleets = adapter.build_worker_fleets(plan)
+
+    assert all(fleet.readiness_timeout_sec == 1500 for fleet in fleets)
+    assert all(fleet.crsbench_git_ref == "provider-ref" for fleet in fleets)
 
 
 def test_create_workers_waits_for_operations_and_normalizes_provider_instances():

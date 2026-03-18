@@ -148,6 +148,10 @@ storage:
   # results_filestore: /data/crsbench/finished
 
 cloud:
+  defaults:
+    readiness_timeout_sec: 900
+    crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
+    crsbench_git_ref: main
   providers:
     gce:
       project: example-project
@@ -158,8 +162,6 @@ cloud:
         image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
         service_account_email: crsbench@example-project.iam.gserviceaccount.com
         owner_label: team-crs
-        readiness_timeout_sec: 900
-        crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
       instance_profiles:
         gce-orch:
           service_account_email: crsbench-orchestrator@example-project.iam.gserviceaccount.com

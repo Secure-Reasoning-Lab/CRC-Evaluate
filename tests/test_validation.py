@@ -655,6 +655,11 @@ class TestExperimentConfigSchema:
     @staticmethod
     def _provider_neutral_cloud_kwargs() -> dict:
         return {
+            "defaults": {
+                "readiness_timeout_sec": 1200,
+                "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
+                "crsbench_git_ref": "feat/gcp",
+            },
             "providers": {
                 "gce": {
                     "project": "test-project",
@@ -664,8 +669,6 @@ class TestExperimentConfigSchema:
                         "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
                         "service_account_email": "crsbench@test-project.iam.gserviceaccount.com",
                         "owner_label": "team-crs",
-                        "readiness_timeout_sec": 1200,
-                        "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
                     },
                     "instance_profiles": {
                         "gce-orchestrator-n2d": {},
@@ -1000,6 +1003,9 @@ class TestExperimentConfigSchema:
     def test_cloud_rejects_legacy_orchestrator_config(self):
         data = self._base_kwargs()
         data["cloud"] = {
+            "defaults": {
+                "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
+            },
             "providers": {
                 "gce": {
                     "project": "test-project",
@@ -1009,7 +1015,6 @@ class TestExperimentConfigSchema:
                         "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
                         "service_account_email": "crsbench@test-project.iam.gserviceaccount.com",
                         "owner_label": "team-crs",
-                        "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
                     },
                     "instance_profiles": {
                         "gce-worker-n2d": {},
@@ -1091,6 +1096,13 @@ class TestExperimentConfigSchema:
         config = ExperimentConfig(**data)
 
         assert config.cloud is not None
+        assert config.cloud.defaults is not None
+        assert config.cloud.defaults.readiness_timeout_sec == 1200
+        assert (
+            config.cloud.defaults.crsbench_install_spec
+            == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+        )
+        assert config.cloud.defaults.crsbench_git_ref == "feat/gcp"
         assert config.cloud.providers.gce is not None
         assert config.cloud.providers.gce.project == "test-project"
         assert config.cloud.providers.gce.profile_defaults is not None
@@ -1118,6 +1130,25 @@ class TestExperimentConfigSchema:
             placement.instance_profile == "gce-evaluator-c3"
             for placement in config.cloud.evaluators.placements
         )
+
+    def test_cloud_provider_contract_parses_provider_launch_defaults_override(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["providers"]["gce"]["defaults"] = {
+            "readiness_timeout_sec": 1500,
+            "crsbench_git_ref": "provider-ref",
+        }
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.defaults is not None
+        assert config.cloud.defaults.readiness_timeout_sec == 1200
+        assert config.cloud.providers is not None
+        assert config.cloud.providers.gce is not None
+        assert config.cloud.providers.gce.defaults is not None
+        assert config.cloud.providers.gce.defaults.readiness_timeout_sec == 1500
+        assert config.cloud.providers.gce.defaults.crsbench_git_ref == "provider-ref"
 
     def test_cloud_provider_contract_merges_layered_env_maps(self):
         data = self._base_kwargs()
@@ -1270,6 +1301,68 @@ class TestExperimentConfigSchema:
                 target = target[int(part)]
             else:
                 target = target[part]
+        target[path_parts[-1]] = field_value
+
+        with pytest.raises(PydanticValidationError, match=match):
+            ExperimentConfig(**data)
+
+    @pytest.mark.parametrize(
+        ("field_path", "field_value", "match"),
+        [
+            (
+                "providers.gce.profile_defaults.readiness_timeout_sec",
+                1200,
+                "readiness_timeout_sec",
+            ),
+            (
+                "providers.gce.profile_defaults.crsbench_install_spec",
+                "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
+                "crsbench_install_spec",
+            ),
+            (
+                "providers.gce.profile_defaults.crsbench_git_ref",
+                "feat/gcp",
+                "crsbench_git_ref",
+            ),
+            (
+                "providers.gce.profile_defaults.github_deploy_key_file",
+                "file:.crsbench-keys/crsbench-deploy",
+                "github_deploy_key_file",
+            ),
+            (
+                "providers.gce.instance_profiles.gce-worker-n2d.readiness_timeout_sec",
+                1200,
+                "readiness_timeout_sec",
+            ),
+            (
+                "providers.gce.instance_profiles.gce-worker-n2d.crsbench_install_spec",
+                "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
+                "crsbench_install_spec",
+            ),
+            (
+                "providers.gce.instance_profiles.gce-worker-n2d.crsbench_git_ref",
+                "feat/gcp",
+                "crsbench_git_ref",
+            ),
+            (
+                "providers.gce.instance_profiles.gce-worker-n2d.github_deploy_key_file",
+                "file:.crsbench-keys/crsbench-deploy",
+                "github_deploy_key_file",
+            ),
+        ],
+    )
+    def test_cloud_provider_contract_rejects_launch_defaults_under_gce_profiles(
+        self,
+        field_path: str,
+        field_value: object,
+        match: str,
+    ) -> None:
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        target = data["cloud"]
+        path_parts = field_path.split(".")
+        for part in path_parts[:-1]:
+            target = target[int(part)] if part.isdigit() else target[part]
         target[path_parts[-1]] = field_value
 
         with pytest.raises(PydanticValidationError, match=match):

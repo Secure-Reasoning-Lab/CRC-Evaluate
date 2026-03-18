@@ -1682,6 +1682,39 @@ def _merge_cloud_placement_defaults(
     return merged
 
 
+class CloudLaunchDefaultsConfig(BaseModel):
+    """Provider-agnostic launch/bootstrap defaults shared across cloud roles."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    readiness_timeout_sec: Optional[int] = Field(default=None, ge=1)
+    crsbench_install_spec: Optional[str] = Field(default=None)
+    crsbench_git_ref: Optional[str] = Field(default=None)
+    github_deploy_key_file: Optional[str] = Field(default=None)
+
+    @field_validator(
+        "crsbench_install_spec",
+        "crsbench_git_ref",
+        "github_deploy_key_file",
+    )
+    @classmethod
+    def normalize_optional_strings(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_cloud_optional_string(value)
+
+    @field_validator("github_deploy_key_file")
+    @classmethod
+    def validate_github_deploy_key_file(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        try:
+            return validate_secret_reference_format(
+                value,
+                field_path="github_deploy_key_file",
+            )
+        except CloudSecretReferenceError as exc:
+            raise ValueError(str(exc)) from exc
+
+
 class GceInstanceProfileDefaultsConfig(BaseModel):
     """Partial reusable defaults merged into named GCE instance profiles."""
 
@@ -1701,10 +1734,6 @@ class GceInstanceProfileDefaultsConfig(BaseModel):
     startup_script_uri: Optional[str] = Field(default=None)
     use_os_login: Optional[bool] = Field(default=None)
     ssh_via_iap: Optional[bool] = Field(default=None)
-    readiness_timeout_sec: Optional[int] = Field(default=None, ge=1)
-    crsbench_install_spec: Optional[str] = Field(default=None)
-    crsbench_git_ref: Optional[str] = Field(default=None)
-    github_deploy_key_file: Optional[str] = Field(default=None)
 
     @field_validator(
         "machine_type",
@@ -1715,9 +1744,6 @@ class GceInstanceProfileDefaultsConfig(BaseModel):
         "service_account_email",
         "owner_label",
         "startup_script_uri",
-        "crsbench_install_spec",
-        "crsbench_git_ref",
-        "github_deploy_key_file",
     )
     @classmethod
     def normalize_optional_strings(cls, value: Optional[str]) -> Optional[str]:
@@ -1803,32 +1829,6 @@ class GceInstanceProfileConfig(BaseModel):
         default=False,
         description="Whether operators are expected to connect through IAP-backed SSH.",
     )
-    readiness_timeout_sec: int = Field(
-        default=900,
-        ge=1,
-        description="Maximum time to wait for a worker to report ready before bring-up fails.",
-    )
-    crsbench_install_spec: Optional[str] = Field(
-        default=None,
-        description=(
-            "How to install crsbench on instances using this profile. "
-            "Use 'git+ssh://...' for private repo clone+uv-sync, "
-            "or a pip spec like 'crsbench==1.0' for PyPI install."
-        ),
-    )
-    crsbench_git_ref: str = Field(
-        default="main",
-        description="Git branch, tag, or commit to checkout after cloning (only used with git+ssh:// install spec).",
-    )
-    github_deploy_key_file: Optional[str] = Field(
-        default=None,
-        description=(
-            "SSH private key path for GitHub deploy key access. Supports a plain path, "
-            "'file:...' path reference, or 'os.environ/NAME' at launch time. "
-            "The resolved file contents are base64-encoded and injected as "
-            "instance metadata."
-        ),
-    )
 
     @field_validator(
         "machine_type",
@@ -1839,8 +1839,6 @@ class GceInstanceProfileConfig(BaseModel):
         "service_account_email",
         "owner_label",
         "startup_script_uri",
-        "crsbench_install_spec",
-        "github_deploy_key_file",
     )
     @classmethod
     def normalize_optional_strings(cls, value: Optional[str]) -> Optional[str]:
@@ -1935,6 +1933,10 @@ class GceProviderConfig(BaseModel):
     ssh_via_iap: bool = Field(
         default=False,
         description="Whether operators are expected to connect through IAP-backed SSH by default.",
+    )
+    defaults: CloudLaunchDefaultsConfig = Field(
+        default_factory=CloudLaunchDefaultsConfig,
+        description="Provider-specific overrides for shared cloud launch defaults.",
     )
     profile_defaults: Optional[GceInstanceProfileDefaultsConfig] = Field(
         default=None,
@@ -2263,6 +2265,10 @@ class CloudConfig(BaseModel):
     bootstrap: CloudBootstrapConfig = Field(
         default_factory=CloudBootstrapConfig,
         description="Provider-neutral bootstrap policy for cloud VMs.",
+    )
+    defaults: CloudLaunchDefaultsConfig = Field(
+        default_factory=CloudLaunchDefaultsConfig,
+        description="Provider-agnostic launch/bootstrap defaults for all cloud roles.",
     )
     env: Dict[str, str] = Field(
         default_factory=dict,

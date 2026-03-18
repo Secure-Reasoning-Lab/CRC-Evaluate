@@ -9,6 +9,7 @@ from typing import Mapping
 from crsbench.cloud.gce.provider import GceProviderAdapter
 from crsbench.cloud.launch_state import redact_worker_fleet_config
 from crsbench.cloud.models import (
+    CloudLaunchDefaults,
     CloudLaunchPlan,
     CloudOrchestratorPlan,
     CloudPlacementPlan,
@@ -74,6 +75,11 @@ def _resolve_launch_plan(
             cwd=cwd,
             env=env,
         ),
+        launch_defaults=_resolve_launch_defaults(
+            plan.orchestrator.launch_defaults,
+            cwd=cwd,
+            env=env,
+        ),
         env=_resolve_cloud_env_map(
             plan.orchestrator.env,
             field_prefix="cloud.orchestrator.env",
@@ -89,6 +95,11 @@ def _resolve_launch_plan(
             count=placement.count,
             instance_profile=_resolve_instance_profile(
                 placement.instance_profile,
+                cwd=cwd,
+                env=env,
+            ),
+            launch_defaults=_resolve_launch_defaults(
+                placement.launch_defaults,
                 cwd=cwd,
                 env=env,
             ),
@@ -109,6 +120,11 @@ def _resolve_launch_plan(
             count=placement.count,
             instance_profile=_resolve_instance_profile(
                 placement.instance_profile,
+                cwd=cwd,
+                env=env,
+            ),
+            launch_defaults=_resolve_launch_defaults(
+                placement.launch_defaults,
                 cwd=cwd,
                 env=env,
             ),
@@ -135,15 +151,31 @@ def _resolve_instance_profile(
     cwd: Path,
     env: Mapping[str, str] | None,
 ) -> ResolvedInstanceProfile:
-    profile_config = dict(profile.profile_config)
-    field_prefix = _profile_field_prefix(profile)
-    profile_config["github_deploy_key_file"] = resolve_secret_path(
-        profile_config.get("github_deploy_key_file"),
-        field_path=f"{field_prefix}.github_deploy_key_file",
-        env=env,
-        cwd=cwd,
+    del cwd, env
+    return profile
+
+
+def _resolve_launch_defaults(
+    defaults: CloudLaunchDefaults,
+    *,
+    cwd: Path,
+    env: Mapping[str, str] | None,
+) -> CloudLaunchDefaults:
+    return CloudLaunchDefaults(
+        readiness_timeout_sec=defaults.readiness_timeout_sec,
+        readiness_timeout_sec_field_path=defaults.readiness_timeout_sec_field_path,
+        crsbench_install_spec=defaults.crsbench_install_spec,
+        crsbench_install_spec_field_path=defaults.crsbench_install_spec_field_path,
+        crsbench_git_ref=defaults.crsbench_git_ref,
+        crsbench_git_ref_field_path=defaults.crsbench_git_ref_field_path,
+        github_deploy_key_file=resolve_secret_path(
+            defaults.github_deploy_key_file,
+            field_path=defaults.github_deploy_key_file_field_path,
+            env=env,
+            cwd=cwd,
+        ),
+        github_deploy_key_file_field_path=defaults.github_deploy_key_file_field_path,
     )
-    return replace(profile, profile_config=profile_config)
 
 
 def _resolve_cloud_env_map(
@@ -166,34 +198,20 @@ def _resolve_cloud_env_map(
     }
 
 
-def _profile_field_prefix(profile: ResolvedInstanceProfile) -> str:
-    """Return the config field prefix for one resolved provider profile."""
-    return f"cloud.providers.{profile.provider.value}.instance_profiles.{profile.name}"
-
-
 def _validate_checkout_install_specs_for_plan(plan: CloudLaunchPlan) -> None:
     _validate_checkout_install_spec(
-        plan.orchestrator.instance_profile.profile_config.get("crsbench_install_spec"),
-        field_path=(
-            f"{_profile_field_prefix(plan.orchestrator.instance_profile)}."
-            "crsbench_install_spec"
-        ),
+        plan.orchestrator.launch_defaults.crsbench_install_spec,
+        field_path=plan.orchestrator.launch_defaults.crsbench_install_spec_field_path,
     )
     for placement in plan.worker_placements:
         _validate_checkout_install_spec(
-            placement.instance_profile.profile_config.get("crsbench_install_spec"),
-            field_path=(
-                f"{_profile_field_prefix(placement.instance_profile)}."
-                "crsbench_install_spec"
-            ),
+            placement.launch_defaults.crsbench_install_spec,
+            field_path=placement.launch_defaults.crsbench_install_spec_field_path,
         )
     for placement in plan.evaluator_placements:
         _validate_checkout_install_spec(
-            placement.instance_profile.profile_config.get("crsbench_install_spec"),
-            field_path=(
-                f"{_profile_field_prefix(placement.instance_profile)}."
-                "crsbench_install_spec"
-            ),
+            placement.launch_defaults.crsbench_install_spec,
+            field_path=placement.launch_defaults.crsbench_install_spec_field_path,
         )
 
 

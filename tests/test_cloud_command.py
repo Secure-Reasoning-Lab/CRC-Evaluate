@@ -303,6 +303,11 @@ def _make_provider_neutral_experiment_config() -> ExperimentConfig:
             "experiment_filestore": "/tmp/filestore",
             "report_filestore": "/tmp/reports",
             "cloud": {
+                "defaults": {
+                    "readiness_timeout_sec": 1200,
+                    "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
+                    "crsbench_git_ref": "feat/gcp",
+                },
                 "providers": {
                     "gce": {
                         "project": "test-project",
@@ -312,7 +317,6 @@ def _make_provider_neutral_experiment_config() -> ExperimentConfig:
                             "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
                             "service_account_email": "crsbench@test-project.iam.gserviceaccount.com",
                             "owner_label": "team-crs",
-                            "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
                         },
                         "instance_profiles": {
                             "gce-orchestrator-n2d": {
@@ -380,9 +384,9 @@ def _add_secret_refs_to_provider_neutral_config(
     hf_token_ref: str = "os.environ/HF_TOKEN",
 ) -> ExperimentConfig:
     config = config.model_copy(deep=True)
-    profiles = config.cloud.providers.gce.instance_profiles
-    profiles["gce-orchestrator-n2d"].github_deploy_key_file = deploy_key_ref
-    profiles["gce-worker-n2d"].github_deploy_key_file = deploy_key_ref
+    assert config.cloud is not None
+    assert config.cloud.defaults is not None
+    config.cloud.defaults.github_deploy_key_file = deploy_key_ref
     if config.cloud.env is None:
         config.cloud.env = {}
     config.cloud.env["HF_TOKEN"] = hf_token_ref
@@ -487,6 +491,39 @@ def test_build_cloud_launch_plan_resolves_profiles_for_orchestrator_and_workers(
     assert all(
         placement.provider is CloudProvider.GCE for placement in plan.worker_placements
     )
+    assert plan.orchestrator.launch_defaults.readiness_timeout_sec == 1200
+    assert (
+        plan.orchestrator.launch_defaults.crsbench_install_spec
+        == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+    )
+    assert plan.orchestrator.launch_defaults.crsbench_git_ref == "feat/gcp"
+    assert (
+        plan.worker_placements[0].launch_defaults == plan.orchestrator.launch_defaults
+    )
+
+
+def test_build_cloud_launch_plan_merges_provider_launch_defaults_override():
+    from crsbench.cloud.models import build_cloud_launch_plan
+
+    config = _make_provider_neutral_experiment_config()
+    assert config.cloud is not None
+    assert config.cloud.providers is not None
+    assert config.cloud.providers.gce is not None
+    config.cloud.providers.gce.defaults.readiness_timeout_sec = 1500
+    config.cloud.providers.gce.defaults.crsbench_git_ref = "provider-ref"
+    config = ExperimentConfig.model_validate(
+        config.model_dump(mode="json", exclude_none=True)
+    )
+
+    plan = build_cloud_launch_plan(config)
+
+    assert plan.orchestrator.launch_defaults.readiness_timeout_sec == 1500
+    assert plan.worker_placements[0].launch_defaults.readiness_timeout_sec == 1500
+    assert plan.orchestrator.launch_defaults.crsbench_git_ref == "provider-ref"
+    assert (
+        plan.orchestrator.launch_defaults.crsbench_install_spec
+        == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+    )
 
 
 def test_build_cloud_launch_plan_merges_layered_env_for_targets():
@@ -581,16 +618,14 @@ def test_prepare_gce_launch_inputs_resolves_provider_neutral_secret_refs(
 
     assert launch_plan.orchestrator.env["HF_TOKEN"] == "os.environ/HF_TOKEN"
     assert (
-        launch_plan.worker_placements[0].instance_profile.profile_config[
-            "github_deploy_key_file"
-        ]
+        launch_plan.worker_placements[0].launch_defaults.github_deploy_key_file
         == "file:.crsbench-keys/crsbench-deploy"
     )
     assert preflight.orchestrator_env["HF_TOKEN"] == "hf_secret_value"
     assert preflight.worker_placement_envs[0]["HF_TOKEN"] == "hf_secret_value"
-    assert preflight.resolved_plan.worker_placements[0].instance_profile.profile_config[
-        "github_deploy_key_file"
-    ] == str(key_path)
+    assert preflight.resolved_plan.worker_placements[
+        0
+    ].launch_defaults.github_deploy_key_file == str(key_path)
     assert preflight.redacted_worker_fleets[0].github_deploy_key_file is None
 
 
@@ -754,9 +789,9 @@ def test_prepare_gce_launch_inputs_rejects_non_git_install_spec_for_checkout_mod
     from crsbench.cloud.models import build_cloud_launch_plan
 
     config = _make_provider_neutral_experiment_config()
-    config.cloud.providers.gce.instance_profiles[
-        "gce-worker-n2d"
-    ].crsbench_install_spec = "crsbench==0.1.0"
+    assert config.cloud is not None
+    assert config.cloud.defaults is not None
+    config.cloud.defaults.crsbench_install_spec = "crsbench==0.1.0"
     launch_plan = build_cloud_launch_plan(config)
 
     with pytest.raises(ValueError, match="git\\+"):

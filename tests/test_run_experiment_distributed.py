@@ -443,6 +443,11 @@ def _make_provider_neutral_run_config(tmp_path: Path) -> ExperimentConfig:
             "verify_timeout": 600,
             "inputs": {"pov": {"max_variants_per_cpv": 1}},
             "cloud": {
+                "defaults": {
+                    "readiness_timeout_sec": 1200,
+                    "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
+                    "crsbench_git_ref": "feat/gcp",
+                },
                 "providers": {
                     "gce": {
                         "project": "test-project",
@@ -452,7 +457,6 @@ def _make_provider_neutral_run_config(tmp_path: Path) -> ExperimentConfig:
                             "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
                             "service_account_email": "crsbench@test-project.iam.gserviceaccount.com",
                             "owner_label": "team-crs",
-                            "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
                         },
                         "instance_profiles": {
                             "gce-orchestrator-n2d": {},
@@ -492,9 +496,9 @@ def _add_secret_refs_to_provider_neutral_run_config(
     hf_token_ref: str = "os.environ/HF_TOKEN",
 ) -> ExperimentConfig:
     config = config.model_copy(deep=True)
-    profiles = config.cloud.providers.gce.instance_profiles
-    profiles["gce-orchestrator-n2d"].github_deploy_key_file = deploy_key_ref
-    profiles["gce-worker-n2d"].github_deploy_key_file = deploy_key_ref
+    assert config.cloud is not None
+    assert config.cloud.defaults is not None
+    config.cloud.defaults.github_deploy_key_file = deploy_key_ref
     if config.cloud.env is None:
         config.cloud.env = {}
     config.cloud.env["HF_TOKEN"] = hf_token_ref
@@ -888,16 +892,12 @@ def test_provider_neutral_cloud_workers_resolve_secret_refs_before_bringup(
         resolved_plan = kwargs["plan"]
         assert resolved_plan.worker_placements[0].env["HF_TOKEN"] == "hf_secret_value"
         assert (
-            resolved_plan.worker_placements[0].instance_profile.profile_config[
-                "github_deploy_key_file"
-            ]
+            resolved_plan.worker_placements[0].launch_defaults.github_deploy_key_file
             == expected_key_path
         )
         assert launch_plan.worker_placements[0].env["HF_TOKEN"] == "os.environ/HF_TOKEN"
         assert (
-            launch_plan.worker_placements[0].instance_profile.profile_config[
-                "github_deploy_key_file"
-            ]
+            launch_plan.worker_placements[0].launch_defaults.github_deploy_key_file
             == "file:.crsbench-keys/crsbench-deploy"
         )
         raise RuntimeError("stop after resolved bringup")

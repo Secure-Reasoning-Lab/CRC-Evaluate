@@ -957,21 +957,18 @@ class TestIntegrationWithSampleConfigs:
         }
         assert config.cloud.providers is not None
         assert config.cloud.providers.gce is not None
+        assert config.cloud.defaults is not None
         assert config.cloud.providers.gce.profile_defaults is not None
         assert config.cloud.workers is not None
         assert config.cloud.evaluators is not None
         assert config.cloud.orchestrator is not None
         assert config.experiment == "gce-sanity-1o2w1e"
         assert (
-            config.cloud.providers.gce.instance_profiles[
-                "gce-worker-n2d"
-            ].crsbench_install_spec
+            config.cloud.defaults.crsbench_install_spec
             == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
         )
         assert (
-            config.cloud.providers.gce.instance_profiles[
-                "gce-worker-n2d"
-            ].github_deploy_key_file
+            config.cloud.defaults.github_deploy_key_file
             == "file:.crsbench-keys/crsbench-deploy"
         )
         assert config.cloud.env == {
@@ -993,12 +990,7 @@ class TestIntegrationWithSampleConfigs:
         assert [
             placement.count for placement in config.cloud.evaluators.placements
         ] == [1]
-        assert (
-            config.cloud.providers.gce.instance_profiles[
-                "gce-worker-n2d"
-            ].readiness_timeout_sec
-            == 1200
-        )
+        assert config.cloud.defaults.readiness_timeout_sec == 1200
         assert (
             config.cloud.providers.gce.instance_profiles[
                 "gce-worker-n2d"
@@ -1006,9 +998,7 @@ class TestIntegrationWithSampleConfigs:
             == 100
         )
         assert (
-            config.cloud.providers.gce.instance_profiles[
-                "gce-orchestrator-n2d"
-            ].crsbench_install_spec
+            config.cloud.defaults.crsbench_install_spec
             == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
         )
         assert (
@@ -1018,17 +1008,10 @@ class TestIntegrationWithSampleConfigs:
             == 100
         )
         assert (
-            config.cloud.providers.gce.instance_profiles[
-                "gce-orchestrator-n2d"
-            ].github_deploy_key_file
+            config.cloud.defaults.github_deploy_key_file
             == "file:.crsbench-keys/crsbench-deploy"
         )
-        assert (
-            config.cloud.providers.gce.instance_profiles[
-                "gce-orchestrator-n2d"
-            ].readiness_timeout_sec
-            == 1200
-        )
+        assert config.cloud.defaults.readiness_timeout_sec == 1200
         assert (
             config.cloud.providers.gce.instance_profiles[
                 "gce-worker-n2d"
