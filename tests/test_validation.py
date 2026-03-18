@@ -1325,9 +1325,9 @@ class TestExperimentConfigSchema:
                 "crsbench_git_ref",
             ),
             (
-                "providers.gce.profile_defaults.github_deploy_key_file",
-                "file:.crsbench-keys/crsbench-deploy",
-                "github_deploy_key_file",
+                "providers.gce.profile_defaults.github_deploy_key_path",
+                ".crsbench-keys/crsbench-deploy",
+                "github_deploy_key_path",
             ),
             (
                 "providers.gce.instance_profiles.gce-worker-n2d.readiness_timeout_sec",
@@ -1345,9 +1345,9 @@ class TestExperimentConfigSchema:
                 "crsbench_git_ref",
             ),
             (
-                "providers.gce.instance_profiles.gce-worker-n2d.github_deploy_key_file",
-                "file:.crsbench-keys/crsbench-deploy",
-                "github_deploy_key_file",
+                "providers.gce.instance_profiles.gce-worker-n2d.github_deploy_key_path",
+                ".crsbench-keys/crsbench-deploy",
+                "github_deploy_key_path",
             ),
         ],
     )
@@ -1366,6 +1366,21 @@ class TestExperimentConfigSchema:
         target[path_parts[-1]] = field_value
 
         with pytest.raises(PydanticValidationError, match=match):
+            ExperimentConfig(**data)
+
+    def test_cloud_provider_contract_rejects_file_reference_for_github_deploy_key_path(
+        self,
+    ) -> None:
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["defaults"]["github_deploy_key_path"] = (
+            "file:.crsbench-keys/crsbench-deploy"
+        )
+
+        with pytest.raises(
+            PydanticValidationError,
+            match="github_deploy_key_path.*file: references are not supported for path fields",
+        ):
             ExperimentConfig(**data)
 
     @pytest.mark.parametrize(

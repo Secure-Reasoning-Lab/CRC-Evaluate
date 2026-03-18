@@ -168,13 +168,13 @@ def _resolve_launch_defaults(
         crsbench_install_spec_field_path=defaults.crsbench_install_spec_field_path,
         crsbench_git_ref=defaults.crsbench_git_ref,
         crsbench_git_ref_field_path=defaults.crsbench_git_ref_field_path,
-        github_deploy_key_file=resolve_secret_path(
-            defaults.github_deploy_key_file,
-            field_path=defaults.github_deploy_key_file_field_path,
+        github_deploy_key_path=resolve_secret_path(
+            defaults.github_deploy_key_path,
+            field_path=defaults.github_deploy_key_path_field_path,
             env=env,
             cwd=cwd,
         ),
-        github_deploy_key_file_field_path=defaults.github_deploy_key_file_field_path,
+        github_deploy_key_path_field_path=defaults.github_deploy_key_path_field_path,
     )
 
 

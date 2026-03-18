@@ -492,13 +492,13 @@ def _make_provider_neutral_run_config(tmp_path: Path) -> ExperimentConfig:
 def _add_secret_refs_to_provider_neutral_run_config(
     config: ExperimentConfig,
     *,
-    deploy_key_ref: str = "file:.crsbench-keys/crsbench-deploy",
+    deploy_key_ref: str = ".crsbench-keys/crsbench-deploy",
     hf_token_ref: str = "os.environ/HF_TOKEN",
 ) -> ExperimentConfig:
     config = config.model_copy(deep=True)
     assert config.cloud is not None
     assert config.cloud.defaults is not None
-    config.cloud.defaults.github_deploy_key_file = deploy_key_ref
+    config.cloud.defaults.github_deploy_key_path = deploy_key_ref
     if config.cloud.env is None:
         config.cloud.env = {}
     config.cloud.env["HF_TOKEN"] = hf_token_ref
@@ -892,13 +892,13 @@ def test_provider_neutral_cloud_workers_resolve_secret_refs_before_bringup(
         resolved_plan = kwargs["plan"]
         assert resolved_plan.worker_placements[0].env["HF_TOKEN"] == "hf_secret_value"
         assert (
-            resolved_plan.worker_placements[0].launch_defaults.github_deploy_key_file
+            resolved_plan.worker_placements[0].launch_defaults.github_deploy_key_path
             == expected_key_path
         )
         assert launch_plan.worker_placements[0].env["HF_TOKEN"] == "os.environ/HF_TOKEN"
         assert (
-            launch_plan.worker_placements[0].launch_defaults.github_deploy_key_file
-            == "file:.crsbench-keys/crsbench-deploy"
+            launch_plan.worker_placements[0].launch_defaults.github_deploy_key_path
+            == ".crsbench-keys/crsbench-deploy"
         )
         raise RuntimeError("stop after resolved bringup")
 

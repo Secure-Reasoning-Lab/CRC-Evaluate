@@ -103,9 +103,7 @@ def test_resolve_secret_path_reads_env_relative_to_cwd(tmp_path: Path) -> None:
 
     resolved = resolve_secret_path(
         "os.environ/DEPLOY_KEY_PATH",
-        field_path=(
-            "cloud.providers.gce.instance_profiles.worker-n2d.github_deploy_key_file"
-        ),
+        field_path="cloud.defaults.github_deploy_key_path",
         env={"DEPLOY_KEY_PATH": ".crsbench-keys/crsbench-deploy"},
         cwd=tmp_path,
     )
@@ -116,7 +114,6 @@ def test_resolve_secret_path_reads_env_relative_to_cwd(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "value",
     [
-        "file:.crsbench-keys/missing",
         ".crsbench-keys/missing",
     ],
 )
@@ -131,12 +128,23 @@ def test_resolve_secret_path_reports_missing_file_with_field_context(
 
     with pytest.raises(
         CloudSecretReferenceError,
-        match="github_deploy_key_file",
+        match="github_deploy_key_path",
     ):
         resolve_secret_path(
             value,
-            field_path=(
-                "cloud.providers.gce.instance_profiles.worker-n2d.github_deploy_key_file"
-            ),
+            field_path="cloud.defaults.github_deploy_key_path",
             cwd=tmp_path,
+        )
+
+
+def test_resolve_secret_path_rejects_file_reference_for_path_fields() -> None:
+    from crsbench.cloud.secret_refs import (
+        CloudSecretReferenceError,
+        resolve_secret_path,
+    )
+
+    with pytest.raises(CloudSecretReferenceError, match="github_deploy_key_path"):
+        resolve_secret_path(
+            "file:.crsbench-keys/crsbench-deploy",
+            field_path="cloud.defaults.github_deploy_key_path",
         )

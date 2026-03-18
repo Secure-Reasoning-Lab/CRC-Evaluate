@@ -968,8 +968,8 @@ class TestIntegrationWithSampleConfigs:
             == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
         )
         assert (
-            config.cloud.defaults.github_deploy_key_file
-            == "file:.crsbench-keys/crsbench-deploy"
+            config.cloud.defaults.github_deploy_key_path
+            == ".crsbench-keys/crsbench-deploy"
         )
         assert config.cloud.env == {
             "CRSBENCH_LLM_UPSTREAM_BASE_URL": "os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL",
@@ -1008,8 +1008,8 @@ class TestIntegrationWithSampleConfigs:
             == 100
         )
         assert (
-            config.cloud.defaults.github_deploy_key_file
-            == "file:.crsbench-keys/crsbench-deploy"
+            config.cloud.defaults.github_deploy_key_path
+            == ".crsbench-keys/crsbench-deploy"
         )
         assert config.cloud.defaults.readiness_timeout_sec == 1200
         assert (

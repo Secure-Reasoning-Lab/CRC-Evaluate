@@ -23,6 +23,7 @@ from pydantic import (
 from crsbench.cloud.env_validation import normalize_env_name
 from crsbench.cloud.secret_refs import (
     CloudSecretReferenceError,
+    validate_secret_path_reference_format,
     validate_secret_reference_format,
 )
 from crsbench.cloud.types import (
@@ -1263,11 +1264,11 @@ class GceWorkerFleetConfig(BaseModel):
         default="main",
         description="Git branch, tag, or commit to checkout after cloning (only used with git+ssh:// install spec).",
     )
-    github_deploy_key_file: Optional[str] = Field(
+    github_deploy_key_path: Optional[str] = Field(
         default=None,
         description=(
-            "SSH private key path for GitHub deploy key access. Supports a plain path, "
-            "'file:...' path reference, or 'os.environ/NAME' at launch time. "
+            "SSH private key path for GitHub deploy key access. Supports a plain path "
+            "or 'os.environ/NAME' at launch time. "
             "The resolved file contents are base64-encoded and injected as "
             "crsbench-github-deploy-key instance metadata."
         ),
@@ -1287,7 +1288,7 @@ class GceWorkerFleetConfig(BaseModel):
         "zone",
         "region",
         "crsbench_install_spec",
-        "github_deploy_key_file",
+        "github_deploy_key_path",
     )
     @classmethod
     def normalize_optional_strings(cls, value: Optional[str]) -> Optional[str]:
@@ -1462,11 +1463,11 @@ class GceOrchestratorConfig(BaseModel):
         default="main",
         description="Git branch, tag, or commit to checkout after cloning (only used with git+ssh:// install spec).",
     )
-    github_deploy_key_file: Optional[str] = Field(
+    github_deploy_key_path: Optional[str] = Field(
         default=None,
         description=(
-            "SSH private key path for GitHub deploy key access. Supports a plain path, "
-            "'file:...' path reference, or 'os.environ/NAME' at launch time. "
+            "SSH private key path for GitHub deploy key access. Supports a plain path "
+            "or 'os.environ/NAME' at launch time. "
             "The resolved file contents are base64-encoded and injected as "
             "instance metadata."
         ),
@@ -1486,7 +1487,7 @@ class GceOrchestratorConfig(BaseModel):
         "zone",
         "region",
         "crsbench_install_spec",
-        "github_deploy_key_file",
+        "github_deploy_key_path",
     )
     @classmethod
     def normalize_optional_strings(cls, value: Optional[str]) -> Optional[str]:
@@ -1690,26 +1691,26 @@ class CloudLaunchDefaultsConfig(BaseModel):
     readiness_timeout_sec: Optional[int] = Field(default=None, ge=1)
     crsbench_install_spec: Optional[str] = Field(default=None)
     crsbench_git_ref: Optional[str] = Field(default=None)
-    github_deploy_key_file: Optional[str] = Field(default=None)
+    github_deploy_key_path: Optional[str] = Field(default=None)
 
     @field_validator(
         "crsbench_install_spec",
         "crsbench_git_ref",
-        "github_deploy_key_file",
+        "github_deploy_key_path",
     )
     @classmethod
     def normalize_optional_strings(cls, value: Optional[str]) -> Optional[str]:
         return _normalize_cloud_optional_string(value)
 
-    @field_validator("github_deploy_key_file")
+    @field_validator("github_deploy_key_path")
     @classmethod
-    def validate_github_deploy_key_file(cls, value: Optional[str]) -> Optional[str]:
+    def validate_github_deploy_key_path(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
         try:
-            return validate_secret_reference_format(
+            return validate_secret_path_reference_format(
                 value,
-                field_path="github_deploy_key_file",
+                field_path="github_deploy_key_path",
             )
         except CloudSecretReferenceError as exc:
             raise ValueError(str(exc)) from exc

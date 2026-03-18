@@ -35,8 +35,8 @@ class CloudLaunchDefaults:
     crsbench_install_spec_field_path: str = "cloud.defaults.crsbench_install_spec"
     crsbench_git_ref: str | None = None
     crsbench_git_ref_field_path: str = "cloud.defaults.crsbench_git_ref"
-    github_deploy_key_file: str | None = None
-    github_deploy_key_file_field_path: str = "cloud.defaults.github_deploy_key_file"
+    github_deploy_key_path: str | None = None
+    github_deploy_key_path_field_path: str = "cloud.defaults.github_deploy_key_path"
 
 
 @dataclass(frozen=True)
@@ -286,16 +286,16 @@ def _resolve_launch_defaults(
             provider_defaults=provider_defaults,
             field_name="crsbench_git_ref",
         ),
-        github_deploy_key_file=_get_launch_default_str(
+        github_deploy_key_path=_get_launch_default_str(
             cloud.defaults,
             provider_defaults,
-            "github_deploy_key_file",
+            "github_deploy_key_path",
         ),
-        github_deploy_key_file_field_path=_get_launch_default_field_path(
+        github_deploy_key_path_field_path=_get_launch_default_field_path(
             provider=provider,
             global_defaults=cloud.defaults,
             provider_defaults=provider_defaults,
-            field_name="github_deploy_key_file",
+            field_name="github_deploy_key_path",
         ),
     )
 

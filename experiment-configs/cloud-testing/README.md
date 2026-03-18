@@ -85,7 +85,7 @@ The checked-in config currently uses:
 
 - `cloud.defaults.crsbench_install_spec: git+ssh://git@github.com/sslab-gatech/CRSBench.git`
 - `cloud.defaults.crsbench_git_ref: feat/gcp`
-- `cloud.defaults.github_deploy_key_file: file:.crsbench-keys/crsbench-deploy`
+- `cloud.defaults.github_deploy_key_path: .crsbench-keys/crsbench-deploy`
 
 That only works if:
 
@@ -122,10 +122,10 @@ The checked-in config already points at that private key:
 cloud:
   defaults:
     crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
-    github_deploy_key_file: file:.crsbench-keys/crsbench-deploy
+    github_deploy_key_path: .crsbench-keys/crsbench-deploy
 ```
 
-`file:` paths resolve relative to the directory where you run the launch
+Relative deploy-key paths resolve from the directory where you run the launch
 command, so run the smoke test from the repo root if you keep the checked-in
 relative path.
 

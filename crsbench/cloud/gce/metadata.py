@@ -44,7 +44,7 @@ class _InstallMetadataConfig(Protocol):
     ssh_via_iap: bool
     crsbench_install_spec: str | None
     crsbench_git_ref: str
-    github_deploy_key_file: str | None
+    github_deploy_key_path: str | None
 
 
 def _sanitize_label_key(value: str) -> str:
@@ -265,8 +265,8 @@ def _apply_install_metadata(
         metadata[CRSBENCH_INSTALL_SPEC_KEY] = config.crsbench_install_spec
         metadata[CRSBENCH_GIT_REF_KEY] = config.crsbench_git_ref
 
-    if config.github_deploy_key_file:
-        key_bytes = Path(config.github_deploy_key_file).read_bytes()
+    if config.github_deploy_key_path:
+        key_bytes = Path(config.github_deploy_key_path).read_bytes()
         metadata[CRSBENCH_GITHUB_DEPLOY_KEY] = base64.b64encode(key_bytes).decode(
             "ascii"
         )

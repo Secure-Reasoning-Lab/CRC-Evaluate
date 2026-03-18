@@ -83,7 +83,7 @@ def redact_worker_fleet_config(fleet: GceWorkerFleetConfig) -> GceWorkerFleetCon
     """Return a fleet config safe to persist in local launch state."""
     return fleet.model_copy(
         update={
-            "github_deploy_key_file": None,
+            "github_deploy_key_path": None,
         }
     )
 

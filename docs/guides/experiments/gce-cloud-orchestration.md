@@ -111,7 +111,7 @@ Launch/bootstrap defaults live outside instance profiles:
 - `cloud.defaults.readiness_timeout_sec`
 - `cloud.defaults.crsbench_install_spec`
 - `cloud.defaults.crsbench_git_ref`
-- `cloud.defaults.github_deploy_key_file`
+- `cloud.defaults.github_deploy_key_path`
 
 Provider-specific overrides can replace those values through
 `cloud.providers.<provider>.defaults`.
@@ -298,7 +298,7 @@ Expected result:
 Add the public key to the repository that the VMs will clone. Read-only access
 is sufficient for smoke testing.
 
-When `github_deploy_key_file` is set, the provisioner reads the private key
+When `github_deploy_key_path` is set, the provisioner reads the private key
 file at provision time, base64-encodes it, and sets it as
 `crsbench-github-deploy-key` instance metadata. The startup script writes it to
 `/root/.ssh/id_ed25519` and uses it only for the top-level CRSBench clone.

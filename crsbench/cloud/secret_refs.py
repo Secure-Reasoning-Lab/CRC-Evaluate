@@ -66,7 +66,7 @@ def resolve_secret_path(
     env: Mapping[str, str] | None = None,
     cwd: Path | str | None = None,
 ) -> str | None:
-    """Resolve a path-bearing field from literal, env, or explicit file path ref."""
+    """Resolve a path-bearing field from a literal path or env-provided path."""
     if value is None:
         return None
 
@@ -81,7 +81,13 @@ def resolve_secret_path(
             empty_detail=f"env var {reference.value} resolved to an empty value",
         )
     elif reference.kind == "file":
-        path_value = _require_non_empty(reference.value, field_path=field_path)
+        raise CloudSecretReferenceError(
+            field_path=field_path,
+            detail=(
+                "file: references are not supported for path fields; "
+                "use a plain path or os.environ/NAME"
+            ),
+        )
     else:
         raise AssertionError(f"Unsupported reference kind: {reference.kind}")
 
@@ -97,6 +103,24 @@ def validate_secret_reference_format(value: str, *, field_path: str) -> str:
         return f"os.environ/{reference.value}"
     if reference.kind == "file":
         return f"file:{_require_non_empty(reference.value, field_path=field_path)}"
+    raise AssertionError(f"Unsupported reference kind: {reference.kind}")
+
+
+def validate_secret_path_reference_format(value: str, *, field_path: str) -> str:
+    """Validate path-bearing secret-reference syntax without resolving files."""
+    reference = _parse_reference(value, field_path=field_path)
+    if reference.kind == "literal":
+        return _require_non_empty(reference.value, field_path=field_path)
+    if reference.kind == "env":
+        return f"os.environ/{reference.value}"
+    if reference.kind == "file":
+        raise CloudSecretReferenceError(
+            field_path=field_path,
+            detail=(
+                "file: references are not supported for path fields; "
+                "use a plain path or os.environ/NAME"
+            ),
+        )
     raise AssertionError(f"Unsupported reference kind: {reference.kind}")
 
 

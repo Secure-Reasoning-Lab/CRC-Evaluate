@@ -110,7 +110,7 @@ class GceProviderAdapter:
             crsbench_install_spec=plan.orchestrator.launch_defaults.crsbench_install_spec,
             crsbench_git_ref=plan.orchestrator.launch_defaults.crsbench_git_ref
             or "main",
-            github_deploy_key_file=plan.orchestrator.launch_defaults.github_deploy_key_file,
+            github_deploy_key_path=plan.orchestrator.launch_defaults.github_deploy_key_path,
         )
 
     def build_worker_fleets(self, plan: CloudLaunchPlan) -> list[GceWorkerFleetConfig]:
@@ -149,7 +149,7 @@ class GceProviderAdapter:
                     crsbench_install_spec=placement.launch_defaults.crsbench_install_spec,
                     crsbench_git_ref=placement.launch_defaults.crsbench_git_ref
                     or "main",
-                    github_deploy_key_file=placement.launch_defaults.github_deploy_key_file,
+                    github_deploy_key_path=placement.launch_defaults.github_deploy_key_path,
                 )
             )
             next_index_by_zone[placement.zone] = start_index + placement.count
@@ -194,7 +194,7 @@ class GceProviderAdapter:
                     crsbench_install_spec=placement.launch_defaults.crsbench_install_spec,
                     crsbench_git_ref=placement.launch_defaults.crsbench_git_ref
                     or "main",
-                    github_deploy_key_file=placement.launch_defaults.github_deploy_key_file,
+                    github_deploy_key_path=placement.launch_defaults.github_deploy_key_path,
                 )
             )
             next_index_by_zone[placement.zone] = start_index + placement.count

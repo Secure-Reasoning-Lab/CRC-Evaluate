@@ -26,7 +26,7 @@ Managed cloud execution uses a provider-neutral top-level shape:
   optional `profile_defaults`
 - `cloud.defaults`: provider-agnostic launch/bootstrap defaults such as
   `readiness_timeout_sec`, `crsbench_install_spec`, `crsbench_git_ref`, and
-  `github_deploy_key_file`
+  `github_deploy_key_path`
 - `cloud.env`: global environment variables merged into all launched cloud roles
 - `cloud.orchestrator`: zone and instance-profile reference for the remote
   orchestrator VM, plus optional orchestrator-only `env`

@@ -322,7 +322,7 @@ def test_build_instance_metadata_fleet_config_install_spec_overrides_manual_meta
 
 
 def test_metadata_includes_github_deploy_key(tmp_path):
-    """github_deploy_key_file in fleet config causes base64-encoded key in metadata."""
+    """github_deploy_key_path in fleet config causes base64-encoded key in metadata."""
     from crsbench.cloud.gce.metadata import (
         CRSBENCH_GITHUB_DEPLOY_KEY,
         build_instance_metadata,
@@ -333,7 +333,7 @@ def test_metadata_includes_github_deploy_key(tmp_path):
     key_file.write_bytes(key_content)
 
     fleet = _make_fleet(
-        github_deploy_key_file=str(key_file),
+        github_deploy_key_path=str(key_file),
         metadata={"custom-key": "custom-value"},
     )
     metadata = build_instance_metadata(

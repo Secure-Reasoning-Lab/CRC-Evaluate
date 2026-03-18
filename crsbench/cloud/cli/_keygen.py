@@ -94,7 +94,7 @@ def run_keygen(args: argparse.Namespace) -> int:
         "(Settings > Deploy keys > Add deploy key).\n"
     )
     _write("\n")
-    _write("Private key path (set github_deploy_key_file in your fleet config):\n")
+    _write("Private key path (set github_deploy_key_path in your fleet config):\n")
     _write(f"  {key_path}\n")
 
     return 0

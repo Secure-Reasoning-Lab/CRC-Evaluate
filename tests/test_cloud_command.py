@@ -380,13 +380,13 @@ def _make_provider_neutral_experiment_config_with_evaluators() -> ExperimentConf
 def _add_secret_refs_to_provider_neutral_config(
     config: ExperimentConfig,
     *,
-    deploy_key_ref: str = "file:.crsbench-keys/crsbench-deploy",
+    deploy_key_ref: str = ".crsbench-keys/crsbench-deploy",
     hf_token_ref: str = "os.environ/HF_TOKEN",
 ) -> ExperimentConfig:
     config = config.model_copy(deep=True)
     assert config.cloud is not None
     assert config.cloud.defaults is not None
-    config.cloud.defaults.github_deploy_key_file = deploy_key_ref
+    config.cloud.defaults.github_deploy_key_path = deploy_key_ref
     if config.cloud.env is None:
         config.cloud.env = {}
     config.cloud.env["HF_TOKEN"] = hf_token_ref
@@ -618,15 +618,15 @@ def test_prepare_gce_launch_inputs_resolves_provider_neutral_secret_refs(
 
     assert launch_plan.orchestrator.env["HF_TOKEN"] == "os.environ/HF_TOKEN"
     assert (
-        launch_plan.worker_placements[0].launch_defaults.github_deploy_key_file
-        == "file:.crsbench-keys/crsbench-deploy"
+        launch_plan.worker_placements[0].launch_defaults.github_deploy_key_path
+        == ".crsbench-keys/crsbench-deploy"
     )
     assert preflight.orchestrator_env["HF_TOKEN"] == "hf_secret_value"
     assert preflight.worker_placement_envs[0]["HF_TOKEN"] == "hf_secret_value"
     assert preflight.resolved_plan.worker_placements[
         0
-    ].launch_defaults.github_deploy_key_file == str(key_path)
-    assert preflight.redacted_worker_fleets[0].github_deploy_key_file is None
+    ].launch_defaults.github_deploy_key_path == str(key_path)
+    assert preflight.redacted_worker_fleets[0].github_deploy_key_path is None
 
 
 def test_prepare_gce_launch_inputs_resolves_layered_env_per_placement(
@@ -1615,7 +1615,7 @@ def test_save_launch_state_redacts_secret_bearing_worker_fields(tmp_path: Path) 
                 service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
                 owner_label="team-crs",
                 worker_name_prefix="test-exp-us-east5-b",
-                github_deploy_key_file="file:.crsbench-keys/crsbench-deploy",
+                github_deploy_key_path=".crsbench-keys/crsbench-deploy",
             )
         ],
     )
@@ -1627,11 +1627,11 @@ def test_save_launch_state_redacts_secret_bearing_worker_fields(tmp_path: Path) 
             encoding="utf-8"
         )
     )
-    assert raw_state["worker_fleet_configs"][0]["github_deploy_key_file"] is None
+    assert raw_state["worker_fleet_configs"][0]["github_deploy_key_path"] is None
 
     loaded_state = load_launch_state(config_path, "test-exp")
     assert loaded_state is not None
-    assert loaded_state.worker_fleet_configs[0].github_deploy_key_file is None
+    assert loaded_state.worker_fleet_configs[0].github_deploy_key_path is None
 
 
 def test_append_created_instance_records_appends_jsonl_entries(tmp_path: Path) -> None:
