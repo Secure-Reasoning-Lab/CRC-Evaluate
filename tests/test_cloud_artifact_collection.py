@@ -589,3 +589,52 @@ class TestRemoteLogCollection:
         ).read_text(encoding="utf-8") == (trial_dir / "worker.log").read_text(
             encoding="utf-8"
         )
+
+    def test_collect_logs_raises_when_remote_command_transport_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        config_path = tmp_path / "config.yaml"
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+        collector = ArtifactCollector(base_path=config_path)
+
+        def _fake_remote_command(*args, **kwargs):
+            del args, kwargs
+            return subprocess.CompletedProcess(
+                args=["ssh"],
+                returncode=255,
+                stdout="",
+                stderr="ssh: connect to host failed",
+            )
+
+        def _fake_subprocess_run(cmd, *_args, **_kwargs):
+            if cmd and cmd[:3] == ["gcloud", "compute", "os-login"]:
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout="test-user\n",
+                    stderr="",
+                )
+
+            if cmd and cmd[0] in {"ssh-keygen", "ssh-keyscan"}:
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout="ssh-ed25519 AAAATESTKEY\n",
+                    stderr="",
+                )
+
+            raise AssertionError(f"unexpected subprocess invocation: {cmd!r}")
+
+        monkeypatch.setattr(collector, "_run_remote_command", _fake_remote_command)
+        with patch("subprocess.run", side_effect=_fake_subprocess_run):
+            with pytest.raises(ArtifactCollectionError):
+                collector.collect_logs(
+                    worker=worker,
+                    fleet=fleet,
+                    experiment_name="exp-42",
+                    experiment_filestore=experiment_filestore,
+                    remote_experiment_dir="/data/experiments/exp-42",
+                )

@@ -156,6 +156,10 @@ class ArtifactCollector:
                 ssh_user=ssh_user,
                 command=command,
             )
+            if output.returncode != 0:
+                raise ArtifactCollectionError(
+                    f"remote log command failed for {worker.name}: {command}"
+                )
             combined = output.stdout
             if output.stderr:
                 combined = f"{combined}\n{output.stderr}".strip() + "\n"
