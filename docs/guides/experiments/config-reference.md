@@ -55,8 +55,10 @@ For GCE in v1:
   whether GCE attaches ephemeral external NAT for outbound internet access
 - cloud env merge order is:
   `cloud.env -> profile_defaults.env -> instance_profile.env -> role/default placement env`
-- the checked-in example is
+- the checked-in examples are
   `experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml`
+  and
+  `experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval-multilang-given-fuzzer.yaml`
 
 ## Input Contract
 

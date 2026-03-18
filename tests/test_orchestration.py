@@ -905,113 +905,25 @@ benchmarks:
 class TestIntegrationWithSampleConfigs:
     """Test integration with actual sample configs from experiment-configs/."""
 
-    def test_sanity_bugfinding_smoke_config_enables_pov_early_stop(self):
-        """Smoke bug-finding preset should enable POV early termination explicitly."""
-        config = load_experiment_config(
-            Path(
-                "experiment-configs/sanity-bugfinding/"
-                "atlantis-multilang-given_fuzzer-default-delta.yaml"
-            )
-        )
-
-        assert config.pov_early_stop is True
-
-    def test_sanity_bugfixing_smoke_config_relies_on_compose_cpu_limit(self):
-        """Smoke bug-fixing preset should not inject a trial CPU fallback."""
-        config = load_experiment_config(
-            Path(
-                "experiment-configs/sanity-bugfixing/"
-                "crs-copilot-cli-gpt-5-3-codex-delta-sanity-mock-c.yaml"
-            )
-        )
-
-        assert config.resources is None or config.resources.cores_per_trial is None
-        assert config.crs_compose is not None
-        assert config.crs_compose.services["crs-copilot-cli"].num_cores == 8
-
-    def test_remote_gce_sample_config_loads_for_cloud_launch(self):
-        """The checked-in GCE sanity config should exercise remote-orchestrator launch."""
-        config_path = Path(
-            "experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml"
-        )
-
-        assert config_path.exists(), (
-            f"Expected checked-in sample config at {config_path}"
-        )
-
-        config = load_experiment_config(config_path)
-
-        assert config.cloud is not None
-        assert config.build_timeout == 3600
-        assert config.max_total_time > (
-            config.build_timeout + config.run_timeout + config.verify_timeout
-        )
-        assert config.crs_compose is not None
-        assert set(config.crs_compose.services) == {"crs-libfuzzer"}
-        assert config.cloud.bootstrap.prepare_mode == "full"
-        assert config.cloud.bootstrap.download_benchmarks == "auto"
-        assert config.cloud.env == {
-            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL",
-            "CRSBENCH_LLM_MASTER_KEY": "os.environ/CRSBENCH_LLM_MASTER_KEY",
-            "HF_TOKEN": "os.environ/HF_TOKEN",
-        }
-        assert config.cloud.providers is not None
-        assert config.cloud.providers.gce is not None
-        assert config.cloud.defaults is not None
-        assert config.cloud.providers.gce.profile_defaults is not None
-        assert config.cloud.workers is not None
-        assert config.cloud.evaluators is not None
-        assert config.cloud.orchestrator is not None
-        assert config.experiment == "gce-sanity-1o2w1e"
-        assert (
-            config.cloud.defaults.crsbench_install_spec
-            == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
-        )
-        assert (
-            config.cloud.defaults.github_deploy_key_path
-            == ".crsbench-keys/crsbench-deploy"
-        )
-        assert config.cloud.env == {
-            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL",
-            "CRSBENCH_LLM_MASTER_KEY": "os.environ/CRSBENCH_LLM_MASTER_KEY",
-            "HF_TOKEN": "os.environ/HF_TOKEN",
-        }
-        assert config.cloud.workers.defaults is not None
-        assert config.cloud.workers.defaults.instance_profile == "gce-worker-n2d"
-
-    def test_remote_gce_multilang_given_fuzzer_sample_config_loads_for_cloud_launch(
+    def _assert_remote_gce_smoke_common(
         self,
-    ):
-        """The Atlantis GCE sanity config should exercise remote-orchestrator launch."""
-        config_path = Path(
-            "experiment-configs/cloud-testing/"
-            "gce-sanity-1orch-2worker-1eval-multilang-given-fuzzer.yaml"
-        )
-
-        assert config_path.exists(), (
-            f"Expected checked-in sample config at {config_path}"
-        )
-
-        config = load_experiment_config(config_path)
-
+        config,
+        *,
+        experiment_name: str,
+        expected_cloud_env: dict[str, str],
+        expected_services: set[str],
+    ) -> None:
+        """Checked-in remote GCE smoke configs should keep the same launch topology."""
         assert config.cloud is not None
         assert config.build_timeout == 3600
         assert config.max_total_time > (
             config.build_timeout + config.run_timeout + config.verify_timeout
         )
-        assert config.pov_early_stop is True
-        assert config.inputs.sarif.enabled is True
-        assert config.inputs.sarif.level == 5
-        assert config.inputs.diff.enabled is True
         assert config.crs_compose is not None
-        assert set(config.crs_compose.services) == {"atlantis-multilang-given_fuzzer"}
+        assert set(config.crs_compose.services) == expected_services
         assert config.cloud.bootstrap.prepare_mode == "full"
         assert config.cloud.bootstrap.download_benchmarks == "auto"
-        assert config.cloud.env == {
-            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL",
-            "CRSBENCH_LLM_MASTER_KEY": "os.environ/CRSBENCH_LLM_MASTER_KEY",
-            "HF_TOKEN": "os.environ/HF_TOKEN",
-        }
+        assert config.cloud.env == expected_cloud_env
         assert config.cloud.providers is not None
         assert config.cloud.providers.gce is not None
         assert config.cloud.defaults is not None
@@ -1019,7 +931,7 @@ class TestIntegrationWithSampleConfigs:
         assert config.cloud.workers is not None
         assert config.cloud.evaluators is not None
         assert config.cloud.orchestrator is not None
-        assert config.experiment == "gce-sanity-mgf-1o2w1e"
+        assert config.experiment == experiment_name
         assert (
             config.cloud.defaults.crsbench_install_spec
             == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
@@ -1050,20 +962,11 @@ class TestIntegrationWithSampleConfigs:
             == 100
         )
         assert (
-            config.cloud.defaults.crsbench_install_spec
-            == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
-        )
-        assert (
             config.cloud.providers.gce.instance_profiles[
                 "gce-orchestrator-n2d"
             ].boot_disk_size_gb
             == 100
         )
-        assert (
-            config.cloud.defaults.github_deploy_key_path
-            == ".crsbench-keys/crsbench-deploy"
-        )
-        assert config.cloud.defaults.readiness_timeout_sec == 1200
         assert (
             config.cloud.providers.gce.instance_profiles[
                 "gce-worker-n2d"
@@ -1084,6 +987,80 @@ class TestIntegrationWithSampleConfigs:
             1,
             1,
         ]
+
+    def test_sanity_bugfinding_smoke_config_enables_pov_early_stop(self):
+        """Smoke bug-finding preset should enable POV early termination explicitly."""
+        config = load_experiment_config(
+            Path(
+                "experiment-configs/sanity-bugfinding/"
+                "atlantis-multilang-given_fuzzer-default-delta.yaml"
+            )
+        )
+
+        assert config.pov_early_stop is True
+
+    def test_sanity_bugfixing_smoke_config_relies_on_compose_cpu_limit(self):
+        """Smoke bug-fixing preset should not inject a trial CPU fallback."""
+        config = load_experiment_config(
+            Path(
+                "experiment-configs/sanity-bugfixing/"
+                "crs-copilot-cli-gpt-5-3-codex-delta-sanity-mock-c.yaml"
+            )
+        )
+
+        assert config.resources is None or config.resources.cores_per_trial is None
+        assert config.crs_compose is not None
+        assert config.crs_compose.services["crs-copilot-cli"].num_cores == 8
+
+    def test_remote_gce_sample_config_loads_for_cloud_launch(self):
+        """The checked-in GCE sanity config should parse with launch defaults."""
+        config_path = Path(
+            "experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml"
+        )
+
+        assert config_path.exists(), (
+            f"Expected checked-in sample config at {config_path}"
+        )
+
+        config = load_experiment_config(config_path)
+
+        self._assert_remote_gce_smoke_common(
+            config,
+            experiment_name="gce-sanity-1o2w1e",
+            expected_cloud_env={
+                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL",
+                "CRSBENCH_LLM_MASTER_KEY": "os.environ/CRSBENCH_LLM_MASTER_KEY",
+                "HF_TOKEN": "os.environ/HF_TOKEN",
+            },
+            expected_services={"crs-libfuzzer"},
+        )
+
+    def test_remote_gce_multilang_given_fuzzer_sample_config_loads_for_cloud_launch(
+        self,
+    ):
+        """The Atlantis GCE sanity config should parse with launch defaults."""
+        config_path = Path(
+            "experiment-configs/cloud-testing/"
+            "gce-sanity-1orch-2worker-1eval-multilang-given-fuzzer.yaml"
+        )
+
+        assert config_path.exists(), (
+            f"Expected checked-in sample config at {config_path}"
+        )
+
+        config = load_experiment_config(config_path)
+
+        self._assert_remote_gce_smoke_common(
+            config,
+            experiment_name="gce-sanity-mgf-1o2w1e",
+            expected_cloud_env={},
+            expected_services={"atlantis-multilang-given_fuzzer"},
+        )
+
+        assert config.pov_early_stop is True
+        assert config.inputs.sarif.enabled is True
+        assert config.inputs.sarif.level == 5
+        assert config.inputs.diff.enabled is True
 
     def test_e2e_with_sample_config_single_crs(self, tmp_path):
         """Test end-to-end workflow with a sample single-CRS config."""

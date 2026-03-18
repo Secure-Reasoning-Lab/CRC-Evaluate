@@ -424,10 +424,13 @@ orchestrator/worker processes as `systemd --user` services while pre-creating
 the delegated `user@<uid>.service/crsbench` and
 `user@<uid>.service/oss-crs` cgroup hierarchies expected by the CRSBench
 runtime and the `oss-crs` CLI.
-The checked-in smoke config uses `cloud.defaults.readiness_timeout_sec: 1200`,
+The checked-in smoke configs use `cloud.defaults.readiness_timeout_sec: 1200`,
 `boot_disk_size_gb: 100` via `cloud.providers.gce.profile_defaults`, and
 `runtime.build_timeout: 3600` so fresh-image smoke runs have room to finish
-bootstrap plus a real CRS prepare/build cycle.
+bootstrap plus a real CRS prepare/build cycle. The Atlantis
+`atlantis-multilang-given_fuzzer` sample also enables `runtime.pov_early_stop`
+plus `inputs.sarif` and `inputs.diff` to match the existing Atlantis sanity
+bug-finding preset shape.
 
 ## Monitoring
 

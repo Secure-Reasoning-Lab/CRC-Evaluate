@@ -23,9 +23,14 @@ Both use the same GCE topology:
 Both checked-in experiment identifiers stay under the 63-character GCE name
 limit by using compact role suffixes: `orch`, `work`, and `eval`.
 
-The command examples below use the `crs-libfuzzer` sample config, but you can
-substitute the Atlantis file path directly when you want to smoke-test
-`atlantis-multilang-given_fuzzer`.
+The command examples below use the `crs-libfuzzer` sample config. For the
+Atlantis preset, replace:
+
+- the config path with
+  `experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval-multilang-given-fuzzer.yaml`
+- the experiment name `gce-sanity-1o2w1e` with `gce-sanity-mgf-1o2w1e`
+- the remote dir `/tmp/crsbench/experiment-data/gce-sanity-1o2w1e` with
+  `/tmp/crsbench/experiment-data/gce-sanity-mgf-1o2w1e`
 
 These configs are for:
 
@@ -141,13 +146,18 @@ Relative deploy-key paths resolve from the directory where you run the launch
 command, so run the smoke test from the repo root if you keep the checked-in
 relative path.
 
-Optional: if your dataset access requires Hugging Face credentials, export a
-token before launch and point the config at `cloud.env.HF_TOKEN:
-os.environ/HF_TOKEN`.
+Optional for the checked-in `gce-sanity-1orch-2worker-1eval.yaml`
+`crs-libfuzzer` sample: if your dataset access requires Hugging Face
+credentials, export a token before launch and point the config at
+`cloud.env.HF_TOKEN: os.environ/HF_TOKEN`.
 
-For the checked-in smoke config, `HF_TOKEN` is still required because launch
-preflight resolves `cloud.env.HF_TOKEN` before provisioning even though
-`sanity` auto-skips the VM-side download step.
+For the checked-in `gce-sanity-1orch-2worker-1eval.yaml` `crs-libfuzzer`
+sample, `HF_TOKEN` is still required because launch preflight resolves
+`cloud.env.HF_TOKEN` before provisioning even though `sanity` auto-skips the
+VM-side download step. The Atlantis
+`gce-sanity-1orch-2worker-1eval-multilang-given-fuzzer.yaml` sample leaves
+`cloud.env` empty because that CRS does not need LLM credentials and the
+checked-in `sanity` bring-up skips VM-side benchmark download.
 
 If you launch through the normal CRSBench CLI, this can come from either:
 
@@ -179,7 +189,8 @@ Expected result:
 - missing or empty configured env vars fail launch before any VM is created
 - runtime-managed vars such as `CRSBENCH_REDIS_HOST` are rejected in config validation
 
-The checked-in `gce-sanity-1orch-2worker-1eval.yaml` now includes:
+The checked-in `gce-sanity-1orch-2worker-1eval.yaml` `crs-libfuzzer` sample
+now includes:
 
 - `CRSBENCH_LLM_UPSTREAM_BASE_URL`
 - `CRSBENCH_LLM_MASTER_KEY`
@@ -191,6 +202,11 @@ The checked-in `gce-sanity-1orch-2worker-1eval.yaml` now includes:
 
 So the operator must export those before launch. Using a `.env` file is also
 fine when you launch through the CRSBench CLI.
+
+The Atlantis
+`gce-sanity-1orch-2worker-1eval-multilang-given-fuzzer.yaml` sample does not
+declare any `cloud.env` secrets, so it does not require `CRSBENCH_LLM_*` or
+`HF_TOKEN` exports for launch preflight.
 
 4. Confirm quota is sufficient for this exact layout:
 
