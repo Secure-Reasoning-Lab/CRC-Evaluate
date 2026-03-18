@@ -94,6 +94,50 @@ class TestRunEvaluatorMain:
         assert kwargs["verify_cores_per_job"] is None
 
     @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
+    @patch("crsbench.distributed.evaluator._report_cloud_runtime_state")
+    @patch("crsbench.distributed.ci_supervisor.run_ci_supervisor")
+    def test_reports_cloud_readiness_before_starting_supervisor(
+        self,
+        mock_supervisor: MagicMock,
+        mock_report_state: MagicMock,
+    ) -> None:
+        """Cloud-managed evaluators should promote readiness before gating trials."""
+        from crsbench.distributed.evaluator import run_evaluator_main
+
+        mock_supervisor.return_value = 0
+        config = MagicMock()
+        config.oss_fuzz_path = "/tmp/oss-fuzz"
+        config.per_pov_verify_timeout = 180
+
+        with (
+            patch("crsbench.evaluation.verification.pov.engine.VerificationEngine"),
+            patch("crsbench.distributed.evaluator_jobs.set_engine"),
+        ):
+            result = run_evaluator_main(
+                config,
+                "exp-test",
+                redis_host="redis.internal:6379",
+            )
+
+        assert result == 0
+        assert mock_report_state.call_args_list == [
+            (
+                ("redis.internal:6379",),
+                {
+                    "state": "registering",
+                    "detail": "Preparing evaluator runtime for build and verify queues",
+                },
+            ),
+            (
+                ("redis.internal:6379",),
+                {
+                    "state": "ready",
+                    "detail": "Evaluator supervisor managing build and verify queues",
+                },
+            ),
+        ]
+
+    @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
     def test_rejects_invalid_redis_host(self) -> None:
         """run_evaluator_main should reject invalid redis host values."""
         from crsbench.distributed.evaluator import run_evaluator_main
