@@ -5,7 +5,9 @@ Use this page for queue cleanup, continue-vs-fresh behavior, and retry flows.
 ## Snapshot Versus Live Attach
 
 - `crsbench cloud status <experiment> --config <config.yaml>` prints a one-shot
-  fleet, job, and recovery snapshot.
+  fleet, job, and recovery snapshot. In remote-orchestrator mode it waits for
+  the Redis tunnel during bootstrap and falls back to the live queue view if
+  lifecycle rows have not been populated yet.
 - `crsbench cloud monitor <experiment> --config <config.yaml>` attaches to a
   launched remote orchestrator and keeps refreshing the live trial-queue view.
 

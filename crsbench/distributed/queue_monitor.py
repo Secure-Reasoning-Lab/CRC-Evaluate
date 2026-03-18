@@ -7,7 +7,11 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
-from crsbench.distributed.queue import get_existing_trials, get_queue_stats
+from crsbench.distributed.queue import (
+    get_existing_trials,
+    get_queue_stats,
+    get_trial_key,
+)
 from crsbench.utils import log_progress, log_section, log_summary
 from crsbench.utils.logger import get_logger
 
@@ -30,6 +34,17 @@ class RunningJobInfo:
     trial_num: str
     phase: str
     elapsed: str
+
+
+@dataclass(frozen=True)
+class QueueJobEntry:
+    """Experiment-scoped job row derived directly from RQ queue registries."""
+
+    job_id: str
+    trial_key: str
+    state: str
+    claimed_by: str | None
+    retry_count: int
 
 
 @dataclass(frozen=True)
@@ -93,6 +108,45 @@ def build_monitor_snapshot(queue, experiment_name: str) -> QueueMonitorSnapshot:
         )
 
     return QueueMonitorSnapshot(stats=stats, running_jobs=running_jobs)
+
+
+def list_queue_job_entries(queue, experiment_name: str) -> list[QueueJobEntry]:
+    """Return queue-derived per-job status rows for one experiment."""
+    existing = get_existing_trials(queue, experiment_name=experiment_name)
+    entries: list[QueueJobEntry] = []
+    state_map = (
+        ("queued", "queued"),
+        ("deferred", "deferred"),
+        ("scheduled", "scheduled"),
+        ("started", "running"),
+        ("finished", "completed"),
+        ("failed", "failed"),
+    )
+
+    for bucket_name, state in state_map:
+        for job in existing[bucket_name].values():
+            refresh = getattr(job, "refresh", None)
+            if callable(refresh):
+                refresh()
+            meta = getattr(job, "meta", {}) or {}
+            retry_count = meta.get("retry_count", 0)
+            if not isinstance(retry_count, int):
+                retry_count = 0
+            claimed_by = meta.get("worker_name")
+            if not isinstance(claimed_by, str) or not claimed_by.strip():
+                claimed_by = None
+            entries.append(
+                QueueJobEntry(
+                    job_id=str(getattr(job, "id", "") or ""),
+                    trial_key=get_trial_key(job),
+                    state=state,
+                    claimed_by=claimed_by,
+                    retry_count=retry_count,
+                )
+            )
+
+    entries.sort(key=lambda entry: entry.job_id)
+    return entries
 
 
 def monitor_queue(

@@ -6,6 +6,7 @@ for distributed CRS trial execution.
 
 import os
 import re
+import time
 from enum import StrEnum
 from typing import List, Optional
 
@@ -301,6 +302,42 @@ def check_redis_available(redis_host: str, timeout: int = 2) -> bool:
     """
     probe_state, _detail = probe_redis_connection(redis_host, timeout=timeout)
     return probe_state is RedisConnectionProbe.READY
+
+
+def wait_for_redis_connection(
+    redis_host: str,
+    *,
+    redis_password: str | None = None,
+    timeout_sec: int,
+    poll_interval_sec: float = 5.0,
+    probe_timeout_sec: int = 2,
+) -> None:
+    """Wait until Redis responds successfully or fail on timeout/fatal errors."""
+    deadline = time.monotonic() + float(timeout_sec)
+    last_detail = "Redis did not become ready"
+
+    while True:
+        probe_state, detail = probe_redis_connection(
+            redis_host,
+            timeout=probe_timeout_sec,
+            redis_password=redis_password,
+        )
+        if probe_state is RedisConnectionProbe.READY:
+            return
+        if probe_state is RedisConnectionProbe.FATAL:
+            raise RuntimeError(
+                f"Failed to connect to Redis at {redis_host}: "
+                f"{detail or 'fatal Redis probe error'}"
+            )
+
+        last_detail = detail or last_detail
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(
+                f"Timed out waiting for Redis at {redis_host} after "
+                f"{timeout_sec}s: {last_detail}"
+            )
+        time.sleep(min(poll_interval_sec, remaining))
 
 
 def initialize_queue(

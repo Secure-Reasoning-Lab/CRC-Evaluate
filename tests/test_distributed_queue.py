@@ -3,6 +3,7 @@
 from unittest.mock import Mock, patch
 
 import crsbench.distributed.queue as queue_module
+import pytest
 
 
 @patch.object(queue_module, "create_redis_connection")
@@ -95,3 +96,51 @@ def test_initialize_queue_passes_explicit_redis_password(
         "redis.internal:6379",
         redis_password="shared-secret",
     )
+
+
+@patch.object(queue_module, "time")
+@patch.object(queue_module, "probe_redis_connection")
+def test_wait_for_redis_connection_retries_until_ready(
+    mock_probe_redis_connection: Mock,
+    mock_time,
+) -> None:
+    """Retryable Redis startup failures should be polled until the server is ready."""
+    mock_time.monotonic.side_effect = [0.0, 0.0, 0.5]
+    mock_probe_redis_connection.side_effect = [
+        (queue_module.RedisConnectionProbe.RETRYABLE, "connection reset"),
+        (queue_module.RedisConnectionProbe.READY, None),
+    ]
+
+    queue_module.wait_for_redis_connection(
+        "redis.internal:6379",
+        redis_password="shared-secret",
+        timeout_sec=30,
+        poll_interval_sec=0.5,
+        probe_timeout_sec=1,
+    )
+
+    assert mock_probe_redis_connection.call_count == 2
+    mock_probe_redis_connection.assert_any_call(
+        "redis.internal:6379",
+        timeout=1,
+        redis_password="shared-secret",
+    )
+    mock_time.sleep.assert_called_once_with(0.5)
+
+
+@patch.object(queue_module, "probe_redis_connection")
+def test_wait_for_redis_connection_raises_on_fatal_probe(
+    mock_probe_redis_connection: Mock,
+) -> None:
+    """Authentication and other fatal probe failures should not be retried."""
+    mock_probe_redis_connection.return_value = (
+        queue_module.RedisConnectionProbe.FATAL,
+        "bad password",
+    )
+
+    with pytest.raises(RuntimeError, match="bad password"):
+        queue_module.wait_for_redis_connection(
+            "redis.internal:6379",
+            redis_password="shared-secret",
+            timeout_sec=30,
+        )

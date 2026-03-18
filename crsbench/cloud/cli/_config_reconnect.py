@@ -20,7 +20,10 @@ from crsbench.cloud.models import CloudLaunchPlan, build_cloud_launch_plan
 from crsbench.cloud.orchestrator_tunnel import OrchestratorRedisTunnel
 from crsbench.cloud.readiness import CloudReadinessStore
 from crsbench.distributed.job_lifecycle import JobLifecycleStore
-from crsbench.distributed.queue import create_redis_connection
+from crsbench.distributed.queue import (
+    create_redis_connection,
+    wait_for_redis_connection,
+)
 from crsbench.run_experiment import load_experiment_config
 from crsbench.utils.logger import get_logger
 from crsbench.validation.schemas import CloudOrchestratorPlacementConfig
@@ -47,6 +50,19 @@ class ResolvedCloudContext:
 
 
 logger = get_logger(__name__)
+_DEFAULT_REMOTE_REDIS_READY_TIMEOUT_SEC = 300
+
+
+def _resolve_remote_redis_ready_timeout_sec(context: ResolvedCloudContext) -> int:
+    """Return how long reconnect callers should wait for remote Redis startup."""
+    launch_plan = context.launch_plan
+    launch_defaults = getattr(
+        getattr(launch_plan, "orchestrator", None), "launch_defaults", None
+    )
+    timeout = getattr(launch_defaults, "readiness_timeout_sec", None)
+    if isinstance(timeout, int) and timeout > 0:
+        return timeout
+    return _DEFAULT_REMOTE_REDIS_READY_TIMEOUT_SEC
 
 
 def _register_tunnel_cleanup(redis_conn, tunnel: OrchestratorRedisTunnel) -> None:
@@ -150,7 +166,12 @@ def resolve_cloud_context(
     )
 
 
-def reconnect(config_path: str, experiment_name: str):  # noqa: ARG001
+def reconnect(
+    config_path: str,
+    experiment_name: str,
+    *,
+    wait_for_remote_redis: bool = False,
+):  # noqa: ARG001
     """Bootstrap operational context from a config YAML for standalone cloud commands.
 
     Args:
@@ -179,6 +200,12 @@ def reconnect(config_path: str, experiment_name: str):  # noqa: ARG001
         )
         tunnel.start()
         redis_host = tunnel.redis_host
+        if wait_for_remote_redis:
+            wait_for_redis_connection(
+                redis_host,
+                redis_password=context.redis_password,
+                timeout_sec=_resolve_remote_redis_ready_timeout_sec(context),
+            )
 
     try:
         redis_conn = create_redis_connection(redis_host)

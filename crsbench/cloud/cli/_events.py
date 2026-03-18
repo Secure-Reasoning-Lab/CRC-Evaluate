@@ -6,17 +6,26 @@ import json
 from typing import TYPE_CHECKING
 
 from crsbench.cloud.cli._config_reconnect import reconnect
-from crsbench.utils.logger import log_table
+from crsbench.utils.logger import get_logger, log_table
 
 if TYPE_CHECKING:
     import argparse
 
 
+logger = get_logger(__name__)
+
+
 def run_events(args: argparse.Namespace) -> int:
     """Show chronological recovery event timeline."""
-    _context, redis_conn, _readiness, _lifecycle, _filestore = reconnect(
-        args.config, args.experiment
-    )
+    try:
+        _context, redis_conn, _readiness, _lifecycle, _filestore = reconnect(
+            args.config,
+            args.experiment,
+            wait_for_remote_redis=True,
+        )
+    except Exception as exc:
+        logger.error("Cloud events failed: {}", exc)
+        return 1
 
     raw_events = redis_conn.lrange(f"crsbench:recovery-events:{args.experiment}", 0, -1)
     events = [json.loads(e) for e in raw_events]

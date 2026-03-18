@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -1016,6 +1017,46 @@ class TestReconnect:
                 == mock_state.return_value.worker_fleet_configs
             )
             assert filestore == Path("/tmp/filestore")
+
+    @patch("crsbench.cloud.cli._config_reconnect.wait_for_redis_connection")
+    @patch(
+        "crsbench.cloud.cli._config_reconnect.OrchestratorRedisTunnel.from_launch_state"
+    )
+    @patch("crsbench.cloud.cli._config_reconnect.create_redis_connection")
+    @patch("crsbench.cloud.cli._config_reconnect.load_launch_state")
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_reconnect_waits_for_remote_redis_when_requested(
+        self,
+        mock_load,
+        mock_state,
+        mock_redis,
+        mock_tunnel_cls,
+        mock_wait_for_redis_connection,
+    ):
+        """Status-style reconnects should wait for remote Redis instead of failing during bootstrap."""
+        config = _mock_config(has_cloud=True)
+        mock_load.return_value = config
+        launch_state = _make_launch_state()
+        mock_state.return_value = launch_state
+        mock_redis.return_value = _FakeRedis()
+        mock_tunnel = MagicMock()
+        mock_tunnel.redis_host = "127.0.0.1:16379"
+        mock_tunnel_cls.return_value = mock_tunnel
+
+        from crsbench.cloud.cli._config_reconnect import reconnect
+
+        reconnect(
+            "/path/to/config.yaml",
+            "test-exp",
+            wait_for_remote_redis=True,
+        )
+
+        mock_wait_for_redis_connection.assert_called_once_with(
+            "127.0.0.1:16379",
+            redis_password="shared-secret",
+            timeout_sec=1200,
+        )
+        mock_redis.assert_called_once_with("127.0.0.1:16379")
 
     @patch("crsbench.cloud.cli._config_reconnect.load_launch_state")
     @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
@@ -2107,6 +2148,72 @@ class TestStatusOutput:
         assert "jobs" in data
         assert "collection" in data
         assert "events" in data
+
+    @patch("crsbench.cloud.cli._status._load_status_jobs", create=True)
+    @patch("crsbench.cloud.cli._status.reconnect")
+    def test_status_json_output_falls_back_to_queue_snapshot_when_lifecycle_empty(
+        self,
+        mock_reconnect,
+        mock_load_status_jobs,
+        fake_redis,
+        capsys,
+    ):
+        """Status should still report remote queue work when lifecycle tracking is empty."""
+        for i, state in enumerate(["ready", "ready"], start=1):
+            w = _make_worker_status(
+                f"worker-{i}",
+                state=state,
+                internal_ip=f"10.0.0.{i}",
+            )
+            fake_redis.hset(
+                "crsbench:cloud:workers:test-exp",
+                f"id-worker-{i}",
+                json.dumps(w),
+            )
+        from crsbench.cloud.readiness import CloudReadinessStore
+        from crsbench.distributed.job_lifecycle import JobLifecycleStore
+
+        readiness = CloudReadinessStore(fake_redis)
+        lifecycle = JobLifecycleStore(fake_redis)
+        mock_reconnect.return_value = (
+            MagicMock(),
+            fake_redis,
+            readiness,
+            lifecycle,
+            Path("/tmp"),
+        )
+        mock_load_status_jobs.return_value = [
+            SimpleNamespace(
+                job_id="job-running",
+                trial_key="trial-running",
+                state="running",
+                claimed_by="worker-1",
+                retry_count=0,
+            ),
+            SimpleNamespace(
+                job_id="job-completed",
+                trial_key="trial-completed",
+                state="completed",
+                claimed_by="worker-2",
+                retry_count=1,
+            ),
+        ]
+
+        from crsbench.cloud.cli._status import run_status
+
+        rc = run_status(_make_status_args(json_output=True))
+        assert rc == 0
+
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data["collection"]["total"] == 2
+        assert data["collection"]["running"] == 1
+        assert data["collection"]["completed"] == 1
+        assert {job["job_id"] for job in data["jobs"]} == {
+            "job-running",
+            "job-completed",
+        }
+        mock_load_status_jobs.assert_called_once()
 
     @patch("crsbench.cloud.cli._status.reconnect")
     def test_status_output_includes_evaluator_role(self, mock_reconnect, fake_redis):

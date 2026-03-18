@@ -6,9 +6,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from crsbench.distributed.queue_monitor import (
+    QueueJobEntry,
     QueueMonitorCallbacks,
     QueueMonitorSnapshot,
     build_monitor_snapshot,
+    list_queue_job_entries,
     monitor_queue,
 )
 
@@ -78,6 +80,63 @@ def test_build_monitor_snapshot_uses_experiment_scoped_counts() -> None:
     assert len(snapshot.running_jobs) == 1
     assert snapshot.running_jobs[0].worker_name == "worker-1"
     assert snapshot.running_jobs[0].phase == "running"
+
+
+def test_list_queue_job_entries_maps_registry_states_to_status_rows() -> None:
+    queue = MagicMock()
+    queued_job = MagicMock()
+    queued_job.id = "job-queued"
+    queued_job.meta = {"retry_count": 0}
+    started_job = MagicMock()
+    started_job.id = "job-started"
+    started_job.meta = {"worker_name": "worker-1", "retry_count": 2}
+    failed_job = MagicMock()
+    failed_job.id = "job-failed"
+    failed_job.meta = {"retry_count": 3}
+
+    with (
+        patch(
+            "crsbench.distributed.queue_monitor.get_existing_trials",
+            return_value=_existing_jobs(
+                queued=0,
+                started={"started-1": started_job},
+                failed=0,
+            )
+            | {
+                "queued": {"queued-1": queued_job},
+                "failed": {"failed-1": failed_job},
+            },
+        ),
+        patch(
+            "crsbench.distributed.queue_monitor.get_trial_key",
+            side_effect=lambda job: f"trial:{job.id}",
+        ),
+    ):
+        entries = list_queue_job_entries(queue, "exp-1")
+
+    assert entries == [
+        QueueJobEntry(
+            job_id="job-failed",
+            trial_key="trial:job-failed",
+            state="failed",
+            claimed_by=None,
+            retry_count=3,
+        ),
+        QueueJobEntry(
+            job_id="job-queued",
+            trial_key="trial:job-queued",
+            state="queued",
+            claimed_by=None,
+            retry_count=0,
+        ),
+        QueueJobEntry(
+            job_id="job-started",
+            trial_key="trial:job-started",
+            state="running",
+            claimed_by="worker-1",
+            retry_count=2,
+        ),
+    ]
 
 
 def test_monitor_queue_attach_mode_is_read_only() -> None:

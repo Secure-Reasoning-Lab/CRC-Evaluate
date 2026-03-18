@@ -393,7 +393,10 @@ If the orchestrator is still finishing bootstrap, `cloud monitor` waits for
 the tunneled Redis endpoint to become ready up to `readiness_timeout_sec`
 instead of failing on the first connection refusal.
 
-Use `cloud status` when you want a one-shot fleet and lifecycle snapshot. Use
+Use `cloud status` when you want a one-shot fleet and job snapshot. For
+remote-orchestrator launches it now waits for the tunneled Redis endpoint
+during bootstrap, then reports lifecycle records when present or falls back to
+the live RQ queue/registry view when lifecycle tracking is still empty. Use
 `cloud monitor` when you want the continuously updating queue view.
 
 Bootstrap failures are reported with per-instance evidence, so you can
@@ -437,8 +440,10 @@ uv run crsbench cloud status my-experiment --config config.yaml
 Shows:
 
 - Fleet summary: each worker/evaluator VM's name, role, state, zone, and IP
-- Job summary: trial progress per job
-- Collection summary: artifact sync progress
+- Job summary: per-job queue/lifecycle state, including running workers when
+  the live queue is the only available source
+- Collection summary: one-shot totals for completed, syncing, running, pending,
+  failed, and orphaned work
 - Recent recovery events
 
 Add `--json` for machine-readable output:
