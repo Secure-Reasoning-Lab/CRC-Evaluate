@@ -124,40 +124,61 @@ def _build_trial_tree(
 class TestRsyncCmdIap:
     """test_rsync_cmd_iap — ARTF-01: IAP SSH transport."""
 
-    def test_rsync_cmd_iap(self) -> None:
-        """When ssh_via_iap=True the -e arg uses gcloud compute ssh with --tunnel-through-iap."""
+    def test_iap_tunnel_command_uses_start_iap_tunnel(self) -> None:
+        """IAP rsync transport should start a local TCP tunnel instead of shelling through -W."""
         worker = _make_worker(zone="us-central1-a")
         fleet = _make_fleet(ssh_via_iap=True, zone="us-central1-a")
-        collector = ArtifactCollector()
+        collector = ArtifactCollector(base_path=Path("/tmp/config.yaml"))
 
+        cmd = collector._build_iap_tunnel_command(
+            worker=worker,
+            fleet=fleet,
+            local_port=2222,
+        )
+
+        assert cmd[:4] == ["gcloud", "compute", "start-iap-tunnel", worker.name]
+        assert "22" in cmd
+        assert "--project=test-project" in cmd
+        assert "--zone=us-central1-a" in cmd
+        assert "--local-host-port=127.0.0.1:2222" in cmd
+
+    def test_rsync_cmd_iap_uses_local_ssh_transport(self, tmp_path: Path) -> None:
+        """IAP rsync should use a local ssh command against the tunneled localhost port."""
+        worker = _make_worker(zone="us-central1-a")
+        fleet = _make_fleet(ssh_via_iap=True, zone="us-central1-a")
+        collector = ArtifactCollector(base_path=tmp_path / "config.yaml")
+
+        ssh_cmd = collector._build_iap_ssh_command(
+            local_port=2222,
+            ssh_user="alice",
+            known_hosts_path=tmp_path / "known_hosts_iap",
+            host_key_alias=worker.name,
+        )
         cmd = collector._build_rsync_cmd(
             worker=worker,
             fleet=fleet,
             remote_experiment_dir="/data/experiments/exp-42",
             staging_dir=Path("/tmp/staging"),
+            ssh_command=ssh_cmd,
+            remote_host="127.0.0.1",
         )
 
-        # Must be a list of strings
-        assert isinstance(cmd, list)
-        assert all(isinstance(token, str) for token in cmd)
-
-        # rsync is the executable
-        assert cmd[0] == "rsync"
-
-        # -e flag must be present and contain the IAP gcloud invocation
         assert "-e" in cmd
         e_idx = cmd.index("-e")
-        ssh_cmd = cmd[e_idx + 1]
-        assert "gcloud" in ssh_cmd
-        assert "compute" in ssh_cmd
-        assert "ssh" in ssh_cmd
-        assert worker.name in ssh_cmd
-        assert "--project=test-project" in ssh_cmd
-        assert "--zone=us-central1-a" in ssh_cmd
-        assert "--tunnel-through-iap" in ssh_cmd
-        assert "-W %h:%p" in ssh_cmd
+        rendered_ssh_cmd = cmd[e_idx + 1]
+        assert rendered_ssh_cmd.startswith("ssh ")
+        assert "BatchMode=yes" in rendered_ssh_cmd
+        assert "StrictHostKeyChecking=no" in rendered_ssh_cmd
+        assert "HostKeyAlias=gce-worker-001" in rendered_ssh_cmd
+        assert "UserKnownHostsFile=" in rendered_ssh_cmd
+        assert "-p 2222" in rendered_ssh_cmd
+        assert "-l alice" in rendered_ssh_cmd
+        assert "gcloud compute ssh" not in rendered_ssh_cmd
+        assert "-W %h:%p" not in rendered_ssh_cmd
 
-        # Required rsync flags
+        source = cmd[-2]
+        assert source == "127.0.0.1:/data/experiments/exp-42/"
+
         assert "-a" in cmd
         assert "--mkpath" in cmd
         assert "--partial-dir=.rsync-partial" in cmd

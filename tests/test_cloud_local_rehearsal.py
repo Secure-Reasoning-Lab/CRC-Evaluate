@@ -163,8 +163,13 @@ def test_rehearsal_wrapper_only_resets_state_for_bringup() -> None:
         encoding="utf-8"
     )
 
+    assert "reset_compose_runtime()" in wrapper_text
     assert "if [[ $# -eq 0 ]]; then" in wrapper_text
     assert 'if [[ "$1" == "up" ]]; then' in wrapper_text
+    assert (
+        'docker compose -f "${SCRIPT_DIR}/docker-compose.yml" down --remove-orphans'
+        in wrapper_text
+    )
     assert "CRSBENCH_LOCAL_REHEARSAL_GIT_REF" in wrapper_text
     assert "--evaluator-count 1" in wrapper_text
     assert "docker_cleanup_state" in wrapper_text

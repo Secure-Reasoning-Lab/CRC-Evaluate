@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import socket
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from crsbench.cloud.launch_state import CloudLaunchState
 from crsbench.cloud.orchestrator_tunnel import (
     OrchestratorRedisTunnel,
     OrchestratorTunnelError,
     build_tunnel_command,
+    wait_for_local_port,
 )
 from crsbench.cloud.types import CloudProvider
 
@@ -122,7 +125,13 @@ def test_tunnel_waits_for_local_port_before_returning():
         ) as tunnel:
             assert tunnel.redis_host == "127.0.0.1:16379"
 
-    mock_wait.assert_called_once_with("127.0.0.1", 16379, timeout=5.0)
+    mock_wait.assert_called_once_with(
+        "127.0.0.1",
+        16379,
+        timeout=5.0,
+        process=process,
+        process_label="orchestrator tunnel process",
+    )
     assert process.terminated is True
 
 
@@ -184,7 +193,44 @@ def test_tunnel_retries_transient_startup_failures():
             assert tunnel.redis_host == "127.0.0.1:16379"
 
     assert mock_wait.call_count == 2
-    mock_wait.assert_any_call("127.0.0.1", 16379, timeout=5.0)
+    mock_wait.assert_any_call(
+        "127.0.0.1",
+        16379,
+        timeout=5.0,
+        process=first_process,
+        process_label="orchestrator tunnel process",
+    )
+    mock_wait.assert_any_call(
+        "127.0.0.1",
+        16379,
+        timeout=5.0,
+        process=second_process,
+        process_label="orchestrator tunnel process",
+    )
     mock_sleep.assert_called_once_with(1.0)
     assert first_process.terminated is True
     assert second_process.terminated is True
+
+
+def test_wait_for_local_port_fails_fast_when_tunnel_process_exits() -> None:
+    process = _DummyProcess()
+
+    with (
+        patch(
+            "crsbench.cloud.orchestrator_tunnel.socket.create_connection",
+            side_effect=socket.error("connection refused"),
+        ),
+        patch.object(process, "poll", return_value=255),
+        patch("crsbench.cloud.orchestrator_tunnel.time.sleep"),
+        pytest.raises(
+            OrchestratorTunnelError,
+            match="orchestrator tunnel process exited with code 255",
+        ),
+    ):
+        wait_for_local_port(
+            "127.0.0.1",
+            16379,
+            timeout=1.0,
+            process=process,
+            process_label="orchestrator tunnel process",
+        )

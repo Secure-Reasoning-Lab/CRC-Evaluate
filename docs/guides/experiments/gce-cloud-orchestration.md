@@ -133,6 +133,11 @@ and `crsbench-<experiment>-<zone>-eval-001`. Worker and evaluator suffixes
 increase monotonically per experiment, zone, and role, even if the config uses
 multiple placements in the same zone.
 
+`cloud launch` refuses to provision when the same experiment already has a
+config-adjacent launch-state file or matching live orchestrator/worker/evaluator
+VMs. Tear down the existing fleet before relaunching instead of mutating the
+experiment name to create a second set of instances.
+
 If a generated GCE instance name would violate Compute Engine naming rules,
 CRSBench now fails launch before provisioning instead of truncating the name.
 
@@ -364,6 +369,9 @@ This path:
 `cloud events` still reconnect to the remote orchestrator's Redis; `cloud collect`
 and `cloud teardown` can fall back to the persisted VM inventory if Redis is
 unavailable.
+That launch-state file is part of the duplicate-launch guard: if it still
+exists for an experiment, CRSBench treats that experiment as already launched
+until you tear it down or remove the stale state.
 CRSBench also appends every created VM name to
 `.crsbench-cloud/created-instances.cache` as local JSONL history so you still
 have a garbage-collection ledger even if you forget to tear down a prior run.

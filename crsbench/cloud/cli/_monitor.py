@@ -126,6 +126,7 @@ def run_monitor(args: argparse.Namespace) -> int:
                 args.experiment,
                 tracked_job_ids=None,
                 tracked_jobs=None,
+                exit_when_idle=False,
             )
     except Exception as exc:
         logger.error("Cloud monitor failed: {}", exc)

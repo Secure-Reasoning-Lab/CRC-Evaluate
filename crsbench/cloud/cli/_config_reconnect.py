@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import atexit
 import dataclasses
 import os
+import weakref
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -15,6 +17,7 @@ from crsbench.cloud.launch_state import (
     save_launch_state,
 )
 from crsbench.cloud.models import CloudLaunchPlan, build_cloud_launch_plan
+from crsbench.cloud.orchestrator_tunnel import OrchestratorRedisTunnel
 from crsbench.cloud.readiness import CloudReadinessStore
 from crsbench.distributed.job_lifecycle import JobLifecycleStore
 from crsbench.distributed.queue import create_redis_connection
@@ -44,6 +47,19 @@ class ResolvedCloudContext:
 
 
 logger = get_logger(__name__)
+
+
+def _register_tunnel_cleanup(redis_conn, tunnel: OrchestratorRedisTunnel) -> None:
+    """Keep a remote Redis tunnel alive for the session and stop it on teardown."""
+    atexit.register(tunnel.stop)
+    try:
+        weakref.finalize(redis_conn, tunnel.stop)
+    except TypeError:
+        pass
+    try:
+        redis_conn._crsbench_orchestrator_tunnel = tunnel
+    except Exception:
+        logger.debug("Unable to attach orchestrator tunnel handle to Redis client")
 
 
 def resolve_cloud_context(
@@ -153,9 +169,27 @@ def reconnect(config_path: str, experiment_name: str):  # noqa: ARG001
         os.environ["CRSBENCH_REDIS_PASSWORD"] = context.redis_password
     else:
         os.environ.pop("CRSBENCH_REDIS_PASSWORD", None)
-    redis_conn = create_redis_connection(context.redis_host)
 
-    readiness = CloudReadinessStore(cast("ReadinessRedisProtocol", redis_conn))
-    lifecycle = JobLifecycleStore(cast("LifecycleRedisProtocol", redis_conn))
+    tunnel: OrchestratorRedisTunnel | None = None
+    redis_host = context.redis_host
+    if context.launch_state is not None:
+        tunnel = OrchestratorRedisTunnel.from_launch_state(
+            Path(config_path),
+            context.launch_state,
+        )
+        tunnel.start()
+        redis_host = tunnel.redis_host
+
+    try:
+        redis_conn = create_redis_connection(redis_host)
+        readiness = CloudReadinessStore(cast("ReadinessRedisProtocol", redis_conn))
+        lifecycle = JobLifecycleStore(cast("LifecycleRedisProtocol", redis_conn))
+    except Exception:
+        if tunnel is not None:
+            tunnel.stop()
+        raise
+
+    if tunnel is not None:
+        _register_tunnel_cleanup(redis_conn, tunnel)
 
     return context, redis_conn, readiness, lifecycle, context.experiment_filestore

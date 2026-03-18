@@ -30,6 +30,8 @@ Non-goals:
 - Service accounts must be explicit and least-privileged
 - Readiness is a control-plane concept distinct from GCE VM `RUNNING` state
 - Cloud VMs are experiment-pinned and do not join the shared configless pool
+- Duplicate launch is rejected when config-adjacent launch state or matching
+  live instances already exist for the same experiment
 - Cloud VM bootstrap runs from a cloned CRSBench checkout; non-`git+` install specs are outside this contract
 - Operator-selected remote environment passthrough is explicit; runtime-managed vars such as Redis host/password remain owned by the VM bootstrap
 
@@ -138,6 +140,8 @@ Rollback:
 
 - If any VM creation fails, all previously created VMs are deleted in reverse order
 - Rollback errors are silently caught to avoid masking the original creation error
+- Before any VM is created, launch fails fast if the same experiment already has
+  a persisted launch-state file or matching live orchestrator/worker/evaluator VMs
 
 ## Contract: Bring-up and Readiness Gating
 
@@ -190,7 +194,9 @@ Cloud env contract:
 
 Rsync transport:
 
-- IAP mode: `gcloud compute ssh ... --tunnel-through-iap -- -W %h:%p`
+- IAP mode: open a temporary local `gcloud compute start-iap-tunnel` to remote
+  SSH port 22, then run plain `ssh`/`rsync` against `127.0.0.1:<local-port>`
+  with a per-instance host-key alias
 - Direct mode: `ssh -o BatchMode=yes -o StrictHostKeyChecking=yes`
 
 Retry: `tenacity` exponential backoff (min 2s, max 30s, 3 attempts) on rsync failure.

@@ -560,7 +560,9 @@ def test_startup_script_supports_apt_and_apk_bootstrap_dependencies():
     script = load_startup_script()
 
     assert "apt-get install -y -qq" in script
-    assert "install_packages docker.io docker-compose-v2" in script
+    assert "install_packages docker.io docker-compose-v2 docker-buildx" in script
+    assert "docker compose version >/dev/null 2>&1" in script
+    assert "docker buildx version >/dev/null 2>&1" in script
     assert "apk add --no-cache" in script
     assert "https://get.docker.com" not in script
     assert "Docker daemon is unavailable after waiting" in script
@@ -843,10 +845,22 @@ def test_orchestrator_startup_script_supports_apt_and_apk_bootstrap_dependencies
     script = load_orchestrator_startup_script()
 
     assert "apt-get install -y -qq" in script
-    assert "install_packages docker.io docker-compose-v2" in script
+    assert "install_packages docker.io docker-compose-v2 docker-buildx" in script
+    assert "docker compose version >/dev/null 2>&1" in script
+    assert "docker buildx version >/dev/null 2>&1" in script
     assert "apk add --no-cache" in script
     assert "https://get.docker.com" not in script
     assert "Docker daemon is unavailable after waiting" in script
+
+
+def test_orchestrator_startup_script_only_restarts_service_on_failure():
+    """Orchestrator bootstrap should not relaunch a cleanly exited run forever."""
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+
+    assert "Restart=on-failure" in script
+    assert "Restart=always" not in script
 
 
 def test_orchestrator_startup_script_configures_timezone_and_docker_cgroupfs():

@@ -20,6 +20,10 @@ docker_cleanup_state() {
   "
 }
 
+reset_compose_runtime() {
+  docker compose -f "${SCRIPT_DIR}/docker-compose.yml" down --remove-orphans >/dev/null 2>&1 || true
+}
+
 reset_local_state() {
   if ! rm -rf "${STATE_DIR}/metadata" "${STATE_DIR}/state"; then
     docker_cleanup_state
@@ -44,6 +48,7 @@ render_metadata() {
 }
 
 if [[ $# -eq 0 ]]; then
+  reset_compose_runtime
   reset_local_state
   render_metadata
   docker compose -f "${SCRIPT_DIR}/docker-compose.yml" up --build --remove-orphans
@@ -51,6 +56,7 @@ if [[ $# -eq 0 ]]; then
 fi
 
 if [[ "$1" == "up" ]]; then
+  reset_compose_runtime
   reset_local_state
   render_metadata
 fi

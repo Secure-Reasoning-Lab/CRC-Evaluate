@@ -107,6 +107,7 @@ def monitor_queue(
     callbacks: QueueMonitorCallbacks | None = None,
     use_rich: bool | None = None,
     poll_interval: float = 3.0,
+    exit_when_idle: bool = True,
 ) -> None:
     """Run the shared operator queue monitor until completion."""
     del tracked_job_ids  # Reserved for future queue-only tracked attach mode.
@@ -126,6 +127,7 @@ def monitor_queue(
             registry=registry,
             callbacks=callbacks,
             poll_interval=poll_interval,
+            exit_when_idle=exit_when_idle,
         )
         return
 
@@ -138,6 +140,7 @@ def monitor_queue(
         registry=registry,
         callbacks=callbacks,
         poll_interval=poll_interval,
+        exit_when_idle=exit_when_idle,
     )
 
 
@@ -242,6 +245,7 @@ def _monitor_queue_basic(
     registry: "RegistryClient | None",
     callbacks: QueueMonitorCallbacks,
     poll_interval: float,
+    exit_when_idle: bool,
 ) -> None:
     last_renew = time.monotonic()
     seen_finished: set[str] = set()
@@ -271,7 +275,9 @@ def _monitor_queue_basic(
             )
             if completed + failed >= len(tracked_jobs):
                 break
-        elif snapshot.stats["queued"] + snapshot.stats["started"] == 0:
+        elif (
+            exit_when_idle and snapshot.stats["queued"] + snapshot.stats["started"] == 0
+        ):
             break
 
         last_renew = _renew_registry(
@@ -340,6 +346,7 @@ def _monitor_queue_rich(
     registry: "RegistryClient | None",
     callbacks: QueueMonitorCallbacks,
     poll_interval: float,
+    exit_when_idle: bool,
 ) -> None:
     from rich.console import Console
     from rich.live import Live
@@ -372,7 +379,8 @@ def _monitor_queue_rich(
             if tracked_jobs and completed + failed >= len(tracked_jobs):
                 break
             if (
-                not tracked_jobs
+                exit_when_idle
+                and not tracked_jobs
                 and snapshot.stats["queued"] + snapshot.stats["started"] == 0
             ):
                 break

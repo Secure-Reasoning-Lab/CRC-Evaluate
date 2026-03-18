@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from crsbench.distributed.queue_monitor import (
     QueueMonitorCallbacks,
     QueueMonitorSnapshot,
@@ -113,6 +114,35 @@ def test_monitor_queue_attach_mode_is_read_only() -> None:
 
     callbacks.on_job_finished.assert_not_called()
     callbacks.on_job_failed.assert_not_called()
+
+
+def test_monitor_queue_attach_mode_can_wait_while_idle() -> None:
+    queue = MagicMock()
+    idle = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 0, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[],
+    )
+
+    with (
+        patch(
+            "crsbench.distributed.queue_monitor.build_monitor_snapshot",
+            return_value=idle,
+        ),
+        patch(
+            "crsbench.distributed.queue_monitor.time.sleep",
+            side_effect=RuntimeError("stop monitoring"),
+        ),
+        pytest.raises(RuntimeError, match="stop monitoring"),
+    ):
+        monitor_queue(
+            queue,
+            "exp-1",
+            tracked_job_ids=None,
+            callbacks=QueueMonitorCallbacks(),
+            use_rich=False,
+            poll_interval=0,
+            exit_when_idle=False,
+        )
 
 
 def test_monitor_queue_plain_and_rich_paths_share_snapshot_builder() -> None:

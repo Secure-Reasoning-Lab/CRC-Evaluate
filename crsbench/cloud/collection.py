@@ -14,12 +14,14 @@ from __future__ import annotations
 import shlex
 import shutil
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path  # noqa: TC003
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Iterator, Protocol
 
 import tenacity
 
 from crsbench.cloud.launch_state import cloud_state_dir, remote_logs_dir
+from crsbench.cloud.orchestrator_tunnel import allocate_local_port, wait_for_local_port
 from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -35,6 +37,9 @@ class SshTransportConfig(Protocol):
 
 
 logger = get_logger(__name__)
+
+_IAP_TUNNEL_PORT = 22
+_IAP_TUNNEL_STARTUP_TIMEOUT_SEC = 30.0
 
 
 class ArtifactCollectionError(Exception):
@@ -85,7 +90,7 @@ class ArtifactCollector:
             fleet=fleet,
             experiment_filestore=experiment_filestore,
         )
-        ssh_user = self._direct_ssh_user(fleet) if not fleet.ssh_via_iap else None
+        ssh_user = self._direct_ssh_user(fleet)
         staging_dir = (
             experiment_filestore / ".collect-staging" / worker.name / experiment_name
         )
@@ -96,16 +101,15 @@ class ArtifactCollector:
             shutil.rmtree(staging_dir)
         staging_dir.mkdir(parents=True, exist_ok=True)
 
-        cmd = self._build_rsync_cmd(
+        self._run_artifact_rsync(
             worker=worker,
             fleet=fleet,
             remote_experiment_dir=remote_experiment_dir,
             staging_dir=staging_dir,
+            experiment_filestore=experiment_filestore,
             known_hosts_path=known_hosts_path,
             ssh_user=ssh_user,
         )
-
-        self._run_rsync_with_retry(cmd)
 
         # Verify before publishing
         self._verify_staging(staging_dir)
@@ -144,7 +148,7 @@ class ArtifactCollector:
             fleet=fleet,
             experiment_filestore=experiment_filestore,
         )
-        ssh_user = self._direct_ssh_user(fleet) if not fleet.ssh_via_iap else None
+        ssh_user = self._direct_ssh_user(fleet)
 
         for destination, command in self._log_commands(worker).items():
             destination = logs_root / destination
@@ -172,15 +176,15 @@ class ArtifactCollector:
             ssh_user=ssh_user,
             remote_path=remote_experiment_dir,
         ):
-            cmd = self._build_log_rsync_cmd(
+            self._run_log_rsync(
                 worker=worker,
                 fleet=fleet,
                 remote_experiment_dir=remote_experiment_dir,
                 staging_dir=instance_logs_dir / "trial-artifacts",
+                experiment_filestore=experiment_filestore,
                 known_hosts_path=known_hosts_path,
                 ssh_user=ssh_user,
             )
-            self._run_rsync_with_retry(cmd)
 
         logger.info(
             "Remote log collection complete: worker={} experiment={} logs_dir={}",
@@ -212,6 +216,8 @@ class ArtifactCollector:
         staging_dir: Path,
         known_hosts_path: Path | None = None,
         ssh_user: str | None = None,
+        ssh_command: str | None = None,
+        remote_host: str | None = None,
     ) -> list[str]:
         """Return the full rsync command as a list of strings.
 
@@ -228,13 +234,15 @@ class ArtifactCollector:
             and self._base_path is not None
         ):
             known_hosts_path = cloud_state_dir(self._base_path) / "known_hosts"
-        ssh_cmd = self._build_ssh_command(worker, fleet, known_hosts_path)
+        ssh_cmd = ssh_command or self._build_ssh_command(
+            worker, fleet, known_hosts_path
+        )
 
-        remote_host = self._remote_host(worker, fleet)
-        if ssh_user is not None and not fleet.ssh_via_iap:
-            remote_host = f"{ssh_user}@{remote_host}"
+        resolved_remote_host = remote_host or self._remote_host(worker, fleet)
+        if ssh_user is not None and remote_host is None and not fleet.ssh_via_iap:
+            resolved_remote_host = f"{ssh_user}@{resolved_remote_host}"
 
-        source = f"{remote_host}:{remote_experiment_dir}/"
+        source = f"{resolved_remote_host}:{remote_experiment_dir}/"
         dest = str(staging_dir) + "/"
 
         return [
@@ -258,6 +266,8 @@ class ArtifactCollector:
         staging_dir: Path,
         known_hosts_path: Path | None = None,
         ssh_user: str | None = None,
+        ssh_command: str | None = None,
+        remote_host: str | None = None,
     ) -> list[str]:
         """Return an rsync command that only copies lightweight trial-observability files."""
         if (
@@ -266,12 +276,14 @@ class ArtifactCollector:
             and self._base_path is not None
         ):
             known_hosts_path = cloud_state_dir(self._base_path) / "known_hosts"
-        ssh_cmd = self._build_ssh_command(worker, fleet, known_hosts_path)
-        remote_host = self._remote_host(worker, fleet)
-        if ssh_user is not None and not fleet.ssh_via_iap:
-            remote_host = f"{ssh_user}@{remote_host}"
+        ssh_cmd = ssh_command or self._build_ssh_command(
+            worker, fleet, known_hosts_path
+        )
+        resolved_remote_host = remote_host or self._remote_host(worker, fleet)
+        if ssh_user is not None and remote_host is None and not fleet.ssh_via_iap:
+            resolved_remote_host = f"{ssh_user}@{resolved_remote_host}"
 
-        source = f"{remote_host}:{remote_experiment_dir}/"
+        source = f"{resolved_remote_host}:{remote_experiment_dir}/"
         dest = str(staging_dir) + "/"
 
         return [
@@ -298,20 +310,8 @@ class ArtifactCollector:
         fleet: SshTransportConfig,
         known_hosts_path: Path | None = None,
     ) -> str:
-        """Return the ``-e`` argument string for rsync SSH transport.
-
-        For IAP:  ``gcloud compute ssh INSTANCE --project=P --zone=Z --tunnel-through-iap -- -W %h:%p``
-        For direct-IP: ``ssh -o BatchMode=yes -o StrictHostKeyChecking=yes``
-        """
-        if fleet.ssh_via_iap:
-            zone = worker.zone or fleet.zone or ""
-            return (
-                f"gcloud compute ssh {worker.name}"
-                f" --project={fleet.project}"
-                f" --zone={zone}"
-                f" --tunnel-through-iap"
-                f" -- -W %h:%p"
-            )
+        """Return the ``-e`` argument string for direct-IP rsync SSH transport."""
+        del worker, fleet
         parts = [
             "ssh",
             "-o",
@@ -340,6 +340,70 @@ class ArtifactCollector:
             )
         return " ".join(parts)
 
+    def _build_iap_tunnel_command(
+        self,
+        *,
+        worker: GceWorkerRecord,
+        fleet: SshTransportConfig,
+        local_port: int,
+    ) -> list[str]:
+        """Return the gcloud command that opens a local IAP tunnel to remote SSH."""
+        zone = worker.zone or fleet.zone or ""
+        return [
+            "gcloud",
+            "compute",
+            "start-iap-tunnel",
+            worker.name,
+            str(_IAP_TUNNEL_PORT),
+            f"--project={fleet.project}",
+            f"--zone={zone}",
+            f"--local-host-port=127.0.0.1:{local_port}",
+        ]
+
+    def _build_iap_ssh_command(
+        self,
+        *,
+        local_port: int,
+        ssh_user: str,
+        known_hosts_path: Path,
+        host_key_alias: str,
+    ) -> str:
+        """Return a localhost-targeted ssh command for rsync over an active IAP tunnel."""
+        known_hosts_path.parent.mkdir(parents=True, exist_ok=True)
+        known_hosts_path.touch(exist_ok=True)
+        known_hosts_path.chmod(0o600)
+
+        parts = [
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "CheckHostIP=no",
+            "-o",
+            f"HostKeyAlias={shlex.quote(host_key_alias)}",
+            "-o",
+            f"UserKnownHostsFile={shlex.quote(str(known_hosts_path))}",
+            "-o",
+            "ConnectTimeout=10",
+            "-p",
+            str(local_port),
+            "-l",
+            shlex.quote(ssh_user),
+        ]
+        identity_file = Path.home() / ".ssh" / "google_compute_engine"
+        if identity_file.is_file():
+            parts.extend(
+                [
+                    "-i",
+                    shlex.quote(str(identity_file)),
+                    "-o",
+                    "IdentitiesOnly=yes",
+                ]
+            )
+        return " ".join(parts)
+
     def _state_dir(self, experiment_filestore: Path) -> Path:
         """Return the local state directory used for SSH trust and log capture."""
         if self._base_path is not None:
@@ -357,6 +421,10 @@ class ArtifactCollector:
     def _known_hosts_path(self, experiment_filestore: Path) -> Path:
         """Return the local known_hosts file used for direct-IP collection."""
         return self._state_dir(experiment_filestore) / "known_hosts"
+
+    def _iap_known_hosts_path(self, experiment_filestore: Path) -> Path:
+        """Return the localhost tunnel known_hosts file used for IAP rsync."""
+        return self._state_dir(experiment_filestore) / "known_hosts_iap"
 
     def _remote_host(
         self,
@@ -417,6 +485,147 @@ class ArtifactCollector:
         with known_hosts_path.open("a", encoding="utf-8") as handle:
             handle.write(keyscan.stdout)
         return known_hosts_path
+
+    @contextmanager
+    def _open_iap_tunnel(
+        self,
+        *,
+        worker: GceWorkerRecord,
+        fleet: SshTransportConfig,
+    ) -> Iterator[int]:
+        """Open a temporary local TCP tunnel to a worker's SSH port through IAP."""
+        local_port = allocate_local_port()
+        cmd = self._build_iap_tunnel_command(
+            worker=worker,
+            fleet=fleet,
+            local_port=local_port,
+        )
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+        except OSError as exc:
+            raise ArtifactCollectionError(
+                f"failed to start IAP tunnel for {worker.name}: {exc}"
+            ) from exc
+
+        try:
+            wait_for_local_port(
+                "127.0.0.1",
+                local_port,
+                timeout=_IAP_TUNNEL_STARTUP_TIMEOUT_SEC,
+                process=process,
+                process_label=f"IAP tunnel for {worker.name}",
+            )
+            yield local_port
+        except Exception as exc:
+            raise ArtifactCollectionError(
+                f"failed to establish IAP tunnel for {worker.name}: {exc}"
+            ) from exc
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5.0)
+
+    def _run_artifact_rsync(
+        self,
+        *,
+        worker: GceWorkerRecord,
+        fleet: SshTransportConfig,
+        remote_experiment_dir: str,
+        staging_dir: Path,
+        experiment_filestore: Path,
+        known_hosts_path: Path | None,
+        ssh_user: str | None,
+    ) -> None:
+        """Run the full artifact rsync for one worker using the right transport."""
+        if fleet.ssh_via_iap:
+            if not ssh_user:
+                raise ArtifactCollectionError(
+                    f"Unable to resolve SSH user for IAP collection from {worker.name}"
+                )
+            with self._open_iap_tunnel(worker=worker, fleet=fleet) as local_port:
+                cmd = self._build_rsync_cmd(
+                    worker=worker,
+                    fleet=fleet,
+                    remote_experiment_dir=remote_experiment_dir,
+                    staging_dir=staging_dir,
+                    ssh_command=self._build_iap_ssh_command(
+                        local_port=local_port,
+                        ssh_user=ssh_user,
+                        known_hosts_path=self._iap_known_hosts_path(
+                            experiment_filestore
+                        ),
+                        host_key_alias=worker.name,
+                    ),
+                    remote_host="127.0.0.1",
+                )
+                self._run_rsync_with_retry(cmd)
+            return
+
+        cmd = self._build_rsync_cmd(
+            worker=worker,
+            fleet=fleet,
+            remote_experiment_dir=remote_experiment_dir,
+            staging_dir=staging_dir,
+            known_hosts_path=known_hosts_path,
+            ssh_user=ssh_user,
+        )
+        self._run_rsync_with_retry(cmd)
+
+    def _run_log_rsync(
+        self,
+        *,
+        worker: GceWorkerRecord,
+        fleet: SshTransportConfig,
+        remote_experiment_dir: str,
+        staging_dir: Path,
+        experiment_filestore: Path,
+        known_hosts_path: Path | None,
+        ssh_user: str | None,
+    ) -> None:
+        """Run the observability-only rsync for one worker using the right transport."""
+        if fleet.ssh_via_iap:
+            if not ssh_user:
+                raise ArtifactCollectionError(
+                    f"Unable to resolve SSH user for IAP log collection from {worker.name}"
+                )
+            with self._open_iap_tunnel(worker=worker, fleet=fleet) as local_port:
+                cmd = self._build_log_rsync_cmd(
+                    worker=worker,
+                    fleet=fleet,
+                    remote_experiment_dir=remote_experiment_dir,
+                    staging_dir=staging_dir,
+                    ssh_command=self._build_iap_ssh_command(
+                        local_port=local_port,
+                        ssh_user=ssh_user,
+                        known_hosts_path=self._iap_known_hosts_path(
+                            experiment_filestore
+                        ),
+                        host_key_alias=worker.name,
+                    ),
+                    remote_host="127.0.0.1",
+                )
+                self._run_rsync_with_retry(cmd)
+            return
+
+        cmd = self._build_log_rsync_cmd(
+            worker=worker,
+            fleet=fleet,
+            remote_experiment_dir=remote_experiment_dir,
+            staging_dir=staging_dir,
+            known_hosts_path=known_hosts_path,
+            ssh_user=ssh_user,
+        )
+        self._run_rsync_with_retry(cmd)
 
     def _run_remote_command(
         self,

@@ -977,17 +977,24 @@ class TestReconnect:
         with pytest.raises(SystemExit):
             reconnect("/path/to/config.yaml", "test-exp")
 
+    @patch(
+        "crsbench.cloud.cli._config_reconnect.OrchestratorRedisTunnel.from_launch_state"
+    )
     @patch("crsbench.cloud.cli._config_reconnect.create_redis_connection")
     @patch("crsbench.cloud.cli._config_reconnect.load_launch_state")
     @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
     def test_reconnect_remote_orchestrator_uses_launch_state(
-        self, mock_load, mock_state, mock_redis
+        self, mock_load, mock_state, mock_redis, mock_tunnel_cls
     ):
         """Remote orchestrator launches reconnect through persisted launch state."""
         config = _mock_config(has_cloud=True)
         mock_load.return_value = config
-        mock_state.return_value = _make_launch_state()
+        launch_state = _make_launch_state()
+        mock_state.return_value = launch_state
         mock_redis.return_value = _FakeRedis()
+        mock_tunnel = MagicMock()
+        mock_tunnel.redis_host = "127.0.0.1:16379"
+        mock_tunnel_cls.return_value = mock_tunnel
 
         from crsbench.cloud.cli._config_reconnect import reconnect
 
@@ -996,7 +1003,12 @@ class TestReconnect:
                 "/path/to/config.yaml", "test-exp"
             )
 
-            mock_redis.assert_called_once_with("10.0.0.50:6379")
+            mock_tunnel_cls.assert_called_once_with(
+                Path("/path/to/config.yaml"),
+                launch_state,
+            )
+            mock_tunnel.start.assert_called_once_with()
+            mock_redis.assert_called_once_with("127.0.0.1:16379")
             mock_state.assert_called_once_with(Path("/path/to/config.yaml"), "test-exp")
             assert os.environ["CRSBENCH_REDIS_PASSWORD"] == "shared-secret"
             assert (
@@ -1263,6 +1275,7 @@ def test_run_monitor_passes_saved_redis_password(
         redis_password="shared-secret",
     )
     mock_monitor_queue.assert_called_once()
+    assert mock_monitor_queue.call_args.kwargs["exit_when_idle"] is False
 
 
 @patch("crsbench.cloud.cli._monitor.time.sleep")
@@ -1308,6 +1321,100 @@ def test_run_monitor_retries_until_redis_is_ready(
 
 class TestLaunch:
     """Tests for run_launch() orchestration."""
+
+    @patch("crsbench.cloud.cli._launch.load_launch_state")
+    @patch("crsbench.cloud.cli._launch.prepare_gce_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._launch.QuotaValidator")
+    @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
+    @patch("crsbench.cloud.cli._launch.load_experiment_config")
+    def test_launch_rejects_existing_saved_launch_state(
+        self,
+        mock_load,
+        mock_build_plan,
+        mock_validator_cls,
+        mock_adapter_cls,
+        mock_preflight,
+        mock_load_state,
+    ):
+        """Launch should fail fast when the experiment already has persisted launch state."""
+        mock_load.return_value = _make_launch_config()
+        launch_plan = MagicMock(experiment_name="test-exp")
+        resolved_plan = MagicMock(experiment_name="test-exp")
+        mock_build_plan.return_value = launch_plan
+        mock_validator_cls.return_value.validate.return_value = None
+        mock_preflight.return_value = MagicMock(
+            resolved_plan=resolved_plan,
+            redacted_worker_fleets=[_make_launch_state().worker_fleet_configs[0]],
+            redacted_evaluator_fleets=[],
+            orchestrator_env={},
+            worker_placement_envs=[],
+            evaluator_placement_envs=[],
+        )
+        mock_load_state.return_value = _make_launch_state()
+        mock_adapter = MagicMock()
+        mock_adapter.build_orchestrator_config.return_value.project = "test-project"
+        mock_adapter.list_orchestrators.return_value = []
+        mock_adapter.list_workers.return_value = []
+        mock_adapter.list_evaluators.return_value = []
+        mock_adapter_cls.return_value = mock_adapter
+
+        from crsbench.cloud.cli._launch import run_launch
+
+        rc = run_launch(_make_launch_args())
+
+        assert rc == 1
+        mock_load_state.assert_called_once_with(Path("/tmp/config.yaml"), "test-exp")
+        mock_adapter.create_orchestrator.assert_not_called()
+        mock_adapter.create_workers.assert_not_called()
+
+    @patch("crsbench.cloud.cli._launch.load_launch_state", return_value=None)
+    @patch("crsbench.cloud.cli._launch.prepare_gce_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._launch.QuotaValidator")
+    @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
+    @patch("crsbench.cloud.cli._launch.load_experiment_config")
+    def test_launch_rejects_existing_live_instances(
+        self,
+        mock_load,
+        mock_build_plan,
+        mock_validator_cls,
+        mock_adapter_cls,
+        mock_preflight,
+        mock_load_state,
+    ):
+        """Launch should fail fast when matching live instances already exist."""
+        del mock_load_state
+        mock_load.return_value = _make_launch_config()
+        launch_plan = MagicMock(experiment_name="test-exp")
+        resolved_plan = MagicMock(experiment_name="test-exp")
+        mock_build_plan.return_value = launch_plan
+        mock_validator_cls.return_value.validate.return_value = None
+        mock_preflight.return_value = MagicMock(
+            resolved_plan=resolved_plan,
+            redacted_worker_fleets=[_make_launch_state().worker_fleet_configs[0]],
+            redacted_evaluator_fleets=[],
+            orchestrator_env={},
+            worker_placement_envs=[],
+            evaluator_placement_envs=[],
+        )
+        mock_adapter = MagicMock()
+        mock_adapter.build_orchestrator_config.return_value.project = "test-project"
+        mock_adapter.list_orchestrators.return_value = [
+            _make_gce_worker("gce-orchestrator-test-exp", ip="10.0.0.50")
+        ]
+        mock_adapter.list_workers.return_value = []
+        mock_adapter.list_evaluators.return_value = []
+        mock_adapter_cls.return_value = mock_adapter
+
+        from crsbench.cloud.cli._launch import run_launch
+
+        rc = run_launch(_make_launch_args())
+
+        assert rc == 1
+        mock_adapter.list_orchestrators.assert_called_once_with(plan=resolved_plan)
+        mock_adapter.create_orchestrator.assert_not_called()
+        mock_adapter.create_workers.assert_not_called()
 
     @patch(
         "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"

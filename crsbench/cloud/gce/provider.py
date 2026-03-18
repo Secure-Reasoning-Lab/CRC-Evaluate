@@ -350,6 +350,15 @@ class GceProviderAdapter:
             )
         return workers
 
+    def list_orchestrators(self, *, plan: CloudLaunchPlan) -> list["GceWorkerRecord"]:
+        """List orchestrators belonging to a provider-neutral launch plan."""
+        if plan.orchestrator.provider is not CloudProvider.GCE:
+            return []
+        return self._provisioner.list_orchestrators(
+            experiment_name=plan.experiment_name,
+            orchestrator=self.build_orchestrator_config(plan),
+        )
+
     def delete_workers(self, *, plan: CloudLaunchPlan) -> list["GceWorkerRecord"]:
         """Delete workers across all placements in a provider-neutral launch plan."""
         workers: list[GceWorkerRecord] = []

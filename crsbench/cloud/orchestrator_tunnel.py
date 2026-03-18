@@ -137,7 +137,14 @@ def build_tunnel_command(
     return cmd
 
 
-def wait_for_local_port(host: str, port: int, *, timeout: float = 10.0) -> None:
+def wait_for_local_port(
+    host: str,
+    port: int,
+    *,
+    timeout: float = 10.0,
+    process: subprocess.Popen | None = None,
+    process_label: str = "tunnel process",
+) -> None:
     """Wait until a local forwarded port starts accepting TCP connections."""
     deadline = time.monotonic() + timeout
     last_error: OSError | None = None
@@ -147,13 +154,20 @@ def wait_for_local_port(host: str, port: int, *, timeout: float = 10.0) -> None:
                 return
         except OSError as exc:
             last_error = exc
+            if process is not None:
+                return_code = process.poll()
+                if return_code is not None:
+                    raise OrchestratorTunnelError(
+                        f"{process_label} exited with code {return_code} before local tunnel "
+                        f"{host}:{port} became ready"
+                    ) from exc
             time.sleep(0.1)
     raise OrchestratorTunnelError(
         f"Timed out waiting for local tunnel {host}:{port} to become ready: {last_error}"
     )
 
 
-def _allocate_local_port() -> int:
+def allocate_local_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         sock.listen(1)
@@ -204,16 +218,13 @@ class OrchestratorRedisTunnel:
         if self.process is not None:
             return
 
-        if self.local_port is None:
-            self.local_port = _allocate_local_port()
-        cmd = build_tunnel_command(
-            self.base_path,
-            self.launch_state,
-            local_port=self.local_port,
+        auto_local_port = self.local_port is None
+        transport_command = (
+            "gcloud" if self.launch_state.orchestrator_ssh_via_iap else "ssh"
         )
-        if shutil.which(cmd[0]) is None:
+        if shutil.which(transport_command) is None:
             raise OrchestratorTunnelError(
-                f"Required transport command not found: {cmd[0]}"
+                f"Required transport command not found: {transport_command}"
             )
 
         deadline = time.monotonic() + self.startup_timeout
@@ -228,8 +239,15 @@ class OrchestratorRedisTunnel:
                     f"Timed out starting orchestrator tunnel after {self.startup_timeout}s"
                 )
 
+            if auto_local_port or self.local_port is None:
+                self.local_port = allocate_local_port()
             self.process = subprocess.Popen(
-                cmd,
+                build_tunnel_command(
+                    self.base_path,
+                    self.launch_state,
+                    local_port=self.local_port,
+                ),
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 text=True,
@@ -239,11 +257,15 @@ class OrchestratorRedisTunnel:
                     "127.0.0.1",
                     self.local_port,
                     timeout=min(remaining, _TUNNEL_STARTUP_ATTEMPT_TIMEOUT_SEC),
+                    process=self.process,
+                    process_label="orchestrator tunnel process",
                 )
                 return
             except Exception as exc:
                 last_error = exc
                 self.stop()
+                if auto_local_port:
+                    self.local_port = None
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise

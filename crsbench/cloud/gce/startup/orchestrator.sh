@@ -393,10 +393,12 @@ PY
 }
 
 ensure_docker_ready() {
-  if ! command -v docker >/dev/null 2>&1; then
+  if ! command -v docker >/dev/null 2>&1 || \
+     ! docker compose version >/dev/null 2>&1 || \
+     ! docker buildx version >/dev/null 2>&1; then
     echo "Installing Docker..."
     if command -v apt-get >/dev/null 2>&1; then
-      install_packages docker.io docker-compose-v2
+      install_packages docker.io docker-compose-v2 docker-buildx
     elif command -v apk >/dev/null 2>&1; then
       install_packages docker docker-cli-compose
     else
@@ -898,7 +900,7 @@ Type=simple
 EnvironmentFile=${ENV_PATH}
 WorkingDirectory=${CLONE_DIR}
 ExecStart=/bin/bash ${LAUNCHER_PATH}
-Restart=always
+Restart=on-failure
 RestartSec=10
 
 [Install]

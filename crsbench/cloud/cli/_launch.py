@@ -16,6 +16,8 @@ from crsbench.cloud.launch_state import (
     CloudLaunchState,
     CreatedCloudInstanceRecord,
     append_created_instance_records,
+    launch_state_path,
+    load_launch_state,
     save_launch_state,
 )
 from crsbench.cloud.models import build_cloud_launch_plan
@@ -31,6 +33,37 @@ if TYPE_CHECKING:
     from crsbench.validation.schemas import GceWorkerFleetConfig
 
 logger = get_logger(__name__)
+
+
+def _assert_experiment_launch_target_is_clear(
+    *,
+    config_path: Path,
+    experiment_name: str,
+    adapter: GceProviderAdapter,
+    plan,
+) -> None:
+    """Reject duplicate launch attempts for an experiment before provisioning starts."""
+    conflicts: list[str] = []
+    existing_state = load_launch_state(config_path, experiment_name)
+    if existing_state is not None:
+        conflicts.append(
+            f"saved launch state exists at {launch_state_path(config_path, experiment_name)}"
+        )
+
+    live_instances = [
+        *adapter.list_orchestrators(plan=plan),
+        *adapter.list_workers(plan=plan),
+        *adapter.list_evaluators(plan=plan),
+    ]
+    if live_instances:
+        live_names = ", ".join(sorted({instance.name for instance in live_instances}))
+        conflicts.append(f"live cloud instances already exist: {live_names}")
+
+    if conflicts:
+        raise GceProvisioningError(
+            f"Experiment {experiment_name!r} already has cloud launch state; "
+            f"{'; '.join(conflicts)}. Tear it down before launching again."
+        )
 
 
 def _project_for_worker_record(
@@ -113,6 +146,12 @@ def run_launch(args: argparse.Namespace) -> int:
         adapter = GceProviderAdapter()
         resolved_orchestrator_config = adapter.build_orchestrator_config(
             provisioning_plan
+        )
+        _assert_experiment_launch_target_is_clear(
+            config_path=config_path,
+            experiment_name=config.experiment,
+            adapter=adapter,
+            plan=provisioning_plan,
         )
         validator = QuotaValidator(adapters={"gce": adapter})
         validator.validate(launch_plan)
