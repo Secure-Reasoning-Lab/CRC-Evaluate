@@ -35,13 +35,12 @@ evaluator:
   jobs: 1
   cores_per_job: 4
 cloud:
+  env:
+    CRSBENCH_LLM_UPSTREAM_BASE_URL: os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL
+    CRSBENCH_LLM_MASTER_KEY: os.environ/CRSBENCH_LLM_MASTER_KEY
   bootstrap:
     prepare_mode: full
     download_benchmarks: auto
-    env_passthrough:
-      common:
-        - CRSBENCH_LLM_UPSTREAM_BASE_URL
-        - CRSBENCH_LLM_MASTER_KEY
   providers:
     gce:
       project: aixcc-426805

@@ -950,6 +950,10 @@ class TestIntegrationWithSampleConfigs:
         assert set(config.crs_compose.services) == {"crs-libfuzzer"}
         assert config.cloud.bootstrap.prepare_mode == "full"
         assert config.cloud.bootstrap.download_benchmarks == "auto"
+        assert config.cloud.env == {
+            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL",
+            "CRSBENCH_LLM_MASTER_KEY": "os.environ/CRSBENCH_LLM_MASTER_KEY",
+        }
         assert config.cloud.providers is not None
         assert config.cloud.providers.gce is not None
         assert config.cloud.providers.gce.profile_defaults is not None

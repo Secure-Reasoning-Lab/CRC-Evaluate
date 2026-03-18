@@ -147,18 +147,15 @@ Expected result:
 - the token is not written back into `.crsbench-cloud/*.json`
 
 If your CRS/LLM path also needs operator-side env vars on the remote VMs,
-declare them in `cloud.bootstrap.env_passthrough`. Example:
+declare them in `cloud.env` using the same `os.environ/...` references that
+launch preflight already resolves. Example:
 
 ```yaml
 cloud:
-  bootstrap:
-    env_passthrough:
-      common:
-        - CRSBENCH_LLM_UPSTREAM_BASE_URL
-      orchestrator:
-        - CRSBENCH_LLM_MASTER_KEY
-      workers:
-        - OPENAI_API_KEY
+  env:
+    CRSBENCH_LLM_UPSTREAM_BASE_URL: os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL
+    CRSBENCH_LLM_MASTER_KEY: os.environ/CRSBENCH_LLM_MASTER_KEY
+    OPENAI_API_KEY: os.environ/OPENAI_API_KEY
 ```
 
 Expected result:
