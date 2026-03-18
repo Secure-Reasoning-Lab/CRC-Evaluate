@@ -43,6 +43,11 @@ def run_with_graceful_timeout(
         - returncode: Process return code (-9 if killed)
         - timed_out: True if timeout or early stop occurred
     """
+    popen_kwargs = dict(kwargs)
+    # Fuzzer/container output may contain arbitrary bytes; replace undecodable
+    # sequences so timeout handling can complete without crashing.
+    popen_kwargs.setdefault("encoding", "utf-8")
+    popen_kwargs.setdefault("errors", "replace")
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -50,7 +55,7 @@ def run_with_graceful_timeout(
         text=True,
         cwd=str(cwd) if cwd else None,
         env=env,
-        **kwargs,
+        **popen_kwargs,
     )
 
     timed_out = False
