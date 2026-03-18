@@ -2404,6 +2404,11 @@ class CloudConfig(BaseModel):
                 "cloud requires either legacy cloud.gce or provider-neutral cloud.providers/cloud.workers configuration"
             )
 
+        if self.env:
+            raise ValueError(
+                "cloud.env is only supported with provider-neutral cloud.providers/cloud.workers configuration"
+            )
+
         return self
 
     def _validate_provider_neutral_references(self) -> None:

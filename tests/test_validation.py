@@ -1003,6 +1003,17 @@ class TestExperimentConfigSchema:
         with pytest.raises(PydanticValidationError, match="CRSBENCH_REDIS_HOST"):
             ExperimentConfig(**data)
 
+    def test_cloud_gce_rejects_cloud_env_without_provider_neutral_config(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._legacy_cloud_kwargs()
+        data["cloud"]["env"] = {"CRSBENCH_LLM_MASTER_KEY": "value"}
+
+        with pytest.raises(
+            PydanticValidationError,
+            match="cloud.env is only supported with provider-neutral",
+        ):
+            ExperimentConfig(**data)
+
     def test_cloud_gce_with_orchestrator_valid(self):
         data = self._base_kwargs()
         data["cloud"] = {
