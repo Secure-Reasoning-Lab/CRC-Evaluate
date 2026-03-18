@@ -1359,6 +1359,71 @@ def test_provider_neutral_preprovisioned_wait_does_not_resolve_secret_refs_again
     manager.bring_up_workers.assert_not_called()
 
 
+def test_provider_neutral_preprovisioned_evaluators_use_combined_wait(
+    tmp_path: Path,
+) -> None:
+    """Pre-provisioned evaluator fleets should use the combined wait path."""
+    config = _with_evaluator_placements(_make_provider_neutral_run_config(tmp_path))
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.cloud_readiness = MagicMock()
+    session.register_or_raise.return_value = None
+
+    registration = MagicMock()
+    launch_plan = build_cloud_launch_plan(config)
+    adapter = MagicMock()
+    manager = MagicMock()
+
+    def _wait_for_existing_instances(**kwargs):
+        unresolved_plan = kwargs["plan"]
+        assert unresolved_plan.evaluator_placements == launch_plan.evaluator_placements
+        raise RuntimeError("stop after existing-instance wait")
+
+    manager.wait_for_existing_instances.side_effect = _wait_for_existing_instances
+
+    with (
+        patch.dict(
+            os.environ,
+            {"CRSBENCH_CLOUD_PREPROVISIONED_WORKERS": "1"},
+            clear=False,
+        ),
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={"queued": {}, "started": {}, "failed": {}, "finished": {}},
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config",
+            return_value=registration,
+        ),
+        patch(
+            "crsbench.cloud.models.build_cloud_launch_plan",
+            return_value=launch_plan,
+        ),
+        patch(
+            "crsbench.cloud.gce.provider.GceProviderAdapter",
+            return_value=adapter,
+        ),
+        patch(
+            "crsbench.cloud.status.CloudFleetStatusManager",
+            return_value=manager,
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="stop after existing-instance wait"):
+            run_experiment_distributed("exp-test", config, [_make_trial(None)])
+
+    manager.wait_for_existing_instances.assert_called_once()
+    manager.wait_for_existing_workers.assert_not_called()
+    manager.bring_up_instances.assert_not_called()
+    manager.bring_up_workers.assert_not_called()
+
+
 def test_cloud_fleet_failure_aborts_before_enqueue(tmp_path: Path) -> None:
     """Cloud bring-up failures must abort before any trial jobs are queued."""
     from crsbench.cloud.status import CloudFleetBringupError
