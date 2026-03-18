@@ -112,32 +112,30 @@ cloud:
     gce:
       project: example-project
       ssh_via_iap: true
+      profile_defaults:
+        machine_type: n2d-standard-16
+        boot_disk_size_gb: 200
+        image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+        service_account_email: crsbench-worker@example-project.iam.gserviceaccount.com
+        owner_label: team-crs
+        readiness_timeout_sec: 900
       instance_profiles:
-        worker-n2d:
-          machine_type: n2d-standard-16
-          boot_disk_size_gb: 200
-          image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
-          service_account_email: crsbench-worker@example-project.iam.gserviceaccount.com
-          owner_label: team-crs
-          readiness_timeout_sec: 900
+        gce-worker-n2d: {}
   orchestrator:
-    provider: gce
     zone: us-east5-b
-    instance_profile: worker-n2d
+    instance_profile: gce-worker-n2d
   workers:
+    defaults:
+      instance_profile: gce-worker-n2d
+      count: 1
     placements:
-      - provider: gce
-        zone: us-east5-b
-        worker_count: 3
-        instance_profile: worker-n2d
-      - provider: gce
-        zone: us-east1-b
-        worker_count: 1
-        instance_profile: worker-n2d
+      - zone: us-east5-b
+        count: 3
+      - zone: us-east1-b
 ```
 
 Phase 1 contract notes:
-- `cloud.providers.gce` plus `cloud.workers.placements` is the canonical GCE declaration surface.
+- `cloud.providers.gce` plus `cloud.workers.defaults` / `cloud.workers.placements` is the canonical GCE declaration surface.
 - Phase 1 supports explicit zone placements only; region selectors are not supported.
 - Access is OS Login-compatible SSH only; keep host verification enabled.
 - Use a dedicated worker service account rather than default project
@@ -286,24 +284,25 @@ cloud:
     gce:
       project: example-project
       ssh_via_iap: true
+      profile_defaults:
+        machine_type: n2d-standard-16
+        boot_disk_size_gb: 200
+        image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+        service_account_email: crsbench-worker@example-project.iam.gserviceaccount.com
+        owner_label: team-crs
+        readiness_timeout_sec: 900
       instance_profiles:
-        worker-n2d:
-          machine_type: n2d-standard-16
-          boot_disk_size_gb: 200
-          image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
-          service_account_email: crsbench-worker@example-project.iam.gserviceaccount.com
-          owner_label: team-crs
-          readiness_timeout_sec: 900
+        gce-worker-n2d: {}
   orchestrator:
-    provider: gce
     zone: us-east5-b
-    instance_profile: worker-n2d
+    instance_profile: gce-worker-n2d
   workers:
+    defaults:
+      instance_profile: gce-worker-n2d
+      count: 1
     placements:
-      - provider: gce
-        zone: us-east5-b
-        worker_count: 4
-        instance_profile: worker-n2d
+      - zone: us-east5-b
+        count: 4
 ```
 
 ### Config File Naming

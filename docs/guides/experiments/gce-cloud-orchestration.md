@@ -29,8 +29,8 @@ For a local preflight of the same startup scripts before touching GCE, use
 ## Configuration
 
 Declare provider-native GCE details under `cloud.providers.gce`, then reference
-those instance profiles from `cloud.orchestrator`,
-`cloud.workers.placements`, and optional `cloud.evaluators.placements`:
+those instance profiles from `cloud.orchestrator`, `cloud.workers`, and
+optional `cloud.evaluators`:
 
 ```yaml
 cloud:
@@ -41,51 +41,36 @@ cloud:
     gce:
       project: my-gcp-project
       ssh_via_iap: true
+      profile_defaults:
+        machine_type: n2d-standard-16
+        boot_disk_size_gb: 100
+        image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+        service_account_email: crsbench@my-gcp-project.iam.gserviceaccount.com
+        owner_label: my-team
+        readiness_timeout_sec: 900
+        crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
       instance_profiles:
-        orchestrator-n2d:
-          machine_type: n2d-standard-16
-          boot_disk_size_gb: 100
-          image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
-          service_account_email: crsbench-orchestrator@my-gcp-project.iam.gserviceaccount.com
-          owner_label: my-team
-          readiness_timeout_sec: 900
-          crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
-        worker-n2d:
-          machine_type: n2d-standard-16
-          boot_disk_size_gb: 100
-          image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
-          service_account_email: crsbench-worker@my-gcp-project.iam.gserviceaccount.com
-          owner_label: my-team
-          readiness_timeout_sec: 900
-          crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
-        evaluator-c3d:
+        gce-orchestrator-n2d: {}
+        gce-worker-n2d: {}
+        gce-evaluator-c3d:
           machine_type: c3d-standard-30
-          boot_disk_size_gb: 100
-          image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
-          service_account_email: crsbench-evaluator@my-gcp-project.iam.gserviceaccount.com
-          owner_label: my-team
-          readiness_timeout_sec: 900
-          crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
   orchestrator:
-    provider: gce
     zone: us-east5-b
-    instance_profile: orchestrator-n2d
+    instance_profile: gce-orchestrator-n2d
   workers:
+    defaults:
+      instance_profile: gce-worker-n2d
+      count: 1
     placements:
-      - provider: gce
-        zone: us-east5-b
-        worker_count: 3
-        instance_profile: worker-n2d
-      - provider: gce
-        zone: us-east1-b
-        worker_count: 1
-        instance_profile: worker-n2d
+      - zone: us-east5-b
+        count: 3
+      - zone: us-east1-b
   evaluators:
+    defaults:
+      instance_profile: gce-evaluator-c3d
+      count: 1
     placements:
-      - provider: gce
-        zone: us-east5-b
-        evaluator_count: 1
-        instance_profile: evaluator-c3d
+      - zone: us-east5-b
 ```
 
 ### Configuration Fields
@@ -93,18 +78,24 @@ cloud:
 | Field | Required | Description |
 |---|---|---|
 | `cloud.providers.gce.project` | yes | GCP project ID used for all referenced GCE resources |
+| `cloud.providers.gce.profile_defaults` | no | Default instance-profile fields merged into every named GCE profile |
 | `cloud.providers.gce.instance_profiles.<name>` | yes | Reusable machine/image/service-account bundle for orchestrator or workers |
-| `cloud.orchestrator.provider` | yes | Provider for the remote orchestrator VM (`gce` only in v1) |
 | `cloud.orchestrator.zone` | yes | Explicit orchestrator zone |
 | `cloud.orchestrator.instance_profile` | yes | Instance profile name for the orchestrator VM |
+| `cloud.workers.defaults.count` | no | Default number of workers to create per placement |
+| `cloud.workers.defaults.instance_profile` | no | Default worker instance profile |
 | `cloud.workers.placements[].zone` | yes | Explicit worker placement zone (zone selectors only in v1) |
-| `cloud.workers.placements[].worker_count` | no | Number of workers to create in that placement |
-| `cloud.workers.placements[].instance_profile` | yes | Instance profile name for that placement |
+| `cloud.workers.placements[].count` | no | Number of workers to create in that placement |
+| `cloud.workers.placements[].instance_profile` | no | Instance profile override for that placement |
+| `cloud.evaluators.defaults.count` | no | Default number of evaluators to create per placement |
+| `cloud.evaluators.defaults.instance_profile` | no | Default evaluator instance profile |
 | `cloud.evaluators.placements[].zone` | yes | Explicit evaluator placement zone (zone selectors only in v1) |
-| `cloud.evaluators.placements[].evaluator_count` | no | Number of evaluators to create in that placement |
-| `cloud.evaluators.placements[].instance_profile` | yes | Instance profile name for that placement |
+| `cloud.evaluators.placements[].count` | no | Number of evaluators to create in that placement |
+| `cloud.evaluators.placements[].instance_profile` | no | Instance profile override for that placement |
 
-All placement `provider` fields must currently be `gce`, and one launch cannot
+Provider-neutral configs do not repeat `provider` on orchestrator or
+placements. CRSBench resolves the provider from the referenced
+`cloud.providers.<provider>.instance_profiles` catalog, and one launch cannot
 mix providers across orchestrator, workers, and evaluators.
 
 Instance profiles carry the per-VM details such as `machine_type`,
@@ -139,17 +130,19 @@ cloud:
     gce:
       project: my-gcp-project
       ssh_via_iap: true
+      profile_defaults:
+        service_account_email: crsbench-worker@my-gcp-project.iam.gserviceaccount.com
+        owner_label: my-team
       instance_profiles:
-        worker-template:
+        gce-worker-template:
           instance_template: projects/my-gcp-project/global/instanceTemplates/crsbench-worker-v1
-          service_account_email: crsbench-worker@my-gcp-project.iam.gserviceaccount.com
-          owner_label: my-team
   workers:
+    defaults:
+      instance_profile: gce-worker-template
+      count: 1
     placements:
-      - provider: gce
-        zone: us-central1-a
-        worker_count: 8
-        instance_profile: worker-template
+      - zone: us-central1-a
+        count: 8
 ```
 
 ## Private Repository & Dataset Access
@@ -226,23 +219,15 @@ public key. Add it to your GitHub repository:
 cloud:
   providers:
     gce:
+      profile_defaults:
+        crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
       instance_profiles:
-        orchestrator-n2d:
-          # Install CRSBench from a public repo via git clone + uv sync
-          crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
-
-          # For a private repo, switch to git+ssh://... and provide a deploy key:
-          # crsbench_install_spec: "git+ssh://git@github.com/your-org/CRSBench.git"
-          # github_deploy_key_file: file:.crsbench-keys/crsbench-deploy
-
-        worker-n2d:
-          # Install CRSBench from a public repo via git clone + uv sync
-          crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
-
-          # For a private repo, switch to git+ssh://... and provide a deploy key:
-          # crsbench_install_spec: "git+ssh://git@github.com/your-org/CRSBench.git"
-          # github_deploy_key_file: file:.crsbench-keys/crsbench-deploy
-
+        # Inherit the public git+https install path from profile_defaults.
+        # For a private repo, override on the specific profile:
+        #   crsbench_install_spec: "git+ssh://git@github.com/your-org/CRSBench.git"
+        #   github_deploy_key_file: file:.crsbench-keys/crsbench-deploy
+        gce-orchestrator-n2d: {}
+        gce-worker-n2d:
           # HuggingFace token for gated dataset downloads (optional)
           hf_token: os.environ/HF_TOKEN
 ```

@@ -138,7 +138,7 @@ class GceProviderAdapter:
                 GceWorkerFleetConfig(
                     project=resolved.project,
                     zone=placement.zone,
-                    worker_count=placement.worker_count,
+                    worker_count=placement.count,
                     machine_type=resolved.machine_type,
                     boot_disk_size_gb=resolved.boot_disk_size_gb,
                     image=resolved.image,
@@ -176,7 +176,7 @@ class GceProviderAdapter:
                 GceWorkerFleetConfig(
                     project=resolved.project,
                     zone=placement.zone,
-                    worker_count=placement.evaluator_count,
+                    worker_count=placement.count,
                     machine_type=resolved.machine_type,
                     boot_disk_size_gb=resolved.boot_disk_size_gb,
                     image=resolved.image,
@@ -226,7 +226,7 @@ class GceProviderAdapter:
                 requirements=requirements,
                 zone=placement.zone,
                 machine_type=resolved.machine_type,
-                count=placement.worker_count,
+                count=placement.count,
             )
 
         for placement in plan.evaluator_placements:
@@ -237,7 +237,7 @@ class GceProviderAdapter:
                 requirements=requirements,
                 zone=placement.zone,
                 machine_type=resolved.machine_type,
-                count=placement.evaluator_count,
+                count=placement.count,
             )
 
         return [

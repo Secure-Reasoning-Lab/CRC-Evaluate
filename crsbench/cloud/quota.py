@@ -45,6 +45,9 @@ class QuotaValidator:
         """Raise if any provider cannot satisfy its part of the launch plan."""
         shortages: list[QuotaShortage] = []
         provider_names = {placement.provider for placement in plan.worker_placements}
+        provider_names.update(
+            placement.provider for placement in plan.evaluator_placements
+        )
         if include_orchestrator:
             provider_names.add(plan.orchestrator.provider)
         for provider_name in sorted(provider_names):

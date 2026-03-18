@@ -5,11 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from crsbench.cloud.types import CloudProvider, coerce_cloud_provider
+from crsbench.cloud.readiness import CloudInstanceRole
+from crsbench.cloud.types import CloudProvider
 from crsbench.validation.schemas import (
     CloudOrchestratorPlacementConfig,
     ExperimentConfig,
-    GceInstanceProfileConfig,
     GceProviderConfig,
 )
 
@@ -34,22 +34,13 @@ class CloudOrchestratorPlan:
 
 
 @dataclass(frozen=True)
-class CloudWorkerPlacementPlan:
-    """Resolved worker placement for one cloud launch."""
+class CloudPlacementPlan:
+    """Resolved worker/evaluator placement for one cloud launch."""
 
+    role: CloudInstanceRole
     provider: CloudProvider
     zone: str
-    worker_count: int
-    instance_profile: ResolvedInstanceProfile
-
-
-@dataclass(frozen=True)
-class CloudEvaluatorPlacementPlan:
-    """Resolved evaluator placement for one cloud launch."""
-
-    provider: CloudProvider
-    zone: str
-    evaluator_count: int
+    count: int
     instance_profile: ResolvedInstanceProfile
 
 
@@ -80,10 +71,8 @@ class CloudLaunchPlan:
 
     experiment_name: str
     orchestrator: CloudOrchestratorPlan
-    worker_placements: list[CloudWorkerPlacementPlan] = field(default_factory=list)
-    evaluator_placements: list[CloudEvaluatorPlacementPlan] = field(
-        default_factory=list
-    )
+    worker_placements: list[CloudPlacementPlan] = field(default_factory=list)
+    evaluator_placements: list[CloudPlacementPlan] = field(default_factory=list)
 
 
 def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
@@ -99,37 +88,32 @@ def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
             "Experiment config does not define provider-neutral cloud launch config"
         )
 
-    gce_provider = config.cloud.providers.gce
-    orchestrator_profile = _resolve_gce_profile(
-        provider_name=CloudProvider.GCE,
-        provider_config=gce_provider,
+    orchestrator_profile = _resolve_provider_profile(
+        config=config,
         profile_name=config.cloud.orchestrator.instance_profile,
+        field_path="cloud.orchestrator.instance_profile",
     )
     worker_placements = [
-        CloudWorkerPlacementPlan(
-            provider=coerce_cloud_provider(placement.provider),
+        _build_placement_plan(
+            config=config,
+            role=CloudInstanceRole.WORKER,
             zone=placement.zone or "",
-            worker_count=placement.worker_count,
-            instance_profile=_resolve_gce_profile(
-                provider_name=CloudProvider.GCE,
-                provider_config=gce_provider,
-                profile_name=placement.instance_profile,
-            ),
+            count=placement.count,
+            profile_name=placement.instance_profile,
+            field_path=f"cloud.workers.placements.{index}.instance_profile",
         )
-        for placement in config.cloud.workers.placements
+        for index, placement in enumerate(config.cloud.workers.placements)
     ]
     evaluator_placements = [
-        CloudEvaluatorPlacementPlan(
-            provider=coerce_cloud_provider(placement.provider),
+        _build_placement_plan(
+            config=config,
+            role=CloudInstanceRole.EVALUATOR,
             zone=placement.zone or "",
-            evaluator_count=placement.evaluator_count,
-            instance_profile=_resolve_gce_profile(
-                provider_name=CloudProvider.GCE,
-                provider_config=gce_provider,
-                profile_name=placement.instance_profile,
-            ),
+            count=placement.count,
+            profile_name=placement.instance_profile,
+            field_path=f"cloud.evaluators.placements.{index}.instance_profile",
         )
-        for placement in (
+        for index, placement in enumerate(
             config.cloud.evaluators.placements if config.cloud.evaluators else []
         )
     ]
@@ -137,7 +121,7 @@ def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
     return CloudLaunchPlan(
         experiment_name=config.experiment,
         orchestrator=CloudOrchestratorPlan(
-            provider=coerce_cloud_provider(config.cloud.orchestrator.provider),
+            provider=orchestrator_profile.provider,
             zone=config.cloud.orchestrator.zone,
             instance_profile=orchestrator_profile,
         ),
@@ -146,22 +130,60 @@ def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
     )
 
 
-def _resolve_gce_profile(
+def _resolve_provider_profile(
     *,
-    provider_name: CloudProvider,
-    provider_config: GceProviderConfig,
+    config: ExperimentConfig,
     profile_name: str,
+    field_path: str,
 ) -> ResolvedInstanceProfile:
-    """Resolve one named GCE instance profile into a normalized launch record."""
+    """Resolve one named provider profile from the owning provider catalog."""
+    matches: list[tuple[CloudProvider, GceProviderConfig]] = []
+    providers = config.cloud.providers if config.cloud is not None else None
+    if providers is not None and providers.gce is not None:
+        if profile_name in providers.gce.instance_profiles:
+            matches.append((CloudProvider.GCE, providers.gce))
+
+    if not matches:
+        raise ValueError(
+            f"{field_path} '{profile_name}' was not found under any "
+            "cloud.providers.*.instance_profiles catalog"
+        )
+    if len(matches) > 1:
+        provider_names = ", ".join(provider.value for provider, _ in matches)
+        raise ValueError(
+            f"{field_path} '{profile_name}' is ambiguous across cloud provider "
+            f"catalogs: {provider_names}"
+        )
+
+    provider_name, provider_config = matches[0]
     profile = provider_config.instance_profiles[profile_name]
     return ResolvedInstanceProfile(
         provider=provider_name,
         name=profile_name,
-        provider_config=provider_config.model_dump(),
-        profile_config=_profile_dump(profile),
+        provider_config=provider_config.model_dump(exclude_none=True),
+        profile_config=profile.model_dump(exclude_none=True),
     )
 
 
-def _profile_dump(profile: GceInstanceProfileConfig) -> dict[str, Any]:
-    """Serialize a profile into plain data for provider-neutral plan objects."""
-    return profile.model_dump()
+def _build_placement_plan(
+    *,
+    config: ExperimentConfig,
+    role: CloudInstanceRole,
+    zone: str,
+    count: int,
+    profile_name: str,
+    field_path: str,
+) -> CloudPlacementPlan:
+    """Build one typed worker/evaluator placement from the provider catalog."""
+    instance_profile = _resolve_provider_profile(
+        config=config,
+        profile_name=profile_name,
+        field_path=field_path,
+    )
+    return CloudPlacementPlan(
+        role=role,
+        provider=instance_profile.provider,
+        zone=zone,
+        count=count,
+        instance_profile=instance_profile,
+    )

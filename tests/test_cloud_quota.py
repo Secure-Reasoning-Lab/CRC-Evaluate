@@ -24,50 +24,40 @@ def _make_provider_neutral_experiment_config() -> ExperimentConfig:
                 "providers": {
                     "gce": {
                         "project": "test-project",
+                        "profile_defaults": {
+                            "machine_type": "n2d-standard-16",
+                            "boot_disk_size_gb": 50,
+                            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                            "service_account_email": "crsbench@test-project.iam.gserviceaccount.com",
+                            "owner_label": "team-crs",
+                        },
                         "instance_profiles": {
-                            "orchestrator-n2d": {
-                                "machine_type": "n2d-standard-16",
-                                "boot_disk_size_gb": 50,
-                                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                                "service_account_email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com",
-                                "owner_label": "team-crs",
-                            },
-                            "worker-n2d": {
-                                "machine_type": "n2d-standard-16",
-                                "boot_disk_size_gb": 50,
-                                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
-                                "owner_label": "team-crs",
-                            },
+                            "gce-orchestrator-n2d": {},
+                            "gce-worker-n2d": {},
                         },
                     }
                 },
                 "orchestrator": {
-                    "provider": "gce",
                     "zone": "us-east5-b",
-                    "instance_profile": "orchestrator-n2d",
+                    "instance_profile": "gce-orchestrator-n2d",
                 },
                 "workers": {
+                    "defaults": {
+                        "instance_profile": "gce-worker-n2d",
+                        "count": 1,
+                    },
                     "placements": [
                         {
-                            "provider": "gce",
                             "zone": "us-east5-b",
-                            "worker_count": 2,
-                            "instance_profile": "worker-n2d",
+                            "count": 2,
                         },
                         {
-                            "provider": "gce",
                             "zone": "us-east5-c",
-                            "worker_count": 1,
-                            "instance_profile": "worker-n2d",
                         },
                         {
-                            "provider": "gce",
                             "zone": "us-east1-b",
-                            "worker_count": 1,
-                            "instance_profile": "worker-n2d",
                         },
-                    ]
+                    ],
                 },
             },
             "crs_compose": {"test-crs": {"num_cores": 1}},

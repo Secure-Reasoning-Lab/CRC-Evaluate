@@ -158,45 +158,38 @@ def _make_provider_neutral_experiment_config() -> ExperimentConfig:
                 "providers": {
                     "gce": {
                         "project": "test-project",
+                        "profile_defaults": {
+                            "machine_type": "n2d-standard-16",
+                            "boot_disk_size_gb": 50,
+                            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                            "service_account_email": "crsbench@test-project.iam.gserviceaccount.com",
+                            "owner_label": "team-crs",
+                            "ssh_via_iap": True,
+                        },
                         "instance_profiles": {
-                            "orchestrator-n2d": {
-                                "machine_type": "n2d-standard-16",
-                                "boot_disk_size_gb": 50,
-                                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                                "service_account_email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com",
-                                "owner_label": "team-crs",
-                            },
-                            "worker-n2d": {
-                                "machine_type": "n2d-standard-16",
-                                "boot_disk_size_gb": 50,
-                                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
-                                "owner_label": "team-crs",
-                                "ssh_via_iap": True,
-                            },
+                            "gce-orchestrator-n2d": {},
+                            "gce-worker-n2d": {},
                         },
                     }
                 },
                 "orchestrator": {
-                    "provider": "gce",
                     "zone": "us-east5-b",
-                    "instance_profile": "orchestrator-n2d",
+                    "instance_profile": "gce-orchestrator-n2d",
                 },
                 "workers": {
+                    "defaults": {
+                        "instance_profile": "gce-worker-n2d",
+                        "count": 1,
+                    },
                     "placements": [
                         {
-                            "provider": "gce",
                             "zone": "us-east5-b",
-                            "worker_count": 2,
-                            "instance_profile": "worker-n2d",
+                            "count": 2,
                         },
                         {
-                            "provider": "gce",
                             "zone": "us-east1-b",
-                            "worker_count": 1,
-                            "instance_profile": "worker-n2d",
                         },
-                    ]
+                    ],
                 },
             },
             "crs_compose": {"test-crs": {"num_cores": 1}},
@@ -205,29 +198,27 @@ def _make_provider_neutral_experiment_config() -> ExperimentConfig:
 
 
 def _make_provider_neutral_experiment_config_with_evaluators() -> ExperimentConfig:
-    config = _make_provider_neutral_experiment_config().model_dump()
-    config["cloud"]["providers"]["gce"]["instance_profiles"]["evaluator-c3"] = {
+    config = _make_provider_neutral_experiment_config().model_dump(
+        mode="json", exclude_none=True
+    )
+    config["cloud"]["providers"]["gce"]["instance_profiles"]["gce-evaluator-c3"] = {
         "machine_type": "c3-standard-8",
-        "boot_disk_size_gb": 100,
-        "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
         "service_account_email": "crsbench-evaluator@test-project.iam.gserviceaccount.com",
-        "owner_label": "team-crs",
     }
     config["cloud"]["evaluators"] = {
+        "defaults": {
+            "instance_profile": "gce-evaluator-c3",
+            "count": 1,
+        },
         "placements": [
             {
-                "provider": "gce",
                 "zone": "us-east5-b",
-                "evaluator_count": 1,
-                "instance_profile": "evaluator-c3",
             },
             {
-                "provider": "gce",
                 "zone": "us-east1-b",
-                "evaluator_count": 2,
-                "instance_profile": "evaluator-c3",
+                "count": 2,
             },
-        ]
+        ],
     }
     return ExperimentConfig.model_validate(config)
 
@@ -335,7 +326,7 @@ def test_gce_provider_adapter_resolves_named_instance_profile():
     assert resolved.machine_type == "n2d-standard-16"
     assert (
         resolved.service_account_email
-        == "crsbench-orchestrator@test-project.iam.gserviceaccount.com"
+        == "crsbench@test-project.iam.gserviceaccount.com"
     )
 
 

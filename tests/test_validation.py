@@ -667,6 +667,66 @@ class TestExperimentConfigSchema:
             }
         }
 
+    @staticmethod
+    def _provider_neutral_cloud_kwargs() -> dict:
+        return {
+            "providers": {
+                "gce": {
+                    "project": "test-project",
+                    "profile_defaults": {
+                        "machine_type": "n2d-standard-16",
+                        "boot_disk_size_gb": 50,
+                        "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                        "service_account_email": "crsbench@test-project.iam.gserviceaccount.com",
+                        "owner_label": "team-crs",
+                        "readiness_timeout_sec": 1200,
+                        "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
+                    },
+                    "instance_profiles": {
+                        "gce-orchestrator-n2d": {},
+                        "gce-worker-n2d": {},
+                        "gce-evaluator-c3": {
+                            "machine_type": "c3-standard-8",
+                        },
+                    },
+                }
+            },
+            "orchestrator": {
+                "zone": "us-east5-b",
+                "instance_profile": "gce-orchestrator-n2d",
+            },
+            "workers": {
+                "defaults": {
+                    "instance_profile": "gce-worker-n2d",
+                    "count": 150,
+                },
+                "placements": [
+                    {
+                        "zone": "us-east5-b",
+                    },
+                    {
+                        "zone": "us-east5-c",
+                        "count": 100,
+                    },
+                ],
+            },
+            "evaluators": {
+                "defaults": {
+                    "instance_profile": "gce-evaluator-c3",
+                    "count": 1,
+                },
+                "placements": [
+                    {
+                        "zone": "us-east5-b",
+                    },
+                    {
+                        "zone": "us-east1-b",
+                        "count": 2,
+                    },
+                ],
+            },
+        }
+
     def test_experiment_config_valid(self):
         config = ExperimentConfig(**self._base_kwargs())
         assert config.trials == 1
@@ -1119,115 +1179,45 @@ class TestExperimentConfigSchema:
         ):
             ExperimentConfig(**data)
 
-    def test_cloud_provider_contract_parses_worker_placements(self):
+    def test_cloud_provider_contract_parses_defaults_driven_placements(self):
         data = self._base_kwargs()
-        data["cloud"] = {
-            "providers": {
-                "gce": {
-                    "project": "test-project",
-                    "instance_profiles": {
-                        "orchestrator-n2d": {
-                            "machine_type": "n2d-standard-16",
-                            "boot_disk_size_gb": 50,
-                            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                            "service_account_email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com",
-                            "owner_label": "team-crs",
-                        },
-                        "worker-n2d": {
-                            "machine_type": "n2d-standard-16",
-                            "boot_disk_size_gb": 50,
-                            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                            "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
-                            "owner_label": "team-crs",
-                        },
-                    },
-                }
-            },
-            "orchestrator": {
-                "provider": "gce",
-                "zone": "us-east5-b",
-                "instance_profile": "orchestrator-n2d",
-            },
-            "workers": {
-                "placements": [
-                    {
-                        "provider": "gce",
-                        "zone": "us-east5-b",
-                        "worker_count": 150,
-                        "instance_profile": "worker-n2d",
-                    },
-                    {
-                        "provider": "gce",
-                        "zone": "us-east5-c",
-                        "worker_count": 100,
-                        "instance_profile": "worker-n2d",
-                    },
-                ]
-            },
-        }
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
 
         config = ExperimentConfig(**data)
 
         assert config.cloud is not None
         assert config.cloud.providers.gce is not None
         assert config.cloud.providers.gce.project == "test-project"
+        assert config.cloud.providers.gce.profile_defaults is not None
         assert config.cloud.orchestrator is not None
-        assert config.cloud.orchestrator.provider == "gce"
-        assert config.cloud.orchestrator.instance_profile == "orchestrator-n2d"
+        assert config.cloud.orchestrator.instance_profile == "gce-orchestrator-n2d"
         assert [placement.zone for placement in config.cloud.workers.placements] == [
             "us-east5-b",
             "us-east5-c",
         ]
-        assert [
-            placement.worker_count for placement in config.cloud.workers.placements
-        ] == [
+        assert [placement.count for placement in config.cloud.workers.placements] == [
             150,
             100,
         ]
         assert all(
-            placement.instance_profile == "worker-n2d"
+            placement.instance_profile == "gce-worker-n2d"
             for placement in config.cloud.workers.placements
+        )
+        assert [
+            placement.count for placement in config.cloud.evaluators.placements
+        ] == [
+            1,
+            2,
+        ]
+        assert all(
+            placement.instance_profile == "gce-evaluator-c3"
+            for placement in config.cloud.evaluators.placements
         )
 
     def test_cloud_provider_contract_requires_worker_placement_zone(self):
         data = self._base_kwargs()
-        data["cloud"] = {
-            "providers": {
-                "gce": {
-                    "project": "test-project",
-                    "instance_profiles": {
-                        "worker-n2d": {
-                            "machine_type": "n2d-standard-16",
-                            "boot_disk_size_gb": 50,
-                            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                            "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
-                            "owner_label": "team-crs",
-                        },
-                        "orchestrator-n2d": {
-                            "machine_type": "n2d-standard-16",
-                            "boot_disk_size_gb": 50,
-                            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                            "service_account_email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com",
-                            "owner_label": "team-crs",
-                        },
-                    },
-                }
-            },
-            "orchestrator": {
-                "provider": "gce",
-                "zone": "us-east5-b",
-                "instance_profile": "orchestrator-n2d",
-            },
-            "workers": {
-                "placements": [
-                    {
-                        "provider": "gce",
-                        "worker_count": 150,
-                        "instance_profile": "worker-n2d",
-                    }
-                ]
-            },
-        }
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["workers"]["placements"] = [{"count": 150}]
 
         with pytest.raises(
             PydanticValidationError,
@@ -1246,44 +1236,7 @@ class TestExperimentConfigSchema:
         self, field_name: str, field_value: object
     ):
         data = self._base_kwargs()
-        data["cloud"] = {
-            "providers": {
-                "gce": {
-                    "project": "test-project",
-                    "instance_profiles": {
-                        "worker-n2d": {
-                            "machine_type": "n2d-standard-16",
-                            "boot_disk_size_gb": 50,
-                            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                            "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
-                            "owner_label": "team-crs",
-                        },
-                        "orchestrator-n2d": {
-                            "machine_type": "n2d-standard-16",
-                            "boot_disk_size_gb": 50,
-                            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                            "service_account_email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com",
-                            "owner_label": "team-crs",
-                        },
-                    },
-                }
-            },
-            "orchestrator": {
-                "provider": "gce",
-                "zone": "us-east5-b",
-                "instance_profile": "orchestrator-n2d",
-            },
-            "workers": {
-                "placements": [
-                    {
-                        "provider": "gce",
-                        "zone": "us-east5-b",
-                        "worker_count": 150,
-                        "instance_profile": "worker-n2d",
-                    }
-                ]
-            },
-        }
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
         data["cloud"]["workers"][field_name] = field_value
 
         with pytest.raises(
@@ -1294,86 +1247,51 @@ class TestExperimentConfigSchema:
 
     def test_cloud_provider_contract_rejects_missing_instance_profile(self):
         data = self._base_kwargs()
-        data["cloud"] = {
-            "providers": {
-                "gce": {
-                    "project": "test-project",
-                    "instance_profiles": {
-                        "worker-n2d": {
-                            "machine_type": "n2d-standard-16",
-                            "boot_disk_size_gb": 50,
-                            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                            "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
-                            "owner_label": "team-crs",
-                        }
-                    },
-                }
-            },
-            "orchestrator": {
-                "provider": "gce",
-                "zone": "us-east5-b",
-                "instance_profile": "orchestrator-n2d",
-            },
-            "workers": {
-                "placements": [
-                    {
-                        "provider": "gce",
-                        "zone": "us-east5-b",
-                        "worker_count": 150,
-                        "instance_profile": "worker-n2d",
-                    }
-                ]
-            },
-        }
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["providers"]["gce"]["instance_profiles"] = {"gce-worker-n2d": {}}
 
         with pytest.raises(
             PydanticValidationError,
-            match="cloud.orchestrator.instance_profile 'orchestrator-n2d' was not found under cloud.providers.gce.instance_profiles",
+            match="cloud.orchestrator.instance_profile 'gce-orchestrator-n2d' was not found under cloud.providers.gce.instance_profiles",
         ):
             ExperimentConfig(**data)
 
-    def test_cloud_provider_contract_rejects_non_gce_provider_literals(self):
+    @pytest.mark.parametrize(
+        ("field_path", "field_value", "match"),
+        [
+            ("orchestrator.provider", "gce", "provider"),
+            (
+                "workers.placements.0.provider",
+                "gce",
+                "provider",
+            ),
+            (
+                "workers.placements.0.worker_count",
+                1,
+                "worker_count",
+            ),
+            (
+                "evaluators.placements.0.evaluator_count",
+                1,
+                "evaluator_count",
+            ),
+        ],
+    )
+    def test_cloud_provider_contract_rejects_removed_provider_neutral_fields(
+        self, field_path: str, field_value: object, match: str
+    ):
         data = self._base_kwargs()
-        data["cloud"] = {
-            "providers": {
-                "gce": {
-                    "project": "test-project",
-                    "instance_profiles": {
-                        "worker-n2d": {
-                            "machine_type": "n2d-standard-16",
-                            "boot_disk_size_gb": 50,
-                            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                            "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
-                            "owner_label": "team-crs",
-                        },
-                        "orchestrator-n2d": {
-                            "machine_type": "n2d-standard-16",
-                            "boot_disk_size_gb": 50,
-                            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                            "service_account_email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com",
-                            "owner_label": "team-crs",
-                        },
-                    },
-                }
-            },
-            "orchestrator": {
-                "provider": "aws",
-                "zone": "us-east5-b",
-                "instance_profile": "orchestrator-n2d",
-            },
-            "workers": {
-                "placements": [
-                    {
-                        "provider": "gce",
-                        "zone": "us-east5-b",
-                        "worker_count": 1,
-                        "instance_profile": "worker-n2d",
-                    }
-                ]
-            },
-        }
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        target = data["cloud"]
+        path_parts = field_path.split(".")
+        for part in path_parts[:-1]:
+            if part.isdigit():
+                target = target[int(part)]
+            else:
+                target = target[part]
+        target[path_parts[-1]] = field_value
 
-        with pytest.raises(PydanticValidationError, match="Input should be 'gce'"):
+        with pytest.raises(PydanticValidationError, match=match):
             ExperimentConfig(**data)
 
     def test_validate_single_cloud_provider_rejects_cross_provider_launches(self):

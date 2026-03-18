@@ -335,46 +335,42 @@ def _make_provider_neutral_experiment_config() -> ExperimentConfig:
                 "providers": {
                     "gce": {
                         "project": "test-project",
+                        "profile_defaults": {
+                            "machine_type": "n2d-standard-16",
+                            "boot_disk_size_gb": 50,
+                            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                            "service_account_email": "crsbench@test-project.iam.gserviceaccount.com",
+                            "owner_label": "team-crs",
+                            "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
+                        },
                         "instance_profiles": {
-                            "orchestrator-n2d": {
-                                "machine_type": "n2d-standard-16",
-                                "boot_disk_size_gb": 50,
-                                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                            "gce-orchestrator-n2d": {
                                 "service_account_email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com",
-                                "owner_label": "team-crs",
-                                "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
                             },
-                            "worker-n2d": {
-                                "machine_type": "n2d-standard-16",
-                                "boot_disk_size_gb": 50,
-                                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                            "gce-worker-n2d": {
                                 "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
-                                "owner_label": "team-crs",
-                                "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
                             },
                         },
                     }
                 },
                 "orchestrator": {
-                    "provider": "gce",
                     "zone": "us-east5-b",
-                    "instance_profile": "orchestrator-n2d",
+                    "instance_profile": "gce-orchestrator-n2d",
                 },
                 "workers": {
+                    "defaults": {
+                        "instance_profile": "gce-worker-n2d",
+                        "count": 150,
+                    },
                     "placements": [
                         {
-                            "provider": "gce",
                             "zone": "us-east5-b",
-                            "worker_count": 150,
-                            "instance_profile": "worker-n2d",
                         },
                         {
-                            "provider": "gce",
                             "zone": "us-east5-c",
-                            "worker_count": 100,
-                            "instance_profile": "worker-n2d",
+                            "count": 100,
                         },
-                    ]
+                    ],
                 },
             },
             "crs_compose": {"test-crs": {"num_cores": 1}},
@@ -384,29 +380,24 @@ def _make_provider_neutral_experiment_config() -> ExperimentConfig:
 
 def _make_provider_neutral_experiment_config_with_evaluators() -> ExperimentConfig:
     config = _make_provider_neutral_experiment_config().model_dump()
-    config["cloud"]["providers"]["gce"]["instance_profiles"]["evaluator-c3"] = {
+    config["cloud"]["providers"]["gce"]["instance_profiles"]["gce-evaluator-c3"] = {
         "machine_type": "c3-standard-8",
-        "boot_disk_size_gb": 50,
-        "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
         "service_account_email": "crsbench-evaluator@test-project.iam.gserviceaccount.com",
-        "owner_label": "team-crs",
-        "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
     }
     config["cloud"]["evaluators"] = {
+        "defaults": {
+            "instance_profile": "gce-evaluator-c3",
+            "count": 1,
+        },
         "placements": [
             {
-                "provider": "gce",
                 "zone": "us-east5-b",
-                "evaluator_count": 1,
-                "instance_profile": "evaluator-c3",
             },
             {
-                "provider": "gce",
                 "zone": "us-east1-b",
-                "evaluator_count": 2,
-                "instance_profile": "evaluator-c3",
+                "count": 2,
             },
-        ]
+        ],
     }
     return ExperimentConfig.model_validate(config)
 
@@ -419,10 +410,10 @@ def _add_secret_refs_to_provider_neutral_config(
 ) -> ExperimentConfig:
     config = config.model_copy(deep=True)
     profiles = config.cloud.providers.gce.instance_profiles
-    profiles["orchestrator-n2d"].github_deploy_key_file = deploy_key_ref
-    profiles["orchestrator-n2d"].hf_token = hf_token_ref
-    profiles["worker-n2d"].github_deploy_key_file = deploy_key_ref
-    profiles["worker-n2d"].hf_token = hf_token_ref
+    profiles["gce-orchestrator-n2d"].github_deploy_key_file = deploy_key_ref
+    profiles["gce-orchestrator-n2d"].hf_token = hf_token_ref
+    profiles["gce-worker-n2d"].github_deploy_key_file = deploy_key_ref
+    profiles["gce-worker-n2d"].hf_token = hf_token_ref
     return config
 
 
@@ -451,7 +442,7 @@ def test_build_cloud_launch_plan_resolves_profiles_for_orchestrator_and_workers(
 
     assert plan.orchestrator.provider is CloudProvider.GCE
     assert plan.orchestrator.zone == "us-east5-b"
-    assert plan.orchestrator.instance_profile.name == "orchestrator-n2d"
+    assert plan.orchestrator.instance_profile.name == "gce-orchestrator-n2d"
     assert plan.orchestrator.instance_profile.provider is CloudProvider.GCE
     assert (
         plan.orchestrator.instance_profile.provider_config["project"] == "test-project"
@@ -461,12 +452,12 @@ def test_build_cloud_launch_plan_resolves_profiles_for_orchestrator_and_workers(
         "us-east5-b",
         "us-east5-c",
     ]
-    assert [placement.worker_count for placement in plan.worker_placements] == [
+    assert [placement.count for placement in plan.worker_placements] == [
         150,
         100,
     ]
     assert all(
-        placement.instance_profile.name == "worker-n2d"
+        placement.instance_profile.name == "gce-worker-n2d"
         for placement in plan.worker_placements
     )
     assert all(
@@ -490,12 +481,12 @@ def test_build_cloud_launch_plan_resolves_profiles_for_evaluators():
         "us-east5-b",
         "us-east1-b",
     ]
-    assert [placement.evaluator_count for placement in plan.evaluator_placements] == [
+    assert [placement.count for placement in plan.evaluator_placements] == [
         1,
         2,
     ]
     assert all(
-        placement.instance_profile.name == "evaluator-c3"
+        placement.instance_profile.name == "gce-evaluator-c3"
         for placement in plan.evaluator_placements
     )
 
@@ -626,7 +617,7 @@ def test_prepare_gce_launch_inputs_rejects_non_git_install_spec_for_checkout_mod
 
     config = _make_provider_neutral_experiment_config()
     config.cloud.providers.gce.instance_profiles[
-        "worker-n2d"
+        "gce-worker-n2d"
     ].crsbench_install_spec = "crsbench==0.1.0"
     launch_plan = build_cloud_launch_plan(config)
 

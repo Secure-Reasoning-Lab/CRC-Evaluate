@@ -446,46 +446,38 @@ def _make_provider_neutral_run_config(tmp_path: Path) -> ExperimentConfig:
                 "providers": {
                     "gce": {
                         "project": "test-project",
+                        "profile_defaults": {
+                            "machine_type": "n2d-standard-16",
+                            "boot_disk_size_gb": 50,
+                            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                            "service_account_email": "crsbench@test-project.iam.gserviceaccount.com",
+                            "owner_label": "team-crs",
+                            "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
+                        },
                         "instance_profiles": {
-                            "orchestrator-n2d": {
-                                "machine_type": "n2d-standard-16",
-                                "boot_disk_size_gb": 50,
-                                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                                "service_account_email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com",
-                                "owner_label": "team-crs",
-                                "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
-                            },
-                            "worker-n2d": {
-                                "machine_type": "n2d-standard-16",
-                                "boot_disk_size_gb": 50,
-                                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
-                                "owner_label": "team-crs",
-                                "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
-                            },
+                            "gce-orchestrator-n2d": {},
+                            "gce-worker-n2d": {},
                         },
                     }
                 },
                 "orchestrator": {
-                    "provider": "gce",
                     "zone": "us-east5-b",
-                    "instance_profile": "orchestrator-n2d",
+                    "instance_profile": "gce-orchestrator-n2d",
                 },
                 "workers": {
+                    "defaults": {
+                        "instance_profile": "gce-worker-n2d",
+                        "count": 1,
+                    },
                     "placements": [
                         {
-                            "provider": "gce",
                             "zone": "us-east5-b",
-                            "worker_count": 2,
-                            "instance_profile": "worker-n2d",
+                            "count": 2,
                         },
                         {
-                            "provider": "gce",
                             "zone": "us-east1-b",
-                            "worker_count": 1,
-                            "instance_profile": "worker-n2d",
                         },
-                    ]
+                    ],
                 },
             },
             "crs_compose": {"crs-a": {"num_cores": 1}},
@@ -501,10 +493,10 @@ def _add_secret_refs_to_provider_neutral_run_config(
 ) -> ExperimentConfig:
     config = config.model_copy(deep=True)
     profiles = config.cloud.providers.gce.instance_profiles
-    profiles["orchestrator-n2d"].github_deploy_key_file = deploy_key_ref
-    profiles["orchestrator-n2d"].hf_token = hf_token_ref
-    profiles["worker-n2d"].github_deploy_key_file = deploy_key_ref
-    profiles["worker-n2d"].hf_token = hf_token_ref
+    profiles["gce-orchestrator-n2d"].github_deploy_key_file = deploy_key_ref
+    profiles["gce-orchestrator-n2d"].hf_token = hf_token_ref
+    profiles["gce-worker-n2d"].github_deploy_key_file = deploy_key_ref
+    profiles["gce-worker-n2d"].hf_token = hf_token_ref
     return config
 
 
@@ -526,24 +518,23 @@ def _with_env_passthrough(
 
 def _with_evaluator_placements(config: ExperimentConfig) -> ExperimentConfig:
     raw_config = config.model_dump(mode="json", exclude_none=True)
-    raw_config["cloud"]["providers"]["gce"]["instance_profiles"]["evaluator-n2d"] = (
-        raw_config["cloud"]["providers"]["gce"]["instance_profiles"]["worker-n2d"]
-    )
+    raw_config["cloud"]["providers"]["gce"]["instance_profiles"][
+        "gce-evaluator-n2d"
+    ] = raw_config["cloud"]["providers"]["gce"]["instance_profiles"]["gce-worker-n2d"]
     raw_config["cloud"]["evaluators"] = {
+        "defaults": {
+            "instance_profile": "gce-evaluator-n2d",
+            "count": 1,
+        },
         "placements": [
             {
-                "provider": "gce",
                 "zone": "us-east5-b",
-                "evaluator_count": 1,
-                "instance_profile": "evaluator-n2d",
             },
             {
-                "provider": "gce",
                 "zone": "us-east1-b",
-                "evaluator_count": 2,
-                "instance_profile": "evaluator-n2d",
+                "count": 2,
             },
-        ]
+        ],
     }
     return ExperimentConfig.model_validate(raw_config)
 

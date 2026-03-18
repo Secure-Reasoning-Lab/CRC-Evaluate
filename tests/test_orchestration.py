@@ -846,86 +846,102 @@ class TestIntegrationWithSampleConfigs:
         assert config.cloud.bootstrap.download_benchmarks == "auto"
         assert config.cloud.providers is not None
         assert config.cloud.providers.gce is not None
+        assert config.cloud.providers.gce.profile_defaults is not None
         assert config.cloud.workers is not None
         assert config.cloud.evaluators is not None
         assert config.cloud.orchestrator is not None
         assert config.experiment == "gce-sanity-1orch-2worker-1eval"
         assert (
             config.cloud.providers.gce.instance_profiles[
-                "worker-n2d"
+                "gce-worker-n2d"
             ].crsbench_install_spec
             == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
         )
         assert (
             config.cloud.providers.gce.instance_profiles[
-                "worker-n2d"
+                "gce-worker-n2d"
             ].github_deploy_key_file
             == "file:.crsbench-keys/crsbench-deploy"
         )
         assert (
-            config.cloud.providers.gce.instance_profiles["worker-n2d"].hf_token
+            config.cloud.providers.gce.instance_profiles["gce-worker-n2d"].hf_token
             == "os.environ/HF_TOKEN"
         )
+        assert config.cloud.workers.defaults is not None
+        assert config.cloud.workers.defaults.instance_profile == "gce-worker-n2d"
+        assert config.cloud.workers.defaults.count == 1
         assert [placement.zone for placement in config.cloud.evaluators.placements] == [
             "us-east5-b"
         ]
+        assert config.cloud.evaluators.defaults is not None
         assert [
             placement.instance_profile
             for placement in config.cloud.evaluators.placements
-        ] == ["evaluator-n2d"]
+        ] == ["gce-evaluator-n2d"]
+        assert [
+            placement.count for placement in config.cloud.evaluators.placements
+        ] == [1]
         assert (
             config.cloud.providers.gce.instance_profiles[
-                "worker-n2d"
+                "gce-worker-n2d"
             ].readiness_timeout_sec
             == 1200
         )
         assert (
-            config.cloud.providers.gce.instance_profiles["worker-n2d"].boot_disk_size_gb
-            == 100
-        )
-        assert (
             config.cloud.providers.gce.instance_profiles[
-                "orchestrator-n2d"
-            ].crsbench_install_spec
-            == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
-        )
-        assert (
-            config.cloud.providers.gce.instance_profiles[
-                "orchestrator-n2d"
+                "gce-worker-n2d"
             ].boot_disk_size_gb
             == 100
         )
         assert (
             config.cloud.providers.gce.instance_profiles[
-                "orchestrator-n2d"
+                "gce-orchestrator-n2d"
+            ].crsbench_install_spec
+            == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+        )
+        assert (
+            config.cloud.providers.gce.instance_profiles[
+                "gce-orchestrator-n2d"
+            ].boot_disk_size_gb
+            == 100
+        )
+        assert (
+            config.cloud.providers.gce.instance_profiles[
+                "gce-orchestrator-n2d"
             ].github_deploy_key_file
             == "file:.crsbench-keys/crsbench-deploy"
         )
         assert (
-            config.cloud.providers.gce.instance_profiles["orchestrator-n2d"].hf_token
+            config.cloud.providers.gce.instance_profiles[
+                "gce-orchestrator-n2d"
+            ].hf_token
             == "os.environ/HF_TOKEN"
         )
         assert (
             config.cloud.providers.gce.instance_profiles[
-                "orchestrator-n2d"
+                "gce-orchestrator-n2d"
             ].readiness_timeout_sec
             == 1200
         )
         assert (
             config.cloud.providers.gce.instance_profiles[
-                "worker-n2d"
+                "gce-worker-n2d"
             ].service_account_email
             == "153298433405-compute@developer.gserviceaccount.com"
         )
         assert (
             config.cloud.providers.gce.instance_profiles[
-                "orchestrator-n2d"
+                "gce-orchestrator-n2d"
             ].service_account_email
             == "153298433405-compute@developer.gserviceaccount.com"
         )
         assert [placement.zone for placement in config.cloud.workers.placements] == [
             "us-east5-b",
             "us-east1-b",
+        ]
+        assert [placement.count for placement in config.cloud.workers.placements] == [
+            1,
+            1,
         ]
 
     def test_e2e_with_sample_config_single_crs(self, tmp_path):

@@ -22,20 +22,26 @@ and examples.
 Managed cloud execution uses a provider-neutral top-level shape:
 
 - `cloud.providers.<provider>`: provider-native backing details such as GCE
-  project and reusable instance profiles
-- `cloud.orchestrator`: provider, zone, and instance-profile reference for the
-  remote orchestrator VM
-- `cloud.workers.placements[]`: explicit worker placements with zone,
-  `worker_count`, and `instance_profile`
-- `cloud.evaluators.placements[]`: optional evaluator placements with zone,
-  `evaluator_count`, and `instance_profile`
+  project, reusable instance profiles, and optional `profile_defaults`
+- `cloud.orchestrator`: zone and instance-profile reference for the remote
+  orchestrator VM
+- `cloud.workers.defaults`: optional role-level worker placement defaults such
+  as `count` and `instance_profile`
+- `cloud.workers.placements[]`: explicit worker placements with zone plus any
+  overrides from `defaults`
+- `cloud.evaluators.defaults`: optional role-level evaluator placement defaults
+  such as `count` and `instance_profile`
+- `cloud.evaluators.placements[]`: optional evaluator placements with zone plus
+  any overrides from `defaults`
 - `cloud.bootstrap.env_passthrough`: operator-resolved environment variables
   split into `common`, `orchestrator`, `workers`, and `evaluators`
 
 For GCE in v1:
 
 - use `cloud.providers.gce`
-- `cloud.orchestrator.provider` and every placement `provider` must be `gce`
+- provider-neutral configs do not repeat `provider` on orchestrator or
+  placements; CRSBench resolves the provider from the owning
+  `cloud.providers.<provider>.instance_profiles` catalog
 - one launch cannot mix providers across orchestrator, workers, and evaluators
 - placements must use explicit zones
 - live quota validation is mandatory before launch

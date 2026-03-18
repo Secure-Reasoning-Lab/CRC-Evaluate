@@ -24,7 +24,6 @@ from pydantic import (
 from crsbench.cloud.env_passthrough import normalize_env_name_list
 from crsbench.cloud.types import (
     CloudProvider,
-    CloudProviderName,
     validate_single_cloud_provider,
 )
 from crsbench.validation.ground_truth_paths import validate_ground_truth_segment
@@ -1293,12 +1292,7 @@ class GceWorkerFleetConfig(BaseModel):
     @classmethod
     def normalize_optional_strings(cls, value: Optional[str]) -> Optional[str]:
         """Trim string values and collapse blanks to None."""
-        if value is None:
-            return None
-        normalized = value.strip()
-        if not normalized:
-            return None
-        return normalized
+        return _normalize_cloud_optional_string(value)
 
     @field_validator("project", "service_account_email")
     @classmethod
@@ -1598,6 +1592,130 @@ class GceOrchestratorConfig(BaseModel):
         return self
 
 
+def _normalize_cloud_optional_string(value: Optional[str]) -> Optional[str]:
+    """Trim string values and collapse blanks to None."""
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    return normalized
+
+
+def _validate_cloud_service_account_email(value: Optional[str]) -> Optional[str]:
+    """Validate optional service-account identifiers when present."""
+    if value is None:
+        return None
+    if "@" not in value:
+        raise ValueError(
+            "cloud.providers.gce.instance_profiles service_account_email must be a service-account email"
+        )
+    return value
+
+
+def _validate_cloud_string_map(value: Dict[str, str]) -> Dict[str, str]:
+    """Reject blank keys or values in user-supplied maps."""
+    normalized: dict[str, str] = {}
+    for key, item in value.items():
+        key_str = key.strip()
+        item_str = item.strip()
+        if not key_str or not item_str:
+            raise ValueError(
+                "cloud.providers.gce.instance_profiles labels/metadata must not contain blanks"
+            )
+        normalized[key_str] = item_str
+    return normalized
+
+
+def _merge_cloud_maps(defaults: object, override: object) -> dict[str, str]:
+    """Merge optional string maps with override precedence."""
+    merged: dict[str, str] = {}
+    if isinstance(defaults, dict):
+        merged.update({str(k): str(v) for k, v in defaults.items()})
+    if isinstance(override, dict):
+        merged.update({str(k): str(v) for k, v in override.items()})
+    return merged
+
+
+def _merge_gce_profile_defaults(
+    defaults: dict[str, Any], override: dict[str, Any]
+) -> dict[str, Any]:
+    """Merge provider-level GCE profile defaults into one raw profile object."""
+    merged = {key: value for key, value in defaults.items() if value is not None}
+    merged.update({key: value for key, value in override.items() if value is not None})
+    for field_name in ("labels", "metadata"):
+        merged_map = _merge_cloud_maps(
+            defaults.get(field_name),
+            override.get(field_name),
+        )
+        if merged_map:
+            merged[field_name] = merged_map
+        else:
+            merged.pop(field_name, None)
+    return merged
+
+
+def _merge_cloud_placement_defaults(
+    defaults: dict[str, Any], placement: dict[str, Any]
+) -> dict[str, Any]:
+    """Merge role-level placement defaults into one raw placement object."""
+    merged = {key: value for key, value in defaults.items() if value is not None}
+    merged.update({key: value for key, value in placement.items() if value is not None})
+    return merged
+
+
+class GceInstanceProfileDefaultsConfig(BaseModel):
+    """Partial reusable defaults merged into named GCE instance profiles."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    machine_type: Optional[str] = Field(default=None)
+    boot_disk_size_gb: Optional[int] = Field(default=None, ge=10)
+    image: Optional[str] = Field(default=None)
+    instance_template: Optional[str] = Field(default=None)
+    network: Optional[str] = Field(default=None)
+    subnetwork: Optional[str] = Field(default=None)
+    service_account_email: Optional[str] = Field(default=None)
+    owner_label: Optional[str] = Field(default=None)
+    labels: Dict[str, str] = Field(default_factory=dict)
+    metadata: Dict[str, str] = Field(default_factory=dict)
+    startup_script_uri: Optional[str] = Field(default=None)
+    use_os_login: Optional[bool] = Field(default=None)
+    ssh_via_iap: Optional[bool] = Field(default=None)
+    readiness_timeout_sec: Optional[int] = Field(default=None, ge=1)
+    crsbench_install_spec: Optional[str] = Field(default=None)
+    crsbench_git_ref: Optional[str] = Field(default=None)
+    github_deploy_key_file: Optional[str] = Field(default=None)
+    hf_token: Optional[str] = Field(default=None)
+
+    @field_validator(
+        "machine_type",
+        "image",
+        "instance_template",
+        "network",
+        "subnetwork",
+        "service_account_email",
+        "owner_label",
+        "startup_script_uri",
+        "crsbench_install_spec",
+        "crsbench_git_ref",
+        "github_deploy_key_file",
+    )
+    @classmethod
+    def normalize_optional_strings(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_cloud_optional_string(value)
+
+    @field_validator("service_account_email")
+    @classmethod
+    def validate_service_account_email(cls, value: Optional[str]) -> Optional[str]:
+        return _validate_cloud_service_account_email(value)
+
+    @field_validator("labels", "metadata")
+    @classmethod
+    def validate_string_maps(cls, value: Dict[str, str]) -> Dict[str, str]:
+        return _validate_cloud_string_map(value)
+
+
 class GceInstanceProfileConfig(BaseModel):
     """Reusable GCE instance profile referenced by provider-neutral cloud roles."""
 
@@ -1718,26 +1836,16 @@ class GceInstanceProfileConfig(BaseModel):
         """Require an email-like service account identifier."""
         if value is None:
             raise ValueError("Field is required")
-        if "@" not in value:
-            raise ValueError(
-                "cloud.providers.gce.instance_profiles service_account_email must be a service-account email"
-            )
-        return value
+        validated = _validate_cloud_service_account_email(value)
+        if validated is None:
+            raise ValueError("Field is required")
+        return validated
 
     @field_validator("labels", "metadata")
     @classmethod
     def validate_string_maps(cls, value: Dict[str, str]) -> Dict[str, str]:
         """Reject blank keys or values in user-supplied maps."""
-        normalized: dict[str, str] = {}
-        for key, item in value.items():
-            key_str = key.strip()
-            item_str = item.strip()
-            if not key_str or not item_str:
-                raise ValueError(
-                    "cloud.providers.gce.instance_profiles labels/metadata must not contain blanks"
-                )
-            normalized[key_str] = item_str
-        return normalized
+        return _validate_cloud_string_map(value)
 
     @model_validator(mode="after")
     def validate_profile_contract(self):
@@ -1798,10 +1906,38 @@ class GceProviderConfig(BaseModel):
         default=False,
         description="Whether operators are expected to connect through IAP-backed SSH by default.",
     )
+    profile_defaults: Optional[GceInstanceProfileDefaultsConfig] = Field(
+        default=None,
+        description="Default GCE instance-profile fields merged into every named instance profile.",
+    )
     instance_profiles: Dict[str, GceInstanceProfileConfig] = Field(
         default_factory=dict,
         description="Named GCE instance profiles referenced by orchestrator and worker placements.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def apply_profile_defaults(cls, value: object) -> object:
+        """Merge provider-level profile defaults into raw instance profile objects."""
+        if not isinstance(value, dict):
+            return value
+
+        normalized = dict(value)
+        raw_defaults = normalized.get("profile_defaults")
+        defaults_dict = raw_defaults if isinstance(raw_defaults, dict) else {}
+        raw_profiles = normalized.get("instance_profiles")
+        if not isinstance(raw_profiles, dict):
+            return normalized
+
+        normalized["instance_profiles"] = {
+            key: (
+                _merge_gce_profile_defaults(defaults_dict, raw_profile)
+                if isinstance(raw_profile, dict)
+                else raw_profile
+            )
+            for key, raw_profile in raw_profiles.items()
+        }
+        return normalized
 
     @field_validator("project", "network", "subnetwork")
     @classmethod
@@ -1855,24 +1991,10 @@ class CloudOrchestratorPlacementConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    provider: CloudProviderName = Field(
-        ..., description="Cloud provider used for the orchestrator."
-    )
     zone: str = Field(..., description="Explicit zone for the orchestrator.")
     instance_profile: str = Field(
         ..., description="Named provider instance profile for the orchestrator."
     )
-
-    @field_validator("provider", mode="before")
-    @classmethod
-    def normalize_provider(cls, value: object) -> object:
-        """Trim provider strings before literal validation."""
-        if isinstance(value, str):
-            normalized = value.strip()
-            if not normalized:
-                raise ValueError("Field is required")
-            return normalized
-        return value
 
     @field_validator("zone", "instance_profile")
     @classmethod
@@ -1884,37 +2006,49 @@ class CloudOrchestratorPlacementConfig(BaseModel):
         return normalized
 
 
-class CloudWorkerPlacementConfig(BaseModel):
-    """Provider-neutral worker placement declaration."""
+class CloudPlacementDefaultsConfig(BaseModel):
+    """Role-level defaults merged into worker/evaluator placements."""
 
     model_config = ConfigDict(extra="forbid")
 
-    provider: CloudProviderName = Field(
-        ..., description="Cloud provider used for this placement."
+    instance_profile: Optional[str] = Field(
+        default=None,
+        description="Default named provider instance profile for placements in this role.",
     )
+    count: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Default number of instances to create per placement in this role.",
+    )
+
+    @field_validator("instance_profile")
+    @classmethod
+    def normalize_instance_profile(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        return normalized
+
+
+class CloudPlacementConfig(BaseModel):
+    """Shared provider-neutral placement declaration."""
+
+    model_config = ConfigDict(extra="forbid")
+
     zone: Optional[str] = Field(
         default=None,
-        description="Explicit zone for this worker placement.",
+        description="Explicit zone for this placement.",
     )
-    worker_count: int = Field(
+    count: int = Field(
         default=1,
         ge=1,
-        description="Number of workers to create in this placement.",
+        description="Number of instances to create in this placement.",
     )
     instance_profile: str = Field(
         ..., description="Named provider instance profile for this placement."
     )
-
-    @field_validator("provider", mode="before")
-    @classmethod
-    def normalize_provider(cls, value: object) -> object:
-        """Trim provider strings before literal validation."""
-        if isinstance(value, str):
-            normalized = value.strip()
-            if not normalized:
-                raise ValueError("Field is required")
-            return normalized
-        return value
 
     @field_validator("instance_profile")
     @classmethod
@@ -1936,8 +2070,12 @@ class CloudWorkerPlacementConfig(BaseModel):
             return None
         return normalized
 
+
+class CloudWorkerPlacementConfig(CloudPlacementConfig):
+    """Provider-neutral worker placement declaration."""
+
     @model_validator(mode="after")
-    def validate_zonal_contract(self):
+    def validate_worker_zonal_contract(self):
         """Require explicit zonal worker placements in v1."""
         if self.zone is None:
             raise ValueError("cloud.workers.placements require explicit zone in v1")
@@ -1949,6 +2087,10 @@ class CloudWorkersConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    defaults: CloudPlacementDefaultsConfig = Field(
+        default_factory=CloudPlacementDefaultsConfig,
+        description="Optional defaults merged into each worker placement.",
+    )
     placements: List[CloudWorkerPlacementConfig] = Field(
         default_factory=list,
         description="Explicit worker placements for the experiment.",
@@ -1956,14 +2098,26 @@ class CloudWorkersConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def reject_unsupported_fields(cls, value: object) -> object:
-        """Reject unsupported quota toggles in the public config surface."""
+    def normalize_workers_config(cls, value: object) -> object:
+        """Reject unsupported fields and merge worker placement defaults."""
         if isinstance(value, dict):
             for field_name in ("quota_validation", "mode"):
                 if field_name in value:
                     raise ValueError(
                         f"cloud.workers.{field_name} is not supported in v1"
                     )
+            normalized = dict(value)
+            defaults = normalized.get("defaults")
+            defaults_dict = defaults if isinstance(defaults, dict) else {}
+            placements = normalized.get("placements")
+            if isinstance(placements, list):
+                normalized["placements"] = [
+                    _merge_cloud_placement_defaults(defaults_dict, placement)
+                    if isinstance(placement, dict)
+                    else placement
+                    for placement in placements
+                ]
+            return normalized
         return value
 
     @model_validator(mode="after")
@@ -1974,60 +2128,11 @@ class CloudWorkersConfig(BaseModel):
         return self
 
 
-class CloudEvaluatorPlacementConfig(BaseModel):
+class CloudEvaluatorPlacementConfig(CloudPlacementConfig):
     """Provider-neutral evaluator placement declaration."""
 
-    model_config = ConfigDict(extra="forbid")
-
-    provider: CloudProviderName = Field(
-        ..., description="Cloud provider used for this placement."
-    )
-    zone: Optional[str] = Field(
-        default=None,
-        description="Explicit zone for this evaluator placement.",
-    )
-    evaluator_count: int = Field(
-        default=1,
-        ge=1,
-        description="Number of evaluators to create in this placement.",
-    )
-    instance_profile: str = Field(
-        ..., description="Named provider instance profile for this placement."
-    )
-
-    @field_validator("provider", mode="before")
-    @classmethod
-    def normalize_provider(cls, value: object) -> object:
-        """Trim provider strings before literal validation."""
-        if isinstance(value, str):
-            normalized = value.strip()
-            if not normalized:
-                raise ValueError("Field is required")
-            return normalized
-        return value
-
-    @field_validator("instance_profile")
-    @classmethod
-    def validate_required_strings(cls, value: str) -> str:
-        """Require non-empty strings for placement references."""
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("Field is required")
-        return normalized
-
-    @field_validator("zone")
-    @classmethod
-    def normalize_zone(cls, value: Optional[str]) -> Optional[str]:
-        """Trim zone strings and collapse blanks to None."""
-        if value is None:
-            return None
-        normalized = value.strip()
-        if not normalized:
-            return None
-        return normalized
-
     @model_validator(mode="after")
-    def validate_zonal_contract(self):
+    def validate_evaluator_zonal_contract(self):
         """Require explicit zonal evaluator placements in v1."""
         if self.zone is None:
             raise ValueError("cloud.evaluators.placements require explicit zone in v1")
@@ -2039,10 +2144,33 @@ class CloudEvaluatorsConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    defaults: CloudPlacementDefaultsConfig = Field(
+        default_factory=CloudPlacementDefaultsConfig,
+        description="Optional defaults merged into each evaluator placement.",
+    )
     placements: List[CloudEvaluatorPlacementConfig] = Field(
         default_factory=list,
         description="Explicit evaluator placements for the experiment.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_evaluators_config(cls, value: object) -> object:
+        """Merge evaluator placement defaults into raw placements."""
+        if isinstance(value, dict):
+            normalized = dict(value)
+            defaults = normalized.get("defaults")
+            defaults_dict = defaults if isinstance(defaults, dict) else {}
+            placements = normalized.get("placements")
+            if isinstance(placements, list):
+                normalized["placements"] = [
+                    _merge_cloud_placement_defaults(defaults_dict, placement)
+                    if isinstance(placement, dict)
+                    else placement
+                    for placement in placements
+                ]
+            return normalized
+        return value
 
     @model_validator(mode="after")
     def validate_evaluator_contract(self):
@@ -2166,7 +2294,7 @@ class CloudConfig(BaseModel):
                 )
             if not isinstance(self.orchestrator, CloudOrchestratorPlacementConfig):
                 raise ValueError(
-                    "cloud.orchestrator must use provider, zone, and instance_profile in provider-neutral cloud config"
+                    "cloud.orchestrator must use zone and instance_profile in provider-neutral cloud config"
                 )
             if self.workers is None:
                 raise ValueError(
@@ -2188,50 +2316,67 @@ class CloudConfig(BaseModel):
             return
         if not isinstance(self.orchestrator, CloudOrchestratorPlacementConfig):
             raise ValueError(
-                "cloud.orchestrator must use provider, zone, and instance_profile in provider-neutral cloud config"
+                "cloud.orchestrator must use zone and instance_profile in provider-neutral cloud config"
             )
         orchestrator = self.orchestrator
 
         provider_names = [
-            orchestrator.provider,
-            *(placement.provider for placement in self.workers.placements),
+            self._resolve_provider_for_profile(
+                orchestrator.instance_profile,
+                field_path="cloud.orchestrator.instance_profile",
+            ),
+            *(
+                self._resolve_provider_for_profile(
+                    placement.instance_profile,
+                    field_path="cloud.workers.placements instance_profile",
+                )
+                for placement in self.workers.placements
+            ),
         ]
         if self.evaluators is not None:
             provider_names.extend(
-                placement.provider for placement in self.evaluators.placements
+                self._resolve_provider_for_profile(
+                    placement.instance_profile,
+                    field_path="cloud.evaluators.placements instance_profile",
+                )
+                for placement in self.evaluators.placements
             )
         provider = validate_single_cloud_provider(provider_names)
         if provider is not CloudProvider.GCE:
             raise ValueError(f"cloud provider '{provider.value}' is not supported yet")
-        if self.providers.gce is None:
+        return
+
+    def _resolve_provider_for_profile(
+        self,
+        profile_name: str,
+        *,
+        field_path: str,
+    ) -> CloudProvider:
+        """Resolve the owning provider catalog for one referenced instance profile."""
+        if self.providers is None:
             raise ValueError(
-                "cloud.providers.gce is required when cloud.orchestrator.provider is 'gce'"
-            )
-        if orchestrator.instance_profile not in self.providers.gce.instance_profiles:
-            raise ValueError(
-                "cloud.orchestrator.instance_profile "
-                f"'{orchestrator.instance_profile}' was not found under "
-                "cloud.providers.gce.instance_profiles"
+                "cloud.providers is required for provider-neutral cloud config"
             )
 
-        for placement in self.workers.placements:
-            if placement.instance_profile not in self.providers.gce.instance_profiles:
+        matches: list[CloudProvider] = []
+        if (
+            self.providers.gce is not None
+            and profile_name in self.providers.gce.instance_profiles
+        ):
+            matches.append(CloudProvider.GCE)
+
+        if not matches:
+            if self.providers.gce is not None:
                 raise ValueError(
-                    "cloud.workers.placements instance_profile "
-                    f"'{placement.instance_profile}' was not found under "
+                    f"{field_path} '{profile_name}' was not found under "
                     "cloud.providers.gce.instance_profiles"
                 )
+            raise ValueError(
+                f"{field_path} '{profile_name}' was not found under any "
+                "cloud.providers.*.instance_profiles catalog"
+            )
 
-        if self.evaluators is None:
-            return
-
-        for placement in self.evaluators.placements:
-            if placement.instance_profile not in self.providers.gce.instance_profiles:
-                raise ValueError(
-                    "cloud.evaluators.placements instance_profile "
-                    f"'{placement.instance_profile}' was not found under "
-                    "cloud.providers.gce.instance_profiles"
-                )
+        return validate_single_cloud_provider(matches)
 
 
 class ExperimentPovInputs(BaseModel):

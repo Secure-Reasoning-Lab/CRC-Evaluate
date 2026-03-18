@@ -46,57 +46,34 @@ cloud:
     gce:
       project: aixcc-426805
       ssh_via_iap: true
+      profile_defaults:
+        machine_type: n2d-standard-16
+        boot_disk_size_gb: 100
+        image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+        service_account_email: 153298433405-compute@developer.gserviceaccount.com
+        owner_label: yufu
+        readiness_timeout_sec: 1200
+        crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+        crsbench_git_ref: feat/gcp
+        github_deploy_key_file: file:.crsbench-keys/crsbench-deploy
+        hf_token: os.environ/HF_TOKEN
       instance_profiles:
-        orchestrator-n2d:
-          machine_type: n2d-standard-16
-          boot_disk_size_gb: 100
-          image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
-          service_account_email: 153298433405-compute@developer.gserviceaccount.com
-          owner_label: yufu
-          readiness_timeout_sec: 1200
-          crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
-          crsbench_git_ref: feat/gcp
-          github_deploy_key_file: file:.crsbench-keys/crsbench-deploy
-          hf_token: os.environ/HF_TOKEN
-        worker-n2d:
-          machine_type: n2d-standard-16
-          boot_disk_size_gb: 100
-          image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
-          service_account_email: 153298433405-compute@developer.gserviceaccount.com
-          owner_label: yufu
-          readiness_timeout_sec: 1200
-          crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
-          crsbench_git_ref: feat/gcp
-          github_deploy_key_file: file:.crsbench-keys/crsbench-deploy
-          hf_token: os.environ/HF_TOKEN
-        evaluator-n2d:
-          machine_type: n2d-standard-16
-          boot_disk_size_gb: 100
-          image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
-          service_account_email: 153298433405-compute@developer.gserviceaccount.com
-          owner_label: yufu
-          readiness_timeout_sec: 1200
-          crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
-          crsbench_git_ref: feat/gcp
-          github_deploy_key_file: file:.crsbench-keys/crsbench-deploy
-          hf_token: os.environ/HF_TOKEN
+        gce-orchestrator-n2d: {}
+        gce-worker-n2d: {}
+        gce-evaluator-n2d: {}
   orchestrator:
-    provider: gce
     zone: us-east5-b
-    instance_profile: orchestrator-n2d
+    instance_profile: gce-orchestrator-n2d
   workers:
+    defaults:
+      instance_profile: gce-worker-n2d
+      count: 1
     placements:
-      - provider: gce
-        zone: us-east5-b
-        worker_count: 1
-        instance_profile: worker-n2d
-      - provider: gce
-        zone: us-east1-b
-        worker_count: 1
-        instance_profile: worker-n2d
+      - zone: us-east5-b
+      - zone: us-east1-b
   evaluators:
+    defaults:
+      instance_profile: gce-evaluator-n2d
+      count: 1
     placements:
-      - provider: gce
-        zone: us-east5-b
-        evaluator_count: 1
-        instance_profile: evaluator-n2d
+      - zone: us-east5-b
