@@ -180,6 +180,10 @@ def test_load_startup_script_contains_managed_worker_service_bootstrap():
     assert 'systemctl restart "user@${CRSBENCH_USER_UID}.service"' in startup_script
     assert 'CRSBENCH_USER_SERVICE_CGROUP="/sys/fs/cgroup/user.slice/' in startup_script
     assert (
+        'CRSBENCH_RUNTIME_CGROUP="${CRSBENCH_USER_SERVICE_CGROUP}/crsbench"'
+        in startup_script
+    )
+    assert (
         'CRSBENCH_OSS_CRS_CGROUP="${CRSBENCH_USER_SERVICE_CGROUP}/oss-crs"'
         in startup_script
     )
@@ -655,6 +659,9 @@ def test_orchestrator_startup_script_consumes_config_payload_and_preprovisioned_
     assert "dbus-user-session" in script
     assert 'systemctl restart "user@${CRSBENCH_USER_UID}.service"' in script
     assert 'CRSBENCH_USER_SERVICE_CGROUP="/sys/fs/cgroup/user.slice/' in script
+    assert (
+        'CRSBENCH_RUNTIME_CGROUP="${CRSBENCH_USER_SERVICE_CGROUP}/crsbench"' in script
+    )
     assert 'CRSBENCH_OSS_CRS_CGROUP="${CRSBENCH_USER_SERVICE_CGROUP}/oss-crs"' in script
     assert "cgroup.subtree_control" in script
     assert "systemctl --user enable --now crsbench-orchestrator.service" in script

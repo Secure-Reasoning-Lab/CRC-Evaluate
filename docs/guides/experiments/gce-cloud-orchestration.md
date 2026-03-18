@@ -319,8 +319,9 @@ the scripts now create a dedicated `crsbench` user, grant passwordless `sudo`
 for disposable-host bootstrap, install the user-session support package needed
 for `/run/user/<uid>/bus`, enforce Docker `cgroupfs`, and run the long-lived
 orchestrator/worker processes as `systemd --user` services while pre-creating
-the delegated `user@<uid>.service/oss-crs` cgroup hierarchy that `oss-crs`
-expects.
+the delegated `user@<uid>.service/crsbench` and
+`user@<uid>.service/oss-crs` cgroup hierarchies expected by the CRSBench
+runtime and the `oss-crs` CLI.
 The checked-in smoke config uses `readiness_timeout_sec: 1200` for both
 orchestrator and worker instance profiles to give clean Ubuntu images more room
 to finish bootstrap.
@@ -481,9 +482,14 @@ During bootstrap, both orchestrator and worker VMs also normalize the host
 timezone to `America/New_York` and configure Docker to use the `cgroupfs`
 driver expected by `oss-crs`. If you inspect a VM manually, verify these with
 `timedatectl`, `cat /etc/timezone`, and `docker info --format '{{.CgroupDriver}}'`.
-You can also verify the delegated cgroup setup that `oss-crs` depends on with:
+You can also verify the delegated cgroup setup that both CRSBench and
+`oss-crs` depend on with:
 
 ```bash
+sudo ls -ld \
+  /sys/fs/cgroup/user.slice/user-$(id -u crsbench).slice/user@$(id -u crsbench).service/crsbench \
+  /sys/fs/cgroup/user.slice/user-$(id -u crsbench).slice/user@$(id -u crsbench).service/oss-crs
+
 sudo -iu crsbench env \
   XDG_RUNTIME_DIR=/run/user/$(id -u crsbench) \
   DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u crsbench)/bus \

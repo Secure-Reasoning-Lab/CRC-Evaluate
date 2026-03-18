@@ -345,6 +345,7 @@ ensure_crsbench_user() {
   CRSBENCH_USER_LOCAL_BIN="${CRSBENCH_USER_HOME}/.local/bin"
   CRSBENCH_USER_PATH="${CRSBENCH_USER_LOCAL_BIN}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   CRSBENCH_USER_SERVICE_CGROUP="/sys/fs/cgroup/user.slice/user-${CRSBENCH_USER_UID}.slice/user@${CRSBENCH_USER_UID}.service"
+  CRSBENCH_RUNTIME_CGROUP="${CRSBENCH_USER_SERVICE_CGROUP}/crsbench"
   CRSBENCH_OSS_CRS_CGROUP="${CRSBENCH_USER_SERVICE_CGROUP}/oss-crs"
 
   install -d -o "${CRSBENCH_USER}" -g "${CRSBENCH_USER}" -m 0755 "${CRSBENCH_USER_HOME}"
@@ -469,7 +470,15 @@ wait_for_user_manager() {
   exit 1
 }
 
-ensure_oss_crs_cgroup_hierarchy() {
+ensure_runtime_cgroup_hierarchy() {
+  local cgroup_path="$1"
+
+  mkdir -p "${cgroup_path}"
+  chown -R "${CRSBENCH_USER_UID}:${CRSBENCH_USER_GID}" "${cgroup_path}"
+  enable_cgroup_controllers "${cgroup_path}/cgroup.subtree_control"
+}
+
+ensure_runtime_cgroup_hierarchies() {
   if ! service_manager_uses_systemd; then
     return 0
   fi
@@ -480,9 +489,8 @@ ensure_oss_crs_cgroup_hierarchy() {
   fi
 
   enable_cgroup_controllers "${CRSBENCH_USER_SERVICE_CGROUP}/cgroup.subtree_control"
-  mkdir -p "${CRSBENCH_OSS_CRS_CGROUP}"
-  chown -R "${CRSBENCH_USER_UID}:${CRSBENCH_USER_GID}" "${CRSBENCH_OSS_CRS_CGROUP}"
-  enable_cgroup_controllers "${CRSBENCH_OSS_CRS_CGROUP}/cgroup.subtree_control"
+  ensure_runtime_cgroup_hierarchy "${CRSBENCH_RUNTIME_CGROUP}"
+  ensure_runtime_cgroup_hierarchy "${CRSBENCH_OSS_CRS_CGROUP}"
 }
 
 setup_user_systemd_runtime() {
@@ -504,7 +512,7 @@ EOF
   loginctl enable-linger "${CRSBENCH_USER}"
   systemctl restart "user@${CRSBENCH_USER_UID}.service" || systemctl start "user@${CRSBENCH_USER_UID}.service"
   wait_for_user_manager
-  ensure_oss_crs_cgroup_hierarchy
+  ensure_runtime_cgroup_hierarchies
 }
 
 run_user_systemctl() {
