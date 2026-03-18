@@ -7,6 +7,7 @@ The rehearsal runs:
 
 - one orchestrator container
 - two worker containers
+- one evaluator container
 - the same `crsbench/cloud/gce/startup/*.sh` scripts used on GCE
 - an Ubuntu 24.04 DinD-based image so the bootstrap path can run Docker-backed
   CRS prep against a base that matches the default GCE VM family more closely
@@ -15,12 +16,13 @@ The rehearsal runs:
 
 - startup metadata is decoded correctly
 - checkout-first bootstrap works from a real repo clone
-- orchestrator and worker bootstrap can run in forced foreground mode inside the
-  Docker harness under the non-root `crsbench` user
+- orchestrator, worker, and evaluator bootstrap can run in forced foreground
+  mode inside the Docker harness under the non-root `crsbench` user
 - the startup scripts work with file-backed metadata, not only the GCE metadata
   endpoint
 - the orchestrator binds Valkey on loopback plus the discovered container IP, so
-  workers can still reach `orchestrator:6379` without exposing `0.0.0.0`
+  workers/evaluators can still reach `orchestrator:6379` without exposing
+  `0.0.0.0`
 
 ## Quickstart
 
@@ -34,7 +36,7 @@ The helper script:
 
 1. renders file-backed metadata trees under `.crsbench-local-rehearsal/`
 2. builds the DinD rehearsal image
-3. starts `docker compose` for one orchestrator plus two workers
+3. starts `docker compose` for one orchestrator plus two workers plus one evaluator
 
 Useful follow-up commands:
 
@@ -42,6 +44,7 @@ Useful follow-up commands:
 scripts/cloud-rehearsal/run-local-rehearsal.sh ps
 scripts/cloud-rehearsal/run-local-rehearsal.sh logs -f orchestrator
 scripts/cloud-rehearsal/run-local-rehearsal.sh logs -f worker-1
+scripts/cloud-rehearsal/run-local-rehearsal.sh logs -f evaluator-1
 scripts/cloud-rehearsal/run-local-rehearsal.sh down -v
 ```
 
@@ -58,6 +61,8 @@ Default topology:
 - orchestrator service name: `orchestrator`
 - worker compose services: `worker-1`, `worker-2`
 - worker runtime names reported to CRSBench: `local-worker-1`, `local-worker-2`
+- evaluator compose service: `evaluator-1`
+- evaluator runtime name reported to CRSBench: `local-evaluator-1`
 - repo mount inside containers: `/src/CRSBench`
 
 Override knobs:
@@ -77,8 +82,11 @@ The local rehearsal depends on these startup-script env overrides:
 - `CRSBENCH_METADATA_ROOT_DIR`
   - reads metadata from mounted files instead of `metadata.google.internal`
 - `CRSBENCH_SERVICE_MANAGER=foreground`
-  - set for both orchestrator and workers; skips `systemd` and `exec`s the
-    launcher directly as `crsbench`
+  - set for orchestrator, workers, and evaluator; skips `systemd` and `exec`s
+    the launcher directly as `crsbench`
+- `CRSBENCH_STARTUP_MODE=evaluator`
+  - set only on the evaluator compose service so the shared `worker.sh`
+    bootstrap launches `crsbench evaluator`
 
 The scripts still keep the VM behavior by default:
 

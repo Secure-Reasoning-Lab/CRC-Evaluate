@@ -26,6 +26,9 @@ worker:
   cores_per_job: 2
   storage:
     cleanup_after_trial: true
+evaluator:
+  jobs: 1
+  cores_per_job: 2
 crs_compose:
   oss_crs_infra:
     shared: true

@@ -55,6 +55,9 @@ resources:
 worker:
   jobs: 1
   cores_per_job: 2
+evaluator:
+  jobs: 1
+  cores_per_job: 2
 crs_compose:
   oss_crs_infra:
     shared: true
@@ -92,6 +95,22 @@ crs_compose:
     assert payload["download_benchmarks"] == "auto"
     assert (worker_root / "id").read_text(encoding="utf-8").startswith("local-worker-")
     assert len(layout.worker_metadata_dirs) == 2
+    assert len(layout.evaluator_metadata_dirs) == 1
+    evaluator_root = layout.evaluator_metadata_dirs[0]
+    evaluator_payload = json.loads(
+        base64.b64decode(
+            (evaluator_root / "attributes" / "crsbench-bootstrap-payload").read_text(
+                encoding="utf-8"
+            )
+        ).decode("utf-8")
+    )
+    assert evaluator_payload["redis_host"] == "orchestrator:6379"
+    assert evaluator_payload["experiment"] == "local-cloud-rehearsal"
+    assert (
+        (evaluator_root / "id")
+        .read_text(encoding="utf-8")
+        .startswith("local-evaluator-")
+    )
 
 
 def test_rehearsal_compose_uses_file_metadata_and_foreground_workers() -> None:
@@ -103,6 +122,9 @@ def test_rehearsal_compose_uses_file_metadata_and_foreground_workers() -> None:
     assert "CRSBENCH_METADATA_ROOT_DIR: /metadata-root" in compose_text
     assert "CRSBENCH_SERVICE_MANAGER: foreground" in compose_text
     assert "/metadata-root/instance:ro" in compose_text
+    assert "evaluator-1:" in compose_text
+    assert "/metadata/local-evaluator-1:/metadata-root/instance:ro" in compose_text
+    assert "/src/CRSBench/crsbench/cloud/gce/startup/worker.sh" in compose_text
 
 
 def test_rehearsal_dockerfile_uses_ubuntu_24_dind_base() -> None:
@@ -128,6 +150,8 @@ def test_default_rehearsal_experiment_config_is_valid() -> None:
     assert config.build_timeout == 3600
     assert config.crs_compose is not None
     assert set(config.crs_compose.services) == {"crs-libfuzzer"}
+    assert config.evaluator is not None
+    assert config.evaluator.jobs == 1
     assert config.max_total_time > (
         config.build_timeout + config.run_timeout + config.verify_timeout
     )
@@ -142,6 +166,9 @@ def test_rehearsal_wrapper_only_resets_state_for_bringup() -> None:
     assert "if [[ $# -eq 0 ]]; then" in wrapper_text
     assert 'if [[ "$1" == "up" ]]; then' in wrapper_text
     assert "CRSBENCH_LOCAL_REHEARSAL_GIT_REF" in wrapper_text
+    assert "--evaluator-count 1" in wrapper_text
+    assert "docker_cleanup_state" in wrapper_text
+    assert 'docker run --rm -v "${STATE_DIR}:/state"' in wrapper_text
 
 
 def test_render_metadata_detect_git_ref_uses_checked_out_head(monkeypatch) -> None:

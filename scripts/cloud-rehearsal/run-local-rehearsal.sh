@@ -12,6 +12,21 @@ mkdir -p "${STATE_DIR}"
 export CRSBENCH_LOCAL_REHEARSAL_REPO_ROOT="${REPO_ROOT}"
 export CRSBENCH_LOCAL_REHEARSAL_STATE_DIR="${STATE_DIR}"
 
+docker_cleanup_state() {
+  docker run --rm -v "${STATE_DIR}:/state" alpine:3.20 sh -euc "
+    rm -rf /state/metadata /state/state
+    mkdir -p /state/metadata /state/state
+    chown -R $(id -u):$(id -g) /state
+  "
+}
+
+reset_local_state() {
+  if ! rm -rf "${STATE_DIR}/metadata" "${STATE_DIR}/state"; then
+    docker_cleanup_state
+    return 0
+  fi
+}
+
 render_metadata() {
   local -a cmd=(
     uv run python "${SCRIPT_DIR}/render_metadata.py"
@@ -20,6 +35,7 @@ render_metadata() {
     --repo-mount-path /src/CRSBench
     --source-repo-path "${REPO_ROOT}"
     --worker-count 2
+    --evaluator-count 1
   )
   if [[ -n "${GIT_REF}" ]]; then
     cmd+=(--git-ref "${GIT_REF}")
@@ -28,14 +44,14 @@ render_metadata() {
 }
 
 if [[ $# -eq 0 ]]; then
-  rm -rf "${STATE_DIR}/metadata" "${STATE_DIR}/state"
+  reset_local_state
   render_metadata
   docker compose -f "${SCRIPT_DIR}/docker-compose.yml" up --build --remove-orphans
   exit 0
 fi
 
 if [[ "$1" == "up" ]]; then
-  rm -rf "${STATE_DIR}/metadata" "${STATE_DIR}/state"
+  reset_local_state
   render_metadata
 fi
 

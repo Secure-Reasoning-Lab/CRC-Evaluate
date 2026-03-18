@@ -50,3 +50,22 @@ services:
     command:
       - /bin/bash
       - /src/CRSBench/crsbench/cloud/gce/startup/worker.sh
+
+  evaluator-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    privileged: true
+    depends_on:
+      - orchestrator
+    environment:
+      CRSBENCH_METADATA_ROOT_DIR: /metadata-root
+      CRSBENCH_SERVICE_MANAGER: foreground
+      CRSBENCH_STARTUP_MODE: evaluator
+    volumes:
+      - ${CRSBENCH_LOCAL_REHEARSAL_REPO_ROOT}:/src/CRSBench:ro
+      - ${CRSBENCH_LOCAL_REHEARSAL_STATE_DIR}/metadata/local-evaluator-1:/metadata-root/instance:ro
+      - ${CRSBENCH_LOCAL_REHEARSAL_STATE_DIR}/state/local-evaluator-1:/var/lib/crsbench
+    command:
+      - /bin/bash
+      - /src/CRSBench/crsbench/cloud/gce/startup/worker.sh

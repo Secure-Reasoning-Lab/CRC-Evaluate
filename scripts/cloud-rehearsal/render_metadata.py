@@ -18,6 +18,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source-repo-path", type=Path, required=True)
     parser.add_argument("--git-ref", default=None)
     parser.add_argument("--worker-count", type=int, default=2)
+    parser.add_argument("--evaluator-count", type=int, default=1)
     return parser.parse_args()
 
 
@@ -52,6 +53,7 @@ def main() -> int:
         experiment_config_path=args.experiment_config,
         repo_mount_path=args.repo_mount_path,
         worker_count=args.worker_count,
+        evaluator_count=args.evaluator_count,
         git_ref=args.git_ref or detect_git_ref(args.source_repo_path),
     )
     print(f"Rendered local rehearsal metadata under {layout.output_dir}")
