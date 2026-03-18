@@ -500,8 +500,10 @@ class GceProvisioner:
         name_prefix = _sanitize_name_fragment(
             fleet.worker_name_prefix or experiment_name or "worker"
         )
+        start_index = fleet.worker_name_start_index
         return [
-            f"{name_prefix}-{index:03d}" for index in range(1, fleet.worker_count + 1)
+            f"{name_prefix}-{index:03d}"
+            for index in range(start_index, start_index + fleet.worker_count)
         ]
 
     def create_workers(
@@ -930,11 +932,15 @@ class GceProvisioner:
         experiment_name: str,
         orchestrator: GceOrchestratorConfig,
     ) -> str:
-        prefix = _sanitize_name_fragment(
-            orchestrator.instance_name_prefix or "orchestrator"
-        )
         experiment_fragment = _sanitize_name_fragment(experiment_name)
-        name = f"{prefix}-{experiment_fragment}"
+        if orchestrator.instance_name_prefix:
+            prefix = _sanitize_name_fragment(orchestrator.instance_name_prefix)
+            name = f"{prefix}-{experiment_fragment}"
+        else:
+            zone_fragment = _sanitize_name_fragment(
+                self._resolve_orchestrator_zone(orchestrator)
+            )
+            name = f"crsbench-{experiment_fragment}-{zone_fragment}-orchestrator"
         return name[:63].rstrip("-") or "orchestrator"
 
     def _rollback_requests(self, requests: list[GceInstanceRequest]) -> None:

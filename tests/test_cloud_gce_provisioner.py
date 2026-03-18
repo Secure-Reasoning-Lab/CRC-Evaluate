@@ -223,6 +223,25 @@ def _make_provider_neutral_experiment_config_with_evaluators() -> ExperimentConf
     return ExperimentConfig.model_validate(config)
 
 
+def _make_provider_neutral_experiment_config_with_duplicate_zone_placements() -> (
+    ExperimentConfig
+):
+    config = _make_provider_neutral_experiment_config().model_dump(
+        mode="json", exclude_none=True
+    )
+    config["cloud"]["workers"]["placements"] = [
+        {
+            "zone": "us-east5-b",
+            "count": 2,
+        },
+        {
+            "zone": "us-east5-b",
+            "count": 1,
+        },
+    ]
+    return ExperimentConfig.model_validate(config)
+
+
 def test_build_requests_include_experiment_identity_labels_and_bootstrap_metadata():
     """Rendered instance requests should carry stable names, labels, and payloads."""
     from crsbench.cloud.gce.metadata import CRSBENCH_BOOTSTRAP_PAYLOAD_KEY
@@ -341,6 +360,39 @@ def test_gce_provider_adapter_builds_worker_fleets_per_placement():
     assert [fleet.zone for fleet in fleets] == ["us-east5-b", "us-east1-b"]
     assert [fleet.worker_count for fleet in fleets] == [2, 1]
     assert all(fleet.project == "test-project" for fleet in fleets)
+    assert [fleet.worker_name_prefix for fleet in fleets] == [
+        "crsbench-exp-cloud-42-us-east5-b-worker",
+        "crsbench-exp-cloud-42-us-east1-b-worker",
+    ]
+
+
+def test_gce_provider_adapter_offsets_worker_suffixes_for_same_zone_placements():
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+
+    plan = build_cloud_launch_plan(
+        _make_provider_neutral_experiment_config_with_duplicate_zone_placements()
+    )
+    adapter = GceProviderAdapter()
+    provisioner = GceProvisioner(client=_RecordingClient())
+
+    fleets = adapter.build_worker_fleets(plan)
+
+    assert [fleet.zone for fleet in fleets] == ["us-east5-b", "us-east5-b"]
+    assert [fleet.worker_name_start_index for fleet in fleets] == [1, 3]
+    assert provisioner.build_worker_names(
+        experiment_name=plan.experiment_name,
+        fleet=fleets[0],
+    ) == [
+        "crsbench-exp-cloud-42-us-east5-b-worker-001",
+        "crsbench-exp-cloud-42-us-east5-b-worker-002",
+    ]
+    assert provisioner.build_worker_names(
+        experiment_name=plan.experiment_name,
+        fleet=fleets[1],
+    ) == [
+        "crsbench-exp-cloud-42-us-east5-b-worker-003",
+    ]
 
 
 def test_gce_provider_adapter_builds_evaluator_fleets_per_placement():
@@ -356,7 +408,10 @@ def test_gce_provider_adapter_builds_evaluator_fleets_per_placement():
     assert [fleet.zone for fleet in fleets] == ["us-east5-b", "us-east1-b"]
     assert [fleet.worker_count for fleet in fleets] == [1, 2]
     assert all(fleet.project == "test-project" for fleet in fleets)
-    assert all(fleet.worker_name_prefix.startswith("evaluator-") for fleet in fleets)
+    assert [fleet.worker_name_prefix for fleet in fleets] == [
+        "crsbench-exp-cloud-42-us-east5-b-evaluator",
+        "crsbench-exp-cloud-42-us-east1-b-evaluator",
+    ]
 
 
 def test_create_workers_waits_for_operations_and_normalizes_provider_instances():
@@ -823,4 +878,44 @@ def test_create_orchestrator_waits_for_operation_and_returns_instance_record():
     assert worker.internal_ip == "10.0.0.50"
     assert client.waited == [
         ("test-project", "us-central1-a", "op-gce-orchestrator-exp-cloud-42")
+    ]
+
+
+def test_create_orchestrator_defaults_to_experiment_zone_type_name():
+    """Default orchestrator names should sort with experiment and zone first."""
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+
+    client = _RecordingClient()
+    client.instances_by_name = {
+        "crsbench-exp-cloud-42-us-east5-b-orchestrator": {
+            "id": "3002",
+            "name": "crsbench-exp-cloud-42-us-east5-b-orchestrator",
+            "status": "RUNNING",
+            "zone": "zones/us-east5-b",
+            "networkInterfaces": [{"networkIP": "10.0.0.51"}],
+            "labels": {"crsbench-experiment": "exp-cloud-42", "owner": "team-crs"},
+            "serviceAccounts": [
+                {"email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com"}
+            ],
+        }
+    }
+    provisioner = GceProvisioner(client=client)
+
+    worker = provisioner.create_orchestrator(
+        experiment_name="Exp.Cloud 42",
+        orchestrator=_make_orchestrator(
+            zone="us-east5-b",
+            instance_name_prefix=None,
+        ),
+        experiment_config_path="config.yaml",
+        redis_password="shared-secret",
+    )
+
+    assert worker.name == "crsbench-exp-cloud-42-us-east5-b-orchestrator"
+    assert client.waited == [
+        (
+            "test-project",
+            "us-east5-b",
+            "op-crsbench-exp-cloud-42-us-east5-b-orchestrator",
+        )
     ]

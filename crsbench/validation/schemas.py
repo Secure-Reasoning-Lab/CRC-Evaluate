@@ -1180,6 +1180,11 @@ class GceWorkerFleetConfig(BaseModel):
         ge=1,
         description="Number of worker VMs to provision for the experiment.",
     )
+    worker_name_start_index: int = Field(
+        default=1,
+        ge=1,
+        description="Starting 1-based suffix for generated worker instance names.",
+    )
     machine_type: Optional[str] = Field(
         default=None,
         description="GCE machine type when creating VMs from an image.",

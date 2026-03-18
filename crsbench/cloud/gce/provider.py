@@ -130,15 +130,18 @@ class GceProviderAdapter:
     def build_worker_fleets(self, plan: CloudLaunchPlan) -> list[GceWorkerFleetConfig]:
         """Build one legacy worker-fleet config per provider-neutral placement."""
         fleets: list[GceWorkerFleetConfig] = []
+        next_index_by_zone: dict[str, int] = {}
         for placement in plan.worker_placements:
             if placement.provider is not CloudProvider.GCE:
                 continue
             resolved = self.resolve_instance_profile(placement.instance_profile)
+            start_index = next_index_by_zone.get(placement.zone, 1)
             fleets.append(
                 GceWorkerFleetConfig(
                     project=resolved.project,
                     zone=placement.zone,
                     worker_count=placement.count,
+                    worker_name_start_index=start_index,
                     machine_type=resolved.machine_type,
                     boot_disk_size_gb=resolved.boot_disk_size_gb,
                     image=resolved.image,
@@ -149,7 +152,9 @@ class GceProviderAdapter:
                     owner_label=resolved.owner_label,
                     labels=resolved.labels,
                     metadata=resolved.metadata,
-                    worker_name_prefix=f"{plan.experiment_name}-{placement.zone}",
+                    worker_name_prefix=(
+                        f"crsbench-{plan.experiment_name}-{placement.zone}-worker"
+                    ),
                     startup_script_uri=resolved.startup_script_uri,
                     use_os_login=resolved.use_os_login,
                     ssh_via_iap=resolved.ssh_via_iap,
@@ -160,6 +165,7 @@ class GceProviderAdapter:
                     hf_token=resolved.hf_token,
                 )
             )
+            next_index_by_zone[placement.zone] = start_index + placement.count
         return fleets
 
     def build_evaluator_fleets(
@@ -168,15 +174,18 @@ class GceProviderAdapter:
     ) -> list[GceWorkerFleetConfig]:
         """Build one legacy fleet config per provider-neutral evaluator placement."""
         fleets: list[GceWorkerFleetConfig] = []
+        next_index_by_zone: dict[str, int] = {}
         for placement in plan.evaluator_placements:
             if placement.provider is not CloudProvider.GCE:
                 continue
             resolved = self.resolve_instance_profile(placement.instance_profile)
+            start_index = next_index_by_zone.get(placement.zone, 1)
             fleets.append(
                 GceWorkerFleetConfig(
                     project=resolved.project,
                     zone=placement.zone,
                     worker_count=placement.count,
+                    worker_name_start_index=start_index,
                     machine_type=resolved.machine_type,
                     boot_disk_size_gb=resolved.boot_disk_size_gb,
                     image=resolved.image,
@@ -187,7 +196,9 @@ class GceProviderAdapter:
                     owner_label=resolved.owner_label,
                     labels=resolved.labels,
                     metadata=resolved.metadata,
-                    worker_name_prefix=f"evaluator-{plan.experiment_name}-{placement.zone}",
+                    worker_name_prefix=(
+                        f"crsbench-{plan.experiment_name}-{placement.zone}-evaluator"
+                    ),
                     startup_script_uri=resolved.startup_script_uri,
                     use_os_login=resolved.use_os_login,
                     ssh_via_iap=resolved.ssh_via_iap,
@@ -198,6 +209,7 @@ class GceProviderAdapter:
                     hf_token=resolved.hf_token,
                 )
             )
+            next_index_by_zone[placement.zone] = start_index + placement.count
         return fleets
 
     def quota_requirements(

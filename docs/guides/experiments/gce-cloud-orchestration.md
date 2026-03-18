@@ -104,6 +104,13 @@ Instance profiles carry the per-VM details such as `machine_type`,
 `crsbench_install_spec`, `crsbench_git_ref`, `github_deploy_key_file`, and
 `hf_token`.
 
+By default, provisioned instance names sort naturally in the GCP console:
+`crsbench-<experiment>-<zone>-orchestrator`,
+`crsbench-<experiment>-<zone>-worker-001`,
+and `crsbench-<experiment>-<zone>-evaluator-001`. Worker and evaluator suffixes
+increase monotonically per experiment, zone, and role, even if the config uses
+multiple placements in the same zone.
+
 ### Bootstrap Policy
 
 `cloud.bootstrap` controls the VM bootstrap steps that run before a worker or
