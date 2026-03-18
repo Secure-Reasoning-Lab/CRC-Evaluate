@@ -43,6 +43,16 @@ class CloudWorkerPlacementPlan:
 
 
 @dataclass(frozen=True)
+class CloudEvaluatorPlacementPlan:
+    """Resolved evaluator placement for one cloud launch."""
+
+    provider: str
+    zone: str
+    evaluator_count: int
+    instance_profile: ResolvedInstanceProfile
+
+
+@dataclass(frozen=True)
 class QuotaRequirement:
     """Provider-neutral quota demand record."""
 
@@ -70,6 +80,9 @@ class CloudLaunchPlan:
     experiment_name: str
     orchestrator: CloudOrchestratorPlan
     worker_placements: list[CloudWorkerPlacementPlan] = field(default_factory=list)
+    evaluator_placements: list[CloudEvaluatorPlacementPlan] = field(
+        default_factory=list
+    )
 
 
 def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
@@ -104,6 +117,21 @@ def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
         )
         for placement in config.cloud.workers.placements
     ]
+    evaluator_placements = [
+        CloudEvaluatorPlacementPlan(
+            provider=placement.provider,
+            zone=placement.zone or "",
+            evaluator_count=placement.evaluator_count,
+            instance_profile=_resolve_gce_profile(
+                provider_name="gce",
+                provider_config=gce_provider,
+                profile_name=placement.instance_profile,
+            ),
+        )
+        for placement in (
+            config.cloud.evaluators.placements if config.cloud.evaluators else []
+        )
+    ]
 
     return CloudLaunchPlan(
         experiment_name=config.experiment,
@@ -113,6 +141,7 @@ def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
             instance_profile=orchestrator_profile,
         ),
         worker_placements=worker_placements,
+        evaluator_placements=evaluator_placements,
     )
 
 

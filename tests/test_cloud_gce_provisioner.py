@@ -204,6 +204,34 @@ def _make_provider_neutral_experiment_config() -> ExperimentConfig:
     )
 
 
+def _make_provider_neutral_experiment_config_with_evaluators() -> ExperimentConfig:
+    config = _make_provider_neutral_experiment_config().model_dump()
+    config["cloud"]["providers"]["gce"]["instance_profiles"]["evaluator-c3"] = {
+        "machine_type": "c3-standard-8",
+        "boot_disk_size_gb": 100,
+        "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+        "service_account_email": "crsbench-evaluator@test-project.iam.gserviceaccount.com",
+        "owner_label": "team-crs",
+    }
+    config["cloud"]["evaluators"] = {
+        "placements": [
+            {
+                "provider": "gce",
+                "zone": "us-east5-b",
+                "evaluator_count": 1,
+                "instance_profile": "evaluator-c3",
+            },
+            {
+                "provider": "gce",
+                "zone": "us-east1-b",
+                "evaluator_count": 2,
+                "instance_profile": "evaluator-c3",
+            },
+        ]
+    }
+    return ExperimentConfig.model_validate(config)
+
+
 def test_build_requests_include_experiment_identity_labels_and_bootstrap_metadata():
     """Rendered instance requests should carry stable names, labels, and payloads."""
     from crsbench.cloud.gce.metadata import CRSBENCH_BOOTSTRAP_PAYLOAD_KEY
@@ -237,6 +265,34 @@ def test_build_requests_include_experiment_identity_labels_and_bootstrap_metadat
     assert payload["worker_jobs"] == 3
     assert payload["worker_cores_per_job"] == 6
     assert payload["worker_cpu_tag"] == "c3"
+
+
+def test_build_evaluator_requests_include_role_labels_and_config_metadata(tmp_path):
+    """Evaluator requests should carry evaluator role labels and serialized config metadata."""
+    from crsbench.cloud.gce.metadata import CRSBENCH_EXPERIMENT_CONFIG_B64_KEY
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("experiment: exp-cloud-42\n", encoding="utf-8")
+    provisioner = GceProvisioner(client=_RecordingClient())
+
+    requests = provisioner.build_evaluator_requests(
+        experiment_name="Exp.Cloud 42",
+        fleet=_make_fleet(
+            worker_name_prefix="evaluator-exp-cloud-42-us-east5-b",
+            worker_count=1,
+        ),
+        redis_host="redis.internal:6380",
+        registration=_make_registration(),
+        experiment_config_path=config_path,
+    )
+
+    assert [request.name for request in requests] == [
+        "evaluator-exp-cloud-42-us-east5-b-001",
+    ]
+    first = requests[0]
+    assert first.labels["crsbench-role"] == "evaluator"
+    assert CRSBENCH_EXPERIMENT_CONFIG_B64_KEY in first.metadata
 
 
 def test_instance_request_renders_compute_proto_field_names() -> None:
@@ -294,6 +350,22 @@ def test_gce_provider_adapter_builds_worker_fleets_per_placement():
     assert [fleet.zone for fleet in fleets] == ["us-east5-b", "us-east1-b"]
     assert [fleet.worker_count for fleet in fleets] == [2, 1]
     assert all(fleet.project == "test-project" for fleet in fleets)
+
+
+def test_gce_provider_adapter_builds_evaluator_fleets_per_placement():
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+
+    plan = build_cloud_launch_plan(
+        _make_provider_neutral_experiment_config_with_evaluators()
+    )
+    adapter = GceProviderAdapter()
+
+    fleets = adapter.build_evaluator_fleets(plan)
+
+    assert [fleet.zone for fleet in fleets] == ["us-east5-b", "us-east1-b"]
+    assert [fleet.worker_count for fleet in fleets] == [1, 2]
+    assert all(fleet.project == "test-project" for fleet in fleets)
+    assert all(fleet.worker_name_prefix.startswith("evaluator-") for fleet in fleets)
 
 
 def test_create_workers_waits_for_operations_and_normalizes_provider_instances():

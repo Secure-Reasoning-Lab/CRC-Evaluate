@@ -161,6 +161,44 @@ class GceProviderAdapter:
             )
         return fleets
 
+    def build_evaluator_fleets(
+        self,
+        plan: CloudLaunchPlan,
+    ) -> list[GceWorkerFleetConfig]:
+        """Build one legacy fleet config per provider-neutral evaluator placement."""
+        fleets: list[GceWorkerFleetConfig] = []
+        for placement in plan.evaluator_placements:
+            if placement.provider != "gce":
+                continue
+            resolved = self.resolve_instance_profile(placement.instance_profile)
+            fleets.append(
+                GceWorkerFleetConfig(
+                    project=resolved.project,
+                    zone=placement.zone,
+                    worker_count=placement.evaluator_count,
+                    machine_type=resolved.machine_type,
+                    boot_disk_size_gb=resolved.boot_disk_size_gb,
+                    image=resolved.image,
+                    instance_template=resolved.instance_template,
+                    network=resolved.network,
+                    subnetwork=resolved.subnetwork,
+                    service_account_email=resolved.service_account_email,
+                    owner_label=resolved.owner_label,
+                    labels=resolved.labels,
+                    metadata=resolved.metadata,
+                    worker_name_prefix=f"evaluator-{plan.experiment_name}-{placement.zone}",
+                    startup_script_uri=resolved.startup_script_uri,
+                    use_os_login=resolved.use_os_login,
+                    ssh_via_iap=resolved.ssh_via_iap,
+                    readiness_timeout_sec=resolved.readiness_timeout_sec,
+                    crsbench_install_spec=resolved.crsbench_install_spec,
+                    crsbench_git_ref=resolved.crsbench_git_ref,
+                    github_deploy_key_file=resolved.github_deploy_key_file,
+                    hf_token=resolved.hf_token,
+                )
+            )
+        return fleets
+
     def quota_requirements(
         self,
         plan: CloudLaunchPlan,
@@ -188,6 +226,17 @@ class GceProviderAdapter:
                 zone=placement.zone,
                 machine_type=resolved.machine_type,
                 count=placement.worker_count,
+            )
+
+        for placement in plan.evaluator_placements:
+            if placement.provider != "gce":
+                continue
+            resolved = self.resolve_instance_profile(placement.instance_profile)
+            _accumulate_requirement(
+                requirements=requirements,
+                zone=placement.zone,
+                machine_type=resolved.machine_type,
+                count=placement.evaluator_count,
             )
 
         return [
@@ -293,6 +342,58 @@ class GceProviderAdapter:
                 )
             )
         return workers
+
+    def create_evaluators(
+        self,
+        *,
+        plan: CloudLaunchPlan,
+        redis_host: str,
+        redis_password: str | None,
+        registration: "RuntimeRegistration",
+        experiment_config_path: str,
+        bootstrap_inputs: "CloudVmBootstrapInputs | None" = None,
+        env_passthrough: dict[str, str] | None = None,
+    ) -> list["GceWorkerRecord"]:
+        """Create evaluators across all placements in a provider-neutral launch plan."""
+        evaluators: list[GceWorkerRecord] = []
+        for fleet in self.build_evaluator_fleets(plan):
+            evaluators.extend(
+                self._provisioner.create_evaluators(
+                    experiment_name=plan.experiment_name,
+                    fleet=fleet,
+                    redis_host=redis_host,
+                    redis_password=redis_password,
+                    registration=registration,
+                    experiment_config_path=experiment_config_path,
+                    bootstrap_inputs=bootstrap_inputs,
+                    env_passthrough=env_passthrough,
+                )
+            )
+        return evaluators
+
+    def list_evaluators(self, *, plan: CloudLaunchPlan) -> list["GceWorkerRecord"]:
+        """List evaluators across all placements in a provider-neutral launch plan."""
+        evaluators: list[GceWorkerRecord] = []
+        for fleet in self.build_evaluator_fleets(plan):
+            evaluators.extend(
+                self._provisioner.list_evaluators(
+                    experiment_name=plan.experiment_name,
+                    fleet=fleet,
+                )
+            )
+        return evaluators
+
+    def delete_evaluators(self, *, plan: CloudLaunchPlan) -> list["GceWorkerRecord"]:
+        """Delete evaluators across all placements in a provider-neutral launch plan."""
+        evaluators: list[GceWorkerRecord] = []
+        for fleet in self.build_evaluator_fleets(plan):
+            evaluators.extend(
+                self._provisioner.delete_evaluators(
+                    experiment_name=plan.experiment_name,
+                    fleet=fleet,
+                )
+            )
+        return evaluators
 
 
 def _accumulate_requirement(

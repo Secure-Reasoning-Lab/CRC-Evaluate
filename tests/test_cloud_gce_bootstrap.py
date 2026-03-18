@@ -45,6 +45,12 @@ def _make_registration(**overrides) -> RuntimeRegistration:
         "worker_jobs": 3,
         "worker_cores_per_job": 6,
         "worker_cpu_tag": "c3",
+        "evaluator_build_jobs": 2,
+        "evaluator_build_cores_per_job": 8,
+        "evaluator_verify_jobs": 4,
+        "evaluator_verify_cores_per_job": 4,
+        "evaluator_idle_timeout": 600,
+        "evaluator_cpu_tag": "c3d",
         "benchmarks_root": "/mnt/benchmarks",
         "modes": ["delta"],
         "sanitizers": ["address"],
@@ -191,6 +197,62 @@ def test_load_startup_script_contains_managed_worker_service_bootstrap():
     assert "systemctl --user enable --now crsbench-worker.service" in startup_script
     assert "/etc/systemd/system/crsbench-worker.service" not in startup_script
     assert "/etc/default/crsbench-worker" not in startup_script
+
+
+def test_build_evaluator_metadata_embeds_startup_script_and_config_payload(tmp_path):
+    """Evaluator metadata should embed config payload and evaluator runtime settings."""
+    from crsbench.cloud.gce.metadata import (
+        CRSBENCH_BOOTSTRAP_PAYLOAD_KEY,
+        CRSBENCH_EXPERIMENT_CONFIG_B64_KEY,
+        build_evaluator_metadata,
+    )
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("experiment: exp-cloud-42\n", encoding="utf-8")
+
+    metadata = build_evaluator_metadata(
+        experiment_name="Exp.Cloud 42",
+        fleet=_make_fleet(worker_name_prefix="gce-evaluator"),
+        redis_host="redis.internal:6380",
+        registration=_make_registration(),
+        evaluator_name="gce-evaluator-001",
+        experiment_config_path=config_path,
+        startup_script="#!/usr/bin/env bash\necho boot\n",
+    )
+
+    assert metadata["startup-script"].startswith("#!/usr/bin/env bash")
+    payload = _decode_payload(metadata[CRSBENCH_BOOTSTRAP_PAYLOAD_KEY])
+    assert payload["experiment"] == "Exp.Cloud 42"
+    assert payload["evaluator_name"] == "gce-evaluator-001"
+    assert payload["evaluator_build_jobs"] == 2
+    assert payload["evaluator_build_cores_per_job"] == 8
+    assert payload["evaluator_verify_jobs"] == 4
+    assert payload["evaluator_verify_cores_per_job"] == 4
+    assert payload["evaluator_idle_timeout"] == 600
+    assert payload["evaluator_cpu_tag"] == "c3d"
+    decoded_config = base64.b64decode(
+        metadata[CRSBENCH_EXPERIMENT_CONFIG_B64_KEY]
+    ).decode("utf-8")
+    assert "experiment: exp-cloud-42" in decoded_config
+
+
+def test_load_evaluator_startup_script_contains_managed_evaluator_service_bootstrap():
+    """Bundled evaluator startup script should hand off the evaluator to a managed user service."""
+    from crsbench.cloud.gce.metadata import load_evaluator_startup_script
+
+    startup_script = load_evaluator_startup_script()
+
+    assert "CRSBENCH_METADATA_BASE_URL" in startup_script
+    assert "CRSBENCH_CLOUD_INSTANCE_ID" in startup_script
+    assert 'CRSBENCH_USER="${CRSBENCH_USER:-crsbench}"' in startup_script
+    assert "crsbench-evaluator.service" in startup_script
+    assert "systemctl --user enable --now crsbench-evaluator.service" in startup_script
+    assert "crsbench evaluator" in startup_script
+    assert "--experiment-config" in startup_script
+    assert "CRSBENCH_EVALUATOR_NAME" in startup_script
+    assert "CRSBENCH_CLOUD_ROLE" in startup_script
+    assert "loginctl enable-linger" in startup_script
+    assert "dbus-user-session" in startup_script
 
 
 def test_build_instance_metadata_includes_install_spec_from_fleet_config():

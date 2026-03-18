@@ -1,4 +1,4 @@
-"""Teardown sub-action: collect artifacts then delete GCE workers with safety gates."""
+"""Teardown sub-action: collect artifacts then delete GCE instances with safety gates."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from crsbench.cloud.collection import ArtifactCollector
 from crsbench.cloud.gce.provider import GceProviderAdapter
 from crsbench.cloud.gce.provisioner import GceProvisioner
 from crsbench.cloud.launch_state import delete_launch_state
+from crsbench.cloud.readiness import CloudInstanceRole
 from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -22,7 +23,7 @@ logger = get_logger(__name__)
 
 
 def run_teardown(args: argparse.Namespace) -> int:
-    """Collect remaining artifacts then delete all workers for the experiment.
+    """Collect remaining artifacts then delete all cloud instances for the experiment.
 
     Safety flow:
     1. Validate GCE instances exist
@@ -54,11 +55,13 @@ def run_teardown(args: argparse.Namespace) -> int:
     collector = ArtifactCollector(base_path=args.config)
 
     # Validate GCE state
-    live_workers = _list_live_workers(context, args.experiment, provisioner)
-    live_names = {w.name for w in live_workers}
+    live_instances = _list_live_instances(context, args.experiment, provisioner)
+    live_names = {w.name for w in live_instances}
 
     # Cross-reference with Redis readiness state
-    redis_workers = readiness.list_workers(args.experiment) if readiness else []
+    redis_workers = (
+        _list_readiness_instances(readiness, args.experiment) if readiness else []
+    )
     redis_names = {w.instance_name for w in redis_workers}
     stale_names = redis_names - live_names
 
@@ -68,13 +71,13 @@ def run_teardown(args: argparse.Namespace) -> int:
             ", ".join(sorted(stale_names)),
         )
 
-    if not live_workers and not redis_workers and launch_state is None:
+    if not live_instances and not redis_workers and launch_state is None:
         logger.info("Nothing to tear down for experiment '{}'", args.experiment)
         return 0
 
-    if not live_workers and redis_workers and launch_state is None:
+    if not live_instances and redis_workers and launch_state is None:
         logger.warning(
-            "No live GCE instances but Redis has %d worker entries (stale state)",
+            "No live GCE instances but Redis has %d instance entries (stale state)",
             len(redis_workers),
         )
         return 0
@@ -89,7 +92,7 @@ def run_teardown(args: argparse.Namespace) -> int:
             logger.error("Use --force for non-interactive teardown")
             return 1
 
-        worker_count = len(live_workers) + (1 if launch_state is not None else 0)
+        worker_count = len(live_instances) + (1 if launch_state is not None else 0)
         logger.info(
             "This will collect artifacts from %d instances (%s uncollected jobs) "
             "and delete all cloud VMs.",
@@ -104,11 +107,11 @@ def run_teardown(args: argparse.Namespace) -> int:
     # Collect phase -- best effort, but teardown still proceeds to avoid leaked VMs.
     remote_experiment_dir = args.remote_dir
     collection_failed = False
-    for worker in live_workers:
+    for worker in live_instances:
         try:
             collector.collect_logs(
                 worker=worker,
-                fleet=_resolve_worker_fleet(context, worker),
+                fleet=_resolve_instance_fleet(context, worker),
                 experiment_name=args.experiment,
                 experiment_filestore=experiment_filestore,
                 remote_experiment_dir=remote_experiment_dir,
@@ -124,7 +127,7 @@ def run_teardown(args: argparse.Namespace) -> int:
         try:
             collector.collect(
                 worker=worker,
-                fleet=_resolve_worker_fleet(context, worker),
+                fleet=_resolve_instance_fleet(context, worker),
                 experiment_name=args.experiment,
                 experiment_filestore=experiment_filestore,
                 remote_experiment_dir=remote_experiment_dir,
@@ -159,7 +162,7 @@ def run_teardown(args: argparse.Namespace) -> int:
 
     deletion_failed = False
     try:
-        _delete_live_workers(context, args.experiment, provisioner)
+        _delete_live_instances(context, args.experiment, provisioner)
     except Exception as exc:
         logger.error(
             "Worker deletion failed for experiment {}: {}", args.experiment, exc
@@ -203,63 +206,77 @@ def run_teardown(args: argparse.Namespace) -> int:
         return 1
 
     logger.info(
-        "Teardown complete: %d workers deleted%s",
-        len(live_workers),
+        "Teardown complete: %d instances deleted%s",
+        len(live_instances),
         " and orchestrator deleted" if launch_state is not None else "",
     )
     return 0
 
 
-def _list_live_workers(
+def _list_live_instances(
     context: "ResolvedCloudContext",
     experiment_name: str,
     provisioner: GceProvisioner,
 ) -> list["GceWorkerRecord"]:
     if context.launch_plan is not None:
-        return GceProviderAdapter(provisioner=provisioner).list_workers(
-            plan=context.launch_plan
-        )
+        adapter = GceProviderAdapter(provisioner=provisioner)
+        workers = adapter.list_workers(plan=context.launch_plan)
+        if context.evaluator_fleet_configs:
+            workers.extend(adapter.list_evaluators(plan=context.launch_plan))
+        return workers
 
     workers: list[GceWorkerRecord] = []
     for fleet in context.worker_fleet_configs:
         workers.extend(
             provisioner.list_workers(experiment_name=experiment_name, fleet=fleet)
         )
+    for fleet in context.evaluator_fleet_configs:
+        workers.extend(
+            provisioner.list_workers(experiment_name=experiment_name, fleet=fleet)
+        )
     return workers
 
 
-def _delete_live_workers(
+def _delete_live_instances(
     context: "ResolvedCloudContext",
     experiment_name: str,
     provisioner: GceProvisioner,
 ) -> None:
     if context.launch_plan is not None:
-        GceProviderAdapter(provisioner=provisioner).delete_workers(
-            plan=context.launch_plan
-        )
+        adapter = GceProviderAdapter(provisioner=provisioner)
+        adapter.delete_workers(plan=context.launch_plan)
+        if context.evaluator_fleet_configs:
+            adapter.delete_evaluators(plan=context.launch_plan)
         return
 
     for fleet in context.worker_fleet_configs:
         provisioner.delete_workers(experiment_name=experiment_name, fleet=fleet)
+    for fleet in context.evaluator_fleet_configs:
+        provisioner.delete_workers(experiment_name=experiment_name, fleet=fleet)
 
 
-def _resolve_worker_fleet(
+def _resolve_instance_fleet(
     context: "ResolvedCloudContext",
     worker: "GceWorkerRecord",
 ):
+    role = worker.labels.get("crsbench-role")
+    candidate_fleets = (
+        context.evaluator_fleet_configs
+        if role == "evaluator"
+        else context.worker_fleet_configs
+    )
     prefix_matches = [
         fleet
-        for fleet in context.worker_fleet_configs
+        for fleet in candidate_fleets
         if fleet.zone == worker.zone
+        and isinstance(fleet.worker_name_prefix, str)
         and fleet.worker_name_prefix
         and worker.name.startswith(fleet.worker_name_prefix)
     ]
     if prefix_matches:
         return prefix_matches[0]
 
-    zone_matches = [
-        fleet for fleet in context.worker_fleet_configs if fleet.zone == worker.zone
-    ]
+    zone_matches = [fleet for fleet in candidate_fleets if fleet.zone == worker.zone]
     if zone_matches:
         return zone_matches[0]
 
@@ -267,5 +284,16 @@ def _resolve_worker_fleet(
         return context.worker_fleet_config
 
     raise RuntimeError(
-        f"No worker fleet config matched instance {worker.name} in zone {worker.zone}"
+        f"No cloud fleet config matched instance {worker.name} in zone {worker.zone}"
     )
+
+
+def _list_readiness_instances(readiness, experiment_name: str):
+    workers = readiness.list_workers(experiment_name)
+    workers.extend(
+        readiness.list_workers(
+            experiment_name,
+            role=CloudInstanceRole.EVALUATOR,
+        )
+    )
+    return workers

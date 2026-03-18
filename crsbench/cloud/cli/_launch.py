@@ -59,6 +59,19 @@ def _project_for_worker_record(
     return None
 
 
+def _project_for_fleet_record(
+    instance_name: str,
+    *,
+    instance_zone: str,
+    fleet_configs: list[GceWorkerFleetConfig],
+) -> str | None:
+    return _project_for_worker_record(
+        instance_name,
+        worker_zone=instance_zone,
+        worker_fleet_configs=fleet_configs,
+    )
+
+
 def run_launch(args: argparse.Namespace) -> int:
     """Provision a remote orchestrator VM first, then point workers at its Redis."""
     config_path = Path(args.config)
@@ -81,6 +94,7 @@ def run_launch(args: argparse.Namespace) -> int:
     redis_password = secrets.token_urlsafe(24)
     orchestrator_record = None
     workers = []
+    evaluators = []
     launch_plan = None
     provisioning_plan = None
     adapter = None
@@ -196,6 +210,15 @@ def run_launch(args: argparse.Namespace) -> int:
                 bootstrap_inputs=bootstrap_inputs,
                 env_passthrough=preflight.worker_env,
             )
+            evaluators = adapter.create_evaluators(
+                plan=provisioning_plan,
+                redis_host=redis_host,
+                redis_password=redis_password,
+                registration=registration,
+                experiment_config_path=str(config_path),
+                bootstrap_inputs=bootstrap_inputs,
+                env_passthrough=preflight.evaluator_env,
+            )
         else:
             assert resolved_legacy_fleet is not None
             provisioner = GceProvisioner()
@@ -210,15 +233,18 @@ def run_launch(args: argparse.Namespace) -> int:
             )
 
         worker_fleet_configs: list[GceWorkerFleetConfig]
+        evaluator_fleet_configs: list[GceWorkerFleetConfig]
         if uses_provider_neutral_cloud:
             assert resolved_orchestrator_config is not None
             assert preflight.redacted_worker_fleets is not None
             worker_fleet_configs = preflight.redacted_worker_fleets
+            evaluator_fleet_configs = preflight.redacted_evaluator_fleets or []
             orchestrator_ssh_via_iap = resolved_orchestrator_config.ssh_via_iap
         else:
             assert resolved_legacy_orchestrator is not None
             assert preflight.redacted_worker_fleets is not None
             worker_fleet_configs = preflight.redacted_worker_fleets
+            evaluator_fleet_configs = []
             orchestrator_ssh_via_iap = resolved_legacy_orchestrator.ssh_via_iap
 
         if workers:
@@ -240,6 +266,25 @@ def run_launch(args: argparse.Namespace) -> int:
                 ],
             )
 
+        if evaluators:
+            append_created_instance_records(
+                config_path,
+                experiment_name=config.experiment,
+                records=[
+                    CreatedCloudInstanceRecord(
+                        provider="gce",
+                        project=_project_for_fleet_record(
+                            worker.name,
+                            instance_zone=worker.zone,
+                            fleet_configs=evaluator_fleet_configs,
+                        ),
+                        zone=worker.zone,
+                        instance_name=worker.name,
+                    )
+                    for worker in evaluators
+                ],
+            )
+
         save_launch_state(
             config_path,
             CloudLaunchState(
@@ -256,6 +301,7 @@ def run_launch(args: argparse.Namespace) -> int:
                 orchestrator_external_ip=orchestrator_record.external_ip,
                 orchestrator_ssh_via_iap=orchestrator_ssh_via_iap,
                 worker_fleet_configs=worker_fleet_configs,
+                evaluator_fleet_configs=evaluator_fleet_configs,
                 worker_fleet_config=(
                     worker_fleet_configs[0] if len(worker_fleet_configs) == 1 else None
                 ),
@@ -265,6 +311,17 @@ def run_launch(args: argparse.Namespace) -> int:
         logger.error("Cloud launch failed: {}", str(exc))
         return 1
     except Exception as exc:
+        if evaluators:
+            try:
+                if uses_provider_neutral_cloud:
+                    assert adapter is not None
+                    assert provisioning_plan is not None
+                    adapter.delete_evaluators(plan=provisioning_plan)
+            except Exception:
+                logger.warning(
+                    "Best-effort rollback failed for evaluator fleet in experiment {}",
+                    config.experiment,
+                )
         if workers:
             try:
                 if uses_provider_neutral_cloud:
@@ -307,9 +364,10 @@ def run_launch(args: argparse.Namespace) -> int:
         return 1
 
     logger.info(
-        "Cloud launch complete: orchestrator={} redis={} workers={}",
+        "Cloud launch complete: orchestrator={} redis={} workers={} evaluators={}",
         orchestrator_record.name,
         f"{orchestrator_record.internal_ip}:6379",
         len(workers),
+        len(evaluators),
     )
     return 0

@@ -27,12 +27,17 @@ Managed cloud execution uses a provider-neutral top-level shape:
   remote orchestrator VM
 - `cloud.workers.placements[]`: explicit worker placements with zone,
   `worker_count`, and `instance_profile`
+- `cloud.evaluators.placements[]`: optional evaluator placements with zone,
+  `evaluator_count`, and `instance_profile`
+- `cloud.bootstrap.env_passthrough`: operator-resolved environment variables
+  split into `common`, `orchestrator`, `workers`, and `evaluators`
 
 For GCE in v1:
 
 - use `cloud.providers.gce`
 - placements must use explicit zones
 - live quota validation is mandatory before launch
+- worker and evaluator placements can use different instance profiles
 - the checked-in example is
   `experiment-configs/cloud-testing/gce-sanity-1orch-2worker.yaml`
 

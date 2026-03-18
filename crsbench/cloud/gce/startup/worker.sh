@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+CRSBENCH_STARTUP_MODE="${CRSBENCH_STARTUP_MODE:-worker}"
 CRSBENCH_METADATA_ROOT_DIR="${CRSBENCH_METADATA_ROOT_DIR:-}"
 CRSBENCH_METADATA_BASE_URL="${CRSBENCH_METADATA_BASE_URL:-http://metadata.google.internal/computeMetadata/v1}"
 CRSBENCH_METADATA_HEADER_NAME="${CRSBENCH_METADATA_HEADER_NAME:-Metadata-Flavor}"
@@ -13,6 +14,7 @@ STATE_DIR="${CRSBENCH_STATE_DIR:-/var/lib/crsbench}"
 PAYLOAD_PATH="${STATE_DIR}/bootstrap.json"
 LAUNCHER_PATH="${STATE_DIR}/launch-worker.sh"
 ENV_PATH="${STATE_DIR}/worker.env"
+EXPERIMENT_CONFIG_PATH="${STATE_DIR}/experiment-config.yaml"
 CLONE_DIR="${CRSBENCH_CLONE_DIR:-/opt/crsbench}"
 DOCKER_DAEMON_CONFIG_PATH="${CRSBENCH_DOCKER_DAEMON_CONFIG_PATH:-/etc/docker/daemon.json}"
 DOCKER_CGROUP_DRIVER_OPT="${CRSBENCH_DOCKER_CGROUP_DRIVER_OPT:-native.cgroupdriver=cgroupfs}"
@@ -27,6 +29,12 @@ CRSBENCH_USER_LOCAL_BIN=""
 CRSBENCH_USER_PATH=""
 CRSBENCH_USER_SERVICE_CGROUP=""
 CRSBENCH_OSS_CRS_CGROUP=""
+
+if [[ "${CRSBENCH_STARTUP_MODE}" == "evaluator" ]]; then
+  LAUNCHER_PATH="${STATE_DIR}/launch-evaluator.sh"
+  ENV_PATH="${STATE_DIR}/evaluator.env"
+  SERVICE_PATH="${USER_SERVICE_DIR}/crsbench-evaluator.service"
+fi
 
 metadata_fetch() {
   local relative_path="$1"
@@ -338,6 +346,9 @@ ensure_crsbench_user() {
   CRSBENCH_USER_HOME="$(lookup_user_home "${CRSBENCH_USER}")"
   USER_SERVICE_DIR="${CRSBENCH_USER_HOME}/.config/systemd/user"
   SERVICE_PATH="${USER_SERVICE_DIR}/crsbench-worker.service"
+  if [[ "${CRSBENCH_STARTUP_MODE}" == "evaluator" ]]; then
+    SERVICE_PATH="${USER_SERVICE_DIR}/crsbench-evaluator.service"
+  fi
   CRSBENCH_USER_UID="$(id -u "${CRSBENCH_USER}")"
   CRSBENCH_USER_GID="$(id -g "${CRSBENCH_USER}")"
   CRSBENCH_USER_RUNTIME_DIR="/run/user/${CRSBENCH_USER_UID}"
@@ -592,7 +603,7 @@ if not redis_host:
 report_cloud_worker_state_from_env(
     redis_host=redis_host,
     state="bootstrap_failed",
-    detail="GCE worker bootstrap failed",
+    detail="GCE ${CRSBENCH_STARTUP_MODE:-worker} bootstrap failed",
     startup_evidence=sys.argv[2],
 )
 PY
@@ -607,10 +618,17 @@ start_worker_runtime() {
     auto)
       if supports_systemd; then
         run_user_systemctl daemon-reload
-        sudo -H -u "${CRSBENCH_USER}" env \
-          XDG_RUNTIME_DIR="${CRSBENCH_USER_RUNTIME_DIR}" \
-          DBUS_SESSION_BUS_ADDRESS="${CRSBENCH_USER_DBUS_ADDRESS}" \
-          systemctl --user enable --now crsbench-worker.service
+        if [[ "${CRSBENCH_STARTUP_MODE}" == "evaluator" ]]; then
+          sudo -H -u "${CRSBENCH_USER}" env \
+            XDG_RUNTIME_DIR="${CRSBENCH_USER_RUNTIME_DIR}" \
+            DBUS_SESSION_BUS_ADDRESS="${CRSBENCH_USER_DBUS_ADDRESS}" \
+            systemctl --user enable --now crsbench-evaluator.service
+        else
+          sudo -H -u "${CRSBENCH_USER}" env \
+            XDG_RUNTIME_DIR="${CRSBENCH_USER_RUNTIME_DIR}" \
+            DBUS_SESSION_BUS_ADDRESS="${CRSBENCH_USER_DBUS_ADDRESS}" \
+            systemctl --user enable --now crsbench-worker.service
+        fi
         return 0
       fi
       ;;
@@ -620,10 +638,17 @@ start_worker_runtime() {
         exit 1
       fi
       run_user_systemctl daemon-reload
-      sudo -H -u "${CRSBENCH_USER}" env \
-        XDG_RUNTIME_DIR="${CRSBENCH_USER_RUNTIME_DIR}" \
-        DBUS_SESSION_BUS_ADDRESS="${CRSBENCH_USER_DBUS_ADDRESS}" \
-        systemctl --user enable --now crsbench-worker.service
+      if [[ "${CRSBENCH_STARTUP_MODE}" == "evaluator" ]]; then
+        sudo -H -u "${CRSBENCH_USER}" env \
+          XDG_RUNTIME_DIR="${CRSBENCH_USER_RUNTIME_DIR}" \
+          DBUS_SESSION_BUS_ADDRESS="${CRSBENCH_USER_DBUS_ADDRESS}" \
+          systemctl --user enable --now crsbench-evaluator.service
+      else
+        sudo -H -u "${CRSBENCH_USER}" env \
+          XDG_RUNTIME_DIR="${CRSBENCH_USER_RUNTIME_DIR}" \
+          DBUS_SESSION_BUS_ADDRESS="${CRSBENCH_USER_DBUS_ADDRESS}" \
+          systemctl --user enable --now crsbench-worker.service
+      fi
       return 0
       ;;
     foreground)
@@ -653,47 +678,96 @@ ensure_user_systemd_support_packages
 metadata_get "crsbench-bootstrap-payload" | base64 --decode > "${PAYLOAD_PATH}"
 
 readarray -t PAYLOAD_FIELDS < <(
-  python3 - "${PAYLOAD_PATH}" <<'PY'
+  python3 - "${PAYLOAD_PATH}" "${CRSBENCH_STARTUP_MODE}" <<'PY'
 import json
 import sys
 
 with open(sys.argv[1], encoding="utf-8") as handle:
     payload = json.load(handle)
 
+mode = sys.argv[2]
 print(payload["redis_host"])
-print(payload["worker_name"])
 print(payload["experiment"])
-print(payload.get("worker_jobs") or "")
-print(payload.get("worker_cores_per_job") or "")
-print(payload.get("worker_cpu_tag") or "")
+if mode == "evaluator":
+    print(payload["evaluator_name"])
+    print(payload.get("evaluator_build_jobs") or "")
+    print(payload.get("evaluator_build_cores_per_job") or "")
+    print(payload.get("evaluator_verify_jobs") or "")
+    print(payload.get("evaluator_verify_cores_per_job") or "")
+    print(payload.get("evaluator_idle_timeout") or "")
+    print(payload.get("evaluator_cpu_tag") or "")
+else:
+    print(payload["worker_name"])
+    print(payload.get("worker_jobs") or "")
+    print(payload.get("worker_cores_per_job") or "")
+    print(payload.get("worker_cpu_tag") or "")
 print(payload.get("readiness_timeout_sec") or "")
 PY
 )
 
 REDIS_HOST="${PAYLOAD_FIELDS[0]}"
-WORKER_NAME="${PAYLOAD_FIELDS[1]}"
-EXPERIMENT_NAME="${PAYLOAD_FIELDS[2]}"
-WORKER_JOBS="${PAYLOAD_FIELDS[3]}"
-WORKER_CORES_PER_JOB="${PAYLOAD_FIELDS[4]}"
-WORKER_CPU_TAG="${PAYLOAD_FIELDS[5]}"
-READINESS_TIMEOUT_SEC="${PAYLOAD_FIELDS[6]}"
+EXPERIMENT_NAME="${PAYLOAD_FIELDS[1]}"
+READINESS_TIMEOUT_SEC=""
+WORKER_NAME=""
+WORKER_JOBS=""
+WORKER_CORES_PER_JOB=""
+WORKER_CPU_TAG=""
+EVALUATOR_NAME=""
+EVALUATOR_BUILD_JOBS=""
+EVALUATOR_BUILD_CORES_PER_JOB=""
+EVALUATOR_VERIFY_JOBS=""
+EVALUATOR_VERIFY_CORES_PER_JOB=""
+EVALUATOR_IDLE_TIMEOUT=""
+EVALUATOR_CPU_TAG=""
+if [[ "${CRSBENCH_STARTUP_MODE}" == "evaluator" ]]; then
+  EVALUATOR_NAME="${PAYLOAD_FIELDS[2]}"
+  EVALUATOR_BUILD_JOBS="${PAYLOAD_FIELDS[3]}"
+  EVALUATOR_BUILD_CORES_PER_JOB="${PAYLOAD_FIELDS[4]}"
+  EVALUATOR_VERIFY_JOBS="${PAYLOAD_FIELDS[5]}"
+  EVALUATOR_VERIFY_CORES_PER_JOB="${PAYLOAD_FIELDS[6]}"
+  EVALUATOR_IDLE_TIMEOUT="${PAYLOAD_FIELDS[7]}"
+  EVALUATOR_CPU_TAG="${PAYLOAD_FIELDS[8]}"
+  READINESS_TIMEOUT_SEC="${PAYLOAD_FIELDS[9]}"
+else
+  WORKER_NAME="${PAYLOAD_FIELDS[2]}"
+  WORKER_JOBS="${PAYLOAD_FIELDS[3]}"
+  WORKER_CORES_PER_JOB="${PAYLOAD_FIELDS[4]}"
+  WORKER_CPU_TAG="${PAYLOAD_FIELDS[5]}"
+  READINESS_TIMEOUT_SEC="${PAYLOAD_FIELDS[6]}"
+fi
 REDIS_PASSWORD="$(metadata_get_optional "crsbench-redis-password")"
 INSTANCE_ID="$(instance_metadata_get "id")"
 ZONE_PATH="$(instance_metadata_get "zone")"
 ZONE="${ZONE_PATH##*/}"
+if [[ "${CRSBENCH_STARTUP_MODE}" == "evaluator" ]]; then
+  metadata_get_optional "crsbench-experiment-config-b64" | base64 --decode > "${EXPERIMENT_CONFIG_PATH}"
+fi
 
 export CRSBENCH_REDIS_HOST="${REDIS_HOST}"
 export CRSBENCH_REDIS_PASSWORD="${REDIS_PASSWORD}"
-export CRSBENCH_WORKER_NAME="${WORKER_NAME}"
 export CRSBENCH_EXPERIMENT_NAME="${EXPERIMENT_NAME}"
-export CRSBENCH_WORKER_JOBS="${WORKER_JOBS}"
-export CRSBENCH_WORKER_CORES_PER_JOB="${WORKER_CORES_PER_JOB}"
-export CRSBENCH_WORKER_CPU_TAG="${WORKER_CPU_TAG}"
 export CRSBENCH_READINESS_TIMEOUT_SEC="${READINESS_TIMEOUT_SEC}"
 export CRSBENCH_CLOUD_EXPERIMENT="${EXPERIMENT_NAME}"
 export CRSBENCH_CLOUD_INSTANCE_ID="${INSTANCE_ID}"
-export CRSBENCH_CLOUD_INSTANCE_NAME="${WORKER_NAME}"
+export CRSBENCH_CLOUD_ROLE="${CRSBENCH_STARTUP_MODE}"
 export CRSBENCH_CLOUD_ZONE="${ZONE}"
+if [[ "${CRSBENCH_STARTUP_MODE}" == "evaluator" ]]; then
+  export CRSBENCH_EVALUATOR_NAME="${EVALUATOR_NAME}"
+  export CRSBENCH_EVALUATOR_BUILD_JOBS="${EVALUATOR_BUILD_JOBS}"
+  export CRSBENCH_EVALUATOR_BUILD_CORES_PER_JOB="${EVALUATOR_BUILD_CORES_PER_JOB}"
+  export CRSBENCH_EVALUATOR_VERIFY_JOBS="${EVALUATOR_VERIFY_JOBS}"
+  export CRSBENCH_EVALUATOR_VERIFY_CORES_PER_JOB="${EVALUATOR_VERIFY_CORES_PER_JOB}"
+  export CRSBENCH_EVALUATOR_IDLE_TIMEOUT="${EVALUATOR_IDLE_TIMEOUT}"
+  export CRSBENCH_EVALUATOR_CPU_TAG="${EVALUATOR_CPU_TAG}"
+  export CRSBENCH_EXPERIMENT_CONFIG_PATH="${EXPERIMENT_CONFIG_PATH}"
+  export CRSBENCH_CLOUD_INSTANCE_NAME="${EVALUATOR_NAME}"
+else
+  export CRSBENCH_WORKER_NAME="${WORKER_NAME}"
+  export CRSBENCH_WORKER_JOBS="${WORKER_JOBS}"
+  export CRSBENCH_WORKER_CORES_PER_JOB="${WORKER_CORES_PER_JOB}"
+  export CRSBENCH_WORKER_CPU_TAG="${WORKER_CPU_TAG}"
+  export CRSBENCH_CLOUD_INSTANCE_NAME="${WORKER_NAME}"
+fi
 
 trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR
 
@@ -714,7 +788,7 @@ export_passthrough_env "${ENV_PASSTHROUGH_B64}"
 
 # --- Install crsbench from a repo checkout ---
 if [[ -z "${INSTALL_SPEC}" || "${INSTALL_SPEC}" != git+* ]]; then
-  echo "cloud worker bootstrap requires git+ install spec metadata" >&2
+  echo "cloud worker bootstrap requires git+ install spec metadata (role=${CRSBENCH_STARTUP_MODE:-worker})" >&2
   exit 1
 fi
 REPO_URL="${INSTALL_SPEC#git+}"
@@ -748,17 +822,30 @@ write_env_var "CRSBENCH_REDIS_HOST" "${REDIS_HOST}"
 if [[ -n "${REDIS_PASSWORD}" ]]; then
   write_env_var "CRSBENCH_REDIS_PASSWORD" "${REDIS_PASSWORD}"
 fi
-write_env_var "CRSBENCH_WORKER_NAME" "${WORKER_NAME}"
 write_env_var "CRSBENCH_EXPERIMENT_NAME" "${EXPERIMENT_NAME}"
-write_env_var "CRSBENCH_WORKER_JOBS" "${WORKER_JOBS}"
-write_env_var "CRSBENCH_WORKER_CORES_PER_JOB" "${WORKER_CORES_PER_JOB}"
-write_env_var "CRSBENCH_WORKER_CPU_TAG" "${WORKER_CPU_TAG}"
 write_env_var "CRSBENCH_READINESS_TIMEOUT_SEC" "${READINESS_TIMEOUT_SEC}"
 write_env_var "CRSBENCH_CLOUD_EXPERIMENT" "${EXPERIMENT_NAME}"
 write_env_var "CRSBENCH_CLOUD_INSTANCE_ID" "${INSTANCE_ID}"
-write_env_var "CRSBENCH_CLOUD_INSTANCE_NAME" "${WORKER_NAME}"
+write_env_var "CRSBENCH_CLOUD_ROLE" "${CRSBENCH_STARTUP_MODE}"
 write_env_var "CRSBENCH_CLOUD_ZONE" "${ZONE}"
 write_env_var "CRSBENCH_LOG_LEVEL" "INFO"
+if [[ "${CRSBENCH_STARTUP_MODE}" == "evaluator" ]]; then
+  write_env_var "CRSBENCH_EVALUATOR_NAME" "${EVALUATOR_NAME}"
+  write_env_var "CRSBENCH_EVALUATOR_BUILD_JOBS" "${EVALUATOR_BUILD_JOBS}"
+  write_env_var "CRSBENCH_EVALUATOR_BUILD_CORES_PER_JOB" "${EVALUATOR_BUILD_CORES_PER_JOB}"
+  write_env_var "CRSBENCH_EVALUATOR_VERIFY_JOBS" "${EVALUATOR_VERIFY_JOBS}"
+  write_env_var "CRSBENCH_EVALUATOR_VERIFY_CORES_PER_JOB" "${EVALUATOR_VERIFY_CORES_PER_JOB}"
+  write_env_var "CRSBENCH_EVALUATOR_IDLE_TIMEOUT" "${EVALUATOR_IDLE_TIMEOUT}"
+  write_env_var "CRSBENCH_EVALUATOR_CPU_TAG" "${EVALUATOR_CPU_TAG}"
+  write_env_var "CRSBENCH_EXPERIMENT_CONFIG_PATH" "${EXPERIMENT_CONFIG_PATH}"
+  write_env_var "CRSBENCH_CLOUD_INSTANCE_NAME" "${EVALUATOR_NAME}"
+else
+  write_env_var "CRSBENCH_WORKER_NAME" "${WORKER_NAME}"
+  write_env_var "CRSBENCH_WORKER_JOBS" "${WORKER_JOBS}"
+  write_env_var "CRSBENCH_WORKER_CORES_PER_JOB" "${WORKER_CORES_PER_JOB}"
+  write_env_var "CRSBENCH_WORKER_CPU_TAG" "${WORKER_CPU_TAG}"
+  write_env_var "CRSBENCH_CLOUD_INSTANCE_NAME" "${WORKER_NAME}"
+fi
 if [[ -n "${HF_TOKEN:-}" ]]; then
   write_env_var "HF_TOKEN" "${HF_TOKEN}"
 fi
@@ -795,7 +882,7 @@ if not redis_host:
 report_cloud_worker_state_from_env(
     redis_host=redis_host,
     state="bootstrap_failed",
-    detail="GCE worker service failed",
+    detail="GCE ${CRSBENCH_CLOUD_ROLE:-worker} service failed",
     startup_evidence=sys.argv[2],
 )
 PY
@@ -854,26 +941,60 @@ PY
   done
 }
 
-cmd=(
-  /usr/bin/env
-  crsbench
-  worker
-  --experiment-name
-  "${CRSBENCH_EXPERIMENT_NAME}"
-  --worker-name
-  "${CRSBENCH_WORKER_NAME}"
-)
+cmd=(/usr/bin/env crsbench)
+if [[ "${CRSBENCH_CLOUD_ROLE:-worker}" == "evaluator" ]]; then
+  # Launch crsbench evaluator in config-pinned mode on managed evaluator VMs.
+  cmd+=(
+    evaluator
+    --experiment-config
+    "${CRSBENCH_EXPERIMENT_CONFIG_PATH}"
+    --worker-name
+    "${CRSBENCH_EVALUATOR_NAME}"
+  )
 
-if [[ -n "${CRSBENCH_WORKER_JOBS:-}" ]]; then
-  cmd+=(--jobs "${CRSBENCH_WORKER_JOBS}")
-fi
+  if [[ -n "${CRSBENCH_EVALUATOR_BUILD_JOBS:-}" ]]; then
+    cmd+=(--build-jobs "${CRSBENCH_EVALUATOR_BUILD_JOBS}")
+  fi
 
-if [[ -n "${CRSBENCH_WORKER_CORES_PER_JOB:-}" ]]; then
-  cmd+=(--cores-per-job "${CRSBENCH_WORKER_CORES_PER_JOB}")
-fi
+  if [[ -n "${CRSBENCH_EVALUATOR_BUILD_CORES_PER_JOB:-}" ]]; then
+    cmd+=(--build-cores-per-job "${CRSBENCH_EVALUATOR_BUILD_CORES_PER_JOB}")
+  fi
 
-if [[ -n "${CRSBENCH_WORKER_CPU_TAG:-}" ]]; then
-  cmd+=(--cpu-tag "${CRSBENCH_WORKER_CPU_TAG}")
+  if [[ -n "${CRSBENCH_EVALUATOR_VERIFY_JOBS:-}" ]]; then
+    cmd+=(--verify-jobs "${CRSBENCH_EVALUATOR_VERIFY_JOBS}")
+  fi
+
+  if [[ -n "${CRSBENCH_EVALUATOR_VERIFY_CORES_PER_JOB:-}" ]]; then
+    cmd+=(--verify-cores-per-job "${CRSBENCH_EVALUATOR_VERIFY_CORES_PER_JOB}")
+  fi
+
+  if [[ -n "${CRSBENCH_EVALUATOR_IDLE_TIMEOUT:-}" ]]; then
+    cmd+=(--idle-timeout "${CRSBENCH_EVALUATOR_IDLE_TIMEOUT}")
+  fi
+
+  if [[ -n "${CRSBENCH_EVALUATOR_CPU_TAG:-}" ]]; then
+    cmd+=(--cpu-tag "${CRSBENCH_EVALUATOR_CPU_TAG}")
+  fi
+else
+  cmd+=(
+    worker
+    --experiment-name
+    "${CRSBENCH_EXPERIMENT_NAME}"
+    --worker-name
+    "${CRSBENCH_WORKER_NAME}"
+  )
+
+  if [[ -n "${CRSBENCH_WORKER_JOBS:-}" ]]; then
+    cmd+=(--jobs "${CRSBENCH_WORKER_JOBS}")
+  fi
+
+  if [[ -n "${CRSBENCH_WORKER_CORES_PER_JOB:-}" ]]; then
+    cmd+=(--cores-per-job "${CRSBENCH_WORKER_CORES_PER_JOB}")
+  fi
+
+  if [[ -n "${CRSBENCH_WORKER_CPU_TAG:-}" ]]; then
+    cmd+=(--cpu-tag "${CRSBENCH_WORKER_CPU_TAG}")
+  fi
 fi
 
 wait_for_redis
@@ -886,7 +1007,7 @@ if [[ "${exit_code}" -eq 0 ]]; then
   exit 0
 fi
 
-report_bootstrap_failure "worker service exited with status ${exit_code}"
+report_bootstrap_failure "${CRSBENCH_CLOUD_ROLE:-worker} service exited with status ${exit_code}"
 exit "${exit_code}"
 EOF
 python3 - "${LAUNCHER_PATH}" "${ENV_PATH}" <<'PY'
@@ -901,11 +1022,20 @@ launcher_path.write_text(
 )
 PY
 chmod +x "${LAUNCHER_PATH}"
-chown "${CRSBENCH_USER}:${CRSBENCH_USER}" "${PAYLOAD_PATH}" "${ENV_PATH}" "${LAUNCHER_PATH}"
+if [[ "${CRSBENCH_STARTUP_MODE}" == "evaluator" ]]; then
+  chown "${CRSBENCH_USER}:${CRSBENCH_USER}" "${PAYLOAD_PATH}" "${ENV_PATH}" "${LAUNCHER_PATH}" "${EXPERIMENT_CONFIG_PATH}"
+else
+  chown "${CRSBENCH_USER}:${CRSBENCH_USER}" "${PAYLOAD_PATH}" "${ENV_PATH}" "${LAUNCHER_PATH}"
+fi
+
+SERVICE_DESCRIPTION="CRSBench worker service"
+if [[ "${CRSBENCH_STARTUP_MODE}" == "evaluator" ]]; then
+  SERVICE_DESCRIPTION="CRSBench evaluator service"
+fi
 
 cat > "${SERVICE_PATH}" <<EOF
 [Unit]
-Description=CRSBench worker service
+Description=${SERVICE_DESCRIPTION}
 After=network-online.target
 Wants=network-online.target
 

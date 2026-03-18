@@ -638,3 +638,70 @@ class TestRemoteLogCollection:
                     experiment_filestore=experiment_filestore,
                     remote_experiment_dir="/data/experiments/exp-42",
                 )
+
+    def test_collect_logs_uses_evaluator_service_name_for_evaluator_instances(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worker = _make_worker(name="gce-evaluator-001")
+        worker.labels["crsbench-role"] = "evaluator"
+        fleet = _make_fleet(ssh_via_iap=False)
+        config_path = tmp_path / "config.yaml"
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+        collector = ArtifactCollector(base_path=config_path)
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        _build_trial_tree(source_root, experiment_name="exp-42")
+
+        def _fake_remote_command(*args, **kwargs):
+            del args, kwargs
+            return subprocess.CompletedProcess(
+                args=["ssh"],
+                returncode=0,
+                stdout="remote output\n",
+                stderr="",
+            )
+
+        def _fake_subprocess_run(cmd, *_args, **_kwargs):
+            if cmd and cmd[:3] == ["gcloud", "compute", "os-login"]:
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout="test-user\n",
+                    stderr="",
+                )
+
+            if cmd and cmd[0] in {"ssh-keygen", "ssh-keyscan"}:
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout="ssh-ed25519 AAAATESTKEY\n",
+                    stderr="",
+                )
+
+            if cmd and cmd[0] == "rsync":
+                dest = Path(cmd[-1].rstrip("/"))
+                shutil.copytree(
+                    source_root / "exp-42",
+                    dest,
+                    dirs_exist_ok=True,
+                )
+                return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+            raise AssertionError(f"unexpected subprocess invocation: {cmd!r}")
+
+        monkeypatch.setattr(collector, "_run_remote_command", _fake_remote_command)
+        with patch("subprocess.run", side_effect=_fake_subprocess_run):
+            logs_dir = collector.collect_logs(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        instance_dir = logs_dir / worker.name
+        assert (instance_dir / "crsbench-evaluator.journal.log").read_text(
+            encoding="utf-8"
+        )

@@ -70,6 +70,7 @@ def _make_worker_status(
     state: str = "ready",
     zone: str = "us-central1-a",
     internal_ip: str = "10.0.0.1",
+    role: str = "worker",
 ) -> dict[str, Any]:
     """Return a CloudWorkerStatus-shaped dict for JSON storage in fake Redis."""
     return {
@@ -78,6 +79,7 @@ def _make_worker_status(
         "instance_name": instance_name,
         "zone": zone,
         "state": state,
+        "role": role,
         "provider_status": "RUNNING",
         "internal_ip": internal_ip,
         "external_ip": None,
@@ -379,6 +381,35 @@ def _make_provider_neutral_experiment_config() -> ExperimentConfig:
     )
 
 
+def _make_provider_neutral_experiment_config_with_evaluators() -> ExperimentConfig:
+    config = _make_provider_neutral_experiment_config().model_dump()
+    config["cloud"]["providers"]["gce"]["instance_profiles"]["evaluator-c3"] = {
+        "machine_type": "c3-standard-8",
+        "boot_disk_size_gb": 50,
+        "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+        "service_account_email": "crsbench-evaluator@test-project.iam.gserviceaccount.com",
+        "owner_label": "team-crs",
+        "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
+    }
+    config["cloud"]["evaluators"] = {
+        "placements": [
+            {
+                "provider": "gce",
+                "zone": "us-east5-b",
+                "evaluator_count": 1,
+                "instance_profile": "evaluator-c3",
+            },
+            {
+                "provider": "gce",
+                "zone": "us-east1-b",
+                "evaluator_count": 2,
+                "instance_profile": "evaluator-c3",
+            },
+        ]
+    }
+    return ExperimentConfig.model_validate(config)
+
+
 def _add_secret_refs_to_provider_neutral_config(
     config: ExperimentConfig,
     *,
@@ -400,11 +431,13 @@ def _with_env_passthrough(
     common: list[str] | None = None,
     orchestrator: list[str] | None = None,
     workers: list[str] | None = None,
+    evaluators: list[str] | None = None,
 ) -> ExperimentConfig:
     config = config.model_copy(deep=True)
     config.cloud.bootstrap.env_passthrough.common = list(common or [])
     config.cloud.bootstrap.env_passthrough.orchestrator = list(orchestrator or [])
     config.cloud.bootstrap.env_passthrough.workers = list(workers or [])
+    config.cloud.bootstrap.env_passthrough.evaluators = list(evaluators or [])
     return config
 
 
@@ -438,6 +471,28 @@ def test_build_cloud_launch_plan_resolves_profiles_for_orchestrator_and_workers(
     assert all(
         placement.instance_profile.provider_config["project"] == "test-project"
         for placement in plan.worker_placements
+    )
+
+
+def test_build_cloud_launch_plan_resolves_profiles_for_evaluators():
+    from crsbench.cloud.models import build_cloud_launch_plan
+
+    config = _make_provider_neutral_experiment_config_with_evaluators()
+
+    plan = build_cloud_launch_plan(config)
+
+    assert len(plan.evaluator_placements) == 2
+    assert [placement.zone for placement in plan.evaluator_placements] == [
+        "us-east5-b",
+        "us-east1-b",
+    ]
+    assert [placement.evaluator_count for placement in plan.evaluator_placements] == [
+        1,
+        2,
+    ]
+    assert all(
+        placement.instance_profile.name == "evaluator-c3"
+        for placement in plan.evaluator_placements
     )
 
 
@@ -493,6 +548,7 @@ def test_prepare_gce_launch_inputs_resolves_env_passthrough_for_roles() -> None:
         common=["CRSBENCH_LLM_UPSTREAM_BASE_URL"],
         orchestrator=["CRSBENCH_LLM_MASTER_KEY"],
         workers=["OPENAI_API_KEY"],
+        evaluators=["ANTHROPIC_API_KEY"],
     )
     launch_plan = build_cloud_launch_plan(config)
 
@@ -503,6 +559,7 @@ def test_prepare_gce_launch_inputs_resolves_env_passthrough_for_roles() -> None:
             "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
             "CRSBENCH_LLM_MASTER_KEY": "master-key",
             "OPENAI_API_KEY": "openai-key",
+            "ANTHROPIC_API_KEY": "anthropic-key",
         },
     )
 
@@ -513,6 +570,10 @@ def test_prepare_gce_launch_inputs_resolves_env_passthrough_for_roles() -> None:
     assert preflight.worker_env == {
         "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
         "OPENAI_API_KEY": "openai-key",
+    }
+    assert preflight.evaluator_env == {
+        "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+        "ANTHROPIC_API_KEY": "anthropic-key",
     }
 
 
@@ -1320,6 +1381,88 @@ class TestLaunch:
         saved_state = mock_save_state.call_args.args[1]
         assert saved_state.worker_fleet_configs == expected_worker_fleets
 
+    @patch(
+        "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
+    )
+    @patch("crsbench.cloud.cli._launch.save_launch_state")
+    @patch("crsbench.cloud.cli._launch.prepare_gce_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._launch.QuotaValidator")
+    @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
+    @patch("crsbench.cloud.cli._launch.load_experiment_config")
+    def test_provider_neutral_launch_creates_and_persists_evaluators(
+        self,
+        mock_load,
+        mock_build_plan,
+        mock_validator_cls,
+        mock_adapter_cls,
+        mock_preflight,
+        mock_save_state,
+        mock_secret,
+    ):
+        del mock_secret
+        config = _with_env_passthrough(
+            _make_provider_neutral_experiment_config_with_evaluators(),
+            evaluators=["ANTHROPIC_API_KEY"],
+        )
+        mock_load.return_value = config
+
+        launch_plan = MagicMock()
+        launch_plan.experiment_name = "test-exp"
+        resolved_plan = MagicMock()
+        resolved_plan.experiment_name = "test-exp"
+        expected_worker_fleets = (
+            _make_provider_neutral_launch_state().worker_fleet_configs
+        )
+        expected_evaluator_fleets = [
+            GceWorkerFleetConfig(
+                project="test-project",
+                zone="us-east1-b",
+                worker_count=1,
+                machine_type="c3-standard-8",
+                boot_disk_size_gb=50,
+                image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                service_account_email="crsbench-evaluator@test-project.iam.gserviceaccount.com",
+                owner_label="team-crs",
+                worker_name_prefix="evaluator-test-exp-us-east1-b",
+            )
+        ]
+        mock_build_plan.return_value = launch_plan
+        mock_preflight.return_value = MagicMock(
+            resolved_plan=resolved_plan,
+            redacted_worker_fleets=expected_worker_fleets,
+            redacted_evaluator_fleets=expected_evaluator_fleets,
+            orchestrator_env={},
+            worker_env={},
+            evaluator_env={"ANTHROPIC_API_KEY": "anthropic-key"},
+        )
+        mock_validator_cls.return_value.validate.return_value = None
+
+        mock_adapter = mock_adapter_cls.return_value
+        mock_adapter.build_orchestrator_config.return_value.project = "test-project"
+        mock_adapter.build_orchestrator_config.return_value.ssh_via_iap = True
+        mock_adapter.create_orchestrator.return_value = _make_gce_worker(
+            "gce-orchestrator-test-exp",
+            zone="us-east5-b",
+            ip="10.0.0.50",
+        )
+        mock_adapter.create_workers.return_value = [_make_gce_worker("worker-east5")]
+        evaluator = _make_gce_worker("evaluator-east1", zone="us-east1-b")
+        evaluator.labels["crsbench-role"] = "evaluator"
+        mock_adapter.create_evaluators.return_value = [evaluator]
+
+        from crsbench.cloud.cli._launch import run_launch
+
+        rc = run_launch(_make_launch_args())
+
+        assert rc == 0
+        assert mock_adapter.create_evaluators.call_args.kwargs["plan"] is resolved_plan
+        assert mock_adapter.create_evaluators.call_args.kwargs["env_passthrough"] == {
+            "ANTHROPIC_API_KEY": "anthropic-key",
+        }
+        saved_state = mock_save_state.call_args.args[1]
+        assert saved_state.evaluator_fleet_configs == expected_evaluator_fleets
+
 
 def test_save_launch_state_redacts_secret_bearing_worker_fields(tmp_path: Path) -> None:
     from crsbench.cloud.launch_state import (
@@ -1527,6 +1670,55 @@ class TestStatusOutput:
         assert "events" in data
 
     @patch("crsbench.cloud.cli._status.reconnect")
+    def test_status_output_includes_evaluator_role(self, mock_reconnect, fake_redis):
+        """Status output should include evaluator instances in the fleet summary."""
+        _populate_fake_redis(fake_redis)
+        fake_redis.hset(
+            "crsbench:cloud:evaluators:test-exp",
+            "id-evaluator-1",
+            json.dumps(
+                _make_worker_status(
+                    "evaluator-1",
+                    state="ready",
+                    internal_ip="10.0.1.10",
+                    role="evaluator",
+                )
+            ),
+        )
+        from crsbench.cloud.readiness import CloudReadinessStore
+        from crsbench.distributed.job_lifecycle import JobLifecycleStore
+
+        readiness = CloudReadinessStore(fake_redis)
+        lifecycle = JobLifecycleStore(fake_redis)
+        mock_reconnect.return_value = (
+            MagicMock(),
+            fake_redis,
+            readiness,
+            lifecycle,
+            Path("/tmp"),
+        )
+
+        from crsbench.cloud.cli._status import run_status
+
+        with (
+            patch("crsbench.cloud.cli._status.log_table") as mock_table,
+            patch("crsbench.cloud.cli._status.log_section"),
+            patch("crsbench.cloud.cli._status.log_key_value"),
+        ):
+            rc = run_status(_make_status_args())
+
+        assert rc == 0
+        fleet_headers, fleet_rows = mock_table.call_args_list[0].args
+        assert fleet_headers == ["Instance", "Role", "State", "Zone", "IP"]
+        assert [
+            "evaluator-1",
+            "evaluator",
+            "ready",
+            "us-central1-a",
+            "10.0.1.10",
+        ] in fleet_rows
+
+    @patch("crsbench.cloud.cli._status.reconnect")
     def test_status_job_instance_correlation(self, mock_reconnect, fake_redis, capsys):
         """Job entries in JSON output include claimed_by for instance correlation (OBS-01)."""
         _populate_fake_redis(fake_redis)
@@ -1553,6 +1745,49 @@ class TestStatusOutput:
         # At least one job should have claimed_by set
         claimed_values = [j["claimed_by"] for j in data["jobs"] if j.get("claimed_by")]
         assert len(claimed_values) > 0
+
+    @patch("crsbench.cloud.cli._status.reconnect")
+    def test_status_json_output_includes_evaluator_role(
+        self, mock_reconnect, fake_redis, capsys
+    ):
+        """JSON status output should include evaluator fleet entries with their role."""
+        _populate_fake_redis(fake_redis)
+        fake_redis.hset(
+            "crsbench:cloud:evaluators:test-exp",
+            "id-evaluator-1",
+            json.dumps(
+                _make_worker_status(
+                    "evaluator-1",
+                    state="ready",
+                    internal_ip="10.0.1.10",
+                    role="evaluator",
+                )
+            ),
+        )
+        from crsbench.cloud.readiness import CloudReadinessStore
+        from crsbench.distributed.job_lifecycle import JobLifecycleStore
+
+        readiness = CloudReadinessStore(fake_redis)
+        lifecycle = JobLifecycleStore(fake_redis)
+        mock_reconnect.return_value = (
+            MagicMock(),
+            fake_redis,
+            readiness,
+            lifecycle,
+            Path("/tmp"),
+        )
+
+        from crsbench.cloud.cli._status import run_status
+
+        rc = run_status(_make_status_args(json_output=True))
+        assert rc == 0
+
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        evaluator_entry = next(
+            entry for entry in data["fleet"] if entry["instance_name"] == "evaluator-1"
+        )
+        assert evaluator_entry["role"] == "evaluator"
 
 
 # ---------------------------------------------------------------------------
@@ -1987,6 +2222,63 @@ class TestCollect:
 
         assert rc == 0
         adapter.list_workers.assert_called_once_with(plan=context.launch_plan)
+        assert mock_coll.collect_logs.call_count == 3
+        assert mock_coll.collect.call_count == 2
+
+    @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._collect.ArtifactCollector")
+    @patch("crsbench.cloud.cli._collect.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._collect.GceProvisioner")
+    @patch("crsbench.cloud.cli._collect.reconnect")
+    def test_collect_provider_neutral_context_also_collects_evaluators(
+        self,
+        mock_reconnect,
+        mock_prov_cls,
+        mock_adapter_cls,
+        mock_coll_cls,
+        mock_resolve_context,
+    ):
+        """Provider-neutral collection should collect evaluator VMs in addition to workers."""
+        del mock_prov_cls
+        launch_state = _make_provider_neutral_launch_state()
+        context = MagicMock()
+        context.launch_plan = MagicMock(experiment_name="test-exp")
+        context.launch_state = launch_state
+        context.experiment_filestore = Path("/tmp/filestore")
+        context.worker_fleet_configs = launch_state.worker_fleet_configs
+        context.evaluator_fleet_configs = [MagicMock(zone="us-east1-b")]
+        context.worker_fleet_config = None
+        mock_resolve_context.return_value = context
+
+        adapter = mock_adapter_cls.return_value
+        adapter.list_workers.return_value = [
+            _make_gce_worker("test-exp-us-east5-b-001", zone="us-east5-b"),
+        ]
+        evaluator = _make_gce_worker(
+            "evaluator-test-exp-us-east1-b-001", zone="us-east1-b"
+        )
+        evaluator.labels["crsbench-role"] = "evaluator"
+        adapter.list_evaluators.return_value = [evaluator]
+
+        mock_coll = MagicMock()
+        mock_coll_cls.return_value = mock_coll
+        readiness = MagicMock()
+        readiness.list_workers.return_value = []
+        mock_reconnect.return_value = (
+            MagicMock(),
+            MagicMock(),
+            readiness,
+            MagicMock(),
+            Path("/tmp/filestore"),
+        )
+
+        from crsbench.cloud.cli._collect import run_collect
+
+        rc = run_collect(_make_collect_args())
+
+        assert rc == 0
+        adapter.list_workers.assert_called_once_with(plan=context.launch_plan)
+        adapter.list_evaluators.assert_called_once_with(plan=context.launch_plan)
         assert mock_coll.collect_logs.call_count == 3
         assert mock_coll.collect.call_count == 2
 
@@ -2430,4 +2722,73 @@ class TestTeardown:
         adapter.list_workers.assert_called_once_with(plan=context.launch_plan)
         adapter.delete_workers.assert_called_once_with(plan=context.launch_plan)
         mock_prov.delete_instance.assert_called_once()
+        assert mock_delete_state.call_count == 2
+
+    @patch("crsbench.cloud.cli._teardown.delete_launch_state")
+    @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
+    @patch("crsbench.cloud.cli._teardown.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.reconnect")
+    def test_teardown_provider_neutral_context_deletes_evaluators_via_adapter(
+        self,
+        mock_reconnect,
+        mock_prov_cls,
+        mock_adapter_cls,
+        mock_coll_cls,
+        mock_resolve_context,
+        mock_delete_state,
+    ):
+        """Provider-neutral teardown should collect and delete evaluator VMs too."""
+        launch_state = _make_provider_neutral_launch_state()
+        context = MagicMock()
+        context.launch_plan = MagicMock(experiment_name="test-exp")
+        context.launch_state = launch_state
+        context.experiment_filestore = Path("/tmp/filestore")
+        context.worker_fleet_configs = launch_state.worker_fleet_configs
+        context.evaluator_fleet_configs = [MagicMock(zone="us-east1-b")]
+        context.worker_fleet_config = None
+        mock_resolve_context.return_value = context
+
+        adapter = mock_adapter_cls.return_value
+        adapter.list_workers.return_value = [
+            _make_gce_worker("test-exp-us-east5-b-001", zone="us-east5-b"),
+        ]
+        evaluator = _make_gce_worker(
+            "evaluator-test-exp-us-east1-b-001", zone="us-east1-b"
+        )
+        evaluator.labels["crsbench-role"] = "evaluator"
+        adapter.list_evaluators.return_value = [evaluator]
+        adapter.delete_workers.return_value = adapter.list_workers.return_value
+        adapter.delete_evaluators.return_value = adapter.list_evaluators.return_value
+
+        mock_coll = MagicMock()
+        mock_coll_cls.return_value = mock_coll
+        readiness = MagicMock()
+        readiness.list_workers.return_value = []
+        lifecycle = MagicMock()
+        lifecycle.list_jobs.return_value = []
+        mock_reconnect.return_value = (
+            MagicMock(),
+            MagicMock(),
+            readiness,
+            lifecycle,
+            Path("/tmp/filestore"),
+        )
+
+        mock_prov = MagicMock()
+        mock_prov_cls.return_value = mock_prov
+
+        from crsbench.cloud.cli._teardown import run_teardown
+
+        rc = run_teardown(_make_teardown_args(force=True))
+
+        assert rc == 0
+        adapter.list_workers.assert_called_once_with(plan=context.launch_plan)
+        adapter.list_evaluators.assert_called_once_with(plan=context.launch_plan)
+        adapter.delete_workers.assert_called_once_with(plan=context.launch_plan)
+        adapter.delete_evaluators.assert_called_once_with(plan=context.launch_plan)
+        mock_prov.delete_instance.assert_called_once()
+        assert mock_coll.collect_logs.call_count == 3
+        assert mock_coll.collect.call_count == 2
         assert mock_delete_state.call_count == 2

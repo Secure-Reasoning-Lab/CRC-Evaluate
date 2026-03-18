@@ -2126,15 +2126,22 @@ def run_experiment_distributed(
 
                 launch_plan = build_cloud_launch_plan(config)
                 adapter = GceProviderAdapter()
+                has_evaluator_placements = bool(launch_plan.evaluator_placements)
                 if os.environ.get("CRSBENCH_CLOUD_PREPROVISIONED_WORKERS") == "1":
                     logger.info(
-                        "Waiting for pre-provisioned cloud workers because "
+                        "Waiting for pre-provisioned cloud instances because "
                         "CRSBENCH_CLOUD_PREPROVISIONED_WORKERS=1"
                     )
-                    fleet_status = fleet_status_manager.wait_for_existing_workers(
-                        plan=launch_plan,
-                        adapter=adapter,
-                    )
+                    if has_evaluator_placements:
+                        fleet_status = fleet_status_manager.wait_for_existing_instances(
+                            plan=launch_plan,
+                            adapter=adapter,
+                        )
+                    else:
+                        fleet_status = fleet_status_manager.wait_for_existing_workers(
+                            plan=launch_plan,
+                            adapter=adapter,
+                        )
                 else:
                     preflight = prepare_gce_launch_inputs(
                         plan=launch_plan,
@@ -2146,17 +2153,34 @@ def run_experiment_distributed(
                         launch_plan,
                         include_orchestrator=False,
                     )
-                    fleet_status = fleet_status_manager.bring_up_workers(
-                        plan=preflight.resolved_plan,
-                        adapter=adapter,
-                        redis_host=redis_host,
-                        redis_password=os.environ.get("CRSBENCH_REDIS_PASSWORD"),
-                        registration=registration,
-                        bootstrap_inputs=bootstrap_inputs,
-                        env_passthrough=preflight.worker_env,
-                    )
+                    if has_evaluator_placements:
+                        evaluator_experiment_config = yaml.safe_dump(
+                            config.model_dump(mode="json", exclude_none=True),
+                            sort_keys=False,
+                        )
+                        fleet_status = fleet_status_manager.bring_up_instances(
+                            plan=preflight.resolved_plan,
+                            adapter=adapter,
+                            redis_host=redis_host,
+                            redis_password=os.environ.get("CRSBENCH_REDIS_PASSWORD"),
+                            registration=registration,
+                            bootstrap_inputs=bootstrap_inputs,
+                            worker_env_passthrough=preflight.worker_env,
+                            evaluator_env_passthrough=preflight.evaluator_env,
+                            evaluator_experiment_config=evaluator_experiment_config,
+                        )
+                    else:
+                        fleet_status = fleet_status_manager.bring_up_workers(
+                            plan=preflight.resolved_plan,
+                            adapter=adapter,
+                            redis_host=redis_host,
+                            redis_password=os.environ.get("CRSBENCH_REDIS_PASSWORD"),
+                            registration=registration,
+                            bootstrap_inputs=bootstrap_inputs,
+                            env_passthrough=preflight.worker_env,
+                        )
                     logger.info(
-                        "Cloud worker placements ready: "
+                        "Cloud instance placements ready: "
                         f"{fleet_status.ready_count}/{fleet_status.requested_count}"
                     )
             else:

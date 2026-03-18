@@ -6,6 +6,7 @@ import json
 from typing import TYPE_CHECKING
 
 from crsbench.cloud.cli._config_reconnect import reconnect
+from crsbench.cloud.readiness import CloudInstanceRole
 from crsbench.distributed.job_lifecycle import JobState
 from crsbench.utils.logger import log_key_value, log_section, log_table
 
@@ -21,6 +22,14 @@ def run_status(args: argparse.Namespace) -> int:
 
     # Query data
     workers = readiness.list_workers(args.experiment)
+    evaluators = readiness.list_workers(
+        args.experiment,
+        role=CloudInstanceRole.EVALUATOR,
+    )
+    instances = sorted(
+        [*workers, *evaluators],
+        key=lambda worker: (worker.role.value, worker.instance_name),
+    )
     jobs = lifecycle.list_jobs(args.experiment)
     raw_events = redis_conn.lrange(
         f"crsbench:recovery-events:{args.experiment}", -5, -1
@@ -42,11 +51,12 @@ def run_status(args: argparse.Namespace) -> int:
             "fleet": [
                 {
                     "instance_name": w.instance_name,
+                    "role": w.role.value,
                     "state": w.state.value,
                     "zone": w.zone,
                     "internal_ip": w.internal_ip,
                 }
-                for w in workers
+                for w in instances
             ],
             "jobs": [
                 {
@@ -74,9 +84,10 @@ def run_status(args: argparse.Namespace) -> int:
     # Human-readable output
     log_section("Fleet Summary")
     fleet_rows = [
-        [w.instance_name, w.state.value, w.zone, w.internal_ip or "-"] for w in workers
+        [w.instance_name, w.role.value, w.state.value, w.zone, w.internal_ip or "-"]
+        for w in instances
     ]
-    log_table(["Instance", "State", "Zone", "IP"], fleet_rows)
+    log_table(["Instance", "Role", "State", "Zone", "IP"], fleet_rows)
 
     log_section("Job Summary")
     job_rows = [

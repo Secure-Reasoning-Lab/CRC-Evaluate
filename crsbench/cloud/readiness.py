@@ -24,6 +24,13 @@ class CloudWorkerState(StrEnum):
     DELETED = "deleted"
 
 
+class CloudInstanceRole(StrEnum):
+    """Cloud runtime role tracked in the readiness store."""
+
+    WORKER = "worker"
+    EVALUATOR = "evaluator"
+
+
 @dataclass(frozen=True)
 class CloudWorkerStatus:
     """Serialized readiness/status record for one worker instance."""
@@ -33,6 +40,7 @@ class CloudWorkerStatus:
     instance_name: str
     zone: str
     state: CloudWorkerState
+    role: CloudInstanceRole = CloudInstanceRole.WORKER
     provider_status: str | None = None
     internal_ip: str | None = None
     external_ip: str | None = None
@@ -142,7 +150,11 @@ class CloudReadinessStore:
 
     def record(self, status: CloudWorkerStatus) -> CloudWorkerStatus:
         """Write a readiness record, enforcing forward-only state transitions."""
-        existing = self.get_worker(status.experiment_name, status.instance_id)
+        existing = self.get_worker(
+            status.experiment_name,
+            status.instance_id,
+            role=status.role,
+        )
         if (
             existing is not None
             and status.state not in _ALLOWED_TRANSITIONS[existing.state]
@@ -163,6 +175,7 @@ class CloudReadinessStore:
             instance_name=status.instance_name,
             zone=status.zone,
             state=status.state,
+            role=status.role,
             provider_status=status.provider_status,
             internal_ip=status.internal_ip,
             external_ip=status.external_ip,
@@ -174,7 +187,7 @@ class CloudReadinessStore:
         payload = asdict(stored)
         payload["state"] = stored.state.value
         self._conn.hset(
-            self._key(status.experiment_name),
+            self._key(status.experiment_name, role=status.role),
             status.instance_id,
             json.dumps(payload, sort_keys=True),
         )
@@ -184,16 +197,23 @@ class CloudReadinessStore:
         self,
         experiment_name: str,
         instance_id: str,
+        *,
+        role: CloudInstanceRole = CloudInstanceRole.WORKER,
     ) -> CloudWorkerStatus | None:
         """Fetch one worker record by experiment and instance id."""
-        payload = self._conn.hget(self._key(experiment_name), instance_id)
+        payload = self._conn.hget(self._key(experiment_name, role=role), instance_id)
         if payload is None:
             return None
         return self._deserialize(_decode_text(payload))
 
-    def list_workers(self, experiment_name: str) -> list[CloudWorkerStatus]:
+    def list_workers(
+        self,
+        experiment_name: str,
+        *,
+        role: CloudInstanceRole = CloudInstanceRole.WORKER,
+    ) -> list[CloudWorkerStatus]:
         """List all known workers for an experiment."""
-        payloads = self._conn.hgetall(self._key(experiment_name))
+        payloads = self._conn.hgetall(self._key(experiment_name, role=role))
         workers: list[CloudWorkerStatus] = []
         for raw_payload in payloads.values():
             workers.append(self._deserialize(_decode_text(raw_payload)))
@@ -205,10 +225,12 @@ class CloudReadinessStore:
         *,
         experiment_name: str,
         expected_instance_ids: list[str],
+        role: CloudInstanceRole = CloudInstanceRole.WORKER,
     ) -> CloudFleetSnapshot:
         """Build a readiness view for the expected worker instance ids."""
         statuses = {
-            worker.instance_id: worker for worker in self.list_workers(experiment_name)
+            worker.instance_id: worker
+            for worker in self.list_workers(experiment_name, role=role)
         }
         ready_workers: list[CloudWorkerStatus] = []
         pending_workers: list[CloudWorkerStatus] = []
@@ -236,14 +258,20 @@ class CloudReadinessStore:
             missing_instance_ids=tuple(missing_instance_ids),
         )
 
-    def clear_experiment(self, experiment_name: str) -> None:
+    def clear_experiment(
+        self,
+        experiment_name: str,
+        *,
+        role: CloudInstanceRole = CloudInstanceRole.WORKER,
+    ) -> None:
         """Remove all readiness records for one experiment."""
-        self._conn.delete(self._key(experiment_name))
+        self._conn.delete(self._key(experiment_name, role=role))
 
-    def _key(self, experiment_name: str) -> str:
-        return f"crsbench:cloud:workers:{experiment_name}"
+    def _key(self, experiment_name: str, *, role: CloudInstanceRole) -> str:
+        return f"crsbench:cloud:{role.value}s:{experiment_name}"
 
     def _deserialize(self, payload: str) -> CloudWorkerStatus:
         data = json.loads(payload)
+        data["role"] = CloudInstanceRole(data.get("role", CloudInstanceRole.WORKER))
         data["state"] = CloudWorkerState(data["state"])
         return CloudWorkerStatus(**data)

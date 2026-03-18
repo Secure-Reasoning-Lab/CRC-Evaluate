@@ -29,7 +29,8 @@ For a local preflight of the same startup scripts before touching GCE, use
 ## Configuration
 
 Declare provider-native GCE details under `cloud.providers.gce`, then reference
-those instance profiles from `cloud.orchestrator` and `cloud.workers.placements`:
+those instance profiles from `cloud.orchestrator`,
+`cloud.workers.placements`, and optional `cloud.evaluators.placements`:
 
 ```yaml
 cloud:
@@ -57,6 +58,14 @@ cloud:
           owner_label: my-team
           readiness_timeout_sec: 900
           crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
+        evaluator-c3d:
+          machine_type: c3d-standard-30
+          boot_disk_size_gb: 100
+          image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+          service_account_email: crsbench-evaluator@my-gcp-project.iam.gserviceaccount.com
+          owner_label: my-team
+          readiness_timeout_sec: 900
+          crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
   orchestrator:
     provider: gce
     zone: us-east5-b
@@ -71,6 +80,12 @@ cloud:
         zone: us-east1-b
         worker_count: 1
         instance_profile: worker-n2d
+  evaluators:
+    placements:
+      - provider: gce
+        zone: us-east5-b
+        evaluator_count: 1
+        instance_profile: evaluator-c3d
 ```
 
 ### Configuration Fields
@@ -85,6 +100,9 @@ cloud:
 | `cloud.workers.placements[].zone` | yes | Explicit worker placement zone (zone selectors only in v1) |
 | `cloud.workers.placements[].worker_count` | no | Number of workers to create in that placement |
 | `cloud.workers.placements[].instance_profile` | yes | Instance profile name for that placement |
+| `cloud.evaluators.placements[].zone` | yes | Explicit evaluator placement zone (zone selectors only in v1) |
+| `cloud.evaluators.placements[].evaluator_count` | no | Number of evaluators to create in that placement |
+| `cloud.evaluators.placements[].instance_profile` | yes | Instance profile name for that placement |
 
 Instance profiles carry the per-VM details such as `machine_type`,
 `boot_disk_size_gb`, `image` or `instance_template`, `service_account_email`,
@@ -154,7 +172,7 @@ directory when they are not absolute.
 Cloud orchestration requires `crsbench_install_spec` to use a `git+...`
 checkout source. The VM bootstrap clones CRSBench into `/opt/crsbench`,
 changes into that checkout, runs `crsbench prepare`, optionally downloads
-benchmarks, and only then starts the orchestrator or worker runtime.
+benchmarks, and only then starts the orchestrator, worker, or evaluator runtime.
 
 If remote VMs need API keys or upstream URLs from the operator environment,
 configure `cloud.bootstrap.env_passthrough`:
@@ -169,13 +187,16 @@ cloud:
         - CRSBENCH_LLM_MASTER_KEY
       workers:
         - OPENAI_API_KEY
+      evaluators:
+        - ANTHROPIC_API_KEY
 ```
 
 Semantics:
 
-- `common` is copied to both the orchestrator VM and all worker VMs
+- `common` is copied to both the orchestrator VM and all worker/evaluator VMs
 - `orchestrator` adds orchestrator-only variables
 - `workers` adds worker-only variables
+- `evaluators` adds evaluator-only variables
 - values are resolved from the operator environment before provisioning
 - when you launch through the CRSBench CLI, `.env` is loaded first, so
   `os.environ/...` references and `env_passthrough` can come from either the
@@ -258,7 +279,8 @@ variables instead of inline secret refs.
 ### Local Orchestrator + GCE Workers
 
 When you run `crsbench run --experiment-config ...`, CRSBench can provision the
-declared `cloud.workers.placements` from the local machine:
+declared `cloud.workers.placements` and `cloud.evaluators.placements` from the
+local machine:
 
 ```bash
 uv run crsbench run --experiment-config config.yaml
@@ -266,8 +288,8 @@ uv run crsbench run --experiment-config config.yaml
 
 The local orchestrator will:
 
-1. Validate live quota for the requested worker placements
-2. Create the requested worker VMs across the configured zones
+1. Validate live quota for the requested worker/evaluator placements
+2. Create the requested worker/evaluator VMs across the configured zones
 3. Wait for each VM to bootstrap and report `ready`
 4. Enqueue trial jobs only after the full fleet is ready
 5. If any VM fails to become ready, tear down the entire fleet and exit with an error
@@ -275,7 +297,7 @@ The local orchestrator will:
 ### Remote Orchestrator + GCE Workers
 
 When you use `cloud launch`, the local operator machine provisions the
-orchestrator VM and the worker placements declared in the same config:
+orchestrator VM and the worker/evaluator placements declared in the same config:
 
 ```bash
 uv run crsbench cloud launch --config config.yaml
@@ -283,11 +305,11 @@ uv run crsbench cloud launch --config config.yaml
 
 This path:
 
-1. Validates live GCE quota for the orchestrator zone plus all worker placement regions
+1. Validates live GCE quota for the orchestrator zone plus all worker/evaluator placement regions
 2. Provisions one orchestrator VM
 3. Waits for the orchestrator VM to have an internal address
-4. Provisions workers across all `cloud.workers.placements`, passing the orchestrator Redis host/password
-5. Lets the remote orchestrator VM clone CRSBench, run `crsbench prepare`, optionally download benchmarks, start Valkey, rewrite the experiment config to use local Redis, wait for the pre-provisioned workers to report ready, and run `crsbench run`
+4. Provisions workers across all `cloud.workers.placements` and evaluators across all `cloud.evaluators.placements`, passing the orchestrator Redis host/password
+5. Lets the remote orchestrator VM clone CRSBench, run `crsbench prepare`, optionally download benchmarks, start Valkey, rewrite the experiment config to use local Redis, wait for the pre-provisioned workers/evaluators to report ready, and run `crsbench run`
 
 `cloud launch` persists local launch state next to the config file under
 `.crsbench-cloud/<experiment>.json`. Later `cloud status`, `cloud collect`, and
@@ -308,11 +330,13 @@ checkout, `crsbench prepare`, optional benchmark download, and Redis/queue
 listener startup.
 
 Worker bootstrap now polls the configured Redis endpoint before starting the
-managed `crsbench worker` process. That closes the gap where workers could
-terminally fail before the remote orchestrator had finished starting Valkey.
-Transport-level connection failures are retried until the readiness timeout,
-while fatal Redis auth/config errors still fail immediately with bootstrap
-evidence.
+managed `crsbench worker` process, and evaluator bootstrap uses the same host
+bootstrap path before launching a managed `crsbench evaluator` service with the
+experiment config embedded in VM metadata. That closes the gap where workers or
+evaluators could terminally fail before the remote orchestrator had finished
+starting Valkey. Transport-level connection failures are retried until the
+readiness timeout, while fatal Redis auth/config errors still fail immediately
+with bootstrap evidence.
 The same startup scripts also support local rehearsal via file-backed metadata
 and a foreground launcher mode for non-`systemd` containers. On real GCE VMs,
 the scripts now create a dedicated `crsbench` user, grant passwordless `sudo`
@@ -337,7 +361,7 @@ uv run crsbench cloud status my-experiment --config config.yaml
 
 Shows:
 
-- Fleet summary: each worker's name, state, zone, and IP
+- Fleet summary: each worker/evaluator VM's name, role, state, zone, and IP
 - Job summary: trial progress per job
 - Collection summary: artifact sync progress
 - Recent recovery events
@@ -363,7 +387,8 @@ uv run crsbench cloud events my-experiment --config config.yaml --json
 
 ## Collecting Artifacts
 
-Pull experiment results from all live workers to the local experiment filestore:
+Pull experiment results from all live workers/evaluators to the local experiment
+filestore:
 
 ```bash
 uv run crsbench cloud collect my-experiment \
@@ -374,11 +399,11 @@ uv run crsbench cloud collect my-experiment \
 - Uses rsync (via IAP tunnel or direct SSH depending on config)
 - For direct SSH, seeds a config-adjacent `.crsbench-cloud/known_hosts` file and reuses the local GCE OS Login username
 - Stages worker artifacts in a temporary directory, verifies at least one valid trial exists, then publishes to the experiment filestore
-- Continues to remaining workers if one fails; exits with code 1 on partial failure
+- Continues to remaining worker/evaluator VMs if one fails; exits with code 1 on partial failure
 - Safe to run multiple times (incremental rsync)
 - Also collects VM diagnostics under `.crsbench-cloud/remote-logs/<experiment>/`, including:
   - `google-startup-scripts.service` and `google-guest-agent.service` journals
-  - `crsbench-worker.service` or `crsbench-orchestrator.service` user journals
+  - `crsbench-worker.service`, `crsbench-evaluator.service`, or `crsbench-orchestrator.service` user journals
   - `runtime-summary.txt` with timezone, Docker cgroup driver, user-bus, linger, and Redis listener state
   - lightweight per-trial observability files such as `worker.log`, `metadata.json`, `.success`, `.failure`, and the orchestrator `trial_matrix.json`
 - In remote-orchestrator mode, collects orchestrator logs and control-plane files, but trial artifact publication still comes from workers
@@ -386,7 +411,7 @@ uv run crsbench cloud collect my-experiment \
 
 ## Teardown
 
-Remove the worker fleet after collecting results:
+Remove the worker/evaluator fleet after collecting results:
 
 ```bash
 uv run crsbench cloud teardown my-experiment \
@@ -399,8 +424,8 @@ The teardown safety flow:
 1. Lists live GCE instances for the experiment
 2. Cross-references with Redis readiness records when Redis is reachable (warns about mismatches)
 3. Prompts for confirmation (interactive TTY required)
-4. Collects artifacts from ALL workers first
-5. Collects logs from the remote orchestrator VM and all workers into `.crsbench-cloud/remote-logs/<experiment>/`
+4. Collects artifacts from ALL worker/evaluator VMs first
+5. Collects logs from the remote orchestrator VM and all worker/evaluator VMs into `.crsbench-cloud/remote-logs/<experiment>/`
 6. Deletes VMs even if some collections fail, to avoid leaking cloud resources
 7. Returns a non-zero exit code if any collection or deletion step failed
 

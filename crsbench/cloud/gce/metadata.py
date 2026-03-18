@@ -65,12 +65,13 @@ def _sanitize_label_value(value: str) -> str:
     return cleaned[:63].rstrip("-_") or "value"
 
 
-def build_worker_labels(
+def _build_role_labels(
     *,
     experiment_name: str,
     fleet: GceWorkerFleetConfig,
+    role: str,
 ) -> dict[str, str]:
-    """Render deterministic GCE labels for a CRSBench worker fleet."""
+    """Render deterministic GCE labels for a CRSBench role-specific fleet."""
     labels = {
         _sanitize_label_key(key): _sanitize_label_value(value)
         for key, value in fleet.labels.items()
@@ -79,8 +80,32 @@ def build_worker_labels(
         fleet.owner_label or fleet.labels.get("owner", "crsbench")
     )
     labels["crsbench-experiment"] = _sanitize_label_value(experiment_name)
-    labels["crsbench-role"] = "worker"
+    labels["crsbench-role"] = role
     return labels
+
+
+def build_worker_labels(
+    *,
+    experiment_name: str,
+    fleet: GceWorkerFleetConfig,
+) -> dict[str, str]:
+    """Render deterministic GCE labels for a CRSBench worker fleet."""
+    return _build_role_labels(
+        experiment_name=experiment_name, fleet=fleet, role="worker"
+    )
+
+
+def build_evaluator_labels(
+    *,
+    experiment_name: str,
+    fleet: GceWorkerFleetConfig,
+) -> dict[str, str]:
+    """Render deterministic GCE labels for a CRSBench evaluator fleet."""
+    return _build_role_labels(
+        experiment_name=experiment_name,
+        fleet=fleet,
+        role="evaluator",
+    )
 
 
 def build_orchestrator_labels(
@@ -144,6 +169,52 @@ def build_bootstrap_payload(
     return payload
 
 
+def build_evaluator_bootstrap_payload(
+    *,
+    experiment_name: str,
+    evaluator_name: str,
+    redis_host: str,
+    registration: RuntimeRegistration,
+    fleet: GceWorkerFleetConfig,
+    bootstrap_inputs: CloudVmBootstrapInputs | None = None,
+) -> dict[str, object]:
+    """Build the minimal managed-evaluator payload consumed at VM boot."""
+    payload: dict[str, object] = {
+        "experiment": experiment_name,
+        "evaluator_name": evaluator_name,
+        "redis_host": redis_host,
+        "evaluator_build_jobs": registration.evaluator_build_jobs or 1,
+        "evaluator_build_cores_per_job": registration.evaluator_build_cores_per_job
+        or 4,
+        "evaluator_verify_jobs": registration.evaluator_verify_jobs or 1,
+        "evaluator_verify_cores_per_job": registration.evaluator_verify_cores_per_job
+        or 4,
+        "evaluator_idle_timeout": registration.evaluator_idle_timeout or 0,
+        "evaluator_cpu_tag": registration.evaluator_cpu_tag,
+        "benchmarks_root": registration.benchmarks_root,
+        "readiness_timeout_sec": fleet.readiness_timeout_sec,
+    }
+    if bootstrap_inputs is None:
+        return payload
+
+    selector = bootstrap_inputs.selector
+    payload.update(
+        {
+            "prepare_mode": bootstrap_inputs.prepare_mode,
+            "download_benchmarks": bootstrap_inputs.download_benchmarks,
+            "benchmarks_root": str(selector.effective_benchmarks_root()),
+        }
+    )
+    if selector.benchmark_suite is not None:
+        payload["benchmark_suite"] = selector.benchmark_suite
+        payload["benchmark_suites_root"] = str(
+            selector.effective_benchmark_suites_root()
+        )
+    if selector.benchmarks is not None:
+        payload["benchmarks"] = selector.benchmarks
+    return payload
+
+
 def encode_bootstrap_payload(payload: dict[str, object]) -> str:
     """Encode bootstrap payload as base64 JSON for instance metadata transport."""
     return base64.b64encode(
@@ -154,6 +225,19 @@ def encode_bootstrap_payload(payload: dict[str, object]) -> str:
 def load_startup_script() -> str:
     """Load the bundled worker startup script."""
     return _STARTUP_SCRIPT_PATH.read_text(encoding="utf-8")
+
+
+def load_evaluator_startup_script() -> str:
+    """Load the bundled evaluator startup script derived from worker bootstrap."""
+    startup_script = load_startup_script()
+    marker = "set -euo pipefail\n"
+    override = (
+        "set -euo pipefail\n"
+        'CRSBENCH_STARTUP_MODE="${CRSBENCH_STARTUP_MODE:-evaluator}"\n'
+    )
+    if marker not in startup_script:
+        raise ValueError("Worker startup script is missing the expected shell prologue")
+    return startup_script.replace(marker, override, 1)
 
 
 def load_orchestrator_startup_script() -> str:
@@ -268,6 +352,54 @@ def build_instance_metadata(
     metadata[CRSBENCH_EXPERIMENT_METADATA_KEY] = experiment_name
     metadata[CRSBENCH_WORKER_NAME_METADATA_KEY] = worker_name
     metadata[CRSBENCH_READINESS_TIMEOUT_METADATA_KEY] = str(fleet.readiness_timeout_sec)
+    if redis_password:
+        metadata[CRSBENCH_REDIS_PASSWORD_KEY] = redis_password
+
+    _apply_access_metadata(metadata=metadata, config=fleet)
+    _apply_install_metadata(
+        metadata=metadata,
+        config=fleet,
+        env_passthrough=env_passthrough,
+    )
+    _apply_startup_script_metadata(
+        metadata=metadata,
+        config=fleet,
+        startup_script=startup_script,
+    )
+    return metadata
+
+
+def build_evaluator_metadata(
+    *,
+    experiment_name: str,
+    fleet: GceWorkerFleetConfig,
+    redis_host: str,
+    registration: RuntimeRegistration,
+    evaluator_name: str,
+    experiment_config_path: str | Path,
+    redis_password: str | None = None,
+    bootstrap_inputs: CloudVmBootstrapInputs | None = None,
+    env_passthrough: dict[str, str] | None = None,
+    startup_script: str,
+) -> dict[str, str]:
+    """Render metadata consumed by the GCE evaluator bootstrap."""
+    metadata = dict(fleet.metadata)
+    metadata[CRSBENCH_BOOTSTRAP_PAYLOAD_KEY] = encode_bootstrap_payload(
+        build_evaluator_bootstrap_payload(
+            experiment_name=experiment_name,
+            evaluator_name=evaluator_name,
+            redis_host=redis_host,
+            registration=registration,
+            fleet=fleet,
+            bootstrap_inputs=bootstrap_inputs,
+        )
+    )
+    metadata[CRSBENCH_EXPERIMENT_METADATA_KEY] = experiment_name
+    metadata[CRSBENCH_WORKER_NAME_METADATA_KEY] = evaluator_name
+    metadata[CRSBENCH_READINESS_TIMEOUT_METADATA_KEY] = str(fleet.readiness_timeout_sec)
+    metadata[CRSBENCH_EXPERIMENT_CONFIG_B64_KEY] = base64.b64encode(
+        _read_experiment_config_bytes(experiment_config_path)
+    ).decode("ascii")
     if redis_password:
         metadata[CRSBENCH_REDIS_PASSWORD_KEY] = redis_password
 

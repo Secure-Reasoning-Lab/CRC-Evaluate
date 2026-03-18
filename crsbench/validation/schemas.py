@@ -1943,6 +1943,71 @@ class CloudWorkersConfig(BaseModel):
         return self
 
 
+class CloudEvaluatorPlacementConfig(BaseModel):
+    """Provider-neutral evaluator placement declaration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str = Field(..., description="Cloud provider used for this placement.")
+    zone: Optional[str] = Field(
+        default=None,
+        description="Explicit zone for this evaluator placement.",
+    )
+    evaluator_count: int = Field(
+        default=1,
+        ge=1,
+        description="Number of evaluators to create in this placement.",
+    )
+    instance_profile: str = Field(
+        ..., description="Named provider instance profile for this placement."
+    )
+
+    @field_validator("provider", "instance_profile")
+    @classmethod
+    def validate_required_strings(cls, value: str) -> str:
+        """Require non-empty strings for placement references."""
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Field is required")
+        return normalized
+
+    @field_validator("zone")
+    @classmethod
+    def normalize_zone(cls, value: Optional[str]) -> Optional[str]:
+        """Trim zone strings and collapse blanks to None."""
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_zonal_contract(self):
+        """Require explicit zonal evaluator placements in v1."""
+        if self.zone is None:
+            raise ValueError("cloud.evaluators.placements require explicit zone in v1")
+        return self
+
+
+class CloudEvaluatorsConfig(BaseModel):
+    """Provider-neutral evaluator placement configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    placements: List[CloudEvaluatorPlacementConfig] = Field(
+        default_factory=list,
+        description="Explicit evaluator placements for the experiment.",
+    )
+
+    @model_validator(mode="after")
+    def validate_evaluator_contract(self):
+        """Require at least one evaluator placement when evaluators are configured."""
+        if not self.placements:
+            raise ValueError("cloud.evaluators.placements must not be empty")
+        return self
+
+
 class CloudBootstrapConfig(BaseModel):
     """Provider-neutral cloud VM bootstrap policy."""
 
@@ -1981,8 +2046,12 @@ class CloudEnvPassthroughConfig(BaseModel):
         default_factory=list,
         description="Additional environment variables passed only to workers.",
     )
+    evaluators: List[str] = Field(
+        default_factory=list,
+        description="Additional environment variables passed only to evaluators.",
+    )
 
-    @field_validator("common", "orchestrator", "workers")
+    @field_validator("common", "orchestrator", "workers", "evaluators")
     @classmethod
     def normalize_env_names(
         cls,
@@ -2019,6 +2088,10 @@ class CloudConfig(BaseModel):
         default=None,
         description="Provider-neutral worker placement configuration.",
     )
+    evaluators: Optional[CloudEvaluatorsConfig] = Field(
+        default=None,
+        description="Provider-neutral evaluator placement configuration.",
+    )
     gce: Optional[GceWorkerFleetConfig] = Field(
         default=None,
         description="Legacy GCE worker fleet configuration for backward compatibility during migration.",
@@ -2030,6 +2103,7 @@ class CloudConfig(BaseModel):
         uses_provider_neutral = (
             self.providers is not None
             or self.workers is not None
+            or self.evaluators is not None
             or isinstance(self.orchestrator, CloudOrchestratorPlacementConfig)
         )
         uses_legacy = self.gce is not None or isinstance(
@@ -2099,6 +2173,25 @@ class CloudConfig(BaseModel):
             if placement.instance_profile not in self.providers.gce.instance_profiles:
                 raise ValueError(
                     "cloud.workers.placements instance_profile "
+                    f"'{placement.instance_profile}' was not found under "
+                    "cloud.providers.gce.instance_profiles"
+                )
+
+        if self.evaluators is None:
+            return
+
+        for placement in self.evaluators.placements:
+            if placement.provider != "gce":
+                raise ValueError(
+                    f"cloud.evaluators.placements provider '{placement.provider}' is not supported yet"
+                )
+            if self.providers.gce is None:
+                raise ValueError(
+                    "cloud.providers.gce is required when cloud.evaluators.placements use provider 'gce'"
+                )
+            if placement.instance_profile not in self.providers.gce.instance_profiles:
+                raise ValueError(
+                    "cloud.evaluators.placements instance_profile "
                     f"'{placement.instance_profile}' was not found under "
                     "cloud.providers.gce.instance_profiles"
                 )

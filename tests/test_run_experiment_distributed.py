@@ -514,12 +514,38 @@ def _with_env_passthrough(
     common: list[str] | None = None,
     orchestrator: list[str] | None = None,
     workers: list[str] | None = None,
+    evaluators: list[str] | None = None,
 ) -> ExperimentConfig:
     config = config.model_copy(deep=True)
     config.cloud.bootstrap.env_passthrough.common = list(common or [])
     config.cloud.bootstrap.env_passthrough.orchestrator = list(orchestrator or [])
     config.cloud.bootstrap.env_passthrough.workers = list(workers or [])
+    config.cloud.bootstrap.env_passthrough.evaluators = list(evaluators or [])
     return config
+
+
+def _with_evaluator_placements(config: ExperimentConfig) -> ExperimentConfig:
+    raw_config = config.model_dump(mode="json", exclude_none=True)
+    raw_config["cloud"]["providers"]["gce"]["instance_profiles"]["evaluator-n2d"] = (
+        raw_config["cloud"]["providers"]["gce"]["instance_profiles"]["worker-n2d"]
+    )
+    raw_config["cloud"]["evaluators"] = {
+        "placements": [
+            {
+                "provider": "gce",
+                "zone": "us-east5-b",
+                "evaluator_count": 1,
+                "instance_profile": "evaluator-n2d",
+            },
+            {
+                "provider": "gce",
+                "zone": "us-east1-b",
+                "evaluator_count": 2,
+                "instance_profile": "evaluator-n2d",
+            },
+        ]
+    }
+    return ExperimentConfig.model_validate(raw_config)
 
 
 def test_build_trial_id_includes_target_cpv_id() -> None:
@@ -885,12 +911,14 @@ def test_provider_neutral_cloud_workers_validate_quota_before_bringup(
     registration = MagicMock()
     launch_plan = MagicMock()
     launch_plan.experiment_name = "exp-test"
+    launch_plan.evaluator_placements = []
     adapter = MagicMock()
     validator = MagicMock()
     manager = MagicMock()
     call_order: list[str] = []
     resolved_plan = MagicMock()
     resolved_plan.experiment_name = "exp-test"
+    resolved_plan.evaluator_placements = []
 
     validator.validate.side_effect = lambda plan, *, include_orchestrator=True: (
         call_order.append(
@@ -958,6 +986,7 @@ def test_provider_neutral_cloud_workers_validate_quota_before_bringup(
 
     validator.validate.assert_called_once_with(launch_plan, include_orchestrator=False)
     manager.bring_up_workers.assert_called_once()
+    manager.bring_up_instances.assert_not_called()
     manager.bring_up_gce_workers.assert_not_called()
 
 
@@ -1151,6 +1180,113 @@ def test_provider_neutral_cloud_workers_pass_role_specific_env_passthrough(
         cwd=Path.cwd(),
     )
     manager.bring_up_workers.assert_called_once()
+
+
+def test_provider_neutral_cloud_instances_with_evaluators_pass_role_specific_env_passthrough(
+    tmp_path: Path,
+) -> None:
+    """Local cloud bring-up should provision evaluators with evaluator-only env vars."""
+    config = _with_env_passthrough(
+        _with_evaluator_placements(_make_provider_neutral_run_config(tmp_path)),
+        common=["CRSBENCH_LLM_UPSTREAM_BASE_URL"],
+        orchestrator=["CRSBENCH_LLM_MASTER_KEY"],
+        workers=["OPENAI_API_KEY"],
+        evaluators=["ANTHROPIC_API_KEY"],
+    )
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.cloud_readiness = MagicMock()
+    session.register_or_raise.return_value = None
+
+    registration = MagicMock()
+    adapter = MagicMock()
+    validator = MagicMock()
+    manager = MagicMock()
+    launch_plan = build_cloud_launch_plan(config)
+    resolved_plan = MagicMock()
+    resolved_plan.experiment_name = "exp-test"
+    resolved_plan.evaluator_placements = launch_plan.evaluator_placements
+
+    def _bring_up_instances(**kwargs):
+        assert kwargs["worker_env_passthrough"] == {
+            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+            "OPENAI_API_KEY": "openai-key",
+        }
+        assert kwargs["evaluator_env_passthrough"] == {
+            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+            "ANTHROPIC_API_KEY": "anthropic-key",
+        }
+        raise RuntimeError("stop after evaluator env passthrough")
+
+    manager.bring_up_instances.side_effect = _bring_up_instances
+
+    with (
+        patch.dict(
+            os.environ,
+            {
+                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "CRSBENCH_LLM_MASTER_KEY": "master-key",
+                "OPENAI_API_KEY": "openai-key",
+                "ANTHROPIC_API_KEY": "anthropic-key",
+            },
+            clear=False,
+        ),
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={"queued": {}, "started": {}, "failed": {}, "finished": {}},
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config",
+            return_value=registration,
+        ),
+        patch(
+            "crsbench.cloud.models.build_cloud_launch_plan",
+            return_value=launch_plan,
+        ),
+        patch(
+            "crsbench.cloud.gce.launch_preflight.prepare_gce_launch_inputs",
+            return_value=MagicMock(
+                resolved_plan=resolved_plan,
+                worker_env={
+                    "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                    "OPENAI_API_KEY": "openai-key",
+                },
+                evaluator_env={
+                    "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                    "ANTHROPIC_API_KEY": "anthropic-key",
+                },
+            ),
+        ) as mock_preflight,
+        patch(
+            "crsbench.cloud.gce.provider.GceProviderAdapter",
+            return_value=adapter,
+        ),
+        patch(
+            "crsbench.cloud.quota.QuotaValidator",
+            return_value=validator,
+        ),
+        patch(
+            "crsbench.cloud.status.CloudFleetStatusManager",
+            return_value=manager,
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="stop after evaluator env passthrough"):
+            run_experiment_distributed("exp-test", config, [_make_trial(None)])
+
+    mock_preflight.assert_called_once_with(
+        plan=launch_plan,
+        bootstrap=config.cloud.bootstrap,
+        cwd=Path.cwd(),
+    )
+    manager.bring_up_instances.assert_called_once()
+    manager.bring_up_workers.assert_not_called()
 
 
 def test_provider_neutral_preprovisioned_wait_does_not_resolve_secret_refs_again(

@@ -520,8 +520,11 @@ class ArtifactCollector:
 
     def _service_name(self, worker: GceWorkerRecord) -> str:
         """Return the CRSBench user service name expected on the target VM."""
-        if worker.labels.get("crsbench-role") == "orchestrator":
+        role = worker.labels.get("crsbench-role")
+        if role == "orchestrator":
             return "crsbench-orchestrator.service"
+        if role == "evaluator":
+            return "crsbench-evaluator.service"
         return "crsbench-worker.service"
 
     def _log_commands(self, worker: GceWorkerRecord) -> dict[Path, str]:
@@ -540,6 +543,8 @@ class ArtifactCollector:
                 + (
                     "orchestrator"
                     if service_name.startswith("crsbench-orchestrator")
+                    else "evaluator"
+                    if service_name.startswith("crsbench-evaluator")
                     else "worker"
                 )
                 + '"; '

@@ -69,6 +69,48 @@ def test_readiness_store_tracks_identity_and_forward_transitions() -> None:
     assert statuses[0].state is CloudWorkerState.READY
 
 
+def test_readiness_store_keeps_evaluator_records_separate_from_workers() -> None:
+    """Evaluator lifecycle records should not appear in worker readiness snapshots."""
+    from crsbench.cloud.readiness import (
+        CloudInstanceRole,
+        CloudReadinessStore,
+        CloudWorkerState,
+        CloudWorkerStatus,
+    )
+
+    store = CloudReadinessStore(_FakeRedis())
+    store.record(
+        CloudWorkerStatus(
+            experiment_name="exp-cloud-42",
+            instance_id="worker-1001",
+            instance_name="gce-worker-001",
+            zone="us-central1-a",
+            role=CloudInstanceRole.WORKER,
+            state=CloudWorkerState.READY,
+        )
+    )
+    store.record(
+        CloudWorkerStatus(
+            experiment_name="exp-cloud-42",
+            instance_id="evaluator-2001",
+            instance_name="gce-evaluator-001",
+            zone="us-east1-b",
+            role=CloudInstanceRole.EVALUATOR,
+            state=CloudWorkerState.READY,
+        )
+    )
+
+    worker_statuses = store.list_workers("exp-cloud-42")
+    evaluator_statuses = store.list_workers(
+        "exp-cloud-42", role=CloudInstanceRole.EVALUATOR
+    )
+
+    assert [status.instance_name for status in worker_statuses] == ["gce-worker-001"]
+    assert [status.instance_name for status in evaluator_statuses] == [
+        "gce-evaluator-001"
+    ]
+
+
 def test_readiness_store_rejects_backward_transition_after_ready() -> None:
     """Ready workers must not regress to booting states."""
     from crsbench.cloud.readiness import (
@@ -301,7 +343,10 @@ def test_bring_up_workers_deletes_all_provider_neutral_placements_after_timeout(
 
     store = CloudReadinessStore(_FakeRedis())
     adapter = _Adapter()
-    plan = SimpleNamespace(experiment_name="exp-cloud-42")
+    plan = SimpleNamespace(
+        experiment_name="exp-cloud-42",
+        evaluator_placements=[SimpleNamespace()],
+    )
     timestamps = iter([0.0, 0.0, 0.0, 901.0])
     manager = CloudFleetStatusManager(
         readiness_store=store,
@@ -320,3 +365,78 @@ def test_bring_up_workers_deletes_all_provider_neutral_placements_after_timeout(
         )
 
     assert adapter.deleted == [plan]
+
+
+def test_bring_up_instances_deletes_worker_and_evaluator_placements_after_timeout() -> (
+    None
+):
+    """Provider-neutral bring-up should tear down both roles after a timeout."""
+    from crsbench.cloud.readiness import CloudReadinessStore
+    from crsbench.cloud.status import CloudFleetBringupError, CloudFleetStatusManager
+
+    class _Adapter:
+        def __init__(self) -> None:
+            self.deleted_workers: list[object] = []
+            self.deleted_evaluators: list[object] = []
+
+        def create_workers(self, **_kwargs) -> list[GceWorkerRecord]:
+            return [_make_worker()]
+
+        def create_evaluators(self, **_kwargs) -> list[GceWorkerRecord]:
+            return [
+                replace(
+                    _make_worker(),
+                    name="gce-evaluator-001",
+                    instance_id="2001",
+                    zone="us-east1-b",
+                    internal_ip="10.0.2.10",
+                    labels={
+                        "crsbench-experiment": "exp-cloud-42",
+                        "owner": "team-crs",
+                        "crsbench-role": "evaluator",
+                    },
+                )
+            ]
+
+        def delete_workers(self, *, plan) -> list[GceWorkerRecord]:
+            self.deleted_workers.append(plan)
+            return []
+
+        def delete_evaluators(self, *, plan) -> list[GceWorkerRecord]:
+            self.deleted_evaluators.append(plan)
+            return []
+
+        def build_worker_fleets(self, plan) -> list[SimpleNamespace]:
+            del plan
+            return [SimpleNamespace(readiness_timeout_sec=900)]
+
+        def build_evaluator_fleets(self, plan) -> list[SimpleNamespace]:
+            del plan
+            return [SimpleNamespace(readiness_timeout_sec=900)]
+
+    store = CloudReadinessStore(_FakeRedis())
+    adapter = _Adapter()
+    plan = SimpleNamespace(
+        experiment_name="exp-cloud-42",
+        evaluator_placements=[SimpleNamespace()],
+    )
+    timestamps = iter([0.0, 0.0, 0.0, 0.0, 901.0])
+    manager = CloudFleetStatusManager(
+        readiness_store=store,
+        provisioner=None,
+        clock=lambda: next(timestamps),
+        sleep=lambda _seconds: None,
+        poll_interval_sec=0.0,
+    )
+
+    with pytest.raises(CloudFleetBringupError, match="timed out waiting for ready"):
+        manager.bring_up_instances(
+            plan=plan,
+            adapter=adapter,
+            redis_host="redis.internal:6379",
+            registration=object(),
+            evaluator_experiment_config="experiment: exp-cloud-42\n",
+        )
+
+    assert adapter.deleted_workers == [plan]
+    assert adapter.deleted_evaluators == [plan]

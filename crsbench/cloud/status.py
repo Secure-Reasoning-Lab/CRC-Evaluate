@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from crsbench.cloud.gce.provisioner import GceProvisioner
 from crsbench.cloud.readiness import (
     CloudFleetSnapshot,
+    CloudInstanceRole,
     CloudReadinessStore,
     CloudWorkerState,
     CloudWorkerStatus,
@@ -179,6 +180,151 @@ class CloudFleetStatusManager:
                 )
             self._sleep(self._poll_interval_sec)
 
+    def bring_up_instances(
+        self,
+        *,
+        plan: "CloudLaunchPlan",
+        adapter: "GceProviderAdapter",
+        redis_host: str,
+        redis_password: str | None = None,
+        registration: "RuntimeRegistration",
+        bootstrap_inputs: "CloudVmBootstrapInputs | None" = None,
+        worker_env_passthrough: dict[str, str] | None = None,
+        evaluator_env_passthrough: dict[str, str] | None = None,
+        evaluator_experiment_config: str | None = None,
+    ) -> CloudFleetSnapshot:
+        """Provision workers and evaluators across a launch plan and wait for readiness."""
+        self._clear_experiment_roles(
+            experiment_name=plan.experiment_name,
+            roles=(
+                CloudInstanceRole.WORKER,
+                CloudInstanceRole.EVALUATOR,
+            ),
+        )
+        workers: list[GceWorkerRecord] = []
+        evaluators: list[GceWorkerRecord] = []
+        try:
+            workers = adapter.create_workers(
+                plan=plan,
+                redis_host=redis_host,
+                redis_password=redis_password,
+                registration=registration,
+                bootstrap_inputs=bootstrap_inputs,
+                env_passthrough=worker_env_passthrough,
+            )
+            if plan.evaluator_placements:
+                if evaluator_experiment_config is None:
+                    raise ValueError(
+                        "Evaluator placements require serialized experiment config"
+                    )
+                evaluators = adapter.create_evaluators(
+                    plan=plan,
+                    redis_host=redis_host,
+                    redis_password=redis_password,
+                    registration=registration,
+                    experiment_config_path=evaluator_experiment_config,
+                    bootstrap_inputs=bootstrap_inputs,
+                    env_passthrough=evaluator_env_passthrough,
+                )
+
+            self._record_initial_workers(
+                experiment_name=plan.experiment_name,
+                workers=workers,
+            )
+            self._record_initial_workers(
+                experiment_name=plan.experiment_name,
+                workers=evaluators,
+                role=CloudInstanceRole.EVALUATOR,
+            )
+            return self.wait_for_instances(
+                experiment_name=plan.experiment_name,
+                workers=workers,
+                evaluators=evaluators,
+                timeout_sec=self._max_instance_readiness_timeout(adapter, plan),
+            )
+        except Exception:
+            if workers or evaluators:
+                self._teardown_instances(
+                    plan=plan,
+                    adapter=adapter,
+                    workers=workers,
+                    evaluators=evaluators,
+                )
+            raise
+
+    def wait_for_existing_instances(
+        self,
+        *,
+        plan: "CloudLaunchPlan",
+        adapter: "GceProviderAdapter",
+    ) -> CloudFleetSnapshot:
+        """Wait for all pre-provisioned workers and evaluators to report ready."""
+        expected_workers: list[str] = []
+        expected_evaluators: list[str] = []
+        timeout_sec = self._max_instance_readiness_timeout(adapter, plan)
+        for fleet in adapter.build_worker_fleets(plan):
+            expected_workers.extend(
+                self._provisioner.build_worker_names(
+                    experiment_name=plan.experiment_name,
+                    fleet=fleet,
+                )
+            )
+        for fleet in adapter.build_evaluator_fleets(plan):
+            expected_evaluators.extend(
+                self._provisioner.build_worker_names(
+                    experiment_name=plan.experiment_name,
+                    fleet=fleet,
+                )
+            )
+
+        deadline = self._clock() + timeout_sec
+        while True:
+            workers = adapter.list_workers(plan=plan)
+            evaluators = adapter.list_evaluators(plan=plan)
+            workers_by_name = {worker.name: worker for worker in workers}
+            evaluators_by_name = {worker.name: worker for worker in evaluators}
+            missing_names = [
+                worker_name
+                for worker_name in expected_workers
+                if worker_name not in workers_by_name
+            ]
+            missing_names.extend(
+                evaluator_name
+                for evaluator_name in expected_evaluators
+                if evaluator_name not in evaluators_by_name
+            )
+            if not missing_names:
+                resolved_workers = [
+                    workers_by_name[worker_name] for worker_name in expected_workers
+                ]
+                resolved_evaluators = [
+                    evaluators_by_name[evaluator_name]
+                    for evaluator_name in expected_evaluators
+                ]
+                self._record_initial_workers(
+                    experiment_name=plan.experiment_name,
+                    workers=resolved_workers,
+                )
+                self._record_initial_workers(
+                    experiment_name=plan.experiment_name,
+                    workers=resolved_evaluators,
+                    role=CloudInstanceRole.EVALUATOR,
+                )
+                remaining_timeout = max(int(deadline - self._clock()), 1)
+                return self.wait_for_instances(
+                    experiment_name=plan.experiment_name,
+                    workers=resolved_workers,
+                    evaluators=resolved_evaluators,
+                    timeout_sec=remaining_timeout,
+                )
+
+            if self._clock() >= deadline:
+                raise CloudFleetBringupError(
+                    "timed out waiting for pre-provisioned cloud instances: "
+                    + ", ".join(missing_names)
+                )
+            self._sleep(self._poll_interval_sec)
+
     def _initial_state(self, worker: GceWorkerRecord) -> CloudWorkerState:
         provider_status = worker.status.upper()
         if provider_status == "RUNNING":
@@ -190,10 +336,15 @@ class CloudFleetStatusManager:
         *,
         experiment_name: str,
         workers: list[GceWorkerRecord],
+        role: CloudInstanceRole = CloudInstanceRole.WORKER,
     ) -> None:
         for worker in workers:
             if (
-                self._readiness_store.get_worker(experiment_name, worker.instance_id)
+                self._readiness_store.get_worker(
+                    experiment_name,
+                    worker.instance_id,
+                    role=role,
+                )
                 is not None
             ):
                 continue
@@ -204,6 +355,7 @@ class CloudFleetStatusManager:
                     instance_name=worker.name,
                     zone=worker.zone,
                     state=self._initial_state(worker),
+                    role=role,
                     provider_status=worker.status,
                     internal_ip=worker.internal_ip,
                     external_ip=worker.external_ip,
@@ -219,13 +371,22 @@ class CloudFleetStatusManager:
         parts = [f"{prefix}: ready {snapshot.ready_count}/{snapshot.requested_count}"]
         for worker in snapshot.failed_workers:
             evidence = worker.startup_evidence or worker.detail or "no startup evidence"
-            parts.append(f"{worker.instance_name}={worker.state.value} ({evidence})")
+            parts.append(
+                f"{self._display_name(worker)}={worker.state.value} ({evidence})"
+            )
         for worker in snapshot.pending_workers:
             evidence = worker.startup_evidence or worker.detail or "awaiting readiness"
-            parts.append(f"{worker.instance_name}={worker.state.value} ({evidence})")
+            parts.append(
+                f"{self._display_name(worker)}={worker.state.value} ({evidence})"
+            )
         for instance_id in snapshot.missing_instance_ids:
             parts.append(f"{instance_id}=missing (no readiness record)")
         return "; ".join(parts)
+
+    def _display_name(self, worker: CloudWorkerStatus) -> str:
+        if worker.role is CloudInstanceRole.WORKER:
+            return worker.instance_name
+        return f"{worker.instance_name}[{worker.role.value}]"
 
     def _teardown_gce_workers(
         self,
@@ -365,6 +526,125 @@ class CloudFleetStatusManager:
             fleet.readiness_timeout_sec for fleet in adapter.build_worker_fleets(plan)
         )
 
+    def _max_instance_readiness_timeout(
+        self,
+        adapter: "GceProviderAdapter",
+        plan: "CloudLaunchPlan",
+    ) -> int:
+        timeouts = [
+            fleet.readiness_timeout_sec for fleet in adapter.build_worker_fleets(plan)
+        ]
+        timeouts.extend(
+            fleet.readiness_timeout_sec
+            for fleet in adapter.build_evaluator_fleets(plan)
+        )
+        return max(timeouts)
+
+    def wait_for_instances(
+        self,
+        *,
+        experiment_name: str,
+        workers: list["GceWorkerRecord"],
+        evaluators: list["GceWorkerRecord"],
+        timeout_sec: int,
+    ) -> CloudFleetSnapshot:
+        """Wait until all expected workers and evaluators report `ready`."""
+        expected_workers = {
+            CloudInstanceRole.WORKER: workers,
+            CloudInstanceRole.EVALUATOR: evaluators,
+        }
+        deadline = self._clock() + timeout_sec
+
+        while True:
+            snapshot = self._snapshot_instances(
+                experiment_name=experiment_name,
+                workers_by_role=expected_workers,
+            )
+            if snapshot.ready_count == snapshot.requested_count:
+                return snapshot
+            if snapshot.failed_workers:
+                raise CloudFleetBringupError(
+                    self._format_failure(
+                        "cloud instance bootstrap failed",
+                        snapshot,
+                    ),
+                    snapshot,
+                )
+            if self._clock() >= deadline:
+                raise CloudFleetBringupError(
+                    self._format_failure(
+                        "timed out waiting for ready instances",
+                        snapshot,
+                    ),
+                    snapshot,
+                )
+            self._sleep(self._poll_interval_sec)
+
+    def _snapshot_instances(
+        self,
+        *,
+        experiment_name: str,
+        workers_by_role: dict[CloudInstanceRole, list["GceWorkerRecord"]],
+    ) -> CloudFleetSnapshot:
+        expected_instance_ids: list[str] = []
+        ready_workers: list[CloudWorkerStatus] = []
+        pending_workers: list[CloudWorkerStatus] = []
+        failed_workers: list[CloudWorkerStatus] = []
+        missing_instance_ids: list[str] = []
+
+        for role, workers in workers_by_role.items():
+            if not workers:
+                continue
+            instance_ids = [worker.instance_id for worker in workers]
+            snapshot = self._readiness_store.snapshot(
+                experiment_name=experiment_name,
+                expected_instance_ids=instance_ids,
+                role=role,
+            )
+            expected_instance_ids.extend(
+                f"{role.value}:{instance_id}" for instance_id in instance_ids
+            )
+            ready_workers.extend(snapshot.ready_workers)
+            pending_workers.extend(snapshot.pending_workers)
+            failed_workers.extend(snapshot.failed_workers)
+            missing_instance_ids.extend(
+                f"{role.value}:{instance_id}"
+                for instance_id in snapshot.missing_instance_ids
+            )
+
+        return CloudFleetSnapshot(
+            experiment_name=experiment_name,
+            expected_instance_ids=tuple(expected_instance_ids),
+            ready_workers=tuple(
+                sorted(
+                    ready_workers,
+                    key=lambda worker: (worker.role, worker.instance_name),
+                )
+            ),
+            pending_workers=tuple(
+                sorted(
+                    pending_workers,
+                    key=lambda worker: (worker.role, worker.instance_name),
+                )
+            ),
+            failed_workers=tuple(
+                sorted(
+                    failed_workers,
+                    key=lambda worker: (worker.role, worker.instance_name),
+                )
+            ),
+            missing_instance_ids=tuple(sorted(missing_instance_ids)),
+        )
+
+    def _clear_experiment_roles(
+        self,
+        *,
+        experiment_name: str,
+        roles: tuple[CloudInstanceRole, ...],
+    ) -> None:
+        for role in roles:
+            self._readiness_store.clear_experiment(experiment_name, role=role)
+
     def _teardown_workers(
         self,
         *,
@@ -402,6 +682,85 @@ class CloudFleetStatusManager:
                     provider_status=worker.status,
                     internal_ip=worker.internal_ip,
                     external_ip=worker.external_ip,
+                    detail="Deleted after failed bring-up",
+                )
+            )
+
+    def _teardown_instances(
+        self,
+        *,
+        plan: "CloudLaunchPlan",
+        adapter: "GceProviderAdapter",
+        workers: list["GceWorkerRecord"],
+        evaluators: list["GceWorkerRecord"],
+    ) -> None:
+        for worker in workers:
+            self._readiness_store.record(
+                CloudWorkerStatus(
+                    experiment_name=plan.experiment_name,
+                    instance_id=worker.instance_id,
+                    instance_name=worker.name,
+                    zone=worker.zone,
+                    state=CloudWorkerState.DELETING,
+                    role=CloudInstanceRole.WORKER,
+                    provider_status=worker.status,
+                    internal_ip=worker.internal_ip,
+                    external_ip=worker.external_ip,
+                    detail="Deleting worker after failed bring-up",
+                )
+            )
+        for evaluator in evaluators:
+            self._readiness_store.record(
+                CloudWorkerStatus(
+                    experiment_name=plan.experiment_name,
+                    instance_id=evaluator.instance_id,
+                    instance_name=evaluator.name,
+                    zone=evaluator.zone,
+                    state=CloudWorkerState.DELETING,
+                    role=CloudInstanceRole.EVALUATOR,
+                    provider_status=evaluator.status,
+                    internal_ip=evaluator.internal_ip,
+                    external_ip=evaluator.external_ip,
+                    detail="Deleting evaluator after failed bring-up",
+                )
+            )
+
+        try:
+            deleted_workers = adapter.delete_workers(plan=plan)
+        except Exception:
+            deleted_workers = []
+        try:
+            deleted_evaluators = adapter.delete_evaluators(plan=plan)
+        except Exception:
+            deleted_evaluators = []
+
+        for worker in deleted_workers:
+            self._readiness_store.record(
+                CloudWorkerStatus(
+                    experiment_name=plan.experiment_name,
+                    instance_id=worker.instance_id,
+                    instance_name=worker.name,
+                    zone=worker.zone,
+                    state=CloudWorkerState.DELETED,
+                    role=CloudInstanceRole.WORKER,
+                    provider_status=worker.status,
+                    internal_ip=worker.internal_ip,
+                    external_ip=worker.external_ip,
+                    detail="Deleted after failed bring-up",
+                )
+            )
+        for evaluator in deleted_evaluators:
+            self._readiness_store.record(
+                CloudWorkerStatus(
+                    experiment_name=plan.experiment_name,
+                    instance_id=evaluator.instance_id,
+                    instance_name=evaluator.name,
+                    zone=evaluator.zone,
+                    state=CloudWorkerState.DELETED,
+                    role=CloudInstanceRole.EVALUATOR,
+                    provider_status=evaluator.status,
+                    internal_ip=evaluator.internal_ip,
+                    external_ip=evaluator.external_ip,
                     detail="Deleted after failed bring-up",
                 )
             )

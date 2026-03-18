@@ -38,6 +38,9 @@ class ResolvedCloudContext:
     redis_host: str
     redis_password: str | None
     launch_plan: CloudLaunchPlan | None = None
+    evaluator_fleet_configs: list["GceWorkerFleetConfig"] = dataclasses.field(
+        default_factory=list
+    )
 
     @property
     def worker_fleet_config(self) -> "GceWorkerFleetConfig | None":
@@ -61,6 +64,7 @@ def resolve_cloud_context(
 
     launch_plan: CloudLaunchPlan | None = None
     derived_worker_fleets: list["GceWorkerFleetConfig"] = []
+    derived_evaluator_fleets: list["GceWorkerFleetConfig"] = []
     uses_provider_neutral_cloud = (
         config.cloud.providers is not None
         and config.cloud.workers is not None
@@ -68,7 +72,9 @@ def resolve_cloud_context(
     )
     if uses_provider_neutral_cloud:
         launch_plan = build_cloud_launch_plan(config)
-        derived_worker_fleets = GceProviderAdapter().build_worker_fleets(launch_plan)
+        adapter = GceProviderAdapter()
+        derived_worker_fleets = adapter.build_worker_fleets(launch_plan)
+        derived_evaluator_fleets = adapter.build_evaluator_fleets(launch_plan)
     elif config.cloud.gce is not None:
         derived_worker_fleets = [config.cloud.gce]
 
@@ -88,6 +94,10 @@ def resolve_cloud_context(
         if not launch_state.worker_fleet_configs and derived_worker_fleets:
             launch_state_updates["worker_fleet_configs"] = [
                 redact_worker_fleet_config(fleet) for fleet in derived_worker_fleets
+            ]
+        if not launch_state.evaluator_fleet_configs and derived_evaluator_fleets:
+            launch_state_updates["evaluator_fleet_configs"] = [
+                redact_worker_fleet_config(fleet) for fleet in derived_evaluator_fleets
             ]
         if launch_state.worker_fleet_config is None and len(derived_worker_fleets) == 1:
             launch_state_updates["worker_fleet_config"] = redact_worker_fleet_config(
@@ -117,6 +127,7 @@ def resolve_cloud_context(
             )
         return ResolvedCloudContext(
             worker_fleet_configs=launch_state.resolved_worker_fleets(),
+            evaluator_fleet_configs=launch_state.resolved_evaluator_fleets(),
             launch_state=launch_state,
             experiment_filestore=Path(launch_state.experiment_filestore),
             redis_host=launch_state.redis_host,
@@ -135,6 +146,7 @@ def resolve_cloud_context(
 
     return ResolvedCloudContext(
         worker_fleet_configs=derived_worker_fleets,
+        evaluator_fleet_configs=derived_evaluator_fleets,
         launch_state=launch_state,
         experiment_filestore=Path(config.experiment_filestore),
         redis_host=config.redis_host or "localhost",

@@ -37,22 +37,23 @@ Deployment assumptions:
 - Authentication, tunnels, and firewall policy are operational concerns, not protocol concerns.
 - CRSBench only requires that each process can reach the configured Redis host.
 
-## Cloud Worker Contract
+## Cloud Fleet Contract
 
-When a deployment uses managed GCE workers, the experiment config is the source
-of truth for worker-fleet shape. The cloud contract is:
+When a deployment uses managed GCE workers or evaluators, the experiment config
+is the source of truth for fleet shape. The cloud contract is:
 
 - worker fleets are declared through `cloud.providers.gce` plus `cloud.workers.placements`, not in lab-specific host maps
+- evaluator fleets are declared through `cloud.providers.gce` plus `cloud.evaluators.placements`, not in lab-specific host maps
 - Phase 1 supports explicit zone placements only; region selectors are not supported
-- provisioned workers carry experiment identity plus operator ownership labels
+- provisioned workers/evaluators carry experiment identity plus operator ownership labels
 - supported operator access remains OS Login-compatible SSH with host
   verification enabled
-- IAP-backed SSH is preferred when workers do not expose public SSH
-- worker service accounts must be explicit and least-privileged
-- cloud-worker readiness is a control-plane state distinct from raw VM
+- IAP-backed SSH is preferred when fleet VMs do not expose public SSH
+- worker and evaluator service accounts must be explicit and least-privileged
+- cloud readiness is a control-plane state distinct from raw VM
   `RUNNING` state and from global Redis worker counts
-- bootstrapped workers use an experiment-pinned runtime path rather than the
-  shared configless worker pool
+- bootstrapped workers and evaluators use experiment-pinned runtime paths
+  rather than the shared configless worker/evaluator pool
 - readiness records are keyed by cloud `instance_id`, not by instance name
   alone
 - startup failure evidence must remain retrievable from the control path
@@ -61,13 +62,13 @@ of truth for worker-fleet shape. The cloud contract is:
 ## Remote GCE Orchestrator Contract
 
 When a deployment uses `cloud.orchestrator` plus GCE-backed
-`cloud.workers.placements`, the local
+`cloud.workers.placements` / `cloud.evaluators.placements`, the local
 operator machine remains the cloud control plane. The deployment contract is:
 
-- the operator machine provisions exactly one orchestrator VM plus the worker fleet
+- the operator machine provisions exactly one orchestrator VM plus the requested worker/evaluator fleets
 - the orchestrator VM runs `crsbench run` but does not create workers again
 - the operator machine generates the Redis/Valkey password for the run
-- workers receive the orchestrator VM's worker-reachable Redis host, never `localhost`
+- workers and evaluators receive the orchestrator VM's worker-reachable Redis host, never `localhost`
 - local `cloud` commands reconnect through persisted launch state stored next to
   the submitted config file under `.crsbench-cloud/`
 - local `status` and `events` still require Redis reachability from the
@@ -82,11 +83,12 @@ fleet for the current experiment:
 
 - provider states such as `PROVISIONING` or VM `RUNNING` map to non-ready
   CRSBench states like `provisioning` and `booting`
-- `registering` means the worker runtime can report to Redis but is not yet
-  listening for trial work
-- workers become schedulable only after the readiness store records `ready`
-- `ready` means the worker connected to Redis and is listening on the
-  experiment queue; it is not just a VM boot-complete signal
+- `registering` means the worker/evaluator runtime can report to Redis but is
+  not yet listening for work
+- workers and evaluators become schedulable only after the readiness store
+  records `ready`
+- `ready` means the worker/evaluator connected to Redis and is listening on the
+  expected experiment queue; it is not just a VM boot-complete signal
 - `bootstrap_failed` and `deleted` are terminal non-ready states during bring-up
 - startup evidence must include per-instance detail so operators can diagnose
   failures without manual SSH
@@ -122,9 +124,9 @@ fleet for the current experiment:
 - Path mismatch on remote hosts: jobs fail unless host-local overrides or shared
   mounts make paths resolvable.
 - Queue cleanup must be experiment-scoped in shared flat-queue deployments.
-- Cloud worker timeout or bootstrap failure: orchestrator startup fails before
-  trial enqueue, tears down the requested fleet, and surfaces per-instance
-  readiness evidence.
+- Cloud worker/evaluator timeout or bootstrap failure: orchestrator startup
+  fails before trial enqueue, tears down the requested fleet, and surfaces
+  per-instance readiness evidence.
 
 ## Benchmark CI Deployment Contract
 

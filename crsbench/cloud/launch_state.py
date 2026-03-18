@@ -47,6 +47,7 @@ class CloudLaunchState(BaseModel):
     orchestrator_external_ip: str | None = None
     orchestrator_ssh_via_iap: bool = False
     worker_fleet_configs: list[GceWorkerFleetConfig] = Field(default_factory=list)
+    evaluator_fleet_configs: list[GceWorkerFleetConfig] = Field(default_factory=list)
     worker_fleet_config: GceWorkerFleetConfig | None = None
 
     @model_validator(mode="after")
@@ -82,6 +83,10 @@ class CloudLaunchState(BaseModel):
         """Return all worker fleet configs recorded for this launch."""
         return list(self.worker_fleet_configs)
 
+    def resolved_evaluator_fleets(self) -> list[GceWorkerFleetConfig]:
+        """Return all evaluator fleet configs recorded for this launch."""
+        return list(self.evaluator_fleet_configs)
+
 
 def redact_worker_fleet_config(fleet: GceWorkerFleetConfig) -> GceWorkerFleetConfig:
     """Return a fleet config safe to persist in local launch state."""
@@ -98,6 +103,9 @@ def redact_launch_state(state: CloudLaunchState) -> CloudLaunchState:
     redacted_fleets = [
         redact_worker_fleet_config(fleet) for fleet in state.worker_fleet_configs
     ]
+    redacted_evaluator_fleets = [
+        redact_worker_fleet_config(fleet) for fleet in state.evaluator_fleet_configs
+    ]
     redacted_single = (
         redact_worker_fleet_config(state.worker_fleet_config)
         if state.worker_fleet_config is not None
@@ -106,6 +114,7 @@ def redact_launch_state(state: CloudLaunchState) -> CloudLaunchState:
     return state.model_copy(
         update={
             "worker_fleet_configs": redacted_fleets,
+            "evaluator_fleet_configs": redacted_evaluator_fleets,
             "worker_fleet_config": redacted_single,
         }
     )

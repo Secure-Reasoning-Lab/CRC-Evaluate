@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from crsbench.cloud.readiness import (
+    CloudInstanceRole,
     CloudReadinessStore,
     CloudWorkerState,
     CloudWorkerStatus,
@@ -18,6 +19,7 @@ CRSBENCH_CLOUD_EXPERIMENT_ENV = "CRSBENCH_CLOUD_EXPERIMENT"
 CRSBENCH_CLOUD_INSTANCE_ID_ENV = "CRSBENCH_CLOUD_INSTANCE_ID"
 CRSBENCH_CLOUD_INSTANCE_NAME_ENV = "CRSBENCH_CLOUD_INSTANCE_NAME"
 CRSBENCH_CLOUD_ZONE_ENV = "CRSBENCH_CLOUD_ZONE"
+CRSBENCH_CLOUD_ROLE_ENV = "CRSBENCH_CLOUD_ROLE"
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,7 @@ class CloudWorkerRuntimeContext:
     instance_id: str
     instance_name: str
     zone: str
+    role: CloudInstanceRole = CloudInstanceRole.WORKER
 
     @classmethod
     def from_env(cls) -> CloudWorkerRuntimeContext | None:
@@ -35,6 +38,7 @@ class CloudWorkerRuntimeContext:
         instance_id = os.environ.get(CRSBENCH_CLOUD_INSTANCE_ID_ENV)
         instance_name = os.environ.get(CRSBENCH_CLOUD_INSTANCE_NAME_ENV)
         zone = os.environ.get(CRSBENCH_CLOUD_ZONE_ENV)
+        role = os.environ.get(CRSBENCH_CLOUD_ROLE_ENV, CloudInstanceRole.WORKER)
         if not all((experiment_name, instance_id, instance_name, zone)):
             return None
         return cls(
@@ -42,6 +46,7 @@ class CloudWorkerRuntimeContext:
             instance_id=cast("str", instance_id),
             instance_name=cast("str", instance_name),
             zone=cast("str", zone),
+            role=CloudInstanceRole(role),
         )
 
 
@@ -69,6 +74,7 @@ def report_cloud_worker_state_from_env(
                 instance_id=context.instance_id,
                 instance_name=context.instance_name,
                 zone=context.zone,
+                role=context.role,
                 state=state_value,
                 detail=detail,
                 startup_evidence=startup_evidence,

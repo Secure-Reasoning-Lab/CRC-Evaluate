@@ -1,4 +1,4 @@
-"""Collect sub-action: invoke ArtifactCollector for each live GCE worker."""
+"""Collect sub-action: invoke ArtifactCollector for each live GCE instance."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from crsbench.cloud.cli._config_reconnect import reconnect, resolve_cloud_context
 from crsbench.cloud.gce.provider import GceProviderAdapter
+from crsbench.cloud.readiness import CloudInstanceRole
 
 if TYPE_CHECKING:
     import argparse
@@ -20,7 +21,7 @@ logger = get_logger(__name__)
 
 
 def run_collect(args: argparse.Namespace) -> int:
-    """Collect artifacts from live GCE workers for the given experiment.
+    """Collect artifacts from live GCE workers/evaluators for the given experiment.
 
     Returns 0 if all collections succeed, 1 if any failed.
     """
@@ -44,12 +45,12 @@ def run_collect(args: argparse.Namespace) -> int:
     collector = ArtifactCollector(base_path=args.config)
 
     # Validate GCE state
-    live_workers = _list_live_workers(context, args.experiment, provisioner)
-    live_names = {w.name for w in live_workers}
+    live_instances = _list_live_instances(context, args.experiment, provisioner)
+    live_names = {w.name for w in live_instances}
 
     # Cross-reference with Redis readiness state
     if readiness is not None:
-        redis_workers = readiness.list_workers(args.experiment)
+        redis_workers = _list_readiness_instances(readiness, args.experiment)
         redis_names = {w.instance_name for w in redis_workers}
         stale_names = redis_names - live_names
         if stale_names:
@@ -58,7 +59,7 @@ def run_collect(args: argparse.Namespace) -> int:
                 ", ".join(sorted(stale_names)),
             )
 
-    if not live_workers and launch_state is None:
+    if not live_instances and launch_state is None:
         logger.warning(
             "No live GCE instances found for experiment '{}'", args.experiment
         )
@@ -67,11 +68,11 @@ def run_collect(args: argparse.Namespace) -> int:
     remote_experiment_dir = args.remote_dir
     failed = 0
 
-    for worker in live_workers:
+    for worker in live_instances:
         try:
             collector.collect_logs(
                 worker=worker,
-                fleet=_resolve_worker_fleet(context, worker),
+                fleet=_resolve_instance_fleet(context, worker),
                 experiment_name=args.experiment,
                 experiment_filestore=experiment_filestore,
                 remote_experiment_dir=remote_experiment_dir,
@@ -83,7 +84,7 @@ def run_collect(args: argparse.Namespace) -> int:
         try:
             collector.collect(
                 worker=worker,
-                fleet=_resolve_worker_fleet(context, worker),
+                fleet=_resolve_instance_fleet(context, worker),
                 experiment_name=args.experiment,
                 experiment_filestore=experiment_filestore,
                 remote_experiment_dir=remote_experiment_dir,
@@ -113,41 +114,52 @@ def run_collect(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
-def _list_live_workers(
+def _list_live_instances(
     context: "ResolvedCloudContext",
     experiment_name: str,
     provisioner: GceProvisioner,
 ) -> list["GceWorkerRecord"]:
     if context.launch_plan is not None:
-        return GceProviderAdapter(provisioner=provisioner).list_workers(
-            plan=context.launch_plan
-        )
+        adapter = GceProviderAdapter(provisioner=provisioner)
+        workers = adapter.list_workers(plan=context.launch_plan)
+        if context.evaluator_fleet_configs:
+            workers.extend(adapter.list_evaluators(plan=context.launch_plan))
+        return workers
 
     workers: list[GceWorkerRecord] = []
     for fleet in context.worker_fleet_configs:
         workers.extend(
             provisioner.list_workers(experiment_name=experiment_name, fleet=fleet)
         )
+    for fleet in context.evaluator_fleet_configs:
+        workers.extend(
+            provisioner.list_workers(experiment_name=experiment_name, fleet=fleet)
+        )
     return workers
 
 
-def _resolve_worker_fleet(
+def _resolve_instance_fleet(
     context: "ResolvedCloudContext",
     worker: "GceWorkerRecord",
 ):
+    role = worker.labels.get("crsbench-role")
+    candidate_fleets = (
+        context.evaluator_fleet_configs
+        if role == "evaluator"
+        else context.worker_fleet_configs
+    )
     prefix_matches = [
         fleet
-        for fleet in context.worker_fleet_configs
+        for fleet in candidate_fleets
         if fleet.zone == worker.zone
+        and isinstance(fleet.worker_name_prefix, str)
         and fleet.worker_name_prefix
         and worker.name.startswith(fleet.worker_name_prefix)
     ]
     if prefix_matches:
         return prefix_matches[0]
 
-    zone_matches = [
-        fleet for fleet in context.worker_fleet_configs if fleet.zone == worker.zone
-    ]
+    zone_matches = [fleet for fleet in candidate_fleets if fleet.zone == worker.zone]
     if zone_matches:
         return zone_matches[0]
 
@@ -155,5 +167,16 @@ def _resolve_worker_fleet(
         return context.worker_fleet_config
 
     raise RuntimeError(
-        f"No worker fleet config matched instance {worker.name} in zone {worker.zone}"
+        f"No cloud fleet config matched instance {worker.name} in zone {worker.zone}"
     )
+
+
+def _list_readiness_instances(readiness, experiment_name: str):
+    workers = readiness.list_workers(experiment_name)
+    workers.extend(
+        readiness.list_workers(
+            experiment_name,
+            role=CloudInstanceRole.EVALUATOR,
+        )
+    )
+    return workers

@@ -7,10 +7,13 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Protocol, cast
 
 from crsbench.cloud.gce.metadata import (
+    build_evaluator_labels,
+    build_evaluator_metadata,
     build_instance_metadata,
     build_orchestrator_labels,
     build_orchestrator_metadata,
     build_worker_labels,
+    load_evaluator_startup_script,
     load_orchestrator_startup_script,
     load_startup_script,
 )
@@ -434,6 +437,59 @@ class GceProvisioner:
             )
         return requests
 
+    def build_evaluator_requests(
+        self,
+        *,
+        experiment_name: str,
+        fleet: GceWorkerFleetConfig,
+        redis_host: str,
+        registration: RuntimeRegistration,
+        experiment_config_path: str,
+        redis_password: str | None = None,
+        bootstrap_inputs: CloudVmBootstrapInputs | None = None,
+        env_passthrough: dict[str, str] | None = None,
+    ) -> list[GceInstanceRequest]:
+        """Render evaluator instance requests from validated config and runtime metadata."""
+        zone = self._resolve_zone(fleet)
+        labels = build_evaluator_labels(experiment_name=experiment_name, fleet=fleet)
+        startup_script = self._startup_script or load_evaluator_startup_script()
+
+        requests: list[GceInstanceRequest] = []
+        for evaluator_name in self.build_worker_names(
+            experiment_name=experiment_name,
+            fleet=fleet,
+        ):
+            metadata = build_evaluator_metadata(
+                experiment_name=experiment_name,
+                fleet=fleet,
+                redis_host=redis_host,
+                redis_password=redis_password,
+                registration=registration,
+                bootstrap_inputs=bootstrap_inputs,
+                env_passthrough=env_passthrough,
+                evaluator_name=evaluator_name,
+                experiment_config_path=experiment_config_path,
+                startup_script=startup_script,
+            )
+            requests.append(
+                GceInstanceRequest(
+                    project=fleet.project,
+                    zone=zone,
+                    name=evaluator_name,
+                    labels=dict(labels),
+                    metadata=metadata,
+                    service_account_email=fleet.service_account_email,
+                    ssh_via_iap=fleet.ssh_via_iap,
+                    machine_type=fleet.machine_type,
+                    boot_disk_size_gb=fleet.boot_disk_size_gb,
+                    image=fleet.image,
+                    instance_template=fleet.instance_template,
+                    network=fleet.network,
+                    subnetwork=fleet.subnetwork,
+                )
+            )
+        return requests
+
     def build_worker_names(
         self,
         *,
@@ -489,6 +545,64 @@ class GceProvisioner:
                 if errors:
                     raise GceProvisioningError(
                         f"Failed to create worker {request.name}: {'; '.join(errors)}"
+                    )
+                workers.append(
+                    _normalize_instance(
+                        self._client.get_instance(
+                            project=request.project,
+                            zone=request.zone,
+                            instance=request.name,
+                        )
+                    )
+                )
+            return workers
+        except Exception:
+            self._rollback_requests(rollback_requests)
+            raise
+
+    def create_evaluators(
+        self,
+        *,
+        experiment_name: str,
+        fleet: GceWorkerFleetConfig,
+        redis_host: str,
+        registration: RuntimeRegistration,
+        experiment_config_path: str,
+        redis_password: str | None = None,
+        bootstrap_inputs: CloudVmBootstrapInputs | None = None,
+        env_passthrough: dict[str, str] | None = None,
+    ) -> list[GceWorkerRecord]:
+        """Create an evaluator fleet and return normalized provider records."""
+        requests = self.build_evaluator_requests(
+            experiment_name=experiment_name,
+            fleet=fleet,
+            redis_host=redis_host,
+            redis_password=redis_password,
+            registration=registration,
+            experiment_config_path=experiment_config_path,
+            bootstrap_inputs=bootstrap_inputs,
+            env_passthrough=env_passthrough,
+        )
+        workers: list[GceWorkerRecord] = []
+        rollback_requests: list[GceInstanceRequest] = []
+        try:
+            for request in requests:
+                operation = self._client.insert_instance(
+                    project=request.project,
+                    zone=request.zone,
+                    instance_resource=request.to_instance_resource(),
+                    source_instance_template=request.instance_template,
+                )
+                rollback_requests.append(request)
+                result = self._client.wait_for_zone_operation(
+                    project=request.project,
+                    zone=request.zone,
+                    operation=_extract_operation_name(operation),
+                )
+                errors = _extract_operation_errors(result)
+                if errors:
+                    raise GceProvisioningError(
+                        f"Failed to create evaluator {request.name}: {'; '.join(errors)}"
                     )
                 workers.append(
                     _normalize_instance(
@@ -729,6 +843,64 @@ class GceProvisioner:
             if errors:
                 raise GceProvisioningError(
                     f"Failed to delete worker {worker.name}: {'; '.join(errors)}"
+                )
+        return deleted_workers
+
+    def list_evaluators(
+        self,
+        *,
+        experiment_name: str,
+        fleet: GceWorkerFleetConfig,
+    ) -> list[GceWorkerRecord]:
+        """List evaluators belonging to this experiment-scoped fleet."""
+        zone = self._resolve_zone(fleet)
+        expected_labels = build_evaluator_labels(
+            experiment_name=experiment_name,
+            fleet=fleet,
+        )
+        workers = [
+            _normalize_instance(instance)
+            for instance in self._client.list_instances(
+                project=fleet.project,
+                zone=zone,
+                label_selector=expected_labels,
+            )
+        ]
+        return [
+            worker
+            for worker in workers
+            if all(
+                worker.labels.get(key) == value
+                for key, value in expected_labels.items()
+            )
+        ]
+
+    def delete_evaluators(
+        self,
+        *,
+        experiment_name: str,
+        fleet: GceWorkerFleetConfig,
+    ) -> list[GceWorkerRecord]:
+        """Delete all evaluators owned by this experiment-scoped fleet."""
+        deleted_workers = self.list_evaluators(
+            experiment_name=experiment_name,
+            fleet=fleet,
+        )
+        for worker in deleted_workers:
+            operation = self._client.delete_instance(
+                project=fleet.project,
+                zone=worker.zone,
+                instance=worker.name,
+            )
+            result = self._client.wait_for_zone_operation(
+                project=fleet.project,
+                zone=worker.zone,
+                operation=_extract_operation_name(operation),
+            )
+            errors = _extract_operation_errors(result)
+            if errors:
+                raise GceProvisioningError(
+                    f"Failed to delete evaluator {worker.name}: {'; '.join(errors)}"
                 )
         return deleted_workers
 

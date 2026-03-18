@@ -13,6 +13,7 @@ from crsbench.cloud.env_passthrough import (
 from crsbench.cloud.gce.provider import GceProviderAdapter
 from crsbench.cloud.launch_state import redact_worker_fleet_config
 from crsbench.cloud.models import (
+    CloudEvaluatorPlacementPlan,
     CloudLaunchPlan,
     CloudOrchestratorPlan,
     CloudWorkerPlacementPlan,
@@ -36,8 +37,11 @@ class GceLaunchPreflight:
     resolved_orchestrator: GceOrchestratorConfig | None = None
     resolved_worker_fleets: list[GceWorkerFleetConfig] | None = None
     redacted_worker_fleets: list[GceWorkerFleetConfig] | None = None
+    resolved_evaluator_fleets: list[GceWorkerFleetConfig] | None = None
+    redacted_evaluator_fleets: list[GceWorkerFleetConfig] | None = None
     orchestrator_env: dict[str, str] = field(default_factory=dict)
     worker_env: dict[str, str] = field(default_factory=dict)
+    evaluator_env: dict[str, str] = field(default_factory=dict)
 
 
 def prepare_gce_launch_inputs(
@@ -52,7 +56,7 @@ def prepare_gce_launch_inputs(
     """Resolve GCE secret-bearing fields once on the operator before provisioning."""
     base_cwd = Path.cwd() if cwd is None else Path(cwd)
     fleets = list(worker_fleets or [])
-    orchestrator_env, worker_env = _resolve_env_passthrough(
+    orchestrator_env, worker_env, evaluator_env = _resolve_env_passthrough(
         bootstrap=bootstrap,
         env=env,
     )
@@ -62,14 +66,20 @@ def prepare_gce_launch_inputs(
         resolved_plan = _resolve_launch_plan(plan, cwd=base_cwd, env=env)
         _validate_checkout_install_specs_for_plan(resolved_plan)
         resolved_worker_fleets = adapter.build_worker_fleets(resolved_plan)
+        resolved_evaluator_fleets = adapter.build_evaluator_fleets(resolved_plan)
         return GceLaunchPreflight(
             resolved_plan=resolved_plan,
             resolved_worker_fleets=resolved_worker_fleets,
+            resolved_evaluator_fleets=resolved_evaluator_fleets,
             redacted_worker_fleets=[
                 redact_worker_fleet_config(fleet) for fleet in resolved_worker_fleets
             ],
+            redacted_evaluator_fleets=[
+                redact_worker_fleet_config(fleet) for fleet in resolved_evaluator_fleets
+            ],
             orchestrator_env=orchestrator_env,
             worker_env=worker_env,
+            evaluator_env=evaluator_env,
         )
 
     resolved_orchestrator = (
@@ -92,6 +102,7 @@ def prepare_gce_launch_inputs(
         ],
         orchestrator_env=orchestrator_env,
         worker_env=worker_env,
+        evaluator_env=evaluator_env,
     )
 
 
@@ -99,9 +110,9 @@ def _resolve_env_passthrough(
     *,
     bootstrap: CloudBootstrapConfig | None,
     env: Mapping[str, str] | None,
-) -> tuple[dict[str, str], dict[str, str]]:
+) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
     if bootstrap is None:
-        return {}, {}
+        return {}, {}, {}
 
     common = list(bootstrap.env_passthrough.common)
     orchestrator_names = merge_env_passthrough(
@@ -109,6 +120,10 @@ def _resolve_env_passthrough(
         bootstrap.env_passthrough.orchestrator,
     )
     worker_names = merge_env_passthrough(common, bootstrap.env_passthrough.workers)
+    evaluator_names = merge_env_passthrough(
+        common,
+        bootstrap.env_passthrough.evaluators,
+    )
     return (
         resolve_env_passthrough(
             orchestrator_names,
@@ -118,6 +133,11 @@ def _resolve_env_passthrough(
         resolve_env_passthrough(
             worker_names,
             field_path="cloud.bootstrap.env_passthrough.workers",
+            env=env,
+        ),
+        resolve_env_passthrough(
+            evaluator_names,
+            field_path="cloud.bootstrap.env_passthrough.evaluators",
             env=env,
         ),
     )
@@ -151,10 +171,24 @@ def _resolve_launch_plan(
         )
         for placement in plan.worker_placements
     ]
+    resolved_evaluator_placements = [
+        CloudEvaluatorPlacementPlan(
+            provider=placement.provider,
+            zone=placement.zone,
+            evaluator_count=placement.evaluator_count,
+            instance_profile=_resolve_instance_profile(
+                placement.instance_profile,
+                cwd=cwd,
+                env=env,
+            ),
+        )
+        for placement in plan.evaluator_placements
+    ]
     return replace(
         plan,
         orchestrator=resolved_orchestrator,
         worker_placements=resolved_placements,
+        evaluator_placements=resolved_evaluator_placements,
     )
 
 
@@ -239,6 +273,14 @@ def _validate_checkout_install_specs_for_plan(plan: CloudLaunchPlan) -> None:
         ),
     )
     for placement in plan.worker_placements:
+        _validate_checkout_install_spec(
+            placement.instance_profile.profile_config.get("crsbench_install_spec"),
+            field_path=(
+                "cloud.providers.gce.instance_profiles."
+                f"{placement.instance_profile.name}.crsbench_install_spec"
+            ),
+        )
+    for placement in plan.evaluator_placements:
         _validate_checkout_install_spec(
             placement.instance_profile.profile_config.get("crsbench_install_spec"),
             field_path=(
