@@ -41,6 +41,8 @@ class GceLaunchPreflight:
     orchestrator_env: dict[str, str] = field(default_factory=dict)
     worker_env: dict[str, str] = field(default_factory=dict)
     evaluator_env: dict[str, str] = field(default_factory=dict)
+    worker_placement_envs: list[dict[str, str]] = field(default_factory=list)
+    evaluator_placement_envs: list[dict[str, str]] = field(default_factory=list)
 
 
 def prepare_gce_launch_inputs(
@@ -66,6 +68,24 @@ def prepare_gce_launch_inputs(
         _validate_checkout_install_specs_for_plan(resolved_plan)
         resolved_worker_fleets = adapter.build_worker_fleets(resolved_plan)
         resolved_evaluator_fleets = adapter.build_evaluator_fleets(resolved_plan)
+        resolved_orchestrator_env = {
+            **orchestrator_env,
+            **resolved_plan.orchestrator.env,
+        }
+        resolved_worker_envs = [
+            {
+                **worker_env,
+                **placement.env,
+            }
+            for placement in resolved_plan.worker_placements
+        ]
+        resolved_evaluator_envs = [
+            {
+                **evaluator_env,
+                **placement.env,
+            }
+            for placement in resolved_plan.evaluator_placements
+        ]
         return GceLaunchPreflight(
             resolved_plan=resolved_plan,
             resolved_worker_fleets=resolved_worker_fleets,
@@ -76,9 +96,11 @@ def prepare_gce_launch_inputs(
             redacted_evaluator_fleets=[
                 redact_worker_fleet_config(fleet) for fleet in resolved_evaluator_fleets
             ],
-            orchestrator_env=orchestrator_env,
+            orchestrator_env=resolved_orchestrator_env,
             worker_env=worker_env,
             evaluator_env=evaluator_env,
+            worker_placement_envs=resolved_worker_envs,
+            evaluator_placement_envs=resolved_evaluator_envs,
         )
 
     resolved_orchestrator = (
@@ -156,6 +178,12 @@ def _resolve_launch_plan(
             cwd=cwd,
             env=env,
         ),
+        env=_resolve_cloud_env_map(
+            plan.orchestrator.env,
+            field_prefix="cloud.orchestrator.env",
+            cwd=cwd,
+            env=env,
+        ),
     )
     resolved_placements = [
         CloudPlacementPlan(
@@ -168,8 +196,14 @@ def _resolve_launch_plan(
                 cwd=cwd,
                 env=env,
             ),
+            env=_resolve_cloud_env_map(
+                placement.env,
+                field_prefix=f"cloud.workers.placements.{index}.env",
+                cwd=cwd,
+                env=env,
+            ),
         )
-        for placement in plan.worker_placements
+        for index, placement in enumerate(plan.worker_placements)
     ]
     resolved_evaluator_placements = [
         CloudPlacementPlan(
@@ -182,8 +216,14 @@ def _resolve_launch_plan(
                 cwd=cwd,
                 env=env,
             ),
+            env=_resolve_cloud_env_map(
+                placement.env,
+                field_prefix=f"cloud.evaluators.placements.{index}.env",
+                cwd=cwd,
+                env=env,
+            ),
         )
-        for placement in plan.evaluator_placements
+        for index, placement in enumerate(plan.evaluator_placements)
     ]
     return replace(
         plan,
@@ -214,6 +254,26 @@ def _resolve_instance_profile(
         cwd=cwd,
     )
     return replace(profile, profile_config=profile_config)
+
+
+def _resolve_cloud_env_map(
+    values: Mapping[str, str],
+    *,
+    field_prefix: str,
+    cwd: Path,
+    env: Mapping[str, str] | None,
+) -> dict[str, str]:
+    return {
+        str(key): str(
+            resolve_secret_text(
+                value,
+                field_path=f"{field_prefix}.{key}",
+                env=env,
+                cwd=cwd,
+            )
+        )
+        for key, value in values.items()
+    }
 
 
 def _profile_field_prefix(profile: ResolvedInstanceProfile) -> str:

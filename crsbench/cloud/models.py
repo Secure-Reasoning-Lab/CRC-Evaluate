@@ -31,6 +31,7 @@ class CloudOrchestratorPlan:
     provider: CloudProvider
     zone: str
     instance_profile: ResolvedInstanceProfile
+    env: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,7 @@ class CloudPlacementPlan:
     zone: str
     count: int
     instance_profile: ResolvedInstanceProfile
+    env: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -100,6 +102,7 @@ def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
             zone=placement.zone or "",
             count=placement.count,
             profile_name=placement.instance_profile,
+            placement_env=placement.env,
             field_path=f"cloud.workers.placements.{index}.instance_profile",
         )
         for index, placement in enumerate(config.cloud.workers.placements)
@@ -111,6 +114,7 @@ def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
             zone=placement.zone or "",
             count=placement.count,
             profile_name=placement.instance_profile,
+            placement_env=placement.env,
             field_path=f"cloud.evaluators.placements.{index}.instance_profile",
         )
         for index, placement in enumerate(
@@ -124,6 +128,11 @@ def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
             provider=orchestrator_profile.provider,
             zone=config.cloud.orchestrator.zone,
             instance_profile=orchestrator_profile,
+            env=_merge_env_layers(
+                config.cloud.env,
+                _profile_env(orchestrator_profile),
+                config.cloud.orchestrator.env,
+            ),
         ),
         worker_placements=worker_placements,
         evaluator_placements=evaluator_placements,
@@ -172,6 +181,7 @@ def _build_placement_plan(
     zone: str,
     count: int,
     profile_name: str,
+    placement_env: dict[str, str],
     field_path: str,
 ) -> CloudPlacementPlan:
     """Build one typed worker/evaluator placement from the provider catalog."""
@@ -186,4 +196,23 @@ def _build_placement_plan(
         zone=zone,
         count=count,
         instance_profile=instance_profile,
+        env=_merge_env_layers(
+            config.cloud.env if config.cloud is not None else {},
+            _profile_env(instance_profile),
+            placement_env,
+        ),
     )
+
+
+def _profile_env(profile: ResolvedInstanceProfile) -> dict[str, str]:
+    return {
+        str(key): str(value)
+        for key, value in profile.profile_config.get("env", {}).items()
+    }
+
+
+def _merge_env_layers(*layers: dict[str, str]) -> dict[str, str]:
+    merged: dict[str, str] = {}
+    for layer in layers:
+        merged.update({str(key): str(value) for key, value in layer.items()})
+    return merged

@@ -190,8 +190,8 @@ class CloudFleetStatusManager:
         redis_password: str | None = None,
         registration: "RuntimeRegistration",
         bootstrap_inputs: "CloudVmBootstrapInputs | None" = None,
-        worker_env_passthrough: dict[str, str] | None = None,
-        evaluator_env_passthrough: dict[str, str] | None = None,
+        worker_env_passthrough_by_placement: list[dict[str, str]] | None = None,
+        evaluator_env_passthrough_by_placement: list[dict[str, str]] | None = None,
         evaluator_experiment_config: str | None = None,
     ) -> CloudFleetSnapshot:
         """Provision workers and evaluators across a launch plan and wait for readiness."""
@@ -211,7 +211,7 @@ class CloudFleetStatusManager:
                 redis_password=redis_password,
                 registration=registration,
                 bootstrap_inputs=bootstrap_inputs,
-                env_passthrough=worker_env_passthrough,
+                env_passthrough_by_placement=worker_env_passthrough_by_placement,
             )
             if plan.evaluator_placements:
                 if evaluator_experiment_config is None:
@@ -225,7 +225,9 @@ class CloudFleetStatusManager:
                     registration=registration,
                     experiment_config_path=evaluator_experiment_config,
                     bootstrap_inputs=bootstrap_inputs,
-                    env_passthrough=evaluator_env_passthrough,
+                    env_passthrough_by_placement=(
+                        evaluator_env_passthrough_by_placement
+                    ),
                 )
 
             self._record_initial_workers(
@@ -445,7 +447,7 @@ class CloudFleetStatusManager:
         redis_password: str | None = None,
         registration: "RuntimeRegistration",
         bootstrap_inputs: "CloudVmBootstrapInputs | None" = None,
-        env_passthrough: dict[str, str] | None = None,
+        env_passthrough_by_placement: list[dict[str, str]] | None = None,
     ) -> CloudFleetSnapshot:
         """Provision workers across all placements in a launch plan and wait for readiness."""
         self._readiness_store.clear_experiment(plan.experiment_name)
@@ -457,7 +459,7 @@ class CloudFleetStatusManager:
                 redis_password=redis_password,
                 registration=registration,
                 bootstrap_inputs=bootstrap_inputs,
-                env_passthrough=env_passthrough,
+                env_passthrough_by_placement=env_passthrough_by_placement,
             )
             self._record_initial_workers(
                 experiment_name=plan.experiment_name,

@@ -88,6 +88,18 @@ def resolve_secret_path(
     return str(_resolve_existing_path(path_value, field_path=field_path, cwd=cwd))
 
 
+def validate_secret_reference_format(value: str, *, field_path: str) -> str:
+    """Validate secret-reference syntax without resolving env vars or files."""
+    reference = _parse_reference(value, field_path=field_path)
+    if reference.kind == "literal":
+        return _require_non_empty(reference.value, field_path=field_path)
+    if reference.kind == "env":
+        return f"os.environ/{reference.value}"
+    if reference.kind == "file":
+        return f"file:{_require_non_empty(reference.value, field_path=field_path)}"
+    raise AssertionError(f"Unsupported reference kind: {reference.kind}")
+
+
 def _parse_reference(value: str, *, field_path: str) -> _Reference:
     text = value.strip()
     if not text:

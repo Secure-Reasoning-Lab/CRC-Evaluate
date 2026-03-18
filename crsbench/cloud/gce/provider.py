@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Sequence
 
 from crsbench.cloud.gce.provisioner import GceProvisioner
 from crsbench.cloud.gce.quota import (
@@ -314,11 +314,17 @@ class GceProviderAdapter:
         redis_password: str | None,
         registration: "RuntimeRegistration",
         bootstrap_inputs: "CloudVmBootstrapInputs | None" = None,
-        env_passthrough: dict[str, str] | None = None,
+        env_passthrough_by_placement: Sequence[dict[str, str]] | None = None,
     ) -> list["GceWorkerRecord"]:
         """Create workers across all zonal placements in the launch plan."""
         workers: list[GceWorkerRecord] = []
-        for fleet in self.build_worker_fleets(plan):
+        fleets = self.build_worker_fleets(plan)
+        _validate_env_passthrough_count(
+            role="worker",
+            fleets=fleets,
+            env_passthrough_by_placement=env_passthrough_by_placement,
+        )
+        for index, fleet in enumerate(fleets):
             workers.extend(
                 self._provisioner.create_workers(
                     experiment_name=plan.experiment_name,
@@ -327,7 +333,9 @@ class GceProviderAdapter:
                     redis_password=redis_password,
                     registration=registration,
                     bootstrap_inputs=bootstrap_inputs,
-                    env_passthrough=env_passthrough,
+                    env_passthrough=_env_passthrough_for_placement(
+                        env_passthrough_by_placement, index
+                    ),
                 )
             )
         return workers
@@ -365,11 +373,17 @@ class GceProviderAdapter:
         registration: "RuntimeRegistration",
         experiment_config_path: str,
         bootstrap_inputs: "CloudVmBootstrapInputs | None" = None,
-        env_passthrough: dict[str, str] | None = None,
+        env_passthrough_by_placement: Sequence[dict[str, str]] | None = None,
     ) -> list["GceWorkerRecord"]:
         """Create evaluators across all placements in a provider-neutral launch plan."""
         evaluators: list[GceWorkerRecord] = []
-        for fleet in self.build_evaluator_fleets(plan):
+        fleets = self.build_evaluator_fleets(plan)
+        _validate_env_passthrough_count(
+            role="evaluator",
+            fleets=fleets,
+            env_passthrough_by_placement=env_passthrough_by_placement,
+        )
+        for index, fleet in enumerate(fleets):
             evaluators.extend(
                 self._provisioner.create_evaluators(
                     experiment_name=plan.experiment_name,
@@ -379,7 +393,9 @@ class GceProviderAdapter:
                     registration=registration,
                     experiment_config_path=experiment_config_path,
                     bootstrap_inputs=bootstrap_inputs,
-                    env_passthrough=env_passthrough,
+                    env_passthrough=_env_passthrough_for_placement(
+                        env_passthrough_by_placement, index
+                    ),
                 )
             )
         return evaluators
@@ -425,6 +441,30 @@ def _accumulate_requirement(
     requirements[(region, family)] = requirements.get((region, family), 0) + (
         machine_type_to_vcpus(machine_type) * count
     )
+
+
+def _validate_env_passthrough_count(
+    *,
+    role: str,
+    fleets: Sequence[GceWorkerFleetConfig],
+    env_passthrough_by_placement: Sequence[dict[str, str]] | None,
+) -> None:
+    if env_passthrough_by_placement is None:
+        return
+    if len(env_passthrough_by_placement) != len(fleets):
+        raise ValueError(
+            f"Expected {len(fleets)} {role} env payloads, got "
+            f"{len(env_passthrough_by_placement)}"
+        )
+
+
+def _env_passthrough_for_placement(
+    env_passthrough_by_placement: Sequence[dict[str, str]] | None,
+    index: int,
+) -> dict[str, str] | None:
+    if env_passthrough_by_placement is None:
+        return None
+    return env_passthrough_by_placement[index]
 
 
 def _get_optional_str(data: dict[str, Any], key: str) -> str | None:

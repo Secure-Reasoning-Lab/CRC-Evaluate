@@ -209,7 +209,7 @@ def run_launch(args: argparse.Namespace) -> int:
                 redis_password=redis_password,
                 registration=registration,
                 bootstrap_inputs=bootstrap_inputs,
-                env_passthrough=preflight.worker_env,
+                env_passthrough_by_placement=preflight.worker_placement_envs,
             )
             evaluators = adapter.create_evaluators(
                 plan=provisioning_plan,
@@ -218,7 +218,7 @@ def run_launch(args: argparse.Namespace) -> int:
                 registration=registration,
                 experiment_config_path=str(config_path),
                 bootstrap_inputs=bootstrap_inputs,
-                env_passthrough=preflight.evaluator_env,
+                env_passthrough_by_placement=preflight.evaluator_placement_envs,
             )
         else:
             assert resolved_legacy_fleet is not None

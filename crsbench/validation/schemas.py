@@ -21,7 +21,14 @@ from pydantic import (
     model_validator,
 )
 
-from crsbench.cloud.env_passthrough import normalize_env_name_list
+from crsbench.cloud.env_passthrough import (
+    normalize_env_name,
+    normalize_env_name_list,
+)
+from crsbench.cloud.secret_refs import (
+    CloudSecretReferenceError,
+    validate_secret_reference_format,
+)
 from crsbench.cloud.types import (
     CloudProvider,
     validate_single_cloud_provider,
@@ -1632,6 +1639,26 @@ def _validate_cloud_string_map(value: Dict[str, str]) -> Dict[str, str]:
     return normalized
 
 
+def _validate_cloud_env_map(
+    value: Dict[str, str], *, field_path: str
+) -> Dict[str, str]:
+    """Reject malformed env-map keys/values for cloud launch configuration."""
+    normalized: dict[str, str] = {}
+    for key, item in value.items():
+        key_str = normalize_env_name(str(key), field_path=field_path)
+        item_str = str(item).strip()
+        if not item_str:
+            raise ValueError(f"{field_path} must not contain blank environment values")
+        try:
+            normalized[key_str] = validate_secret_reference_format(
+                item_str,
+                field_path=f"{field_path}.{key_str}",
+            )
+        except CloudSecretReferenceError as exc:
+            raise ValueError(str(exc)) from exc
+    return normalized
+
+
 def _merge_cloud_maps(defaults: object, override: object) -> dict[str, str]:
     """Merge optional string maps with override precedence."""
     merged: dict[str, str] = {}
@@ -1648,7 +1675,7 @@ def _merge_gce_profile_defaults(
     """Merge provider-level GCE profile defaults into one raw profile object."""
     merged = {key: value for key, value in defaults.items() if value is not None}
     merged.update({key: value for key, value in override.items() if value is not None})
-    for field_name in ("labels", "metadata"):
+    for field_name in ("labels", "metadata", "env"):
         merged_map = _merge_cloud_maps(
             defaults.get(field_name),
             override.get(field_name),
@@ -1666,6 +1693,11 @@ def _merge_cloud_placement_defaults(
     """Merge role-level placement defaults into one raw placement object."""
     merged = {key: value for key, value in defaults.items() if value is not None}
     merged.update({key: value for key, value in placement.items() if value is not None})
+    merged_env = _merge_cloud_maps(defaults.get("env"), placement.get("env"))
+    if merged_env:
+        merged["env"] = merged_env
+    else:
+        merged.pop("env", None)
     return merged
 
 
@@ -1684,6 +1716,7 @@ class GceInstanceProfileDefaultsConfig(BaseModel):
     owner_label: Optional[str] = Field(default=None)
     labels: Dict[str, str] = Field(default_factory=dict)
     metadata: Dict[str, str] = Field(default_factory=dict)
+    env: Dict[str, str] = Field(default_factory=dict)
     startup_script_uri: Optional[str] = Field(default=None)
     use_os_login: Optional[bool] = Field(default=None)
     ssh_via_iap: Optional[bool] = Field(default=None)
@@ -1719,6 +1752,13 @@ class GceInstanceProfileDefaultsConfig(BaseModel):
     @classmethod
     def validate_string_maps(cls, value: Dict[str, str]) -> Dict[str, str]:
         return _validate_cloud_string_map(value)
+
+    @field_validator("env")
+    @classmethod
+    def validate_env_map(cls, value: Dict[str, str]) -> Dict[str, str]:
+        return _validate_cloud_env_map(
+            value, field_path="cloud.providers.gce.profile_defaults.env"
+        )
 
 
 class GceInstanceProfileConfig(BaseModel):
@@ -1766,6 +1806,10 @@ class GceInstanceProfileConfig(BaseModel):
     metadata: Dict[str, str] = Field(
         default_factory=dict,
         description="Additional GCE metadata applied to instances using this profile.",
+    )
+    env: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Additional environment variables injected into instances using this profile.",
     )
     startup_script_uri: Optional[str] = Field(
         default=None,
@@ -1851,6 +1895,14 @@ class GceInstanceProfileConfig(BaseModel):
     def validate_string_maps(cls, value: Dict[str, str]) -> Dict[str, str]:
         """Reject blank keys or values in user-supplied maps."""
         return _validate_cloud_string_map(value)
+
+    @field_validator("env")
+    @classmethod
+    def validate_env_map(cls, value: Dict[str, str]) -> Dict[str, str]:
+        return _validate_cloud_env_map(
+            value,
+            field_path="cloud.providers.gce.instance_profiles.env",
+        )
 
     @model_validator(mode="after")
     def validate_profile_contract(self):
@@ -2000,6 +2052,10 @@ class CloudOrchestratorPlacementConfig(BaseModel):
     instance_profile: str = Field(
         ..., description="Named provider instance profile for the orchestrator."
     )
+    env: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Environment variables injected only into the orchestrator VM.",
+    )
 
     @field_validator("zone", "instance_profile")
     @classmethod
@@ -2009,6 +2065,11 @@ class CloudOrchestratorPlacementConfig(BaseModel):
         if not normalized:
             raise ValueError("Field is required")
         return normalized
+
+    @field_validator("env")
+    @classmethod
+    def validate_env_map(cls, value: Dict[str, str]) -> Dict[str, str]:
+        return _validate_cloud_env_map(value, field_path="cloud.orchestrator.env")
 
 
 class CloudPlacementDefaultsConfig(BaseModel):
@@ -2025,6 +2086,10 @@ class CloudPlacementDefaultsConfig(BaseModel):
         ge=1,
         description="Default number of instances to create per placement in this role.",
     )
+    env: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Default environment variables merged into each placement in this role.",
+    )
 
     @field_validator("instance_profile")
     @classmethod
@@ -2035,6 +2100,14 @@ class CloudPlacementDefaultsConfig(BaseModel):
         if not normalized:
             return None
         return normalized
+
+    @field_validator("env")
+    @classmethod
+    def validate_env_map(cls, value: Dict[str, str]) -> Dict[str, str]:
+        return _validate_cloud_env_map(
+            value,
+            field_path="cloud.placements.defaults.env",
+        )
 
 
 class CloudPlacementConfig(BaseModel):
@@ -2053,6 +2126,10 @@ class CloudPlacementConfig(BaseModel):
     )
     instance_profile: str = Field(
         ..., description="Named provider instance profile for this placement."
+    )
+    env: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Environment variables injected into every VM in this placement.",
     )
 
     @field_validator("instance_profile")
@@ -2074,6 +2151,11 @@ class CloudPlacementConfig(BaseModel):
         if not normalized:
             return None
         return normalized
+
+    @field_validator("env")
+    @classmethod
+    def validate_env_map(cls, value: Dict[str, str]) -> Dict[str, str]:
+        return _validate_cloud_env_map(value, field_path="cloud.placements.env")
 
 
 class CloudWorkerPlacementConfig(CloudPlacementConfig):
@@ -2251,6 +2333,10 @@ class CloudConfig(BaseModel):
         default_factory=CloudBootstrapConfig,
         description="Provider-neutral bootstrap policy for cloud VMs.",
     )
+    env: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Global environment variables merged into all launched cloud roles.",
+    )
     providers: Optional[CloudProvidersConfig] = Field(
         default=None,
         description="Provider-specific backing configuration for cloud launches.",
@@ -2273,6 +2359,11 @@ class CloudConfig(BaseModel):
         default=None,
         description="Legacy GCE worker fleet configuration for backward compatibility during migration.",
     )
+
+    @field_validator("env")
+    @classmethod
+    def validate_env_map(cls, value: Dict[str, str]) -> Dict[str, str]:
+        return _validate_cloud_env_map(value, field_path="cloud.env")
 
     @model_validator(mode="after")
     def validate_cloud_contract(self):

@@ -119,6 +119,8 @@ cloud:
         service_account_email: crsbench-worker@example-project.iam.gserviceaccount.com
         owner_label: team-crs
         readiness_timeout_sec: 900
+        env:
+          CRSBENCH_LLM_UPSTREAM_BASE_URL: os.environ/LITELLM_BASE_URL
       instance_profiles:
         gce-worker-n2d: {}
   orchestrator:
@@ -131,7 +133,11 @@ cloud:
     placements:
       - zone: us-east5-b
         count: 3
+        env:
+          CRSBENCH_LLM_MASTER_KEY: os.environ/LITELLM1_MASTER_KEY
       - zone: us-east1-b
+        env:
+          CRSBENCH_LLM_MASTER_KEY: os.environ/LITELLM2_MASTER_KEY
 ```
 
 Phase 1 contract notes:
@@ -154,6 +160,10 @@ Phase 1 contract notes:
   normal diagnosis should not require interactive SSH.
 - Failed cloud bring-up tears down the requested fleet before control returns
   to the operator.
+- First-class `cloud.env` / profile `env` / placement `env` maps are the
+  preferred way to shard upstream credentials or URLs across cloud worker
+  groups; `cloud.bootstrap.env_passthrough` remains available as a
+  compatibility-only name-copy mechanism.
 
 ## Queue Behavior and Cleanup
 

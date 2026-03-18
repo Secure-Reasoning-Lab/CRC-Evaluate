@@ -181,7 +181,67 @@ changes into that checkout, runs `crsbench prepare`, optionally downloads
 benchmarks, and only then starts the orchestrator, worker, or evaluator runtime.
 
 If remote VMs need API keys or upstream URLs from the operator environment,
-configure `cloud.bootstrap.env_passthrough`:
+prefer first-class layered `env` maps:
+
+```yaml
+cloud:
+  env:
+    CRSBENCH_LLM_UPSTREAM_BASE_URL: os.environ/LITELLM_BASE_URL
+
+  providers:
+    gce:
+      profile_defaults:
+        env:
+          HTTPS_PROXY: os.environ/HTTPS_PROXY
+      instance_profiles:
+        gce-orchestrator-n2d:
+          env:
+            CRSBENCH_LLM_MASTER_KEY: os.environ/LITELLM_ORCH_MASTER_KEY
+        gce-worker-n2d:
+          env:
+            OPENAI_API_KEY: os.environ/DEFAULT_OPENAI_API_KEY
+
+  orchestrator:
+    zone: us-east5-b
+    instance_profile: gce-orchestrator-n2d
+    env:
+      CRSBENCH_LLM_MASTER_KEY: os.environ/LITELLM_ORCH_MASTER_KEY
+
+  workers:
+    defaults:
+      instance_profile: gce-worker-n2d
+      count: 1
+      env:
+        OPENAI_API_KEY: os.environ/DEFAULT_OPENAI_API_KEY
+    placements:
+      - zone: us-east5-b
+        env:
+          CRSBENCH_LLM_UPSTREAM_BASE_URL: os.environ/LITELLM1_BASE_URL
+          CRSBENCH_LLM_MASTER_KEY: os.environ/LITELLM1_MASTER_KEY
+      - zone: us-east1-b
+        env:
+          CRSBENCH_LLM_UPSTREAM_BASE_URL: os.environ/LITELLM2_BASE_URL
+          CRSBENCH_LLM_MASTER_KEY: os.environ/LITELLM2_MASTER_KEY
+```
+
+Semantics:
+
+- values support literal strings, `os.environ/NAME`, and `file:path`
+- values are resolved on the operator before provisioning
+- orchestrator merge order is:
+  `cloud.env -> profile_defaults.env -> instance_profile.env -> cloud.orchestrator.env`
+- worker/evaluator merge order is:
+  `cloud.env -> profile_defaults.env -> instance_profile.env -> role defaults.env -> placement.env`
+- all VMs in the same placement share the same merged env payload
+- when you launch through the CRSBench CLI, `.env` is loaded first, so
+  `os.environ/...` references can come from either the
+  shell environment or `.env`
+- missing or empty referenced values fail launch before any VM is created
+- runtime-managed variables such as `CRSBENCH_REDIS_HOST` and
+  `CRSBENCH_REDIS_PASSWORD` are rejected and must not be overridden
+
+`cloud.bootstrap.env_passthrough` remains supported as a compatibility layer
+for simple name-based copies:
 
 ```yaml
 cloud:
@@ -197,19 +257,12 @@ cloud:
         - ANTHROPIC_API_KEY
 ```
 
-Semantics:
+Compatibility notes:
 
-- `common` is copied to both the orchestrator VM and all worker/evaluator VMs
-- `orchestrator` adds orchestrator-only variables
-- `workers` adds worker-only variables
-- `evaluators` adds evaluator-only variables
-- values are resolved from the operator environment before provisioning
-- when you launch through the CRSBench CLI, `.env` is loaded first, so
-  `os.environ/...` references and `env_passthrough` can come from either the
-  shell environment or `.env`
-- missing or empty configured variables fail launch before any VM is created
-- runtime-managed variables such as `CRSBENCH_REDIS_HOST` and
-  `CRSBENCH_REDIS_PASSWORD` are rejected and must not be passed through
+- passthrough names are resolved from the operator environment before launch
+- passthrough-derived values merge under explicit `env` values
+- explicit `env` keys win on conflicts
+- new configs should prefer first-class `env`
 
 ### Generate a deploy key
 
@@ -268,9 +321,10 @@ key. The `hf_token` is
 passed as `crsbench-hf-token` metadata and exported as `HF_TOKEN` in the worker
 environment. Secret references are resolved once on the operator before VM
 creation; the original experiment config payload sent to the remote orchestrator
-is not rewritten with resolved secret values. `cloud.bootstrap.env_passthrough`
-uses the same operator-side resolution rule, but copies named environment
-variables instead of inline secret refs.
+is not rewritten with resolved secret values. First-class `cloud.*.env` values
+use the same operator-side resolution rule, and the legacy
+`cloud.bootstrap.env_passthrough` path still copies named environment variables
+through the same metadata channel for compatibility.
 
 ## Launching an Experiment
 

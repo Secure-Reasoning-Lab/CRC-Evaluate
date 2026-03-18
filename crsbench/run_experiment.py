@@ -2165,8 +2165,12 @@ def run_experiment_distributed(
                             redis_password=os.environ.get("CRSBENCH_REDIS_PASSWORD"),
                             registration=registration,
                             bootstrap_inputs=bootstrap_inputs,
-                            worker_env_passthrough=preflight.worker_env,
-                            evaluator_env_passthrough=preflight.evaluator_env,
+                            worker_env_passthrough_by_placement=(
+                                preflight.worker_placement_envs
+                            ),
+                            evaluator_env_passthrough_by_placement=(
+                                preflight.evaluator_placement_envs
+                            ),
                             evaluator_experiment_config=evaluator_experiment_config,
                         )
                     else:
@@ -2177,7 +2181,9 @@ def run_experiment_distributed(
                             redis_password=os.environ.get("CRSBENCH_REDIS_PASSWORD"),
                             registration=registration,
                             bootstrap_inputs=bootstrap_inputs,
-                            env_passthrough=preflight.worker_env,
+                            env_passthrough_by_placement=(
+                                preflight.worker_placement_envs
+                            ),
                         )
                     logger.info(
                         "Cloud instance placements ready: "

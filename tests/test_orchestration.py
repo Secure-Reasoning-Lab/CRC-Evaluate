@@ -154,6 +154,112 @@ redis_host: localhost
 
         assert config.redis_host == "localhost"
 
+    def test_load_experiment_config_with_layered_cloud_env(self, tmp_path):
+        """Provider-neutral cloud env maps should parse and merge through config load."""
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.safe_dump(
+                {
+                    "experiment": "cloud-env-experiment",
+                    "trials": 1,
+                    "mode": "delta",
+                    "max_total_time": 20000,
+                    "experiment_filestore": "/tmp/crsbench/experiment-data",
+                    "report_filestore": "/tmp/crsbench/report-data",
+                    "crs_compose": {"crs-libfuzzer": {"num_cores": 1}},
+                    "benchmarks": ["sanity-mock-c-delta-01"],
+                    "cloud": {
+                        "env": {
+                            "GLOBAL_ONLY": "global-value",
+                            "SHARED_KEY": "global-value",
+                        },
+                        "providers": {
+                            "gce": {
+                                "project": "test-project",
+                                "profile_defaults": {
+                                    "machine_type": "n2d-standard-16",
+                                    "boot_disk_size_gb": 100,
+                                    "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                                    "service_account_email": "crsbench@test-project.iam.gserviceaccount.com",
+                                    "owner_label": "team-crs",
+                                    "env": {
+                                        "PROFILE_DEFAULT_ONLY": "profile-default-value",
+                                        "SHARED_KEY": "profile-default-value",
+                                    },
+                                },
+                                "instance_profiles": {
+                                    "gce-orchestrator-n2d": {},
+                                    "gce-worker-n2d": {
+                                        "env": {
+                                            "PROFILE_ONLY": "profile-value",
+                                            "SHARED_KEY": "profile-value",
+                                        }
+                                    },
+                                },
+                            }
+                        },
+                        "orchestrator": {
+                            "zone": "us-east5-b",
+                            "instance_profile": "gce-orchestrator-n2d",
+                            "env": {
+                                "ORCH_ONLY": "orchestrator-value",
+                                "SHARED_KEY": "orchestrator-value",
+                            },
+                        },
+                        "workers": {
+                            "defaults": {
+                                "instance_profile": "gce-worker-n2d",
+                                "count": 1,
+                                "env": {
+                                    "ROLE_ONLY": "worker-role-value",
+                                    "SHARED_KEY": "worker-role-value",
+                                },
+                            },
+                            "placements": [
+                                {
+                                    "zone": "us-east5-b",
+                                    "env": {
+                                        "PLACEMENT_ONLY": "worker-placement-value",
+                                        "SHARED_KEY": "worker-placement-value",
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                },
+                sort_keys=False,
+            )
+        )
+
+        config = load_experiment_config(config_path)
+
+        assert config.cloud is not None
+        assert config.cloud.env == {
+            "GLOBAL_ONLY": "global-value",
+            "SHARED_KEY": "global-value",
+        }
+        assert config.cloud.orchestrator is not None
+        assert config.cloud.orchestrator.env == {
+            "ORCH_ONLY": "orchestrator-value",
+            "SHARED_KEY": "orchestrator-value",
+        }
+        assert config.cloud.providers is not None
+        assert config.cloud.providers.gce is not None
+        assert config.cloud.providers.gce.instance_profiles["gce-worker-n2d"].env == {
+            "PROFILE_DEFAULT_ONLY": "profile-default-value",
+            "PROFILE_ONLY": "profile-value",
+            "SHARED_KEY": "profile-value",
+        }
+        assert config.cloud.workers.defaults.env == {
+            "ROLE_ONLY": "worker-role-value",
+            "SHARED_KEY": "worker-role-value",
+        }
+        assert config.cloud.workers.placements[0].env == {
+            "ROLE_ONLY": "worker-role-value",
+            "PLACEMENT_ONLY": "worker-placement-value",
+            "SHARED_KEY": "worker-placement-value",
+        }
+
     def test_load_experiment_config_minimal_required_fields(self, tmp_path):
         """Test loading config with only required fields."""
         config_path = tmp_path / "config.yaml"

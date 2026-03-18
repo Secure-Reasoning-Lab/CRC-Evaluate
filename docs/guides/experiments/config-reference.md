@@ -23,17 +23,18 @@ Managed cloud execution uses a provider-neutral top-level shape:
 
 - `cloud.providers.<provider>`: provider-native backing details such as GCE
   project, reusable instance profiles, and optional `profile_defaults`
+- `cloud.env`: global environment variables merged into all launched cloud roles
 - `cloud.orchestrator`: zone and instance-profile reference for the remote
-  orchestrator VM
+  orchestrator VM, plus optional orchestrator-only `env`
 - `cloud.workers.defaults`: optional role-level worker placement defaults such
-  as `count` and `instance_profile`
+  as `count`, `instance_profile`, and `env`
 - `cloud.workers.placements[]`: explicit worker placements with zone plus any
   overrides from `defaults`
 - `cloud.evaluators.defaults`: optional role-level evaluator placement defaults
-  such as `count` and `instance_profile`
+  such as `count`, `instance_profile`, and `env`
 - `cloud.evaluators.placements[]`: optional evaluator placements with zone plus
   any overrides from `defaults`
-- `cloud.bootstrap.env_passthrough`: operator-resolved environment variables
+- `cloud.bootstrap.env_passthrough`: compatibility-only operator env-name lists
   split into `common`, `orchestrator`, `workers`, and `evaluators`
 
 For GCE in v1:
@@ -46,6 +47,10 @@ For GCE in v1:
 - placements must use explicit zones
 - live quota validation is mandatory before launch
 - worker and evaluator placements can use different instance profiles
+- cloud env merge order is:
+  `cloud.env -> profile_defaults.env -> instance_profile.env -> role/default placement env`
+- new configs should prefer first-class `env`; `cloud.bootstrap.env_passthrough`
+  remains supported for simple name-based copies
 - the checked-in example is
   `experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml`
 

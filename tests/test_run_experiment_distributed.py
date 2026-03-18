@@ -1104,10 +1104,16 @@ def test_provider_neutral_cloud_workers_pass_role_specific_env_passthrough(
     resolved_plan.experiment_name = "exp-test"
 
     def _bring_up_workers(**kwargs):
-        assert kwargs["env_passthrough"] == {
-            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
-            "OPENAI_API_KEY": "openai-key",
-        }
+        assert kwargs["env_passthrough_by_placement"] == [
+            {
+                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "OPENAI_API_KEY": "openai-key",
+            },
+            {
+                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "OPENAI_API_KEY": "openai-key",
+            },
+        ]
         raise RuntimeError("stop after env passthrough")
 
     manager.bring_up_workers.side_effect = _bring_up_workers
@@ -1143,10 +1149,16 @@ def test_provider_neutral_cloud_workers_pass_role_specific_env_passthrough(
             "crsbench.cloud.gce.launch_preflight.prepare_gce_launch_inputs",
             return_value=MagicMock(
                 resolved_plan=resolved_plan,
-                worker_env={
-                    "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
-                    "OPENAI_API_KEY": "openai-key",
-                },
+                worker_placement_envs=[
+                    {
+                        "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                        "OPENAI_API_KEY": "openai-key",
+                    },
+                    {
+                        "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                        "OPENAI_API_KEY": "openai-key",
+                    },
+                ],
             ),
         ) as mock_preflight,
         patch(
@@ -1201,14 +1213,26 @@ def test_provider_neutral_cloud_instances_with_evaluators_pass_role_specific_env
     resolved_plan.evaluator_placements = launch_plan.evaluator_placements
 
     def _bring_up_instances(**kwargs):
-        assert kwargs["worker_env_passthrough"] == {
-            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
-            "OPENAI_API_KEY": "openai-key",
-        }
-        assert kwargs["evaluator_env_passthrough"] == {
-            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
-            "ANTHROPIC_API_KEY": "anthropic-key",
-        }
+        assert kwargs["worker_env_passthrough_by_placement"] == [
+            {
+                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "OPENAI_API_KEY": "openai-key",
+            },
+            {
+                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "OPENAI_API_KEY": "openai-key",
+            },
+        ]
+        assert kwargs["evaluator_env_passthrough_by_placement"] == [
+            {
+                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "ANTHROPIC_API_KEY": "anthropic-key",
+            },
+            {
+                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "ANTHROPIC_API_KEY": "anthropic-key",
+            },
+        ]
         raise RuntimeError("stop after evaluator env passthrough")
 
     manager.bring_up_instances.side_effect = _bring_up_instances
@@ -1245,14 +1269,26 @@ def test_provider_neutral_cloud_instances_with_evaluators_pass_role_specific_env
             "crsbench.cloud.gce.launch_preflight.prepare_gce_launch_inputs",
             return_value=MagicMock(
                 resolved_plan=resolved_plan,
-                worker_env={
-                    "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
-                    "OPENAI_API_KEY": "openai-key",
-                },
-                evaluator_env={
-                    "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
-                    "ANTHROPIC_API_KEY": "anthropic-key",
-                },
+                worker_placement_envs=[
+                    {
+                        "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                        "OPENAI_API_KEY": "openai-key",
+                    },
+                    {
+                        "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                        "OPENAI_API_KEY": "openai-key",
+                    },
+                ],
+                evaluator_placement_envs=[
+                    {
+                        "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                        "ANTHROPIC_API_KEY": "anthropic-key",
+                    },
+                    {
+                        "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                        "ANTHROPIC_API_KEY": "anthropic-key",
+                    },
+                ],
             ),
         ) as mock_preflight,
         patch(

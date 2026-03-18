@@ -433,6 +433,70 @@ def _with_env_passthrough(
     return config
 
 
+def _with_layered_env_overrides(
+    config: ExperimentConfig,
+) -> ExperimentConfig:
+    config = config.model_copy(deep=True)
+    assert config.cloud is not None
+    assert config.cloud.providers is not None
+    assert config.cloud.providers.gce is not None
+    config.cloud.env = {
+        "GLOBAL_ONLY": "global-value",
+        "SHARED_KEY": "global-value",
+        "COMMON_LEGACY": "explicit-common-value",
+    }
+    config.cloud.providers.gce.profile_defaults.env = {
+        "PROFILE_DEFAULT_ONLY": "profile-default-value",
+        "SHARED_KEY": "profile-default-value",
+    }
+    config.cloud.providers.gce.instance_profiles["gce-orchestrator-n2d"].env = {
+        "PROFILE_ONLY": "orchestrator-profile-value",
+        "SHARED_KEY": "orchestrator-profile-value",
+    }
+    config.cloud.providers.gce.instance_profiles["gce-worker-n2d"].env = {
+        "PROFILE_ONLY": "worker-profile-value",
+        "SHARED_KEY": "worker-profile-value",
+    }
+    if "gce-evaluator-c3" in config.cloud.providers.gce.instance_profiles:
+        config.cloud.providers.gce.instance_profiles["gce-evaluator-c3"].env = {
+            "PROFILE_ONLY": "evaluator-profile-value",
+            "SHARED_KEY": "evaluator-profile-value",
+        }
+    assert config.cloud.orchestrator is not None
+    config.cloud.orchestrator.env = {
+        "TARGET_ONLY": "orchestrator-value",
+        "SHARED_KEY": "orchestrator-value",
+    }
+    config.cloud.workers.defaults.env = {
+        "ROLE_ONLY": "worker-role-value",
+        "SHARED_KEY": "worker-role-value",
+    }
+    config.cloud.workers.placements[0].env = {
+        "TARGET_ONLY": "worker-east5-value",
+        "SHARED_KEY": "worker-east5-value",
+    }
+    config.cloud.workers.placements[1].env = {
+        "TARGET_ONLY": "worker-east5c-value",
+        "SHARED_KEY": "worker-east5c-value",
+    }
+    if config.cloud.evaluators is not None:
+        config.cloud.evaluators.defaults.env = {
+            "ROLE_ONLY": "evaluator-role-value",
+            "SHARED_KEY": "evaluator-role-value",
+        }
+        config.cloud.evaluators.placements[0].env = {
+            "TARGET_ONLY": "evaluator-east5-value",
+            "SHARED_KEY": "evaluator-east5-value",
+        }
+        config.cloud.evaluators.placements[1].env = {
+            "TARGET_ONLY": "evaluator-east1-value",
+            "SHARED_KEY": "evaluator-east1-value",
+        }
+    return ExperimentConfig.model_validate(
+        config.model_dump(mode="json", exclude_none=True)
+    )
+
+
 def test_build_cloud_launch_plan_resolves_profiles_for_orchestrator_and_workers():
     from crsbench.cloud.models import build_cloud_launch_plan
 
@@ -467,6 +531,52 @@ def test_build_cloud_launch_plan_resolves_profiles_for_orchestrator_and_workers(
     assert all(
         placement.provider is CloudProvider.GCE for placement in plan.worker_placements
     )
+
+
+def test_build_cloud_launch_plan_merges_layered_env_for_targets():
+    from crsbench.cloud.models import build_cloud_launch_plan
+
+    config = _with_layered_env_overrides(
+        _make_provider_neutral_experiment_config_with_evaluators()
+    )
+
+    plan = build_cloud_launch_plan(config)
+
+    assert plan.orchestrator.env == {
+        "COMMON_LEGACY": "explicit-common-value",
+        "GLOBAL_ONLY": "global-value",
+        "PROFILE_DEFAULT_ONLY": "profile-default-value",
+        "PROFILE_ONLY": "orchestrator-profile-value",
+        "SHARED_KEY": "orchestrator-value",
+        "TARGET_ONLY": "orchestrator-value",
+    }
+    assert plan.worker_placements[0].env == {
+        "COMMON_LEGACY": "explicit-common-value",
+        "GLOBAL_ONLY": "global-value",
+        "PROFILE_DEFAULT_ONLY": "profile-default-value",
+        "PROFILE_ONLY": "worker-profile-value",
+        "ROLE_ONLY": "worker-role-value",
+        "SHARED_KEY": "worker-east5-value",
+        "TARGET_ONLY": "worker-east5-value",
+    }
+    assert plan.worker_placements[1].env == {
+        "COMMON_LEGACY": "explicit-common-value",
+        "GLOBAL_ONLY": "global-value",
+        "PROFILE_DEFAULT_ONLY": "profile-default-value",
+        "PROFILE_ONLY": "worker-profile-value",
+        "ROLE_ONLY": "worker-role-value",
+        "SHARED_KEY": "worker-east5c-value",
+        "TARGET_ONLY": "worker-east5c-value",
+    }
+    assert plan.evaluator_placements[0].env == {
+        "COMMON_LEGACY": "explicit-common-value",
+        "GLOBAL_ONLY": "global-value",
+        "PROFILE_DEFAULT_ONLY": "profile-default-value",
+        "PROFILE_ONLY": "evaluator-profile-value",
+        "ROLE_ONLY": "evaluator-role-value",
+        "SHARED_KEY": "evaluator-east5-value",
+        "TARGET_ONLY": "evaluator-east5-value",
+    }
 
 
 def test_build_cloud_launch_plan_resolves_profiles_for_evaluators():
@@ -562,14 +672,128 @@ def test_prepare_gce_launch_inputs_resolves_env_passthrough_for_roles() -> None:
         "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
         "CRSBENCH_LLM_MASTER_KEY": "master-key",
     }
-    assert preflight.worker_env == {
-        "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
-        "OPENAI_API_KEY": "openai-key",
+    assert preflight.worker_placement_envs == [
+        {
+            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+            "OPENAI_API_KEY": "openai-key",
+        },
+        {
+            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+            "OPENAI_API_KEY": "openai-key",
+        },
+    ]
+    assert preflight.evaluator_placement_envs == []
+
+
+def test_prepare_gce_launch_inputs_resolves_layered_env_per_placement(
+    tmp_path: Path,
+) -> None:
+    from crsbench.cloud.gce.launch_preflight import prepare_gce_launch_inputs
+    from crsbench.cloud.models import build_cloud_launch_plan
+
+    secret_dir = tmp_path / ".secrets"
+    secret_dir.mkdir()
+    worker_secret = secret_dir / "worker-token"
+    worker_secret.write_text("worker-file-value", encoding="utf-8")
+
+    config = _with_env_passthrough(
+        _with_layered_env_overrides(
+            _make_provider_neutral_experiment_config_with_evaluators()
+        ),
+        common=["COMMON_LEGACY"],
+        orchestrator=["ORCH_LEGACY"],
+        workers=["WORKER_LEGACY"],
+        evaluators=["EVALUATOR_LEGACY"],
+    )
+    config.cloud.providers.gce.instance_profiles["gce-worker-n2d"].env[
+        "PROFILE_FILE"
+    ] = "file:.secrets/worker-token"
+    config.cloud.workers.placements[0].env["TARGET_REF"] = "os.environ/WORKER_ZERO"
+    config.cloud.workers.placements[1].env["TARGET_REF"] = "os.environ/WORKER_ONE"
+    config.cloud.evaluators.defaults.env["ROLE_REF"] = "os.environ/EVAL_ROLE"
+    config.cloud.orchestrator.env["TARGET_REF"] = "os.environ/ORCH_TARGET"
+    config = ExperimentConfig.model_validate(
+        config.model_dump(mode="json", exclude_none=True)
+    )
+
+    launch_plan = build_cloud_launch_plan(config)
+
+    preflight = prepare_gce_launch_inputs(
+        plan=launch_plan,
+        bootstrap=config.cloud.bootstrap,
+        cwd=tmp_path,
+        env={
+            "COMMON_LEGACY": "legacy-common-value",
+            "ORCH_LEGACY": "legacy-orchestrator-value",
+            "WORKER_LEGACY": "legacy-worker-value",
+            "EVALUATOR_LEGACY": "legacy-evaluator-value",
+            "ORCH_TARGET": "orchestrator-target-ref",
+            "WORKER_ZERO": "worker-zero-ref",
+            "WORKER_ONE": "worker-one-ref",
+            "EVAL_ROLE": "evaluator-role-ref",
+        },
+    )
+
+    assert preflight.orchestrator_env == {
+        "COMMON_LEGACY": "explicit-common-value",
+        "GLOBAL_ONLY": "global-value",
+        "ORCH_LEGACY": "legacy-orchestrator-value",
+        "PROFILE_DEFAULT_ONLY": "profile-default-value",
+        "PROFILE_ONLY": "orchestrator-profile-value",
+        "SHARED_KEY": "orchestrator-value",
+        "TARGET_ONLY": "orchestrator-value",
+        "TARGET_REF": "orchestrator-target-ref",
     }
-    assert preflight.evaluator_env == {
-        "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
-        "ANTHROPIC_API_KEY": "anthropic-key",
-    }
+    assert preflight.worker_placement_envs == [
+        {
+            "COMMON_LEGACY": "explicit-common-value",
+            "GLOBAL_ONLY": "global-value",
+            "PROFILE_DEFAULT_ONLY": "profile-default-value",
+            "PROFILE_FILE": "worker-file-value",
+            "PROFILE_ONLY": "worker-profile-value",
+            "ROLE_ONLY": "worker-role-value",
+            "SHARED_KEY": "worker-east5-value",
+            "TARGET_ONLY": "worker-east5-value",
+            "TARGET_REF": "worker-zero-ref",
+            "WORKER_LEGACY": "legacy-worker-value",
+        },
+        {
+            "COMMON_LEGACY": "explicit-common-value",
+            "GLOBAL_ONLY": "global-value",
+            "PROFILE_DEFAULT_ONLY": "profile-default-value",
+            "PROFILE_FILE": "worker-file-value",
+            "PROFILE_ONLY": "worker-profile-value",
+            "ROLE_ONLY": "worker-role-value",
+            "SHARED_KEY": "worker-east5c-value",
+            "TARGET_ONLY": "worker-east5c-value",
+            "TARGET_REF": "worker-one-ref",
+            "WORKER_LEGACY": "legacy-worker-value",
+        },
+    ]
+    assert preflight.evaluator_placement_envs == [
+        {
+            "COMMON_LEGACY": "explicit-common-value",
+            "EVALUATOR_LEGACY": "legacy-evaluator-value",
+            "GLOBAL_ONLY": "global-value",
+            "PROFILE_DEFAULT_ONLY": "profile-default-value",
+            "PROFILE_ONLY": "evaluator-profile-value",
+            "ROLE_ONLY": "evaluator-role-value",
+            "ROLE_REF": "evaluator-role-ref",
+            "SHARED_KEY": "evaluator-east5-value",
+            "TARGET_ONLY": "evaluator-east5-value",
+        },
+        {
+            "COMMON_LEGACY": "explicit-common-value",
+            "EVALUATOR_LEGACY": "legacy-evaluator-value",
+            "GLOBAL_ONLY": "global-value",
+            "PROFILE_DEFAULT_ONLY": "profile-default-value",
+            "PROFILE_ONLY": "evaluator-profile-value",
+            "ROLE_ONLY": "evaluator-role-value",
+            "ROLE_REF": "evaluator-role-ref",
+            "SHARED_KEY": "evaluator-east1-value",
+            "TARGET_ONLY": "evaluator-east1-value",
+        },
+    ]
 
 
 def test_prepare_gce_launch_inputs_rejects_empty_env_passthrough_value() -> None:
@@ -1240,7 +1464,7 @@ class TestLaunch:
                     _make_provider_neutral_launch_state().worker_fleet_configs
                 ),
                 orchestrator_env={},
-                worker_env={},
+                worker_placement_envs=[],
             )
         )
         mock_validator = mock_validator_cls.return_value
@@ -1268,7 +1492,7 @@ class TestLaunch:
             assert bootstrap_inputs.prepare_mode == "skip_base_images"
             assert bootstrap_inputs.download_benchmarks == "always"
             assert bootstrap_inputs.benchmark_suite == "sanity"
-            assert kwargs["env_passthrough"] == {}
+            assert kwargs["env_passthrough_by_placement"] == []
             call_order.append("create-workers")
             return [_make_gce_worker("worker-east5"), _make_gce_worker("worker-east1")]
 
@@ -1337,10 +1561,16 @@ class TestLaunch:
                 "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
                 "CRSBENCH_LLM_MASTER_KEY": "master-key",
             },
-            worker_env={
-                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
-                "OPENAI_API_KEY": "openai-key",
-            },
+            worker_placement_envs=[
+                {
+                    "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                    "OPENAI_API_KEY": "openai-key",
+                },
+                {
+                    "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                    "OPENAI_API_KEY": "openai-key",
+                },
+            ],
         )
         mock_validator_cls.return_value.validate.return_value = None
 
@@ -1368,10 +1598,18 @@ class TestLaunch:
             "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
             "CRSBENCH_LLM_MASTER_KEY": "master-key",
         }
-        assert mock_adapter.create_workers.call_args.kwargs["env_passthrough"] == {
-            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
-            "OPENAI_API_KEY": "openai-key",
-        }
+        assert mock_adapter.create_workers.call_args.kwargs[
+            "env_passthrough_by_placement"
+        ] == [
+            {
+                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "OPENAI_API_KEY": "openai-key",
+            },
+            {
+                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "OPENAI_API_KEY": "openai-key",
+            },
+        ]
         mock_save_state.assert_called_once()
         saved_state = mock_save_state.call_args.args[1]
         assert saved_state.worker_fleet_configs == expected_worker_fleets
@@ -1428,8 +1666,8 @@ class TestLaunch:
             redacted_worker_fleets=expected_worker_fleets,
             redacted_evaluator_fleets=expected_evaluator_fleets,
             orchestrator_env={},
-            worker_env={},
-            evaluator_env={"ANTHROPIC_API_KEY": "anthropic-key"},
+            worker_placement_envs=[],
+            evaluator_placement_envs=[{"ANTHROPIC_API_KEY": "anthropic-key"}],
         )
         mock_validator_cls.return_value.validate.return_value = None
 
@@ -1452,9 +1690,9 @@ class TestLaunch:
 
         assert rc == 0
         assert mock_adapter.create_evaluators.call_args.kwargs["plan"] is resolved_plan
-        assert mock_adapter.create_evaluators.call_args.kwargs["env_passthrough"] == {
-            "ANTHROPIC_API_KEY": "anthropic-key",
-        }
+        assert mock_adapter.create_evaluators.call_args.kwargs[
+            "env_passthrough_by_placement"
+        ] == [{"ANTHROPIC_API_KEY": "anthropic-key"}]
         saved_state = mock_save_state.call_args.args[1]
         assert saved_state.evaluator_fleet_configs == expected_evaluator_fleets
 

@@ -1214,6 +1214,82 @@ class TestExperimentConfigSchema:
             for placement in config.cloud.evaluators.placements
         )
 
+    def test_cloud_provider_contract_merges_layered_env_maps(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["env"] = {
+            "GLOBAL_ONLY": "global-value",
+            "SHARED_KEY": "global-value",
+        }
+        data["cloud"]["providers"]["gce"]["profile_defaults"]["env"] = {
+            "PROFILE_DEFAULT_ONLY": "profile-default-value",
+            "SHARED_KEY": "profile-default-value",
+        }
+        data["cloud"]["providers"]["gce"]["instance_profiles"]["gce-worker-n2d"] = {
+            "env": {
+                "PROFILE_ONLY": "profile-value",
+                "SHARED_KEY": "profile-value",
+            }
+        }
+        data["cloud"]["orchestrator"]["env"] = {
+            "ORCH_ONLY": "orchestrator-value",
+            "SHARED_KEY": "orchestrator-value",
+        }
+        data["cloud"]["workers"]["defaults"]["env"] = {
+            "ROLE_ONLY": "worker-role-value",
+            "SHARED_KEY": "worker-role-value",
+        }
+        data["cloud"]["workers"]["placements"][0]["env"] = {
+            "PLACEMENT_ONLY": "worker-placement-value",
+            "SHARED_KEY": "worker-placement-value",
+        }
+        data["cloud"]["evaluators"]["defaults"]["env"] = {
+            "ROLE_ONLY": "evaluator-role-value",
+            "SHARED_KEY": "evaluator-role-value",
+        }
+        data["cloud"]["evaluators"]["placements"][0]["env"] = {
+            "PLACEMENT_ONLY": "evaluator-placement-value",
+            "SHARED_KEY": "evaluator-placement-value",
+        }
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.env == {
+            "GLOBAL_ONLY": "global-value",
+            "SHARED_KEY": "global-value",
+        }
+        assert config.cloud.orchestrator is not None
+        assert config.cloud.orchestrator.env == {
+            "ORCH_ONLY": "orchestrator-value",
+            "SHARED_KEY": "orchestrator-value",
+        }
+        assert config.cloud.providers is not None
+        assert config.cloud.providers.gce is not None
+        assert config.cloud.providers.gce.instance_profiles["gce-worker-n2d"].env == {
+            "PROFILE_DEFAULT_ONLY": "profile-default-value",
+            "PROFILE_ONLY": "profile-value",
+            "SHARED_KEY": "profile-value",
+        }
+        assert config.cloud.workers.defaults.env == {
+            "ROLE_ONLY": "worker-role-value",
+            "SHARED_KEY": "worker-role-value",
+        }
+        assert config.cloud.workers.placements[0].env == {
+            "ROLE_ONLY": "worker-role-value",
+            "PLACEMENT_ONLY": "worker-placement-value",
+            "SHARED_KEY": "worker-placement-value",
+        }
+        assert config.cloud.evaluators.defaults.env == {
+            "ROLE_ONLY": "evaluator-role-value",
+            "SHARED_KEY": "evaluator-role-value",
+        }
+        assert config.cloud.evaluators.placements[0].env == {
+            "ROLE_ONLY": "evaluator-role-value",
+            "PLACEMENT_ONLY": "evaluator-placement-value",
+            "SHARED_KEY": "evaluator-placement-value",
+        }
+
     def test_cloud_provider_contract_requires_worker_placement_zone(self):
         data = self._base_kwargs()
         data["cloud"] = self._provider_neutral_cloud_kwargs()
@@ -1278,6 +1354,39 @@ class TestExperimentConfigSchema:
         ],
     )
     def test_cloud_provider_contract_rejects_removed_provider_neutral_fields(
+        self, field_path: str, field_value: object, match: str
+    ):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        target = data["cloud"]
+        path_parts = field_path.split(".")
+        for part in path_parts[:-1]:
+            if part.isdigit():
+                target = target[int(part)]
+            else:
+                target = target[part]
+        target[path_parts[-1]] = field_value
+
+        with pytest.raises(PydanticValidationError, match=match):
+            ExperimentConfig(**data)
+
+    @pytest.mark.parametrize(
+        ("field_path", "field_value", "match"),
+        [
+            ("env", {"": "value"}, "must not contain blank environment names"),
+            (
+                "env",
+                {"BROKEN_REF": "os.environ/not valid"},
+                "invalid os.environ reference",
+            ),
+            (
+                "workers.placements.0.env",
+                {"BROKEN_FILE": "file:"},
+                "invalid file reference",
+            ),
+        ],
+    )
+    def test_cloud_provider_contract_rejects_invalid_env_maps(
         self, field_path: str, field_value: object, match: str
     ):
         data = self._base_kwargs()
