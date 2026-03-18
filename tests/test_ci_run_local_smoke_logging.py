@@ -130,7 +130,7 @@ def test_start_smoke_logged_command_bg_streams_and_stops(tmp_path: Path) -> None
         start_smoke_logged_command_bg "{log_path}" "smoke:bugfinding:worker" \
             bash -lc 'printf "worker-ready\\n"; trap "exit 0" TERM; while :; do sleep 1; done'
         worker_pid="$SMOKE_BG_PID"
-        sleep 0.5
+        sleep 2
         stop_worker_process "$worker_pid" "worker[test]"
         """
     )

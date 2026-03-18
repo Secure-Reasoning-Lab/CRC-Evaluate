@@ -788,11 +788,60 @@ run_smoke_suite_run() {
         [ -n "${_evaluator_logger_pid:-}" ] && kill "${_evaluator_logger_pid}" 2>/dev/null || true
         cleanup_smoke_bg_logging
     }
-    trap _smoke_suite_cleanup EXIT
+    # Per-suite Valkey for full isolation in parallel mode.
+    local suite_valkey_container="" suite_valkey_volume="" suite_redis_host=""
+    _smoke_suite_cleanup_valkey() {
+        if [ -n "$suite_valkey_container" ]; then
+            docker rm -f "$suite_valkey_container" >/dev/null 2>&1 || true
+        fi
+        if [ -n "$suite_valkey_volume" ]; then
+            docker volume rm "$suite_valkey_volume" >/dev/null 2>&1 || true
+        fi
+    }
+    _smoke_suite_full_cleanup() {
+        _smoke_suite_cleanup
+        _smoke_suite_cleanup_valkey
+    }
+    trap _smoke_suite_full_cleanup EXIT
 
     run_stage "$stage_name"
     base_config="$(smoke_config_for_suite "$suite")" || fail "Unknown smoke suite: $suite"
     [ -f "$base_config" ] || fail "Missing smoke config: $base_config"
+
+    # Start per-suite Valkey if no external CRSBENCH_REDIS_HOST is set
+    if [ -z "${CRSBENCH_REDIS_HOST:-}" ]; then
+        local _attempt _port
+        for _attempt in $(seq 1 20); do
+            _port=$(python3 -c "import random; print(random.randint(20000, 50000))")
+            suite_valkey_container="crsbench-smoke-valkey-${suite}-${_port}-$$"
+            suite_valkey_volume="crsbench_smoke_valkey_${suite}_${_port}_$$"
+            if docker run -d \
+                --name "$suite_valkey_container" \
+                -p "127.0.0.1:${_port}:6379" \
+                -v "${suite_valkey_volume}:/data" \
+                valkey/valkey:8.0-alpine \
+                valkey-server --appendonly yes >/dev/null 2>&1; then
+                local _ready=0
+                for _ in $(seq 1 20); do
+                    if docker exec "$suite_valkey_container" valkey-cli ping >/dev/null 2>&1; then
+                        _ready=1; break
+                    fi
+                    sleep 0.2
+                done
+                if [ "$_ready" -eq 1 ]; then
+                    suite_redis_host="localhost:${_port}"
+                    echo "[smoke:${suite}] started per-suite Valkey: container=${suite_valkey_container} host=${suite_redis_host}"
+                    break
+                fi
+                docker rm -f "$suite_valkey_container" >/dev/null 2>&1 || true
+                docker volume rm "$suite_valkey_volume" >/dev/null 2>&1 || true
+                suite_valkey_container="" ; suite_valkey_volume=""
+            fi
+        done
+        [ -n "$suite_redis_host" ] || fail "Failed to start per-suite Valkey for $suite"
+    else
+        suite_redis_host="${CRSBENCH_REDIS_HOST}"
+    fi
 
     workspace=$(mktemp -d "/tmp/crsbench-smoke-${suite}-XXXXXX")
     config_path="$workspace/experiment-config.yaml"
@@ -801,7 +850,7 @@ run_smoke_suite_run() {
     mkdir -p "$exp_dir" "$report_dir"
 
     skip_verification="$(smoke_skip_verification_for_suite "$suite")"
-    render_smoke_config "$suite" "$base_config" "$config_path" "$exp_dir" "$report_dir" "${CRSBENCH_REDIS_HOST}" "$skip_verification" >/dev/null \
+    render_smoke_config "$suite" "$base_config" "$config_path" "$exp_dir" "$report_dir" "$suite_redis_host" "$skip_verification" >/dev/null \
         || fail "Failed to render smoke config for $suite"
 
     # Save workspace path for post-verify phase
@@ -940,11 +989,8 @@ run_smoke_bugfinding() {
     if [ "$bugfind_requires_litellm" = "1" ]; then
         run_litellm_preflight "$bugfind_requires_tracking"
     fi
-    start_temp_valkey
-    trap cleanup_temp_valkey EXIT
+    # Per-suite Valkey started inside run_smoke_suite_run
     run_smoke_suite_config bugfinding "Stage 4a: Smoke Bugfinding (config-first)"
-    trap - EXIT
-    cleanup_temp_valkey
 }
 
 run_smoke_bugfixing() {
@@ -955,11 +1001,8 @@ run_smoke_bugfixing() {
     if [ "$bugfix_requires_litellm" = "1" ]; then
         run_litellm_preflight "$bugfix_requires_tracking"
     fi
-    start_temp_valkey
-    trap cleanup_temp_valkey EXIT
+    # Per-suite Valkey started inside run_smoke_suite_run
     run_smoke_suite_config bugfixing "Stage 4b: Smoke Bugfixing (config-first)"
-    trap - EXIT
-    cleanup_temp_valkey
 }
 
 _smoke_parallel_preflight() {
@@ -990,9 +1033,8 @@ run_smoke_run() {
     run_stage "Stage 4a: Parallel Smoke Run (worker + evaluator + orchestrator)"
     _smoke_parallel_preflight
 
-    start_temp_valkey
-    trap cleanup_temp_valkey EXIT
-
+    # Each suite starts its own Valkey inside run_smoke_suite_run
+    # (per-suite isolation prevents shared-queue corruption).
     local pids=()
     local suites=(bugfinding bugfixing)
     local suite
@@ -1006,8 +1048,6 @@ run_smoke_run() {
         wait "$pid" || rc=1
     done
 
-    trap - EXIT
-    cleanup_temp_valkey
     [ "$rc" -eq 0 ] || fail "Parallel smoke run failed"
     success "Parallel smoke run passed"
 }
@@ -1038,9 +1078,8 @@ run_smoke_parallel() {
     run_stage "Stage 4: Parallel Smoke (config-first)"
     _smoke_parallel_preflight
 
-    start_temp_valkey
-    trap cleanup_temp_valkey EXIT
-
+    # Each suite starts its own Valkey inside run_smoke_suite_run
+    # (per-suite isolation prevents shared-queue corruption).
     local pids=()
     local suites=(bugfinding bugfixing)
     local suite
@@ -1054,8 +1093,6 @@ run_smoke_parallel() {
         wait "$pid" || rc=1
     done
 
-    trap - EXIT
-    cleanup_temp_valkey
     [ "$rc" -eq 0 ] || fail "Parallel smoke failed"
     success "Parallel smoke passed"
 }
