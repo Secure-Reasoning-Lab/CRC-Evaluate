@@ -176,6 +176,14 @@ def test_load_startup_script_contains_managed_worker_service_bootstrap():
     assert "bootstrap_failed" in startup_script
     assert "loginctl enable-linger" in startup_script
     assert "NOPASSWD:ALL" in startup_script
+    assert "dbus-user-session" in startup_script
+    assert 'systemctl restart "user@${CRSBENCH_USER_UID}.service"' in startup_script
+    assert 'CRSBENCH_USER_SERVICE_CGROUP="/sys/fs/cgroup/user.slice/' in startup_script
+    assert (
+        'CRSBENCH_OSS_CRS_CGROUP="${CRSBENCH_USER_SERVICE_CGROUP}/oss-crs"'
+        in startup_script
+    )
+    assert "cgroup.subtree_control" in startup_script
     assert "systemctl --user enable --now crsbench-worker.service" in startup_script
     assert "/etc/systemd/system/crsbench-worker.service" not in startup_script
     assert "/etc/default/crsbench-worker" not in startup_script
@@ -644,6 +652,11 @@ def test_orchestrator_startup_script_consumes_config_payload_and_preprovisioned_
     assert "crsbench-redis-password" in script
     assert "loginctl enable-linger" in script
     assert "NOPASSWD:ALL" in script
+    assert "dbus-user-session" in script
+    assert 'systemctl restart "user@${CRSBENCH_USER_UID}.service"' in script
+    assert 'CRSBENCH_USER_SERVICE_CGROUP="/sys/fs/cgroup/user.slice/' in script
+    assert 'CRSBENCH_OSS_CRS_CGROUP="${CRSBENCH_USER_SERVICE_CGROUP}/oss-crs"' in script
+    assert "cgroup.subtree_control" in script
     assert "systemctl --user enable --now crsbench-orchestrator.service" in script
     assert "python3-pip" in script
     assert "python3-yaml" in script

@@ -316,9 +316,11 @@ evidence.
 The same startup scripts also support local rehearsal via file-backed metadata
 and a foreground launcher mode for non-`systemd` containers. On real GCE VMs,
 the scripts now create a dedicated `crsbench` user, grant passwordless `sudo`
-for disposable-host bootstrap, enforce Docker `cgroupfs`, and run the long-lived
-orchestrator/worker processes as `systemd --user` services so `oss-crs` can use
-its delegated user-cgroup path.
+for disposable-host bootstrap, install the user-session support package needed
+for `/run/user/<uid>/bus`, enforce Docker `cgroupfs`, and run the long-lived
+orchestrator/worker processes as `systemd --user` services while pre-creating
+the delegated `user@<uid>.service/oss-crs` cgroup hierarchy that `oss-crs`
+expects.
 The checked-in smoke config uses `readiness_timeout_sec: 1200` for both
 orchestrator and worker instance profiles to give clean Ubuntu images more room
 to finish bootstrap.

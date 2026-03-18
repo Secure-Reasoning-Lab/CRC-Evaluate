@@ -42,6 +42,8 @@ CRSBENCH_USER_RUNTIME_DIR=""
 CRSBENCH_USER_DBUS_ADDRESS=""
 CRSBENCH_USER_LOCAL_BIN=""
 CRSBENCH_USER_PATH=""
+CRSBENCH_USER_SERVICE_CGROUP=""
+CRSBENCH_OSS_CRS_CGROUP=""
 
 metadata_fetch() {
   local relative_path="$1"
@@ -244,6 +246,27 @@ ensure_system_packages() {
   fi
   echo "Unsupported base image: cannot install git/python/runtime dependencies" >&2
   exit 1
+}
+
+ensure_user_systemd_support_packages() {
+  if ! service_manager_uses_systemd; then
+    return 0
+  fi
+  if ! supports_systemd; then
+    return 0
+  fi
+
+  if command -v apt-get >/dev/null 2>&1; then
+    if dpkg-query -W -f='${Status}' dbus-user-session 2>/dev/null | grep -q "install ok installed"; then
+      return 0
+    fi
+    install_packages dbus-user-session
+    return 0
+  fi
+
+  if command -v apk >/dev/null 2>&1; then
+    install_packages dbus
+  fi
 }
 
 ensure_timezone() {
@@ -456,6 +479,8 @@ ensure_crsbench_user() {
   CRSBENCH_USER_DBUS_ADDRESS="unix:path=${CRSBENCH_USER_RUNTIME_DIR}/bus"
   CRSBENCH_USER_LOCAL_BIN="${CRSBENCH_USER_HOME}/.local/bin"
   CRSBENCH_USER_PATH="${CRSBENCH_USER_LOCAL_BIN}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  CRSBENCH_USER_SERVICE_CGROUP="/sys/fs/cgroup/user.slice/user-${CRSBENCH_USER_UID}.slice/user@${CRSBENCH_USER_UID}.service"
+  CRSBENCH_OSS_CRS_CGROUP="${CRSBENCH_USER_SERVICE_CGROUP}/oss-crs"
 
   install -d -o "${CRSBENCH_USER}" -g "${CRSBENCH_USER}" -m 0755 "${CRSBENCH_USER_HOME}"
   install -d -o "${CRSBENCH_USER}" -g "${CRSBENCH_USER}" -m 0755 "${CRSBENCH_USER_HOME}/.config"
@@ -545,6 +570,56 @@ ensure_uv_for_crsbench() {
   run_crsbench_shell 'curl -LsSf https://astral.sh/uv/install.sh | sh'
 }
 
+enable_cgroup_controllers() {
+  local subtree_control_path="$1"
+  local current=""
+  if [[ -f "${subtree_control_path}" ]]; then
+    current="$(cat "${subtree_control_path}" 2>/dev/null || true)"
+  fi
+
+  local -a missing=()
+  if ! grep -qw cpuset <<<"${current}"; then
+    missing+=("+cpuset")
+  fi
+  if ! grep -qw memory <<<"${current}"; then
+    missing+=("+memory")
+  fi
+  if [[ "${#missing[@]}" -eq 0 ]]; then
+    return 0
+  fi
+  printf '%s\n' "${missing[*]}" > "${subtree_control_path}"
+}
+
+wait_for_user_manager() {
+  for _i in $(seq 1 30); do
+    if systemctl is-active --quiet "user@${CRSBENCH_USER_UID}.service" \
+      && [[ -d "${CRSBENCH_USER_SERVICE_CGROUP}" ]] \
+      && [[ -S "${CRSBENCH_USER_RUNTIME_DIR}/bus" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "systemd user manager did not become ready for ${CRSBENCH_USER}" >&2
+  exit 1
+}
+
+ensure_oss_crs_cgroup_hierarchy() {
+  if ! service_manager_uses_systemd; then
+    return 0
+  fi
+
+  if [[ ! -d "${CRSBENCH_USER_SERVICE_CGROUP}" ]]; then
+    echo "Missing user service cgroup for ${CRSBENCH_USER}: ${CRSBENCH_USER_SERVICE_CGROUP}" >&2
+    exit 1
+  fi
+
+  enable_cgroup_controllers "${CRSBENCH_USER_SERVICE_CGROUP}/cgroup.subtree_control"
+  mkdir -p "${CRSBENCH_OSS_CRS_CGROUP}"
+  chown -R "${CRSBENCH_USER_UID}:${CRSBENCH_USER_GID}" "${CRSBENCH_OSS_CRS_CGROUP}"
+  enable_cgroup_controllers "${CRSBENCH_OSS_CRS_CGROUP}/cgroup.subtree_control"
+}
+
 setup_user_systemd_runtime() {
   if ! service_manager_uses_systemd; then
     return 0
@@ -562,17 +637,9 @@ Delegate=cpuset memory
 EOF
   systemctl daemon-reload
   loginctl enable-linger "${CRSBENCH_USER}"
-  systemctl start "user@${CRSBENCH_USER_UID}.service"
-
-  for _i in $(seq 1 30); do
-    if [[ -S "${CRSBENCH_USER_RUNTIME_DIR}/bus" ]]; then
-      return 0
-    fi
-    sleep 1
-  done
-
-  echo "systemd user manager did not become ready for ${CRSBENCH_USER}" >&2
-  exit 1
+  systemctl restart "user@${CRSBENCH_USER_UID}.service" || systemctl start "user@${CRSBENCH_USER_UID}.service"
+  wait_for_user_manager
+  ensure_oss_crs_cgroup_hierarchy
 }
 
 run_user_systemctl() {
@@ -636,6 +703,7 @@ ensure_docker_ready
 ensure_crsbench_user
 ensure_passwordless_sudo
 ensure_docker_group_membership
+ensure_user_systemd_support_packages
 
 # --- Read metadata ---
 INSTALL_SPEC="$(metadata_get_optional "crsbench-install-spec")"
