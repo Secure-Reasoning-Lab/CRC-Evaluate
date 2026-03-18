@@ -1470,6 +1470,52 @@ class TestConfiglessEvaluator:
         assert result == 0
         assert mock_main.call_args.kwargs["redis_host"] == "redis-env"
 
+    def test_evaluator_cli_config_mode_env_redis_overrides_config_value(self) -> None:
+        """Cloud runtime env redis host should override config-mode placeholder values."""
+        import argparse
+
+        from crsbench.distributed.cli.evaluator_command import run_evaluator
+
+        args = argparse.Namespace(
+            experiment_config="test.yaml",
+            ci=False,
+            verbose=False,
+            no_cpuset=True,
+            cores=None,
+            skip_cpus=None,
+            cpu_tag=None,
+            build_jobs=None,
+            build_cores_per_job=None,
+            verify_cores_per_job=None,
+            verify_jobs=None,
+            worker_name=None,
+            idle_timeout=None,
+            benchmarks_root=None,
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.evaluator.run_evaluator_main", return_value=0
+            ) as mock_main,
+            patch("crsbench.run_experiment.load_experiment_config") as mock_load,
+            patch.dict(
+                "os.environ",
+                {"CRSBENCH_REDIS_HOST": "10.202.0.17:6379"},
+                clear=False,
+            ),
+        ):
+            mock_config = MagicMock()
+            mock_config.experiment = "exp-1"
+            mock_config.redis_host = "redis-server:6379"
+            mock_config.evaluator = None
+            mock_config.resources = None
+            mock_load.return_value = mock_config
+
+            result = run_evaluator(args)
+
+        assert result == 0
+        assert mock_main.call_args.kwargs["redis_host"] == "10.202.0.17:6379"
+
     def test_evaluator_cli_config_mode_whitespace_evaluator_cpu_tag_falls_back_to_resources(
         self,
     ) -> None:
