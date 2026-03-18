@@ -850,7 +850,7 @@ class TestIntegrationWithSampleConfigs:
         assert config.cloud.workers is not None
         assert config.cloud.evaluators is not None
         assert config.cloud.orchestrator is not None
-        assert config.experiment == "gce-sanity-1orch-2worker-1eval"
+        assert config.experiment == "gce-sanity-1o2w1e"
         assert (
             config.cloud.providers.gce.instance_profiles[
                 "gce-worker-n2d"

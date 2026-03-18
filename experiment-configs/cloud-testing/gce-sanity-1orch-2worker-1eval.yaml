@@ -1,5 +1,5 @@
 experiment:
-  name: gce-sanity-1orch-2worker-1eval
+  name: gce-sanity-1o2w1e
   task: bugfinding
   benchmark_suite: sanity
   mode: delta

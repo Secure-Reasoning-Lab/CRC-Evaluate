@@ -105,11 +105,14 @@ Instance profiles carry the per-VM details such as `machine_type`,
 `hf_token`.
 
 By default, provisioned instance names sort naturally in the GCP console:
-`crsbench-<experiment>-<zone>-orchestrator`,
-`crsbench-<experiment>-<zone>-worker-001`,
-and `crsbench-<experiment>-<zone>-evaluator-001`. Worker and evaluator suffixes
+`crsbench-<experiment>-<zone>-orch`,
+`crsbench-<experiment>-<zone>-work-001`,
+and `crsbench-<experiment>-<zone>-eval-001`. Worker and evaluator suffixes
 increase monotonically per experiment, zone, and role, even if the config uses
 multiple placements in the same zone.
+
+If a generated GCE instance name would violate Compute Engine naming rules,
+CRSBench now fails launch before provisioning instead of truncating the name.
 
 ### Bootstrap Policy
 

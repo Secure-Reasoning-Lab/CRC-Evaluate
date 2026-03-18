@@ -153,7 +153,7 @@ class GceProviderAdapter:
                     labels=resolved.labels,
                     metadata=resolved.metadata,
                     worker_name_prefix=(
-                        f"crsbench-{plan.experiment_name}-{placement.zone}-worker"
+                        f"crsbench-{plan.experiment_name}-{placement.zone}-work"
                     ),
                     startup_script_uri=resolved.startup_script_uri,
                     use_os_login=resolved.use_os_login,
@@ -197,7 +197,7 @@ class GceProviderAdapter:
                     labels=resolved.labels,
                     metadata=resolved.metadata,
                     worker_name_prefix=(
-                        f"crsbench-{plan.experiment_name}-{placement.zone}-evaluator"
+                        f"crsbench-{plan.experiment_name}-{placement.zone}-eval"
                     ),
                     startup_script_uri=resolved.startup_script_uri,
                     use_os_login=resolved.use_os_login,

@@ -305,6 +305,23 @@ def test_build_evaluator_requests_include_role_labels_and_config_metadata(tmp_pa
     assert CRSBENCH_EXPERIMENT_CONFIG_B64_KEY in first.metadata
 
 
+def test_build_worker_names_rejects_invalid_gce_name_length():
+    from crsbench.cloud.gce.provisioner import GceProvisioner, GceProvisioningError
+
+    provisioner = GceProvisioner(client=_RecordingClient())
+
+    with pytest.raises(
+        GceProvisioningError, match="Generated GCE instance name is invalid"
+    ):
+        provisioner.build_worker_names(
+            experiment_name="exp-cloud-42",
+            fleet=_make_fleet(
+                worker_name_prefix="crsbench-" + ("x" * 60),
+                worker_count=1,
+            ),
+        )
+
+
 def test_instance_request_renders_compute_proto_field_names() -> None:
     """Rendered instance resources must match compute_v1.Instance field names."""
     from crsbench.cloud.gce.models import GceInstanceRequest
@@ -361,8 +378,8 @@ def test_gce_provider_adapter_builds_worker_fleets_per_placement():
     assert [fleet.worker_count for fleet in fleets] == [2, 1]
     assert all(fleet.project == "test-project" for fleet in fleets)
     assert [fleet.worker_name_prefix for fleet in fleets] == [
-        "crsbench-exp-cloud-42-us-east5-b-worker",
-        "crsbench-exp-cloud-42-us-east1-b-worker",
+        "crsbench-exp-cloud-42-us-east5-b-work",
+        "crsbench-exp-cloud-42-us-east1-b-work",
     ]
 
 
@@ -384,14 +401,14 @@ def test_gce_provider_adapter_offsets_worker_suffixes_for_same_zone_placements()
         experiment_name=plan.experiment_name,
         fleet=fleets[0],
     ) == [
-        "crsbench-exp-cloud-42-us-east5-b-worker-001",
-        "crsbench-exp-cloud-42-us-east5-b-worker-002",
+        "crsbench-exp-cloud-42-us-east5-b-work-001",
+        "crsbench-exp-cloud-42-us-east5-b-work-002",
     ]
     assert provisioner.build_worker_names(
         experiment_name=plan.experiment_name,
         fleet=fleets[1],
     ) == [
-        "crsbench-exp-cloud-42-us-east5-b-worker-003",
+        "crsbench-exp-cloud-42-us-east5-b-work-003",
     ]
 
 
@@ -409,8 +426,8 @@ def test_gce_provider_adapter_builds_evaluator_fleets_per_placement():
     assert [fleet.worker_count for fleet in fleets] == [1, 2]
     assert all(fleet.project == "test-project" for fleet in fleets)
     assert [fleet.worker_name_prefix for fleet in fleets] == [
-        "crsbench-exp-cloud-42-us-east5-b-evaluator",
-        "crsbench-exp-cloud-42-us-east1-b-evaluator",
+        "crsbench-exp-cloud-42-us-east5-b-eval",
+        "crsbench-exp-cloud-42-us-east1-b-eval",
     ]
 
 
@@ -887,9 +904,9 @@ def test_create_orchestrator_defaults_to_experiment_zone_type_name():
 
     client = _RecordingClient()
     client.instances_by_name = {
-        "crsbench-exp-cloud-42-us-east5-b-orchestrator": {
+        "crsbench-exp-cloud-42-us-east5-b-orch": {
             "id": "3002",
-            "name": "crsbench-exp-cloud-42-us-east5-b-orchestrator",
+            "name": "crsbench-exp-cloud-42-us-east5-b-orch",
             "status": "RUNNING",
             "zone": "zones/us-east5-b",
             "networkInterfaces": [{"networkIP": "10.0.0.51"}],
@@ -911,11 +928,30 @@ def test_create_orchestrator_defaults_to_experiment_zone_type_name():
         redis_password="shared-secret",
     )
 
-    assert worker.name == "crsbench-exp-cloud-42-us-east5-b-orchestrator"
+    assert worker.name == "crsbench-exp-cloud-42-us-east5-b-orch"
     assert client.waited == [
         (
             "test-project",
             "us-east5-b",
-            "op-crsbench-exp-cloud-42-us-east5-b-orchestrator",
+            "op-crsbench-exp-cloud-42-us-east5-b-orch",
         )
     ]
+
+
+def test_create_orchestrator_rejects_invalid_gce_name_length():
+    from crsbench.cloud.gce.provisioner import GceProvisioner, GceProvisioningError
+
+    provisioner = GceProvisioner(client=_RecordingClient())
+
+    with pytest.raises(
+        GceProvisioningError, match="Generated GCE instance name is invalid"
+    ):
+        provisioner.create_orchestrator(
+            experiment_name="x" * 48,
+            orchestrator=_make_orchestrator(
+                zone="us-east5-b",
+                instance_name_prefix=None,
+            ),
+            experiment_config_path="config.yaml",
+            redis_password="shared-secret",
+        )

@@ -271,6 +271,7 @@ class GoogleComputeClient:
 
 
 _NAME_PATTERN = re.compile(r"[^a-z0-9-]+")
+_GCE_INSTANCE_NAME_PATTERN = re.compile(r"^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$")
 
 
 def _sanitize_name_fragment(value: str) -> str:
@@ -279,7 +280,17 @@ def _sanitize_name_fragment(value: str) -> str:
         return "worker"
     if not cleaned[0].isalpha():
         cleaned = f"w-{cleaned}"
-    return cleaned[:55].rstrip("-") or "worker"
+    return cleaned
+
+
+def _validate_gce_instance_name(name: str) -> str:
+    if _GCE_INSTANCE_NAME_PATTERN.fullmatch(name):
+        return name
+    raise GceProvisioningError(
+        "Generated GCE instance name is invalid; expected 1-63 chars matching "
+        "^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$ "
+        f"but got {name!r} (length={len(name)})"
+    )
 
 
 def _extract_operation_name(result: Mapping[str, object]) -> str:
@@ -502,7 +513,7 @@ class GceProvisioner:
         )
         start_index = fleet.worker_name_start_index
         return [
-            f"{name_prefix}-{index:03d}"
+            _validate_gce_instance_name(f"{name_prefix}-{index:03d}")
             for index in range(start_index, start_index + fleet.worker_count)
         ]
 
@@ -940,8 +951,8 @@ class GceProvisioner:
             zone_fragment = _sanitize_name_fragment(
                 self._resolve_orchestrator_zone(orchestrator)
             )
-            name = f"crsbench-{experiment_fragment}-{zone_fragment}-orchestrator"
-        return name[:63].rstrip("-") or "orchestrator"
+            name = f"crsbench-{experiment_fragment}-{zone_fragment}-orch"
+        return _validate_gce_instance_name(name)
 
     def _rollback_requests(self, requests: list[GceInstanceRequest]) -> None:
         for request in reversed(requests):

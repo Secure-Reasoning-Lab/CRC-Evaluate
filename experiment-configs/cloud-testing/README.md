@@ -11,6 +11,10 @@ remote-orchestrator flow:
 - 1 evaluator in `us-east5-b`
 - `n2d-standard-16` everywhere
 
+The checked-in experiment identifier inside that file is
+`gce-sanity-1o2w1e` so the generated GCE instance names stay under the
+63-character limit using compact role suffixes: `orch`, `work`, and `eval`.
+
 This config is for:
 
 ```bash
@@ -200,7 +204,7 @@ Expected result:
 Watch status:
 
 ```bash
-uv run crsbench cloud status gce-sanity-1orch-2worker-1eval \
+uv run crsbench cloud status gce-sanity-1o2w1e \
   --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml
 ```
 
@@ -215,7 +219,7 @@ Expected result:
 Watch recovery events:
 
 ```bash
-uv run crsbench cloud events gce-sanity-1orch-2worker-1eval \
+uv run crsbench cloud events gce-sanity-1o2w1e \
   --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml
 ```
 
@@ -227,9 +231,9 @@ Expected result:
 Collect results after completion:
 
 ```bash
-uv run crsbench cloud collect gce-sanity-1orch-2worker-1eval \
+uv run crsbench cloud collect gce-sanity-1o2w1e \
   --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml \
-  --remote-dir /tmp/crsbench/experiment-data/gce-sanity-1orch-2worker-1eval
+  --remote-dir /tmp/crsbench/experiment-data/gce-sanity-1o2w1e
 ```
 
 Expected result:
@@ -241,9 +245,9 @@ Expected result:
 Tear everything down:
 
 ```bash
-uv run crsbench cloud teardown gce-sanity-1orch-2worker-1eval \
+uv run crsbench cloud teardown gce-sanity-1o2w1e \
   --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml \
-  --remote-dir /tmp/crsbench/experiment-data/gce-sanity-1orch-2worker-1eval \
+  --remote-dir /tmp/crsbench/experiment-data/gce-sanity-1o2w1e \
   --force
 ```
 
