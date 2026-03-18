@@ -835,6 +835,12 @@ class TestIntegrationWithSampleConfigs:
         config = load_experiment_config(config_path)
 
         assert config.cloud is not None
+        assert config.build_timeout == 3600
+        assert config.max_total_time > (
+            config.build_timeout + config.run_timeout + config.verify_timeout
+        )
+        assert config.crs_compose is not None
+        assert set(config.crs_compose.services) == {"crs-libfuzzer"}
         assert config.cloud.bootstrap.prepare_mode == "full"
         assert config.cloud.bootstrap.download_benchmarks == "auto"
         assert config.cloud.providers is not None
@@ -864,10 +870,20 @@ class TestIntegrationWithSampleConfigs:
             == 1200
         )
         assert (
+            config.cloud.providers.gce.instance_profiles["worker-n2d"].boot_disk_size_gb
+            == 100
+        )
+        assert (
             config.cloud.providers.gce.instance_profiles[
                 "orchestrator-n2d"
             ].crsbench_install_spec
             == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+        )
+        assert (
+            config.cloud.providers.gce.instance_profiles[
+                "orchestrator-n2d"
+            ].boot_disk_size_gb
+            == 100
         )
         assert (
             config.cloud.providers.gce.instance_profiles[

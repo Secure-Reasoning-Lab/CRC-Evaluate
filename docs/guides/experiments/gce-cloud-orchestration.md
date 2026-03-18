@@ -43,7 +43,7 @@ cloud:
       instance_profiles:
         orchestrator-n2d:
           machine_type: n2d-standard-16
-          boot_disk_size_gb: 50
+          boot_disk_size_gb: 100
           image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
           service_account_email: crsbench-orchestrator@my-gcp-project.iam.gserviceaccount.com
           owner_label: my-team
@@ -51,7 +51,7 @@ cloud:
           crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
         worker-n2d:
           machine_type: n2d-standard-16
-          boot_disk_size_gb: 50
+          boot_disk_size_gb: 100
           image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
           service_account_email: crsbench-worker@my-gcp-project.iam.gserviceaccount.com
           owner_label: my-team
@@ -323,8 +323,9 @@ the delegated `user@<uid>.service/crsbench` and
 `user@<uid>.service/oss-crs` cgroup hierarchies expected by the CRSBench
 runtime and the `oss-crs` CLI.
 The checked-in smoke config uses `readiness_timeout_sec: 1200` for both
-orchestrator and worker instance profiles to give clean Ubuntu images more room
-to finish bootstrap.
+orchestrator and worker instance profiles, `boot_disk_size_gb: 100` for both VM
+roles, and `runtime.build_timeout: 3600` so fresh-image smoke runs have room to
+finish bootstrap plus a real CRS prepare/build cycle.
 
 ## Monitoring
 

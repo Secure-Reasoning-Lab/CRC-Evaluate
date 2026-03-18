@@ -5,8 +5,8 @@ experiment:
   mode: delta
 runtime:
   trials: 1
-  max_total_time: 3600
-  build_timeout: 1200
+  max_total_time: 7200
+  build_timeout: 3600
   run_timeout: 600
   verify_timeout: 600
   redis_host: ignored:6379
@@ -29,5 +29,5 @@ worker:
 crs_compose:
   oss_crs_infra:
     shared: true
-  atlantis-multilang-given_fuzzer:
+  crs-libfuzzer:
     num_cores: 2

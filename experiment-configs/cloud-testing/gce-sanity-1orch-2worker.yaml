@@ -5,8 +5,8 @@ experiment:
   mode: delta
 runtime:
   trials: 1
-  max_total_time: 3600
-  build_timeout: 1200
+  max_total_time: 7200
+  build_timeout: 3600
   run_timeout: 600
   verify_timeout: 600
   redis_host: redis-server:6379
@@ -29,7 +29,7 @@ worker:
 crs_compose:
   oss_crs_infra:
     shared: true
-  atlantis-multilang-given_fuzzer:
+  crs-libfuzzer:
     num_cores: 2
 evaluator:
   cores_per_job: 4
@@ -48,7 +48,7 @@ cloud:
       instance_profiles:
         orchestrator-n2d:
           machine_type: n2d-standard-16
-          boot_disk_size_gb: 50
+          boot_disk_size_gb: 100
           image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
           service_account_email: 153298433405-compute@developer.gserviceaccount.com
           owner_label: yufu
@@ -59,7 +59,7 @@ cloud:
           hf_token: os.environ/HF_TOKEN
         worker-n2d:
           machine_type: n2d-standard-16
-          boot_disk_size_gb: 50
+          boot_disk_size_gb: 100
           image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
           service_account_email: 153298433405-compute@developer.gserviceaccount.com
           owner_label: yufu

@@ -125,6 +125,9 @@ def test_default_rehearsal_experiment_config_is_valid() -> None:
     )
 
     assert config.experiment == "local-cloud-rehearsal"
+    assert config.build_timeout == 3600
+    assert config.crs_compose is not None
+    assert set(config.crs_compose.services) == {"crs-libfuzzer"}
     assert config.max_total_time > (
         config.build_timeout + config.run_timeout + config.verify_timeout
     )

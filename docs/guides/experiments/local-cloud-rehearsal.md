@@ -50,6 +50,8 @@ scripts/cloud-rehearsal/run-local-rehearsal.sh down -v
 Default rehearsal config:
 
 - [`scripts/cloud-rehearsal/local-experiment.yaml`](../../../scripts/cloud-rehearsal/local-experiment.yaml)
+  - mirrors the checked-in GCE smoke path with `crs-libfuzzer` and the same
+    longer build window used for cloud testing
 
 Default topology:
 
