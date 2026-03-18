@@ -358,6 +358,23 @@ CRSBench also appends every created VM name to
 `.crsbench-cloud/created-instances.cache` as local JSONL history so you still
 have a garbage-collection ledger even if you forget to tear down a prior run.
 
+### Live Queue Attach
+
+After `cloud launch`, you can attach to the remote orchestrator's live trial
+queue from the operator machine:
+
+```bash
+uv run crsbench cloud monitor my-experiment --config config.yaml
+```
+
+This command requires the config-adjacent launch state written by
+`cloud launch`. CRSBench opens a temporary SSH or IAP tunnel to the remote
+orchestrator automatically, attaches to the orchestrator-local Redis service,
+and renders the same live queue progress view used by `crsbench run`.
+
+Use `cloud status` when you want a one-shot fleet and lifecycle snapshot. Use
+`cloud monitor` when you want the continuously updating queue view.
+
 Bootstrap failures are reported with per-instance evidence, so you can
 diagnose issues without SSH-ing into VMs.
 

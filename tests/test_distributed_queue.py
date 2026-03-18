@@ -48,3 +48,28 @@ def test_probe_redis_connection_reports_fatal_auth_failures(
 
     assert probe_state == queue_module.RedisConnectionProbe.FATAL
     assert "bad password" in detail
+
+
+@patch.object(queue_module.rq, "Queue")
+@patch.object(queue_module, "create_redis_connection")
+def test_initialize_queue_passes_explicit_redis_password(
+    mock_create_redis_connection: Mock,
+    mock_queue_cls: Mock,
+) -> None:
+    """Queue initialization should forward explicit Redis credentials."""
+    connection = Mock()
+    queue = Mock()
+    mock_create_redis_connection.return_value = connection
+    mock_queue_cls.return_value = queue
+
+    result = queue_module.initialize_queue(
+        "redis.internal:6379",
+        "test-exp",
+        redis_password="shared-secret",
+    )
+
+    assert result is queue
+    mock_create_redis_connection.assert_called_once_with(
+        "redis.internal:6379",
+        redis_password="shared-secret",
+    )

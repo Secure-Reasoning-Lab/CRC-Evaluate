@@ -190,8 +190,14 @@ def _resolve_provider_profile(
     return ResolvedInstanceProfile(
         provider=provider_name,
         name=profile_name,
-        provider_config=provider_config.model_dump(exclude_none=True),
-        profile_config=profile.model_dump(exclude_none=True),
+        provider_config=provider_config.model_dump(
+            exclude_none=True,
+            exclude_unset=True,
+        ),
+        profile_config=profile.model_dump(
+            exclude_none=True,
+            exclude_unset=True,
+        ),
     )
 
 

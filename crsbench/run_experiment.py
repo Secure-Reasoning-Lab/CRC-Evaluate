@@ -30,7 +30,6 @@ import secrets
 import shutil
 import string
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import List
@@ -46,6 +45,13 @@ from crsbench.distributed.jobs import (
     _check_existing_trial,
     get_crs_type,
 )
+from crsbench.distributed.queue_monitor import (
+    QueueMonitorCallbacks,
+    monitor_queue,
+)
+from crsbench.distributed.queue_monitor import (
+    get_experiment_queue_stats as get_shared_queue_stats,
+)
 from crsbench.evaluation.cleanup import cleanup_trial_directory
 from crsbench.evaluation.results import TrialMetadata, TrialResult
 from crsbench.evaluation.trial_paths import (
@@ -54,7 +60,7 @@ from crsbench.evaluation.trial_paths import (
 from crsbench.evaluation.trial_paths import (
     resolve_benchmarks_root,
 )
-from crsbench.utils import log_progress, log_section, log_summary
+from crsbench.utils import log_section
 from crsbench.utils.benchmark_utils import (
     filter_benchmarks_by_mode,
     get_available_modes_for_benchmark,
@@ -1320,17 +1326,88 @@ def _get_experiment_queue_stats(queue, experiment_name: str) -> dict:
     finished/failed jobs only for the target experiment while still reporting
     the total number of connected workers for operator visibility.
     """
-    from crsbench.distributed.queue import get_existing_trials, get_queue_stats
+    return get_shared_queue_stats(queue, experiment_name)
 
-    global_stats = get_queue_stats(queue)
-    existing = get_existing_trials(queue, experiment_name=experiment_name)
-    return {
-        "queued": len(existing["queued"]),
-        "started": len(existing["started"]),
-        "finished": len(existing["finished"]),
-        "failed": len(existing["failed"]),
-        "workers": global_stats.get("workers", 0),
-    }
+
+def _build_failed_job_result(job) -> TrialResult:
+    """Create a synthetic failed TrialResult for RQ-level job failures."""
+    kwargs = job.kwargs or {}
+    meta = job.meta or {}
+    return TrialResult(
+        crs=kwargs.get("crs", "unknown"),
+        benchmark=kwargs.get("benchmark", "unknown"),
+        harness=kwargs.get("harness_name", meta.get("harness", "unknown")),
+        trial_num=kwargs.get("trial_num", 0),
+        crs_type="bug-finding",
+        mode=kwargs.get("mode"),
+        sanitizer=kwargs.get("sanitizer"),
+        target_cpv_id=kwargs.get("target_cpv_id"),
+        success=False,
+        execution_time=0.0,
+        error=f"Job failed: {job.exc_info}",
+        error_type="RQJobFailure",
+        report={},
+        metadata=TrialMetadata(
+            timestamp_start=0.0,
+            timestamp_end=0.0,
+            worker_machine=meta.get("worker_name"),
+        ),
+    )
+
+
+def _build_monitor_callbacks(
+    config: ExperimentConfig,
+) -> QueueMonitorCallbacks:
+    """Build marker-writing callbacks for the shared queue monitor."""
+    marked_jobs: set[str] = set()
+
+    def on_job_finished(job) -> None:
+        job_id = getattr(job, "id", None)
+        if not isinstance(job_id, str) or job_id in marked_jobs:
+            return
+        try:
+            result = job.result
+            if result is None:
+                logger.warning(f"Job {job_id[:8]} finished but result is None")
+                _write_orchestrator_marker(_build_missing_job_result(job), config)
+            else:
+                _write_orchestrator_marker(result, config)
+        except Exception as exc:
+            logger.warning(
+                f"Failed to write orchestrator marker for {job_id[:8]}: {exc}"
+            )
+        finally:
+            marked_jobs.add(job_id)
+
+    def on_job_failed(job) -> None:
+        job_id = getattr(job, "id", None)
+        if not isinstance(job_id, str) or job_id in marked_jobs:
+            return
+        try:
+            _write_orchestrator_marker(_build_failed_job_result(job), config)
+        except Exception as exc:
+            logger.warning(f"Failed to write orchestrator fail marker: {exc}")
+        finally:
+            marked_jobs.add(job_id)
+
+    return QueueMonitorCallbacks(
+        on_job_finished=on_job_finished,
+        on_job_failed=on_job_failed,
+    )
+
+
+def _collect_monitored_results(job_list: List) -> List[TrialResult]:
+    """Collect trial results after the shared queue monitor exits."""
+    results: List[TrialResult] = []
+    for job in job_list:
+        job.refresh()
+        if job.result is not None:
+            results.append(job.result)
+        elif job.is_finished:
+            results.append(_build_missing_job_result(job))
+        elif job.is_failed:
+            results.append(_build_failed_job_result(job))
+    return results
 
 
 def _monitor_jobs_basic(
@@ -1343,170 +1420,18 @@ def _monitor_jobs_basic(
     registry=None,
 ) -> List[TrialResult]:
     """Basic job monitoring without Rich UI."""
-    last_renew = time.monotonic()
     logger.info(f"\nMonitoring {len(job_list)} jobs for experiment: {experiment_name}")
-
-    # Track jobs that have already had markers written
-    marked_jobs: set[str] = set()
-
-    while True:
-        stats = _get_experiment_queue_stats(queue, experiment_name)
-
-        # Display stats
-        log_section(f"Experiment: {experiment_name}", width=60)
-        logger.info(f"Workers connected: {stats.get('workers', 0)}")
-        status_dict = {
-            "queued": stats["queued"],
-            "started": stats["started"],
-            "finished": stats["finished"],
-            "failed": stats["failed"],
-        }
-        if disk_skipped > 0:
-            status_dict["skipped (disk)"] = disk_skipped
-        status_dict["total"] = len(job_list) + disk_skipped
-        log_summary(
-            "Queue Status",
-            status_dict,
-            show_percentage=False,
-            level="debug",
-        )
-
-        # Display currently running jobs with metadata
-        running_jobs = []
-        for job in job_list:
-            job.refresh()
-            if job.get_status() == "started":
-                worker_name = job.meta.get("worker_name", "?")
-                crs = job.meta.get("crs", "?")
-                benchmark = job.meta.get("benchmark", "?")
-                harness = job.meta.get("harness", "?")
-                target_cpv_id = job.meta.get("target_cpv_id", "-")
-                mode = job.meta.get("mode", "?")
-                trial_num = job.meta.get("trial_num", "?")
-                phase = job.meta.get("phase", "queued")
-                phase_started_at = job.meta.get("phase_started_at")
-                elapsed = ""
-                if phase_started_at:
-                    elapsed_sec = int(time.time() - phase_started_at)
-                    mins, secs = divmod(elapsed_sec, 60)
-                    elapsed = f"{mins}m{secs}s"
-                running_jobs.append(
-                    f"  [{worker_name}] [{crs}] {benchmark}/{harness} cpv={target_cpv_id} mode={mode} trial={trial_num} phase={phase} ({elapsed})"
-                )
-
-        if running_jobs:
-            logger.info("Currently Running:")
-            for line in running_jobs:
-                logger.info(line)
-
-        # Check if all jobs completed and write markers incrementally
-        completed = 0
-        failed = 0
-        for job in job_list:
-            job.refresh()
-            if job.is_finished:
-                completed += 1
-                # Write orchestrator marker as soon as job finishes
-                if job.id not in marked_jobs:
-                    try:
-                        result = job.result
-                        if result is None:
-                            logger.warning(
-                                f"Job {job.id[:8]} finished but result is None"
-                            )
-                            _write_orchestrator_marker(
-                                _build_missing_job_result(job), config
-                            )
-                        else:
-                            _write_orchestrator_marker(result, config)
-                        marked_jobs.add(job.id)
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to write orchestrator marker for {job.id[:8]}: {e}"
-                        )
-                        marked_jobs.add(job.id)
-            elif job.is_failed:
-                failed += 1
-                # Write .fail marker for RQ-level failures
-                if job.id not in marked_jobs:
-                    kwargs = job.kwargs or {}
-                    meta = job.meta or {}
-                    fail_result = TrialResult(
-                        crs=kwargs.get("crs", "unknown"),
-                        benchmark=kwargs.get("benchmark", "unknown"),
-                        harness=kwargs.get("harness_name", "unknown"),
-                        trial_num=kwargs.get("trial_num", 0),
-                        crs_type="bug-finding",
-                        mode=kwargs.get("mode"),
-                        sanitizer=kwargs.get("sanitizer"),
-                        success=False,
-                        execution_time=0.0,
-                        error=f"Job failed: {job.exc_info}",
-                        error_type="RQJobFailure",
-                        report={},
-                        metadata=TrialMetadata(
-                            timestamp_start=0.0,
-                            timestamp_end=0.0,
-                            worker_machine=meta.get("worker_name"),
-                        ),
-                    )
-                    try:
-                        _write_orchestrator_marker(fail_result, config)
-                    except Exception as e:
-                        logger.warning(f"Failed to write orchestrator fail marker: {e}")
-                    marked_jobs.add(job.id)
-
-        log_progress(
-            completed + failed,
-            len(job_list),
-            f"Jobs complete ({completed} success, {failed} failed)",
-        )
-
-        if completed + failed >= len(job_list):
-            break
-
-        if registry and time.monotonic() - last_renew >= 60:
-            if not registry.renew(experiment_name):
-                logger.warning("Experiment lock lost — another run may have taken over")
-            last_renew = time.monotonic()
-
-        time.sleep(3)
-
-    # Collect results
-    results: List[TrialResult] = []
-    for job in job_list:
-        job.refresh()
-        if job.result is not None:
-            results.append(job.result)
-        elif job.is_finished:
-            results.append(_build_missing_job_result(job))
-        elif job.is_failed:
-            # Create TrialResult for failed jobs using job kwargs
-            kwargs = job.kwargs or {}
-            meta = job.meta or {}
-            results.append(
-                TrialResult(
-                    crs=kwargs.get("crs", "unknown"),
-                    benchmark=kwargs.get("benchmark", "unknown"),
-                    harness=kwargs.get("harness_name", "unknown"),
-                    trial_num=kwargs.get("trial_num", 0),
-                    crs_type="bug-finding",
-                    mode=kwargs.get("mode"),
-                    sanitizer=kwargs.get("sanitizer"),
-                    success=False,
-                    execution_time=0.0,
-                    error=f"Job failed: {job.exc_info}",
-                    error_type="RQJobFailure",
-                    report={},
-                    metadata=TrialMetadata(
-                        timestamp_start=0.0,
-                        timestamp_end=0.0,
-                        worker_machine=meta.get("worker_name"),
-                    ),
-                )
-            )
-
-    return results
+    monitor_queue(
+        queue,
+        experiment_name,
+        tracked_jobs=job_list,
+        total_jobs=len(job_list),
+        disk_skipped=disk_skipped,
+        registry=registry,
+        callbacks=_build_monitor_callbacks(config),
+        use_rich=False,
+    )
+    return _collect_monitored_results(job_list)
 
 
 def _monitor_jobs_rich(
@@ -1519,193 +1444,18 @@ def _monitor_jobs_rich(
     registry=None,
 ) -> List[TrialResult]:
     """Monitor jobs with Rich UI."""
-    from rich.console import Console, Group
-    from rich.live import Live
-    from rich.table import Table
-
-    console = Console()
-
-    # Track jobs that have already had markers written
-    marked_jobs: set[str] = set()
-
-    def generate_status_table():
-        stats = _get_experiment_queue_stats(queue, experiment_name)
-
-        # Debug: log queue info
-        logger.debug(f"Experiment queue stats for {experiment_name}: {stats}")
-
-        # Queue status table
-        table = Table(title=f"Experiment: {experiment_name}")
-        table.add_column("Status", style="cyan")
-        table.add_column("Count", justify="right", style="magenta")
-
-        table.add_row("Queued", str(stats["queued"]))
-        table.add_row("Started", str(stats["started"]))
-        table.add_row("Finished", str(stats["finished"]), style="green")
-        table.add_row("Failed", str(stats["failed"]), style="red")
-        if disk_skipped > 0:
-            table.add_row("Skipped (disk)", str(disk_skipped), style="dim")
-        table.add_row("Total", str(len(job_list) + disk_skipped))
-
-        # Running jobs table
-        running_table = Table(title="Running Jobs")
-        running_table.add_column("Worker", style="green")
-        running_table.add_column("CRS", style="cyan")
-        running_table.add_column("Benchmark", style="yellow")
-        running_table.add_column("Harness", style="yellow")
-        running_table.add_column("CPV", style="magenta")
-        running_table.add_column("Mode", style="blue")
-        running_table.add_column("Trial", justify="right")
-        running_table.add_column("Phase", style="magenta")
-        running_table.add_column("Elapsed", justify="right", style="magenta")
-
-        for job in job_list:
-            job.refresh()
-            status = job.get_status()
-            logger.debug(
-                f"Job {job.id[:8]}: status={status}, is_queued={job.is_queued}, is_started={job.is_started}, is_finished={job.is_finished}"
-            )
-            if status == "started":
-                worker_name = job.meta.get("worker_name", "?")
-                crs = job.meta.get("crs", "?")
-                benchmark = job.meta.get("benchmark", "?")
-                harness = job.meta.get("harness", "?")
-                target_cpv_id = job.meta.get("target_cpv_id", "-")
-                mode = job.meta.get("mode", "?")
-                trial_num = str(job.meta.get("trial_num", "?"))
-                phase = job.meta.get("phase", "queued")
-                phase_started_at = job.meta.get("phase_started_at")
-                elapsed = "N/A"
-                if phase_started_at:
-                    elapsed_sec = int(time.time() - phase_started_at)
-                    mins, secs = divmod(elapsed_sec, 60)
-                    elapsed = f"{mins}m {secs}s"
-                running_table.add_row(
-                    worker_name,
-                    crs,
-                    benchmark,
-                    harness,
-                    target_cpv_id,
-                    mode,
-                    trial_num,
-                    phase,
-                    elapsed,
-                )
-
-        return Group(table, running_table)
-
-    last_renew = time.monotonic()
-    with Live(generate_status_table(), refresh_per_second=1, console=console) as live:
-        while True:
-            # Check if all jobs completed and write markers incrementally
-            completed = 0
-            failed = 0
-            for job in job_list:
-                job.refresh()
-                if job.is_finished:
-                    completed += 1
-                    if job.id not in marked_jobs:
-                        try:
-                            result = job.result
-                            if result is None:
-                                logger.warning(
-                                    f"Job {job.id[:8]} finished but result is None"
-                                )
-                                _write_orchestrator_marker(
-                                    _build_missing_job_result(job), config
-                                )
-                            else:
-                                _write_orchestrator_marker(result, config)
-                            marked_jobs.add(job.id)
-                        except Exception as e:
-                            logger.warning(
-                                f"Failed to write orchestrator marker for "
-                                f"{job.id[:8]}: {e}"
-                            )
-                            marked_jobs.add(job.id)
-                elif job.is_failed:
-                    failed += 1
-                    if job.id not in marked_jobs:
-                        kwargs = job.kwargs or {}
-                        meta = job.meta or {}
-                        fail_result = TrialResult(
-                            crs=kwargs.get("crs", "unknown"),
-                            benchmark=kwargs.get("benchmark", "unknown"),
-                            harness=kwargs.get("harness_name", "unknown"),
-                            trial_num=kwargs.get("trial_num", 0),
-                            crs_type="bug-finding",
-                            mode=kwargs.get("mode"),
-                            sanitizer=kwargs.get("sanitizer"),
-                            target_cpv_id=kwargs.get("target_cpv_id"),
-                            success=False,
-                            execution_time=0.0,
-                            error=f"Job failed: {job.exc_info}",
-                            error_type="RQJobFailure",
-                            report={},
-                            metadata=TrialMetadata(
-                                timestamp_start=0.0,
-                                timestamp_end=0.0,
-                                worker_machine=meta.get("worker_name"),
-                            ),
-                        )
-                        try:
-                            _write_orchestrator_marker(fail_result, config)
-                        except Exception as e:
-                            logger.warning(
-                                f"Failed to write orchestrator fail marker: {e}"
-                            )
-                        marked_jobs.add(job.id)
-
-            if completed + failed >= len(job_list):
-                break
-
-            if registry and time.monotonic() - last_renew >= 60:
-                if not registry.renew(experiment_name):
-                    logger.warning(
-                        "Experiment lock lost — another run may have taken over"
-                    )
-                last_renew = time.monotonic()
-
-            live.update(generate_status_table())
-            time.sleep(1)
-
-    # Collect results
-    results: List[TrialResult] = []
-    for job in job_list:
-        job.refresh()
-        if job.result is not None:
-            results.append(job.result)
-        elif job.is_finished:
-            results.append(_build_missing_job_result(job))
-        elif job.is_failed:
-            # Create TrialResult for failed jobs using job kwargs
-            kwargs = job.kwargs or {}
-            meta = job.meta or {}
-            results.append(
-                TrialResult(
-                    crs=kwargs.get("crs", "unknown"),
-                    benchmark=kwargs.get("benchmark", "unknown"),
-                    harness=kwargs.get("harness_name", "unknown"),
-                    trial_num=kwargs.get("trial_num", 0),
-                    crs_type="bug-finding",
-                    mode=kwargs.get("mode"),
-                    sanitizer=kwargs.get("sanitizer"),
-                    target_cpv_id=kwargs.get("target_cpv_id"),
-                    success=False,
-                    execution_time=0.0,
-                    error=f"Job failed: {job.exc_info}",
-                    error_type="RQJobFailure",
-                    report={},
-                    metadata=TrialMetadata(
-                        timestamp_start=0.0,
-                        timestamp_end=0.0,
-                        worker_machine=meta.get("worker_name"),
-                    ),
-                )
-            )
-
-    console.print("\n[green]✓[/green] All jobs completed!")
-    return results
+    monitor_queue(
+        queue,
+        experiment_name,
+        tracked_jobs=job_list,
+        total_jobs=len(job_list),
+        disk_skipped=disk_skipped,
+        registry=registry,
+        callbacks=_build_monitor_callbacks(config),
+        use_rich=True,
+        poll_interval=1.0,
+    )
+    return _collect_monitored_results(job_list)
 
 
 def _build_missing_job_result(job) -> TrialResult:

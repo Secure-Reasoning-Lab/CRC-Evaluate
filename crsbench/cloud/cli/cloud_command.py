@@ -18,6 +18,7 @@ def add_cloud_subparser(subparsers) -> None:
         epilog="""
 Examples:
   %(prog)s status my-experiment --config config.yaml
+  %(prog)s monitor my-experiment --config config.yaml
   %(prog)s events my-experiment --config config.yaml --type orphan_detected
   %(prog)s teardown my-experiment --config config.yaml --force
         """,
@@ -34,6 +35,16 @@ Examples:
     )
     status_p.add_argument(
         "--json", action="store_true", dest="json_output", help="JSON output"
+    )
+
+    # monitor
+    monitor_p = cloud_subparsers.add_parser(
+        "monitor",
+        help="Attach to a launched remote orchestrator and show live queue progress",
+    )
+    monitor_p.add_argument("experiment", help="Experiment name")
+    monitor_p.add_argument(
+        "--config", required=True, help="Path to experiment YAML config"
     )
 
     # teardown
@@ -128,6 +139,11 @@ def run_cloud(args: argparse.Namespace) -> int:
         from crsbench.cloud.cli._status import run_status
 
         return run_status(args)
+
+    if cmd == "monitor":
+        from crsbench.cloud.cli._monitor import run_monitor
+
+        return run_monitor(args)
 
     if cmd == "events":
         from crsbench.cloud.cli._events import run_events

@@ -2,6 +2,13 @@
 
 Use this page for queue cleanup, continue-vs-fresh behavior, and retry flows.
 
+## Snapshot Versus Live Attach
+
+- `crsbench cloud status <experiment> --config <config.yaml>` prints a one-shot
+  fleet, job, and recovery snapshot.
+- `crsbench cloud monitor <experiment> --config <config.yaml>` attaches to a
+  launched remote orchestrator and keeps refreshing the live trial-queue view.
+
 ## Cleaning an Experiment Queue
 
 ```bash

@@ -148,6 +148,7 @@ def create_redis_connection(
     redis_host: str,
     *,
     socket_connect_timeout: int = 5,
+    redis_password: str | None = None,
 ) -> "redis.Redis":
     """Create a Redis connection with auto-detection of password requirement.
 
@@ -161,6 +162,8 @@ def create_redis_connection(
     Args:
         redis_host: Redis server hostname or IP address
         socket_connect_timeout: Connection timeout in seconds
+        redis_password: Optional explicit Redis password override. Falls back to
+            ``CRSBENCH_REDIS_PASSWORD`` when unset.
 
     Returns:
         Connected and pinged Redis client
@@ -179,7 +182,9 @@ def create_redis_connection(
         )
 
     resolved_host, resolved_port = _resolve_redis_endpoint(redis_host)
-    password = os.environ.get("CRSBENCH_REDIS_PASSWORD") or None
+    password = redis_password
+    if password is None:
+        password = os.environ.get("CRSBENCH_REDIS_PASSWORD") or None
 
     # Fast path: use cached auth decision
     if _auth_required is True and password:
@@ -292,13 +297,20 @@ def check_redis_available(redis_host: str, timeout: int = 2) -> bool:
     return probe_state is RedisConnectionProbe.READY
 
 
-def initialize_queue(redis_host: str, experiment_name: str) -> Optional["rq.Queue"]:
+def initialize_queue(
+    redis_host: str,
+    experiment_name: str,
+    *,
+    redis_password: str | None = None,
+) -> Optional["rq.Queue"]:
     """
     Initialize Redis-backed RQ queue for an experiment.
 
     Args:
         redis_host: Redis server hostname or IP address
         experiment_name: Experiment identifier for queue naming
+        redis_password: Optional explicit Redis password override. Falls back to
+            ``CRSBENCH_REDIS_PASSWORD`` when unset.
 
     Returns:
         rq.Queue: Initialized RQ queue, or None if Redis unavailable
@@ -325,7 +337,10 @@ def initialize_queue(redis_host: str, experiment_name: str) -> Optional["rq.Queu
     logger.info(f"Initializing queue: {queue_name}")
 
     try:
-        redis_connection = create_redis_connection(redis_host)
+        redis_connection = create_redis_connection(
+            redis_host,
+            redis_password=redis_password,
+        )
 
         queue = rq.Queue(queue_name, connection=redis_connection)  # type: ignore[attr-defined]
         logger.info(f"Queue initialized successfully: {queue_name}")

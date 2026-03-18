@@ -526,6 +526,52 @@ def test_build_cloud_launch_plan_merges_provider_launch_defaults_override():
     )
 
 
+def test_provider_level_ssh_via_iap_flows_to_resolved_gce_configs():
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+    from crsbench.cloud.models import build_cloud_launch_plan
+
+    raw_config = _make_provider_neutral_experiment_config().model_dump(
+        mode="json",
+        exclude_none=True,
+        exclude_defaults=True,
+    )
+    raw_config["cloud"]["providers"]["gce"]["ssh_via_iap"] = True
+    config = ExperimentConfig.model_validate(raw_config)
+
+    plan = build_cloud_launch_plan(config)
+    adapter = GceProviderAdapter()
+
+    assert adapter.build_orchestrator_config(plan).ssh_via_iap is True
+    assert all(fleet.ssh_via_iap is True for fleet in adapter.build_worker_fleets(plan))
+
+
+def test_profile_level_ssh_via_iap_override_beats_provider_default():
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+    from crsbench.cloud.models import build_cloud_launch_plan
+
+    raw_config = _make_provider_neutral_experiment_config().model_dump(
+        mode="json",
+        exclude_none=True,
+        exclude_defaults=True,
+    )
+    raw_config["cloud"]["providers"]["gce"]["ssh_via_iap"] = True
+    raw_config["cloud"]["providers"]["gce"]["instance_profiles"][
+        "gce-orchestrator-n2d"
+    ]["ssh_via_iap"] = False
+    raw_config["cloud"]["providers"]["gce"]["instance_profiles"]["gce-worker-n2d"][
+        "ssh_via_iap"
+    ] = False
+    config = ExperimentConfig.model_validate(raw_config)
+
+    plan = build_cloud_launch_plan(config)
+    adapter = GceProviderAdapter()
+
+    assert adapter.build_orchestrator_config(plan).ssh_via_iap is False
+    assert all(
+        fleet.ssh_via_iap is False for fleet in adapter.build_worker_fleets(plan)
+    )
+
+
 def test_build_cloud_launch_plan_merges_layered_env_for_targets():
     from crsbench.cloud.models import build_cloud_launch_plan
 
@@ -1084,12 +1130,87 @@ class TestArgParsing:
         assert args.cloud_command == "launch"
         assert args.config == "c.yaml"
 
+    def test_parse_monitor(self):
+        parser = self._build_parser()
+        args = parser.parse_args(["cloud", "monitor", "my-exp", "--config", "c.yaml"])
+        assert args.command == "cloud"
+        assert args.cloud_command == "monitor"
+        assert args.experiment == "my-exp"
+        assert args.config == "c.yaml"
+
 
 def _make_launch_args(config: str = "/tmp/config.yaml"):
     return argparse.Namespace(
         config=config,
         cloud_command="launch",
     )
+
+
+def _make_monitor_args(
+    experiment: str = "test-exp",
+    config: str = "/tmp/config.yaml",
+):
+    return argparse.Namespace(
+        experiment=experiment,
+        config=config,
+        cloud_command="monitor",
+    )
+
+
+@patch("crsbench.cloud.cli._monitor.run_monitor", return_value=0)
+def test_run_cloud_dispatches_monitor(mock_run_monitor):
+    from crsbench.cloud.cli.cloud_command import run_cloud
+
+    rc = run_cloud(_make_monitor_args())
+
+    assert rc == 0
+    mock_run_monitor.assert_called_once()
+
+
+@patch("crsbench.cloud.cli._monitor.initialize_queue")
+@patch(
+    "crsbench.cloud.cli._monitor.require_launch_state",
+    side_effect=SystemExit("cloud monitor requires saved remote launch state"),
+)
+def test_run_monitor_requires_launch_state(mock_require_state, mock_initialize_queue):
+    from crsbench.cloud.cli._monitor import run_monitor
+
+    rc = run_monitor(_make_monitor_args())
+
+    assert rc == 1
+    mock_require_state.assert_called_once_with("/tmp/config.yaml", "test-exp")
+    mock_initialize_queue.assert_not_called()
+
+
+@patch("crsbench.cloud.cli._monitor.monitor_queue")
+@patch("crsbench.cloud.cli._monitor.initialize_queue")
+@patch("crsbench.cloud.cli._monitor.OrchestratorRedisTunnel.from_launch_state")
+@patch("crsbench.cloud.cli._monitor.require_launch_state")
+def test_run_monitor_passes_saved_redis_password(
+    mock_require_state,
+    mock_tunnel_cls,
+    mock_initialize_queue,
+    mock_monitor_queue,
+):
+    from crsbench.cloud.cli._monitor import run_monitor
+
+    context = _make_provider_neutral_operational_context(include_launch_state=True)
+    assert context.launch_state is not None
+    mock_require_state.return_value = context
+    mock_tunnel = MagicMock()
+    mock_tunnel.redis_host = "127.0.0.1:16379"
+    mock_tunnel_cls.return_value.__enter__.return_value = mock_tunnel
+    mock_initialize_queue.return_value = MagicMock()
+
+    rc = run_monitor(_make_monitor_args())
+
+    assert rc == 0
+    mock_initialize_queue.assert_called_once_with(
+        "127.0.0.1:16379",
+        "test-exp",
+        redis_password="shared-secret",
+    )
+    mock_monitor_queue.assert_called_once()
 
 
 class TestLaunch:

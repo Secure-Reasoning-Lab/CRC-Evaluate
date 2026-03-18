@@ -622,13 +622,49 @@ def test_monitor_jobs_basic_includes_finished_none_result() -> None:
     marker.assert_called_once()
 
 
+def test_monitor_jobs_basic_delegates_to_shared_monitor() -> None:
+    queue = MagicMock()
+    config = MagicMock()
+    job = MagicMock()
+    job.id = "job-12345678"
+    job.is_finished = True
+    job.is_failed = False
+    job.result = MagicMock(success=True)
+    job.kwargs = {}
+    job.meta = {}
+    job.get_status.return_value = "finished"
+
+    with (
+        patch(
+            "crsbench.run_experiment._get_experiment_queue_stats",
+            return_value={
+                "queued": 0,
+                "started": 0,
+                "finished": 1,
+                "failed": 0,
+                "workers": 1,
+            },
+        ),
+        patch("crsbench.run_experiment.monitor_queue", create=True) as shared_monitor,
+    ):
+        results = _monitor_jobs_basic(
+            queue=queue,
+            job_list=[job],
+            experiment_name="exp-test",
+            config=config,
+        )
+
+    shared_monitor.assert_called_once()
+    assert results == [job.result]
+
+
 def test_get_experiment_queue_stats_uses_experiment_scoped_counts() -> None:
     """Monitor stats must ignore unrelated jobs in the shared flat queue."""
     queue = MagicMock()
 
     with (
         patch(
-            "crsbench.distributed.queue.get_queue_stats",
+            "crsbench.distributed.queue_monitor.get_queue_stats",
             return_value={
                 "queued": 51,
                 "started": 12,
@@ -638,7 +674,7 @@ def test_get_experiment_queue_stats_uses_experiment_scoped_counts() -> None:
             },
         ),
         patch(
-            "crsbench.distributed.queue.get_existing_trials",
+            "crsbench.distributed.queue_monitor.get_existing_trials",
             return_value={
                 "queued": {f"q{i}": MagicMock() for i in range(51)},
                 "started": {f"s{i}": MagicMock() for i in range(12)},
