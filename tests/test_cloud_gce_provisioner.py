@@ -340,6 +340,7 @@ def test_instance_request_renders_compute_proto_field_names() -> None:
         metadata={"startup-script": "#!/bin/bash"},
         service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
         ssh_via_iap=True,
+        assign_external_ip=True,
         machine_type="e2-standard-16",
         boot_disk_size_gb=200,
         image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
@@ -351,8 +352,32 @@ def test_instance_request_renders_compute_proto_field_names() -> None:
     assert instance.service_accounts[0].email == request.service_account_email
     assert instance.machine_type == "zones/us-central1-a/machineTypes/e2-standard-16"
     assert instance.network_interfaces == [Instance(resource).network_interfaces[0]]
+    assert len(instance.network_interfaces[0].access_configs) == 1
     assert instance.disks[0].initialize_params.source_image == request.image
     assert instance.disks[0].initialize_params.disk_size_gb == 200
+
+
+def test_instance_request_can_disable_external_nat() -> None:
+    """Private-only launches should omit access configs explicitly."""
+    from crsbench.cloud.gce.models import GceInstanceRequest
+
+    request = GceInstanceRequest(
+        project="test-project",
+        zone="us-central1-a",
+        name="gce-worker-001",
+        labels={"owner": "team-crs"},
+        metadata={"startup-script": "#!/bin/bash"},
+        service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+        ssh_via_iap=True,
+        assign_external_ip=False,
+        machine_type="e2-standard-16",
+        boot_disk_size_gb=200,
+        image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+    )
+
+    resource = request.to_instance_resource()
+
+    assert "access_configs" not in resource["network_interfaces"][0]
 
 
 def test_gce_provider_adapter_resolves_named_instance_profile():

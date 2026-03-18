@@ -15,6 +15,9 @@ from crsbench.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _REMOTE_REDIS_BIND = "127.0.0.1:6379"
+_TUNNEL_STARTUP_TIMEOUT_SEC = 30.0
+_TUNNEL_STARTUP_ATTEMPT_TIMEOUT_SEC = 5.0
+_TUNNEL_STARTUP_RETRY_DELAY_SEC = 1.0
 
 
 class OrchestratorTunnelError(RuntimeError):
@@ -164,7 +167,7 @@ class OrchestratorRedisTunnel:
     base_path: Path
     launch_state: CloudLaunchState
     local_port: int | None = None
-    startup_timeout: float = 10.0
+    startup_timeout: float = _TUNNEL_STARTUP_TIMEOUT_SEC
     process: subprocess.Popen | None = None
 
     @classmethod
@@ -174,7 +177,7 @@ class OrchestratorRedisTunnel:
         launch_state: CloudLaunchState,
         *,
         local_port: int | None = None,
-        startup_timeout: float = 10.0,
+        startup_timeout: float = _TUNNEL_STARTUP_TIMEOUT_SEC,
     ) -> "OrchestratorRedisTunnel":
         return cls(
             base_path=Path(base_path),
@@ -213,19 +216,38 @@ class OrchestratorRedisTunnel:
                 f"Required transport command not found: {cmd[0]}"
             )
 
-        self.process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-        try:
-            wait_for_local_port(
-                "127.0.0.1", self.local_port, timeout=self.startup_timeout
+        deadline = time.monotonic() + self.startup_timeout
+        last_error: Exception | None = None
+
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                if last_error is not None:
+                    raise last_error
+                raise OrchestratorTunnelError(
+                    f"Timed out starting orchestrator tunnel after {self.startup_timeout}s"
+                )
+
+            self.process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
             )
-        except Exception:
-            self.stop()
-            raise
+            try:
+                wait_for_local_port(
+                    "127.0.0.1",
+                    self.local_port,
+                    timeout=min(remaining, _TUNNEL_STARTUP_ATTEMPT_TIMEOUT_SEC),
+                )
+                return
+            except Exception as exc:
+                last_error = exc
+                self.stop()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise
+                time.sleep(min(_TUNNEL_STARTUP_RETRY_DELAY_SEC, remaining))
 
     def stop(self) -> None:
         """Terminate the forward process if it is still running."""

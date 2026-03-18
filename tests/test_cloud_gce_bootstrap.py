@@ -560,7 +560,9 @@ def test_startup_script_supports_apt_and_apk_bootstrap_dependencies():
     script = load_startup_script()
 
     assert "apt-get install -y -qq" in script
+    assert "install_packages docker.io docker-compose-v2" in script
     assert "apk add --no-cache" in script
+    assert "https://get.docker.com" not in script
     assert "Docker daemon is unavailable after waiting" in script
 
 
@@ -706,6 +708,52 @@ def test_build_orchestrator_metadata_embeds_config_payload_and_redis_password(tm
     }
 
 
+def test_build_orchestrator_metadata_strips_secret_path_fields_from_config_payload(
+    tmp_path,
+):
+    """Remote config payload should omit local-only deploy-key path references."""
+    from crsbench.cloud.gce.metadata import (
+        CRSBENCH_EXPERIMENT_CONFIG_B64_KEY,
+        build_orchestrator_metadata,
+    )
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "experiment": {"name": "exp-42"},
+                "cloud": {
+                    "defaults": {
+                        "crsbench_install_spec": (
+                            "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+                        ),
+                        "github_deploy_key_path": "/home/operator/.ssh/crsbench",
+                    }
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    metadata = build_orchestrator_metadata(
+        experiment_name="exp-42",
+        orchestrator=_make_orchestrator(),
+        experiment_config_path=config_path,
+        redis_password="shared-secret",
+        startup_script="#!/usr/bin/env bash\necho boot\n",
+    )
+
+    decoded_config = yaml.safe_load(
+        base64.b64decode(metadata[CRSBENCH_EXPERIMENT_CONFIG_B64_KEY]).decode("utf-8")
+    )
+
+    assert decoded_config["cloud"]["defaults"]["crsbench_install_spec"] == (
+        "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+    )
+    assert "github_deploy_key_path" not in decoded_config["cloud"]["defaults"]
+
+
 def test_orchestrator_startup_script_consumes_config_payload_and_preprovisioned_mode():
     """Orchestrator startup should decode config payload and run under the crsbench user."""
     from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
@@ -795,7 +843,9 @@ def test_orchestrator_startup_script_supports_apt_and_apk_bootstrap_dependencies
     script = load_orchestrator_startup_script()
 
     assert "apt-get install -y -qq" in script
+    assert "install_packages docker.io docker-compose-v2" in script
     assert "apk add --no-cache" in script
+    assert "https://get.docker.com" not in script
     assert "Docker daemon is unavailable after waiting" in script
 
 

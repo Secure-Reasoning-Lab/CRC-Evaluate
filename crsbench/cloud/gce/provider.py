@@ -44,6 +44,7 @@ class ResolvedGceInstanceProfile:
     startup_script_uri: str | None
     use_os_login: bool
     ssh_via_iap: bool
+    assign_external_ip: bool
 
 
 class GceProviderAdapter:
@@ -86,6 +87,12 @@ class GceProviderAdapter:
                     provider_config.get("ssh_via_iap", False),
                 )
             ),
+            assign_external_ip=bool(
+                profile_config.get(
+                    "assign_external_ip",
+                    provider_config.get("assign_external_ip", True),
+                )
+            ),
         )
 
     def build_orchestrator_config(self, plan: CloudLaunchPlan) -> GceOrchestratorConfig:
@@ -107,6 +114,7 @@ class GceProviderAdapter:
             startup_script_uri=resolved.startup_script_uri,
             use_os_login=resolved.use_os_login,
             ssh_via_iap=resolved.ssh_via_iap,
+            assign_external_ip=resolved.assign_external_ip,
             crsbench_install_spec=plan.orchestrator.launch_defaults.crsbench_install_spec,
             crsbench_git_ref=plan.orchestrator.launch_defaults.crsbench_git_ref
             or "main",
@@ -144,6 +152,7 @@ class GceProviderAdapter:
                     startup_script_uri=resolved.startup_script_uri,
                     use_os_login=resolved.use_os_login,
                     ssh_via_iap=resolved.ssh_via_iap,
+                    assign_external_ip=resolved.assign_external_ip,
                     readiness_timeout_sec=placement.launch_defaults.readiness_timeout_sec
                     or 900,
                     crsbench_install_spec=placement.launch_defaults.crsbench_install_spec,
@@ -189,6 +198,7 @@ class GceProviderAdapter:
                     startup_script_uri=resolved.startup_script_uri,
                     use_os_login=resolved.use_os_login,
                     ssh_via_iap=resolved.ssh_via_iap,
+                    assign_external_ip=resolved.assign_external_ip,
                     readiness_timeout_sec=placement.launch_defaults.readiness_timeout_sec
                     or 900,
                     crsbench_install_spec=placement.launch_defaults.crsbench_install_spec,

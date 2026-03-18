@@ -251,6 +251,8 @@ def create_redis_connection(
 def probe_redis_connection(
     redis_host: str,
     timeout: int = 2,
+    *,
+    redis_password: str | None = None,
 ) -> tuple[RedisConnectionProbe, str | None]:
     """Classify Redis probe results for startup retry logic."""
     if not REDIS_AVAILABLE:
@@ -260,7 +262,11 @@ def probe_redis_connection(
 
     connection = None
     try:
-        connection = create_redis_connection(redis_host, socket_connect_timeout=timeout)
+        connection = create_redis_connection(
+            redis_host,
+            socket_connect_timeout=timeout,
+            redis_password=redis_password,
+        )
         logger.debug(f"Redis server at {redis_host} is reachable")
         return RedisConnectionProbe.READY, None
     except redis.AuthenticationError as exc:

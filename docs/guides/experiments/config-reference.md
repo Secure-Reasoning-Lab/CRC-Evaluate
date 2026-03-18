@@ -51,6 +51,8 @@ For GCE in v1:
 - placements must use explicit zones
 - live quota validation is mandatory before launch
 - worker and evaluator placements can use different instance profiles
+- `ssh_via_iap` controls operator SSH transport; `assign_external_ip` controls
+  whether GCE attaches ephemeral external NAT for outbound internet access
 - cloud env merge order is:
   `cloud.env -> profile_defaults.env -> instance_profile.env -> role/default placement env`
 - the checked-in example is

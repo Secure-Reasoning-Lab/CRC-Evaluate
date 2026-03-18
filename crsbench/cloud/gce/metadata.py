@@ -8,6 +8,8 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
+import yaml
+
 if TYPE_CHECKING:
     from crsbench.cloud.bootstrap import CloudVmBootstrapInputs
     from crsbench.distributed.registry import RuntimeRegistration
@@ -36,6 +38,7 @@ _ORCHESTRATOR_STARTUP_SCRIPT_PATH = (
     Path(__file__).with_name("startup") / "orchestrator.sh"
 )
 _LABEL_PATTERN = re.compile(r"[^a-z0-9_-]+")
+_REMOTE_CONFIG_SECRET_PATH_KEYS = frozenset({"github_deploy_key_path"})
 
 
 class _InstallMetadataConfig(Protocol):
@@ -299,8 +302,23 @@ def _apply_startup_script_metadata(
 def _read_experiment_config_bytes(experiment_config_path: str | Path) -> bytes:
     config_path = Path(experiment_config_path)
     if config_path.is_file():
-        return config_path.read_bytes()
+        raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        sanitized_config = _strip_remote_only_secret_paths(raw_config)
+        return yaml.safe_dump(sanitized_config, sort_keys=False).encode("utf-8")
     return str(experiment_config_path).encode("utf-8")
+
+
+def _strip_remote_only_secret_paths(value: object) -> object:
+    """Remove local-only secret path references before shipping config to VMs."""
+    if isinstance(value, dict):
+        return {
+            key: _strip_remote_only_secret_paths(item)
+            for key, item in value.items()
+            if str(key) not in _REMOTE_CONFIG_SECRET_PATH_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_remote_only_secret_paths(item) for item in value]
+    return value
 
 
 def _filter_env_passthrough(

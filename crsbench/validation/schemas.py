@@ -1247,6 +1247,13 @@ class GceWorkerFleetConfig(BaseModel):
         default=False,
         description="Whether operators are expected to connect through IAP-backed SSH.",
     )
+    assign_external_ip: bool = Field(
+        default=True,
+        description=(
+            "Whether worker instances should receive an external NAT interface for "
+            "package installs and other outbound internet access."
+        ),
+    )
     readiness_timeout_sec: int = Field(
         default=900,
         ge=1,
@@ -1451,6 +1458,13 @@ class GceOrchestratorConfig(BaseModel):
     ssh_via_iap: bool = Field(
         default=False,
         description="Whether operators are expected to connect through IAP-backed SSH.",
+    )
+    assign_external_ip: bool = Field(
+        default=True,
+        description=(
+            "Whether the orchestrator instance should receive an external NAT "
+            "interface for package installs and other outbound internet access."
+        ),
     )
     crsbench_install_spec: Optional[str] = Field(
         default=None,
@@ -1736,6 +1750,7 @@ class GceInstanceProfileDefaultsConfig(BaseModel):
     startup_script_uri: Optional[str] = Field(default=None)
     use_os_login: Optional[bool] = Field(default=None)
     ssh_via_iap: Optional[bool] = Field(default=None)
+    assign_external_ip: Optional[bool] = Field(default=None)
 
     @field_validator(
         "machine_type",
@@ -1830,6 +1845,13 @@ class GceInstanceProfileConfig(BaseModel):
     ssh_via_iap: bool = Field(
         default=False,
         description="Whether operators are expected to connect through IAP-backed SSH.",
+    )
+    assign_external_ip: bool = Field(
+        default=True,
+        description=(
+            "Whether instances using this profile should receive an external NAT "
+            "interface for outbound internet access."
+        ),
     )
 
     @field_validator(
@@ -1935,6 +1957,13 @@ class GceProviderConfig(BaseModel):
     ssh_via_iap: bool = Field(
         default=False,
         description="Whether operators are expected to connect through IAP-backed SSH by default.",
+    )
+    assign_external_ip: bool = Field(
+        default=True,
+        description=(
+            "Whether instances using this provider should receive an external NAT "
+            "interface by default."
+        ),
     )
     defaults: CloudLaunchDefaultsConfig = Field(
         default_factory=CloudLaunchDefaultsConfig,

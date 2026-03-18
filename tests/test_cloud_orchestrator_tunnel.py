@@ -8,6 +8,7 @@ from unittest.mock import patch
 from crsbench.cloud.launch_state import CloudLaunchState
 from crsbench.cloud.orchestrator_tunnel import (
     OrchestratorRedisTunnel,
+    OrchestratorTunnelError,
     build_tunnel_command,
 )
 from crsbench.cloud.types import CloudProvider
@@ -121,7 +122,7 @@ def test_tunnel_waits_for_local_port_before_returning():
         ) as tunnel:
             assert tunnel.redis_host == "127.0.0.1:16379"
 
-    mock_wait.assert_called_once_with("127.0.0.1", 16379, timeout=10.0)
+    mock_wait.assert_called_once_with("127.0.0.1", 16379, timeout=5.0)
     assert process.terminated is True
 
 
@@ -152,3 +153,38 @@ def test_tunnel_cleans_up_on_exception_exit():
             pass
 
     assert process.terminated is True
+
+
+def test_tunnel_retries_transient_startup_failures():
+    first_process = _DummyProcess()
+    second_process = _DummyProcess()
+    launch_state = _make_launch_state(ssh_via_iap=True)
+
+    with (
+        patch(
+            "crsbench.cloud.orchestrator_tunnel.build_tunnel_command",
+            return_value=["ssh", "-N", "-L", "16379:127.0.0.1:6379"],
+        ),
+        patch(
+            "crsbench.cloud.orchestrator_tunnel.subprocess.Popen",
+            side_effect=[first_process, second_process],
+        ),
+        patch(
+            "crsbench.cloud.orchestrator_tunnel.wait_for_local_port",
+            side_effect=[OrchestratorTunnelError("not ready"), None],
+        ) as mock_wait,
+        patch("crsbench.cloud.orchestrator_tunnel.time.sleep") as mock_sleep,
+    ):
+        with OrchestratorRedisTunnel.from_launch_state(
+            Path("/tmp/config.yaml"),
+            launch_state,
+            local_port=16379,
+            startup_timeout=30.0,
+        ) as tunnel:
+            assert tunnel.redis_host == "127.0.0.1:16379"
+
+    assert mock_wait.call_count == 2
+    mock_wait.assert_any_call("127.0.0.1", 16379, timeout=5.0)
+    mock_sleep.assert_called_once_with(1.0)
+    assert first_process.terminated is True
+    assert second_process.terminated is True

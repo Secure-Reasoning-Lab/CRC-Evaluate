@@ -20,6 +20,7 @@ class GceInstanceRequest:
     metadata: dict[str, str]
     service_account_email: str
     ssh_via_iap: bool
+    assign_external_ip: bool
     machine_type: str | None = None
     boot_disk_size_gb: int | None = None
     image: str | None = None
@@ -73,7 +74,7 @@ class GceInstanceRequest:
             network_interface["network"] = self.network
         if self.subnetwork:
             network_interface["subnetwork"] = self.subnetwork
-        if not self.ssh_via_iap:
+        if self.assign_external_ip:
             network_interface["access_configs"] = [
                 {"name": "External NAT", "type": "ONE_TO_ONE_NAT"}
             ]

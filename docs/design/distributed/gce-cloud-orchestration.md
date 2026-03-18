@@ -126,7 +126,9 @@ Timeout contract:
 - Worker names follow the pattern `{prefix}-{NNN}` (zero-padded, e.g., `my-exp-001`)
 - Orchestrator names are distinct and labeled with `crsbench-role=orchestrator`
 - Two creation modes: explicit `image` + `machine_type` + `boot_disk_size_gb`, or `instance_template`
-- Network: external NAT when `ssh_via_iap=False`; private-only when `ssh_via_iap=True`
+- Network: `ssh_via_iap` controls operator SSH transport only; outbound internet
+  egress is controlled independently by `assign_external_ip` (default `true`,
+  set `false` only when private egress such as Cloud NAT is already available)
 - OS Login enabled via metadata (`enable-oslogin=TRUE`, `block-project-ssh-keys=TRUE`)
 - Labels always include `owner` and `crsbench-experiment`; role-specific labels distinguish orchestrator and workers
 - Bootstrap payload delivered as base64-encoded JSON in instance metadata

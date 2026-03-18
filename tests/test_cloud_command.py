@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from crsbench.cloud.types import CloudProvider
+from crsbench.distributed.queue import RedisConnectionProbe
 from crsbench.validation.schemas import (
     CloudBootstrapConfig,
     ExperimentConfig,
@@ -569,6 +570,54 @@ def test_profile_level_ssh_via_iap_override_beats_provider_default():
     assert adapter.build_orchestrator_config(plan).ssh_via_iap is False
     assert all(
         fleet.ssh_via_iap is False for fleet in adapter.build_worker_fleets(plan)
+    )
+
+
+def test_provider_level_assign_external_ip_flows_to_resolved_gce_configs():
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+    from crsbench.cloud.models import build_cloud_launch_plan
+
+    raw_config = _make_provider_neutral_experiment_config().model_dump(
+        mode="json",
+        exclude_none=True,
+        exclude_defaults=True,
+    )
+    raw_config["cloud"]["providers"]["gce"]["assign_external_ip"] = False
+    config = ExperimentConfig.model_validate(raw_config)
+
+    plan = build_cloud_launch_plan(config)
+    adapter = GceProviderAdapter()
+
+    assert adapter.build_orchestrator_config(plan).assign_external_ip is False
+    assert all(
+        fleet.assign_external_ip is False for fleet in adapter.build_worker_fleets(plan)
+    )
+
+
+def test_profile_level_assign_external_ip_override_beats_provider_default():
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+    from crsbench.cloud.models import build_cloud_launch_plan
+
+    raw_config = _make_provider_neutral_experiment_config().model_dump(
+        mode="json",
+        exclude_none=True,
+        exclude_defaults=True,
+    )
+    raw_config["cloud"]["providers"]["gce"]["assign_external_ip"] = False
+    raw_config["cloud"]["providers"]["gce"]["instance_profiles"][
+        "gce-orchestrator-n2d"
+    ]["assign_external_ip"] = True
+    raw_config["cloud"]["providers"]["gce"]["instance_profiles"]["gce-worker-n2d"][
+        "assign_external_ip"
+    ] = True
+    config = ExperimentConfig.model_validate(raw_config)
+
+    plan = build_cloud_launch_plan(config)
+    adapter = GceProviderAdapter()
+
+    assert adapter.build_orchestrator_config(plan).assign_external_ip is True
+    assert all(
+        fleet.assign_external_ip is True for fleet in adapter.build_worker_fleets(plan)
     )
 
 
@@ -1184,11 +1233,13 @@ def test_run_monitor_requires_launch_state(mock_require_state, mock_initialize_q
 
 @patch("crsbench.cloud.cli._monitor.monitor_queue")
 @patch("crsbench.cloud.cli._monitor.initialize_queue")
+@patch("crsbench.cloud.cli._monitor.probe_redis_connection")
 @patch("crsbench.cloud.cli._monitor.OrchestratorRedisTunnel.from_launch_state")
 @patch("crsbench.cloud.cli._monitor.require_launch_state")
 def test_run_monitor_passes_saved_redis_password(
     mock_require_state,
     mock_tunnel_cls,
+    mock_probe_redis_connection,
     mock_initialize_queue,
     mock_monitor_queue,
 ):
@@ -1200,11 +1251,53 @@ def test_run_monitor_passes_saved_redis_password(
     mock_tunnel = MagicMock()
     mock_tunnel.redis_host = "127.0.0.1:16379"
     mock_tunnel_cls.return_value.__enter__.return_value = mock_tunnel
+    mock_probe_redis_connection.return_value = (RedisConnectionProbe.READY, None)
     mock_initialize_queue.return_value = MagicMock()
 
     rc = run_monitor(_make_monitor_args())
 
     assert rc == 0
+    mock_initialize_queue.assert_called_once_with(
+        "127.0.0.1:16379",
+        "test-exp",
+        redis_password="shared-secret",
+    )
+    mock_monitor_queue.assert_called_once()
+
+
+@patch("crsbench.cloud.cli._monitor.time.sleep")
+@patch("crsbench.cloud.cli._monitor.monitor_queue")
+@patch("crsbench.cloud.cli._monitor.initialize_queue")
+@patch("crsbench.cloud.cli._monitor.probe_redis_connection")
+@patch("crsbench.cloud.cli._monitor.OrchestratorRedisTunnel.from_launch_state")
+@patch("crsbench.cloud.cli._monitor.require_launch_state")
+def test_run_monitor_retries_until_redis_is_ready(
+    mock_require_state,
+    mock_tunnel_cls,
+    mock_probe_redis_connection,
+    mock_initialize_queue,
+    mock_monitor_queue,
+    mock_sleep,
+):
+    from crsbench.cloud.cli._monitor import run_monitor
+
+    context = _make_provider_neutral_operational_context(include_launch_state=True)
+    assert context.launch_state is not None
+    mock_require_state.return_value = context
+    mock_tunnel = MagicMock()
+    mock_tunnel.redis_host = "127.0.0.1:16379"
+    mock_tunnel_cls.return_value.__enter__.return_value = mock_tunnel
+    mock_probe_redis_connection.side_effect = [
+        (RedisConnectionProbe.RETRYABLE, "connection refused"),
+        (RedisConnectionProbe.READY, None),
+    ]
+    mock_initialize_queue.return_value = MagicMock()
+
+    rc = run_monitor(_make_monitor_args())
+
+    assert rc == 0
+    assert mock_probe_redis_connection.call_count == 2
+    mock_sleep.assert_called_once()
     mock_initialize_queue.assert_called_once_with(
         "127.0.0.1:16379",
         "test-exp",

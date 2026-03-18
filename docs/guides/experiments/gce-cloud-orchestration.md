@@ -107,7 +107,14 @@ entries.
 
 Instance profiles carry the per-VM details such as `machine_type`,
 `boot_disk_size_gb`, `image` or `instance_template`, `service_account_email`,
-`owner_label`, `labels`, `metadata`, and `ssh_via_iap`.
+`owner_label`, `labels`, `metadata`, `ssh_via_iap`, and
+`assign_external_ip`.
+
+`ssh_via_iap` controls how operators connect. `assign_external_ip` controls
+whether GCE attaches an external NAT interface for outbound package installs,
+GitHub clone, benchmark downloads, and image pulls. The default is `true`.
+Set `assign_external_ip: false` only when your project already provides private
+egress, such as Cloud NAT.
 
 Launch/bootstrap defaults live outside instance profiles:
 
@@ -374,6 +381,9 @@ This command requires the config-adjacent launch state written by
 `cloud launch`. CRSBench opens a temporary SSH or IAP tunnel to the remote
 orchestrator automatically, attaches to the orchestrator-local Redis service,
 and renders the same live queue progress view used by `crsbench run`.
+If the orchestrator is still finishing bootstrap, `cloud monitor` waits for
+the tunneled Redis endpoint to become ready up to `readiness_timeout_sec`
+instead of failing on the first connection refusal.
 
 Use `cloud status` when you want a one-shot fleet and lifecycle snapshot. Use
 `cloud monitor` when you want the continuously updating queue view.
