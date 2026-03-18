@@ -81,18 +81,24 @@ def run_collect(args: argparse.Namespace) -> int:
         except (ArtifactCollectionError, Exception) as exc:
             logger.error("Log collection failed for {}: {}", worker.name, exc)
             failed += 1
-        try:
-            collector.collect(
-                worker=worker,
-                fleet=_resolve_instance_fleet(context, worker),
-                experiment_name=args.experiment,
-                experiment_filestore=experiment_filestore,
-                remote_experiment_dir=remote_experiment_dir,
+        if _collects_experiment_artifacts(worker):
+            try:
+                collector.collect(
+                    worker=worker,
+                    fleet=_resolve_instance_fleet(context, worker),
+                    experiment_name=args.experiment,
+                    experiment_filestore=experiment_filestore,
+                    remote_experiment_dir=remote_experiment_dir,
+                )
+                logger.info("Collection succeeded: {}", worker.name)
+            except (ArtifactCollectionError, Exception) as exc:
+                logger.error("Collection failed for {}: {}", worker.name, exc)
+                failed += 1
+        else:
+            logger.info(
+                "Skipping artifact collection for evaluator {}; logs only",
+                worker.name,
             )
-            logger.info("Collection succeeded: {}", worker.name)
-        except (ArtifactCollectionError, Exception) as exc:
-            logger.error("Collection failed for {}: {}", worker.name, exc)
-            failed += 1
 
     if launch_state is not None:
         orchestrator_worker = launch_state.as_orchestrator_record()
@@ -180,3 +186,8 @@ def _list_readiness_instances(readiness, experiment_name: str):
         )
     )
     return workers
+
+
+def _collects_experiment_artifacts(worker: "GceWorkerRecord") -> bool:
+    """Return whether this instance owns a worker-style experiment artifact tree."""
+    return worker.labels.get("crsbench-role") != CloudInstanceRole.EVALUATOR.value

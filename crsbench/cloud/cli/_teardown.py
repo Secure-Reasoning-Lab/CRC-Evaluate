@@ -124,22 +124,28 @@ def run_teardown(args: argparse.Namespace) -> int:
                 exc,
             )
             collection_failed = True
-        try:
-            collector.collect(
-                worker=worker,
-                fleet=_resolve_instance_fleet(context, worker),
-                experiment_name=args.experiment,
-                experiment_filestore=experiment_filestore,
-                remote_experiment_dir=remote_experiment_dir,
-            )
-            logger.info("Collection succeeded: {}", worker.name)
-        except Exception as exc:
-            logger.error(
-                "Collection failed for {}: {} -- continuing with teardown",
+        if _collects_experiment_artifacts(worker):
+            try:
+                collector.collect(
+                    worker=worker,
+                    fleet=_resolve_instance_fleet(context, worker),
+                    experiment_name=args.experiment,
+                    experiment_filestore=experiment_filestore,
+                    remote_experiment_dir=remote_experiment_dir,
+                )
+                logger.info("Collection succeeded: {}", worker.name)
+            except Exception as exc:
+                logger.error(
+                    "Collection failed for {}: {} -- continuing with teardown",
+                    worker.name,
+                    exc,
+                )
+                collection_failed = True
+        else:
+            logger.info(
+                "Skipping artifact collection for evaluator {}; logs only",
                 worker.name,
-                exc,
             )
-            collection_failed = True
 
     if launch_state is not None:
         orchestrator_worker = launch_state.as_orchestrator_record()
@@ -286,6 +292,11 @@ def _resolve_instance_fleet(
     raise RuntimeError(
         f"No cloud fleet config matched instance {worker.name} in zone {worker.zone}"
     )
+
+
+def _collects_experiment_artifacts(worker: "GceWorkerRecord") -> bool:
+    """Return whether this instance owns a worker-style experiment artifact tree."""
+    return worker.labels.get("crsbench-role") != CloudInstanceRole.EVALUATOR.value
 
 
 def _list_readiness_instances(readiness, experiment_name: str):

@@ -2275,7 +2275,11 @@ class TestCollect:
         adapter.list_workers.assert_called_once_with(plan=context.launch_plan)
         adapter.list_evaluators.assert_called_once_with(plan=context.launch_plan)
         assert mock_coll.collect_logs.call_count == 3
-        assert mock_coll.collect.call_count == 2
+        assert mock_coll.collect.call_count == 1
+        assert (
+            mock_coll.collect.call_args.kwargs["worker"].name
+            == "test-exp-us-east5-b-001"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2785,5 +2789,9 @@ class TestTeardown:
         adapter.delete_evaluators.assert_called_once_with(plan=context.launch_plan)
         mock_prov.delete_instance.assert_called_once()
         assert mock_coll.collect_logs.call_count == 3
-        assert mock_coll.collect.call_count == 2
+        assert mock_coll.collect.call_count == 1
+        assert (
+            mock_coll.collect.call_args.kwargs["worker"].name
+            == "test-exp-us-east5-b-001"
+        )
         assert mock_delete_state.call_count == 2

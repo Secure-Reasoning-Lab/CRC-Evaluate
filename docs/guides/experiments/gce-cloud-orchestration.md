@@ -385,8 +385,8 @@ uv run crsbench cloud events my-experiment --config config.yaml --json
 
 ## Collecting Artifacts
 
-Pull experiment results from all live workers/evaluators to the local experiment
-filestore:
+Pull experiment results from live workers to the local experiment filestore and
+collect runtime logs from workers, evaluators, and the orchestrator:
 
 ```bash
 uv run crsbench cloud collect my-experiment \
@@ -398,6 +398,7 @@ uv run crsbench cloud collect my-experiment \
 - For direct SSH, seeds a config-adjacent `.crsbench-cloud/known_hosts` file and reuses the local GCE OS Login username
 - Stages worker artifacts in a temporary directory, verifies at least one valid trial exists, then publishes to the experiment filestore
 - Continues to remaining worker/evaluator VMs if one fails; exits with code 1 on partial failure
+- Evaluator VMs are log-only for collection; they do not rsync `/tmp/crsbench/experiment-data/<experiment>` because build/verify work stays in transient evaluator scratch space instead of a worker-style experiment tree
 - Safe to run multiple times (incremental rsync)
 - Also collects VM diagnostics under `.crsbench-cloud/remote-logs/<experiment>/`, including:
   - `google-startup-scripts.service` and `google-guest-agent.service` journals
@@ -422,7 +423,7 @@ The teardown safety flow:
 1. Lists live GCE instances for the experiment
 2. Cross-references with Redis readiness records when Redis is reachable (warns about mismatches)
 3. Prompts for confirmation (interactive TTY required)
-4. Collects artifacts from ALL worker/evaluator VMs first
+4. Collects artifacts from worker VMs first and log-only diagnostics from evaluator VMs
 5. Collects logs from the remote orchestrator VM and all worker/evaluator VMs into `.crsbench-cloud/remote-logs/<experiment>/`
 6. Deletes VMs even if some collections fail, to avoid leaking cloud resources
 7. Returns a non-zero exit code if any collection or deletion step failed
