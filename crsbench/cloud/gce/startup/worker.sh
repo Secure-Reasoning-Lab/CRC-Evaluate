@@ -661,7 +661,8 @@ start_worker_runtime() {
       ;;
   esac
 
-  exec sudo -H -u "${CRSBENCH_USER}" /bin/bash "${LAUNCHER_PATH}"
+  exec sudo -H -u "${CRSBENCH_USER}" /bin/bash -lc \
+    "cd $(printf '%q' "${CLONE_DIR}") && exec $(printf '%q' "${LAUNCHER_PATH}")"
 }
 
 require_cmd curl

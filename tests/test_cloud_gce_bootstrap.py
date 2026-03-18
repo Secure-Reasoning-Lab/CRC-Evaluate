@@ -550,7 +550,11 @@ def test_startup_script_supports_file_backed_metadata_and_foreground_service_mod
     assert 'if [[ -n "${CRSBENCH_METADATA_ROOT_DIR}" ]]; then' in script
     assert 'CRSBENCH_SERVICE_MANAGER="${CRSBENCH_SERVICE_MANAGER:-auto}"' in script
     assert "[[ -d /run/systemd/system ]]" in script
-    assert 'exec sudo -H -u "${CRSBENCH_USER}" /bin/bash "${LAUNCHER_PATH}"' in script
+    assert 'exec sudo -H -u "${CRSBENCH_USER}" /bin/bash -lc' in script
+    assert (
+        "\"cd $(printf '%q' \"${CLONE_DIR}\") && exec $(printf '%q' "
+        '"${LAUNCHER_PATH}")"'
+    ) in script
 
 
 def test_startup_script_supports_apt_and_apk_bootstrap_dependencies():
