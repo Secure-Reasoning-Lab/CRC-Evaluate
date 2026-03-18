@@ -2140,7 +2140,6 @@ def run_experiment_distributed(
             else:
                 preflight = prepare_gce_launch_inputs(
                     plan=launch_plan,
-                    bootstrap=cloud_config.bootstrap,
                     cwd=Path.cwd(),
                 )
                 QuotaValidator(adapters={"gce": adapter}).validate(

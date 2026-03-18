@@ -161,9 +161,8 @@ Phase 1 contract notes:
 - Failed cloud bring-up tears down the requested fleet before control returns
   to the operator.
 - First-class `cloud.env` / profile `env` / placement `env` maps are the
-  preferred way to shard upstream credentials or URLs across cloud worker
-  groups; `cloud.bootstrap.env_passthrough` remains available as a
-  compatibility-only name-copy mechanism.
+  supported way to shard upstream credentials or URLs across cloud worker
+  groups.
 
 ## Queue Behavior and Cleanup
 

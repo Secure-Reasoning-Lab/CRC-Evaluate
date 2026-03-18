@@ -388,22 +388,6 @@ def _add_secret_refs_to_provider_neutral_config(
     return config
 
 
-def _with_env_passthrough(
-    config: ExperimentConfig,
-    *,
-    common: list[str] | None = None,
-    orchestrator: list[str] | None = None,
-    workers: list[str] | None = None,
-    evaluators: list[str] | None = None,
-) -> ExperimentConfig:
-    config = config.model_copy(deep=True)
-    config.cloud.bootstrap.env_passthrough.common = list(common or [])
-    config.cloud.bootstrap.env_passthrough.orchestrator = list(orchestrator or [])
-    config.cloud.bootstrap.env_passthrough.workers = list(workers or [])
-    config.cloud.bootstrap.env_passthrough.evaluators = list(evaluators or [])
-    return config
-
-
 def _with_layered_env_overrides(
     config: ExperimentConfig,
 ) -> ExperimentConfig:
@@ -615,47 +599,6 @@ def test_prepare_gce_launch_inputs_resolves_provider_neutral_secret_refs(
     assert preflight.redacted_worker_fleets[0].github_deploy_key_file is None
 
 
-def test_prepare_gce_launch_inputs_resolves_env_passthrough_for_roles() -> None:
-    from crsbench.cloud.gce.launch_preflight import prepare_gce_launch_inputs
-    from crsbench.cloud.models import build_cloud_launch_plan
-
-    config = _with_env_passthrough(
-        _make_provider_neutral_experiment_config(),
-        common=["CRSBENCH_LLM_UPSTREAM_BASE_URL"],
-        orchestrator=["CRSBENCH_LLM_MASTER_KEY"],
-        workers=["OPENAI_API_KEY"],
-        evaluators=["ANTHROPIC_API_KEY"],
-    )
-    launch_plan = build_cloud_launch_plan(config)
-
-    preflight = prepare_gce_launch_inputs(
-        plan=launch_plan,
-        bootstrap=config.cloud.bootstrap,
-        env={
-            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
-            "CRSBENCH_LLM_MASTER_KEY": "master-key",
-            "OPENAI_API_KEY": "openai-key",
-            "ANTHROPIC_API_KEY": "anthropic-key",
-        },
-    )
-
-    assert preflight.orchestrator_env == {
-        "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
-        "CRSBENCH_LLM_MASTER_KEY": "master-key",
-    }
-    assert preflight.worker_placement_envs == [
-        {
-            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
-            "OPENAI_API_KEY": "openai-key",
-        },
-        {
-            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
-            "OPENAI_API_KEY": "openai-key",
-        },
-    ]
-    assert preflight.evaluator_placement_envs == []
-
-
 def test_prepare_gce_launch_inputs_resolves_layered_env_per_placement(
     tmp_path: Path,
 ) -> None:
@@ -667,15 +610,13 @@ def test_prepare_gce_launch_inputs_resolves_layered_env_per_placement(
     worker_secret = secret_dir / "worker-token"
     worker_secret.write_text("worker-file-value", encoding="utf-8")
 
-    config = _with_env_passthrough(
-        _with_layered_env_overrides(
-            _make_provider_neutral_experiment_config_with_evaluators()
-        ),
-        common=["COMMON_LEGACY"],
-        orchestrator=["ORCH_LEGACY"],
-        workers=["WORKER_LEGACY"],
-        evaluators=["EVALUATOR_LEGACY"],
+    config = _with_layered_env_overrides(
+        _make_provider_neutral_experiment_config_with_evaluators()
     )
+    config.cloud.env["COMMON_REF"] = "os.environ/COMMON_REF"
+    config.cloud.orchestrator.env["ORCH_REF"] = "os.environ/ORCH_REF"
+    config.cloud.workers.defaults.env["WORKER_REF"] = "os.environ/WORKER_REF"
+    config.cloud.evaluators.defaults.env["EVALUATOR_REF"] = "os.environ/EVALUATOR_REF"
     config.cloud.providers.gce.instance_profiles["gce-worker-n2d"].env[
         "PROFILE_FILE"
     ] = "file:.secrets/worker-token"
@@ -691,13 +632,12 @@ def test_prepare_gce_launch_inputs_resolves_layered_env_per_placement(
 
     preflight = prepare_gce_launch_inputs(
         plan=launch_plan,
-        bootstrap=config.cloud.bootstrap,
         cwd=tmp_path,
         env={
-            "COMMON_LEGACY": "legacy-common-value",
-            "ORCH_LEGACY": "legacy-orchestrator-value",
-            "WORKER_LEGACY": "legacy-worker-value",
-            "EVALUATOR_LEGACY": "legacy-evaluator-value",
+            "COMMON_REF": "common-ref-value",
+            "ORCH_REF": "orchestrator-ref-value",
+            "WORKER_REF": "worker-ref-value",
+            "EVALUATOR_REF": "evaluator-ref-value",
             "ORCH_TARGET": "orchestrator-target-ref",
             "WORKER_ZERO": "worker-zero-ref",
             "WORKER_ONE": "worker-one-ref",
@@ -707,8 +647,9 @@ def test_prepare_gce_launch_inputs_resolves_layered_env_per_placement(
 
     assert preflight.orchestrator_env == {
         "COMMON_LEGACY": "explicit-common-value",
+        "COMMON_REF": "common-ref-value",
         "GLOBAL_ONLY": "global-value",
-        "ORCH_LEGACY": "legacy-orchestrator-value",
+        "ORCH_REF": "orchestrator-ref-value",
         "PROFILE_DEFAULT_ONLY": "profile-default-value",
         "PROFILE_ONLY": "orchestrator-profile-value",
         "SHARED_KEY": "orchestrator-value",
@@ -718,6 +659,7 @@ def test_prepare_gce_launch_inputs_resolves_layered_env_per_placement(
     assert preflight.worker_placement_envs == [
         {
             "COMMON_LEGACY": "explicit-common-value",
+            "COMMON_REF": "common-ref-value",
             "GLOBAL_ONLY": "global-value",
             "PROFILE_DEFAULT_ONLY": "profile-default-value",
             "PROFILE_FILE": "worker-file-value",
@@ -726,10 +668,11 @@ def test_prepare_gce_launch_inputs_resolves_layered_env_per_placement(
             "SHARED_KEY": "worker-east5-value",
             "TARGET_ONLY": "worker-east5-value",
             "TARGET_REF": "worker-zero-ref",
-            "WORKER_LEGACY": "legacy-worker-value",
+            "WORKER_REF": "worker-ref-value",
         },
         {
             "COMMON_LEGACY": "explicit-common-value",
+            "COMMON_REF": "common-ref-value",
             "GLOBAL_ONLY": "global-value",
             "PROFILE_DEFAULT_ONLY": "profile-default-value",
             "PROFILE_FILE": "worker-file-value",
@@ -738,13 +681,14 @@ def test_prepare_gce_launch_inputs_resolves_layered_env_per_placement(
             "SHARED_KEY": "worker-east5c-value",
             "TARGET_ONLY": "worker-east5c-value",
             "TARGET_REF": "worker-one-ref",
-            "WORKER_LEGACY": "legacy-worker-value",
+            "WORKER_REF": "worker-ref-value",
         },
     ]
     assert preflight.evaluator_placement_envs == [
         {
             "COMMON_LEGACY": "explicit-common-value",
-            "EVALUATOR_LEGACY": "legacy-evaluator-value",
+            "COMMON_REF": "common-ref-value",
+            "EVALUATOR_REF": "evaluator-ref-value",
             "GLOBAL_ONLY": "global-value",
             "PROFILE_DEFAULT_ONLY": "profile-default-value",
             "PROFILE_ONLY": "evaluator-profile-value",
@@ -755,7 +699,8 @@ def test_prepare_gce_launch_inputs_resolves_layered_env_per_placement(
         },
         {
             "COMMON_LEGACY": "explicit-common-value",
-            "EVALUATOR_LEGACY": "legacy-evaluator-value",
+            "COMMON_REF": "common-ref-value",
+            "EVALUATOR_REF": "evaluator-ref-value",
             "GLOBAL_ONLY": "global-value",
             "PROFILE_DEFAULT_ONLY": "profile-default-value",
             "PROFILE_ONLY": "evaluator-profile-value",
@@ -767,21 +712,24 @@ def test_prepare_gce_launch_inputs_resolves_layered_env_per_placement(
     ]
 
 
-def test_prepare_gce_launch_inputs_rejects_empty_env_passthrough_value() -> None:
-    from crsbench.cloud.env_passthrough import CloudEnvPassthroughError
+def test_prepare_gce_launch_inputs_rejects_empty_layered_env_reference_value() -> None:
     from crsbench.cloud.gce.launch_preflight import prepare_gce_launch_inputs
     from crsbench.cloud.models import build_cloud_launch_plan
+    from crsbench.cloud.secret_refs import CloudSecretReferenceError
 
-    config = _with_env_passthrough(
-        _make_provider_neutral_experiment_config(),
-        common=["CRSBENCH_LLM_MASTER_KEY"],
+    config = _make_provider_neutral_experiment_config()
+    config.cloud.env = {"CRSBENCH_LLM_MASTER_KEY": "os.environ/CRSBENCH_LLM_MASTER_KEY"}
+    config = ExperimentConfig.model_validate(
+        config.model_dump(mode="json", exclude_none=True)
     )
     launch_plan = build_cloud_launch_plan(config)
 
-    with pytest.raises(CloudEnvPassthroughError, match="CRSBENCH_LLM_MASTER_KEY"):
+    with pytest.raises(
+        CloudSecretReferenceError,
+        match="CRSBENCH_LLM_MASTER_KEY",
+    ):
         prepare_gce_launch_inputs(
             plan=launch_plan,
-            bootstrap=config.cloud.bootstrap,
             env={"CRSBENCH_LLM_MASTER_KEY": ""},
         )
 
@@ -1446,7 +1394,7 @@ class TestLaunch:
     @patch("crsbench.cloud.cli._launch.QuotaValidator")
     @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
     @patch("crsbench.cloud.cli._launch.load_experiment_config")
-    def test_provider_neutral_launch_passes_role_specific_env_passthrough(
+    def test_provider_neutral_launch_passes_layered_env_payloads(
         self,
         mock_load,
         mock_build_plan,
@@ -1457,12 +1405,7 @@ class TestLaunch:
         mock_secret,
     ):
         del mock_secret
-        config = _with_env_passthrough(
-            _make_provider_neutral_experiment_config(),
-            common=["CRSBENCH_LLM_UPSTREAM_BASE_URL"],
-            orchestrator=["CRSBENCH_LLM_MASTER_KEY"],
-            workers=["OPENAI_API_KEY"],
-        )
+        config = _make_provider_neutral_experiment_config()
         mock_load.return_value = config
 
         launch_plan = MagicMock()
@@ -1510,7 +1453,6 @@ class TestLaunch:
         assert rc == 0
         mock_preflight.assert_called_once_with(
             plan=launch_plan,
-            bootstrap=config.cloud.bootstrap,
             cwd=Path.cwd(),
         )
         assert mock_adapter.create_orchestrator.call_args.kwargs["env_passthrough"] == {
@@ -1553,10 +1495,7 @@ class TestLaunch:
         mock_secret,
     ):
         del mock_secret
-        config = _with_env_passthrough(
-            _make_provider_neutral_experiment_config_with_evaluators(),
-            evaluators=["ANTHROPIC_API_KEY"],
-        )
+        config = _make_provider_neutral_experiment_config_with_evaluators()
         mock_load.return_value = config
 
         launch_plan = MagicMock()

@@ -960,7 +960,7 @@ class TestExperimentConfigSchema:
         assert config.cloud.bootstrap.prepare_mode == "full"
         assert config.cloud.bootstrap.download_benchmarks == download_benchmarks
 
-    def test_cloud_bootstrap_env_passthrough_valid(self):
+    def test_cloud_bootstrap_rejects_env_passthrough(self):
         data = self._base_kwargs()
         data["cloud"] = self._provider_neutral_cloud_kwargs()
         data["cloud"]["bootstrap"] = {
@@ -969,29 +969,10 @@ class TestExperimentConfigSchema:
                     "CRSBENCH_LLM_UPSTREAM_BASE_URL",
                     "CRSBENCH_LLM_MASTER_KEY",
                 ],
-                "orchestrator": ["OPENAI_API_KEY"],
-                "workers": ["ANTHROPIC_API_KEY"],
             }
         }
 
-        config = ExperimentConfig(**data)
-
-        assert config.cloud is not None
-        assert config.cloud.bootstrap.env_passthrough.common == [
-            "CRSBENCH_LLM_UPSTREAM_BASE_URL",
-            "CRSBENCH_LLM_MASTER_KEY",
-        ]
-        assert config.cloud.bootstrap.env_passthrough.orchestrator == ["OPENAI_API_KEY"]
-        assert config.cloud.bootstrap.env_passthrough.workers == ["ANTHROPIC_API_KEY"]
-
-    def test_cloud_bootstrap_env_passthrough_rejects_reserved_runtime_vars(self):
-        data = self._base_kwargs()
-        data["cloud"] = self._provider_neutral_cloud_kwargs()
-        data["cloud"]["bootstrap"] = {
-            "env_passthrough": {"common": ["CRSBENCH_REDIS_HOST"]}
-        }
-
-        with pytest.raises(PydanticValidationError, match="CRSBENCH_REDIS_HOST"):
+        with pytest.raises(PydanticValidationError, match="env_passthrough"):
             ExperimentConfig(**data)
 
     def test_cloud_gce_rejects_cloud_env_without_provider_neutral_config(self):

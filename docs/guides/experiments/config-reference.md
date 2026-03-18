@@ -34,9 +34,6 @@ Managed cloud execution uses a provider-neutral top-level shape:
   such as `count`, `instance_profile`, and `env`
 - `cloud.evaluators.placements[]`: optional evaluator placements with zone plus
   any overrides from `defaults`
-- `cloud.bootstrap.env_passthrough`: compatibility-only operator env-name lists
-  split into `common`, `orchestrator`, `workers`, and `evaluators`
-
 For GCE in v1:
 
 - use `cloud.providers.gce`
@@ -49,8 +46,6 @@ For GCE in v1:
 - worker and evaluator placements can use different instance profiles
 - cloud env merge order is:
   `cloud.env -> profile_defaults.env -> instance_profile.env -> role/default placement env`
-- new configs should prefer first-class `env`; `cloud.bootstrap.env_passthrough`
-  remains supported for simple name-based copies
 - the checked-in example is
   `experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml`
 

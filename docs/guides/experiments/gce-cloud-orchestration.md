@@ -240,30 +240,6 @@ Semantics:
 - runtime-managed variables such as `CRSBENCH_REDIS_HOST` and
   `CRSBENCH_REDIS_PASSWORD` are rejected and must not be overridden
 
-`cloud.bootstrap.env_passthrough` remains supported as a compatibility layer
-for simple name-based copies:
-
-```yaml
-cloud:
-  bootstrap:
-    env_passthrough:
-      common:
-        - CRSBENCH_LLM_UPSTREAM_BASE_URL
-      orchestrator:
-        - CRSBENCH_LLM_MASTER_KEY
-      workers:
-        - OPENAI_API_KEY
-      evaluators:
-        - ANTHROPIC_API_KEY
-```
-
-Compatibility notes:
-
-- passthrough names are resolved from the operator environment before launch
-- passthrough-derived values merge under explicit `env` values
-- explicit `env` keys win on conflicts
-- new configs should prefer first-class `env`
-
 ### Generate a deploy key
 
 ```bash
@@ -306,7 +282,7 @@ Expected result:
 - `.crsbench-keys/crsbench-deploy` and `.crsbench-keys/crsbench-deploy.pub`
   exist locally
 - the command prints the public key to add under GitHub
-  `Settings -> Deploy keys`
+`Settings -> Deploy keys`
 
 Add the public key to the repository that the VMs will clone. Read-only access
 is sufficient for smoke testing.
@@ -322,9 +298,8 @@ passed as `crsbench-hf-token` metadata and exported as `HF_TOKEN` in the worker
 environment. Secret references are resolved once on the operator before VM
 creation; the original experiment config payload sent to the remote orchestrator
 is not rewritten with resolved secret values. First-class `cloud.*.env` values
-use the same operator-side resolution rule, and the legacy
-`cloud.bootstrap.env_passthrough` path still copies named environment variables
-through the same metadata channel for compatibility.
+use the same operator-side resolution rule and are passed through the same VM
+metadata channel after resolution.
 
 ## Launching an Experiment
 

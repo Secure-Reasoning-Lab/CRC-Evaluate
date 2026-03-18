@@ -16,15 +16,11 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    ValidationInfo,
     field_validator,
     model_validator,
 )
 
-from crsbench.cloud.env_passthrough import (
-    normalize_env_name,
-    normalize_env_name_list,
-)
+from crsbench.cloud.env_validation import normalize_env_name
 from crsbench.cloud.secret_refs import (
     CloudSecretReferenceError,
     validate_secret_reference_format,
@@ -2280,48 +2276,6 @@ class CloudBootstrapConfig(BaseModel):
         default="auto",
         description="Whether cloud VMs download benchmarks before runtime startup.",
     )
-    env_passthrough: "CloudEnvPassthroughConfig" = Field(
-        default_factory=lambda: CloudEnvPassthroughConfig(),
-        description=(
-            "Operator environment variables to copy onto remote orchestrator/worker VMs."
-        ),
-    )
-
-
-class CloudEnvPassthroughConfig(BaseModel):
-    """Role-aware environment variables copied from operator env to remote VMs."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    common: List[str] = Field(
-        default_factory=list,
-        description="Environment variables passed to both orchestrator and workers.",
-    )
-    orchestrator: List[str] = Field(
-        default_factory=list,
-        description="Additional environment variables passed only to the orchestrator.",
-    )
-    workers: List[str] = Field(
-        default_factory=list,
-        description="Additional environment variables passed only to workers.",
-    )
-    evaluators: List[str] = Field(
-        default_factory=list,
-        description="Additional environment variables passed only to evaluators.",
-    )
-
-    @field_validator("common", "orchestrator", "workers", "evaluators")
-    @classmethod
-    def normalize_env_names(
-        cls,
-        value: List[str],
-        info: ValidationInfo,
-    ) -> List[str]:
-        """Normalize env-var names and reject runtime-managed values."""
-        return normalize_env_name_list(
-            value,
-            field_path=f"cloud.bootstrap.env_passthrough.{info.field_name}",
-        )
 
 
 class CloudConfig(BaseModel):

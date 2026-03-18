@@ -106,7 +106,6 @@ def run_launch(args: argparse.Namespace) -> int:
         launch_plan = build_cloud_launch_plan(config)
         preflight = prepare_gce_launch_inputs(
             plan=launch_plan,
-            bootstrap=config.cloud.bootstrap,
             cwd=Path.cwd(),
         )
         provisioning_plan = preflight.resolved_plan

@@ -500,22 +500,6 @@ def _add_secret_refs_to_provider_neutral_run_config(
     return config
 
 
-def _with_env_passthrough(
-    config: ExperimentConfig,
-    *,
-    common: list[str] | None = None,
-    orchestrator: list[str] | None = None,
-    workers: list[str] | None = None,
-    evaluators: list[str] | None = None,
-) -> ExperimentConfig:
-    config = config.model_copy(deep=True)
-    config.cloud.bootstrap.env_passthrough.common = list(common or [])
-    config.cloud.bootstrap.env_passthrough.orchestrator = list(orchestrator or [])
-    config.cloud.bootstrap.env_passthrough.workers = list(workers or [])
-    config.cloud.bootstrap.env_passthrough.evaluators = list(evaluators or [])
-    return config
-
-
 def _with_evaluator_placements(config: ExperimentConfig) -> ExperimentConfig:
     raw_config = config.model_dump(mode="json", exclude_none=True)
     raw_config["cloud"]["providers"]["gce"]["instance_profiles"][
@@ -970,16 +954,11 @@ def test_provider_neutral_cloud_workers_resolve_secret_refs_before_bringup(
     manager.bring_up_workers.assert_called_once()
 
 
-def test_provider_neutral_cloud_workers_pass_role_specific_env_passthrough(
+def test_provider_neutral_cloud_workers_pass_layered_env_payloads(
     tmp_path: Path,
 ) -> None:
     """Local cloud-worker bring-up should pass only common+worker env vars to VMs."""
-    config = _with_env_passthrough(
-        _make_provider_neutral_run_config(tmp_path),
-        common=["CRSBENCH_LLM_UPSTREAM_BASE_URL"],
-        orchestrator=["CRSBENCH_LLM_MASTER_KEY"],
-        workers=["OPENAI_API_KEY"],
-    )
+    config = _make_provider_neutral_run_config(tmp_path)
 
     session = MagicMock()
     queue = MagicMock()
@@ -1071,23 +1050,16 @@ def test_provider_neutral_cloud_workers_pass_role_specific_env_passthrough(
 
     mock_preflight.assert_called_once_with(
         plan=launch_plan,
-        bootstrap=config.cloud.bootstrap,
         cwd=Path.cwd(),
     )
     manager.bring_up_workers.assert_called_once()
 
 
-def test_provider_neutral_cloud_instances_with_evaluators_pass_role_specific_env_passthrough(
+def test_provider_neutral_cloud_instances_with_evaluators_pass_layered_env_payloads(
     tmp_path: Path,
 ) -> None:
     """Local cloud bring-up should provision evaluators with evaluator-only env vars."""
-    config = _with_env_passthrough(
-        _with_evaluator_placements(_make_provider_neutral_run_config(tmp_path)),
-        common=["CRSBENCH_LLM_UPSTREAM_BASE_URL"],
-        orchestrator=["CRSBENCH_LLM_MASTER_KEY"],
-        workers=["OPENAI_API_KEY"],
-        evaluators=["ANTHROPIC_API_KEY"],
-    )
+    config = _with_evaluator_placements(_make_provider_neutral_run_config(tmp_path))
 
     session = MagicMock()
     queue = MagicMock()
@@ -1201,7 +1173,6 @@ def test_provider_neutral_cloud_instances_with_evaluators_pass_role_specific_env
 
     mock_preflight.assert_called_once_with(
         plan=launch_plan,
-        bootstrap=config.cloud.bootstrap,
         cwd=Path.cwd(),
     )
     manager.bring_up_instances.assert_called_once()
