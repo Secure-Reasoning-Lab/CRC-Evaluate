@@ -34,14 +34,14 @@ def run_collect(args: argparse.Namespace) -> int:
         )
     except Exception as exc:
         logger.warning(
-            "Redis reconnect unavailable for experiment %s; "
-            "continuing collection with GCE state only: %s",
+            "Redis reconnect unavailable for experiment {}; "
+            "continuing collection with GCE state only: {}",
             args.experiment,
             exc,
         )
 
     provisioner = GceProvisioner()
-    collector = ArtifactCollector()
+    collector = ArtifactCollector(base_path=args.config)
 
     # Validate GCE state
     live_workers = _list_live_workers(context, args.experiment, provisioner)
@@ -54,13 +54,13 @@ def run_collect(args: argparse.Namespace) -> int:
         stale_names = redis_names - live_names
         if stale_names:
             logger.warning(
-                "Stale Redis entries (no matching GCE instance): %s",
+                "Stale Redis entries (no matching GCE instance): {}",
                 ", ".join(sorted(stale_names)),
             )
 
     if not live_workers and launch_state is None:
         logger.warning(
-            "No live GCE instances found for experiment '%s'", args.experiment
+            "No live GCE instances found for experiment '{}'", args.experiment
         )
         return 0
 
@@ -69,6 +69,18 @@ def run_collect(args: argparse.Namespace) -> int:
 
     for worker in live_workers:
         try:
+            collector.collect_logs(
+                worker=worker,
+                fleet=_resolve_worker_fleet(context, worker),
+                experiment_name=args.experiment,
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir=remote_experiment_dir,
+            )
+            logger.info("Log collection succeeded: {}", worker.name)
+        except (ArtifactCollectionError, Exception) as exc:
+            logger.error("Log collection failed for {}: {}", worker.name, exc)
+            failed += 1
+        try:
             collector.collect(
                 worker=worker,
                 fleet=_resolve_worker_fleet(context, worker),
@@ -76,24 +88,26 @@ def run_collect(args: argparse.Namespace) -> int:
                 experiment_filestore=experiment_filestore,
                 remote_experiment_dir=remote_experiment_dir,
             )
-            logger.info("Collection succeeded: %s", worker.name)
+            logger.info("Collection succeeded: {}", worker.name)
         except (ArtifactCollectionError, Exception) as exc:
-            logger.error("Collection failed for %s: %s", worker.name, exc)
+            logger.error("Collection failed for {}: {}", worker.name, exc)
             failed += 1
 
     if launch_state is not None:
         orchestrator_worker = launch_state.as_orchestrator_record()
         try:
-            collector.collect(
+            collector.collect_logs(
                 worker=orchestrator_worker,
                 fleet=launch_state.as_transport_config(),
                 experiment_name=args.experiment,
                 experiment_filestore=experiment_filestore,
                 remote_experiment_dir=remote_experiment_dir,
             )
-            logger.info("Collection succeeded: %s", orchestrator_worker.name)
+            logger.info("Log collection succeeded: {}", orchestrator_worker.name)
         except (ArtifactCollectionError, Exception) as exc:
-            logger.error("Collection failed for %s: %s", orchestrator_worker.name, exc)
+            logger.error(
+                "Log collection failed for {}: {}", orchestrator_worker.name, exc
+            )
             failed += 1
 
     return 1 if failed else 0

@@ -16,6 +16,7 @@ from crsbench.validation.schemas import GceWorkerFleetConfig  # noqa: TC001
 
 _STATE_DIRNAME = ".crsbench-cloud"
 _INSTANCE_CACHE_BASENAME = "created-instances.cache"
+_REMOTE_LOGS_DIRNAME = "remote-logs"
 
 
 @dataclass(frozen=True)
@@ -114,19 +115,29 @@ def _resolve_launch_state_dir(base_path: Path | str) -> Path:
     from pathlib import Path as _Path
 
     path = _Path(base_path)
-    if path.is_file():
+    if path.is_file() or (not path.exists() and path.suffix):
         return path.parent / _STATE_DIRNAME
     return path / _STATE_DIRNAME
 
 
+def cloud_state_dir(base_path: Path | str) -> Path:
+    """Return the config-adjacent local state directory for cloud operations."""
+    return _resolve_launch_state_dir(base_path)
+
+
 def launch_state_path(base_path: Path | str, experiment_name: str) -> Path:
     """Return the on-disk path used to persist launch state for one experiment."""
-    return _resolve_launch_state_dir(base_path) / f"{experiment_name}.json"
+    return cloud_state_dir(base_path) / f"{experiment_name}.json"
 
 
 def created_instance_cache_path(base_path: Path | str) -> Path:
     """Return the append-only cache path tracking created cloud instance names."""
-    return _resolve_launch_state_dir(base_path) / _INSTANCE_CACHE_BASENAME
+    return cloud_state_dir(base_path) / _INSTANCE_CACHE_BASENAME
+
+
+def remote_logs_dir(base_path: Path | str, experiment_name: str) -> Path:
+    """Return the local directory used to store best-effort remote VM logs."""
+    return cloud_state_dir(base_path) / _REMOTE_LOGS_DIRNAME / experiment_name
 
 
 def append_created_instance_records(

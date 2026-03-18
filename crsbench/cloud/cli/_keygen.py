@@ -31,7 +31,7 @@ def run_keygen(args: argparse.Namespace) -> int:
     try:
         output_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
     except OSError as exc:
-        logger.error("Cannot create output directory %s: %s", output_dir, exc)
+        logger.error("Cannot create output directory {}: {}", output_dir, exc)
         return 1
 
     key_path = output_dir / name
@@ -52,7 +52,7 @@ def run_keygen(args: argparse.Namespace) -> int:
             try:
                 p.unlink(missing_ok=True)
             except OSError as exc:
-                logger.error("Cannot remove existing key file %s: %s", p, exc)
+                logger.error("Cannot remove existing key file {}: {}", p, exc)
                 return 1
 
     try:
@@ -72,7 +72,7 @@ def run_keygen(args: argparse.Namespace) -> int:
             capture_output=True,
         )
     except subprocess.CalledProcessError as exc:
-        logger.error("ssh-keygen failed: %s", exc.stderr.decode(errors="replace"))
+        logger.error("ssh-keygen failed: {}", exc.stderr.decode(errors="replace"))
         return 1
     except FileNotFoundError:
         logger.error("ssh-keygen not found — install OpenSSH to use this command")
@@ -82,7 +82,7 @@ def run_keygen(args: argparse.Namespace) -> int:
     try:
         key_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
     except OSError as exc:
-        logger.warning("Could not chmod private key %s: %s", key_path, exc)
+        logger.warning("Could not chmod private key {}: {}", key_path, exc)
 
     pub_key = pub_path.read_text(encoding="utf-8").strip()
 

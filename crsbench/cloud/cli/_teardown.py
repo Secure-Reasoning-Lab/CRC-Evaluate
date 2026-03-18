@@ -44,14 +44,14 @@ def run_teardown(args: argparse.Namespace) -> int:
         )
     except Exception as exc:
         logger.warning(
-            "Redis reconnect unavailable for experiment %s; "
-            "continuing teardown with GCE state only: %s",
+            "Redis reconnect unavailable for experiment {}; "
+            "continuing teardown with GCE state only: {}",
             args.experiment,
             exc,
         )
 
     provisioner = GceProvisioner()
-    collector = ArtifactCollector()
+    collector = ArtifactCollector(base_path=args.config)
 
     # Validate GCE state
     live_workers = _list_live_workers(context, args.experiment, provisioner)
@@ -64,12 +64,12 @@ def run_teardown(args: argparse.Namespace) -> int:
 
     if stale_names:
         logger.warning(
-            "Stale Redis entries (no matching GCE instance): %s",
+            "Stale Redis entries (no matching GCE instance): {}",
             ", ".join(sorted(stale_names)),
         )
 
     if not live_workers and not redis_workers and launch_state is None:
-        logger.info("Nothing to tear down for experiment '%s'", args.experiment)
+        logger.info("Nothing to tear down for experiment '{}'", args.experiment)
         return 0
 
     if not live_workers and redis_workers and launch_state is None:
@@ -106,6 +106,22 @@ def run_teardown(args: argparse.Namespace) -> int:
     collection_failed = False
     for worker in live_workers:
         try:
+            collector.collect_logs(
+                worker=worker,
+                fleet=_resolve_worker_fleet(context, worker),
+                experiment_name=args.experiment,
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir=remote_experiment_dir,
+            )
+            logger.info("Log collection succeeded: {}", worker.name)
+        except Exception as exc:
+            logger.error(
+                "Log collection failed for {}: {} -- continuing with teardown",
+                worker.name,
+                exc,
+            )
+            collection_failed = True
+        try:
             collector.collect(
                 worker=worker,
                 fleet=_resolve_worker_fleet(context, worker),
@@ -113,10 +129,10 @@ def run_teardown(args: argparse.Namespace) -> int:
                 experiment_filestore=experiment_filestore,
                 remote_experiment_dir=remote_experiment_dir,
             )
-            logger.info("Collection succeeded: %s", worker.name)
+            logger.info("Collection succeeded: {}", worker.name)
         except Exception as exc:
             logger.error(
-                "Collection failed for %s: %s -- continuing with teardown",
+                "Collection failed for {}: {} -- continuing with teardown",
                 worker.name,
                 exc,
             )
@@ -125,17 +141,17 @@ def run_teardown(args: argparse.Namespace) -> int:
     if launch_state is not None:
         orchestrator_worker = launch_state.as_orchestrator_record()
         try:
-            collector.collect(
+            collector.collect_logs(
                 worker=orchestrator_worker,
                 fleet=launch_state.as_transport_config(),
                 experiment_name=args.experiment,
                 experiment_filestore=experiment_filestore,
                 remote_experiment_dir=remote_experiment_dir,
             )
-            logger.info("Collection succeeded: %s", orchestrator_worker.name)
+            logger.info("Log collection succeeded: {}", orchestrator_worker.name)
         except Exception as exc:
             logger.error(
-                "Collection failed for %s: %s -- continuing with teardown",
+                "Log collection failed for {}: {} -- continuing with teardown",
                 orchestrator_worker.name,
                 exc,
             )
@@ -146,7 +162,7 @@ def run_teardown(args: argparse.Namespace) -> int:
         _delete_live_workers(context, args.experiment, provisioner)
     except Exception as exc:
         logger.error(
-            "Worker deletion failed for experiment %s: %s", args.experiment, exc
+            "Worker deletion failed for experiment {}: {}", args.experiment, exc
         )
         deletion_failed = True
     if launch_state is not None:
@@ -158,7 +174,7 @@ def run_teardown(args: argparse.Namespace) -> int:
             )
         except Exception as exc:
             logger.error(
-                "Orchestrator deletion failed for %s: %s",
+                "Orchestrator deletion failed for {}: {}",
                 launch_state.orchestrator_name,
                 exc,
             )
@@ -169,7 +185,7 @@ def run_teardown(args: argparse.Namespace) -> int:
             delete_launch_state(args.config, args.experiment)
         except OSError as exc:
             logger.warning(
-                "Failed to remove config-adjacent launch state for %s: %s",
+                "Failed to remove config-adjacent launch state for {}: {}",
                 args.experiment,
                 exc,
             )
@@ -178,7 +194,7 @@ def run_teardown(args: argparse.Namespace) -> int:
                 delete_launch_state(launch_state.experiment_filestore, args.experiment)
             except OSError as exc:
                 logger.warning(
-                    "Failed to remove legacy launch state for %s: %s",
+                    "Failed to remove legacy launch state for {}: {}",
                     args.experiment,
                     exc,
                 )

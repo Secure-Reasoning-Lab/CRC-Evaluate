@@ -1678,6 +1678,42 @@ class TestCollect:
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
     @patch("crsbench.cloud.cli._collect.GceProvisioner")
     @patch("crsbench.cloud.cli._collect.reconnect")
+    def test_collect_uses_config_scoped_collector_and_collects_logs(
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
+    ):
+        """Collection should use the config path for SSH/log state and fetch logs per worker."""
+        workers = [_make_gce_worker("w-1"), _make_gce_worker("w-2")]
+        mock_prov = MagicMock()
+        mock_prov.list_workers.return_value = workers
+        mock_prov_cls.return_value = mock_prov
+        mock_resolve_context.return_value = _make_resolved_cloud_context()
+
+        mock_coll = MagicMock()
+        mock_coll_cls.return_value = mock_coll
+
+        readiness = MagicMock()
+        readiness.list_workers.return_value = []
+        mock_reconnect.return_value = (
+            MagicMock(),
+            MagicMock(),
+            readiness,
+            MagicMock(),
+            Path("/tmp/filestore"),
+        )
+
+        from crsbench.cloud.cli._collect import run_collect
+
+        rc = run_collect(_make_collect_args())
+
+        assert rc == 0
+        mock_coll_cls.assert_called_once_with(base_path="/tmp/config.yaml")
+        assert mock_coll.collect_logs.call_count == 2
+        assert mock_coll.collect.call_count == 2
+
+    @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._collect.ArtifactCollector")
+    @patch("crsbench.cloud.cli._collect.GceProvisioner")
+    @patch("crsbench.cloud.cli._collect.reconnect")
     def test_collect_invokes_collector(
         self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
     ):
@@ -1794,6 +1830,7 @@ class TestCollect:
         rc = run_collect(_make_collect_args())
         assert rc == 1
         # Both workers should have been attempted
+        assert mock_coll.collect_logs.call_count == 2
         assert mock_coll.collect.call_count == 2
 
     @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
@@ -1803,7 +1840,7 @@ class TestCollect:
     def test_collect_also_collects_orchestrator_when_launch_state_present(
         self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
     ):
-        """Remote launches should collect orchestrator artifacts in addition to workers."""
+        """Remote launches should collect orchestrator logs in addition to worker artifacts."""
         workers = [_make_gce_worker("w-1"), _make_gce_worker("w-2")]
         mock_prov = MagicMock()
         mock_prov.list_workers.return_value = workers
@@ -1830,9 +1867,12 @@ class TestCollect:
 
         rc = run_collect(_make_collect_args())
         assert rc == 0
-        assert mock_coll.collect.call_count == 3
-        orchestrator_call = mock_coll.collect.call_args_list[-1]
-        assert orchestrator_call.kwargs["worker"].name == "gce-orchestrator-test-exp"
+        assert mock_coll.collect_logs.call_count == 3
+        assert mock_coll.collect.call_count == 2
+        orchestrator_log_call = mock_coll.collect_logs.call_args_list[-1]
+        assert (
+            orchestrator_log_call.kwargs["worker"].name == "gce-orchestrator-test-exp"
+        )
 
     @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
@@ -1841,7 +1881,7 @@ class TestCollect:
     def test_collect_orchestrator_when_no_workers_remain(
         self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
     ):
-        """Remote launches should still collect orchestrator artifacts after workers are gone."""
+        """Remote launches should still collect orchestrator logs after workers are gone."""
         mock_prov = MagicMock()
         mock_prov.list_workers.return_value = []
         mock_prov_cls.return_value = mock_prov
@@ -1867,9 +1907,10 @@ class TestCollect:
 
         rc = run_collect(_make_collect_args())
         assert rc == 0
-        assert mock_coll.collect.call_count == 1
+        assert mock_coll.collect_logs.call_count == 1
+        assert mock_coll.collect.call_count == 0
         assert (
-            mock_coll.collect.call_args.kwargs["worker"].name
+            mock_coll.collect_logs.call_args.kwargs["worker"].name
             == "gce-orchestrator-test-exp"
         )
 
@@ -1946,7 +1987,8 @@ class TestCollect:
 
         assert rc == 0
         adapter.list_workers.assert_called_once_with(plan=context.launch_plan)
-        assert mock_coll.collect.call_count == 3
+        assert mock_coll.collect_logs.call_count == 3
+        assert mock_coll.collect.call_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -2008,6 +2050,29 @@ def _setup_teardown_mocks(
 
 class TestTeardown:
     """Tests for run_teardown() sub-action."""
+
+    @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
+    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.reconnect")
+    def test_teardown_collects_logs_before_deletion(
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
+    ):
+        """Teardown should collect remote logs in addition to artifacts before deleting VMs."""
+        mock_resolve_context.return_value = _make_resolved_cloud_context()
+        mock_prov, mock_coll, _, _ = _setup_teardown_mocks(
+            mock_reconnect, mock_prov_cls, mock_coll_cls
+        )
+
+        from crsbench.cloud.cli._teardown import run_teardown
+
+        rc = run_teardown(_make_teardown_args(force=True))
+
+        assert rc == 0
+        mock_coll_cls.assert_called_once_with(base_path="/tmp/config.yaml")
+        assert mock_coll.collect_logs.call_count == 2
+        assert mock_coll.collect.call_count == 2
+        mock_prov.delete_workers.assert_called_once()
 
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
@@ -2208,7 +2273,8 @@ class TestTeardown:
         rc = run_teardown(_make_teardown_args(force=True))
 
         assert rc == 0
-        assert mock_coll.collect.call_count == 3
+        assert mock_coll.collect_logs.call_count == 3
+        assert mock_coll.collect.call_count == 2
         mock_prov.delete_workers.assert_called_once()
         mock_prov.delete_instance.assert_called_once()
         assert mock_delete_state.call_count == 2
@@ -2270,7 +2336,6 @@ class TestTeardown:
         mock_coll.collect.side_effect = [
             ArtifactCollectionError("worker collect failed"),
             Path("/tmp/out"),
-            ArtifactCollectionError("orchestrator collect failed"),
         ]
 
         from crsbench.cloud.cli._teardown import run_teardown

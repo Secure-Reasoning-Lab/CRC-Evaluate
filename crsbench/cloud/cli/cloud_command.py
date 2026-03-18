@@ -149,5 +149,5 @@ def run_cloud(args: argparse.Namespace) -> int:
 
         return run_teardown(args)
 
-    logger.error("Unknown cloud command: %s", cmd)
+    logger.error("Unknown cloud command: {}", cmd)
     return 2

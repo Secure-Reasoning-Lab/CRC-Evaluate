@@ -208,6 +208,29 @@ class TestRsyncCmdDirectIp:
         source = cmd[-2]
         assert "34.1.2.3" in source
 
+    def test_rsync_cmd_uses_config_scoped_known_hosts_when_base_path_is_set(
+        self, tmp_path: Path
+    ) -> None:
+        """Direct SSH collection should pin host trust to a config-adjacent known_hosts file."""
+        worker = _make_worker(internal_ip="10.0.0.10", external_ip="34.1.2.3")
+        fleet = _make_fleet(ssh_via_iap=False)
+        config_path = tmp_path / "config.yaml"
+        collector = ArtifactCollector(base_path=config_path)
+
+        cmd = collector._build_rsync_cmd(
+            worker=worker,
+            fleet=fleet,
+            remote_experiment_dir="/data/experiments/exp-42",
+            staging_dir=Path("/tmp/staging"),
+        )
+
+        ssh_cmd = cmd[cmd.index("-e") + 1]
+        assert "StrictHostKeyChecking=yes" in ssh_cmd
+        assert (
+            f"UserKnownHostsFile={tmp_path / '.crsbench-cloud' / 'known_hosts'}"
+            in ssh_cmd
+        )
+
 
 class TestRsyncPreservesMtimes:
     """test_rsync_preserves_mtimes — ARTF-02."""
@@ -287,6 +310,53 @@ class TestStagingAndPublish:
             assert not worker_staging.exists(), (
                 "Worker staging dir should be cleaned up"
             )
+
+    def test_publish_overwrites_read_only_files_and_preserves_broken_symlinks(
+        self, tmp_path: Path
+    ) -> None:
+        """Local publish should behave like rsync: preserve symlinks and replace prior read-only files."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for publish regression coverage")
+
+        staging_dir = tmp_path / "staging"
+        final_dir = tmp_path / "final"
+        staging_dir.mkdir()
+        final_dir.mkdir()
+
+        shared_rel = (
+            Path("trial-1") / "oss-crs-workdir" / "crs_compose" / "crs_src" / "repo"
+        )
+        staging_repo = staging_dir / shared_rel
+        final_repo = final_dir / shared_rel
+        staging_repo.mkdir(parents=True, exist_ok=True)
+        final_repo.mkdir(parents=True, exist_ok=True)
+
+        readonly_dest = final_repo / "artifact.txt"
+        readonly_dest.write_text("old\n")
+        readonly_dest.chmod(0o444)
+
+        updated_src = staging_repo / "artifact.txt"
+        updated_src.write_text("new\n")
+        import os
+
+        dest_stat = readonly_dest.stat()
+        os.utime(
+            updated_src,
+            (dest_stat.st_atime + 5, dest_stat.st_mtime + 5),
+        )
+
+        broken_link = staging_repo / "broken-link"
+        broken_link.symlink_to("../missing-target")
+
+        collector = ArtifactCollector()
+        collector._publish(staging_dir, final_dir)
+
+        assert not staging_dir.exists()
+        assert readonly_dest.read_text() == "new\n"
+        assert broken_link.name in {p.name for p in final_repo.iterdir()}
+        published_link = final_repo / "broken-link"
+        assert published_link.is_symlink()
+        assert published_link.readlink() == Path("../missing-target")
 
 
 class TestPartialStagingNotPublished:
@@ -421,3 +491,101 @@ class TestCollectFullTrialTree:
         # Source must end with trailing slash (rsync convention for directory contents)
         source = cmd[-2]
         assert source.endswith("/"), "rsync source must have trailing slash"
+
+
+class TestRemoteLogCollection:
+    """Best-effort remote log collection should land under the local cloud state dir."""
+
+    def test_collect_logs_writes_service_and_trial_logs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        config_path = tmp_path / "config.yaml"
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+        collector = ArtifactCollector(base_path=config_path)
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+
+        def _fake_remote_command(*args, **kwargs):
+            del args, kwargs
+            return subprocess.CompletedProcess(
+                args=["ssh"],
+                returncode=0,
+                stdout="remote output\n",
+                stderr="",
+            )
+
+        def _fake_subprocess_run(cmd, *_args, **_kwargs):
+            if cmd and cmd[:3] == ["gcloud", "compute", "os-login"]:
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout="test-user\n",
+                    stderr="",
+                )
+
+            if cmd and cmd[0] == "ssh-keygen":
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout="",
+                    stderr="",
+                )
+
+            if cmd and cmd[0] == "ssh-keyscan":
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout=f"{worker.external_ip} ssh-ed25519 AAAATESTKEY\n",
+                    stderr="",
+                )
+
+            if cmd and cmd[0] == "rsync":
+                dest = Path(cmd[-1].rstrip("/"))
+                shutil.copytree(
+                    source_root / "exp-42",
+                    dest,
+                    dirs_exist_ok=True,
+                )
+                return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+            raise AssertionError(f"unexpected subprocess invocation: {cmd!r}")
+
+        monkeypatch.setattr(collector, "_run_remote_command", _fake_remote_command)
+        with patch("subprocess.run", side_effect=_fake_subprocess_run):
+            logs_dir = collector.collect_logs(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        instance_dir = logs_dir / worker.name
+        assert (instance_dir / "runtime-summary.txt").read_text(encoding="utf-8")
+        assert (instance_dir / "google-startup-scripts.journal.log").read_text(
+            encoding="utf-8"
+        )
+        assert (instance_dir / "google-guest-agent.journal.log").read_text(
+            encoding="utf-8"
+        )
+        assert (instance_dir / "crsbench-worker.journal.log").read_text(
+            encoding="utf-8"
+        )
+        assert (
+            instance_dir
+            / "trial-artifacts"
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+            / "worker.log"
+        ).read_text(encoding="utf-8") == (trial_dir / "worker.log").read_text(
+            encoding="utf-8"
+        )

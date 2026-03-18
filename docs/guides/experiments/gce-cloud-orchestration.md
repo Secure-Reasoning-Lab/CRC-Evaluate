@@ -368,10 +368,16 @@ uv run crsbench cloud collect my-experiment \
 ```
 
 - Uses rsync (via IAP tunnel or direct SSH depending on config)
-- Stages artifacts in a temporary directory, verifies at least one valid trial exists, then publishes to the experiment filestore
+- For direct SSH, seeds a config-adjacent `.crsbench-cloud/known_hosts` file and reuses the local GCE OS Login username
+- Stages worker artifacts in a temporary directory, verifies at least one valid trial exists, then publishes to the experiment filestore
 - Continues to remaining workers if one fails; exits with code 1 on partial failure
 - Safe to run multiple times (incremental rsync)
-- In remote-orchestrator mode, also collects the orchestrator VM's experiment tree, even if the worker VMs have already been deleted
+- Also collects VM diagnostics under `.crsbench-cloud/remote-logs/<experiment>/`, including:
+  - `google-startup-scripts.service` and `google-guest-agent.service` journals
+  - `crsbench-worker.service` or `crsbench-orchestrator.service` user journals
+  - `runtime-summary.txt` with timezone, Docker cgroup driver, user-bus, linger, and Redis listener state
+  - lightweight per-trial observability files such as `worker.log`, `metadata.json`, `.success`, `.failure`, and the orchestrator `trial_matrix.json`
+- In remote-orchestrator mode, collects orchestrator logs and control-plane files, but trial artifact publication still comes from workers
 - If Redis is unavailable, falls back to the persisted launch state plus live GCE inventory
 
 ## Teardown
@@ -390,7 +396,7 @@ The teardown safety flow:
 2. Cross-references with Redis readiness records when Redis is reachable (warns about mismatches)
 3. Prompts for confirmation (interactive TTY required)
 4. Collects artifacts from ALL workers first
-5. In remote-orchestrator mode, also collects the orchestrator VM
+5. Collects logs from the remote orchestrator VM and all workers into `.crsbench-cloud/remote-logs/<experiment>/`
 6. Deletes VMs even if some collections fail, to avoid leaking cloud resources
 7. Returns a non-zero exit code if any collection or deletion step failed
 
