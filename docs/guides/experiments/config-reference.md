@@ -41,7 +41,7 @@ For GCE in v1:
 - live quota validation is mandatory before launch
 - worker and evaluator placements can use different instance profiles
 - the checked-in example is
-  `experiment-configs/cloud-testing/gce-sanity-1orch-2worker.yaml`
+  `experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml`
 
 ## Input Contract
 

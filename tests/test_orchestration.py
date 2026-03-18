@@ -826,11 +826,12 @@ class TestIntegrationWithSampleConfigs:
     def test_remote_gce_sample_config_loads_for_cloud_launch(self):
         """The checked-in GCE sanity config should exercise remote-orchestrator launch."""
         config_path = Path(
-            "experiment-configs/cloud-testing/gce-sanity-1orch-2worker.yaml"
+            "experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml"
         )
 
-        if not config_path.exists():
-            pytest.skip("GCE sanity config not found, skipping integration test")
+        assert config_path.exists(), (
+            f"Expected checked-in sample config at {config_path}"
+        )
 
         config = load_experiment_config(config_path)
 
@@ -846,7 +847,9 @@ class TestIntegrationWithSampleConfigs:
         assert config.cloud.providers is not None
         assert config.cloud.providers.gce is not None
         assert config.cloud.workers is not None
+        assert config.cloud.evaluators is not None
         assert config.cloud.orchestrator is not None
+        assert config.experiment == "gce-sanity-1orch-2worker-1eval"
         assert (
             config.cloud.providers.gce.instance_profiles[
                 "worker-n2d"
@@ -863,6 +866,13 @@ class TestIntegrationWithSampleConfigs:
             config.cloud.providers.gce.instance_profiles["worker-n2d"].hf_token
             == "os.environ/HF_TOKEN"
         )
+        assert [placement.zone for placement in config.cloud.evaluators.placements] == [
+            "us-east5-b"
+        ]
+        assert [
+            placement.instance_profile
+            for placement in config.cloud.evaluators.placements
+        ] == ["evaluator-n2d"]
         assert (
             config.cloud.providers.gce.instance_profiles[
                 "worker-n2d"

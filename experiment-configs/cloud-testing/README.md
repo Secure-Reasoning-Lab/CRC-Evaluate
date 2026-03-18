@@ -2,24 +2,25 @@
 
 This directory holds operator-facing smoke-test configs for real cloud bring-up.
 
-`gce-sanity-1orch-2worker.yaml` is the current GCE smoke config for the
+`gce-sanity-1orch-2worker-1eval.yaml` is the current GCE smoke config for the
 remote-orchestrator flow:
 
 - 1 orchestrator VM in `us-east5-b`
 - 1 worker in `us-east5-b`
 - 1 worker in `us-east1-b`
+- 1 evaluator in `us-east5-b`
 - `n2d-standard-16` everywhere
 
 This config is for:
 
 ```bash
-uv run crsbench cloud launch --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker.yaml
+uv run crsbench cloud launch --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml
 ```
 
 It is not intended for:
 
 ```bash
-uv run crsbench run --experiment-config experiment-configs/cloud-testing/gce-sanity-1orch-2worker.yaml
+uv run crsbench run --experiment-config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml
 ```
 
 The checked-in `runtime.redis_host` value is only a placeholder for config
@@ -33,7 +34,7 @@ This smoke config uses the checkout-first cloud bootstrap path:
 - every VM runs `crsbench prepare`
 - `download_benchmarks: auto` is set, so this `benchmark_suite: sanity` run
   skips the VM-side benchmark download
-- both GCE instance profiles use `readiness_timeout_sec: 1200` so cold-image
+- all three GCE instance profiles use `readiness_timeout_sec: 1200` so cold-image
   bootstrap and Redis startup have a 20-minute bring-up window
 
 ## Preflight
@@ -161,12 +162,13 @@ Expected result:
 - missing or empty configured env vars fail launch before any VM is created
 - runtime-managed vars such as `CRSBENCH_REDIS_HOST` are rejected in config validation
 
-The checked-in `gce-sanity-1orch-2worker.yaml` now includes:
+The checked-in `gce-sanity-1orch-2worker-1eval.yaml` now includes:
 
 - `CRSBENCH_LLM_UPSTREAM_BASE_URL`
 - `CRSBENCH_LLM_MASTER_KEY`
 - `worker.jobs: 1` so each VM runs one trial job at a time
-- `runtime.build_timeout: 1200` to leave more headroom for cold-cloud prepare
+- `evaluator.jobs: 1` so the evaluator runs one job at a time
+- `runtime.build_timeout: 3600` to leave more headroom for cold-cloud prepare
   and build phases
 
 So the operator must export those before launch in addition to `HF_TOKEN`.
@@ -174,8 +176,8 @@ Using a `.env` file is also fine when you launch through the CRSBench CLI.
 
 4. Confirm quota is sufficient for this exact layout:
 
-- `us-east5`: 32 `n2d` vCPUs
-  because the orchestrator and one worker are both `n2d-standard-16`
+- `us-east5`: 48 `n2d` vCPUs
+  because the orchestrator, one worker, and one evaluator are all `n2d-standard-16`
 - `us-east1`: 16 `n2d` vCPUs
   because one worker is `n2d-standard-16`
 
@@ -185,37 +187,36 @@ Launch:
 
 ```bash
 uv run crsbench cloud launch \
-  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker.yaml
+  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml
 ```
 
 Expected result:
 
 - exit code `0`
-- log line similar to
-  `Cloud launch complete: orchestrator=<name> redis=<internal-ip>:6379 workers=2`
-- three VMs visible in GCP:
-  one orchestrator, two workers
+- log line showing the orchestrator name and Redis internal address
+- four VMs visible in GCP:
+  one orchestrator, two workers, one evaluator
 
 Watch status:
 
 ```bash
-uv run crsbench cloud status gce-sanity-1orch-2worker \
-  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker.yaml
+uv run crsbench cloud status gce-sanity-1orch-2worker-1eval \
+  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml
 ```
 
 Expected result:
 
-- both workers eventually show as `ready`
+- both workers and the evaluator eventually show as `ready`
 - zones should include `us-east5-b` and `us-east1-b`
 - `ready` only happens after checkout, `crsbench prepare`, the skipped-or-run
-  download step, worker-side Redis polling, and Redis queue-listener startup complete
+  download step, worker/evaluator-side Redis polling, and queue-listener startup complete
 - job counts should move from queued/running to completed as the smoke run finishes
 
 Watch recovery events:
 
 ```bash
-uv run crsbench cloud events gce-sanity-1orch-2worker \
-  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker.yaml
+uv run crsbench cloud events gce-sanity-1orch-2worker-1eval \
+  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml
 ```
 
 Expected result:
@@ -226,23 +227,23 @@ Expected result:
 Collect results after completion:
 
 ```bash
-uv run crsbench cloud collect gce-sanity-1orch-2worker \
-  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker.yaml \
-  --remote-dir /tmp/crsbench/experiment-data/gce-sanity-1orch-2worker
+uv run crsbench cloud collect gce-sanity-1orch-2worker-1eval \
+  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml \
+  --remote-dir /tmp/crsbench/experiment-data/gce-sanity-1orch-2worker-1eval
 ```
 
 Expected result:
 
 - exit code `0`
-- `Collection succeeded:` lines for the two workers and the orchestrator
+- `Collection succeeded:` lines for the two workers, the evaluator, and the orchestrator
 - local experiment data appears under your configured experiment filestore
 
 Tear everything down:
 
 ```bash
-uv run crsbench cloud teardown gce-sanity-1orch-2worker \
-  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker.yaml \
-  --remote-dir /tmp/crsbench/experiment-data/gce-sanity-1orch-2worker \
+uv run crsbench cloud teardown gce-sanity-1orch-2worker-1eval \
+  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml \
+  --remote-dir /tmp/crsbench/experiment-data/gce-sanity-1orch-2worker-1eval \
   --force
 ```
 
@@ -250,7 +251,7 @@ Expected result:
 
 - exit code `0`
 - log line similar to
-  `Teardown complete: 2 workers deleted and orchestrator deleted`
+  `Teardown complete: 2 workers deleted, 1 evaluator deleted, and orchestrator deleted`
 - `gcloud compute instances list` no longer shows the smoke-test VMs
 
 ## Current Readiness

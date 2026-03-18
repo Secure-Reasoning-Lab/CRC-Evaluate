@@ -1,5 +1,5 @@
 experiment:
-  name: gce-sanity-1orch-2worker
+  name: gce-sanity-1orch-2worker-1eval
   task: bugfinding
   benchmark_suite: sanity
   mode: delta
@@ -32,6 +32,7 @@ crs_compose:
   crs-libfuzzer:
     num_cores: 2
 evaluator:
+  jobs: 1
   cores_per_job: 4
 cloud:
   bootstrap:
@@ -68,6 +69,17 @@ cloud:
           crsbench_git_ref: feat/gcp
           github_deploy_key_file: file:.crsbench-keys/crsbench-deploy
           hf_token: os.environ/HF_TOKEN
+        evaluator-n2d:
+          machine_type: n2d-standard-16
+          boot_disk_size_gb: 100
+          image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+          service_account_email: 153298433405-compute@developer.gserviceaccount.com
+          owner_label: yufu
+          readiness_timeout_sec: 1200
+          crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+          crsbench_git_ref: feat/gcp
+          github_deploy_key_file: file:.crsbench-keys/crsbench-deploy
+          hf_token: os.environ/HF_TOKEN
   orchestrator:
     provider: gce
     zone: us-east5-b
@@ -82,3 +94,9 @@ cloud:
         zone: us-east1-b
         worker_count: 1
         instance_profile: worker-n2d
+  evaluators:
+    placements:
+      - provider: gce
+        zone: us-east5-b
+        evaluator_count: 1
+        instance_profile: evaluator-n2d
