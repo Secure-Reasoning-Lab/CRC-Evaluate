@@ -978,6 +978,58 @@ class TestIntegrationWithSampleConfigs:
         }
         assert config.cloud.workers.defaults is not None
         assert config.cloud.workers.defaults.instance_profile == "gce-worker-n2d"
+
+    def test_remote_gce_multilang_given_fuzzer_sample_config_loads_for_cloud_launch(
+        self,
+    ):
+        """The Atlantis GCE sanity config should exercise remote-orchestrator launch."""
+        config_path = Path(
+            "experiment-configs/cloud-testing/"
+            "gce-sanity-1orch-2worker-1eval-multilang-given-fuzzer.yaml"
+        )
+
+        assert config_path.exists(), (
+            f"Expected checked-in sample config at {config_path}"
+        )
+
+        config = load_experiment_config(config_path)
+
+        assert config.cloud is not None
+        assert config.build_timeout == 3600
+        assert config.max_total_time > (
+            config.build_timeout + config.run_timeout + config.verify_timeout
+        )
+        assert config.pov_early_stop is True
+        assert config.inputs.sarif.enabled is True
+        assert config.inputs.sarif.level == 5
+        assert config.inputs.diff.enabled is True
+        assert config.crs_compose is not None
+        assert set(config.crs_compose.services) == {"atlantis-multilang-given_fuzzer"}
+        assert config.cloud.bootstrap.prepare_mode == "full"
+        assert config.cloud.bootstrap.download_benchmarks == "auto"
+        assert config.cloud.env == {
+            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL",
+            "CRSBENCH_LLM_MASTER_KEY": "os.environ/CRSBENCH_LLM_MASTER_KEY",
+            "HF_TOKEN": "os.environ/HF_TOKEN",
+        }
+        assert config.cloud.providers is not None
+        assert config.cloud.providers.gce is not None
+        assert config.cloud.defaults is not None
+        assert config.cloud.providers.gce.profile_defaults is not None
+        assert config.cloud.workers is not None
+        assert config.cloud.evaluators is not None
+        assert config.cloud.orchestrator is not None
+        assert config.experiment == "gce-sanity-mgf-1o2w1e"
+        assert (
+            config.cloud.defaults.crsbench_install_spec
+            == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+        )
+        assert (
+            config.cloud.defaults.github_deploy_key_path
+            == ".crsbench-keys/crsbench-deploy"
+        )
+        assert config.cloud.workers.defaults is not None
+        assert config.cloud.workers.defaults.instance_profile == "gce-worker-n2d"
         assert config.cloud.workers.defaults.count == 1
         assert [placement.zone for placement in config.cloud.evaluators.placements] == [
             "us-east5-b"

@@ -2,8 +2,17 @@
 
 This directory holds operator-facing smoke-test configs for real cloud bring-up.
 
-`gce-sanity-1orch-2worker-1eval.yaml` is the current GCE smoke config for the
+This directory currently ships two GCE smoke configs for the
 remote-orchestrator flow:
+
+- `gce-sanity-1orch-2worker-1eval.yaml`
+  - uses `crs-libfuzzer`
+  - checked-in experiment identifier: `gce-sanity-1o2w1e`
+- `gce-sanity-1orch-2worker-1eval-multilang-given-fuzzer.yaml`
+  - uses `atlantis-multilang-given_fuzzer`
+  - checked-in experiment identifier: `gce-sanity-mgf-1o2w1e`
+
+Both use the same GCE topology:
 
 - 1 orchestrator VM in `us-east5-b`
 - 1 worker in `us-east5-b`
@@ -11,11 +20,14 @@ remote-orchestrator flow:
 - 1 evaluator in `us-east5-b`
 - `n2d-standard-16` everywhere
 
-The checked-in experiment identifier inside that file is
-`gce-sanity-1o2w1e` so the generated GCE instance names stay under the
-63-character limit using compact role suffixes: `orch`, `work`, and `eval`.
+Both checked-in experiment identifiers stay under the 63-character GCE name
+limit by using compact role suffixes: `orch`, `work`, and `eval`.
 
-This config is for:
+The command examples below use the `crs-libfuzzer` sample config, but you can
+substitute the Atlantis file path directly when you want to smoke-test
+`atlantis-multilang-given_fuzzer`.
+
+These configs are for:
 
 ```bash
 uv run crsbench cloud launch --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml

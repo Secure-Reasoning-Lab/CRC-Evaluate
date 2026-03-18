@@ -1,0 +1,83 @@
+experiment:
+  name: gce-sanity-mgf-1o2w1e
+  task: bugfinding
+  benchmark_suite: sanity
+  mode: delta
+runtime:
+  trials: 1
+  max_total_time: 7200
+  build_timeout: 3600
+  run_timeout: 600
+  verify_timeout: 600
+  pov_early_stop: true
+  redis_host: redis-server:6379
+  inputs:
+    pov:
+      max_variants_per_cpv: 1
+    sarif:
+      level: 5
+    diff: {}
+  litellm:
+    skip: true
+storage:
+  experiment_filestore: /tmp/crsbench/experiment-data
+  report_filestore: /tmp/crsbench/report-data
+resources:
+  cores_per_trial: 2
+  memory_per_trial: 4G
+worker:
+  jobs: 1
+  storage:
+    cleanup_after_trial: true
+  cores_per_job: 2
+crs_compose:
+  oss_crs_infra:
+    shared: true
+  atlantis-multilang-given_fuzzer:
+    num_cores: 2
+evaluator:
+  jobs: 1
+  cores_per_job: 4
+cloud:
+  defaults:
+    readiness_timeout_sec: 1200
+    crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+    crsbench_git_ref: feat/gcp
+    github_deploy_key_path: .crsbench-keys/crsbench-deploy
+  env:
+    CRSBENCH_LLM_UPSTREAM_BASE_URL: os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL
+    CRSBENCH_LLM_MASTER_KEY: os.environ/CRSBENCH_LLM_MASTER_KEY
+    HF_TOKEN: os.environ/HF_TOKEN
+  bootstrap:
+    prepare_mode: full
+    download_benchmarks: auto
+  providers:
+    gce:
+      project: aixcc-426805
+      ssh_via_iap: true
+      profile_defaults:
+        machine_type: n2d-standard-16
+        boot_disk_size_gb: 100
+        image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+        service_account_email: 153298433405-compute@developer.gserviceaccount.com
+        owner_label: yufu
+      instance_profiles:
+        gce-orchestrator-n2d: {}
+        gce-worker-n2d: {}
+        gce-evaluator-n2d: {}
+  orchestrator:
+    zone: us-east5-b
+    instance_profile: gce-orchestrator-n2d
+  workers:
+    defaults:
+      instance_profile: gce-worker-n2d
+      count: 1
+    placements:
+      - zone: us-east5-b
+      - zone: us-east1-b
+  evaluators:
+    defaults:
+      instance_profile: gce-evaluator-n2d
+      count: 1
+    placements:
+      - zone: us-east5-b
