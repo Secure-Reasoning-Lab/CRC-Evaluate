@@ -77,7 +77,7 @@ def run_teardown(args: argparse.Namespace) -> int:
 
     if not live_instances and redis_workers and launch_state is None:
         logger.warning(
-            "No live GCE instances but Redis has %d instance entries (stale state)",
+            "No live GCE instances but Redis has {} instance entries (stale state)",
             len(redis_workers),
         )
         return 0
@@ -94,7 +94,7 @@ def run_teardown(args: argparse.Namespace) -> int:
 
         worker_count = len(live_instances) + (1 if launch_state is not None else 0)
         logger.info(
-            "This will collect artifacts from %d instances (%s uncollected jobs) "
+            "This will collect artifacts from {} instances ({} uncollected jobs) "
             "and delete all cloud VMs.",
             worker_count,
             str(uncollected_count) if lifecycle is not None else "unknown",
@@ -198,21 +198,12 @@ def run_teardown(args: argparse.Namespace) -> int:
                 args.experiment,
                 exc,
             )
-        if launch_state.experiment_filestore:
-            try:
-                delete_launch_state(launch_state.experiment_filestore, args.experiment)
-            except OSError as exc:
-                logger.warning(
-                    "Failed to remove legacy launch state for {}: {}",
-                    args.experiment,
-                    exc,
-                )
 
     if collection_failed or deletion_failed:
         return 1
 
     logger.info(
-        "Teardown complete: %d instances deleted%s",
+        "Teardown complete: {} instances deleted{}",
         len(live_instances),
         " and orchestrator deleted" if launch_state is not None else "",
     )
@@ -285,9 +276,6 @@ def _resolve_instance_fleet(
     zone_matches = [fleet for fleet in candidate_fleets if fleet.zone == worker.zone]
     if zone_matches:
         return zone_matches[0]
-
-    if context.worker_fleet_config is not None:
-        return context.worker_fleet_config
 
     raise RuntimeError(
         f"No cloud fleet config matched instance {worker.name} in zone {worker.zone}"

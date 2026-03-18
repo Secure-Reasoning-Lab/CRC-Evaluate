@@ -727,30 +727,7 @@ def test_monitor_jobs_rich_includes_finished_none_result() -> None:
 
 def test_cloud_fleet_bringup_runs_before_enqueue(tmp_path: Path) -> None:
     """Cloud-backed runs must wait for bring-up before queueing trial work."""
-    from crsbench.validation.schemas import CloudConfig, GceWorkerFleetConfig
-
-    config = MagicMock()
-    config.redis_host = "localhost"
-    config.resources = None
-    config.keep_only_results = False
-    config.experiment_filestore = tmp_path
-    config.experiment = "exp-test"
-    config.crs_compose = None
-    config.max_total_time = 3600
-    config.model_dump.return_value = {"experiment": "exp-test"}
-    config.cloud = CloudConfig(
-        gce=GceWorkerFleetConfig(
-            project="test-project",
-            zone="us-central1-a",
-            worker_count=1,
-            machine_type="e2-standard-16",
-            boot_disk_size_gb=200,
-            image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-            service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
-            owner_label="team-crs",
-            crsbench_install_spec="git+ssh://git@github.com/sslab-gatech/CRSBench.git",
-        )
-    )
+    config = _make_provider_neutral_run_config(tmp_path)
 
     session = MagicMock()
     queue = MagicMock()
@@ -761,7 +738,7 @@ def test_cloud_fleet_bringup_runs_before_enqueue(tmp_path: Path) -> None:
     registration = MagicMock()
     call_order: list[str] = []
     manager = MagicMock()
-    manager.bring_up_gce_workers.side_effect = lambda **_kwargs: (
+    manager.bring_up_workers.side_effect = lambda **_kwargs: (
         call_order.append("bringup") or MagicMock(ready_count=1, requested_count=1)
     )
 
@@ -786,101 +763,17 @@ def test_cloud_fleet_bringup_runs_before_enqueue(tmp_path: Path) -> None:
             "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config",
             return_value=registration,
         ),
+        patch("crsbench.cloud.quota.QuotaValidator") as mock_quota_validator_cls,
         patch(
             "crsbench.cloud.status.CloudFleetStatusManager",
             return_value=manager,
         ),
     ):
+        mock_quota_validator_cls.return_value.validate.return_value = None
         with pytest.raises(RuntimeError, match="stop after enqueue"):
             run_experiment_distributed("exp-test", config, [_make_trial(None)])
 
-    manager.bring_up_gce_workers.assert_called_once()
-
-
-def test_legacy_cloud_workers_resolve_secret_refs_before_bringup(
-    tmp_path: Path,
-) -> None:
-    """Legacy GCE bring-up should resolve secret refs before provisioning."""
-    from crsbench.validation.schemas import CloudConfig, GceWorkerFleetConfig
-
-    key_dir = tmp_path / ".crsbench-keys"
-    key_dir.mkdir()
-    expected_key_path = str((key_dir / "crsbench-deploy").resolve())
-    (key_dir / "crsbench-deploy").write_text("PRIVATE KEY", encoding="utf-8")
-    original_cwd = Path.cwd()
-
-    config = MagicMock()
-    config.redis_host = "localhost"
-    config.resources = None
-    config.keep_only_results = False
-    config.experiment_filestore = tmp_path
-    config.experiment = "exp-test"
-    config.crs_compose = None
-    config.max_total_time = 3600
-    config.model_dump.return_value = {"experiment": "exp-test"}
-    config.cloud = CloudConfig(
-        gce=GceWorkerFleetConfig(
-            project="test-project",
-            zone="us-central1-a",
-            worker_count=1,
-            machine_type="e2-standard-16",
-            boot_disk_size_gb=200,
-            image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-            service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
-            owner_label="team-crs",
-            crsbench_install_spec="git+ssh://git@github.com/sslab-gatech/CRSBench.git",
-            github_deploy_key_file="file:.crsbench-keys/crsbench-deploy",
-            hf_token="os.environ/HF_TOKEN",
-        )
-    )
-
-    session = MagicMock()
-    queue = MagicMock()
-    session.trial_queue = queue
-    session.cloud_readiness = MagicMock()
-    session.register_or_raise.return_value = None
-
-    manager = MagicMock()
-    registration = MagicMock()
-
-    def _bring_up_gce_workers(**kwargs):
-        fleet = kwargs["fleet"]
-        assert fleet.github_deploy_key_file == expected_key_path
-        assert fleet.hf_token == "hf_secret_value"
-        raise RuntimeError("stop after resolved legacy bringup")
-
-    manager.bring_up_gce_workers.side_effect = _bring_up_gce_workers
-
-    with (
-        patch.dict(os.environ, {"HF_TOKEN": "hf_secret_value"}, clear=False),
-        patch(
-            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
-            return_value=session,
-        ),
-        patch(
-            "crsbench.distributed.queue.get_existing_trials",
-            return_value={"queued": {}, "started": {}, "failed": {}, "finished": {}},
-        ),
-        patch("crsbench.run_experiment.dump_trial_matrix"),
-        patch(
-            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config",
-            return_value=registration,
-        ),
-        patch(
-            "crsbench.cloud.status.CloudFleetStatusManager",
-            return_value=manager,
-        ),
-    ):
-        os.chdir(tmp_path)
-        try:
-            with pytest.raises(
-                RuntimeError, match="stop after resolved legacy bringup"
-            ):
-                run_experiment_distributed("exp-test", config, [_make_trial(None)])
-        finally:
-            os.chdir(original_cwd)
-
-    manager.bring_up_gce_workers.assert_called_once()
+    manager.bring_up_workers.assert_called_once()
 
 
 def test_provider_neutral_cloud_workers_validate_quota_before_bringup(
@@ -978,7 +871,6 @@ def test_provider_neutral_cloud_workers_validate_quota_before_bringup(
     validator.validate.assert_called_once_with(launch_plan, include_orchestrator=False)
     manager.bring_up_workers.assert_called_once()
     manager.bring_up_instances.assert_not_called()
-    manager.bring_up_gce_workers.assert_not_called()
 
 
 def test_provider_neutral_cloud_workers_resolve_secret_refs_before_bringup(
@@ -1454,30 +1346,8 @@ def test_provider_neutral_preprovisioned_evaluators_use_combined_wait(
 def test_cloud_fleet_failure_aborts_before_enqueue(tmp_path: Path) -> None:
     """Cloud bring-up failures must abort before any trial jobs are queued."""
     from crsbench.cloud.status import CloudFleetBringupError
-    from crsbench.validation.schemas import CloudConfig, GceWorkerFleetConfig
 
-    config = MagicMock()
-    config.redis_host = "localhost"
-    config.resources = None
-    config.keep_only_results = False
-    config.experiment_filestore = tmp_path
-    config.experiment = "exp-test"
-    config.crs_compose = None
-    config.max_total_time = 3600
-    config.model_dump.return_value = {"experiment": "exp-test"}
-    config.cloud = CloudConfig(
-        gce=GceWorkerFleetConfig(
-            project="test-project",
-            zone="us-central1-a",
-            worker_count=1,
-            machine_type="e2-standard-16",
-            boot_disk_size_gb=200,
-            image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-            service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
-            owner_label="team-crs",
-            crsbench_install_spec="git+ssh://git@github.com/sslab-gatech/CRSBench.git",
-        )
-    )
+    config = _make_provider_neutral_run_config(tmp_path)
 
     session = MagicMock()
     queue = MagicMock()
@@ -1486,7 +1356,7 @@ def test_cloud_fleet_failure_aborts_before_enqueue(tmp_path: Path) -> None:
     session.register_or_raise.return_value = None
 
     manager = MagicMock()
-    manager.bring_up_gce_workers.side_effect = CloudFleetBringupError(
+    manager.bring_up_workers.side_effect = CloudFleetBringupError(
         "gce-worker-001 bootstrap failed: systemd unit exited",
     )
 
@@ -1503,11 +1373,13 @@ def test_cloud_fleet_failure_aborts_before_enqueue(tmp_path: Path) -> None:
         patch(
             "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
         ),
+        patch("crsbench.cloud.quota.QuotaValidator") as mock_quota_validator_cls,
         patch(
             "crsbench.cloud.status.CloudFleetStatusManager",
             return_value=manager,
         ),
     ):
+        mock_quota_validator_cls.return_value.validate.return_value = None
         with pytest.raises(
             CloudFleetBringupError,
             match="bootstrap failed: systemd unit exited",
@@ -1519,30 +1391,7 @@ def test_cloud_fleet_failure_aborts_before_enqueue(tmp_path: Path) -> None:
 
 def test_cloud_fleet_bringup_is_skipped_when_no_trials_remain(tmp_path: Path) -> None:
     """Runs with no remaining work should not provision cloud workers."""
-    from crsbench.validation.schemas import CloudConfig, GceWorkerFleetConfig
-
-    config = MagicMock()
-    config.redis_host = "localhost"
-    config.resources = None
-    config.keep_only_results = False
-    config.experiment_filestore = tmp_path
-    config.experiment = "exp-test"
-    config.crs_compose = None
-    config.max_total_time = 3600
-    config.model_dump.return_value = {"experiment": "exp-test"}
-    config.cloud = CloudConfig(
-        gce=GceWorkerFleetConfig(
-            project="test-project",
-            zone="us-central1-a",
-            worker_count=1,
-            machine_type="e2-standard-16",
-            boot_disk_size_gb=200,
-            image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-            service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
-            owner_label="team-crs",
-            crsbench_install_spec="git+ssh://git@github.com/sslab-gatech/CRSBench.git",
-        )
-    )
+    config = _make_provider_neutral_run_config(tmp_path)
 
     session = MagicMock()
     session.trial_queue = MagicMock()
@@ -1572,7 +1421,7 @@ def test_cloud_fleet_bringup_is_skipped_when_no_trials_remain(tmp_path: Path) ->
         run_experiment_distributed("exp-test", config, [])
 
     session.register_or_raise.assert_not_called()
-    manager.bring_up_gce_workers.assert_not_called()
+    manager.bring_up_workers.assert_not_called()
     session.trial_queue.enqueue.assert_not_called()
 
 
@@ -1580,32 +1429,8 @@ def test_cloud_fleet_bringup_is_skipped_for_preprovisioned_remote_orchestrator(
     tmp_path: Path, monkeypatch
 ) -> None:
     """Remote orchestrator mode should wait for existing workers instead of reprovisioning."""
-    from crsbench.validation.schemas import CloudConfig, GceWorkerFleetConfig
-
     monkeypatch.setenv("CRSBENCH_CLOUD_PREPROVISIONED_WORKERS", "1")
-
-    config = MagicMock()
-    config.redis_host = "localhost"
-    config.resources = None
-    config.keep_only_results = False
-    config.experiment_filestore = tmp_path
-    config.experiment = "exp-test"
-    config.crs_compose = None
-    config.max_total_time = 3600
-    config.model_dump.return_value = {"experiment": "exp-test"}
-    config.cloud = CloudConfig(
-        gce=GceWorkerFleetConfig(
-            project="test-project",
-            zone="us-central1-a",
-            worker_count=1,
-            machine_type="e2-standard-16",
-            boot_disk_size_gb=200,
-            image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-            service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
-            owner_label="team-crs",
-            crsbench_install_spec="git+ssh://git@github.com/sslab-gatech/CRSBench.git",
-        )
-    )
+    config = _make_provider_neutral_run_config(tmp_path)
 
     session = MagicMock()
     queue = MagicMock()
@@ -1641,5 +1466,5 @@ def test_cloud_fleet_bringup_is_skipped_for_preprovisioned_remote_orchestrator(
         with pytest.raises(RuntimeError, match="stop after enqueue"):
             run_experiment_distributed("exp-test", config, [_make_trial(None)])
 
-    manager.bring_up_gce_workers.assert_not_called()
-    manager.wait_for_existing_gce_workers.assert_called_once()
+    manager.bring_up_workers.assert_not_called()
+    manager.wait_for_existing_workers.assert_called_once()

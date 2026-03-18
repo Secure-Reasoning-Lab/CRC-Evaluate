@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from crsbench.cloud.gce.models import GceWorkerRecord
 from crsbench.cloud.types import CloudProvider, coerce_cloud_provider
@@ -49,16 +49,6 @@ class CloudLaunchState(BaseModel):
     orchestrator_ssh_via_iap: bool = False
     worker_fleet_configs: list[GceWorkerFleetConfig] = Field(default_factory=list)
     evaluator_fleet_configs: list[GceWorkerFleetConfig] = Field(default_factory=list)
-    worker_fleet_config: GceWorkerFleetConfig | None = None
-
-    @model_validator(mode="after")
-    def populate_worker_fleet_configs(self) -> "CloudLaunchState":
-        """Preserve backward compatibility for legacy single-fleet launch state."""
-        if self.worker_fleet_configs:
-            return self
-        if self.worker_fleet_config is not None:
-            self.worker_fleet_configs = [self.worker_fleet_config]
-        return self
 
     def as_orchestrator_record(self) -> GceWorkerRecord:
         """Build a collector-compatible instance record for the orchestrator VM."""
@@ -107,16 +97,10 @@ def redact_launch_state(state: CloudLaunchState) -> CloudLaunchState:
     redacted_evaluator_fleets = [
         redact_worker_fleet_config(fleet) for fleet in state.evaluator_fleet_configs
     ]
-    redacted_single = (
-        redact_worker_fleet_config(state.worker_fleet_config)
-        if state.worker_fleet_config is not None
-        else None
-    )
     return state.model_copy(
         update={
             "worker_fleet_configs": redacted_fleets,
             "evaluator_fleet_configs": redacted_evaluator_fleets,
-            "worker_fleet_config": redacted_single,
         }
     )
 

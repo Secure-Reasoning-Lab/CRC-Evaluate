@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Mapping, Sequence
+from typing import TYPE_CHECKING, Mapping
 
 from crsbench.cloud.env_passthrough import (
     merge_env_passthrough,
@@ -21,109 +21,68 @@ from crsbench.cloud.models import (
 from crsbench.cloud.secret_refs import resolve_secret_path, resolve_secret_text
 
 if TYPE_CHECKING:
-    from crsbench.validation.schemas import (
-        CloudBootstrapConfig,
-        GceOrchestratorConfig,
-        GceWorkerFleetConfig,
-    )
+    from crsbench.validation.schemas import CloudBootstrapConfig
 
 
 @dataclass(frozen=True)
 class GceLaunchPreflight:
     """Resolved launch inputs for provisioning plus redacted persistence copies."""
 
-    resolved_plan: CloudLaunchPlan | None = None
-    resolved_orchestrator: GceOrchestratorConfig | None = None
-    resolved_worker_fleets: list[GceWorkerFleetConfig] | None = None
-    redacted_worker_fleets: list[GceWorkerFleetConfig] | None = None
-    resolved_evaluator_fleets: list[GceWorkerFleetConfig] | None = None
-    redacted_evaluator_fleets: list[GceWorkerFleetConfig] | None = None
+    resolved_plan: CloudLaunchPlan
+    redacted_worker_fleets: list = field(default_factory=list)
+    redacted_evaluator_fleets: list = field(default_factory=list)
     orchestrator_env: dict[str, str] = field(default_factory=dict)
-    worker_env: dict[str, str] = field(default_factory=dict)
-    evaluator_env: dict[str, str] = field(default_factory=dict)
     worker_placement_envs: list[dict[str, str]] = field(default_factory=list)
     evaluator_placement_envs: list[dict[str, str]] = field(default_factory=list)
 
 
 def prepare_gce_launch_inputs(
     *,
-    plan: CloudLaunchPlan | None = None,
-    orchestrator: GceOrchestratorConfig | None = None,
-    worker_fleets: Sequence[GceWorkerFleetConfig] | None = None,
+    plan: CloudLaunchPlan,
     bootstrap: CloudBootstrapConfig | None = None,
     cwd: Path | str | None = None,
     env: Mapping[str, str] | None = None,
 ) -> GceLaunchPreflight:
     """Resolve GCE secret-bearing fields once on the operator before provisioning."""
     base_cwd = Path.cwd() if cwd is None else Path(cwd)
-    fleets = list(worker_fleets or [])
     orchestrator_env, worker_env, evaluator_env = _resolve_env_passthrough(
         bootstrap=bootstrap,
         env=env,
     )
-
-    if plan is not None:
-        adapter = GceProviderAdapter()
-        resolved_plan = _resolve_launch_plan(plan, cwd=base_cwd, env=env)
-        _validate_checkout_install_specs_for_plan(resolved_plan)
-        resolved_worker_fleets = adapter.build_worker_fleets(resolved_plan)
-        resolved_evaluator_fleets = adapter.build_evaluator_fleets(resolved_plan)
-        resolved_orchestrator_env = {
-            **orchestrator_env,
-            **resolved_plan.orchestrator.env,
+    adapter = GceProviderAdapter()
+    resolved_plan = _resolve_launch_plan(plan, cwd=base_cwd, env=env)
+    _validate_checkout_install_specs_for_plan(resolved_plan)
+    resolved_worker_fleets = adapter.build_worker_fleets(resolved_plan)
+    resolved_evaluator_fleets = adapter.build_evaluator_fleets(resolved_plan)
+    resolved_orchestrator_env = {
+        **orchestrator_env,
+        **resolved_plan.orchestrator.env,
+    }
+    resolved_worker_envs = [
+        {
+            **worker_env,
+            **placement.env,
         }
-        resolved_worker_envs = [
-            {
-                **worker_env,
-                **placement.env,
-            }
-            for placement in resolved_plan.worker_placements
-        ]
-        resolved_evaluator_envs = [
-            {
-                **evaluator_env,
-                **placement.env,
-            }
-            for placement in resolved_plan.evaluator_placements
-        ]
-        return GceLaunchPreflight(
-            resolved_plan=resolved_plan,
-            resolved_worker_fleets=resolved_worker_fleets,
-            resolved_evaluator_fleets=resolved_evaluator_fleets,
-            redacted_worker_fleets=[
-                redact_worker_fleet_config(fleet) for fleet in resolved_worker_fleets
-            ],
-            redacted_evaluator_fleets=[
-                redact_worker_fleet_config(fleet) for fleet in resolved_evaluator_fleets
-            ],
-            orchestrator_env=resolved_orchestrator_env,
-            worker_env=worker_env,
-            evaluator_env=evaluator_env,
-            worker_placement_envs=resolved_worker_envs,
-            evaluator_placement_envs=resolved_evaluator_envs,
-        )
-
-    resolved_orchestrator = (
-        _resolve_orchestrator_config(orchestrator, cwd=base_cwd, env=env)
-        if orchestrator is not None
-        else None
-    )
-    resolved_worker_fleets = [
-        _resolve_worker_fleet_config(fleet, cwd=base_cwd, env=env) for fleet in fleets
+        for placement in resolved_plan.worker_placements
     ]
-    _validate_checkout_install_specs_for_legacy_configs(
-        resolved_orchestrator=resolved_orchestrator,
-        resolved_worker_fleets=resolved_worker_fleets,
-    )
+    resolved_evaluator_envs = [
+        {
+            **evaluator_env,
+            **placement.env,
+        }
+        for placement in resolved_plan.evaluator_placements
+    ]
     return GceLaunchPreflight(
-        resolved_orchestrator=resolved_orchestrator,
-        resolved_worker_fleets=resolved_worker_fleets,
+        resolved_plan=resolved_plan,
         redacted_worker_fleets=[
             redact_worker_fleet_config(fleet) for fleet in resolved_worker_fleets
         ],
-        orchestrator_env=orchestrator_env,
-        worker_env=worker_env,
-        evaluator_env=evaluator_env,
+        redacted_evaluator_fleets=[
+            redact_worker_fleet_config(fleet) for fleet in resolved_evaluator_fleets
+        ],
+        orchestrator_env=resolved_orchestrator_env,
+        worker_placement_envs=resolved_worker_envs,
+        evaluator_placement_envs=resolved_evaluator_envs,
     )
 
 
@@ -281,55 +240,6 @@ def _profile_field_prefix(profile: ResolvedInstanceProfile) -> str:
     return f"cloud.providers.{profile.provider.value}.instance_profiles.{profile.name}"
 
 
-def _resolve_orchestrator_config(
-    orchestrator: GceOrchestratorConfig,
-    *,
-    cwd: Path,
-    env: Mapping[str, str] | None,
-) -> GceOrchestratorConfig:
-    return orchestrator.model_copy(
-        update={
-            "github_deploy_key_file": resolve_secret_path(
-                orchestrator.github_deploy_key_file,
-                field_path="cloud.orchestrator.github_deploy_key_file",
-                env=env,
-                cwd=cwd,
-            ),
-            "hf_token": resolve_secret_text(
-                orchestrator.hf_token,
-                field_path="cloud.orchestrator.hf_token",
-                env=env,
-                cwd=cwd,
-            ),
-        }
-    )
-
-
-def _resolve_worker_fleet_config(
-    fleet: GceWorkerFleetConfig,
-    *,
-    cwd: Path,
-    env: Mapping[str, str] | None,
-) -> GceWorkerFleetConfig:
-    field_prefix = f"cloud.gce[{fleet.zone}]"
-    return fleet.model_copy(
-        update={
-            "github_deploy_key_file": resolve_secret_path(
-                fleet.github_deploy_key_file,
-                field_path=f"{field_prefix}.github_deploy_key_file",
-                env=env,
-                cwd=cwd,
-            ),
-            "hf_token": resolve_secret_text(
-                fleet.hf_token,
-                field_path=f"{field_prefix}.hf_token",
-                env=env,
-                cwd=cwd,
-            ),
-        }
-    )
-
-
 def _validate_checkout_install_specs_for_plan(plan: CloudLaunchPlan) -> None:
     _validate_checkout_install_spec(
         plan.orchestrator.instance_profile.profile_config.get("crsbench_install_spec"),
@@ -353,23 +263,6 @@ def _validate_checkout_install_specs_for_plan(plan: CloudLaunchPlan) -> None:
                 f"{_profile_field_prefix(placement.instance_profile)}."
                 "crsbench_install_spec"
             ),
-        )
-
-
-def _validate_checkout_install_specs_for_legacy_configs(
-    *,
-    resolved_orchestrator: GceOrchestratorConfig | None,
-    resolved_worker_fleets: Sequence[GceWorkerFleetConfig],
-) -> None:
-    if resolved_orchestrator is not None:
-        _validate_checkout_install_spec(
-            resolved_orchestrator.crsbench_install_spec,
-            field_path="cloud.orchestrator.crsbench_install_spec",
-        )
-    for fleet in resolved_worker_fleets:
-        _validate_checkout_install_spec(
-            fleet.crsbench_install_spec,
-            field_path=f"cloud.gce[{fleet.zone}].crsbench_install_spec",
         )
 
 

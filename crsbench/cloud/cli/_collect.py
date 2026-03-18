@@ -169,9 +169,6 @@ def _resolve_instance_fleet(
     if zone_matches:
         return zone_matches[0]
 
-    if context.worker_fleet_config is not None:
-        return context.worker_fleet_config
-
     raise RuntimeError(
         f"No cloud fleet config matched instance {worker.name} in zone {worker.zone}"
     )

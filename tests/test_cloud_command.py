@@ -13,9 +13,7 @@ import pytest
 from crsbench.cloud.types import CloudProvider
 from crsbench.validation.schemas import (
     CloudBootstrapConfig,
-    CloudConfig,
     ExperimentConfig,
-    GceOrchestratorConfig,
     GceWorkerFleetConfig,
 )
 
@@ -155,56 +153,18 @@ def _populate_fake_redis(fake: _FakeRedis, experiment: str = "test-exp") -> None
 
 def _mock_config(*, has_cloud: bool = True):
     """Build a mock ExperimentConfig."""
-    config = MagicMock()
     if has_cloud:
-        config.cloud = MagicMock()
-        config.cloud.gce = GceWorkerFleetConfig(
-            project="current-project",
-            zone="us-west1-b",
-            worker_count=9,
-            machine_type="e2-standard-8",
-            boot_disk_size_gb=150,
-            image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-            service_account_email="current-worker@test-project.iam.gserviceaccount.com",
-            owner_label="current-owner",
-        )
-        config.cloud.orchestrator = None
-    else:
-        config.cloud = None
+        return _make_provider_neutral_experiment_config()
+
+    config = MagicMock()
+    config.cloud = None
     config.redis_host = "localhost"
     config.experiment_filestore = Path("/tmp/filestore")
     return config
 
 
 def _make_launch_config():
-    config = MagicMock()
-    config.experiment = "test-exp"
-    config.experiment_filestore = Path("/tmp/filestore")
-    config.cloud = CloudConfig(
-        gce=GceWorkerFleetConfig(
-            project="test-project",
-            zone="us-central1-a",
-            worker_count=2,
-            machine_type="e2-standard-4",
-            boot_disk_size_gb=100,
-            image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-            service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
-            owner_label="team-crs",
-            crsbench_install_spec="git+ssh://git@github.com/sslab-gatech/CRSBench.git",
-        ),
-        orchestrator=GceOrchestratorConfig(
-            project="test-project",
-            zone="us-central1-a",
-            machine_type="e2-standard-4",
-            boot_disk_size_gb=100,
-            image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-            service_account_email="crsbench-orchestrator@test-project.iam.gserviceaccount.com",
-            owner_label="team-crs",
-            instance_name_prefix="gce-orchestrator",
-            crsbench_install_spec="git+ssh://git@github.com/sslab-gatech/CRSBench.git",
-        ),
-    )
-    return config
+    return _make_provider_neutral_experiment_config()
 
 
 def _make_launch_state():
@@ -223,16 +183,18 @@ def _make_launch_state():
         orchestrator_internal_ip="10.0.0.50",
         orchestrator_external_ip="34.1.2.50",
         orchestrator_ssh_via_iap=True,
-        worker_fleet_config=GceWorkerFleetConfig(
-            project="test-project",
-            zone="us-central1-a",
-            worker_count=2,
-            machine_type="e2-standard-4",
-            boot_disk_size_gb=100,
-            image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-            service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
-            owner_label="team-crs",
-        ),
+        worker_fleet_configs=[
+            GceWorkerFleetConfig(
+                project="test-project",
+                zone="us-central1-a",
+                worker_count=2,
+                machine_type="e2-standard-4",
+                boot_disk_size_gb=100,
+                image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+                owner_label="team-crs",
+            )
+        ],
     )
 
 
@@ -300,7 +262,16 @@ def _make_resolved_cloud_context(launch_state=None):
     from crsbench.cloud.cli._config_reconnect import ResolvedCloudContext
 
     if launch_state is None:
-        fleet = _mock_config(has_cloud=True).cloud.gce
+        fleet = GceWorkerFleetConfig(
+            project="test-project",
+            zone="us-central1-a",
+            worker_count=2,
+            machine_type="e2-standard-4",
+            boot_disk_size_gb=100,
+            image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+            service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+            owner_label="team-crs",
+        )
         return ResolvedCloudContext(
             worker_fleet_configs=[fleet],
             launch_state=None,
@@ -849,45 +820,6 @@ def test_prepare_gce_launch_inputs_rejects_non_git_install_spec_for_checkout_mod
         prepare_gce_launch_inputs(plan=launch_plan, cwd=Path.cwd(), env={})
 
 
-def test_prepare_gce_launch_inputs_resolves_legacy_gce_secret_refs(
-    tmp_path: Path,
-) -> None:
-    from crsbench.cloud.gce.launch_preflight import prepare_gce_launch_inputs
-
-    key_dir = tmp_path / ".crsbench-keys"
-    key_dir.mkdir()
-    key_path = key_dir / "crsbench-deploy"
-    key_path.write_text("PRIVATE KEY", encoding="utf-8")
-
-    launch_config = _make_launch_config()
-    launch_config.cloud.gce = launch_config.cloud.gce.model_copy(
-        update={
-            "github_deploy_key_file": "file:.crsbench-keys/crsbench-deploy",
-            "hf_token": "os.environ/HF_TOKEN",
-        }
-    )
-    launch_config.cloud.orchestrator = launch_config.cloud.orchestrator.model_copy(
-        update={
-            "github_deploy_key_file": "file:.crsbench-keys/crsbench-deploy",
-            "hf_token": "os.environ/HF_TOKEN",
-        }
-    )
-
-    preflight = prepare_gce_launch_inputs(
-        orchestrator=launch_config.cloud.orchestrator,
-        worker_fleets=[launch_config.cloud.gce],
-        cwd=tmp_path,
-        env={"HF_TOKEN": "hf_secret_value"},
-    )
-
-    assert preflight.resolved_orchestrator.hf_token == "hf_secret_value"
-    assert preflight.resolved_orchestrator.github_deploy_key_file == str(key_path)
-    assert preflight.resolved_worker_fleets[0].hf_token == "hf_secret_value"
-    assert preflight.resolved_worker_fleets[0].github_deploy_key_file == str(key_path)
-    assert preflight.redacted_worker_fleets[0].hf_token is None
-    assert preflight.redacted_worker_fleets[0].github_deploy_key_file is None
-
-
 def test_run_launch_fails_on_quota_shortage_before_creating_instances(tmp_path: Path):
     from crsbench.cloud.cli._launch import run_launch
     from crsbench.cloud.quota import CloudQuotaValidationError
@@ -958,7 +890,7 @@ class TestReconnect:
         result = reconnect("/path/to/config.yaml", "test-exp")
         assert len(result) == 5
         context, redis_conn, readiness, lifecycle, filestore = result
-        assert context.worker_fleet_config is not None
+        assert context.worker_fleet_configs
         assert redis_conn is not None
         assert filestore == Path("/tmp/filestore")
 
@@ -980,7 +912,6 @@ class TestReconnect:
     ):
         """Remote orchestrator launches reconnect through persisted launch state."""
         config = _mock_config(has_cloud=True)
-        config.cloud.orchestrator = MagicMock()
         mock_load.return_value = config
         mock_state.return_value = _make_launch_state()
         mock_redis.return_value = _FakeRedis()
@@ -996,80 +927,31 @@ class TestReconnect:
             mock_state.assert_called_once_with(Path("/path/to/config.yaml"), "test-exp")
             assert os.environ["CRSBENCH_REDIS_PASSWORD"] == "shared-secret"
             assert (
-                context.worker_fleet_config
-                == mock_state.return_value.worker_fleet_config
+                context.worker_fleet_configs
+                == mock_state.return_value.worker_fleet_configs
             )
             assert filestore == Path("/tmp/filestore")
 
-    @patch("crsbench.cloud.cli._config_reconnect.save_launch_state")
-    @patch("crsbench.cloud.cli._config_reconnect.create_redis_connection")
     @patch("crsbench.cloud.cli._config_reconnect.load_launch_state")
     @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
-    def test_reconnect_migrates_legacy_launch_state_from_filestore(
-        self, mock_load, mock_state, mock_redis, mock_save_state
+    def test_resolve_cloud_context_does_not_fall_back_to_legacy_filestore_state(
+        self, mock_load, mock_state
     ):
-        """Legacy launch state should still load and migrate to the config-adjacent path."""
-        config = _mock_config(has_cloud=True)
-        config.cloud.orchestrator = MagicMock()
-        mock_load.return_value = config
-        legacy_state = _make_launch_state().model_copy(
-            update={
-                "experiment_filestore": None,
-                "worker_fleet_config": None,
-                "worker_fleet_configs": [],
-            }
-        )
-        mock_state.side_effect = [None, legacy_state]
-        mock_redis.return_value = _FakeRedis()
+        """Reconnect should only consult the config-adjacent launch-state path."""
+        mock_load.return_value = _make_provider_neutral_experiment_config()
+        mock_state.return_value = None
 
-        from crsbench.cloud.cli._config_reconnect import reconnect
+        from crsbench.cloud.cli._config_reconnect import resolve_cloud_context
 
-        context, _redis_conn, _readiness, _lifecycle, filestore = reconnect(
-            "/path/to/config.yaml", "test-exp"
-        )
+        context = resolve_cloud_context("/path/to/config.yaml", "test-exp")
 
-        assert mock_state.call_args_list[0].args == (
-            Path("/path/to/config.yaml"),
-            "test-exp",
-        )
-        assert mock_state.call_args_list[1].args == (Path("/tmp/filestore"), "test-exp")
-        mock_save_state.assert_called_once()
-        migrated_state = mock_save_state.call_args.args[1]
-        assert migrated_state.experiment_filestore == "/tmp/filestore"
-        assert migrated_state.worker_fleet_config == config.cloud.gce
-        assert context.worker_fleet_config == config.cloud.gce
-        assert filestore == Path("/tmp/filestore")
-
-    @patch("crsbench.cloud.cli._config_reconnect.save_launch_state")
-    @patch("crsbench.cloud.cli._config_reconnect.create_redis_connection")
-    @patch("crsbench.cloud.cli._config_reconnect.load_launch_state")
-    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
-    def test_reconnect_uses_legacy_launch_state_even_if_migration_save_fails(
-        self, mock_load, mock_state, mock_redis, mock_save_state
-    ):
-        """Legacy launch state should remain usable if config-adjacent migration cannot be written."""
-        config = _mock_config(has_cloud=True)
-        config.cloud.orchestrator = MagicMock()
-        mock_load.return_value = config
-        legacy_state = _make_launch_state().model_copy(
-            update={
-                "experiment_filestore": None,
-                "worker_fleet_config": None,
-                "worker_fleet_configs": [],
-            }
-        )
-        mock_state.side_effect = [None, legacy_state]
-        mock_redis.return_value = _FakeRedis()
-        mock_save_state.side_effect = PermissionError("read only")
-
-        from crsbench.cloud.cli._config_reconnect import reconnect
-
-        context, _redis_conn, _readiness, _lifecycle, filestore = reconnect(
-            "/path/to/config.yaml", "test-exp"
-        )
-
-        assert context.worker_fleet_config == config.cloud.gce
-        assert filestore == Path("/tmp/filestore")
+        mock_state.assert_called_once_with(Path("/path/to/config.yaml"), "test-exp")
+        assert [fleet.zone for fleet in context.worker_fleet_configs] == [
+            "us-east5-b",
+            "us-east5-c",
+        ]
+        assert context.launch_state is None
+        assert context.redis_host == "localhost:6379"
 
     @patch("crsbench.cloud.cli._config_reconnect.load_launch_state")
     @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
@@ -1241,12 +1123,16 @@ class TestLaunch:
     @patch("crsbench.cloud.cli._launch.append_created_instance_records")
     @patch("crsbench.cloud.cli._launch.save_launch_state")
     @patch("crsbench.cloud.cli._launch.prepare_gce_launch_inputs")
-    @patch("crsbench.cloud.cli._launch.GceProvisioner")
+    @patch("crsbench.cloud.cli._launch.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._launch.QuotaValidator")
+    @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
     @patch("crsbench.cloud.cli._launch.load_experiment_config")
     def test_launch_provisions_orchestrator_before_workers(
         self,
         mock_load,
-        mock_prov_cls,
+        mock_build_plan,
+        mock_validator_cls,
+        mock_adapter_cls,
         mock_preflight,
         mock_save_state,
         mock_append_instances,
@@ -1254,29 +1140,20 @@ class TestLaunch:
     ):
         del mock_secret
         mock_load.return_value = _make_launch_config()
-        mock_prov = MagicMock()
+        launch_plan = MagicMock(experiment_name="test-exp")
+        resolved_plan = MagicMock(experiment_name="test-exp")
+        mock_build_plan.return_value = launch_plan
+        mock_validator_cls.return_value.validate.return_value = None
+        mock_adapter = MagicMock()
         call_order: list[str] = []
-        resolved_orchestrator = _make_launch_config().cloud.orchestrator.model_copy(
-            update={
-                "hf_token": "hf_secret_value",
-                "github_deploy_key_file": "/tmp/crsbench-deploy",
-            }
-        )
-        resolved_fleet = _make_launch_config().cloud.gce.model_copy(
-            update={
-                "hf_token": "hf_secret_value",
-                "github_deploy_key_file": "/tmp/crsbench-deploy",
-            }
-        )
-        redacted_fleet = resolved_fleet.model_copy(
-            update={"hf_token": None, "github_deploy_key_file": None}
-        )
+        redacted_fleet = _make_launch_state().worker_fleet_configs[0]
         mock_preflight.return_value = MagicMock(
-            resolved_orchestrator=resolved_orchestrator,
-            resolved_worker_fleets=[resolved_fleet],
+            resolved_plan=resolved_plan,
             redacted_worker_fleets=[redacted_fleet],
+            redacted_evaluator_fleets=[],
             orchestrator_env={},
-            worker_env={},
+            worker_placement_envs=[],
+            evaluator_placement_envs=[],
         )
 
         orchestrator_record = _make_gce_worker(
@@ -1287,7 +1164,7 @@ class TestLaunch:
             call_order.append("orchestrator")
             assert kwargs["redis_password"] == "shared-secret"
             assert kwargs["experiment_config_path"] == "/tmp/config.yaml"
-            assert kwargs["orchestrator"] == resolved_orchestrator
+            assert kwargs["plan"] is resolved_plan
             assert kwargs["env_passthrough"] == {}
             return orchestrator_record
 
@@ -1295,13 +1172,16 @@ class TestLaunch:
             call_order.append("workers")
             assert kwargs["redis_host"] == "10.0.0.50:6379"
             assert kwargs["redis_password"] == "shared-secret"
-            assert kwargs["fleet"] == resolved_fleet
-            assert kwargs["env_passthrough"] == {}
+            assert kwargs["plan"] is resolved_plan
+            assert kwargs["env_passthrough_by_placement"] == []
             return [_make_gce_worker("w-1")]
 
-        mock_prov.create_orchestrator.side_effect = _create_orchestrator
-        mock_prov.create_workers.side_effect = _create_workers
-        mock_prov_cls.return_value = mock_prov
+        mock_adapter.build_orchestrator_config.return_value.project = "test-project"
+        mock_adapter.build_orchestrator_config.return_value.ssh_via_iap = True
+        mock_adapter.create_orchestrator.side_effect = _create_orchestrator
+        mock_adapter.create_workers.side_effect = _create_workers
+        mock_adapter.create_evaluators.return_value = []
+        mock_adapter_cls.return_value = mock_adapter
 
         from crsbench.cloud.cli._launch import run_launch
 
@@ -1332,7 +1212,7 @@ class TestLaunch:
         mock_save_state.assert_called_once()
         assert mock_save_state.call_args.args[0] == Path("/tmp/config.yaml")
         saved_state = mock_save_state.call_args.args[1]
-        assert saved_state.worker_fleet_config == redacted_fleet
+        assert saved_state.worker_fleet_configs == [redacted_fleet]
 
     @patch(
         "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
@@ -1342,26 +1222,46 @@ class TestLaunch:
         "crsbench.cloud.cli._launch.save_launch_state",
         side_effect=RuntimeError("disk full"),
     )
-    @patch("crsbench.cloud.cli._launch.GceProvisioner")
+    @patch("crsbench.cloud.cli._launch.prepare_gce_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._launch.QuotaValidator")
+    @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
     @patch("crsbench.cloud.cli._launch.logger")
     @patch("crsbench.cloud.cli._launch.load_experiment_config")
     def test_launch_rolls_back_workers_when_state_persist_fails(
         self,
         mock_load,
         mock_logger,
-        mock_prov_cls,
+        mock_build_plan,
+        mock_validator_cls,
+        mock_adapter_cls,
+        mock_preflight,
         mock_save_state,
         mock_append_instances,
         mock_secret,
     ):
         del mock_save_state, mock_secret
         mock_load.return_value = _make_launch_config()
-        mock_prov = MagicMock()
-        mock_prov_cls.return_value = mock_prov
-        mock_prov.create_orchestrator.return_value = _make_gce_worker(
+        resolved_plan = MagicMock(experiment_name="test-exp")
+        mock_build_plan.return_value = MagicMock(experiment_name="test-exp")
+        mock_validator_cls.return_value.validate.return_value = None
+        mock_adapter = mock_adapter_cls.return_value
+        redacted_fleet = _make_launch_state().worker_fleet_configs[0]
+        mock_preflight.return_value = MagicMock(
+            resolved_plan=resolved_plan,
+            redacted_worker_fleets=[redacted_fleet],
+            redacted_evaluator_fleets=[],
+            orchestrator_env={},
+            worker_placement_envs=[],
+            evaluator_placement_envs=[],
+        )
+        mock_adapter.build_orchestrator_config.return_value.project = "test-project"
+        mock_adapter.build_orchestrator_config.return_value.ssh_via_iap = True
+        mock_adapter.create_orchestrator.return_value = _make_gce_worker(
             "gce-orchestrator-test-exp", ip="10.0.0.50"
         )
-        mock_prov.create_workers.return_value = [_make_gce_worker("w-1")]
+        mock_adapter.create_workers.return_value = [_make_gce_worker("w-1")]
+        mock_adapter.create_evaluators.return_value = []
 
         from crsbench.cloud.cli._launch import run_launch
 
@@ -1377,8 +1277,7 @@ class TestLaunch:
             record.instance_name
             for record in mock_append_instances.call_args_list[1].kwargs["records"]
         ] == ["w-1"]
-        mock_prov.delete_workers.assert_called_once()
-        mock_prov.delete_orchestrators.assert_called_once()
+        mock_adapter.delete_workers.assert_called_once()
         mock_logger.error.assert_called_once_with(
             "Cloud launch failed: {}", "disk full"
         )
@@ -1387,25 +1286,45 @@ class TestLaunch:
         "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
     )
     @patch("crsbench.cloud.cli._launch.append_created_instance_records")
-    @patch("crsbench.cloud.cli._launch.GceProvisioner")
+    @patch("crsbench.cloud.cli._launch.prepare_gce_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._launch.QuotaValidator")
+    @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
     @patch("crsbench.cloud.cli._launch.logger")
     @patch("crsbench.cloud.cli._launch.load_experiment_config")
     def test_launch_records_orchestrator_before_worker_provisioning_failure(
         self,
         mock_load,
         mock_logger,
-        mock_prov_cls,
+        mock_build_plan,
+        mock_validator_cls,
+        mock_adapter_cls,
+        mock_preflight,
         mock_append_instances,
         mock_secret,
     ):
         del mock_secret
         mock_load.return_value = _make_launch_config()
-        mock_prov = MagicMock()
-        mock_prov_cls.return_value = mock_prov
-        mock_prov.create_orchestrator.return_value = _make_gce_worker(
+        resolved_plan = MagicMock(experiment_name="test-exp")
+        mock_build_plan.return_value = MagicMock(experiment_name="test-exp")
+        mock_validator_cls.return_value.validate.return_value = None
+        mock_adapter = mock_adapter_cls.return_value
+        redacted_fleet = _make_launch_state().worker_fleet_configs[0]
+        mock_preflight.return_value = MagicMock(
+            resolved_plan=resolved_plan,
+            redacted_worker_fleets=[redacted_fleet],
+            redacted_evaluator_fleets=[],
+            orchestrator_env={},
+            worker_placement_envs=[],
+            evaluator_placement_envs=[],
+        )
+        mock_adapter.build_orchestrator_config.return_value.project = "test-project"
+        mock_adapter.build_orchestrator_config.return_value.ssh_via_iap = True
+        mock_adapter.create_orchestrator.return_value = _make_gce_worker(
             "gce-orchestrator-test-exp", ip="10.0.0.50"
         )
-        mock_prov.create_workers.side_effect = RuntimeError("worker boom")
+        mock_adapter.create_workers.side_effect = RuntimeError("worker boom")
+        mock_adapter.create_evaluators.return_value = []
 
         from crsbench.cloud.cli._launch import run_launch
 
@@ -1417,7 +1336,7 @@ class TestLaunch:
             record.instance_name
             for record in mock_append_instances.call_args.kwargs["records"]
         ] == ["gce-orchestrator-test-exp"]
-        mock_prov.delete_orchestrators.assert_called_once()
+        mock_adapter.delete_workers.assert_not_called()
         mock_logger.error.assert_called_once_with(
             "Cloud launch failed: {}", "worker boom"
         )
@@ -2480,7 +2399,6 @@ class TestCollect:
         context.experiment_filestore = Path("/tmp/filestore")
         context.worker_fleet_configs = launch_state.worker_fleet_configs
         context.evaluator_fleet_configs = [MagicMock(zone="us-east1-b")]
-        context.worker_fleet_config = None
         mock_resolve_context.return_value = context
 
         adapter = mock_adapter_cls.return_value
@@ -2806,15 +2724,7 @@ class TestTeardown:
         assert mock_coll.collect.call_count == 2
         mock_prov.delete_workers.assert_called_once()
         mock_prov.delete_instance.assert_called_once()
-        assert mock_delete_state.call_count == 2
-        assert mock_delete_state.call_args_list[0].args == (
-            "/tmp/config.yaml",
-            "test-exp",
-        )
-        assert mock_delete_state.call_args_list[1].args == (
-            "/tmp/filestore",
-            "test-exp",
-        )
+        mock_delete_state.assert_called_once_with("/tmp/config.yaml", "test-exp")
 
     @patch("crsbench.cloud.cli._teardown.delete_launch_state")
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
@@ -2959,7 +2869,7 @@ class TestTeardown:
         adapter.list_workers.assert_called_once_with(plan=context.launch_plan)
         adapter.delete_workers.assert_called_once_with(plan=context.launch_plan)
         mock_prov.delete_instance.assert_called_once()
-        assert mock_delete_state.call_count == 2
+        mock_delete_state.assert_called_once_with("/tmp/config.yaml", "test-exp")
 
     @patch("crsbench.cloud.cli._teardown.delete_launch_state")
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
@@ -2984,7 +2894,6 @@ class TestTeardown:
         context.experiment_filestore = Path("/tmp/filestore")
         context.worker_fleet_configs = launch_state.worker_fleet_configs
         context.evaluator_fleet_configs = [MagicMock(zone="us-east1-b")]
-        context.worker_fleet_config = None
         mock_resolve_context.return_value = context
 
         adapter = mock_adapter_cls.return_value
@@ -3032,4 +2941,4 @@ class TestTeardown:
             mock_coll.collect.call_args.kwargs["worker"].name
             == "test-exp-us-east5-b-001"
         )
-        assert mock_delete_state.call_count == 2
+        mock_delete_state.assert_called_once_with("/tmp/config.yaml", "test-exp")

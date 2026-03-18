@@ -148,25 +148,32 @@ storage:
   # results_filestore: /data/crsbench/finished
 
 cloud:
-  gce:
-    project: example-project
+  providers:
+    gce:
+      project: example-project
+      ssh_via_iap: true
+      profile_defaults:
+        machine_type: e2-standard-16
+        boot_disk_size_gb: 200
+        image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+        service_account_email: crsbench@example-project.iam.gserviceaccount.com
+        owner_label: team-crs
+        readiness_timeout_sec: 900
+        crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
+      instance_profiles:
+        gce-orch:
+          service_account_email: crsbench-orchestrator@example-project.iam.gserviceaccount.com
+        gce-work:
+          service_account_email: crsbench-worker@example-project.iam.gserviceaccount.com
+  orchestrator:
     zone: us-central1-a
-    worker_count: 4
-    machine_type: e2-standard-16
-    boot_disk_size_gb: 200
-    image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
-    service_account_email: crsbench-worker@example-project.iam.gserviceaccount.com
-    owner_label: team-crs
-    use_os_login: true
-    ssh_via_iap: true
-    readiness_timeout_sec: 900
-    # Optional GCE worker-fleet overrides:
-    # worker_name_prefix: gce-worker
-    # network: default
-    # subnetwork: default
-    # startup_script_uri: gs://example-bucket/crsbench/worker.sh
-    # labels:
-    #   env: test
+    instance_profile: gce-orch
+  workers:
+    defaults:
+      instance_profile: gce-work
+      count: 4
+    placements:
+      - zone: us-central1-a
 
 # Optional top-level verification/reporting behavior.
 # pov_dedup_strategy: patch-based

@@ -2341,11 +2341,9 @@ class CloudConfig(BaseModel):
         default=None,
         description="Provider-specific backing configuration for cloud launches.",
     )
-    orchestrator: Optional[
-        Union[CloudOrchestratorPlacementConfig, GceOrchestratorConfig]
-    ] = Field(
+    orchestrator: Optional[CloudOrchestratorPlacementConfig] = Field(
         default=None,
-        description="Provider-neutral orchestrator placement or legacy GCE orchestrator VM configuration.",
+        description="Provider-neutral orchestrator placement configuration.",
     )
     workers: Optional[CloudWorkersConfig] = Field(
         default=None,
@@ -2355,10 +2353,6 @@ class CloudConfig(BaseModel):
         default=None,
         description="Provider-neutral evaluator placement configuration.",
     )
-    gce: Optional[GceWorkerFleetConfig] = Field(
-        default=None,
-        description="Legacy GCE worker fleet configuration for backward compatibility during migration.",
-    )
 
     @field_validator("env")
     @classmethod
@@ -2367,48 +2361,24 @@ class CloudConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_cloud_contract(self):
-        """Enforce either the new provider-neutral cloud surface or the legacy one."""
-        uses_provider_neutral = (
-            self.providers is not None
-            or self.workers is not None
-            or self.evaluators is not None
-            or isinstance(self.orchestrator, CloudOrchestratorPlacementConfig)
-        )
-        uses_legacy = self.gce is not None or isinstance(
-            self.orchestrator, GceOrchestratorConfig
-        )
-
-        if uses_provider_neutral and uses_legacy:
+        """Enforce the provider-neutral cloud launch contract."""
+        if self.providers is None:
             raise ValueError(
-                "cloud legacy gce/orchestrator fields cannot be mixed with provider-neutral providers/workers config"
+                "cloud.providers is required for provider-neutral cloud configuration"
             )
-
-        if uses_provider_neutral:
-            if self.providers is None:
-                raise ValueError(
-                    "cloud.providers is required for provider-neutral cloud config"
-                )
-            if not isinstance(self.orchestrator, CloudOrchestratorPlacementConfig):
-                raise ValueError(
-                    "cloud.orchestrator must use zone and instance_profile in provider-neutral cloud config"
-                )
-            if self.workers is None:
-                raise ValueError(
-                    "cloud.workers is required for provider-neutral cloud config"
-                )
-            self._validate_provider_neutral_references()
-            return self
-
-        if self.gce is None:
+        if self.orchestrator is None:
             raise ValueError(
-                "cloud requires either legacy cloud.gce or provider-neutral cloud.providers/cloud.workers configuration"
+                "cloud.orchestrator is required for provider-neutral cloud configuration"
             )
-
-        if self.env:
+        if self.workers is None:
             raise ValueError(
-                "cloud.env is only supported with provider-neutral cloud.providers/cloud.workers configuration"
+                "cloud.workers is required for provider-neutral cloud configuration"
             )
-
+        if not isinstance(self.orchestrator, CloudOrchestratorPlacementConfig):
+            raise ValueError(
+                "cloud.orchestrator must use zone and instance_profile in provider-neutral cloud config"
+            )
+        self._validate_provider_neutral_references()
         return self
 
     def _validate_provider_neutral_references(self) -> None:

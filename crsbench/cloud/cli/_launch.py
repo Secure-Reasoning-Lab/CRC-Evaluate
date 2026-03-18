@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import secrets
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
@@ -24,14 +24,11 @@ from crsbench.cloud.types import CloudProvider
 from crsbench.distributed.registry import RuntimeRegistration
 from crsbench.run_experiment import load_experiment_config
 from crsbench.utils.logger import get_logger
-from crsbench.validation.schemas import (
-    CloudOrchestratorPlacementConfig,
-    GceOrchestratorConfig,
-    GceWorkerFleetConfig,
-)
 
 if TYPE_CHECKING:
     import argparse
+
+    from crsbench.validation.schemas import GceWorkerFleetConfig
 
 logger = get_logger(__name__)
 
@@ -100,91 +97,41 @@ def run_launch(args: argparse.Namespace) -> int:
     provisioning_plan = None
     adapter = None
     resolved_orchestrator_config = None
-    legacy_orchestrator = None
-    legacy_fleet = None
-    resolved_legacy_orchestrator = None
-    resolved_legacy_fleet = None
-
-    uses_provider_neutral_cloud = (
-        config.cloud.providers is not None
-        and config.cloud.workers is not None
-        and isinstance(config.cloud.orchestrator, CloudOrchestratorPlacementConfig)
-    )
-
     try:
-        if uses_provider_neutral_cloud:
-            if registration is None:
-                raise GceProvisioningError(
-                    "Runtime registration is required for provider-neutral cloud launch"
-                )
+        if registration is None:
+            raise GceProvisioningError(
+                "Runtime registration is required for cloud launch"
+            )
 
-            launch_plan = build_cloud_launch_plan(config)
-            preflight = prepare_gce_launch_inputs(
-                plan=launch_plan,
-                bootstrap=config.cloud.bootstrap,
-                cwd=Path.cwd(),
-            )
-            provisioning_plan = preflight.resolved_plan
-            assert provisioning_plan is not None
-            assert preflight.redacted_worker_fleets is not None
-            adapter = GceProviderAdapter()
-            resolved_orchestrator_config = adapter.build_orchestrator_config(
-                provisioning_plan
-            )
-            validator = QuotaValidator(adapters={"gce": adapter})
-            validator.validate(launch_plan)
+        launch_plan = build_cloud_launch_plan(config)
+        preflight = prepare_gce_launch_inputs(
+            plan=launch_plan,
+            bootstrap=config.cloud.bootstrap,
+            cwd=Path.cwd(),
+        )
+        provisioning_plan = preflight.resolved_plan
+        assert preflight.redacted_worker_fleets is not None
+        adapter = GceProviderAdapter()
+        resolved_orchestrator_config = adapter.build_orchestrator_config(
+            provisioning_plan
+        )
+        validator = QuotaValidator(adapters={"gce": adapter})
+        validator.validate(launch_plan)
 
-            orchestrator_record = adapter.create_orchestrator(
-                plan=provisioning_plan,
-                experiment_config_path=str(config_path),
-                env_passthrough=preflight.orchestrator_env,
-                redis_password=redis_password,
-            )
-        else:
-            if config.cloud.gce is None:
-                logger.error("Experiment config must define cloud.gce for cloud launch")
-                return 1
-            if config.cloud.orchestrator is None:
-                logger.error(
-                    "Experiment config must define cloud.orchestrator for remote launch"
-                )
-                return 1
-
-            legacy_fleet = config.cloud.gce
-            legacy_orchestrator = cast(
-                "GceOrchestratorConfig", config.cloud.orchestrator
-            )
-            preflight = prepare_gce_launch_inputs(
-                orchestrator=legacy_orchestrator,
-                worker_fleets=[legacy_fleet],
-                bootstrap=config.cloud.bootstrap,
-                cwd=Path.cwd(),
-            )
-            resolved_legacy_orchestrator = preflight.resolved_orchestrator
-            assert resolved_legacy_orchestrator is not None
-            assert preflight.resolved_worker_fleets is not None
-            assert preflight.redacted_worker_fleets is not None
-            resolved_legacy_fleet = preflight.resolved_worker_fleets[0]
-            provisioner = GceProvisioner()
-            orchestrator_record = provisioner.create_orchestrator(
-                experiment_name=config.experiment,
-                orchestrator=resolved_legacy_orchestrator,
-                experiment_config_path=str(config_path),
-                env_passthrough=preflight.orchestrator_env,
-                redis_password=redis_password,
-            )
+        orchestrator_record = adapter.create_orchestrator(
+            plan=provisioning_plan,
+            experiment_config_path=str(config_path),
+            env_passthrough=preflight.orchestrator_env,
+            redis_password=redis_password,
+        )
 
         if not orchestrator_record.internal_ip:
             raise GceProvisioningError(
                 f"Provisioned orchestrator {orchestrator_record.name} has no internal IP"
             )
 
-        if uses_provider_neutral_cloud:
-            assert resolved_orchestrator_config is not None
-            orchestrator_project = resolved_orchestrator_config.project
-        else:
-            assert resolved_legacy_orchestrator is not None
-            orchestrator_project = resolved_legacy_orchestrator.project
+        assert resolved_orchestrator_config is not None
+        orchestrator_project = resolved_orchestrator_config.project
 
         append_created_instance_records(
             config_path,
@@ -200,53 +147,31 @@ def run_launch(args: argparse.Namespace) -> int:
         )
 
         redis_host = f"{orchestrator_record.internal_ip}:6379"
-        if uses_provider_neutral_cloud:
-            assert adapter is not None
-            assert provisioning_plan is not None
-            workers = adapter.create_workers(
-                plan=provisioning_plan,
-                redis_host=redis_host,
-                redis_password=redis_password,
-                registration=registration,
-                bootstrap_inputs=bootstrap_inputs,
-                env_passthrough_by_placement=preflight.worker_placement_envs,
-            )
-            evaluators = adapter.create_evaluators(
-                plan=provisioning_plan,
-                redis_host=redis_host,
-                redis_password=redis_password,
-                registration=registration,
-                experiment_config_path=str(config_path),
-                bootstrap_inputs=bootstrap_inputs,
-                env_passthrough_by_placement=preflight.evaluator_placement_envs,
-            )
-        else:
-            assert resolved_legacy_fleet is not None
-            provisioner = GceProvisioner()
-            workers = provisioner.create_workers(
-                experiment_name=config.experiment,
-                fleet=resolved_legacy_fleet,
-                redis_host=redis_host,
-                redis_password=redis_password,
-                registration=registration,
-                bootstrap_inputs=bootstrap_inputs,
-                env_passthrough=preflight.worker_env,
-            )
+        assert adapter is not None
+        workers = adapter.create_workers(
+            plan=provisioning_plan,
+            redis_host=redis_host,
+            redis_password=redis_password,
+            registration=registration,
+            bootstrap_inputs=bootstrap_inputs,
+            env_passthrough_by_placement=preflight.worker_placement_envs,
+        )
+        evaluators = adapter.create_evaluators(
+            plan=provisioning_plan,
+            redis_host=redis_host,
+            redis_password=redis_password,
+            registration=registration,
+            experiment_config_path=str(config_path),
+            bootstrap_inputs=bootstrap_inputs,
+            env_passthrough_by_placement=preflight.evaluator_placement_envs,
+        )
 
         worker_fleet_configs: list[GceWorkerFleetConfig]
         evaluator_fleet_configs: list[GceWorkerFleetConfig]
-        if uses_provider_neutral_cloud:
-            assert resolved_orchestrator_config is not None
-            assert preflight.redacted_worker_fleets is not None
-            worker_fleet_configs = preflight.redacted_worker_fleets
-            evaluator_fleet_configs = preflight.redacted_evaluator_fleets or []
-            orchestrator_ssh_via_iap = resolved_orchestrator_config.ssh_via_iap
-        else:
-            assert resolved_legacy_orchestrator is not None
-            assert preflight.redacted_worker_fleets is not None
-            worker_fleet_configs = preflight.redacted_worker_fleets
-            evaluator_fleet_configs = []
-            orchestrator_ssh_via_iap = resolved_legacy_orchestrator.ssh_via_iap
+        assert preflight.redacted_worker_fleets is not None
+        worker_fleet_configs = preflight.redacted_worker_fleets
+        evaluator_fleet_configs = preflight.redacted_evaluator_fleets or []
+        orchestrator_ssh_via_iap = resolved_orchestrator_config.ssh_via_iap
 
         if workers:
             append_created_instance_records(
@@ -303,38 +228,25 @@ def run_launch(args: argparse.Namespace) -> int:
                 orchestrator_ssh_via_iap=orchestrator_ssh_via_iap,
                 worker_fleet_configs=worker_fleet_configs,
                 evaluator_fleet_configs=evaluator_fleet_configs,
-                worker_fleet_config=(
-                    worker_fleet_configs[0] if len(worker_fleet_configs) == 1 else None
-                ),
             ),
         )
     except CloudQuotaValidationError as exc:
         logger.error("Cloud launch failed: {}", str(exc))
         return 1
     except Exception as exc:
-        if evaluators:
+        if evaluators and provisioning_plan is not None:
             try:
-                if uses_provider_neutral_cloud:
-                    assert adapter is not None
-                    assert provisioning_plan is not None
-                    adapter.delete_evaluators(plan=provisioning_plan)
+                assert adapter is not None
+                adapter.delete_evaluators(plan=provisioning_plan)
             except Exception:
                 logger.warning(
                     "Best-effort rollback failed for evaluator fleet in experiment {}",
                     config.experiment,
                 )
-        if workers:
+        if workers and provisioning_plan is not None:
             try:
-                if uses_provider_neutral_cloud:
-                    assert adapter is not None
-                    assert provisioning_plan is not None
-                    adapter.delete_workers(plan=provisioning_plan)
-                else:
-                    assert resolved_legacy_fleet is not None
-                    GceProvisioner().delete_workers(
-                        experiment_name=config.experiment,
-                        fleet=resolved_legacy_fleet,
-                    )
+                assert adapter is not None
+                adapter.delete_workers(plan=provisioning_plan)
             except Exception:
                 logger.warning(
                     "Best-effort rollback failed for worker fleet in experiment {}",
@@ -342,20 +254,13 @@ def run_launch(args: argparse.Namespace) -> int:
                 )
         if orchestrator_record is not None:
             try:
-                if uses_provider_neutral_cloud:
-                    assert adapter is not None
-                    assert resolved_orchestrator_config is not None
-                    GceProvisioner().delete_instance(
-                        project=resolved_orchestrator_config.project,
-                        zone=orchestrator_record.zone,
-                        instance_name=orchestrator_record.name,
-                    )
-                else:
-                    assert resolved_legacy_orchestrator is not None
-                    GceProvisioner().delete_orchestrators(
-                        experiment_name=config.experiment,
-                        orchestrator=resolved_legacy_orchestrator,
-                    )
+                assert adapter is not None
+                assert resolved_orchestrator_config is not None
+                GceProvisioner().delete_instance(
+                    project=resolved_orchestrator_config.project,
+                    zone=orchestrator_record.zone,
+                    instance_name=orchestrator_record.name,
+                )
             except Exception:
                 logger.warning(
                     "Best-effort rollback failed for orchestrator {}",

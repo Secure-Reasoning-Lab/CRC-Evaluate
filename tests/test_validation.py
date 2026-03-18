@@ -653,21 +653,6 @@ class TestExperimentConfigSchema:
         }
 
     @staticmethod
-    def _legacy_cloud_kwargs() -> dict:
-        return {
-            "gce": {
-                "project": "test-project",
-                "zone": "us-central1-a",
-                "worker_count": 2,
-                "machine_type": "e2-standard-4",
-                "boot_disk_size_gb": 100,
-                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
-                "owner_label": "team-crs",
-            }
-        }
-
-    @staticmethod
     def _provider_neutral_cloud_kwargs() -> dict:
         return {
             "providers": {
@@ -930,25 +915,31 @@ class TestExperimentConfigSchema:
         ):
             ExperimentConfig(**data)
 
-    def test_cloud_gce_valid(self):
+    def test_cloud_rejects_legacy_gce_config(self):
         data = self._base_kwargs()
-        data["cloud"] = self._legacy_cloud_kwargs()
-        data["cloud"]["gce"]["ssh_via_iap"] = True
-        data["cloud"]["gce"]["readiness_timeout_sec"] = 1200
-        config = ExperimentConfig(**data)
-        assert config.cloud is not None
-        assert config.cloud.gce.project == "test-project"
-        assert config.cloud.gce.zone == "us-central1-a"
-        assert config.cloud.gce.region is None
-        assert config.cloud.gce.use_os_login is True
-        assert config.cloud.gce.ssh_via_iap is True
-        assert config.cloud.bootstrap.prepare_mode == "full"
-        assert config.cloud.bootstrap.download_benchmarks == "auto"
+        data["cloud"] = {
+            "gce": {
+                "project": "test-project",
+                "zone": "us-central1-a",
+                "worker_count": 2,
+                "machine_type": "e2-standard-4",
+                "boot_disk_size_gb": 100,
+                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                "owner_label": "team-crs",
+            }
+        }
+
+        with pytest.raises(
+            PydanticValidationError,
+            match="cloud.gce",
+        ):
+            ExperimentConfig(**data)
 
     @pytest.mark.parametrize("prepare_mode", ["full", "skip_base_images"])
     def test_cloud_bootstrap_prepare_mode_valid(self, prepare_mode: str):
         data = self._base_kwargs()
-        data["cloud"] = self._legacy_cloud_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
         data["cloud"]["bootstrap"] = {"prepare_mode": prepare_mode}
 
         config = ExperimentConfig(**data)
@@ -960,7 +951,7 @@ class TestExperimentConfigSchema:
     @pytest.mark.parametrize("download_benchmarks", ["auto", "always", "never"])
     def test_cloud_bootstrap_download_policy_valid(self, download_benchmarks: str):
         data = self._base_kwargs()
-        data["cloud"] = self._legacy_cloud_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
         data["cloud"]["bootstrap"] = {"download_benchmarks": download_benchmarks}
 
         config = ExperimentConfig(**data)
@@ -971,7 +962,7 @@ class TestExperimentConfigSchema:
 
     def test_cloud_bootstrap_env_passthrough_valid(self):
         data = self._base_kwargs()
-        data["cloud"] = self._legacy_cloud_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
         data["cloud"]["bootstrap"] = {
             "env_passthrough": {
                 "common": [
@@ -995,7 +986,7 @@ class TestExperimentConfigSchema:
 
     def test_cloud_bootstrap_env_passthrough_rejects_reserved_runtime_vars(self):
         data = self._base_kwargs()
-        data["cloud"] = self._legacy_cloud_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
         data["cloud"]["bootstrap"] = {
             "env_passthrough": {"common": ["CRSBENCH_REDIS_HOST"]}
         }
@@ -1004,17 +995,6 @@ class TestExperimentConfigSchema:
             ExperimentConfig(**data)
 
     def test_cloud_gce_rejects_cloud_env_without_provider_neutral_config(self):
-        data = self._base_kwargs()
-        data["cloud"] = self._legacy_cloud_kwargs()
-        data["cloud"]["env"] = {"CRSBENCH_LLM_MASTER_KEY": "value"}
-
-        with pytest.raises(
-            PydanticValidationError,
-            match="cloud.env is only supported with provider-neutral",
-        ):
-            ExperimentConfig(**data)
-
-    def test_cloud_gce_with_orchestrator_valid(self):
         data = self._base_kwargs()
         data["cloud"] = {
             "gce": {
@@ -1026,6 +1006,34 @@ class TestExperimentConfigSchema:
                 "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
                 "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
                 "owner_label": "team-crs",
+            }
+        }
+        data["cloud"]["env"] = {"CRSBENCH_LLM_MASTER_KEY": "value"}
+
+        with pytest.raises(
+            PydanticValidationError,
+            match="cloud.gce",
+        ):
+            ExperimentConfig(**data)
+
+    def test_cloud_rejects_legacy_orchestrator_config(self):
+        data = self._base_kwargs()
+        data["cloud"] = {
+            "providers": {
+                "gce": {
+                    "project": "test-project",
+                    "profile_defaults": {
+                        "machine_type": "n2d-standard-16",
+                        "boot_disk_size_gb": 50,
+                        "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                        "service_account_email": "crsbench@test-project.iam.gserviceaccount.com",
+                        "owner_label": "team-crs",
+                        "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
+                    },
+                    "instance_profiles": {
+                        "gce-worker-n2d": {},
+                    },
+                }
             },
             "orchestrator": {
                 "project": "test-project",
@@ -1037,14 +1045,21 @@ class TestExperimentConfigSchema:
                 "owner_label": "team-crs",
                 "ssh_via_iap": True,
             },
+            "workers": {
+                "placements": [
+                    {
+                        "zone": "us-east5-b",
+                        "instance_profile": "gce-worker-n2d",
+                    }
+                ]
+            },
         }
-        config = ExperimentConfig(**data)
-        assert config.cloud is not None
-        assert config.cloud.orchestrator is not None
-        assert config.cloud.orchestrator.project == "test-project"
-        assert config.cloud.orchestrator.zone == "us-central1-a"
-        assert config.cloud.orchestrator.use_os_login is True
-        assert config.cloud.orchestrator.ssh_via_iap is True
+
+        with pytest.raises(
+            PydanticValidationError,
+            match="cloud.orchestrator.instance_profile",
+        ):
+            ExperimentConfig(**data)
 
     def test_cloud_bootstrap_custom_values_valid(self):
         data = self._base_kwargs()
@@ -1053,17 +1068,8 @@ class TestExperimentConfigSchema:
                 "prepare_mode": "skip_base_images",
                 "download_benchmarks": "never",
             },
-            "gce": {
-                "project": "test-project",
-                "zone": "us-central1-a",
-                "worker_count": 2,
-                "machine_type": "e2-standard-4",
-                "boot_disk_size_gb": 100,
-                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
-                "owner_label": "team-crs",
-            },
         }
+        data["cloud"].update(self._provider_neutral_cloud_kwargs())
 
         config = ExperimentConfig(**data)
 
@@ -1073,19 +1079,8 @@ class TestExperimentConfigSchema:
 
     def test_cloud_bootstrap_always_download_policy_valid(self):
         data = self._base_kwargs()
-        data["cloud"] = {
-            "bootstrap": {"download_benchmarks": "always"},
-            "gce": {
-                "project": "test-project",
-                "zone": "us-central1-a",
-                "worker_count": 2,
-                "machine_type": "e2-standard-4",
-                "boot_disk_size_gb": 100,
-                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
-                "owner_label": "team-crs",
-            },
-        }
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["bootstrap"] = {"download_benchmarks": "always"}
 
         config = ExperimentConfig(**data)
 
@@ -1094,100 +1089,18 @@ class TestExperimentConfigSchema:
 
     def test_cloud_bootstrap_invalid_prepare_mode_rejected(self):
         data = self._base_kwargs()
-        data["cloud"] = {
-            "bootstrap": {"prepare_mode": "partial"},
-            "gce": {
-                "project": "test-project",
-                "zone": "us-central1-a",
-                "worker_count": 2,
-                "machine_type": "e2-standard-4",
-                "boot_disk_size_gb": 100,
-                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
-                "owner_label": "team-crs",
-            },
-        }
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["bootstrap"] = {"prepare_mode": "partial"}
 
         with pytest.raises(PydanticValidationError, match="prepare_mode"):
             ExperimentConfig(**data)
 
     def test_cloud_bootstrap_invalid_download_policy_rejected(self):
         data = self._base_kwargs()
-        data["cloud"] = {
-            "bootstrap": {"download_benchmarks": "sometimes"},
-            "gce": {
-                "project": "test-project",
-                "zone": "us-central1-a",
-                "worker_count": 2,
-                "machine_type": "e2-standard-4",
-                "boot_disk_size_gb": 100,
-                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
-                "owner_label": "team-crs",
-            },
-        }
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["bootstrap"] = {"download_benchmarks": "sometimes"}
 
         with pytest.raises(PydanticValidationError, match="download_benchmarks"):
-            ExperimentConfig(**data)
-
-    def test_cloud_gce_rejects_region_until_supported(self):
-        data = self._base_kwargs()
-        data["cloud"] = {
-            "gce": {
-                "project": "test-project",
-                "region": "us-central1",
-                "worker_count": 2,
-                "machine_type": "e2-standard-4",
-                "boot_disk_size_gb": 100,
-                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
-                "owner_label": "team-crs",
-            }
-        }
-        with pytest.raises(
-            PydanticValidationError, match="cloud.gce.region is not supported yet"
-        ):
-            ExperimentConfig(**data)
-
-    def test_cloud_gce_rejects_image_and_instance_template(self):
-        data = self._base_kwargs()
-        data["cloud"] = {
-            "gce": {
-                "project": "test-project",
-                "zone": "us-central1-a",
-                "worker_count": 2,
-                "machine_type": "e2-standard-4",
-                "boot_disk_size_gb": 100,
-                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                "instance_template": "global/instanceTemplates/crsbench-worker",
-                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
-                "owner_label": "team-crs",
-            }
-        }
-        with pytest.raises(
-            PydanticValidationError,
-            match="exactly one of 'image' or 'instance_template'",
-        ):
-            ExperimentConfig(**data)
-
-    def test_cloud_gce_rejects_unsupported_access_mode(self):
-        data = self._base_kwargs()
-        data["cloud"] = {
-            "gce": {
-                "project": "test-project",
-                "zone": "us-central1-a",
-                "worker_count": 2,
-                "machine_type": "e2-standard-4",
-                "boot_disk_size_gb": 100,
-                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
-                "owner_label": "team-crs",
-                "use_os_login": False,
-            }
-        }
-        with pytest.raises(
-            PydanticValidationError, match="use_os_login must remain true"
-        ):
             ExperimentConfig(**data)
 
     def test_cloud_provider_contract_parses_defaults_driven_placements(self):
@@ -2268,9 +2181,12 @@ class TestIntegrationAllConfigs:
         assert config.max_total_time == 28800
         assert config.redis_host == "localhost:6379"
         assert config.cloud is not None
-        assert config.cloud.gce.project == "example-project"
-        assert config.cloud.gce.zone == "us-central1-a"
-        assert config.cloud.gce.use_os_login is True
+        assert config.cloud.providers is not None
+        assert config.cloud.providers.gce is not None
+        assert config.cloud.providers.gce.project == "example-project"
+        assert config.cloud.orchestrator is not None
+        assert config.cloud.orchestrator.zone == "us-central1-a"
+        assert config.cloud.orchestrator.instance_profile == "gce-orch"
 
     def test_validate_suite_example_format(self):
         """Test validation of benchmark suite with proper format (not placeholders)."""

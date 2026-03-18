@@ -139,9 +139,7 @@ Rollback:
 
 ## Contract: Bring-up and Readiness Gating
 
-- `CloudFleetStatusManager.bring_up_gce_workers()` remains the legacy single-fleet path
 - `CloudFleetStatusManager.bring_up_workers()` clears stale readiness records, creates VMs across all declared placements, records initial state, then polls for readiness
-- `CloudFleetStatusManager.wait_for_existing_gce_workers()` remains the legacy pre-provisioned path
 - `CloudFleetStatusManager.wait_for_existing_workers()` gates pre-provisioned workers across all declared placements on the same explicit readiness protocol without creating VMs again
 - Polling uses `CloudReadinessStore.snapshot()` with configurable `poll_interval_sec` (default 5s)
 - Remote launch succeeds only when the orchestrator is reachable and all workers reach `READY`

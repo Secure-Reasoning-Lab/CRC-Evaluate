@@ -42,13 +42,6 @@ class ResolvedCloudContext:
         default_factory=list
     )
 
-    @property
-    def worker_fleet_config(self) -> "GceWorkerFleetConfig | None":
-        """Return the lone fleet for legacy callers when only one exists."""
-        if len(self.worker_fleet_configs) == 1:
-            return self.worker_fleet_configs[0]
-        return None
-
 
 logger = get_logger(__name__)
 
@@ -70,20 +63,16 @@ def resolve_cloud_context(
         and config.cloud.workers is not None
         and isinstance(config.cloud.orchestrator, CloudOrchestratorPlacementConfig)
     )
-    if uses_provider_neutral_cloud:
-        launch_plan = build_cloud_launch_plan(config)
-        adapter = GceProviderAdapter()
-        derived_worker_fleets = adapter.build_worker_fleets(launch_plan)
-        derived_evaluator_fleets = adapter.build_evaluator_fleets(launch_plan)
-    elif config.cloud.gce is not None:
-        derived_worker_fleets = [config.cloud.gce]
+    if not uses_provider_neutral_cloud:
+        raise SystemExit(
+            "Experiment config must use provider-neutral cloud.providers/cloud.orchestrator/cloud.workers"
+        )
+    launch_plan = build_cloud_launch_plan(config)
+    adapter = GceProviderAdapter()
+    derived_worker_fleets = adapter.build_worker_fleets(launch_plan)
+    derived_evaluator_fleets = adapter.build_evaluator_fleets(launch_plan)
 
     launch_state = load_launch_state(Path(config_path), experiment_name)
-    loaded_from_legacy_path = False
-    if launch_state is None:
-        launch_state = load_launch_state(config.experiment_filestore, experiment_name)
-        loaded_from_legacy_path = launch_state is not None
-
     launch_state_changed = False
     if launch_state is not None:
         launch_state_updates: dict[str, object] = {}
@@ -99,19 +88,15 @@ def resolve_cloud_context(
             launch_state_updates["evaluator_fleet_configs"] = [
                 redact_worker_fleet_config(fleet) for fleet in derived_evaluator_fleets
             ]
-        if launch_state.worker_fleet_config is None and len(derived_worker_fleets) == 1:
-            launch_state_updates["worker_fleet_config"] = redact_worker_fleet_config(
-                derived_worker_fleets[0]
-            )
         if launch_state_updates:
             launch_state = launch_state.model_copy(update=launch_state_updates)
             launch_state_changed = True
-        if loaded_from_legacy_path or launch_state_changed:
+        if launch_state_changed:
             try:
                 save_launch_state(Path(config_path), launch_state)
             except OSError as exc:
                 logger.warning(
-                    "Failed to persist migrated launch state next to config %s: %s",
+                    "Failed to persist migrated launch state next to config {}: {}",
                     config_path,
                     exc,
                 )
@@ -133,12 +118,6 @@ def resolve_cloud_context(
             redis_host=launch_state.redis_host,
             redis_password=launch_state.redis_password,
             launch_plan=launch_plan,
-        )
-
-    if config.cloud.orchestrator is not None and not uses_provider_neutral_cloud:
-        raise SystemExit(
-            "Remote orchestrator launch state not found. "
-            "Run `crsbench cloud launch --config ...` first."
         )
 
     if not derived_worker_fleets:

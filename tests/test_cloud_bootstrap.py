@@ -239,16 +239,41 @@ def test_from_experiment_config_restores_repo_default_roots() -> None:
         benchmark_suite="sanity",
         crs_compose={"test-crs": {"num_cores": 1}},
         cloud={
-            "gce": {
-                "project": "test-project",
+            "providers": {
+                "gce": {
+                    "project": "test-project",
+                    "profile_defaults": {
+                        "machine_type": "e2-standard-4",
+                        "boot_disk_size_gb": 100,
+                        "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                        "service_account_email": "crsbench@test-project.iam.gserviceaccount.com",
+                        "owner_label": "team-crs",
+                    },
+                    "instance_profiles": {
+                        "gce-orchestrator-default": {
+                            "service_account_email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com",
+                        },
+                        "gce-worker-default": {
+                            "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                        },
+                    },
+                }
+            },
+            "orchestrator": {
                 "zone": "us-central1-a",
-                "worker_count": 1,
-                "machine_type": "e2-standard-4",
-                "boot_disk_size_gb": 100,
-                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
-                "owner_label": "team-crs",
-            }
+                "instance_profile": "gce-orchestrator-default",
+            },
+            "workers": {
+                "defaults": {
+                    "instance_profile": "gce-worker-default",
+                    "count": 1,
+                },
+                "placements": [
+                    {
+                        "zone": "us-central1-a",
+                    }
+                ],
+            },
         },
     )
 
