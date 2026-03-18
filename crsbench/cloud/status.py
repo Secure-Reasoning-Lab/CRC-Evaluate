@@ -13,6 +13,7 @@ from crsbench.cloud.readiness import (
     CloudWorkerState,
     CloudWorkerStatus,
 )
+from crsbench.cloud.types import CloudProviderInstanceStatus, coerce_gce_provider_status
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -326,8 +327,8 @@ class CloudFleetStatusManager:
             self._sleep(self._poll_interval_sec)
 
     def _initial_state(self, worker: GceWorkerRecord) -> CloudWorkerState:
-        provider_status = worker.status.upper()
-        if provider_status == "RUNNING":
+        provider_status = coerce_gce_provider_status(worker.status)
+        if provider_status is CloudProviderInstanceStatus.RUNNING:
             return CloudWorkerState.BOOTING
         return CloudWorkerState.PROVISIONING
 
@@ -339,6 +340,7 @@ class CloudFleetStatusManager:
         role: CloudInstanceRole = CloudInstanceRole.WORKER,
     ) -> None:
         for worker in workers:
+            provider_status = coerce_gce_provider_status(worker.status)
             if (
                 self._readiness_store.get_worker(
                     experiment_name,
@@ -356,10 +358,10 @@ class CloudFleetStatusManager:
                     zone=worker.zone,
                     state=self._initial_state(worker),
                     role=role,
-                    provider_status=worker.status,
+                    provider_status=provider_status,
                     internal_ip=worker.internal_ip,
                     external_ip=worker.external_ip,
-                    detail=f"GCE provider status: {worker.status}",
+                    detail=f"GCE provider status: {provider_status.value}",
                 )
             )
 
@@ -396,6 +398,7 @@ class CloudFleetStatusManager:
         workers: list[GceWorkerRecord],
     ) -> None:
         for worker in workers:
+            provider_status = coerce_gce_provider_status(worker.status)
             self._readiness_store.record(
                 CloudWorkerStatus(
                     experiment_name=experiment_name,
@@ -403,7 +406,7 @@ class CloudFleetStatusManager:
                     instance_name=worker.name,
                     zone=worker.zone,
                     state=CloudWorkerState.DELETING,
-                    provider_status=worker.status,
+                    provider_status=provider_status,
                     internal_ip=worker.internal_ip,
                     external_ip=worker.external_ip,
                     detail="Deleting worker after failed bring-up",
@@ -418,6 +421,7 @@ class CloudFleetStatusManager:
         except Exception:
             return
         for worker in deleted_workers:
+            provider_status = coerce_gce_provider_status(worker.status)
             self._readiness_store.record(
                 CloudWorkerStatus(
                     experiment_name=experiment_name,
@@ -425,7 +429,7 @@ class CloudFleetStatusManager:
                     instance_name=worker.name,
                     zone=worker.zone,
                     state=CloudWorkerState.DELETED,
-                    provider_status=worker.status,
+                    provider_status=provider_status,
                     internal_ip=worker.internal_ip,
                     external_ip=worker.external_ip,
                     detail="Deleted after failed bring-up",
@@ -653,6 +657,7 @@ class CloudFleetStatusManager:
         workers: list[GceWorkerRecord],
     ) -> None:
         for worker in workers:
+            provider_status = coerce_gce_provider_status(worker.status)
             self._readiness_store.record(
                 CloudWorkerStatus(
                     experiment_name=plan.experiment_name,
@@ -660,7 +665,7 @@ class CloudFleetStatusManager:
                     instance_name=worker.name,
                     zone=worker.zone,
                     state=CloudWorkerState.DELETING,
-                    provider_status=worker.status,
+                    provider_status=provider_status,
                     internal_ip=worker.internal_ip,
                     external_ip=worker.external_ip,
                     detail="Deleting worker after failed bring-up",
@@ -672,6 +677,7 @@ class CloudFleetStatusManager:
         except Exception:
             return
         for worker in deleted_workers:
+            provider_status = coerce_gce_provider_status(worker.status)
             self._readiness_store.record(
                 CloudWorkerStatus(
                     experiment_name=plan.experiment_name,
@@ -679,7 +685,7 @@ class CloudFleetStatusManager:
                     instance_name=worker.name,
                     zone=worker.zone,
                     state=CloudWorkerState.DELETED,
-                    provider_status=worker.status,
+                    provider_status=provider_status,
                     internal_ip=worker.internal_ip,
                     external_ip=worker.external_ip,
                     detail="Deleted after failed bring-up",
@@ -695,6 +701,7 @@ class CloudFleetStatusManager:
         evaluators: list["GceWorkerRecord"],
     ) -> None:
         for worker in workers:
+            provider_status = coerce_gce_provider_status(worker.status)
             self._readiness_store.record(
                 CloudWorkerStatus(
                     experiment_name=plan.experiment_name,
@@ -703,13 +710,14 @@ class CloudFleetStatusManager:
                     zone=worker.zone,
                     state=CloudWorkerState.DELETING,
                     role=CloudInstanceRole.WORKER,
-                    provider_status=worker.status,
+                    provider_status=provider_status,
                     internal_ip=worker.internal_ip,
                     external_ip=worker.external_ip,
                     detail="Deleting worker after failed bring-up",
                 )
             )
         for evaluator in evaluators:
+            provider_status = coerce_gce_provider_status(evaluator.status)
             self._readiness_store.record(
                 CloudWorkerStatus(
                     experiment_name=plan.experiment_name,
@@ -718,7 +726,7 @@ class CloudFleetStatusManager:
                     zone=evaluator.zone,
                     state=CloudWorkerState.DELETING,
                     role=CloudInstanceRole.EVALUATOR,
-                    provider_status=evaluator.status,
+                    provider_status=provider_status,
                     internal_ip=evaluator.internal_ip,
                     external_ip=evaluator.external_ip,
                     detail="Deleting evaluator after failed bring-up",
@@ -735,6 +743,7 @@ class CloudFleetStatusManager:
             deleted_evaluators = []
 
         for worker in deleted_workers:
+            provider_status = coerce_gce_provider_status(worker.status)
             self._readiness_store.record(
                 CloudWorkerStatus(
                     experiment_name=plan.experiment_name,
@@ -743,13 +752,14 @@ class CloudFleetStatusManager:
                     zone=worker.zone,
                     state=CloudWorkerState.DELETED,
                     role=CloudInstanceRole.WORKER,
-                    provider_status=worker.status,
+                    provider_status=provider_status,
                     internal_ip=worker.internal_ip,
                     external_ip=worker.external_ip,
                     detail="Deleted after failed bring-up",
                 )
             )
         for evaluator in deleted_evaluators:
+            provider_status = coerce_gce_provider_status(evaluator.status)
             self._readiness_store.record(
                 CloudWorkerStatus(
                     experiment_name=plan.experiment_name,
@@ -758,7 +768,7 @@ class CloudFleetStatusManager:
                     zone=evaluator.zone,
                     state=CloudWorkerState.DELETED,
                     role=CloudInstanceRole.EVALUATOR,
-                    provider_status=evaluator.status,
+                    provider_status=provider_status,
                     internal_ip=evaluator.internal_ip,
                     external_ip=evaluator.external_ip,
                     detail="Deleted after failed bring-up",

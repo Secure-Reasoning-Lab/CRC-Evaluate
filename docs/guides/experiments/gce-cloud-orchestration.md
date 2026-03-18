@@ -94,7 +94,7 @@ cloud:
 |---|---|---|
 | `cloud.providers.gce.project` | yes | GCP project ID used for all referenced GCE resources |
 | `cloud.providers.gce.instance_profiles.<name>` | yes | Reusable machine/image/service-account bundle for orchestrator or workers |
-| `cloud.orchestrator.provider` | yes | Provider for the remote orchestrator VM (`gce` in v1) |
+| `cloud.orchestrator.provider` | yes | Provider for the remote orchestrator VM (`gce` only in v1) |
 | `cloud.orchestrator.zone` | yes | Explicit orchestrator zone |
 | `cloud.orchestrator.instance_profile` | yes | Instance profile name for the orchestrator VM |
 | `cloud.workers.placements[].zone` | yes | Explicit worker placement zone (zone selectors only in v1) |
@@ -103,6 +103,9 @@ cloud:
 | `cloud.evaluators.placements[].zone` | yes | Explicit evaluator placement zone (zone selectors only in v1) |
 | `cloud.evaluators.placements[].evaluator_count` | no | Number of evaluators to create in that placement |
 | `cloud.evaluators.placements[].instance_profile` | yes | Instance profile name for that placement |
+
+All placement `provider` fields must currently be `gce`, and one launch cannot
+mix providers across orchestrator, workers, and evaluators.
 
 Instance profiles carry the per-VM details such as `machine_type`,
 `boot_disk_size_gb`, `image` or `instance_template`, `service_account_email`,

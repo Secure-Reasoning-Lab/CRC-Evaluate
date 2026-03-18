@@ -20,6 +20,7 @@ from crsbench.cloud.launch_state import (
 )
 from crsbench.cloud.models import build_cloud_launch_plan
 from crsbench.cloud.quota import CloudQuotaValidationError, QuotaValidator
+from crsbench.cloud.types import CloudProvider
 from crsbench.distributed.registry import RuntimeRegistration
 from crsbench.run_experiment import load_experiment_config
 from crsbench.utils.logger import get_logger
@@ -190,7 +191,7 @@ def run_launch(args: argparse.Namespace) -> int:
             experiment_name=config.experiment,
             records=[
                 CreatedCloudInstanceRecord(
-                    provider="gce",
+                    provider=CloudProvider.GCE,
                     project=orchestrator_project,
                     zone=orchestrator_record.zone,
                     instance_name=orchestrator_record.name,
@@ -253,7 +254,7 @@ def run_launch(args: argparse.Namespace) -> int:
                 experiment_name=config.experiment,
                 records=[
                     CreatedCloudInstanceRecord(
-                        provider="gce",
+                        provider=CloudProvider.GCE,
                         project=_project_for_worker_record(
                             worker.name,
                             worker_zone=worker.zone,
@@ -272,7 +273,7 @@ def run_launch(args: argparse.Namespace) -> int:
                 experiment_name=config.experiment,
                 records=[
                     CreatedCloudInstanceRecord(
-                        provider="gce",
+                        provider=CloudProvider.GCE,
                         project=_project_for_fleet_record(
                             worker.name,
                             instance_zone=worker.zone,
@@ -293,7 +294,7 @@ def run_launch(args: argparse.Namespace) -> int:
                 experiment_filestore=str(config.experiment_filestore),
                 redis_host=redis_host,
                 redis_password=redis_password,
-                orchestrator_provider="gce",
+                orchestrator_provider=CloudProvider.GCE,
                 orchestrator_name=orchestrator_record.name,
                 orchestrator_project=orchestrator_project,
                 orchestrator_zone=orchestrator_record.zone,

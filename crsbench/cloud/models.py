@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from crsbench.cloud.types import CloudProvider, coerce_cloud_provider
 from crsbench.validation.schemas import (
     CloudOrchestratorPlacementConfig,
     ExperimentConfig,
@@ -17,7 +18,7 @@ from crsbench.validation.schemas import (
 class ResolvedInstanceProfile:
     """Resolved provider profile referenced by a launch plan."""
 
-    provider: str
+    provider: CloudProvider
     name: str
     provider_config: dict[str, Any]
     profile_config: dict[str, Any]
@@ -27,7 +28,7 @@ class ResolvedInstanceProfile:
 class CloudOrchestratorPlan:
     """Resolved orchestrator placement for one cloud launch."""
 
-    provider: str
+    provider: CloudProvider
     zone: str
     instance_profile: ResolvedInstanceProfile
 
@@ -36,7 +37,7 @@ class CloudOrchestratorPlan:
 class CloudWorkerPlacementPlan:
     """Resolved worker placement for one cloud launch."""
 
-    provider: str
+    provider: CloudProvider
     zone: str
     worker_count: int
     instance_profile: ResolvedInstanceProfile
@@ -46,7 +47,7 @@ class CloudWorkerPlacementPlan:
 class CloudEvaluatorPlacementPlan:
     """Resolved evaluator placement for one cloud launch."""
 
-    provider: str
+    provider: CloudProvider
     zone: str
     evaluator_count: int
     instance_profile: ResolvedInstanceProfile
@@ -56,7 +57,7 @@ class CloudEvaluatorPlacementPlan:
 class QuotaRequirement:
     """Provider-neutral quota demand record."""
 
-    provider: str
+    provider: CloudProvider
     scope: str
     resource_family: str
     required: int
@@ -66,7 +67,7 @@ class QuotaRequirement:
 class QuotaShortage:
     """Provider-neutral quota shortage record."""
 
-    provider: str
+    provider: CloudProvider
     scope: str
     resource_family: str
     required: int
@@ -100,17 +101,17 @@ def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
 
     gce_provider = config.cloud.providers.gce
     orchestrator_profile = _resolve_gce_profile(
-        provider_name="gce",
+        provider_name=CloudProvider.GCE,
         provider_config=gce_provider,
         profile_name=config.cloud.orchestrator.instance_profile,
     )
     worker_placements = [
         CloudWorkerPlacementPlan(
-            provider=placement.provider,
+            provider=coerce_cloud_provider(placement.provider),
             zone=placement.zone or "",
             worker_count=placement.worker_count,
             instance_profile=_resolve_gce_profile(
-                provider_name="gce",
+                provider_name=CloudProvider.GCE,
                 provider_config=gce_provider,
                 profile_name=placement.instance_profile,
             ),
@@ -119,11 +120,11 @@ def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
     ]
     evaluator_placements = [
         CloudEvaluatorPlacementPlan(
-            provider=placement.provider,
+            provider=coerce_cloud_provider(placement.provider),
             zone=placement.zone or "",
             evaluator_count=placement.evaluator_count,
             instance_profile=_resolve_gce_profile(
-                provider_name="gce",
+                provider_name=CloudProvider.GCE,
                 provider_config=gce_provider,
                 profile_name=placement.instance_profile,
             ),
@@ -136,7 +137,7 @@ def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
     return CloudLaunchPlan(
         experiment_name=config.experiment,
         orchestrator=CloudOrchestratorPlan(
-            provider=config.cloud.orchestrator.provider,
+            provider=coerce_cloud_provider(config.cloud.orchestrator.provider),
             zone=config.cloud.orchestrator.zone,
             instance_profile=orchestrator_profile,
         ),
@@ -147,7 +148,7 @@ def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
 
 def _resolve_gce_profile(
     *,
-    provider_name: str,
+    provider_name: CloudProvider,
     provider_config: GceProviderConfig,
     profile_name: str,
 ) -> ResolvedInstanceProfile:

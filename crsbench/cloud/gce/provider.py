@@ -17,6 +17,7 @@ from crsbench.cloud.models import (
     QuotaShortage,
     ResolvedInstanceProfile,
 )
+from crsbench.cloud.types import CloudProvider
 from crsbench.validation.schemas import GceOrchestratorConfig, GceWorkerFleetConfig
 
 if TYPE_CHECKING:
@@ -130,7 +131,7 @@ class GceProviderAdapter:
         """Build one legacy worker-fleet config per provider-neutral placement."""
         fleets: list[GceWorkerFleetConfig] = []
         for placement in plan.worker_placements:
-            if placement.provider != "gce":
+            if placement.provider is not CloudProvider.GCE:
                 continue
             resolved = self.resolve_instance_profile(placement.instance_profile)
             fleets.append(
@@ -168,7 +169,7 @@ class GceProviderAdapter:
         """Build one legacy fleet config per provider-neutral evaluator placement."""
         fleets: list[GceWorkerFleetConfig] = []
         for placement in plan.evaluator_placements:
-            if placement.provider != "gce":
+            if placement.provider is not CloudProvider.GCE:
                 continue
             resolved = self.resolve_instance_profile(placement.instance_profile)
             fleets.append(
@@ -208,7 +209,7 @@ class GceProviderAdapter:
         """Return aggregated regional quota demand as `(region, family, required)`."""
         requirements: dict[tuple[str, str], int] = {}
 
-        if include_orchestrator and plan.orchestrator.provider == "gce":
+        if include_orchestrator and plan.orchestrator.provider is CloudProvider.GCE:
             resolved = self.resolve_instance_profile(plan.orchestrator.instance_profile)
             _accumulate_requirement(
                 requirements=requirements,
@@ -218,7 +219,7 @@ class GceProviderAdapter:
             )
 
         for placement in plan.worker_placements:
-            if placement.provider != "gce":
+            if placement.provider is not CloudProvider.GCE:
                 continue
             resolved = self.resolve_instance_profile(placement.instance_profile)
             _accumulate_requirement(
@@ -229,7 +230,7 @@ class GceProviderAdapter:
             )
 
         for placement in plan.evaluator_placements:
-            if placement.provider != "gce":
+            if placement.provider is not CloudProvider.GCE:
                 continue
             resolved = self.resolve_instance_profile(placement.instance_profile)
             _accumulate_requirement(
@@ -267,7 +268,7 @@ class GceProviderAdapter:
             if available < required:
                 shortages.append(
                     QuotaShortage(
-                        provider="gce",
+                        provider=CloudProvider.GCE,
                         scope=region,
                         resource_family=family,
                         required=required,

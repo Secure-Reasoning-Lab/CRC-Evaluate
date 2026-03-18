@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from typing import TYPE_CHECKING, Protocol
 
+from crsbench.cloud.types import CloudProviderInstanceStatus
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -41,7 +43,7 @@ class CloudWorkerStatus:
     zone: str
     state: CloudWorkerState
     role: CloudInstanceRole = CloudInstanceRole.WORKER
-    provider_status: str | None = None
+    provider_status: CloudProviderInstanceStatus | None = None
     internal_ip: str | None = None
     external_ip: str | None = None
     detail: str | None = None
@@ -186,6 +188,9 @@ class CloudReadinessStore:
         )
         payload = asdict(stored)
         payload["state"] = stored.state.value
+        payload["role"] = stored.role.value
+        if stored.provider_status is not None:
+            payload["provider_status"] = stored.provider_status.value
         self._conn.hset(
             self._key(status.experiment_name, role=status.role),
             status.instance_id,
@@ -274,4 +279,8 @@ class CloudReadinessStore:
         data = json.loads(payload)
         data["role"] = CloudInstanceRole(data.get("role", CloudInstanceRole.WORKER))
         data["state"] = CloudWorkerState(data["state"])
+        if data.get("provider_status") is not None:
+            data["provider_status"] = CloudProviderInstanceStatus(
+                data["provider_status"]
+            )
         return CloudWorkerStatus(**data)

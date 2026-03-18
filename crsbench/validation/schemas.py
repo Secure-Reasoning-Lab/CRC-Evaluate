@@ -22,6 +22,11 @@ from pydantic import (
 )
 
 from crsbench.cloud.env_passthrough import normalize_env_name_list
+from crsbench.cloud.types import (
+    CloudProvider,
+    CloudProviderName,
+    validate_single_cloud_provider,
+)
 from crsbench.validation.ground_truth_paths import validate_ground_truth_segment
 
 # =============================================================================
@@ -1850,13 +1855,26 @@ class CloudOrchestratorPlacementConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    provider: str = Field(..., description="Cloud provider used for the orchestrator.")
+    provider: CloudProviderName = Field(
+        ..., description="Cloud provider used for the orchestrator."
+    )
     zone: str = Field(..., description="Explicit zone for the orchestrator.")
     instance_profile: str = Field(
         ..., description="Named provider instance profile for the orchestrator."
     )
 
-    @field_validator("provider", "zone", "instance_profile")
+    @field_validator("provider", mode="before")
+    @classmethod
+    def normalize_provider(cls, value: object) -> object:
+        """Trim provider strings before literal validation."""
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                raise ValueError("Field is required")
+            return normalized
+        return value
+
+    @field_validator("zone", "instance_profile")
     @classmethod
     def validate_required_strings(cls, value: str) -> str:
         """Require non-empty strings for placement references."""
@@ -1871,7 +1889,9 @@ class CloudWorkerPlacementConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    provider: str = Field(..., description="Cloud provider used for this placement.")
+    provider: CloudProviderName = Field(
+        ..., description="Cloud provider used for this placement."
+    )
     zone: Optional[str] = Field(
         default=None,
         description="Explicit zone for this worker placement.",
@@ -1885,7 +1905,18 @@ class CloudWorkerPlacementConfig(BaseModel):
         ..., description="Named provider instance profile for this placement."
     )
 
-    @field_validator("provider", "instance_profile")
+    @field_validator("provider", mode="before")
+    @classmethod
+    def normalize_provider(cls, value: object) -> object:
+        """Trim provider strings before literal validation."""
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                raise ValueError("Field is required")
+            return normalized
+        return value
+
+    @field_validator("instance_profile")
     @classmethod
     def validate_required_strings(cls, value: str) -> str:
         """Require non-empty strings for placement references."""
@@ -1948,7 +1979,9 @@ class CloudEvaluatorPlacementConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    provider: str = Field(..., description="Cloud provider used for this placement.")
+    provider: CloudProviderName = Field(
+        ..., description="Cloud provider used for this placement."
+    )
     zone: Optional[str] = Field(
         default=None,
         description="Explicit zone for this evaluator placement.",
@@ -1962,7 +1995,18 @@ class CloudEvaluatorPlacementConfig(BaseModel):
         ..., description="Named provider instance profile for this placement."
     )
 
-    @field_validator("provider", "instance_profile")
+    @field_validator("provider", mode="before")
+    @classmethod
+    def normalize_provider(cls, value: object) -> object:
+        """Trim provider strings before literal validation."""
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                raise ValueError("Field is required")
+            return normalized
+        return value
+
+    @field_validator("instance_profile")
     @classmethod
     def validate_required_strings(cls, value: str) -> str:
         """Require non-empty strings for placement references."""
@@ -2142,34 +2186,35 @@ class CloudConfig(BaseModel):
         """Ensure placement provider and profile references resolve cleanly."""
         if self.providers is None or self.workers is None:
             return
+        if not isinstance(self.orchestrator, CloudOrchestratorPlacementConfig):
+            raise ValueError(
+                "cloud.orchestrator must use provider, zone, and instance_profile in provider-neutral cloud config"
+            )
+        orchestrator = self.orchestrator
 
-        if (
-            isinstance(self.orchestrator, CloudOrchestratorPlacementConfig)
-            and self.orchestrator.provider == "gce"
-        ):
-            if self.providers.gce is None:
-                raise ValueError(
-                    "cloud.providers.gce is required when cloud.orchestrator.provider is 'gce'"
-                )
-            if (
-                self.orchestrator.instance_profile
-                not in self.providers.gce.instance_profiles
-            ):
-                raise ValueError(
-                    "cloud.orchestrator.instance_profile "
-                    f"'{self.orchestrator.instance_profile}' was not found under "
-                    "cloud.providers.gce.instance_profiles"
-                )
+        provider_names = [
+            orchestrator.provider,
+            *(placement.provider for placement in self.workers.placements),
+        ]
+        if self.evaluators is not None:
+            provider_names.extend(
+                placement.provider for placement in self.evaluators.placements
+            )
+        provider = validate_single_cloud_provider(provider_names)
+        if provider is not CloudProvider.GCE:
+            raise ValueError(f"cloud provider '{provider.value}' is not supported yet")
+        if self.providers.gce is None:
+            raise ValueError(
+                "cloud.providers.gce is required when cloud.orchestrator.provider is 'gce'"
+            )
+        if orchestrator.instance_profile not in self.providers.gce.instance_profiles:
+            raise ValueError(
+                "cloud.orchestrator.instance_profile "
+                f"'{orchestrator.instance_profile}' was not found under "
+                "cloud.providers.gce.instance_profiles"
+            )
 
         for placement in self.workers.placements:
-            if placement.provider != "gce":
-                raise ValueError(
-                    f"cloud.workers.placements provider '{placement.provider}' is not supported yet"
-                )
-            if self.providers.gce is None:
-                raise ValueError(
-                    "cloud.providers.gce is required when cloud.workers.placements use provider 'gce'"
-                )
             if placement.instance_profile not in self.providers.gce.instance_profiles:
                 raise ValueError(
                     "cloud.workers.placements instance_profile "
@@ -2181,14 +2226,6 @@ class CloudConfig(BaseModel):
             return
 
         for placement in self.evaluators.placements:
-            if placement.provider != "gce":
-                raise ValueError(
-                    f"cloud.evaluators.placements provider '{placement.provider}' is not supported yet"
-                )
-            if self.providers.gce is None:
-                raise ValueError(
-                    "cloud.providers.gce is required when cloud.evaluators.placements use provider 'gce'"
-                )
             if placement.instance_profile not in self.providers.gce.instance_profiles:
                 raise ValueError(
                     "cloud.evaluators.placements instance_profile "

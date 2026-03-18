@@ -35,6 +35,8 @@ Managed cloud execution uses a provider-neutral top-level shape:
 For GCE in v1:
 
 - use `cloud.providers.gce`
+- `cloud.orchestrator.provider` and every placement `provider` must be `gce`
+- one launch cannot mix providers across orchestrator, workers, and evaluators
 - placements must use explicit zones
 - live quota validation is mandatory before launch
 - worker and evaluator placements can use different instance profiles

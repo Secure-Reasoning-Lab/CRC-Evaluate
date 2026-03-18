@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from crsbench.cloud.gce.models import GceWorkerRecord
+from crsbench.cloud.types import CloudProvider, coerce_cloud_provider
 from crsbench.validation.schemas import GceWorkerFleetConfig  # noqa: TC001
 
 _STATE_DIRNAME = ".crsbench-cloud"
@@ -23,7 +24,7 @@ _REMOTE_LOGS_DIRNAME = "remote-logs"
 class CreatedCloudInstanceRecord:
     """Append-only local ledger entry for a provisioned cloud instance."""
 
-    provider: str
+    provider: CloudProvider
     instance_name: str
     zone: str
     project: str | None = None
@@ -39,7 +40,7 @@ class CloudLaunchState(BaseModel):
     experiment_filestore: str | None = None
     redis_host: str
     redis_password: str
-    orchestrator_provider: str = "gce"
+    orchestrator_provider: CloudProvider = CloudProvider.GCE
     orchestrator_name: str
     orchestrator_project: str
     orchestrator_zone: str
@@ -166,7 +167,7 @@ def append_created_instance_records(
                     {
                         "created_at": created_at,
                         "experiment_name": experiment_name,
-                        "provider": record.provider,
+                        "provider": coerce_cloud_provider(record.provider).value,
                         "project": record.project,
                         "zone": record.zone,
                         "instance_name": record.instance_name,
@@ -197,7 +198,7 @@ def save_launch_state(
             delete=False,
             encoding="utf-8",
         ) as handle:
-            handle.write(json.dumps(state.model_dump(), indent=2))
+            handle.write(json.dumps(state.model_dump(mode="json"), indent=2))
             temp_path = Path(handle.name)
         if temp_path is None:
             raise RuntimeError("Failed to allocate temporary launch-state path")

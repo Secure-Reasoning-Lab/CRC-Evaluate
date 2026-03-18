@@ -10,6 +10,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from crsbench.cloud.types import CloudProvider
 from crsbench.validation.schemas import (
     CloudBootstrapConfig,
     CloudConfig,
@@ -215,7 +216,7 @@ def _make_launch_state():
         experiment_filestore="/tmp/filestore",
         redis_host="10.0.0.50:6379",
         redis_password="shared-secret",
-        orchestrator_provider="gce",
+        orchestrator_provider=CloudProvider.GCE,
         orchestrator_name="gce-orchestrator-test-exp",
         orchestrator_project="test-project",
         orchestrator_zone="us-central1-a",
@@ -244,7 +245,7 @@ def _make_provider_neutral_launch_state():
         experiment_filestore="/tmp/filestore",
         redis_host="10.0.0.50:6379",
         redis_password="shared-secret",
-        orchestrator_provider="gce",
+        orchestrator_provider=CloudProvider.GCE,
         orchestrator_name="gce-orchestrator-test-exp",
         orchestrator_project="test-project",
         orchestrator_zone="us-east5-b",
@@ -448,10 +449,10 @@ def test_build_cloud_launch_plan_resolves_profiles_for_orchestrator_and_workers(
 
     plan = build_cloud_launch_plan(config)
 
-    assert plan.orchestrator.provider == "gce"
+    assert plan.orchestrator.provider is CloudProvider.GCE
     assert plan.orchestrator.zone == "us-east5-b"
     assert plan.orchestrator.instance_profile.name == "orchestrator-n2d"
-    assert plan.orchestrator.instance_profile.provider == "gce"
+    assert plan.orchestrator.instance_profile.provider is CloudProvider.GCE
     assert (
         plan.orchestrator.instance_profile.provider_config["project"] == "test-project"
     )
@@ -471,6 +472,9 @@ def test_build_cloud_launch_plan_resolves_profiles_for_orchestrator_and_workers(
     assert all(
         placement.instance_profile.provider_config["project"] == "test-project"
         for placement in plan.worker_placements
+    )
+    assert all(
+        placement.provider is CloudProvider.GCE for placement in plan.worker_placements
     )
 
 
@@ -1479,7 +1483,7 @@ def test_save_launch_state_redacts_secret_bearing_worker_fields(tmp_path: Path) 
         experiment_filestore="/tmp/filestore",
         redis_host="10.0.0.50:6379",
         redis_password="shared-secret",
-        orchestrator_provider="gce",
+        orchestrator_provider=CloudProvider.GCE,
         orchestrator_name="gce-orchestrator-test-exp",
         orchestrator_project="test-project",
         orchestrator_zone="us-east5-b",
@@ -1531,13 +1535,13 @@ def test_append_created_instance_records_appends_jsonl_entries(tmp_path: Path) -
         experiment_name="test-exp",
         records=[
             CreatedCloudInstanceRecord(
-                provider="gce",
+                provider=CloudProvider.GCE,
                 project="test-project",
                 zone="us-east5-b",
                 instance_name="gce-orchestrator-test-exp",
             ),
             CreatedCloudInstanceRecord(
-                provider="gce",
+                provider=CloudProvider.GCE,
                 project="test-project",
                 zone="us-east5-b",
                 instance_name="worker-east5-001",
@@ -1549,7 +1553,7 @@ def test_append_created_instance_records_appends_jsonl_entries(tmp_path: Path) -
         experiment_name="test-exp",
         records=[
             CreatedCloudInstanceRecord(
-                provider="gce",
+                provider=CloudProvider.GCE,
                 project="test-project",
                 zone="us-east1-b",
                 instance_name="worker-east1-001",

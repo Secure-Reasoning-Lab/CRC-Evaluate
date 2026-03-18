@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from crsbench.cloud.types import CloudProvider, validate_single_cloud_provider
 from crsbench.validation import (
     validate_benchmark_from_string,
     validate_benchmark_suite_from_string,
@@ -1330,6 +1331,59 @@ class TestExperimentConfigSchema:
             match="cloud.orchestrator.instance_profile 'orchestrator-n2d' was not found under cloud.providers.gce.instance_profiles",
         ):
             ExperimentConfig(**data)
+
+    def test_cloud_provider_contract_rejects_non_gce_provider_literals(self):
+        data = self._base_kwargs()
+        data["cloud"] = {
+            "providers": {
+                "gce": {
+                    "project": "test-project",
+                    "instance_profiles": {
+                        "worker-n2d": {
+                            "machine_type": "n2d-standard-16",
+                            "boot_disk_size_gb": 50,
+                            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                            "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                            "owner_label": "team-crs",
+                        },
+                        "orchestrator-n2d": {
+                            "machine_type": "n2d-standard-16",
+                            "boot_disk_size_gb": 50,
+                            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                            "service_account_email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com",
+                            "owner_label": "team-crs",
+                        },
+                    },
+                }
+            },
+            "orchestrator": {
+                "provider": "aws",
+                "zone": "us-east5-b",
+                "instance_profile": "orchestrator-n2d",
+            },
+            "workers": {
+                "placements": [
+                    {
+                        "provider": "gce",
+                        "zone": "us-east5-b",
+                        "worker_count": 1,
+                        "instance_profile": "worker-n2d",
+                    }
+                ]
+            },
+        }
+
+        with pytest.raises(PydanticValidationError, match="Input should be 'gce'"):
+            ExperimentConfig(**data)
+
+    def test_validate_single_cloud_provider_rejects_cross_provider_launches(self):
+        with pytest.raises(
+            ValueError,
+            match="Cross-provider cloud launches are not supported yet",
+        ):
+            validate_single_cloud_provider(
+                [CloudProvider.GCE, CloudProvider.AWS, CloudProvider.GCE]
+            )
 
     def test_benchmarks_nested_harness_cpvs(self):
         data = self._base_kwargs()

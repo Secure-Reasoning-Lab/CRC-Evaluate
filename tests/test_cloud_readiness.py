@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from crsbench.cloud.gce.models import GceWorkerRecord
+from crsbench.cloud.types import CloudProviderInstanceStatus, coerce_gce_provider_status
 
 
 class _FakeRedis:
@@ -55,7 +56,7 @@ def test_readiness_store_tracks_identity_and_forward_transitions() -> None:
         instance_name="gce-worker-001",
         zone="us-central1-a",
         state=CloudWorkerState.PROVISIONING,
-        provider_status="PROVISIONING",
+        provider_status=CloudProviderInstanceStatus.PROVISIONING,
     )
 
     store.record(initial)
@@ -67,6 +68,7 @@ def test_readiness_store_tracks_identity_and_forward_transitions() -> None:
     assert len(statuses) == 1
     assert statuses[0].instance_id == "1001"
     assert statuses[0].state is CloudWorkerState.READY
+    assert statuses[0].provider_status is CloudProviderInstanceStatus.PROVISIONING
 
 
 def test_readiness_store_keeps_evaluator_records_separate_from_workers() -> None:
@@ -126,7 +128,7 @@ def test_readiness_store_rejects_backward_transition_after_ready() -> None:
         instance_name="gce-worker-001",
         zone="us-central1-a",
         state=CloudWorkerState.READY,
-        provider_status="RUNNING",
+        provider_status=CloudProviderInstanceStatus.RUNNING,
     )
 
     store.record(ready_status)
@@ -152,7 +154,7 @@ def test_wait_for_gce_workers_requires_explicit_ready_not_running_vm() -> None:
             instance_name="gce-worker-001",
             zone="us-central1-a",
             state=CloudWorkerState.BOOTING,
-            provider_status="RUNNING",
+            provider_status=CloudProviderInstanceStatus.RUNNING,
             detail="startup still in progress",
         )
     )
@@ -193,7 +195,7 @@ def test_wait_for_gce_workers_surfaces_startup_failure_evidence() -> None:
             instance_name="gce-worker-001",
             zone="us-central1-a",
             state=CloudWorkerState.BOOTSTRAP_FAILED,
-            provider_status="RUNNING",
+            provider_status=CloudProviderInstanceStatus.RUNNING,
             detail="worker service failed",
             startup_evidence="systemd unit crsbench-worker.service exited with status 1",
         )
@@ -283,7 +285,7 @@ def test_wait_for_existing_gce_workers_ignores_stale_other_instance_records() ->
             instance_name="gce-worker-001",
             zone="us-central1-a",
             state=CloudWorkerState.READY,
-            provider_status="RUNNING",
+            provider_status=CloudProviderInstanceStatus.RUNNING,
         )
     )
 
@@ -365,6 +367,11 @@ def test_bring_up_workers_deletes_all_provider_neutral_placements_after_timeout(
         )
 
     assert adapter.deleted == [plan]
+
+
+def test_coerce_gce_provider_status_rejects_unknown_values() -> None:
+    with pytest.raises(ValueError, match="Unsupported GCE instance status"):
+        coerce_gce_provider_status("MYSTERY_STATUS")
 
 
 def test_bring_up_instances_deletes_worker_and_evaluator_placements_after_timeout() -> (
