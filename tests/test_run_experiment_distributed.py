@@ -494,9 +494,10 @@ def _add_secret_refs_to_provider_neutral_run_config(
     config = config.model_copy(deep=True)
     profiles = config.cloud.providers.gce.instance_profiles
     profiles["gce-orchestrator-n2d"].github_deploy_key_file = deploy_key_ref
-    profiles["gce-orchestrator-n2d"].hf_token = hf_token_ref
     profiles["gce-worker-n2d"].github_deploy_key_file = deploy_key_ref
-    profiles["gce-worker-n2d"].hf_token = hf_token_ref
+    if config.cloud.env is None:
+        config.cloud.env = {}
+    config.cloud.env["HF_TOKEN"] = hf_token_ref
     return config
 
 
@@ -885,22 +886,14 @@ def test_provider_neutral_cloud_workers_resolve_secret_refs_before_bringup(
 
     def _bring_up_workers(**kwargs):
         resolved_plan = kwargs["plan"]
-        assert (
-            resolved_plan.worker_placements[0].instance_profile.profile_config[
-                "hf_token"
-            ]
-            == "hf_secret_value"
-        )
+        assert resolved_plan.worker_placements[0].env["HF_TOKEN"] == "hf_secret_value"
         assert (
             resolved_plan.worker_placements[0].instance_profile.profile_config[
                 "github_deploy_key_file"
             ]
             == expected_key_path
         )
-        assert (
-            launch_plan.worker_placements[0].instance_profile.profile_config["hf_token"]
-            == "os.environ/HF_TOKEN"
-        )
+        assert launch_plan.worker_placements[0].env["HF_TOKEN"] == "os.environ/HF_TOKEN"
         assert (
             launch_plan.worker_placements[0].instance_profile.profile_config[
                 "github_deploy_key_file"
@@ -1201,9 +1194,7 @@ def test_provider_neutral_preprovisioned_wait_does_not_resolve_secret_refs_again
     def _wait_for_existing_workers(**kwargs):
         unresolved_plan = kwargs["plan"]
         assert (
-            unresolved_plan.worker_placements[0].instance_profile.profile_config[
-                "hf_token"
-            ]
+            unresolved_plan.worker_placements[0].env["HF_TOKEN"]
             == "os.environ/HF_TOKEN"
         )
         raise RuntimeError("stop after existing-worker wait")

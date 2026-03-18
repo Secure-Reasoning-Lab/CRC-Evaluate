@@ -16,7 +16,7 @@ def test_resolve_secret_text_returns_trimmed_literal() -> None:
     assert (
         resolve_secret_text(
             "  hf_test_token_abc123  ",
-            field_path="cloud.providers.gce.instance_profiles.worker-n2d.hf_token",
+            field_path="cloud.env.HF_TOKEN",
         )
         == "hf_test_token_abc123"
     )
@@ -28,10 +28,10 @@ def test_resolve_secret_text_rejects_empty_literal() -> None:
         resolve_secret_text,
     )
 
-    with pytest.raises(CloudSecretReferenceError, match="hf_token"):
+    with pytest.raises(CloudSecretReferenceError, match="HF_TOKEN"):
         resolve_secret_text(
             "   ",
-            field_path="cloud.providers.gce.instance_profiles.worker-n2d.hf_token",
+            field_path="cloud.env.HF_TOKEN",
         )
 
 
@@ -41,7 +41,7 @@ def test_resolve_secret_text_resolves_env_reference() -> None:
     assert (
         resolve_secret_text(
             "os.environ/HF_TOKEN",
-            field_path="cloud.providers.gce.instance_profiles.worker-n2d.hf_token",
+            field_path="cloud.env.HF_TOKEN",
             env={"HF_TOKEN": "hf_secret_value"},
         )
         == "hf_secret_value"
@@ -71,7 +71,7 @@ def test_resolve_secret_text_rejects_invalid_env_references(
     with pytest.raises(CloudSecretReferenceError, match=match):
         resolve_secret_text(
             value,
-            field_path="cloud.providers.gce.instance_profiles.worker-n2d.hf_token",
+            field_path="cloud.env.HF_TOKEN",
             env=env,
         )
 
@@ -86,7 +86,7 @@ def test_resolve_secret_text_reads_file_relative_to_cwd(tmp_path: Path) -> None:
     assert (
         resolve_secret_text(
             "file:.secrets/hf_token.txt",
-            field_path="cloud.providers.gce.instance_profiles.worker-n2d.hf_token",
+            field_path="cloud.env.HF_TOKEN",
             cwd=tmp_path,
         )
         == "hf_file_token"

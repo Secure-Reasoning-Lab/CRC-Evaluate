@@ -143,12 +143,6 @@ def _resolve_instance_profile(
         env=env,
         cwd=cwd,
     )
-    profile_config["hf_token"] = resolve_secret_text(
-        profile_config.get("hf_token"),
-        field_path=f"{field_prefix}.hf_token",
-        env=env,
-        cwd=cwd,
-    )
     return replace(profile, profile_config=profile_config)
 
 

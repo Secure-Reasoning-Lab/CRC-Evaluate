@@ -101,8 +101,7 @@ mix providers across orchestrator, workers, and evaluators.
 Instance profiles carry the per-VM details such as `machine_type`,
 `boot_disk_size_gb`, `image` or `instance_template`, `service_account_email`,
 `owner_label`, `labels`, `metadata`, `ssh_via_iap`, `readiness_timeout_sec`,
-`crsbench_install_spec`, `crsbench_git_ref`, `github_deploy_key_file`, and
-`hf_token`.
+`crsbench_install_spec`, `crsbench_git_ref`, and `github_deploy_key_file`.
 
 By default, provisioned instance names sort naturally in the GCP console:
 `crsbench-<experiment>-<zone>-orch`,
@@ -256,6 +255,8 @@ public key. Add it to your GitHub repository:
 
 ```yaml
 cloud:
+  env:
+    HF_TOKEN: os.environ/HF_TOKEN
   providers:
     gce:
       profile_defaults:
@@ -266,9 +267,7 @@ cloud:
         #   crsbench_install_spec: "git+ssh://git@github.com/your-org/CRSBench.git"
         #   github_deploy_key_file: file:.crsbench-keys/crsbench-deploy
         gce-orchestrator-n2d: {}
-        gce-worker-n2d:
-          # HuggingFace token for gated dataset downloads (optional)
-          hf_token: os.environ/HF_TOKEN
+        gce-worker-n2d: {}
 ```
 
 If you switch to the private `git+ssh` path, run:
@@ -293,13 +292,12 @@ file at provision time, base64-encodes it, and sets it as
 `/root/.ssh/id_ed25519` and uses it only for the top-level CRSBench clone.
 Submodules continue to use the URLs declared in `.gitmodules`, so public
 submodules such as `oss-crs` can stay on HTTPS and do not require the deploy
-key. The `hf_token` is
-passed as `crsbench-hf-token` metadata and exported as `HF_TOKEN` in the worker
-environment. Secret references are resolved once on the operator before VM
-creation; the original experiment config payload sent to the remote orchestrator
-is not rewritten with resolved secret values. First-class `cloud.*.env` values
-use the same operator-side resolution rule and are passed through the same VM
-metadata channel after resolution.
+key. `HF_TOKEN` and other remote env vars should be declared in `cloud.env` or
+the role/profile env layers. Secret references are resolved once on the
+operator before VM creation; the original experiment config payload sent to the
+remote orchestrator is not rewritten with resolved secret values. First-class
+`cloud.*.env` values are encoded into the generic env metadata bundle and
+exported by the startup scripts after resolution.
 
 ## Launching an Experiment
 

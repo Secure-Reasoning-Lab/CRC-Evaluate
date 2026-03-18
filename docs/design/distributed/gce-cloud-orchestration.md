@@ -175,7 +175,7 @@ Cloud env contract:
 - Values may be literals, `os.environ/...`, or `file:...` references and are resolved on the operator before provisioning
 - Missing or empty referenced values fail launch before any VM is created
 - Reserved runtime-managed names such as `CRSBENCH_REDIS_HOST` and `CRSBENCH_REDIS_PASSWORD` are rejected during config validation
-- If both `hf_token` metadata and `HF_TOKEN` env are configured, the dedicated `hf_token` metadata wins and duplicate env injection is dropped during metadata assembly
+- Resolved env values are encoded into the generic cloud env metadata bundle and exported by the startup scripts on each VM
 
 ## Contract: Artifact Collection
 

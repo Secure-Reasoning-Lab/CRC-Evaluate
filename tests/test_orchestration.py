@@ -953,6 +953,7 @@ class TestIntegrationWithSampleConfigs:
         assert config.cloud.env == {
             "CRSBENCH_LLM_UPSTREAM_BASE_URL": "os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL",
             "CRSBENCH_LLM_MASTER_KEY": "os.environ/CRSBENCH_LLM_MASTER_KEY",
+            "HF_TOKEN": "os.environ/HF_TOKEN",
         }
         assert config.cloud.providers is not None
         assert config.cloud.providers.gce is not None
@@ -973,10 +974,11 @@ class TestIntegrationWithSampleConfigs:
             ].github_deploy_key_file
             == "file:.crsbench-keys/crsbench-deploy"
         )
-        assert (
-            config.cloud.providers.gce.instance_profiles["gce-worker-n2d"].hf_token
-            == "os.environ/HF_TOKEN"
-        )
+        assert config.cloud.env == {
+            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL",
+            "CRSBENCH_LLM_MASTER_KEY": "os.environ/CRSBENCH_LLM_MASTER_KEY",
+            "HF_TOKEN": "os.environ/HF_TOKEN",
+        }
         assert config.cloud.workers.defaults is not None
         assert config.cloud.workers.defaults.instance_profile == "gce-worker-n2d"
         assert config.cloud.workers.defaults.count == 1
@@ -1020,12 +1022,6 @@ class TestIntegrationWithSampleConfigs:
                 "gce-orchestrator-n2d"
             ].github_deploy_key_file
             == "file:.crsbench-keys/crsbench-deploy"
-        )
-        assert (
-            config.cloud.providers.gce.instance_profiles[
-                "gce-orchestrator-n2d"
-            ].hf_token
-            == "os.environ/HF_TOKEN"
         )
         assert (
             config.cloud.providers.gce.instance_profiles[

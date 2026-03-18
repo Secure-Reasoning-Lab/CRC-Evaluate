@@ -128,11 +128,12 @@ command, so run the smoke test from the repo root if you keep the checked-in
 relative path.
 
 Optional: if your dataset access requires Hugging Face credentials, export a
-token before launch and point the config at `hf_token: os.environ/HF_TOKEN`.
+token before launch and point the config at `cloud.env.HF_TOKEN:
+os.environ/HF_TOKEN`.
 
 For the checked-in smoke config, `HF_TOKEN` is still required because launch
-preflight resolves that env secret before provisioning even though `sanity`
-auto-skips the VM-side download step.
+preflight resolves `cloud.env.HF_TOKEN` before provisioning even though
+`sanity` auto-skips the VM-side download step.
 
 If you launch through the normal CRSBench CLI, this can come from either:
 
@@ -156,6 +157,7 @@ cloud:
     CRSBENCH_LLM_UPSTREAM_BASE_URL: os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL
     CRSBENCH_LLM_MASTER_KEY: os.environ/CRSBENCH_LLM_MASTER_KEY
     OPENAI_API_KEY: os.environ/OPENAI_API_KEY
+    HF_TOKEN: os.environ/HF_TOKEN
 ```
 
 Expected result:
@@ -167,13 +169,14 @@ The checked-in `gce-sanity-1orch-2worker-1eval.yaml` now includes:
 
 - `CRSBENCH_LLM_UPSTREAM_BASE_URL`
 - `CRSBENCH_LLM_MASTER_KEY`
+- `HF_TOKEN`
 - `worker.jobs: 1` so each VM runs one trial job at a time
 - `evaluator.jobs: 1` so the evaluator runs one job at a time
 - `runtime.build_timeout: 3600` to leave more headroom for cold-cloud prepare
   and build phases
 
-So the operator must export those before launch in addition to `HF_TOKEN`.
-Using a `.env` file is also fine when you launch through the CRSBench CLI.
+So the operator must export those before launch. Using a `.env` file is also
+fine when you launch through the CRSBench CLI.
 
 4. Confirm quota is sufficient for this exact layout:
 

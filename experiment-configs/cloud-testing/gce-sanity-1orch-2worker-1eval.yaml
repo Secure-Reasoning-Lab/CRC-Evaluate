@@ -38,6 +38,7 @@ cloud:
   env:
     CRSBENCH_LLM_UPSTREAM_BASE_URL: os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL
     CRSBENCH_LLM_MASTER_KEY: os.environ/CRSBENCH_LLM_MASTER_KEY
+    HF_TOKEN: os.environ/HF_TOKEN
   bootstrap:
     prepare_mode: full
     download_benchmarks: auto
@@ -55,7 +56,6 @@ cloud:
         crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
         crsbench_git_ref: feat/gcp
         github_deploy_key_file: file:.crsbench-keys/crsbench-deploy
-        hf_token: os.environ/HF_TOKEN
       instance_profiles:
         gce-orchestrator-n2d: {}
         gce-worker-n2d: {}

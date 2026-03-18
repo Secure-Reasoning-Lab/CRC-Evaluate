@@ -774,16 +774,10 @@ trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR
 INSTALL_SPEC="$(metadata_get_optional "crsbench-install-spec")"
 GIT_REF="$(metadata_get_optional "crsbench-git-ref")"
 GITHUB_DEPLOY_KEY="$(metadata_get_optional "crsbench-github-deploy-key")"
-HF_TOKEN="$(metadata_get_optional "crsbench-hf-token")"
 ENV_PASSTHROUGH_B64="$(metadata_get_optional "crsbench-env-passthrough-b64")"
 
 # --- GitHub SSH setup (if deploy key provided) ---
 configure_clone_ssh "${GITHUB_DEPLOY_KEY}"
-
-# --- HuggingFace token ---
-if [[ -n "${HF_TOKEN}" ]]; then
-  export HF_TOKEN
-fi
 export_passthrough_env "${ENV_PASSTHROUGH_B64}"
 
 # --- Install crsbench from a repo checkout ---
@@ -845,9 +839,6 @@ else
   write_env_var "CRSBENCH_WORKER_CORES_PER_JOB" "${WORKER_CORES_PER_JOB}"
   write_env_var "CRSBENCH_WORKER_CPU_TAG" "${WORKER_CPU_TAG}"
   write_env_var "CRSBENCH_CLOUD_INSTANCE_NAME" "${WORKER_NAME}"
-fi
-if [[ -n "${HF_TOKEN:-}" ]]; then
-  write_env_var "HF_TOKEN" "${HF_TOKEN}"
 fi
 write_passthrough_env_vars "${ENV_PASSTHROUGH_B64}"
 if [[ -n "${VENV_BIN:-}" ]]; then

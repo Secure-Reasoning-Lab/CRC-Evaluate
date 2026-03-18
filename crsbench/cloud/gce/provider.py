@@ -48,7 +48,6 @@ class ResolvedGceInstanceProfile:
     crsbench_install_spec: str | None
     crsbench_git_ref: str
     github_deploy_key_file: str | None
-    hf_token: str | None
 
 
 class GceProviderAdapter:
@@ -99,7 +98,6 @@ class GceProviderAdapter:
             github_deploy_key_file=_get_optional_str(
                 profile_config, "github_deploy_key_file"
             ),
-            hf_token=_get_optional_str(profile_config, "hf_token"),
         )
 
     def build_orchestrator_config(self, plan: CloudLaunchPlan) -> GceOrchestratorConfig:
@@ -124,7 +122,6 @@ class GceProviderAdapter:
             crsbench_install_spec=resolved.crsbench_install_spec,
             crsbench_git_ref=resolved.crsbench_git_ref,
             github_deploy_key_file=resolved.github_deploy_key_file,
-            hf_token=resolved.hf_token,
         )
 
     def build_worker_fleets(self, plan: CloudLaunchPlan) -> list[GceWorkerFleetConfig]:
@@ -162,7 +159,6 @@ class GceProviderAdapter:
                     crsbench_install_spec=resolved.crsbench_install_spec,
                     crsbench_git_ref=resolved.crsbench_git_ref,
                     github_deploy_key_file=resolved.github_deploy_key_file,
-                    hf_token=resolved.hf_token,
                 )
             )
             next_index_by_zone[placement.zone] = start_index + placement.count
@@ -206,7 +202,6 @@ class GceProviderAdapter:
                     crsbench_install_spec=resolved.crsbench_install_spec,
                     crsbench_git_ref=resolved.crsbench_git_ref,
                     github_deploy_key_file=resolved.github_deploy_key_file,
-                    hf_token=resolved.hf_token,
                 )
             )
             next_index_by_zone[placement.zone] = start_index + placement.count

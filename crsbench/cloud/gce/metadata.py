@@ -20,7 +20,6 @@ CRSBENCH_BOOTSTRAP_PAYLOAD_KEY = "crsbench-bootstrap-payload"
 CRSBENCH_INSTALL_SPEC_KEY = "crsbench-install-spec"
 CRSBENCH_GIT_REF_KEY = "crsbench-git-ref"
 CRSBENCH_GITHUB_DEPLOY_KEY = "crsbench-github-deploy-key"
-CRSBENCH_HF_TOKEN_KEY = "crsbench-hf-token"
 CRSBENCH_ENV_PASSTHROUGH_B64_KEY = "crsbench-env-passthrough-b64"
 CRSBENCH_REDIS_PASSWORD_KEY = "crsbench-redis-password"
 CRSBENCH_EXPERIMENT_CONFIG_B64_KEY = "crsbench-experiment-config-b64"
@@ -46,7 +45,6 @@ class _InstallMetadataConfig(Protocol):
     crsbench_install_spec: str | None
     crsbench_git_ref: str
     github_deploy_key_file: str | None
-    hf_token: str | None
 
 
 def _sanitize_label_key(value: str) -> str:
@@ -273,13 +271,7 @@ def _apply_install_metadata(
             "ascii"
         )
 
-    if config.hf_token:
-        metadata[CRSBENCH_HF_TOKEN_KEY] = config.hf_token
-
-    filtered_env_passthrough = _filter_env_passthrough(
-        env_passthrough,
-        skip_keys={"HF_TOKEN"} if config.hf_token else set(),
-    )
+    filtered_env_passthrough = _filter_env_passthrough(env_passthrough)
     if filtered_env_passthrough:
         metadata[CRSBENCH_ENV_PASSTHROUGH_B64_KEY] = base64.b64encode(
             json.dumps(
@@ -313,16 +305,10 @@ def _read_experiment_config_bytes(experiment_config_path: str | Path) -> bytes:
 
 def _filter_env_passthrough(
     env_passthrough: dict[str, str] | None,
-    *,
-    skip_keys: set[str],
 ) -> dict[str, str]:
     if not env_passthrough:
         return {}
-    return {
-        str(key): str(value)
-        for key, value in env_passthrough.items()
-        if str(key) not in skip_keys
-    }
+    return {str(key): str(value) for key, value in env_passthrough.items()}
 
 
 def build_instance_metadata(

@@ -84,7 +84,6 @@ def redact_worker_fleet_config(fleet: GceWorkerFleetConfig) -> GceWorkerFleetCon
     return fleet.model_copy(
         update={
             "github_deploy_key_file": None,
-            "hf_token": None,
         }
     )
 

@@ -352,15 +352,14 @@ def test_metadata_includes_github_deploy_key(tmp_path):
     assert decoded == key_content
 
 
-def test_metadata_includes_hf_token():
-    """hf_token in fleet config causes crsbench-hf-token in metadata."""
+def test_metadata_includes_hf_token_in_env_passthrough_blob():
+    """HF_TOKEN should travel through the generic env metadata bundle."""
     from crsbench.cloud.gce.metadata import (
-        CRSBENCH_HF_TOKEN_KEY,
+        CRSBENCH_ENV_PASSTHROUGH_B64_KEY,
         build_instance_metadata,
     )
 
     fleet = _make_fleet(
-        hf_token="hf_test_token_abc123",
         metadata={"custom-key": "custom-value"},
     )
     metadata = build_instance_metadata(
@@ -368,23 +367,25 @@ def test_metadata_includes_hf_token():
         fleet=fleet,
         redis_host="redis.internal:6380",
         registration=_make_registration(),
+        env_passthrough={"HF_TOKEN": "hf_test_token_abc123"},
         worker_name="gce-worker-001",
         startup_script="#!/usr/bin/env bash\n",
     )
 
-    assert metadata[CRSBENCH_HF_TOKEN_KEY] == "hf_test_token_abc123"
+    passthrough = json.loads(
+        base64.b64decode(metadata[CRSBENCH_ENV_PASSTHROUGH_B64_KEY]).decode("utf-8")
+    )
+    assert passthrough == {"HF_TOKEN": "hf_test_token_abc123"}
 
 
-def test_metadata_includes_env_passthrough_blob_and_deduplicates_hf_token():
-    """Role passthrough env should be encoded without duplicating dedicated HF token."""
+def test_metadata_includes_env_passthrough_blob_without_special_hf_token_handling():
+    """Role env should be encoded exactly as provided, including HF_TOKEN."""
     from crsbench.cloud.gce.metadata import (
         CRSBENCH_ENV_PASSTHROUGH_B64_KEY,
-        CRSBENCH_HF_TOKEN_KEY,
         build_instance_metadata,
     )
 
     fleet = _make_fleet(
-        hf_token="hf_test_token_abc123",
         metadata={"custom-key": "custom-value"},
     )
     metadata = build_instance_metadata(
@@ -393,18 +394,20 @@ def test_metadata_includes_env_passthrough_blob_and_deduplicates_hf_token():
         redis_host="redis.internal:6380",
         registration=_make_registration(),
         env_passthrough={
-            "HF_TOKEN": "ignored-duplicate",
+            "HF_TOKEN": "hf_test_token_abc123",
             "CRSBENCH_LLM_MASTER_KEY": "master-key",
         },
         worker_name="gce-worker-001",
         startup_script="#!/usr/bin/env bash\n",
     )
 
-    assert metadata[CRSBENCH_HF_TOKEN_KEY] == "hf_test_token_abc123"
     passthrough = json.loads(
         base64.b64decode(metadata[CRSBENCH_ENV_PASSTHROUGH_B64_KEY]).decode("utf-8")
     )
-    assert passthrough == {"CRSBENCH_LLM_MASTER_KEY": "master-key"}
+    assert passthrough == {
+        "HF_TOKEN": "hf_test_token_abc123",
+        "CRSBENCH_LLM_MASTER_KEY": "master-key",
+    }
 
 
 def test_metadata_omits_secrets_when_not_configured():
@@ -412,7 +415,6 @@ def test_metadata_omits_secrets_when_not_configured():
     from crsbench.cloud.gce.metadata import (
         CRSBENCH_ENV_PASSTHROUGH_B64_KEY,
         CRSBENCH_GITHUB_DEPLOY_KEY,
-        CRSBENCH_HF_TOKEN_KEY,
         build_instance_metadata,
     )
 
@@ -427,7 +429,6 @@ def test_metadata_omits_secrets_when_not_configured():
     )
 
     assert CRSBENCH_GITHUB_DEPLOY_KEY not in metadata
-    assert CRSBENCH_HF_TOKEN_KEY not in metadata
     assert CRSBENCH_ENV_PASSTHROUGH_B64_KEY not in metadata
 
 
@@ -477,7 +478,7 @@ def test_metadata_git_ref_defaults_to_main():
 
 
 def test_startup_script_contains_git_clone_path():
-    """Startup script should include git clone, uv sync, deploy key, and HF token handling."""
+    """Startup script should include git clone, uv sync, deploy key, and env handling."""
     from crsbench.cloud.gce.metadata import load_startup_script
 
     script = load_startup_script()
@@ -485,7 +486,7 @@ def test_startup_script_contains_git_clone_path():
     assert "git clone" in script
     assert "uv sync" in script
     assert "crsbench-github-deploy-key" in script
-    assert "crsbench-hf-token" in script
+    assert "crsbench-env-passthrough-b64" in script
     assert "crsbench-git-ref" in script
     assert "git checkout" in script
     assert "python3-pip" in script

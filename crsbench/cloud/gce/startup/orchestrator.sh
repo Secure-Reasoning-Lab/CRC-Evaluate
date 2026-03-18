@@ -7,7 +7,7 @@
 #   crsbench-redis-password     shared Valkey password (required)
 #   crsbench-git-ref            branch/tag to clone (default: main)
 #   crsbench-github-deploy-key  base64-encoded SSH private key (optional)
-#   crsbench-hf-token           HuggingFace token (optional)
+#   crsbench-env-passthrough-b64  base64-encoded resolved remote env map (optional)
 #
 # The script:
 #   1. Clones CRSBench as the crsbench user
@@ -719,17 +719,11 @@ GIT_REF="$(metadata_get_optional "crsbench-git-ref")"
 EXPERIMENT_CONFIG_B64="$(metadata_get "crsbench-experiment-config-b64")"
 REDIS_PASSWORD="$(metadata_get "crsbench-redis-password")"
 GITHUB_DEPLOY_KEY="$(metadata_get_optional "crsbench-github-deploy-key")"
-HF_TOKEN="$(metadata_get_optional "crsbench-hf-token")"
 ENV_PASSTHROUGH_B64="$(metadata_get_optional "crsbench-env-passthrough-b64")"
 REDIS_BIND_HOST="$(discover_redis_bind_host)"
 
 # --- GitHub SSH setup (if deploy key provided) ---
 configure_clone_ssh "${GITHUB_DEPLOY_KEY}"
-
-# --- HuggingFace token ---
-if [[ -n "${HF_TOKEN}" ]]; then
-  export HF_TOKEN
-fi
 export_passthrough_env "${ENV_PASSTHROUGH_B64}"
 
 # --- Install crsbench from a repo checkout ---
@@ -820,9 +814,6 @@ write_env_var "CRSBENCH_REDIS_BIND_HOST" "${REDIS_BIND_HOST}"
 write_env_var "CRSBENCH_CLOUD_PREPROVISIONED_WORKERS" "1"
 write_env_var "CONFIG_PATH" "${CONFIG_PATH}"
 write_env_var "LOG_PATH" "${LOG_PATH}"
-if [[ -n "${HF_TOKEN:-}" ]]; then
-  write_env_var "HF_TOKEN" "${HF_TOKEN}"
-fi
 write_passthrough_env_vars "${ENV_PASSTHROUGH_B64}"
 if [[ -n "${VENV_BIN:-}" ]]; then
   write_env_var "PATH" "${VENV_BIN}:${CRSBENCH_USER_HOME}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"

@@ -1272,14 +1272,6 @@ class GceWorkerFleetConfig(BaseModel):
             "crsbench-github-deploy-key instance metadata."
         ),
     )
-    hf_token: Optional[str] = Field(
-        default=None,
-        description=(
-            "HuggingFace token for private dataset access. Supports a literal token, "
-            "'file:...' secret file, or 'os.environ/NAME' at launch time. "
-            "Injected as crsbench-hf-token instance metadata."
-        ),
-    )
 
     @field_validator(
         "project",
@@ -1477,13 +1469,6 @@ class GceOrchestratorConfig(BaseModel):
             "'file:...' path reference, or 'os.environ/NAME' at launch time. "
             "The resolved file contents are base64-encoded and injected as "
             "instance metadata."
-        ),
-    )
-    hf_token: Optional[str] = Field(
-        default=None,
-        description=(
-            "HuggingFace token for private dataset access. Supports a literal token, "
-            "'file:...' secret file, or 'os.environ/NAME' at launch time."
         ),
     )
 
@@ -1720,7 +1705,6 @@ class GceInstanceProfileDefaultsConfig(BaseModel):
     crsbench_install_spec: Optional[str] = Field(default=None)
     crsbench_git_ref: Optional[str] = Field(default=None)
     github_deploy_key_file: Optional[str] = Field(default=None)
-    hf_token: Optional[str] = Field(default=None)
 
     @field_validator(
         "machine_type",
@@ -1843,13 +1827,6 @@ class GceInstanceProfileConfig(BaseModel):
             "'file:...' path reference, or 'os.environ/NAME' at launch time. "
             "The resolved file contents are base64-encoded and injected as "
             "instance metadata."
-        ),
-    )
-    hf_token: Optional[str] = Field(
-        default=None,
-        description=(
-            "HuggingFace token for private dataset access. Supports a literal token, "
-            "'file:...' secret file, or 'os.environ/NAME' at launch time."
         ),
     )
 
