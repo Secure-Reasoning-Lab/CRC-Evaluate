@@ -53,8 +53,8 @@ class TestAddReevalSubparser:
         assert args.oss_fuzz_path is None
         assert args.source == "pkgs"
         assert args.mode == "snapshot"
-        assert args.build_workers is None
-        assert args.verify_workers is None
+        assert args.jobs is None
+        assert args.cores_per_job is None
         assert args.force_rebuild is False
         assert args.output is None
         assert args.verbose is False
@@ -74,9 +74,9 @@ class TestAddReevalSubparser:
                 "/opt/oss-fuzz",
                 "--source",
                 "pkgs",
-                "--build-workers",
+                "--jobs",
                 "4",
-                "--verify-workers",
+                "--cores-per-job",
                 "8",
                 "--force-rebuild",
                 "--mode",
@@ -88,8 +88,8 @@ class TestAddReevalSubparser:
         )
         assert args.oss_fuzz_path == Path("/opt/oss-fuzz")
         assert args.source == "pkgs"
-        assert args.build_workers == 4
-        assert args.verify_workers == 8
+        assert args.jobs == 4
+        assert args.cores_per_job == 8
         assert args.force_rebuild is True
         assert args.mode == "full"
         assert args.output == Path("/tmp/out")
@@ -277,8 +277,8 @@ class TestRunReeval:
             oss_fuzz_path=oss_fuzz,
             source="main_repo",
             mode="snapshot",
-            build_workers=None,
-            verify_workers=None,
+            jobs=None,
+            cores_per_job=None,
             force_rebuild=False,
             per_pov_verify_timeout=None,
             output=output,
@@ -1081,8 +1081,8 @@ def test_reeval_bug_finding_skips_duplicate_hashes(tmp_path: Path) -> None:
             harness="h",
             dest_dir=tmp_path / "out",
             source_mode="pkgs",
-            build_workers=None,
-            verify_workers=None,
+            jobs=None,
+            cores_per_job=None,
             force_rebuild=False,
             use_inc_build=True,
             sanitizer="address",
@@ -1442,8 +1442,8 @@ class TestRunReevalCleanup:
             oss_fuzz_path=oss_fuzz,
             source="pkgs",
             mode="snapshot",
-            build_workers=None,
-            verify_workers=None,
+            jobs=None,
+            cores_per_job=None,
             force_rebuild=False,
             per_pov_verify_timeout=None,
             output=None,

@@ -128,12 +128,9 @@ crsbench benchmark ci all --all --inc-coverage --output-dir ci-results/
 crsbench benchmark ci all --all --mode full
 ```
 
-**Note**: `--build-workers` and `--verify-workers` are compatibility flags in
-modular benchmark-ci commands and are currently not used by submitter
-scheduling. In distributed mode, they must remain default values; distributed
-parallelism is controlled by evaluator worker flags (`crsbench evaluator --ci
---jobs ... --cores-per-job ...`, with split `--build-*` / `--verify-*`
-overrides only for asymmetric tuning).
+**Note**: Distributed parallelism is controlled by evaluator worker flags
+(`crsbench evaluator --ci --jobs ... --cores-per-job ...`, with split
+`--build-*` / `--verify-*` overrides only for asymmetric tuning).
 
 ### Execution Flow (Local)
 

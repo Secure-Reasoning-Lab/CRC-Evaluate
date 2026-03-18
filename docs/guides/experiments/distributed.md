@@ -129,8 +129,7 @@ uv run crsbench run --experiment-config config.yaml --queue-mode continue --retr
 For modular benchmark-ci commands (`crsbench benchmark ci all|build|pov|patch|coverage`):
 
 - `--exit-on-error` is currently a compatibility flag (accepted, no-op).
-- `--build-workers` / `--verify-workers` are compatibility flags (accepted, currently not used by submitter scheduling).
-- With `--distributed`, keep `--build-workers` / `--verify-workers` at defaults; set concurrency on evaluator processes instead (`crsbench evaluator --ci --jobs ... --cores-per-job ...`, or split `--build-*` / `--verify-*` only for asymmetric tuning).
+- With `--distributed`, set concurrency on evaluator processes (`crsbench evaluator --ci --jobs ... --cores-per-job ...`, or split `--build-*` / `--verify-*` only for asymmetric tuning).
 - In `crsbench evaluator --ci`, `--worker-name` defaults to `ci-evaluator` when omitted.
 
 ## Full Workflow Example (Production Example)
@@ -346,8 +345,10 @@ uv run crsbench evaluator \
 | `--ci` | Use CI queue aliases (`crsbench_ci_*`) | Off |
 
 Config v2 evaluator defaults use unified knobs:
-- `evaluator.jobs` (default: `1`)
-- `evaluator.cores_per_job` (default: `4`)
+- `evaluator.jobs` (default: unset; runtime falls back to one build job when no
+  explicit build concurrency is configured)
+- `evaluator.cores_per_job` (default: unset; runtime derives effective CPU width
+  from the current visible CPU envelope / cpuset policy)
 
 Optional split overrides are only for asymmetric tuning:
 - `evaluator.build_jobs`, `evaluator.build_cores_per_job`
@@ -494,8 +495,8 @@ Bug-finding re-eval duplicate handling:
 | `--force-rebuild` | Force rebuild of variant images |
 | `--per-pov-verify-timeout` | Timeout per POV verification (seconds) |
 | `--output`, `-o` | Output directory (default: write to trial dirs) |
-| `--build-workers` | Number of parallel build workers |
-| `--verify-workers` | Number of parallel verify workers |
+| `--jobs` | Number of parallel verification jobs |
+| `--cores-per-job` | CPUs per verification job |
 | `-v`, `--verbose` | Enable verbose logging |
 
 ## Reporting

@@ -345,9 +345,13 @@ def run_worker(args: argparse.Namespace) -> int:
     num_workers = (
         jobs_override
         if jobs_override is not None
-        else (worker_config.jobs if worker_config else 1)
+        else (
+            worker_config.jobs
+            if worker_config and worker_config.jobs is not None
+            else 1
+        )
     )
-    default_cores_per_job = config.resources.cores_per_trial if config.resources else 4
+    default_cores_per_job = None
     cores_per_job = (
         cores_per_job_override
         if cores_per_job_override is not None

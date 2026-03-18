@@ -87,7 +87,7 @@ def mock_corpus(tmp_path: Path) -> Path:
 @pytest.fixture
 def engine(mock_oss_fuzz: Path) -> Generator[CoverageEngine, None, None]:
     """Create CoverageEngine with cleanup."""
-    eng = CoverageEngine(mock_oss_fuzz, build_workers=2)
+    eng = CoverageEngine(mock_oss_fuzz, jobs=2)
     yield eng
     eng.cleanup()
 
@@ -97,13 +97,13 @@ class TestCoverageEngine:
 
     def test_worker_configuration(self, mock_oss_fuzz: Path):
         """Test worker counts are set correctly."""
-        eng = CoverageEngine(mock_oss_fuzz, build_workers=8)
+        eng = CoverageEngine(mock_oss_fuzz, jobs=8)
         assert eng.build_workers == 8
         # Note: verify_workers removed - parallelism handled by DAGExecutor
 
     def test_default_workspace_uses_repo_local_atlantis_cache(self) -> None:
         """Coverage analysis can run without an OSS-Fuzz checkout."""
-        eng = CoverageEngine(build_workers=1)
+        eng = CoverageEngine(jobs=1)
         variant_name = "test-benchmark-cov-delta-coverage"
         expected = (
             Path(__file__).resolve().parents[1]

@@ -19,8 +19,10 @@ from crsbench.validation.schemas import (
     ExperimentConfig,
     HarnessFile,
     ProjectConfig,
+    ResourceConfig,
     RtsMode,
     Vulnerability,
+    WorkerConfig,
 )
 from pydantic import ValidationError as PydanticValidationError
 
@@ -117,6 +119,30 @@ class TestVulnerabilityModel:
         )
         assert vuln.vuln_keyword == "cpv_1"
         assert vuln.patch_superset == "cpv_7"
+
+
+class TestResourceConfigModel:
+    """Test ResourceConfig defaults and validation."""
+
+    def test_resource_config_defaults_are_unset(self):
+        """Trial resource fallbacks should default to None."""
+        config = ResourceConfig()
+        assert config.cores_per_trial is None
+        assert config.memory_per_trial is None
+
+
+class TestWorkerConfigModel:
+    """Test WorkerConfig defaults and validation."""
+
+    def test_worker_config_defaults_do_not_impose_concurrency_or_cpu_width(self):
+        """Worker jobs/CPU width should default to unset."""
+        config = WorkerConfig()
+        assert config.jobs is None
+        assert config.cores_per_job is None
+
+
+class TestVulnerabilityPatchSupersetModel:
+    """Test Vulnerability patch_superset normalization and validation."""
 
     def test_vulnerability_without_patch_superset(self):
         """Test vulnerability without patch_superset (defaults to None)."""

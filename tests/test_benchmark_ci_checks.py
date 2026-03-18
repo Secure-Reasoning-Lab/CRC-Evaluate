@@ -85,6 +85,75 @@ class TestCheckVerify:
 
         assert check_verify(benchmark_path, results_file) is False
 
+    def test_check_verify_harness_filter_ignores_other_harness_cpvs(
+        self, tmp_path: Path
+    ) -> None:
+        """Harness-scoped verify should only require CPVs for that harness."""
+        benchmark_path = tmp_path / "test-benchmark"
+        aixcc_dir = benchmark_path / ".aixcc"
+        aixcc_dir.mkdir(parents=True)
+
+        meta = {
+            "harness_files": [
+                {
+                    "name": "fuzz_target_a",
+                    "vulns": [
+                        {"vuln_keyword": "cpv_0"},
+                    ],
+                },
+                {
+                    "name": "fuzz_target_b",
+                    "vulns": [
+                        {"vuln_keyword": "cpv_1"},
+                    ],
+                },
+            ]
+        }
+        (aixcc_dir / "meta.yaml").write_text(yaml.dump(meta))
+
+        results = [{"harness": "fuzz_target_a", "cpv_matched": ["cpv_0"]}]
+        results_file = tmp_path / "results.json"
+        results_file.write_text(json.dumps(results))
+
+        assert (
+            check_verify(benchmark_path, results_file, harness="fuzz_target_a") is True
+        )
+
+    def test_check_verify_harness_filter_requires_selected_harness_cpvs(
+        self, tmp_path: Path
+    ) -> None:
+        """Harness-scoped verify should fail if selected harness misses a CPV."""
+        benchmark_path = tmp_path / "test-benchmark"
+        aixcc_dir = benchmark_path / ".aixcc"
+        aixcc_dir.mkdir(parents=True)
+
+        meta = {
+            "harness_files": [
+                {
+                    "name": "fuzz_target_a",
+                    "vulns": [
+                        {"vuln_keyword": "cpv_0"},
+                        {"vuln_keyword": "cpv_1"},
+                    ],
+                },
+                {
+                    "name": "fuzz_target_b",
+                    "vulns": [
+                        {"vuln_keyword": "cpv_2"},
+                    ],
+                },
+            ]
+        }
+        (aixcc_dir / "meta.yaml").write_text(yaml.dump(meta))
+
+        results = [{"harness": "fuzz_target_a", "cpv_matched": ["cpv_0"]}]
+        results_file = tmp_path / "results.json"
+        results_file.write_text(json.dumps(results))
+
+        assert (
+            check_verify(benchmark_path, results_file, harness="fuzz_target_a") is False
+        )
+
 
 class TestCheckPatchVerify:
     """Tests for check_patch_verify function."""

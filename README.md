@@ -161,14 +161,18 @@ fish and other shell setup instructions.
 ### Verification (Standalone)
 
 ```bash
-crsbench verify       benchmarks/project --pov-dir ./povs/
-crsbench patch-verify benchmarks/project --patch-dir ./patches --pov-dir ./povs
+crsbench verify       benchmarks/project --pov-dir ./povs/ --jobs 4 --cores-per-job 2
+crsbench patch-verify benchmarks/project --patch-dir ./patches --pov-dir ./povs --jobs 4 --cores-per-job 2
 crsbench coverage     --experiment-config ./experiment.yaml      # seed coverage over time
 crsbench coverage     --experiment-dir ./experiment-filestore/experiment-name       # seed coverage over time
 crsbench coverage     --experiment-dir ./experiment-filestore/experiment-name --output-dir ./coverage-out
 crsbench coverage     --seed-dir ./seeds --benchmark project --harness fuzz_target --output-dir ./coverage-out
 crsbench coverage     --seed-dir ./seeds --experiment-start-time 1710000000 --benchmark project --harness fuzz_target --output-dir ./coverage-out
 ```
+
+For standalone `verify` / `patch-verify`, `--jobs` and `--cores-per-job`
+are the primary parallelism flags. Legacy `--build-workers` and
+`--verify-workers` remain accepted as hidden compatibility aliases.
 
 Timeline coverage mode persists raw per-seed artifacts under the target
 coverage directory's `raw/` subdirectory. Each analyzed seed keeps its

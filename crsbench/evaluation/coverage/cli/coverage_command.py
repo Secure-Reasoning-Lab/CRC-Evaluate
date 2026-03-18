@@ -33,10 +33,7 @@ logger = get_logger(__name__)
 
 def _resolve_jobs(args: argparse.Namespace) -> int:
     jobs = getattr(args, "jobs", None)
-    legacy_jobs = getattr(args, "build_workers", None)
-    if jobs is not None and legacy_jobs is not None and jobs != legacy_jobs:
-        raise ValueError("--jobs conflicts with legacy --build-workers")
-    resolved = int(jobs if jobs is not None else legacy_jobs or 1)
+    resolved = int(jobs if jobs is not None else 1)
     if resolved < 1:
         raise ValueError("--jobs must be >= 1")
     return resolved
@@ -44,14 +41,7 @@ def _resolve_jobs(args: argparse.Namespace) -> int:
 
 def _resolve_cores_per_job(args: argparse.Namespace) -> int:
     cores_per_job = getattr(args, "cores_per_job", None)
-    legacy_cores = getattr(args, "verify_workers", None)
-    if (
-        cores_per_job is not None
-        and legacy_cores is not None
-        and cores_per_job != legacy_cores
-    ):
-        raise ValueError("--cores-per-job conflicts with legacy --verify-workers")
-    resolved = int(cores_per_job if cores_per_job is not None else legacy_cores or 1)
+    resolved = int(cores_per_job if cores_per_job is not None else 1)
     if resolved < 1:
         raise ValueError("--cores-per-job must be >= 1")
     return resolved
@@ -168,18 +158,6 @@ Examples:
             "Warm coverage containers per benchmark-harness job. Seeds are "
             "sharded across this many one-core containers."
         ),
-    )
-    parser.add_argument(
-        "--build-workers",
-        type=int,
-        default=None,
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument(
-        "--verify-workers",
-        type=int,
-        default=None,
-        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--source",
@@ -395,7 +373,7 @@ def _run_direct_seed_timeline(args: argparse.Namespace) -> int:
         return 1
 
     engine = CoverageEngine(
-        build_workers=jobs,
+        jobs=jobs,
         runtime_workers=cores_per_job,
         runtime_cpus=runtime_cpus,
         source_mode=args.source,
@@ -532,7 +510,7 @@ def _run_single_trial_job(
         output_base=args.output_dir,
     )
     engine = CoverageEngine(
-        build_workers=1,
+        jobs=1,
         runtime_workers=cores_per_job,
         runtime_cpus=allocated_cpus,
         source_mode=args.source,

@@ -231,8 +231,11 @@ def test_setup_third_party_repairs_existing_managed_oss_fuzz_checkout(
     _run(["git", "fetch", "--depth", "1", "origin", drift_commit], cwd=managed)
     _run(["git", "checkout", "-f", drift_commit], cwd=managed)
     helper_path.write_text(helper_path.read_text() + "\n# local drift\n")
-    stray = managed / "stray.txt"
+    stray = managed / "infra" / "stray.txt"
     stray.write_text("leftover\n")
+    build_artifact = managed / "build" / "out" / "keep.txt"
+    build_artifact.parent.mkdir(parents=True, exist_ok=True)
+    build_artifact.write_text("artifact\n")
 
     second = _run(["bash", str(script), "--oss-fuzz-only"], cwd=repo_root, env=env)
     assert second.returncode == 0, second.stderr or second.stdout
@@ -240,6 +243,7 @@ def test_setup_third_party_repairs_existing_managed_oss_fuzz_checkout(
     head = _run(["git", "rev-parse", "HEAD"], cwd=managed).stdout.strip()
     assert head == base_commit
     assert not stray.exists()
+    assert build_artifact.exists()
     helper_text = helper_path.read_text()
     assert "_runtime_resource_docker_args" in helper_text
     assert "build_project_image=args.build_image" in helper_text

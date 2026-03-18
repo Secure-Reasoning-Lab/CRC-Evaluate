@@ -105,7 +105,7 @@ normalize_oss_fuzz_checkout() {
     fi
 
     git -C "$OSS_FUZZ_DIR" checkout -f "$OSS_FUZZ_COMMIT"
-    git -C "$OSS_FUZZ_DIR" clean -fdx
+    git -C "$OSS_FUZZ_DIR" clean -fdx -- infra/
     configure_oss_fuzz_sparse_checkout
 }
 

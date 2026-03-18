@@ -87,8 +87,7 @@ Timeline origin depends on the entry point:
 `--jobs` controls how many `(benchmark, harness)` coverage jobs run in parallel.
 `--cores-per-job` controls how many one-core warm containers are used for a
 single job; CRSBench splits the seed set into that many shards and runs each
-shard sequentially inside its own warm runner. `--build-workers` and
-`--verify-workers` remain hidden compatibility aliases.
+shard sequentially inside its own warm runner.
 
 ### LiteLLM Runtime Contract
 

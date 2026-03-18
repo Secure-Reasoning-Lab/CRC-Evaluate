@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from crsbench.benchmark_ci.models import (
     BenchmarkValidationResult,
     CheckResult,
@@ -422,6 +423,17 @@ class TestBenchmarkValidator:
     These tests verify the validator delegates to existing engines correctly,
     which is the key fix for the race condition issue (#59).
     """
+
+    @pytest.fixture(autouse=True)
+    def _mock_oss_fuzz(self, tmp_path: Path) -> None:
+        """Prevent real oss-fuzz bootstrap during unit tests."""
+        fake_oss_fuzz = tmp_path / "oss-fuzz"
+        fake_oss_fuzz.mkdir(exist_ok=True)
+        with patch(
+            "crsbench.benchmark_ci.validator.ensure_oss_fuzz_root",
+            return_value=str(fake_oss_fuzz),
+        ):
+            yield
 
     def test_validate_format_passes(self, tmp_path: Path) -> None:
         """Test format validation delegates to format_validate."""

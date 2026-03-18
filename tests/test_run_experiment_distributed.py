@@ -439,6 +439,14 @@ def test_get_crs_cpu_count_prioritizes_service_override() -> None:
     assert get_crs_cpu_count("crs-a", config) == 10
 
 
+def test_get_crs_cpu_count_returns_none_when_unset() -> None:
+    config = MagicMock()
+    config.resources = None
+    config.crs_compose = None
+
+    assert get_crs_cpu_count("crs-a", config) is None
+
+
 def test_get_crs_memory_prioritizes_service_override() -> None:
     config = MagicMock()
     config.resources = MagicMock()

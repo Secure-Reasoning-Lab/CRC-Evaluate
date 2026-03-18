@@ -11,6 +11,7 @@ A file-based lock ensures only one worker process runs at a time.
 
 import fcntl
 import multiprocessing
+import multiprocessing.context
 import os
 import socket
 import sys
@@ -29,6 +30,7 @@ from crsbench.distributed.common import (
     validate_optional_int_override,
 )
 from crsbench.distributed.queue import REDIS_AVAILABLE
+from crsbench.utils.cpu_pool import auto_cores_per_job, visible_cpu_count
 from crsbench.utils.logger import configure_logger, get_logger
 
 # Load environment variables from .env file if present
@@ -40,8 +42,9 @@ LOCK_DIR = Path(os.environ.get("CRSBENCH_WORKER_LOCK_DIR", DEFAULT_LOCK_DIR))
 
 logger = get_logger(__name__)
 
-# Default CPU cores allocated per trial job when using the ci_supervisor
-DEFAULT_TRIAL_CORES_PER_JOB = 4
+# Use 'fork' context so child processes inherit module-level state.
+# Python 3.14 defaults to 'forkserver' which does NOT inherit these.
+_mp_ctx: multiprocessing.context.ForkContext = multiprocessing.get_context("fork")  # type: ignore[assignment]
 
 
 def _terminate_process_tree(pid: int, *, grace_seconds: int = 10) -> None:
@@ -244,7 +247,7 @@ def main(
     cores: Optional[str] = None,
     skip_cpus: Optional[str] = None,
     cpu_tag: Optional[str] = None,
-    cores_per_job: int = DEFAULT_TRIAL_CORES_PER_JOB,
+    cores_per_job: Optional[int] = None,
     log_level: str = "INFO",
 ) -> int:
     """
@@ -425,7 +428,7 @@ def _spawn_workers(
             name = f"{worker_name}-{i}"
 
             # Create worker process
-            p = multiprocessing.Process(
+            p = _mp_ctx.Process(
                 target=_run_single_worker,
                 args=(redis_host, experiment_name, name),
                 kwargs={
@@ -607,7 +610,7 @@ def run_worker_continuous(
     cores: Optional[str] = None,
     skip_cpus: Optional[str] = None,
     cpu_tag: Optional[str] = None,
-    cores_per_job: int = DEFAULT_TRIAL_CORES_PER_JOB,
+    cores_per_job: Optional[int] = None,
     log_level: str = "INFO",
 ):
     """
@@ -798,13 +801,6 @@ def run_worker_configless(
             field_name="worker.cores_per_job",
             minimum=1,
         )
-        if not metadata_cores_per_job:
-            metadata_cores_per_job = collect_validated_int_metadata(
-                registrations=ordered_regs,
-                attr_name="cores_per_trial",
-                field_name="resources.cores_per_trial",
-                minimum=1,
-            )
     except RuntimeError as exc:
         logger.error(str(exc))
         return 1
@@ -823,11 +819,7 @@ def run_worker_configless(
     resolved_cores_per_job = (
         cores_per_job_override
         if cores_per_job_override is not None
-        else (
-            max(metadata_cores_per_job)
-            if metadata_cores_per_job
-            else DEFAULT_TRIAL_CORES_PER_JOB
-        )
+        else (max(metadata_cores_per_job) if metadata_cores_per_job else None)
     )
     resolved_cpuset = cores
     resolved_skip_cpuset = skip_cpus
@@ -843,10 +835,27 @@ def run_worker_configless(
             )
             return 1
         resolved_cpu_tag = distinct_cpu_tags[0] if distinct_cpu_tags else None
+    effective_cores_per_job = (
+        resolved_cores_per_job
+        if resolved_cores_per_job is not None
+        else (
+            auto_cores_per_job(
+                resolved_jobs,
+                cores=resolved_cpuset,
+                skip_cpus=resolved_skip_cpuset,
+            )
+            if use_cpuset
+            else visible_cpu_count(
+                cores=resolved_cpuset, skip_cpus=resolved_skip_cpuset
+            )
+        )
+    )
     logger.info(f"Discovered {len(experiments)} experiment(s), queues: {queue_names}")
     logger.info(
-        f"Worker resource profile (CLI > metadata > default for jobs/cores): jobs={resolved_jobs}, "
-        f"cores_per_job={resolved_cores_per_job}, "
+        "Worker resource profile (CLI > metadata > runtime envelope): "
+        f"jobs={resolved_jobs}, "
+        f"cores_per_job={resolved_cores_per_job if resolved_cores_per_job is not None else 'auto'}, "
+        f"effective_cores_per_job={effective_cores_per_job}, "
         f"cpuset={resolved_cpuset}, skip_cpuset={resolved_skip_cpuset} (CLI-owned), "
         f"cpu_tag={resolved_cpu_tag}"
     )
@@ -877,13 +886,6 @@ def run_worker_configless(
                 field_name="worker.cores_per_job",
                 minimum=1,
             )
-            if not reg_cores_per_job_values:
-                reg_cores_per_job_values = collect_validated_int_metadata(
-                    registrations=[reg],
-                    attr_name="cores_per_trial",
-                    field_name="resources.cores_per_trial",
-                    minimum=1,
-                )
         except RuntimeError as exc:
             _warn_incompatible_once(experiment_name, str(exc))
             return False
@@ -897,15 +899,16 @@ def run_worker_configless(
             return False
 
         required_cores_per_job = (
-            reg_cores_per_job_values[0]
-            if reg_cores_per_job_values
-            else DEFAULT_TRIAL_CORES_PER_JOB
+            reg_cores_per_job_values[0] if reg_cores_per_job_values else None
         )
-        if required_cores_per_job > resolved_cores_per_job:
+        if (
+            required_cores_per_job is not None
+            and required_cores_per_job > effective_cores_per_job
+        ):
             _warn_incompatible_once(
                 experiment_name,
                 "requires worker.cores_per_job="
-                f"{required_cores_per_job} but worker runs with cores_per_job={resolved_cores_per_job}",
+                f"{required_cores_per_job} but worker runs with cores_per_job={effective_cores_per_job}",
             )
             return False
 

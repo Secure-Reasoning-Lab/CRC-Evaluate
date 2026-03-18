@@ -154,7 +154,7 @@ class TestCiSupervisorQueues:
             _patch_supervisor(),
             patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
             patch(
-                "crsbench.distributed.ci_supervisor.multiprocessing.Process"
+                "crsbench.distributed.ci_supervisor._mp_ctx.Process"
             ) as mock_proc_cls,
         ):
             mock_rq.Queue.side_effect = queue_factory
@@ -830,7 +830,7 @@ class TestSupervisorExitCondition:
             _patch_supervisor(),
             patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
             patch(
-                "crsbench.distributed.ci_supervisor.multiprocessing.Process"
+                "crsbench.distributed.ci_supervisor._mp_ctx.Process"
             ) as mock_proc_cls,
             patch("crsbench.utils.cpu_pool.CPUPool", return_value=mock_pool),
             patch(
@@ -908,7 +908,7 @@ class TestSupervisorExitCondition:
             _patch_supervisor(),
             patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
             patch(
-                "crsbench.distributed.ci_supervisor.multiprocessing.Process"
+                "crsbench.distributed.ci_supervisor._mp_ctx.Process"
             ) as mock_proc_cls,
         ):
             mock_rq.Queue.side_effect = queue_factory
@@ -1276,7 +1276,7 @@ class TestMultiQueueSupervisor:
             _patch_supervisor(),
             patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
             patch(
-                "crsbench.distributed.ci_supervisor.multiprocessing.Process"
+                "crsbench.distributed.ci_supervisor._mp_ctx.Process"
             ) as mock_proc_cls,
             patch("crsbench.utils.cpu_pool.CPUPool", return_value=mock_pool),
             patch(

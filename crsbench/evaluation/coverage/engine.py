@@ -11,7 +11,7 @@ Architecture:
 - Provides cleanup() method for resource management
 
 Usage:
-    engine = CoverageEngine(build_workers=4)
+    engine = CoverageEngine(jobs=4)
     try:
         report = engine.collect_coverage(
             benchmark_path=Path("benchmarks/my-project"),
@@ -143,7 +143,7 @@ class CoverageEngine:
 
     Coordinates the entire coverage workflow:
     1. Load benchmark configuration via MetaYamlAdapter
-    2. Build coverage variant (with build_workers)
+    2. Build coverage variant (with jobs)
     3. Collect coverage from corpus files (sequentially)
     4. Merge and deduplicate coverage results
     5. Generate coverage reports
@@ -155,14 +155,14 @@ class CoverageEngine:
     Attributes:
         oss_fuzz_path: Optional legacy compatibility root for coverage build cache.
         workspace: Coverage-local build workspace for Atlantis artifacts.
-        build_workers: Number of parallel workers for building.
+        build_workers: Resolved number of parallel build jobs.
     """
 
     def __init__(
         self,
         oss_fuzz_path: Optional[Path] = None,
         *,
-        build_workers: Optional[int] = None,
+        jobs: Optional[int] = None,
         runtime_workers: Optional[int] = None,
         runtime_cpus: Optional[list[int]] = None,
         work_dir: Optional[Path] = None,
@@ -173,14 +173,14 @@ class CoverageEngine:
         Args:
             oss_fuzz_path: Optional legacy cache root. Coverage analysis no longer
                 requires a real OSS-Fuzz checkout.
-            build_workers: Number of parallel workers for building (default: 4).
+            jobs: Number of parallel build jobs (default: 4).
             work_dir: Working directory for isolated builds. If None, uses
                 default oss-fuzz/build/out/ location.
             source_mode: Source mode - "pkgs" (bundled, default) or "main_repo" (clone)
         """
         self.oss_fuzz_path = Path(oss_fuzz_path).resolve() if oss_fuzz_path else None
         self.work_dir = Path(work_dir) if work_dir else None
-        self.build_workers = resolve_build_workers(build_workers)
+        self.build_workers = resolve_build_workers(jobs)
         self.runtime_workers = max(1, int(runtime_workers or 1))
         self.runtime_cpus = list(runtime_cpus) if runtime_cpus else None
         self.source_mode = source_mode

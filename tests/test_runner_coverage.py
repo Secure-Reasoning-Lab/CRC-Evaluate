@@ -14,8 +14,6 @@ def _make_runner() -> BenchmarkRunner:
     return BenchmarkRunner(
         adapter=adapter,
         snapshot_period=0,
-        build_workers=2,
-        verify_workers=3,
     )
 
 
@@ -38,7 +36,7 @@ def test_run_post_experiment_coverage_uses_engine_timed_line_coverage(
         def __init__(
             self,
             *,
-            build_workers: int | None = None,
+            jobs: int | None = None,
             runtime_workers: int | None = None,
             runtime_cpus: list[int] | None = None,
             work_dir: Path | None = None,
@@ -46,7 +44,7 @@ def test_run_post_experiment_coverage_uses_engine_timed_line_coverage(
         ) -> None:
             engine_inits.append(
                 {
-                    "build_workers": build_workers,
+                    "jobs": jobs,
                     "runtime_workers": runtime_workers,
                     "runtime_cpus": runtime_cpus,
                     "work_dir": work_dir,
@@ -108,8 +106,8 @@ def test_run_post_experiment_coverage_uses_engine_timed_line_coverage(
 
     assert engine_inits == [
         {
-            "build_workers": 2,
-            "runtime_workers": 3,
+            "jobs": None,
+            "runtime_workers": None,
             "runtime_cpus": None,
             "work_dir": None,
             "source_mode": "pkgs",

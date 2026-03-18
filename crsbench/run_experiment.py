@@ -1797,7 +1797,7 @@ def _prepare_trial_dir_for_retry(config: ExperimentConfig, job) -> bool:
     return True
 
 
-def get_crs_cpu_count(crs_name: str, config: ExperimentConfig) -> int:
+def get_crs_cpu_count(crs_name: str, config: ExperimentConfig) -> int | None:
     """Get CPU count for a CRS from compose overrides or experiment defaults."""
     if config.crs_compose:
         service = config.crs_compose.services.get(crs_name)
@@ -1805,7 +1805,7 @@ def get_crs_cpu_count(crs_name: str, config: ExperimentConfig) -> int:
             return service.num_cores
     if config.resources and config.resources.cores_per_trial:
         return config.resources.cores_per_trial
-    return 4
+    return None
 
 
 def get_crs_memory(crs_name: str, config: ExperimentConfig) -> str | None:
@@ -2010,8 +2010,8 @@ def run_experiment_distributed(
         # Extract unique CRS names from trials
         crses = sorted({t.crs for t in trials})
 
-        # Get CPU counts for each CRS
-        # Priority: crs_compose service override > experiment config > default (4)
+        # Get CPU counts for each CRS.
+        # Priority: crs_compose service override > experiment config > unconstrained.
         crs_cpu_counts = {}
         for crs in crses:
             crs_cpu_counts[crs] = get_crs_cpu_count(crs, config)
@@ -2053,7 +2053,7 @@ def run_experiment_distributed(
         jobs = []
         for trial in trials:
             bh = trial.benchmark_harness
-            cpu_count = crs_cpu_counts.get(trial.crs, 4)
+            cpu_count = crs_cpu_counts.get(trial.crs)
             memory_limit = crs_memory_limits.get(trial.crs)
 
             trial_id = build_trial_id(experiment_name, trial, trial_suffix)
@@ -2083,8 +2083,8 @@ def run_experiment_distributed(
                     "sanitizer": trial.sanitizer,
                     "trial_num": trial.trial_num,
                     "target_cpv_id": trial.target_cpv_id,
-                    "cpu_count": cpu_count,  # CPU count from resource config
-                    "memory_limit": memory_limit,  # Memory limit from resource config
+                    "cpu_count": cpu_count,  # Explicit CRS/runtime CPU limit, or None
+                    "memory_limit": memory_limit,  # Explicit CRS/runtime memory limit, or None
                     "cpu_tag": cpu_tag,
                     "experiment_name": experiment_name,
                 },
@@ -2439,7 +2439,9 @@ def main() -> None:
 
     # Display estimated runtime (with worker count for distributed mode)
     if use_distributed and config.worker:
-        display_estimated_runtime(total_jobs, config, worker_count=config.worker.jobs)
+        display_estimated_runtime(
+            total_jobs, config, worker_count=config.worker.jobs or 1
+        )
     else:
         display_estimated_runtime(total_jobs, config)
 

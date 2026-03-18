@@ -11,6 +11,8 @@ E2E tests are in test_patch_verification_integration.py.
 import os
 import shutil
 import tempfile
+import threading
+import time
 from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
@@ -1779,6 +1781,47 @@ class TestEngineDiscoveryFunctions:
 
         (pov_dir / "cpv_2").write_bytes(b"pov2")
         assert engine._infer_single_pov_id(pov_dir) is None
+
+    def test_run_pov_variants_test_uses_verify_workers(
+        self, tmp_path: Path, mock_oss_fuzz: Path
+    ) -> None:
+        """POV variant checks should use verify_workers concurrency."""
+        from crsbench.evaluation.verification.patch import PatchVerificationEngine
+
+        engine = PatchVerificationEngine(mock_oss_fuzz, cores_per_job=2)
+        pov_paths = []
+        for idx in range(2):
+            pov_path = tmp_path / f"pov_{idx}.blob"
+            pov_path.write_bytes(b"pov")
+            pov_paths.append(pov_path)
+
+        lock = threading.Lock()
+        active = 0
+        max_active = 0
+
+        def _fake_verify_single_pov(
+            _variant_name: str, _harness: str, pov_path: Path
+        ) -> tuple[str, bool, str, str]:
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return pov_path.stem, True, "", ""
+
+        engine._verify_single_pov = _fake_verify_single_pov
+
+        all_passed, failed_povs = engine._run_pov_variants_test(
+            "variant",
+            "fuzz_target",
+            pov_paths,
+        )
+
+        assert all_passed is True
+        assert failed_povs == []
+        assert max_active >= 2
 
 
 # =============================================================================

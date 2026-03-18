@@ -856,6 +856,32 @@ class TestOssCrsAdapterBugFindFull:
         assert data["test-crs"]["cpuset"] == "21-22"
 
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_generate_compose_yaml_uses_visible_cpu_affinity_when_unset(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure(
+            {
+                "oss_crs_infra": {"shared": True},
+                "crs_services": {
+                    "test-crs": {
+                        "num_cores": 2,
+                    }
+                },
+            }
+        )
+
+        with patch(
+            "crsbench.evaluation.adapter.oss_crs.os.sched_getaffinity",
+            return_value={20, 21, 22, 23},
+        ):
+            compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
+
+        data = yaml.safe_load(compose_path.read_text())
+        assert data["oss_crs_infra"]["cpuset"] == "20-21"
+        assert data["test-crs"]["cpuset"] == "20-21"
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
     def test_generate_compose_yaml_rejects_insufficient_allocated_cpus(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
@@ -950,10 +976,17 @@ class TestOssCrsAdapterBugFindFull:
                 }
             }
         )
-        compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
+        adapter.configure({"allocated_memory": "10G"})
+        with patch(
+            "crsbench.evaluation.adapter.oss_crs.os.sched_getaffinity",
+            return_value={8, 9, 10},
+        ):
+            compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
         data = yaml.safe_load(compose_path.read_text())
         assert "test-crs" in data
         assert "other-crs" not in data
+        assert data["test-crs"]["cpuset"] == "8-10"
+        assert data["test-crs"]["memory"] == "10G"
 
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
     def test_configure_crs_services_missing_current_resets_stale_override(
@@ -976,9 +1009,13 @@ class TestOssCrsAdapterBugFindFull:
             }
         )
         adapter.configure({"allocated_memory": "10G"})
-        compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
+        with patch(
+            "crsbench.evaluation.adapter.oss_crs.os.sched_getaffinity",
+            return_value={0, 1, 2},
+        ):
+            compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
         data = yaml.safe_load(compose_path.read_text())
-        assert data["test-crs"]["cpuset"] == "0"
+        assert data["test-crs"]["cpuset"] == "0-2"
         assert data["test-crs"]["memory"] == "10G"
 
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
@@ -1012,6 +1049,28 @@ class TestOssCrsAdapterBugFindFull:
         data = yaml.safe_load(compose_path.read_text())
         assert data["oss_crs_infra"]["memory"] == "12G"
         assert data["test-crs"]["memory"] == "12G"
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_generate_compose_yaml_uses_visible_memory_when_unset(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure(
+            {
+                "oss_crs_infra": {"num_cores": 1},
+                "crs_services": {"test-crs": {"num_cores": 1}},
+            }
+        )
+
+        with patch(
+            "crsbench.evaluation.adapter.oss_crs._default_memory_limit",
+            return_value="24576MB",
+        ):
+            compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
+
+        data = yaml.safe_load(compose_path.read_text())
+        assert data["oss_crs_infra"]["memory"] == "24576MB"
+        assert data["test-crs"]["memory"] == "24576MB"
 
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
     def test_generate_compose_yaml_service_memory_tracks_infra_updates(

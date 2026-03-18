@@ -16,11 +16,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from crsbench.benchmark_ci.cli import add_ci_subparser, dispatch_ci
-from crsbench.benchmark_ci.cli.commands.all_cmd import run_all
-from crsbench.benchmark_ci.cli.commands.build_cmd import run_build
-from crsbench.benchmark_ci.cli.commands.coverage_cmd import run_coverage
-from crsbench.benchmark_ci.cli.commands.patch_cmd import run_patch
-from crsbench.benchmark_ci.cli.commands.pov_cmd import run_pov
 from crsbench.benchmark_ci.models import CheckMode
 
 
@@ -66,8 +61,6 @@ class TestSubcommandRegistration:
         help_text = capsys.readouterr().out
         assert "--exit-on-error" in help_text
         assert "Compatibility flag" in help_text
-        assert "--build-workers" in help_text
-        assert "Compatibility knob" in help_text
 
     def test_ci_subparser_all_runs_coverage_by_default(self):
         parser = _make_parser()
@@ -153,9 +146,7 @@ class TestDispatchCi:
 
     def test_dispatch_ci_propagates_args_to_handler(self):
         parser = _make_parser()
-        args = parser.parse_args(
-            ["ci", "pov", "--source", "pkgs", "--build-workers", "8", "--all"]
-        )
+        args = parser.parse_args(["ci", "pov", "--source", "pkgs", "--all"])
 
         with patch(
             "crsbench.benchmark_ci.cli.commands.pov_cmd.run_pov"
@@ -166,37 +157,6 @@ class TestDispatchCi:
             mock_run_pov.assert_called_once_with(args)
             call_args = mock_run_pov.call_args[0][0]
             assert call_args.source == "pkgs"
-            assert call_args.build_workers == 8
-
-
-class TestDistributedFlagAlignment:
-    """Distributed mode should reject local worker knobs consistently."""
-
-    @pytest.mark.parametrize(
-        "runner",
-        [run_build, run_pov, run_patch, run_coverage, run_all],
-    )
-    def test_distributed_rejects_local_worker_knobs(self, runner):
-        args = argparse.Namespace(
-            benchmark=None,
-            benchmarks=["dummy-bench"],
-            benchmark_suite=None,
-            all=False,
-            filter=None,
-            source="pkgs",
-            mode="snapshot",
-            force_rebuild=False,
-            distributed=True,
-            redis_host="localhost",
-            build_workers=8,
-            verify_workers=8,
-            output=None,
-            output_dir=None,
-            no_color=True,
-            max_povs_per_cpv=None,
-            inc_coverage=False,
-        )
-        assert runner(args) == 1
 
 
 # --- Test parse subcommand (functional) ---
@@ -342,24 +302,6 @@ class TestParentParserInheritance:
         "subcommand",
         ["pov", "patch", "coverage", "all"],
     )
-    def test_build_subcommands_accept_build_workers(self, subcommand):
-        parser = _make_parser()
-        args = parser.parse_args(["ci", subcommand, "--build-workers", "16", "--all"])
-        assert args.build_workers == 16
-
-    @pytest.mark.parametrize(
-        "subcommand",
-        ["pov", "patch", "coverage", "all"],
-    )
-    def test_build_subcommands_accept_verify_workers(self, subcommand):
-        parser = _make_parser()
-        args = parser.parse_args(["ci", subcommand, "--verify-workers", "8", "--all"])
-        assert args.verify_workers == 8
-
-    @pytest.mark.parametrize(
-        "subcommand",
-        ["pov", "patch", "coverage", "all"],
-    )
     def test_build_subcommands_accept_mode(self, subcommand):
         parser = _make_parser()
         args = parser.parse_args(["ci", subcommand, "--mode", "full", "--all"])
@@ -373,11 +315,6 @@ class TestParentParserInheritance:
         parser = _make_parser()
         args = parser.parse_args(["ci", subcommand, "--no-color", "--all"])
         assert args.no_color is True
-
-    def test_format_does_not_accept_build_workers(self):
-        parser = _make_parser()
-        with pytest.raises(SystemExit):
-            parser.parse_args(["ci", "format", "--build-workers", "4", "--all"])
 
 
 # --- Test format subcommand integration ---
@@ -2109,9 +2046,6 @@ class TestAllSubcommand:
         parser = _make_parser()
         args = parser.parse_args(["ci", "all", "--all"])
         dispatch_ci(args)
-
-        assert args.build_workers == 4
-        assert args.verify_workers == 4
 
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
     @patch("crsbench.distributed.ci_jobs.ci_results_to_executor_results")
