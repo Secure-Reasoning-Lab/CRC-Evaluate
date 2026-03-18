@@ -16,6 +16,7 @@ from crsbench.validation.schemas import (
     POV,
     BenchmarkEntry,
     BenchmarkSuiteConfig,
+    CloudProvidersConfig,
     EvaluationMode,
     ExperimentConfig,
     HarnessFile,
@@ -25,7 +26,14 @@ from crsbench.validation.schemas import (
     Vulnerability,
     WorkerConfig,
 )
-from pydantic import ValidationError as PydanticValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+)
+from pydantic import (
+    ValidationError as PydanticValidationError,
+)
 
 # ============================================================================
 # Schema Validation Tests
@@ -1267,6 +1275,29 @@ class TestExperimentConfigSchema:
             match="cloud.orchestrator.instance_profile 'gce-orchestrator-n2d' was not found under cloud.providers.gce.instance_profiles",
         ):
             ExperimentConfig(**data)
+
+    def test_cloud_provider_contract_rejects_duplicate_profile_names_across_catalogs(
+        self,
+    ):
+        class DummyProviderConfig(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+
+            instance_profiles: dict[str, dict[str, str]] = Field(default_factory=dict)
+
+        class MultiProviderCloudProvidersConfig(CloudProvidersConfig):
+            dummy: DummyProviderConfig | None = None
+
+        with pytest.raises(
+            PydanticValidationError,
+            match=(
+                "cloud.providers.\\*\\.instance_profiles keys must be globally "
+                "unique across providers; 'gce-worker-n2d' appears under dummy, gce"
+            ),
+        ):
+            MultiProviderCloudProvidersConfig(
+                gce=self._provider_neutral_cloud_kwargs()["providers"]["gce"],
+                dummy={"instance_profiles": {"gce-worker-n2d": {}}},
+            )
 
     @pytest.mark.parametrize(
         ("field_path", "field_value", "match"),

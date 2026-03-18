@@ -28,6 +28,7 @@ from crsbench.cloud.secret_refs import (
 )
 from crsbench.cloud.types import (
     CloudProvider,
+    coerce_cloud_provider,
     validate_single_cloud_provider,
 )
 from crsbench.validation.ground_truth_paths import validate_ground_truth_segment
@@ -2008,6 +2009,22 @@ class GceProviderConfig(BaseModel):
         return normalized
 
 
+def _iter_provider_instance_profile_catalogs(
+    providers: BaseModel,
+) -> list[tuple[str, dict[str, Any]]]:
+    """Collect configured provider instance-profile catalogs from a provider model."""
+    catalogs: list[tuple[str, dict[str, Any]]] = []
+    for provider_name in type(providers).model_fields:
+        provider_config = getattr(providers, provider_name, None)
+        if provider_config is None:
+            continue
+
+        instance_profiles = getattr(provider_config, "instance_profiles", None)
+        if isinstance(instance_profiles, dict):
+            catalogs.append((provider_name, instance_profiles))
+    return catalogs
+
+
 class CloudProvidersConfig(BaseModel):
     """Provider catalog for provider-neutral cloud configuration."""
 
@@ -2017,6 +2034,33 @@ class CloudProvidersConfig(BaseModel):
         default=None,
         description="GCE provider-specific backing configuration.",
     )
+
+    @model_validator(mode="after")
+    def validate_unique_instance_profile_names(self):
+        """Require instance-profile names to be globally unique across providers."""
+        owners_by_profile: dict[str, list[str]] = {}
+        for (
+            provider_name,
+            instance_profiles,
+        ) in _iter_provider_instance_profile_catalogs(self):
+            for profile_name in instance_profiles:
+                owners_by_profile.setdefault(profile_name, []).append(provider_name)
+
+        duplicates = {
+            profile_name: sorted(set(provider_names))
+            for profile_name, provider_names in owners_by_profile.items()
+            if len(set(provider_names)) > 1
+        }
+        if duplicates:
+            conflicts = "; ".join(
+                f"'{profile_name}' appears under {', '.join(provider_names)}"
+                for profile_name, provider_names in sorted(duplicates.items())
+            )
+            raise ValueError(
+                "cloud.providers.*.instance_profiles keys must be globally unique "
+                f"across providers; {conflicts}"
+            )
+        return self
 
 
 class CloudOrchestratorPlacementConfig(BaseModel):
@@ -2368,17 +2412,17 @@ class CloudConfig(BaseModel):
             )
 
         matches: list[CloudProvider] = []
-        if (
-            self.providers.gce is not None
-            and profile_name in self.providers.gce.instance_profiles
-        ):
-            matches.append(CloudProvider.GCE)
+        catalogs = _iter_provider_instance_profile_catalogs(self.providers)
+        for provider_name, instance_profiles in catalogs:
+            if profile_name in instance_profiles:
+                matches.append(coerce_cloud_provider(provider_name))
 
         if not matches:
-            if self.providers.gce is not None:
+            if len(catalogs) == 1:
+                provider_name, _ = catalogs[0]
                 raise ValueError(
                     f"{field_path} '{profile_name}' was not found under "
-                    "cloud.providers.gce.instance_profiles"
+                    f"cloud.providers.{provider_name}.instance_profiles"
                 )
             raise ValueError(
                 f"{field_path} '{profile_name}' was not found under any "

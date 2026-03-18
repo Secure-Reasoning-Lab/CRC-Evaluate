@@ -101,6 +101,9 @@ Provider-neutral configs do not repeat `provider` on orchestrator or
 placements. CRSBench resolves the provider from the referenced
 `cloud.providers.<provider>.instance_profiles` catalog, and one launch cannot
 mix providers across orchestrator, workers, and evaluators.
+Instance-profile keys must also be globally unique across provider catalogs, so
+the same profile name cannot be reused under multiple `cloud.providers.*`
+entries.
 
 Instance profiles carry the per-VM details such as `machine_type`,
 `boot_disk_size_gb`, `image` or `instance_template`, `service_account_email`,

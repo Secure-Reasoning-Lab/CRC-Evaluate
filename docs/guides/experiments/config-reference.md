@@ -46,6 +46,7 @@ For GCE in v1:
 - provider-neutral configs do not repeat `provider` on orchestrator or
   placements; CRSBench resolves the provider from the owning
   `cloud.providers.<provider>.instance_profiles` catalog
+- instance-profile keys must be globally unique across provider catalogs
 - one launch cannot mix providers across orchestrator, workers, and evaluators
 - placements must use explicit zones
 - live quota validation is mandatory before launch

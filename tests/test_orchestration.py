@@ -977,9 +977,7 @@ class TestIntegrationWithSampleConfigs:
             "HF_TOKEN": "os.environ/HF_TOKEN",
         }
         assert config.cloud.workers.defaults is not None
-        assert (
-            config.cloud.workers.defaults.instance_profile == "cloudtest-gce-worker-n2d"
-        )
+        assert config.cloud.workers.defaults.instance_profile == "gce-worker-n2d"
         assert config.cloud.workers.defaults.count == 1
         assert [placement.zone for placement in config.cloud.evaluators.placements] == [
             "us-east5-b"
@@ -988,14 +986,14 @@ class TestIntegrationWithSampleConfigs:
         assert [
             placement.instance_profile
             for placement in config.cloud.evaluators.placements
-        ] == ["cloudtest-gce-evaluator-n2d"]
+        ] == ["gce-evaluator-n2d"]
         assert [
             placement.count for placement in config.cloud.evaluators.placements
         ] == [1]
         assert config.cloud.defaults.readiness_timeout_sec == 1200
         assert (
             config.cloud.providers.gce.instance_profiles[
-                "cloudtest-gce-worker-n2d"
+                "gce-worker-n2d"
             ].boot_disk_size_gb
             == 100
         )
@@ -1005,7 +1003,7 @@ class TestIntegrationWithSampleConfigs:
         )
         assert (
             config.cloud.providers.gce.instance_profiles[
-                "cloudtest-gce-orchestrator-n2d"
+                "gce-orchestrator-n2d"
             ].boot_disk_size_gb
             == 100
         )
@@ -1016,13 +1014,13 @@ class TestIntegrationWithSampleConfigs:
         assert config.cloud.defaults.readiness_timeout_sec == 1200
         assert (
             config.cloud.providers.gce.instance_profiles[
-                "cloudtest-gce-worker-n2d"
+                "gce-worker-n2d"
             ].service_account_email
             == "153298433405-compute@developer.gserviceaccount.com"
         )
         assert (
             config.cloud.providers.gce.instance_profiles[
-                "cloudtest-gce-orchestrator-n2d"
+                "gce-orchestrator-n2d"
             ].service_account_email
             == "153298433405-compute@developer.gserviceaccount.com"
         )
