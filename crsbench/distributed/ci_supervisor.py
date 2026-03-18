@@ -21,6 +21,7 @@ from crsbench.utils.cpu_pool import auto_cores_per_job, visible_cpu_count
 from crsbench.utils.logger import get_logger
 
 if REDIS_AVAILABLE:
+    import redis.exceptions
     import rq
     import rq.job
 
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 DEQUEUE_POLL_TIMEOUT_SECONDS = 1
 NON_CONTINUOUS_CPU_MISMATCH_LIMIT = 3
+MAX_CONSECUTIVE_DEQUEUE_ERRORS = 10
 
 # Use 'fork' context so child processes inherit module-level state
 # (e.g. _verification_engine, _benchmarks_root) from the parent.
@@ -217,6 +219,7 @@ def run_ci_supervisor(
     build_phase_complete = False
     idle_since: float = 0.0
     consecutive_cpu_mismatch_requeues = 0
+    consecutive_dequeue_errors = 0
     mismatch_job_ids: set[str] = set()
     mismatch_queue_names: set[str] = set()
     cpu_tag_livelock_detected = False
@@ -345,46 +348,57 @@ def run_ci_supervisor(
                             break
 
             # --- Determine which queues have capacity ---
-            now = time.time()
-            queues_with_capacity: list[rq.Queue] = []
-            if (
-                len(build_active) < build_jobs
-                and build_queue.count > 0
-                and queue_cooldown_until.get(build_queue.name, 0.0) <= now
-            ):
-                queues_with_capacity.append(build_queue)
-            if (
-                len(verify_active) < verify_jobs
-                and verify_queue.count > 0
-                and queue_cooldown_until.get(verify_queue.name, 0.0) <= now
-            ):
-                queues_with_capacity.append(verify_queue)
-
-            if not queues_with_capacity:
-                time.sleep(0.5)
-                continue
-
-            # Dequeue with build priority (build queue first in list)
+            # Wrap queue-interaction block so corrupted Redis replies
+            # (e.g. from a peer evaluator killed on shared Valkey) are
+            # retried instead of crashing this supervisor.
             try:
+                now = time.time()
+                queues_with_capacity: list[rq.Queue] = []
+                if (
+                    len(build_active) < build_jobs
+                    and build_queue.count > 0
+                    and queue_cooldown_until.get(build_queue.name, 0.0) <= now
+                ):
+                    queues_with_capacity.append(build_queue)
+                if (
+                    len(verify_active) < verify_jobs
+                    and verify_queue.count > 0
+                    and queue_cooldown_until.get(verify_queue.name, 0.0) <= now
+                ):
+                    queues_with_capacity.append(verify_queue)
+
+                if not queues_with_capacity:
+                    time.sleep(0.5)
+                    consecutive_dequeue_errors = 0
+                    continue
+
                 result = rq.Queue.dequeue_any(
                     queues_with_capacity,
                     timeout=DEQUEUE_POLL_TIMEOUT_SECONDS,
                     connection=redis_conn,
                 )
-            except Exception as dequeue_err:
-                logger.warning(f"Transient dequeue error (will retry): {dequeue_err}")
-                time.sleep(1)
-                continue
 
-            if not result:
-                time.sleep(0.5)
-                continue
+                if not result:
+                    time.sleep(0.5)
+                    consecutive_dequeue_errors = 0
+                    continue
 
-            try:
                 job, queue_obj = result
-            except (TypeError, ValueError) as unpack_err:
-                logger.warning(f"Unexpected dequeue result {result!r}: {unpack_err}")
-                time.sleep(0.5)
+                consecutive_dequeue_errors = 0
+            except (
+                OSError,
+                TypeError,
+                ValueError,
+                redis.exceptions.RedisError,
+            ) as transient_err:
+                consecutive_dequeue_errors += 1
+                logger.warning(
+                    f"Transient queue error #{consecutive_dequeue_errors}: "
+                    f"{transient_err}"
+                )
+                if consecutive_dequeue_errors >= MAX_CONSECUTIVE_DEQUEUE_ERRORS:
+                    raise
+                time.sleep(1)
                 continue
 
             # Skip jobs that are already finished or failed (stale queue entries)
@@ -757,6 +771,7 @@ def run_multi_queue_supervisor(
     build_phase_complete = False
     idle_since: float = 0.0
     consecutive_cpu_mismatch_requeues = 0
+    consecutive_dequeue_errors = 0
     mismatch_job_ids: set[str] = set()
     mismatch_queue_names: set[str] = set()
     cpu_tag_livelock_detected = False
@@ -934,44 +949,58 @@ def run_multi_queue_supervisor(
                             break
 
             # --- Determine which queues have capacity ---
-            now = time.time()
-            queues_with_capacity: list[rq.Queue] = []
-            # Build queues first (priority)
-            if len(build_active) < build_jobs:
-                for bq in build_queues:
-                    if bq.count > 0 and queue_cooldown_until.get(bq.name, 0.0) <= now:
-                        queues_with_capacity.append(bq)
-            # Then verify queues
-            if len(verify_active) < verify_jobs:
-                for vq in verify_queues:
-                    if vq.count > 0 and queue_cooldown_until.get(vq.name, 0.0) <= now:
-                        queues_with_capacity.append(vq)
-
-            if not queues_with_capacity:
-                time.sleep(0.5)
-                continue
-
-            # Dequeue with build priority
             try:
+                now = time.time()
+                queues_with_capacity: list[rq.Queue] = []
+                # Build queues first (priority)
+                if len(build_active) < build_jobs:
+                    for bq in build_queues:
+                        if (
+                            bq.count > 0
+                            and queue_cooldown_until.get(bq.name, 0.0) <= now
+                        ):
+                            queues_with_capacity.append(bq)
+                # Then verify queues
+                if len(verify_active) < verify_jobs:
+                    for vq in verify_queues:
+                        if (
+                            vq.count > 0
+                            and queue_cooldown_until.get(vq.name, 0.0) <= now
+                        ):
+                            queues_with_capacity.append(vq)
+
+                if not queues_with_capacity:
+                    time.sleep(0.5)
+                    consecutive_dequeue_errors = 0
+                    continue
+
                 result = rq.Queue.dequeue_any(
                     queues_with_capacity,
                     timeout=DEQUEUE_POLL_TIMEOUT_SECONDS,
                     connection=redis_conn,
                 )
-            except Exception as dequeue_err:
-                logger.warning(f"Transient dequeue error (will retry): {dequeue_err}")
-                time.sleep(1)
-                continue
 
-            if not result:
-                time.sleep(0.5)
-                continue
+                if not result:
+                    time.sleep(0.5)
+                    consecutive_dequeue_errors = 0
+                    continue
 
-            try:
                 job, queue_obj = result
-            except (TypeError, ValueError) as unpack_err:
-                logger.warning(f"Unexpected dequeue result {result!r}: {unpack_err}")
-                time.sleep(0.5)
+                consecutive_dequeue_errors = 0
+            except (
+                OSError,
+                TypeError,
+                ValueError,
+                redis.exceptions.RedisError,
+            ) as transient_err:
+                consecutive_dequeue_errors += 1
+                logger.warning(
+                    f"Transient queue error #{consecutive_dequeue_errors}: "
+                    f"{transient_err}"
+                )
+                if consecutive_dequeue_errors >= MAX_CONSECUTIVE_DEQUEUE_ERRORS:
+                    raise
+                time.sleep(1)
                 continue
 
             # Skip stale jobs
