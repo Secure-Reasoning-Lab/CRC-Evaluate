@@ -101,6 +101,8 @@ class GceProviderAdapter:
         return GceOrchestratorConfig(
             project=resolved.project,
             zone=_primary_zone(plan.orchestrator.zones),
+            zones=list(plan.orchestrator.zones),
+            fallback=plan.orchestrator.fallback,
             machine_type=resolved.machine_type,
             boot_disk_size_gb=resolved.boot_disk_size_gb,
             image=resolved.image,
@@ -133,6 +135,8 @@ class GceProviderAdapter:
                 GceWorkerFleetConfig(
                     project=resolved.project,
                     zone=_primary_zone(placement.zones),
+                    zones=list(placement.zones),
+                    fallback=placement.fallback,
                     worker_count=placement.count,
                     worker_name_start_index=next_worker_index,
                     machine_type=resolved.machine_type,
@@ -176,6 +180,8 @@ class GceProviderAdapter:
                 GceWorkerFleetConfig(
                     project=resolved.project,
                     zone=_primary_zone(placement.zones),
+                    zones=list(placement.zones),
+                    fallback=placement.fallback,
                     worker_count=placement.count,
                     worker_name_start_index=next_evaluator_index,
                     machine_type=resolved.machine_type,

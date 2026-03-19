@@ -141,6 +141,56 @@ class _ExtendedOperation:
         self.name = name
 
 
+def _operation_error(code: str, message: str) -> dict[str, object]:
+    return {
+        "status": "DONE",
+        "error": {
+            "errors": [
+                {
+                    "code": code,
+                    "message": message,
+                }
+            ]
+        },
+    }
+
+
+class _ZonalRecordingClient(_RecordingClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.wait_results: dict[tuple[str, str], dict[str, object]] = {}
+
+    def wait_for_zone_operation(
+        self,
+        *,
+        project: str,
+        zone: str,
+        operation: str,
+    ) -> dict[str, object]:
+        self.waited.append((project, zone, operation))
+        return self.wait_results.get((zone, operation), {"status": "DONE"})
+
+    def get_instance(
+        self,
+        *,
+        project: str,
+        zone: str,
+        instance: str,
+    ) -> dict[str, object]:
+        del project
+        return {
+            "id": f"{zone}-{instance}",
+            "name": instance,
+            "status": "RUNNING",
+            "zone": f"zones/{zone}",
+            "networkInterfaces": [{"networkIP": "10.0.0.10"}],
+            "labels": {"crsbench-experiment": "exp-cloud-42", "owner": "team-crs"},
+            "serviceAccounts": [
+                {"email": "crsbench-worker@test-project.iam.gserviceaccount.com"}
+            ],
+        }
+
+
 def _make_provider_neutral_experiment_config() -> ExperimentConfig:
     return ExperimentConfig.model_validate(
         {
@@ -673,6 +723,150 @@ def test_create_workers_rolls_back_partial_fleet_on_failure() -> None:
         ("test-project", "us-central1-a", "gce-worker-001"),
         ("test-project", "us-central1-a", "gce-worker-002"),
     }
+
+
+def test_create_workers_retries_next_zone_on_retryable_capacity_error() -> None:
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+
+    client = _ZonalRecordingClient()
+    client.wait_results[("us-east5-b", "op-gce-worker-001")] = _operation_error(
+        "ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS",
+        "No capacity left in zone",
+    )
+    provisioner = GceProvisioner(client=client)
+
+    workers = provisioner.create_workers(
+        experiment_name="Exp.Cloud 42",
+        fleet=_make_fleet(
+            zone=None,
+            zones=["us-east5-b", "us-east1-b"],
+            fallback=True,
+            worker_count=1,
+        ),
+        redis_host="redis.internal:6380",
+        registration=_make_registration(),
+    )
+
+    assert [worker.zone for worker in workers] == ["us-east1-b"]
+    assert [zone for _, zone, _ in client.inserted] == ["us-east5-b", "us-east1-b"]
+    assert client.deleted == [("test-project", "us-east5-b", "gce-worker-001")]
+
+
+def test_create_workers_moves_multi_count_placement_as_atomic_group() -> None:
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+
+    client = _ZonalRecordingClient()
+    client.wait_results[("us-east5-b", "op-gce-worker-002")] = _operation_error(
+        "ZONE_RESOURCE_POOL_EXHAUSTED",
+        "No capacity left in zone",
+    )
+    provisioner = GceProvisioner(client=client)
+
+    workers = provisioner.create_workers(
+        experiment_name="Exp.Cloud 42",
+        fleet=_make_fleet(
+            zone=None,
+            zones=["us-east5-b", "us-east1-b"],
+            fallback=True,
+            worker_count=2,
+        ),
+        redis_host="redis.internal:6380",
+        registration=_make_registration(),
+    )
+
+    assert [worker.name for worker in workers] == ["gce-worker-001", "gce-worker-002"]
+    assert [worker.zone for worker in workers] == ["us-east1-b", "us-east1-b"]
+    assert [zone for _, zone, _ in client.inserted] == [
+        "us-east5-b",
+        "us-east5-b",
+        "us-east1-b",
+        "us-east1-b",
+    ]
+    assert set(client.deleted) == {
+        ("test-project", "us-east5-b", "gce-worker-001"),
+        ("test-project", "us-east5-b", "gce-worker-002"),
+    }
+
+
+def test_create_workers_does_not_retry_when_fallback_disabled() -> None:
+    from crsbench.cloud.gce.provisioner import GceProvisioner, GceProvisioningError
+
+    client = _ZonalRecordingClient()
+    client.wait_results[("us-east5-b", "op-gce-worker-001")] = _operation_error(
+        "ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS",
+        "No capacity left in zone",
+    )
+    provisioner = GceProvisioner(client=client)
+
+    with pytest.raises(GceProvisioningError, match="ZONE_RESOURCE_POOL_EXHAUSTED"):
+        provisioner.create_workers(
+            experiment_name="Exp.Cloud 42",
+            fleet=_make_fleet(
+                zone=None,
+                zones=["us-east5-b", "us-east1-b"],
+                fallback=False,
+                worker_count=1,
+            ),
+            redis_host="redis.internal:6380",
+            registration=_make_registration(),
+        )
+
+    assert [zone for _, zone, _ in client.inserted] == ["us-east5-b"]
+
+
+def test_create_workers_does_not_retry_non_capacity_errors() -> None:
+    from crsbench.cloud.gce.provisioner import GceProvisioner, GceProvisioningError
+
+    client = _ZonalRecordingClient()
+    client.wait_results[("us-east5-b", "op-gce-worker-001")] = _operation_error(
+        "PERMISSION_DENIED",
+        "Caller is not authorized",
+    )
+    provisioner = GceProvisioner(client=client)
+
+    with pytest.raises(GceProvisioningError, match="PERMISSION_DENIED"):
+        provisioner.create_workers(
+            experiment_name="Exp.Cloud 42",
+            fleet=_make_fleet(
+                zone=None,
+                zones=["us-east5-b", "us-east1-b"],
+                fallback=True,
+                worker_count=1,
+            ),
+            redis_host="redis.internal:6380",
+            registration=_make_registration(),
+        )
+
+    assert [zone for _, zone, _ in client.inserted] == ["us-east5-b"]
+
+
+def test_create_orchestrator_retries_next_zone_on_retryable_capacity_error() -> None:
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+
+    client = _ZonalRecordingClient()
+    client.wait_results[("us-east5-b", "op-crsbench-exp-cloud-42-orch")] = (
+        _operation_error(
+            "ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS",
+            "No capacity left in zone",
+        )
+    )
+    provisioner = GceProvisioner(client=client)
+
+    worker = provisioner.create_orchestrator(
+        experiment_name="Exp.Cloud 42",
+        orchestrator=_make_orchestrator(
+            zone=None,
+            zones=["us-east5-b", "us-east1-b"],
+            fallback=True,
+            instance_name_prefix=None,
+        ),
+        experiment_config_path="config.yaml",
+        redis_password="shared-secret",
+    )
+
+    assert worker.name == "crsbench-exp-cloud-42-orch"
+    assert worker.zone == "us-east1-b"
+    assert [zone for _, zone, _ in client.inserted] == ["us-east5-b", "us-east1-b"]
 
 
 def test_google_compute_client_accepts_extended_operation_objects() -> None:

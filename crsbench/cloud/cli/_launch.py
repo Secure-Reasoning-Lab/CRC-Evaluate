@@ -103,6 +103,24 @@ def _project_for_fleet_record(
     )
 
 
+def _rollback_created_instances(
+    records: list[CreatedCloudInstanceRecord],
+) -> None:
+    provisioner = GceProvisioner()
+    for record in reversed(records):
+        if record.project is None:
+            logger.warning(
+                "Best-effort rollback skipped instance {} because its project is unknown",
+                record.instance_name,
+            )
+            continue
+        provisioner.delete_instance(
+            project=record.project,
+            zone=record.zone,
+            instance_name=record.instance_name,
+        )
+
+
 def run_launch(args: argparse.Namespace) -> int:
     """Provision a remote orchestrator VM first, then point workers at its Redis."""
     config_path = Path(args.config)
@@ -130,6 +148,11 @@ def run_launch(args: argparse.Namespace) -> int:
     provisioning_plan = None
     adapter = None
     resolved_orchestrator_config = None
+    worker_fleet_configs: list[GceWorkerFleetConfig] = []
+    evaluator_fleet_configs: list[GceWorkerFleetConfig] = []
+    orchestrator_created_records: list[CreatedCloudInstanceRecord] = []
+    worker_created_records: list[CreatedCloudInstanceRecord] = []
+    evaluator_created_records: list[CreatedCloudInstanceRecord] = []
     try:
         if registration is None:
             raise GceProvisioningError(
@@ -174,14 +197,16 @@ def run_launch(args: argparse.Namespace) -> int:
         append_created_instance_records(
             config_path,
             experiment_name=config.experiment,
-            records=[
-                CreatedCloudInstanceRecord(
-                    provider=CloudProvider.GCE,
-                    project=orchestrator_project,
-                    zone=orchestrator_record.zone,
-                    instance_name=orchestrator_record.name,
-                )
-            ],
+            records=(
+                orchestrator_created_records := [
+                    CreatedCloudInstanceRecord(
+                        provider=CloudProvider.GCE,
+                        project=orchestrator_project,
+                        zone=orchestrator_record.zone,
+                        instance_name=orchestrator_record.name,
+                    )
+                ]
+            ),
         )
 
         redis_host = f"{orchestrator_record.internal_ip}:6379"
@@ -204,49 +229,49 @@ def run_launch(args: argparse.Namespace) -> int:
             env_passthrough_by_placement=preflight.evaluator_placement_envs,
         )
 
-        worker_fleet_configs: list[GceWorkerFleetConfig]
-        evaluator_fleet_configs: list[GceWorkerFleetConfig]
         assert preflight.redacted_worker_fleets is not None
         worker_fleet_configs = preflight.redacted_worker_fleets
         evaluator_fleet_configs = preflight.redacted_evaluator_fleets or []
         orchestrator_ssh_via_iap = resolved_orchestrator_config.ssh_via_iap
 
         if workers:
+            worker_created_records = [
+                CreatedCloudInstanceRecord(
+                    provider=CloudProvider.GCE,
+                    project=_project_for_worker_record(
+                        worker.name,
+                        worker_zone=worker.zone,
+                        worker_fleet_configs=worker_fleet_configs,
+                    ),
+                    zone=worker.zone,
+                    instance_name=worker.name,
+                )
+                for worker in workers
+            ]
             append_created_instance_records(
                 config_path,
                 experiment_name=config.experiment,
-                records=[
-                    CreatedCloudInstanceRecord(
-                        provider=CloudProvider.GCE,
-                        project=_project_for_worker_record(
-                            worker.name,
-                            worker_zone=worker.zone,
-                            worker_fleet_configs=worker_fleet_configs,
-                        ),
-                        zone=worker.zone,
-                        instance_name=worker.name,
-                    )
-                    for worker in workers
-                ],
+                records=worker_created_records,
             )
 
         if evaluators:
+            evaluator_created_records = [
+                CreatedCloudInstanceRecord(
+                    provider=CloudProvider.GCE,
+                    project=_project_for_fleet_record(
+                        worker.name,
+                        instance_zone=worker.zone,
+                        fleet_configs=evaluator_fleet_configs,
+                    ),
+                    zone=worker.zone,
+                    instance_name=worker.name,
+                )
+                for worker in evaluators
+            ]
             append_created_instance_records(
                 config_path,
                 experiment_name=config.experiment,
-                records=[
-                    CreatedCloudInstanceRecord(
-                        provider=CloudProvider.GCE,
-                        project=_project_for_fleet_record(
-                            worker.name,
-                            instance_zone=worker.zone,
-                            fleet_configs=evaluator_fleet_configs,
-                        ),
-                        zone=worker.zone,
-                        instance_name=worker.name,
-                    )
-                    for worker in evaluators
-                ],
+                records=evaluator_created_records,
             )
 
         save_launch_state(
@@ -272,37 +297,31 @@ def run_launch(args: argparse.Namespace) -> int:
         logger.error("Cloud launch failed: {}", str(exc))
         return 1
     except Exception as exc:
-        if evaluators and provisioning_plan is not None:
+        if evaluator_created_records:
             try:
-                assert adapter is not None
-                adapter.delete_evaluators(plan=provisioning_plan)
+                _rollback_created_instances(evaluator_created_records)
             except Exception:
                 logger.warning(
-                    "Best-effort rollback failed for evaluator fleet in experiment {}",
+                    "Best-effort rollback failed for created evaluator instances in experiment {}",
                     config.experiment,
                 )
-        if workers and provisioning_plan is not None:
+        if worker_created_records:
             try:
-                assert adapter is not None
-                adapter.delete_workers(plan=provisioning_plan)
+                _rollback_created_instances(worker_created_records)
             except Exception:
                 logger.warning(
-                    "Best-effort rollback failed for worker fleet in experiment {}",
+                    "Best-effort rollback failed for created worker instances in experiment {}",
                     config.experiment,
                 )
-        if orchestrator_record is not None:
+        if orchestrator_created_records:
             try:
-                assert adapter is not None
-                assert resolved_orchestrator_config is not None
-                GceProvisioner().delete_instance(
-                    project=resolved_orchestrator_config.project,
-                    zone=orchestrator_record.zone,
-                    instance_name=orchestrator_record.name,
-                )
+                _rollback_created_instances(orchestrator_created_records)
             except Exception:
                 logger.warning(
                     "Best-effort rollback failed for orchestrator {}",
-                    orchestrator_record.name,
+                    orchestrator_record.name
+                    if orchestrator_record is not None
+                    else "?",
                 )
         logger.error("Cloud launch failed: {}", str(exc))
         return 1

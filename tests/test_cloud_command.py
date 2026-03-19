@@ -1618,6 +1618,79 @@ class TestLaunch:
     @patch(
         "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
     )
+    @patch("crsbench.cloud.cli._launch.GceProvisioner")
+    @patch("crsbench.cloud.cli._launch.append_created_instance_records")
+    @patch(
+        "crsbench.cloud.cli._launch.save_launch_state",
+        side_effect=RuntimeError("disk full"),
+    )
+    @patch("crsbench.cloud.cli._launch.prepare_gce_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._launch.QuotaValidator")
+    @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
+    @patch("crsbench.cloud.cli._launch.logger")
+    @patch("crsbench.cloud.cli._launch.load_experiment_config")
+    def test_launch_rolls_back_workers_by_actual_created_zone(
+        self,
+        mock_load,
+        mock_logger,
+        mock_build_plan,
+        mock_validator_cls,
+        mock_adapter_cls,
+        mock_preflight,
+        mock_save_state,
+        mock_append_instances,
+        mock_provisioner_cls,
+        mock_secret,
+    ):
+        del mock_save_state, mock_secret
+        mock_load.return_value = _make_launch_config()
+        resolved_plan = MagicMock(experiment_name="test-exp")
+        mock_build_plan.return_value = MagicMock(experiment_name="test-exp")
+        mock_validator_cls.return_value.validate.return_value = None
+        mock_adapter = mock_adapter_cls.return_value
+        redacted_fleet = (
+            _make_launch_state()
+            .worker_fleet_configs[0]
+            .model_copy(update={"zone": "us-east5-b"})
+        )
+        mock_preflight.return_value = MagicMock(
+            resolved_plan=resolved_plan,
+            redacted_worker_fleets=[redacted_fleet],
+            redacted_evaluator_fleets=[],
+            orchestrator_env={},
+            worker_placement_envs=[],
+            evaluator_placement_envs=[],
+        )
+        mock_adapter.build_orchestrator_config.return_value.project = "test-project"
+        mock_adapter.build_orchestrator_config.return_value.ssh_via_iap = True
+        mock_adapter.create_orchestrator.return_value = _make_gce_worker(
+            "gce-orchestrator-test-exp", zone="us-east5-b", ip="10.0.0.50"
+        )
+        mock_adapter.create_workers.return_value = [
+            _make_gce_worker("w-1", zone="us-east1-b")
+        ]
+        mock_adapter.create_evaluators.return_value = []
+
+        from crsbench.cloud.cli._launch import run_launch
+
+        rc = run_launch(_make_launch_args())
+
+        assert rc == 1
+        mock_adapter.delete_workers.assert_not_called()
+        mock_provisioner_cls.return_value.delete_instance.assert_any_call(
+            project="test-project",
+            zone="us-east1-b",
+            instance_name="w-1",
+        )
+        mock_logger.error.assert_called_once_with(
+            "Cloud launch failed: {}", "disk full"
+        )
+
+    @patch(
+        "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
+    )
+    @patch("crsbench.cloud.cli._launch.GceProvisioner")
     @patch("crsbench.cloud.cli._launch.append_created_instance_records")
     @patch(
         "crsbench.cloud.cli._launch.save_launch_state",
@@ -1639,6 +1712,7 @@ class TestLaunch:
         mock_preflight,
         mock_save_state,
         mock_append_instances,
+        mock_provisioner_cls,
         mock_secret,
     ):
         del mock_save_state, mock_secret
@@ -1678,7 +1752,12 @@ class TestLaunch:
             record.instance_name
             for record in mock_append_instances.call_args_list[1].kwargs["records"]
         ] == ["w-1"]
-        mock_adapter.delete_workers.assert_called_once()
+        mock_adapter.delete_workers.assert_not_called()
+        mock_provisioner_cls.return_value.delete_instance.assert_any_call(
+            project="test-project",
+            zone="us-central1-a",
+            instance_name="w-1",
+        )
         mock_logger.error.assert_called_once_with(
             "Cloud launch failed: {}", "disk full"
         )

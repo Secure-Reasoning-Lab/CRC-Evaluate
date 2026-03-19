@@ -1176,9 +1176,17 @@ class GceWorkerFleetConfig(BaseModel):
         default=None,
         description="GCE zone for direct worker VM creation.",
     )
+    zones: list[str] = Field(
+        default_factory=list,
+        description="Ordered candidate GCE zones for direct worker VM creation.",
+    )
     region: Optional[str] = Field(
         default=None,
         description="Optional regional placement selector when zone-level targeting is not used.",
+    )
+    fallback: bool = Field(
+        default=True,
+        description="Whether worker creation should try later candidate zones after retryable zonal-capacity failures.",
     )
     worker_count: int = Field(
         default=1,
@@ -1334,10 +1342,26 @@ class GceWorkerFleetConfig(BaseModel):
             normalized[key_str] = item_str
         return normalized
 
+    @field_validator("zones", mode="before")
+    @classmethod
+    def normalize_zones(
+        cls,
+        value: list[str] | tuple[str, ...] | None,
+    ) -> list[str]:
+        """Normalize ordered worker candidate zones."""
+        return _normalize_cloud_zone_list(value, field_path="cloud.gce.zones")
+
     @model_validator(mode="after")
     def validate_gce_contract(self):
         """Enforce the Phase 1 GCE fleet contract."""
-        has_zone = self.zone is not None
+        effective_zones = list(self.zones)
+        if not effective_zones and self.zone is not None:
+            effective_zones = [self.zone]
+        if effective_zones:
+            self.zones = effective_zones
+            self.zone = effective_zones[0]
+
+        has_zone = bool(effective_zones)
         has_region = self.region is not None
         if not has_zone:
             if has_region:
@@ -1398,9 +1422,17 @@ class GceOrchestratorConfig(BaseModel):
         default=None,
         description="GCE zone for direct orchestrator VM creation.",
     )
+    zones: list[str] = Field(
+        default_factory=list,
+        description="Ordered candidate GCE zones for direct orchestrator VM creation.",
+    )
     region: Optional[str] = Field(
         default=None,
         description="Optional regional placement selector when zone-level targeting is not used.",
+    )
+    fallback: bool = Field(
+        default=True,
+        description="Whether orchestrator creation should try later candidate zones after retryable zonal-capacity failures.",
     )
     machine_type: Optional[str] = Field(
         default=None,
@@ -1547,10 +1579,29 @@ class GceOrchestratorConfig(BaseModel):
             normalized[key_str] = item_str
         return normalized
 
+    @field_validator("zones", mode="before")
+    @classmethod
+    def normalize_zones(
+        cls,
+        value: list[str] | tuple[str, ...] | None,
+    ) -> list[str]:
+        """Normalize ordered orchestrator candidate zones."""
+        return _normalize_cloud_zone_list(
+            value,
+            field_path="cloud.orchestrator.zones",
+        )
+
     @model_validator(mode="after")
     def validate_gce_contract(self):
         """Enforce the supported GCE orchestrator contract."""
-        has_zone = self.zone is not None
+        effective_zones = list(self.zones)
+        if not effective_zones and self.zone is not None:
+            effective_zones = [self.zone]
+        if effective_zones:
+            self.zones = effective_zones
+            self.zone = effective_zones[0]
+
+        has_zone = bool(effective_zones)
         has_region = self.region is not None
         if not has_zone:
             if has_region:

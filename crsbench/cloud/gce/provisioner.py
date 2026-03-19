@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Protocol, cast
 
 from crsbench.cloud.gce.metadata import (
@@ -323,6 +323,13 @@ def _extract_operation_errors(result: Mapping[str, object]) -> list[str]:
     return messages
 
 
+def _is_retryable_zonal_capacity_error(exc: Exception) -> bool:
+    if not isinstance(exc, GceProvisioningError):
+        return False
+    message = str(exc)
+    return "ZONE_RESOURCE_POOL_EXHAUSTED" in message
+
+
 def _build_label_filter(label_selector: Mapping[str, str]) -> str:
     parts: list[str] = []
     for key, value in sorted(label_selector.items()):
@@ -402,6 +409,7 @@ class GceProvisioner:
         *,
         experiment_name: str,
         fleet: GceWorkerFleetConfig,
+        zone: str | None = None,
         redis_host: str,
         redis_password: str | None = None,
         registration: RuntimeRegistration,
@@ -409,7 +417,7 @@ class GceProvisioner:
         env_passthrough: dict[str, str] | None = None,
     ) -> list[GceInstanceRequest]:
         """Render instance requests from validated config and runtime metadata."""
-        zone = self._resolve_zone(fleet)
+        zone = zone or self._resolve_zone(fleet)
         labels = build_worker_labels(experiment_name=experiment_name, fleet=fleet)
         startup_script = self._startup_script or load_startup_script()
 
@@ -454,6 +462,7 @@ class GceProvisioner:
         *,
         experiment_name: str,
         fleet: GceWorkerFleetConfig,
+        zone: str | None = None,
         redis_host: str,
         registration: RuntimeRegistration,
         experiment_config_path: str,
@@ -462,7 +471,7 @@ class GceProvisioner:
         env_passthrough: dict[str, str] | None = None,
     ) -> list[GceInstanceRequest]:
         """Render evaluator instance requests from validated config and runtime metadata."""
-        zone = self._resolve_zone(fleet)
+        zone = zone or self._resolve_zone(fleet)
         labels = build_evaluator_labels(experiment_name=experiment_name, fleet=fleet)
         startup_script = self._startup_script or load_evaluator_startup_script()
 
@@ -531,49 +540,21 @@ class GceProvisioner:
         env_passthrough: dict[str, str] | None = None,
     ) -> list[GceWorkerRecord]:
         """Create a worker fleet and return normalized provider records."""
-        requests = self.build_requests(
-            experiment_name=experiment_name,
-            fleet=fleet,
-            redis_host=redis_host,
-            redis_password=redis_password,
-            registration=registration,
-            bootstrap_inputs=bootstrap_inputs,
-            env_passthrough=env_passthrough,
+        return self._create_requests_with_zone_fallback(
+            zones=self._candidate_zones_for_fleet(fleet),
+            fallback=fleet.fallback,
+            request_builder=lambda zone: self.build_requests(
+                experiment_name=experiment_name,
+                fleet=fleet,
+                zone=zone,
+                redis_host=redis_host,
+                redis_password=redis_password,
+                registration=registration,
+                bootstrap_inputs=bootstrap_inputs,
+                env_passthrough=env_passthrough,
+            ),
+            role_label="worker",
         )
-        workers: list[GceWorkerRecord] = []
-        rollback_requests: list[GceInstanceRequest] = []
-        try:
-            for request in requests:
-                operation = self._client.insert_instance(
-                    project=request.project,
-                    zone=request.zone,
-                    instance_resource=request.to_instance_resource(),
-                    source_instance_template=request.instance_template,
-                )
-                rollback_requests.append(request)
-                result = self._client.wait_for_zone_operation(
-                    project=request.project,
-                    zone=request.zone,
-                    operation=_extract_operation_name(operation),
-                )
-                errors = _extract_operation_errors(result)
-                if errors:
-                    raise GceProvisioningError(
-                        f"Failed to create worker {request.name}: {'; '.join(errors)}"
-                    )
-                workers.append(
-                    _normalize_instance(
-                        self._client.get_instance(
-                            project=request.project,
-                            zone=request.zone,
-                            instance=request.name,
-                        )
-                    )
-                )
-            return workers
-        except Exception:
-            self._rollback_requests(rollback_requests)
-            raise
 
     def create_evaluators(
         self,
@@ -588,62 +569,35 @@ class GceProvisioner:
         env_passthrough: dict[str, str] | None = None,
     ) -> list[GceWorkerRecord]:
         """Create an evaluator fleet and return normalized provider records."""
-        requests = self.build_evaluator_requests(
-            experiment_name=experiment_name,
-            fleet=fleet,
-            redis_host=redis_host,
-            redis_password=redis_password,
-            registration=registration,
-            experiment_config_path=experiment_config_path,
-            bootstrap_inputs=bootstrap_inputs,
-            env_passthrough=env_passthrough,
+        return self._create_requests_with_zone_fallback(
+            zones=self._candidate_zones_for_fleet(fleet),
+            fallback=fleet.fallback,
+            request_builder=lambda zone: self.build_evaluator_requests(
+                experiment_name=experiment_name,
+                fleet=fleet,
+                zone=zone,
+                redis_host=redis_host,
+                redis_password=redis_password,
+                registration=registration,
+                experiment_config_path=experiment_config_path,
+                bootstrap_inputs=bootstrap_inputs,
+                env_passthrough=env_passthrough,
+            ),
+            role_label="evaluator",
         )
-        workers: list[GceWorkerRecord] = []
-        rollback_requests: list[GceInstanceRequest] = []
-        try:
-            for request in requests:
-                operation = self._client.insert_instance(
-                    project=request.project,
-                    zone=request.zone,
-                    instance_resource=request.to_instance_resource(),
-                    source_instance_template=request.instance_template,
-                )
-                rollback_requests.append(request)
-                result = self._client.wait_for_zone_operation(
-                    project=request.project,
-                    zone=request.zone,
-                    operation=_extract_operation_name(operation),
-                )
-                errors = _extract_operation_errors(result)
-                if errors:
-                    raise GceProvisioningError(
-                        f"Failed to create evaluator {request.name}: {'; '.join(errors)}"
-                    )
-                workers.append(
-                    _normalize_instance(
-                        self._client.get_instance(
-                            project=request.project,
-                            zone=request.zone,
-                            instance=request.name,
-                        )
-                    )
-                )
-            return workers
-        except Exception:
-            self._rollback_requests(rollback_requests)
-            raise
 
     def build_orchestrator_request(
         self,
         *,
         experiment_name: str,
         orchestrator: GceOrchestratorConfig,
+        zone: str | None = None,
         experiment_config_path: str,
         env_passthrough: dict[str, str] | None = None,
         redis_password: str,
     ) -> GceInstanceRequest:
         """Render an instance request for the remote orchestrator VM."""
-        zone = self._resolve_orchestrator_zone(orchestrator)
+        zone = zone or self._resolve_orchestrator_zone(orchestrator)
         labels = build_orchestrator_labels(
             experiment_name=experiment_name,
             orchestrator=orchestrator,
@@ -688,40 +642,22 @@ class GceProvisioner:
         redis_password: str,
     ) -> GceWorkerRecord:
         """Create the remote orchestrator VM and return its normalized record."""
-        request = self.build_orchestrator_request(
-            experiment_name=experiment_name,
-            orchestrator=orchestrator,
-            experiment_config_path=experiment_config_path,
-            env_passthrough=env_passthrough,
-            redis_password=redis_password,
+        requests = self._create_requests_with_zone_fallback(
+            zones=self._candidate_zones_for_orchestrator(orchestrator),
+            fallback=orchestrator.fallback,
+            request_builder=lambda zone: [
+                self.build_orchestrator_request(
+                    experiment_name=experiment_name,
+                    orchestrator=orchestrator,
+                    zone=zone,
+                    experiment_config_path=experiment_config_path,
+                    env_passthrough=env_passthrough,
+                    redis_password=redis_password,
+                )
+            ],
+            role_label="orchestrator",
         )
-        try:
-            operation = self._client.insert_instance(
-                project=request.project,
-                zone=request.zone,
-                instance_resource=request.to_instance_resource(),
-                source_instance_template=request.instance_template,
-            )
-            result = self._client.wait_for_zone_operation(
-                project=request.project,
-                zone=request.zone,
-                operation=_extract_operation_name(operation),
-            )
-            errors = _extract_operation_errors(result)
-            if errors:
-                raise GceProvisioningError(
-                    f"Failed to create orchestrator {request.name}: {'; '.join(errors)}"
-                )
-            return _normalize_instance(
-                self._client.get_instance(
-                    project=request.project,
-                    zone=request.zone,
-                    instance=request.name,
-                )
-            )
-        except Exception:
-            self._rollback_requests([request])
-            raise
+        return requests[0]
 
     def list_orchestrators(
         self,
@@ -919,6 +855,87 @@ class GceProvisioner:
                     f"Failed to delete evaluator {worker.name}: {'; '.join(errors)}"
                 )
         return deleted_workers
+
+    def _create_requests_with_zone_fallback(
+        self,
+        *,
+        zones: list[str],
+        fallback: bool,
+        request_builder: Callable[[str], Sequence[GceInstanceRequest]],
+        role_label: str,
+    ) -> list[GceWorkerRecord]:
+        last_exc: GceProvisioningError | None = None
+        for index, zone in enumerate(zones):
+            try:
+                return self._create_request_group(
+                    request_builder(zone),
+                    role_label=role_label,
+                )
+            except GceProvisioningError as exc:
+                last_exc = exc
+                should_retry = (
+                    fallback
+                    and index < len(zones) - 1
+                    and _is_retryable_zonal_capacity_error(exc)
+                )
+                if not should_retry:
+                    raise
+        assert last_exc is not None
+        raise last_exc
+
+    def _create_request_group(
+        self,
+        requests: Sequence[GceInstanceRequest],
+        *,
+        role_label: str,
+    ) -> list[GceWorkerRecord]:
+        workers: list[GceWorkerRecord] = []
+        rollback_requests: list[GceInstanceRequest] = []
+        try:
+            for request in requests:
+                operation = self._client.insert_instance(
+                    project=request.project,
+                    zone=request.zone,
+                    instance_resource=request.to_instance_resource(),
+                    source_instance_template=request.instance_template,
+                )
+                rollback_requests.append(request)
+                result = self._client.wait_for_zone_operation(
+                    project=request.project,
+                    zone=request.zone,
+                    operation=_extract_operation_name(operation),
+                )
+                errors = _extract_operation_errors(result)
+                if errors:
+                    raise GceProvisioningError(
+                        f"Failed to create {role_label} {request.name}: {'; '.join(errors)}"
+                    )
+                workers.append(
+                    _normalize_instance(
+                        self._client.get_instance(
+                            project=request.project,
+                            zone=request.zone,
+                            instance=request.name,
+                        )
+                    )
+                )
+            return workers
+        except Exception:
+            self._rollback_requests(rollback_requests)
+            raise
+
+    def _candidate_zones_for_fleet(self, fleet: GceWorkerFleetConfig) -> list[str]:
+        if fleet.zones:
+            return list(fleet.zones)
+        return [self._resolve_zone(fleet)]
+
+    def _candidate_zones_for_orchestrator(
+        self,
+        orchestrator: GceOrchestratorConfig,
+    ) -> list[str]:
+        if orchestrator.zones:
+            return list(orchestrator.zones)
+        return [self._resolve_orchestrator_zone(orchestrator)]
 
     def _resolve_zone(self, fleet: GceWorkerFleetConfig) -> str:
         if fleet.zone:
