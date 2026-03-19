@@ -42,7 +42,7 @@ Examples:
         "monitor",
         help="Attach to a launched remote orchestrator and show live queue progress",
     )
-    monitor_p.add_argument("experiment", help="Experiment name")
+    monitor_p.add_argument("experiment", nargs="?", help="Experiment name")
     monitor_p.add_argument(
         "--config", required=True, help="Path to experiment YAML config"
     )

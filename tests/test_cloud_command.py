@@ -1472,6 +1472,14 @@ class TestArgParsing:
         assert args.experiment == "my-exp"
         assert args.config == "c.yaml"
 
+    def test_parse_monitor_allows_inferred_experiment(self):
+        parser = self._build_parser()
+        args = parser.parse_args(["cloud", "monitor", "--config", "c.yaml"])
+        assert args.command == "cloud"
+        assert args.cloud_command == "monitor"
+        assert args.experiment is None
+        assert args.config == "c.yaml"
+
 
 def _make_launch_args(config: str = "/tmp/config.yaml"):
     return argparse.Namespace(
@@ -1481,7 +1489,7 @@ def _make_launch_args(config: str = "/tmp/config.yaml"):
 
 
 def _make_monitor_args(
-    experiment: str = "test-exp",
+    experiment: str | None = "test-exp",
     config: str = "/tmp/config.yaml",
 ):
     return argparse.Namespace(
@@ -1502,16 +1510,23 @@ def test_run_cloud_dispatches_monitor(mock_run_monitor):
 
 
 @patch("crsbench.cloud.cli._monitor.initialize_queue")
+@patch("crsbench.cloud.cli._monitor.resolve_effective_experiment_name")
 @patch(
     "crsbench.cloud.cli._monitor.require_launch_state",
     side_effect=SystemExit("cloud monitor requires saved remote launch state"),
 )
-def test_run_monitor_requires_launch_state(mock_require_state, mock_initialize_queue):
+def test_run_monitor_requires_launch_state(
+    mock_require_state,
+    mock_resolve_experiment_name,
+    mock_initialize_queue,
+):
     from crsbench.cloud.cli._monitor import run_monitor
 
+    mock_resolve_experiment_name.return_value = "test-exp"
     rc = run_monitor(_make_monitor_args())
 
     assert rc == 1
+    mock_resolve_experiment_name.assert_called_once_with("/tmp/config.yaml", "test-exp")
     mock_require_state.assert_called_once_with("/tmp/config.yaml", "test-exp")
     mock_initialize_queue.assert_not_called()
 
@@ -1521,7 +1536,9 @@ def test_run_monitor_requires_launch_state(mock_require_state, mock_initialize_q
 @patch("crsbench.cloud.cli._monitor.probe_redis_connection")
 @patch("crsbench.cloud.cli._monitor.OrchestratorRedisTunnel.from_launch_state")
 @patch("crsbench.cloud.cli._monitor.require_launch_state")
+@patch("crsbench.cloud.cli._monitor.resolve_effective_experiment_name")
 def test_run_monitor_passes_saved_redis_password(
+    mock_resolve_experiment_name,
     mock_require_state,
     mock_tunnel_cls,
     mock_probe_redis_connection,
@@ -1532,6 +1549,7 @@ def test_run_monitor_passes_saved_redis_password(
 
     context = _make_provider_neutral_operational_context(include_launch_state=True)
     assert context.launch_state is not None
+    mock_resolve_experiment_name.return_value = "test-exp"
     mock_require_state.return_value = context
     mock_tunnel = MagicMock()
     mock_tunnel.redis_host = "127.0.0.1:16379"
@@ -1542,6 +1560,7 @@ def test_run_monitor_passes_saved_redis_password(
     rc = run_monitor(_make_monitor_args())
 
     assert rc == 0
+    mock_resolve_experiment_name.assert_called_once_with("/tmp/config.yaml", "test-exp")
     mock_initialize_queue.assert_called_once_with(
         "127.0.0.1:16379",
         "test-exp",
@@ -1549,6 +1568,45 @@ def test_run_monitor_passes_saved_redis_password(
     )
     mock_monitor_queue.assert_called_once()
     assert mock_monitor_queue.call_args.kwargs["exit_when_idle"] is False
+
+
+@patch("crsbench.cloud.cli._monitor.monitor_queue")
+@patch("crsbench.cloud.cli._monitor.initialize_queue")
+@patch("crsbench.cloud.cli._monitor.probe_redis_connection")
+@patch("crsbench.cloud.cli._monitor.OrchestratorRedisTunnel.from_launch_state")
+@patch("crsbench.cloud.cli._monitor.require_launch_state")
+@patch("crsbench.cloud.cli._monitor.resolve_effective_experiment_name")
+def test_run_monitor_infers_experiment_from_config(
+    mock_resolve_experiment_name,
+    mock_require_state,
+    mock_tunnel_cls,
+    mock_probe_redis_connection,
+    mock_initialize_queue,
+    mock_monitor_queue,
+):
+    from crsbench.cloud.cli._monitor import run_monitor
+
+    context = _make_provider_neutral_operational_context(include_launch_state=True)
+    assert context.launch_state is not None
+    mock_resolve_experiment_name.return_value = "inferred-exp"
+    mock_require_state.return_value = context
+    mock_tunnel = MagicMock()
+    mock_tunnel.redis_host = "127.0.0.1:16379"
+    mock_tunnel_cls.return_value.__enter__.return_value = mock_tunnel
+    mock_probe_redis_connection.return_value = (RedisConnectionProbe.READY, None)
+    mock_initialize_queue.return_value = MagicMock()
+
+    rc = run_monitor(_make_monitor_args(experiment=None))
+
+    assert rc == 0
+    mock_resolve_experiment_name.assert_called_once_with("/tmp/config.yaml", None)
+    mock_require_state.assert_called_once_with("/tmp/config.yaml", "inferred-exp")
+    mock_initialize_queue.assert_called_once_with(
+        "127.0.0.1:16379",
+        "inferred-exp",
+        redis_password="shared-secret",
+    )
+    mock_monitor_queue.assert_called_once()
 
 
 @patch("crsbench.cloud.cli._monitor.time.sleep")

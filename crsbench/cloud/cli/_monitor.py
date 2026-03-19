@@ -6,7 +6,10 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from crsbench.cloud.cli._config_reconnect import resolve_cloud_context
+from crsbench.cloud.cli._config_reconnect import (
+    resolve_cloud_context,
+    resolve_effective_experiment_name,
+)
 from crsbench.cloud.orchestrator_tunnel import OrchestratorRedisTunnel
 from crsbench.distributed.queue import (
     RedisConnectionProbe,
@@ -95,8 +98,9 @@ def wait_for_remote_redis(
 
 def run_monitor(args: argparse.Namespace) -> int:
     """Attach to a launched remote orchestrator and show live queue progress."""
+    experiment_name = resolve_effective_experiment_name(args.config, args.experiment)
     try:
-        context = require_launch_state(args.config, args.experiment)
+        context = require_launch_state(args.config, experiment_name)
     except SystemExit as exc:
         logger.error(str(exc))
         return 1
@@ -114,16 +118,16 @@ def run_monitor(args: argparse.Namespace) -> int:
             )
             queue = initialize_queue(
                 tunnel.redis_host,
-                args.experiment,
+                experiment_name,
                 redis_password=context.redis_password,
             )
             if queue is None:
                 raise RuntimeError(
-                    f"Failed to initialize trial queue for experiment {args.experiment}"
+                    f"Failed to initialize trial queue for experiment {experiment_name}"
                 )
             monitor_queue(
                 queue,
-                args.experiment,
+                experiment_name,
                 tracked_job_ids=None,
                 tracked_jobs=None,
                 exit_when_idle=False,
