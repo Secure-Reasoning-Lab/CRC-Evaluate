@@ -64,6 +64,7 @@ def _terminate_process_tree(pid: int, *, grace_seconds: int = 10) -> None:
                 ["ps", "--ppid", str(parent), "-o", "pid", "--no-headers"],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=5,
             )
             for line in out.stdout.splitlines():

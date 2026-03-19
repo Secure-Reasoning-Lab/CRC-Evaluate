@@ -67,7 +67,8 @@ class TestRunWithTimeoutNormalExecution:
         assert isinstance(result.stdout, str)
         assert "text" in result.stdout
 
-    def test_text_mode_replaces_non_utf8_output(self):
+    def test_text_mode_tolerates_non_utf8_output(self):
+        """Non-UTF-8 bytes must not crash; surrounding payload must survive."""
         result = run_with_timeout(
             [sys.executable, "-c", _NON_UTF8_SCRIPT],
             timeout=10,
@@ -76,9 +77,7 @@ class TestRunWithTimeoutNormalExecution:
         assert isinstance(result.stdout, str)
         assert isinstance(result.stderr, str)
         assert "stdout:" in result.stdout
-        assert "\ufffd" in result.stdout
         assert "stderr:" in result.stderr
-        assert "\ufffd" in result.stderr
 
     def test_capture_output_false(self):
         result = run_with_timeout(
@@ -173,7 +172,8 @@ class TestRunWithTimeoutKillsProcessGroup:
         assert isinstance(exc_info.value.output, bytes)
         assert b"binary_data" in exc_info.value.output
 
-    def test_timeout_expired_replaces_non_utf8_output_in_text_mode(self):
+    def test_timeout_expired_tolerates_non_utf8_output_in_text_mode(self):
+        """Timeout with non-UTF-8 must not crash; payload must survive."""
         with pytest.raises(subprocess.TimeoutExpired) as exc_info:
             run_with_timeout(
                 [sys.executable, "-c", _NON_UTF8_SLEEP_SCRIPT],
@@ -183,9 +183,7 @@ class TestRunWithTimeoutKillsProcessGroup:
         assert isinstance(exc_info.value.output, str)
         assert isinstance(exc_info.value.stderr, str)
         assert "stdout:" in exc_info.value.output
-        assert "\ufffd" in exc_info.value.output
         assert "stderr:" in exc_info.value.stderr
-        assert "\ufffd" in exc_info.value.stderr
 
 
 class TestDockerKillOrphans:

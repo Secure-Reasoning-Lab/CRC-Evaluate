@@ -1769,6 +1769,7 @@ class OSSFuzzInfrastructure:
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=60,
                 stdin=subprocess.DEVNULL,
             )
@@ -1792,6 +1793,7 @@ class OSSFuzzInfrastructure:
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=60,
                 stdin=subprocess.DEVNULL,
             )
@@ -2188,6 +2190,7 @@ class OSSFuzzInfrastructure:
                 ["docker", "manifest", "inspect", image_name, "--verbose"],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=60,
                 stdin=subprocess.DEVNULL,
             )
@@ -2471,6 +2474,7 @@ class OSSFuzzInfrastructure:
                 ["docker", "tag", src_image, dst_image],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=30,
                 stdin=subprocess.DEVNULL,
             )
@@ -2492,6 +2496,7 @@ class OSSFuzzInfrastructure:
                 ["docker", "image", "inspect", "--format", "{{.Id}}", image_name],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=30,
                 stdin=subprocess.DEVNULL,
             )
@@ -2511,6 +2516,7 @@ class OSSFuzzInfrastructure:
                 ["docker", "rmi", image_name],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=120,
                 stdin=subprocess.DEVNULL,
             )

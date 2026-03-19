@@ -97,6 +97,7 @@ def _local_image_exists(image_ref: str) -> bool:
         ["docker", "image", "inspect", image_ref],
         capture_output=True,
         text=True,
+        errors="replace",
     )
     return inspect.returncode == 0
 
@@ -106,6 +107,7 @@ def _local_image_id(image_ref: str) -> str | None:
         ["docker", "image", "inspect", "--format", "{{.Id}}", image_ref],
         capture_output=True,
         text=True,
+        errors="replace",
     )
     if inspect.returncode != 0:
         return None
@@ -134,6 +136,7 @@ def _pull_prepare_images(*, image_tag: str = DEFAULT_UNIAFL_RELEASE) -> list[str
             ["docker", "pull", published_ref],
             capture_output=True,
             text=True,
+            errors="replace",
         )
         if pull.returncode != 0:
             detail = pull.stderr.strip() or pull.stdout.strip() or "unknown error"
@@ -143,6 +146,7 @@ def _pull_prepare_images(*, image_tag: str = DEFAULT_UNIAFL_RELEASE) -> list[str
             ["docker", "tag", published_ref, local_ref],
             capture_output=True,
             text=True,
+            errors="replace",
         )
         if tag_result.returncode != 0:
             detail = (
@@ -159,11 +163,13 @@ def _checkout_matches_published_release(repo_root: Path) -> bool:
         ["git", "-C", str(repo_root), "describe", "--tags", "--exact-match"],
         capture_output=True,
         text=True,
+        errors="replace",
     )
     tracked_status = subprocess.run(
         ["git", "-C", str(repo_root), "status", "--porcelain", "--untracked-files=no"],
         capture_output=True,
         text=True,
+        errors="replace",
     )
     return (
         tag.returncode == 0
@@ -197,11 +203,13 @@ def _uniafl_checkout_fingerprint(repo_root: Path) -> str:
         ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
         capture_output=True,
         text=True,
+        errors="replace",
     )
     git_status = subprocess.run(
         ["git", "-C", str(repo_root), "status", "--porcelain"],
         capture_output=True,
         text=True,
+        errors="replace",
     )
     if git_head.returncode == 0 and git_status.returncode == 0:
         filtered_status = []

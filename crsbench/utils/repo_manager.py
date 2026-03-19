@@ -214,6 +214,10 @@ def run_git(args: List[str], **kwargs) -> subprocess.CompletedProcess:
     if "stdin" not in kwargs:
         kwargs["stdin"] = subprocess.DEVNULL
 
+    # Tolerate non-UTF-8 bytes in git output (e.g. binary diff content)
+    if kwargs.get("text"):
+        kwargs.setdefault("errors", "replace")
+
     if USE_GITCACHE:
         cmd = f"gitcache git {' '.join(args)}"
         return subprocess.run(cmd, shell=True, **kwargs)

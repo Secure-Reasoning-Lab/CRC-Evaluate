@@ -163,6 +163,7 @@ def docker_kill_orphans(container_prefix: str) -> int:
             ["docker", "ps", "--filter", f"name={container_prefix}", "-q"],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=10,
             stdin=subprocess.DEVNULL,
         )

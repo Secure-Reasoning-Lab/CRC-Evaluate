@@ -201,6 +201,7 @@ def docker_image_exists(image_tag: str) -> bool:
             ["docker", "image", "inspect", image_tag],
             capture_output=True,
             text=True,
+            errors="replace",
             stdin=subprocess.DEVNULL,  # Prevent terminal issues
         )
         return result.returncode == 0
@@ -297,6 +298,7 @@ def ensure_oss_fuzz_root(*, bootstrap_if_missing: bool = True) -> str:
                     cwd=str(crsbench_root),
                     capture_output=True,
                     text=True,
+                    errors="replace",
                     stdin=subprocess.DEVNULL,
                 )
                 if result.returncode != 0:
@@ -1855,6 +1857,8 @@ def run_with_rolling_output(command: str, n: int = 5) -> None:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,  # Line-buffered reading
             start_new_session=True,  # Ensures all child processes inherit I/O
         )

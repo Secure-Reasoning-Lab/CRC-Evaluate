@@ -69,6 +69,7 @@ def local_prepare_images_available(*, image_tag: str = "latest") -> bool:
             ["docker", "image", "inspect", image_ref],
             capture_output=True,
             text=True,
+            errors="replace",
         )
         if inspect.returncode != 0:
             return False

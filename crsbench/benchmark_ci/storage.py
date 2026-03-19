@@ -66,6 +66,7 @@ def measure_directory_size(path: Path) -> int:
             ["du", "-s", "-B1", str(path)],
             capture_output=True,
             text=True,
+            errors="replace",
             check=True,
             timeout=30,
         )
@@ -118,6 +119,7 @@ def measure_docker_image_size(image_name: str) -> int:
             ["docker", "image", "inspect", image_name, "--format", "{{.Size}}"],
             capture_output=True,
             text=True,
+            errors="replace",
             check=True,
             timeout=10,
         )
@@ -147,6 +149,7 @@ def measure_benchmark_docker_size(benchmark_name: str, prefix: str) -> int:
             ["docker", "images", "--format", "{{.ID}}\t{{.Size}}\t{{.Repository}}"],
             capture_output=True,
             text=True,
+            errors="replace",
             check=True,
             timeout=30,
         )

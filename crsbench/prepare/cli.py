@@ -104,6 +104,7 @@ def run_prepare(args: argparse.Namespace) -> int:
             cwd=oss_fuzz_root,
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=HELPER_PULL_TIMEOUT,
             stdin=subprocess.DEVNULL,
         )
@@ -131,6 +132,7 @@ def run_prepare(args: argparse.Namespace) -> int:
                 ["docker", "pull", image],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=DOCKER_PULL_TIMEOUT,
                 stdin=subprocess.DEVNULL,
             )
@@ -164,6 +166,7 @@ def run_prepare(args: argparse.Namespace) -> int:
                 cwd=oss_fuzz_root,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=BASE_BUILD_TIMEOUT,
                 stdin=subprocess.DEVNULL,
             )

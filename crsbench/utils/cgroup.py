@@ -62,6 +62,7 @@ def check_docker_cgroup_driver() -> tuple[bool, str]:
             ["docker", "info", "--format", "{{.CgroupDriver}}"],
             capture_output=True,
             text=True,
+            errors="replace",
             check=True,
             timeout=10,
         )
