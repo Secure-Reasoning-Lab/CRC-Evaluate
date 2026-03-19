@@ -44,7 +44,8 @@ class CloudOrchestratorPlan:
     """Resolved orchestrator placement for one cloud launch."""
 
     provider: CloudProvider
-    zone: str
+    zones: list[str]
+    fallback: bool
     instance_profile: ResolvedInstanceProfile
     launch_defaults: CloudLaunchDefaults = field(default_factory=CloudLaunchDefaults)
     env: dict[str, str] = field(default_factory=dict)
@@ -56,7 +57,8 @@ class CloudPlacementPlan:
 
     role: CloudInstanceRole
     provider: CloudProvider
-    zone: str
+    zones: list[str]
+    fallback: bool
     count: int
     instance_profile: ResolvedInstanceProfile
     launch_defaults: CloudLaunchDefaults = field(default_factory=CloudLaunchDefaults)
@@ -116,7 +118,14 @@ def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
         _build_placement_plan(
             config=config,
             role=CloudInstanceRole.WORKER,
-            zone=placement.zone or "",
+            zones=_resolve_candidate_zones(
+                config=config,
+                specific_zones=placement.zones,
+            ),
+            fallback=_resolve_fallback_policy(
+                config=config,
+                specific_fallback=placement.fallback,
+            ),
             count=placement.count,
             profile_name=placement.instance_profile,
             placement_env=placement.env,
@@ -128,7 +137,14 @@ def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
         _build_placement_plan(
             config=config,
             role=CloudInstanceRole.EVALUATOR,
-            zone=placement.zone or "",
+            zones=_resolve_candidate_zones(
+                config=config,
+                specific_zones=placement.zones,
+            ),
+            fallback=_resolve_fallback_policy(
+                config=config,
+                specific_fallback=placement.fallback,
+            ),
             count=placement.count,
             profile_name=placement.instance_profile,
             placement_env=placement.env,
@@ -143,7 +159,14 @@ def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
         experiment_name=config.experiment,
         orchestrator=CloudOrchestratorPlan(
             provider=orchestrator_profile.provider,
-            zone=config.cloud.orchestrator.zone,
+            zones=_resolve_candidate_zones(
+                config=config,
+                specific_zones=config.cloud.orchestrator.zones,
+            ),
+            fallback=_resolve_fallback_policy(
+                config=config,
+                specific_fallback=config.cloud.orchestrator.fallback,
+            ),
             instance_profile=orchestrator_profile,
             launch_defaults=_resolve_launch_defaults(
                 config=config,
@@ -205,7 +228,8 @@ def _build_placement_plan(
     *,
     config: ExperimentConfig,
     role: CloudInstanceRole,
-    zone: str,
+    zones: list[str],
+    fallback: bool,
     count: int,
     profile_name: str,
     placement_env: dict[str, str],
@@ -220,7 +244,8 @@ def _build_placement_plan(
     return CloudPlacementPlan(
         role=role,
         provider=instance_profile.provider,
-        zone=zone,
+        zones=list(zones),
+        fallback=fallback,
         count=count,
         instance_profile=instance_profile,
         launch_defaults=_resolve_launch_defaults(
@@ -240,6 +265,32 @@ def _profile_env(profile: ResolvedInstanceProfile) -> dict[str, str]:
         str(key): str(value)
         for key, value in profile.profile_config.get("env", {}).items()
     }
+
+
+def _resolve_candidate_zones(
+    *,
+    config: ExperimentConfig,
+    specific_zones: list[str],
+) -> list[str]:
+    if specific_zones:
+        return list(specific_zones)
+    cloud = config.cloud
+    if cloud is None or cloud.providers is None or cloud.providers.gce is None:
+        return []
+    return list(cloud.providers.gce.zones)
+
+
+def _resolve_fallback_policy(
+    *,
+    config: ExperimentConfig,
+    specific_fallback: bool | None,
+) -> bool:
+    if specific_fallback is not None:
+        return bool(specific_fallback)
+    cloud = config.cloud
+    if cloud is None or cloud.providers is None or cloud.providers.gce is None:
+        return True
+    return bool(cloud.providers.gce.fallback)
 
 
 def _resolve_launch_defaults(

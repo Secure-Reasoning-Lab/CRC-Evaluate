@@ -1128,6 +1128,56 @@ class TestExperimentConfigSchema:
             placement.instance_profile == "gce-worker-n2d"
             for placement in config.cloud.workers.placements
         )
+
+    def test_cloud_provider_contract_accepts_provider_default_zones_and_fallback(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["providers"]["gce"]["zones"] = [
+            "us-east5-b",
+            "us-east1-b",
+        ]
+        data["cloud"]["providers"]["gce"]["fallback"] = False
+        data["cloud"]["orchestrator"] = {
+            "instance_profile": "gce-orchestrator-n2d",
+        }
+        data["cloud"]["workers"]["placements"] = [
+            {
+                "count": 1,
+            }
+        ]
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.providers is not None
+        assert config.cloud.providers.gce is not None
+        assert config.cloud.providers.gce.zones == ["us-east5-b", "us-east1-b"]
+        assert config.cloud.providers.gce.fallback is False
+        assert config.cloud.orchestrator is not None
+        assert config.cloud.orchestrator.zones == []
+        assert config.cloud.orchestrator.fallback is None
+
+    def test_cloud_worker_placement_accepts_zone_list_and_fallback_override(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["providers"]["gce"]["zones"] = [
+            "us-east5-b",
+            "us-east1-b",
+        ]
+        data["cloud"]["workers"]["placements"][0] = {
+            "zones": ["us-central1-a", "us-west1-b"],
+            "fallback": False,
+        }
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.workers.placements[0].zone is None
+        assert config.cloud.workers.placements[0].zones == [
+            "us-central1-a",
+            "us-west1-b",
+        ]
+        assert config.cloud.workers.placements[0].fallback is False
         assert [
             placement.count for placement in config.cloud.evaluators.placements
         ] == [
@@ -1241,7 +1291,7 @@ class TestExperimentConfigSchema:
 
         with pytest.raises(
             PydanticValidationError,
-            match="cloud.workers.placements require explicit zone in v1",
+            match="cloud.workers.placements require explicit zone or zones in v1",
         ):
             ExperimentConfig(**data)
 

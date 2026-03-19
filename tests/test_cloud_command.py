@@ -467,17 +467,19 @@ def test_build_cloud_launch_plan_resolves_profiles_for_orchestrator_and_workers(
     plan = build_cloud_launch_plan(config)
 
     assert plan.orchestrator.provider is CloudProvider.GCE
-    assert plan.orchestrator.zone == "us-east5-b"
+    assert plan.orchestrator.zones == ["us-east5-b"]
+    assert plan.orchestrator.fallback is True
     assert plan.orchestrator.instance_profile.name == "gce-orchestrator-n2d"
     assert plan.orchestrator.instance_profile.provider is CloudProvider.GCE
     assert (
         plan.orchestrator.instance_profile.provider_config["project"] == "test-project"
     )
     assert len(plan.worker_placements) == 2
-    assert [placement.zone for placement in plan.worker_placements] == [
-        "us-east5-b",
-        "us-east5-c",
+    assert [placement.zones for placement in plan.worker_placements] == [
+        ["us-east5-b"],
+        ["us-east5-c"],
     ]
+    assert all(placement.fallback is True for placement in plan.worker_placements)
     assert [placement.count for placement in plan.worker_placements] == [
         150,
         100,
@@ -502,6 +504,64 @@ def test_build_cloud_launch_plan_resolves_profiles_for_orchestrator_and_workers(
     assert (
         plan.worker_placements[0].launch_defaults == plan.orchestrator.launch_defaults
     )
+
+
+def test_build_cloud_launch_plan_inherits_provider_default_zones_and_fallback():
+    from crsbench.cloud.models import build_cloud_launch_plan
+
+    raw_config = _make_provider_neutral_experiment_config().model_dump(
+        mode="json",
+        exclude_none=True,
+        exclude_defaults=True,
+    )
+    raw_config["cloud"]["providers"]["gce"]["zones"] = ["us-east5-b", "us-east1-b"]
+    raw_config["cloud"]["providers"]["gce"]["fallback"] = False
+    raw_config["cloud"]["orchestrator"] = {
+        "instance_profile": "gce-orchestrator-n2d",
+    }
+    raw_config["cloud"]["workers"]["placements"] = [
+        {
+            "count": 1,
+            "instance_profile": "gce-worker-n2d",
+        }
+    ]
+    config = ExperimentConfig.model_validate(raw_config)
+
+    plan = build_cloud_launch_plan(config)
+
+    assert plan.orchestrator.zones == ["us-east5-b", "us-east1-b"]
+    assert plan.orchestrator.fallback is False
+    assert plan.worker_placements[0].zones == ["us-east5-b", "us-east1-b"]
+    assert plan.worker_placements[0].fallback is False
+
+
+def test_build_cloud_launch_plan_prefers_specific_zone_lists_and_fallback_override():
+    from crsbench.cloud.models import build_cloud_launch_plan
+
+    raw_config = _make_provider_neutral_experiment_config().model_dump(
+        mode="json",
+        exclude_none=True,
+        exclude_defaults=True,
+    )
+    raw_config["cloud"]["providers"]["gce"]["zones"] = ["us-east5-b", "us-east1-b"]
+    raw_config["cloud"]["providers"]["gce"]["fallback"] = False
+    raw_config["cloud"]["orchestrator"]["zones"] = ["us-central1-a", "us-west1-b"]
+    raw_config["cloud"]["orchestrator"].pop("zone", None)
+    raw_config["cloud"]["orchestrator"]["fallback"] = True
+    raw_config["cloud"]["workers"]["placements"][0] = {
+        "zones": ["us-central1-a", "us-west1-b"],
+        "fallback": True,
+        "instance_profile": "gce-worker-n2d",
+        "count": 2,
+    }
+    config = ExperimentConfig.model_validate(raw_config)
+
+    plan = build_cloud_launch_plan(config)
+
+    assert plan.orchestrator.zones == ["us-central1-a", "us-west1-b"]
+    assert plan.orchestrator.fallback is True
+    assert plan.worker_placements[0].zones == ["us-central1-a", "us-west1-b"]
+    assert plan.worker_placements[0].fallback is True
 
 
 def test_build_cloud_launch_plan_merges_provider_launch_defaults_override():
@@ -676,10 +736,11 @@ def test_build_cloud_launch_plan_resolves_profiles_for_evaluators():
     plan = build_cloud_launch_plan(config)
 
     assert len(plan.evaluator_placements) == 2
-    assert [placement.zone for placement in plan.evaluator_placements] == [
-        "us-east5-b",
-        "us-east1-b",
+    assert [placement.zones for placement in plan.evaluator_placements] == [
+        ["us-east5-b"],
+        ["us-east1-b"],
     ]
+    assert all(placement.fallback is True for placement in plan.evaluator_placements)
     assert [placement.count for placement in plan.evaluator_placements] == [
         1,
         2,

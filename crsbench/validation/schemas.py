@@ -1656,6 +1656,28 @@ def _validate_cloud_env_map(
     return normalized
 
 
+def _normalize_cloud_zone_list(
+    value: list[str] | tuple[str, ...] | None,
+    *,
+    field_path: str,
+) -> list[str]:
+    """Normalize ordered zone candidates while preserving user order."""
+    if value is None:
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_zone in value:
+        zone = str(raw_zone).strip()
+        if not zone:
+            raise ValueError(f"{field_path} must not contain blank zones")
+        if zone in seen:
+            continue
+        normalized.append(zone)
+        seen.add(zone)
+    return normalized
+
+
 def _merge_cloud_maps(defaults: object, override: object) -> dict[str, str]:
     """Merge optional string maps with override precedence."""
     merged: dict[str, str] = {}
@@ -1965,6 +1987,14 @@ class GceProviderConfig(BaseModel):
             "interface by default."
         ),
     )
+    zones: list[str] = Field(
+        default_factory=list,
+        description="Default ordered candidate zones for GCE placements.",
+    )
+    fallback: bool = Field(
+        default=True,
+        description="Whether GCE placements fall back to later candidate zones by default.",
+    )
     defaults: CloudLaunchDefaultsConfig = Field(
         default_factory=CloudLaunchDefaultsConfig,
         description="Provider-specific overrides for shared cloud launch defaults.",
@@ -2020,6 +2050,14 @@ class GceProviderConfig(BaseModel):
         if value is None:
             raise ValueError("Field is required")
         return value
+
+    @field_validator("zones")
+    @classmethod
+    def validate_zones(cls, value: list[str]) -> list[str]:
+        return _normalize_cloud_zone_list(
+            value,
+            field_path="cloud.providers.gce.zones",
+        )
 
     @field_validator("instance_profiles")
     @classmethod
@@ -2097,7 +2135,18 @@ class CloudOrchestratorPlacementConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    zone: str = Field(..., description="Explicit zone for the orchestrator.")
+    zone: Optional[str] = Field(
+        default=None,
+        description="Explicit preferred zone for the orchestrator.",
+    )
+    zones: list[str] = Field(
+        default_factory=list,
+        description="Ordered candidate zones for the orchestrator.",
+    )
+    fallback: Optional[bool] = Field(
+        default=None,
+        description="Optional override for orchestrator zone fallback behavior.",
+    )
     instance_profile: str = Field(
         ..., description="Named provider instance profile for the orchestrator."
     )
@@ -2106,7 +2155,26 @@ class CloudOrchestratorPlacementConfig(BaseModel):
         description="Environment variables injected only into the orchestrator VM.",
     )
 
-    @field_validator("zone", "instance_profile")
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_zone_fields(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        zone = _normalize_cloud_optional_string(normalized.get("zone"))
+        zones = _normalize_cloud_zone_list(
+            normalized.get("zones"),
+            field_path="cloud.orchestrator.zones",
+        )
+        if zone is not None and not zones:
+            zones = [zone]
+        normalized["zone"] = (
+            zone if zone is not None and not normalized.get("zones") else None
+        )
+        normalized["zones"] = zones
+        return normalized
+
+    @field_validator("instance_profile")
     @classmethod
     def validate_required_strings(cls, value: str) -> str:
         """Require non-empty strings for placement references."""
@@ -2135,6 +2203,14 @@ class CloudPlacementDefaultsConfig(BaseModel):
         ge=1,
         description="Default number of instances to create per placement in this role.",
     )
+    zones: list[str] = Field(
+        default_factory=list,
+        description="Default ordered candidate zones for placements in this role.",
+    )
+    fallback: Optional[bool] = Field(
+        default=None,
+        description="Optional default zone fallback policy for placements in this role.",
+    )
     env: Dict[str, str] = Field(
         default_factory=dict,
         description="Default environment variables merged into each placement in this role.",
@@ -2149,6 +2225,14 @@ class CloudPlacementDefaultsConfig(BaseModel):
         if not normalized:
             return None
         return normalized
+
+    @field_validator("zones")
+    @classmethod
+    def validate_zones(cls, value: list[str]) -> list[str]:
+        return _normalize_cloud_zone_list(
+            value,
+            field_path="cloud.placements.defaults.zones",
+        )
 
     @field_validator("env")
     @classmethod
@@ -2168,6 +2252,14 @@ class CloudPlacementConfig(BaseModel):
         default=None,
         description="Explicit zone for this placement.",
     )
+    zones: list[str] = Field(
+        default_factory=list,
+        description="Ordered candidate zones for this placement.",
+    )
+    fallback: Optional[bool] = Field(
+        default=None,
+        description="Optional override for zone fallback behavior in this placement.",
+    )
     count: int = Field(
         default=1,
         ge=1,
@@ -2180,6 +2272,25 @@ class CloudPlacementConfig(BaseModel):
         default_factory=dict,
         description="Environment variables injected into every VM in this placement.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_zone_fields(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        zone = _normalize_cloud_optional_string(normalized.get("zone"))
+        zones = _normalize_cloud_zone_list(
+            normalized.get("zones"),
+            field_path="cloud.placements.zones",
+        )
+        if zone is not None and not zones:
+            zones = [zone]
+        normalized["zone"] = (
+            zone if zone is not None and not normalized.get("zones") else None
+        )
+        normalized["zones"] = zones
+        return normalized
 
     @field_validator("instance_profile")
     @classmethod
@@ -2209,13 +2320,6 @@ class CloudPlacementConfig(BaseModel):
 
 class CloudWorkerPlacementConfig(CloudPlacementConfig):
     """Provider-neutral worker placement declaration."""
-
-    @model_validator(mode="after")
-    def validate_worker_zonal_contract(self):
-        """Require explicit zonal worker placements in v1."""
-        if self.zone is None:
-            raise ValueError("cloud.workers.placements require explicit zone in v1")
-        return self
 
 
 class CloudWorkersConfig(BaseModel):
@@ -2266,13 +2370,6 @@ class CloudWorkersConfig(BaseModel):
 
 class CloudEvaluatorPlacementConfig(CloudPlacementConfig):
     """Provider-neutral evaluator placement declaration."""
-
-    @model_validator(mode="after")
-    def validate_evaluator_zonal_contract(self):
-        """Require explicit zonal evaluator placements in v1."""
-        if self.zone is None:
-            raise ValueError("cloud.evaluators.placements require explicit zone in v1")
-        return self
 
 
 class CloudEvaluatorsConfig(BaseModel):
@@ -2387,9 +2484,10 @@ class CloudConfig(BaseModel):
             )
         if not isinstance(self.orchestrator, CloudOrchestratorPlacementConfig):
             raise ValueError(
-                "cloud.orchestrator must use zone and instance_profile in provider-neutral cloud config"
+                "cloud.orchestrator must use zone(s) and instance_profile in provider-neutral cloud config"
             )
         self._validate_provider_neutral_references()
+        self._validate_effective_zone_contract()
         return self
 
     def _validate_provider_neutral_references(self) -> None:
@@ -2427,6 +2525,32 @@ class CloudConfig(BaseModel):
         if provider is not CloudProvider.GCE:
             raise ValueError(f"cloud provider '{provider.value}' is not supported yet")
         return
+
+    def _validate_effective_zone_contract(self) -> None:
+        if (
+            self.providers is None
+            or self.providers.gce is None
+            or self.orchestrator is None
+        ):
+            return
+
+        provider_zones = self.providers.gce.zones
+        if not self.orchestrator.zones and not provider_zones:
+            raise ValueError("cloud.orchestrator requires explicit zone or zones in v1")
+
+        if self.workers is not None:
+            for placement in self.workers.placements:
+                if not placement.zones and not provider_zones:
+                    raise ValueError(
+                        "cloud.workers.placements require explicit zone or zones in v1"
+                    )
+
+        if self.evaluators is not None:
+            for placement in self.evaluators.placements:
+                if not placement.zones and not provider_zones:
+                    raise ValueError(
+                        "cloud.evaluators.placements require explicit zone or zones in v1"
+                    )
 
     def _resolve_provider_for_profile(
         self,
