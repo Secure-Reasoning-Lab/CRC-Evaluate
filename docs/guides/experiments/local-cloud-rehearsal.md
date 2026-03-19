@@ -55,6 +55,14 @@ Default rehearsal config:
 - [`scripts/cloud-rehearsal/local-experiment.yaml`](../../../scripts/cloud-rehearsal/local-experiment.yaml)
   - mirrors the checked-in GCE smoke path with `crs-libfuzzer` and the same
     longer build window used for cloud testing
+- [`scripts/cloud-rehearsal/local-experiment-sanity-always.yaml`](../../../scripts/cloud-rehearsal/local-experiment-sanity-always.yaml)
+  - forces `download_benchmarks: always` for the `sanity` suite so the startup
+    scripts rehearse the explicit-download override
+- [`scripts/cloud-rehearsal/local-experiment-hf-download.yaml`](../../../scripts/cloud-rehearsal/local-experiment-hf-download.yaml)
+  - uses the 3-benchmark
+    [`smoke-test-bug-finding-hf-download`](../../../benchmark-suites/smoke-test-bug-finding-hf-download.yaml)
+    suite with `download_benchmarks: auto` plus `cloud.env.HF_TOKEN` to rehearse
+    gated Hugging Face benchmark download
 
 Default topology:
 
@@ -68,6 +76,9 @@ Default topology:
 Override knobs:
 
 - `CRSBENCH_LOCAL_REHEARSAL_EXPERIMENT_CONFIG`
+- `HF_TOKEN`
+  - required when the selected config declares `cloud.env.HF_TOKEN`, such as the
+    non-`sanity` download smoke config above
 - `CRSBENCH_LOCAL_REHEARSAL_GIT_REF`
   - defaults to the current local `HEAD`; set it explicitly to bypass host-side
     `HEAD` autodetection or pin a different ref that already exists in the
@@ -93,6 +104,9 @@ The scripts still keep the VM behavior by default:
 - GCE metadata remains the fallback when `CRSBENCH_METADATA_ROOT_DIR` is unset
 - `systemd --user` under `crsbench` remains the preferred VM runtime when it is
   available
+- when a rehearsal config includes provider-neutral `cloud.env`, the harness now
+  resolves the same secret references on the operator side and injects the
+  resolved values into the file-backed metadata tree before container startup
 
 ## Notes
 

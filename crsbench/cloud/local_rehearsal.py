@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from crsbench.cloud.bootstrap import CloudVmBootstrapInputs
+from crsbench.cloud.gce.launch_preflight import resolve_cloud_env_map
 from crsbench.cloud.gce.metadata import (
     build_evaluator_metadata,
     build_instance_metadata,
@@ -14,12 +16,15 @@ from crsbench.cloud.gce.metadata import (
     load_orchestrator_startup_script,
     load_startup_script,
 )
+from crsbench.cloud.models import build_cloud_launch_plan
 from crsbench.distributed.registry import RuntimeRegistration
 from crsbench.run_experiment import load_experiment_config
 from crsbench.validation.schemas import GceOrchestratorConfig, GceWorkerFleetConfig
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from crsbench.cloud.models import CloudPlacementPlan
 
 DEFAULT_LOCAL_ZONE = "local-docker-a"
 DEFAULT_LOCAL_REDIS_PASSWORD = "local-rehearsal-redis-password"
@@ -63,6 +68,16 @@ def build_local_rehearsal_layout(
     bootstrap_inputs = CloudVmBootstrapInputs.from_experiment_config(config)
     registration = RuntimeRegistration.from_experiment_config(config)
     install_spec = f"git+file://{repo_mount_path}"
+    (
+        orchestrator_env_passthrough,
+        worker_env_passthroughs,
+        evaluator_env_passthroughs,
+    ) = _resolve_rehearsal_env_passthroughs(
+        config=config,
+        experiment_config_path=experiment_config_path,
+        worker_count=worker_count,
+        evaluator_count=evaluator_count,
+    )
 
     orchestrator = GceOrchestratorConfig(
         project="local-rehearsal",
@@ -129,6 +144,7 @@ def build_local_rehearsal_layout(
         experiment_name=config.experiment,
         orchestrator=orchestrator,
         experiment_config_path=experiment_config_path,
+        env_passthrough=orchestrator_env_passthrough,
         redis_password=redis_password,
         startup_script=load_orchestrator_startup_script(),
     )
@@ -149,6 +165,7 @@ def build_local_rehearsal_layout(
             redis_password=redis_password,
             registration=registration,
             bootstrap_inputs=bootstrap_inputs,
+            env_passthrough=worker_env_passthroughs[worker_index],
             worker_name=worker_name,
             startup_script=load_startup_script(),
         )
@@ -173,7 +190,7 @@ def build_local_rehearsal_layout(
             redis_password=redis_password,
             registration=registration,
             bootstrap_inputs=bootstrap_inputs,
-            env_passthrough=None,
+            env_passthrough=evaluator_env_passthroughs[evaluator_index],
             evaluator_name=evaluator_name,
             experiment_config_path=experiment_config_path,
             startup_script=load_evaluator_startup_script(),
@@ -202,6 +219,75 @@ def build_local_rehearsal_layout(
         worker_state_dirs=worker_state_dirs,
         evaluator_state_dirs=evaluator_state_dirs,
     )
+
+
+def _resolve_rehearsal_env_passthroughs(
+    *,
+    config,
+    experiment_config_path: Path,
+    worker_count: int,
+    evaluator_count: int,
+) -> tuple[dict[str, str], list[dict[str, str]], list[dict[str, str]]]:
+    if config.cloud is None:
+        return (
+            {},
+            [{} for _ in range(worker_count)],
+            [{} for _ in range(evaluator_count)],
+        )
+
+    launch_plan = build_cloud_launch_plan(config)
+    cwd = experiment_config_path.resolve().parent
+    orchestrator_env = resolve_cloud_env_map(
+        launch_plan.orchestrator.env,
+        field_prefix="cloud.orchestrator.env",
+        cwd=cwd,
+        env=os.environ,
+    )
+    worker_envs = _expand_placement_env_passthroughs(
+        placements=launch_plan.worker_placements,
+        field_prefix_template="cloud.workers.placements.{index}.env",
+        cwd=cwd,
+    )
+    evaluator_envs = _expand_placement_env_passthroughs(
+        placements=launch_plan.evaluator_placements,
+        field_prefix_template="cloud.evaluators.placements.{index}.env",
+        cwd=cwd,
+    )
+
+    if worker_envs and len(worker_envs) != worker_count:
+        raise ValueError(
+            "Local rehearsal worker_count must match the total cloud worker placement count "
+            f"({len(worker_envs)}) when cloud.env passthrough is configured"
+        )
+    if evaluator_envs and len(evaluator_envs) != evaluator_count:
+        raise ValueError(
+            "Local rehearsal evaluator_count must match the total cloud evaluator placement count "
+            f"({len(evaluator_envs)}) when cloud.env passthrough is configured"
+        )
+
+    return (
+        orchestrator_env,
+        worker_envs or [{} for _ in range(worker_count)],
+        evaluator_envs or [{} for _ in range(evaluator_count)],
+    )
+
+
+def _expand_placement_env_passthroughs(
+    *,
+    placements: list[CloudPlacementPlan],
+    field_prefix_template: str,
+    cwd: Path,
+) -> list[dict[str, str]]:
+    expanded: list[dict[str, str]] = []
+    for index, placement in enumerate(placements):
+        resolved_env = resolve_cloud_env_map(
+            placement.env,
+            field_prefix=field_prefix_template.format(index=index),
+            cwd=cwd,
+            env=os.environ,
+        )
+        expanded.extend(dict(resolved_env) for _ in range(placement.count))
+    return expanded
 
 
 def _write_metadata_tree(

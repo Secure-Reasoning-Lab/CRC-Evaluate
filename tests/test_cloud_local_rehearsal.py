@@ -157,6 +157,132 @@ def test_default_rehearsal_experiment_config_is_valid() -> None:
     )
 
 
+def test_sanity_always_rehearsal_config_is_valid() -> None:
+    """The checked-in sanity+always rehearsal config should validate cleanly."""
+    from crsbench.run_experiment import load_experiment_config
+
+    config = load_experiment_config(
+        Path("scripts/cloud-rehearsal/local-experiment-sanity-always.yaml")
+    )
+
+    assert config.experiment == "local-cloud-rehearsal-sanity-always"
+    assert config.benchmark_suite == "sanity"
+    assert config.cloud is not None
+    assert config.cloud.bootstrap.download_benchmarks == "always"
+
+
+def test_hf_download_rehearsal_config_is_valid() -> None:
+    """The checked-in non-sanity rehearsal config should validate cleanly."""
+    from crsbench.run_experiment import load_experiment_config
+
+    config = load_experiment_config(
+        Path("scripts/cloud-rehearsal/local-experiment-hf-download.yaml")
+    )
+
+    assert config.experiment == "local-cloud-rehearsal-hf-download"
+    assert config.benchmark_suite == "smoke-test-bug-finding-hf-download"
+    assert config.cloud is not None
+    assert config.cloud.bootstrap.download_benchmarks == "auto"
+    assert config.cloud.env["HF_TOKEN"] == "os.environ/HF_TOKEN"
+
+
+def test_build_local_rehearsal_layout_resolves_cloud_env_passthrough(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Local rehearsal should reuse cloud env resolution for startup metadata."""
+    from crsbench.cloud.local_rehearsal import build_local_rehearsal_layout
+
+    monkeypatch.setenv("HF_TOKEN", "hf_test_token_local_rehearsal")
+
+    layout = build_local_rehearsal_layout(
+        output_dir=tmp_path / "rehearsal",
+        experiment_config_path=Path(
+            "scripts/cloud-rehearsal/local-experiment-hf-download.yaml"
+        ),
+        repo_mount_path="/src/CRSBench",
+        worker_count=2,
+        evaluator_count=1,
+        git_ref="test-ref",
+    )
+
+    orchestrator_env = json.loads(
+        base64.b64decode(
+            (
+                layout.orchestrator_metadata_dir
+                / "attributes"
+                / "crsbench-env-passthrough-b64"
+            ).read_text(encoding="utf-8")
+        ).decode("utf-8")
+    )
+    assert orchestrator_env["HF_TOKEN"] == "hf_test_token_local_rehearsal"
+
+    worker_env = json.loads(
+        base64.b64decode(
+            (
+                layout.worker_metadata_dirs[0]
+                / "attributes"
+                / "crsbench-env-passthrough-b64"
+            ).read_text(encoding="utf-8")
+        ).decode("utf-8")
+    )
+    assert worker_env["HF_TOKEN"] == "hf_test_token_local_rehearsal"
+
+    evaluator_env = json.loads(
+        base64.b64decode(
+            (
+                layout.evaluator_metadata_dirs[0]
+                / "attributes"
+                / "crsbench-env-passthrough-b64"
+            ).read_text(encoding="utf-8")
+        ).decode("utf-8")
+    )
+    assert evaluator_env["HF_TOKEN"] == "hf_test_token_local_rehearsal"
+
+    worker_payload = json.loads(
+        base64.b64decode(
+            (
+                layout.worker_metadata_dirs[0]
+                / "attributes"
+                / "crsbench-bootstrap-payload"
+            ).read_text(encoding="utf-8")
+        ).decode("utf-8")
+    )
+    assert worker_payload["benchmark_suite"] == "smoke-test-bug-finding-hf-download"
+    assert worker_payload["download_benchmarks"] == "auto"
+
+
+def test_build_local_rehearsal_layout_preserves_sanity_always_download_policy(
+    tmp_path,
+) -> None:
+    """Local rehearsal metadata should preserve sanity+always bootstrap policy."""
+    from crsbench.cloud.local_rehearsal import build_local_rehearsal_layout
+
+    layout = build_local_rehearsal_layout(
+        output_dir=tmp_path / "rehearsal",
+        experiment_config_path=Path(
+            "scripts/cloud-rehearsal/local-experiment-sanity-always.yaml"
+        ),
+        repo_mount_path="/src/CRSBench",
+        worker_count=2,
+        evaluator_count=1,
+        git_ref="test-ref",
+    )
+
+    worker_payload = json.loads(
+        base64.b64decode(
+            (
+                layout.worker_metadata_dirs[0]
+                / "attributes"
+                / "crsbench-bootstrap-payload"
+            ).read_text(encoding="utf-8")
+        ).decode("utf-8")
+    )
+
+    assert worker_payload["benchmark_suite"] == "sanity"
+    assert worker_payload["download_benchmarks"] == "always"
+
+
 def test_rehearsal_wrapper_only_resets_state_for_bringup() -> None:
     """Read-only compose subcommands should not wipe the previous rehearsal state."""
     wrapper_text = Path("scripts/cloud-rehearsal/run-local-rehearsal.sh").read_text(

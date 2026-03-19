@@ -80,7 +80,7 @@ def _resolve_launch_plan(
             cwd=cwd,
             env=env,
         ),
-        env=_resolve_cloud_env_map(
+        env=resolve_cloud_env_map(
             plan.orchestrator.env,
             field_prefix="cloud.orchestrator.env",
             cwd=cwd,
@@ -103,7 +103,7 @@ def _resolve_launch_plan(
                 cwd=cwd,
                 env=env,
             ),
-            env=_resolve_cloud_env_map(
+            env=resolve_cloud_env_map(
                 placement.env,
                 field_prefix=f"cloud.workers.placements.{index}.env",
                 cwd=cwd,
@@ -128,7 +128,7 @@ def _resolve_launch_plan(
                 cwd=cwd,
                 env=env,
             ),
-            env=_resolve_cloud_env_map(
+            env=resolve_cloud_env_map(
                 placement.env,
                 field_prefix=f"cloud.evaluators.placements.{index}.env",
                 cwd=cwd,
@@ -178,7 +178,7 @@ def _resolve_launch_defaults(
     )
 
 
-def _resolve_cloud_env_map(
+def resolve_cloud_env_map(
     values: Mapping[str, str],
     *,
     field_prefix: str,
