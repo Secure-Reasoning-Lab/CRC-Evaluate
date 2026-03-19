@@ -48,8 +48,9 @@ both paths use the same provider-neutral cloud surface:
 - `cloud.providers.gce` for provider-native backing details
 - `cloud.orchestrator` for orchestrator placement
 - `cloud.workers.placements` for worker placement fanout
-- `cloud.providers.gce.zones` plus role/placement `zones` for ordered zonal
-  fallback policy
+- `cloud.providers.gce.region` plus role/placement `region` for regional
+  bulk placement, and `cloud.providers.gce.zones` plus role/placement `zones`
+  for either regional allowlists or ordered zonal fallback policy
 
 ## Contract
 
@@ -78,6 +79,9 @@ both paths use the same provider-neutral cloud surface:
 - each logical orchestrator/worker/evaluator slot resolves one ordered
   candidate-zone list from the config and may retry later zones only when that
   slot's effective fallback policy allows it
+- when a logical slot resolves an effective region, CRSBench uses GCE regional
+  bulk insert with `ANY_SINGLE_ZONE`; optional `zones` are validated as an
+  allowlist inside that region instead of an ordered retry list
 
 ### Role Discovery Contract
 
@@ -111,6 +115,18 @@ Zone selection behavior:
 4. if fallback is disabled, or the failure is not a recognized zonal placement error, launch fails immediately
 5. for multi-count worker/evaluator placements, all instances in that placement are created in one zone or rolled back before trying the next zone
 6. any unrecoverable placement failure rolls back all previously created instances for the launch
+
+Regional placement behavior:
+
+1. the local control plane resolves each logical slot's effective region
+2. if a region is present, it issues one regional bulk-insert request for that
+   logical slot with `ANY_SINGLE_ZONE`
+3. optional `zones` are passed as an allowlist inside the resolved region
+4. the control plane discovers the actual chosen zone from returned instance
+   inventory and persists it in launch state for later reconnect, collect, and
+   teardown operations
+5. any mismatch between declared `zones` and the resolved region fails before
+   provisioning begins
 
 Failure behavior:
 

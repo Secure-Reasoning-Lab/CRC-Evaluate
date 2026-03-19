@@ -130,7 +130,7 @@ def build_orchestrator_labels(
 def build_bootstrap_payload(
     *,
     experiment_name: str,
-    worker_name: str,
+    worker_name: str | None,
     redis_host: str,
     registration: RuntimeRegistration,
     fleet: GceWorkerFleetConfig,
@@ -139,7 +139,6 @@ def build_bootstrap_payload(
     """Build the minimal configless-worker payload consumed at VM boot."""
     payload: dict[str, object] = {
         "experiment": experiment_name,
-        "worker_name": worker_name,
         "redis_host": redis_host,
         "worker_jobs": registration.worker_jobs or 1,
         "worker_cores_per_job": registration.worker_cores_per_job
@@ -149,6 +148,8 @@ def build_bootstrap_payload(
         "benchmarks_root": registration.benchmarks_root,
         "readiness_timeout_sec": fleet.readiness_timeout_sec,
     }
+    if worker_name is not None:
+        payload["worker_name"] = worker_name
     if bootstrap_inputs is None:
         return payload
 
@@ -173,7 +174,7 @@ def build_bootstrap_payload(
 def build_evaluator_bootstrap_payload(
     *,
     experiment_name: str,
-    evaluator_name: str,
+    evaluator_name: str | None,
     redis_host: str,
     registration: RuntimeRegistration,
     fleet: GceWorkerFleetConfig,
@@ -182,7 +183,6 @@ def build_evaluator_bootstrap_payload(
     """Build the minimal managed-evaluator payload consumed at VM boot."""
     payload: dict[str, object] = {
         "experiment": experiment_name,
-        "evaluator_name": evaluator_name,
         "redis_host": redis_host,
         "evaluator_build_jobs": registration.evaluator_build_jobs or 1,
         "evaluator_build_cores_per_job": registration.evaluator_build_cores_per_job
@@ -195,6 +195,8 @@ def build_evaluator_bootstrap_payload(
         "benchmarks_root": registration.benchmarks_root,
         "readiness_timeout_sec": fleet.readiness_timeout_sec,
     }
+    if evaluator_name is not None:
+        payload["evaluator_name"] = evaluator_name
     if bootstrap_inputs is None:
         return payload
 
@@ -338,7 +340,7 @@ def build_instance_metadata(
     registration: RuntimeRegistration,
     bootstrap_inputs: CloudVmBootstrapInputs | None = None,
     env_passthrough: dict[str, str] | None = None,
-    worker_name: str,
+    worker_name: str | None,
     startup_script: str,
 ) -> dict[str, str]:
     """Render metadata consumed by GCE startup automation."""
@@ -354,7 +356,8 @@ def build_instance_metadata(
         )
     )
     metadata[CRSBENCH_EXPERIMENT_METADATA_KEY] = experiment_name
-    metadata[CRSBENCH_WORKER_NAME_METADATA_KEY] = worker_name
+    if worker_name is not None:
+        metadata[CRSBENCH_WORKER_NAME_METADATA_KEY] = worker_name
     metadata[CRSBENCH_READINESS_TIMEOUT_METADATA_KEY] = str(fleet.readiness_timeout_sec)
     if redis_password:
         metadata[CRSBENCH_REDIS_PASSWORD_KEY] = redis_password
@@ -379,7 +382,7 @@ def build_evaluator_metadata(
     fleet: GceWorkerFleetConfig,
     redis_host: str,
     registration: RuntimeRegistration,
-    evaluator_name: str,
+    evaluator_name: str | None,
     experiment_config_path: str | Path,
     redis_password: str | None = None,
     bootstrap_inputs: CloudVmBootstrapInputs | None = None,
@@ -399,7 +402,8 @@ def build_evaluator_metadata(
         )
     )
     metadata[CRSBENCH_EXPERIMENT_METADATA_KEY] = experiment_name
-    metadata[CRSBENCH_WORKER_NAME_METADATA_KEY] = evaluator_name
+    if evaluator_name is not None:
+        metadata[CRSBENCH_WORKER_NAME_METADATA_KEY] = evaluator_name
     metadata[CRSBENCH_READINESS_TIMEOUT_METADATA_KEY] = str(fleet.readiness_timeout_sec)
     metadata[CRSBENCH_EXPERIMENT_CONFIG_B64_KEY] = base64.b64encode(
         _read_experiment_config_bytes(experiment_config_path)

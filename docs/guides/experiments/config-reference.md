@@ -23,22 +23,22 @@ Managed cloud execution uses a provider-neutral top-level shape:
 
 - `cloud.providers.<provider>`: provider-native backing details such as GCE
   project, reusable instance profiles, optional provider `defaults`, optional
-  `profile_defaults`, and optional ordered default `zones` / `fallback`
-  placement policy
+  `profile_defaults`, and optional default `region` plus ordered `zones` /
+  `fallback` placement policy
 - `cloud.defaults`: provider-agnostic launch/bootstrap defaults such as
   `readiness_timeout_sec`, `crsbench_install_spec`, `crsbench_git_ref`, and
   `github_deploy_key_path`
 - `cloud.env`: global environment variables merged into all launched cloud roles
 - `cloud.orchestrator`: instance-profile reference for the remote orchestrator
-  VM, plus optional orchestrator-only `zones`, `fallback`, and `env`
+  VM, plus optional orchestrator-only `region`, `zones`, `fallback`, and `env`
 - `cloud.workers.defaults`: optional role-level worker placement defaults such
-  as `count`, `instance_profile`, `zones`, `fallback`, and `env`
+  as `count`, `instance_profile`, `region`, `zones`, `fallback`, and `env`
 - `cloud.workers.placements[]`: explicit worker placements with optional
-  `zones` / `fallback` overrides plus any inherited defaults
+  `region` / `zones` / `fallback` overrides plus any inherited defaults
 - `cloud.evaluators.defaults`: optional role-level evaluator placement defaults
-  such as `count`, `instance_profile`, `zones`, `fallback`, and `env`
+  such as `count`, `instance_profile`, `region`, `zones`, `fallback`, and `env`
 - `cloud.evaluators.placements[]`: optional evaluator placements with optional
-  `zones` / `fallback` overrides plus any inherited defaults
+  `region` / `zones` / `fallback` overrides plus any inherited defaults
 For GCE in v1:
 
 - use `cloud.providers.gce`
@@ -51,8 +51,15 @@ For GCE in v1:
 - one launch cannot mix providers across orchestrator, workers, and evaluators
 - effective zone order resolves as placement/orchestrator `zones` override,
   then role defaults, then `cloud.providers.gce.zones`
+- effective region resolves as placement/orchestrator `region` override, then
+  role defaults, then `cloud.providers.gce.region`
 - effective fallback resolves as placement/orchestrator `fallback` override,
   then role defaults, then `cloud.providers.gce.fallback`, then `true`
+- when an effective region is present, CRSBench uses GCE regional bulk insert
+  with `ANY_SINGLE_ZONE`; optional `zones` are treated as an allowlist inside
+  that region rather than an ordered retry list
+- config validation rejects any `zones` entry whose region does not match the
+  effective `region`
 - runtime zone retry only happens for recognized zonal placement failures;
   `fallback: false` hard-fails that logical placement and rolls back the launch
 - live quota validation is mandatory before launch
@@ -71,6 +78,8 @@ For GCE in v1:
   `experiment-configs/cloud-testing/gce-hf-download-1orch-2worker-1eval.yaml`
   and
   `experiment-configs/cloud-testing/gce-sanity-zone-fallback-1orch-1worker-1eval.yaml`
+  and
+  `experiment-configs/cloud-testing/gce-sanity-region-1orch-2worker-1eval.yaml`
 
 ## Input Contract
 

@@ -2,7 +2,7 @@
 
 This directory holds operator-facing smoke-test configs for real cloud bring-up.
 
-This directory currently ships four GCE smoke configs for the
+This directory currently ships five GCE smoke configs for the
 remote-orchestrator flow:
 
 - `gce-sanity-1orch-2worker-1eval.yaml`
@@ -20,6 +20,11 @@ remote-orchestrator flow:
   - benchmark suite: `sanity`
   - exercises provider-level ordered zones plus placement-level `fallback: false`
   - checked-in experiment identifier: `gce-sanity-fallback-1o1w1e`
+- `gce-sanity-region-1orch-2worker-1eval.yaml`
+  - uses `crs-libfuzzer`
+  - benchmark suite: `sanity`
+  - exercises provider-level `region` plus optional `zones` allowlists
+  - checked-in experiment identifier: `gce-sanity-region-1o2w1e`
 
 The first three samples use the same fixed-topology GCE layout:
 
@@ -36,6 +41,15 @@ The fallback sample uses:
 - 1 orchestrator that inherits the provider zone order
 - 1 worker that inherits the provider zone order
 - 1 evaluator pinned to `us-east1-b` with `fallback: false`
+
+The regional sample uses:
+
+- provider-level `region: us-east5`
+- no provider-level `zones`, so GCE chooses the east5 zone automatically
+- 1 orchestrator that inherits the provider region
+- 1 worker that inherits the provider region
+- 1 worker that overrides to `region: us-east1` with `zones: [us-east1-b]`
+- 1 evaluator that inherits the provider region
 
 All checked-in experiment identifiers stay under the 63-character GCE name
 limit by using compact role suffixes: `orch`, `work`, and `eval`. Generated
@@ -66,6 +80,14 @@ For the fallback preset, replace:
 - the experiment name `gce-sanity-1o2w1e` with `gce-sanity-fallback-1o1w1e`
 - the remote dir `/tmp/crsbench/experiment-data/gce-sanity-1o2w1e` with
   `/tmp/crsbench/experiment-data/gce-sanity-fallback-1o1w1e`
+
+For the regional preset, replace:
+
+- the config path with
+  `experiment-configs/cloud-testing/gce-sanity-region-1orch-2worker-1eval.yaml`
+- the experiment name `gce-sanity-1o2w1e` with `gce-sanity-region-1o2w1e`
+- the remote dir `/tmp/crsbench/experiment-data/gce-sanity-1o2w1e` with
+  `/tmp/crsbench/experiment-data/gce-sanity-region-1o2w1e`
 
 These configs are for:
 
@@ -100,6 +122,12 @@ The fallback sample is the reference when you want CRSBench to try zones in
 order at runtime. If `us-east5-b` is exhausted, the orchestrator and inherited
 worker placement retry `us-east1-b`. The evaluator does not retry because its
 placement sets `fallback: false`.
+
+The regional sample is the reference when you want to declare `region` instead
+of a fixed zonal create target. When `region` is present, CRSBench uses GCE
+regional bulk insert with `ANY_SINGLE_ZONE`. Optional `zones` become an
+allowlist inside that region, and config validation fails fast if any listed
+zone belongs to a different region.
 
 ## Preflight
 

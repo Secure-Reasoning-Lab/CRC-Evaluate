@@ -100,8 +100,11 @@ class GceProviderAdapter:
         resolved = self.resolve_instance_profile(plan.orchestrator.instance_profile)
         return GceOrchestratorConfig(
             project=resolved.project,
-            zone=_primary_zone(plan.orchestrator.zones),
+            zone=None
+            if plan.orchestrator.region
+            else _primary_zone(plan.orchestrator.zones),
             zones=list(plan.orchestrator.zones),
+            region=plan.orchestrator.region,
             fallback=plan.orchestrator.fallback,
             machine_type=resolved.machine_type,
             boot_disk_size_gb=resolved.boot_disk_size_gb,
@@ -134,8 +137,9 @@ class GceProviderAdapter:
             fleets.append(
                 GceWorkerFleetConfig(
                     project=resolved.project,
-                    zone=_primary_zone(placement.zones),
+                    zone=None if placement.region else _primary_zone(placement.zones),
                     zones=list(placement.zones),
+                    region=placement.region,
                     fallback=placement.fallback,
                     worker_count=placement.count,
                     worker_name_start_index=next_worker_index,
@@ -179,8 +183,9 @@ class GceProviderAdapter:
             fleets.append(
                 GceWorkerFleetConfig(
                     project=resolved.project,
-                    zone=_primary_zone(placement.zones),
+                    zone=None if placement.region else _primary_zone(placement.zones),
                     zones=list(placement.zones),
+                    region=placement.region,
                     fallback=placement.fallback,
                     worker_count=placement.count,
                     worker_name_start_index=next_evaluator_index,
@@ -223,7 +228,10 @@ class GceProviderAdapter:
             resolved = self.resolve_instance_profile(plan.orchestrator.instance_profile)
             _accumulate_requirement(
                 requirements=requirements,
-                zone=_primary_zone(plan.orchestrator.zones),
+                region=plan.orchestrator.region,
+                zone=_primary_zone(plan.orchestrator.zones)
+                if plan.orchestrator.zones
+                else None,
                 machine_type=resolved.machine_type,
                 count=1,
             )
@@ -234,7 +242,8 @@ class GceProviderAdapter:
             resolved = self.resolve_instance_profile(placement.instance_profile)
             _accumulate_requirement(
                 requirements=requirements,
-                zone=_primary_zone(placement.zones),
+                region=placement.region,
+                zone=_primary_zone(placement.zones) if placement.zones else None,
                 machine_type=resolved.machine_type,
                 count=placement.count,
             )
@@ -245,7 +254,8 @@ class GceProviderAdapter:
             resolved = self.resolve_instance_profile(placement.instance_profile)
             _accumulate_requirement(
                 requirements=requirements,
-                zone=_primary_zone(placement.zones),
+                region=placement.region,
+                zone=_primary_zone(placement.zones) if placement.zones else None,
                 machine_type=resolved.machine_type,
                 count=placement.count,
             )
@@ -435,7 +445,8 @@ class GceProviderAdapter:
 def _accumulate_requirement(
     *,
     requirements: dict[tuple[str, str], int],
-    zone: str,
+    region: str | None,
+    zone: str | None,
     machine_type: str | None,
     count: int,
 ) -> None:
@@ -443,11 +454,13 @@ def _accumulate_requirement(
         raise ValueError(
             "GCE quota validation requires instance profiles with explicit machine_type"
         )
-    region = zone_to_region(zone)
+    effective_region = region or (zone_to_region(zone) if zone is not None else None)
+    if effective_region is None:
+        raise ValueError("GCE quota validation requires a region or zone")
     family = machine_type_to_family(machine_type)
-    requirements[(region, family)] = requirements.get((region, family), 0) + (
-        machine_type_to_vcpus(machine_type) * count
-    )
+    requirements[(effective_region, family)] = requirements.get(
+        (effective_region, family), 0
+    ) + (machine_type_to_vcpus(machine_type) * count)
 
 
 def _primary_zone(zones: Sequence[str]) -> str:

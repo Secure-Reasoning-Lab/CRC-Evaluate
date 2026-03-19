@@ -79,9 +79,12 @@ class _RecordingClient:
     def __init__(self) -> None:
         self.inserted: list[tuple[str, str, dict[str, object]]] = []
         self.waited: list[tuple[str, str, str]] = []
+        self.bulk_inserted: list[tuple[str, str, dict[str, object], str | None]] = []
+        self.region_waited: list[tuple[str, str, str]] = []
         self.deleted: list[tuple[str, str, str]] = []
         self.instances_by_name: dict[str, dict[str, object]] = {}
         self.listed_instances: list[dict[str, object]] = []
+        self.region_listed_instances: dict[str, list[dict[str, object]]] = {}
         self.operation_errors: dict[str, dict[str, object]] = {}
 
     def insert_instance(
@@ -134,6 +137,40 @@ class _RecordingClient:
     ) -> dict[str, object]:
         self.deleted.append((project, zone, instance))
         return {"name": f"delete-{instance}"}
+
+    def bulk_insert_instances(
+        self,
+        *,
+        project: str,
+        region: str,
+        bulk_insert_instance_resource: dict[str, object],
+        source_instance_template: str | None = None,
+    ) -> dict[str, object]:
+        self.bulk_inserted.append(
+            (project, region, bulk_insert_instance_resource, source_instance_template)
+        )
+        name = str(bulk_insert_instance_resource.get("namePattern", "bulk"))
+        return {"name": f"bulk-op-{region}-{name}"}
+
+    def wait_for_region_operation(
+        self,
+        *,
+        project: str,
+        region: str,
+        operation: str,
+    ) -> dict[str, object]:
+        self.region_waited.append((project, region, operation))
+        return self.operation_errors.get(operation, {"status": "DONE"})
+
+    def list_instances_in_region(
+        self,
+        *,
+        project: str,
+        region: str,
+        label_selector: dict[str, str],
+    ) -> list[dict[str, object]]:
+        del project, label_selector
+        return list(self.region_listed_instances.get(region, []))
 
 
 class _ExtendedOperation:
@@ -293,6 +330,28 @@ def _make_provider_neutral_experiment_config_with_duplicate_zone_placements() ->
             "zone": "us-east5-b",
             "count": 1,
         },
+    ]
+    return ExperimentConfig.model_validate(config)
+
+
+def _make_provider_neutral_experiment_config_with_regional_workers() -> (
+    ExperimentConfig
+):
+    config = _make_provider_neutral_experiment_config().model_dump(
+        mode="json", exclude_none=True
+    )
+    config["cloud"]["providers"]["gce"]["region"] = "us-east5"
+    config["cloud"]["orchestrator"] = {
+        "region": "us-east5",
+        "zones": ["us-east5-b", "us-east5-c"],
+        "instance_profile": "gce-orchestrator-n2d",
+    }
+    config["cloud"]["workers"]["placements"] = [
+        {
+            "region": "us-east5",
+            "zones": ["us-east5-b", "us-east5-c"],
+            "count": 2,
+        }
     ]
     return ExperimentConfig.model_validate(config)
 
@@ -469,6 +528,22 @@ def test_gce_provider_adapter_builds_worker_fleets_per_placement():
         "crsbench-exp-cloud-42-work",
         "crsbench-exp-cloud-42-work",
     ]
+
+
+def test_gce_provider_adapter_builds_regional_worker_fleets_with_zone_allowlist():
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+
+    plan = build_cloud_launch_plan(
+        _make_provider_neutral_experiment_config_with_regional_workers()
+    )
+    adapter = GceProviderAdapter()
+
+    fleets = adapter.build_worker_fleets(plan)
+
+    assert len(fleets) == 1
+    assert fleets[0].region == "us-east5"
+    assert fleets[0].zone is None
+    assert fleets[0].zones == ["us-east5-b", "us-east5-c"]
 
 
 def test_gce_provider_adapter_offsets_worker_suffixes_for_same_zone_placements():
@@ -752,6 +827,132 @@ def test_create_workers_retries_next_zone_on_retryable_capacity_error() -> None:
     assert client.deleted == [("test-project", "us-east5-b", "gce-worker-001")]
 
 
+def test_create_workers_uses_regional_bulk_insert_and_returns_actual_zone_records():
+    from crsbench.cloud.gce.metadata import CRSBENCH_BOOTSTRAP_PAYLOAD_KEY
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+
+    client = _RecordingClient()
+    client.region_listed_instances["us-east5"] = [
+        {
+            "id": "east5-c-gce-worker-001",
+            "name": "gce-worker-001",
+            "status": "RUNNING",
+            "zone": "zones/us-east5-c",
+            "networkInterfaces": [{"networkIP": "10.0.5.11"}],
+            "labels": {
+                "crsbench-experiment": "exp-cloud-42",
+                "crsbench-role": "worker",
+                "env": "prod",
+                "owner": "team-crs",
+            },
+            "serviceAccounts": [
+                {"email": "crsbench-worker@test-project.iam.gserviceaccount.com"}
+            ],
+        },
+        {
+            "id": "east5-c-gce-worker-002",
+            "name": "gce-worker-002",
+            "status": "RUNNING",
+            "zone": "zones/us-east5-c",
+            "networkInterfaces": [{"networkIP": "10.0.5.12"}],
+            "labels": {
+                "crsbench-experiment": "exp-cloud-42",
+                "crsbench-role": "worker",
+                "env": "prod",
+                "owner": "team-crs",
+            },
+            "serviceAccounts": [
+                {"email": "crsbench-worker@test-project.iam.gserviceaccount.com"}
+            ],
+        },
+    ]
+    provisioner = GceProvisioner(client=client)
+
+    workers = provisioner.create_workers(
+        experiment_name="Exp.Cloud 42",
+        fleet=_make_fleet(
+            zone=None,
+            region="us-east5",
+            zones=["us-east5-b", "us-east5-c"],
+            fallback=True,
+            worker_count=2,
+        ),
+        redis_host="redis.internal:6380",
+        registration=_make_registration(),
+    )
+
+    assert [worker.name for worker in workers] == ["gce-worker-001", "gce-worker-002"]
+    assert [worker.zone for worker in workers] == ["us-east5-c", "us-east5-c"]
+    assert client.inserted == []
+    assert client.region_waited == [
+        ("test-project", "us-east5", "bulk-op-us-east5-bulk")
+    ]
+    assert len(client.bulk_inserted) == 1
+    project, region, bulk_resource, source_template = client.bulk_inserted[0]
+    assert project == "test-project"
+    assert region == "us-east5"
+    assert source_template is None
+    assert bulk_resource["count"] == 2
+    assert set(bulk_resource["per_instance_properties"].keys()) == {
+        "gce-worker-001",
+        "gce-worker-002",
+    }
+    assert bulk_resource["location_policy"]["target_shape"] == "ANY_SINGLE_ZONE"
+    assert bulk_resource["location_policy"]["zones"] == [
+        {"zone": "zones/us-east5-b"},
+        {"zone": "zones/us-east5-c"},
+    ]
+
+    metadata_items = bulk_resource["instance_properties"]["metadata"]["items"]
+    metadata = {item["key"]: item["value"] for item in metadata_items}
+    payload = _decode_payload(metadata[CRSBENCH_BOOTSTRAP_PAYLOAD_KEY])
+    assert "worker_name" not in payload
+    assert "crsbench-worker-name" not in metadata
+
+
+def test_create_workers_uses_regional_bulk_insert_without_zone_allowlist():
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+
+    client = _RecordingClient()
+    client.region_listed_instances["us-east5"] = [
+        {
+            "id": "east5-c-gce-worker-001",
+            "name": "gce-worker-001",
+            "status": "RUNNING",
+            "zone": "zones/us-east5-c",
+            "networkInterfaces": [{"networkIP": "10.0.5.11"}],
+            "labels": {
+                "crsbench-experiment": "exp-cloud-42",
+                "crsbench-role": "worker",
+                "env": "prod",
+                "owner": "team-crs",
+            },
+            "serviceAccounts": [
+                {"email": "crsbench-worker@test-project.iam.gserviceaccount.com"}
+            ],
+        }
+    ]
+    provisioner = GceProvisioner(client=client)
+
+    workers = provisioner.create_workers(
+        experiment_name="Exp.Cloud 42",
+        fleet=_make_fleet(
+            zone=None,
+            region="us-east5",
+            zones=[],
+            fallback=True,
+            worker_count=1,
+        ),
+        redis_host="redis.internal:6380",
+        registration=_make_registration(),
+    )
+
+    assert [worker.zone for worker in workers] == ["us-east5-c"]
+    assert client.bulk_inserted[0][2]["location_policy"] == {
+        "target_shape": "ANY_SINGLE_ZONE"
+    }
+
+
 def test_create_workers_moves_multi_count_placement_as_atomic_group() -> None:
     from crsbench.cloud.gce.provisioner import GceProvisioner
 
@@ -867,6 +1068,131 @@ def test_create_orchestrator_retries_next_zone_on_retryable_capacity_error() -> 
     assert worker.name == "crsbench-exp-cloud-42-orch"
     assert worker.zone == "us-east1-b"
     assert [zone for _, zone, _ in client.inserted] == ["us-east5-b", "us-east1-b"]
+
+
+def test_create_orchestrator_uses_regional_bulk_insert_with_zone_allowlist() -> None:
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+
+    client = _RecordingClient()
+    client.region_listed_instances["us-east5"] = [
+        {
+            "id": "east5-c-crsbench-exp-cloud-42-orch",
+            "name": "crsbench-exp-cloud-42-orch",
+            "status": "RUNNING",
+            "zone": "zones/us-east5-c",
+            "networkInterfaces": [{"networkIP": "10.0.5.50"}],
+            "labels": {
+                "crsbench-experiment": "exp-cloud-42",
+                "crsbench-role": "orchestrator",
+                "env": "prod",
+                "owner": "team-crs",
+            },
+            "serviceAccounts": [
+                {"email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com"}
+            ],
+        }
+    ]
+    provisioner = GceProvisioner(client=client)
+
+    worker = provisioner.create_orchestrator(
+        experiment_name="Exp.Cloud 42",
+        orchestrator=_make_orchestrator(
+            zone=None,
+            region="us-east5",
+            zones=["us-east5-b", "us-east5-c"],
+            fallback=True,
+            instance_name_prefix=None,
+        ),
+        experiment_config_path="config.yaml",
+        redis_password="shared-secret",
+    )
+
+    assert worker.name == "crsbench-exp-cloud-42-orch"
+    assert worker.zone == "us-east5-c"
+    assert client.inserted == []
+    assert len(client.bulk_inserted) == 1
+    _, region, bulk_resource, _ = client.bulk_inserted[0]
+    assert region == "us-east5"
+    assert bulk_resource["count"] == 1
+    assert set(bulk_resource["per_instance_properties"].keys()) == {
+        "crsbench-exp-cloud-42-orch"
+    }
+
+
+def test_create_orchestrator_uses_regional_bulk_insert_without_zone_allowlist() -> None:
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+
+    client = _RecordingClient()
+    client.region_listed_instances["us-east5"] = [
+        {
+            "id": "east5-c-crsbench-exp-cloud-42-orch",
+            "name": "crsbench-exp-cloud-42-orch",
+            "status": "RUNNING",
+            "zone": "zones/us-east5-c",
+            "networkInterfaces": [{"networkIP": "10.0.5.50"}],
+            "labels": {
+                "crsbench-experiment": "exp-cloud-42",
+                "crsbench-role": "orchestrator",
+                "env": "prod",
+                "owner": "team-crs",
+            },
+            "serviceAccounts": [
+                {"email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com"}
+            ],
+        }
+    ]
+    provisioner = GceProvisioner(client=client)
+
+    worker = provisioner.create_orchestrator(
+        experiment_name="Exp.Cloud 42",
+        orchestrator=_make_orchestrator(
+            zone=None,
+            region="us-east5",
+            zones=[],
+            fallback=True,
+            instance_name_prefix=None,
+        ),
+        experiment_config_path="config.yaml",
+        redis_password="shared-secret",
+    )
+
+    assert worker.zone == "us-east5-c"
+    assert client.bulk_inserted[0][2]["location_policy"] == {
+        "target_shape": "ANY_SINGLE_ZONE"
+    }
+
+
+def test_list_workers_uses_region_scoped_listing_when_only_region_is_configured() -> (
+    None
+):
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+
+    client = _RecordingClient()
+    client.region_listed_instances["us-east5"] = [
+        {
+            "id": "1001",
+            "name": "gce-worker-001",
+            "status": "RUNNING",
+            "zone": "zones/us-east5-c",
+            "labels": {
+                "crsbench-experiment": "exp-cloud-42",
+                "crsbench-role": "worker",
+                "env": "prod",
+                "owner": "team-crs",
+            },
+            "serviceAccounts": [
+                {"email": "crsbench-worker@test-project.iam.gserviceaccount.com"}
+            ],
+        }
+    ]
+    provisioner = GceProvisioner(client=client)
+
+    workers = provisioner.list_workers(
+        experiment_name="Exp.Cloud 42",
+        fleet=_make_fleet(zone=None, region="us-east5", zones=[]),
+    )
+
+    assert [worker.zone for worker in workers] == ["us-east5-c"]
 
 
 def test_google_compute_client_accepts_extended_operation_objects() -> None:
@@ -1031,6 +1357,195 @@ def test_google_compute_client_passes_source_instance_template_separately() -> N
             ),
             {},
         )
+    ]
+
+
+def test_google_compute_client_builds_regional_bulk_insert_request() -> None:
+    """Regional bulk insert should use the region-scoped request wrapper."""
+    from crsbench.cloud.gce.provisioner import GoogleComputeClient
+    from google.cloud.compute_v1.types import (
+        BulkInsertInstanceResource,
+        BulkInsertRegionInstanceRequest,
+    )
+
+    class _RegionInstancesClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[object | None, dict[str, object]]] = []
+
+        def bulk_insert(self, request: object | None = None, **kwargs) -> object:
+            self.calls.append((request, kwargs))
+            return _ExtendedOperation("bulk-op")
+
+    region_instances_client = _RegionInstancesClient()
+    client = GoogleComputeClient(
+        instances_client=None,
+        zone_operations_client=None,
+        region_instances_client=region_instances_client,
+        region_operations_client=None,
+    )
+
+    client.bulk_insert_instances(
+        project="test-project",
+        region="us-east5",
+        bulk_insert_instance_resource={
+            "count": 2,
+            "min_count": 2,
+            "instance_properties": {
+                "metadata": {
+                    "items": [{"key": "startup-script", "value": "#!/bin/bash"}]
+                },
+                "service_accounts": [
+                    {
+                        "email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                        "scopes": ["https://www.googleapis.com/auth/cloud-platform"],
+                    }
+                ],
+                "network_interfaces": [{}],
+                "machine_type": "n2d-standard-16",
+                "disks": [
+                    {
+                        "boot": True,
+                        "auto_delete": True,
+                        "initialize_params": {
+                            "source_image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                            "disk_size_gb": "100",
+                        },
+                    }
+                ],
+            },
+            "per_instance_properties": {
+                "gce-worker-001": {},
+                "gce-worker-002": {},
+            },
+            "location_policy": {
+                "target_shape": "ANY_SINGLE_ZONE",
+                "zones": [{"zone": "zones/us-east5-b"}],
+            },
+        },
+    )
+
+    assert region_instances_client.calls == [
+        (
+            BulkInsertRegionInstanceRequest(
+                {
+                    "project": "test-project",
+                    "region": "us-east5",
+                    "bulk_insert_instance_resource_resource": BulkInsertInstanceResource(
+                        {
+                            "count": 2,
+                            "min_count": 2,
+                            "instance_properties": {
+                                "metadata": {
+                                    "items": [
+                                        {
+                                            "key": "startup-script",
+                                            "value": "#!/bin/bash",
+                                        }
+                                    ]
+                                },
+                                "service_accounts": [
+                                    {
+                                        "email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                                        "scopes": [
+                                            "https://www.googleapis.com/auth/cloud-platform"
+                                        ],
+                                    }
+                                ],
+                                "network_interfaces": [{}],
+                                "machine_type": "n2d-standard-16",
+                                "disks": [
+                                    {
+                                        "boot": True,
+                                        "auto_delete": True,
+                                        "initialize_params": {
+                                            "source_image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                                            "disk_size_gb": "100",
+                                        },
+                                    }
+                                ],
+                            },
+                            "per_instance_properties": {
+                                "gce-worker-001": {},
+                                "gce-worker-002": {},
+                            },
+                            "location_policy": {
+                                "target_shape": "ANY_SINGLE_ZONE",
+                                "zones": [{"zone": "zones/us-east5-b"}],
+                            },
+                        }
+                    ),
+                }
+            ),
+            {},
+        )
+    ]
+
+
+def test_google_compute_client_lists_region_instances_from_aggregated_list() -> None:
+    """Region-scoped listing should filter aggregated results to matching zones."""
+    from crsbench.cloud.gce.provisioner import GoogleComputeClient
+
+    class _InstancesClient:
+        def __init__(self) -> None:
+            self.requests: list[object] = []
+
+        def insert(self, **_kwargs) -> object:
+            raise AssertionError("insert not used")
+
+        def get(self, **_kwargs) -> object:
+            raise AssertionError("get not used")
+
+        def list(self, **_kwargs) -> list[object]:
+            raise AssertionError("list not used")
+
+        def aggregated_list(self, request: object | None = None, **_kwargs) -> object:
+            self.requests.append(request)
+            return [
+                (
+                    "zones/us-east5-b",
+                    {
+                        "instances": [
+                            {"id": "1001", "name": "gce-worker-001"},
+                        ]
+                    },
+                ),
+                (
+                    "zones/us-east1-b",
+                    {
+                        "instances": [
+                            {"id": "2001", "name": "gce-worker-002"},
+                        ]
+                    },
+                ),
+            ]
+
+        def delete(self, **_kwargs) -> object:
+            raise AssertionError("delete not used")
+
+    instances_client = _InstancesClient()
+    client = GoogleComputeClient(
+        instances_client=instances_client,
+        zone_operations_client=None,
+    )
+
+    instances = client.list_instances_in_region(
+        project="test-project",
+        region="us-east5",
+        label_selector={
+            "crsbench-experiment": "exp-cloud-42",
+            "crsbench-role": "worker",
+        },
+    )
+
+    assert instances == [{"id": "1001", "name": "gce-worker-001"}]
+    assert instances_client.requests == [
+        {
+            "project": "test-project",
+            "filter": (
+                '(labels.crsbench-experiment = "exp-cloud-42") '
+                '(labels.crsbench-role = "worker")'
+            ),
+        }
     ]
 
 

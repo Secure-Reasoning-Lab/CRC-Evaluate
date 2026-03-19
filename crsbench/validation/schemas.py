@@ -1360,19 +1360,20 @@ class GceWorkerFleetConfig(BaseModel):
             effective_zones = [self.zone]
         if effective_zones:
             self.zones = effective_zones
-            self.zone = effective_zones[0]
+            self.zone = None if self.region is not None else effective_zones[0]
 
         has_zone = bool(effective_zones)
         has_region = self.region is not None
-        if not has_zone:
-            if has_region:
-                raise ValueError(
-                    "cloud.gce.region is not supported yet; configure cloud.gce.zone"
-                )
-            raise ValueError("cloud.gce requires 'zone' for worker placement")
-        if has_region:
+        if not has_zone and not has_region:
             raise ValueError(
-                "cloud.gce.region is not supported yet; configure cloud.gce.zone"
+                "cloud.gce requires 'zone', 'zones', or 'region' for worker placement"
+            )
+        if has_region:
+            assert self.region is not None
+            _validate_region_zone_membership(
+                region=self.region,
+                zones=effective_zones,
+                field_path="cloud.gce.zones",
             )
 
         has_image = self.image is not None
@@ -1600,19 +1601,20 @@ class GceOrchestratorConfig(BaseModel):
             effective_zones = [self.zone]
         if effective_zones:
             self.zones = effective_zones
-            self.zone = effective_zones[0]
+            self.zone = None if self.region is not None else effective_zones[0]
 
         has_zone = bool(effective_zones)
         has_region = self.region is not None
-        if not has_zone:
-            if has_region:
-                raise ValueError(
-                    "cloud.orchestrator.region is not supported yet; configure cloud.orchestrator.zone"
-                )
-            raise ValueError("cloud.orchestrator requires 'zone' for placement")
-        if has_region:
+        if not has_zone and not has_region:
             raise ValueError(
-                "cloud.orchestrator.region is not supported yet; configure cloud.orchestrator.zone"
+                "cloud.orchestrator requires 'zone', 'zones', or 'region' for placement"
+            )
+        if has_region:
+            assert self.region is not None
+            _validate_region_zone_membership(
+                region=self.region,
+                zones=effective_zones,
+                field_path="cloud.orchestrator.zones",
             )
 
         has_image = self.image is not None

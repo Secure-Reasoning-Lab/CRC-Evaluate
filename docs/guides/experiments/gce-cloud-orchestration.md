@@ -45,6 +45,7 @@ cloud:
     gce:
       project: my-gcp-project
       ssh_via_iap: true
+      region: us-east5
       zones:
         - us-east5-b
         - us-east1-b
@@ -61,23 +62,26 @@ cloud:
         gce-evaluator-c3d:
           machine_type: c3d-standard-30
   orchestrator:
+    region: us-east5
     instance_profile: gce-orchestrator-n2d
   workers:
     defaults:
       instance_profile: gce-worker-n2d
       count: 1
     placements:
-      - count: 3
-      - zones:
+      - region: us-east5
+        count: 3
+      - region: us-central1
+        zones:
           - us-central1-a
-          - us-east1-b
         fallback: false
   evaluators:
     defaults:
       instance_profile: gce-evaluator-c3d
       count: 1
     placements:
-      - zones:
+      - region: us-east1
+        zones:
           - us-east1-b
 ```
 
@@ -88,28 +92,34 @@ cloud:
 | `cloud.defaults` | no | Provider-agnostic launch/bootstrap defaults merged into every cloud role |
 | `cloud.providers.gce.project` | yes | GCP project ID used for all referenced GCE resources |
 | `cloud.providers.gce.defaults` | no | Provider-specific overrides for `cloud.defaults` |
+| `cloud.providers.gce.region` | no | Default GCE region used when orchestrator or placements do not override `region` |
 | `cloud.providers.gce.zones` | no | Ordered default candidate zones used when orchestrator or placements do not override `zones` |
 | `cloud.providers.gce.fallback` | no | Default policy for retrying later candidate zones after zonal placement failure |
 | `cloud.providers.gce.profile_defaults` | no | Default instance-profile fields merged into every named GCE profile |
 | `cloud.providers.gce.instance_profiles.<name>` | yes | Reusable machine/image/service-account bundle for orchestrator or workers |
 | `cloud.orchestrator.zone` | no | Backward-compatible single preferred orchestrator zone; normalized into `zones` |
+| `cloud.orchestrator.region` | no | Optional orchestrator region; enables regional bulk placement |
 | `cloud.orchestrator.zones` | no | Ordered candidate zones for the orchestrator VM |
 | `cloud.orchestrator.fallback` | no | Override for orchestrator zone retry behavior |
 | `cloud.orchestrator.instance_profile` | yes | Instance profile name for the orchestrator VM |
 | `cloud.workers.defaults.count` | no | Default number of workers to create per placement |
 | `cloud.workers.defaults.instance_profile` | no | Default worker instance profile |
+| `cloud.workers.defaults.region` | no | Role-level default region for worker placements |
 | `cloud.workers.defaults.zones` | no | Role-level default candidate zones for worker placements |
 | `cloud.workers.defaults.fallback` | no | Role-level default fallback policy for worker placements |
 | `cloud.workers.placements[].zone` | no | Backward-compatible single preferred worker zone; normalized into `zones` |
+| `cloud.workers.placements[].region` | no | Optional worker region for regional bulk placement |
 | `cloud.workers.placements[].zones` | no | Ordered candidate zones for one worker placement |
 | `cloud.workers.placements[].fallback` | no | Per-placement override for worker zone retry behavior |
 | `cloud.workers.placements[].count` | no | Number of workers to create in that placement |
 | `cloud.workers.placements[].instance_profile` | no | Instance profile override for that placement |
 | `cloud.evaluators.defaults.count` | no | Default number of evaluators to create per placement |
 | `cloud.evaluators.defaults.instance_profile` | no | Default evaluator instance profile |
+| `cloud.evaluators.defaults.region` | no | Role-level default region for evaluator placements |
 | `cloud.evaluators.defaults.zones` | no | Role-level default candidate zones for evaluator placements |
 | `cloud.evaluators.defaults.fallback` | no | Role-level default fallback policy for evaluator placements |
 | `cloud.evaluators.placements[].zone` | no | Backward-compatible single preferred evaluator zone; normalized into `zones` |
+| `cloud.evaluators.placements[].region` | no | Optional evaluator region for regional bulk placement |
 | `cloud.evaluators.placements[].zones` | no | Ordered candidate zones for one evaluator placement |
 | `cloud.evaluators.placements[].fallback` | no | Per-placement override for evaluator zone retry behavior |
 | `cloud.evaluators.placements[].count` | no | Number of evaluators to create in that placement |
@@ -133,6 +143,11 @@ whether GCE attaches an external NAT interface for outbound package installs,
 GitHub clone, benchmark downloads, and image pulls. The default is `true`.
 Set `assign_external_ip: false` only when your project already provides private
 egress, such as Cloud NAT.
+
+When an effective `region` is present, CRSBench uses GCE regional bulk insert
+with `ANY_SINGLE_ZONE`. Optional `zones` become an allowlist inside that
+region. CRSBench validates that every listed zone belongs to the effective
+region before any VM create request is sent.
 
 Launch/bootstrap defaults live outside instance profiles:
 
@@ -375,7 +390,7 @@ uv run crsbench run --experiment-config config.yaml
 The local orchestrator will:
 
 1. Validate live quota for the requested worker/evaluator placements
-2. Create the requested worker/evaluator VMs across the configured zones
+2. Create the requested worker/evaluator VMs across the configured zones or regions
 3. Wait for each VM to bootstrap and report `ready`
 4. Enqueue trial jobs only after the full fleet is ready
 5. If any VM fails to become ready, tear down the entire fleet and exit with an error
@@ -391,7 +406,7 @@ uv run crsbench cloud launch --config config.yaml
 
 This path:
 
-1. Validates live GCE quota for the orchestrator zone plus all worker/evaluator placement regions
+1. Validates live GCE quota for the orchestrator region plus all worker/evaluator placement regions
 2. Provisions one orchestrator VM
 3. Waits for the orchestrator VM to have an internal address
 4. Provisions workers across all `cloud.workers.placements` and evaluators across all `cloud.evaluators.placements`, passing the orchestrator Redis host/password

@@ -692,7 +692,7 @@ mode = sys.argv[2]
 print(payload["redis_host"])
 print(payload["experiment"])
 if mode == "evaluator":
-    print(payload["evaluator_name"])
+    print(payload.get("evaluator_name") or "")
     print(payload.get("evaluator_build_jobs") or "")
     print(payload.get("evaluator_build_cores_per_job") or "")
     print(payload.get("evaluator_verify_jobs") or "")
@@ -700,7 +700,7 @@ if mode == "evaluator":
     print(payload.get("evaluator_idle_timeout") or "")
     print(payload.get("evaluator_cpu_tag") or "")
 else:
-    print(payload["worker_name"])
+    print(payload.get("worker_name") or "")
     print(payload.get("worker_jobs") or "")
     print(payload.get("worker_cores_per_job") or "")
     print(payload.get("worker_cpu_tag") or "")
@@ -724,6 +724,9 @@ EVALUATOR_IDLE_TIMEOUT=""
 EVALUATOR_CPU_TAG=""
 if [[ "${CRSBENCH_STARTUP_MODE}" == "evaluator" ]]; then
   EVALUATOR_NAME="${PAYLOAD_FIELDS[2]}"
+  if [[ -z "${EVALUATOR_NAME}" ]]; then
+    EVALUATOR_NAME="$(instance_metadata_get "name")"
+  fi
   EVALUATOR_BUILD_JOBS="${PAYLOAD_FIELDS[3]}"
   EVALUATOR_BUILD_CORES_PER_JOB="${PAYLOAD_FIELDS[4]}"
   EVALUATOR_VERIFY_JOBS="${PAYLOAD_FIELDS[5]}"
@@ -733,6 +736,9 @@ if [[ "${CRSBENCH_STARTUP_MODE}" == "evaluator" ]]; then
   READINESS_TIMEOUT_SEC="${PAYLOAD_FIELDS[9]}"
 else
   WORKER_NAME="${PAYLOAD_FIELDS[2]}"
+  if [[ -z "${WORKER_NAME}" ]]; then
+    WORKER_NAME="$(instance_metadata_get "name")"
+  fi
   WORKER_JOBS="${PAYLOAD_FIELDS[3]}"
   WORKER_CORES_PER_JOB="${PAYLOAD_FIELDS[4]}"
   WORKER_CPU_TAG="${PAYLOAD_FIELDS[5]}"

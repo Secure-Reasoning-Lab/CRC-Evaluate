@@ -144,6 +144,29 @@ def test_build_instance_metadata_includes_vm_bootstrap_policy_and_selector():
     assert payload["benchmark_suites_root"] == "/srv/benchmark-suites"
 
 
+def test_build_instance_metadata_omits_worker_name_for_regional_bulk_insert():
+    """Regional bulk insert shares metadata, so worker identity must come from the VM itself."""
+    from crsbench.cloud.gce.metadata import (
+        CRSBENCH_BOOTSTRAP_PAYLOAD_KEY,
+        CRSBENCH_WORKER_NAME_METADATA_KEY,
+        build_instance_metadata,
+    )
+
+    metadata = build_instance_metadata(
+        experiment_name="Exp.Cloud 42",
+        fleet=_make_fleet(region="us-east5", zones=["us-east5-b", "us-east5-c"]),
+        redis_host="redis.internal:6380",
+        registration=_make_registration(),
+        worker_name=None,
+        startup_script="#!/usr/bin/env bash\necho boot\n",
+    )
+
+    payload = _decode_payload(metadata[CRSBENCH_BOOTSTRAP_PAYLOAD_KEY])
+
+    assert "worker_name" not in payload
+    assert CRSBENCH_WORKER_NAME_METADATA_KEY not in metadata
+
+
 def test_build_instance_metadata_uses_startup_script_url_when_configured():
     """Configured startup script URIs should use startup-script-url metadata."""
     from crsbench.cloud.gce.metadata import build_instance_metadata
@@ -183,6 +206,7 @@ def test_load_startup_script_contains_managed_worker_service_bootstrap():
     assert "loginctl enable-linger" in startup_script
     assert "NOPASSWD:ALL" in startup_script
     assert "dbus-user-session" in startup_script
+    assert 'instance_metadata_get "name"' in startup_script
     assert 'systemctl restart "user@${CRSBENCH_USER_UID}.service"' in startup_script
     assert 'CRSBENCH_USER_SERVICE_CGROUP="/sys/fs/cgroup/user.slice/' in startup_script
     assert (
@@ -203,7 +227,6 @@ def test_build_evaluator_metadata_embeds_startup_script_and_config_payload(tmp_p
     """Evaluator metadata should embed config payload and evaluator runtime settings."""
     from crsbench.cloud.gce.metadata import (
         CRSBENCH_BOOTSTRAP_PAYLOAD_KEY,
-        CRSBENCH_EXPERIMENT_CONFIG_B64_KEY,
         build_evaluator_metadata,
     )
 
@@ -230,6 +253,40 @@ def test_build_evaluator_metadata_embeds_startup_script_and_config_payload(tmp_p
     assert payload["evaluator_verify_cores_per_job"] == 4
     assert payload["evaluator_idle_timeout"] == 600
     assert payload["evaluator_cpu_tag"] == "c3d"
+
+
+def test_build_evaluator_metadata_omits_evaluator_name_for_regional_bulk_insert(
+    tmp_path,
+):
+    """Regional evaluator fleets must derive identity from the created instance name."""
+    from crsbench.cloud.gce.metadata import (
+        CRSBENCH_BOOTSTRAP_PAYLOAD_KEY,
+        CRSBENCH_EXPERIMENT_CONFIG_B64_KEY,
+        CRSBENCH_WORKER_NAME_METADATA_KEY,
+        build_evaluator_metadata,
+    )
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("experiment: exp-cloud-42\n", encoding="utf-8")
+
+    metadata = build_evaluator_metadata(
+        experiment_name="Exp.Cloud 42",
+        fleet=_make_fleet(
+            worker_name_prefix="gce-evaluator",
+            region="us-east5",
+            zones=["us-east5-b", "us-east5-c"],
+        ),
+        redis_host="redis.internal:6380",
+        registration=_make_registration(),
+        evaluator_name=None,
+        experiment_config_path=config_path,
+        startup_script="#!/usr/bin/env bash\necho boot\n",
+    )
+
+    payload = _decode_payload(metadata[CRSBENCH_BOOTSTRAP_PAYLOAD_KEY])
+
+    assert "evaluator_name" not in payload
+    assert CRSBENCH_WORKER_NAME_METADATA_KEY not in metadata
     decoded_config = base64.b64decode(
         metadata[CRSBENCH_EXPERIMENT_CONFIG_B64_KEY]
     ).decode("utf-8")

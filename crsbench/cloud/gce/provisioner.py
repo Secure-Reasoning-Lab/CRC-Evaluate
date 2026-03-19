@@ -49,6 +49,23 @@ class GceApiClient(Protocol):
         operation: str,
     ) -> dict[str, object]: ...
 
+    def bulk_insert_instances(
+        self,
+        *,
+        project: str,
+        region: str,
+        bulk_insert_instance_resource: dict[str, object],
+        source_instance_template: str | None = None,
+    ) -> dict[str, object]: ...
+
+    def wait_for_region_operation(
+        self,
+        *,
+        project: str,
+        region: str,
+        operation: str,
+    ) -> dict[str, object]: ...
+
     def get_instance(
         self,
         *,
@@ -62,6 +79,14 @@ class GceApiClient(Protocol):
         *,
         project: str,
         zone: str,
+        label_selector: dict[str, str],
+    ) -> list[dict[str, object]]: ...
+
+    def list_instances_in_region(
+        self,
+        *,
+        project: str,
+        region: str,
         label_selector: dict[str, str],
     ) -> list[dict[str, object]]: ...
 
@@ -97,6 +122,12 @@ class _InstancesClientProtocol(Protocol):
         zone: str | None = None,
     ) -> Sequence[object]: ...
 
+    def aggregated_list(
+        self,
+        request: object | None = None,
+        **kwargs,
+    ) -> Sequence[tuple[str, object]]: ...
+
     def delete(
         self,
         *,
@@ -116,6 +147,24 @@ class _ZoneOperationsClientProtocol(Protocol):
     ) -> object: ...
 
 
+class _RegionInstancesClientProtocol(Protocol):
+    def bulk_insert(
+        self,
+        request: object | None = None,
+        **kwargs,
+    ) -> object: ...
+
+
+class _RegionOperationsClientProtocol(Protocol):
+    def wait(
+        self,
+        *,
+        project: str,
+        region: str,
+        operation: str,
+    ) -> object: ...
+
+
 class GoogleComputeClient:
     """Lazy wrapper around the Google Compute Engine client library."""
 
@@ -124,9 +173,13 @@ class GoogleComputeClient:
         *,
         instances_client: _InstancesClientProtocol | None = None,
         zone_operations_client: _ZoneOperationsClientProtocol | None = None,
+        region_instances_client: _RegionInstancesClientProtocol | None = None,
+        region_operations_client: _RegionOperationsClientProtocol | None = None,
     ) -> None:
         self._instances_client = instances_client
         self._zone_operations_client = zone_operations_client
+        self._region_instances_client = region_instances_client
+        self._region_operations_client = region_operations_client
 
     def insert_instance(
         self,
@@ -168,6 +221,45 @@ class GoogleComputeClient:
         )
         return self._coerce_mapping(result)
 
+    def bulk_insert_instances(
+        self,
+        *,
+        project: str,
+        region: str,
+        bulk_insert_instance_resource: dict[str, object],
+        source_instance_template: str | None = None,
+    ) -> dict[str, object]:
+        from google.cloud import compute_v1
+
+        resource_kwargs = dict(bulk_insert_instance_resource)
+        if source_instance_template:
+            resource_kwargs["source_instance_template"] = source_instance_template
+        request = compute_v1.BulkInsertRegionInstanceRequest(
+            {
+                "project": project,
+                "region": region,
+                "bulk_insert_instance_resource_resource": compute_v1.BulkInsertInstanceResource(
+                    resource_kwargs
+                ),
+            }
+        )
+        operation = self._region_instances().bulk_insert(request=request)
+        return self._coerce_mapping(operation)
+
+    def wait_for_region_operation(
+        self,
+        *,
+        project: str,
+        region: str,
+        operation: str,
+    ) -> dict[str, object]:
+        result = self._region_operations().wait(
+            project=project,
+            region=region,
+            operation=operation,
+        )
+        return self._coerce_mapping(result)
+
     def get_instance(
         self,
         *,
@@ -195,6 +287,33 @@ class GoogleComputeClient:
                 }
             )
         ]
+
+    def list_instances_in_region(
+        self,
+        *,
+        project: str,
+        region: str,
+        label_selector: dict[str, str],
+    ) -> list[dict[str, object]]:
+        instances: list[dict[str, object]] = []
+        for scope, scoped_list in self._instances().aggregated_list(
+            request={
+                "project": project,
+                "filter": _build_label_filter(label_selector),
+            }
+        ):
+            zone = _zone_name_from_self_link(scope)
+            if not zone or ("/zones/" not in scope and not scope.startswith("zones/")):
+                continue
+            if not zone.startswith(f"{region}-"):
+                continue
+            scoped_mapping = self._coerce_mapping(scoped_list)
+            raw_instances = scoped_mapping.get("instances")
+            if not isinstance(raw_instances, Sequence):
+                continue
+            for instance in raw_instances:
+                instances.append(self._coerce_mapping(instance))
+        return instances
 
     def delete_instance(
         self,
@@ -229,6 +348,26 @@ class GoogleComputeClient:
                 compute_v1.ZoneOperationsClient(),
             )
         return self._zone_operations_client
+
+    def _region_instances(self) -> _RegionInstancesClientProtocol:
+        if self._region_instances_client is None:
+            from google.cloud import compute_v1
+
+            self._region_instances_client = cast(
+                "_RegionInstancesClientProtocol",
+                compute_v1.RegionInstancesClient(),
+            )
+        return self._region_instances_client
+
+    def _region_operations(self) -> _RegionOperationsClientProtocol:
+        if self._region_operations_client is None:
+            from google.cloud import compute_v1
+
+            self._region_operations_client = cast(
+                "_RegionOperationsClientProtocol",
+                compute_v1.RegionOperationsClient(),
+            )
+        return self._region_operations_client
 
     def _coerce_mapping(self, value: object) -> dict[str, object]:
         if isinstance(value, Mapping):
@@ -338,6 +477,14 @@ def _build_label_filter(label_selector: Mapping[str, str]) -> str:
     return " ".join(parts)
 
 
+def _require_request_zone(request: GceInstanceRequest) -> str:
+    if request.zone is None:
+        raise GceProvisioningError(
+            f"Missing zone for zonal request {request.name}; expected zonal path only"
+        )
+    return request.zone
+
+
 def _zone_name_from_self_link(value: object) -> str:
     if not isinstance(value, str) or not value:
         return ""
@@ -410,6 +557,7 @@ class GceProvisioner:
         experiment_name: str,
         fleet: GceWorkerFleetConfig,
         zone: str | None = None,
+        region_based: bool = False,
         redis_host: str,
         redis_password: str | None = None,
         registration: RuntimeRegistration,
@@ -417,7 +565,8 @@ class GceProvisioner:
         env_passthrough: dict[str, str] | None = None,
     ) -> list[GceInstanceRequest]:
         """Render instance requests from validated config and runtime metadata."""
-        zone = zone or self._resolve_zone(fleet)
+        if zone is None and not region_based:
+            zone = self._resolve_zone(fleet)
         labels = build_worker_labels(experiment_name=experiment_name, fleet=fleet)
         startup_script = self._startup_script or load_startup_script()
 
@@ -434,7 +583,7 @@ class GceProvisioner:
                 registration=registration,
                 bootstrap_inputs=bootstrap_inputs,
                 env_passthrough=env_passthrough,
-                worker_name=worker_name,
+                worker_name=None if region_based else worker_name,
                 startup_script=startup_script,
             )
             requests.append(
@@ -463,6 +612,7 @@ class GceProvisioner:
         experiment_name: str,
         fleet: GceWorkerFleetConfig,
         zone: str | None = None,
+        region_based: bool = False,
         redis_host: str,
         registration: RuntimeRegistration,
         experiment_config_path: str,
@@ -471,7 +621,8 @@ class GceProvisioner:
         env_passthrough: dict[str, str] | None = None,
     ) -> list[GceInstanceRequest]:
         """Render evaluator instance requests from validated config and runtime metadata."""
-        zone = zone or self._resolve_zone(fleet)
+        if zone is None and not region_based:
+            zone = self._resolve_zone(fleet)
         labels = build_evaluator_labels(experiment_name=experiment_name, fleet=fleet)
         startup_script = self._startup_script or load_evaluator_startup_script()
 
@@ -488,7 +639,7 @@ class GceProvisioner:
                 registration=registration,
                 bootstrap_inputs=bootstrap_inputs,
                 env_passthrough=env_passthrough,
-                evaluator_name=evaluator_name,
+                evaluator_name=None if region_based else evaluator_name,
                 experiment_config_path=experiment_config_path,
                 startup_script=startup_script,
             )
@@ -540,6 +691,27 @@ class GceProvisioner:
         env_passthrough: dict[str, str] | None = None,
     ) -> list[GceWorkerRecord]:
         """Create a worker fleet and return normalized provider records."""
+        if fleet.region is not None:
+            return self._create_requests_in_region(
+                region=fleet.region,
+                zones=list(fleet.zones),
+                request_builder=lambda: self.build_requests(
+                    experiment_name=experiment_name,
+                    fleet=fleet,
+                    zone=fleet.zones[0] if fleet.zones else None,
+                    region_based=True,
+                    redis_host=redis_host,
+                    redis_password=redis_password,
+                    registration=registration,
+                    bootstrap_inputs=bootstrap_inputs,
+                    env_passthrough=env_passthrough,
+                ),
+                role_label="worker",
+                label_selector=build_worker_labels(
+                    experiment_name=experiment_name,
+                    fleet=fleet,
+                ),
+            )
         return self._create_requests_with_zone_fallback(
             zones=self._candidate_zones_for_fleet(fleet),
             fallback=fleet.fallback,
@@ -569,6 +741,28 @@ class GceProvisioner:
         env_passthrough: dict[str, str] | None = None,
     ) -> list[GceWorkerRecord]:
         """Create an evaluator fleet and return normalized provider records."""
+        if fleet.region is not None:
+            return self._create_requests_in_region(
+                region=fleet.region,
+                zones=list(fleet.zones),
+                request_builder=lambda: self.build_evaluator_requests(
+                    experiment_name=experiment_name,
+                    fleet=fleet,
+                    zone=fleet.zones[0] if fleet.zones else None,
+                    region_based=True,
+                    redis_host=redis_host,
+                    redis_password=redis_password,
+                    registration=registration,
+                    experiment_config_path=experiment_config_path,
+                    bootstrap_inputs=bootstrap_inputs,
+                    env_passthrough=env_passthrough,
+                ),
+                role_label="evaluator",
+                label_selector=build_evaluator_labels(
+                    experiment_name=experiment_name,
+                    fleet=fleet,
+                ),
+            )
         return self._create_requests_with_zone_fallback(
             zones=self._candidate_zones_for_fleet(fleet),
             fallback=fleet.fallback,
@@ -597,7 +791,8 @@ class GceProvisioner:
         redis_password: str,
     ) -> GceInstanceRequest:
         """Render an instance request for the remote orchestrator VM."""
-        zone = zone or self._resolve_orchestrator_zone(orchestrator)
+        if zone is None and orchestrator.region is None:
+            zone = self._resolve_orchestrator_zone(orchestrator)
         labels = build_orchestrator_labels(
             experiment_name=experiment_name,
             orchestrator=orchestrator,
@@ -642,6 +837,27 @@ class GceProvisioner:
         redis_password: str,
     ) -> GceWorkerRecord:
         """Create the remote orchestrator VM and return its normalized record."""
+        if orchestrator.region is not None:
+            requests = self._create_requests_in_region(
+                region=orchestrator.region,
+                zones=list(orchestrator.zones),
+                request_builder=lambda: [
+                    self.build_orchestrator_request(
+                        experiment_name=experiment_name,
+                        orchestrator=orchestrator,
+                        zone=orchestrator.zones[0] if orchestrator.zones else None,
+                        experiment_config_path=experiment_config_path,
+                        env_passthrough=env_passthrough,
+                        redis_password=redis_password,
+                    )
+                ],
+                role_label="orchestrator",
+                label_selector=build_orchestrator_labels(
+                    experiment_name=experiment_name,
+                    orchestrator=orchestrator,
+                ),
+            )
+            return requests[0]
         requests = self._create_requests_with_zone_fallback(
             zones=self._candidate_zones_for_orchestrator(orchestrator),
             fallback=orchestrator.fallback,
@@ -670,6 +886,13 @@ class GceProvisioner:
             experiment_name=experiment_name,
             orchestrator=orchestrator,
         )
+        if orchestrator.region is not None:
+            return self._list_records_in_region(
+                project=orchestrator.project,
+                region=orchestrator.region,
+                label_selector=expected_labels,
+                allowed_zones=orchestrator.zones,
+            )
         instances: dict[tuple[str, str], GceWorkerRecord] = {}
         for zone in self._candidate_zones_for_orchestrator(orchestrator):
             zone_instances = [
@@ -751,6 +974,13 @@ class GceProvisioner:
         expected_labels = build_worker_labels(
             experiment_name=experiment_name, fleet=fleet
         )
+        if fleet.region is not None:
+            return self._list_records_in_region(
+                project=fleet.project,
+                region=fleet.region,
+                label_selector=expected_labels,
+                allowed_zones=fleet.zones,
+            )
         workers: dict[tuple[str, str], GceWorkerRecord] = {}
         for zone in self._candidate_zones_for_fleet(fleet):
             zone_workers = [
@@ -809,6 +1039,13 @@ class GceProvisioner:
             experiment_name=experiment_name,
             fleet=fleet,
         )
+        if fleet.region is not None:
+            return self._list_records_in_region(
+                project=fleet.project,
+                region=fleet.region,
+                label_selector=expected_labels,
+                allowed_zones=fleet.zones,
+            )
         workers: dict[tuple[str, str], GceWorkerRecord] = {}
         for zone in self._candidate_zones_for_fleet(fleet):
             zone_workers = [
@@ -883,6 +1120,68 @@ class GceProvisioner:
         assert last_exc is not None
         raise last_exc
 
+    def _create_requests_in_region(
+        self,
+        *,
+        region: str,
+        zones: list[str],
+        request_builder: Callable[[], Sequence[GceInstanceRequest]],
+        role_label: str,
+        label_selector: Mapping[str, str],
+    ) -> list[GceWorkerRecord]:
+        requests = list(request_builder())
+        if not requests:
+            return []
+
+        bulk_request = self._build_bulk_insert_request(
+            requests=requests,
+            allowed_zones=zones,
+        )
+        project = requests[0].project
+        rollback_workers: list[GceWorkerRecord] = []
+        try:
+            operation = self._client.bulk_insert_instances(
+                project=project,
+                region=region,
+                bulk_insert_instance_resource=bulk_request,
+                source_instance_template=requests[0].instance_template,
+            )
+            result = self._client.wait_for_region_operation(
+                project=project,
+                region=region,
+                operation=_extract_operation_name(operation),
+            )
+            errors = _extract_operation_errors(result)
+            if errors:
+                raise GceProvisioningError(
+                    f"Failed to create {role_label} fleet in region {region}: "
+                    f"{'; '.join(errors)}"
+                )
+
+            workers_by_name = {
+                worker.name: worker
+                for worker in self._list_records_in_region(
+                    project=project,
+                    region=region,
+                    label_selector=label_selector,
+                    allowed_zones=zones,
+                )
+            }
+            ordered_workers: list[GceWorkerRecord] = []
+            for request in requests:
+                worker = workers_by_name.get(request.name)
+                if worker is None:
+                    rollback_workers = list(workers_by_name.values())
+                    raise GceProvisioningError(
+                        f"Regional bulk insert did not return {role_label} "
+                        f"{request.name} in region {region}"
+                    )
+                ordered_workers.append(worker)
+            return ordered_workers
+        except Exception:
+            self._rollback_records(project=project, workers=rollback_workers)
+            raise
+
     def _create_request_group(
         self,
         requests: Sequence[GceInstanceRequest],
@@ -893,16 +1192,17 @@ class GceProvisioner:
         rollback_requests: list[GceInstanceRequest] = []
         try:
             for request in requests:
+                zone = _require_request_zone(request)
                 operation = self._client.insert_instance(
                     project=request.project,
-                    zone=request.zone,
+                    zone=zone,
                     instance_resource=request.to_instance_resource(),
                     source_instance_template=request.instance_template,
                 )
                 rollback_requests.append(request)
                 result = self._client.wait_for_zone_operation(
                     project=request.project,
-                    zone=request.zone,
+                    zone=zone,
                     operation=_extract_operation_name(operation),
                 )
                 errors = _extract_operation_errors(result)
@@ -914,7 +1214,7 @@ class GceProvisioner:
                     _normalize_instance(
                         self._client.get_instance(
                             project=request.project,
-                            zone=request.zone,
+                            zone=zone,
                             instance=request.name,
                         )
                     )
@@ -942,19 +1242,21 @@ class GceProvisioner:
             return fleet.zone
         if fleet.region:
             raise GceProvisioningError(
-                "cloud.gce.region is not supported yet; configure cloud.gce.zone"
+                "cloud.gce.zone resolution is unavailable for regional placements"
             )
-        raise GceProvisioningError("cloud.gce.zone is required for GCE worker fleets")
+        raise GceProvisioningError(
+            "cloud.gce requires zone, zones, or region for worker placement"
+        )
 
     def _resolve_orchestrator_zone(self, orchestrator: GceOrchestratorConfig) -> str:
         if orchestrator.zone:
             return orchestrator.zone
         if orchestrator.region:
             raise GceProvisioningError(
-                "cloud.orchestrator.region is not supported yet; configure cloud.orchestrator.zone"
+                "cloud.orchestrator.zone resolution is unavailable for regional placements"
             )
         raise GceProvisioningError(
-            "cloud.orchestrator.zone is required for GCE orchestrator instances"
+            "cloud.orchestrator requires zone, zones, or region for placement"
         )
 
     def _build_orchestrator_name(
@@ -974,15 +1276,89 @@ class GceProvisioner:
     def _rollback_requests(self, requests: list[GceInstanceRequest]) -> None:
         for request in reversed(requests):
             try:
+                zone = _require_request_zone(request)
                 operation = self._client.delete_instance(
                     project=request.project,
-                    zone=request.zone,
+                    zone=zone,
                     instance=request.name,
                 )
                 self._client.wait_for_zone_operation(
                     project=request.project,
-                    zone=request.zone,
+                    zone=zone,
                     operation=_extract_operation_name(operation),
                 )
             except Exception:
                 continue
+
+    def _rollback_records(
+        self,
+        *,
+        project: str,
+        workers: Sequence[GceWorkerRecord],
+    ) -> None:
+        for worker in reversed(list(workers)):
+            try:
+                self.delete_instance(
+                    project=project,
+                    zone=worker.zone,
+                    instance_name=worker.name,
+                )
+            except Exception:
+                continue
+
+    def _build_bulk_insert_request(
+        self,
+        *,
+        requests: Sequence[GceInstanceRequest],
+        allowed_zones: Sequence[str],
+    ) -> dict[str, object]:
+        if not requests:
+            raise GceProvisioningError("Expected at least one regional request")
+        shared_properties = requests[0].to_bulk_insert_instance_properties()
+        for request in requests[1:]:
+            if (
+                request.project != requests[0].project
+                or request.instance_template != requests[0].instance_template
+                or request.to_bulk_insert_instance_properties() != shared_properties
+            ):
+                raise GceProvisioningError(
+                    "Regional bulk insert requires identical shared instance properties"
+                )
+
+        resource: dict[str, object] = {
+            "count": len(requests),
+            "min_count": len(requests),
+            "instance_properties": shared_properties,
+            "per_instance_properties": {request.name: {} for request in requests},
+        }
+        location_policy: dict[str, object] = {"target_shape": "ANY_SINGLE_ZONE"}
+        if allowed_zones:
+            location_policy["zones"] = [
+                {"zone": f"zones/{zone}"} for zone in allowed_zones
+            ]
+        resource["location_policy"] = location_policy
+        return resource
+
+    def _list_records_in_region(
+        self,
+        *,
+        project: str,
+        region: str,
+        label_selector: Mapping[str, str],
+        allowed_zones: Sequence[str],
+    ) -> list[GceWorkerRecord]:
+        allowed_zone_set = set(allowed_zones)
+        records: dict[tuple[str, str], GceWorkerRecord] = {}
+        for instance in self._client.list_instances_in_region(
+            project=project,
+            region=region,
+            label_selector=dict(label_selector),
+        ):
+            record = _normalize_instance(instance)
+            if allowed_zone_set and record.zone not in allowed_zone_set:
+                continue
+            if all(
+                record.labels.get(key) == value for key, value in label_selector.items()
+            ):
+                records[(record.zone, record.name)] = record
+        return list(records.values())
