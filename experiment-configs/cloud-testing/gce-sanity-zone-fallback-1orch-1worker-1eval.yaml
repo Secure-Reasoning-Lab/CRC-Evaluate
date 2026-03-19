@@ -58,9 +58,9 @@ cloud:
         service_account_email: 153298433405-compute@developer.gserviceaccount.com
         owner_label: yufu
       instance_profiles:
-        gce-orchestrator-n2d: {}
-        gce-worker-n2d: {}
-        gce-evaluator-n2d: {}
+        gce-orchestrator-n2d: {} # inherit provider profile defaults
+        gce-worker-n2d: {} # inherit provider profile defaults
+        gce-evaluator-n2d: {} # inherit provider profile defaults
   orchestrator:
     instance_profile: gce-orchestrator-n2d
   workers:
@@ -68,7 +68,7 @@ cloud:
       instance_profile: gce-worker-n2d
       count: 1
     placements:
-      - {}
+      - {} # inherit provider zone order
   evaluators:
     defaults:
       instance_profile: gce-evaluator-n2d

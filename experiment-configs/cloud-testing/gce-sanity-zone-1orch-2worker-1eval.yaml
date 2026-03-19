@@ -1,5 +1,5 @@
 experiment:
-  name: gce-sanity-region-1o2w1e
+  name: gce-sanity-zone-1o2w1e
   task: bugfinding
   benchmark_suite: sanity
   mode: delta
@@ -51,7 +51,6 @@ cloud:
     gce:
       project: aixcc-426805
       ssh_via_iap: true
-      region: us-east5
       profile_defaults:
         machine_type: n2d-standard-16
         boot_disk_size_gb: 100
@@ -59,23 +58,22 @@ cloud:
         service_account_email: 153298433405-compute@developer.gserviceaccount.com
         owner_label: yufu
       instance_profiles:
-        gce-orchestrator-n2d: {}
-        gce-worker-n2d: {}
-        gce-evaluator-n2d: {}
+        gce-orchestrator-n2d: {} # inherit provider profile defaults
+        gce-worker-n2d: {} # inherit provider profile defaults
+        gce-evaluator-n2d: {} # inherit provider profile defaults
   orchestrator:
+    zone: us-east5-b
     instance_profile: gce-orchestrator-n2d
   workers:
     defaults:
       instance_profile: gce-worker-n2d
       count: 1
     placements:
-      - {}
-      - region: us-east1
-        zones:
-          - us-east1-b
+      - zone: us-east5-b
+      - zone: us-east1-b
   evaluators:
     defaults:
       instance_profile: gce-evaluator-n2d
       count: 1
     placements:
-      - {}
+      - zone: us-east5-b

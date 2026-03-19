@@ -929,6 +929,7 @@ class TestIntegrationWithSampleConfigs:
         assert config.cloud.providers.gce is not None
         assert config.cloud.defaults is not None
         assert config.cloud.providers.gce.profile_defaults is not None
+        assert config.cloud.providers.gce.region == "us-east5"
         assert config.cloud.workers is not None
         assert config.cloud.evaluators is not None
         assert config.cloud.orchestrator is not None
@@ -944,9 +945,12 @@ class TestIntegrationWithSampleConfigs:
         assert config.cloud.workers.defaults is not None
         assert config.cloud.workers.defaults.instance_profile == "gce-worker-n2d"
         assert config.cloud.workers.defaults.count == 1
-        assert [placement.zone for placement in config.cloud.evaluators.placements] == [
-            "us-east5-b"
-        ]
+        assert [
+            placement.region for placement in config.cloud.evaluators.placements
+        ] == [None]
+        assert [
+            placement.zones for placement in config.cloud.evaluators.placements
+        ] == [[]]
         assert config.cloud.evaluators.defaults is not None
         assert [
             placement.instance_profile
@@ -980,9 +984,11 @@ class TestIntegrationWithSampleConfigs:
             ].service_account_email
             == "153298433405-compute@developer.gserviceaccount.com"
         )
-        assert [placement.zone for placement in config.cloud.workers.placements] == [
-            "us-east5-b",
-            "us-east1-b",
+        assert config.cloud.orchestrator.region is None
+        assert config.cloud.orchestrator.zones == []
+        assert [placement.region for placement in config.cloud.workers.placements] == [
+            None,
+            "us-east1",
         ]
         assert [placement.count for placement in config.cloud.workers.placements] == [
             1,
@@ -1035,6 +1041,10 @@ class TestIntegrationWithSampleConfigs:
             },
             expected_services={"crs-libfuzzer"},
         )
+        assert [placement.zones for placement in config.cloud.workers.placements] == [
+            [],
+            [],
+        ]
 
     def test_remote_gce_multilang_given_fuzzer_sample_config_loads_for_cloud_launch(
         self,
@@ -1057,6 +1067,10 @@ class TestIntegrationWithSampleConfigs:
             expected_cloud_env={},
             expected_services={"atlantis-multilang-given_fuzzer"},
         )
+        assert [placement.zones for placement in config.cloud.workers.placements] == [
+            [],
+            ["us-east1-b"],
+        ]
 
         assert config.pov_early_stop is True
         assert config.inputs.sarif.enabled is True
@@ -1083,6 +1097,10 @@ class TestIntegrationWithSampleConfigs:
             },
             expected_services={"crs-libfuzzer"},
         )
+        assert [placement.zones for placement in config.cloud.workers.placements] == [
+            [],
+            ["us-east1-b"],
+        ]
 
         assert config.benchmark_suite == "smoke-test-bug-finding-hf-download"
 
@@ -1142,10 +1160,10 @@ class TestIntegrationWithSampleConfigs:
             False
         ]
 
-    def test_remote_gce_region_sample_config_loads_for_cloud_launch(self):
-        """The GCE regional sample should preserve region plus zone allowlists."""
+    def test_remote_gce_zone_sample_config_loads_for_cloud_launch(self):
+        """The explicit zone sample should preserve the original zonal 1/2/1 layout."""
         config_path = Path(
-            "experiment-configs/cloud-testing/gce-sanity-region-1orch-2worker-1eval.yaml"
+            "experiment-configs/cloud-testing/gce-sanity-zone-1orch-2worker-1eval.yaml"
         )
 
         assert config_path.exists(), (
@@ -1158,46 +1176,31 @@ class TestIntegrationWithSampleConfigs:
         assert config.cloud is not None
         assert config.cloud.providers is not None
         assert config.cloud.providers.gce is not None
-        assert config.cloud.providers.gce.region == "us-east5"
-        assert config.cloud.providers.gce.zones == []
+        assert config.cloud.providers.gce.region is None
         assert config.cloud.orchestrator is not None
-        assert config.cloud.orchestrator.region is None
-        assert config.cloud.orchestrator.zones == []
+        assert config.cloud.orchestrator.zone == "us-east5-b"
         assert config.cloud.workers is not None
         assert config.cloud.evaluators is not None
-        assert [placement.region for placement in config.cloud.workers.placements] == [
-            None,
-            "us-east1",
+        assert [placement.zone for placement in config.cloud.workers.placements] == [
+            "us-east5-b",
+            "us-east1-b",
         ]
-        assert [placement.zones for placement in config.cloud.workers.placements] == [
-            [],
-            ["us-east1-b"],
+        assert [placement.zone for placement in config.cloud.evaluators.placements] == [
+            "us-east5-b"
         ]
-        assert [
-            placement.region for placement in config.cloud.evaluators.placements
-        ] == [None]
-        assert [
-            placement.zones for placement in config.cloud.evaluators.placements
-        ] == [[]]
 
-        assert config.experiment == "gce-sanity-region-1o2w1e"
+        assert config.experiment == "gce-sanity-zone-1o2w1e"
         assert config.benchmark_suite == "sanity"
         assert config.cloud.bootstrap.prepare_mode == "full"
         assert config.cloud.bootstrap.download_benchmarks == "auto"
-        assert plan.orchestrator.region == "us-east5"
-        assert plan.orchestrator.zones == []
-        assert [placement.region for placement in plan.worker_placements] == [
-            "us-east5",
-            "us-east1",
-        ]
+        assert plan.orchestrator.zones == ["us-east5-b"]
         assert [placement.zones for placement in plan.worker_placements] == [
-            [],
+            ["us-east5-b"],
             ["us-east1-b"],
         ]
-        assert [placement.region for placement in plan.evaluator_placements] == [
-            "us-east5"
+        assert [placement.zones for placement in plan.evaluator_placements] == [
+            ["us-east5-b"]
         ]
-        assert [placement.zones for placement in plan.evaluator_placements] == [[]]
 
     def test_e2e_with_sample_config_single_crs(self, tmp_path):
         """Test end-to-end workflow with a sample single-CRS config."""

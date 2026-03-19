@@ -20,19 +20,23 @@ remote-orchestrator flow:
   - benchmark suite: `sanity`
   - exercises provider-level ordered zones plus placement-level `fallback: false`
   - checked-in experiment identifier: `gce-sanity-fallback-1o1w1e`
-- `gce-sanity-region-1orch-2worker-1eval.yaml`
+- `gce-sanity-zone-1orch-2worker-1eval.yaml`
   - uses `crs-libfuzzer`
   - benchmark suite: `sanity`
-  - exercises provider-level `region` plus optional `zones` allowlists
-  - checked-in experiment identifier: `gce-sanity-region-1o2w1e`
+  - preserves the original fixed-zone 1/2/1 topology under an explicit zonal filename
+  - checked-in experiment identifier: `gce-sanity-zone-1o2w1e`
 
-The first three samples use the same fixed-topology GCE layout:
+The default sanity sample uses this regional GCE layout:
 
-- 1 orchestrator VM in `us-east5-b`
-- 1 worker in `us-east5-b`
-- 1 worker in `us-east1-b`
-- 1 evaluator in `us-east5-b`
+- provider-level `region: us-east5`
+- 1 orchestrator that inherits the provider region
+- 1 worker that inherits the provider region
+- 1 worker that overrides to `region: us-east1` without a zone allowlist
+- 1 evaluator that inherits the provider region
 - `n2d-standard-16` everywhere
+
+The Atlantis and HF-download samples keep the same shape, except their second
+worker placement narrows the east1 worker to `zones: [us-east1-b]`.
 
 The fallback sample uses:
 
@@ -42,14 +46,12 @@ The fallback sample uses:
 - 1 worker that inherits the provider zone order
 - 1 evaluator pinned to `us-east1-b` with `fallback: false`
 
-The regional sample uses:
+The explicit zonal sample uses:
 
-- provider-level `region: us-east5`
-- no provider-level `zones`, so GCE chooses the east5 zone automatically
-- 1 orchestrator that inherits the provider region
-- 1 worker that inherits the provider region
-- 1 worker that overrides to `region: us-east1` with `zones: [us-east1-b]`
-- 1 evaluator that inherits the provider region
+- 1 orchestrator VM in `us-east5-b`
+- 1 worker in `us-east5-b`
+- 1 worker in `us-east1-b`
+- 1 evaluator in `us-east5-b`
 
 All checked-in experiment identifiers stay under the 63-character GCE name
 limit by using compact role suffixes: `orch`, `work`, and `eval`. Generated
@@ -81,13 +83,13 @@ For the fallback preset, replace:
 - the remote dir `/tmp/crsbench/experiment-data/gce-sanity-1o2w1e` with
   `/tmp/crsbench/experiment-data/gce-sanity-fallback-1o1w1e`
 
-For the regional preset, replace:
+For the explicit zonal preset, replace:
 
 - the config path with
-  `experiment-configs/cloud-testing/gce-sanity-region-1orch-2worker-1eval.yaml`
-- the experiment name `gce-sanity-1o2w1e` with `gce-sanity-region-1o2w1e`
+  `experiment-configs/cloud-testing/gce-sanity-zone-1orch-2worker-1eval.yaml`
+- the experiment name `gce-sanity-1o2w1e` with `gce-sanity-zone-1o2w1e`
 - the remote dir `/tmp/crsbench/experiment-data/gce-sanity-1o2w1e` with
-  `/tmp/crsbench/experiment-data/gce-sanity-region-1o2w1e`
+  `/tmp/crsbench/experiment-data/gce-sanity-zone-1o2w1e`
 
 These configs are for:
 
@@ -110,8 +112,8 @@ These smoke configs use the checkout-first cloud bootstrap path:
 
 - cloud VMs clone CRSBench from `crsbench_install_spec`
 - every VM runs `crsbench prepare`
-- `download_benchmarks: auto` is set for all four samples
-- the three `benchmark_suite: sanity` samples skip the VM-side benchmark download
+- `download_benchmarks: auto` is set for all five samples
+- the four `benchmark_suite: sanity` samples skip the VM-side benchmark download
 - the `gce-hf-download-1orch-2worker-1eval.yaml` sample runs the VM-side
   Hugging Face dataset download for
   `benchmark_suite: smoke-test-bug-finding-hf-download`
@@ -123,11 +125,14 @@ order at runtime. If `us-east5-b` is exhausted, the orchestrator and inherited
 worker placement retry `us-east1-b`. The evaluator does not retry because its
 placement sets `fallback: false`.
 
-The regional sample is the reference when you want to declare `region` instead
-of a fixed zonal create target. When `region` is present, CRSBench uses GCE
-regional bulk insert with `ANY_SINGLE_ZONE`. Optional `zones` become an
-allowlist inside that region, and config validation fails fast if any listed
-zone belongs to a different region.
+The default sanity, Atlantis, and HF-download samples are the references when
+you want to declare `region` instead of a fixed zonal create target. When
+`region` is present, CRSBench uses GCE regional bulk insert with
+`ANY_SINGLE_ZONE`. Optional `zones` become an allowlist inside that region, and
+config validation fails fast if any listed zone belongs to a different region.
+
+The `gce-sanity-zone-1orch-2worker-1eval.yaml` sample is the reference when you
+want the older explicit zonal topology on purpose.
 
 ## Preflight
 
@@ -318,7 +323,7 @@ uv run crsbench cloud status gce-sanity-1o2w1e \
 Expected result:
 
 - both workers and the evaluator eventually show as `ready`
-- zones should include `us-east5-b` and `us-east1-b`
+- zones should include one `us-east5-*` VM and one `us-east1-*` worker VM
 - `ready` only happens after checkout, `crsbench prepare`, the skipped-or-run
   download step, worker/evaluator-side Redis polling, and queue-listener startup complete
 - job counts should move from queued/running to completed as the smoke run finishes

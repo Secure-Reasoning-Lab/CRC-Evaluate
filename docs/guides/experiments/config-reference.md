@@ -79,7 +79,7 @@ For GCE in v1:
   and
   `experiment-configs/cloud-testing/gce-sanity-zone-fallback-1orch-1worker-1eval.yaml`
   and
-  `experiment-configs/cloud-testing/gce-sanity-region-1orch-2worker-1eval.yaml`
+  `experiment-configs/cloud-testing/gce-sanity-zone-1orch-2worker-1eval.yaml`
 
 ## Input Contract
 
