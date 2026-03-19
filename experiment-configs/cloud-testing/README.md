@@ -338,10 +338,14 @@ Expected result:
 Collect results after completion:
 
 ```bash
-uv run crsbench cloud collect gce-sanity-1o2w1e \
-  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml \
-  --remote-dir /tmp/crsbench/experiment-data/gce-sanity-1o2w1e
+uv run crsbench cloud collect \
+  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml
 ```
+
+This infers:
+
+- experiment name: `gce-sanity-1o2w1e`
+- remote dir: `/tmp/crsbench/experiment-data/gce-sanity-1o2w1e`
 
 Expected result:
 
@@ -352,9 +356,8 @@ Expected result:
 Tear everything down:
 
 ```bash
-uv run crsbench cloud teardown gce-sanity-1o2w1e \
+uv run crsbench cloud teardown \
   --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml \
-  --remote-dir /tmp/crsbench/experiment-data/gce-sanity-1o2w1e \
   --force
 ```
 

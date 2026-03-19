@@ -51,7 +51,7 @@ Examples:
     teardown_p = cloud_subparsers.add_parser(
         "teardown", help="Collect artifacts and delete workers"
     )
-    teardown_p.add_argument("experiment", help="Experiment name")
+    teardown_p.add_argument("experiment", nargs="?", help="Experiment name")
     teardown_p.add_argument(
         "--config", required=True, help="Path to experiment YAML config"
     )
@@ -60,7 +60,6 @@ Examples:
     )
     teardown_p.add_argument(
         "--remote-dir",
-        required=True,
         dest="remote_dir",
         help="Absolute path on workers containing the experiment tree",
     )
@@ -69,13 +68,12 @@ Examples:
     collect_p = cloud_subparsers.add_parser(
         "collect", help="Collect artifacts from workers"
     )
-    collect_p.add_argument("experiment", help="Experiment name")
+    collect_p.add_argument("experiment", nargs="?", help="Experiment name")
     collect_p.add_argument(
         "--config", required=True, help="Path to experiment YAML config"
     )
     collect_p.add_argument(
         "--remote-dir",
-        required=True,
         dest="remote_dir",
         help="Absolute path on workers containing the experiment tree",
     )

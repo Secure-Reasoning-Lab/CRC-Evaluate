@@ -523,6 +523,19 @@ Pull experiment results from live workers to the local experiment filestore and
 collect runtime logs from workers, evaluators, and the orchestrator:
 
 ```bash
+uv run crsbench cloud collect \
+    --config config.yaml
+```
+
+By default, `cloud collect` infers:
+
+- the experiment name from `experiment.name`
+- the remote worker artifact directory as
+  `<storage.experiment_filestore>/<experiment.name>`
+
+You can still override either value explicitly:
+
+```bash
 uv run crsbench cloud collect my-experiment \
     --config config.yaml \
     --remote-dir /data/experiments/my-experiment
@@ -547,9 +560,8 @@ uv run crsbench cloud collect my-experiment \
 Remove the worker/evaluator fleet after collecting results:
 
 ```bash
-uv run crsbench cloud teardown my-experiment \
-    --config config.yaml \
-    --remote-dir /data/experiments/my-experiment
+uv run crsbench cloud teardown \
+    --config config.yaml
 ```
 
 The teardown safety flow:
@@ -563,6 +575,14 @@ The teardown safety flow:
 7. Returns a non-zero exit code if any collection or deletion step failed
 
 Use `--force` to skip the confirmation prompt (e.g., in scripts):
+
+```bash
+uv run crsbench cloud teardown \
+    --config config.yaml \
+    --force
+```
+
+You can still override the inferred experiment name and remote directory:
 
 ```bash
 uv run crsbench cloud teardown my-experiment \
@@ -590,14 +610,12 @@ uv run crsbench cloud launch --config config.yaml
 uv run crsbench cloud status my-experiment --config config.yaml
 
 # 5. After completion, collect artifacts
-uv run crsbench cloud collect my-experiment \
-    --config config.yaml \
-    --remote-dir /data/experiments/my-experiment
+uv run crsbench cloud collect \
+    --config config.yaml
 
 # 6. Tear down the fleet (and remote orchestrator, if used)
-uv run crsbench cloud teardown my-experiment \
-    --config config.yaml \
-    --remote-dir /data/experiments/my-experiment
+uv run crsbench cloud teardown \
+    --config config.yaml
 
 # 7. Generate report
 uv run python scripts/cpv_report.py /data/experiments/my-experiment --csv

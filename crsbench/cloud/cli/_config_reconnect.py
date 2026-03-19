@@ -53,6 +53,28 @@ logger = get_logger(__name__)
 _DEFAULT_REMOTE_REDIS_READY_TIMEOUT_SEC = 300
 
 
+def resolve_effective_experiment_name(
+    config_path: str,
+    experiment_name: str | None,
+) -> str:
+    """Return the CLI experiment name, inferring from config when omitted."""
+    if experiment_name:
+        return experiment_name
+    config = load_experiment_config(Path(config_path))
+    return config.experiment
+
+
+def resolve_remote_experiment_dir(
+    experiment_filestore: Path,
+    experiment_name: str,
+    remote_dir: str | None,
+) -> str:
+    """Return the remote experiment tree path, inferring from filestore when omitted."""
+    if remote_dir:
+        return remote_dir
+    return str(experiment_filestore / experiment_name)
+
+
 def _resolve_remote_redis_ready_timeout_sec(context: ResolvedCloudContext) -> int:
     """Return how long reconnect callers should wait for remote Redis startup."""
     launch_plan = context.launch_plan

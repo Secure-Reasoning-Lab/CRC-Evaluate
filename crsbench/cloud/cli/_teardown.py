@@ -5,7 +5,12 @@ from __future__ import annotations
 import sys
 from typing import TYPE_CHECKING
 
-from crsbench.cloud.cli._config_reconnect import reconnect, resolve_cloud_context
+from crsbench.cloud.cli._config_reconnect import (
+    reconnect,
+    resolve_cloud_context,
+    resolve_effective_experiment_name,
+    resolve_remote_experiment_dir,
+)
 from crsbench.cloud.collection import ArtifactCollector
 from crsbench.cloud.gce.provider import GceProviderAdapter
 from crsbench.cloud.gce.provisioner import GceProvisioner
@@ -34,20 +39,21 @@ def run_teardown(args: argparse.Namespace) -> int:
 
     Returns 0 on success, 1 on failure/abort.
     """
-    context = resolve_cloud_context(args.config, args.experiment)
+    experiment_name = resolve_effective_experiment_name(args.config, args.experiment)
+    context = resolve_cloud_context(args.config, experiment_name)
     launch_state = context.launch_state
     experiment_filestore = context.experiment_filestore
     readiness = None
     lifecycle = None
     try:
         _context, _redis_conn, readiness, lifecycle, experiment_filestore = reconnect(
-            args.config, args.experiment
+            args.config, experiment_name
         )
     except Exception as exc:
         logger.warning(
             "Redis reconnect unavailable for experiment {}; "
             "continuing teardown with GCE state only: {}",
-            args.experiment,
+            experiment_name,
             exc,
         )
 
@@ -55,12 +61,12 @@ def run_teardown(args: argparse.Namespace) -> int:
     collector = ArtifactCollector(base_path=args.config)
 
     # Validate GCE state
-    live_instances = _list_live_instances(context, args.experiment, provisioner)
+    live_instances = _list_live_instances(context, experiment_name, provisioner)
     live_names = {w.name for w in live_instances}
 
     # Cross-reference with Redis readiness state
     redis_workers = (
-        _list_readiness_instances(readiness, args.experiment) if readiness else []
+        _list_readiness_instances(readiness, experiment_name) if readiness else []
     )
     redis_names = {w.instance_name for w in redis_workers}
     stale_names = redis_names - live_names
@@ -72,7 +78,7 @@ def run_teardown(args: argparse.Namespace) -> int:
         )
 
     if not live_instances and not redis_workers and launch_state is None:
-        logger.info("Nothing to tear down for experiment '{}'", args.experiment)
+        logger.info("Nothing to tear down for experiment '{}'", experiment_name)
         return 0
 
     if not live_instances and redis_workers and launch_state is None:
@@ -83,7 +89,7 @@ def run_teardown(args: argparse.Namespace) -> int:
         return 0
 
     # Query uncollected jobs
-    jobs = lifecycle.list_jobs(args.experiment) if lifecycle else []
+    jobs = lifecycle.list_jobs(experiment_name) if lifecycle else []
     uncollected_count = sum(1 for j in jobs if j.state not in ("completed", "failed"))
 
     # Confirmation prompt
@@ -105,14 +111,18 @@ def run_teardown(args: argparse.Namespace) -> int:
             return 0
 
     # Collect phase -- best effort, but teardown still proceeds to avoid leaked VMs.
-    remote_experiment_dir = args.remote_dir
+    remote_experiment_dir = resolve_remote_experiment_dir(
+        experiment_filestore,
+        experiment_name,
+        args.remote_dir,
+    )
     collection_failed = False
     for worker in live_instances:
         try:
             collector.collect_logs(
                 worker=worker,
                 fleet=_resolve_instance_fleet(context, worker),
-                experiment_name=args.experiment,
+                experiment_name=experiment_name,
                 experiment_filestore=experiment_filestore,
                 remote_experiment_dir=remote_experiment_dir,
             )
@@ -129,7 +139,7 @@ def run_teardown(args: argparse.Namespace) -> int:
                 collector.collect(
                     worker=worker,
                     fleet=_resolve_instance_fleet(context, worker),
-                    experiment_name=args.experiment,
+                    experiment_name=experiment_name,
                     experiment_filestore=experiment_filestore,
                     remote_experiment_dir=remote_experiment_dir,
                 )
@@ -153,7 +163,7 @@ def run_teardown(args: argparse.Namespace) -> int:
             collector.collect_logs(
                 worker=orchestrator_worker,
                 fleet=launch_state.as_transport_config(),
-                experiment_name=args.experiment,
+                experiment_name=experiment_name,
                 experiment_filestore=experiment_filestore,
                 remote_experiment_dir=remote_experiment_dir,
             )
@@ -168,10 +178,10 @@ def run_teardown(args: argparse.Namespace) -> int:
 
     deletion_failed = False
     try:
-        _delete_live_instances(context, args.experiment, provisioner)
+        _delete_live_instances(context, experiment_name, provisioner)
     except Exception as exc:
         logger.error(
-            "Worker deletion failed for experiment {}: {}", args.experiment, exc
+            "Worker deletion failed for experiment {}: {}", experiment_name, exc
         )
         deletion_failed = True
     if launch_state is not None:
@@ -191,11 +201,11 @@ def run_teardown(args: argparse.Namespace) -> int:
 
     if launch_state is not None and not deletion_failed:
         try:
-            delete_launch_state(args.config, args.experiment)
+            delete_launch_state(args.config, experiment_name)
         except OSError as exc:
             logger.warning(
                 "Failed to remove config-adjacent launch state for {}: {}",
-                args.experiment,
+                experiment_name,
                 exc,
             )
 

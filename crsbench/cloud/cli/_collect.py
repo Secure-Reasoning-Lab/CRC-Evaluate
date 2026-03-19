@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from crsbench.cloud.cli._config_reconnect import reconnect, resolve_cloud_context
+from crsbench.cloud.cli._config_reconnect import (
+    reconnect,
+    resolve_cloud_context,
+    resolve_effective_experiment_name,
+    resolve_remote_experiment_dir,
+)
 from crsbench.cloud.gce.provider import GceProviderAdapter
 from crsbench.cloud.readiness import CloudInstanceRole
 
@@ -25,19 +30,20 @@ def run_collect(args: argparse.Namespace) -> int:
 
     Returns 0 if all collections succeed, 1 if any failed.
     """
-    context = resolve_cloud_context(args.config, args.experiment)
+    experiment_name = resolve_effective_experiment_name(args.config, args.experiment)
+    context = resolve_cloud_context(args.config, experiment_name)
     launch_state = context.launch_state
     experiment_filestore = context.experiment_filestore
     readiness = None
     try:
         _context, _redis_conn, readiness, _lifecycle, experiment_filestore = reconnect(
-            args.config, args.experiment
+            args.config, experiment_name
         )
     except Exception as exc:
         logger.warning(
             "Redis reconnect unavailable for experiment {}; "
             "continuing collection with GCE state only: {}",
-            args.experiment,
+            experiment_name,
             exc,
         )
 
@@ -45,12 +51,12 @@ def run_collect(args: argparse.Namespace) -> int:
     collector = ArtifactCollector(base_path=args.config)
 
     # Validate GCE state
-    live_instances = _list_live_instances(context, args.experiment, provisioner)
+    live_instances = _list_live_instances(context, experiment_name, provisioner)
     live_names = {w.name for w in live_instances}
 
     # Cross-reference with Redis readiness state
     if readiness is not None:
-        redis_workers = _list_readiness_instances(readiness, args.experiment)
+        redis_workers = _list_readiness_instances(readiness, experiment_name)
         redis_names = {w.instance_name for w in redis_workers}
         stale_names = redis_names - live_names
         if stale_names:
@@ -61,11 +67,15 @@ def run_collect(args: argparse.Namespace) -> int:
 
     if not live_instances and launch_state is None:
         logger.warning(
-            "No live GCE instances found for experiment '{}'", args.experiment
+            "No live GCE instances found for experiment '{}'", experiment_name
         )
         return 0
 
-    remote_experiment_dir = args.remote_dir
+    remote_experiment_dir = resolve_remote_experiment_dir(
+        experiment_filestore,
+        experiment_name,
+        args.remote_dir,
+    )
     failed = 0
 
     for worker in live_instances:
@@ -73,7 +83,7 @@ def run_collect(args: argparse.Namespace) -> int:
             collector.collect_logs(
                 worker=worker,
                 fleet=_resolve_instance_fleet(context, worker),
-                experiment_name=args.experiment,
+                experiment_name=experiment_name,
                 experiment_filestore=experiment_filestore,
                 remote_experiment_dir=remote_experiment_dir,
             )
@@ -86,7 +96,7 @@ def run_collect(args: argparse.Namespace) -> int:
                 collector.collect(
                     worker=worker,
                     fleet=_resolve_instance_fleet(context, worker),
-                    experiment_name=args.experiment,
+                    experiment_name=experiment_name,
                     experiment_filestore=experiment_filestore,
                     remote_experiment_dir=remote_experiment_dir,
                 )
@@ -106,7 +116,7 @@ def run_collect(args: argparse.Namespace) -> int:
             collector.collect_logs(
                 worker=orchestrator_worker,
                 fleet=launch_state.as_transport_config(),
-                experiment_name=args.experiment,
+                experiment_name=experiment_name,
                 experiment_filestore=experiment_filestore,
                 remote_experiment_dir=remote_experiment_dir,
             )

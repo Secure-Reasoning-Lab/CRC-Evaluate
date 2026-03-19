@@ -1264,6 +1264,32 @@ class TestReconnect:
         assert context.redis_host == "localhost:6379"
         assert context.experiment_filestore == Path("/tmp/filestore")
 
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_resolve_effective_experiment_name_uses_config_when_omitted(
+        self, mock_load
+    ):
+        mock_load.return_value = _make_provider_neutral_experiment_config()
+
+        from crsbench.cloud.cli._config_reconnect import (
+            resolve_effective_experiment_name,
+        )
+
+        experiment_name = resolve_effective_experiment_name("/tmp/config.yaml", None)
+
+        assert experiment_name == "test-exp"
+        mock_load.assert_called_once_with(Path("/tmp/config.yaml"))
+
+    def test_resolve_remote_experiment_dir_defaults_to_filestore_and_experiment(self):
+        from crsbench.cloud.cli._config_reconnect import resolve_remote_experiment_dir
+
+        remote_dir = resolve_remote_experiment_dir(
+            Path("/tmp/filestore"),
+            "test-exp",
+            None,
+        )
+
+        assert remote_dir == "/tmp/filestore/test-exp"
+
 
 # ---------------------------------------------------------------------------
 # Argument parsing tests
@@ -1351,6 +1377,22 @@ class TestArgParsing:
         )
         assert args.force is True
 
+    def test_parse_teardown_allows_inferred_experiment_and_remote_dir(self):
+        parser = self._build_parser()
+        args = parser.parse_args(
+            [
+                "cloud",
+                "teardown",
+                "--config",
+                "c.yaml",
+                "--force",
+            ]
+        )
+        assert args.cloud_command == "teardown"
+        assert args.experiment is None
+        assert args.remote_dir is None
+        assert args.force is True
+
     def test_parse_collect(self):
         parser = self._build_parser()
         args = parser.parse_args(
@@ -1366,6 +1408,20 @@ class TestArgParsing:
         )
         assert args.cloud_command == "collect"
         assert args.remote_dir == "/home/user/experiments/my-exp"
+
+    def test_parse_collect_allows_inferred_experiment_and_remote_dir(self):
+        parser = self._build_parser()
+        args = parser.parse_args(
+            [
+                "cloud",
+                "collect",
+                "--config",
+                "c.yaml",
+            ]
+        )
+        assert args.cloud_command == "collect"
+        assert args.experiment is None
+        assert args.remote_dir is None
 
     def test_parse_launch(self):
         parser = self._build_parser()
@@ -2762,6 +2818,51 @@ def _make_gce_worker(name: str, zone: str = "us-central1-a", ip: str = "10.0.0.1
 class TestCollect:
     """Tests for run_collect() sub-action."""
 
+    @patch("crsbench.cloud.cli._collect.resolve_effective_experiment_name")
+    @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._collect.ArtifactCollector")
+    @patch("crsbench.cloud.cli._collect.GceProvisioner")
+    @patch("crsbench.cloud.cli._collect.reconnect")
+    def test_collect_infers_experiment_and_remote_dir_from_config(
+        self,
+        mock_reconnect,
+        mock_prov_cls,
+        mock_coll_cls,
+        mock_resolve_context,
+        mock_resolve_experiment_name,
+    ):
+        workers = [_make_gce_worker("w-1")]
+        mock_resolve_experiment_name.return_value = "test-exp"
+        mock_prov = MagicMock()
+        mock_prov.list_workers.return_value = workers
+        mock_prov_cls.return_value = mock_prov
+        mock_resolve_context.return_value = _make_resolved_cloud_context()
+
+        mock_coll = MagicMock()
+        mock_coll_cls.return_value = mock_coll
+
+        readiness = MagicMock()
+        readiness.list_workers.return_value = []
+        mock_reconnect.return_value = (
+            MagicMock(),
+            MagicMock(),
+            readiness,
+            MagicMock(),
+            Path("/tmp/filestore"),
+        )
+
+        from crsbench.cloud.cli._collect import run_collect
+
+        rc = run_collect(_make_collect_args(experiment=None, remote_dir=None))
+
+        assert rc == 0
+        mock_resolve_context.assert_called_once_with("/tmp/config.yaml", "test-exp")
+        mock_coll.collect.assert_called_once()
+        assert (
+            mock_coll.collect.call_args.kwargs["remote_experiment_dir"]
+            == "/tmp/filestore/test-exp"
+        )
+
     @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
     @patch("crsbench.cloud.cli._collect.GceProvisioner")
@@ -3206,6 +3307,43 @@ def _setup_teardown_mocks(
 
 class TestTeardown:
     """Tests for run_teardown() sub-action."""
+
+    @patch("crsbench.cloud.cli._teardown.resolve_effective_experiment_name")
+    @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
+    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.reconnect")
+    def test_teardown_infers_experiment_and_remote_dir_from_config(
+        self,
+        mock_reconnect,
+        mock_prov_cls,
+        mock_coll_cls,
+        mock_resolve_context,
+        mock_resolve_experiment_name,
+    ):
+        mock_resolve_experiment_name.return_value = "test-exp"
+        mock_resolve_context.return_value = _make_resolved_cloud_context()
+        mock_prov, mock_coll, _, _ = _setup_teardown_mocks(
+            mock_reconnect,
+            mock_prov_cls,
+            mock_coll_cls,
+            workers=[_make_gce_worker("w-1")],
+        )
+
+        from crsbench.cloud.cli._teardown import run_teardown
+
+        rc = run_teardown(
+            _make_teardown_args(experiment=None, remote_dir=None, force=True)
+        )
+
+        assert rc == 0
+        mock_resolve_context.assert_called_once_with("/tmp/config.yaml", "test-exp")
+        mock_prov.delete_workers.assert_called_once()
+        mock_coll.collect.assert_called_once()
+        assert (
+            mock_coll.collect.call_args.kwargs["remote_experiment_dir"]
+            == "/tmp/filestore/test-exp"
+        )
 
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")

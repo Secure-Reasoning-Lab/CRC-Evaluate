@@ -225,13 +225,15 @@ Retry: `tenacity` exponential backoff (min 2s, max 30s, 3 attempts) on rsync fai
 - Recovery event timeline from Redis list `crsbench:recovery-events:{experiment}`
 - Filterable by event type
 
-**`cloud collect <experiment> --config <yaml> --remote-dir <path>`**
+**`cloud collect [<experiment>] --config <yaml> [--remote-dir <path>]`**
 
 - Lists live GCE workers, cross-references with Redis
 - Runs `ArtifactCollector.collect()` per worker
+- Defaults to `experiment.name` and
+  `<storage.experiment_filestore>/<experiment.name>` when the CLI omits them
 - Partial failure: continues to remaining workers, returns exit code 1
 
-**`cloud teardown <experiment> --config <yaml> --remote-dir <path> [--force]`**
+**`cloud teardown [<experiment>] --config <yaml> [--remote-dir <path>] [--force]`**
 
 - Full collect-then-delete safety flow described above
 
