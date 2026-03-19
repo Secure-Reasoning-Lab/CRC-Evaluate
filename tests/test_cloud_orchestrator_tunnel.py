@@ -11,6 +11,7 @@ from crsbench.cloud.launch_state import CloudLaunchState
 from crsbench.cloud.orchestrator_tunnel import (
     OrchestratorRedisTunnel,
     OrchestratorTunnelError,
+    build_iap_tunnel_command,
     build_tunnel_command,
     wait_for_local_port,
 )
@@ -87,37 +88,75 @@ def test_build_tunnel_command_for_direct_ssh():
 def test_build_tunnel_command_for_iap():
     launch_state = _make_launch_state(ssh_via_iap=True)
 
-    cmd = build_tunnel_command(
-        Path("/tmp/config.yaml"),
-        launch_state,
-        local_port=16379,
-    )
+    with (
+        patch(
+            "crsbench.cloud.orchestrator_tunnel.prepare_iap_known_hosts",
+            return_value=Path("/tmp/known_hosts_iap"),
+        ),
+        patch(
+            "crsbench.cloud.orchestrator_tunnel.resolve_direct_ssh_user",
+            return_value="alice",
+        ),
+    ):
+        cmd = build_tunnel_command(
+            Path("/tmp/config.yaml"),
+            launch_state,
+            local_port=16379,
+            iap_ssh_port=2222,
+        )
 
-    assert cmd[:4] == ["gcloud", "compute", "ssh", "gce-orchestrator-test-exp"]
-    assert "--project=test-project" in cmd
-    assert "--zone=us-east5-b" in cmd
-    assert "--tunnel-through-iap" in cmd
-    assert "--" in cmd
+    assert cmd[0] == "ssh"
+    assert "-p" in cmd
+    assert "2222" in cmd
     assert "-N" in cmd
     assert "-L" in cmd
     assert "16379:127.0.0.1:6379" in cmd
+    assert "alice@127.0.0.1" in cmd
+
+
+def test_build_iap_tunnel_command():
+    launch_state = _make_launch_state(ssh_via_iap=True)
+
+    cmd = build_iap_tunnel_command(
+        launch_state,
+        local_port=2222,
+    )
+
+    assert cmd[:4] == [
+        "gcloud",
+        "compute",
+        "start-iap-tunnel",
+        "gce-orchestrator-test-exp",
+    ]
+    assert "22" in cmd
+    assert "--project=test-project" in cmd
+    assert "--zone=us-east5-b" in cmd
+    assert "--local-host-port=127.0.0.1:2222" in cmd
 
 
 def test_tunnel_waits_for_local_port_before_returning():
+    iap_process = _DummyProcess()
     process = _DummyProcess()
     launch_state = _make_launch_state(ssh_via_iap=True)
 
     with (
         patch(
+            "crsbench.cloud.orchestrator_tunnel.build_iap_tunnel_command",
+            return_value=["gcloud", "compute", "start-iap-tunnel"],
+        ),
+        patch(
             "crsbench.cloud.orchestrator_tunnel.build_tunnel_command",
             return_value=["ssh", "-N", "-L", "16379:127.0.0.1:6379"],
+        ),
+        patch(
+            "crsbench.cloud.orchestrator_tunnel.allocate_local_port", return_value=2222
         ),
         patch(
             "crsbench.cloud.orchestrator_tunnel.shutil.which", return_value="/bin/ssh"
         ),
         patch(
             "crsbench.cloud.orchestrator_tunnel.subprocess.Popen",
-            return_value=process,
+            side_effect=[iap_process, process],
         ),
         patch("crsbench.cloud.orchestrator_tunnel.wait_for_local_port") as mock_wait,
     ):
@@ -128,19 +167,28 @@ def test_tunnel_waits_for_local_port_before_returning():
         ) as tunnel:
             assert tunnel.redis_host == "127.0.0.1:16379"
 
-    mock_wait.assert_called_once_with(
+    assert mock_wait.call_count == 2
+    mock_wait.assert_any_call(
         "127.0.0.1",
         16379,
         timeout=5.0,
         process=process,
-        process_label="orchestrator tunnel process",
+        process_label="orchestrator redis tunnel process",
     )
+    mock_wait.assert_any_call(
+        "127.0.0.1",
+        2222,
+        timeout=5.0,
+        process=iap_process,
+        process_label="orchestrator IAP tunnel process",
+    )
+    assert iap_process.terminated is True
     assert process.terminated is True
 
 
 def test_tunnel_cleans_up_on_exception_exit():
     process = _DummyProcess()
-    launch_state = _make_launch_state(ssh_via_iap=True)
+    launch_state = _make_launch_state(ssh_via_iap=False)
 
     with (
         patch(
@@ -173,7 +221,7 @@ def test_tunnel_cleans_up_on_exception_exit():
 def test_tunnel_retries_transient_startup_failures():
     first_process = _DummyProcess()
     second_process = _DummyProcess()
-    launch_state = _make_launch_state(ssh_via_iap=True)
+    launch_state = _make_launch_state(ssh_via_iap=False)
 
     with (
         patch(
@@ -207,14 +255,14 @@ def test_tunnel_retries_transient_startup_failures():
         16379,
         timeout=5.0,
         process=first_process,
-        process_label="orchestrator tunnel process",
+        process_label="orchestrator redis tunnel process",
     )
     mock_wait.assert_any_call(
         "127.0.0.1",
         16379,
         timeout=5.0,
         process=second_process,
-        process_label="orchestrator tunnel process",
+        process_label="orchestrator redis tunnel process",
     )
     mock_sleep.assert_called_once_with(1.0)
     assert first_process.terminated is True

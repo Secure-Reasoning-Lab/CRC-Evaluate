@@ -18,6 +18,7 @@ _REMOTE_REDIS_BIND = "127.0.0.1:6379"
 _TUNNEL_STARTUP_TIMEOUT_SEC = 30.0
 _TUNNEL_STARTUP_ATTEMPT_TIMEOUT_SEC = 5.0
 _TUNNEL_STARTUP_RETRY_DELAY_SEC = 1.0
+_IAP_REMOTE_SSH_PORT = "22"
 
 
 class OrchestratorTunnelError(RuntimeError):
@@ -88,29 +89,88 @@ def prepare_known_hosts(base_path: Path | str, remote_host: str) -> Path:
     return known_hosts_path
 
 
+def prepare_iap_known_hosts(base_path: Path | str, host_key_alias: str) -> Path:
+    """Prepare the localhost-tunnel known_hosts file used for IAP-backed SSH."""
+    known_hosts_path = cloud_state_dir(base_path) / "known_hosts_iap"
+    known_hosts_path.parent.mkdir(parents=True, exist_ok=True)
+    known_hosts_path.touch(exist_ok=True)
+    known_hosts_path.chmod(0o600)
+
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-R",
+            host_key_alias,
+            "-f",
+            str(known_hosts_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return known_hosts_path
+
+
+def build_iap_tunnel_command(
+    launch_state: CloudLaunchState,
+    *,
+    local_port: int,
+) -> list[str]:
+    """Build the gcloud command that opens an IAP tunnel to remote SSH."""
+    return [
+        "gcloud",
+        "compute",
+        "start-iap-tunnel",
+        launch_state.orchestrator_name,
+        _IAP_REMOTE_SSH_PORT,
+        f"--project={launch_state.orchestrator_project}",
+        f"--zone={launch_state.orchestrator_zone}",
+        f"--local-host-port=127.0.0.1:{local_port}",
+    ]
+
+
 def build_tunnel_command(
     base_path: Path | str,
     launch_state: CloudLaunchState,
     *,
     local_port: int,
+    iap_ssh_port: int | None = None,
 ) -> list[str]:
     """Build the subprocess command used for the local Redis forward."""
     forward = f"{local_port}:{_REMOTE_REDIS_BIND}"
 
     if launch_state.orchestrator_ssh_via_iap:
-        return [
-            "gcloud",
-            "compute",
-            "ssh",
+        if iap_ssh_port is None:
+            raise OrchestratorTunnelError(
+                "IAP-backed orchestrator tunnel requires a local forwarded SSH port"
+            )
+        known_hosts_path = prepare_iap_known_hosts(
+            base_path,
             launch_state.orchestrator_name,
-            f"--project={launch_state.orchestrator_project}",
-            f"--zone={launch_state.orchestrator_zone}",
-            "--tunnel-through-iap",
-            "--",
-            "-N",
-            "-L",
-            forward,
+        )
+        ssh_user = resolve_direct_ssh_user(launch_state.orchestrator_project)
+        cmd = [
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "CheckHostIP=no",
+            "-o",
+            f"HostKeyAlias={launch_state.orchestrator_name}",
+            "-o",
+            f"UserKnownHostsFile={known_hosts_path}",
+            "-o",
+            "ConnectTimeout=10",
+            "-p",
+            str(iap_ssh_port),
         ]
+        identity_file = Path.home() / ".ssh" / "google_compute_engine"
+        if identity_file.is_file():
+            cmd.extend(["-i", str(identity_file), "-o", "IdentitiesOnly=yes"])
+        cmd.extend(["-N", "-L", forward, f"{ssh_user}@127.0.0.1"])
+        return cmd
 
     remote_host = (
         launch_state.orchestrator_external_ip
@@ -183,6 +243,8 @@ class OrchestratorRedisTunnel:
     local_port: int | None = None
     startup_timeout: float = _TUNNEL_STARTUP_TIMEOUT_SEC
     process: subprocess.Popen | None = None
+    iap_process: subprocess.Popen | None = None
+    iap_local_port: int | None = None
 
     @classmethod
     def from_launch_state(
@@ -219,13 +281,14 @@ class OrchestratorRedisTunnel:
             return
 
         auto_local_port = self.local_port is None
-        transport_command = (
-            "gcloud" if self.launch_state.orchestrator_ssh_via_iap else "ssh"
-        )
-        if shutil.which(transport_command) is None:
-            raise OrchestratorTunnelError(
-                f"Required transport command not found: {transport_command}"
-            )
+        required_commands = ["ssh"]
+        if self.launch_state.orchestrator_ssh_via_iap:
+            required_commands.append("gcloud")
+        for transport_command in required_commands:
+            if shutil.which(transport_command) is None:
+                raise OrchestratorTunnelError(
+                    f"Required transport command not found: {transport_command}"
+                )
 
         deadline = time.monotonic() + self.startup_timeout
         last_error: Exception | None = None
@@ -241,11 +304,38 @@ class OrchestratorRedisTunnel:
 
             if auto_local_port or self.local_port is None:
                 self.local_port = allocate_local_port()
+            if self.launch_state.orchestrator_ssh_via_iap:
+                self.iap_local_port = allocate_local_port()
+                self.iap_process = subprocess.Popen(
+                    build_iap_tunnel_command(
+                        self.launch_state,
+                        local_port=self.iap_local_port,
+                    ),
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                )
+                try:
+                    wait_for_local_port(
+                        "127.0.0.1",
+                        self.iap_local_port,
+                        timeout=min(remaining, _TUNNEL_STARTUP_ATTEMPT_TIMEOUT_SEC),
+                        process=self.iap_process,
+                        process_label="orchestrator IAP tunnel process",
+                    )
+                except Exception:
+                    self.stop()
+                    if auto_local_port:
+                        self.local_port = None
+                    self.iap_local_port = None
+                    raise
             self.process = subprocess.Popen(
                 build_tunnel_command(
                     self.base_path,
                     self.launch_state,
                     local_port=self.local_port,
+                    iap_ssh_port=self.iap_local_port,
                 ),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
@@ -258,7 +348,7 @@ class OrchestratorRedisTunnel:
                     self.local_port,
                     timeout=min(remaining, _TUNNEL_STARTUP_ATTEMPT_TIMEOUT_SEC),
                     process=self.process,
-                    process_label="orchestrator tunnel process",
+                    process_label="orchestrator redis tunnel process",
                 )
                 return
             except Exception as exc:
@@ -266,6 +356,7 @@ class OrchestratorRedisTunnel:
                 self.stop()
                 if auto_local_port:
                     self.local_port = None
+                self.iap_local_port = None
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise
@@ -274,13 +365,26 @@ class OrchestratorRedisTunnel:
     def stop(self) -> None:
         """Terminate the forward process if it is still running."""
         if self.process is None:
-            return
+            process = None
+        else:
+            process = self.process
 
-        if self.process.poll() is None:
-            self.process.terminate()
+        if process is not None and process.poll() is None:
+            process.terminate()
             try:
-                self.process.wait(timeout=5.0)
+                process.wait(timeout=5.0)
             except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait(timeout=5.0)
+                process.kill()
+                process.wait(timeout=5.0)
         self.process = None
+
+        if self.iap_process is None:
+            return
+        if self.iap_process.poll() is None:
+            self.iap_process.terminate()
+            try:
+                self.iap_process.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                self.iap_process.kill()
+                self.iap_process.wait(timeout=5.0)
+        self.iap_process = None
