@@ -71,8 +71,6 @@ cloud:
     placements:
       - {} # inherit provider region
       - region: us-east1
-        zones:
-          - us-east1-b
   evaluators:
     defaults:
       instance_profile: gce-evaluator-n2d

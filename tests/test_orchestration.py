@@ -1069,7 +1069,7 @@ class TestIntegrationWithSampleConfigs:
         )
         assert [placement.zones for placement in config.cloud.workers.placements] == [
             [],
-            ["us-east1-b"],
+            [],
         ]
 
         assert config.pov_early_stop is True
@@ -1099,7 +1099,7 @@ class TestIntegrationWithSampleConfigs:
         )
         assert [placement.zones for placement in config.cloud.workers.placements] == [
             [],
-            ["us-east1-b"],
+            [],
         ]
 
         assert config.benchmark_suite == "smoke-test-bug-finding-hf-download"

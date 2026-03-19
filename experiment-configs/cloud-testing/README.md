@@ -35,8 +35,13 @@ The default sanity sample uses this regional GCE layout:
 - 1 evaluator that inherits the provider region
 - `n2d-standard-16` everywhere
 
-The Atlantis and HF-download samples keep the same shape, except their second
-worker placement narrows the east1 worker to `zones: [us-east1-b]`.
+The Atlantis and HF-download samples keep the same regional shape:
+
+- provider-level `region: us-east5`
+- 1 orchestrator that inherits the provider region
+- 1 worker that inherits the provider region
+- 1 worker that overrides to `region: us-east1` without a zone allowlist
+- 1 evaluator that inherits the provider region
 
 The fallback sample uses:
 
@@ -130,6 +135,8 @@ you want to declare `region` instead of a fixed zonal create target. When
 `region` is present, CRSBench uses GCE regional bulk insert with
 `ANY_SINGLE_ZONE`. Optional `zones` become an allowlist inside that region, and
 config validation fails fast if any listed zone belongs to a different region.
+The checked-in regional samples intentionally omit `zones` so GCE can choose the
+actual zone within each requested region.
 
 The `gce-sanity-zone-1orch-2worker-1eval.yaml` sample is the reference when you
 want the older explicit zonal topology on purpose.
