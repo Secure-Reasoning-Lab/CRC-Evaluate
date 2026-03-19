@@ -1,4 +1,5 @@
 import json
+import multiprocessing
 import os
 import time
 from pathlib import Path
@@ -568,3 +569,148 @@ def test_run_tests_sets_utf8_locale_env(tmp_path: Path) -> None:
     cmd_str = " ".join(cmd)
     assert "LANG=C.UTF-8" in cmd_str
     assert "LC_ALL=C.UTF-8" in cmd_str
+
+
+# ---------------------------------------------------------------------------
+# Concurrent build lock tests
+# ---------------------------------------------------------------------------
+
+
+def _child_build(
+    oss_fuzz_path: str,
+    config_kwargs: dict,
+    barrier_path: str,
+    result_queue: multiprocessing.Queue,
+) -> None:
+    """Entry point for child process that calls build_fuzzers.
+
+    Uses a barrier file to synchronize two processes so they enter the
+    lock region at approximately the same time.  Mocks are set up
+    inside the child (fork copies parent module state but patches must
+    be active when the code runs).
+    """
+    from unittest.mock import MagicMock  # noqa: I001
+    from unittest.mock import patch as mock_patch
+
+    infra = OSSFuzzInfrastructure(Path(oss_fuzz_path))
+    config = BuildConfig(
+        benchmark_name=config_kwargs["benchmark_name"],
+        variant_type=VariantType(config_kwargs["variant_type"]),
+        commit=config_kwargs["commit"],
+        main_repo=config_kwargs["main_repo"],
+        benchmark_path=Path(config_kwargs["benchmark_path"]),
+        mode=BenchmarkMode(config_kwargs["mode"]),
+        sanitizer=config_kwargs["sanitizer"],
+        timeout=config_kwargs["timeout"],
+    )
+
+    barrier = Path(barrier_path)
+    barrier.mkdir(parents=True, exist_ok=True)
+    (barrier / str(os.getpid())).touch()
+    # Wait for peer (max 5s)
+    deadline = time.monotonic() + 5
+    while len(list(barrier.iterdir())) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    variant_name = config.variant_name
+
+    def _fake_build(*_args, **_kwargs):
+        """Simulate a build that takes time and writes metadata."""
+        time.sleep(0.5)
+        # Write build metadata so is_variant_built() returns True
+        out_dir = Path(oss_fuzz_path) / "build" / "out" / variant_name
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "fuzzer_binary").write_bytes(b"\x00")
+        (out_dir / ".build-meta.json").write_text(
+            json.dumps(
+                {
+                    "sanitizer": config.sanitizer,
+                    "inc_build": False,
+                    "fallback_used": False,
+                }
+            )
+        )
+        # Project dir must also exist
+        (Path(oss_fuzz_path) / "projects" / variant_name).mkdir(
+            parents=True, exist_ok=True
+        )
+        return MagicMock(returncode=0, stdout="ok", stderr="")
+
+    with (
+        mock_patch(
+            "crsbench.builder.infrastructure.run_with_timeout",
+            side_effect=_fake_build,
+        ) as mock_run,
+        mock_patch("crsbench.builder.infrastructure.fix_docker_ownership"),
+    ):
+        build_result = infra.build_fuzzers(config, src_path=Path(oss_fuzz_path) / "src")
+        result_queue.put(
+            {
+                "pid": os.getpid(),
+                "success": build_result.success,
+                "run_called": mock_run.called,
+            }
+        )
+
+
+def test_concurrent_build_fuzzers_serialized_by_lock(tmp_path: Path) -> None:
+    """Two processes building the same variant must not race.
+
+    One process should build; the other should find the completed build
+    via the double-check after acquiring the lock, and skip the build.
+    """
+    oss_fuzz = tmp_path / "oss-fuzz"
+    (oss_fuzz / "infra").mkdir(parents=True)
+    (oss_fuzz / "projects").mkdir(parents=True)
+    (oss_fuzz / "build" / "out").mkdir(parents=True)
+    (oss_fuzz / "infra" / "helper.py").write_text("#!/usr/bin/env python3\n")
+    (oss_fuzz / "src").mkdir()
+
+    config_kwargs = {
+        "benchmark_name": "afc-test-race-01",
+        "variant_type": VariantType.DELTA_REF.value,
+        "commit": "a" * 40,
+        "main_repo": "https://example.com/repo.git",
+        "benchmark_path": str(tmp_path / "bench"),
+        "mode": BenchmarkMode.DELTA.value,
+        "sanitizer": "address",
+        "timeout": 30,
+    }
+    (tmp_path / "bench").mkdir()
+
+    barrier_path = str(tmp_path / "barrier")
+    result_queue = multiprocessing.Queue()
+
+    ctx = multiprocessing.get_context("fork")
+    p1 = ctx.Process(
+        target=_child_build,
+        args=(str(oss_fuzz), config_kwargs, barrier_path, result_queue),
+    )
+    p2 = ctx.Process(
+        target=_child_build,
+        args=(str(oss_fuzz), config_kwargs, barrier_path, result_queue),
+    )
+
+    p1.start()
+    p2.start()
+    p1.join(timeout=20)
+    p2.join(timeout=20)
+
+    assert p1.exitcode == 0, f"Process 1 crashed with exit code {p1.exitcode}"
+    assert p2.exitcode == 0, f"Process 2 crashed with exit code {p2.exitcode}"
+
+    results = []
+    while not result_queue.empty():
+        results.append(result_queue.get_nowait())
+
+    assert len(results) == 2, f"Expected 2 results, got {len(results)}"
+    assert all(r["success"] for r in results), f"Not all builds succeeded: {results}"
+
+    # One process should have called run_with_timeout (the builder),
+    # the other should have skipped via the double-check (no run call).
+    run_calls = [r["run_called"] for r in results]
+    assert True in run_calls, "At least one process must run the build"
+    assert False in run_calls, (
+        "Second process should skip build via double-check after lock, "
+        f"but both called run_with_timeout: {results}"
+    )

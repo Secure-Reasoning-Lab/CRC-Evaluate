@@ -1346,50 +1346,75 @@ class OSSFuzzInfrastructure:
                 replay_policy.tool_hooks_csv(),
             )
 
+        # Serialize concurrent builds for the same variant across processes.
+        # Multiple evaluator verify jobs may trigger builds for the same
+        # variant simultaneously; without locking the shared build/out/
+        # directory gets corrupted.
+        lock_path = Path("/tmp") / f"crsbench-build-{variant_name}.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_file = lock_path.open("w")
         try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+
+            # Double-check: another process may have completed the build
+            # while we waited for the lock.
+            if self.is_variant_built(variant_name, require_inc_build=None):
+                logger.debug(f"Build for {variant_name} completed by another process")
+                lock_file.close()
+                actual_fallback = use_inc_image and snapshot_fallback
+                return FuzzerBuildResult(
+                    success=True,
+                    fallback_used=actual_fallback,
+                    stdout="",
+                    stderr="",
+                )
+
             result = run_with_timeout(
                 cmd,
                 timeout=config.timeout,
                 cwd=self.oss_fuzz_path,
             )
-
-            if result.returncode == 0:
-                logger.debug(f"Build succeeded for {variant_name}")
-                # Log build output for debugging
-                if result.stdout:
-                    logger.debug(f"Build stdout: {result.stdout[:1000]}")
-                fix_docker_ownership(self.get_build_output_path(variant_name))
-                # Track if fallback may have been used
-                # Only relevant when inc-build was attempted (use_inc_image=True)
-                # and fallback was enabled (snapshot_fallback=True)
-                actual_fallback = use_inc_image and snapshot_fallback
-                return FuzzerBuildResult(
-                    success=True,
-                    fallback_used=actual_fallback,
-                    stdout=result.stdout or "",
-                    stderr=result.stderr or "",
-                )
-
-            logger.error(
-                f"Build failed for {variant_name} (exit code {result.returncode})"
-            )
-            if result.stdout:
-                logger.debug(f"Build stdout: {result.stdout[:2000]}...")
-            if result.stderr:
-                logger.debug(f"Build stderr: {result.stderr[:2000]}...")
-            return FuzzerBuildResult(
-                success=False,
-                fallback_used=False,
-                stdout=result.stdout or "",
-                stderr=result.stderr or "",
-            )
-
         except subprocess.TimeoutExpired:
             logger.error(f"Build timed out for {variant_name} ({config.timeout}s)")
             return FuzzerBuildResult(success=False, fallback_used=False)
         except Exception as e:
             logger.error(f"Build error for {variant_name}: {e}")
             return FuzzerBuildResult(success=False, fallback_used=False)
+        finally:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            lock_file.close()
+
+        if result.returncode == 0:
+            logger.debug(f"Build succeeded for {variant_name}")
+            # Log build output for debugging
+            if result.stdout:
+                logger.debug(f"Build stdout: {result.stdout[:1000]}")
+            fix_docker_ownership(self.get_build_output_path(variant_name))
+            # Track if fallback may have been used
+            # Only relevant when inc-build was attempted (use_inc_image=True)
+            # and fallback was enabled (snapshot_fallback=True)
+            actual_fallback = use_inc_image and snapshot_fallback
+            return FuzzerBuildResult(
+                success=True,
+                fallback_used=actual_fallback,
+                stdout=result.stdout or "",
+                stderr=result.stderr or "",
+            )
+
+        logger.error(f"Build failed for {variant_name} (exit code {result.returncode})")
+        if result.stdout:
+            logger.debug(f"Build stdout: {result.stdout[:2000]}...")
+        if result.stderr:
+            logger.debug(f"Build stderr: {result.stderr[:2000]}...")
+        return FuzzerBuildResult(
+            success=False,
+            fallback_used=False,
+            stdout=result.stdout or "",
+            stderr=result.stderr or "",
+        )
 
     def get_patch_superset_map(self, benchmark_path: Path) -> dict[int, int]:
         """Get mapping of CPV subset to superset relationships from meta.yaml.
