@@ -69,7 +69,8 @@ def _resolve_launch_plan(
 ) -> CloudLaunchPlan:
     resolved_orchestrator = CloudOrchestratorPlan(
         provider=plan.orchestrator.provider,
-        zone=plan.orchestrator.zone,
+        zones=list(plan.orchestrator.zones),
+        fallback=plan.orchestrator.fallback,
         instance_profile=_resolve_instance_profile(
             plan.orchestrator.instance_profile,
             cwd=cwd,
@@ -91,7 +92,8 @@ def _resolve_launch_plan(
         CloudPlacementPlan(
             role=placement.role,
             provider=placement.provider,
-            zone=placement.zone,
+            zones=list(placement.zones),
+            fallback=placement.fallback,
             count=placement.count,
             instance_profile=_resolve_instance_profile(
                 placement.instance_profile,
@@ -116,7 +118,8 @@ def _resolve_launch_plan(
         CloudPlacementPlan(
             role=placement.role,
             provider=placement.provider,
-            zone=placement.zone,
+            zones=list(placement.zones),
+            fallback=placement.fallback,
             count=placement.count,
             instance_profile=_resolve_instance_profile(
                 placement.instance_profile,

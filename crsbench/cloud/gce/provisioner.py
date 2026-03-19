@@ -951,10 +951,7 @@ class GceProvisioner:
             prefix = _sanitize_name_fragment(orchestrator.instance_name_prefix)
             name = f"{prefix}-{experiment_fragment}"
         else:
-            zone_fragment = _sanitize_name_fragment(
-                self._resolve_orchestrator_zone(orchestrator)
-            )
-            name = f"crsbench-{experiment_fragment}-{zone_fragment}-orch"
+            name = f"crsbench-{experiment_fragment}-orch"
         return _validate_gce_instance_name(name)
 
     def _rollback_requests(self, requests: list[GceInstanceRequest]) -> None:

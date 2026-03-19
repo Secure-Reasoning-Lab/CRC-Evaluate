@@ -100,7 +100,7 @@ class GceProviderAdapter:
         resolved = self.resolve_instance_profile(plan.orchestrator.instance_profile)
         return GceOrchestratorConfig(
             project=resolved.project,
-            zone=plan.orchestrator.zone,
+            zone=_primary_zone(plan.orchestrator.zones),
             machine_type=resolved.machine_type,
             boot_disk_size_gb=resolved.boot_disk_size_gb,
             image=resolved.image,
@@ -124,18 +124,17 @@ class GceProviderAdapter:
     def build_worker_fleets(self, plan: CloudLaunchPlan) -> list[GceWorkerFleetConfig]:
         """Build one legacy worker-fleet config per provider-neutral placement."""
         fleets: list[GceWorkerFleetConfig] = []
-        next_index_by_zone: dict[str, int] = {}
+        next_worker_index = 1
         for placement in plan.worker_placements:
             if placement.provider is not CloudProvider.GCE:
                 continue
             resolved = self.resolve_instance_profile(placement.instance_profile)
-            start_index = next_index_by_zone.get(placement.zone, 1)
             fleets.append(
                 GceWorkerFleetConfig(
                     project=resolved.project,
-                    zone=placement.zone,
+                    zone=_primary_zone(placement.zones),
                     worker_count=placement.count,
-                    worker_name_start_index=start_index,
+                    worker_name_start_index=next_worker_index,
                     machine_type=resolved.machine_type,
                     boot_disk_size_gb=resolved.boot_disk_size_gb,
                     image=resolved.image,
@@ -146,9 +145,7 @@ class GceProviderAdapter:
                     owner_label=resolved.owner_label,
                     labels=resolved.labels,
                     metadata=resolved.metadata,
-                    worker_name_prefix=(
-                        f"crsbench-{plan.experiment_name}-{placement.zone}-work"
-                    ),
+                    worker_name_prefix=f"crsbench-{plan.experiment_name}-work",
                     startup_script_uri=resolved.startup_script_uri,
                     use_os_login=resolved.use_os_login,
                     ssh_via_iap=resolved.ssh_via_iap,
@@ -161,7 +158,7 @@ class GceProviderAdapter:
                     github_deploy_key_path=placement.launch_defaults.github_deploy_key_path,
                 )
             )
-            next_index_by_zone[placement.zone] = start_index + placement.count
+            next_worker_index += placement.count
         return fleets
 
     def build_evaluator_fleets(
@@ -170,18 +167,17 @@ class GceProviderAdapter:
     ) -> list[GceWorkerFleetConfig]:
         """Build one legacy fleet config per provider-neutral evaluator placement."""
         fleets: list[GceWorkerFleetConfig] = []
-        next_index_by_zone: dict[str, int] = {}
+        next_evaluator_index = 1
         for placement in plan.evaluator_placements:
             if placement.provider is not CloudProvider.GCE:
                 continue
             resolved = self.resolve_instance_profile(placement.instance_profile)
-            start_index = next_index_by_zone.get(placement.zone, 1)
             fleets.append(
                 GceWorkerFleetConfig(
                     project=resolved.project,
-                    zone=placement.zone,
+                    zone=_primary_zone(placement.zones),
                     worker_count=placement.count,
-                    worker_name_start_index=start_index,
+                    worker_name_start_index=next_evaluator_index,
                     machine_type=resolved.machine_type,
                     boot_disk_size_gb=resolved.boot_disk_size_gb,
                     image=resolved.image,
@@ -192,9 +188,7 @@ class GceProviderAdapter:
                     owner_label=resolved.owner_label,
                     labels=resolved.labels,
                     metadata=resolved.metadata,
-                    worker_name_prefix=(
-                        f"crsbench-{plan.experiment_name}-{placement.zone}-eval"
-                    ),
+                    worker_name_prefix=f"crsbench-{plan.experiment_name}-eval",
                     startup_script_uri=resolved.startup_script_uri,
                     use_os_login=resolved.use_os_login,
                     ssh_via_iap=resolved.ssh_via_iap,
@@ -207,7 +201,7 @@ class GceProviderAdapter:
                     github_deploy_key_path=placement.launch_defaults.github_deploy_key_path,
                 )
             )
-            next_index_by_zone[placement.zone] = start_index + placement.count
+            next_evaluator_index += placement.count
         return fleets
 
     def quota_requirements(
@@ -223,7 +217,7 @@ class GceProviderAdapter:
             resolved = self.resolve_instance_profile(plan.orchestrator.instance_profile)
             _accumulate_requirement(
                 requirements=requirements,
-                zone=plan.orchestrator.zone,
+                zone=_primary_zone(plan.orchestrator.zones),
                 machine_type=resolved.machine_type,
                 count=1,
             )
@@ -234,7 +228,7 @@ class GceProviderAdapter:
             resolved = self.resolve_instance_profile(placement.instance_profile)
             _accumulate_requirement(
                 requirements=requirements,
-                zone=placement.zone,
+                zone=_primary_zone(placement.zones),
                 machine_type=resolved.machine_type,
                 count=placement.count,
             )
@@ -245,7 +239,7 @@ class GceProviderAdapter:
             resolved = self.resolve_instance_profile(placement.instance_profile)
             _accumulate_requirement(
                 requirements=requirements,
-                zone=placement.zone,
+                zone=_primary_zone(placement.zones),
                 machine_type=resolved.machine_type,
                 count=placement.count,
             )
@@ -448,6 +442,13 @@ def _accumulate_requirement(
     requirements[(region, family)] = requirements.get((region, family), 0) + (
         machine_type_to_vcpus(machine_type) * count
     )
+
+
+def _primary_zone(zones: Sequence[str]) -> str:
+    """Bridge provider-neutral zone candidates into the current single-zone API."""
+    if not zones:
+        raise ValueError("Expected at least one candidate zone for GCE placement")
+    return zones[0]
 
 
 def _validate_env_passthrough_count(
