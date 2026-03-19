@@ -1062,6 +1062,29 @@ class TestIntegrationWithSampleConfigs:
         assert config.inputs.sarif.level == 5
         assert config.inputs.diff.enabled is True
 
+    def test_remote_gce_hf_download_sample_config_loads_for_cloud_launch(self):
+        """The GCE HF-download config should parse with launch defaults."""
+        config_path = Path(
+            "experiment-configs/cloud-testing/gce-hf-download-1orch-2worker-1eval.yaml"
+        )
+
+        assert config_path.exists(), (
+            f"Expected checked-in sample config at {config_path}"
+        )
+
+        config = load_experiment_config(config_path)
+
+        self._assert_remote_gce_smoke_common(
+            config,
+            experiment_name="gce-hf-download-1o2w1e",
+            expected_cloud_env={
+                "HF_TOKEN": "os.environ/HF_TOKEN",
+            },
+            expected_services={"crs-libfuzzer"},
+        )
+
+        assert config.benchmark_suite == "smoke-test-bug-finding-hf-download"
+
     def test_e2e_with_sample_config_single_crs(self, tmp_path):
         """Test end-to-end workflow with a sample single-CRS config."""
         config_path = Path("experiment-configs/experiment-config-sanity.yaml")
