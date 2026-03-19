@@ -1185,9 +1185,13 @@ class GceWorkerFleetConfig(BaseModel):
         default=None,
         description="Optional regional placement selector when zone-level targeting is not used.",
     )
+    regions: list[str] = Field(
+        default_factory=list,
+        description="Ordered candidate regions when regional placement fallback is enabled.",
+    )
     fallback: bool = Field(
         default=True,
-        description="Whether worker creation should try later candidate zones after retryable zonal-capacity failures.",
+        description="Whether worker creation should try later candidate zones or regions after retryable capacity failures.",
     )
     worker_count: int = Field(
         default=1,
@@ -1352,9 +1356,26 @@ class GceWorkerFleetConfig(BaseModel):
         """Normalize ordered worker candidate zones."""
         return _normalize_cloud_zone_list(value, field_path="cloud.gce.zones")
 
+    @field_validator("regions", mode="before")
+    @classmethod
+    def normalize_regions(
+        cls,
+        value: list[str] | tuple[str, ...] | None,
+    ) -> list[str]:
+        """Normalize ordered worker candidate regions."""
+        return _normalize_cloud_region_list(value, field_path="cloud.gce.regions")
+
     @model_validator(mode="after")
     def validate_gce_contract(self):
         """Enforce the Phase 1 GCE fleet contract."""
+        effective_regions = _coalesce_cloud_regions(
+            region=self.region,
+            regions=self.regions,
+        )
+        if effective_regions:
+            self.regions = effective_regions
+            self.region = effective_regions[0]
+
         effective_zones = list(self.zones)
         if not effective_zones and self.zone is not None:
             effective_zones = [self.zone]
@@ -1363,15 +1384,14 @@ class GceWorkerFleetConfig(BaseModel):
             self.zone = None if self.region is not None else effective_zones[0]
 
         has_zone = bool(effective_zones)
-        has_region = self.region is not None
+        has_region = bool(effective_regions)
         if not has_zone and not has_region:
             raise ValueError(
                 "cloud.gce requires 'zone', 'zones', or 'region' for worker placement"
             )
         if has_region:
-            assert self.region is not None
-            _validate_region_zone_membership(
-                region=self.region,
+            _validate_regions_zone_membership(
+                regions=effective_regions,
                 zones=effective_zones,
                 field_path="cloud.gce.zones",
             )
@@ -1432,9 +1452,13 @@ class GceOrchestratorConfig(BaseModel):
         default=None,
         description="Optional regional placement selector when zone-level targeting is not used.",
     )
+    regions: list[str] = Field(
+        default_factory=list,
+        description="Ordered candidate regions when regional placement fallback is enabled.",
+    )
     fallback: bool = Field(
         default=True,
-        description="Whether orchestrator creation should try later candidate zones after retryable zonal-capacity failures.",
+        description="Whether orchestrator creation should try later candidate zones or regions after retryable capacity failures.",
     )
     machine_type: Optional[str] = Field(
         default=None,
@@ -1593,9 +1617,29 @@ class GceOrchestratorConfig(BaseModel):
             field_path="cloud.orchestrator.zones",
         )
 
+    @field_validator("regions", mode="before")
+    @classmethod
+    def normalize_regions(
+        cls,
+        value: list[str] | tuple[str, ...] | None,
+    ) -> list[str]:
+        """Normalize ordered orchestrator candidate regions."""
+        return _normalize_cloud_region_list(
+            value,
+            field_path="cloud.orchestrator.regions",
+        )
+
     @model_validator(mode="after")
     def validate_gce_contract(self):
         """Enforce the supported GCE orchestrator contract."""
+        effective_regions = _coalesce_cloud_regions(
+            region=self.region,
+            regions=self.regions,
+        )
+        if effective_regions:
+            self.regions = effective_regions
+            self.region = effective_regions[0]
+
         effective_zones = list(self.zones)
         if not effective_zones and self.zone is not None:
             effective_zones = [self.zone]
@@ -1604,15 +1648,14 @@ class GceOrchestratorConfig(BaseModel):
             self.zone = None if self.region is not None else effective_zones[0]
 
         has_zone = bool(effective_zones)
-        has_region = self.region is not None
+        has_region = bool(effective_regions)
         if not has_zone and not has_region:
             raise ValueError(
                 "cloud.orchestrator requires 'zone', 'zones', or 'region' for placement"
             )
         if has_region:
-            assert self.region is not None
-            _validate_region_zone_membership(
-                region=self.region,
+            _validate_regions_zone_membership(
+                regions=effective_regions,
                 zones=effective_zones,
                 field_path="cloud.orchestrator.zones",
             )
@@ -1732,6 +1775,41 @@ def _normalize_cloud_zone_list(
     return normalized
 
 
+def _normalize_cloud_region_list(
+    value: list[str] | tuple[str, ...] | None,
+    *,
+    field_path: str,
+) -> list[str]:
+    """Normalize ordered region candidates while preserving user order."""
+    if value is None:
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_region in value:
+        region = str(raw_region).strip()
+        if not region:
+            raise ValueError(f"{field_path} must not contain blank regions")
+        if region in seen:
+            continue
+        normalized.append(region)
+        seen.add(region)
+    return normalized
+
+
+def _coalesce_cloud_regions(
+    *,
+    region: Optional[str],
+    regions: list[str],
+) -> list[str]:
+    """Return the effective ordered region list from singular/plural fields."""
+    if regions:
+        return list(regions)
+    if region is not None:
+        return [region]
+    return []
+
+
 def _validate_region_zone_membership(
     *,
     region: str,
@@ -1741,6 +1819,30 @@ def _validate_region_zone_membership(
     for zone in zones:
         if zone_to_region(zone) != region:
             raise ValueError(f"{field_path} must all belong to region '{region}'")
+
+
+def _validate_regions_zone_membership(
+    *,
+    regions: list[str],
+    zones: list[str],
+    field_path: str,
+) -> None:
+    if not regions:
+        return
+    if len(regions) == 1:
+        _validate_region_zone_membership(
+            region=regions[0],
+            zones=zones,
+            field_path=field_path,
+        )
+        return
+
+    allowed_regions = set(regions)
+    for zone in zones:
+        if zone_to_region(zone) not in allowed_regions:
+            raise ValueError(
+                f"{field_path} must all belong to one of regions {regions!r}"
+            )
 
 
 def _merge_cloud_maps(defaults: object, override: object) -> dict[str, str]:
@@ -1776,6 +1878,12 @@ def _merge_cloud_placement_defaults(
 ) -> dict[str, Any]:
     """Merge role-level placement defaults into one raw placement object."""
     merged = {key: value for key, value in defaults.items() if value is not None}
+    if "zone" in placement or "zones" in placement:
+        merged.pop("zone", None)
+        merged.pop("zones", None)
+    if "region" in placement or "regions" in placement:
+        merged.pop("region", None)
+        merged.pop("regions", None)
     merged.update({key: value for key, value in placement.items() if value is not None})
     merged_env = _merge_cloud_maps(defaults.get("env"), placement.get("env"))
     if merged_env:
@@ -2056,6 +2164,10 @@ class GceProviderConfig(BaseModel):
         default=None,
         description="Default region for GCE placements when zone-level targeting is not used.",
     )
+    regions: list[str] = Field(
+        default_factory=list,
+        description="Default ordered candidate regions for GCE placements.",
+    )
     zones: list[str] = Field(
         default_factory=list,
         description="Default ordered candidate zones for GCE placements.",
@@ -2120,6 +2232,14 @@ class GceProviderConfig(BaseModel):
             raise ValueError("Field is required")
         return value
 
+    @field_validator("regions")
+    @classmethod
+    def validate_regions(cls, value: list[str]) -> list[str]:
+        return _normalize_cloud_region_list(
+            value,
+            field_path="cloud.providers.gce.regions",
+        )
+
     @field_validator("zones")
     @classmethod
     def validate_zones(cls, value: list[str]) -> list[str]:
@@ -2146,9 +2266,15 @@ class GceProviderConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_region_zone_contract(self):
-        if self.region is not None:
-            _validate_region_zone_membership(
-                region=self.region,
+        effective_regions = _coalesce_cloud_regions(
+            region=self.region,
+            regions=self.regions,
+        )
+        if effective_regions:
+            self.regions = effective_regions
+            self.region = effective_regions[0]
+            _validate_regions_zone_membership(
+                regions=effective_regions,
                 zones=self.zones,
                 field_path="cloud.providers.gce.zones",
             )
@@ -2226,6 +2352,10 @@ class CloudOrchestratorPlacementConfig(BaseModel):
         default=None,
         description="Optional region for the orchestrator placement.",
     )
+    regions: list[str] = Field(
+        default_factory=list,
+        description="Ordered candidate regions for the orchestrator placement.",
+    )
     fallback: Optional[bool] = Field(
         default=None,
         description="Optional override for orchestrator zone fallback behavior.",
@@ -2262,6 +2392,14 @@ class CloudOrchestratorPlacementConfig(BaseModel):
     def normalize_region(cls, value: Optional[str]) -> Optional[str]:
         return _normalize_cloud_optional_string(value)
 
+    @field_validator("regions")
+    @classmethod
+    def validate_regions(cls, value: list[str]) -> list[str]:
+        return _normalize_cloud_region_list(
+            value,
+            field_path="cloud.orchestrator.regions",
+        )
+
     @field_validator("instance_profile")
     @classmethod
     def validate_required_strings(cls, value: str) -> str:
@@ -2278,9 +2416,15 @@ class CloudOrchestratorPlacementConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_region_zone_contract(self):
-        if self.region is not None:
-            _validate_region_zone_membership(
-                region=self.region,
+        effective_regions = _coalesce_cloud_regions(
+            region=self.region,
+            regions=self.regions,
+        )
+        if effective_regions:
+            self.regions = effective_regions
+            self.region = effective_regions[0]
+            _validate_regions_zone_membership(
+                regions=effective_regions,
                 zones=self.zones,
                 field_path="cloud.orchestrator.zones",
             )
@@ -2304,6 +2448,10 @@ class CloudPlacementDefaultsConfig(BaseModel):
     region: Optional[str] = Field(
         default=None,
         description="Default region for placements in this role.",
+    )
+    regions: list[str] = Field(
+        default_factory=list,
+        description="Default ordered candidate regions for placements in this role.",
     )
     zones: list[str] = Field(
         default_factory=list,
@@ -2333,6 +2481,14 @@ class CloudPlacementDefaultsConfig(BaseModel):
     def normalize_region(cls, value: Optional[str]) -> Optional[str]:
         return _normalize_cloud_optional_string(value)
 
+    @field_validator("regions")
+    @classmethod
+    def validate_regions(cls, value: list[str]) -> list[str]:
+        return _normalize_cloud_region_list(
+            value,
+            field_path="cloud.placements.defaults.regions",
+        )
+
     @field_validator("zones")
     @classmethod
     def validate_zones(cls, value: list[str]) -> list[str]:
@@ -2351,9 +2507,15 @@ class CloudPlacementDefaultsConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_region_zone_contract(self):
-        if self.region is not None:
-            _validate_region_zone_membership(
-                region=self.region,
+        effective_regions = _coalesce_cloud_regions(
+            region=self.region,
+            regions=self.regions,
+        )
+        if effective_regions:
+            self.regions = effective_regions
+            self.region = effective_regions[0]
+            _validate_regions_zone_membership(
+                regions=effective_regions,
                 zones=self.zones,
                 field_path="cloud.placements.defaults.zones",
             )
@@ -2376,6 +2538,10 @@ class CloudPlacementConfig(BaseModel):
     region: Optional[str] = Field(
         default=None,
         description="Optional region for this placement.",
+    )
+    regions: list[str] = Field(
+        default_factory=list,
+        description="Ordered candidate regions for this placement.",
     )
     fallback: Optional[bool] = Field(
         default=None,
@@ -2418,6 +2584,14 @@ class CloudPlacementConfig(BaseModel):
     def normalize_region(cls, value: Optional[str]) -> Optional[str]:
         return _normalize_cloud_optional_string(value)
 
+    @field_validator("regions")
+    @classmethod
+    def validate_regions(cls, value: list[str]) -> list[str]:
+        return _normalize_cloud_region_list(
+            value,
+            field_path="cloud.placements.regions",
+        )
+
     @field_validator("instance_profile")
     @classmethod
     def validate_required_strings(cls, value: str) -> str:
@@ -2445,9 +2619,15 @@ class CloudPlacementConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_region_zone_contract(self):
-        if self.region is not None:
-            _validate_region_zone_membership(
-                region=self.region,
+        effective_regions = _coalesce_cloud_regions(
+            region=self.region,
+            regions=self.regions,
+        )
+        if effective_regions:
+            self.regions = effective_regions
+            self.region = effective_regions[0]
+            _validate_regions_zone_membership(
+                regions=effective_regions,
                 zones=self.zones,
                 field_path="cloud.placements.zones",
             )
@@ -2671,8 +2851,16 @@ class CloudConfig(BaseModel):
             return
 
         provider_region = self.providers.gce.region
+        provider_regions = self.providers.gce.regions
         provider_zones = self.providers.gce.zones
-        orchestrator_region = self.orchestrator.region or provider_region
+        orchestrator_regions: list[str] = (
+            self.orchestrator.regions
+            if self.orchestrator.regions
+            else ([self.orchestrator.region] if self.orchestrator.region else [])
+            or provider_regions
+            or ([provider_region] if provider_region else [])
+        )
+        orchestrator_region = orchestrator_regions[0] if orchestrator_regions else None
         orchestrator_zones = (
             self.orchestrator.zones if self.orchestrator.zones else provider_zones
         )
@@ -2685,15 +2873,22 @@ class CloudConfig(BaseModel):
                 "cloud.orchestrator requires explicit zone, zones, or region"
             )
         if orchestrator_region is not None:
-            _validate_region_zone_membership(
-                region=orchestrator_region,
+            _validate_regions_zone_membership(
+                regions=orchestrator_regions,
                 zones=orchestrator_zones,
                 field_path="cloud.orchestrator.zones",
             )
 
         if self.workers is not None:
             for index, placement in enumerate(self.workers.placements):
-                effective_region = placement.region or provider_region
+                effective_regions: list[str] = (
+                    placement.regions
+                    if placement.regions
+                    else ([placement.region] if placement.region else [])
+                    or provider_regions
+                    or ([provider_region] if provider_region else [])
+                )
+                effective_region = effective_regions[0] if effective_regions else None
                 effective_zones = placement.zones if placement.zones else provider_zones
                 if (
                     not placement.zones
@@ -2704,15 +2899,22 @@ class CloudConfig(BaseModel):
                         "cloud.workers.placements require explicit zone, zones, or region"
                     )
                 if effective_region is not None:
-                    _validate_region_zone_membership(
-                        region=effective_region,
+                    _validate_regions_zone_membership(
+                        regions=effective_regions,
                         zones=effective_zones,
                         field_path=f"cloud.workers.placements.{index}.zones",
                     )
 
         if self.evaluators is not None:
             for index, placement in enumerate(self.evaluators.placements):
-                effective_region = placement.region or provider_region
+                effective_regions: list[str] = (
+                    placement.regions
+                    if placement.regions
+                    else ([placement.region] if placement.region else [])
+                    or provider_regions
+                    or ([provider_region] if provider_region else [])
+                )
+                effective_region = effective_regions[0] if effective_regions else None
                 effective_zones = placement.zones if placement.zones else provider_zones
                 if (
                     not placement.zones
@@ -2723,8 +2925,8 @@ class CloudConfig(BaseModel):
                         "cloud.evaluators.placements require explicit zone, zones, or region"
                     )
                 if effective_region is not None:
-                    _validate_region_zone_membership(
-                        region=effective_region,
+                    _validate_regions_zone_membership(
+                        regions=effective_regions,
                         zones=effective_zones,
                         field_path=f"cloud.evaluators.placements.{index}.zones",
                     )

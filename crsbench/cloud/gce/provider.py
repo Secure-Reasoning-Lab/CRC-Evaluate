@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 from crsbench.cloud.gce.provisioner import GceProvisioner
 from crsbench.cloud.gce.quota import (
@@ -104,6 +104,7 @@ class GceProviderAdapter:
             if plan.orchestrator.region
             else _primary_zone(plan.orchestrator.zones),
             zones=list(plan.orchestrator.zones),
+            regions=list(plan.orchestrator.regions),
             region=plan.orchestrator.region,
             fallback=plan.orchestrator.fallback,
             machine_type=resolved.machine_type,
@@ -139,6 +140,7 @@ class GceProviderAdapter:
                     project=resolved.project,
                     zone=None if placement.region else _primary_zone(placement.zones),
                     zones=list(placement.zones),
+                    regions=list(placement.regions),
                     region=placement.region,
                     fallback=placement.fallback,
                     worker_count=placement.count,
@@ -185,6 +187,7 @@ class GceProviderAdapter:
                     project=resolved.project,
                     zone=None if placement.region else _primary_zone(placement.zones),
                     zones=list(placement.zones),
+                    regions=list(placement.regions),
                     region=placement.region,
                     fallback=placement.fallback,
                     worker_count=placement.count,
@@ -275,11 +278,75 @@ class GceProviderAdapter:
         project = self.resolve_instance_profile(
             plan.orchestrator.instance_profile
         ).project
+        aggregated_requirements: dict[tuple[str, str], int] = {}
+        flexible_requirements: list[tuple[list[str], str, int]] = []
+
+        def collect_requirement(
+            *,
+            candidate_regions: Sequence[str],
+            fallback: bool,
+            machine_type: str | None,
+            count: int,
+        ) -> None:
+            if machine_type is None:
+                raise ValueError(
+                    "GCE quota validation requires instance profiles with explicit machine_type"
+                )
+            if not candidate_regions:
+                raise ValueError("GCE quota validation requires a region or zone")
+
+            family = machine_type_to_family(machine_type)
+            required = machine_type_to_vcpus(machine_type) * count
+            if len(candidate_regions) == 1 or not fallback:
+                region = candidate_regions[0]
+                aggregated_requirements[(region, family)] = (
+                    aggregated_requirements.get((region, family), 0) + required
+                )
+                return
+            flexible_requirements.append((list(candidate_regions), family, required))
+
+        if include_orchestrator and plan.orchestrator.provider is CloudProvider.GCE:
+            resolved = self.resolve_instance_profile(plan.orchestrator.instance_profile)
+            collect_requirement(
+                candidate_regions=_candidate_regions_for_quota(
+                    regions=plan.orchestrator.regions,
+                    zones=plan.orchestrator.zones,
+                ),
+                fallback=plan.orchestrator.fallback,
+                machine_type=resolved.machine_type,
+                count=1,
+            )
+
+        for placement in plan.worker_placements:
+            if placement.provider is not CloudProvider.GCE:
+                continue
+            resolved = self.resolve_instance_profile(placement.instance_profile)
+            collect_requirement(
+                candidate_regions=_candidate_regions_for_quota(
+                    regions=placement.regions,
+                    zones=placement.zones,
+                ),
+                fallback=placement.fallback,
+                machine_type=resolved.machine_type,
+                count=placement.count,
+            )
+
+        for placement in plan.evaluator_placements:
+            if placement.provider is not CloudProvider.GCE:
+                continue
+            resolved = self.resolve_instance_profile(placement.instance_profile)
+            collect_requirement(
+                candidate_regions=_candidate_regions_for_quota(
+                    regions=placement.regions,
+                    zones=placement.zones,
+                ),
+                fallback=placement.fallback,
+                machine_type=resolved.machine_type,
+                count=placement.count,
+            )
+
         shortages: list[QuotaShortage] = []
-        for region, family, required in self.quota_requirements(
-            plan,
-            include_orchestrator=include_orchestrator,
-        ):
+        for (region, family), required in sorted(aggregated_requirements.items()):
             available = self._quota_client.get_available_capacity(
                 project=project,
                 region=region,
@@ -295,7 +362,94 @@ class GceProviderAdapter:
                         available=available,
                     )
                 )
+
+        for candidate_regions, family, required in flexible_requirements:
+            availabilities = [
+                (
+                    region,
+                    self._quota_client.get_available_capacity(
+                        project=project,
+                        region=region,
+                        resource_family=family,
+                    )
+                    - aggregated_requirements.get((region, family), 0),
+                )
+                for region in candidate_regions
+            ]
+            if any(available >= required for _, available in availabilities):
+                continue
+            shortages.extend(
+                self._quota_shortages_for_requirement(
+                    project=project,
+                    candidate_regions=candidate_regions,
+                    fallback=True,
+                    family=family,
+                    required=required,
+                    reserved_requirements=aggregated_requirements,
+                )
+            )
         return shortages
+
+    def _quota_shortages_for_requirement(
+        self,
+        *,
+        project: str,
+        candidate_regions: Sequence[str],
+        fallback: bool,
+        family: str,
+        required: int,
+        reserved_requirements: Mapping[tuple[str, str], int] | None = None,
+    ) -> list[QuotaShortage]:
+        if not candidate_regions:
+            raise ValueError("GCE quota validation requires a region or zone")
+
+        regions_to_check = list(candidate_regions)
+        if not fallback:
+            regions_to_check = regions_to_check[:1]
+
+        availabilities = [
+            (
+                region,
+                self._quota_client.get_available_capacity(
+                    project=project,
+                    region=region,
+                    resource_family=family,
+                ),
+            )
+            for region in regions_to_check
+        ]
+        if reserved_requirements is not None:
+            availabilities = [
+                (
+                    region,
+                    available - reserved_requirements.get((region, family), 0),
+                )
+                for region, available in availabilities
+            ]
+        if any(available >= required for _, available in availabilities):
+            return []
+
+        if len(availabilities) == 1:
+            region, available = availabilities[0]
+            return [
+                QuotaShortage(
+                    provider=CloudProvider.GCE,
+                    scope=region,
+                    resource_family=family,
+                    required=required,
+                    available=available,
+                )
+            ]
+
+        return [
+            QuotaShortage(
+                provider=CloudProvider.GCE,
+                scope="|".join(region for region, _ in availabilities),
+                resource_family=family,
+                required=required,
+                available=max(available for _, available in availabilities),
+            )
+        ]
 
     def create_orchestrator(
         self,
@@ -461,6 +615,25 @@ def _accumulate_requirement(
     requirements[(effective_region, family)] = requirements.get(
         (effective_region, family), 0
     ) + (machine_type_to_vcpus(machine_type) * count)
+
+
+def _candidate_regions_for_quota(
+    *,
+    regions: Sequence[str],
+    zones: Sequence[str],
+) -> list[str]:
+    if regions:
+        return list(regions)
+
+    candidate_regions: list[str] = []
+    seen: set[str] = set()
+    for zone in zones:
+        region = zone_to_region(zone)
+        if region in seen:
+            continue
+        candidate_regions.append(region)
+        seen.add(region)
+    return candidate_regions
 
 
 def _primary_zone(zones: Sequence[str]) -> str:

@@ -953,6 +953,61 @@ def test_create_workers_uses_regional_bulk_insert_without_zone_allowlist():
     }
 
 
+def test_create_workers_retries_next_region_on_retryable_capacity_error() -> None:
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+
+    client = _RecordingClient()
+    client.operation_errors["bulk-op-us-east5-bulk"] = _operation_error(
+        "RESOURCE_POOL_EXHAUSTED",
+        "No regional capacity left",
+    )
+    client.region_listed_instances["us-east1"] = [
+        {
+            "id": "east1-b-gce-worker-001",
+            "name": "gce-worker-001",
+            "status": "RUNNING",
+            "zone": "zones/us-east1-b",
+            "networkInterfaces": [{"networkIP": "10.0.1.11"}],
+            "labels": {
+                "crsbench-experiment": "exp-cloud-42",
+                "crsbench-role": "worker",
+                "env": "prod",
+                "owner": "team-crs",
+            },
+            "serviceAccounts": [
+                {"email": "crsbench-worker@test-project.iam.gserviceaccount.com"}
+            ],
+        }
+    ]
+    provisioner = GceProvisioner(client=client)
+
+    workers = provisioner.create_workers(
+        experiment_name="Exp.Cloud 42",
+        fleet=_make_fleet(
+            zone=None,
+            region="us-east5",
+            regions=["us-east5", "us-east1"],
+            zones=["us-east5-b", "us-east1-b"],
+            fallback=True,
+            worker_count=1,
+        ),
+        redis_host="redis.internal:6380",
+        registration=_make_registration(),
+    )
+
+    assert [worker.zone for worker in workers] == ["us-east1-b"]
+    assert [region for _, region, _, _ in client.bulk_inserted] == [
+        "us-east5",
+        "us-east1",
+    ]
+    assert client.bulk_inserted[0][2]["location_policy"]["zones"] == [
+        {"zone": "zones/us-east5-b"}
+    ]
+    assert client.bulk_inserted[1][2]["location_policy"]["zones"] == [
+        {"zone": "zones/us-east1-b"}
+    ]
+
+
 def test_create_workers_moves_multi_count_placement_as_atomic_group() -> None:
     from crsbench.cloud.gce.provisioner import GceProvisioner
 

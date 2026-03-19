@@ -138,6 +138,11 @@ config validation fails fast if any listed zone belongs to a different region.
 The checked-in regional samples intentionally omit `zones` so GCE can choose the
 actual zone within each requested region.
 
+If you want ordered regional fallback, use `regions` instead of a single
+`region`, for example `regions: [us-east5, us-east1]` with optional `fallback:
+true`. Optional `zones` remain an allowlist, but every listed zone must belong
+to one of those declared regions.
+
 The `gce-sanity-zone-1orch-2worker-1eval.yaml` sample is the reference when you
 want the older explicit zonal topology on purpose.
 

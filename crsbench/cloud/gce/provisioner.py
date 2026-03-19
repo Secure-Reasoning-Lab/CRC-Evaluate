@@ -18,6 +18,7 @@ from crsbench.cloud.gce.metadata import (
     load_startup_script,
 )
 from crsbench.cloud.gce.models import GceInstanceRequest, GceWorkerRecord
+from crsbench.cloud.gce.quota import zone_to_region
 
 if TYPE_CHECKING:
     from crsbench.cloud.bootstrap import CloudVmBootstrapInputs
@@ -469,6 +470,13 @@ def _is_retryable_zonal_capacity_error(exc: Exception) -> bool:
     return "ZONE_RESOURCE_POOL_EXHAUSTED" in message
 
 
+def _is_retryable_regional_capacity_error(exc: Exception) -> bool:
+    if not isinstance(exc, GceProvisioningError):
+        return False
+    message = str(exc)
+    return "RESOURCE_POOL_EXHAUSTED" in message
+
+
 def _build_label_filter(label_selector: Mapping[str, str]) -> str:
     parts: list[str] = []
     for key, value in sorted(label_selector.items()):
@@ -691,14 +699,15 @@ class GceProvisioner:
         env_passthrough: dict[str, str] | None = None,
     ) -> list[GceWorkerRecord]:
         """Create a worker fleet and return normalized provider records."""
-        if fleet.region is not None:
-            return self._create_requests_in_region(
-                region=fleet.region,
-                zones=list(fleet.zones),
+        candidate_regions = self._candidate_regions_for_fleet(fleet)
+        if candidate_regions:
+            return self._create_requests_with_region_fallback(
+                regions=candidate_regions,
+                allowed_zones=list(fleet.zones),
+                fallback=fleet.fallback,
                 request_builder=lambda: self.build_requests(
                     experiment_name=experiment_name,
                     fleet=fleet,
-                    zone=fleet.zones[0] if fleet.zones else None,
                     region_based=True,
                     redis_host=redis_host,
                     redis_password=redis_password,
@@ -741,14 +750,15 @@ class GceProvisioner:
         env_passthrough: dict[str, str] | None = None,
     ) -> list[GceWorkerRecord]:
         """Create an evaluator fleet and return normalized provider records."""
-        if fleet.region is not None:
-            return self._create_requests_in_region(
-                region=fleet.region,
-                zones=list(fleet.zones),
+        candidate_regions = self._candidate_regions_for_fleet(fleet)
+        if candidate_regions:
+            return self._create_requests_with_region_fallback(
+                regions=candidate_regions,
+                allowed_zones=list(fleet.zones),
+                fallback=fleet.fallback,
                 request_builder=lambda: self.build_evaluator_requests(
                     experiment_name=experiment_name,
                     fleet=fleet,
-                    zone=fleet.zones[0] if fleet.zones else None,
                     region_based=True,
                     redis_host=redis_host,
                     redis_password=redis_password,
@@ -837,15 +847,16 @@ class GceProvisioner:
         redis_password: str,
     ) -> GceWorkerRecord:
         """Create the remote orchestrator VM and return its normalized record."""
-        if orchestrator.region is not None:
-            requests = self._create_requests_in_region(
-                region=orchestrator.region,
-                zones=list(orchestrator.zones),
+        candidate_regions = self._candidate_regions_for_orchestrator(orchestrator)
+        if candidate_regions:
+            requests = self._create_requests_with_region_fallback(
+                regions=candidate_regions,
+                allowed_zones=list(orchestrator.zones),
+                fallback=orchestrator.fallback,
                 request_builder=lambda: [
                     self.build_orchestrator_request(
                         experiment_name=experiment_name,
                         orchestrator=orchestrator,
-                        zone=orchestrator.zones[0] if orchestrator.zones else None,
                         experiment_config_path=experiment_config_path,
                         env_passthrough=env_passthrough,
                         redis_password=redis_password,
@@ -886,13 +897,21 @@ class GceProvisioner:
             experiment_name=experiment_name,
             orchestrator=orchestrator,
         )
-        if orchestrator.region is not None:
-            return self._list_records_in_region(
-                project=orchestrator.project,
-                region=orchestrator.region,
-                label_selector=expected_labels,
-                allowed_zones=orchestrator.zones,
-            )
+        candidate_regions = self._candidate_regions_for_orchestrator(orchestrator)
+        if candidate_regions:
+            records: dict[tuple[str, str], GceWorkerRecord] = {}
+            for region in candidate_regions:
+                for instance in self._list_records_in_region(
+                    project=orchestrator.project,
+                    region=region,
+                    label_selector=expected_labels,
+                    allowed_zones=self._zones_for_region(
+                        allowed_zones=orchestrator.zones,
+                        region=region,
+                    ),
+                ):
+                    records[(instance.zone, instance.name)] = instance
+            return list(records.values())
         instances: dict[tuple[str, str], GceWorkerRecord] = {}
         for zone in self._candidate_zones_for_orchestrator(orchestrator):
             zone_instances = [
@@ -974,13 +993,21 @@ class GceProvisioner:
         expected_labels = build_worker_labels(
             experiment_name=experiment_name, fleet=fleet
         )
-        if fleet.region is not None:
-            return self._list_records_in_region(
-                project=fleet.project,
-                region=fleet.region,
-                label_selector=expected_labels,
-                allowed_zones=fleet.zones,
-            )
+        candidate_regions = self._candidate_regions_for_fleet(fleet)
+        if candidate_regions:
+            records: dict[tuple[str, str], GceWorkerRecord] = {}
+            for region in candidate_regions:
+                for worker in self._list_records_in_region(
+                    project=fleet.project,
+                    region=region,
+                    label_selector=expected_labels,
+                    allowed_zones=self._zones_for_region(
+                        allowed_zones=fleet.zones,
+                        region=region,
+                    ),
+                ):
+                    records[(worker.zone, worker.name)] = worker
+            return list(records.values())
         workers: dict[tuple[str, str], GceWorkerRecord] = {}
         for zone in self._candidate_zones_for_fleet(fleet):
             zone_workers = [
@@ -1039,13 +1066,21 @@ class GceProvisioner:
             experiment_name=experiment_name,
             fleet=fleet,
         )
-        if fleet.region is not None:
-            return self._list_records_in_region(
-                project=fleet.project,
-                region=fleet.region,
-                label_selector=expected_labels,
-                allowed_zones=fleet.zones,
-            )
+        candidate_regions = self._candidate_regions_for_fleet(fleet)
+        if candidate_regions:
+            records: dict[tuple[str, str], GceWorkerRecord] = {}
+            for region in candidate_regions:
+                for worker in self._list_records_in_region(
+                    project=fleet.project,
+                    region=region,
+                    label_selector=expected_labels,
+                    allowed_zones=self._zones_for_region(
+                        allowed_zones=fleet.zones,
+                        region=region,
+                    ),
+                ):
+                    records[(worker.zone, worker.name)] = worker
+            return list(records.values())
         workers: dict[tuple[str, str], GceWorkerRecord] = {}
         for zone in self._candidate_zones_for_fleet(fleet):
             zone_workers = [
@@ -1182,6 +1217,41 @@ class GceProvisioner:
             self._rollback_records(project=project, workers=rollback_workers)
             raise
 
+    def _create_requests_with_region_fallback(
+        self,
+        *,
+        regions: list[str],
+        allowed_zones: list[str],
+        fallback: bool,
+        request_builder: Callable[[], Sequence[GceInstanceRequest]],
+        role_label: str,
+        label_selector: Mapping[str, str],
+    ) -> list[GceWorkerRecord]:
+        last_exc: GceProvisioningError | None = None
+        for index, region in enumerate(regions):
+            try:
+                return self._create_requests_in_region(
+                    region=region,
+                    zones=self._zones_for_region(
+                        allowed_zones=allowed_zones,
+                        region=region,
+                    ),
+                    request_builder=request_builder,
+                    role_label=role_label,
+                    label_selector=label_selector,
+                )
+            except GceProvisioningError as exc:
+                last_exc = exc
+                should_retry = (
+                    fallback
+                    and index < len(regions) - 1
+                    and _is_retryable_regional_capacity_error(exc)
+                )
+                if not should_retry:
+                    raise
+        assert last_exc is not None
+        raise last_exc
+
     def _create_request_group(
         self,
         requests: Sequence[GceInstanceRequest],
@@ -1229,6 +1299,13 @@ class GceProvisioner:
             return list(fleet.zones)
         return [self._resolve_zone(fleet)]
 
+    def _candidate_regions_for_fleet(self, fleet: GceWorkerFleetConfig) -> list[str]:
+        if fleet.regions:
+            return list(fleet.regions)
+        if fleet.region is not None:
+            return [fleet.region]
+        return []
+
     def _candidate_zones_for_orchestrator(
         self,
         orchestrator: GceOrchestratorConfig,
@@ -1236,6 +1313,24 @@ class GceProvisioner:
         if orchestrator.zones:
             return list(orchestrator.zones)
         return [self._resolve_orchestrator_zone(orchestrator)]
+
+    def _candidate_regions_for_orchestrator(
+        self,
+        orchestrator: GceOrchestratorConfig,
+    ) -> list[str]:
+        if orchestrator.regions:
+            return list(orchestrator.regions)
+        if orchestrator.region is not None:
+            return [orchestrator.region]
+        return []
+
+    def _zones_for_region(
+        self,
+        *,
+        allowed_zones: Sequence[str],
+        region: str,
+    ) -> list[str]:
+        return [zone for zone in allowed_zones if zone_to_region(zone) == region]
 
     def _resolve_zone(self, fleet: GceWorkerFleetConfig) -> str:
         if fleet.zone:

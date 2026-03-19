@@ -70,6 +70,7 @@ def _resolve_launch_plan(
     resolved_orchestrator = CloudOrchestratorPlan(
         provider=plan.orchestrator.provider,
         region=plan.orchestrator.region,
+        regions=list(plan.orchestrator.regions),
         zones=list(plan.orchestrator.zones),
         fallback=plan.orchestrator.fallback,
         instance_profile=_resolve_instance_profile(
@@ -94,6 +95,7 @@ def _resolve_launch_plan(
             role=placement.role,
             provider=placement.provider,
             region=placement.region,
+            regions=list(placement.regions),
             zones=list(placement.zones),
             fallback=placement.fallback,
             count=placement.count,
@@ -121,6 +123,7 @@ def _resolve_launch_plan(
             role=placement.role,
             provider=placement.provider,
             region=placement.region,
+            regions=list(placement.regions),
             zones=list(placement.zones),
             fallback=placement.fallback,
             count=placement.count,

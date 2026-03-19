@@ -645,6 +645,40 @@ def test_build_cloud_launch_plan_prefers_specific_region_and_zone_allowlist_over
     assert plan.worker_placements[0].zones == ["us-central1-a", "us-central1-f"]
 
 
+def test_build_cloud_launch_plan_inherits_ordered_provider_regions_and_fallback():
+    from crsbench.cloud.models import build_cloud_launch_plan
+
+    raw_config = _make_provider_neutral_experiment_config().model_dump(
+        mode="json",
+        exclude_none=True,
+        exclude_defaults=True,
+    )
+    raw_config["cloud"]["providers"]["gce"]["regions"] = ["us-east5", "us-east1"]
+    raw_config["cloud"]["providers"]["gce"]["zones"] = ["us-east5-b", "us-east1-b"]
+    raw_config["cloud"]["providers"]["gce"]["fallback"] = False
+    raw_config["cloud"]["orchestrator"] = {
+        "instance_profile": "gce-orchestrator-n2d",
+    }
+    raw_config["cloud"]["workers"]["placements"] = [
+        {
+            "count": 1,
+            "instance_profile": "gce-worker-n2d",
+        }
+    ]
+    config = ExperimentConfig.model_validate(raw_config)
+
+    plan = build_cloud_launch_plan(config)
+
+    assert plan.orchestrator.region == "us-east5"
+    assert plan.orchestrator.regions == ["us-east5", "us-east1"]
+    assert plan.orchestrator.zones == ["us-east5-b", "us-east1-b"]
+    assert plan.orchestrator.fallback is False
+    assert plan.worker_placements[0].region == "us-east5"
+    assert plan.worker_placements[0].regions == ["us-east5", "us-east1"]
+    assert plan.worker_placements[0].zones == ["us-east5-b", "us-east1-b"]
+    assert plan.worker_placements[0].fallback is False
+
+
 def test_build_cloud_launch_plan_merges_provider_launch_defaults_override():
     from crsbench.cloud.models import build_cloud_launch_plan
 

@@ -1199,6 +1199,45 @@ class TestExperimentConfigSchema:
         assert config.cloud.orchestrator.region is None
         assert config.cloud.orchestrator.zones == []
 
+    def test_cloud_provider_contract_accepts_ordered_regions_and_zone_allowlist(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["providers"]["gce"]["regions"] = [
+            "us-east5",
+            "us-east1",
+        ]
+        data["cloud"]["providers"]["gce"]["zones"] = [
+            "us-east5-b",
+            "us-east1-b",
+        ]
+        data["cloud"]["orchestrator"] = {
+            "instance_profile": "gce-orchestrator-n2d",
+        }
+        data["cloud"]["workers"]["placements"] = [
+            {
+                "count": 1,
+                "regions": ["us-east5", "us-east1"],
+                "zones": ["us-east5-b", "us-east1-b"],
+                "fallback": False,
+            }
+        ]
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.providers is not None
+        assert config.cloud.providers.gce is not None
+        assert config.cloud.providers.gce.region == "us-east5"
+        assert config.cloud.providers.gce.regions == ["us-east5", "us-east1"]
+        assert config.cloud.providers.gce.zones == ["us-east5-b", "us-east1-b"]
+        assert config.cloud.workers.placements[0].region == "us-east5"
+        assert config.cloud.workers.placements[0].regions == ["us-east5", "us-east1"]
+        assert config.cloud.workers.placements[0].zones == [
+            "us-east5-b",
+            "us-east1-b",
+        ]
+        assert config.cloud.workers.placements[0].fallback is False
+
     def test_cloud_worker_placement_accepts_zone_list_and_fallback_override(self):
         data = self._base_kwargs()
         data["cloud"] = self._provider_neutral_cloud_kwargs()
@@ -1243,6 +1282,27 @@ class TestExperimentConfigSchema:
         with pytest.raises(
             PydanticValidationError,
             match="cloud.providers.gce.zones must all belong to region 'us-east5'",
+        ):
+            ExperimentConfig(**data)
+
+    def test_cloud_provider_contract_rejects_zone_allowlist_outside_regions(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["providers"]["gce"]["regions"] = [
+            "us-east5",
+            "us-east1",
+        ]
+        data["cloud"]["providers"]["gce"]["zones"] = [
+            "us-east5-b",
+            "us-central1-a",
+        ]
+
+        with pytest.raises(
+            PydanticValidationError,
+            match=(
+                "cloud.providers.gce.zones must all belong to one of regions "
+                "\\['us-east5', 'us-east1'\\]"
+            ),
         ):
             ExperimentConfig(**data)
 

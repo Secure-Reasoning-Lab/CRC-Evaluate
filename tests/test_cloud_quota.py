@@ -109,3 +109,39 @@ def test_quota_validator_reports_normalized_shortage_before_launch():
 
     with pytest.raises(CloudQuotaValidationError, match="us-east5"):
         validator.validate(plan)
+
+
+def test_quota_validator_allows_multi_region_fallback_when_later_region_has_capacity():
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+    from crsbench.cloud.quota import QuotaValidator
+
+    config = _make_provider_neutral_experiment_config()
+    assert config.cloud is not None
+    assert config.cloud.workers is not None
+    config.cloud.workers.placements = [
+        config.cloud.workers.placements[0].model_copy(
+            update={
+                "region": "us-east5",
+                "regions": ["us-east5", "us-east1"],
+                "zones": ["us-east5-b", "us-east1-b"],
+                "count": 2,
+            }
+        )
+    ]
+    plan = build_cloud_launch_plan(
+        ExperimentConfig.model_validate(
+            config.model_dump(mode="json", exclude_none=True)
+        )
+    )
+    adapter = GceProviderAdapter(
+        quota_client=_QuotaClient(
+            {
+                ("us-east5", "n2d"): 0,
+                ("us-east1", "n2d"): 32,
+            }
+        )
+    )
+
+    validator = QuotaValidator(adapters={"gce": adapter})
+
+    validator.validate(plan, include_orchestrator=False)

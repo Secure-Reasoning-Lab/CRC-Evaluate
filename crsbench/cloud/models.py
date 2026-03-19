@@ -45,6 +45,7 @@ class CloudOrchestratorPlan:
 
     provider: CloudProvider
     region: str | None
+    regions: list[str]
     zones: list[str]
     fallback: bool
     instance_profile: ResolvedInstanceProfile
@@ -59,6 +60,7 @@ class CloudPlacementPlan:
     role: CloudInstanceRole
     provider: CloudProvider
     region: str | None
+    regions: list[str]
     zones: list[str]
     fallback: bool
     count: int
@@ -120,9 +122,10 @@ def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
         _build_placement_plan(
             config=config,
             role=CloudInstanceRole.WORKER,
-            region=_resolve_candidate_region(
+            regions=_resolve_candidate_regions(
                 config=config,
                 specific_region=placement.region,
+                specific_regions=placement.regions,
             ),
             zones=_resolve_candidate_zones(
                 config=config,
@@ -143,9 +146,10 @@ def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
         _build_placement_plan(
             config=config,
             role=CloudInstanceRole.EVALUATOR,
-            region=_resolve_candidate_region(
+            regions=_resolve_candidate_regions(
                 config=config,
                 specific_region=placement.region,
+                specific_regions=placement.regions,
             ),
             zones=_resolve_candidate_zones(
                 config=config,
@@ -165,14 +169,18 @@ def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
         )
     ]
 
+    orchestrator_regions = _resolve_candidate_regions(
+        config=config,
+        specific_region=config.cloud.orchestrator.region,
+        specific_regions=config.cloud.orchestrator.regions,
+    )
+
     return CloudLaunchPlan(
         experiment_name=config.experiment,
         orchestrator=CloudOrchestratorPlan(
             provider=orchestrator_profile.provider,
-            region=_resolve_candidate_region(
-                config=config,
-                specific_region=config.cloud.orchestrator.region,
-            ),
+            region=orchestrator_regions[0] if orchestrator_regions else None,
+            regions=orchestrator_regions,
             zones=_resolve_candidate_zones(
                 config=config,
                 specific_zones=config.cloud.orchestrator.zones,
@@ -242,7 +250,7 @@ def _build_placement_plan(
     *,
     config: ExperimentConfig,
     role: CloudInstanceRole,
-    region: str | None,
+    regions: list[str],
     zones: list[str],
     fallback: bool,
     count: int,
@@ -259,7 +267,8 @@ def _build_placement_plan(
     return CloudPlacementPlan(
         role=role,
         provider=instance_profile.provider,
-        region=region,
+        region=regions[0] if regions else None,
+        regions=list(regions),
         zones=list(zones),
         fallback=fallback,
         count=count,
@@ -296,17 +305,24 @@ def _resolve_candidate_zones(
     return list(cloud.providers.gce.zones)
 
 
-def _resolve_candidate_region(
+def _resolve_candidate_regions(
     *,
     config: ExperimentConfig,
     specific_region: str | None,
-) -> str | None:
+    specific_regions: list[str],
+) -> list[str]:
+    if specific_regions:
+        return list(specific_regions)
     if specific_region is not None:
-        return specific_region
+        return [specific_region]
     cloud = config.cloud
     if cloud is None or cloud.providers is None or cloud.providers.gce is None:
-        return None
-    return cloud.providers.gce.region
+        return []
+    if cloud.providers.gce.regions:
+        return list(cloud.providers.gce.regions)
+    if cloud.providers.gce.region is not None:
+        return [cloud.providers.gce.region]
+    return []
 
 
 def _resolve_fallback_policy(

@@ -113,6 +113,9 @@ def test_tunnel_waits_for_local_port_before_returning():
             return_value=["ssh", "-N", "-L", "16379:127.0.0.1:6379"],
         ),
         patch(
+            "crsbench.cloud.orchestrator_tunnel.shutil.which", return_value="/bin/ssh"
+        ),
+        patch(
             "crsbench.cloud.orchestrator_tunnel.subprocess.Popen",
             return_value=process,
         ),
@@ -145,6 +148,9 @@ def test_tunnel_cleans_up_on_exception_exit():
             return_value=["ssh", "-N", "-L", "16379:127.0.0.1:6379"],
         ),
         patch(
+            "crsbench.cloud.orchestrator_tunnel.shutil.which", return_value="/bin/ssh"
+        ),
+        patch(
             "crsbench.cloud.orchestrator_tunnel.subprocess.Popen",
             return_value=process,
         ),
@@ -173,6 +179,9 @@ def test_tunnel_retries_transient_startup_failures():
         patch(
             "crsbench.cloud.orchestrator_tunnel.build_tunnel_command",
             return_value=["ssh", "-N", "-L", "16379:127.0.0.1:6379"],
+        ),
+        patch(
+            "crsbench.cloud.orchestrator_tunnel.shutil.which", return_value="/bin/ssh"
         ),
         patch(
             "crsbench.cloud.orchestrator_tunnel.subprocess.Popen",
