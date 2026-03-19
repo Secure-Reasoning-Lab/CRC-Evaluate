@@ -587,6 +587,64 @@ def test_build_cloud_launch_plan_prefers_specific_zone_lists_and_fallback_overri
     assert plan.worker_placements[0].fallback is True
 
 
+def test_build_cloud_launch_plan_inherits_provider_default_region_with_zone_allowlist():
+    from crsbench.cloud.models import build_cloud_launch_plan
+
+    raw_config = _make_provider_neutral_experiment_config().model_dump(
+        mode="json",
+        exclude_none=True,
+        exclude_defaults=True,
+    )
+    raw_config["cloud"]["providers"]["gce"]["region"] = "us-east5"
+    raw_config["cloud"]["providers"]["gce"]["zones"] = ["us-east5-b", "us-east5-c"]
+    raw_config["cloud"]["orchestrator"] = {
+        "instance_profile": "gce-orchestrator-n2d",
+    }
+    raw_config["cloud"]["workers"]["placements"] = [
+        {
+            "count": 1,
+            "instance_profile": "gce-worker-n2d",
+        }
+    ]
+    config = ExperimentConfig.model_validate(raw_config)
+
+    plan = build_cloud_launch_plan(config)
+
+    assert plan.orchestrator.region == "us-east5"
+    assert plan.orchestrator.zones == ["us-east5-b", "us-east5-c"]
+    assert plan.worker_placements[0].region == "us-east5"
+    assert plan.worker_placements[0].zones == ["us-east5-b", "us-east5-c"]
+
+
+def test_build_cloud_launch_plan_prefers_specific_region_and_zone_allowlist_override():
+    from crsbench.cloud.models import build_cloud_launch_plan
+
+    raw_config = _make_provider_neutral_experiment_config().model_dump(
+        mode="json",
+        exclude_none=True,
+        exclude_defaults=True,
+    )
+    raw_config["cloud"]["providers"]["gce"]["region"] = "us-east5"
+    raw_config["cloud"]["providers"]["gce"]["zones"] = ["us-east5-b", "us-east5-c"]
+    raw_config["cloud"]["orchestrator"]["region"] = "us-central1"
+    raw_config["cloud"]["orchestrator"]["zones"] = ["us-central1-a", "us-central1-f"]
+    raw_config["cloud"]["orchestrator"].pop("zone", None)
+    raw_config["cloud"]["workers"]["placements"][0] = {
+        "region": "us-central1",
+        "zones": ["us-central1-a", "us-central1-f"],
+        "instance_profile": "gce-worker-n2d",
+        "count": 2,
+    }
+    config = ExperimentConfig.model_validate(raw_config)
+
+    plan = build_cloud_launch_plan(config)
+
+    assert plan.orchestrator.region == "us-central1"
+    assert plan.orchestrator.zones == ["us-central1-a", "us-central1-f"]
+    assert plan.worker_placements[0].region == "us-central1"
+    assert plan.worker_placements[0].zones == ["us-central1-a", "us-central1-f"]
+
+
 def test_build_cloud_launch_plan_merges_provider_launch_defaults_override():
     from crsbench.cloud.models import build_cloud_launch_plan
 

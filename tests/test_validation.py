@@ -1145,6 +1145,12 @@ class TestExperimentConfigSchema:
                 "count": 1,
             }
         ]
+        data["cloud"]["evaluators"]["placements"] = [
+            {
+                "count": 1,
+                "zones": ["us-east5-b"],
+            }
+        ]
 
         config = ExperimentConfig(**data)
 
@@ -1156,6 +1162,42 @@ class TestExperimentConfigSchema:
         assert config.cloud.orchestrator is not None
         assert config.cloud.orchestrator.zones == []
         assert config.cloud.orchestrator.fallback is None
+
+    def test_cloud_provider_contract_accepts_provider_default_region_and_zone_allowlist(
+        self,
+    ):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["providers"]["gce"]["region"] = "us-east5"
+        data["cloud"]["providers"]["gce"]["zones"] = [
+            "us-east5-b",
+            "us-east5-c",
+        ]
+        data["cloud"]["orchestrator"] = {
+            "instance_profile": "gce-orchestrator-n2d",
+        }
+        data["cloud"]["workers"]["placements"] = [
+            {
+                "count": 1,
+            }
+        ]
+        data["cloud"]["evaluators"]["placements"] = [
+            {
+                "count": 1,
+                "zones": ["us-east5-b"],
+            }
+        ]
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.providers is not None
+        assert config.cloud.providers.gce is not None
+        assert config.cloud.providers.gce.region == "us-east5"
+        assert config.cloud.providers.gce.zones == ["us-east5-b", "us-east5-c"]
+        assert config.cloud.orchestrator is not None
+        assert config.cloud.orchestrator.region is None
+        assert config.cloud.orchestrator.zones == []
 
     def test_cloud_worker_placement_accepts_zone_list_and_fallback_override(self):
         data = self._base_kwargs()
@@ -1188,6 +1230,21 @@ class TestExperimentConfigSchema:
             placement.instance_profile == "gce-evaluator-c3"
             for placement in config.cloud.evaluators.placements
         )
+
+    def test_cloud_provider_contract_rejects_zone_allowlist_outside_region(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["providers"]["gce"]["region"] = "us-east5"
+        data["cloud"]["providers"]["gce"]["zones"] = [
+            "us-east5-b",
+            "us-east1-b",
+        ]
+
+        with pytest.raises(
+            PydanticValidationError,
+            match="cloud.providers.gce.zones must all belong to region 'us-east5'",
+        ):
+            ExperimentConfig(**data)
 
     def test_cloud_provider_contract_parses_provider_launch_defaults_override(self):
         data = self._base_kwargs()
@@ -1291,7 +1348,7 @@ class TestExperimentConfigSchema:
 
         with pytest.raises(
             PydanticValidationError,
-            match="cloud.workers.placements require explicit zone or zones in v1",
+            match="cloud.workers.placements require explicit zone, zones, or region",
         ):
             ExperimentConfig(**data)
 
