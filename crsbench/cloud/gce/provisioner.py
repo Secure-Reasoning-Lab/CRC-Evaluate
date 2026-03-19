@@ -666,27 +666,27 @@ class GceProvisioner:
         orchestrator: GceOrchestratorConfig,
     ) -> list[GceWorkerRecord]:
         """List orchestrator instances belonging to this experiment."""
-        zone = self._resolve_orchestrator_zone(orchestrator)
         expected_labels = build_orchestrator_labels(
             experiment_name=experiment_name,
             orchestrator=orchestrator,
         )
-        instances = [
-            _normalize_instance(instance)
-            for instance in self._client.list_instances(
-                project=orchestrator.project,
-                zone=zone,
-                label_selector=expected_labels,
-            )
-        ]
-        return [
-            instance
-            for instance in instances
-            if all(
-                instance.labels.get(key) == value
-                for key, value in expected_labels.items()
-            )
-        ]
+        instances: dict[tuple[str, str], GceWorkerRecord] = {}
+        for zone in self._candidate_zones_for_orchestrator(orchestrator):
+            zone_instances = [
+                _normalize_instance(instance)
+                for instance in self._client.list_instances(
+                    project=orchestrator.project,
+                    zone=zone,
+                    label_selector=expected_labels,
+                )
+            ]
+            for instance in zone_instances:
+                if all(
+                    instance.labels.get(key) == value
+                    for key, value in expected_labels.items()
+                ):
+                    instances[(instance.zone, instance.name)] = instance
+        return list(instances.values())
 
     def delete_orchestrators(
         self,
@@ -748,26 +748,26 @@ class GceProvisioner:
         fleet: GceWorkerFleetConfig,
     ) -> list[GceWorkerRecord]:
         """List workers belonging to this experiment-scoped fleet."""
-        zone = self._resolve_zone(fleet)
         expected_labels = build_worker_labels(
             experiment_name=experiment_name, fleet=fleet
         )
-        workers = [
-            _normalize_instance(instance)
-            for instance in self._client.list_instances(
-                project=fleet.project,
-                zone=zone,
-                label_selector=expected_labels,
-            )
-        ]
-        return [
-            worker
-            for worker in workers
-            if all(
-                worker.labels.get(key) == value
-                for key, value in expected_labels.items()
-            )
-        ]
+        workers: dict[tuple[str, str], GceWorkerRecord] = {}
+        for zone in self._candidate_zones_for_fleet(fleet):
+            zone_workers = [
+                _normalize_instance(instance)
+                for instance in self._client.list_instances(
+                    project=fleet.project,
+                    zone=zone,
+                    label_selector=expected_labels,
+                )
+            ]
+            for worker in zone_workers:
+                if all(
+                    worker.labels.get(key) == value
+                    for key, value in expected_labels.items()
+                ):
+                    workers[(worker.zone, worker.name)] = worker
+        return list(workers.values())
 
     def delete_workers(
         self,
@@ -805,27 +805,27 @@ class GceProvisioner:
         fleet: GceWorkerFleetConfig,
     ) -> list[GceWorkerRecord]:
         """List evaluators belonging to this experiment-scoped fleet."""
-        zone = self._resolve_zone(fleet)
         expected_labels = build_evaluator_labels(
             experiment_name=experiment_name,
             fleet=fleet,
         )
-        workers = [
-            _normalize_instance(instance)
-            for instance in self._client.list_instances(
-                project=fleet.project,
-                zone=zone,
-                label_selector=expected_labels,
-            )
-        ]
-        return [
-            worker
-            for worker in workers
-            if all(
-                worker.labels.get(key) == value
-                for key, value in expected_labels.items()
-            )
-        ]
+        workers: dict[tuple[str, str], GceWorkerRecord] = {}
+        for zone in self._candidate_zones_for_fleet(fleet):
+            zone_workers = [
+                _normalize_instance(instance)
+                for instance in self._client.list_instances(
+                    project=fleet.project,
+                    zone=zone,
+                    label_selector=expected_labels,
+                )
+            ]
+            for worker in zone_workers:
+                if all(
+                    worker.labels.get(key) == value
+                    for key, value in expected_labels.items()
+                ):
+                    workers[(worker.zone, worker.name)] = worker
+        return list(workers.values())
 
     def delete_evaluators(
         self,

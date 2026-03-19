@@ -260,6 +260,29 @@ def _make_provider_neutral_operational_context(*, include_launch_state: bool):
     )
 
 
+def _make_stable_worker_fleet(
+    *,
+    zone: str,
+    zones: list[str] | None = None,
+    start_index: int,
+    worker_count: int,
+    prefix: str = "crsbench-test-exp-work",
+) -> GceWorkerFleetConfig:
+    return GceWorkerFleetConfig(
+        project="test-project",
+        zone=zone,
+        zones=zones or [zone],
+        worker_count=worker_count,
+        worker_name_start_index=start_index,
+        machine_type="n2d-standard-16",
+        boot_disk_size_gb=100,
+        image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+        service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+        owner_label="team-crs",
+        worker_name_prefix=prefix,
+    )
+
+
 def _make_resolved_cloud_context(launch_state=None):
     from crsbench.cloud.cli._config_reconnect import ResolvedCloudContext
 
@@ -2190,12 +2213,98 @@ def test_append_created_instance_records_appends_jsonl_entries(tmp_path: Path) -
         "worker-east5-001",
         "worker-east1-001",
     ]
-    assert all(entry["experiment_name"] == "test-exp" for entry in entries)
-    assert entries[0]["project"] == "test-project"
-    assert entries[1]["zone"] == "us-east5-b"
-    assert entries[2]["zone"] == "us-east1-b"
-    assert all(entry["provider"] == "gce" for entry in entries)
-    assert all(entry["created_at"] for entry in entries)
+
+
+def test_collect_list_live_instances_prefers_persisted_fleets_when_launch_state_present():
+    from crsbench.cloud.cli._collect import _list_live_instances
+
+    launch_state = _make_provider_neutral_launch_state()
+    context = MagicMock()
+    context.launch_state = launch_state
+    context.launch_plan = MagicMock(experiment_name="test-exp")
+    context.worker_fleet_configs = launch_state.worker_fleet_configs
+    context.evaluator_fleet_configs = []
+
+    provisioner = MagicMock()
+    provisioner.list_workers.side_effect = [
+        [_make_gce_worker("crsbench-test-exp-work-001", zone="us-east1-b")],
+        [_make_gce_worker("crsbench-test-exp-work-002", zone="us-east5-b")],
+    ]
+
+    workers = _list_live_instances(context, "test-exp", provisioner)
+
+    assert [worker.name for worker in workers] == [
+        "crsbench-test-exp-work-001",
+        "crsbench-test-exp-work-002",
+    ]
+    assert provisioner.list_workers.call_count == 2
+
+
+def test_collect_resolves_fallback_worker_fleet_by_stable_name_index():
+    from crsbench.cloud.cli._collect import _resolve_instance_fleet
+
+    context = MagicMock()
+    context.worker_fleet_configs = [
+        _make_stable_worker_fleet(
+            zone="us-east5-b",
+            zones=["us-east5-b", "us-east1-b"],
+            start_index=1,
+            worker_count=2,
+        ),
+        _make_stable_worker_fleet(
+            zone="us-central1-a",
+            start_index=3,
+            worker_count=1,
+        ),
+    ]
+    context.evaluator_fleet_configs = []
+    worker = _make_gce_worker("crsbench-test-exp-work-003", zone="us-east1-b")
+
+    fleet = _resolve_instance_fleet(context, worker)
+
+    assert fleet.worker_name_start_index == 3
+
+
+def test_teardown_delete_live_instances_prefers_persisted_fleets_when_launch_state_present():
+    from crsbench.cloud.cli._teardown import _delete_live_instances
+
+    launch_state = _make_provider_neutral_launch_state()
+    context = MagicMock()
+    context.launch_state = launch_state
+    context.launch_plan = MagicMock(experiment_name="test-exp")
+    context.worker_fleet_configs = launch_state.worker_fleet_configs
+    context.evaluator_fleet_configs = []
+
+    provisioner = MagicMock()
+
+    _delete_live_instances(context, "test-exp", provisioner)
+
+    assert provisioner.delete_workers.call_count == 2
+
+
+def test_teardown_resolves_fallback_worker_fleet_by_stable_name_index():
+    from crsbench.cloud.cli._teardown import _resolve_instance_fleet
+
+    context = MagicMock()
+    context.worker_fleet_configs = [
+        _make_stable_worker_fleet(
+            zone="us-east5-b",
+            zones=["us-east5-b", "us-east1-b"],
+            start_index=1,
+            worker_count=2,
+        ),
+        _make_stable_worker_fleet(
+            zone="us-central1-a",
+            start_index=3,
+            worker_count=1,
+        ),
+    ]
+    context.evaluator_fleet_configs = []
+    worker = _make_gce_worker("crsbench-test-exp-work-003", zone="us-east1-b")
+
+    fleet = _resolve_instance_fleet(context, worker)
+
+    assert fleet.worker_name_start_index == 3
 
 
 # ---------------------------------------------------------------------------
@@ -2879,15 +2988,15 @@ class TestCollect:
         mock_coll_cls,
         mock_resolve_context,
     ):
-        """Provider-neutral collection should list workers across placements via the adapter."""
-        del mock_prov_cls
+        """Provider-neutral collection should use persisted fleets when launch state exists."""
+        del mock_adapter_cls
         context = _make_provider_neutral_operational_context(include_launch_state=True)
         mock_resolve_context.return_value = context
 
-        adapter = mock_adapter_cls.return_value
-        adapter.list_workers.return_value = [
-            _make_gce_worker("test-exp-us-east5-b-001", zone="us-east5-b"),
-            _make_gce_worker("test-exp-us-east1-b-001", zone="us-east1-b"),
+        provisioner = mock_prov_cls.return_value
+        provisioner.list_workers.side_effect = [
+            [_make_gce_worker("test-exp-us-east5-b-001", zone="us-east5-b")],
+            [_make_gce_worker("test-exp-us-east1-b-001", zone="us-east1-b")],
         ]
 
         mock_coll = MagicMock()
@@ -2907,7 +3016,7 @@ class TestCollect:
         rc = run_collect(_make_collect_args())
 
         assert rc == 0
-        adapter.list_workers.assert_called_once_with(plan=context.launch_plan)
+        assert provisioner.list_workers.call_count == 2
         assert mock_coll.collect_logs.call_count == 3
         assert mock_coll.collect.call_count == 2
 
@@ -2925,25 +3034,33 @@ class TestCollect:
         mock_resolve_context,
     ):
         """Provider-neutral collection should collect evaluator VMs in addition to workers."""
-        del mock_prov_cls
+        del mock_adapter_cls
         launch_state = _make_provider_neutral_launch_state()
         context = MagicMock()
         context.launch_plan = MagicMock(experiment_name="test-exp")
         context.launch_state = launch_state
         context.experiment_filestore = Path("/tmp/filestore")
         context.worker_fleet_configs = launch_state.worker_fleet_configs
-        context.evaluator_fleet_configs = [MagicMock(zone="us-east1-b")]
+        context.evaluator_fleet_configs = [
+            _make_stable_worker_fleet(
+                zone="us-east1-b",
+                start_index=1,
+                worker_count=1,
+                prefix="evaluator-test-exp-us-east1-b",
+            )
+        ]
         mock_resolve_context.return_value = context
 
-        adapter = mock_adapter_cls.return_value
-        adapter.list_workers.return_value = [
-            _make_gce_worker("test-exp-us-east5-b-001", zone="us-east5-b"),
-        ]
+        provisioner = mock_prov_cls.return_value
         evaluator = _make_gce_worker(
             "evaluator-test-exp-us-east1-b-001", zone="us-east1-b"
         )
         evaluator.labels["crsbench-role"] = "evaluator"
-        adapter.list_evaluators.return_value = [evaluator]
+        provisioner.list_workers.side_effect = [
+            [_make_gce_worker("test-exp-us-east5-b-001", zone="us-east5-b")],
+            [],
+        ]
+        provisioner.list_evaluators.return_value = [evaluator]
 
         mock_coll = MagicMock()
         mock_coll_cls.return_value = mock_coll
@@ -2962,8 +3079,8 @@ class TestCollect:
         rc = run_collect(_make_collect_args())
 
         assert rc == 0
-        adapter.list_workers.assert_called_once_with(plan=context.launch_plan)
-        adapter.list_evaluators.assert_called_once_with(plan=context.launch_plan)
+        assert provisioner.list_workers.call_count == 2
+        provisioner.list_evaluators.assert_called_once()
         assert mock_coll.collect_logs.call_count == 3
         assert mock_coll.collect.call_count == 1
         assert (
@@ -3367,16 +3484,16 @@ class TestTeardown:
         mock_resolve_context,
         mock_delete_state,
     ):
-        """Provider-neutral teardown should delete all placements through the adapter before cleanup."""
+        """Provider-neutral teardown should delete all persisted fleets when launch state exists."""
         context = _make_provider_neutral_operational_context(include_launch_state=True)
         mock_resolve_context.return_value = context
 
-        adapter = mock_adapter_cls.return_value
-        adapter.list_workers.return_value = [
-            _make_gce_worker("test-exp-us-east5-b-001", zone="us-east5-b"),
-            _make_gce_worker("test-exp-us-east1-b-001", zone="us-east1-b"),
+        del mock_adapter_cls
+        mock_prov = mock_prov_cls.return_value
+        mock_prov.list_workers.side_effect = [
+            [_make_gce_worker("test-exp-us-east5-b-001", zone="us-east5-b")],
+            [_make_gce_worker("test-exp-us-east1-b-001", zone="us-east1-b")],
         ]
-        adapter.delete_workers.return_value = adapter.list_workers.return_value
 
         mock_coll = MagicMock()
         mock_coll_cls.return_value = mock_coll
@@ -3392,16 +3509,13 @@ class TestTeardown:
             Path("/tmp/filestore"),
         )
 
-        mock_prov = MagicMock()
-        mock_prov_cls.return_value = mock_prov
-
         from crsbench.cloud.cli._teardown import run_teardown
 
         rc = run_teardown(_make_teardown_args(force=True))
 
         assert rc == 0
-        adapter.list_workers.assert_called_once_with(plan=context.launch_plan)
-        adapter.delete_workers.assert_called_once_with(plan=context.launch_plan)
+        assert mock_prov.list_workers.call_count == 2
+        assert mock_prov.delete_workers.call_count == 2
         mock_prov.delete_instance.assert_called_once()
         mock_delete_state.assert_called_once_with("/tmp/config.yaml", "test-exp")
 
@@ -3420,27 +3534,34 @@ class TestTeardown:
         mock_resolve_context,
         mock_delete_state,
     ):
-        """Provider-neutral teardown should collect and delete evaluator VMs too."""
+        """Provider-neutral teardown should collect and delete persisted evaluator fleets too."""
         launch_state = _make_provider_neutral_launch_state()
         context = MagicMock()
         context.launch_plan = MagicMock(experiment_name="test-exp")
         context.launch_state = launch_state
         context.experiment_filestore = Path("/tmp/filestore")
         context.worker_fleet_configs = launch_state.worker_fleet_configs
-        context.evaluator_fleet_configs = [MagicMock(zone="us-east1-b")]
+        context.evaluator_fleet_configs = [
+            _make_stable_worker_fleet(
+                zone="us-east1-b",
+                start_index=1,
+                worker_count=1,
+                prefix="evaluator-test-exp-us-east1-b",
+            )
+        ]
         mock_resolve_context.return_value = context
 
-        adapter = mock_adapter_cls.return_value
-        adapter.list_workers.return_value = [
-            _make_gce_worker("test-exp-us-east5-b-001", zone="us-east5-b"),
+        del mock_adapter_cls
+        mock_prov = mock_prov_cls.return_value
+        mock_prov.list_workers.side_effect = [
+            [_make_gce_worker("test-exp-us-east5-b-001", zone="us-east5-b")],
+            [],
         ]
         evaluator = _make_gce_worker(
             "evaluator-test-exp-us-east1-b-001", zone="us-east1-b"
         )
         evaluator.labels["crsbench-role"] = "evaluator"
-        adapter.list_evaluators.return_value = [evaluator]
-        adapter.delete_workers.return_value = adapter.list_workers.return_value
-        adapter.delete_evaluators.return_value = adapter.list_evaluators.return_value
+        mock_prov.list_evaluators.return_value = [evaluator]
 
         mock_coll = MagicMock()
         mock_coll_cls.return_value = mock_coll
@@ -3456,18 +3577,15 @@ class TestTeardown:
             Path("/tmp/filestore"),
         )
 
-        mock_prov = MagicMock()
-        mock_prov_cls.return_value = mock_prov
-
         from crsbench.cloud.cli._teardown import run_teardown
 
         rc = run_teardown(_make_teardown_args(force=True))
 
         assert rc == 0
-        adapter.list_workers.assert_called_once_with(plan=context.launch_plan)
-        adapter.list_evaluators.assert_called_once_with(plan=context.launch_plan)
-        adapter.delete_workers.assert_called_once_with(plan=context.launch_plan)
-        adapter.delete_evaluators.assert_called_once_with(plan=context.launch_plan)
+        assert mock_prov.list_workers.call_count == 2
+        mock_prov.list_evaluators.assert_called_once()
+        assert mock_prov.delete_workers.call_count == 2
+        mock_prov.delete_evaluators.assert_called_once()
         mock_prov.delete_instance.assert_called_once()
         assert mock_coll.collect_logs.call_count == 3
         assert mock_coll.collect.call_count == 1

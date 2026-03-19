@@ -125,6 +125,20 @@ def _list_live_instances(
     experiment_name: str,
     provisioner: GceProvisioner,
 ) -> list["GceWorkerRecord"]:
+    if context.launch_state is not None:
+        workers: list[GceWorkerRecord] = []
+        for fleet in context.worker_fleet_configs:
+            workers.extend(
+                provisioner.list_workers(experiment_name=experiment_name, fleet=fleet)
+            )
+        for fleet in context.evaluator_fleet_configs:
+            workers.extend(
+                provisioner.list_evaluators(
+                    experiment_name=experiment_name, fleet=fleet
+                )
+            )
+        return workers
+
     if context.launch_plan is not None:
         adapter = GceProviderAdapter(provisioner=provisioner)
         workers = adapter.list_workers(plan=context.launch_plan)
@@ -154,18 +168,23 @@ def _resolve_instance_fleet(
         if role == "evaluator"
         else context.worker_fleet_configs
     )
-    prefix_matches = [
+    name_matches = [
         fleet
         for fleet in candidate_fleets
-        if fleet.zone == worker.zone
-        and isinstance(fleet.worker_name_prefix, str)
-        and fleet.worker_name_prefix
-        and worker.name.startswith(fleet.worker_name_prefix)
+        if _fleet_matches_instance_name(fleet, worker.name)
     ]
-    if prefix_matches:
-        return prefix_matches[0]
+    if len(name_matches) == 1:
+        return name_matches[0]
 
-    zone_matches = [fleet for fleet in candidate_fleets if fleet.zone == worker.zone]
+    zone_filtered_name_matches = [
+        fleet for fleet in name_matches if _fleet_targets_zone(fleet, worker.zone)
+    ]
+    if zone_filtered_name_matches:
+        return zone_filtered_name_matches[0]
+
+    zone_matches = [
+        fleet for fleet in candidate_fleets if _fleet_targets_zone(fleet, worker.zone)
+    ]
     if zone_matches:
         return zone_matches[0]
 
@@ -188,3 +207,23 @@ def _list_readiness_instances(readiness, experiment_name: str):
 def _collects_experiment_artifacts(worker: "GceWorkerRecord") -> bool:
     """Return whether this instance owns a worker-style experiment artifact tree."""
     return worker.labels.get("crsbench-role") != CloudInstanceRole.EVALUATOR.value
+
+
+def _fleet_matches_instance_name(fleet, instance_name: str) -> bool:
+    prefix = fleet.worker_name_prefix
+    if not isinstance(prefix, str) or not prefix:
+        return False
+    if not instance_name.startswith(f"{prefix}-"):
+        return False
+    suffix = instance_name.removeprefix(f"{prefix}-")
+    if not suffix.isdigit():
+        return False
+    index = int(suffix)
+    start = fleet.worker_name_start_index
+    return start <= index < start + fleet.worker_count
+
+
+def _fleet_targets_zone(fleet, zone: str) -> bool:
+    if getattr(fleet, "zones", None):
+        return zone in fleet.zones
+    return fleet.zone == zone
