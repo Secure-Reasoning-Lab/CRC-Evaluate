@@ -48,6 +48,8 @@ both paths use the same provider-neutral cloud surface:
 - `cloud.providers.gce` for provider-native backing details
 - `cloud.orchestrator` for orchestrator placement
 - `cloud.workers.placements` for worker placement fanout
+- `cloud.providers.gce.zones` plus role/placement `zones` for ordered zonal
+  fallback policy
 
 ## Contract
 
@@ -73,6 +75,9 @@ both paths use the same provider-neutral cloud surface:
 - the derived config must rewrite both the compatibility `redis_host` key and the grouped `runtime.redis.host` key to the orchestrator-local Redis endpoint
 - the derived orchestrator config must not trigger worker provisioning again
 - worker placement declarations remain the source of truth for the remote worker shape
+- each logical orchestrator/worker/evaluator slot resolves one ordered
+  candidate-zone list from the config and may retry later zones only when that
+  slot's effective fallback policy allows it
 
 ### Role Discovery Contract
 
@@ -80,6 +85,11 @@ both paths use the same provider-neutral cloud surface:
 - local-machine status and teardown commands must be able to find both roles for one experiment
 - worker readiness remains keyed by experiment plus cloud `instance_id`
 - orchestrator lifecycle state is tracked separately from worker readiness
+- generated instance names are deterministic per experiment and role ordinal,
+  not derived from the actual chosen zone
+- persisted launch state stores the actual zone chosen for each created
+  instance, and reconnect paths use that persisted zone instead of parsing it
+  from instance names
 
 ## Runtime Behavior
 
@@ -93,10 +103,21 @@ Happy path:
 6. workers bootstrap, connect to the orchestrator-hosted Redis, and process trial jobs
 7. operator uses local `cloud status`, `cloud collect`, and `cloud teardown`
 
+Zone selection behavior:
+
+1. the local control plane resolves each logical slot's effective ordered zone list
+2. it attempts create in the first candidate zone
+3. if create fails with a recognized zonal capacity error and fallback is enabled for that slot, it retries the next candidate zone
+4. if fallback is disabled, or the failure is not a recognized zonal placement error, launch fails immediately
+5. for multi-count worker/evaluator placements, all instances in that placement are created in one zone or rolled back before trying the next zone
+6. any unrecoverable placement failure rolls back all previously created instances for the launch
+
 Failure behavior:
 
 - orchestrator create failure: no workers are created
-- worker create failure after orchestrator creation: local control plane tears down created workers and the orchestrator VM
+- worker create failure after orchestrator creation: local control plane tears
+  down created workers and the orchestrator VM, including any partial instances
+  created in an earlier candidate zone
 - orchestrator bootstrap failure: status must surface evidence without requiring SSH
 - worker bootstrap failure: readiness gating remains explicit and per-instance
 - Redis auth mismatch: workers fail bootstrap and surface evidence

@@ -2,7 +2,7 @@
 
 This directory holds operator-facing smoke-test configs for real cloud bring-up.
 
-This directory currently ships three GCE smoke configs for the
+This directory currently ships four GCE smoke configs for the
 remote-orchestrator flow:
 
 - `gce-sanity-1orch-2worker-1eval.yaml`
@@ -15,8 +15,13 @@ remote-orchestrator flow:
   - uses `crs-libfuzzer`
   - benchmark suite: `smoke-test-bug-finding-hf-download`
   - checked-in experiment identifier: `gce-hf-download-1o2w1e`
+- `gce-sanity-zone-fallback-1orch-1worker-1eval.yaml`
+  - uses `crs-libfuzzer`
+  - benchmark suite: `sanity`
+  - exercises provider-level ordered zones plus placement-level `fallback: false`
+  - checked-in experiment identifier: `gce-sanity-fallback-1o1w1e`
 
-Both use the same GCE topology:
+The first three samples use the same fixed-topology GCE layout:
 
 - 1 orchestrator VM in `us-east5-b`
 - 1 worker in `us-east5-b`
@@ -24,8 +29,18 @@ Both use the same GCE topology:
 - 1 evaluator in `us-east5-b`
 - `n2d-standard-16` everywhere
 
-Both checked-in experiment identifiers stay under the 63-character GCE name
-limit by using compact role suffixes: `orch`, `work`, and `eval`.
+The fallback sample uses:
+
+- provider-level `zones: [us-east5-b, us-east1-b]`
+- provider-level `fallback: true`
+- 1 orchestrator that inherits the provider zone order
+- 1 worker that inherits the provider zone order
+- 1 evaluator pinned to `us-east1-b` with `fallback: false`
+
+All checked-in experiment identifiers stay under the 63-character GCE name
+limit by using compact role suffixes: `orch`, `work`, and `eval`. Generated
+instance names are zone-independent, for example
+`crsbench-gce-sanity-fallback-1o1w1e-work-001`.
 
 The command examples below use the `crs-libfuzzer` sanity sample config. For the
 Atlantis preset, replace:
@@ -43,6 +58,14 @@ For the HF-download preset, replace:
 - the experiment name `gce-sanity-1o2w1e` with `gce-hf-download-1o2w1e`
 - the remote dir `/tmp/crsbench/experiment-data/gce-sanity-1o2w1e` with
   `/tmp/crsbench/experiment-data/gce-hf-download-1o2w1e`
+
+For the fallback preset, replace:
+
+- the config path with
+  `experiment-configs/cloud-testing/gce-sanity-zone-fallback-1orch-1worker-1eval.yaml`
+- the experiment name `gce-sanity-1o2w1e` with `gce-sanity-fallback-1o1w1e`
+- the remote dir `/tmp/crsbench/experiment-data/gce-sanity-1o2w1e` with
+  `/tmp/crsbench/experiment-data/gce-sanity-fallback-1o1w1e`
 
 These configs are for:
 
@@ -65,13 +88,18 @@ These smoke configs use the checkout-first cloud bootstrap path:
 
 - cloud VMs clone CRSBench from `crsbench_install_spec`
 - every VM runs `crsbench prepare`
-- `download_benchmarks: auto` is set for all three samples
-- the two `benchmark_suite: sanity` samples skip the VM-side benchmark download
+- `download_benchmarks: auto` is set for all four samples
+- the three `benchmark_suite: sanity` samples skip the VM-side benchmark download
 - the `gce-hf-download-1orch-2worker-1eval.yaml` sample runs the VM-side
   Hugging Face dataset download for
   `benchmark_suite: smoke-test-bug-finding-hf-download`
 - `cloud.defaults.readiness_timeout_sec: 1200` gives the whole fleet a
   20-minute bring-up window for cold-image bootstrap and Redis startup
+
+The fallback sample is the reference when you want CRSBench to try zones in
+order at runtime. If `us-east5-b` is exhausted, the orchestrator and inherited
+worker placement retry `us-east1-b`. The evaluator does not retry because its
+placement sets `fallback: false`.
 
 ## Preflight
 

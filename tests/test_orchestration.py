@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 import pytest
 import yaml
+from crsbench.cloud.models import build_cloud_launch_plan
 from crsbench.run_experiment import (
     Trial,
     generate_trial_matrix,
@@ -1084,6 +1085,62 @@ class TestIntegrationWithSampleConfigs:
         )
 
         assert config.benchmark_suite == "smoke-test-bug-finding-hf-download"
+
+    def test_remote_gce_zone_fallback_sample_config_loads_for_cloud_launch(self):
+        """The GCE fallback sample should resolve provider-default zone fallback."""
+        config_path = Path(
+            "experiment-configs/cloud-testing/gce-sanity-zone-fallback-1orch-1worker-1eval.yaml"
+        )
+
+        assert config_path.exists(), (
+            f"Expected checked-in sample config at {config_path}"
+        )
+
+        config = load_experiment_config(config_path)
+        plan = build_cloud_launch_plan(config)
+
+        assert config.cloud is not None
+        assert config.cloud.providers is not None
+        assert config.cloud.providers.gce is not None
+        assert config.cloud.providers.gce.zones == [
+            "us-east5-b",
+            "us-east1-b",
+        ]
+        assert config.cloud.providers.gce.fallback is True
+        assert config.cloud.orchestrator is not None
+        assert config.cloud.orchestrator.zones == []
+        assert config.cloud.orchestrator.fallback is None
+        assert config.cloud.workers is not None
+        assert config.cloud.evaluators is not None
+        assert [placement.zones for placement in config.cloud.workers.placements] == [
+            []
+        ]
+        assert [
+            placement.fallback for placement in config.cloud.workers.placements
+        ] == [None]
+        assert [
+            placement.zones for placement in config.cloud.evaluators.placements
+        ] == [["us-east1-b"]]
+        assert [
+            placement.fallback for placement in config.cloud.evaluators.placements
+        ] == [False]
+
+        assert config.experiment == "gce-sanity-fallback-1o1w1e"
+        assert config.benchmark_suite == "sanity"
+        assert config.cloud.bootstrap.prepare_mode == "full"
+        assert config.cloud.bootstrap.download_benchmarks == "auto"
+        assert plan.orchestrator.zones == ["us-east5-b", "us-east1-b"]
+        assert plan.orchestrator.fallback is True
+        assert [placement.zones for placement in plan.worker_placements] == [
+            ["us-east5-b", "us-east1-b"]
+        ]
+        assert [placement.fallback for placement in plan.worker_placements] == [True]
+        assert [placement.zones for placement in plan.evaluator_placements] == [
+            ["us-east1-b"]
+        ]
+        assert [placement.fallback for placement in plan.evaluator_placements] == [
+            False
+        ]
 
     def test_e2e_with_sample_config_single_crs(self, tmp_path):
         """Test end-to-end workflow with a sample single-CRS config."""

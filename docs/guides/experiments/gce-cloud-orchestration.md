@@ -45,6 +45,10 @@ cloud:
     gce:
       project: my-gcp-project
       ssh_via_iap: true
+      zones:
+        - us-east5-b
+        - us-east1-b
+      fallback: true
       profile_defaults:
         machine_type: n2d-standard-16
         boot_disk_size_gb: 100
@@ -57,22 +61,24 @@ cloud:
         gce-evaluator-c3d:
           machine_type: c3d-standard-30
   orchestrator:
-    zone: us-east5-b
     instance_profile: gce-orchestrator-n2d
   workers:
     defaults:
       instance_profile: gce-worker-n2d
       count: 1
     placements:
-      - zone: us-east5-b
-        count: 3
-      - zone: us-east1-b
+      - count: 3
+      - zones:
+          - us-central1-a
+          - us-east1-b
+        fallback: false
   evaluators:
     defaults:
       instance_profile: gce-evaluator-c3d
       count: 1
     placements:
-      - zone: us-east5-b
+      - zones:
+          - us-east1-b
 ```
 
 ### Configuration Fields
@@ -82,18 +88,30 @@ cloud:
 | `cloud.defaults` | no | Provider-agnostic launch/bootstrap defaults merged into every cloud role |
 | `cloud.providers.gce.project` | yes | GCP project ID used for all referenced GCE resources |
 | `cloud.providers.gce.defaults` | no | Provider-specific overrides for `cloud.defaults` |
+| `cloud.providers.gce.zones` | no | Ordered default candidate zones used when orchestrator or placements do not override `zones` |
+| `cloud.providers.gce.fallback` | no | Default policy for retrying later candidate zones after zonal placement failure |
 | `cloud.providers.gce.profile_defaults` | no | Default instance-profile fields merged into every named GCE profile |
 | `cloud.providers.gce.instance_profiles.<name>` | yes | Reusable machine/image/service-account bundle for orchestrator or workers |
-| `cloud.orchestrator.zone` | yes | Explicit orchestrator zone |
+| `cloud.orchestrator.zone` | no | Backward-compatible single preferred orchestrator zone; normalized into `zones` |
+| `cloud.orchestrator.zones` | no | Ordered candidate zones for the orchestrator VM |
+| `cloud.orchestrator.fallback` | no | Override for orchestrator zone retry behavior |
 | `cloud.orchestrator.instance_profile` | yes | Instance profile name for the orchestrator VM |
 | `cloud.workers.defaults.count` | no | Default number of workers to create per placement |
 | `cloud.workers.defaults.instance_profile` | no | Default worker instance profile |
-| `cloud.workers.placements[].zone` | yes | Explicit worker placement zone (zone selectors only in v1) |
+| `cloud.workers.defaults.zones` | no | Role-level default candidate zones for worker placements |
+| `cloud.workers.defaults.fallback` | no | Role-level default fallback policy for worker placements |
+| `cloud.workers.placements[].zone` | no | Backward-compatible single preferred worker zone; normalized into `zones` |
+| `cloud.workers.placements[].zones` | no | Ordered candidate zones for one worker placement |
+| `cloud.workers.placements[].fallback` | no | Per-placement override for worker zone retry behavior |
 | `cloud.workers.placements[].count` | no | Number of workers to create in that placement |
 | `cloud.workers.placements[].instance_profile` | no | Instance profile override for that placement |
 | `cloud.evaluators.defaults.count` | no | Default number of evaluators to create per placement |
 | `cloud.evaluators.defaults.instance_profile` | no | Default evaluator instance profile |
-| `cloud.evaluators.placements[].zone` | yes | Explicit evaluator placement zone (zone selectors only in v1) |
+| `cloud.evaluators.defaults.zones` | no | Role-level default candidate zones for evaluator placements |
+| `cloud.evaluators.defaults.fallback` | no | Role-level default fallback policy for evaluator placements |
+| `cloud.evaluators.placements[].zone` | no | Backward-compatible single preferred evaluator zone; normalized into `zones` |
+| `cloud.evaluators.placements[].zones` | no | Ordered candidate zones for one evaluator placement |
+| `cloud.evaluators.placements[].fallback` | no | Per-placement override for evaluator zone retry behavior |
 | `cloud.evaluators.placements[].count` | no | Number of evaluators to create in that placement |
 | `cloud.evaluators.placements[].instance_profile` | no | Instance profile override for that placement |
 
@@ -126,12 +144,28 @@ Launch/bootstrap defaults live outside instance profiles:
 Provider-specific overrides can replace those values through
 `cloud.providers.<provider>.defaults`.
 
+Zone selection is ordered. CRSBench resolves the effective candidate list from
+the most specific declaration present:
+
+1. placement or orchestrator `zones`
+2. role `defaults.zones`
+3. `cloud.providers.gce.zones`
+
+Fallback policy uses the same precedence, ending with `true` if nothing is
+configured. When `fallback: true`, CRSBench retries the next candidate zone
+only for recognized zonal placement failures such as
+`ZONE_RESOURCE_POOL_EXHAUSTED`. When `fallback: false`, the first placement
+failure for that logical slot fails the launch and tears down any instances
+that were already created.
+
 By default, provisioned instance names sort naturally in the GCP console:
-`crsbench-<experiment>-<zone>-orch`,
-`crsbench-<experiment>-<zone>-work-001`,
-and `crsbench-<experiment>-<zone>-eval-001`. Worker and evaluator suffixes
-increase monotonically per experiment, zone, and role, even if the config uses
-multiple placements in the same zone.
+`crsbench-<experiment>-orch`,
+`crsbench-<experiment>-work-001`,
+and `crsbench-<experiment>-eval-001`. Worker and evaluator suffixes increase
+monotonically per experiment and role in config order, even if the actual
+chosen zone changes because of fallback. `cloud collect`, `cloud monitor`, and
+`cloud teardown` use the persisted launch-state zone, not the instance name, to
+reconnect to a launched fleet.
 
 `cloud launch` refuses to provision when the same experiment already has a
 config-adjacent launch-state file or matching live orchestrator/worker/evaluator

@@ -22,22 +22,23 @@ and examples.
 Managed cloud execution uses a provider-neutral top-level shape:
 
 - `cloud.providers.<provider>`: provider-native backing details such as GCE
-  project, reusable instance profiles, optional provider `defaults`, and
-  optional `profile_defaults`
+  project, reusable instance profiles, optional provider `defaults`, optional
+  `profile_defaults`, and optional ordered default `zones` / `fallback`
+  placement policy
 - `cloud.defaults`: provider-agnostic launch/bootstrap defaults such as
   `readiness_timeout_sec`, `crsbench_install_spec`, `crsbench_git_ref`, and
   `github_deploy_key_path`
 - `cloud.env`: global environment variables merged into all launched cloud roles
-- `cloud.orchestrator`: zone and instance-profile reference for the remote
-  orchestrator VM, plus optional orchestrator-only `env`
+- `cloud.orchestrator`: instance-profile reference for the remote orchestrator
+  VM, plus optional orchestrator-only `zones`, `fallback`, and `env`
 - `cloud.workers.defaults`: optional role-level worker placement defaults such
-  as `count`, `instance_profile`, and `env`
-- `cloud.workers.placements[]`: explicit worker placements with zone plus any
-  overrides from `defaults`
+  as `count`, `instance_profile`, `zones`, `fallback`, and `env`
+- `cloud.workers.placements[]`: explicit worker placements with optional
+  `zones` / `fallback` overrides plus any inherited defaults
 - `cloud.evaluators.defaults`: optional role-level evaluator placement defaults
-  such as `count`, `instance_profile`, and `env`
-- `cloud.evaluators.placements[]`: optional evaluator placements with zone plus
-  any overrides from `defaults`
+  such as `count`, `instance_profile`, `zones`, `fallback`, and `env`
+- `cloud.evaluators.placements[]`: optional evaluator placements with optional
+  `zones` / `fallback` overrides plus any inherited defaults
 For GCE in v1:
 
 - use `cloud.providers.gce`
@@ -48,19 +49,28 @@ For GCE in v1:
   `cloud.providers.<provider>.instance_profiles` catalog
 - instance-profile keys must be globally unique across provider catalogs
 - one launch cannot mix providers across orchestrator, workers, and evaluators
-- placements must use explicit zones
+- effective zone order resolves as placement/orchestrator `zones` override,
+  then role defaults, then `cloud.providers.gce.zones`
+- effective fallback resolves as placement/orchestrator `fallback` override,
+  then role defaults, then `cloud.providers.gce.fallback`, then `true`
+- runtime zone retry only happens for recognized zonal placement failures;
+  `fallback: false` hard-fails that logical placement and rolls back the launch
 - live quota validation is mandatory before launch
 - worker and evaluator placements can use different instance profiles
 - `ssh_via_iap` controls operator SSH transport; `assign_external_ip` controls
   whether GCE attaches ephemeral external NAT for outbound internet access
 - cloud env merge order is:
   `cloud.env -> profile_defaults.env -> instance_profile.env -> role/default placement env`
+- generated GCE instance names are deterministic and zone-independent:
+  `crsbench-<experiment>-orch`, `-work-001`, `-eval-001`
 - the checked-in examples are
   `experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml`
   and
   `experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval-multilang-given-fuzzer.yaml`
   and
   `experiment-configs/cloud-testing/gce-hf-download-1orch-2worker-1eval.yaml`
+  and
+  `experiment-configs/cloud-testing/gce-sanity-zone-fallback-1orch-1worker-1eval.yaml`
 
 ## Input Contract
 
