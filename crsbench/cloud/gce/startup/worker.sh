@@ -390,7 +390,7 @@ ensure_docker_group_membership() {
 }
 
 run_as_crsbench() {
-  sudo -H -u "${CRSBENCH_USER}" "$@"
+  sudo -E -H -u "${CRSBENCH_USER}" "$@"
 }
 
 run_crsbench_shell() {

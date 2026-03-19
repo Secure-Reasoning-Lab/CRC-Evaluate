@@ -536,6 +536,15 @@ def test_startup_script_runs_shared_vm_bootstrap_from_repo_checkout():
     assert "${CRSBENCH_USER_HOME}/.local/bin" in script
 
 
+def test_startup_script_preserves_passthrough_env_for_checkout_bootstrap():
+    """Worker bootstrap should preserve metadata-passed secrets through sudo."""
+    from crsbench.cloud.gce.metadata import load_startup_script
+
+    script = load_startup_script()
+
+    assert 'sudo -E -H -u "${CRSBENCH_USER}" "$@"' in script
+
+
 def test_startup_script_supports_file_backed_metadata_and_foreground_service_mode():
     """Worker bootstrap should run outside GCE/systemd for local Docker rehearsal."""
     from crsbench.cloud.gce.metadata import load_startup_script
