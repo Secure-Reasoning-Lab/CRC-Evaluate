@@ -102,7 +102,14 @@ def run_oss_crs_prepare(
     logger.debug(f"Running oss-crs prepare: {' '.join(cmd)}")
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
     except subprocess.TimeoutExpired:
         logger.warning(f"oss-crs prepare timed out after {timeout}s")
         return ("", f"oss-crs prepare timed out after {timeout}s", -1)
@@ -153,7 +160,14 @@ def run_oss_crs_build_target(
     logger.debug(f"Running oss-crs build-target: {' '.join(cmd)}")
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
     except subprocess.TimeoutExpired:
         logger.warning(f"oss-crs build-target timed out after {timeout}s")
         return ("", f"oss-crs build-target timed out after {timeout}s", -1)
@@ -286,6 +300,7 @@ def docker_compose_down_cleanup(work_dir: Path) -> None:
                     ],
                     capture_output=True,
                     text=True,
+                    errors="replace",
                     timeout=60,
                 )
                 if proc.returncode != 0:
@@ -370,7 +385,14 @@ def run_oss_crs_artifacts(
     logger.debug(f"Running oss-crs artifacts: {' '.join(cmd)}")
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+        )
     except FileNotFoundError as exc:
         msg = (
             f"oss-crs executable not found: '{oss_crs_cmd}'. "

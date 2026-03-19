@@ -84,6 +84,7 @@ def is_already_blocked(container_id: str) -> bool:
         ["docker", "exec", container_id, "iptables", "-L", "OUTPUT", "-n"],
         capture_output=True,
         text=True,
+        errors="replace",
     )
 
     if result.returncode != 0:
@@ -149,7 +150,12 @@ def inject_blocking_rules(container_id: str) -> ContainerBlockingConfig:
             "DROP",
         ]
 
-        result = subprocess.run(http_cmd, capture_output=True, text=True)
+        result = subprocess.run(
+            http_cmd,
+            capture_output=True,
+            text=True,
+            errors="replace",
+        )
         if result.returncode != 0:
             logger.warning(
                 f"Failed to add HTTP block rule for {domain}: {result.stderr}"
@@ -179,7 +185,12 @@ def inject_blocking_rules(container_id: str) -> ContainerBlockingConfig:
             "DROP",
         ]
 
-        result = subprocess.run(https_cmd, capture_output=True, text=True)
+        result = subprocess.run(
+            https_cmd,
+            capture_output=True,
+            text=True,
+            errors="replace",
+        )
         if result.returncode != 0:
             logger.warning(
                 f"Failed to add HTTPS block rule for {domain}: {result.stderr}"
@@ -210,6 +221,7 @@ def verify_blocking_rules(container_id: str) -> bool:
         ["docker", "exec", container_id, "iptables", "-L", "OUTPUT", "-n"],
         capture_output=True,
         text=True,
+        errors="replace",
     )
 
     if result.returncode != 0:
@@ -236,6 +248,7 @@ def clear_blocking_rules(container_id: str) -> None:
         ["docker", "exec", container_id, "iptables", "-F", "OUTPUT"],
         capture_output=True,
         text=True,
+        errors="replace",
     )
 
     if result.returncode != 0:
@@ -270,6 +283,7 @@ def find_containers_by_image(image_name: str) -> list[str]:
         ],
         capture_output=True,
         text=True,
+        errors="replace",
     )
 
     if result.returncode != 0:

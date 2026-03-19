@@ -341,7 +341,9 @@ class UniAFLCoverageSession(CoverageSession):
                 + " > /crs.config && sleep infinity",
             ]
         )
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace"
+        )
         if result.returncode != 0:
             stderr = result.stderr.strip() or result.stdout.strip()
             raise RuntimeError(stderr or "Failed to start UniAFL coverage container")
@@ -363,6 +365,8 @@ class UniAFLCoverageSession(CoverageSession):
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
 
@@ -389,6 +393,8 @@ class UniAFLCoverageSession(CoverageSession):
             ["docker", "rm", "-f", self.container_name],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         if result.returncode == 0:
             return
@@ -622,6 +628,8 @@ def _get_run_fuzzer_opt(harness_name: str) -> tuple[int, bool]:
         ["get_run_fuzzer_opt", harness_name],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         env=env,
         check=True,
     )
@@ -650,6 +658,8 @@ def _measure_ms_per_exec(harness_name: str, workdir: Path) -> int:
             ["reproduce", harness_name, "-timeout=100"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             env=env,
             check=False,
         )

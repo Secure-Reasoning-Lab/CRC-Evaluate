@@ -5,6 +5,7 @@ These tests verify that:
 2. The saturation monitor thread correctly signals early stop
 """
 
+import sys
 import threading
 import time
 from pathlib import Path
@@ -12,6 +13,15 @@ from unittest.mock import MagicMock
 
 from crsbench.evaluation.adapter import OssCrsAdapter
 from crsbench.evaluation.process_utils import run_with_graceful_timeout
+
+_NON_UTF8_SCRIPT = (
+    "import sys; "
+    'sys.stdout.buffer.write(b"stdout:\\xff\\n"); '
+    "sys.stdout.flush(); "
+    'sys.stderr.buffer.write(b"stderr:\\xfe\\n"); '
+    "sys.stderr.flush()"
+)
+_NON_UTF8_SLEEP_SCRIPT = _NON_UTF8_SCRIPT + "; import time; time.sleep(5)"
 
 _STUB_ADAPTER = OssCrsAdapter(
     crs_config_name="stub",
@@ -110,6 +120,77 @@ class TestRunWithGracefulTimeoutStopEvent:
         assert "done" in stdout
         assert returncode == 0
         assert timed_out is False
+
+    def test_no_stop_event_replaces_non_utf8_output(self):
+        """Non-UTF-8 output must not crash; surrounding payload must survive."""
+        stdout, stderr, returncode, timed_out = run_with_graceful_timeout(
+            cmd=[sys.executable, "-c", _NON_UTF8_SCRIPT],
+            timeout=10,
+        )
+
+        assert "stdout:" in stdout
+        assert "stderr:" in stderr
+        assert returncode == 0
+        assert timed_out is False
+
+    def test_stop_event_mode_replaces_non_utf8_output(self):
+        """Stop-event polling mode tolerates non-UTF-8 on normal completion."""
+        stop_event = threading.Event()
+
+        stdout, stderr, returncode, timed_out = run_with_graceful_timeout(
+            cmd=[sys.executable, "-c", _NON_UTF8_SCRIPT],
+            timeout=10,
+            grace_period=1,
+            stop_event=stop_event,
+        )
+
+        assert "stdout:" in stdout
+        assert "stderr:" in stderr
+        assert returncode == 0
+        assert timed_out is False
+
+    def test_stop_event_triggered_with_non_utf8_output(self):
+        """Early-stop via stop_event must not crash on non-UTF-8 buffered output.
+
+        This exercises the _graceful_terminate() path triggered by
+        stop_event.is_set(), which is where the original UnicodeDecodeError
+        occurred when process.communicate() read binary fuzzer data.
+        """
+        stop_event = threading.Event()
+
+        def signal_stop():
+            time.sleep(0.5)
+            stop_event.set()
+
+        signal_thread = threading.Thread(target=signal_stop)
+        signal_thread.start()
+
+        stdout, stderr, returncode, timed_out = run_with_graceful_timeout(
+            cmd=[sys.executable, "-c", _NON_UTF8_SLEEP_SCRIPT],
+            timeout=60,
+            grace_period=2,
+            stop_event=stop_event,
+        )
+        signal_thread.join()
+
+        # Must not crash; surrounding text payload must survive
+        assert "stdout:" in stdout
+        assert "stderr:" in stderr
+        # Early stop is reported as timed_out
+        assert timed_out is True
+
+    def test_timeout_replaces_non_utf8_output_during_graceful_terminate(self):
+        """Timeout cleanup preserves output instead of failing on decode."""
+        stdout, stderr, returncode, timed_out = run_with_graceful_timeout(
+            cmd=[sys.executable, "-c", _NON_UTF8_SLEEP_SCRIPT],
+            timeout=1,
+            grace_period=1,
+        )
+
+        assert "stdout:" in stdout
+        assert "stderr:" in stderr
+        assert returncode != 0
+        assert timed_out is True
 
 
 class TestSaturationMonitorIntegration:

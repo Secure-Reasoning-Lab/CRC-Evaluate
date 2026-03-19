@@ -34,6 +34,7 @@ def _find_existing_rq_workers() -> list[tuple[str, str]]:
         ["ps", "-u", str(os.getuid()), "-o", "pid,args"],
         capture_output=True,
         text=True,
+        errors="replace",
         timeout=5,
     )
     if result.returncode != 0:

@@ -300,6 +300,7 @@ def _init_git_repo(repo_path: Path) -> bool:
             cwd=repo_path,
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
             stdin=subprocess.DEVNULL,  # Prevent interactive prompts
             env=git_env,
@@ -314,6 +315,7 @@ def _init_git_repo(repo_path: Path) -> bool:
             cwd=repo_path,
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
             stdin=subprocess.DEVNULL,
             env=git_env,
@@ -328,6 +330,7 @@ def _init_git_repo(repo_path: Path) -> bool:
             cwd=repo_path,
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
             stdin=subprocess.DEVNULL,
             env=git_env,
