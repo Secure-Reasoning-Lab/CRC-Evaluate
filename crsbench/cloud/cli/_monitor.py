@@ -98,15 +98,12 @@ def wait_for_remote_redis(
 
 def run_monitor(args: argparse.Namespace) -> int:
     """Attach to a launched remote orchestrator and show live queue progress."""
-    experiment_name = resolve_effective_experiment_name(args.config, args.experiment)
     try:
+        experiment_name = resolve_effective_experiment_name(
+            args.config, args.experiment
+        )
         context = require_launch_state(args.config, experiment_name)
-    except SystemExit as exc:
-        logger.error(str(exc))
-        return 1
-
-    assert context.launch_state is not None
-    try:
+        assert context.launch_state is not None
         with OrchestratorRedisTunnel.from_launch_state(
             Path(args.config),
             context.launch_state,
@@ -132,6 +129,11 @@ def run_monitor(args: argparse.Namespace) -> int:
                 tracked_jobs=None,
                 exit_when_idle=False,
             )
+    except KeyboardInterrupt:
+        return 130
+    except SystemExit as exc:
+        logger.error(str(exc))
+        return 1
     except Exception as exc:
         logger.error("Cloud monitor failed: {}", exc)
         return 1

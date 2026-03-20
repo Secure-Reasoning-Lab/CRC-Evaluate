@@ -1842,6 +1842,37 @@ def test_run_monitor_retries_until_redis_is_ready(
     mock_monitor_queue.assert_called_once()
 
 
+@patch("crsbench.cloud.cli._monitor.monitor_queue", side_effect=KeyboardInterrupt)
+@patch("crsbench.cloud.cli._monitor.initialize_queue")
+@patch("crsbench.cloud.cli._monitor.probe_redis_connection")
+@patch("crsbench.cloud.cli._monitor.OrchestratorRedisTunnel.from_launch_state")
+@patch("crsbench.cloud.cli._monitor.require_launch_state")
+@patch("crsbench.cloud.cli._monitor.resolve_effective_experiment_name")
+def test_run_monitor_treats_keyboard_interrupt_as_normal_exit(
+    mock_resolve_experiment_name,
+    mock_require_state,
+    mock_tunnel_cls,
+    mock_probe_redis_connection,
+    mock_initialize_queue,
+    _mock_monitor_queue,
+):
+    from crsbench.cloud.cli._monitor import run_monitor
+
+    context = _make_provider_neutral_operational_context(include_launch_state=True)
+    assert context.launch_state is not None
+    mock_resolve_experiment_name.return_value = "test-exp"
+    mock_require_state.return_value = context
+    mock_tunnel = MagicMock()
+    mock_tunnel.redis_host = "127.0.0.1:16379"
+    mock_tunnel_cls.return_value.__enter__.return_value = mock_tunnel
+    mock_probe_redis_connection.return_value = (RedisConnectionProbe.READY, None)
+    mock_initialize_queue.return_value = MagicMock()
+
+    rc = run_monitor(_make_monitor_args())
+
+    assert rc == 130
+
+
 class TestLaunch:
     """Tests for run_launch() orchestration."""
 
@@ -3334,6 +3365,40 @@ class TestSsh:
         out = capsys.readouterr().out
         assert "crsbench-test-exp-orch" in out
         assert "crsbench-test-exp-work-001" in out
+
+    @patch("crsbench.cloud.cli._ssh.select_target", side_effect=KeyboardInterrupt)
+    @patch("crsbench.cloud.cli._ssh.resolve_effective_experiment_name")
+    @patch("crsbench.cloud.cli._ssh.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._ssh.GceProvisioner")
+    def test_ssh_treats_keyboard_interrupt_as_normal_exit(
+        self,
+        mock_provisioner_cls,
+        mock_resolve_context,
+        mock_resolve_experiment_name,
+        _mock_select_target,
+    ):
+        mock_resolve_experiment_name.return_value = "test-exp"
+        context = _make_resolved_cloud_context(_make_launch_state())
+        mock_resolve_context.return_value = context
+        provisioner = mock_provisioner_cls.return_value
+        provisioner.list_workers.return_value = [
+            _make_gce_worker("crsbench-test-exp-work-001", zone="us-central1-a")
+        ]
+        provisioner.list_evaluators.return_value = []
+        provisioner.get_instance_record.return_value = _make_gce_worker(
+            "crsbench-test-exp-orch",
+            zone="us-east5-b",
+            ip="10.0.0.50",
+        )
+        provisioner.get_instance_record.return_value.labels["crsbench-role"] = (
+            "orchestrator"
+        )
+
+        from crsbench.cloud.cli._ssh import run_ssh
+
+        rc = run_ssh(_make_ssh_args(instance=None))
+
+        assert rc == 130
 
 
 class TestExec:
