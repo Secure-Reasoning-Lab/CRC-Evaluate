@@ -772,6 +772,7 @@ class TestExperimentConfigSchema:
 
     def test_inputs_presence_based(self):
         data = self._base_kwargs()
+        data["task"] = "bugfixing"
         data["inputs"] = {
             "pov": {"max_variants_per_cpv": 2},
             "sarif": {"level": 1},

@@ -1163,8 +1163,9 @@ class ExperimentPovInputs(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: Optional[bool] = Field(
-        default=False,
-        description="Whether CRSBench should stage explicit POV inputs when available.",
+        default=None,
+        description="Whether CRSBench should stage explicit POV inputs when available. "
+        "Defaults to False for bug-finding, True for bug-fixing.",
     )
     max_variants_per_cpv: Optional[int] = Field(
         default=1,
@@ -1244,7 +1245,7 @@ class ExperimentInputsConfig(BaseModel):
                 continue
             if isinstance(value, dict):
                 section = dict(value)
-                if "enabled" not in section:
+                if "enabled" not in section and key != "pov":
                     section["enabled"] = True
                 normalized[key] = section
         return normalized
@@ -1906,14 +1907,21 @@ class ExperimentConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def check_pov_input_bugfinding_conflict(self):
-        """Reject POV inputs for bug-finding experiments.
+    def resolve_pov_input_defaults(self):
+        """Resolve POV input defaults by task type and reject invalid combos.
 
-        POV inputs stage ground-truth crash blobs into the trial directory.
-        For bug-finding tasks, this leaks answers to the evaluator because the
-        CRS receives pre-staged POVs it never discovered.
+        When ``inputs.pov.enabled`` is not explicitly set (None):
+        - bug-finding → False  (POV staging leaks ground-truth answers)
+        - bug-fixing  → True   (POV inputs are the normal workflow)
+
+        Explicitly enabling POV inputs for bug-finding is always an error.
         """
-        if self.task == "bugfinding" and self.inputs.pov.enabled:
+        if self.inputs.pov.enabled is None:
+            if self.task == "bugfixing":
+                self.inputs.pov.enabled = True
+            else:
+                self.inputs.pov.enabled = False
+        elif self.inputs.pov.enabled and self.task == "bugfinding":
             raise ValueError(
                 "inputs.pov.enabled=true is incompatible with task='bugfinding'. "
                 "POV inputs stage ground-truth crash blobs that short-circuit "
