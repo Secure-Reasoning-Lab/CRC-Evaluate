@@ -47,7 +47,10 @@ def run_exec(args: argparse.Namespace) -> int:
         return 1
 
     cmd = build_ssh_command(selected, remote_command=exec_command)
-    return subprocess.run(cmd, check=False).returncode
+    try:
+        return subprocess.run(cmd, check=False).returncode
+    except KeyboardInterrupt:
+        return 130
 
 
 def _resolve_exec_request(

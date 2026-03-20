@@ -43,7 +43,10 @@ def run_log(args: argparse.Namespace) -> int:
         ),
     ]
     cmd = build_ssh_command(selected, remote_command=remote_command)
-    return subprocess.run(cmd, check=False).returncode
+    try:
+        return subprocess.run(cmd, check=False).returncode
+    except KeyboardInterrupt:
+        return 130
 
 
 def _service_name_for_role(role: str) -> str:

@@ -3397,6 +3397,44 @@ class TestExec:
 
         assert rc == 2
 
+    @patch("crsbench.cloud.cli._exec.subprocess.run")
+    @patch("crsbench.cloud.cli._exec.build_ssh_command")
+    @patch("crsbench.cloud.cli._exec.resolve_effective_experiment_name")
+    @patch("crsbench.cloud.cli._exec.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._exec.GceProvisioner")
+    def test_exec_treats_keyboard_interrupt_as_normal_exit(
+        self,
+        mock_provisioner_cls,
+        mock_resolve_context,
+        mock_resolve_experiment_name,
+        mock_build_ssh_command,
+        mock_run,
+    ):
+        mock_resolve_experiment_name.return_value = "test-exp"
+        context = _make_resolved_cloud_context(_make_launch_state())
+        mock_resolve_context.return_value = context
+        provisioner = mock_provisioner_cls.return_value
+        provisioner.list_workers.return_value = [
+            _make_gce_worker("crsbench-test-exp-work-001", zone="us-central1-a")
+        ]
+        provisioner.list_evaluators.return_value = []
+        provisioner.get_instance_record.return_value = _make_gce_worker(
+            "crsbench-test-exp-orch",
+            zone="us-east5-b",
+            ip="10.0.0.50",
+        )
+        provisioner.get_instance_record.return_value.labels["crsbench-role"] = (
+            "orchestrator"
+        )
+        mock_build_ssh_command.return_value = ["gcloud", "compute", "ssh", "dummy"]
+        mock_run.side_effect = KeyboardInterrupt
+
+        from crsbench.cloud.cli._exec import run_exec
+
+        rc = run_exec(_make_exec_args(exec_command=["tail", "-f"]))
+
+        assert rc == 130
+
 
 class TestLog:
     """Tests for run_log() sub-action."""
@@ -3476,6 +3514,44 @@ class TestLog:
         assert rc == 0
         remote_command = mock_build_ssh_command.call_args.kwargs["remote_command"]
         assert "crsbench-orchestrator.service" in " ".join(remote_command)
+
+    @patch("crsbench.cloud.cli._log.subprocess.run")
+    @patch("crsbench.cloud.cli._log.build_ssh_command")
+    @patch("crsbench.cloud.cli._log.resolve_effective_experiment_name")
+    @patch("crsbench.cloud.cli._log.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._log.GceProvisioner")
+    def test_log_treats_keyboard_interrupt_as_normal_exit(
+        self,
+        mock_provisioner_cls,
+        mock_resolve_context,
+        mock_resolve_experiment_name,
+        mock_build_ssh_command,
+        mock_run,
+    ):
+        from crsbench.cloud.cli._log import run_log
+
+        mock_resolve_experiment_name.return_value = "test-exp"
+        context = _make_resolved_cloud_context(_make_launch_state())
+        mock_resolve_context.return_value = context
+        provisioner = mock_provisioner_cls.return_value
+        provisioner.list_workers.return_value = [
+            _make_gce_worker("crsbench-test-exp-work-001", zone="us-central1-a")
+        ]
+        provisioner.list_evaluators.return_value = []
+        provisioner.get_instance_record.return_value = _make_gce_worker(
+            "crsbench-test-exp-orch",
+            zone="us-east5-b",
+            ip="10.0.0.50",
+        )
+        provisioner.get_instance_record.return_value.labels["crsbench-role"] = (
+            "orchestrator"
+        )
+        mock_build_ssh_command.return_value = ["gcloud", "compute", "ssh", "dummy"]
+        mock_run.side_effect = KeyboardInterrupt
+
+        rc = run_log(_make_log_args(instance="work-001"))
+
+        assert rc == 130
 
 
 class TestCollect:
