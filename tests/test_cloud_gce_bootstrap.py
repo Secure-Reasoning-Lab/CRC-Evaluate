@@ -630,6 +630,7 @@ def test_startup_script_supports_apt_and_apk_bootstrap_dependencies():
     script = load_startup_script()
 
     assert "apt-get install -y -qq" in script
+    assert "iftop" in script
     assert "ripgrep" in script
     assert "fd-find" in script
     assert "install_packages docker.io docker-compose-v2 docker-buildx" in script
@@ -939,6 +940,7 @@ def test_orchestrator_startup_script_supports_apt_and_apk_bootstrap_dependencies
     script = load_orchestrator_startup_script()
 
     assert "apt-get install -y -qq" in script
+    assert "iftop" in script
     assert "ripgrep" in script
     assert "fd-find" in script
     assert "install_packages docker.io docker-compose-v2 docker-buildx" in script
