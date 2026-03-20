@@ -44,6 +44,8 @@ def add_cloud_subparser(subparsers) -> None:
 Examples:
   %(prog)s --config config.yaml launch
   %(prog)s --config config.yaml list
+  %(prog)s --config config.yaml log
+  %(prog)s --config config.yaml exec work-001 -- docker ps
   %(prog)s status my-experiment --config config.yaml
   %(prog)s monitor my-experiment --config config.yaml
   %(prog)s events my-experiment --config config.yaml --type orphan_detected
@@ -92,6 +94,11 @@ Examples:
     )
     collect_p.add_argument("experiment", nargs="?", help="Experiment name")
     _add_config_argument(collect_p, suppress_default=True)
+    collect_p.add_argument(
+        "--remote-dir",
+        dest="remote_dir",
+        help="Absolute path on workers containing the experiment tree",
+    )
 
     # list
     list_p = cloud_subparsers.add_parser(
@@ -108,11 +115,24 @@ Examples:
     )
     ssh_p.add_argument("instance", nargs="?", help="Instance name or alias")
     _add_config_argument(ssh_p, suppress_default=True)
-    collect_p.add_argument(
-        "--remote-dir",
-        dest="remote_dir",
-        help="Absolute path on workers containing the experiment tree",
+
+    # exec
+    exec_p = cloud_subparsers.add_parser(
+        "exec", help="Run a remote command on a live cloud instance"
     )
+    _add_config_argument(exec_p, suppress_default=True)
+    exec_p.add_argument(
+        "exec_args",
+        nargs=argparse.REMAINDER,
+        help="Optional instance selector plus remote command after '--'",
+    )
+
+    # log
+    log_p = cloud_subparsers.add_parser(
+        "log", help="Follow the primary CRSBench journal on a live cloud instance"
+    )
+    log_p.add_argument("instance", nargs="?", help="Instance name or alias")
+    _add_config_argument(log_p, suppress_default=True)
 
     # launch
     launch_p = cloud_subparsers.add_parser(
@@ -191,6 +211,16 @@ def run_cloud(args: argparse.Namespace) -> int:
         from crsbench.cloud.cli._ssh import run_ssh
 
         return run_ssh(args)
+
+    if cmd == "exec":
+        from crsbench.cloud.cli._exec import run_exec
+
+        return run_exec(args)
+
+    if cmd == "log":
+        from crsbench.cloud.cli._log import run_log
+
+        return run_log(args)
 
     if cmd == "events":
         from crsbench.cloud.cli._events import run_events

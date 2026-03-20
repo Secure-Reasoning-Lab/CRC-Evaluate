@@ -361,6 +361,31 @@ uv run crsbench cloud \
 If you omit the instance selector, CRSBench prints the live inventory and lets
 you choose interactively.
 
+Run a one-off remote command on a selected VM:
+
+```bash
+uv run crsbench cloud \
+  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml \
+  exec work-001 -- hostname
+```
+
+If you omit the selector, CRSBench shows the live inventory first and lets you
+pick a VM interactively:
+
+```bash
+uv run crsbench cloud \
+  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml \
+  exec -- docker ps
+```
+
+Follow the main CRSBench journal for a live VM:
+
+```bash
+uv run crsbench cloud \
+  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml \
+  log work-001
+```
+
 Watch recovery events:
 
 ```bash

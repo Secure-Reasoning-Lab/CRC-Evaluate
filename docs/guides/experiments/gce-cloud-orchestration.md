@@ -589,6 +589,45 @@ uv run crsbench cloud --config config.yaml ssh
 `cloud ssh` infers the experiment name from `experiment.name` and reuses the
 live zone chosen at launch time.
 
+## Remote Command Execution
+
+Run a one-off remote command without opening an interactive shell:
+
+```bash
+uv run crsbench cloud --config config.yaml exec work-001 -- hostname
+```
+
+If you omit the instance selector, CRSBench prints the live inventory, lets you
+pick a VM, and then runs the command there:
+
+```bash
+uv run crsbench cloud --config config.yaml exec -- docker ps
+```
+
+`cloud exec` infers the experiment name from `experiment.name` and reuses the
+live zone chosen at launch time.
+
+## Log Following
+
+Follow the primary CRSBench `systemd --user` journal for one live VM:
+
+```bash
+uv run crsbench cloud --config config.yaml log work-001
+```
+
+Role mapping is automatic:
+
+- `orch` follows `crsbench-orchestrator.service`
+- `work-*` follows `crsbench-worker.service`
+- `eval-*` follows `crsbench-evaluator.service`
+
+If you omit the instance selector, CRSBench prints the live inventory and lets
+you choose interactively:
+
+```bash
+uv run crsbench cloud --config config.yaml log
+```
+
 ## Teardown
 
 Remove the worker/evaluator fleet after collecting results:
