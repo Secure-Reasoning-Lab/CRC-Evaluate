@@ -242,11 +242,30 @@ class OssCrsAdapter:
         self._configured_run_id: Optional[str] = None
         self._run_id: Optional[str] = None
 
+        # Track whether CRS images have been prepared (shared across benchmarks)
+        self._prepared: bool = False
+
     @staticmethod
     def _lock_token(value: str) -> str:
         """Convert arbitrary text to a filesystem-safe lock token."""
         token = re.sub(r"[^a-zA-Z0-9._-]+", "-", value).strip("-")
         return token or "unknown"
+
+    def _lock_dir(self) -> Path:
+        """Return the directory for host-local lock files."""
+        return Path(
+            os.environ.get("CRSBENCH_OSS_CRS_BUILD_LOCK_DIR", "/tmp")
+        ).expanduser()
+
+    def _prepare_lock_file_path(self) -> Path:
+        """Return host-local lock file path for CRS prepare serialization.
+
+        The prepare step builds CRS Docker images which are independent of the
+        benchmark project.  A single CRS-level lock avoids redundant parallel
+        pulls / builds of the same images across workers.
+        """
+        crs = self._lock_token(self._crs_config_name)
+        return self._lock_dir() / f"crsbench-oss-crs-prepare-{crs}.lock"
 
     def _build_lock_file_path(self, project_name: str) -> Path:
         """Return host-local lock file path for build-target serialization.
@@ -254,29 +273,45 @@ class OssCrsAdapter:
         This is a temporary workaround for docker image tag races when multiple
         trials build the same CRS/project/sanitizer concurrently on one host.
         """
-        lock_dir = Path(
-            os.environ.get("CRSBENCH_OSS_CRS_BUILD_LOCK_DIR", "/tmp")
-        ).expanduser()
         crs = self._lock_token(self._crs_config_name)
         project = self._lock_token(project_name)
         sanitizer = self._lock_token(self._sanitizer)
-        return lock_dir / f"crsbench-oss-crs-build-{crs}-{project}-{sanitizer}.lock"
+        return (
+            self._lock_dir()
+            / f"crsbench-oss-crs-build-{crs}-{project}-{sanitizer}.lock"
+        )
 
     @contextmanager
-    def _acquire_build_lock(self, project_name: str):
-        """Acquire an exclusive host-local lock for this build key."""
-        lock_path = self._build_lock_file_path(project_name)
+    def _acquire_lock(self, lock_path: Path, description: str):
+        """Acquire an exclusive host-local flock."""
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("w") as lock_file:
-            logger.info(
-                f"Acquiring build lock for {self._crs_config_name}/{project_name} "
-                f"({self._sanitizer}): {lock_path}"
-            )
+            logger.info(f"Acquiring {description}: {lock_path}")
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             try:
                 yield
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    @contextmanager
+    def _acquire_prepare_lock(self):
+        """Acquire an exclusive host-local lock for CRS prepare."""
+        lock_path = self._prepare_lock_file_path()
+        with self._acquire_lock(
+            lock_path,
+            f"prepare lock for {self._crs_config_name}",
+        ):
+            yield
+
+    @contextmanager
+    def _acquire_build_lock(self, project_name: str):
+        """Acquire an exclusive host-local lock for this build key."""
+        lock_path = self._build_lock_file_path(project_name)
+        with self._acquire_lock(
+            lock_path,
+            f"build lock for {self._crs_config_name}/{project_name} ({self._sanitizer})",
+        ):
+            yield
 
     @property
     def mode(self) -> str:
@@ -617,11 +652,14 @@ class OssCrsAdapter:
                 self._sanitizer = new_sanitizer
                 # Compose embeds SANITIZER via additional_env; changing sanitizer
                 # requires regenerating compose/workdir and rebuilding targets.
+                # Reset _prepared too because CRS prepare env includes SANITIZER
+                # and some CRS bake files may use it.
                 self._compose_file = None
                 if "work_dir" not in config or config["work_dir"] is None:
                     self._work_dir = None
                 self._resolved_artifacts = None
                 self._built_projects.clear()
+                self._prepared = False
         if "skip_litellm" in config:
             self._skip_litellm = bool(config["skip_litellm"])
         if "litellm_runtime_url" in config:
@@ -938,6 +976,34 @@ class OssCrsAdapter:
         # Stage benchmark to exclude ground truth dotfiles
         staged_path = self._stage_benchmark(benchmark_path, trial_output_dir)
 
+        # Phase 1: prepare (build/pull CRS Docker images).
+        # This is CRS-scoped (independent of benchmark), so use a CRS-level
+        # lock to prevent redundant parallel Docker bakes of the same images.
+        # The first worker to acquire the lock builds/pulls the images;
+        # subsequent workers still enter but get an instant Docker cache hit.
+        # The in-process ``_prepared`` flag skips the lock entirely when this
+        # adapter instance has already prepared (e.g. second benchmark on the
+        # same worker).
+        if not self._prepared:
+            with self._acquire_prepare_lock():
+                if not self._prepared:
+                    logger.info(f"oss-crs prepare for {self._crs_config_name}")
+                    stdout, stderr, rc = run_oss_crs_prepare(
+                        compose_file,
+                        work_dir,
+                        oss_crs_cmd=self._oss_crs_cmd,
+                        timeout=self._build_timeout,
+                    )
+                    if rc != 0:
+                        detail = stderr or stdout
+                        msg = f"oss-crs prepare failed (rc={rc}): {detail}"
+                        docker_compose_down_cleanup(work_dir)
+                        raise RuntimeError(msg)
+                    self._prepared = True
+                    logger.info(f"CRS prepare complete for {self._crs_config_name}")
+
+        # Phase 2: build-target (compile the target project).
+        # This is project-scoped, keep per-benchmark/sanitizer lock.
         with self._acquire_build_lock(project_name):
             # Re-check after lock in case another actor finished first.
             if project_name in self._built_projects:
@@ -946,21 +1012,6 @@ class OssCrsAdapter:
 
             build_succeeded = False
             try:
-                # Phase 1: prepare (build CRS Docker images)
-                logger.info(f"oss-crs prepare for {project_name}")
-                stdout, stderr, rc = run_oss_crs_prepare(
-                    compose_file,
-                    work_dir,
-                    oss_crs_cmd=self._oss_crs_cmd,
-                    timeout=self._build_timeout,
-                )
-                if rc != 0:
-                    # oss-crs outputs errors via rich console to stdout
-                    detail = stderr or stdout
-                    msg = f"oss-crs prepare failed (rc={rc}): {detail}"
-                    raise RuntimeError(msg)
-
-                # Phase 2: build-target (compile the target project)
                 logger.info(f"oss-crs build-target for {project_name}")
                 stdout, stderr, rc = run_oss_crs_build_target(
                     compose_file,
@@ -970,7 +1021,6 @@ class OssCrsAdapter:
                     timeout=self._build_timeout,
                 )
                 if rc != 0:
-                    # oss-crs outputs errors via rich console to stdout
                     detail = stderr or stdout
                     msg = f"oss-crs build-target failed (rc={rc}): {detail}"
                     raise RuntimeError(msg)

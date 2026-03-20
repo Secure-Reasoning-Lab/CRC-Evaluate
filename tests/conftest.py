@@ -3,12 +3,23 @@
 from pathlib import Path
 from typing import Optional
 
+import pytest
 from dotenv import load_dotenv
 
 # Load .env file from project root if it exists
 env_file = Path(__file__).parent.parent / ".env"
 if env_file.exists():
     load_dotenv(env_file)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_lock_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolate OssCrsAdapter lock/sentinel files per test.
+
+    Without this, parallel pytest-xdist workers sharing /tmp can leak
+    prepare-done sentinel files across tests, causing false cache hits.
+    """
+    monkeypatch.setenv("CRSBENCH_OSS_CRS_BUILD_LOCK_DIR", str(tmp_path / "locks"))
 
 
 def make_variant_name(
