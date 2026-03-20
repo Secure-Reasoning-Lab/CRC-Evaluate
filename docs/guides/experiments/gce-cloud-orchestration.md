@@ -691,11 +691,10 @@ Docker Engine from Docker's official apt repository rather than the distro
 `docker.io` packages. If you inspect a VM manually, verify these with
 `timedatectl`, `cat /etc/timezone`, `docker info --format '{{.CgroupDriver}}'`,
 and `apt-cache policy docker-ce`.
-Bootstrap also installs `iftop`, `rg`, and `fdfind`, and creates a
-`crsbuilder` buildx builder with the `docker-container` driver so ad hoc
-network and Docker debugging on the VM uses the same toolchain as CRSBench.
-Verify that with `command -v iftop`, `docker buildx ls`, or
-`docker buildx inspect crsbuilder`.
+Bootstrap also installs `iftop`, `rg`, and `fdfind`, and bootstraps Docker
+Buildx for the default builder context so ad hoc network and Docker debugging
+on the VM uses the same toolchain as CRSBench. Verify that with
+`command -v iftop`, `docker buildx ls`, or `docker buildx inspect`.
 You can also verify the delegated cgroup setup that both CRSBench and
 `oss-crs` depend on with:
 

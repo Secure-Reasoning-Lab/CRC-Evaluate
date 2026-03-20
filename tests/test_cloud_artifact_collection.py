@@ -185,6 +185,34 @@ class TestRsyncCmdIap:
         assert "--delay-updates" in cmd
         assert "--delete-delay" in cmd
 
+    def test_prepare_iap_known_hosts_removes_stale_alias(self, tmp_path: Path) -> None:
+        """IAP SSH collection should clear any stale stable-name host key before reconnecting."""
+        collector = ArtifactCollector(base_path=tmp_path / "config.yaml")
+        known_hosts_path = tmp_path / ".crsbench-cloud" / "known_hosts_iap"
+
+        calls: list[list[str]] = []
+
+        def _fake_run(cmd, *_args, **_kwargs):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+        with patch("subprocess.run", side_effect=_fake_run):
+            result = collector._prepare_iap_known_hosts(
+                experiment_filestore=tmp_path / "filestore",
+                host_key_alias="gce-worker-001",
+            )
+
+        assert result == known_hosts_path
+        assert calls == [
+            [
+                "ssh-keygen",
+                "-R",
+                "gce-worker-001",
+                "-f",
+                str(known_hosts_path),
+            ]
+        ]
+
 
 class TestRsyncCmdDirectIp:
     """test_rsync_cmd_direct_ip — ARTF-01: direct-IP SSH transport."""
@@ -726,3 +754,65 @@ class TestRemoteLogCollection:
         assert (instance_dir / "crsbench-evaluator.journal.log").read_text(
             encoding="utf-8"
         )
+
+    def test_run_remote_command_iap_uses_local_ssh_transport(
+        self, tmp_path: Path
+    ) -> None:
+        """IAP-backed remote commands should go through a local tunnel and config-scoped known_hosts."""
+        worker = _make_worker(zone="us-central1-a")
+        fleet = _make_fleet(ssh_via_iap=True, zone="us-central1-a")
+        collector = ArtifactCollector(base_path=tmp_path / "config.yaml")
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+        calls: list[list[str]] = []
+
+        class _Tunnel:
+            def __enter__(self):
+                return 2222
+
+            def __exit__(self, exc_type, exc, tb):
+                del exc_type, exc, tb
+                return False
+
+        def _fake_run(cmd, *_args, **_kwargs):
+            calls.append(cmd)
+            if cmd and cmd[0] == "ssh-keygen":
+                return subprocess.CompletedProcess(args=cmd, returncode=0)
+            if cmd and cmd[0] == "ssh":
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout="remote output\n",
+                    stderr="",
+                )
+            raise AssertionError(f"unexpected subprocess invocation: {cmd!r}")
+
+        with (
+            patch.object(collector, "_open_iap_tunnel", return_value=_Tunnel()),
+            patch("subprocess.run", side_effect=_fake_run),
+        ):
+            result = collector._run_remote_command(
+                worker=worker,
+                fleet=fleet,
+                known_hosts_path=None,
+                ssh_user="test-user",
+                command="echo hello",
+                experiment_filestore=experiment_filestore,
+            )
+
+        assert result.returncode == 0
+        known_hosts_path = tmp_path / ".crsbench-cloud" / "known_hosts_iap"
+        assert calls[0] == [
+            "ssh-keygen",
+            "-R",
+            worker.name,
+            "-f",
+            str(known_hosts_path),
+        ]
+        ssh_cmd = calls[1]
+        assert ssh_cmd[0] == "ssh"
+        assert "StrictHostKeyChecking=no" in ssh_cmd
+        assert f"HostKeyAlias={worker.name}" in ssh_cmd
+        assert f"UserKnownHostsFile={known_hosts_path}" in ssh_cmd
+        assert "127.0.0.1" in ssh_cmd
+        assert "echo hello" in ssh_cmd

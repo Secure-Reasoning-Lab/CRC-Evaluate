@@ -159,6 +159,7 @@ class ArtifactCollector:
                 known_hosts_path=known_hosts_path,
                 ssh_user=ssh_user,
                 command=command,
+                experiment_filestore=experiment_filestore,
             )
             if output.returncode != 0:
                 raise ArtifactCollectionError(
@@ -175,6 +176,7 @@ class ArtifactCollector:
             known_hosts_path=known_hosts_path,
             ssh_user=ssh_user,
             remote_path=remote_experiment_dir,
+            experiment_filestore=experiment_filestore,
         ):
             self._run_log_rsync(
                 worker=worker,
@@ -426,6 +428,31 @@ class ArtifactCollector:
         """Return the localhost tunnel known_hosts file used for IAP rsync."""
         return self._state_dir(experiment_filestore) / "known_hosts_iap"
 
+    def _prepare_iap_known_hosts(
+        self,
+        *,
+        experiment_filestore: Path,
+        host_key_alias: str,
+    ) -> Path:
+        """Clear any stale stable-name host key before reconnecting over an IAP SSH tunnel."""
+        known_hosts_path = self._iap_known_hosts_path(experiment_filestore)
+        known_hosts_path.parent.mkdir(parents=True, exist_ok=True)
+        known_hosts_path.touch(exist_ok=True)
+        known_hosts_path.chmod(0o600)
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-R",
+                host_key_alias,
+                "-f",
+                str(known_hosts_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return known_hosts_path
+
     def _remote_host(
         self,
         worker: GceWorkerRecord,
@@ -552,6 +579,10 @@ class ArtifactCollector:
                 raise ArtifactCollectionError(
                     f"Unable to resolve SSH user for IAP collection from {worker.name}"
                 )
+            iap_known_hosts_path = self._prepare_iap_known_hosts(
+                experiment_filestore=experiment_filestore,
+                host_key_alias=worker.name,
+            )
             with self._open_iap_tunnel(worker=worker, fleet=fleet) as local_port:
                 cmd = self._build_rsync_cmd(
                     worker=worker,
@@ -561,9 +592,7 @@ class ArtifactCollector:
                     ssh_command=self._build_iap_ssh_command(
                         local_port=local_port,
                         ssh_user=ssh_user,
-                        known_hosts_path=self._iap_known_hosts_path(
-                            experiment_filestore
-                        ),
+                        known_hosts_path=iap_known_hosts_path,
                         host_key_alias=worker.name,
                     ),
                     remote_host="127.0.0.1",
@@ -598,6 +627,10 @@ class ArtifactCollector:
                 raise ArtifactCollectionError(
                     f"Unable to resolve SSH user for IAP log collection from {worker.name}"
                 )
+            iap_known_hosts_path = self._prepare_iap_known_hosts(
+                experiment_filestore=experiment_filestore,
+                host_key_alias=worker.name,
+            )
             with self._open_iap_tunnel(worker=worker, fleet=fleet) as local_port:
                 cmd = self._build_log_rsync_cmd(
                     worker=worker,
@@ -607,9 +640,7 @@ class ArtifactCollector:
                     ssh_command=self._build_iap_ssh_command(
                         local_port=local_port,
                         ssh_user=ssh_user,
-                        known_hosts_path=self._iap_known_hosts_path(
-                            experiment_filestore
-                        ),
+                        known_hosts_path=iap_known_hosts_path,
                         host_key_alias=worker.name,
                     ),
                     remote_host="127.0.0.1",
@@ -635,20 +666,33 @@ class ArtifactCollector:
         known_hosts_path: Path | None,
         ssh_user: str | None,
         command: str,
+        experiment_filestore: Path,
     ) -> subprocess.CompletedProcess[str]:
         """Run one shell command on a remote VM and capture stdout/stderr."""
         if fleet.ssh_via_iap:
-            zone = worker.zone or fleet.zone or ""
-            cmd = [
-                "gcloud",
-                "compute",
-                "ssh",
-                worker.name,
-                f"--project={fleet.project}",
-                f"--zone={zone}",
-                "--tunnel-through-iap",
-                f"--command={command}",
-            ]
+            if not ssh_user:
+                raise ArtifactCollectionError(
+                    f"Unable to resolve SSH user for IAP remote command on {worker.name}"
+                )
+            iap_known_hosts_path = self._prepare_iap_known_hosts(
+                experiment_filestore=experiment_filestore,
+                host_key_alias=worker.name,
+            )
+            with self._open_iap_tunnel(worker=worker, fleet=fleet) as local_port:
+                ssh_command = self._build_iap_ssh_command(
+                    local_port=local_port,
+                    ssh_user=ssh_user,
+                    known_hosts_path=iap_known_hosts_path,
+                    host_key_alias=worker.name,
+                )
+                cmd = shlex.split(ssh_command)
+                cmd.extend(["127.0.0.1", command])
+                return subprocess.run(
+                    cmd,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
         else:
             remote_host = self._remote_host(worker, fleet)
             ssh_target = (
@@ -685,6 +729,7 @@ class ArtifactCollector:
         known_hosts_path: Path | None,
         ssh_user: str | None,
         remote_path: str,
+        experiment_filestore: Path,
     ) -> bool:
         """Return whether the remote experiment directory exists."""
         result = self._run_remote_command(
@@ -693,6 +738,7 @@ class ArtifactCollector:
             known_hosts_path=known_hosts_path,
             ssh_user=ssh_user,
             command=f"test -d {shlex.quote(remote_path)}",
+            experiment_filestore=experiment_filestore,
         )
         return result.returncode == 0
 
