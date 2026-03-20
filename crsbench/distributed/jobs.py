@@ -91,9 +91,20 @@ class EffectiveInputSettings:
 
 
 def _resolve_effective_input_settings(
-    config: ExperimentConfig, raw_config: Dict[str, Any]
+    config: ExperimentConfig,
+    raw_config: Dict[str, Any],
+    *,
+    trial_mode: Optional[str] = None,
 ) -> EffectiveInputSettings:
-    """Resolve effective runtime inputs from explicit runtime.inputs only."""
+    """Resolve effective runtime inputs from explicit runtime.inputs only.
+
+    Args:
+        config: Parsed experiment configuration.
+        raw_config: Raw config dict (unused, kept for signature compat).
+        trial_mode: Per-trial evaluation mode ("delta" or "full").
+            When "delta", diff input is force-enabled because the reference
+            diff is a definitional input for delta-mode evaluation.
+    """
     del raw_config
     inputs = config.inputs
 
@@ -105,6 +116,14 @@ def _resolve_effective_input_settings(
     seed_corpus_max_time = inputs.seed.max_time
     diff_enabled = bool(inputs.diff.enabled)
     hint_corpus_level = None
+
+    # Delta mode requires the reference diff by definition.
+    if trial_mode == "delta" and not diff_enabled:
+        diff_enabled = True
+        logger.info(
+            "Auto-enabling diff input for delta-mode trial "
+            "(ref.diff is a definitional input for delta evaluation)"
+        )
 
     return EffectiveInputSettings(
         pov_enabled=pov_enabled,
@@ -870,7 +889,9 @@ def run_crs_trial(
     # Strip internal transport-only markers before schema validation.
     config_parse_dict = dict(config_dict)
     config = ExperimentConfig(**config_parse_dict)
-    effective_inputs = _resolve_effective_input_settings(config, config_dict)
+    effective_inputs = _resolve_effective_input_settings(
+        config, config_dict, trial_mode=mode
+    )
 
     # Apply worker overrides from config.worker section (if present)
     _apply_worker_overrides(config)
