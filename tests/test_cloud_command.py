@@ -1350,6 +1350,15 @@ class TestArgParsing:
         assert args.config == "c.yaml"
         assert args.json_output is False
 
+    def test_parse_status_with_global_config(self):
+        parser = self._build_parser()
+        args = parser.parse_args(["cloud", "--config", "c.yaml", "status", "my-exp"])
+        assert args.command == "cloud"
+        assert args.cloud_command == "status"
+        assert args.experiment == "my-exp"
+        assert args.config == "c.yaml"
+        assert args.json_output is False
+
     def test_parse_status_json(self):
         parser = self._build_parser()
         args = parser.parse_args(
@@ -1464,6 +1473,13 @@ class TestArgParsing:
         assert args.cloud_command == "launch"
         assert args.config == "c.yaml"
 
+    def test_parse_launch_with_global_config(self):
+        parser = self._build_parser()
+        args = parser.parse_args(["cloud", "--config", "c.yaml", "launch"])
+        assert args.command == "cloud"
+        assert args.cloud_command == "launch"
+        assert args.config == "c.yaml"
+
     def test_parse_monitor(self):
         parser = self._build_parser()
         args = parser.parse_args(["cloud", "monitor", "my-exp", "--config", "c.yaml"])
@@ -1483,6 +1499,14 @@ class TestArgParsing:
     def test_parse_list(self):
         parser = self._build_parser()
         args = parser.parse_args(["cloud", "list", "--config", "c.yaml"])
+        assert args.command == "cloud"
+        assert args.cloud_command == "list"
+        assert args.config == "c.yaml"
+        assert args.json_output is False
+
+    def test_parse_list_with_global_config(self):
+        parser = self._build_parser()
+        args = parser.parse_args(["cloud", "--config", "c.yaml", "list"])
         assert args.command == "cloud"
         assert args.cloud_command == "list"
         assert args.config == "c.yaml"
@@ -1509,6 +1533,14 @@ class TestArgParsing:
         assert args.command == "cloud"
         assert args.cloud_command == "ssh"
         assert args.instance is None
+        assert args.config == "c.yaml"
+
+    def test_parse_ssh_with_global_config(self):
+        parser = self._build_parser()
+        args = parser.parse_args(["cloud", "--config", "c.yaml", "ssh", "work-001"])
+        assert args.command == "cloud"
+        assert args.cloud_command == "ssh"
+        assert args.instance == "work-001"
         assert args.config == "c.yaml"
 
 
@@ -1571,6 +1603,14 @@ def test_run_cloud_dispatches_list(mock_run_list):
 
     assert rc == 0
     mock_run_list.assert_called_once()
+
+
+def test_run_cloud_requires_config_for_non_keygen_commands():
+    from crsbench.cloud.cli.cloud_command import run_cloud
+
+    rc = run_cloud(argparse.Namespace(cloud_command="launch", config=None))
+
+    assert rc == 2
 
 
 @patch("crsbench.cloud.cli._ssh.run_ssh", return_value=0)

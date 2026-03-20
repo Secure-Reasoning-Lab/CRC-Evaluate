@@ -9,6 +9,31 @@ from crsbench.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _add_config_argument(
+    parser: argparse.ArgumentParser,
+    *,
+    required: bool = False,
+    suppress_default: bool = False,
+) -> None:
+    if suppress_default:
+        parser.add_argument(
+            "--config",
+            "--experiment-config",
+            dest="config",
+            required=required,
+            default=argparse.SUPPRESS,
+            help="Path to experiment YAML config",
+        )
+        return
+    parser.add_argument(
+        "--config",
+        "--experiment-config",
+        dest="config",
+        required=required,
+        help="Path to experiment YAML config",
+    )
+
+
 def add_cloud_subparser(subparsers) -> None:
     """Add 'cloud' subcommand to the CLI."""
     parser = subparsers.add_parser(
@@ -17,12 +42,15 @@ def add_cloud_subparser(subparsers) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  %(prog)s --config config.yaml launch
+  %(prog)s --config config.yaml list
   %(prog)s status my-experiment --config config.yaml
   %(prog)s monitor my-experiment --config config.yaml
   %(prog)s events my-experiment --config config.yaml --type orphan_detected
   %(prog)s teardown my-experiment --config config.yaml --force
         """,
     )
+    _add_config_argument(parser)
     cloud_subparsers = parser.add_subparsers(dest="cloud_command", required=True)
 
     # status
@@ -30,13 +58,7 @@ Examples:
         "status", help="Show experiment fleet and job status"
     )
     status_p.add_argument("experiment", help="Experiment name")
-    status_p.add_argument(
-        "--config",
-        "--experiment-config",
-        dest="config",
-        required=True,
-        help="Path to experiment YAML config",
-    )
+    _add_config_argument(status_p, suppress_default=True)
     status_p.add_argument(
         "--json", action="store_true", dest="json_output", help="JSON output"
     )
@@ -47,26 +69,14 @@ Examples:
         help="Attach to a launched remote orchestrator and show live queue progress",
     )
     monitor_p.add_argument("experiment", nargs="?", help="Experiment name")
-    monitor_p.add_argument(
-        "--config",
-        "--experiment-config",
-        dest="config",
-        required=True,
-        help="Path to experiment YAML config",
-    )
+    _add_config_argument(monitor_p, suppress_default=True)
 
     # teardown
     teardown_p = cloud_subparsers.add_parser(
         "teardown", help="Collect artifacts and delete workers"
     )
     teardown_p.add_argument("experiment", nargs="?", help="Experiment name")
-    teardown_p.add_argument(
-        "--config",
-        "--experiment-config",
-        dest="config",
-        required=True,
-        help="Path to experiment YAML config",
-    )
+    _add_config_argument(teardown_p, suppress_default=True)
     teardown_p.add_argument(
         "--force", action="store_true", help="Skip confirmation prompt"
     )
@@ -81,25 +91,13 @@ Examples:
         "collect", help="Collect artifacts from workers"
     )
     collect_p.add_argument("experiment", nargs="?", help="Experiment name")
-    collect_p.add_argument(
-        "--config",
-        "--experiment-config",
-        dest="config",
-        required=True,
-        help="Path to experiment YAML config",
-    )
+    _add_config_argument(collect_p, suppress_default=True)
 
     # list
     list_p = cloud_subparsers.add_parser(
         "list", help="List live cloud instances for the experiment config"
     )
-    list_p.add_argument(
-        "--config",
-        "--experiment-config",
-        dest="config",
-        required=True,
-        help="Path to experiment YAML config",
-    )
+    _add_config_argument(list_p, suppress_default=True)
     list_p.add_argument(
         "--json", action="store_true", dest="json_output", help="JSON output"
     )
@@ -109,13 +107,7 @@ Examples:
         "ssh", help="Open an SSH session to a live cloud instance"
     )
     ssh_p.add_argument("instance", nargs="?", help="Instance name or alias")
-    ssh_p.add_argument(
-        "--config",
-        "--experiment-config",
-        dest="config",
-        required=True,
-        help="Path to experiment YAML config",
-    )
+    _add_config_argument(ssh_p, suppress_default=True)
     collect_p.add_argument(
         "--remote-dir",
         dest="remote_dir",
@@ -127,13 +119,7 @@ Examples:
         "launch",
         help="Launch an orchestrator VM plus worker fleet from this machine",
     )
-    launch_p.add_argument(
-        "--config",
-        "--experiment-config",
-        dest="config",
-        required=True,
-        help="Path to experiment YAML config",
-    )
+    _add_config_argument(launch_p, suppress_default=True)
 
     # keygen
     keygen_p = cloud_subparsers.add_parser(
@@ -161,13 +147,7 @@ Examples:
         "events", help="Show recovery event timeline"
     )
     events_p.add_argument("experiment", help="Experiment name")
-    events_p.add_argument(
-        "--config",
-        "--experiment-config",
-        dest="config",
-        required=True,
-        help="Path to experiment YAML config",
-    )
+    _add_config_argument(events_p, suppress_default=True)
     events_p.add_argument("--type", dest="event_type", help="Filter by event type")
     events_p.add_argument(
         "--json", action="store_true", dest="json_output", help="JSON output"
@@ -184,6 +164,13 @@ def run_cloud(args: argparse.Namespace) -> int:
         from crsbench.cloud.cli._keygen import run_keygen
 
         return run_keygen(args)
+
+    if not getattr(args, "config", None):
+        logger.error(
+            "Cloud command '{}' requires --config/--experiment-config",
+            cmd,
+        )
+        return 2
 
     if cmd == "status":
         from crsbench.cloud.cli._status import run_status

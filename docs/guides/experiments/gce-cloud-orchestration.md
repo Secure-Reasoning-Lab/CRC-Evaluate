@@ -431,7 +431,7 @@ After `cloud launch`, you can attach to the remote orchestrator's live trial
 queue from the operator machine:
 
 ```bash
-uv run crsbench cloud monitor my-experiment --config config.yaml
+uv run crsbench cloud --config config.yaml monitor my-experiment
 ```
 
 This command requires the config-adjacent launch state written by
@@ -486,7 +486,7 @@ bug-finding preset shape.
 ### Fleet and Job Status
 
 ```bash
-uv run crsbench cloud status my-experiment --config config.yaml
+uv run crsbench cloud --config config.yaml status my-experiment
 ```
 
 Shows:
@@ -501,20 +501,20 @@ Shows:
 Add `--json` for machine-readable output:
 
 ```bash
-uv run crsbench cloud status my-experiment --config config.yaml --json
+uv run crsbench cloud --config config.yaml status my-experiment --json
 ```
 
 ### Recovery Events
 
 ```bash
 # All events
-uv run crsbench cloud events my-experiment --config config.yaml
+uv run crsbench cloud --config config.yaml events my-experiment
 
 # Filter by type
-uv run crsbench cloud events my-experiment --config config.yaml --type worker_restart
+uv run crsbench cloud --config config.yaml events my-experiment --type worker_restart
 
 # JSON output
-uv run crsbench cloud events my-experiment --config config.yaml --json
+uv run crsbench cloud --config config.yaml events my-experiment --json
 ```
 
 ## Collecting Artifacts
@@ -523,8 +523,7 @@ Pull experiment results from live workers to the local experiment filestore and
 collect runtime logs from workers, evaluators, and the orchestrator:
 
 ```bash
-uv run crsbench cloud collect \
-    --config config.yaml
+uv run crsbench cloud --config config.yaml collect
 ```
 
 By default, `cloud collect` infers:
@@ -536,8 +535,7 @@ By default, `cloud collect` infers:
 You can still override either value explicitly:
 
 ```bash
-uv run crsbench cloud collect my-experiment \
-    --config config.yaml \
+uv run crsbench cloud --config config.yaml collect my-experiment \
     --remote-dir /data/experiments/my-experiment
 ```
 
@@ -561,16 +559,13 @@ Inspect the live VM inventory resolved from the experiment config and persisted
 launch state:
 
 ```bash
-uv run crsbench cloud list \
-    --config config.yaml
+uv run crsbench cloud --config config.yaml list
 ```
 
 Add `--json` for machine-readable output:
 
 ```bash
-uv run crsbench cloud list \
-    --config config.yaml \
-    --json
+uv run crsbench cloud --config config.yaml list --json
 ```
 
 `cloud list` infers the experiment name from `experiment.name`.
@@ -581,16 +576,14 @@ Open an SSH session to a live VM without manually looking up the zone:
 
 ```bash
 # Exact instance name or short alias like orch, work-001, eval-001
-uv run crsbench cloud ssh orch \
-    --config config.yaml
+uv run crsbench cloud --config config.yaml ssh orch
 ```
 
 If you omit the instance selector, CRSBench prints the live inventory and lets
 you choose interactively:
 
 ```bash
-uv run crsbench cloud ssh \
-    --config config.yaml
+uv run crsbench cloud --config config.yaml ssh
 ```
 
 `cloud ssh` infers the experiment name from `experiment.name` and reuses the
@@ -601,8 +594,7 @@ live zone chosen at launch time.
 Remove the worker/evaluator fleet after collecting results:
 
 ```bash
-uv run crsbench cloud teardown \
-    --config config.yaml
+uv run crsbench cloud --config config.yaml teardown
 ```
 
 The teardown safety flow:
@@ -618,9 +610,7 @@ The teardown safety flow:
 Use `--force` to skip the confirmation prompt (e.g., in scripts):
 
 ```bash
-uv run crsbench cloud teardown \
-    --config config.yaml \
-    --force
+uv run crsbench cloud --config config.yaml teardown --force
 ```
 
 You can still override the inferred experiment name and remote directory:

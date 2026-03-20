@@ -212,7 +212,7 @@ Retry: `tenacity` exponential backoff (min 2s, max 30s, 3 attempts) on rsync fai
 
 ## Contract: CLI Sub-actions
 
-**`cloud status <experiment> --config <yaml> [--json]`**
+**`cloud --config <yaml> status <experiment> [--json]`**
 
 - Fleet summary: instance name, state, zone, IP
 - Job summary: job_id, trial, state, claimed_by, retries
@@ -220,12 +220,12 @@ Retry: `tenacity` exponential backoff (min 2s, max 30s, 3 attempts) on rsync fai
 - Last 5 recovery events
 - JSON mode outputs structured data
 
-**`cloud events <experiment> --config <yaml> [--type <type>] [--json]`**
+**`cloud --config <yaml> events <experiment> [--type <type>] [--json]`**
 
 - Recovery event timeline from Redis list `crsbench:recovery-events:{experiment}`
 - Filterable by event type
 
-**`cloud collect [<experiment>] --config <yaml> [--remote-dir <path>]`**
+**`cloud --config <yaml> collect [<experiment>] [--remote-dir <path>]`**
 
 - Lists live GCE workers, cross-references with Redis
 - Runs `ArtifactCollector.collect()` per worker
@@ -233,7 +233,7 @@ Retry: `tenacity` exponential backoff (min 2s, max 30s, 3 attempts) on rsync fai
   `<storage.experiment_filestore>/<experiment.name>` when the CLI omits them
 - Partial failure: continues to remaining workers, returns exit code 1
 
-**`cloud teardown [<experiment>] --config <yaml> [--remote-dir <path>] [--force]`**
+**`cloud --config <yaml> teardown [<experiment>] [--remote-dir <path>] [--force]`**
 
 - Full collect-then-delete safety flow described above
 

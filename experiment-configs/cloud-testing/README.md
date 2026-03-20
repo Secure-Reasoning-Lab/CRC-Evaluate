@@ -314,8 +314,9 @@ path this sample is intended to validate.
 Launch:
 
 ```bash
-uv run crsbench cloud launch \
-  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml
+uv run crsbench cloud \
+  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml \
+  launch
 ```
 
 Expected result:
@@ -328,8 +329,9 @@ Expected result:
 Watch status:
 
 ```bash
-uv run crsbench cloud status gce-sanity-1o2w1e \
-  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml
+uv run crsbench cloud \
+  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml \
+  status gce-sanity-1o2w1e
 ```
 
 Expected result:
@@ -343,15 +345,17 @@ Expected result:
 List the live VMs and their resolved zones:
 
 ```bash
-uv run crsbench cloud list \
-  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml
+uv run crsbench cloud \
+  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml \
+  list
 ```
 
 Open an SSH session by alias or full instance name:
 
 ```bash
-uv run crsbench cloud ssh orch \
-  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml
+uv run crsbench cloud \
+  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml \
+  ssh orch
 ```
 
 If you omit the instance selector, CRSBench prints the live inventory and lets
@@ -360,8 +364,9 @@ you choose interactively.
 Watch recovery events:
 
 ```bash
-uv run crsbench cloud events gce-sanity-1o2w1e \
-  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml
+uv run crsbench cloud \
+  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml \
+  events gce-sanity-1o2w1e
 ```
 
 Expected result:
@@ -372,8 +377,9 @@ Expected result:
 Collect results after completion:
 
 ```bash
-uv run crsbench cloud collect \
-  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml
+uv run crsbench cloud \
+  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml \
+  collect
 ```
 
 This infers:
