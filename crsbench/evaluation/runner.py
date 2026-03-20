@@ -831,12 +831,17 @@ class BenchmarkRunner:
         # CPV-targeted POV staging is meaningful only for bug-fixing runs.
         pov_target_cpv_id = target_cpv_id if self._crs_type == "bug-fixing" else None
 
-        if self.pov_input_enabled:
+        if self.pov_input_enabled and self._crs_type != "bug-finding":
             self._prepare_bugfix_inputs(
                 benchmark_path=benchmark_path,
                 harness_name=harness_name,
                 trial_output_dir=trial_output_dir,
                 target_cpv_id=pov_target_cpv_id,
+            )
+        elif self.pov_input_enabled and self._crs_type == "bug-finding":
+            self.logger.warning(
+                "pov_input_enabled is set but CRS type is bug-finding; "
+                "skipping POV input staging to avoid leaking ground-truth answers"
             )
         else:
             for stale in [

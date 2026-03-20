@@ -1906,6 +1906,22 @@ class ExperimentConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def check_pov_input_bugfinding_conflict(self):
+        """Reject POV inputs for bug-finding experiments.
+
+        POV inputs stage ground-truth crash blobs into the trial directory.
+        For bug-finding tasks, this leaks answers to the evaluator because the
+        CRS receives pre-staged POVs it never discovered.
+        """
+        if self.task == "bugfinding" and self.inputs.pov.enabled:
+            raise ValueError(
+                "inputs.pov.enabled=true is incompatible with task='bugfinding'. "
+                "POV inputs stage ground-truth crash blobs that short-circuit "
+                "bug-finding evaluation. Disable POV inputs or change the task type."
+            )
+        return self
+
+    @model_validator(mode="after")
     def resolve_path_fields(self):
         """Resolve relative Path fields to absolute paths.
 

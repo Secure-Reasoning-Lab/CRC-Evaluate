@@ -688,7 +688,7 @@ class TestExperimentConfigSchema:
                 "runtime": {
                     "trials": 1,
                     "max_total_time": 20000,
-                    "inputs": {"pov": {"max_variants_per_cpv": 1}},
+                    "inputs": {"pov": {"enabled": False, "max_variants_per_cpv": 1}},
                     "redis": {"host": "runtime-redis:6380"},
                 },
                 "storage": {
@@ -793,17 +793,28 @@ class TestExperimentConfigSchema:
         ):
             ExperimentConfig(**data)
 
-    def test_bugfinding_accepts_all_runtime_inputs(self):
+    def test_bugfinding_rejects_pov_input(self):
         data = self._base_kwargs()
         data["task"] = "bugfinding"
         data["inputs"] = {
             "pov": {"enabled": True, "max_variants_per_cpv": 1},
+        }
+        with pytest.raises(
+            PydanticValidationError, match="incompatible with task='bugfinding'"
+        ):
+            ExperimentConfig(**data)
+
+    def test_bugfinding_accepts_non_pov_runtime_inputs(self):
+        data = self._base_kwargs()
+        data["task"] = "bugfinding"
+        data["inputs"] = {
+            "pov": {"enabled": False},
             "sarif": {"enabled": True, "level": 1},
             "seed": {"enabled": True},
             "diff": {"enabled": True},
         }
         config = ExperimentConfig(**data)
-        assert config.inputs.pov.enabled is True
+        assert config.inputs.pov.enabled is False
         assert config.inputs.sarif.enabled is True
         assert config.inputs.seed.enabled is True
         assert config.inputs.diff.enabled is True
