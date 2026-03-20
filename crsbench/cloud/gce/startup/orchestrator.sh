@@ -225,10 +225,16 @@ install_packages() {
 }
 
 ensure_system_packages() {
+  local have_fd_find=1
+  if command -v fdfind >/dev/null 2>&1 || command -v fd >/dev/null 2>&1; then
+    have_fd_find=0
+  fi
   if command -v git >/dev/null 2>&1 \
     && command -v python3 >/dev/null 2>&1 \
     && command -v rsync >/dev/null 2>&1 \
     && command -v tar >/dev/null 2>&1 \
+    && command -v rg >/dev/null 2>&1 \
+    && [[ "${have_fd_find}" -eq 0 ]] \
     && command -v ssh-keyscan >/dev/null 2>&1 \
     && command -v sudo >/dev/null 2>&1 \
     && [[ -e /usr/share/zoneinfo/UTC ]]; then
@@ -237,11 +243,11 @@ ensure_system_packages() {
 
   echo "Installing system packages..."
   if command -v apt-get >/dev/null 2>&1; then
-    install_packages git python3 python3-pip python3-venv python3-yaml rsync tar bash coreutils openssh-client tzdata sudo
+    install_packages git python3 python3-pip python3-venv python3-yaml rsync tar bash coreutils openssh-client tzdata sudo ripgrep fd-find
     return 0
   fi
   if command -v apk >/dev/null 2>&1; then
-    install_packages git python3 py3-pip py3-yaml rsync tar bash coreutils openssh-client tzdata sudo shadow
+    install_packages git python3 py3-pip py3-yaml rsync tar bash coreutils openssh-client tzdata sudo shadow ripgrep fd
     return 0
   fi
   echo "Unsupported base image: cannot install git/python/runtime dependencies" >&2

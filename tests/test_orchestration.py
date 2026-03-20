@@ -1064,7 +1064,7 @@ class TestIntegrationWithSampleConfigs:
         self._assert_remote_gce_smoke_common(
             config,
             experiment_name="gce-sanity-mgf-1o2w1e",
-            expected_cloud_env={},
+            expected_cloud_env={"OSS_CRS_DEBUG": "1"},
             expected_services={"atlantis-multilang-given_fuzzer"},
         )
         assert [placement.zones for placement in config.cloud.workers.placements] == [

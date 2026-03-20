@@ -44,6 +44,8 @@ cloud:
     crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
     crsbench_git_ref: feat/gcp
     github_deploy_key_path: .crsbench-keys/crsbench-deploy
+  env:
+    OSS_CRS_DEBUG: "1"
   bootstrap:
     prepare_mode: full
     download_benchmarks: auto
