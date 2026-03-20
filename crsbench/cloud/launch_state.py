@@ -38,6 +38,7 @@ class CloudLaunchState(BaseModel):
     experiment_name: str
     config_path: str
     experiment_filestore: str | None = None
+    remote_experiment_root: str | None = None
     redis_host: str
     redis_password: str
     orchestrator_provider: CloudProvider = CloudProvider.GCE

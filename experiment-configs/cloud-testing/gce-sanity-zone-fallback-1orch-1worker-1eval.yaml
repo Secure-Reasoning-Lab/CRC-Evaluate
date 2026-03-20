@@ -35,6 +35,8 @@ evaluator:
   jobs: 1
   cores_per_job: 4
 cloud:
+  remote:
+    experiment_root: /tmp/crsbench/experiment-data
   defaults:
     readiness_timeout_sec: 1200
     crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"

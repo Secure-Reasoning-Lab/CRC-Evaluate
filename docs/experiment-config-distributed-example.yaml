@@ -148,6 +148,8 @@ storage:
   # results_filestore: /data/crsbench/finished
 
 cloud:
+  remote:
+    experiment_root: /data/crsbench/experiments
   defaults:
     readiness_timeout_sec: 900
     crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"

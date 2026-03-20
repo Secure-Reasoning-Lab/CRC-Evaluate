@@ -63,6 +63,9 @@ Default rehearsal config:
     [`smoke-test-bug-finding-hf-download`](../../../benchmark-suites/smoke-test-bug-finding-hf-download.yaml)
     suite with `download_benchmarks: auto` plus `cloud.env.HF_TOKEN` to rehearse
     gated Hugging Face benchmark download
+- the checked-in cloud rehearsal configs also set `cloud.remote.experiment_root`
+  explicitly so remote collect/teardown inference stays aligned with the
+  container-side experiment tree
 
 Default topology:
 

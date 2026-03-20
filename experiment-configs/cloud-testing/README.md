@@ -410,7 +410,9 @@ uv run crsbench cloud \
 This infers:
 
 - experiment name: `gce-sanity-1o2w1e`
-- remote dir: `/tmp/crsbench/experiment-data/gce-sanity-1o2w1e`
+- remote dir:
+  `cloud.remote.experiment_root/gce-sanity-1o2w1e` when configured, otherwise
+  `storage.experiment_filestore/gce-sanity-1o2w1e`
 
 Expected result:
 

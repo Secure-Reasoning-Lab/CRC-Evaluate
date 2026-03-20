@@ -176,6 +176,7 @@ def _make_launch_state():
         experiment_name="test-exp",
         config_path="/tmp/config.yaml",
         experiment_filestore="/tmp/filestore",
+        remote_experiment_root="/tmp/remote-root",
         redis_host="10.0.0.50:6379",
         redis_password="shared-secret",
         orchestrator_provider=CloudProvider.GCE,
@@ -207,6 +208,7 @@ def _make_provider_neutral_launch_state():
         experiment_name="test-exp",
         config_path="/tmp/config.yaml",
         experiment_filestore="/tmp/filestore",
+        remote_experiment_root="/tmp/remote-root",
         redis_host="10.0.0.50:6379",
         redis_password="shared-secret",
         orchestrator_provider=CloudProvider.GCE,
@@ -254,6 +256,7 @@ def _make_provider_neutral_operational_context(*, include_launch_state: bool):
         worker_fleet_configs=worker_fleet_configs,
         launch_state=launch_state,
         experiment_filestore=Path("/tmp/filestore"),
+        remote_experiment_root=Path("/tmp/remote-root"),
         redis_host="10.0.0.50:6379",
         redis_password="shared-secret",
         launch_plan=MagicMock(experiment_name="test-exp"),
@@ -301,6 +304,7 @@ def _make_resolved_cloud_context(launch_state=None):
             worker_fleet_configs=[fleet],
             launch_state=None,
             experiment_filestore=Path("/tmp/filestore"),
+            remote_experiment_root=Path("/tmp/remote-root"),
             redis_host="localhost",
             redis_password=None,
         )
@@ -309,6 +313,7 @@ def _make_resolved_cloud_context(launch_state=None):
         worker_fleet_configs=launch_state.resolved_worker_fleets(),
         launch_state=launch_state,
         experiment_filestore=Path(launch_state.experiment_filestore),
+        remote_experiment_root=Path(launch_state.remote_experiment_root),
         redis_host=launch_state.redis_host,
         redis_password=launch_state.redis_password,
     )
@@ -328,6 +333,9 @@ def _make_provider_neutral_experiment_config() -> ExperimentConfig:
             "experiment_filestore": "/tmp/filestore",
             "report_filestore": "/tmp/reports",
             "cloud": {
+                "remote": {
+                    "experiment_root": "/tmp/remote-root",
+                },
                 "defaults": {
                     "readiness_timeout_sec": 1200,
                     "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
@@ -1297,6 +1305,7 @@ class TestReconnect:
         ]
         assert context.redis_host == "localhost:6379"
         assert context.experiment_filestore == Path("/tmp/filestore")
+        assert context.remote_experiment_root == Path("/tmp/remote-root")
 
     @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
     def test_resolve_effective_experiment_name_uses_config_when_omitted(
@@ -1313,16 +1322,38 @@ class TestReconnect:
         assert experiment_name == "test-exp"
         mock_load.assert_called_once_with(Path("/tmp/config.yaml"))
 
-    def test_resolve_remote_experiment_dir_defaults_to_filestore_and_experiment(self):
+    def test_resolve_remote_experiment_dir_defaults_to_remote_root_and_experiment(self):
         from crsbench.cloud.cli._config_reconnect import resolve_remote_experiment_dir
 
         remote_dir = resolve_remote_experiment_dir(
-            Path("/tmp/filestore"),
+            Path("/tmp/remote-root"),
             "test-exp",
             None,
         )
 
-        assert remote_dir == "/tmp/filestore/test-exp"
+        assert remote_dir == "/tmp/remote-root/test-exp"
+
+    @patch("crsbench.cloud.cli._config_reconnect.save_launch_state")
+    @patch("crsbench.cloud.cli._config_reconnect.load_launch_state")
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_resolve_cloud_context_migrates_missing_remote_experiment_root(
+        self,
+        mock_load,
+        mock_state,
+        mock_save_state,
+    ):
+        mock_load.return_value = _make_provider_neutral_experiment_config()
+        launch_state = _make_provider_neutral_launch_state().model_copy(
+            update={"remote_experiment_root": None}
+        )
+        mock_state.return_value = launch_state
+
+        from crsbench.cloud.cli._config_reconnect import resolve_cloud_context
+
+        context = resolve_cloud_context("/tmp/config.yaml", "test-exp")
+
+        assert context.remote_experiment_root == Path("/tmp/remote-root")
+        mock_save_state.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -1854,7 +1885,7 @@ def test_run_monitor_treats_keyboard_interrupt_as_normal_exit(
     mock_tunnel_cls,
     mock_probe_redis_connection,
     mock_initialize_queue,
-    _mock_monitor_queue,
+    mock_monitor_queue,
 ):
     from crsbench.cloud.cli._monitor import run_monitor
 
@@ -1867,6 +1898,7 @@ def test_run_monitor_treats_keyboard_interrupt_as_normal_exit(
     mock_tunnel_cls.return_value.__enter__.return_value = mock_tunnel
     mock_probe_redis_connection.return_value = (RedisConnectionProbe.READY, None)
     mock_initialize_queue.return_value = MagicMock()
+    assert mock_monitor_queue is not None
 
     rc = run_monitor(_make_monitor_args())
 
@@ -3375,9 +3407,10 @@ class TestSsh:
         mock_provisioner_cls,
         mock_resolve_context,
         mock_resolve_experiment_name,
-        _mock_select_target,
+        mock_select_target,
     ):
         mock_resolve_experiment_name.return_value = "test-exp"
+        assert mock_select_target is not None
         context = _make_resolved_cloud_context(_make_launch_state())
         mock_resolve_context.return_value = context
         provisioner = mock_provisioner_cls.return_value
@@ -3664,7 +3697,7 @@ class TestCollect:
         mock_coll.collect.assert_called_once()
         assert (
             mock_coll.collect.call_args.kwargs["remote_experiment_dir"]
-            == "/tmp/filestore/test-exp"
+            == "/tmp/remote-root/test-exp"
         )
 
     @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
@@ -4146,7 +4179,7 @@ class TestTeardown:
         mock_coll.collect.assert_called_once()
         assert (
             mock_coll.collect.call_args.kwargs["remote_experiment_dir"]
-            == "/tmp/filestore/test-exp"
+            == "/tmp/remote-root/test-exp"
         )
 
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")

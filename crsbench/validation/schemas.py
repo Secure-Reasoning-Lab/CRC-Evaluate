@@ -2744,6 +2744,25 @@ class CloudBootstrapConfig(BaseModel):
     )
 
 
+class CloudRemoteConfig(BaseModel):
+    """Remote VM path defaults for cloud operations."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    experiment_root: Optional[str] = Field(
+        default=None,
+        description=(
+            "Remote VM root directory that contains per-experiment trees. "
+            "Defaults to storage.experiment_filestore when unset."
+        ),
+    )
+
+    @field_validator("experiment_root")
+    @classmethod
+    def normalize_optional_strings(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_cloud_optional_string(value)
+
+
 class CloudConfig(BaseModel):
     """Top-level cloud provisioning configuration."""
 
@@ -2752,6 +2771,10 @@ class CloudConfig(BaseModel):
     bootstrap: CloudBootstrapConfig = Field(
         default_factory=CloudBootstrapConfig,
         description="Provider-neutral bootstrap policy for cloud VMs.",
+    )
+    remote: CloudRemoteConfig = Field(
+        default_factory=CloudRemoteConfig,
+        description="Remote VM path defaults used by standalone cloud operations.",
     )
     defaults: CloudLaunchDefaultsConfig = Field(
         default_factory=CloudLaunchDefaultsConfig,

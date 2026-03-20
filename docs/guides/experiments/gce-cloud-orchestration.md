@@ -530,7 +530,14 @@ By default, `cloud collect` infers:
 
 - the experiment name from `experiment.name`
 - the remote worker artifact directory as
-  `<storage.experiment_filestore>/<experiment.name>`
+  `<cloud.remote.experiment_root>/<experiment.name>`
+  when `cloud.remote.experiment_root` is set
+- otherwise, for legacy configs, `<storage.experiment_filestore>/<experiment.name>`
+
+`storage.experiment_filestore` is always the local publish destination.
+`cloud.remote.experiment_root` is the remote-VM source root used by `cloud collect`
+and `cloud teardown`. If you omit `cloud.remote.experiment_root`, CRSBench falls
+back to the legacy behavior of reusing `storage.experiment_filestore` for both.
 
 You can still override either value explicitly:
 

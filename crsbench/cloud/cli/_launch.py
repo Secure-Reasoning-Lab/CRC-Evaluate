@@ -280,6 +280,12 @@ def run_launch(args: argparse.Namespace) -> int:
                 experiment_name=config.experiment,
                 config_path=str(config_path),
                 experiment_filestore=str(config.experiment_filestore),
+                remote_experiment_root=str(
+                    config.cloud.remote.experiment_root
+                    if config.cloud is not None
+                    and config.cloud.remote.experiment_root is not None
+                    else config.experiment_filestore
+                ),
                 redis_host=redis_host,
                 redis_password=redis_password,
                 orchestrator_provider=CloudProvider.GCE,

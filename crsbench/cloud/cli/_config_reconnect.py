@@ -41,6 +41,7 @@ class ResolvedCloudContext:
     worker_fleet_configs: list["GceWorkerFleetConfig"]
     launch_state: CloudLaunchState | None
     experiment_filestore: Path
+    remote_experiment_root: Path
     redis_host: str
     redis_password: str | None
     launch_plan: CloudLaunchPlan | None = None
@@ -65,14 +66,14 @@ def resolve_effective_experiment_name(
 
 
 def resolve_remote_experiment_dir(
-    experiment_filestore: Path,
+    remote_experiment_root: Path,
     experiment_name: str,
     remote_dir: str | None,
 ) -> str:
     """Return the remote experiment tree path, inferring from filestore when omitted."""
     if remote_dir:
         return remote_dir
-    return str(experiment_filestore / experiment_name)
+    return str(remote_experiment_root / experiment_name)
 
 
 def _resolve_remote_redis_ready_timeout_sec(context: ResolvedCloudContext) -> int:
@@ -134,6 +135,10 @@ def resolve_cloud_context(
             launch_state_updates["experiment_filestore"] = str(
                 config.experiment_filestore
             )
+        if launch_state.remote_experiment_root is None:
+            launch_state_updates["remote_experiment_root"] = str(
+                _resolve_remote_experiment_root_from_config(config)
+            )
         if not launch_state.worker_fleet_configs and derived_worker_fleets:
             launch_state_updates["worker_fleet_configs"] = [
                 redact_worker_fleet_config(fleet) for fleet in derived_worker_fleets
@@ -160,6 +165,10 @@ def resolve_cloud_context(
             raise SystemExit(
                 "Remote orchestrator launch state missing experiment filestore"
             )
+        if launch_state.remote_experiment_root is None:
+            raise SystemExit(
+                "Remote orchestrator launch state missing remote experiment root"
+            )
         if not launch_state.worker_fleet_configs:
             raise SystemExit(
                 "Remote orchestrator launch state missing worker fleet config"
@@ -169,6 +178,7 @@ def resolve_cloud_context(
             evaluator_fleet_configs=launch_state.resolved_evaluator_fleets(),
             launch_state=launch_state,
             experiment_filestore=Path(launch_state.experiment_filestore),
+            remote_experiment_root=Path(launch_state.remote_experiment_root),
             redis_host=launch_state.redis_host,
             redis_password=launch_state.redis_password,
             launch_plan=launch_plan,
@@ -182,10 +192,20 @@ def resolve_cloud_context(
         evaluator_fleet_configs=derived_evaluator_fleets,
         launch_state=launch_state,
         experiment_filestore=Path(config.experiment_filestore),
+        remote_experiment_root=_resolve_remote_experiment_root_from_config(config),
         redis_host=config.redis_host or "localhost",
         redis_password=os.environ.get("CRSBENCH_REDIS_PASSWORD"),
         launch_plan=launch_plan,
     )
+
+
+def _resolve_remote_experiment_root_from_config(config) -> Path:
+    """Return the remote VM experiment root configured for cloud collection."""
+    remote = getattr(config.cloud, "remote", None) if config.cloud is not None else None
+    experiment_root = getattr(remote, "experiment_root", None)
+    if experiment_root is not None:
+        return Path(experiment_root)
+    return Path(config.experiment_filestore)
 
 
 def reconnect(

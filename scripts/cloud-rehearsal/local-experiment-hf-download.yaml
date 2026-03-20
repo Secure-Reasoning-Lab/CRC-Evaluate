@@ -35,6 +35,8 @@ crs_compose:
   crs-libfuzzer:
     num_cores: 2
 cloud:
+  remote:
+    experiment_root: /tmp/crsbench/experiment-data
   env:
     HF_TOKEN: os.environ/HF_TOKEN
   bootstrap:

@@ -28,6 +28,9 @@ Managed cloud execution uses a provider-neutral top-level shape:
 - `cloud.defaults`: provider-agnostic launch/bootstrap defaults such as
   `readiness_timeout_sec`, `crsbench_install_spec`, `crsbench_git_ref`, and
   `github_deploy_key_path`
+- `cloud.remote.experiment_root`: remote-VM experiment root used by
+  `cloud collect` / `cloud teardown`; defaults to
+  `storage.experiment_filestore` when unset for backward compatibility
 - `cloud.env`: global environment variables merged into all launched cloud roles
 - `cloud.orchestrator`: instance-profile reference for the remote orchestrator
   VM, plus optional orchestrator-only `region`, `regions`, `zones`,

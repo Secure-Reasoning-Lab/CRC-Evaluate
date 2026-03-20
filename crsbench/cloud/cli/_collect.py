@@ -78,7 +78,7 @@ def run_collect(args: argparse.Namespace) -> int:
         return 0
 
     remote_experiment_dir = resolve_remote_experiment_dir(
-        experiment_filestore,
+        context.remote_experiment_root,
         experiment_name,
         args.remote_dir,
     )

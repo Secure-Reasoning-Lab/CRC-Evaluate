@@ -35,6 +35,8 @@ crs_compose:
   crs-libfuzzer:
     num_cores: 2
 cloud:
+  remote:
+    experiment_root: /tmp/crsbench/experiment-data
   bootstrap:
     prepare_mode: skip_base_images
     download_benchmarks: always
