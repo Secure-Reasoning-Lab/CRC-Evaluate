@@ -698,6 +698,10 @@ During bootstrap, both orchestrator and worker VMs also normalize the host
 timezone to `America/New_York` and configure Docker to use the `cgroupfs`
 driver expected by `oss-crs`. If you inspect a VM manually, verify these with
 `timedatectl`, `cat /etc/timezone`, and `docker info --format '{{.CgroupDriver}}'`.
+Bootstrap also installs `rg`/`fdfind` and creates a `crsbuilder` buildx
+builder with the `docker-container` driver so ad hoc Docker debugging on the
+VM uses the same builder backend as CRSBench. Verify that with
+`docker buildx ls` or `docker buildx inspect crsbuilder`.
 You can also verify the delegated cgroup setup that both CRSBench and
 `oss-crs` depend on with:
 

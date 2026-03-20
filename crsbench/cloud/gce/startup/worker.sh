@@ -18,6 +18,7 @@ EXPERIMENT_CONFIG_PATH="${STATE_DIR}/experiment-config.yaml"
 CLONE_DIR="${CRSBENCH_CLONE_DIR:-/opt/crsbench}"
 DOCKER_DAEMON_CONFIG_PATH="${CRSBENCH_DOCKER_DAEMON_CONFIG_PATH:-/etc/docker/daemon.json}"
 DOCKER_CGROUP_DRIVER_OPT="${CRSBENCH_DOCKER_CGROUP_DRIVER_OPT:-native.cgroupdriver=cgroupfs}"
+CRSBENCH_BUILDX_BUILDER_NAME="${CRSBENCH_BUILDX_BUILDER_NAME:-crsbuilder}"
 USER_SERVICE_DIR="${CRSBENCH_USER_HOME}/.config/systemd/user"
 SERVICE_PATH="${USER_SERVICE_DIR}/crsbench-worker.service"
 CLONE_GIT_SSH_COMMAND=""
@@ -395,6 +396,30 @@ ensure_docker_group_membership() {
   fi
 }
 
+ensure_docker_buildx_builder() {
+  run_as_crsbench env \
+    PATH="${CRSBENCH_USER_PATH}" \
+    HOME="${CRSBENCH_USER_HOME}" \
+    CRSBENCH_BUILDER_NAME="${CRSBENCH_BUILDX_BUILDER_NAME}" \
+    /bin/bash <<'EOF'
+set -euo pipefail
+
+inspect_output="$(docker buildx inspect "${CRSBENCH_BUILDER_NAME}" 2>/dev/null || true)"
+if [[ -n "${inspect_output}" ]] && ! grep -Eq 'Driver:[[:space:]]+docker-container' <<<"${inspect_output}"; then
+  docker buildx rm "${CRSBENCH_BUILDER_NAME}" >/dev/null 2>&1 || true
+  inspect_output=""
+fi
+
+if [[ -z "${inspect_output}" ]]; then
+  docker buildx create --name "${CRSBENCH_BUILDER_NAME}" --driver docker-container --use >/dev/null
+else
+  docker buildx use "${CRSBENCH_BUILDER_NAME}" >/dev/null
+fi
+
+docker buildx inspect --bootstrap "${CRSBENCH_BUILDER_NAME}" >/dev/null
+EOF
+}
+
 run_as_crsbench() {
   sudo -E -H -u "${CRSBENCH_USER}" "$@"
 }
@@ -682,6 +707,7 @@ ensure_docker_ready
 ensure_crsbench_user
 ensure_passwordless_sudo
 ensure_docker_group_membership
+ensure_docker_buildx_builder
 ensure_user_systemd_support_packages
 
 metadata_get "crsbench-bootstrap-payload" | base64 --decode > "${PAYLOAD_PATH}"

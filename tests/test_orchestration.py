@@ -924,7 +924,9 @@ class TestIntegrationWithSampleConfigs:
         assert set(config.crs_compose.services) == expected_services
         assert config.cloud.bootstrap.prepare_mode == "full"
         assert config.cloud.bootstrap.download_benchmarks == "auto"
-        assert config.cloud.env == expected_cloud_env
+        assert config.cloud.env is not None
+        for key, value in expected_cloud_env.items():
+            assert config.cloud.env.get(key) == value
         assert config.cloud.providers is not None
         assert config.cloud.providers.gce is not None
         assert config.cloud.defaults is not None

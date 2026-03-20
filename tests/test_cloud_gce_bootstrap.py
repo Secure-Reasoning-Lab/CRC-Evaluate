@@ -640,6 +640,28 @@ def test_startup_script_supports_apt_and_apk_bootstrap_dependencies():
     assert "Docker daemon is unavailable after waiting" in script
 
 
+def test_startup_script_bootstraps_named_docker_container_buildx_builder():
+    """Worker bootstrap should provision a stable docker-container buildx builder."""
+    from crsbench.cloud.gce.metadata import load_startup_script
+
+    script = load_startup_script()
+
+    assert (
+        'CRSBENCH_BUILDX_BUILDER_NAME="${CRSBENCH_BUILDX_BUILDER_NAME:-crsbuilder}"'
+        in script
+    )
+    assert (
+        'docker buildx create --name "${CRSBENCH_BUILDER_NAME}" --driver docker-container --use >/dev/null'
+        in script
+    )
+    assert 'docker buildx use "${CRSBENCH_BUILDER_NAME}" >/dev/null' in script
+    assert (
+        'docker buildx inspect --bootstrap "${CRSBENCH_BUILDER_NAME}" >/dev/null'
+        in script
+    )
+    assert "Driver:[[:space:]]+docker-container" in script
+
+
 def test_startup_script_configures_timezone_and_docker_cgroupfs():
     """Worker bootstrap should align VM timezone and Docker cgroup driver for oss-crs."""
     from crsbench.cloud.gce.metadata import load_startup_script
@@ -925,6 +947,28 @@ def test_orchestrator_startup_script_supports_apt_and_apk_bootstrap_dependencies
     assert "apk add --no-cache" in script
     assert "https://get.docker.com" not in script
     assert "Docker daemon is unavailable after waiting" in script
+
+
+def test_orchestrator_startup_script_bootstraps_named_docker_container_buildx_builder():
+    """Orchestrator bootstrap should provision a stable docker-container buildx builder."""
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+
+    assert (
+        'CRSBENCH_BUILDX_BUILDER_NAME="${CRSBENCH_BUILDX_BUILDER_NAME:-crsbuilder}"'
+        in script
+    )
+    assert (
+        'docker buildx create --name "${CRSBENCH_BUILDER_NAME}" --driver docker-container --use >/dev/null'
+        in script
+    )
+    assert 'docker buildx use "${CRSBENCH_BUILDER_NAME}" >/dev/null' in script
+    assert (
+        'docker buildx inspect --bootstrap "${CRSBENCH_BUILDER_NAME}" >/dev/null'
+        in script
+    )
+    assert "Driver:[[:space:]]+docker-container" in script
 
 
 def test_orchestrator_startup_script_only_restarts_service_on_failure():
