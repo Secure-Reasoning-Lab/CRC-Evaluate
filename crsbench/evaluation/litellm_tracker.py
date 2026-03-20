@@ -12,6 +12,7 @@ Reference:
 
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -153,7 +154,9 @@ class LiteLLMTracker:
         base_url: Optional[str] = None,
         master_key: Optional[str] = None,
         *,
-        timeout: int = 30,
+        timeout: int = 10,
+        max_retries: int = 10,
+        max_backoff: float = 60.0,
     ):
         """Initialize LiteLLM tracker.
 
@@ -162,7 +165,9 @@ class LiteLLMTracker:
                 URL for current mode.
             master_key: Master key for API. Defaults to resolved CRSBench
                 runtime key.
-            timeout: Request timeout in seconds.
+            timeout: Per-attempt request timeout in seconds.
+            max_retries: Maximum number of retry attempts for transient failures.
+            max_backoff: Maximum total backoff time in seconds across all retries.
 
         Raises:
             LiteLLMTrackerError: If required environment variables are not set.
@@ -173,6 +178,8 @@ class LiteLLMTracker:
         self.base_url = base_url or runtime_env.tracking_base_url
         self.master_key = master_key or runtime_env.master_key
         self.timeout = timeout
+        self.max_retries = max_retries
+        self.max_backoff = max_backoff
 
         if not self.base_url:
             raise LiteLLMTrackerError(
@@ -192,6 +199,70 @@ class LiteLLMTracker:
             "Content-Type": "application/json",
         }
 
+    def _request_with_retry(
+        self,
+        method: str,
+        url: str,
+        *,
+        operation: str = "request",
+        **kwargs,
+    ) -> requests.Response:
+        """Execute an HTTP request with exponential backoff retry.
+
+        Retries on connection errors, timeouts, and 5xx server errors.
+        Total backoff time is capped at ``self.max_backoff`` seconds.
+
+        Args:
+            method: HTTP method ("get" or "post").
+            url: Request URL.
+            operation: Human-readable name for log messages.
+            **kwargs: Forwarded to ``requests.request()``.
+
+        Returns:
+            Successful ``requests.Response``.
+
+        Raises:
+            requests.RequestException: After all retries are exhausted.
+        """
+        kwargs.setdefault("timeout", self.timeout)
+        kwargs.setdefault("headers", self._headers)
+
+        last_exc: Optional[Exception] = None
+        total_wait = 0.0
+
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                response = requests.request(method, url, **kwargs)
+                if response.status_code < 500:
+                    return response
+                # 5xx — retry
+                last_exc = requests.HTTPError(
+                    f"Server error {response.status_code}", response=response
+                )
+            except (
+                requests.ConnectionError,
+                requests.Timeout,
+            ) as exc:
+                last_exc = exc
+
+            if attempt == self.max_retries:
+                break
+
+            # Exponential backoff: 1s, 2s, 4s, 8s, ...
+            delay = min(2 ** (attempt - 1), self.max_backoff - total_wait)
+            if delay <= 0:
+                break
+            logger.debug(
+                f"{operation} attempt {attempt}/{self.max_retries} failed, "
+                f"retrying in {delay:.1f}s"
+            )
+            time.sleep(delay)
+            total_wait += delay
+            if total_wait >= self.max_backoff:
+                break
+
+        raise last_exc  # type: ignore[misc]
+
     def find_team_by_alias(self, team_alias: str) -> Optional[str]:
         """Find a team by exact alias match.
 
@@ -205,11 +276,11 @@ class LiteLLMTracker:
             team_id if exact match found, None otherwise
         """
         try:
-            response = requests.get(
+            response = self._request_with_retry(
+                "get",
                 f"{self.base_url}/v2/team/list",
-                headers=self._headers,
+                operation="find_team",
                 params={"team_alias": team_alias},
-                timeout=self.timeout,
             )
             response.raise_for_status()
             data = response.json()
@@ -249,11 +320,11 @@ class LiteLLMTracker:
             payload["max_budget"] = max_budget
 
         try:
-            response = requests.post(
+            response = self._request_with_retry(
+                "post",
                 f"{self.base_url}/team/new",
-                headers=self._headers,
+                operation="create_team",
                 json=payload,
-                timeout=self.timeout,
             )
             response.raise_for_status()
             data = response.json()
@@ -284,11 +355,11 @@ class LiteLLMTracker:
             payload["max_budget"] = max_budget
 
         try:
-            response = requests.post(
+            response = self._request_with_retry(
+                "post",
                 f"{self.base_url}/team/update",
-                headers=self._headers,
+                operation="update_team",
                 json=payload,
-                timeout=self.timeout,
             )
             response.raise_for_status()
             logger.info(f"Updated LiteLLM team {team_id}: max_budget=${max_budget}")
@@ -342,11 +413,11 @@ class LiteLLMTracker:
             LiteLLMTrackerError: If query fails
         """
         try:
-            response = requests.get(
+            response = self._request_with_retry(
+                "get",
                 f"{self.base_url}/team/info",
-                headers=self._headers,
+                operation="get_team_info",
                 params={"team_id": team_id},
-                timeout=self.timeout,
             )
             response.raise_for_status()
             return response.json()
@@ -410,11 +481,11 @@ class LiteLLMTracker:
             payload["max_budget"] = max_budget
 
         try:
-            response = requests.post(
+            response = self._request_with_retry(
+                "post",
                 f"{self.base_url}/key/generate",
-                headers=self._headers,
+                operation="generate_key",
                 json=payload,
-                timeout=self.timeout,
             )
             response.raise_for_status()
             data = response.json()
@@ -442,11 +513,11 @@ class LiteLLMTracker:
             LiteLLMTrackerError: If query fails
         """
         try:
-            response = requests.get(
+            response = self._request_with_retry(
+                "get",
                 f"{self.base_url}/key/info",
-                headers=self._headers,
+                operation="get_key_info",
                 params={"key": api_key},
-                timeout=self.timeout,
             )
             response.raise_for_status()
             data = response.json()
@@ -469,11 +540,11 @@ class LiteLLMTracker:
             LiteLLMTrackerError: If deletion fails
         """
         try:
-            response = requests.post(
+            response = self._request_with_retry(
+                "post",
                 f"{self.base_url}/key/delete",
-                headers=self._headers,
+                operation="delete_key",
                 json={"keys": [api_key]},
-                timeout=self.timeout,
             )
             response.raise_for_status()
             data = response.json()
@@ -529,11 +600,11 @@ class LiteLLMTracker:
             if end_date:
                 params["end_date"] = end_date
 
-            response = requests.get(
+            response = self._request_with_retry(
+                "get",
                 f"{self.base_url}/spend/logs",
-                headers=self._headers,
+                operation="get_spend_logs",
                 params=params,
-                timeout=self.timeout,
             )
             response.raise_for_status()
             data = response.json()
