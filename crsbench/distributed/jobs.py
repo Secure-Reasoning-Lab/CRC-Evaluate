@@ -268,13 +268,66 @@ def _setup_llm_tracking(
         return None, None
 
 
+def _cleanup_llm_tracking_sync(
+    tracker: LiteLLMTracker,
+    api_key: str,
+    trial_output_dir: Path,
+    trial_id: str,
+) -> None:
+    """Synchronous LLM tracking cleanup (runs in background thread).
+
+    Writes usage/logs/summary files and deletes the API key.
+    Each call uses the tracker's built-in retry+backoff, so transient
+    failures are handled without losing data.
+    """
+    try:
+        tracker.write_llm_usage_file(
+            api_key=api_key,
+            trial_id=trial_id,
+            output_path=trial_output_dir / "llm-usage.json",
+        )
+    except LiteLLMTrackerError as e:
+        logger.error(f"Failed to write LLM usage file: {e}")
+
+    try:
+        tracker.write_llm_logs_file(
+            api_key=api_key,
+            trial_id=trial_id,
+            output_path=trial_output_dir / "llm-logs.json",
+        )
+    except LiteLLMTrackerError as e:
+        logger.error(f"Failed to write LLM logs file: {e}")
+
+    try:
+        tracker.write_llm_summary_file(
+            api_key=api_key,
+            trial_id=trial_id,
+            output_path=trial_output_dir / "llm-summary.json",
+        )
+    except LiteLLMTrackerError as e:
+        logger.error(f"Failed to write LLM summary file: {e}")
+
+    try:
+        tracker.delete_key(api_key)
+    except LiteLLMTrackerError as e:
+        logger.error(f"Failed to delete LLM tracking key: {e}")
+
+
 def _cleanup_llm_tracking(
     tracker: Optional[LiteLLMTracker],
     api_key: Optional[str],
     trial_output_dir: Path,
     trial_id: str,
 ) -> None:
-    """Clean up LLM tracking after trial.
+    """Clean up LLM tracking after trial in a background thread.
+
+    Launches the tracking cleanup asynchronously so the worker can
+    immediately pick up the next job.  The background thread uses
+    retry+backoff (via the tracker) to handle transient API failures.
+
+    The thread is non-daemon so it survives worker shutdown and can
+    finish writing data. Previous cleanup threads are joined with a
+    short timeout before starting a new one to bound accumulation.
 
     Args:
         tracker: LiteLLMTracker instance (or None)
@@ -285,41 +338,22 @@ def _cleanup_llm_tracking(
     if not tracker or not api_key:
         return
 
-    try:
-        # Write final usage file (cost/token summary)
-        tracker.write_llm_usage_file(
-            api_key=api_key,
-            trial_id=trial_id,
-            output_path=trial_output_dir / "llm-usage.json",
-        )
-    except LiteLLMTrackerError as e:
-        logger.error(f"Failed to write LLM usage file: {e}")
+    import threading
 
-    try:
-        # Write detailed LLM logs (all request/response data)
-        tracker.write_llm_logs_file(
-            api_key=api_key,
-            trial_id=trial_id,
-            output_path=trial_output_dir / "llm-logs.json",
-        )
-    except LiteLLMTrackerError as e:
-        logger.error(f"Failed to write LLM logs file: {e}")
+    # Join any previous cleanup thread (non-blocking — just reap if done)
+    prev = getattr(_cleanup_llm_tracking, "_prev_thread", None)
+    if prev is not None and prev.is_alive():
+        prev.join(timeout=1.0)
 
-    try:
-        # Write concise LLM summary (failure categories, per-model totals)
-        tracker.write_llm_summary_file(
-            api_key=api_key,
-            trial_id=trial_id,
-            output_path=trial_output_dir / "llm-summary.json",
-        )
-    except LiteLLMTrackerError as e:
-        logger.error(f"Failed to write LLM summary file: {e}")
-
-    try:
-        # Delete the key
-        tracker.delete_key(api_key)
-    except LiteLLMTrackerError as e:
-        logger.error(f"Failed to delete LLM tracking key: {e}")
+    thread = threading.Thread(
+        target=_cleanup_llm_tracking_sync,
+        args=(tracker, api_key, trial_output_dir, trial_id),
+        name=f"llm-cleanup-{trial_id[:30]}",
+        daemon=False,
+    )
+    thread.start()
+    _cleanup_llm_tracking._prev_thread = thread  # type: ignore[attr-defined]
+    logger.debug(f"LLM tracking cleanup started in background thread: {thread.name}")
 
 
 def get_crs_type(crs_name: str, registry_dir: Path) -> str:

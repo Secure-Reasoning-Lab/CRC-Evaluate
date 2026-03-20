@@ -144,8 +144,8 @@ class TestLiteLLMTracker:
         assert ":" not in alias
         assert " " not in alias
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.post")
-    def test_generate_key_success(self, mock_post, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_generate_key_success(self, mock_request, tracker):
         """Test successful key generation."""
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -153,7 +153,7 @@ class TestLiteLLMTracker:
             "key": "sk-generated-key-abc123",
             "key_alias": "crsbench-exp1-atlantis-curl-fuzz_http-trial1",
         }
-        mock_post.return_value = mock_response
+        mock_request.return_value = mock_response
 
         key = tracker.generate_key(
             experiment="exp1",
@@ -166,11 +166,11 @@ class TestLiteLLMTracker:
         )
 
         assert key == "sk-generated-key-abc123"
-        mock_post.assert_called_once()
+        mock_request.assert_called_once()
 
         # Verify request payload
-        call_kwargs = mock_post.call_args
-        assert call_kwargs[0][0] == "http://litellm:4000/key/generate"
+        call_kwargs = mock_request.call_args
+        assert call_kwargs[0][1] == "http://litellm:4000/key/generate"
         payload = call_kwargs[1]["json"]
         # Key alias includes random suffix
         assert payload["key_alias"].startswith(
@@ -179,13 +179,13 @@ class TestLiteLLMTracker:
         assert payload["metadata"]["experiment"] == "exp1"
         assert payload["metadata"]["crs"] == "atlantis"
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.post")
-    def test_generate_key_with_budget(self, mock_post, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_generate_key_with_budget(self, mock_request, tracker):
         """Test key generation with max budget."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"key": "sk-key"}
-        mock_post.return_value = mock_response
+        mock_request.return_value = mock_response
 
         tracker.generate_key(
             experiment="exp1",
@@ -198,16 +198,16 @@ class TestLiteLLMTracker:
             max_budget=10.0,
         )
 
-        payload = mock_post.call_args[1]["json"]
+        payload = mock_request.call_args[1]["json"]
         assert payload["max_budget"] == 10.0
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.post")
-    def test_generate_key_with_team_id(self, mock_post, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_generate_key_with_team_id(self, mock_request, tracker):
         """Test key generation with team_id."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"key": "sk-key"}
-        mock_post.return_value = mock_response
+        mock_request.return_value = mock_response
 
         tracker.generate_key(
             experiment="exp1",
@@ -220,13 +220,13 @@ class TestLiteLLMTracker:
             team_id="team-123",
         )
 
-        payload = mock_post.call_args[1]["json"]
+        payload = mock_request.call_args[1]["json"]
         assert payload["team_id"] == "team-123"
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.post")
-    def test_generate_key_api_error(self, mock_post, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_generate_key_api_error(self, mock_request, tracker):
         """Test key generation with API error."""
-        mock_post.side_effect = requests.RequestException("Connection failed")
+        mock_request.side_effect = requests.RequestException("Connection failed")
 
         with pytest.raises(LiteLLMTrackerError, match="Failed to generate key"):
             tracker.generate_key(
@@ -239,13 +239,13 @@ class TestLiteLLMTracker:
                 sanitizer="address",
             )
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.post")
-    def test_generate_key_no_key_in_response(self, mock_post, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_generate_key_no_key_in_response(self, mock_request, tracker):
         """Test key generation when response has no key."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"error": "something went wrong"}
-        mock_post.return_value = mock_response
+        mock_request.return_value = mock_response
 
         with pytest.raises(LiteLLMTrackerError, match="No key in response"):
             tracker.generate_key(
@@ -258,8 +258,8 @@ class TestLiteLLMTracker:
                 sanitizer="address",
             )
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
-    def test_get_key_info_success(self, mock_get, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_get_key_info_success(self, mock_request, tracker):
         """Test successful key info retrieval."""
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -271,62 +271,62 @@ class TestLiteLLMTracker:
                 "metadata": {"experiment": "exp1"},
             }
         }
-        mock_get.return_value = mock_response
+        mock_request.return_value = mock_response
 
         info = tracker.get_key_info("sk-test-key")
 
         assert info["info"]["spend"] == 1.25
-        mock_get.assert_called_once()
-        assert mock_get.call_args[1]["params"]["key"] == "sk-test-key"
+        mock_request.assert_called_once()
+        assert mock_request.call_args[1]["params"]["key"] == "sk-test-key"
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
-    def test_get_key_info_api_error(self, mock_get, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_get_key_info_api_error(self, mock_request, tracker):
         """Test key info with API error."""
-        mock_get.side_effect = requests.RequestException("Connection failed")
+        mock_request.side_effect = requests.RequestException("Connection failed")
 
         with pytest.raises(LiteLLMTrackerError, match="Failed to get key info"):
             tracker.get_key_info("sk-test-key")
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.post")
-    def test_delete_key_success(self, mock_post, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_delete_key_success(self, mock_request, tracker):
         """Test successful key deletion."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "deleted_keys": ["sk-test-key"],
         }
-        mock_post.return_value = mock_response
+        mock_request.return_value = mock_response
 
         result = tracker.delete_key("sk-test-key")
 
         assert result is True
-        mock_post.assert_called_once()
-        assert mock_post.call_args[1]["json"]["keys"] == ["sk-test-key"]
+        mock_request.assert_called_once()
+        assert mock_request.call_args[1]["json"]["keys"] == ["sk-test-key"]
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.post")
-    def test_delete_key_not_found(self, mock_post, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_delete_key_not_found(self, mock_request, tracker):
         """Test key deletion when key not in deleted list."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "deleted_keys": [],
         }
-        mock_post.return_value = mock_response
+        mock_request.return_value = mock_response
 
         result = tracker.delete_key("sk-test-key")
 
         assert result is False
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.post")
-    def test_delete_key_api_error(self, mock_post, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_delete_key_api_error(self, mock_request, tracker):
         """Test key deletion with API error."""
-        mock_post.side_effect = requests.RequestException("Connection failed")
+        mock_request.side_effect = requests.RequestException("Connection failed")
 
         with pytest.raises(LiteLLMTrackerError, match="Failed to delete key"):
             tracker.delete_key("sk-test-key")
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
-    def test_find_team_by_alias_success(self, mock_get, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_find_team_by_alias_success(self, mock_request, tracker):
         """Test finding team by exact alias match."""
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -334,30 +334,30 @@ class TestLiteLLMTracker:
             {"team_id": "team-123", "team_alias": "crsbench"},
             {"team_id": "team-456", "team_alias": "crsbench-test"},
         ]
-        mock_get.return_value = mock_response
+        mock_request.return_value = mock_response
 
         team_id = tracker.find_team_by_alias("crsbench")
 
         assert team_id == "team-123"
-        mock_get.assert_called_once()
-        assert mock_get.call_args[1]["params"]["team_alias"] == "crsbench"
+        mock_request.assert_called_once()
+        assert mock_request.call_args[1]["params"]["team_alias"] == "crsbench"
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
-    def test_find_team_by_alias_no_match(self, mock_get, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_find_team_by_alias_no_match(self, mock_request, tracker):
         """Test finding team returns None when no exact match."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = [
             {"team_id": "team-456", "team_alias": "crsbench-test"},
         ]
-        mock_get.return_value = mock_response
+        mock_request.return_value = mock_response
 
         team_id = tracker.find_team_by_alias("crsbench")
 
         assert team_id is None
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
-    def test_find_team_by_alias_dict_response(self, mock_get, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_find_team_by_alias_dict_response(self, mock_request, tracker):
         """Test finding team with dict response format."""
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -366,23 +366,23 @@ class TestLiteLLMTracker:
                 {"team_id": "team-123", "team_alias": "crsbench"},
             ]
         }
-        mock_get.return_value = mock_response
+        mock_request.return_value = mock_response
 
         team_id = tracker.find_team_by_alias("crsbench")
 
         assert team_id == "team-123"
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
-    def test_find_team_by_alias_api_error(self, mock_get, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_find_team_by_alias_api_error(self, mock_request, tracker):
         """Test finding team handles API errors gracefully."""
-        mock_get.side_effect = requests.RequestException("Connection failed")
+        mock_request.side_effect = requests.RequestException("Connection failed")
 
         team_id = tracker.find_team_by_alias("crsbench")
 
         assert team_id is None
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.post")
-    def test_create_team_success(self, mock_post, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_create_team_success(self, mock_request, tracker):
         """Test successful team creation."""
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -390,36 +390,36 @@ class TestLiteLLMTracker:
             "team_id": "team-123",
             "team_alias": "crsbench",
         }
-        mock_post.return_value = mock_response
+        mock_request.return_value = mock_response
 
         team_id = tracker.create_team("crsbench")
 
         assert team_id == "team-123"
-        mock_post.assert_called_once()
-        payload = mock_post.call_args[1]["json"]
+        mock_request.assert_called_once()
+        payload = mock_request.call_args[1]["json"]
         assert payload["team_alias"] == "crsbench"
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.post")
-    def test_create_team_no_team_id_in_response(self, mock_post, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_create_team_no_team_id_in_response(self, mock_request, tracker):
         """Test team creation when response has no team_id."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"error": "something went wrong"}
-        mock_post.return_value = mock_response
+        mock_request.return_value = mock_response
 
         with pytest.raises(LiteLLMTrackerError, match="No team_id in response"):
             tracker.create_team("crsbench")
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.post")
-    def test_create_team_api_error(self, mock_post, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_create_team_api_error(self, mock_request, tracker):
         """Test team creation with API error."""
-        mock_post.side_effect = requests.RequestException("Connection failed")
+        mock_request.side_effect = requests.RequestException("Connection failed")
 
         with pytest.raises(LiteLLMTrackerError, match="Failed to create team"):
             tracker.create_team("crsbench")
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.post")
-    def test_create_team_with_max_budget(self, mock_post, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_create_team_with_max_budget(self, mock_request, tracker):
         """Test team creation with max_budget parameter."""
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -427,42 +427,42 @@ class TestLiteLLMTracker:
             "team_id": "team-123",
             "team_alias": "crsbench",
         }
-        mock_post.return_value = mock_response
+        mock_request.return_value = mock_response
 
         team_id = tracker.create_team("crsbench", max_budget=100.0)
 
         assert team_id == "team-123"
-        mock_post.assert_called_once()
-        payload = mock_post.call_args[1]["json"]
+        mock_request.assert_called_once()
+        payload = mock_request.call_args[1]["json"]
         assert payload["team_alias"] == "crsbench"
         assert payload["max_budget"] == 100.0
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.post")
-    def test_update_team_success(self, mock_post, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_update_team_success(self, mock_request, tracker):
         """Test successful team update."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"status": "success"}
-        mock_post.return_value = mock_response
+        mock_request.return_value = mock_response
 
         tracker.update_team("team-123", max_budget=150.0)
 
-        mock_post.assert_called_once()
-        assert mock_post.call_args[0][0] == "http://litellm:4000/team/update"
-        payload = mock_post.call_args[1]["json"]
+        mock_request.assert_called_once()
+        assert mock_request.call_args[0][1] == "http://litellm:4000/team/update"
+        payload = mock_request.call_args[1]["json"]
         assert payload["team_id"] == "team-123"
         assert payload["max_budget"] == 150.0
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.post")
-    def test_update_team_api_error(self, mock_post, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_update_team_api_error(self, mock_request, tracker):
         """Test team update with API error."""
-        mock_post.side_effect = requests.RequestException("Connection failed")
+        mock_request.side_effect = requests.RequestException("Connection failed")
 
         with pytest.raises(LiteLLMTrackerError, match="Failed to update team"):
             tracker.update_team("team-123", max_budget=150.0)
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
-    def test_get_team_info_success(self, mock_get, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_get_team_info_success(self, mock_request, tracker):
         """Test successful team info retrieval."""
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -472,135 +472,118 @@ class TestLiteLLMTracker:
             "spend": 42.50,
             "max_budget": 100.0,
         }
-        mock_get.return_value = mock_response
+        mock_request.return_value = mock_response
 
         team_info = tracker.get_team_info("team-123")
 
         assert team_info["team_id"] == "team-123"
         assert team_info["spend"] == 42.50
         assert team_info["max_budget"] == 100.0
-        mock_get.assert_called_once_with(
-            "http://litellm:4000/team/info",
-            headers=tracker._headers,
-            params={"team_id": "team-123"},
-            timeout=30,
-        )
+        mock_request.assert_called_once()
+        call_args = mock_request.call_args
+        assert call_args[0][1] == "http://litellm:4000/team/info"
+        assert call_args[1]["params"] == {"team_id": "team-123"}
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
-    def test_get_team_info_api_error(self, mock_get, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_get_team_info_api_error(self, mock_request, tracker):
         """Test team info retrieval with API error."""
-        mock_get.side_effect = requests.RequestException("Connection failed")
+        mock_request.side_effect = requests.RequestException("Connection failed")
 
         with pytest.raises(LiteLLMTrackerError, match="Failed to get team info"):
             tracker.get_team_info("team-123")
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
-    def test_get_or_create_team_uses_existing(self, mock_get, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_get_or_create_team_uses_existing(self, mock_request, tracker):
         """Test get_or_create_team uses existing team when found."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = [
             {"team_id": "team-123", "team_alias": "crsbench"},
         ]
-        mock_get.return_value = mock_response
+        mock_request.return_value = mock_response
 
         team_id = tracker.get_or_create_team("crsbench")
 
         assert team_id == "team-123"
         # Should only call GET (find), not POST (create)
-        mock_get.assert_called_once()
+        mock_request.assert_called_once()
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.post")
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
-    def test_get_or_create_team_creates_new(self, mock_get, mock_post, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_get_or_create_team_creates_new(self, mock_request, tracker):
         """Test get_or_create_team creates team when not found."""
-        # Mock find (returns None)
         mock_find_response = MagicMock()
         mock_find_response.status_code = 200
         mock_find_response.json.return_value = []
-        mock_get.return_value = mock_find_response
 
-        # Mock create
         mock_create_response = MagicMock()
         mock_create_response.status_code = 200
         mock_create_response.json.return_value = {
             "team_id": "team-456",
             "team_alias": "crsbench",
         }
-        mock_post.return_value = mock_create_response
+
+        mock_request.side_effect = [mock_find_response, mock_create_response]
 
         team_id = tracker.get_or_create_team("crsbench")
 
         assert team_id == "team-456"
-        # Should call both GET (find) and POST (create)
-        mock_get.assert_called_once()
-        mock_post.assert_called_once()
+        assert mock_request.call_count == 2
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.post")
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
-    def test_get_or_create_team_updates_existing_budget(
-        self, mock_get, mock_post, tracker
-    ):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_get_or_create_team_updates_existing_budget(self, mock_request, tracker):
         """Test get_or_create_team updates budget on existing team."""
-        # Mock find (returns existing team)
         mock_find_response = MagicMock()
         mock_find_response.status_code = 200
         mock_find_response.json.return_value = [
             {"team_id": "team-123", "team_alias": "crsbench"},
         ]
-        mock_get.return_value = mock_find_response
 
-        # Mock update
         mock_update_response = MagicMock()
         mock_update_response.status_code = 200
         mock_update_response.json.return_value = {"status": "success"}
-        mock_post.return_value = mock_update_response
+
+        mock_request.side_effect = [mock_find_response, mock_update_response]
 
         team_id = tracker.get_or_create_team("crsbench", max_budget=200.0)
 
         assert team_id == "team-123"
-        # Should call GET (find) and POST (update)
-        mock_get.assert_called_once()
-        mock_post.assert_called_once()
-        # Verify update was called with correct params
-        assert mock_post.call_args[0][0] == "http://litellm:4000/team/update"
-        payload = mock_post.call_args[1]["json"]
+        assert mock_request.call_count == 2
+        # Verify update was called with correct params (second call)
+        update_call = mock_request.call_args_list[1]
+        assert "team/update" in update_call[0][1]
+        payload = update_call[1]["json"]
         assert payload["team_id"] == "team-123"
         assert payload["max_budget"] == 200.0
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.post")
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
-    def test_get_or_create_team_creates_with_budget(self, mock_get, mock_post, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_get_or_create_team_creates_with_budget(self, mock_request, tracker):
         """Test get_or_create_team creates team with budget."""
-        # Mock find (returns None)
         mock_find_response = MagicMock()
         mock_find_response.status_code = 200
         mock_find_response.json.return_value = []
-        mock_get.return_value = mock_find_response
 
-        # Mock create
         mock_create_response = MagicMock()
         mock_create_response.status_code = 200
         mock_create_response.json.return_value = {
             "team_id": "team-456",
             "team_alias": "crsbench",
         }
-        mock_post.return_value = mock_create_response
+
+        mock_request.side_effect = [mock_find_response, mock_create_response]
 
         team_id = tracker.get_or_create_team("crsbench", max_budget=250.0)
 
         assert team_id == "team-456"
-        # Should call GET (find) and POST (create)
-        mock_get.assert_called_once()
-        mock_post.assert_called_once()
-        # Verify create was called with budget
-        assert mock_post.call_args[0][0] == "http://litellm:4000/team/new"
-        payload = mock_post.call_args[1]["json"]
+        assert mock_request.call_count == 2
+        # Verify create was called with budget (second call)
+        create_call = mock_request.call_args_list[1]
+        assert "team/new" in create_call[0][1]
+        payload = create_call[1]["json"]
         assert payload["team_alias"] == "crsbench"
         assert payload["max_budget"] == 250.0
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
-    def test_generate_llm_usage_json(self, mock_get, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_generate_llm_usage_json(self, mock_request, tracker):
         """Test LLM usage data generation without detailed logs."""
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -612,7 +595,7 @@ class TestLiteLLMTracker:
                 "metadata": {"experiment": "exp1"},
             }
         }
-        mock_get.return_value = mock_response
+        mock_request.return_value = mock_response
 
         usage = tracker.generate_llm_usage_json(
             api_key="sk-test-key",
@@ -625,8 +608,8 @@ class TestLiteLLMTracker:
         assert usage.total_spend_usd == 2.50
         assert usage.key_alias == "crsbench-exp1-atlantis-curl-fuzz_http-trial1"
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
-    def test_get_spend_logs_success(self, mock_get, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_get_spend_logs_success(self, mock_request, tracker):
         """Test successful spend logs retrieval."""
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -650,7 +633,7 @@ class TestLiteLLMTracker:
                 "cache_hit": True,
             },
         ]
-        mock_get.return_value = mock_response
+        mock_request.return_value = mock_response
 
         logs = tracker.get_spend_logs("sk-test-key")
 
@@ -658,8 +641,8 @@ class TestLiteLLMTracker:
         assert logs[0]["request_id"] == "req-1"
         assert logs[1]["cache_hit"] is True
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
-    def test_get_spend_logs_dict_response(self, mock_get, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_get_spend_logs_dict_response(self, mock_request, tracker):
         """Test spend logs with dict response format."""
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -668,17 +651,17 @@ class TestLiteLLMTracker:
                 {"request_id": "req-1", "model": "gpt-4", "spend": 0.10},
             ]
         }
-        mock_get.return_value = mock_response
+        mock_request.return_value = mock_response
 
         logs = tracker.get_spend_logs("sk-test-key")
 
         assert len(logs) == 1
         assert logs[0]["request_id"] == "req-1"
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
-    def test_get_spend_logs_api_error_returns_empty(self, mock_get, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_get_spend_logs_api_error_returns_empty(self, mock_request, tracker):
         """Test spend logs returns empty list on API error."""
-        mock_get.side_effect = requests.RequestException("Connection failed")
+        mock_request.side_effect = requests.RequestException("Connection failed")
 
         logs = tracker.get_spend_logs("sk-test-key")
 
@@ -769,8 +752,8 @@ class TestLiteLLMTracker:
         assert usage.total_cache_hits == 2
         assert usage.total_cache_misses == 2
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
-    def test_generate_llm_usage_json_with_detailed_logs(self, mock_get, tracker):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_generate_llm_usage_json_with_detailed_logs(self, mock_request, tracker):
         """Test LLM usage generation with detailed logs."""
         # First call is for key/info, second is for spend/logs
         mock_key_info_response = MagicMock()
@@ -807,7 +790,7 @@ class TestLiteLLMTracker:
             },
         ]
 
-        mock_get.side_effect = [mock_key_info_response, mock_spend_logs_response]
+        mock_request.side_effect = [mock_key_info_response, mock_spend_logs_response]
 
         usage = tracker.generate_llm_usage_json(
             api_key="sk-test-key",
@@ -821,9 +804,9 @@ class TestLiteLLMTracker:
         # Total spend should be updated from detailed logs
         assert usage.total_spend_usd == 1.00
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
     def test_generate_llm_usage_json_prefers_higher_key_info_spend(
-        self, mock_get, tracker
+        self, mock_request, tracker
     ):
         """Test key/info spend is preserved when spend logs under-report usage."""
         mock_key_info_response = MagicMock()
@@ -861,7 +844,7 @@ class TestLiteLLMTracker:
             },
         ]
 
-        mock_get.side_effect = [mock_key_info_response, mock_spend_logs_response]
+        mock_request.side_effect = [mock_key_info_response, mock_spend_logs_response]
 
         usage = tracker.generate_llm_usage_json(
             api_key="sk-test-key",
@@ -874,9 +857,9 @@ class TestLiteLLMTracker:
         assert usage.key_info["spend_sources"]["spend_logs_spend_usd"] == 8.5
         assert usage.key_info["spend_sources"]["selected_total_spend_usd"] == 10.0435409
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
     def test_generate_llm_usage_json_suppresses_tiny_spend_mismatch_warning(
-        self, mock_get, tracker, caplog
+        self, mock_request, tracker, caplog
     ):
         """Do not warn when key/info and spend/log totals differ only by float noise."""
         mock_key_info_response = MagicMock()
@@ -904,7 +887,7 @@ class TestLiteLLMTracker:
             }
         ]
 
-        mock_get.side_effect = [mock_key_info_response, mock_spend_logs_response]
+        mock_request.side_effect = [mock_key_info_response, mock_spend_logs_response]
 
         usage = tracker.generate_llm_usage_json(
             api_key="sk-test-key",
@@ -920,10 +903,10 @@ class TestLiteLLMTracker:
         ]
         assert mismatch_warnings == []
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
     @patch("crsbench.evaluation.litellm_tracker.logger.warning")
     def test_generate_llm_usage_json_warns_for_material_key_info_higher_spend(
-        self, mock_warn, mock_get, tracker
+        self, mock_warn, mock_request, tracker
     ):
         mock_key_info_response = MagicMock()
         mock_key_info_response.status_code = 200
@@ -948,7 +931,7 @@ class TestLiteLLMTracker:
                 "cache_hit": False,
             }
         ]
-        mock_get.side_effect = [mock_key_info_response, mock_spend_logs_response]
+        mock_request.side_effect = [mock_key_info_response, mock_spend_logs_response]
 
         tracker.generate_llm_usage_json(
             api_key="sk-test-key",
@@ -961,10 +944,10 @@ class TestLiteLLMTracker:
             "larger=key/info" in str(call.args[0]) for call in mock_warn.call_args_list
         )
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
     @patch("crsbench.evaluation.litellm_tracker.logger.warning")
     def test_generate_llm_usage_json_warns_for_material_spend_logs_higher_spend(
-        self, mock_warn, mock_get, tracker
+        self, mock_warn, mock_request, tracker
     ):
         mock_key_info_response = MagicMock()
         mock_key_info_response.status_code = 200
@@ -989,7 +972,7 @@ class TestLiteLLMTracker:
                 "cache_hit": False,
             }
         ]
-        mock_get.side_effect = [mock_key_info_response, mock_spend_logs_response]
+        mock_request.side_effect = [mock_key_info_response, mock_spend_logs_response]
 
         usage = tracker.generate_llm_usage_json(
             api_key="sk-test-key",
@@ -1004,8 +987,8 @@ class TestLiteLLMTracker:
             for call in mock_warn.call_args_list
         )
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
-    def test_write_llm_usage_file(self, mock_get, tracker, tmp_path):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_write_llm_usage_file(self, mock_request, tracker, tmp_path):
         """Test writing LLM usage to file."""
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -1017,7 +1000,7 @@ class TestLiteLLMTracker:
                 "metadata": {},
             }
         }
-        mock_get.return_value = mock_response
+        mock_request.return_value = mock_response
 
         output_path = tmp_path / "llm-usage.json"
         result_path = tracker.write_llm_usage_file(
@@ -1033,8 +1016,8 @@ class TestLiteLLMTracker:
         assert data["trial_id"] == "test-trial"
         assert data["total_cost_usd"] == 1.00
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
-    def test_write_llm_logs_file(self, mock_get, tracker, tmp_path):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_write_llm_logs_file(self, mock_request, tracker, tmp_path):
         """Test writing detailed LLM logs to file."""
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -1058,7 +1041,7 @@ class TestLiteLLMTracker:
                 "response": "Response",
             },
         ]
-        mock_get.return_value = mock_response
+        mock_request.return_value = mock_response
 
         output_path = tmp_path / "llm-logs.json"
         result_path = tracker.write_llm_logs_file(
@@ -1078,8 +1061,8 @@ class TestLiteLLMTracker:
         assert data["logs"][0]["messages"] == [{"role": "user", "content": "Hello"}]
         assert data["logs"][0]["response"] == "Hi there!"
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
-    def test_write_llm_summary_file(self, mock_get, tracker, tmp_path):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_write_llm_summary_file(self, mock_request, tracker, tmp_path):
         """Test writing concise LLM summary to file."""
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -1106,7 +1089,7 @@ class TestLiteLLMTracker:
                 "exception": "BudgetExceededError: Current cost: 10.04, Max budget: 10.0",
             },
         ]
-        mock_get.return_value = mock_response
+        mock_request.return_value = mock_response
 
         output_path = tmp_path / "llm-summary.json"
         result_path = tracker.write_llm_summary_file(
@@ -1274,23 +1257,13 @@ class TestLLMUsageData:
 class TestLLMTrackingContext:
     """Tests for LLMTrackingContext context manager."""
 
-    @patch("crsbench.evaluation.litellm_tracker.requests.post")
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
-    def test_context_manager_lifecycle(self, mock_get, mock_post, tmp_path):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_context_manager_lifecycle(self, mock_request, tmp_path):
         """Test full context manager lifecycle."""
-        # Mock key generation
         mock_generate_response = MagicMock()
         mock_generate_response.status_code = 200
         mock_generate_response.json.return_value = {"key": "sk-generated-key"}
 
-        # Mock key deletion
-        mock_delete_response = MagicMock()
-        mock_delete_response.status_code = 200
-        mock_delete_response.json.return_value = {"deleted_keys": ["sk-generated-key"]}
-
-        mock_post.side_effect = [mock_generate_response, mock_delete_response]
-
-        # Mock key info
         mock_info_response = MagicMock()
         mock_info_response.status_code = 200
         mock_info_response.json.return_value = {
@@ -1301,7 +1274,18 @@ class TestLLMTrackingContext:
                 "metadata": {},
             }
         }
-        mock_get.return_value = mock_info_response
+
+        mock_delete_response = MagicMock()
+        mock_delete_response.status_code = 200
+        mock_delete_response.json.return_value = {"deleted_keys": ["sk-generated-key"]}
+
+        # generate_key, then __exit__: get_key_info, get_spend_logs (empty), delete_key
+        mock_request.side_effect = [
+            mock_generate_response,
+            mock_info_response,
+            mock_info_response,
+            mock_delete_response,
+        ]
 
         tracker = LiteLLMTracker(
             base_url="http://litellm:4000",
@@ -1322,30 +1306,16 @@ class TestLLMTrackingContext:
             assert ctx.api_key == "sk-generated-key"
             assert ctx.trial_id is not None
 
-        # Verify file was written
         usage_file = tmp_path / "llm-usage.json"
         assert usage_file.exists()
 
-        # Verify key was deleted (second POST call)
-        assert mock_post.call_count == 2
-
-    @patch("crsbench.evaluation.litellm_tracker.requests.post")
-    @patch("crsbench.evaluation.litellm_tracker.requests.get")
-    def test_context_manager_writes_intermediate(self, mock_get, mock_post, tmp_path):
+    @patch("crsbench.evaluation.litellm_tracker.requests.request")
+    def test_context_manager_writes_intermediate(self, mock_request, tmp_path):
         """Test intermediate usage file write."""
-        # Mock key generation
         mock_generate_response = MagicMock()
         mock_generate_response.status_code = 200
         mock_generate_response.json.return_value = {"key": "sk-key"}
 
-        # Mock key deletion
-        mock_delete_response = MagicMock()
-        mock_delete_response.status_code = 200
-        mock_delete_response.json.return_value = {"deleted_keys": ["sk-key"]}
-
-        mock_post.side_effect = [mock_generate_response, mock_delete_response]
-
-        # Mock key info
         mock_info_response = MagicMock()
         mock_info_response.status_code = 200
         mock_info_response.json.return_value = {
@@ -1356,7 +1326,20 @@ class TestLLMTrackingContext:
                 "metadata": {},
             }
         }
-        mock_get.return_value = mock_info_response
+
+        mock_delete_response = MagicMock()
+        mock_delete_response.status_code = 200
+        mock_delete_response.json.return_value = {"deleted_keys": ["sk-key"]}
+
+        # Return info for all calls (generate, intermediate, exit cleanup)
+        mock_request.side_effect = [
+            mock_generate_response,
+            mock_info_response,  # intermediate: get_key_info
+            mock_info_response,  # intermediate: get_spend_logs
+            mock_info_response,  # exit: get_key_info
+            mock_info_response,  # exit: get_spend_logs
+            mock_delete_response,
+        ]
 
         tracker = LiteLLMTracker(base_url="http://litellm:4000", master_key="sk-master")
 
@@ -1371,7 +1354,6 @@ class TestLLMTrackingContext:
             sanitizer="address",
             output_dir=tmp_path,
         ) as ctx:
-            # Write intermediate usage
             path = ctx.write_intermediate_usage()
             assert path is not None
             assert path.exists()
