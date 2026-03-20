@@ -328,6 +328,32 @@ restart_docker_service() {
   return 1
 }
 
+ensure_docker_official_apt_repo() {
+  install_packages ca-certificates curl gnupg
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  chmod a+r /etc/apt/keyrings/docker.asc
+
+  local arch codename
+  arch="$(dpkg --print-architecture)"
+  codename="$(
+    . /etc/os-release
+    printf '%s' "${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"
+  )"
+  if [[ -z "${codename}" ]]; then
+    echo "Unable to determine Ubuntu codename for Docker apt repository" >&2
+    exit 1
+  fi
+
+  printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu %s stable\n' \
+    "${arch}" "${codename}" > /etc/apt/sources.list.d/docker.list
+}
+
+remove_conflicting_docker_apt_packages() {
+  DEBIAN_FRONTEND=noninteractive apt-get remove -y -qq \
+    docker.io docker-doc docker-compose podman-docker containerd runc >/dev/null 2>&1 || true
+}
+
 ensure_docker_cgroupfs() {
   local current_driver
   current_driver="$(docker info --format '{{.CgroupDriver}}' 2>/dev/null || true)"
@@ -406,7 +432,11 @@ ensure_docker_ready() {
      ! docker buildx version >/dev/null 2>&1; then
     echo "Installing Docker..."
     if command -v apt-get >/dev/null 2>&1; then
-      install_packages docker.io docker-compose-v2 docker-buildx
+      remove_conflicting_docker_apt_packages
+      ensure_docker_official_apt_repo
+      apt-get update -qq
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+        docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
     elif command -v apk >/dev/null 2>&1; then
       install_packages docker docker-cli-compose
     else

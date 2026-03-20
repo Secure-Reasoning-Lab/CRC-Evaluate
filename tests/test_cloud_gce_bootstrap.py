@@ -630,10 +630,17 @@ def test_startup_script_supports_apt_and_apk_bootstrap_dependencies():
     script = load_startup_script()
 
     assert "apt-get install -y -qq" in script
+    assert "/etc/apt/keyrings" in script
+    assert "download.docker.com/linux/ubuntu" in script
+    assert "docker.asc" in script
+    assert (
+        "docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
+        in script
+    )
     assert "iftop" in script
     assert "ripgrep" in script
     assert "fd-find" in script
-    assert "install_packages docker.io docker-compose-v2 docker-buildx" in script
+    assert "install_packages docker.io docker-compose-v2 docker-buildx" not in script
     assert "docker compose version >/dev/null 2>&1" in script
     assert "docker buildx version >/dev/null 2>&1" in script
     assert "apk add --no-cache" in script
@@ -940,10 +947,17 @@ def test_orchestrator_startup_script_supports_apt_and_apk_bootstrap_dependencies
     script = load_orchestrator_startup_script()
 
     assert "apt-get install -y -qq" in script
+    assert "/etc/apt/keyrings" in script
+    assert "download.docker.com/linux/ubuntu" in script
+    assert "docker.asc" in script
+    assert (
+        "docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
+        in script
+    )
     assert "iftop" in script
     assert "ripgrep" in script
     assert "fd-find" in script
-    assert "install_packages docker.io docker-compose-v2 docker-buildx" in script
+    assert "install_packages docker.io docker-compose-v2 docker-buildx" not in script
     assert "docker compose version >/dev/null 2>&1" in script
     assert "docker buildx version >/dev/null 2>&1" in script
     assert "apk add --no-cache" in script

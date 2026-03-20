@@ -696,8 +696,11 @@ sudo -iu crsbench env \
 
 During bootstrap, both orchestrator and worker VMs also normalize the host
 timezone to `America/New_York` and configure Docker to use the `cgroupfs`
-driver expected by `oss-crs`. If you inspect a VM manually, verify these with
-`timedatectl`, `cat /etc/timezone`, and `docker info --format '{{.CgroupDriver}}'`.
+driver expected by `oss-crs`. On Ubuntu-based GCE images, CRSBench now installs
+Docker Engine from Docker's official apt repository rather than the distro
+`docker.io` packages. If you inspect a VM manually, verify these with
+`timedatectl`, `cat /etc/timezone`, `docker info --format '{{.CgroupDriver}}'`,
+and `apt-cache policy docker-ce`.
 Bootstrap also installs `iftop`, `rg`, and `fdfind`, and creates a
 `crsbuilder` buildx builder with the `docker-container` driver so ad hoc
 network and Docker debugging on the VM uses the same toolchain as CRSBench.
