@@ -10,6 +10,12 @@ from crsbench.cloud.cli._config_reconnect import (
     resolve_effective_experiment_name,
     resolve_remote_experiment_dir,
 )
+from crsbench.cloud.cli._instance_inventory import (
+    list_live_instances as shared_list_live_instances,
+)
+from crsbench.cloud.cli._instance_inventory import (
+    resolve_instance_fleet as shared_resolve_instance_fleet,
+)
 from crsbench.cloud.gce.provider import GceProviderAdapter
 from crsbench.cloud.readiness import CloudInstanceRole
 
@@ -135,72 +141,20 @@ def _list_live_instances(
     experiment_name: str,
     provisioner: GceProvisioner,
 ) -> list["GceWorkerRecord"]:
-    if context.launch_state is not None:
-        workers: list[GceWorkerRecord] = []
-        for fleet in context.worker_fleet_configs:
-            workers.extend(
-                provisioner.list_workers(experiment_name=experiment_name, fleet=fleet)
-            )
-        for fleet in context.evaluator_fleet_configs:
-            workers.extend(
-                provisioner.list_evaluators(
-                    experiment_name=experiment_name, fleet=fleet
-                )
-            )
-        return workers
-
-    if context.launch_plan is not None:
+    if context.launch_plan is not None and context.launch_state is None:
         adapter = GceProviderAdapter(provisioner=provisioner)
         workers = adapter.list_workers(plan=context.launch_plan)
         if context.evaluator_fleet_configs:
             workers.extend(adapter.list_evaluators(plan=context.launch_plan))
         return workers
-
-    workers: list[GceWorkerRecord] = []
-    for fleet in context.worker_fleet_configs:
-        workers.extend(
-            provisioner.list_workers(experiment_name=experiment_name, fleet=fleet)
-        )
-    for fleet in context.evaluator_fleet_configs:
-        workers.extend(
-            provisioner.list_workers(experiment_name=experiment_name, fleet=fleet)
-        )
-    return workers
+    return shared_list_live_instances(context, experiment_name, provisioner)
 
 
 def _resolve_instance_fleet(
     context: "ResolvedCloudContext",
     worker: "GceWorkerRecord",
 ):
-    role = worker.labels.get("crsbench-role")
-    candidate_fleets = (
-        context.evaluator_fleet_configs
-        if role == "evaluator"
-        else context.worker_fleet_configs
-    )
-    name_matches = [
-        fleet
-        for fleet in candidate_fleets
-        if _fleet_matches_instance_name(fleet, worker.name)
-    ]
-    if len(name_matches) == 1:
-        return name_matches[0]
-
-    zone_filtered_name_matches = [
-        fleet for fleet in name_matches if _fleet_targets_zone(fleet, worker.zone)
-    ]
-    if zone_filtered_name_matches:
-        return zone_filtered_name_matches[0]
-
-    zone_matches = [
-        fleet for fleet in candidate_fleets if _fleet_targets_zone(fleet, worker.zone)
-    ]
-    if zone_matches:
-        return zone_matches[0]
-
-    raise RuntimeError(
-        f"No cloud fleet config matched instance {worker.name} in zone {worker.zone}"
-    )
+    return shared_resolve_instance_fleet(context, worker)
 
 
 def _list_readiness_instances(readiness, experiment_name: str):
@@ -217,23 +171,3 @@ def _list_readiness_instances(readiness, experiment_name: str):
 def _collects_experiment_artifacts(worker: "GceWorkerRecord") -> bool:
     """Return whether this instance owns a worker-style experiment artifact tree."""
     return worker.labels.get("crsbench-role") != CloudInstanceRole.EVALUATOR.value
-
-
-def _fleet_matches_instance_name(fleet, instance_name: str) -> bool:
-    prefix = fleet.worker_name_prefix
-    if not isinstance(prefix, str) or not prefix:
-        return False
-    if not instance_name.startswith(f"{prefix}-"):
-        return False
-    suffix = instance_name.removeprefix(f"{prefix}-")
-    if not suffix.isdigit():
-        return False
-    index = int(suffix)
-    start = fleet.worker_name_start_index
-    return start <= index < start + fleet.worker_count
-
-
-def _fleet_targets_zone(fleet, zone: str) -> bool:
-    if getattr(fleet, "zones", None):
-        return zone in fleet.zones
-    return fleet.zone == zone

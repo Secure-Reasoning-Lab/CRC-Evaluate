@@ -1480,6 +1480,37 @@ class TestArgParsing:
         assert args.experiment is None
         assert args.config == "c.yaml"
 
+    def test_parse_list(self):
+        parser = self._build_parser()
+        args = parser.parse_args(["cloud", "list", "--config", "c.yaml"])
+        assert args.command == "cloud"
+        assert args.cloud_command == "list"
+        assert args.config == "c.yaml"
+        assert args.json_output is False
+
+    def test_parse_list_json(self):
+        parser = self._build_parser()
+        args = parser.parse_args(["cloud", "list", "--config", "c.yaml", "--json"])
+        assert args.command == "cloud"
+        assert args.cloud_command == "list"
+        assert args.json_output is True
+
+    def test_parse_ssh_with_instance(self):
+        parser = self._build_parser()
+        args = parser.parse_args(["cloud", "ssh", "work-001", "--config", "c.yaml"])
+        assert args.command == "cloud"
+        assert args.cloud_command == "ssh"
+        assert args.instance == "work-001"
+        assert args.config == "c.yaml"
+
+    def test_parse_ssh_without_instance(self):
+        parser = self._build_parser()
+        args = parser.parse_args(["cloud", "ssh", "--config", "c.yaml"])
+        assert args.command == "cloud"
+        assert args.cloud_command == "ssh"
+        assert args.instance is None
+        assert args.config == "c.yaml"
+
 
 def _make_launch_args(config: str = "/tmp/config.yaml"):
     return argparse.Namespace(
@@ -1499,6 +1530,29 @@ def _make_monitor_args(
     )
 
 
+def _make_list_args(
+    config: str = "/tmp/config.yaml",
+    *,
+    json_output: bool = False,
+):
+    return argparse.Namespace(
+        config=config,
+        json_output=json_output,
+        cloud_command="list",
+    )
+
+
+def _make_ssh_args(
+    instance: str | None = "work-001",
+    config: str = "/tmp/config.yaml",
+):
+    return argparse.Namespace(
+        instance=instance,
+        config=config,
+        cloud_command="ssh",
+    )
+
+
 @patch("crsbench.cloud.cli._monitor.run_monitor", return_value=0)
 def test_run_cloud_dispatches_monitor(mock_run_monitor):
     from crsbench.cloud.cli.cloud_command import run_cloud
@@ -1507,6 +1561,26 @@ def test_run_cloud_dispatches_monitor(mock_run_monitor):
 
     assert rc == 0
     mock_run_monitor.assert_called_once()
+
+
+@patch("crsbench.cloud.cli._list.run_list", return_value=0)
+def test_run_cloud_dispatches_list(mock_run_list):
+    from crsbench.cloud.cli.cloud_command import run_cloud
+
+    rc = run_cloud(_make_list_args())
+
+    assert rc == 0
+    mock_run_list.assert_called_once()
+
+
+@patch("crsbench.cloud.cli._ssh.run_ssh", return_value=0)
+def test_run_cloud_dispatches_ssh(mock_run_ssh):
+    from crsbench.cloud.cli.cloud_command import run_cloud
+
+    rc = run_cloud(_make_ssh_args())
+
+    assert rc == 0
+    mock_run_ssh.assert_called_once()
 
 
 @patch("crsbench.cloud.cli._monitor.initialize_queue")
@@ -2905,6 +2979,224 @@ def _make_gce_worker(name: str, zone: str = "us-central1-a", ip: str = "10.0.0.1
         zone=zone,
         internal_ip=ip,
     )
+
+
+def _make_completed_process(returncode: int = 0):
+    return SimpleNamespace(returncode=returncode)
+
+
+class TestList:
+    """Tests for run_list() sub-action."""
+
+    @patch("crsbench.cloud.cli._list.resolve_effective_experiment_name")
+    @patch("crsbench.cloud.cli._list.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._list.GceProvisioner")
+    def test_list_prints_live_instances_table(
+        self,
+        mock_provisioner_cls,
+        mock_resolve_context,
+        mock_resolve_experiment_name,
+        capsys,
+    ):
+        mock_resolve_experiment_name.return_value = "test-exp"
+        context = _make_resolved_cloud_context(_make_launch_state())
+        mock_resolve_context.return_value = context
+        provisioner = mock_provisioner_cls.return_value
+        provisioner.list_workers.return_value = [
+            _make_gce_worker("crsbench-test-exp-work-001")
+        ]
+        provisioner.list_evaluators.return_value = []
+        provisioner.get_instance_record.return_value = _make_gce_worker(
+            "crsbench-test-exp-orch",
+            zone="us-east5-b",
+            ip="10.0.0.50",
+        )
+        provisioner.get_instance_record.return_value.labels["crsbench-role"] = (
+            "orchestrator"
+        )
+
+        from crsbench.cloud.cli._list import run_list
+
+        rc = run_list(_make_list_args())
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "crsbench-test-exp-orch" in out
+        assert "crsbench-test-exp-work-001" in out
+        assert "orchestrator" in out
+        assert "worker" in out
+
+    @patch("crsbench.cloud.cli._list.resolve_effective_experiment_name")
+    @patch("crsbench.cloud.cli._list.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._list.GceProvisioner")
+    def test_list_supports_json_output(
+        self,
+        mock_provisioner_cls,
+        mock_resolve_context,
+        mock_resolve_experiment_name,
+        capsys,
+    ):
+        mock_resolve_experiment_name.return_value = "test-exp"
+        context = _make_resolved_cloud_context(_make_launch_state())
+        mock_resolve_context.return_value = context
+        provisioner = mock_provisioner_cls.return_value
+        provisioner.list_workers.return_value = [
+            _make_gce_worker("crsbench-test-exp-work-001")
+        ]
+        provisioner.list_evaluators.return_value = []
+        provisioner.get_instance_record.return_value = _make_gce_worker(
+            "crsbench-test-exp-orch",
+            zone="us-east5-b",
+            ip="10.0.0.50",
+        )
+        provisioner.get_instance_record.return_value.labels["crsbench-role"] = (
+            "orchestrator"
+        )
+
+        from crsbench.cloud.cli._list import run_list
+
+        rc = run_list(_make_list_args(json_output=True))
+
+        assert rc == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert [row["name"] for row in payload] == [
+            "crsbench-test-exp-orch",
+            "crsbench-test-exp-work-001",
+        ]
+
+
+class TestSsh:
+    """Tests for run_ssh() sub-action."""
+
+    @patch("crsbench.cloud.cli._ssh.subprocess.run")
+    @patch("crsbench.cloud.cli._ssh._detect_ssh_key_file")
+    @patch("crsbench.cloud.cli._ssh.resolve_effective_experiment_name")
+    @patch("crsbench.cloud.cli._ssh.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._ssh.GceProvisioner")
+    def test_ssh_runs_selected_instance_command(
+        self,
+        mock_provisioner_cls,
+        mock_resolve_context,
+        mock_resolve_experiment_name,
+        mock_detect_key,
+        mock_run,
+    ):
+        mock_resolve_experiment_name.return_value = "test-exp"
+        context = _make_resolved_cloud_context(_make_launch_state())
+        mock_resolve_context.return_value = context
+        provisioner = mock_provisioner_cls.return_value
+        provisioner.list_workers.return_value = [
+            _make_gce_worker("crsbench-test-exp-work-001", zone="us-central1-a")
+        ]
+        provisioner.list_evaluators.return_value = []
+        provisioner.get_instance_record.return_value = _make_gce_worker(
+            "crsbench-test-exp-orch",
+            zone="us-east5-b",
+            ip="10.0.0.50",
+        )
+        provisioner.get_instance_record.return_value.labels["crsbench-role"] = (
+            "orchestrator"
+        )
+        mock_detect_key.return_value = Path("/tmp/crsbench-oslogin/id_ed25519")
+        mock_run.return_value = _make_completed_process(0)
+
+        from crsbench.cloud.cli._ssh import run_ssh
+
+        rc = run_ssh(_make_ssh_args(instance="work-001"))
+
+        assert rc == 0
+        cmd = mock_run.call_args.args[0]
+        assert cmd[:4] == ["gcloud", "compute", "ssh", "crsbench-test-exp-work-001"]
+        assert "--zone=us-central1-a" in cmd
+        assert "--tunnel-through-iap" not in cmd
+        assert "--ssh-key-file=/tmp/crsbench-oslogin/id_ed25519" in cmd
+
+    @patch("crsbench.cloud.cli._ssh.subprocess.run")
+    @patch("crsbench.cloud.cli._ssh._detect_ssh_key_file")
+    @patch("crsbench.cloud.cli._ssh.input", return_value="2")
+    @patch("crsbench.cloud.cli._ssh.resolve_effective_experiment_name")
+    @patch("crsbench.cloud.cli._ssh.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._ssh.GceProvisioner")
+    def test_ssh_interactively_selects_instance_when_omitted(
+        self,
+        mock_provisioner_cls,
+        mock_resolve_context,
+        mock_resolve_experiment_name,
+        mock_input,
+        mock_detect_key,
+        mock_run,
+        monkeypatch,
+        capsys,
+    ):
+        mock_resolve_experiment_name.return_value = "test-exp"
+        context = _make_resolved_cloud_context(_make_launch_state())
+        mock_resolve_context.return_value = context
+        provisioner = mock_provisioner_cls.return_value
+        provisioner.list_workers.return_value = [
+            _make_gce_worker("crsbench-test-exp-work-001", zone="us-central1-a")
+        ]
+        provisioner.list_evaluators.return_value = []
+        provisioner.get_instance_record.return_value = _make_gce_worker(
+            "crsbench-test-exp-orch",
+            zone="us-east5-b",
+            ip="10.0.0.50",
+        )
+        provisioner.get_instance_record.return_value.labels["crsbench-role"] = (
+            "orchestrator"
+        )
+        mock_detect_key.return_value = None
+        mock_run.return_value = _make_completed_process(0)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+
+        from crsbench.cloud.cli._ssh import run_ssh
+
+        rc = run_ssh(_make_ssh_args(instance=None))
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "1. crsbench-test-exp-orch" in out
+        assert "2. crsbench-test-exp-work-001" in out
+        cmd = mock_run.call_args.args[0]
+        assert cmd[:4] == ["gcloud", "compute", "ssh", "crsbench-test-exp-work-001"]
+        mock_input.assert_called_once()
+
+    @patch("crsbench.cloud.cli._ssh.resolve_effective_experiment_name")
+    @patch("crsbench.cloud.cli._ssh.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._ssh.GceProvisioner")
+    def test_ssh_requires_instance_when_stdin_is_not_a_tty(
+        self,
+        mock_provisioner_cls,
+        mock_resolve_context,
+        mock_resolve_experiment_name,
+        monkeypatch,
+        capsys,
+    ):
+        mock_resolve_experiment_name.return_value = "test-exp"
+        context = _make_resolved_cloud_context(_make_launch_state())
+        mock_resolve_context.return_value = context
+        provisioner = mock_provisioner_cls.return_value
+        provisioner.list_workers.return_value = [
+            _make_gce_worker("crsbench-test-exp-work-001", zone="us-central1-a")
+        ]
+        provisioner.list_evaluators.return_value = []
+        provisioner.get_instance_record.return_value = _make_gce_worker(
+            "crsbench-test-exp-orch",
+            zone="us-east5-b",
+            ip="10.0.0.50",
+        )
+        provisioner.get_instance_record.return_value.labels["crsbench-role"] = (
+            "orchestrator"
+        )
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+        from crsbench.cloud.cli._ssh import run_ssh
+
+        rc = run_ssh(_make_ssh_args(instance=None))
+
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert "crsbench-test-exp-orch" in out
+        assert "crsbench-test-exp-work-001" in out
 
 
 class TestCollect:

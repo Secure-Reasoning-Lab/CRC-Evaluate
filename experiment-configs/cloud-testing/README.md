@@ -340,6 +340,23 @@ Expected result:
   download step, worker/evaluator-side Redis polling, and queue-listener startup complete
 - job counts should move from queued/running to completed as the smoke run finishes
 
+List the live VMs and their resolved zones:
+
+```bash
+uv run crsbench cloud list \
+  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml
+```
+
+Open an SSH session by alias or full instance name:
+
+```bash
+uv run crsbench cloud ssh orch \
+  --config experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml
+```
+
+If you omit the instance selector, CRSBench prints the live inventory and lets
+you choose interactively.
+
 Watch recovery events:
 
 ```bash

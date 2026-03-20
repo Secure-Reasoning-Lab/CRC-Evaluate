@@ -555,6 +555,47 @@ uv run crsbench cloud collect my-experiment \
 - In remote-orchestrator mode, collects orchestrator logs and control-plane files, but trial artifact publication still comes from workers
 - If Redis is unavailable, falls back to the persisted launch state plus live GCE inventory
 
+## Listing Instances
+
+Inspect the live VM inventory resolved from the experiment config and persisted
+launch state:
+
+```bash
+uv run crsbench cloud list \
+    --config config.yaml
+```
+
+Add `--json` for machine-readable output:
+
+```bash
+uv run crsbench cloud list \
+    --config config.yaml \
+    --json
+```
+
+`cloud list` infers the experiment name from `experiment.name`.
+
+## SSH Access
+
+Open an SSH session to a live VM without manually looking up the zone:
+
+```bash
+# Exact instance name or short alias like orch, work-001, eval-001
+uv run crsbench cloud ssh orch \
+    --config config.yaml
+```
+
+If you omit the instance selector, CRSBench prints the live inventory and lets
+you choose interactively:
+
+```bash
+uv run crsbench cloud ssh \
+    --config config.yaml
+```
+
+`cloud ssh` infers the experiment name from `experiment.name` and reuses the
+live zone chosen at launch time.
+
 ## Teardown
 
 Remove the worker/evaluator fleet after collecting results:
@@ -621,9 +662,7 @@ uv run crsbench cloud teardown \
 uv run python scripts/cpv_report.py /data/experiments/my-experiment --csv
 ```
 
-## SSH Access
-
-For VM access during debugging:
+For manual VM access during debugging:
 
 ```bash
 # IAP mode

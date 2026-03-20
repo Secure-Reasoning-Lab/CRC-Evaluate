@@ -983,6 +983,22 @@ class GceProvisioner:
                 f"Failed to delete instance {instance_name}: {'; '.join(errors)}"
             )
 
+    def get_instance_record(
+        self,
+        *,
+        project: str,
+        zone: str,
+        instance_name: str,
+    ) -> GceWorkerRecord:
+        """Return one normalized live instance record."""
+        return _normalize_instance(
+            self._client.get_instance(
+                project=project,
+                zone=zone,
+                instance=instance_name,
+            )
+        )
+
     def list_workers(
         self,
         *,
