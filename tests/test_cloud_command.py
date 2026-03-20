@@ -4027,12 +4027,18 @@ class TestTeardown:
         mock_prov.delete_workers.assert_called_once()
         mock_prov.delete_instance.assert_called_once()
 
+    @patch("crsbench.cloud.cli._teardown.delete_launch_state")
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
     @patch("crsbench.cloud.cli._teardown.GceProvisioner")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_deletes_vms_even_when_collection_fails(
-        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
+        self,
+        mock_reconnect,
+        mock_prov_cls,
+        mock_coll_cls,
+        mock_resolve_context,
+        mock_delete_state,
     ):
         """Collection failures should still proceed to VM deletion to avoid leaks."""
         from crsbench.cloud.collection import ArtifactCollectionError
@@ -4055,6 +4061,47 @@ class TestTeardown:
         assert rc == 1
         mock_prov.delete_workers.assert_called_once()
         mock_prov.delete_instance.assert_called_once()
+        mock_delete_state.assert_called_once_with("/tmp/config.yaml", "test-exp")
+
+    @patch("crsbench.cloud.cli._teardown.delete_launch_state")
+    @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
+    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.reconnect")
+    def test_teardown_clears_launch_state_when_orchestrator_is_already_gone(
+        self,
+        mock_reconnect,
+        mock_prov_cls,
+        mock_coll_cls,
+        mock_resolve_context,
+        mock_delete_state,
+    ):
+        """State cleanup should still happen when deletion reports not-found after VMs are already gone."""
+        mock_resolve_context.return_value = _make_resolved_cloud_context(
+            _make_launch_state()
+        )
+        mock_prov, _mock_coll, _, _ = _setup_teardown_mocks(
+            mock_reconnect, mock_prov_cls, mock_coll_cls
+        )
+        mock_prov.list_workers.side_effect = [
+            [_make_gce_worker("w-1"), _make_gce_worker("w-2")],
+            [],
+        ]
+        mock_prov.delete_instance.side_effect = RuntimeError(
+            "instance gce-orchestrator-test-exp was not found"
+        )
+        mock_prov.get_instance_record.side_effect = RuntimeError(
+            "instance gce-orchestrator-test-exp was not found"
+        )
+
+        from crsbench.cloud.cli._teardown import run_teardown
+
+        rc = run_teardown(_make_teardown_args(force=True))
+
+        assert rc == 1
+        mock_prov.delete_workers.assert_called_once()
+        mock_prov.delete_instance.assert_called_once()
+        mock_delete_state.assert_called_once_with("/tmp/config.yaml", "test-exp")
 
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context", create=True)
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")

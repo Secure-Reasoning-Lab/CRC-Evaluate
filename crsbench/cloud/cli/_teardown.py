@@ -205,7 +205,15 @@ def run_teardown(args: argparse.Namespace) -> int:
             )
             deletion_failed = True
 
-    if launch_state is not None and not deletion_failed:
+    if launch_state is not None and (
+        not deletion_failed
+        or _should_remove_launch_state(
+            context=context,
+            experiment_name=experiment_name,
+            launch_state=launch_state,
+            provisioner=provisioner,
+        )
+    ):
         try:
             delete_launch_state(args.config, experiment_name)
         except OSError as exc:
@@ -232,6 +240,32 @@ def _list_live_instances(
     provisioner: GceProvisioner,
 ) -> list["GceWorkerRecord"]:
     return shared_list_live_instances(context, experiment_name, provisioner)
+
+
+def _should_remove_launch_state(
+    *,
+    context: "ResolvedCloudContext",
+    experiment_name: str,
+    launch_state,
+    provisioner: GceProvisioner,
+) -> bool:
+    """Return whether teardown can safely discard persisted launch state."""
+    if _list_live_instances(context, experiment_name, provisioner):
+        return False
+    try:
+        provisioner.get_instance_record(
+            project=launch_state.orchestrator_project,
+            zone=launch_state.orchestrator_zone,
+            instance_name=launch_state.orchestrator_name,
+        )
+    except Exception as exc:
+        return _instance_missing(exc)
+    return False
+
+
+def _instance_missing(exc: Exception) -> bool:
+    """Return whether a provider error clearly indicates the instance no longer exists."""
+    return "not found" in str(exc).lower()
 
 
 def _delete_live_instances(
