@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 from crsbench.cloud.gce.provisioner import GceProvisioner
@@ -398,7 +399,7 @@ class GceProviderAdapter:
             plan.orchestrator.instance_profile
         ).project
         aggregated_requirements: dict[tuple[str, str], int] = {}
-        flexible_requirements: list[tuple[list[str], str, int]] = []
+        flexible_requirements: dict[str, list[tuple[tuple[str, ...], int]]] = {}
 
         def collect_requirement(
             *,
@@ -422,7 +423,9 @@ class GceProviderAdapter:
                     aggregated_requirements.get((region, family), 0) + required
                 )
                 return
-            flexible_requirements.append((list(candidate_regions), family, required))
+            flexible_requirements.setdefault(family, []).append(
+                (tuple(candidate_regions), required)
+            )
 
         if include_orchestrator and plan.orchestrator.provider is CloudProvider.GCE:
             resolved = self.resolve_instance_profile(plan.orchestrator.instance_profile)
@@ -482,10 +485,16 @@ class GceProviderAdapter:
                     )
                 )
 
-        for candidate_regions, family, required in flexible_requirements:
-            availabilities = [
-                (
-                    region,
+        for family, requirements in sorted(flexible_requirements.items()):
+            candidate_region_set = {
+                region
+                for candidate_regions, _required in requirements
+                for region in candidate_regions
+            }
+            ordered_regions = sorted(candidate_region_set)
+            capacities = {
+                region: max(
+                    0,
                     self._quota_client.get_available_capacity(
                         project=project,
                         region=region,
@@ -493,20 +502,25 @@ class GceProviderAdapter:
                     )
                     - aggregated_requirements.get((region, family), 0),
                 )
-                for region in candidate_regions
-            ]
-            if any(available >= required for _, available in availabilities):
-                continue
-            shortages.extend(
-                self._quota_shortages_for_requirement(
-                    project=project,
-                    candidate_regions=candidate_regions,
-                    fallback=True,
-                    family=family,
-                    required=required,
-                    reserved_requirements=aggregated_requirements,
-                )
+                for region in ordered_regions
+            }
+            total_required = sum(
+                required for _candidate_regions, required in requirements
             )
+            max_assignable = _max_assignable_single_zone_capacity(
+                requirements=requirements,
+                capacities=capacities,
+            )
+            if max_assignable < total_required:
+                shortages.append(
+                    QuotaShortage(
+                        provider=CloudProvider.GCE,
+                        scope="|".join(ordered_regions),
+                        resource_family=family,
+                        required=total_required,
+                        available=max_assignable,
+                    )
+                )
         return shortages
 
     def _quota_shortages_for_requirement(
@@ -751,6 +765,53 @@ def _candidate_regions_for_quota(
         candidate_regions.append(region)
         seen.add(region)
     return candidate_regions
+
+
+def _max_assignable_single_zone_capacity(
+    *,
+    requirements: Sequence[tuple[tuple[str, ...], int]],
+    capacities: Mapping[str, int],
+) -> int:
+    """Return the maximum demand assignable when each request must fit one region."""
+    ordered_regions = tuple(sorted(capacities))
+    normalized_requirements = tuple(
+        sorted(
+            (
+                (tuple(sorted(candidate_regions)), required)
+                for candidate_regions, required in requirements
+            ),
+            key=lambda item: (len(item[0]), -item[1], item[0]),
+        )
+    )
+    region_indexes = {region: index for index, region in enumerate(ordered_regions)}
+    requirement_candidates = tuple(
+        tuple(region_indexes[region] for region in candidate_regions)
+        for candidate_regions, _required in normalized_requirements
+    )
+    requirement_sizes = tuple(
+        required for _candidate_regions, required in normalized_requirements
+    )
+    initial_capacities = tuple(int(capacities[region]) for region in ordered_regions)
+
+    @lru_cache(maxsize=None)
+    def search(index: int, remaining: tuple[int, ...]) -> int:
+        if index >= len(requirement_sizes):
+            return 0
+
+        required = requirement_sizes[index]
+        best = search(index + 1, remaining)
+        for candidate_index in requirement_candidates[index]:
+            if remaining[candidate_index] < required:
+                continue
+            next_remaining = list(remaining)
+            next_remaining[candidate_index] -= required
+            best = max(
+                best,
+                required + search(index + 1, tuple(next_remaining)),
+            )
+        return best
+
+    return search(0, initial_capacities)
 
 
 def _primary_zone(zones: Sequence[str]) -> str:
