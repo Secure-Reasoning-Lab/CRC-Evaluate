@@ -383,8 +383,8 @@ def prepare_uniafl_backend(
                 return 0
         else:
             logger.warning(
-                "Falling back to local Atlantis image build after GHCR pull failed: %s",
-                "; ".join(pull_failures),
+                "Falling back to local Atlantis image build after GHCR pull "
+                f"failed: {'; '.join(pull_failures)}"
             )
     if published_release_checkout and not any(
         issue.startswith("missing local image:") for issue in readiness_issues
