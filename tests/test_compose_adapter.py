@@ -2851,9 +2851,10 @@ class TestBugFixInputStaging:
         assert not (stale_input / "old").exists()
         assert not (stale_cpvs / "old").exists()
 
-    def test_prepare_runtime_inputs_bugfinding_ignores_target_cpv_for_pov_staging(
+    def test_prepare_runtime_inputs_bugfinding_skips_pov_staging(
         self, tmp_path: Path
     ) -> None:
+        """Bug-finding must never stage ground-truth POVs, even when pov_input_enabled."""
         benchmark = self._make_benchmark_with_variants(tmp_path)
         trial_dir = tmp_path / "trial"
         trial_dir.mkdir()
@@ -2870,13 +2871,13 @@ class TestBugFixInputStaging:
             sarif_input_enabled=False,
         )
 
-        # target_cpv_id is irrelevant for bug-finding and should not hard-fail.
         runner._prepare_runtime_inputs(
             benchmark, "fuzz_target", trial_dir, target_cpv_id="cpv_missing"
         )
 
-        staged = {p.name for p in (trial_dir / "povs").iterdir()}
-        assert staged == {"cpv_0", "cpv_1"}
+        # POV staging must be skipped for bug-finding to avoid leaking answers.
+        assert not (trial_dir / "povs").exists()
+        assert not (trial_dir / "crs-input" / "povs").exists()
 
     def test_prepare_runtime_inputs_fails_when_sarif_enabled_but_missing(
         self, tmp_path: Path

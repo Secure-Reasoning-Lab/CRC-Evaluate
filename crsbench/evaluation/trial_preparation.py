@@ -26,8 +26,17 @@ from crsbench.validation.ground_truth_paths import GroundTruthPaths
 logger = get_logger(__name__)
 
 
-def _effective_inputs_from_config(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Resolve trial input controls from explicit runtime.inputs only."""
+def _effective_inputs_from_config(
+    config: Dict[str, Any], *, trial_mode: Optional[str] = None
+) -> Dict[str, Any]:
+    """Resolve trial input controls from explicit runtime.inputs only.
+
+    Args:
+        config: Raw experiment configuration dict.
+        trial_mode: Per-trial evaluation mode ("delta" or "full").
+            When "delta", diff input is force-enabled because the reference
+            diff is a definitional input for delta-mode evaluation.
+    """
     explicit_inputs = config.get("inputs") or {}
     if not isinstance(explicit_inputs, dict):
         explicit_inputs = {}
@@ -44,6 +53,14 @@ def _effective_inputs_from_config(config: Dict[str, Any]) -> Dict[str, Any]:
     pov_enabled = bool(pov_cfg.get("enabled", False))
     max_variants = pov_cfg.get("max_variants_per_cpv")
     diff_enabled = bool(diff_cfg.get("enabled", False))
+
+    # Delta mode requires the reference diff by definition.
+    if trial_mode == "delta" and not diff_enabled:
+        diff_enabled = True
+        logger.info(
+            "Auto-enabling diff input for delta-mode trial "
+            "(ref.diff is a definitional input for delta evaluation)"
+        )
 
     return {
         "source": "inputs",
