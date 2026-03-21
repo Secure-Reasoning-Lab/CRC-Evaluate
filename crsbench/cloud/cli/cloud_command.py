@@ -153,6 +153,21 @@ Examples:
     )
     _add_config_argument(launch_p, suppress_default=True)
 
+    # preflight
+    preflight_p = cloud_subparsers.add_parser(
+        "preflight",
+        help="Resolve the cloud launch plan and checks without provisioning",
+    )
+    _add_config_argument(preflight_p, suppress_default=True)
+    preflight_p.add_argument(
+        "--json", action="store_true", dest="json_output", help="JSON output"
+    )
+    preflight_p.add_argument(
+        "--strict",
+        action="store_true",
+        help="Treat warnings as a non-zero result",
+    )
+
     # keygen
     keygen_p = cloud_subparsers.add_parser(
         "keygen", help="Generate an SSH ed25519 deploy key pair"
@@ -248,6 +263,11 @@ def run_cloud(args: argparse.Namespace) -> int:
         from crsbench.cloud.cli._launch import run_launch
 
         return run_launch(args)
+
+    if cmd == "preflight":
+        from crsbench.cloud.cli._preflight import run_preflight
+
+        return run_preflight(args)
 
     if cmd == "teardown":
         from crsbench.cloud.cli._teardown import run_teardown
