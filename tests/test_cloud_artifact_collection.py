@@ -1075,6 +1075,23 @@ class TestExperimentStartTimeDiscovery:
 class TestMergeExperimentStartTime:
     """test_merge_experiment_start_time — preserve prior marker data as fallback."""
 
+    def test_merge_experiment_start_time_prefers_current_run_value(self) -> None:
+        """Current-run start time must win when both current and prior values exist."""
+        prior_marker = {
+            "schema_version": 1,
+            "experiment_name": "exp-42",
+            "experiment_start_time": "2026-03-19T05:00:00+00:00",
+            "experiment_start_time_source": "earliest_trial_timestamp",
+        }
+        current = ("2026-03-20T06:00:00+00:00", "earliest_trial_timestamp_start")
+
+        start_time, source = merge_experiment_start_time(
+            current=current,
+            prior=prior_marker,
+        )
+        assert start_time == "2026-03-20T06:00:00+00:00"
+        assert source == "earliest_trial_timestamp_start"
+
     def test_merge_experiment_start_time_preserves_prior_marker_when_current_unknown(
         self,
     ) -> None:

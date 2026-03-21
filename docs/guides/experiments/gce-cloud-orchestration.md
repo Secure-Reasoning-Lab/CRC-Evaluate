@@ -597,7 +597,7 @@ uv run crsbench cloud --config config.yaml collect my-experiment \
 - Evaluator VMs are log-only for collection; they do not rsync `/tmp/crsbench/experiment-data/<experiment>` because build/verify work stays in transient evaluator scratch space instead of a worker-style experiment tree
 - Safe to run multiple times (incremental rsync), but when the local destination already exists CRSBench warns before merging into it
 - Interactive runs prompt `Continue and merge into the existing destination? [Y/n]`; non-interactive runs fail unless you pass `--force`
-- Successful collect runs refresh a hidden local marker at `<storage.experiment_filestore>/<experiment>/.crsbench-collect.json` with the last successful collect time and best-effort experiment start time
+- Successful collect runs that actually publish worker artifact data refresh a hidden local marker at `<storage.experiment_filestore>/<experiment>/.crsbench-collect.json` with the last successful artifact collect time and best-effort experiment start time
 - Also collects VM diagnostics under `.crsbench-cloud/remote-logs/<experiment>/`, including:
   - `google-startup-scripts.service` and `google-guest-agent.service` journals
   - `crsbench-worker.service`, `crsbench-evaluator.service`, or `crsbench-orchestrator.service` user journals
