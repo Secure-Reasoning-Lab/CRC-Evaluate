@@ -12,6 +12,7 @@ Operational runbooks and exact commands live in:
 
 Architecture details live in:
 
+- [Cloud Orchestration](./cloud-orchestration.md)
 - [Distributed Evaluation](./distributed-evaluation.md)
 - [Distributed Job Queue](./distributed-job-queue.md)
 
@@ -39,33 +40,33 @@ Deployment assumptions:
 
 ## Cloud Fleet Contract
 
-When a deployment uses managed GCE workers or evaluators, the experiment config
-is the source of truth for fleet shape. The cloud contract is:
+When a deployment uses managed cloud workers or evaluators, the experiment config
+is the source of truth for fleet shape. The shared cloud contract is:
 
-- worker fleets are declared through `cloud.providers.gce` plus `cloud.workers.placements`, not in lab-specific host maps
-- evaluator fleets are declared through `cloud.providers.gce` plus `cloud.evaluators.placements`, not in lab-specific host maps
-- managed placement supports explicit zonal declarations plus regional placement through `region` / `regions`
-- optional `zones` act as an allowlist inside the effective region set when regional placement is used
-- fallback policy is config-driven: recognized capacity failures may retry later declared regions or zones only when `fallback: true`
+- worker fleets are declared through `cloud.providers.<provider>` plus `cloud.workers.placements`, not in lab-specific host maps
+- evaluator fleets are declared through `cloud.providers.<provider>` plus `cloud.evaluators.placements`, not in lab-specific host maps
+- `cloud.bootstrap`, `cloud.defaults`, `cloud.remote.experiment_root`, and the `cloud.*.env` layers are provider-neutral config owned by CRSBench
+- one launch resolves to exactly one provider across orchestrator, workers, and evaluators
+- managed placement supports explicit zonal declarations plus regional placement when the selected provider supports them
+- fallback policy is config-driven: recognized provider placement failures may retry later declared regions or zones only when `fallback: true`
 - provisioned workers/evaluators carry experiment identity plus operator ownership labels
-- supported operator access remains OS Login-compatible SSH with host
-  verification enabled
-- IAP-backed SSH is preferred when fleet VMs do not expose public SSH
-- worker and evaluator service accounts must be explicit and least-privileged
-- cloud readiness is a control-plane state distinct from raw VM
-  `RUNNING` state and from global Redis worker counts
-- bootstrapped workers and evaluators use experiment-pinned runtime paths
-  rather than the shared configless worker/evaluator pool
-- readiness records are keyed by cloud `instance_id`, not by instance name
-  alone
-- startup failure evidence must remain retrievable from the control path
-  without interactive VM login
+- operator SSH/tunnel details are provider-specific, but host verification and explicit operator access remain mandatory
+- worker and evaluator service accounts or identities must be explicit and least-privileged
+- cloud readiness is a control-plane state distinct from raw provider VM status and from global Redis worker counts
+- bootstrapped workers and evaluators use experiment-pinned runtime paths rather than the shared configless worker/evaluator pool
+- readiness records are keyed by cloud `instance_id`, not by instance name alone
+- startup failure evidence must remain retrievable from the control path without interactive VM login
 
-## Remote GCE Orchestrator Contract
+Current implementation status:
 
-When a deployment uses `cloud.orchestrator` plus GCE-backed
+- the config and contract are provider-neutral
+- the only managed cloud backend implemented today is GCE
+
+## Remote Cloud Orchestrator Contract
+
+When a deployment uses `cloud.orchestrator` plus managed cloud
 `cloud.workers.placements` / `cloud.evaluators.placements`, the local
-operator machine remains the cloud control plane. The deployment contract is:
+operator machine remains the cloud control plane. The shared deployment contract is:
 
 - the operator machine provisions exactly one orchestrator VM plus the requested worker/evaluator fleets
 - the orchestrator VM runs `crsbench run` but does not create workers again
@@ -76,7 +77,9 @@ operator machine remains the cloud control plane. The deployment contract is:
 - local `status` and `events` still require Redis reachability from the
   operator machine to the orchestrator VM
 - local `collect` and `teardown` may fall back to persisted launch state plus
-  GCE inventory when Redis is unavailable
+  provider inventory when Redis is unavailable
+
+Today this contract is realized only by the GCE implementation.
 
 ## Cloud Readiness and Evidence
 
@@ -98,7 +101,7 @@ fleet for the current experiment:
 - failed bring-up tears down the matching fleet before the orchestrator returns
 - `readiness_timeout_sec` covers clean-image bootstrap, CRSBench install,
   service startup, Redis reachability, and queue-listener registration; it
-  must not be sized as a bare GCE boot timeout
+  must not be sized as a bare provider VM boot timeout
 
 ## Path and Storage Contract
 

@@ -1,8 +1,9 @@
 # GCE Cloud Orchestrator Launch
 
-- Audience: contributors changing GCE deployment flow, remote orchestration, or cloud control-plane behavior
-- Scope: local-machine launch of one orchestrator VM plus a worker fleet for a single experiment run
+- Audience: contributors changing the remote-orchestrator launch flow on GCE
+- Scope: GCE-specific realization of one operator-launched orchestrator VM plus a pre-provisioned worker/evaluator fleet for a single experiment run
 - Related:
+  - [Cloud Orchestration](./cloud-orchestration.md)
   - [Deployment Guide](./deployment-guide.md)
   - [GCE Cloud Orchestration](./gce-cloud-orchestration.md)
   - [Configless Runtime](./configless-runtime.md)
@@ -19,9 +20,10 @@ Goals:
 
 Non-goals:
 
+- redefining the shared provider-neutral cloud contract owned by [Cloud Orchestration](./cloud-orchestration.md)
 - moving worker fleet ownership to the orchestrator VM
 - adding autoscaling or self-healing worker creation from the orchestrator VM
-- changing non-GCE deployment paths
+- describing non-GCE remote-orchestrator flows
 
 ## Constraints
 
@@ -43,7 +45,7 @@ explicit flow:
 4. the orchestrator VM runs the experiment against the pre-created worker fleet
 
 This flow is additive. The existing local-orchestrator path remains valid, and
-both paths use the same provider-neutral cloud surface:
+both paths use the same shared provider-neutral cloud surface:
 
 - `cloud.providers.gce` for provider-native backing details
 - `cloud.orchestrator` for orchestrator placement
@@ -62,6 +64,7 @@ both paths use the same provider-neutral cloud surface:
 - successful launch persists local reconnect state so later `cloud status`,
   `cloud collect`, and `cloud teardown` commands can target the remote
   orchestrator queue and worker fleet
+- `cloud status`, `cloud events`, and `cloud monitor` remain control-plane reconnect commands that depend on the remote orchestrator backend path, not just GCE inventory
 
 ### Redis Contract
 
@@ -94,6 +97,7 @@ both paths use the same provider-neutral cloud surface:
 - persisted launch state stores the actual zone chosen for each created
   instance, and reconnect paths use that persisted zone instead of parsing it
   from instance names
+- shared launch state also records the provider so later reconnect paths stay provider-neutral
 
 ## Runtime Behavior
 

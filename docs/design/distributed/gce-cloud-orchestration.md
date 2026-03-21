@@ -1,8 +1,9 @@
 # GCE Cloud Orchestration
 
-- Audience: contributors changing cloud provisioning, readiness, artifact collection, or CLI behavior
-- Scope: GCE orchestrator plus worker/evaluator lifecycle from provisioning through teardown
+- Audience: contributors changing the GCE realization of CRSBench cloud provisioning, bootstrap, access, or placement behavior
+- Scope: GCE-specific implementation of the shared cloud orchestration contract for orchestrator, worker, and evaluator VMs
 - Related:
+  - [Cloud Orchestration](./cloud-orchestration.md)
   - [Deployment Guide](./deployment-guide.md)
   - [Configless Runtime](./configless-runtime.md)
   - [Distributed Evaluation](./distributed-evaluation.md)
@@ -12,16 +13,17 @@
 
 Goals:
 
-- Declarative orchestrator and worker/evaluator provisioning from experiment config
-- Explicit readiness gating before trial enqueue
-- Safe artifact collection and VM teardown
-- Operator visibility into fleet, job, and recovery state
+- define how GCE realizes the shared CRSBench cloud contract
+- document GCE-specific provisioning, metadata, quota, and operator access behavior
+- keep zonal/regional placement and fallback semantics explicit for GCE launches
+- document the GCE bootstrap environment expected by CRSBench cloud VMs
 
 Non-goals:
 
+- redefining the provider-neutral `cloud.*` contract owned by [Cloud Orchestration](./cloud-orchestration.md)
+- describing non-GCE provider realization
 - automatic placement decisions beyond declared `region` / `regions` / `zones`
-- Auto-scaling worker count based on queue depth
-- Non-GCE cloud providers
+- auto-scaling worker count based on queue depth
 
 ## Constraints
 
@@ -35,6 +37,18 @@ Non-goals:
 - Cloud VM bootstrap runs from a cloned CRSBench checkout; non-`git+` install specs are outside this contract
 - Operator-selected remote environment passthrough is explicit; runtime-managed vars such as Redis host/password remain owned by the VM bootstrap
 
+## Context and Boundaries
+
+This document is the GCE appendix for the shared cloud contract:
+
+- [Cloud Orchestration](./cloud-orchestration.md) owns provider-neutral config,
+  readiness, reconnect, and collection semantics
+- this document owns GCE VM creation, metadata payload delivery, OS Login/IAP
+  operator access, quota/preflight behavior, and GCE-specific placement
+  realization
+- [GCE Cloud Orchestrator Launch](./gce-cloud-orchestrator.md) owns the remote
+  orchestrator flow on top of these GCE mechanics
+
 ## Architecture
 
 ```
@@ -42,36 +56,31 @@ Experiment YAML
     │
     ▼
 ┌──────────────────────────────────────────────────────────┐
-│                    Orchestrator                          │
-│  CloudFleetStatusManager                                 │
-│    ├── GceProvisioner (create/list/delete VMs)           │
-│    ├── CloudReadinessStore (Redis state tracking)        │
-│    └── wait loop (poll until fleet READY or timeout)     │
+│             Shared Cloud Control Plane                   │
+│  launch plan + readiness + reconnect + collection        │
+│    ├── provider resolution                               │
+│    ├── launch-state persistence                          │
+│    └── control-plane commands                            │
 └─────────────────────┬────────────────────────────────────┘
-                      │ creates VMs with startup metadata
+                      │ calls GCE realization layer
                       ▼
 ┌──────────────────────────────────────────────────────────┐
-│            GCE Worker / Evaluator VM (×N / ×M)           │
-│  startup/worker.sh                                       │
-│    ├── fetch bootstrap payload from instance metadata    │
-│    ├── clone CRSBench checkout as crsbench user          │
-│    ├── run prepare/download + oss-crs setup              │
-│    ├── start user service for worker or evaluator        │
-│    └── on failure: report bootstrap_failed to Redis      │
+│                GCE Provider Realization                  │
+│  GceProvisioner + metadata + transport + startup         │
+│    ├── create/list/delete instances                      │
+│    ├── render metadata and startup payloads              │
+│    ├── validate GCE quota and region/zone membership     │
+│    └── choose OS Login SSH or IAP transport              │
 └─────────────────────┬────────────────────────────────────┘
-                      │ workers consume trial queue
-                      │ evaluators consume build/verify queue
+                      │ GCE startup metadata / SSH / rsync
                       ▼
-                 ┌──────────┐
-                 │  Redis   │
-                 └──────────┘
-                      ▲
-                      │ operator inspects / monitors / collects / tears down
 ┌──────────────────────────────────────────────────────────┐
-│                  CLI (crsbench cloud)                    │
-│    ├── launch / status / monitor / events               │
-│    ├── list / ssh(shell) / exec / log                   │
-│    └── collect / teardown / keygen                      │
+│            GCE Orchestrator / Worker / Evaluator VM      │
+│  startup/*.sh + managed user services                    │
+│    ├── read metadata from GCE                            │
+│    ├── install CRSBench checkout and prerequisites       │
+│    ├── start role service                                │
+│    └── report readiness/evidence through shared control  │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -79,58 +88,23 @@ Experiment YAML
 
 | Module | Responsibility |
 |---|---|
+| `cloud/models.py` | provider-neutral launch plan consumed by GCE resolution |
+| `cloud/providers.py` | provider selection that routes launches to GCE today |
+| `cloud/transport.py` | provider-neutral transport interface implemented by GCE |
 | `cloud/gce/models.py` | `GceInstanceRequest`, `GceWorkerInstance` data models |
 | `cloud/gce/metadata.py` | Bootstrap payload, label sanitization, startup script bundling |
 | `cloud/gce/provisioner.py` | `GceProvisioner`: create, list, delete VMs; `GceApiClient` protocol |
+| `cloud/gce/launch_preflight.py` | GCE quota and launch-input preflight |
+| `cloud/gce/transport.py` | OS Login SSH, known-host, and IAP tunnel commands |
 | `cloud/readiness.py` | `CloudReadinessStore`: Redis-backed per-instance state tracking |
 | `cloud/status.py` | `CloudFleetStatusManager`: bring-up orchestration with readiness gating |
 | `cloud/runtime.py` | Worker/evaluator-side env and state reporting |
 | `cloud/collection.py` | `ArtifactCollector`: rsync staging pipeline with verify-then-publish |
-| `cloud/cli/cloud_command.py` | Top-level `cloud` CLI dispatch |
-| `cloud/cli/_launch.py` | `launch` sub-action for remote orchestrator bring-up |
-| `cloud/cli/_status.py` | `status` sub-action |
-| `cloud/cli/_monitor.py` | `monitor` sub-action for live queue attach |
-| `cloud/cli/_events.py` | `events` sub-action |
-| `cloud/cli/_list.py` | `list` sub-action |
-| `cloud/cli/_ssh.py` | `ssh` / `shell` sub-action |
-| `cloud/cli/_exec.py` | `exec` sub-action |
-| `cloud/cli/_log.py` | `log` sub-action |
-| `cloud/cli/_collect.py` | `collect` sub-action |
-| `cloud/cli/_teardown.py` | `teardown` sub-action with safety flow |
-| `cloud/cli/_keygen.py` | `keygen` sub-action for deploy-key generation |
-| `cloud/cli/_config_reconnect.py` | Config loading and Redis/store reconnection |
-| `cloud/launch_state.py` | Persisted reconnect state for remote-orchestrator launches |
-| `cloud/orchestrator_tunnel.py` | Temporary SSH/IAP Redis tunnel management |
 
-## Contract: Worker / Evaluator State Machine
-
-```
-PROVISIONING ──► BOOTING ──► REGISTERING ──► READY
-                                          ──► BOOTSTRAP_FAILED
-Any state ──► DELETING ──► DELETED
-```
-
-Invariants:
-
-- Transitions are forward-only; invalid transitions raise `ValueError`
-- `READY`, `BOOTSTRAP_FAILED`, and `DELETED` are terminal during bring-up
-- State records are stored in Redis readiness hashes keyed by `instance_id`
-- Each record carries `state`, `instance_name`, `zone`, `updated_at`, `ready_at`, and optional `evidence`
-- `CloudFleetSnapshot` categorizes workers/evaluators into ready/pending/failed/missing buckets
-
-State semantics:
-
-- `PROVISIONING`: the control plane requested the VM, but the worker/evaluator has not yet reached a provider-observed running state
-- `BOOTING`: GCE reports the VM as running, but the startup script may still be installing packages, cloning CRSBench, or writing the managed service
-- `REGISTERING`: the worker/evaluator runtime has started far enough to report into the readiness store, but it is not yet counted as schedulable
-- `READY`: the worker/evaluator has connected to Redis and is listening on the expected experiment queue; this is the only success state counted by bring-up gating
-
-Timeout contract:
-
-- `readiness_timeout_sec` measures wall-clock time spent waiting for workers/evaluators to reach `READY`, not just time until the VM kernel boots or the GCE provider reports `RUNNING`
-- In the create-and-wait flow, the timeout starts after instance creation completes and initial non-ready state is recorded; it therefore includes package installation, checkout/install of CRSBench, systemd launch, Redis reachability, and queue-listener startup
-- In the pre-provisioned wait flow used by the remote orchestrator, the timeout starts when the orchestrator begins waiting for the expected worker/evaluator instances and includes both instance discovery and the remaining time until each role reaches `READY`
-- Operators should size the timeout for clean-image bootstrap plus first Redis/queue registration, not for bare VM boot alone
+Shared readiness states and timeout semantics are defined in
+[Cloud Orchestration](./cloud-orchestration.md). GCE-specific behavior feeds that
+contract by mapping GCE instance status and metadata-driven bootstrap outcomes
+into the shared readiness records.
 
 ## Contract: VM Provisioning
 
@@ -144,6 +118,9 @@ Timeout contract:
 - Labels always include `owner` and `crsbench-experiment`; role-specific labels distinguish orchestrator and workers
 - Bootstrap payload delivered as base64-encoded JSON in instance metadata
 - Operator-selected remote env vars are delivered separately as base64-encoded JSON metadata after operator-side validation; they are not persisted in launch-state files
+- Live quota validation is required before launch begins
+- Regional placement uses GCE regional bulk insert with `ANY_SINGLE_ZONE`; optional `zones` are validated as an allowlist inside the resolved region set
+- Zonal or regional fallback retries only later declared candidates for recognized GCE capacity failures when fallback is enabled
 
 Rollback:
 
@@ -152,14 +129,13 @@ Rollback:
 - Before any VM is created, launch fails fast if the same experiment already has
   a persisted launch-state file or matching live orchestrator/worker/evaluator VMs
 
-## Contract: Bring-up and Readiness Gating
+## Contract: GCE Inputs To Shared Readiness
 
-- `CloudFleetStatusManager.bring_up_workers()` clears stale readiness records, creates VMs across all declared placements, records initial state, then polls for readiness
-- `CloudFleetStatusManager.wait_for_existing_workers()` gates pre-provisioned workers/evaluators across all declared placements on the same explicit readiness protocol without creating VMs again
-- Polling uses `CloudReadinessStore.snapshot()` with configurable `poll_interval_sec` (default 5s)
-- Remote launch succeeds only when the orchestrator is reachable and all requested workers/evaluators reach `READY`
-- On timeout or any failure: transitions workers/evaluators through `DELETING`/`DELETED`, deletes VMs, raises `CloudFleetBringupError` with the snapshot
-- Trial enqueue is gated on successful bring-up
+- `CloudFleetStatusManager.bring_up_workers()` and `wait_for_existing_workers()` use the shared readiness protocol; this GCE contract defines the provider-side inputs they consume
+- GCE `RUNNING` is not a success state; it maps to shared non-ready bootstrap states until the runtime reports readiness
+- startup-script failures must surface evidence through readiness so operators can diagnose failures without SSH
+- remote launch succeeds only when the orchestrator is reachable and all requested workers/evaluators reach shared `READY`
+- on timeout or failure, GCE instances are deleted and shared readiness records transition through the deletion path
 
 ## Contract: VM Bootstrap
 
@@ -193,21 +169,16 @@ Cloud env contract:
 - Reserved runtime-managed names such as `CRSBENCH_REDIS_HOST` and `CRSBENCH_REDIS_PASSWORD` are rejected during config validation
 - Resolved env values are encoded into the generic cloud env metadata bundle and exported by the startup scripts on each VM
 
-## Contract: Artifact Collection
+## Contract: GCE Transport And Collection Realization
 
-`ArtifactCollector` implements a stage-then-publish pattern:
+Shared collection semantics are owned by
+[Cloud Orchestration](./cloud-orchestration.md). GCE realizes them as follows:
 
-1. **Stage**: rsync from worker into `{experiment_filestore}/.collect-staging/{worker_name}/{experiment_name}/`
-2. **Verify**: `discover_trials()` confirms the staging tree contains at least one valid trial (with `metadata.json`)
-3. **Publish**: `shutil.copytree` with `dirs_exist_ok=True` into `{experiment_filestore}/{experiment_name}/`
-4. **Cleanup**: removes the per-worker staging directory
+- worker artifact transfer uses `rsync` over either direct SSH or an IAP-backed local tunnel
+- default remote source path is still derived from `cloud.remote.experiment_root` when present, else the legacy `storage.experiment_filestore` fallback
+- the stage-verify-publish pipeline prevents partial worker trees from becoming visible results
 
-Default remote source path:
-
-- when `cloud.remote.experiment_root` is set, `collect` / `teardown` read from `<cloud.remote.experiment_root>/<experiment.name>`
-- otherwise they fall back to `<storage.experiment_filestore>/<experiment.name>` for backward compatibility
-
-Rsync transport:
+Transport details:
 
 - IAP mode: open a temporary local `gcloud compute start-iap-tunnel` to remote
   SSH port 22, then run plain `ssh`/`rsync` against `127.0.0.1:<local-port>`
@@ -216,72 +187,15 @@ Rsync transport:
 
 Retry: `tenacity` exponential backoff (min 2s, max 30s, 3 attempts) on rsync failure.
 
-## Contract: Teardown Safety Flow
+## Contract: Teardown Realization
 
-1. Validate GCE instances exist, cross-reference with Redis readiness records
-2. Warn about stale Redis entries not matching live VMs
-3. Prompt for confirmation (requires TTY unless `--force`)
-4. Collect artifacts from ALL workers; collection is best-effort so teardown can still reclaim VMs
-5. In remote-orchestrator mode, also collect the orchestrator VM
-6. Delete workers and orchestrator even if collection reported failures, and return a non-zero exit code when any collection or deletion step failed
+Shared teardown safety semantics are owned by
+[Cloud Orchestration](./cloud-orchestration.md). For GCE:
 
-## Contract: CLI Sub-actions
-
-**`cloud --config <yaml> launch`**
-
-- Provisions the orchestrator VM first, then the requested worker/evaluator fleet
-- Persists reconnect state under config-adjacent `.crsbench-cloud/`
-
-**`cloud --config <yaml> status <experiment> [--json]`**
-
-- Fleet summary: instance name, state, zone, IP
-- Job summary: job_id, trial, state, claimed_by, retries
-- Collection summary: total/completed/syncing/pending/failed/completion%
-- Last 5 recovery events
-- JSON mode outputs structured data
-
-**`cloud --config <yaml> events <experiment> [--type <type>] [--json]`**
-
-- Recovery event timeline from Redis list `crsbench:recovery-events:{experiment}`
-- Filterable by event type
-
-**`cloud --config <yaml> monitor [<experiment>]`**
-
-- Reconnects to the remote orchestrator through a temporary SSH/IAP tunnel
-- Renders the same live queue progress view used by `crsbench run`
-
-**`cloud --config <yaml> list [--json]`**
-
-- Lists the live cloud inventory inferred from config plus persisted launch state
-
-**`cloud --config <yaml> ssh|shell [<instance>]`**
-
-- Opens an operator shell on a live cloud instance using its launch-time zone
-
-**`cloud --config <yaml> exec [<instance>] -- <command...>`**
-
-- Runs a one-off remote command against a selected cloud instance
-
-**`cloud --config <yaml> log [<instance>]`**
-
-- Follows the primary managed CRSBench journal on the selected instance
-
-**`cloud keygen [--output-dir ...] [--name ...] [--force]`**
-
-- Generates an ed25519 deploy key pair for private `git+ssh` CRSBench clones
-
-**`cloud --config <yaml> collect [<experiment>] [--remote-dir <path>]`**
-
-- Lists live GCE workers, cross-references with Redis
-- Runs `ArtifactCollector.collect()` per worker
-- Defaults to `experiment.name` and the resolved remote experiment root from
-  `cloud.remote.experiment_root` when present, else
-  `<storage.experiment_filestore>/<experiment.name>`
-- Partial failure: continues to remaining workers, returns exit code 1
-
-**`cloud --config <yaml> teardown [<experiment>] [--remote-dir <path>] [--force]`**
-
-- Full collect-then-delete safety flow described above
+- teardown validates live GCE instances and cross-references readiness records when available
+- stale Redis entries that do not match live VMs are warnings, not blockers
+- collection remains best-effort so leaked GCE resources can still be reclaimed
+- instance deletion uses the realized launch-time zone stored in launch state or live inventory
 
 ## External Dependencies
 
@@ -300,8 +214,6 @@ Retry: `tenacity` exponential backoff (min 2s, max 30s, 3 attempts) on rsync fai
 - **Explicit declared placement**: keeps placement intent declarative while still allowing quota-driven multi-zone or multi-region splits
 - **OS Login only**: eliminates project-level SSH key management; IAP adds network-level isolation
 - **Sequential VM creation**: enables clean rollback ordering; parallelism is a future optimization
-- **Stage-then-publish**: prevents partial artifact trees from appearing in experiment results
-- **Collect-before-delete in teardown**: prevents data loss from premature VM deletion
 - **experiment-pinned workers**: avoids readiness state leaking across experiments
 
 ## Risks and Validation
@@ -314,8 +226,10 @@ Retry: `tenacity` exponential backoff (min 2s, max 30s, 3 attempts) on rsync fai
 ## Implementation Pointers
 
 - `crsbench/cloud/gce/provisioner.py` -- VM lifecycle
+- `crsbench/cloud/gce/launch_preflight.py` -- quota and launch-input preflight
+- `crsbench/cloud/gce/transport.py` -- operator access and tunnels
 - `crsbench/cloud/readiness.py` -- state machine and Redis store
 - `crsbench/cloud/status.py` -- bring-up orchestration
 - `crsbench/cloud/collection.py` -- artifact pipeline
-- `crsbench/cloud/cli/` -- operator commands
+- `crsbench/cloud/providers.py` -- shared provider resolution
 - `crsbench/cloud/gce/startup/worker.sh` -- VM bootstrap script

@@ -23,6 +23,7 @@ belongs in `docs/modules/`.
 - [Reporting Contract](./reporting/report-generation.md)
 - [Benchmark CI Contract](./benchmark-ci/benchmark-ci.md)
 - [Benchmark Lifecycle Contract](./benchmark/benchmark-lifecycle.md)
+- [Cloud Orchestration](./distributed/cloud-orchestration.md)
 - [GCE Cloud Orchestration](./distributed/gce-cloud-orchestration.md)
 - [Migration Design](./migration/migration-validation.md)
 - [Logging Contract](./logging/logging-architecture.md)
@@ -57,5 +58,6 @@ should be applied to the dedicated canonical docs below.
 | Benchmark CI DAG/result aggregation contracts | `benchmark-ci/benchmark-ci.md` |
 | Logging format/semantics contracts | `logging/logging-architecture.md` |
 | Service/backend integration contracts | `services/litellm.md` |
-| GCE cloud orchestration lifecycle | `distributed/gce-cloud-orchestration.md` |
-| GCE remote orchestrator launch lifecycle | `distributed/gce-cloud-orchestrator.md` |
+| Cloud orchestration lifecycle | `distributed/cloud-orchestration.md` |
+| GCE cloud orchestration realization | `distributed/gce-cloud-orchestration.md` |
+| GCE remote orchestrator launch realization | `distributed/gce-cloud-orchestrator.md` |
