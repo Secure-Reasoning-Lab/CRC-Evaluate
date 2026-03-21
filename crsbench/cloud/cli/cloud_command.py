@@ -111,7 +111,9 @@ Examples:
 
     # ssh
     ssh_p = cloud_subparsers.add_parser(
-        "ssh", help="Open an SSH session to a live cloud instance"
+        "ssh",
+        aliases=["shell"],
+        help="Open an SSH session to a live cloud instance",
     )
     ssh_p.add_argument("instance", nargs="?", help="Instance name or alias")
     _add_config_argument(ssh_p, suppress_default=True)
@@ -207,7 +209,7 @@ def run_cloud(args: argparse.Namespace) -> int:
 
         return run_list(args)
 
-    if cmd == "ssh":
+    if cmd in {"ssh", "shell"}:
         from crsbench.cloud.cli._ssh import run_ssh
 
         return run_ssh(args)

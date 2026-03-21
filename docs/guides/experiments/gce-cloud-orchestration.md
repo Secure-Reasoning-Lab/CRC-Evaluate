@@ -584,6 +584,8 @@ Open an SSH session to a live VM without manually looking up the zone:
 ```bash
 # Exact instance name or short alias like orch, work-001, eval-001
 uv run crsbench cloud --config config.yaml ssh orch
+# Equivalent alias:
+uv run crsbench cloud --config config.yaml shell orch
 ```
 
 If you omit the instance selector, CRSBench prints the live inventory and lets
@@ -594,7 +596,9 @@ uv run crsbench cloud --config config.yaml ssh
 ```
 
 `cloud ssh` infers the experiment name from `experiment.name` and reuses the
-live zone chosen at launch time.
+live zone chosen at launch time. The interactive shell immediately switches to
+`sudo su - crsbench`, so you land in the same user environment that runs the
+CRSBench services.
 
 ## Remote Command Execution
 
@@ -612,7 +616,9 @@ uv run crsbench cloud --config config.yaml exec -- docker ps
 ```
 
 `cloud exec` infers the experiment name from `experiment.name` and reuses the
-live zone chosen at launch time.
+live zone chosen at launch time. Unlike `cloud ssh`, it runs as the operator SSH
+login user by default, so one-off root or operator diagnostics remain
+available.
 
 ## Log Following
 

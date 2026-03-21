@@ -46,7 +46,11 @@ def run_exec(args: argparse.Namespace) -> int:
     if selected is None:
         return 1
 
-    cmd = build_ssh_command(selected, remote_command=exec_command)
+    cmd = build_ssh_command(
+        selected,
+        remote_command=exec_command,
+        tty=False,
+    )
     try:
         return subprocess.run(cmd, check=False).returncode
     except KeyboardInterrupt:

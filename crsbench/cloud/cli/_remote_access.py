@@ -53,7 +53,12 @@ def build_ssh_command(
     target: CloudInstanceInventoryRow,
     *,
     remote_command: list[str] | None = None,
+    tty: bool = False,
 ) -> list[str]:
     """Build a provider-specific operator SSH command for one live target."""
     transport = transport_for_provider(target.provider)
-    return transport.build_ssh_command(target, remote_command=remote_command)
+    return transport.build_ssh_command(
+        target,
+        remote_command=remote_command,
+        tty=tty,
+    )

@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest import mock
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1717,6 +1718,14 @@ class TestArgParsing:
         assert args.instance == "work-001"
         assert args.config == "c.yaml"
 
+    def test_parse_shell_with_instance(self):
+        parser = self._build_parser()
+        args = parser.parse_args(["cloud", "shell", "work-001", "--config", "c.yaml"])
+        assert args.command == "cloud"
+        assert args.cloud_command == "shell"
+        assert args.instance == "work-001"
+        assert args.config == "c.yaml"
+
     def test_parse_exec_with_instance_and_command(self):
         parser = self._build_parser()
         args = parser.parse_args(
@@ -1785,11 +1794,12 @@ def _make_list_args(
 def _make_ssh_args(
     instance: str | None = "work-001",
     config: str = "/tmp/config.yaml",
+    cloud_command: str = "ssh",
 ):
     return argparse.Namespace(
         instance=instance,
         config=config,
-        cloud_command="ssh",
+        cloud_command=cloud_command,
     )
 
 
@@ -1850,6 +1860,16 @@ def test_run_cloud_dispatches_ssh(mock_run_ssh):
     from crsbench.cloud.cli.cloud_command import run_cloud
 
     rc = run_cloud(_make_ssh_args())
+
+    assert rc == 0
+    mock_run_ssh.assert_called_once()
+
+
+@patch("crsbench.cloud.cli._ssh.run_ssh", return_value=0)
+def test_run_cloud_dispatches_shell(mock_run_ssh):
+    from crsbench.cloud.cli.cloud_command import run_cloud
+
+    rc = run_cloud(_make_ssh_args(cloud_command="shell"))
 
     assert rc == 0
     mock_run_ssh.assert_called_once()
@@ -3482,7 +3502,8 @@ class TestSsh:
             "ssh",
             "crsbench-test-exp-work-001",
             "--zone=us-central1-a",
-            "--command=echo hi",
+            "--ssh-flag=-t",
+            "--command=sudo su - crsbench",
         ]
         mock_run.return_value = _make_completed_process(0)
 
@@ -3491,7 +3512,11 @@ class TestSsh:
         rc = run_ssh(_make_ssh_args(instance="work-001"))
 
         assert rc == 0
-        mock_build_ssh_command.assert_called_once()
+        mock_build_ssh_command.assert_called_once_with(
+            mock.ANY,
+            remote_command=["sudo", "su", "-", "crsbench"],
+            tty=True,
+        )
         cmd = mock_run.call_args.args[0]
         assert cmd == mock_build_ssh_command.return_value
 
@@ -3554,6 +3579,11 @@ class TestSsh:
         rc = run_ssh(_make_ssh_args(instance=None))
 
         assert rc == 0
+        mock_build_ssh_command.assert_called_once_with(
+            mock_select_target.return_value,
+            remote_command=["sudo", "su", "-", "crsbench"],
+            tty=True,
+        )
         cmd = mock_run.call_args.args[0]
         assert cmd == mock_build_ssh_command.return_value
         mock_select_target.assert_called_once()
@@ -3660,13 +3690,14 @@ class TestRemoteAccess:
         transport.build_ssh_command.return_value = ["provider-ssh", "target"]
         mock_transport_for_provider.return_value = transport
 
-        cmd = build_ssh_command(target, remote_command=["echo", "hi"])
+        cmd = build_ssh_command(target, remote_command=["echo", "hi"], tty=True)
 
         assert cmd == ["provider-ssh", "target"]
         mock_transport_for_provider.assert_called_once_with("gce")
         transport.build_ssh_command.assert_called_once_with(
             target,
             remote_command=["echo", "hi"],
+            tty=True,
         )
 
 
@@ -3717,7 +3748,11 @@ class TestExec:
         rc = run_exec(_make_exec_args(exec_command=["echo", "hi"]))
 
         assert rc == 0
-        mock_build_ssh_command.assert_called_once()
+        mock_build_ssh_command.assert_called_once_with(
+            mock.ANY,
+            remote_command=["echo", "hi"],
+            tty=False,
+        )
         cmd = mock_run.call_args.args[0]
         assert cmd == mock_build_ssh_command.return_value
 

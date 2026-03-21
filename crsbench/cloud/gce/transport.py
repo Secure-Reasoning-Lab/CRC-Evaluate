@@ -23,6 +23,7 @@ class GceCloudTransport:
         target: CloudSshTarget,
         *,
         remote_command: list[str] | None = None,
+        tty: bool = False,
     ) -> list[str]:
         cmd = [
             "gcloud",
@@ -37,6 +38,8 @@ class GceCloudTransport:
         identity_file = self.detect_ssh_key_file()
         if identity_file is not None:
             cmd.append(f"--ssh-key-file={identity_file}")
+        if tty:
+            cmd.append("--ssh-flag=-t")
         if remote_command:
             cmd.append(f"--command={shlex.join(remote_command)}")
         return cmd

@@ -38,7 +38,11 @@ def run_ssh(args: argparse.Namespace) -> int:
         if selected is None:
             return 1
 
-        cmd = build_ssh_command(selected)
+        cmd = build_ssh_command(
+            selected,
+            remote_command=["sudo", "su", "-", "crsbench"],
+            tty=True,
+        )
         return subprocess.run(cmd, check=False).returncode
     except KeyboardInterrupt:
         return 130

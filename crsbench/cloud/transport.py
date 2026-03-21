@@ -27,6 +27,7 @@ class CloudTransport(Protocol):
         target: CloudSshTarget,
         *,
         remote_command: list[str] | None = None,
+        tty: bool = False,
     ) -> list[str]: ...
 
     def build_iap_tunnel_command(
