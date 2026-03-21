@@ -104,6 +104,11 @@ Examples:
         action="store_true",
         help="Skip overwrite confirmation when the local destination already exists",
     )
+    collect_p.add_argument(
+        "--timestamp",
+        action="store_true",
+        help="Collect into a fresh timestamped sibling directory",
+    )
 
     # list
     list_p = cloud_subparsers.add_parser(

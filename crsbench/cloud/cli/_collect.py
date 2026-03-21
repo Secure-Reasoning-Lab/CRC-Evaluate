@@ -35,6 +35,7 @@ from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
     import argparse
+    from pathlib import Path
 
     from crsbench.cloud.cli._config_reconnect import ResolvedCloudContext
     from crsbench.cloud.records import CloudInstanceLike
@@ -51,7 +52,7 @@ def run_collect(args: argparse.Namespace) -> int:
     context = resolve_cloud_context(args.config, experiment_name)
     launch_state = context.launch_state
     experiment_filestore = context.experiment_filestore
-    destination = experiment_filestore / experiment_name
+    base_destination = experiment_filestore / experiment_name
 
     readiness = None
     try:
@@ -90,9 +91,25 @@ def run_collect(args: argparse.Namespace) -> int:
         )
         return 0
 
+    destination = base_destination
     if any(_collects_experiment_artifacts(worker) for worker in live_instances):
-        if not _confirm_destination_overwrite(destination, force=args.force):
-            return 1
+        if args.timestamp:
+            destination = _fresh_timestamp_destination(
+                experiment_filestore,
+                experiment_name,
+            )
+        else:
+            resolved_destination = _confirm_destination_overwrite(
+                base_destination,
+                force=args.force,
+                timestamp_destination_factory=lambda: _fresh_timestamp_destination(
+                    experiment_filestore,
+                    experiment_name,
+                ),
+            )
+            if resolved_destination is None:
+                return 1
+            destination = resolved_destination
 
     remote_experiment_dir = resolve_remote_experiment_dir(
         context.remote_experiment_root,
@@ -125,6 +142,7 @@ def run_collect(args: argparse.Namespace) -> int:
                     experiment_filestore=experiment_filestore,
                     remote_experiment_dir=remote_experiment_dir,
                     start_time_observations=start_time_observations,
+                    destination=destination,
                 )
                 artifact_publish_succeeded = True
                 logger.info("Collection succeeded: {}", worker.name)
@@ -180,10 +198,15 @@ def run_collect(args: argparse.Namespace) -> int:
     return 0
 
 
-def _confirm_destination_overwrite(destination, *, force: bool) -> bool:
+def _confirm_destination_overwrite(
+    destination: Path,
+    *,
+    force: bool,
+    timestamp_destination_factory,
+) -> Path | None:
     """Gate collection when the local destination already exists."""
     if force or not destination.exists():
-        return True
+        return destination
 
     marker = read_collect_marker(destination)
     marker_path = collect_marker_path(destination)
@@ -201,31 +224,66 @@ def _confirm_destination_overwrite(destination, *, force: bool) -> bool:
             logger.warning("Last collected: {}", last_collect_time)
         if isinstance(experiment_start_time, str):
             logger.warning("Experiment started: {}", experiment_start_time)
-    logger.warning("Rerun with --force to skip this prompt.")
+    logger.warning(
+        "Rerun with --force to skip this prompt or --timestamp for a fresh sibling."
+    )
 
     if not sys.stdin.isatty():
         logger.error(
             "Local destination already exists and stdin is not interactive. "
             "Rerun with --force to continue."
         )
-        return False
+        return None
 
     while True:
         try:
             answer = (
-                input("Continue and merge into the existing destination? [Y/n] ")
+                input("Continue and merge into the existing destination? [Y/n/t] ")
                 .strip()
                 .lower()
             )
         except (EOFError, KeyboardInterrupt):
             logger.info("Cancelled.")
-            return False
+            return None
         if answer in {"", "y", "yes"}:
-            return True
+            return destination
         if answer in {"n", "no"}:
             logger.info("Cancelled.")
-            return False
-        logger.warning("Please answer y, yes, n, or no.")
+            return None
+        if answer in {"t", "timestamp"}:
+            return timestamp_destination_factory()
+        logger.warning("Please answer y, yes, n, no, t, or timestamp.")
+
+
+def _format_collect_timestamp(value: str | datetime | None = None) -> str:
+    """Return a UTC timestamp string suitable for local collect directories."""
+    if value is None:
+        current = datetime.now(timezone.utc)
+    elif isinstance(value, str):
+        current = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    else:
+        current = value
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    else:
+        current = current.astimezone(timezone.utc)
+    return current.strftime("%Y-%m-%d-%H-%M")
+
+
+def _fresh_timestamp_destination(
+    experiment_filestore: Path, experiment_name: str
+) -> Path:
+    """Return a fresh timestamped sibling directory for local collection."""
+    base_name = f"{experiment_name}-{_format_collect_timestamp()}"
+    destination = experiment_filestore / base_name
+    if not destination.exists():
+        return destination
+    suffix = 2
+    while True:
+        candidate = experiment_filestore / f"{base_name}-{suffix:02d}"
+        if not candidate.exists():
+            return candidate
+        suffix += 1
 
 
 def _build_collect_marker(

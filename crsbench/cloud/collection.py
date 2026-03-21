@@ -207,6 +207,7 @@ class ArtifactCollector:
         experiment_filestore: Path,
         remote_experiment_dir: str,
         start_time_observations: list[tuple[str | None, str]] | None = None,
+        destination: Path | None = None,
     ) -> Path:
         """Rsync trial artifacts from *worker* and publish them to *experiment_filestore*.
 
@@ -256,7 +257,7 @@ class ArtifactCollector:
                 discover_experiment_start_time_from_staging([staging_dir])
             )
 
-        final_dir = experiment_filestore / experiment_name
+        final_dir = destination or (experiment_filestore / experiment_name)
         self._publish(staging_dir, final_dir)
 
         # Clean up the per-worker staging parent
