@@ -280,6 +280,7 @@ prefer first-class layered `env` maps:
 cloud:
   env:
     CRSBENCH_LLM_UPSTREAM_BASE_URL: os.environ/LITELLM_BASE_URL
+    CRSBENCH_GIT_SSH_HOST: github.example.com
     CRSBENCH_TIMEZONE: America/Los_Angeles
 
   providers:
@@ -302,6 +303,7 @@ cloud:
     instance_profile: gce-orchestrator-n2d
     env:
       CRSBENCH_LLM_MASTER_KEY: os.environ/LITELLM_ORCH_MASTER_KEY
+      CRSBENCH_VALKEY_IMAGE: us-docker.pkg.dev/example/platform/valkey:8.0-alpine
 
   workers:
     defaults:
@@ -339,6 +341,11 @@ Semantics:
   env layers; for example, `cloud.env.CRSBENCH_TIMEZONE: America/Los_Angeles`
   changes the host timezone on orchestrator and worker/evaluator VMs during
   bootstrap
+- startup-time SSH clone settings such as `CRSBENCH_GIT_SSH_HOST` also flow
+  through these env layers; use them when `crsbench_install_spec` points at a
+  non-`github.com` SSH host
+- orchestrator-only startup settings such as `CRSBENCH_VALKEY_IMAGE` should be
+  set through `cloud.orchestrator.env`
 
 ### Generate a deploy key
 
@@ -488,9 +495,12 @@ readiness timeout, while fatal Redis auth/config errors still fail immediately
 with bootstrap evidence.
 The same startup scripts also support local rehearsal via file-backed metadata
 and a foreground launcher mode for non-`systemd` containers. Startup-time
-settings such as `CRSBENCH_TIMEZONE` can be overridden through `cloud.env` or
-the role/profile env layers; when unset, bootstrap still defaults to
-`America/New_York`. On real GCE VMs,
+settings such as `CRSBENCH_TIMEZONE` and `CRSBENCH_GIT_SSH_HOST` can be
+overridden through `cloud.env` or the role/profile env layers; when unset,
+bootstrap still defaults to `America/New_York` and `github.com`. On real GCE
+orchestrators, `CRSBENCH_VALKEY_IMAGE` can be overridden through
+`cloud.orchestrator.env` while still defaulting to `valkey/valkey:8.0-alpine`.
+On real GCE VMs,
 the scripts now create a dedicated `crsbench` user, grant passwordless `sudo`
 for disposable-host bootstrap, install the user-session support package needed
 for `/run/user/<uid>/bus`, enforce Docker `cgroupfs`, and run the long-lived

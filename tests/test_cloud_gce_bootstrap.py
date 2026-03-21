@@ -602,6 +602,19 @@ def test_startup_script_preserves_passthrough_env_for_checkout_bootstrap():
     assert 'sudo -E -H -u "${CRSBENCH_USER}" "$@"' in script
 
 
+def test_startup_script_supports_configurable_git_ssh_host():
+    """Worker bootstrap should allow overriding the SSH host used for known-host setup."""
+    from crsbench.cloud.gce.metadata import load_startup_script
+
+    script = load_startup_script()
+
+    assert 'CRSBENCH_GIT_SSH_HOST="${CRSBENCH_GIT_SSH_HOST:-github.com}"' in script
+    assert (
+        'ssh-keyscan -t ed25519 \\"${CRSBENCH_GIT_SSH_HOST}\\" >> '
+        "${CRSBENCH_USER_HOME}/.ssh/known_hosts 2>/dev/null"
+    ) in script
+
+
 def test_startup_script_loads_passthrough_env_before_timezone_normalization():
     """Worker startup must load metadata-passed env before ensure_timezone runs."""
     from crsbench.cloud.gce.metadata import load_startup_script
@@ -905,6 +918,19 @@ def test_orchestrator_startup_script_loads_passthrough_env_before_timezone_norma
     assert "yaml.safe_load" in script
 
 
+def test_orchestrator_startup_script_supports_configurable_git_ssh_host():
+    """Orchestrator bootstrap should allow overriding the SSH host used for known-host setup."""
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+
+    assert 'CRSBENCH_GIT_SSH_HOST="${CRSBENCH_GIT_SSH_HOST:-github.com}"' in script
+    assert (
+        'ssh-keyscan -t ed25519 \\"${CRSBENCH_GIT_SSH_HOST}\\" >> '
+        "${CRSBENCH_USER_HOME}/.ssh/known_hosts 2>/dev/null"
+    ) in script
+
+
 def test_orchestrator_startup_script_supports_public_git_clone_specs():
     """Orchestrator bootstrap should treat any git+ URL as a clone-based install path."""
     from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
@@ -1029,6 +1055,19 @@ def test_orchestrator_startup_script_binds_valkey_to_loopback_and_internal_ip():
     assert '-p "127.0.0.1:6379:6379"' in script
     assert '-p "\\${CRSBENCH_REDIS_BIND_HOST}:6379:6379"' in script
     assert "0.0.0.0:6379:6379" not in script
+
+
+def test_orchestrator_startup_script_supports_configurable_valkey_image():
+    """Orchestrator bootstrap should allow overriding the Valkey container image."""
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+
+    assert (
+        'CRSBENCH_VALKEY_IMAGE="${CRSBENCH_VALKEY_IMAGE:-valkey/valkey:8.0-alpine}"'
+        in script
+    )
+    assert '"${CRSBENCH_VALKEY_IMAGE}" \\' in script
 
 
 def test_orchestrator_startup_script_does_not_globally_rewrite_sslab_gatech_https_urls():

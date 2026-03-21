@@ -22,9 +22,11 @@ CRSBENCH_METADATA_HEADER_NAME="${CRSBENCH_METADATA_HEADER_NAME:-Metadata-Flavor}
 CRSBENCH_METADATA_HEADER_VALUE="${CRSBENCH_METADATA_HEADER_VALUE:-Google}"
 CRSBENCH_SERVICE_MANAGER="${CRSBENCH_SERVICE_MANAGER:-auto}"
 CRSBENCH_TIMEZONE="${CRSBENCH_TIMEZONE:-America/New_York}"
+CRSBENCH_GIT_SSH_HOST="${CRSBENCH_GIT_SSH_HOST:-github.com}"
 CRSBENCH_USER="${CRSBENCH_USER:-crsbench}"
 CRSBENCH_USER_HOME="${CRSBENCH_USER_HOME:-/home/${CRSBENCH_USER}}"
 CRSBENCH_REDIS_BIND_HOST="${CRSBENCH_REDIS_BIND_HOST:-}"
+CRSBENCH_VALKEY_IMAGE="${CRSBENCH_VALKEY_IMAGE:-valkey/valkey:8.0-alpine}"
 STATE_DIR="${CRSBENCH_STATE_DIR:-/var/lib/crsbench}"
 LOG_PATH="${STATE_DIR}/orchestrator.log"
 CONFIG_PATH="${STATE_DIR}/experiment-config.yaml"
@@ -587,7 +589,7 @@ configure_clone_ssh() {
   touch "${CRSBENCH_USER_HOME}/.ssh/known_hosts"
   chown "${CRSBENCH_USER}:${CRSBENCH_USER}" "${CRSBENCH_USER_HOME}/.ssh/known_hosts"
   chmod 0600 "${CRSBENCH_USER_HOME}/.ssh/known_hosts"
-  run_crsbench_shell "ssh-keyscan -t ed25519 github.com >> ${CRSBENCH_USER_HOME}/.ssh/known_hosts 2>/dev/null"
+  run_crsbench_shell "ssh-keyscan -t ed25519 \"${CRSBENCH_GIT_SSH_HOST}\" >> ${CRSBENCH_USER_HOME}/.ssh/known_hosts 2>/dev/null"
   CLONE_GIT_SSH_COMMAND="ssh -F /dev/null -i ${CRSBENCH_USER_HOME}/.ssh/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=${CRSBENCH_USER_HOME}/.ssh/known_hosts -o StrictHostKeyChecking=yes"
 }
 
@@ -907,7 +909,7 @@ ensure_valkey_running() {
     "\${publish_args[@]}" \
     -v "\${volume_name}:/data" \
     --restart unless-stopped \
-    valkey/valkey:8.0-alpine \
+    "${CRSBENCH_VALKEY_IMAGE}" \
     valkey-server \
     --appendonly yes \
     --requirepass "\${CRSBENCH_REDIS_PASSWORD}"
