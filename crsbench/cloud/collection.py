@@ -12,6 +12,7 @@ Covers ARTF-01 through ARTF-04.
 from __future__ import annotations
 
 import json
+import math
 import shlex
 import shutil
 import subprocess
@@ -151,8 +152,15 @@ def _parse_metadata_timestamp(
 ) -> tuple[datetime, str] | None:
     """Parse a timestamp field from metadata JSON, returning ``(parsed_dt, raw)``."""
     raw = metadata.get(key)
+    if isinstance(raw, bool):
+        return None
     if isinstance(raw, (int, float)):
-        parsed = datetime.fromtimestamp(raw, tz=timezone.utc)
+        if isinstance(raw, float) and not math.isfinite(raw):
+            return None
+        try:
+            parsed = datetime.fromtimestamp(raw, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
         return parsed, parsed.isoformat()
     if isinstance(raw, str):
         normalized = raw.replace("Z", "+00:00")

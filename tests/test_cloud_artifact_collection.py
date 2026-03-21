@@ -1067,6 +1067,42 @@ class TestExperimentStartTimeDiscovery:
         assert start_time == "2024-03-09T19:25:45.250000+00:00"
         assert source == "earliest_trial_timestamp_start"
 
+    def test_discover_experiment_start_time_ignores_boolean_timestamp_start(
+        self, tmp_path: Path
+    ) -> None:
+        """Boolean metadata values are not coerced into bogus epoch timestamps."""
+        stage = tmp_path / "stage-a"
+        trial = _build_trial_tree(stage, experiment_name="exp-42", trial_n=1)
+        _write_trial_metadata(
+            trial,
+            {
+                "timestamp_start": True,
+                "timestamp": "2026-03-10T09:00:00+00:00",
+            },
+        )
+
+        start_time, source = discover_experiment_start_time_from_staging([stage])
+        assert start_time == "2026-03-10T09:00:00+00:00"
+        assert source == "earliest_trial_timestamp"
+
+    def test_discover_experiment_start_time_ignores_invalid_numeric_timestamp_start(
+        self, tmp_path: Path
+    ) -> None:
+        """Non-finite or out-of-range numeric metadata is treated as absent."""
+        stage = tmp_path / "stage-a"
+        trial = _build_trial_tree(stage, experiment_name="exp-42", trial_n=1)
+        _write_trial_metadata(
+            trial,
+            {
+                "timestamp_start": float("nan"),
+                "timestamp": "2026-03-10T09:00:00+00:00",
+            },
+        )
+
+        start_time, source = discover_experiment_start_time_from_staging([stage])
+        assert start_time == "2026-03-10T09:00:00+00:00"
+        assert source == "earliest_trial_timestamp"
+
     def test_discover_experiment_start_time_returns_unknown_when_missing(
         self, tmp_path: Path
     ) -> None:
