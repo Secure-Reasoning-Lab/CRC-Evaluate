@@ -28,6 +28,14 @@ class _FakeRedis:
     def hgetall(self, key: str) -> dict[str, str]:
         return dict(self._hashes.get(key, {}))
 
+    def hdel(self, key: str, field: str) -> None:
+        fields = self._hashes.get(key)
+        if fields is None:
+            return
+        fields.pop(field, None)
+        if not fields:
+            self._hashes.pop(key, None)
+
     def delete(self, key: str) -> None:
         self._hashes.pop(key, None)
 
@@ -448,6 +456,74 @@ def test_wait_for_existing_workers_uses_adapter_expected_names_and_timeouts() ->
         provisioner=None,
         clock=lambda: 0.0,
         sleep=lambda _seconds: None,
+        poll_interval_sec=0.0,
+    )
+
+    snapshot = manager.wait_for_existing_workers(
+        plan=SimpleNamespace(experiment_name="exp-cloud-42"),
+        adapter=_Adapter(),
+    )
+
+    assert snapshot.ready_count == 1
+
+
+def test_wait_for_existing_workers_clears_stale_bootstrap_failure_for_same_instance_id() -> (
+    None
+):
+    """Recovered pre-provisioned workers should be able to re-register as ready."""
+    from crsbench.cloud.readiness import (
+        CloudReadinessStore,
+        CloudWorkerState,
+        CloudWorkerStatus,
+    )
+    from crsbench.cloud.status import CloudFleetStatusManager
+
+    class _Adapter:
+        def expected_worker_names(self, *, plan) -> list[str]:
+            del plan
+            return ["gce-worker-001"]
+
+        def max_worker_readiness_timeout(self, *, plan) -> int:
+            del plan
+            return 900
+
+        def list_workers(self, *, plan) -> list[GceWorkerRecord]:
+            del plan
+            return [_make_worker()]
+
+    store = CloudReadinessStore(_FakeRedis())
+    store.record(
+        CloudWorkerStatus(
+            experiment_name="exp-cloud-42",
+            instance_id="1001",
+            instance_name="gce-worker-001",
+            zone="us-central1-a",
+            state=CloudWorkerState.BOOTSTRAP_FAILED,
+            provider_status=CloudProviderInstanceStatus.RUNNING,
+            startup_evidence="previous bootstrap attempt failed",
+        )
+    )
+
+    timestamps = iter([0.0, 0.0, 0.0, 1.0])
+
+    def mark_worker_ready(_seconds: float) -> None:
+        store.record(
+            CloudWorkerStatus(
+                experiment_name="exp-cloud-42",
+                instance_id="1001",
+                instance_name="gce-worker-001",
+                zone="us-central1-a",
+                state=CloudWorkerState.READY,
+                provider_status=CloudProviderInstanceStatus.RUNNING,
+                detail="worker process listening on queue crsbench_trial",
+            )
+        )
+
+    manager = CloudFleetStatusManager(
+        readiness_store=store,
+        provisioner=None,
+        clock=lambda: next(timestamps),
+        sleep=mark_worker_ready,
         poll_interval_sec=0.0,
     )
 

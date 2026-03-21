@@ -238,6 +238,16 @@ class CloudFleetStatusManager:
                     evaluators_by_name[evaluator_name]
                     for evaluator_name in expected_evaluators
                 ]
+                self._clear_failed_records_for_instances(
+                    experiment_name=plan.experiment_name,
+                    workers=resolved_workers,
+                    role=CloudInstanceRole.WORKER,
+                )
+                self._clear_failed_records_for_instances(
+                    experiment_name=plan.experiment_name,
+                    workers=resolved_evaluators,
+                    role=CloudInstanceRole.EVALUATOR,
+                )
                 self._record_initial_workers(
                     experiment_name=plan.experiment_name,
                     workers=resolved_workers,
@@ -388,6 +398,10 @@ class CloudFleetStatusManager:
                 expected_workers = [
                     workers_by_name[worker_name] for worker_name in expected_names
                 ]
+                self._clear_failed_records_for_instances(
+                    experiment_name=plan.experiment_name,
+                    workers=expected_workers,
+                )
                 self._record_initial_workers(
                     experiment_name=plan.experiment_name,
                     workers=expected_workers,
@@ -524,6 +538,32 @@ class CloudFleetStatusManager:
     ) -> None:
         for role in roles:
             self._readiness_store.clear_experiment(experiment_name, role=role)
+
+    def _clear_failed_records_for_instances(
+        self,
+        *,
+        experiment_name: str,
+        workers: list[CloudInstanceRecord],
+        role: CloudInstanceRole = CloudInstanceRole.WORKER,
+    ) -> None:
+        """Drop stale failed records so repaired instances can report readiness again."""
+        for worker in workers:
+            existing = self._readiness_store.get_worker(
+                experiment_name,
+                worker.instance_id,
+                role=role,
+            )
+            if existing is None:
+                continue
+            if existing.state in {
+                CloudWorkerState.BOOTSTRAP_FAILED,
+                CloudWorkerState.DELETED,
+            }:
+                self._readiness_store.delete_worker(
+                    experiment_name,
+                    worker.instance_id,
+                    role=role,
+                )
 
     def _teardown_workers(
         self,

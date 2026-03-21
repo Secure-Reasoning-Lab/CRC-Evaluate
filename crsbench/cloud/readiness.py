@@ -61,6 +61,8 @@ class ReadinessRedisProtocol(Protocol):
 
     def hgetall(self, key: str) -> Mapping[str | bytes, str | bytes]: ...
 
+    def hdel(self, key: str, field: str) -> object: ...
+
     def delete(self, key: str) -> object: ...
 
 
@@ -271,6 +273,16 @@ class CloudReadinessStore:
     ) -> None:
         """Remove all readiness records for one experiment."""
         self._conn.delete(self._key(experiment_name, role=role))
+
+    def delete_worker(
+        self,
+        experiment_name: str,
+        instance_id: str,
+        *,
+        role: CloudInstanceRole = CloudInstanceRole.WORKER,
+    ) -> None:
+        """Remove one worker readiness record by experiment and instance id."""
+        self._conn.hdel(self._key(experiment_name, role=role), instance_id)
 
     def _key(self, experiment_name: str, *, role: CloudInstanceRole) -> str:
         return f"crsbench:cloud:{role.value}s:{experiment_name}"
