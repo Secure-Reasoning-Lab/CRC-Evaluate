@@ -13,16 +13,16 @@ def resolve_build_workers(
     cli_workers: Optional[int] = None,
     config_workers: Optional[int] = None,
 ) -> int:
-    """Resolve the number of workers for building variants.
+    """Resolve the number of parallel build jobs.
 
     Priority (highest to lowest):
-    1. CLI argument (--build-workers)
-    2. Config file value (build_workers field)
+    1. Explicit caller value (highest priority)
+    2. Fallback config value
     3. Default value (4)
 
     Args:
-        cli_workers: Worker count from CLI argument (highest priority)
-        config_workers: Worker count from config file
+        cli_workers: Worker count (highest priority)
+        config_workers: Fallback worker count
 
     Returns:
         Resolved worker count (always >= 1)
@@ -34,16 +34,16 @@ def resolve_verify_workers(
     cli_workers: Optional[int] = None,
     config_workers: Optional[int] = None,
 ) -> int:
-    """Resolve the number of workers for POV/patch verification.
+    """Resolve the number of parallel verification jobs.
 
     Priority (highest to lowest):
-    1. CLI argument (--verify-workers)
-    2. Config file value (verify_workers field)
+    1. Explicit caller value (highest priority)
+    2. Fallback config value
     3. Default value (4)
 
     Args:
-        cli_workers: Worker count from CLI argument (highest priority)
-        config_workers: Worker count from config file
+        cli_workers: Worker count (highest priority)
+        config_workers: Fallback worker count
 
     Returns:
         Resolved worker count (always >= 1)

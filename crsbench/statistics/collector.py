@@ -203,17 +203,22 @@ def collect_benchmark_info(benchmark_dir: Path) -> BenchmarkInfo | None:
 
 
 def collect_benchmark_stats(
-    benchmarks_dir: Path, specific_benchmarks: list[str] | None = None
+    benchmarks_dir: Path,
+    specific_benchmarks: list[str] | None = None,
+    filter_pattern: str | None = None,
 ) -> list[BenchmarkInfo]:
     """Collect statistics from all benchmarks.
 
     Args:
         benchmarks_dir: Path to benchmarks directory
         specific_benchmarks: Optional list of specific benchmark names to process
+        filter_pattern: Optional glob pattern to filter benchmarks (e.g., 'afc-*')
 
     Returns:
         List of BenchmarkInfo objects
     """
+    import fnmatch
+
     if not benchmarks_dir.exists():
         logger.error(f"Benchmarks directory does not exist: {benchmarks_dir}")
         return []
@@ -226,6 +231,10 @@ def collect_benchmark_stats(
 
         # Skip if specific benchmarks are requested and this isn't one
         if specific_benchmarks and item.name not in specific_benchmarks:
+            continue
+
+        # Skip if filter pattern is set and doesn't match
+        if filter_pattern and not fnmatch.fnmatch(item.name, filter_pattern):
             continue
 
         # Check if it's a valid benchmark (has .aixcc directory)

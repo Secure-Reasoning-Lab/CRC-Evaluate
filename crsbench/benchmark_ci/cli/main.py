@@ -888,8 +888,6 @@ def run_ci(args: argparse.Namespace) -> int:
     # Create validator with adjusted workers
     source_mode = getattr(args, "source", "pkgs")
     validator = BenchmarkValidator(
-        build_workers=per_benchmark_workers,
-        verify_workers=per_benchmark_workers,
         source_mode=source_mode,
     )
 

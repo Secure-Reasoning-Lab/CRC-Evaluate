@@ -1,7 +1,16 @@
 """Tests for CPU pool manager utility."""
 
+from unittest.mock import patch
+
 import pytest
-from crsbench.utils.cpu_pool import CPUPool, cpuset_count, format_cpuset, parse_cpuset
+from crsbench.utils.cpu_pool import (
+    CPUPool,
+    auto_cores_per_job,
+    cpuset_count,
+    format_cpuset,
+    parse_cpuset,
+    visible_cpu_ids,
+)
 
 # ---------------------------------------------------------------------------
 # parse_cpuset
@@ -64,6 +73,21 @@ def test_cpupool_default():
     assert pool.available_count() == 8
     cpus = pool.allocate(4)
     assert cpus == [0, 1, 2, 3]
+
+
+def test_visible_cpu_ids_default_to_current_affinity():
+    """Default visible CPU envelope should follow current process affinity."""
+    with patch("crsbench.utils.cpu_pool.os.sched_getaffinity", return_value={4, 5, 6}):
+        assert visible_cpu_ids() == [4, 5, 6]
+
+
+def test_auto_cores_per_job_uses_visible_cpu_envelope():
+    """Auto per-job width should derive from visible CPUs rather than a hard-coded fallback."""
+    with patch(
+        "crsbench.utils.cpu_pool.os.sched_getaffinity",
+        return_value={8, 9, 10, 11, 12, 13},
+    ):
+        assert auto_cores_per_job(2) == 3
 
 
 def test_cpupool_allocate_release():

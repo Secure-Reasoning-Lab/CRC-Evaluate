@@ -82,6 +82,7 @@ def _get_git_commit(repo_path: Path) -> tuple[str, bool]:
             cwd=repo_path,
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=5,
         )
         if result.returncode != 0:
@@ -95,6 +96,7 @@ def _get_git_commit(repo_path: Path) -> tuple[str, bool]:
             cwd=repo_path,
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=5,
         )
         dirty = bool(result.stdout.strip())

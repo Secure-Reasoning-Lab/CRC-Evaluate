@@ -36,9 +36,16 @@ Examples:
   crsbench benchmark stats --summary-only
   crsbench benchmark stats --output benchmarks.csv
   crsbench benchmark stats --benchmarks atlanta-curl-delta-01 afc-libxml2-delta-01
+  crsbench benchmark stats --filter "afc-*"
         """,
     )
 
+    parser.add_argument(
+        "--filter",
+        type=str,
+        default=None,
+        help="Filter benchmarks by glob pattern (e.g., 'afc-*')",
+    )
     parser.add_argument(
         "--benchmarks-dir",
         type=Path,
@@ -89,6 +96,7 @@ Examples:
   crsbench benchmark stats --summary-only
   crsbench benchmark stats --output benchmarks.csv
   crsbench benchmark stats --benchmarks atlanta-curl-delta-01 afc-libxml2-delta-01
+  crsbench benchmark stats --filter "afc-*"
         """,
     )
 
@@ -97,6 +105,13 @@ Examples:
         type=Path,
         default=None,
         help="Path to benchmarks directory (default: auto-detect from project root)",
+    )
+
+    parser.add_argument(
+        "--filter",
+        type=str,
+        default=None,
+        help="Filter benchmarks by glob pattern (e.g., 'afc-*')",
     )
 
     parser.add_argument(
@@ -149,12 +164,17 @@ def run_stats(args: argparse.Namespace) -> int:
     # Parse specific benchmarks
     specific_benchmarks = args.benchmarks
 
+    # Get filter pattern
+    filter_pattern = getattr(args, "filter", None)
+
     # Get benchmarks directory (auto-detect if not specified)
     benchmarks_dir = args.benchmarks_dir or get_default_benchmarks_dir()
 
     # Collect statistics
     logger.info(f"Collecting benchmark statistics from: {benchmarks_dir}")
-    benchmarks = collect_benchmark_stats(benchmarks_dir, specific_benchmarks)
+    benchmarks = collect_benchmark_stats(
+        benchmarks_dir, specific_benchmarks, filter_pattern=filter_pattern
+    )
 
     if not benchmarks:
         logger.warning("No benchmarks found")
@@ -205,6 +225,13 @@ Examples:
         type=Path,
         default=None,
         help="Path to benchmarks directory (default: auto-detect from project root)",
+    )
+
+    parser.add_argument(
+        "--filter",
+        type=str,
+        default=None,
+        help="Filter benchmarks by glob pattern (e.g., 'afc-*')",
     )
 
     parser.add_argument(

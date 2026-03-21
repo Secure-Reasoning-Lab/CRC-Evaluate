@@ -115,8 +115,6 @@ class BenchmarkRunner:
         llm_api_key: Optional[str] = None,
         llm_trial_id: Optional[str] = None,
         llm_accounting_settle_seconds: int = 60,
-        build_workers: Optional[int] = None,
-        verify_workers: Optional[int] = None,
         max_pov_variants_per_cpv: Optional[int] = 1,
         patch_verify_variants: bool = False,
         pov_input_enabled: bool = False,
@@ -155,8 +153,6 @@ class BenchmarkRunner:
             llm_accounting_settle_seconds: Minimum time to wait after CRS run end
                 before final LLM usage/log capture. Remaining wait is computed after
                 manager shutdown work; set to 0 to disable.
-            build_workers: Number of parallel workers for building variants
-            verify_workers: Number of parallel workers for POV/patch verification
             max_pov_variants_per_cpv: Max POV variants per CPV for bug-fixing input
                 staging.
                 1 = single POV per CPV (default), N = multiple, None = all.
@@ -194,8 +190,6 @@ class BenchmarkRunner:
                 f"got {llm_accounting_settle_seconds}"
             )
         self.llm_accounting_settle_seconds = llm_accounting_settle_seconds
-        self.build_workers = build_workers
-        self.verify_workers = verify_workers
         self.max_pov_variants_per_cpv = max_pov_variants_per_cpv
         self.patch_verify_variants = patch_verify_variants
         self.pov_input_enabled = pov_input_enabled
@@ -565,7 +559,6 @@ class BenchmarkRunner:
         # Run post-experiment coverage (only for bug-finding CRS with successful run)
         if (
             self.coverage_enabled
-            and self.oss_fuzz_path
             and harness_result
             and harness_result.run_successful
             and self._crs_type == "bug-finding"
@@ -1264,8 +1257,6 @@ class BenchmarkRunner:
                 oss_fuzz_path=self.oss_fuzz_path,
                 timeout=self.per_pov_verify_timeout,
                 dedup_strategy=get_dedup_strategy(self.pov_dedup_strategy),
-                build_workers=self.build_workers,
-                verify_workers=self.verify_workers,
                 inc_image_policy=self.inc_image_policy,
                 inc_image_registry=self.inc_image_registry,
                 inc_image_max_pull_bytes=self.inc_image_max_pull_bytes,
@@ -1638,8 +1629,6 @@ class BenchmarkRunner:
                 test_timeout=1800,
                 log_dir=patch_artifacts_dir,
                 force_rebuild=True,  # Always rebuild for fresh verification
-                build_workers=self.build_workers,
-                verify_workers=self.verify_workers,
                 verify_variants=self.patch_verify_variants,
                 inc_image_policy=self.inc_image_policy,
                 inc_image_registry=self.inc_image_registry,
@@ -2186,88 +2175,35 @@ class BenchmarkRunner:
             trial_output_dir: Trial output directory
             harness_name: Name of the harness
         """
-        if not self.oss_fuzz_path:
-            return
-
         corpus_dir = trial_output_dir / "output" / "seeds"
         if not corpus_dir.exists() or not any(corpus_dir.iterdir()):
             self.logger.info("No corpus files for post-experiment coverage")
             return
 
         try:
-            import yaml
-
-            from crsbench.builder import VariantType
-            from crsbench.evaluation.coverage.models import CoverageSummary
-            from crsbench.evaluation.coverage.strategy import (
-                create_coverage_strategy,
-                parse_llvm_cov_summary,
-            )
-            from crsbench.validation.meta_adapter import MetaYamlAdapter
-
-            # Load project.yaml for language and main_repo
-            project_yaml = benchmark_path / "project.yaml"
-            language = "c"
-            main_repo = ""
-            repo_name = None
-            if project_yaml.exists():
-                with project_yaml.open() as f:
-                    project_config = yaml.safe_load(f)
-                    language = project_config.get("language", "c")
-                    main_repo = project_config.get("main_repo", "")
-                    repo_name = project_config.get("repo_name")
-
-            # Load benchmark config via MetaYamlAdapter
-            meta_yaml = benchmark_path / ".aixcc" / "meta.yaml"
-            if not meta_yaml.exists():
-                self.logger.error(f"meta.yaml not found: {meta_yaml}")
-                return
-
-            try:
-                adapter = MetaYamlAdapter.from_meta_yaml(
-                    meta_yaml_path=meta_yaml,
-                    benchmark_name=benchmark_path.name,
-                    lang=language,
-                    main_repo=main_repo,
-                    benchmark_path=benchmark_path,
-                    repo_name=repo_name,
-                )
-            except (FileNotFoundError, ValueError) as e:
-                self.logger.error(f"Failed to load meta.yaml: {e}")
-                return
-
-            # Get coverage variant name (uses adapter's mode)
-            coverage_variant = adapter.get_variant_name(VariantType.COVERAGE)
-
             self.logger.info(
                 f"Running post-experiment coverage on {corpus_dir} "
                 f"({len(list(corpus_dir.iterdir()))} files)"
             )
+            from crsbench.evaluation.coverage.engine import CoverageEngine
+            from crsbench.evaluation.coverage.timeline import normalize_seed_inputs
 
-            # Create strategy and collect coverage
-            strategy = create_coverage_strategy(
-                oss_fuzz_path=self.oss_fuzz_path,
-                project_name=coverage_variant,
-                language=language,
-            )
+            output_dir = trial_output_dir / "coverage"
+            normalized_inputs = normalize_seed_inputs(corpus_dir, base_time=None)
+            if not normalized_inputs:
+                self.logger.info("No analyzable seeds for post-experiment coverage")
+                return
 
-            summary_path = strategy.collect_batch_coverage(
-                harness_path=Path(harness_name),
-                corpus_dir=corpus_dir,
-            )
-
-            # Parse and save results
-            cov_stats = parse_llvm_cov_summary(summary_path)
-            summary = CoverageSummary(
-                metric="line",
-                corpus_total=len(list(corpus_dir.iterdir())),
-                corpus_contributing=len(list(corpus_dir.iterdir())),
-                lines_covered=int(cov_stats.get("lines_covered", 0)),
-                lines_total=int(cov_stats.get("lines_total", 0)),
-                lines_percent=float(cov_stats.get("lines_percent", 0.0)),
-                functions_covered=int(cov_stats.get("functions_covered", 0)),
-                functions_total=int(cov_stats.get("functions_total", 0)),
-            )
+            engine = CoverageEngine()
+            try:
+                _, summary = engine.collect_timed_line_coverage(
+                    benchmark_path=benchmark_path,
+                    timed_inputs=normalized_inputs,
+                    harness_filter=harness_name,
+                    output_dir=output_dir,
+                )
+            finally:
+                engine.cleanup()
 
             # Save final coverage report
             import json
@@ -2283,10 +2219,7 @@ class BenchmarkRunner:
                 )
             )
 
-            self.logger.info(
-                f"Post-experiment coverage: {summary.lines_covered}/{summary.lines_total} "
-                f"lines ({summary.lines_percent:.1f}%)"
-            )
+            self.logger.info(f"Post-experiment coverage: {summary.format_lines()}")
 
         except Exception as e:
             self.logger.error(f"Post-experiment coverage failed: {e}", exc_info=True)

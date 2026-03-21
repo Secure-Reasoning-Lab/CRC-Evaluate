@@ -2,10 +2,12 @@
 
 Tests:
 - has_harness(): Check if harness exists in build output
-- run_coverage(): Run coverage with --coverage-output-dir
+- run_coverage(): Run coverage and copy helper output into requested directory
 - MetaYamlAdapter.from_benchmark_path(): Load adapter from benchmark dir
 """
 
+import fcntl
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -22,29 +24,10 @@ def mock_oss_fuzz(tmp_path: Path) -> Path:
     (oss_fuzz / "projects").mkdir()
     (oss_fuzz / "build" / "out").mkdir(parents=True)
 
-    # Mock helper.py that validates --coverage-output-dir
+    # Mock helper.py presence; run_coverage() itself is unit-tested by mocking
+    # subprocess execution.
     helper = oss_fuzz / "infra" / "helper.py"
-    helper.write_text("""#!/usr/bin/env python3
-import argparse, json, sys
-from pathlib import Path
-
-parser = argparse.ArgumentParser()
-sub = parser.add_subparsers(dest="cmd")
-cov = sub.add_parser("coverage")
-cov.add_argument("--coverage-output-dir", required=True)
-cov.add_argument("--corpus-dir", required=True)
-cov.add_argument("--fuzz-target", required=True)
-cov.add_argument("--no-serve", action="store_true")
-cov.add_argument("project")
-args = parser.parse_args()
-
-if args.cmd == "coverage":
-    out = Path(args.coverage_output_dir) / "report" / "linux"
-    out.mkdir(parents=True, exist_ok=True)
-    (out / "summary.json").write_text(json.dumps({"data": [{"totals": {}}]}))
-    sys.exit(0)
-sys.exit(1)
-""")
+    helper.write_text("#!/usr/bin/env python3\n")
     return oss_fuzz
 
 
@@ -69,21 +52,143 @@ class TestHasHarness:
 class TestRunCoverage:
     """Tests for run_coverage()."""
 
-    def test_passes_coverage_output_dir(self, mock_oss_fuzz: Path, tmp_path: Path):
-        """Verify --coverage-output-dir is passed to helper.py."""
+    def test_uses_supported_helper_flags_and_copies_outputs(
+        self, mock_oss_fuzz: Path, tmp_path: Path
+    ):
+        """Verify helper.py uses supported flags and outputs are copied."""
         corpus = tmp_path / "seeds"
         corpus.mkdir()
         (corpus / "input").write_bytes(b"test")
         output = tmp_path / "out"
+        project_out = mock_oss_fuzz / "build" / "out" / "proj"
 
-        with patch("crsbench.builder.infrastructure.run_with_timeout") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        def _fake_helper_run(cmd, timeout, **kwargs):
+            del cmd, timeout, kwargs
+            report_dir = project_out / "report" / "linux"
+            dumps_dir = project_out / "dumps"
+            report_dir.mkdir(parents=True, exist_ok=True)
+            dumps_dir.mkdir(parents=True, exist_ok=True)
+            (report_dir / "summary.json").write_text('{"data": [{"totals": {}}]}')
+            (dumps_dir / "merged.profdata").write_text("profdata")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with (
+            patch("crsbench.builder.infrastructure.run_with_timeout") as mock_run,
+            patch("crsbench.builder.infrastructure.docker_rmtree", return_value=True),
+            patch(
+                "crsbench.builder.infrastructure.fix_docker_ownership",
+                return_value=True,
+            ),
+        ):
+            mock_run.side_effect = _fake_helper_run
             infra = OSSFuzzInfrastructure(mock_oss_fuzz)
-            infra.run_coverage("proj", "fuzz", corpus, output)
+            success, returned_output = infra.run_coverage(
+                "proj", "fuzz", corpus, output
+            )
 
             cmd = mock_run.call_args[0][0]
-            assert "--coverage-output-dir" in cmd
-            assert str(output) in cmd
+            assert success is True
+            assert returned_output == output
+            assert "--coverage-output-dir" not in cmd
+            assert "--timeout" not in cmd
+            assert "--port" in cmd
+            assert "--corpus-dir" in cmd
+            assert "--fuzz-target" in cmd
+            assert str(corpus) in cmd
+            assert (output / "report" / "linux" / "summary.json").exists()
+            assert (output / "dumps" / "merged.profdata").exists()
+
+    def test_run_coverage_serializes_shared_project_output(
+        self, mock_oss_fuzz: Path, tmp_path: Path
+    ):
+        corpus = tmp_path / "seeds"
+        corpus.mkdir()
+        (corpus / "input").write_bytes(b"test")
+        output_a = tmp_path / "out-a"
+        output_b = tmp_path / "out-b"
+        project_out = mock_oss_fuzz / "build" / "out" / "proj"
+        first_started = threading.Event()
+        allow_first_finish = threading.Event()
+        second_started = threading.Event()
+        second_waiting_for_lock = threading.Event()
+        second_blocking_lock_attempt = threading.Event()
+        helper_call_count = 0
+        results: list[tuple[bool, Path]] = []
+
+        def _fake_helper_run(cmd, timeout, **kwargs):
+            del cmd, timeout, kwargs
+            nonlocal helper_call_count
+            helper_call_count += 1
+            if helper_call_count == 1:
+                first_started.set()
+                allow_first_finish.wait(timeout=2)
+            else:
+                second_started.set()
+            report_dir = project_out / "report" / "linux"
+            dumps_dir = project_out / "dumps"
+            report_dir.mkdir(parents=True, exist_ok=True)
+            dumps_dir.mkdir(parents=True, exist_ok=True)
+            (report_dir / "summary.json").write_text('{"data": [{"totals": {}}]}')
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        def _run_coverage(output_dir: Path):
+            infra = OSSFuzzInfrastructure(mock_oss_fuzz)
+            results.append(infra.run_coverage("proj", "fuzz", corpus, output_dir))
+
+        real_flock = fcntl.flock
+        blocking_lock_seen = False
+
+        def _instrumented_flock(fd: int, operation: int):
+            nonlocal blocking_lock_seen
+            if operation == fcntl.LOCK_EX and not blocking_lock_seen:
+                try:
+                    return real_flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    blocking_lock_seen = True
+                    second_waiting_for_lock.set()
+                    result = real_flock(fd, fcntl.LOCK_EX)
+                    second_blocking_lock_attempt.set()
+                    return result
+            return real_flock(fd, operation)
+
+        with (
+            patch("crsbench.builder.infrastructure.run_with_timeout") as mock_run,
+            patch("crsbench.builder.infrastructure.docker_rmtree", return_value=True),
+            patch(
+                "crsbench.builder.infrastructure.fix_docker_ownership",
+                return_value=True,
+            ),
+            patch(
+                "crsbench.builder.infrastructure.fcntl.flock",
+                side_effect=_instrumented_flock,
+            ),
+            patch.dict(
+                "os.environ",
+                {"CRSBENCH_COVERAGE_LOCK_DIR": str(tmp_path / "locks")},
+                clear=False,
+            ),
+        ):
+            mock_run.side_effect = _fake_helper_run
+            thread_a = threading.Thread(target=_run_coverage, args=(output_a,))
+            thread_b = threading.Thread(target=_run_coverage, args=(output_b,))
+            thread_a.start()
+            assert first_started.wait(timeout=1)
+
+            thread_b.start()
+            assert second_waiting_for_lock.wait(timeout=1)
+            assert second_blocking_lock_attempt.is_set() is False
+
+            allow_first_finish.set()
+            thread_a.join(timeout=2)
+            thread_b.join(timeout=2)
+
+        assert second_started.is_set() is True
+        assert second_blocking_lock_attempt.is_set() is True
+        assert helper_call_count == 2
+        assert len(results) == 2
+        assert all(success for success, _ in results)
+        assert (output_a / "report" / "linux" / "summary.json").exists()
+        assert (output_b / "report" / "linux" / "summary.json").exists()
 
 
 class TestMetaYamlAdapterFromBenchmarkPath:

@@ -339,9 +339,7 @@ class TestWorkerStdinDetachment:
             patch("crsbench.distributed.worker.os.open", return_value=42) as mock_open,
             patch("crsbench.distributed.worker.os.dup2") as mock_dup2,
             patch("crsbench.distributed.worker.os.close") as mock_close,
-            patch(
-                "crsbench.distributed.worker.multiprocessing.Process"
-            ) as mock_process,
+            patch("crsbench.distributed.worker._mp_ctx.Process") as mock_process,
         ):
             mock_proc = MagicMock()
             mock_proc.exitcode = 0
@@ -568,6 +566,124 @@ class TestConfiglessWorker:
         assert result == 0
         assert mock_main.call_args.kwargs["cpu_tag"] == "x86-avx2"
 
+    def test_worker_cli_config_mode_leaves_cores_per_job_unset_when_not_configured(
+        self,
+    ):
+        """Config-mode worker should not inject a CPU-per-job default."""
+        import argparse
+
+        from crsbench.distributed.cli.worker_command import run_worker
+
+        args = argparse.Namespace(
+            experiment_config="test.yaml",
+            verbose=False,
+            continuous=False,
+            worker_name=None,
+            no_cpuset=True,
+            cores=None,
+            skip_cpus=None,
+            cpu_tag=None,
+            jobs=None,
+            cores_per_job=None,
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.worker.main",
+                return_value=0,
+            ) as mock_main,
+            patch(
+                "crsbench.run_experiment.load_experiment_config",
+            ) as mock_load,
+        ):
+            mock_worker = MagicMock()
+            mock_worker.cpu_tag = None
+            mock_worker.worker_name = None
+            mock_worker.jobs = 1
+            mock_worker.cores_per_job = None
+            mock_worker.continuous = False
+            mock_worker.minimum_disk_size = "10GB"
+            mock_worker.disk_check_interval = 60
+            mock_worker.cpuset = None
+            mock_worker.skip_cpuset = None
+            mock_worker.redis_host = None
+
+            mock_resources = MagicMock()
+            mock_resources.cores_per_trial = None
+            mock_resources.cpu_tag = None
+
+            mock_config = MagicMock()
+            mock_config.worker = mock_worker
+            mock_config.benchmarks = None
+            mock_config.experiment = "default"
+            mock_config.redis_host = "localhost"
+            mock_config.resources = mock_resources
+            mock_load.return_value = mock_config
+
+            result = run_worker(args)
+
+        assert result == 0
+        assert mock_main.call_args.kwargs["cores_per_job"] is None
+
+    def test_worker_cli_config_mode_does_not_inherit_trial_cores_for_worker_width(
+        self,
+    ):
+        """Config-mode worker width stays unset even if trial resource fallback exists."""
+        import argparse
+
+        from crsbench.distributed.cli.worker_command import run_worker
+
+        args = argparse.Namespace(
+            experiment_config="test.yaml",
+            verbose=False,
+            continuous=False,
+            worker_name=None,
+            no_cpuset=True,
+            cores=None,
+            skip_cpus=None,
+            cpu_tag=None,
+            jobs=None,
+            cores_per_job=None,
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.worker.main",
+                return_value=0,
+            ) as mock_main,
+            patch(
+                "crsbench.run_experiment.load_experiment_config",
+            ) as mock_load,
+        ):
+            mock_worker = MagicMock()
+            mock_worker.cpu_tag = None
+            mock_worker.worker_name = None
+            mock_worker.jobs = 1
+            mock_worker.cores_per_job = None
+            mock_worker.continuous = False
+            mock_worker.minimum_disk_size = "10GB"
+            mock_worker.disk_check_interval = 60
+            mock_worker.cpuset = None
+            mock_worker.skip_cpuset = None
+            mock_worker.redis_host = None
+
+            mock_resources = MagicMock()
+            mock_resources.cores_per_trial = 8
+            mock_resources.cpu_tag = None
+
+            mock_config = MagicMock()
+            mock_config.worker = mock_worker
+            mock_config.benchmarks = None
+            mock_config.experiment = "default"
+            mock_config.redis_host = "localhost"
+            mock_config.resources = mock_resources
+            mock_load.return_value = mock_config
+
+            result = run_worker(args)
+
+        assert result == 0
+        assert mock_main.call_args.kwargs["cores_per_job"] is None
+
     def test_worker_cli_config_mode_rejects_none_redis_host(self):
         """Config-mode worker should fail fast when redis host normalizes to None."""
         from crsbench.distributed.cli.worker_command import run_worker
@@ -687,7 +803,6 @@ class TestConfiglessWorker:
             verify_queue="crsbench_exp-42_verify",
             worker_jobs=6,
             worker_cores_per_job=8,
-            cores_per_trial=8,
         )
 
         with (
@@ -736,8 +851,8 @@ class TestConfiglessWorker:
         assert kwargs["build_jobs"] == 2
         assert kwargs["build_cores_per_job"] == 4
 
-    def test_configless_cpuset_uses_default_profile_without_metadata(self):
-        """Configless cpuset worker defaults to jobs=1 and cores_per_job=4."""
+    def test_configless_cpuset_leaves_cores_per_job_unset_without_metadata(self):
+        """Configless cpuset worker should not inject a default cores_per_job."""
         from crsbench.distributed.registry import RuntimeRegistration
         from crsbench.distributed.worker import run_worker_configless
 
@@ -767,7 +882,7 @@ class TestConfiglessWorker:
         assert result == 0
         kwargs = mock_supervisor.call_args.kwargs
         assert kwargs["build_jobs"] == 1
-        assert kwargs["build_cores_per_job"] == 4
+        assert kwargs["build_cores_per_job"] is None
 
     def test_configless_cpuset_uses_cli_cpu_pinning_only(self):
         """Configless worker uses CLI cpuset/skip-cpuset (no metadata pinning)."""

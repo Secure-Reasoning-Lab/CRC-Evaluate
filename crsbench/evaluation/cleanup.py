@@ -45,6 +45,7 @@ def _rmtree_with_docker(path: Path) -> bool:
             ],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=300,
         )
         if result.returncode == 0:

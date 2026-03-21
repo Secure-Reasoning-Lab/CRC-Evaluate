@@ -324,16 +324,17 @@ def run_evaluator(args: argparse.Namespace) -> int:
             logger.info(f"Evaluator override: benchmarks_root = {args.benchmarks_root}")
 
         evaluator_cfg = config.evaluator
+
+        def _int_attr(obj, attr_name: str):
+            value = getattr(obj, attr_name, None) if obj else None
+            return value if isinstance(value, int) else None
+
         default_jobs = (
-            evaluator_cfg.jobs
-            if evaluator_cfg and evaluator_cfg.jobs is not None
+            _int_attr(evaluator_cfg, "jobs")
+            if _int_attr(evaluator_cfg, "jobs") is not None
             else 1
         )
-        default_cores_per_job = (
-            evaluator_cfg.cores_per_job
-            if evaluator_cfg and evaluator_cfg.cores_per_job is not None
-            else 4
-        )
+        default_cores_per_job = _int_attr(evaluator_cfg, "cores_per_job")
         resolved_build_jobs = (
             build_jobs
             if build_jobs is not None
@@ -341,8 +342,8 @@ def run_evaluator(args: argparse.Namespace) -> int:
                 jobs
                 if jobs is not None
                 else (
-                    evaluator_cfg.build_jobs
-                    if evaluator_cfg and evaluator_cfg.build_jobs is not None
+                    _int_attr(evaluator_cfg, "build_jobs")
+                    if _int_attr(evaluator_cfg, "build_jobs") is not None
                     else default_jobs
                 )
             )
@@ -354,8 +355,8 @@ def run_evaluator(args: argparse.Namespace) -> int:
                 cores_per_job
                 if cores_per_job is not None
                 else (
-                    evaluator_cfg.build_cores_per_job
-                    if evaluator_cfg and evaluator_cfg.build_cores_per_job is not None
+                    _int_attr(evaluator_cfg, "build_cores_per_job")
+                    if _int_attr(evaluator_cfg, "build_cores_per_job") is not None
                     else default_cores_per_job
                 )
             )
@@ -367,8 +368,8 @@ def run_evaluator(args: argparse.Namespace) -> int:
                 cores_per_job
                 if cores_per_job is not None
                 else (
-                    evaluator_cfg.verify_cores_per_job
-                    if evaluator_cfg and evaluator_cfg.verify_cores_per_job is not None
+                    _int_attr(evaluator_cfg, "verify_cores_per_job")
+                    if _int_attr(evaluator_cfg, "verify_cores_per_job") is not None
                     else default_cores_per_job
                 )
             )
@@ -380,15 +381,22 @@ def run_evaluator(args: argparse.Namespace) -> int:
                 jobs
                 if jobs is not None
                 else (
-                    evaluator_cfg.verify_jobs
-                    if evaluator_cfg and evaluator_cfg.verify_jobs is not None
+                    _int_attr(evaluator_cfg, "verify_jobs")
+                    if _int_attr(evaluator_cfg, "verify_jobs") is not None
                     else (
                         default_jobs
-                        if evaluator_cfg and evaluator_cfg.jobs is not None
-                        else max(
-                            1,
-                            (resolved_build_jobs * resolved_build_cores_per_job)
-                            // resolved_verify_cores_per_job,
+                        if _int_attr(evaluator_cfg, "jobs") is not None
+                        else (
+                            max(
+                                1,
+                                (resolved_build_jobs * resolved_build_cores_per_job)
+                                // resolved_verify_cores_per_job,
+                            )
+                            if (
+                                resolved_build_cores_per_job is not None
+                                and resolved_verify_cores_per_job is not None
+                            )
+                            else default_jobs
                         )
                     )
                 )
@@ -398,8 +406,8 @@ def run_evaluator(args: argparse.Namespace) -> int:
             idle_timeout
             if idle_timeout is not None
             else (
-                evaluator_cfg.idle_timeout
-                if evaluator_cfg and evaluator_cfg.idle_timeout is not None
+                _int_attr(evaluator_cfg, "idle_timeout")
+                if _int_attr(evaluator_cfg, "idle_timeout") is not None
                 else 0
             )
         )

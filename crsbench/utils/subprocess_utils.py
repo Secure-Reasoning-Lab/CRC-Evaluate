@@ -55,15 +55,28 @@ def run_with_timeout(
     stdout_arg = subprocess.PIPE if capture_output else None
     stderr_arg = subprocess.PIPE if capture_output else None
 
-    process = subprocess.Popen(
-        cmd,
-        cwd=cwd,
-        stdin=stdin,
-        stdout=stdout_arg,
-        stderr=stderr_arg,
-        text=text,
-        start_new_session=True,
-    )
+    if text:
+        process = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            stdin=stdin,
+            stdout=stdout_arg,
+            stderr=stderr_arg,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            start_new_session=True,
+        )
+    else:
+        process = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            stdin=stdin,
+            stdout=stdout_arg,
+            stderr=stderr_arg,
+            text=False,
+            start_new_session=True,
+        )
 
     try:
         stdout, stderr = process.communicate(timeout=timeout)
@@ -150,6 +163,7 @@ def docker_kill_orphans(container_prefix: str) -> int:
             ["docker", "ps", "--filter", f"name={container_prefix}", "-q"],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=10,
             stdin=subprocess.DEVNULL,
         )

@@ -24,13 +24,15 @@
 #   SMOKE_BUGFIXING_CONFIG=<path>                # defaults to sanity bugfixing config
 #   SMOKE_CPUSET_<SUITE_NAME>=<cpuset>           # optional per-suite cpuset override (e.g. SMOKE_CPUSET_BUGFINDING=0-23)
 #   SMOKE_SKIP_CPUSET_<SUITE_NAME>=<cpuset>      # optional per-suite excluded CPUs
+#   SMOKE_STREAM_LOGS=1                          # stream smoke worker/run logs live while also saving worker.log/run.log
+#   CRSBENCH_RUN_LOCAL_ENV_FILE=<path>           # optional .env file to load for smoke runs (defaults to <repo>/.env)
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
 SMOKE_BUGFINDING_CONFIG_DEFAULT="$ROOT_DIR/experiment-configs/sanity-bugfinding/atlantis-multilang-given_fuzzer-default-delta.yaml"
-SMOKE_BUGFIXING_CONFIG_DEFAULT="$ROOT_DIR/experiment-configs/sanity-bugfixing/crs-copilot-cli-gpt-5-3-codex-delta-sanity-mock-c.yaml"
+SMOKE_BUGFIXING_CONFIG_DEFAULT="$ROOT_DIR/experiment-configs/sanity-bugfixing/crs-claude-code-delta-sanity-smoke.yaml"
 
 cd "$ROOT_DIR"
 
@@ -51,6 +53,150 @@ success() {
 fail() {
     echo -e "${RED}$1${NC}"
     exit 1
+}
+
+smoke_stream_logs_enabled() {
+    [ "${SMOKE_STREAM_LOGS:-1}" = "1" ]
+}
+
+smoke_can_stream_logs() {
+    smoke_stream_logs_enabled && command -v stdbuf >/dev/null 2>&1
+}
+
+smoke_env_file() {
+    printf '%s\n' "${CRSBENCH_RUN_LOCAL_ENV_FILE:-$ROOT_DIR/.env}"
+}
+
+load_smoke_env_file() {
+    local env_file
+    local had_xtrace=0
+    local load_rc=0
+    env_file="$(smoke_env_file)"
+    [ -f "$env_file" ] || return 0
+
+    case "$-" in
+        *x*)
+            had_xtrace=1
+            set +x
+            ;;
+    esac
+
+    if ! eval "$(
+        uv run python - "$env_file" <<'PY'
+import os
+import re
+import shlex
+import sys
+
+from dotenv import dotenv_values
+
+shell_identifier = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+for key, value in dotenv_values(sys.argv[1]).items():
+    if value is None or key in os.environ:
+        continue
+    if not shell_identifier.match(key):
+        print(
+            f"Skipping non-shell-safe key from smoke env file: {key}",
+            file=sys.stderr,
+        )
+        continue
+    print(f"export {key}={shlex.quote(value)}")
+PY
+    )"; then
+        load_rc=$?
+    fi
+
+    if [ "$had_xtrace" -eq 1 ]; then
+        set -x
+    fi
+
+    return "$load_rc"
+}
+
+create_smoke_stream_fifo_dir() {
+    mktemp -d "${TMPDIR:-/tmp}/crsbench-smoke-stream-XXXXXX"
+}
+
+cleanup_smoke_stream_dir() {
+    local stream_dir="$1"
+    local fifo="$2"
+    rm -f "$fifo"
+    rmdir "$stream_dir" >/dev/null 2>&1 || true
+}
+
+run_smoke_logged_command() {
+    local logfile="$1"
+    local label="$2"
+    local stream_dir fifo logger_pid cmd_rc
+    shift 2
+
+    : > "$logfile"
+    if smoke_can_stream_logs; then
+        stream_dir="$(create_smoke_stream_fifo_dir)"
+        fifo="$stream_dir/stream"
+        mkfifo "$fifo"
+        (stdbuf -oL tee -a "$logfile" <"$fifo" | stdbuf -oL sed "s/^/[${label}] /") &
+        logger_pid=$!
+        if stdbuf -oL -eL "$@" >"$fifo" 2>&1; then
+            cmd_rc=0
+        else
+            cmd_rc=$?
+        fi
+        wait "$logger_pid"
+        cleanup_smoke_stream_dir "$stream_dir" "$fifo"
+        return "$cmd_rc"
+    else
+        if "$@" >"$logfile" 2>&1; then
+            return 0
+        fi
+        return $?
+    fi
+}
+
+SMOKE_BG_PID=""
+SMOKE_BG_LOGGER_PID=""
+SMOKE_BG_STREAM_DIR=""
+SMOKE_BG_STREAM_FIFO=""
+
+cleanup_smoke_bg_logging() {
+    if [ -n "$SMOKE_BG_LOGGER_PID" ]; then
+        wait "$SMOKE_BG_LOGGER_PID"
+    fi
+    if [ -n "$SMOKE_BG_STREAM_FIFO" ]; then
+        rm -f "$SMOKE_BG_STREAM_FIFO"
+    fi
+    if [ -n "$SMOKE_BG_STREAM_DIR" ]; then
+        rmdir "$SMOKE_BG_STREAM_DIR" >/dev/null 2>&1 || true
+    fi
+    SMOKE_BG_LOGGER_PID=""
+    SMOKE_BG_STREAM_FIFO=""
+    SMOKE_BG_STREAM_DIR=""
+}
+
+start_smoke_logged_command_bg() {
+    local logfile="$1"
+    local label="$2"
+    local stream_dir fifo
+    shift 2
+
+    : > "$logfile"
+    SMOKE_BG_LOGGER_PID=""
+    SMOKE_BG_STREAM_DIR=""
+    SMOKE_BG_STREAM_FIFO=""
+    if smoke_can_stream_logs; then
+        stream_dir="$(create_smoke_stream_fifo_dir)"
+        fifo="$stream_dir/stream"
+        mkfifo "$fifo"
+        (stdbuf -oL tee -a "$logfile" <"$fifo" | stdbuf -oL sed "s/^/[${label}] /") &
+        SMOKE_BG_LOGGER_PID=$!
+        SMOKE_BG_STREAM_DIR="$stream_dir"
+        SMOKE_BG_STREAM_FIFO="$fifo"
+        setsid stdbuf -oL -eL "$@" >"$fifo" 2>&1 </dev/null &
+    else
+        setsid "$@" >"$logfile" 2>&1 </dev/null &
+    fi
+    SMOKE_BG_PID=$!
 }
 
 SMOKE_VALKEY_CONTAINER=""
@@ -544,46 +690,158 @@ PY
 stop_worker_process() {
     local pid="$1"
     local label="$2"
-    local signal timeout
 
     if ! kill -0 "$pid" >/dev/null 2>&1; then
         wait "$pid" >/dev/null 2>&1 || true
         return 0
     fi
 
-    for signal in INT TERM KILL; do
-        case "$signal" in
-            INT|TERM) timeout=20 ;;
-            KILL) timeout=5 ;;
-            *) timeout=5 ;;
-        esac
-
-        kill "-$signal" "$pid" >/dev/null 2>&1 || true
-        local elapsed=0
-        while [ "$elapsed" -lt "$timeout" ]; do
-            if ! kill -0 "$pid" >/dev/null 2>&1; then
-                wait "$pid" >/dev/null 2>&1 || true
-                return 0
-            fi
-            sleep 1
-            elapsed=$((elapsed + 1))
-        done
+    # Send SIGTERM to the process group (covers setsid children)
+    kill -TERM -- -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+    local elapsed=0
+    while [ "$elapsed" -lt 20 ]; do
+        if ! kill -0 "$pid" >/dev/null 2>&1; then
+            wait "$pid" 2>/dev/null || true
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
     done
 
-    echo "[smoke] warning: $label (pid=$pid) did not terminate cleanly"
-    wait "$pid" >/dev/null 2>&1 || true
+    # Escalate to SIGKILL
+    kill -KILL -- -"$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    echo "[smoke] warning: $label (pid=$pid) required SIGKILL"
     return 1
 }
 
-run_smoke_suite_config() {
+# Workspace marker: stores the workspace path so post-verify can find it.
+SMOKE_WORKSPACE_DIR="/tmp/crsbench-smoke-workspaces"
+
+# Print a compact summary of smoke run results from log files.
+_smoke_run_summary() {
+    local suite="$1" workspace="$2"
+    local run_log="$workspace/run.log"
+    local worker_log="$workspace/worker.log"
+    echo ""
+    echo -e "${YELLOW}--- Smoke run summary: $suite ---${NC}"
+    if [ -f "$run_log" ]; then
+        grep -E "Total trials:|Successful:|Failed:|Total POVs found:" "$run_log" | sed 's/^.*| /  /' || true
+    fi
+    # Show per-trial completion lines from worker log
+    if [ -f "$worker_log" ]; then
+        grep -E "\[Trial [0-9]+\] Completed" "$worker_log" | sed 's/^.*| /  /' || true
+    fi
+    echo -e "${YELLOW}--- workspace: $workspace ---${NC}"
+    echo ""
+}
+
+# Print a compact summary of smoke post-verify results.
+_smoke_verify_summary() {
+    local suite="$1" workspace="$2"
+    local post_verify_log="$workspace/post-verify.log"
+    echo ""
+    echo -e "${YELLOW}--- Smoke verify summary: $suite ---${NC}"
+    if [ -f "$post_verify_log" ]; then
+        grep -E "VERIFICATION SUMMARY|Total POVs verified:|CPVs triggered:|Smoke post-verification passed|patch.*valid|patch.*PASS|patch.*FAIL" "$post_verify_log" | sed 's/^.*| /  /' || true
+    fi
+    echo -e "${YELLOW}------${NC}"
+    echo ""
+}
+
+_smoke_workspace_marker() {
+    printf '%s/%s' "$SMOKE_WORKSPACE_DIR" "$1"
+}
+
+_save_smoke_workspace() {
+    mkdir -p "$SMOKE_WORKSPACE_DIR"
+    printf '%s\n' "$2" > "$(_smoke_workspace_marker "$1")"
+}
+
+_load_smoke_workspace() {
+    local marker
+    marker="$(_smoke_workspace_marker "$1")"
+    [ -f "$marker" ] || { echo ""; return 1; }
+    cat "$marker"
+}
+
+# Phase 1: Run worker + evaluator + orchestrator.  Leaves workspace intact
+# for post-verify.  Writes workspace path to marker file.
+run_smoke_suite_run() {
     local suite="$1"
     local stage_name="$2"
     local base_config workspace config_path exp_dir report_dir
-    local worker_log run_log worker_pid rc cpuset skip_cpuset skip_verification
+    local worker_log evaluator_log run_log worker_pid evaluator_pid rc cpuset skip_cpuset skip_verification
+
+    _smoke_kill_tree() {
+        local pid="$1"
+        [ -n "$pid" ] || return 0
+        kill -TERM -- -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+        sleep 2
+        kill -KILL -- -"$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+    }
+    _smoke_suite_cleanup() {
+        _smoke_kill_tree "${worker_pid:-}"
+        _smoke_kill_tree "${evaluator_pid:-}"
+        [ -n "${_worker_logger_pid:-}" ] && kill "${_worker_logger_pid}" 2>/dev/null || true
+        [ -n "${_evaluator_logger_pid:-}" ] && kill "${_evaluator_logger_pid}" 2>/dev/null || true
+        cleanup_smoke_bg_logging
+    }
+    # Per-suite Valkey for full isolation in parallel mode.
+    local suite_valkey_container="" suite_valkey_volume="" suite_redis_host=""
+    _smoke_suite_cleanup_valkey() {
+        if [ -n "$suite_valkey_container" ]; then
+            docker rm -f "$suite_valkey_container" >/dev/null 2>&1 || true
+        fi
+        if [ -n "$suite_valkey_volume" ]; then
+            docker volume rm "$suite_valkey_volume" >/dev/null 2>&1 || true
+        fi
+    }
+    _smoke_suite_full_cleanup() {
+        _smoke_suite_cleanup
+        _smoke_suite_cleanup_valkey
+    }
+    trap _smoke_suite_full_cleanup EXIT
 
     run_stage "$stage_name"
     base_config="$(smoke_config_for_suite "$suite")" || fail "Unknown smoke suite: $suite"
     [ -f "$base_config" ] || fail "Missing smoke config: $base_config"
+
+    # Start per-suite Valkey if no external CRSBENCH_REDIS_HOST is set
+    if [ -z "${CRSBENCH_REDIS_HOST:-}" ]; then
+        local _attempt _port
+        for _attempt in $(seq 1 20); do
+            _port=$(python3 -c "import random; print(random.randint(20000, 50000))")
+            suite_valkey_container="crsbench-smoke-valkey-${suite}-${_port}-$$"
+            suite_valkey_volume="crsbench_smoke_valkey_${suite}_${_port}_$$"
+            if docker run -d \
+                --name "$suite_valkey_container" \
+                -p "127.0.0.1:${_port}:6379" \
+                -v "${suite_valkey_volume}:/data" \
+                valkey/valkey:8.0-alpine \
+                valkey-server --appendonly yes >/dev/null 2>&1; then
+                local _ready=0
+                for _ in $(seq 1 20); do
+                    if docker exec "$suite_valkey_container" valkey-cli ping >/dev/null 2>&1; then
+                        _ready=1; break
+                    fi
+                    sleep 0.2
+                done
+                if [ "$_ready" -eq 1 ]; then
+                    suite_redis_host="localhost:${_port}"
+                    echo "[smoke:${suite}] started per-suite Valkey: container=${suite_valkey_container} host=${suite_redis_host}"
+                    break
+                fi
+                docker rm -f "$suite_valkey_container" >/dev/null 2>&1 || true
+                docker volume rm "$suite_valkey_volume" >/dev/null 2>&1 || true
+                suite_valkey_container="" ; suite_valkey_volume=""
+            fi
+        done
+        [ -n "$suite_redis_host" ] || fail "Failed to start per-suite Valkey for $suite"
+    else
+        suite_redis_host="${CRSBENCH_REDIS_HOST}"
+    fi
 
     workspace=$(mktemp -d "/tmp/crsbench-smoke-${suite}-XXXXXX")
     config_path="$workspace/experiment-config.yaml"
@@ -592,10 +850,14 @@ run_smoke_suite_config() {
     mkdir -p "$exp_dir" "$report_dir"
 
     skip_verification="$(smoke_skip_verification_for_suite "$suite")"
-    render_smoke_config "$suite" "$base_config" "$config_path" "$exp_dir" "$report_dir" "${CRSBENCH_REDIS_HOST}" "$skip_verification" >/dev/null \
+    render_smoke_config "$suite" "$base_config" "$config_path" "$exp_dir" "$report_dir" "$suite_redis_host" "$skip_verification" >/dev/null \
         || fail "Failed to render smoke config for $suite"
 
+    # Save workspace path for post-verify phase
+    _save_smoke_workspace "$suite" "$workspace"
+
     worker_log="$workspace/worker.log"
+    evaluator_log="$workspace/evaluator.log"
     run_log="$workspace/run.log"
 
     local worker_cmd=(uv run crsbench worker --experiment-config "$config_path" --continuous)
@@ -610,22 +872,44 @@ run_smoke_suite_config() {
         fi
     fi
 
-    "${worker_cmd[@]}" >"$worker_log" 2>&1 &
-    worker_pid=$!
+    start_smoke_logged_command_bg "$worker_log" "smoke:${suite}:worker" "${worker_cmd[@]}"
+    worker_pid="$SMOKE_BG_PID"
+    _worker_logger_pid="$SMOKE_BG_LOGGER_PID"
+
+    local evaluator_cmd=(uv run crsbench evaluator --experiment-config "$config_path" --idle-timeout 0)
+    start_smoke_logged_command_bg "$evaluator_log" "smoke:${suite}:evaluator" "${evaluator_cmd[@]}"
+    evaluator_pid="$SMOKE_BG_PID"
+    _evaluator_logger_pid="$SMOKE_BG_LOGGER_PID"
+
     sleep 3
     if ! kill -0 "$worker_pid" >/dev/null 2>&1; then
+        _smoke_suite_cleanup
         echo "=== worker log (tail) ==="
         tail -n 120 "$worker_log" || true
         fail "Smoke worker failed to start for suite=$suite"
     fi
+    if ! kill -0 "$evaluator_pid" >/dev/null 2>&1; then
+        _smoke_suite_cleanup
+        echo "=== evaluator log (tail) ==="
+        tail -n 120 "$evaluator_log" || true
+        fail "Smoke evaluator failed to start for suite=$suite"
+    fi
 
     rc=0
-    uv run crsbench run --experiment-config "$config_path" --distributed --queue-mode fresh >"$run_log" 2>&1 || rc=$?
+    run_smoke_logged_command "$run_log" "smoke:${suite}:run" \
+        uv run crsbench run --experiment-config "$config_path" --distributed --queue-mode fresh || rc=$?
 
     if ! stop_worker_process "$worker_pid" "worker[$suite]"; then
         echo "=== worker log (tail) ==="
         tail -n 200 "$worker_log" || true
+        stop_worker_process "$evaluator_pid" "evaluator[$suite]" || true
         fail "Smoke worker did not terminate cleanly for suite=$suite"
+    fi
+
+    if ! stop_worker_process "$evaluator_pid" "evaluator[$suite]"; then
+        echo "=== evaluator log (tail) ==="
+        tail -n 200 "$evaluator_log" || true
+        echo "[smoke] evaluator[$suite] did not terminate cleanly"
     fi
 
     if [ "$rc" -ne 0 ]; then
@@ -633,50 +917,99 @@ run_smoke_suite_config() {
         tail -n 200 "$run_log" || true
         echo "=== worker log (tail) ==="
         tail -n 200 "$worker_log" || true
+        echo "=== evaluator log (tail) ==="
+        tail -n 200 "$evaluator_log" || true
         fail "Smoke run failed for suite=$suite"
     fi
+
+    _smoke_run_summary "$suite" "$workspace"
+    success "Smoke run $suite passed"
+}
+
+# Phase 2: Post-verify outputs from a previous run phase.
+# Reads workspace path from marker file, runs crsbench verify / patch-verify,
+# then cleans up the workspace.
+run_smoke_suite_verify() {
+    local suite="$1"
+    local stage_name="$2"
+    local workspace exp_dir post_verify_log rc skip_verification
+
+    run_stage "$stage_name"
+
+    workspace="$(_load_smoke_workspace "$suite")" \
+        || fail "No smoke workspace found for suite=$suite (run phase first)"
+    [ -d "$workspace" ] || fail "Smoke workspace disappeared: $workspace"
+
+    exp_dir="$workspace/experiment-data"
+    post_verify_log="$workspace/post-verify.log"
+    skip_verification="$(smoke_skip_verification_for_suite "$suite")"
+
+    if [ "$skip_verification" = "1" ]; then
+        echo "[smoke] skipping post-run verification for suite=$suite"
+    else
+        rc=0
+        run_smoke_logged_command "$post_verify_log" "smoke:${suite}:verify" \
+            uv run python -m crsbench.benchmark_ci.smoke_post_verify \
+                --suite "$suite" \
+                --experiment-dir "$exp_dir" \
+                --benchmarks-root "$ROOT_DIR/benchmarks" || rc=$?
+
+        if [ "$rc" -ne 0 ]; then
+            echo "=== post-verify log (tail) ==="
+            tail -n 200 "$post_verify_log" || true
+            fail "Smoke post-verification failed for suite=$suite"
+        fi
+    fi
+
+    _smoke_verify_summary "$suite" "$workspace"
 
     if [ "${SMOKE_KEEP_WORKSPACE:-0}" = "1" ]; then
         echo "[smoke] kept workspace: $workspace"
     else
         cleanup_path "$workspace"
     fi
-    success "Smoke $suite passed"
+    # Clean up marker
+    rm -f "$(_smoke_workspace_marker "$suite")"
+    success "Smoke verify $suite passed"
+}
+
+# Combined: run + verify (backward compatible).
+run_smoke_suite_config() {
+    local suite="$1"
+    local stage_name="$2"
+    run_smoke_suite_run "$suite" "$stage_name"
+    run_smoke_suite_verify "$suite" "Post-verify: $suite"
 }
 
 run_smoke_bugfinding() {
     local bugfind_requires_litellm bugfind_requires_tracking
+    load_smoke_env_file
     bugfind_requires_litellm="$(suite_requires_litellm bugfinding)" || fail "Failed to inspect bugfinding smoke LiteLLM requirements"
     bugfind_requires_tracking="$(suite_requires_litellm_tracking bugfinding)" || fail "Failed to inspect bugfinding smoke LiteLLM tracking requirements"
     if [ "$bugfind_requires_litellm" = "1" ]; then
         run_litellm_preflight "$bugfind_requires_tracking"
     fi
-    start_temp_valkey
-    trap cleanup_temp_valkey EXIT
+    # Per-suite Valkey started inside run_smoke_suite_run
     run_smoke_suite_config bugfinding "Stage 4a: Smoke Bugfinding (config-first)"
-    trap - EXIT
-    cleanup_temp_valkey
 }
 
 run_smoke_bugfixing() {
     local bugfix_requires_litellm bugfix_requires_tracking
+    load_smoke_env_file
     bugfix_requires_litellm="$(suite_requires_litellm bugfixing)" || fail "Failed to inspect bugfixing smoke LiteLLM requirements"
     bugfix_requires_tracking="$(suite_requires_litellm_tracking bugfixing)" || fail "Failed to inspect bugfixing smoke LiteLLM tracking requirements"
     if [ "$bugfix_requires_litellm" = "1" ]; then
         run_litellm_preflight "$bugfix_requires_tracking"
     fi
-    start_temp_valkey
-    trap cleanup_temp_valkey EXIT
+    # Per-suite Valkey started inside run_smoke_suite_run
     run_smoke_suite_config bugfixing "Stage 4b: Smoke Bugfixing (config-first)"
-    trap - EXIT
-    cleanup_temp_valkey
 }
 
-run_smoke_parallel() {
-    run_stage "Stage 4: Parallel Smoke (config-first)"
+_smoke_parallel_preflight() {
     local bugfind_requires_litellm bugfind_requires_tracking
     local bugfix_requires_litellm bugfix_requires_tracking
     local parallel_requires_litellm parallel_requires_tracking
+    load_smoke_env_file
     bugfind_requires_litellm="$(suite_requires_litellm bugfinding)" || fail "Failed to inspect bugfinding smoke LiteLLM requirements"
     bugfind_requires_tracking="$(suite_requires_litellm_tracking bugfinding)" || fail "Failed to inspect bugfinding smoke LiteLLM tracking requirements"
     bugfix_requires_litellm="$(suite_requires_litellm bugfixing)" || fail "Failed to inspect bugfixing smoke LiteLLM requirements"
@@ -692,10 +1025,61 @@ run_smoke_parallel() {
     if [ "$parallel_requires_litellm" = "1" ]; then
         run_litellm_preflight "$parallel_requires_tracking"
     fi
+}
 
-    start_temp_valkey
-    trap cleanup_temp_valkey EXIT
+# Phase 1 only: run worker + evaluator + orchestrator for all suites in parallel.
+# Workspaces are preserved for smoke-post-verify.
+run_smoke_run() {
+    run_stage "Stage 4a: Parallel Smoke Run (worker + evaluator + orchestrator)"
+    _smoke_parallel_preflight
 
+    # Each suite starts its own Valkey inside run_smoke_suite_run
+    # (per-suite isolation prevents shared-queue corruption).
+    local pids=()
+    local suites=(bugfinding bugfixing)
+    local suite
+    for suite in "${suites[@]}"; do
+        run_smoke_suite_run "$suite" "Smoke run $suite" &
+        pids+=("$!")
+    done
+
+    local rc=0
+    for pid in "${pids[@]}"; do
+        wait "$pid" || rc=1
+    done
+
+    [ "$rc" -eq 0 ] || fail "Parallel smoke run failed"
+    success "Parallel smoke run passed"
+}
+
+# Phase 2 only: post-verify outputs from a previous smoke-run.
+run_smoke_post_verify() {
+    run_stage "Stage 4b: Parallel Smoke Post-Verify"
+
+    local pids=()
+    local suites=(bugfinding bugfixing)
+    local suite
+    for suite in "${suites[@]}"; do
+        run_smoke_suite_verify "$suite" "Smoke verify $suite" &
+        pids+=("$!")
+    done
+
+    local rc=0
+    for pid in "${pids[@]}"; do
+        wait "$pid" || rc=1
+    done
+
+    [ "$rc" -eq 0 ] || fail "Parallel smoke post-verify failed"
+    success "Parallel smoke post-verify passed"
+}
+
+# Combined: run + verify (default for `smoke` subcommand).
+run_smoke_parallel() {
+    run_stage "Stage 4: Parallel Smoke (config-first)"
+    _smoke_parallel_preflight
+
+    # Each suite starts its own Valkey inside run_smoke_suite_run
+    # (per-suite isolation prevents shared-queue corruption).
     local pids=()
     local suites=(bugfinding bugfixing)
     local suite
@@ -709,8 +1093,6 @@ run_smoke_parallel() {
         wait "$pid" || rc=1
     done
 
-    trap - EXIT
-    cleanup_temp_valkey
     [ "$rc" -eq 0 ] || fail "Parallel smoke failed"
     success "Parallel smoke passed"
 }
@@ -748,6 +1130,12 @@ main() {
         smoke-validate-config)
             validate_smoke_selection_config
             ;;
+        smoke-run)
+            run_smoke_run
+            ;;
+        smoke-post-verify)
+            run_smoke_post_verify
+            ;;
         smoke-bugfinding)
             run_smoke_bugfinding
             ;;
@@ -773,7 +1161,7 @@ main() {
             run_smoke_parallel
             ;;
         *)
-            echo "Usage: $0 [checks|format|sanity|e2e|smoke|smoke-validate-config|smoke-bugfinding|smoke-bugfixing]"
+            echo "Usage: $0 [checks|format|sanity|e2e|smoke|smoke-run|smoke-post-verify|smoke-validate-config|smoke-bugfinding|smoke-bugfixing]"
             echo ""
             echo "  (default)    Run checks + format + sanity-mock + smoke (matches CI)"
             echo "  checks       Stage 1: typecheck, lint, format, unit tests"
@@ -791,4 +1179,6 @@ main() {
     echo -e "\n${GREEN}Completed successfully!${NC}"
 }
 
-main "$@"
+if [ "${CRSBENCH_RUN_LOCAL_SOURCE_ONLY:-0}" != "1" ]; then
+    main "$@"
+fi

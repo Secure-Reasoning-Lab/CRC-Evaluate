@@ -118,6 +118,7 @@ def run_dashboard(args: argparse.Namespace) -> int:
             cwd=dashboard_dir,
             capture_output=True,
             text=True,
+            errors="replace",
         )
         if result.returncode != 0:
             logger.error(f"Failed to install dependencies: {result.stderr}")

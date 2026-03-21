@@ -85,6 +85,75 @@ class TestCheckVerify:
 
         assert check_verify(benchmark_path, results_file) is False
 
+    def test_check_verify_harness_filter_ignores_other_harness_cpvs(
+        self, tmp_path: Path
+    ) -> None:
+        """Harness-scoped verify should only require CPVs for that harness."""
+        benchmark_path = tmp_path / "test-benchmark"
+        aixcc_dir = benchmark_path / ".aixcc"
+        aixcc_dir.mkdir(parents=True)
+
+        meta = {
+            "harness_files": [
+                {
+                    "name": "fuzz_target_a",
+                    "vulns": [
+                        {"vuln_keyword": "cpv_0"},
+                    ],
+                },
+                {
+                    "name": "fuzz_target_b",
+                    "vulns": [
+                        {"vuln_keyword": "cpv_1"},
+                    ],
+                },
+            ]
+        }
+        (aixcc_dir / "meta.yaml").write_text(yaml.dump(meta))
+
+        results = [{"harness": "fuzz_target_a", "cpv_matched": ["cpv_0"]}]
+        results_file = tmp_path / "results.json"
+        results_file.write_text(json.dumps(results))
+
+        assert (
+            check_verify(benchmark_path, results_file, harness="fuzz_target_a") is True
+        )
+
+    def test_check_verify_harness_filter_requires_selected_harness_cpvs(
+        self, tmp_path: Path
+    ) -> None:
+        """Harness-scoped verify should fail if selected harness misses a CPV."""
+        benchmark_path = tmp_path / "test-benchmark"
+        aixcc_dir = benchmark_path / ".aixcc"
+        aixcc_dir.mkdir(parents=True)
+
+        meta = {
+            "harness_files": [
+                {
+                    "name": "fuzz_target_a",
+                    "vulns": [
+                        {"vuln_keyword": "cpv_0"},
+                        {"vuln_keyword": "cpv_1"},
+                    ],
+                },
+                {
+                    "name": "fuzz_target_b",
+                    "vulns": [
+                        {"vuln_keyword": "cpv_2"},
+                    ],
+                },
+            ]
+        }
+        (aixcc_dir / "meta.yaml").write_text(yaml.dump(meta))
+
+        results = [{"harness": "fuzz_target_a", "cpv_matched": ["cpv_0"]}]
+        results_file = tmp_path / "results.json"
+        results_file.write_text(json.dumps(results))
+
+        assert (
+            check_verify(benchmark_path, results_file, harness="fuzz_target_a") is False
+        )
+
 
 class TestCheckPatchVerify:
     """Tests for check_patch_verify function."""
@@ -175,19 +244,75 @@ class TestCheckCoverage:
         assert check_coverage(results_file) is False
 
     def test_check_coverage_zero_lines_total(self, tmp_path: Path) -> None:
-        """Test coverage fails when no lines are found."""
+        """Test coverage fails when totals are claimed but invalid."""
         data = {
             "harness": "fuzz_target",
             "summary": {
                 "lines_covered": 0,
                 "lines_total": 0,
                 "lines_percent": 0.0,
+                "totals_available": True,
             },
         }
         results_file = tmp_path / "results.json"
         results_file.write_text(json.dumps(data))
 
         assert check_coverage(results_file) is False
+
+    def test_check_coverage_unknown_total_with_covered_lines(
+        self, tmp_path: Path
+    ) -> None:
+        """Unknown totals are acceptable when coverage still found lines."""
+        data = {
+            "harness": "fuzz_target",
+            "summary": {
+                "lines_covered": 7,
+                "lines_total": 0,
+                "lines_percent": 0.0,
+                "totals_available": False,
+            },
+        }
+        results_file = tmp_path / "results.json"
+        results_file.write_text(json.dumps(data))
+
+        assert check_coverage(results_file) is True
+
+    def test_check_coverage_unknown_total_rejects_populated_denominators(
+        self, tmp_path: Path
+    ) -> None:
+        """Unknown-total reports must not ship denominator fields."""
+        data = {
+            "harness": "fuzz_target",
+            "summary": {
+                "lines_covered": 7,
+                "lines_total": 11,
+                "lines_percent": 63.6,
+                "totals_available": False,
+            },
+        }
+        results_file = tmp_path / "results.json"
+        results_file.write_text(json.dumps(data))
+
+        assert check_coverage(results_file) is False
+
+    def test_check_coverage_legacy_function_totals_do_not_force_line_total(
+        self, tmp_path: Path
+    ) -> None:
+        """Legacy reports with only function totals still have unknown line totals."""
+        data = {
+            "harness": "fuzz_target",
+            "summary": {
+                "lines_covered": 7,
+                "lines_total": 0,
+                "lines_percent": 0.0,
+                "functions_covered": 3,
+                "functions_total": 11,
+            },
+        }
+        results_file = tmp_path / "results.json"
+        results_file.write_text(json.dumps(data))
+
+        assert check_coverage(results_file) is True
 
     def test_check_coverage_missing_summary(self, tmp_path: Path) -> None:
         """Test coverage fails when summary is missing."""

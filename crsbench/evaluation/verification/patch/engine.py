@@ -16,9 +16,10 @@ import re
 import shutil
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Iterable, Optional
 
 from crsbench.builder import OSSFuzzInfrastructure
 from crsbench.builder.types import BuildConfig, VariantType
@@ -93,8 +94,8 @@ class PatchVerificationEngine:
         timeout: Timeout for reproduce operations
         build_timeout: Timeout for build operations
         test_timeout: Timeout for unit test execution
-        build_workers: Number of parallel workers for patch builds
-        verify_workers: Number of parallel workers for POV variant testing
+        build_workers: Parallel build jobs (resolved from jobs param)
+        verify_workers: Per-job parallelism (resolved from cores_per_job param)
         work_dir: Working directory for isolated builds
     """
 
@@ -107,8 +108,8 @@ class PatchVerificationEngine:
         timeout: int = 180,
         build_timeout: int = 1200,
         test_timeout: int = 1800,
-        build_workers: Optional[int] = None,
-        verify_workers: Optional[int] = None,
+        jobs: Optional[int] = None,
+        cores_per_job: Optional[int] = None,
         verify_variants: bool = True,
         work_dir: Optional[Path] = None,
         log_dir: Optional[Path] = None,
@@ -134,12 +135,9 @@ class PatchVerificationEngine:
             timeout: Timeout for reproduce operations in seconds
             build_timeout: Timeout for build operations in seconds
             test_timeout: Timeout for unit test execution in seconds
-            build_workers: Number of parallel workers for patch builds (None = use
-                default). Controls how many patches can build simultaneously in
-                verify_patches() and verify_benchmark().
-            verify_workers: Number of parallel workers for POV variant testing
-                (None = use default). Controls parallelism within a single patch
-                verification when testing against multiple POV variants.
+            jobs: Parallel verification jobs (controls build parallelism).
+            cores_per_job: CPUs per verification job (controls per-job
+                parallelism for POV variant testing).
             verify_variants: If True, verify patch against all POV variants
             work_dir: Working directory for isolated builds. If provided, builds
                 are isolated to this directory with symlinks to oss-fuzz/build/out/
@@ -187,8 +185,8 @@ class PatchVerificationEngine:
         self.timeout = timeout
         self.build_timeout = build_timeout
         self.test_timeout = test_timeout
-        self.build_workers = resolve_build_workers(build_workers)
-        self.verify_workers = resolve_verify_workers(verify_workers)
+        self.build_workers = resolve_build_workers(jobs)
+        self.verify_workers = resolve_verify_workers(cores_per_job)
         self.verify_variants = verify_variants
         self.force_rebuild = force_rebuild
         self.use_inc_build = use_inc_build
@@ -638,10 +636,16 @@ class PatchVerificationEngine:
             variant_results: dict[str, bool] = {}
             variants_matched = 0
 
-            for pov_path in pov_variants:
-                pov_name, passed, pov_stdout, pov_stderr = self._verify_single_pov(
-                    variant_name, harness, pov_path
-                )
+            for pov_path, (
+                _pov_name,
+                passed,
+                pov_stdout,
+                pov_stderr,
+            ) in zip(
+                pov_variants,
+                self._run_pov_variant_checks(variant_name, harness, pov_variants),
+                strict=False,
+            ):
                 variant_id = pov_path.stem
                 self._write_verify_streams(
                     patch_id=result.patch_id,
@@ -1328,10 +1332,11 @@ class PatchVerificationEngine:
 
         failed_povs: list[str] = []
 
-        for pov_path in pov_paths:
-            pov_name, passed, _, _ = self._verify_single_pov(
-                variant_name, harness, pov_path
-            )
+        for pov_name, passed, _, _ in self._run_pov_variant_checks(
+            variant_name,
+            harness,
+            pov_paths,
+        ):
             if not passed:
                 failed_povs.append(pov_name)
 
@@ -1342,6 +1347,27 @@ class PatchVerificationEngine:
             logger.info(f"{len(failed_povs)}/{len(pov_paths)} POV variants failed")
 
         return all_passed, failed_povs
+
+    def _run_pov_variant_checks(
+        self,
+        variant_name: str,
+        harness: str,
+        pov_paths: list[Path],
+    ) -> Iterable[tuple[str, bool, str, str]]:
+        """Run POV variant checks using configured per-patch verification parallelism."""
+        if len(pov_paths) <= 1 or self.verify_workers <= 1:
+            for pov_path in pov_paths:
+                yield self._verify_single_pov(variant_name, harness, pov_path)
+            return
+
+        max_workers = min(self.verify_workers, len(pov_paths))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            yield from executor.map(
+                lambda pov_path: self._verify_single_pov(
+                    variant_name, harness, pov_path
+                ),
+                pov_paths,
+            )
 
     def _discover_patches(
         self, patch_dir: Path, target_pov_id: Optional[str] = None

@@ -154,7 +154,7 @@ class TestCiSupervisorQueues:
             _patch_supervisor(),
             patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
             patch(
-                "crsbench.distributed.ci_supervisor.multiprocessing.Process"
+                "crsbench.distributed.ci_supervisor._mp_ctx.Process"
             ) as mock_proc_cls,
         ):
             mock_rq.Queue.side_effect = queue_factory
@@ -830,7 +830,7 @@ class TestSupervisorExitCondition:
             _patch_supervisor(),
             patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
             patch(
-                "crsbench.distributed.ci_supervisor.multiprocessing.Process"
+                "crsbench.distributed.ci_supervisor._mp_ctx.Process"
             ) as mock_proc_cls,
             patch("crsbench.utils.cpu_pool.CPUPool", return_value=mock_pool),
             patch(
@@ -848,6 +848,10 @@ class TestSupervisorExitCondition:
                 return_value="crsbench/build-1",
             ),
             patch("crsbench.utils.cgroup.cleanup_cgroup", return_value=True) as mock_cg,
+            patch(
+                "crsbench.distributed.worker._terminate_process_tree"
+            ) as mock_tree_kill,
+            patch("crsbench.distributed.ci_supervisor._cleanup_stale_rq_workers"),
         ):
             mock_rq.Queue.side_effect = queue_factory
             mock_rq.Queue.dequeue_any.side_effect = dequeue_any
@@ -866,8 +870,7 @@ class TestSupervisorExitCondition:
             )
 
         assert result == 3
-        mock_process.terminate.assert_called_once()
-        mock_process.kill.assert_called_once()
+        mock_tree_kill.assert_called_once_with(43210)
         mock_pool.release.assert_called_once_with([0])
         mock_cg.assert_called_with(Path("/sys/fs/cgroup/crsbench/build-1"), force=True)
 
@@ -905,7 +908,7 @@ class TestSupervisorExitCondition:
             _patch_supervisor(),
             patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
             patch(
-                "crsbench.distributed.ci_supervisor.multiprocessing.Process"
+                "crsbench.distributed.ci_supervisor._mp_ctx.Process"
             ) as mock_proc_cls,
         ):
             mock_rq.Queue.side_effect = queue_factory
@@ -1273,7 +1276,7 @@ class TestMultiQueueSupervisor:
             _patch_supervisor(),
             patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
             patch(
-                "crsbench.distributed.ci_supervisor.multiprocessing.Process"
+                "crsbench.distributed.ci_supervisor._mp_ctx.Process"
             ) as mock_proc_cls,
             patch("crsbench.utils.cpu_pool.CPUPool", return_value=mock_pool),
             patch(
@@ -1291,6 +1294,10 @@ class TestMultiQueueSupervisor:
                 return_value="crsbench/build-1",
             ),
             patch("crsbench.utils.cgroup.cleanup_cgroup", return_value=True) as mock_cg,
+            patch(
+                "crsbench.distributed.worker._terminate_process_tree"
+            ) as mock_tree_kill,
+            patch("crsbench.distributed.ci_supervisor._cleanup_stale_rq_workers"),
         ):
             mock_rq.Queue.side_effect = queue_factory
             mock_rq.Queue.dequeue_any.side_effect = dequeue_any
@@ -1309,8 +1316,7 @@ class TestMultiQueueSupervisor:
             )
 
         assert result == 3
-        mock_process.terminate.assert_called_once()
-        mock_process.kill.assert_called_once()
+        mock_tree_kill.assert_called_once_with(12321)
         mock_pool.release.assert_called_once_with([0])
         mock_cg.assert_called_with(Path("/sys/fs/cgroup/crsbench/build-1"), force=True)
 

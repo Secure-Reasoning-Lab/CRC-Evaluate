@@ -110,6 +110,56 @@ def format_cpuset(cpus: list[int]) -> str:
     return ",".join(ranges)
 
 
+def visible_cpu_ids(
+    total_cpus: Optional[int] = None,
+    *,
+    skip_cpus: Optional[str] = None,
+    cores: Optional[Union[str, int]] = None,
+) -> list[int]:
+    """Return CPUs visible to the current runtime after applying overrides."""
+    if isinstance(cores, str):
+        base_set = set(parse_cpuset(cores))
+    elif isinstance(cores, int):
+        base_set = set(range(cores))
+    elif total_cpus is not None:
+        base_set = set(range(total_cpus))
+    else:
+        try:
+            base_set = set(os.sched_getaffinity(0))
+        except AttributeError:
+            base_set = set(range(os.cpu_count() or 1))
+
+    if skip_cpus is not None:
+        skip_set = set(parse_cpuset(skip_cpus))
+        base_set -= skip_set
+
+    if not base_set:
+        raise ValueError("No CPUs available after applying skip_cpus exclusion")
+
+    return sorted(base_set)
+
+
+def visible_cpu_count(
+    total_cpus: Optional[int] = None,
+    *,
+    skip_cpus: Optional[str] = None,
+    cores: Optional[Union[str, int]] = None,
+) -> int:
+    """Return the count of CPUs visible to the current runtime."""
+    return len(visible_cpu_ids(total_cpus=total_cpus, skip_cpus=skip_cpus, cores=cores))
+
+
+def auto_cores_per_job(
+    jobs: int,
+    *,
+    skip_cpus: Optional[str] = None,
+    cores: Optional[Union[str, int]] = None,
+) -> int:
+    """Derive a per-job CPU width from the visible CPU envelope."""
+    total = visible_cpu_count(skip_cpus=skip_cpus, cores=cores)
+    return max(1, total // max(jobs, 1))
+
+
 class CPUPool:
     """Thread-safe CPU pool for dynamic allocation to workers.
 
@@ -151,26 +201,12 @@ class CPUPool:
                 (e.g., ``"16-47"``) or an integer count (first N cores).
                 Takes precedence over ``total_cpus``.
         """
-        # 1. Determine the base set of cores
-        if isinstance(cores, str):
-            base_set = set(parse_cpuset(cores))
-        elif isinstance(cores, int):
-            base_set = set(range(cores))
-        elif total_cpus is not None:
-            base_set = set(range(total_cpus))
-        else:
-            base_set = set(range(os.cpu_count() or 1))
+        # 1. Determine the visible CPU envelope
+        base_set = set(
+            visible_cpu_ids(total_cpus=total_cpus, skip_cpus=skip_cpus, cores=cores)
+        )
 
-        # 2. Apply skip_cpus exclusion
-        if skip_cpus is not None:
-            skip_set = set(parse_cpuset(skip_cpus))
-            base_set -= skip_set
-
-        # 3. Validate the result
-        if not base_set:
-            raise ValueError("No CPUs available after applying skip_cpus exclusion")
-
-        # 4. Assign to instance variables
+        # 2. Assign to instance variables
         self.total_cpus = len(base_set)
         self.available = base_set
         self.lock = threading.Lock()

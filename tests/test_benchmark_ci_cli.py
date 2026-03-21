@@ -62,8 +62,6 @@ class TestBuildOptionsParent:
         parser = create_build_options_parent()
         ns = parser.parse_args([])
         assert ns.source == "pkgs"
-        assert ns.build_workers == 4
-        assert ns.verify_workers == 4
         assert ns.exit_on_error is False
 
     def test_source_pkgs(self):
@@ -71,20 +69,10 @@ class TestBuildOptionsParent:
         ns = parser.parse_args(["--source", "pkgs"])
         assert ns.source == "pkgs"
 
-    def test_build_workers(self):
-        parser = create_build_options_parent()
-        ns = parser.parse_args(["--build-workers", "8"])
-        assert ns.build_workers == 8
-
     def test_exit_on_error(self):
         parser = create_build_options_parent()
         ns = parser.parse_args(["--exit-on-error"])
         assert ns.exit_on_error is True
-
-    def test_verify_workers(self):
-        parser = create_build_options_parent()
-        ns = parser.parse_args(["--verify-workers", "12"])
-        assert ns.verify_workers == 12
 
 
 class TestOutputOptionsParent:
@@ -135,11 +123,8 @@ class TestParentsComposition:
                 create_output_options_parent(),
             ]
         )
-        ns = parser.parse_args(
-            ["benchmarks/test", "--build-workers", "16", "-o", "out.json"]
-        )
+        ns = parser.parse_args(["benchmarks/test", "-o", "out.json"])
         assert ns.benchmark == "benchmarks/test"
-        assert ns.build_workers == 16
         assert ns.output == Path("out.json")
 
 

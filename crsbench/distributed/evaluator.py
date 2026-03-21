@@ -24,6 +24,7 @@ from crsbench.distributed.queue import REDIS_AVAILABLE
 from crsbench.distributed.registry import RuntimeRegistration
 from crsbench.evaluation.results import TrialResult
 from crsbench.utils.benchmark_utils import filter_benchmarks_by_mode
+from crsbench.utils.cpu_pool import auto_cores_per_job, visible_cpu_count
 from crsbench.utils.logger import configure_logger, get_logger
 
 logger = get_logger(__name__)
@@ -332,8 +333,8 @@ def run_evaluator_main(
         verify_queue_name=verify_queue_name,
         worker_name=f"evaluator-{experiment_name}",
         build_jobs=build_jobs or 1,
-        build_cores_per_job=build_cores_per_job or 4,
-        verify_cores_per_job=verify_cores_per_job or 4,
+        build_cores_per_job=build_cores_per_job,
+        verify_cores_per_job=verify_cores_per_job,
         verify_jobs=verify_jobs or (build_jobs or 1),
         job_runner=_evaluator_job_runner,
         use_cpuset=use_cpuset,
@@ -866,12 +867,46 @@ def run_evaluator_configless(
     resolved_build_cores_per_job = (
         build_cores_per_job
         if build_cores_per_job is not None
-        else (max(meta_build_cores) if meta_build_cores else 4)
+        else (max(meta_build_cores) if meta_build_cores else None)
     )
     resolved_verify_cores_per_job = (
         verify_cores_per_job
         if verify_cores_per_job is not None
-        else (max(meta_verify_cores) if meta_verify_cores else 4)
+        else (max(meta_verify_cores) if meta_verify_cores else None)
+    )
+    effective_build_cores_per_job = (
+        resolved_build_cores_per_job
+        if resolved_build_cores_per_job is not None
+        else (
+            auto_cores_per_job(
+                resolved_build_jobs,
+                cores=cores,
+                skip_cpus=skip_cpus,
+            )
+            if use_cpuset
+            else visible_cpu_count(cores=cores, skip_cpus=skip_cpus)
+        )
+    )
+    effective_verify_cores_per_job = (
+        resolved_verify_cores_per_job
+        if resolved_verify_cores_per_job is not None
+        else (
+            auto_cores_per_job(
+                (
+                    verify_jobs
+                    if verify_jobs is not None
+                    else (
+                        max(meta_verify_jobs)
+                        if meta_verify_jobs
+                        else resolved_build_jobs
+                    )
+                ),
+                cores=cores,
+                skip_cpus=skip_cpus,
+            )
+            if use_cpuset
+            else visible_cpu_count(cores=cores, skip_cpus=skip_cpus)
+        )
     )
     resolved_verify_jobs = (
         verify_jobs
@@ -881,8 +916,8 @@ def run_evaluator_configless(
             if meta_verify_jobs
             else max(
                 1,
-                (resolved_build_jobs * resolved_build_cores_per_job)
-                // resolved_verify_cores_per_job,
+                (resolved_build_jobs * effective_build_cores_per_job)
+                // effective_verify_cores_per_job,
             )
         )
     )
@@ -918,11 +953,13 @@ def run_evaluator_configless(
     from crsbench.distributed.ci_supervisor import run_multi_queue_supervisor
 
     logger.info(
-        "Evaluator resource profile (CLI > metadata > default for jobs/cores): "
+        "Evaluator resource profile (CLI > metadata > runtime envelope): "
         f"build_jobs={resolved_build_jobs}, "
-        f"build_cores_per_job={resolved_build_cores_per_job}, "
+        f"build_cores_per_job={resolved_build_cores_per_job if resolved_build_cores_per_job is not None else 'auto'}, "
+        f"effective_build_cores_per_job={effective_build_cores_per_job}, "
         f"verify_jobs={resolved_verify_jobs}, "
-        f"verify_cores_per_job={resolved_verify_cores_per_job}, "
+        f"verify_cores_per_job={resolved_verify_cores_per_job if resolved_verify_cores_per_job is not None else 'auto'}, "
+        f"effective_verify_cores_per_job={effective_verify_cores_per_job}, "
         f"cpuset={resolved_cpuset}, skip_cpuset={resolved_skip_cpuset} (CLI-owned), "
         f"cpu_tag={resolved_cpu_tag}, idle_timeout={resolved_idle_timeout}"
     )
@@ -1008,19 +1045,15 @@ def run_evaluator_configless(
                 reg_build_jobs_values[0] if reg_build_jobs_values else 1
             )
             required_build_cores = (
-                reg_build_cores_values[0] if reg_build_cores_values else 4
+                reg_build_cores_values[0] if reg_build_cores_values else None
             )
             required_verify_cores = (
-                reg_verify_cores_values[0] if reg_verify_cores_values else 4
+                reg_verify_cores_values[0] if reg_verify_cores_values else None
             )
             required_verify_jobs = (
                 reg_verify_jobs_values[0]
                 if reg_verify_jobs_values
-                else max(
-                    1,
-                    (required_build_jobs * required_build_cores)
-                    // required_verify_cores,
-                )
+                else resolved_verify_jobs
             )
             required_idle_timeout = (
                 reg_idle_timeout_values[0] if reg_idle_timeout_values else 0
@@ -1033,11 +1066,14 @@ def run_evaluator_configless(
                     f"{required_build_jobs} but evaluator runs with build_jobs={resolved_build_jobs}",
                 )
                 return False
-            if required_build_cores > resolved_build_cores_per_job:
+            if (
+                required_build_cores is not None
+                and required_build_cores > effective_build_cores_per_job
+            ):
                 _warn_incompatible_once(
                     experiment_name,
                     "requires evaluator.build_cores_per_job="
-                    f"{required_build_cores} but evaluator runs with build_cores_per_job={resolved_build_cores_per_job}",
+                    f"{required_build_cores} but evaluator runs with build_cores_per_job={effective_build_cores_per_job}",
                 )
                 return False
             if required_verify_jobs > resolved_verify_jobs:
@@ -1047,11 +1083,14 @@ def run_evaluator_configless(
                     f"{required_verify_jobs} but evaluator runs with verify_jobs={resolved_verify_jobs}",
                 )
                 return False
-            if required_verify_cores > resolved_verify_cores_per_job:
+            if (
+                required_verify_cores is not None
+                and required_verify_cores > effective_verify_cores_per_job
+            ):
                 _warn_incompatible_once(
                     experiment_name,
                     "requires evaluator.verify_cores_per_job="
-                    f"{required_verify_cores} but evaluator runs with verify_cores_per_job={resolved_verify_cores_per_job}",
+                    f"{required_verify_cores} but evaluator runs with verify_cores_per_job={effective_verify_cores_per_job}",
                 )
                 return False
             if required_idle_timeout > resolved_idle_timeout:

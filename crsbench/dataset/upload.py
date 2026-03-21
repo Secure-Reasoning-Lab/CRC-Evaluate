@@ -268,6 +268,7 @@ def _get_git_commit() -> str:
             check=True,
             capture_output=True,
             text=True,
+            errors="replace",
         )
         return result.stdout.strip()
     except Exception:

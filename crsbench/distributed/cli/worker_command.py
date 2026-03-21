@@ -23,6 +23,105 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
+def _find_existing_rq_workers() -> list[tuple[str, str]]:
+    """Find running rq worker processes for crsbench.
+
+    Returns list of (pid, cmdline) tuples.
+    """
+    import subprocess
+
+    result = subprocess.run(
+        ["ps", "-u", str(os.getuid()), "-o", "pid,args"],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        timeout=5,
+    )
+    if result.returncode != 0:
+        return []
+
+    workers = []
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if "rq:worker:" not in line or "crsbench" not in line:
+            continue
+        parts = line.split(None, 1)
+        if len(parts) == 2:
+            workers.append((parts[0], parts[1]))
+    return workers
+
+
+def _kill_rq_workers(pids: list[str], logger) -> None:
+    """Terminate rq worker processes and their entire process trees."""
+    from crsbench.distributed.worker import _terminate_process_tree
+
+    if not pids:
+        return
+
+    logger.info(f"Terminating {len(pids)} rq worker(s) and their child processes...")
+    for pid in pids:
+        _terminate_process_tree(int(pid))
+    logger.info("Done.")
+
+
+def _check_existing_workers(logger) -> bool:
+    """Check for existing rq worker processes and prompt the user.
+
+    Detects ``rq:worker:*`` processes belonging to the current user that are
+    processing ``crsbench`` trial jobs.  If any are found, offers the user
+    a choice: kill them, continue anyway, or quit.
+
+    Returns True if it is safe to proceed, False if the user chose to abort.
+    """
+    try:
+        rq_workers = _find_existing_rq_workers()
+
+        if not rq_workers:
+            return True
+
+        logger.warning(
+            f"Found {len(rq_workers)} existing rq worker process(es) "
+            f"already running on this machine."
+        )
+        logger.warning(
+            "Running multiple worker pools can cause job phase tracking "
+            "to report incorrect status (e.g. jobs stuck at 'building')."
+        )
+        for pid, cmdline in rq_workers:
+            logger.warning(f"  PID {pid}: {cmdline[:120]}")
+
+        if not sys.stdin.isatty():
+            logger.warning(
+                "Non-interactive session: proceeding despite existing workers."
+            )
+            return True
+
+        print()  # noqa: T201
+        print("How do you want to proceed?")  # noqa: T201
+        print("  [k] Kill - terminate existing workers and start fresh")  # noqa: T201
+        print("  [c] Continue - start anyway (may cause issues)")  # noqa: T201
+        print("  [q] Quit - abort without changes")  # noqa: T201
+        print()  # noqa: T201
+
+        while True:
+            try:
+                choice = input("Choice [k/c/q]: ").strip().lower()
+            except EOFError:
+                return True
+            if choice == "k":
+                pids = [pid for pid, _ in rq_workers]
+                _kill_rq_workers(pids, logger)
+                return True
+            if choice == "c":
+                return True
+            if choice == "q":
+                return False
+            print("Invalid choice. Please enter 'k', 'c', or 'q'.")  # noqa: T201
+    except Exception as e:
+        logger.debug(f"Could not check existing workers: {e}")
+        return True
+
+
 def add_worker_subparser(subparsers) -> None:
     """Add 'worker' subcommand to the CLI.
 
@@ -171,6 +270,10 @@ def run_worker(args: argparse.Namespace) -> int:
             )
             return 1
 
+        if not _check_existing_workers(logger):
+            logger.info("Aborted by user.")
+            return 1
+
         try:
             return run_worker_configless(
                 redis_host=redis_host,
@@ -243,9 +346,13 @@ def run_worker(args: argparse.Namespace) -> int:
     num_workers = (
         jobs_override
         if jobs_override is not None
-        else (worker_config.jobs if worker_config else 1)
+        else (
+            worker_config.jobs
+            if worker_config and worker_config.jobs is not None
+            else 1
+        )
     )
-    default_cores_per_job = config.resources.cores_per_trial if config.resources else 4
+    default_cores_per_job = None
     cores_per_job = (
         cores_per_job_override
         if cores_per_job_override is not None
@@ -284,6 +391,10 @@ def run_worker(args: argparse.Namespace) -> int:
         cpu_tag = worker_cpu_tag or resources_cpu_tag
     else:
         cpu_tag = normalize_cpu_tag(cpu_tag)
+
+    if not _check_existing_workers(logger):
+        logger.info("Aborted by user.")
+        return 1
 
     try:
         if continuous:

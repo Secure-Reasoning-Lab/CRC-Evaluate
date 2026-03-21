@@ -1,3 +1,5 @@
+import threading
+import time
 from unittest.mock import MagicMock, patch
 
 from crsbench.builder import VariantType
@@ -149,3 +151,68 @@ def test_verify_povs_parallel_preserves_stderr_only_crash_output():
         crash_info["stderr"]["base-asan"]
         == "==2==ERROR: AddressSanitizer: stack-overflow"
     )
+
+
+def test_verify_povs_parallel_uses_verify_workers_for_reproduce_calls():
+    engine = object.__new__(VerificationEngine)
+    engine.verify_workers = 2
+
+    adapter = MagicMock()
+    adapter.benchmark_name = "test-benchmark"
+    adapter.get_mode.return_value = MagicMock(value="full")
+
+    base_result = MagicMock()
+    base_result.success = True
+    base_result.config.variant_type = VariantType.FULL_BASE
+    base_result.config.cpv_num = None
+
+    patched_result = MagicMock()
+    patched_result.success = True
+    patched_result.config.variant_type = VariantType.ALL_PATCHED
+    patched_result.config.cpv_num = None
+
+    lock = threading.Lock()
+    active = 0
+    max_active = 0
+
+    def _fake_execute(task):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.05)
+        with lock:
+            active -= 1
+        return MagicMock(
+            variant_name=task.variant_name,
+            variant_type=task.variant_type,
+            cpv_num=task.cpv_num,
+            crashed=False,
+            crash_log="",
+            stderr="",
+            pov_id=task.pov_id,
+            harness=task.harness,
+        )
+
+    with (
+        patch.object(engine, "_execute_reproduce", side_effect=_fake_execute),
+        patch(
+            "crsbench.evaluation.verification.pov.engine.VerdictResolver.resolve",
+            return_value=PovVerificationResult(
+                status=PovVerificationStatus.NOT_VULNERABLE,
+                benchmark="test-benchmark",
+                pov_id="pov_0",
+            ),
+        ),
+    ):
+        results = engine.verify_povs_parallel(
+            pov_harness_pairs=[("pov_0", b"boom", "test_harness")],
+            adapter=adapter,
+            build_results={
+                "base-asan": base_result,
+                "allpatched-asan": patched_result,
+            },
+        )
+
+    assert len(results) == 1
+    assert max_active >= 2

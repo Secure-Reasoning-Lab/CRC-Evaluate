@@ -63,6 +63,7 @@ def docker_retag(src_image: str, dst_image: str) -> bool:
             ["docker", "tag", src_image, dst_image],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=30,
             stdin=subprocess.DEVNULL,
         )
@@ -83,6 +84,7 @@ def docker_pull(image_name: str, timeout: int = 300) -> bool:
             ["docker", "pull", image_name],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=timeout,
             stdin=subprocess.DEVNULL,
         )
@@ -106,6 +108,7 @@ def docker_push(image_name: str, timeout: int = 600) -> bool:
             ["docker", "push", image_name],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=timeout,
             stdin=subprocess.DEVNULL,
         )
@@ -172,6 +175,7 @@ def get_remote_image_digest(image_name: str) -> Optional[str]:
             ["docker", "manifest", "inspect", image_name, "--verbose"],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=60,
             stdin=subprocess.DEVNULL,
         )
@@ -198,6 +202,7 @@ def get_remote_image_size(image_name: str) -> Optional[int]:
             ["docker", "manifest", "inspect", image_name, "--verbose"],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=60,
             stdin=subprocess.DEVNULL,
         )
@@ -236,6 +241,7 @@ def get_local_image_digest(image_name: str) -> Optional[str]:
             ],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=30,
             stdin=subprocess.DEVNULL,
         )
@@ -257,6 +263,7 @@ def get_local_image_id(image_name: str) -> Optional[str]:
             ["docker", "image", "inspect", image_name, "--format", "{{.Id}}"],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=30,
             stdin=subprocess.DEVNULL,
         )

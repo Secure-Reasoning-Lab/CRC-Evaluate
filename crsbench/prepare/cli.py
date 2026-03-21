@@ -6,6 +6,7 @@ import argparse
 import subprocess
 from pathlib import Path
 
+from crsbench.prepare.uniafl_backend import prepare_uniafl_backend
 from crsbench.utils.logger import get_logger
 from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
@@ -34,9 +35,19 @@ def add_prepare_subparser(subparsers: argparse._SubParsersAction) -> None:
         epilog="""
 Examples:
   %(prog)s prepare
+  %(prog)s prepare --coverage
   %(prog)s prepare --skip-base-images
   %(prog)s prepare --build-base-images
         """,
+    )
+    parser.add_argument(
+        "--coverage",
+        action="store_true",
+        help=(
+            "Prepare the Atlantis/given_fuzzer coverage backend instead of "
+            "OSS-Fuzz. The checkout path is fixed at "
+            "third_party/atlantis-multilang-given_fuzzer."
+        ),
     )
     parser.add_argument(
         "--skip-base-images",
@@ -53,6 +64,19 @@ Examples:
 
 def run_prepare(args: argparse.Namespace) -> int:
     """Execute local environment preparation."""
+    if getattr(args, "coverage", False):
+        if args.skip_base_images or args.build_base_images:
+            logger.error(
+                "Invalid options: --coverage cannot be combined with "
+                "--skip-base-images or --build-base-images"
+            )
+            return 2
+        try:
+            return prepare_uniafl_backend()
+        except (FileNotFoundError, RuntimeError) as e:
+            logger.error(f"Failed to prepare UniAFL coverage backend: {e}")
+            return 1
+
     if args.skip_base_images and args.build_base_images:
         logger.error(
             "Invalid options: --skip-base-images and --build-base-images "
@@ -80,6 +104,7 @@ def run_prepare(args: argparse.Namespace) -> int:
             cwd=oss_fuzz_root,
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=HELPER_PULL_TIMEOUT,
             stdin=subprocess.DEVNULL,
         )
@@ -107,6 +132,7 @@ def run_prepare(args: argparse.Namespace) -> int:
                 ["docker", "pull", image],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=DOCKER_PULL_TIMEOUT,
                 stdin=subprocess.DEVNULL,
             )
@@ -140,6 +166,7 @@ def run_prepare(args: argparse.Namespace) -> int:
                 cwd=oss_fuzz_root,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=BASE_BUILD_TIMEOUT,
                 stdin=subprocess.DEVNULL,
             )

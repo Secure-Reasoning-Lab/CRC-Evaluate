@@ -15,7 +15,7 @@ CLI usage (backwards compatible):
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import yaml
 
@@ -24,11 +24,15 @@ from crsbench.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def get_expected_cpvs(benchmark_path: Path) -> set[str]:
+def get_expected_cpvs(
+    benchmark_path: Path,
+    harness: Optional[str] = None,
+) -> set[str]:
     """Get expected CPVs from benchmark meta.yaml.
 
     Args:
         benchmark_path: Path to benchmark directory
+        harness: Optional harness filter
 
     Returns:
         Set of expected CPV keywords
@@ -42,8 +46,10 @@ def get_expected_cpvs(benchmark_path: Path) -> set[str]:
         meta = yaml.safe_load(f)
 
     cpvs = set()
-    for harness in meta.get("harness_files", []):
-        for vuln in harness.get("vulns", []):
+    for harness_info in meta.get("harness_files", []):
+        if harness is not None and harness_info.get("name") != harness:
+            continue
+        for vuln in harness_info.get("vulns", []):
             cpv = vuln.get("vuln_keyword")
             if cpv:
                 cpvs.add(cpv)
@@ -51,17 +57,22 @@ def get_expected_cpvs(benchmark_path: Path) -> set[str]:
     return cpvs
 
 
-def check_verify(benchmark_path: Path, results_file: Path) -> bool:
+def check_verify(
+    benchmark_path: Path,
+    results_file: Path,
+    harness: Optional[str] = None,
+) -> bool:
     """Check verify results - all expected CPVs must be found.
 
     Args:
         benchmark_path: Path to benchmark directory
         results_file: Path to verification results JSON
+        harness: Optional harness filter
 
     Returns:
         True if all expected CPVs were found
     """
-    expected_cpvs = get_expected_cpvs(benchmark_path)
+    expected_cpvs = get_expected_cpvs(benchmark_path, harness=harness)
     logger.debug(f"Expected CPVs: {sorted(expected_cpvs)}")
 
     if not expected_cpvs:
@@ -161,13 +172,26 @@ def check_coverage(results_file: Path) -> bool:
     lines_covered = summary.get("lines_covered", 0)
     lines_total = summary.get("lines_total", 0)
     lines_percent = summary.get("lines_percent", 0.0)
+    totals_available = summary.get("totals_available")
+    if totals_available is None:
+        totals_available = lines_total > 0
 
     logger.debug(f"Harness: {harness}")
-    logger.debug(f"Lines covered: {lines_covered}/{lines_total} ({lines_percent:.1f}%)")
-
-    if lines_total == 0:
-        logger.error("No lines found in coverage report")
-        return False
+    if totals_available:
+        logger.debug(
+            f"Lines covered: {lines_covered}/{lines_total} ({lines_percent:.1f}%)"
+        )
+        if lines_total == 0:
+            logger.error("Coverage report marked totals as available but lines_total=0")
+            return False
+    else:
+        if lines_total > 0 or lines_percent > 0.0:
+            logger.error(
+                "Coverage report marked totals as unavailable but still populated "
+                "line denominators"
+            )
+            return False
+        logger.debug(f"Lines covered: {lines_covered} (total N/A)")
 
     if lines_covered == 0:
         logger.error("No lines covered")
@@ -186,8 +210,13 @@ def main() -> int:
     command = sys.argv[1]
 
     if command == "verify":
-        if len(sys.argv) != 4:
-            print(f"Usage: {sys.argv[0]} verify <benchmark_path> <results_json>")  # noqa: T201
+        harness = None
+        if len(sys.argv) == 6 and sys.argv[4] == "--harness":
+            harness = sys.argv[5]
+        elif len(sys.argv) != 4:
+            print(  # noqa: T201
+                f"Usage: {sys.argv[0]} verify <benchmark_path> <results_json> [--harness <name>]"
+            )
             return 1
         benchmark_path = Path(sys.argv[2])
         results_file = Path(sys.argv[3])
@@ -197,7 +226,7 @@ def main() -> int:
         if not results_file.exists():
             print(f"ERROR: Results file not found: {results_file}")  # noqa: T201
             return 1
-        return 0 if check_verify(benchmark_path, results_file) else 1
+        return 0 if check_verify(benchmark_path, results_file, harness=harness) else 1
 
     if command == "patch-verify":
         if len(sys.argv) != 3:

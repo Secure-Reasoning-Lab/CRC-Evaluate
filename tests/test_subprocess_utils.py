@@ -6,6 +6,7 @@ Docker containers from blocking communicate() forever.
 
 import os
 import subprocess
+import sys
 import time
 
 import pytest
@@ -13,6 +14,15 @@ from crsbench.utils.subprocess_utils import (
     docker_kill_orphans,
     run_with_timeout,
 )
+
+_NON_UTF8_SCRIPT = (
+    "import sys; "
+    'sys.stdout.buffer.write(b"stdout:\\xff\\n"); '
+    "sys.stdout.flush(); "
+    'sys.stderr.buffer.write(b"stderr:\\xfe\\n"); '
+    "sys.stderr.flush()"
+)
+_NON_UTF8_SLEEP_SCRIPT = _NON_UTF8_SCRIPT + "; import time; time.sleep(5)"
 
 
 class TestRunWithTimeoutNormalExecution:
@@ -56,6 +66,18 @@ class TestRunWithTimeoutNormalExecution:
         )
         assert isinstance(result.stdout, str)
         assert "text" in result.stdout
+
+    def test_text_mode_tolerates_non_utf8_output(self):
+        """Non-UTF-8 bytes must not crash; surrounding payload must survive."""
+        result = run_with_timeout(
+            [sys.executable, "-c", _NON_UTF8_SCRIPT],
+            timeout=10,
+            text=True,
+        )
+        assert isinstance(result.stdout, str)
+        assert isinstance(result.stderr, str)
+        assert "stdout:" in result.stdout
+        assert "stderr:" in result.stderr
 
     def test_capture_output_false(self):
         result = run_with_timeout(
@@ -149,6 +171,19 @@ class TestRunWithTimeoutKillsProcessGroup:
             )
         assert isinstance(exc_info.value.output, bytes)
         assert b"binary_data" in exc_info.value.output
+
+    def test_timeout_expired_tolerates_non_utf8_output_in_text_mode(self):
+        """Timeout with non-UTF-8 must not crash; payload must survive."""
+        with pytest.raises(subprocess.TimeoutExpired) as exc_info:
+            run_with_timeout(
+                [sys.executable, "-c", _NON_UTF8_SLEEP_SCRIPT],
+                timeout=1,
+                text=True,
+            )
+        assert isinstance(exc_info.value.output, str)
+        assert isinstance(exc_info.value.stderr, str)
+        assert "stdout:" in exc_info.value.output
+        assert "stderr:" in exc_info.value.stderr
 
 
 class TestDockerKillOrphans:

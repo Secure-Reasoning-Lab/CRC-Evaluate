@@ -8,6 +8,7 @@ CPU allocations.
 from __future__ import annotations
 
 import multiprocessing
+import multiprocessing.context
 import os
 import shutil
 import time
@@ -16,9 +17,11 @@ from typing import TYPE_CHECKING, Callable, NamedTuple, Optional, Union
 
 from crsbench.distributed.common import normalize_cpu_tag
 from crsbench.distributed.queue import REDIS_AVAILABLE
+from crsbench.utils.cpu_pool import auto_cores_per_job, visible_cpu_count
 from crsbench.utils.logger import get_logger
 
 if REDIS_AVAILABLE:
+    import redis.exceptions
     import rq
     import rq.job
 
@@ -28,6 +31,12 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 DEQUEUE_POLL_TIMEOUT_SECONDS = 1
 NON_CONTINUOUS_CPU_MISMATCH_LIMIT = 3
+MAX_CONSECUTIVE_DEQUEUE_ERRORS = 10
+
+# Use 'fork' context so child processes inherit module-level state
+# (e.g. _verification_engine, _benchmarks_root) from the parent.
+# Python 3.14 defaults to 'forkserver' which does NOT inherit these.
+_mp_ctx: multiprocessing.context.ForkContext = multiprocessing.get_context("fork")  # type: ignore[assignment]
 CPU_TAG_MISMATCH_EXIT_CODE = 4
 
 # job_runner(redis_host, child_name, job_id) -> None
@@ -38,7 +47,7 @@ type QueueRefresher = Callable[["Redis"], tuple[list[str], list[str]]]
 class WorkerEntry(NamedTuple):
     """Metadata for an active child worker process."""
 
-    process: multiprocessing.Process
+    process: multiprocessing.process.BaseProcess
     cpus: list[int]
     job_id: str
     worker_num: int
@@ -95,11 +104,11 @@ def run_ci_supervisor(
     verify_queue_name: str,
     worker_name: str,
     build_jobs: int,
-    build_cores_per_job: int,
+    build_cores_per_job: Optional[int],
     verify_jobs: int,
     job_runner: JobRunner,
     *,
-    verify_cores_per_job: int = 1,
+    verify_cores_per_job: Optional[int] = None,
     use_cpuset: bool = False,
     use_cgroups: bool = False,
     cores: Optional[str] = None,
@@ -144,12 +153,31 @@ def run_ci_supervisor(
     from crsbench.utils.size_parser import parse_size_to_bytes
 
     os.environ["CRSBENCH_SUPERVISOR"] = "1"
+    resolved_build_cores_per_job = (
+        build_cores_per_job
+        if build_cores_per_job is not None
+        else (
+            auto_cores_per_job(build_jobs, cores=cores, skip_cpus=skip_cpus)
+            if use_cpuset
+            else visible_cpu_count(cores=cores, skip_cpus=skip_cpus)
+        )
+    )
+    resolved_verify_cores_per_job = (
+        verify_cores_per_job
+        if verify_cores_per_job is not None
+        else (
+            auto_cores_per_job(max(verify_jobs, 1), cores=cores, skip_cpus=skip_cpus)
+            if use_cpuset
+            else visible_cpu_count(cores=cores, skip_cpus=skip_cpus)
+        )
+    )
+
     logger.info("Starting CI dual-queue supervisor...")
     logger.info(
-        f"Build concurrency: {build_jobs} jobs x {build_cores_per_job} CPUs each"
+        f"Build concurrency: {build_jobs} jobs x {resolved_build_cores_per_job} CPUs each"
     )
     logger.info(
-        f"Verify concurrency: {verify_jobs} jobs x {verify_cores_per_job} CPUs each"
+        f"Verify concurrency: {verify_jobs} jobs x {resolved_verify_cores_per_job} CPUs each"
     )
     if cpu_tag:
         logger.info(f"CPU tag filter enabled: {cpu_tag}")
@@ -191,6 +219,7 @@ def run_ci_supervisor(
     build_phase_complete = False
     idle_since: float = 0.0
     consecutive_cpu_mismatch_requeues = 0
+    consecutive_dequeue_errors = 0
     mismatch_job_ids: set[str] = set()
     mismatch_queue_names: set[str] = set()
     cpu_tag_livelock_detected = False
@@ -319,37 +348,58 @@ def run_ci_supervisor(
                             break
 
             # --- Determine which queues have capacity ---
-            now = time.time()
-            queues_with_capacity: list[rq.Queue] = []
-            if (
-                len(build_active) < build_jobs
-                and build_queue.count > 0
-                and queue_cooldown_until.get(build_queue.name, 0.0) <= now
-            ):
-                queues_with_capacity.append(build_queue)
-            if (
-                len(verify_active) < verify_jobs
-                and verify_queue.count > 0
-                and queue_cooldown_until.get(verify_queue.name, 0.0) <= now
-            ):
-                queues_with_capacity.append(verify_queue)
+            # Wrap queue-interaction block so corrupted Redis replies
+            # (e.g. from a peer evaluator killed on shared Valkey) are
+            # retried instead of crashing this supervisor.
+            try:
+                now = time.time()
+                queues_with_capacity: list[rq.Queue] = []
+                if (
+                    len(build_active) < build_jobs
+                    and build_queue.count > 0
+                    and queue_cooldown_until.get(build_queue.name, 0.0) <= now
+                ):
+                    queues_with_capacity.append(build_queue)
+                if (
+                    len(verify_active) < verify_jobs
+                    and verify_queue.count > 0
+                    and queue_cooldown_until.get(verify_queue.name, 0.0) <= now
+                ):
+                    queues_with_capacity.append(verify_queue)
 
-            if not queues_with_capacity:
-                time.sleep(0.5)
+                if not queues_with_capacity:
+                    time.sleep(0.5)
+                    consecutive_dequeue_errors = 0
+                    continue
+
+                result = rq.Queue.dequeue_any(
+                    queues_with_capacity,
+                    timeout=DEQUEUE_POLL_TIMEOUT_SECONDS,
+                    connection=redis_conn,
+                )
+
+                if not result:
+                    time.sleep(0.5)
+                    consecutive_dequeue_errors = 0
+                    continue
+
+                job, queue_obj = result
+                consecutive_dequeue_errors = 0
+            except (
+                OSError,
+                TypeError,
+                ValueError,
+                redis.exceptions.RedisError,
+            ) as transient_err:
+                consecutive_dequeue_errors += 1
+                logger.warning(
+                    f"Transient queue error #{consecutive_dequeue_errors}: "
+                    f"{transient_err}"
+                )
+                if consecutive_dequeue_errors >= MAX_CONSECUTIVE_DEQUEUE_ERRORS:
+                    raise
+                time.sleep(1)
                 continue
-
-            # Dequeue with build priority (build queue first in list)
-            result = rq.Queue.dequeue_any(
-                queues_with_capacity,
-                timeout=DEQUEUE_POLL_TIMEOUT_SECONDS,
-                connection=redis_conn,
-            )
-
-            if not result:
-                time.sleep(0.5)
-                continue
-
-            job, queue_obj = result
 
             # Skip jobs that are already finished or failed (stale queue entries)
             job_status = job.get_status()
@@ -403,7 +453,11 @@ def run_ci_supervisor(
             mismatch_queue_names.clear()
             is_build = queue_obj.name == build_queue_name
             queue_label = "build" if is_build else "verify"
-            cpu_count = build_cores_per_job if is_build else verify_cores_per_job
+            cpu_count = (
+                resolved_build_cores_per_job
+                if is_build
+                else resolved_verify_cores_per_job
+            )
 
             # Allocate CPUs
             cpus = cpu_pool.allocate(cpu_count) if cpu_pool else None
@@ -458,7 +512,7 @@ def run_ci_supervisor(
                     os.environ["OSS_FUZZ_CPUSET_CPUS"] = cpuset_str
 
                 # Spawn child process
-                p = multiprocessing.Process(
+                p = _mp_ctx.Process(
                     target=job_runner,
                     args=(redis_host, child_name, job.id),
                     name=f"ci-{queue_label}-{worker_num}",
@@ -560,15 +614,18 @@ def run_ci_supervisor(
         _terminate_all(build_active, cpu_pool)
         _terminate_all(verify_active, cpu_pool)
         _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
+        _cleanup_stale_rq_workers(redis_host, build_queue_name, verify_queue_name)
         return 0
     except Exception as e:
         logger.error(f"CI supervisor error: {e}", exc_info=True)
         _terminate_all(build_active, cpu_pool)
         _terminate_all(verify_active, cpu_pool)
         _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
+        _cleanup_stale_rq_workers(redis_host, build_queue_name, verify_queue_name)
         return 3
 
     _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
+    _cleanup_stale_rq_workers(redis_host, build_queue_name, verify_queue_name)
     if cpu_tag_livelock_detected:
         return CPU_TAG_MISMATCH_EXIT_CODE
     return 0
@@ -585,11 +642,11 @@ def run_multi_queue_supervisor(
     verify_queue_names: list[str],
     worker_name: str,
     build_jobs: int,
-    build_cores_per_job: int,
+    build_cores_per_job: Optional[int],
     verify_jobs: int,
     job_runner: JobRunner,
     *,
-    verify_cores_per_job: int = 1,
+    verify_cores_per_job: Optional[int] = None,
     use_cpuset: bool = False,
     use_cgroups: bool = False,
     cores: Optional[str] = None,
@@ -640,14 +697,33 @@ def run_multi_queue_supervisor(
     from crsbench.utils.size_parser import parse_size_to_bytes
 
     os.environ["CRSBENCH_SUPERVISOR"] = "1"
+    resolved_build_cores_per_job = (
+        build_cores_per_job
+        if build_cores_per_job is not None
+        else (
+            auto_cores_per_job(build_jobs, cores=cores, skip_cpus=skip_cpus)
+            if use_cpuset
+            else visible_cpu_count(cores=cores, skip_cpus=skip_cpus)
+        )
+    )
+    resolved_verify_cores_per_job = (
+        verify_cores_per_job
+        if verify_cores_per_job is not None
+        else (
+            auto_cores_per_job(max(verify_jobs, 1), cores=cores, skip_cpus=skip_cpus)
+            if use_cpuset
+            else visible_cpu_count(cores=cores, skip_cpus=skip_cpus)
+        )
+    )
+
     logger.info("Starting multi-queue supervisor...")
     logger.info(f"Build queues: {build_queue_names}")
     logger.info(f"Verify queues: {verify_queue_names}")
     logger.info(
-        f"Build concurrency: {build_jobs} jobs x {build_cores_per_job} CPUs each"
+        f"Build concurrency: {build_jobs} jobs x {resolved_build_cores_per_job} CPUs each"
     )
     logger.info(
-        f"Verify concurrency: {verify_jobs} jobs x {verify_cores_per_job} CPUs each"
+        f"Verify concurrency: {verify_jobs} jobs x {resolved_verify_cores_per_job} CPUs each"
     )
     if cpu_tag:
         logger.info(f"CPU tag filter enabled: {cpu_tag}")
@@ -695,6 +771,7 @@ def run_multi_queue_supervisor(
     build_phase_complete = False
     idle_since: float = 0.0
     consecutive_cpu_mismatch_requeues = 0
+    consecutive_dequeue_errors = 0
     mismatch_job_ids: set[str] = set()
     mismatch_queue_names: set[str] = set()
     cpu_tag_livelock_detected = False
@@ -872,35 +949,59 @@ def run_multi_queue_supervisor(
                             break
 
             # --- Determine which queues have capacity ---
-            now = time.time()
-            queues_with_capacity: list[rq.Queue] = []
-            # Build queues first (priority)
-            if len(build_active) < build_jobs:
-                for bq in build_queues:
-                    if bq.count > 0 and queue_cooldown_until.get(bq.name, 0.0) <= now:
-                        queues_with_capacity.append(bq)
-            # Then verify queues
-            if len(verify_active) < verify_jobs:
-                for vq in verify_queues:
-                    if vq.count > 0 and queue_cooldown_until.get(vq.name, 0.0) <= now:
-                        queues_with_capacity.append(vq)
+            try:
+                now = time.time()
+                queues_with_capacity: list[rq.Queue] = []
+                # Build queues first (priority)
+                if len(build_active) < build_jobs:
+                    for bq in build_queues:
+                        if (
+                            bq.count > 0
+                            and queue_cooldown_until.get(bq.name, 0.0) <= now
+                        ):
+                            queues_with_capacity.append(bq)
+                # Then verify queues
+                if len(verify_active) < verify_jobs:
+                    for vq in verify_queues:
+                        if (
+                            vq.count > 0
+                            and queue_cooldown_until.get(vq.name, 0.0) <= now
+                        ):
+                            queues_with_capacity.append(vq)
 
-            if not queues_with_capacity:
-                time.sleep(0.5)
+                if not queues_with_capacity:
+                    time.sleep(0.5)
+                    consecutive_dequeue_errors = 0
+                    continue
+
+                result = rq.Queue.dequeue_any(
+                    queues_with_capacity,
+                    timeout=DEQUEUE_POLL_TIMEOUT_SECONDS,
+                    connection=redis_conn,
+                )
+
+                if not result:
+                    time.sleep(0.5)
+                    consecutive_dequeue_errors = 0
+                    continue
+
+                job, queue_obj = result
+                consecutive_dequeue_errors = 0
+            except (
+                OSError,
+                TypeError,
+                ValueError,
+                redis.exceptions.RedisError,
+            ) as transient_err:
+                consecutive_dequeue_errors += 1
+                logger.warning(
+                    f"Transient queue error #{consecutive_dequeue_errors}: "
+                    f"{transient_err}"
+                )
+                if consecutive_dequeue_errors >= MAX_CONSECUTIVE_DEQUEUE_ERRORS:
+                    raise
+                time.sleep(1)
                 continue
-
-            # Dequeue with build priority
-            result = rq.Queue.dequeue_any(
-                queues_with_capacity,
-                timeout=DEQUEUE_POLL_TIMEOUT_SECONDS,
-                connection=redis_conn,
-            )
-
-            if not result:
-                time.sleep(0.5)
-                continue
-
-            job, queue_obj = result
 
             # Skip stale jobs
             job_status = job.get_status()
@@ -954,7 +1055,11 @@ def run_multi_queue_supervisor(
             mismatch_queue_names.clear()
             is_build = queue_obj.name in build_queue_name_set
             queue_label = "build" if is_build else "verify"
-            cpu_count = build_cores_per_job if is_build else verify_cores_per_job
+            cpu_count = (
+                resolved_build_cores_per_job
+                if is_build
+                else resolved_verify_cores_per_job
+            )
 
             # Allocate CPUs
             cpus = cpu_pool.allocate(cpu_count) if cpu_pool else None
@@ -1007,7 +1112,7 @@ def run_multi_queue_supervisor(
                     os.environ["OSS_FUZZ_CPUSET_CPUS"] = cpuset_str
 
                 # Spawn child process
-                p = multiprocessing.Process(
+                p = _mp_ctx.Process(
                     target=job_runner,
                     args=(redis_host, child_name, job.id),
                     name=f"mq-{queue_label}-{worker_num}",
@@ -1104,15 +1209,18 @@ def run_multi_queue_supervisor(
         _terminate_all(build_active, cpu_pool)
         _terminate_all(verify_active, cpu_pool)
         _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
+        _cleanup_stale_rq_workers(redis_host, build_queue_names, verify_queue_names)
         return 0
     except Exception as e:
         logger.error(f"Multi-queue supervisor error: {e}", exc_info=True)
         _terminate_all(build_active, cpu_pool)
         _terminate_all(verify_active, cpu_pool)
         _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
+        _cleanup_stale_rq_workers(redis_host, build_queue_names, verify_queue_names)
         return 3
 
     _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
+    _cleanup_stale_rq_workers(redis_host, build_queue_names, verify_queue_names)
     if cpu_tag_livelock_detected:
         return CPU_TAG_MISMATCH_EXIT_CODE
     return 0
@@ -1257,26 +1365,92 @@ def _force_cleanup_deferred_cgroups(deferred: list[Path]) -> None:
     deferred.extend(remaining)
 
 
+def _cleanup_stale_rq_workers(
+    redis_host: str,
+    *queue_names: Union[str, list[str]],
+) -> None:
+    """Remove dead RQ workers from the Redis worker registry.
+
+    Accepts individual queue name strings and/or lists of queue names.
+    After worker processes are terminated, their RQ entries may linger in
+    Redis until the heartbeat TTL expires.  This helper deregisters any
+    worker whose OS process no longer exists.
+    """
+    if not REDIS_AVAILABLE:
+        return
+
+    from crsbench.distributed.queue import create_redis_connection
+
+    # Flatten mixed str / list[str] arguments.
+    flat_names: list[str] = []
+    for name in queue_names:
+        if isinstance(name, list):
+            flat_names.extend(name)
+        else:
+            flat_names.append(name)
+
+    try:
+        conn = create_redis_connection(redis_host)
+    except Exception as exc:
+        logger.warning(f"Failed to connect to Redis for worker cleanup: {exc}")
+        return
+
+    seen_worker_keys: set[str] = set()
+    for qname in flat_names:
+        try:
+            queue = rq.Queue(qname, connection=conn)
+            workers = rq.Worker.all(queue=queue)
+        except Exception as exc:
+            logger.warning(f"Failed to list RQ workers for queue {qname}: {exc}")
+            continue
+
+        for worker in workers:
+            if worker.key in seen_worker_keys:
+                continue
+            seen_worker_keys.add(worker.key)
+            try:
+                worker.refresh()
+                pid = worker.pid
+                if pid is None:
+                    worker.register_death()
+                    logger.info(f"Deregistered RQ worker with no PID: {worker.name}")
+                    continue
+                # Check whether the process is still alive.
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                try:
+                    worker.register_death()
+                    logger.info(
+                        f"Deregistered stale RQ worker: {worker.name} (PID {pid})"
+                    )
+                except Exception as inner:
+                    logger.warning(
+                        f"Failed to deregister stale worker {worker.name}: {inner}"
+                    )
+            except PermissionError:
+                pass
+            except Exception as exc:
+                logger.debug(f"Skipping worker {worker.name} during cleanup: {exc}")
+
+
 def _terminate_all(
     active: dict[int, WorkerEntry],
     cpu_pool: Optional[object],
 ) -> None:
-    """Terminate and clean up all active workers."""
+    """Terminate and clean up all active workers and their process trees."""
+    from crsbench.distributed.worker import _terminate_process_tree
+
     for entry in active.values():
         try:
-            if entry.process.is_alive():
-                entry.process.terminate()
+            if entry.process.is_alive() and entry.process.pid is not None:
+                _terminate_process_tree(entry.process.pid)
         except Exception as e:
-            logger.warning(f"Failed to terminate worker process: {e}")
+            logger.warning(f"Failed to terminate worker process tree: {e}")
     for pid, entry in active.items():
         try:
-            entry.process.join(timeout=5)
-            if entry.process.is_alive():
-                logger.warning(f"Force killing worker (PID: {pid})")
-                entry.process.kill()
-                entry.process.join()
+            entry.process.join(timeout=3)
         except Exception as e:
-            logger.warning(f"Failed joining/killing worker (PID: {pid}): {e}")
+            logger.warning(f"Failed joining worker (PID: {pid}): {e}")
         if cpu_pool and entry.cpus:
             try:
                 cpu_pool.release(entry.cpus)  # type: ignore[union-attr]

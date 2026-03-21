@@ -106,6 +106,7 @@ class TestRuntimeRegistration:
         assert reg.verify_queue == verify_queue
         assert reg.cores_per_trial == 8
         assert reg.memory_per_trial == "16G"
+        assert reg.worker_cores_per_job is None
         assert reg.benchmarks == ["bench-a", "bench-b"]
         assert reg.sanitizers == ["address", "memory"]
         assert reg.modes == ["delta"]
@@ -163,8 +164,9 @@ class TestRuntimeRegistration:
         config.model_dump.return_value = {}
 
         reg = RuntimeRegistration.from_experiment_config(config)
-        assert reg.cores_per_trial == 4  # Default
-        assert reg.memory_per_trial is None  # Unlimited by default
+        assert reg.cores_per_trial is None
+        assert reg.memory_per_trial is None
+        assert reg.worker_cores_per_job is None
 
     def test_from_experiment_config_evaluator_unified_defaults(self) -> None:
         """Unified evaluator jobs/cores_per_job populate build+verify metadata."""

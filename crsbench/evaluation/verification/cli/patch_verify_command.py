@@ -32,11 +32,17 @@ Examples:
 import argparse
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
 import yaml
 
+from crsbench.evaluation.verification.cli.parallelism import (
+    add_parallelism_arguments,
+    resolve_cores_per_job,
+    resolve_jobs,
+)
 from crsbench.evaluation.verification.models import (
     PatchInfo,
     PatchVerificationResult,
@@ -48,6 +54,31 @@ from crsbench.utils.logger import get_logger
 from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
 logger = get_logger(__name__)
+
+
+def _dedupe_variant_tasks(
+    tasks: list[tuple[PatchInfo, str, Path]],
+) -> list[tuple[PatchInfo, str, Path]]:
+    """Skip duplicate patch-variant tasks across harnesses.
+
+    Patch verification variants are keyed by (pov_id, patch_id), not harness.
+    Queueing the same variant for multiple harnesses in parallel causes the
+    build/output races that benchmark-mode verification already guards against.
+    """
+
+    seen_variants: set[str] = set()
+    deduped_tasks: list[tuple[PatchInfo, str, Path]] = []
+    for patch_info, harness, pov_path in tasks:
+        variant_key = f"{patch_info.pov_id}-{patch_info.patch_id}"
+        if variant_key in seen_variants:
+            logger.warning(
+                f"Skipping duplicate patch {variant_key} under harness "
+                f"{harness} (already queued from another harness)"
+            )
+            continue
+        seen_variants.add(variant_key)
+        deduped_tasks.append((patch_info, harness, pov_path))
+    return deduped_tasks
 
 
 def add_patch_verify_subparser(subparsers: argparse._SubParsersAction) -> None:
@@ -194,20 +225,7 @@ Examples:
         help="Timeout for unit test execution in seconds (default: 1800)",
     )
 
-    # Parallel execution
-    parser.add_argument(
-        "--build-workers",
-        type=int,
-        default=None,
-        help="Number of parallel workers for patch builds (default: 4).",
-    )
-
-    parser.add_argument(
-        "--verify-workers",
-        type=int,
-        default=None,
-        help="Number of parallel workers for patch verification (default: 4).",
-    )
+    add_parallelism_arguments(parser)
 
     parser.add_argument(
         "--no-variants",
@@ -275,6 +293,13 @@ def run_patch_verify(args: argparse.Namespace) -> int:
     log_level = "DEBUG" if args.verbose else "INFO"
     configure_logger(level=log_level)
 
+    try:
+        jobs = resolve_jobs(args)
+        cores_per_job = resolve_cores_per_job(args)
+    except ValueError as exc:
+        logger.error(str(exc))
+        return 1
+
     # Validate benchmark path
     if not args.benchmark_path.exists():
         logger.error(f"Benchmark path not found: {args.benchmark_path}")
@@ -314,8 +339,8 @@ def run_patch_verify(args: argparse.Namespace) -> int:
             timeout=args.timeout,
             build_timeout=args.build_timeout,
             test_timeout=args.test_timeout,
-            build_workers=args.build_workers,
-            verify_workers=args.verify_workers,
+            jobs=jobs,
+            cores_per_job=cores_per_job,
             verify_variants=not args.no_variants,
             force_rebuild=force_rebuild,
             use_inc_build=args.inc_build,
@@ -341,6 +366,7 @@ def run_patch_verify(args: argparse.Namespace) -> int:
     try:
         results: list[PatchVerificationResult] = []
         wall_clock_start = time.time()
+        verification_tasks: list[tuple[PatchInfo, str, Path]] = []
 
         def _build_and_verify(
             *,
@@ -378,6 +404,17 @@ def run_patch_verify(args: argparse.Namespace) -> int:
             finally:
                 verify_engine.cleanup()
 
+        def _run_verification_task(
+            task: tuple[PatchInfo, str, Path],
+        ) -> PatchVerificationResult:
+            patch_info, harness, pov_path = task
+            return _build_and_verify(
+                benchmark_path=args.benchmark_path,
+                patch_info=patch_info,
+                harness=harness,
+                pov_path=pov_path,
+            )
+
         if mode == "single":
             logger.info(f"Verifying single patch: {args.patch}")
 
@@ -397,13 +434,7 @@ def run_patch_verify(args: argparse.Namespace) -> int:
                     return 1
 
             for harness in harness_names:
-                result = _build_and_verify(
-                    benchmark_path=args.benchmark_path,
-                    patch_info=patch_info,
-                    harness=harness,
-                    pov_path=pov_path,
-                )
-                results.append(result)
+                verification_tasks.append((patch_info, harness, pov_path))
 
         else:  # directory mode
             pov_dir = args.pov_dir if args.pov_dir else args.pov.parent
@@ -433,13 +464,19 @@ def run_patch_verify(args: argparse.Namespace) -> int:
                             )
                         )
                         continue
-                    results.append(
-                        _build_and_verify(
-                            benchmark_path=args.benchmark_path,
-                            patch_info=patch_info,
-                            harness=harness,
-                            pov_path=pov_path,
-                        )
+                    verification_tasks.append((patch_info, harness, pov_path))
+
+        verification_tasks = _dedupe_variant_tasks(verification_tasks)
+
+        if verification_tasks:
+            max_parallel_jobs = min(jobs, len(verification_tasks))
+            if max_parallel_jobs <= 1:
+                for task in verification_tasks:
+                    results.append(_run_verification_task(task))
+            else:
+                with ThreadPoolExecutor(max_workers=max_parallel_jobs) as executor:
+                    results.extend(
+                        executor.map(_run_verification_task, verification_tasks)
                     )
 
         wall_clock_time = time.time() - wall_clock_start
