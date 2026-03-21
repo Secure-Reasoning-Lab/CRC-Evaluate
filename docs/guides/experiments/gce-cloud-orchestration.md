@@ -616,7 +616,9 @@ uv run crsbench cloud --config config.yaml collect my-experiment \
 - Safe to run multiple times (incremental rsync), but when the local destination already exists CRSBench warns before merging into it
 - Interactive runs prompt `Continue and merge into the existing destination? [Y/n/t]`
 - Press `Enter` or `y` to merge into the existing destination
+- Press `n` or `no` to cancel the collect run without changing the local destination
 - Press `t` to use the same fresh-sibling behavior as `--timestamp`
+- In non-interactive runs, an existing destination causes `cloud collect` to fail unless you pass `--force` or `--timestamp`
 - In non-interactive runs, `--force` merges into the existing destination without prompting, while `--timestamp` chooses a fresh artifact destination when worker artifacts are being published
 - Successful collect runs that actually publish worker artifact data refresh a hidden local marker at `<local-destination>/.crsbench-collect.json` with the last successful artifact collect time and best-effort experiment start time
 - Also collects VM diagnostics under `.crsbench-cloud/remote-logs/<experiment>/`, including:
