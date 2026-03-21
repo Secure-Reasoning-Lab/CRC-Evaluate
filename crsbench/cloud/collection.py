@@ -15,6 +15,7 @@ import json
 import shlex
 import shutil
 import subprocess
+import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path  # noqa: TC003
@@ -73,7 +74,23 @@ def write_collect_marker(destination: Path, payload: dict[str, object]) -> None:
     """Persist *payload* to the hidden collect marker at *destination*."""
     marker_path = collect_marker_path(destination)
     marker_path.parent.mkdir(parents=True, exist_ok=True)
-    marker_path.write_text(json.dumps(payload), encoding="utf-8")
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=marker_path.parent,
+            prefix=f"{marker_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp:
+            json.dump(payload, tmp)
+            temp_path = Path(tmp.name)
+        temp_path.replace(marker_path)
+    except Exception:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+        raise
 
 
 def discover_experiment_start_time_from_staging(

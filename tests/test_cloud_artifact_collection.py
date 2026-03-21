@@ -947,6 +947,32 @@ class TestCollectMarker:
 
         assert read_collect_marker(destination) is None
 
+    def test_write_collect_marker_replace_failure_preserves_prior_marker(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Atomic marker updates should not corrupt the prior marker on replace failure."""
+        destination = tmp_path / "exp-42"
+        prior_payload: dict[str, object] = {
+            "schema_version": 1,
+            "experiment_name": "exp-42",
+            "local_destination": str(destination),
+            "last_collect_time": "2026-03-20T12:00:00+00:00",
+            "experiment_start_time": "2026-03-20T11:00:00+00:00",
+            "experiment_start_time_source": "earliest_trial_timestamp_start",
+        }
+        updated_payload: dict[str, object] = {
+            **prior_payload,
+            "last_collect_time": "2026-03-21T12:00:00+00:00",
+        }
+        write_collect_marker(destination, prior_payload)
+
+        with patch.object(Path, "replace", side_effect=OSError("disk full")):
+            with pytest.raises(OSError, match="disk full"):
+                write_collect_marker(destination, updated_payload)
+
+        assert read_collect_marker(destination) == prior_payload
+
 
 class TestExperimentStartTimeDiscovery:
     """test_experiment_start_time — start time inference from current staging trees."""

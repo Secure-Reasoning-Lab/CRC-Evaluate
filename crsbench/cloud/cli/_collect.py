@@ -99,6 +99,7 @@ def run_collect(args: argparse.Namespace) -> int:
         args.remote_dir,
     )
     failed = 0
+    artifact_publish_succeeded = False
     start_time_observations: list[tuple[str | None, str]] = []
 
     for worker in live_instances:
@@ -124,6 +125,7 @@ def run_collect(args: argparse.Namespace) -> int:
                     remote_experiment_dir=remote_experiment_dir,
                     start_time_observations=start_time_observations,
                 )
+                artifact_publish_succeeded = True
                 logger.info("Collection succeeded: {}", worker.name)
             except (ArtifactCollectionError, Exception) as exc:
                 logger.error("Collection failed for {}: {}", worker.name, exc)
@@ -154,7 +156,7 @@ def run_collect(args: argparse.Namespace) -> int:
     if failed:
         return 1
 
-    if not destination.exists():
+    if not artifact_publish_succeeded or not destination.exists():
         return 0
 
     current_start_time = _resolve_current_run_start_time(start_time_observations)
@@ -167,7 +169,11 @@ def run_collect(args: argparse.Namespace) -> int:
     try:
         write_collect_marker(destination, marker)
     except OSError as exc:
-        logger.error("Failed to write collect marker {}: {}", destination, exc)
+        logger.error(
+            "Failed to write collect marker {}: {}",
+            collect_marker_path(destination),
+            exc,
+        )
         return 1
 
     return 0
@@ -204,11 +210,15 @@ def _confirm_destination_overwrite(destination, *, force: bool) -> bool:
         return False
 
     while True:
-        answer = (
-            input("Continue and merge into the existing destination? [Y/n] ")
-            .strip()
-            .lower()
-        )
+        try:
+            answer = (
+                input("Continue and merge into the existing destination? [Y/n] ")
+                .strip()
+                .lower()
+            )
+        except (EOFError, KeyboardInterrupt):
+            logger.info("Cancelled.")
+            return False
         if answer in {"", "y", "yes"}:
             return True
         if answer in {"n", "no"}:
