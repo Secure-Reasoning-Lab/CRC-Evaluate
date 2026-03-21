@@ -158,6 +158,9 @@ ignore = [
     "TID251",   # logging module allowed in tests
 ]
 "tests/fixtures/**/*.py" = ["PTH123"]  # Fixtures can use open()
+"crsbench/genconfig/generator.py" = [
+    "T201",     # print is intentional for interactive CLI prompts
+]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "logging".msg = "Use `from crsbench.utils.logger import get_logger` instead"
