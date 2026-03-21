@@ -17,6 +17,7 @@ from crsbench.cloud.cli._instance_inventory import (
     resolve_instance_fleet as shared_resolve_instance_fleet,
 )
 from crsbench.cloud.gce.provider import GceProviderAdapter
+from crsbench.cloud.providers import provisioner_for_context
 from crsbench.cloud.readiness import CloudInstanceRole
 
 if TYPE_CHECKING:
@@ -25,7 +26,6 @@ if TYPE_CHECKING:
     from crsbench.cloud.cli._config_reconnect import ResolvedCloudContext
     from crsbench.cloud.gce.models import GceWorkerRecord
 from crsbench.cloud.collection import ArtifactCollectionError, ArtifactCollector
-from crsbench.cloud.gce.provisioner import GceProvisioner
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -53,7 +53,7 @@ def run_collect(args: argparse.Namespace) -> int:
             exc,
         )
 
-    provisioner = GceProvisioner()
+    provisioner = provisioner_for_context(context)
     collector = ArtifactCollector(base_path=args.config)
 
     # Validate GCE state
@@ -139,7 +139,7 @@ def run_collect(args: argparse.Namespace) -> int:
 def _list_live_instances(
     context: "ResolvedCloudContext",
     experiment_name: str,
-    provisioner: GceProvisioner,
+    provisioner,
 ) -> list["GceWorkerRecord"]:
     if context.launch_plan is not None and context.launch_state is None:
         adapter = GceProviderAdapter(provisioner=provisioner)

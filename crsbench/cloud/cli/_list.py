@@ -11,7 +11,7 @@ from crsbench.cloud.cli._config_reconnect import (
     resolve_effective_experiment_name,
 )
 from crsbench.cloud.cli._instance_inventory import list_cloud_instances
-from crsbench.cloud.gce.provisioner import GceProvisioner
+from crsbench.cloud.providers import provisioner_for_context
 
 if TYPE_CHECKING:
     import argparse
@@ -21,7 +21,7 @@ def run_list(args: argparse.Namespace) -> int:
     """Print live cloud instances discovered from config plus saved launch state."""
     experiment_name = resolve_effective_experiment_name(args.config, None)
     context = resolve_cloud_context(args.config, experiment_name)
-    provisioner = GceProvisioner()
+    provisioner = provisioner_for_context(context)
     rows = list_cloud_instances(context, experiment_name, provisioner)
 
     if args.json_output:

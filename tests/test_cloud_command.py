@@ -3277,7 +3277,7 @@ class TestList:
 
     @patch("crsbench.cloud.cli._list.resolve_effective_experiment_name")
     @patch("crsbench.cloud.cli._list.resolve_cloud_context")
-    @patch("crsbench.cloud.cli._list.GceProvisioner")
+    @patch("crsbench.cloud.cli._list.provisioner_for_context")
     def test_list_prints_live_instances_table(
         self,
         mock_provisioner_cls,
@@ -3315,7 +3315,7 @@ class TestList:
 
     @patch("crsbench.cloud.cli._list.resolve_effective_experiment_name")
     @patch("crsbench.cloud.cli._list.resolve_cloud_context")
-    @patch("crsbench.cloud.cli._list.GceProvisioner")
+    @patch("crsbench.cloud.cli._list.provisioner_for_context")
     def test_list_supports_json_output(
         self,
         mock_provisioner_cls,
@@ -3351,6 +3351,31 @@ class TestList:
             "crsbench-test-exp-work-001",
         ]
 
+    @patch("crsbench.cloud.cli._list.provisioner_for_context")
+    @patch("crsbench.cloud.cli._list.resolve_effective_experiment_name")
+    @patch("crsbench.cloud.cli._list.resolve_cloud_context")
+    def test_list_resolves_provisioner_from_context(
+        self,
+        mock_resolve_context,
+        mock_resolve_experiment_name,
+        mock_provisioner_for_context,
+    ):
+        mock_resolve_experiment_name.return_value = "test-exp"
+        context = _make_resolved_cloud_context(_make_launch_state())
+        mock_resolve_context.return_value = context
+        provisioner = MagicMock()
+        provisioner.get_instance_record.return_value = None
+        provisioner.list_workers.return_value = []
+        provisioner.list_evaluators.return_value = []
+        mock_provisioner_for_context.return_value = provisioner
+
+        from crsbench.cloud.cli._list import run_list
+
+        rc = run_list(_make_list_args())
+
+        assert rc == 0
+        mock_provisioner_for_context.assert_called_once_with(context)
+
 
 class TestSsh:
     """Tests for run_ssh() sub-action."""
@@ -3359,7 +3384,7 @@ class TestSsh:
     @patch("crsbench.cloud.cli._ssh.build_ssh_command")
     @patch("crsbench.cloud.cli._ssh.resolve_effective_experiment_name")
     @patch("crsbench.cloud.cli._ssh.resolve_cloud_context")
-    @patch("crsbench.cloud.cli._ssh.GceProvisioner")
+    @patch("crsbench.cloud.cli._ssh.provisioner_for_context")
     def test_ssh_runs_selected_instance_command(
         self,
         mock_provisioner_cls,
@@ -3408,7 +3433,7 @@ class TestSsh:
     @patch("crsbench.cloud.cli._ssh.select_target")
     @patch("crsbench.cloud.cli._ssh.resolve_effective_experiment_name")
     @patch("crsbench.cloud.cli._ssh.resolve_cloud_context")
-    @patch("crsbench.cloud.cli._ssh.GceProvisioner")
+    @patch("crsbench.cloud.cli._ssh.provisioner_for_context")
     def test_ssh_interactively_selects_instance_when_omitted(
         self,
         mock_provisioner_cls,
@@ -3468,7 +3493,7 @@ class TestSsh:
 
     @patch("crsbench.cloud.cli._ssh.resolve_effective_experiment_name")
     @patch("crsbench.cloud.cli._ssh.resolve_cloud_context")
-    @patch("crsbench.cloud.cli._ssh.GceProvisioner")
+    @patch("crsbench.cloud.cli._ssh.provisioner_for_context")
     def test_ssh_requires_instance_when_stdin_is_not_a_tty(
         self,
         mock_provisioner_cls,
@@ -3507,7 +3532,7 @@ class TestSsh:
     @patch("crsbench.cloud.cli._ssh.select_target", side_effect=KeyboardInterrupt)
     @patch("crsbench.cloud.cli._ssh.resolve_effective_experiment_name")
     @patch("crsbench.cloud.cli._ssh.resolve_cloud_context")
-    @patch("crsbench.cloud.cli._ssh.GceProvisioner")
+    @patch("crsbench.cloud.cli._ssh.provisioner_for_context")
     def test_ssh_treats_keyboard_interrupt_as_normal_exit(
         self,
         mock_provisioner_cls,
@@ -3585,7 +3610,7 @@ class TestExec:
     @patch("crsbench.cloud.cli._exec.build_ssh_command")
     @patch("crsbench.cloud.cli._exec.resolve_effective_experiment_name")
     @patch("crsbench.cloud.cli._exec.resolve_cloud_context")
-    @patch("crsbench.cloud.cli._exec.GceProvisioner")
+    @patch("crsbench.cloud.cli._exec.provisioner_for_context")
     def test_exec_runs_remote_command_on_selected_instance(
         self,
         mock_provisioner_cls,
@@ -3643,7 +3668,7 @@ class TestExec:
     @patch("crsbench.cloud.cli._exec.build_ssh_command")
     @patch("crsbench.cloud.cli._exec.resolve_effective_experiment_name")
     @patch("crsbench.cloud.cli._exec.resolve_cloud_context")
-    @patch("crsbench.cloud.cli._exec.GceProvisioner")
+    @patch("crsbench.cloud.cli._exec.provisioner_for_context")
     def test_exec_treats_keyboard_interrupt_as_normal_exit(
         self,
         mock_provisioner_cls,
@@ -3685,7 +3710,7 @@ class TestLog:
     @patch("crsbench.cloud.cli._log.build_ssh_command")
     @patch("crsbench.cloud.cli._log.resolve_effective_experiment_name")
     @patch("crsbench.cloud.cli._log.resolve_cloud_context")
-    @patch("crsbench.cloud.cli._log.GceProvisioner")
+    @patch("crsbench.cloud.cli._log.provisioner_for_context")
     def test_log_uses_worker_service_unit(
         self,
         mock_provisioner_cls,
@@ -3724,7 +3749,7 @@ class TestLog:
     @patch("crsbench.cloud.cli._log.build_ssh_command")
     @patch("crsbench.cloud.cli._log.resolve_effective_experiment_name")
     @patch("crsbench.cloud.cli._log.resolve_cloud_context")
-    @patch("crsbench.cloud.cli._log.GceProvisioner")
+    @patch("crsbench.cloud.cli._log.provisioner_for_context")
     def test_log_uses_orchestrator_service_unit(
         self,
         mock_provisioner_cls,
@@ -3761,7 +3786,7 @@ class TestLog:
     @patch("crsbench.cloud.cli._log.build_ssh_command")
     @patch("crsbench.cloud.cli._log.resolve_effective_experiment_name")
     @patch("crsbench.cloud.cli._log.resolve_cloud_context")
-    @patch("crsbench.cloud.cli._log.GceProvisioner")
+    @patch("crsbench.cloud.cli._log.provisioner_for_context")
     def test_log_treats_keyboard_interrupt_as_normal_exit(
         self,
         mock_provisioner_cls,
@@ -3799,10 +3824,41 @@ class TestLog:
 class TestCollect:
     """Tests for run_collect() sub-action."""
 
+    @patch("crsbench.cloud.cli._collect.reconnect")
+    @patch("crsbench.cloud.cli._collect.provisioner_for_context")
+    @patch("crsbench.cloud.cli._collect.ArtifactCollector")
+    @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._collect.resolve_effective_experiment_name")
+    def test_collect_resolves_provisioner_from_context(
+        self,
+        mock_resolve_experiment_name,
+        mock_resolve_context,
+        mock_collector_cls,
+        mock_provisioner_for_context,
+        mock_reconnect,
+    ):
+        mock_resolve_experiment_name.return_value = "test-exp"
+        context = _make_resolved_cloud_context(_make_launch_state())
+        mock_resolve_context.return_value = context
+        mock_reconnect.side_effect = RuntimeError("redis unavailable")
+        provisioner = MagicMock()
+        provisioner.get_instance_record.return_value = None
+        provisioner.list_workers.return_value = []
+        provisioner.list_evaluators.return_value = []
+        mock_provisioner_for_context.return_value = provisioner
+        mock_collector_cls.return_value = MagicMock()
+
+        from crsbench.cloud.cli._collect import run_collect
+
+        rc = run_collect(_make_collect_args())
+
+        assert rc == 0
+        mock_provisioner_for_context.assert_called_once_with(context)
+
     @patch("crsbench.cloud.cli._collect.resolve_effective_experiment_name")
     @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
-    @patch("crsbench.cloud.cli._collect.GceProvisioner")
+    @patch("crsbench.cloud.cli._collect.provisioner_for_context")
     @patch("crsbench.cloud.cli._collect.reconnect")
     def test_collect_infers_experiment_and_remote_dir_from_config(
         self,
@@ -3846,7 +3902,7 @@ class TestCollect:
 
     @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
-    @patch("crsbench.cloud.cli._collect.GceProvisioner")
+    @patch("crsbench.cloud.cli._collect.provisioner_for_context")
     @patch("crsbench.cloud.cli._collect.reconnect")
     def test_collect_uses_config_scoped_collector_and_collects_logs(
         self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
@@ -3882,7 +3938,7 @@ class TestCollect:
 
     @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
-    @patch("crsbench.cloud.cli._collect.GceProvisioner")
+    @patch("crsbench.cloud.cli._collect.provisioner_for_context")
     @patch("crsbench.cloud.cli._collect.reconnect")
     def test_collect_invokes_collector(
         self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
@@ -3917,7 +3973,7 @@ class TestCollect:
     @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
     @patch("crsbench.cloud.cli._collect.logger")
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
-    @patch("crsbench.cloud.cli._collect.GceProvisioner")
+    @patch("crsbench.cloud.cli._collect.provisioner_for_context")
     @patch("crsbench.cloud.cli._collect.reconnect")
     def test_collect_stale_redis_warning(
         self,
@@ -3963,7 +4019,7 @@ class TestCollect:
 
     @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
-    @patch("crsbench.cloud.cli._collect.GceProvisioner")
+    @patch("crsbench.cloud.cli._collect.provisioner_for_context")
     @patch("crsbench.cloud.cli._collect.reconnect")
     def test_collect_partial_failure(
         self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
@@ -4005,7 +4061,7 @@ class TestCollect:
 
     @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
-    @patch("crsbench.cloud.cli._collect.GceProvisioner")
+    @patch("crsbench.cloud.cli._collect.provisioner_for_context")
     @patch("crsbench.cloud.cli._collect.reconnect")
     def test_collect_also_collects_orchestrator_when_launch_state_present(
         self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
@@ -4046,7 +4102,7 @@ class TestCollect:
 
     @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
-    @patch("crsbench.cloud.cli._collect.GceProvisioner")
+    @patch("crsbench.cloud.cli._collect.provisioner_for_context")
     @patch("crsbench.cloud.cli._collect.reconnect")
     def test_collect_orchestrator_when_no_workers_remain(
         self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
@@ -4086,7 +4142,7 @@ class TestCollect:
 
     @patch("crsbench.cloud.cli._collect.resolve_cloud_context", create=True)
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
-    @patch("crsbench.cloud.cli._collect.GceProvisioner")
+    @patch("crsbench.cloud.cli._collect.provisioner_for_context")
     @patch(
         "crsbench.cloud.cli._collect.reconnect", side_effect=RuntimeError("redis down")
     )
@@ -4118,7 +4174,7 @@ class TestCollect:
     @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
     @patch("crsbench.cloud.cli._collect.GceProviderAdapter")
-    @patch("crsbench.cloud.cli._collect.GceProvisioner")
+    @patch("crsbench.cloud.cli._collect.provisioner_for_context")
     @patch("crsbench.cloud.cli._collect.reconnect")
     def test_collect_provider_neutral_context_uses_adapter_for_multi_zone_workers(
         self,
@@ -4163,7 +4219,7 @@ class TestCollect:
     @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
     @patch("crsbench.cloud.cli._collect.GceProviderAdapter")
-    @patch("crsbench.cloud.cli._collect.GceProvisioner")
+    @patch("crsbench.cloud.cli._collect.provisioner_for_context")
     @patch("crsbench.cloud.cli._collect.reconnect")
     def test_collect_provider_neutral_context_also_collects_evaluators(
         self,
@@ -4292,7 +4348,7 @@ class TestTeardown:
     @patch("crsbench.cloud.cli._teardown.resolve_effective_experiment_name")
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
-    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.provisioner_for_context")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_infers_experiment_and_remote_dir_from_config(
         self,
@@ -4328,7 +4384,7 @@ class TestTeardown:
 
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
-    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.provisioner_for_context")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_collects_logs_before_deletion(
         self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
@@ -4351,7 +4407,7 @@ class TestTeardown:
 
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
-    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.provisioner_for_context")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_collect_then_delete(
         self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
@@ -4378,7 +4434,7 @@ class TestTeardown:
 
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
-    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.provisioner_for_context")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_reports_collection_failure_but_still_deletes(
         self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
@@ -4400,7 +4456,7 @@ class TestTeardown:
 
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
-    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.provisioner_for_context")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_force_flag(
         self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
@@ -4420,7 +4476,7 @@ class TestTeardown:
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.logger")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
-    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.provisioner_for_context")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_stale_redis_warning(
         self,
@@ -4452,7 +4508,7 @@ class TestTeardown:
 
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
-    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.provisioner_for_context")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_confirmation_prompt_yes(
         self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
@@ -4477,7 +4533,7 @@ class TestTeardown:
 
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
-    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.provisioner_for_context")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_confirmation_prompt_no(
         self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
@@ -4502,7 +4558,7 @@ class TestTeardown:
 
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
-    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.provisioner_for_context")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_non_tty_without_force(
         self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
@@ -4525,7 +4581,7 @@ class TestTeardown:
     @patch("crsbench.cloud.cli._teardown.delete_launch_state")
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
-    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.provisioner_for_context")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_collects_and_deletes_orchestrator_when_launch_state_present(
         self,
@@ -4557,7 +4613,7 @@ class TestTeardown:
     @patch("crsbench.cloud.cli._teardown.delete_launch_state")
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
-    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.provisioner_for_context")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_ignores_launch_state_cleanup_failures_after_vm_deletion(
         self,
@@ -4587,7 +4643,7 @@ class TestTeardown:
     @patch("crsbench.cloud.cli._teardown.delete_launch_state")
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
-    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.provisioner_for_context")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_deletes_vms_even_when_collection_fails(
         self,
@@ -4623,7 +4679,7 @@ class TestTeardown:
     @patch("crsbench.cloud.cli._teardown.delete_launch_state")
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
-    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.provisioner_for_context")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_clears_launch_state_when_orchestrator_is_already_gone(
         self,
@@ -4662,7 +4718,7 @@ class TestTeardown:
 
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context", create=True)
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
-    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.provisioner_for_context")
     @patch(
         "crsbench.cloud.cli._teardown.reconnect",
         side_effect=RuntimeError("orchestrator redis unavailable"),
@@ -4697,7 +4753,7 @@ class TestTeardown:
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
     @patch("crsbench.cloud.cli._teardown.GceProviderAdapter")
-    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.provisioner_for_context")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_provider_neutral_context_deletes_multi_zone_workers_via_adapter(
         self,
@@ -4747,7 +4803,7 @@ class TestTeardown:
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
     @patch("crsbench.cloud.cli._teardown.GceProviderAdapter")
-    @patch("crsbench.cloud.cli._teardown.GceProvisioner")
+    @patch("crsbench.cloud.cli._teardown.provisioner_for_context")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_provider_neutral_context_deletes_evaluators_via_adapter(
         self,

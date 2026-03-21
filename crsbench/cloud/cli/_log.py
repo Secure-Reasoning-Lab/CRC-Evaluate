@@ -11,7 +11,7 @@ from crsbench.cloud.cli._config_reconnect import (
 )
 from crsbench.cloud.cli._instance_inventory import list_cloud_instances
 from crsbench.cloud.cli._remote_access import build_ssh_command, select_target
-from crsbench.cloud.gce.provisioner import GceProvisioner
+from crsbench.cloud.providers import provisioner_for_context
 
 if TYPE_CHECKING:
     import argparse
@@ -21,7 +21,7 @@ def run_log(args: argparse.Namespace) -> int:
     """Follow the role-appropriate CRSBench user journal on a live VM."""
     experiment_name = resolve_effective_experiment_name(args.config, None)
     context = resolve_cloud_context(args.config, experiment_name)
-    provisioner = GceProvisioner()
+    provisioner = provisioner_for_context(context)
     rows = list_cloud_instances(context, experiment_name, provisioner)
     if not rows:
         return 1

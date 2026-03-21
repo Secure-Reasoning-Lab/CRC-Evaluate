@@ -19,8 +19,8 @@ from crsbench.cloud.cli._instance_inventory import (
 )
 from crsbench.cloud.collection import ArtifactCollector
 from crsbench.cloud.gce.provider import GceProviderAdapter
-from crsbench.cloud.gce.provisioner import GceProvisioner
 from crsbench.cloud.launch_state import delete_launch_state
+from crsbench.cloud.providers import provisioner_for_context
 from crsbench.cloud.readiness import CloudInstanceRole
 from crsbench.utils.logger import get_logger
 
@@ -63,7 +63,7 @@ def run_teardown(args: argparse.Namespace) -> int:
             exc,
         )
 
-    provisioner = GceProvisioner()
+    provisioner = provisioner_for_context(context)
     collector = ArtifactCollector(base_path=args.config)
 
     # Validate GCE state
@@ -237,7 +237,7 @@ def run_teardown(args: argparse.Namespace) -> int:
 def _list_live_instances(
     context: "ResolvedCloudContext",
     experiment_name: str,
-    provisioner: GceProvisioner,
+    provisioner,
 ) -> list["GceWorkerRecord"]:
     return shared_list_live_instances(context, experiment_name, provisioner)
 
@@ -247,7 +247,7 @@ def _should_remove_launch_state(
     context: "ResolvedCloudContext",
     experiment_name: str,
     launch_state,
-    provisioner: GceProvisioner,
+    provisioner,
 ) -> bool:
     """Return whether teardown can safely discard persisted launch state."""
     if _list_live_instances(context, experiment_name, provisioner):
@@ -271,7 +271,7 @@ def _instance_missing(exc: Exception) -> bool:
 def _delete_live_instances(
     context: "ResolvedCloudContext",
     experiment_name: str,
-    provisioner: GceProvisioner,
+    provisioner,
 ) -> None:
     adapter = GceProviderAdapter(provisioner=provisioner)
     if context.launch_state is not None:
