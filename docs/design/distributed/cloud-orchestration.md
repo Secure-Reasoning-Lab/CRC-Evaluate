@@ -133,6 +133,7 @@ Shared readiness invariants:
 The shared cloud control plane includes:
 
 - `cloud launch`: create the declared fleet and persist reconnect state
+- `cloud preflight`: resolve the launch plan, duplicate-launch guard, provider launch-input preflight, and quota checks without provisioning or mutating launch state
 - `cloud status`: return a one-shot fleet, job, and recovery snapshot
 - `cloud events`: return recovery-event history from the active experiment control plane
 - `cloud monitor`: attach to the launched experiment's live queue view
@@ -145,10 +146,18 @@ Shared reconnect semantics:
 
 - `status`, `events`, and `monitor` are control-plane reconnect commands and may
   require runtime/backend reachability in addition to launch state
+- `preflight` is read-only and must not write or refresh persisted launch state
 - `list`, `ssh`, `exec`, `log`, `collect`, and `teardown` must be able to reuse
   persisted launch state plus live provider inventory
 - `collect` and `teardown` should continue from persisted state when the runtime
   backend is unavailable, subject to provider inventory still being resolvable
+
+Shared preflight semantics:
+
+- `preflight` resolves the same provider-neutral launch plan that `launch` would use
+- duplicate-launch conflicts, provider launch-input failures, and quota failures are blocking checks
+- warning checks may still return success by default, but `--strict` upgrades warnings to a non-zero exit code
+- preflight output is provider-neutral even when the underlying implementation is provider-specific today
 
 ### Artifact Collection
 
