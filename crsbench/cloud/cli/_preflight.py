@@ -20,7 +20,7 @@ from crsbench.cloud.providers import (
     prepare_launch_inputs,
     provider_adapter_for_launch_plan,
 )
-from crsbench.cloud.quota import CloudQuotaValidationError, QuotaValidator
+from crsbench.cloud.quota import QuotaValidator
 from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -47,7 +47,7 @@ def run_preflight(args: argparse.Namespace) -> int:
 
     if config.cloud is None:
         logger.error("Experiment config must define cloud configuration for preflight")
-        return 1
+        return 2
 
     try:
         launch_plan = build_cloud_launch_plan(config)
@@ -55,7 +55,7 @@ def run_preflight(args: argparse.Namespace) -> int:
         logger.error("Cloud preflight failed: {}", exc)
         return 2
 
-    provider = _provider_name_from_config(config)
+    provider = launch_plan.orchestrator.provider.value
 
     try:
         adapter = provider_adapter_for_launch_plan(launch_plan)
@@ -75,12 +75,31 @@ def run_preflight(args: argparse.Namespace) -> int:
         )
         return _emit_report(report, strict=args.strict, json_output=args.json_output)
 
-    conflicts = find_launch_target_conflicts(
-        config_path=config_path,
-        experiment_name=config.experiment,
-        adapter=adapter,
-        plan=launch_plan,
-    )
+    try:
+        conflicts = find_launch_target_conflicts(
+            config_path=config_path,
+            experiment_name=config.experiment,
+            adapter=adapter,
+            plan=launch_plan,
+        )
+    except Exception as exc:
+        return _emit_report(
+            _build_report(
+                config=config,
+                provider=provider,
+                plan=launch_plan,
+                checks=[
+                    CloudPreflightCheck(
+                        name="duplicate_launch_guard",
+                        status=CloudPreflightCheckStatus.FAIL,
+                        summary="Cloud launch target could not be inspected.",
+                        detail=str(exc),
+                    )
+                ],
+            ),
+            strict=args.strict,
+            json_output=args.json_output,
+        )
     if conflicts:
         report = _build_report(
             config=config,
@@ -137,7 +156,7 @@ def run_preflight(args: argparse.Namespace) -> int:
 
     try:
         QuotaValidator(adapters={provider: adapter}).validate(launch_plan)
-    except CloudQuotaValidationError as exc:
+    except Exception as exc:
         report = _build_report(
             config=config,
             provider=provider,
@@ -147,7 +166,7 @@ def run_preflight(args: argparse.Namespace) -> int:
                 CloudPreflightCheck(
                     name="quota",
                     status=CloudPreflightCheckStatus.FAIL,
-                    summary="Provider quota cannot satisfy this launch plan.",
+                    summary="Provider quota checks failed for this launch plan.",
                     detail=str(exc),
                 ),
             ],
@@ -219,8 +238,26 @@ def _print_human_report(report: CloudPreflightReport, *, strict: bool) -> None:
         f"  Experiment: {report.experiment}",
         f"  Provider: {report.provider}",
         f"  Verdict: {report.verdict}",
-        "Checks",
+        "Plan",
     ]
+    _append_json_section(lines, report.plan)
+    lines.extend(
+        [
+            "Defaults",
+        ]
+    )
+    _append_json_section(lines, report.resolved_defaults)
+    lines.extend(
+        [
+            "Environment",
+        ]
+    )
+    _append_json_section(lines, report.env_summary)
+    lines.extend(
+        [
+            "Checks",
+        ]
+    )
     for check in report.checks:
         lines.append(f"  [{check.status.upper()}] {check.name}: {check.summary}")
         if check.detail:
@@ -234,14 +271,8 @@ def _print_human_report(report: CloudPreflightReport, *, strict: bool) -> None:
     sys.stdout.write("\n".join(lines) + "\n")
 
 
-def _provider_name_from_config(config: "ExperimentConfig") -> str:
-    providers = getattr(getattr(config, "cloud", None), "providers", None)
-    provider_values = (
-        providers.model_dump(exclude_none=True, exclude_unset=True) if providers else {}
-    )
-    if provider_values:
-        return next(iter(provider_values))
-    return "unknown"
+def _append_json_section(lines: list[str], payload: Any) -> None:
+    lines.extend(f"  {line}" for line in json.dumps(payload, indent=2).splitlines())
 
 
 def _plan_summary(plan: CloudLaunchPlan | object) -> dict[str, Any]:

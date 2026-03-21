@@ -3198,6 +3198,25 @@ class TestPreflight:
         assert "test-exp" in output
         assert "gce" in output
         assert "verdict" in output
+        assert "plan" in output
+        assert "defaults" in output
+        assert "environment" in output
+
+    @patch("crsbench.cloud.cli._preflight.build_cloud_launch_plan")
+    @patch("crsbench.cloud.cli._preflight.load_experiment_config")
+    def test_preflight_requires_cloud_config_as_usage_error(
+        self,
+        mock_load_config,
+        mock_build_launch_plan,
+    ):
+        mock_load_config.return_value = _mock_config(has_cloud=False)
+
+        from crsbench.cloud.cli._preflight import run_preflight
+
+        rc = run_preflight(_make_preflight_args())
+
+        assert rc == 2
+        mock_build_launch_plan.assert_not_called()
 
     @patch("crsbench.cloud.cli._preflight.save_launch_state", create=True)
     @patch("crsbench.cloud.cli._preflight.load_experiment_config")
@@ -3373,6 +3392,50 @@ class TestPreflight:
 
     @patch("crsbench.cloud.cli._preflight.save_launch_state", create=True)
     @patch("crsbench.cloud.cli._preflight.load_experiment_config")
+    def test_preflight_blocks_provider_inventory_failure(
+        self,
+        mock_load_config,
+        mock_save_launch_state,
+    ):
+        from crsbench.cloud.models import build_cloud_launch_plan
+
+        config = _make_provider_neutral_experiment_config()
+        mock_load_config.return_value = config
+        mock_save_launch_state.return_value = None
+
+        adapter = MagicMock()
+
+        with (
+            patch(
+                "crsbench.cloud.cli._preflight.build_cloud_launch_plan"
+            ) as mock_build_plan,
+            patch(
+                "crsbench.cloud.cli._preflight.provider_adapter_for_launch_plan",
+                return_value=adapter,
+            ) as mock_provider_adapter_for_launch_plan,
+            patch(
+                "crsbench.cloud.cli._preflight.find_launch_target_conflicts",
+                side_effect=RuntimeError("instance inventory unavailable"),
+            ) as mock_find_conflicts,
+            patch(
+                "crsbench.cloud.cli._preflight.prepare_launch_inputs"
+            ) as mock_prepare_launch_inputs,
+        ):
+            launch_plan = build_cloud_launch_plan(config)
+            mock_build_plan.return_value = launch_plan
+
+            from crsbench.cloud.cli._preflight import run_preflight
+
+            rc = run_preflight(_make_preflight_args())
+
+        assert rc == 1
+        mock_save_launch_state.assert_not_called()
+        mock_provider_adapter_for_launch_plan.assert_called_once_with(launch_plan)
+        mock_find_conflicts.assert_called_once()
+        mock_prepare_launch_inputs.assert_not_called()
+
+    @patch("crsbench.cloud.cli._preflight.save_launch_state", create=True)
+    @patch("crsbench.cloud.cli._preflight.load_experiment_config")
     def test_preflight_blocks_quota_validation_failure(
         self,
         mock_load_config,
@@ -3429,6 +3492,69 @@ class TestPreflight:
         mock_save_launch_state.assert_not_called()
         mock_provider_adapter_for_launch_plan.assert_called_once_with(launch_plan)
         mock_find_conflicts.assert_called_once()
+        mock_quota_validator.validate.assert_called_once_with(launch_plan)
+
+    @patch("crsbench.cloud.cli._preflight.save_launch_state", create=True)
+    @patch("crsbench.cloud.cli._preflight.load_experiment_config")
+    def test_preflight_blocks_quota_backend_failure(
+        self,
+        mock_load_config,
+        mock_save_launch_state,
+    ):
+        from crsbench.cloud.models import build_cloud_launch_plan
+
+        config = _make_provider_neutral_experiment_config()
+        mock_load_config.return_value = config
+        mock_save_launch_state.return_value = None
+
+        adapter = MagicMock()
+
+        with (
+            patch(
+                "crsbench.cloud.cli._preflight.build_cloud_launch_plan"
+            ) as mock_build_plan,
+            patch(
+                "crsbench.cloud.cli._preflight.provider_adapter_for_launch_plan",
+                return_value=adapter,
+            ) as mock_provider_adapter_for_launch_plan,
+            patch(
+                "crsbench.cloud.cli._preflight.find_launch_target_conflicts",
+                return_value=[],
+            ) as mock_find_conflicts,
+            patch(
+                "crsbench.cloud.cli._preflight.prepare_launch_inputs"
+            ) as mock_prepare_launch_inputs,
+            patch(
+                "crsbench.cloud.cli._preflight.QuotaValidator"
+            ) as mock_quota_validator_cls,
+        ):
+            launch_plan = build_cloud_launch_plan(config)
+            mock_build_plan.return_value = launch_plan
+            mock_prepare_launch_inputs.return_value = MagicMock(
+                resolved_plan=launch_plan,
+                redacted_worker_fleets=[],
+                redacted_evaluator_fleets=[],
+                orchestrator_env={},
+                worker_placement_envs=[],
+                evaluator_placement_envs=[],
+            )
+            mock_quota_validator = mock_quota_validator_cls.return_value
+            mock_quota_validator.validate.side_effect = RuntimeError(
+                "quota backend unavailable"
+            )
+
+            from crsbench.cloud.cli._preflight import run_preflight
+
+            rc = run_preflight(_make_preflight_args())
+
+        assert rc == 1
+        mock_save_launch_state.assert_not_called()
+        mock_provider_adapter_for_launch_plan.assert_called_once_with(launch_plan)
+        mock_find_conflicts.assert_called_once()
+        mock_prepare_launch_inputs.assert_called_once_with(
+            plan=launch_plan,
+            cwd=Path.cwd(),
+        )
         mock_quota_validator.validate.assert_called_once_with(launch_plan)
 
     @patch("crsbench.cloud.cli._preflight.save_launch_state", create=True)
