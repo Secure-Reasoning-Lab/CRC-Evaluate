@@ -18,9 +18,11 @@ This page is the canonical index for CRSBench environment variables.
 ## Cloud Startup Overrides (Advanced)
 
 These variables are consumed by the cloud startup scripts and are primarily for
-local rehearsal or non-GCE bring-up.
+local rehearsal and custom startup-script bring-up.
 
-For managed GCE launches, startup-script variables that are safe to override
+Managed cloud config uses provider-neutral env layers, but the only implemented
+managed backend today is GCE. For managed GCE launches, startup-script variables
+that are safe to override
 should be configured through the cloud env layers in the experiment config
 (`cloud.env`, `cloud.orchestrator.env`, `cloud.workers.defaults.env`,
 `cloud.workers.placements[].env`, and the evaluator equivalents), not by
@@ -33,7 +35,7 @@ editing the VM manually after launch.
 | `CRSBENCH_METADATA_HEADER_NAME` | Override the metadata-service header name (default `Metadata-Flavor`). |
 | `CRSBENCH_METADATA_HEADER_VALUE` | Override the metadata-service header value (default `Google`). |
 | `CRSBENCH_SERVICE_MANAGER` | Worker/orchestrator startup mode: `auto` (default), `systemd`, or `foreground`. |
-| `CRSBENCH_STARTUP_MODE` | Shared startup-script role override: `worker` (default) or `evaluator`; mainly used by local rehearsal and non-GCE bring-up. |
+| `CRSBENCH_STARTUP_MODE` | Shared startup-script role override: `worker` (default) or `evaluator`; mainly used by local rehearsal and custom startup-script bring-up. |
 | `CRSBENCH_GIT_SSH_HOST` | SSH host used for startup-time known-host bootstrapping for `git+ssh` CRSBench clones (default `github.com`). For managed GCE launches, set it through the cloud env layers when cloning from GitHub Enterprise or another SSH git host. |
 | `CRSBENCH_USER` | Non-root account created by the startup scripts for checkout/install/runtime handoff (default `crsbench`). |
 | `CRSBENCH_TIMEZONE` | Host timezone enforced during startup (default `America/New_York`). For managed GCE launches, set it through the cloud env layers, for example `cloud.env.CRSBENCH_TIMEZONE: America/Los_Angeles`. |

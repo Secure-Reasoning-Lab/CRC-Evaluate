@@ -102,7 +102,8 @@ build/verify work queues harmlessly and can be processed later via
 
 ## Cloud Worker Fleets
 
-For cloud-managed workers, declare provider-native details in
+Managed cloud config uses a provider-neutral `cloud.*` layout. Today the only
+implemented managed backend is GCE, so declare provider-native details in
 `cloud.providers.gce`, then place workers with `cloud.workers.placements`
 instead of relying on host maps or ad hoc SSH setup scripts.
 
@@ -141,7 +142,7 @@ cloud:
 ```
 
 Phase 1 contract notes:
-- `cloud.providers.gce` plus `cloud.workers.defaults` / `cloud.workers.placements` is the canonical GCE declaration surface.
+- the top-level cloud shape is provider-neutral; today that means `cloud.providers.gce` plus `cloud.workers.defaults` / `cloud.workers.placements`
 - Managed GCE placement supports both explicit zonal declarations and regional placement via `region` / `regions`.
 - When an effective `region` or ordered `regions` list is present, CRSBench uses GCE regional bulk insert with `ANY_SINGLE_ZONE`.
 - Optional `zones` act as an allowlist inside the effective region set rather than an ordered retry list.
@@ -166,8 +167,8 @@ Phase 1 contract notes:
 - First-class `cloud.env` / profile `env` / placement `env` maps are the
   supported way to shard upstream credentials or URLs across cloud worker
   groups.
-- For the full remote-orchestrator lifecycle, including `cloud launch`,
-  `cloud monitor`, `cloud collect`, and `cloud teardown`, use
+- For the full managed-cloud lifecycle on the current GCE backend, including
+  `cloud launch`, `cloud monitor`, `cloud collect`, and `cloud teardown`, use
   [GCE Cloud Orchestration](./gce-cloud-orchestration.md).
 
 ## Queue Behavior and Cleanup

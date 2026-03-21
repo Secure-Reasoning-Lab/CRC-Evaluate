@@ -13,7 +13,7 @@ Use this page as the primary navigation hub.
 3. Run distributed experiments
    [Experiment Guides](./guides/experiments/README.md) and
    [Distributed Experiments](./guides/experiments/distributed.md)
-4. Run managed GCE cloud experiments
+4. Run managed cloud experiments on GCE
    [GCE Cloud Orchestration](./guides/experiments/gce-cloud-orchestration.md) and
    [Local Cloud Rehearsal](./guides/experiments/local-cloud-rehearsal.md)
 5. Run benchmark CI
@@ -26,7 +26,7 @@ Use this page as the primary navigation hub.
 - [Experiments Hub](./guides/experiments/README.md)
   - [Single Machine](./guides/experiments/single-machine.md)
   - [Distributed](./guides/experiments/distributed.md)
-  - [GCE Cloud Orchestration](./guides/experiments/gce-cloud-orchestration.md)
+  - [Cloud Orchestration on GCE](./guides/experiments/gce-cloud-orchestration.md)
   - [Local Cloud Rehearsal](./guides/experiments/local-cloud-rehearsal.md)
   - [Queue and Recovery](./guides/experiments/queue-and-recovery.md)
   - [Config Reference](./guides/experiments/config-reference.md)

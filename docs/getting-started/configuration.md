@@ -11,6 +11,9 @@ For full experiment-config structure, use:
 - [Distributed Experiments Guide](../guides/experiments/distributed.md)
 - [GCE Cloud Orchestration Guide](../guides/experiments/gce-cloud-orchestration.md)
 
+Managed cloud config uses a provider-neutral `cloud.*` layout. Today the only
+implemented managed backend is GCE via `cloud.providers.gce`.
+
 ## First-Run Setup
 
 1. Copy the example file:
@@ -85,7 +88,7 @@ Current support status:
 
 Use the advanced guides when you need:
 - multi-machine worker/evaluator topology
-- managed GCE orchestrator/worker/evaluator fleets
+- managed cloud orchestrator/worker/evaluator fleets on GCE
 - centralized or upstream LiteLLM deployment patterns
 - queue cleanup / retry / recovery behavior
 - full experiment-config authoring rules

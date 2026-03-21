@@ -17,6 +17,10 @@ and examples.
 - `resources`: fallback per-trial resource defaults
 - `cloud`: optional provider-neutral cloud placement contract
 
+The `cloud` section is intentionally provider-neutral so future managed backends
+can share one top-level shape. Today the only implemented managed backend is
+GCE, so current launchable configs use `cloud.providers.gce`.
+
 ## Cloud Contract
 
 Managed cloud execution uses a provider-neutral top-level shape:
@@ -81,6 +85,8 @@ For GCE in v1:
   whether GCE attaches ephemeral external NAT for outbound internet access
 - cloud env merge order is:
   `cloud.env -> profile_defaults.env -> instance_profile.env -> role/default placement env`
+- runtime-managed env such as Redis connection material is applied after those
+  user-configured layers and wins last
 - generated GCE instance names are deterministic and zone-independent:
   `crsbench-<experiment>-orch`, `-work-001`, `-eval-001`
 - the checked-in examples are

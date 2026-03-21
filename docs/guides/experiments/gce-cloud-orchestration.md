@@ -3,6 +3,10 @@
 Guide for provisioning and managing remote orchestrator plus worker VMs for
 CRSBench experiments on GCE.
 
+CRSBench uses a provider-neutral top-level `cloud.*` config shape, but the only
+implemented managed backend today is GCE through `cloud.providers.gce`. This
+guide covers that current backend end to end.
+
 For a local preflight of the same startup scripts before touching GCE, use
 [Local Cloud Rehearsal](./local-cloud-rehearsal.md).
 
@@ -29,8 +33,8 @@ For a local preflight of the same startup scripts before touching GCE, use
 ## Configuration
 
 Declare provider-native GCE details under `cloud.providers.gce`, then reference
-those instance profiles from `cloud.orchestrator`, `cloud.workers`, and
-optional `cloud.evaluators`:
+those instance profiles from the provider-neutral `cloud.orchestrator`,
+`cloud.workers`, and optional `cloud.evaluators` sections:
 
 ```yaml
 cloud:
@@ -139,7 +143,7 @@ placements. CRSBench resolves the provider from the referenced
 mix providers across orchestrator, workers, and evaluators.
 Instance-profile keys must also be globally unique across provider catalogs, so
 the same profile name cannot be reused under multiple `cloud.providers.*`
-entries.
+entries. Today the only supported catalog is `cloud.providers.gce`.
 
 Instance profiles carry the per-VM details such as `machine_type`,
 `boot_disk_size_gb`, `image` or `instance_template`, `service_account_email`,
@@ -330,6 +334,8 @@ Semantics:
   `cloud.env -> profile_defaults.env -> instance_profile.env -> cloud.orchestrator.env`
 - worker/evaluator merge order is:
   `cloud.env -> profile_defaults.env -> instance_profile.env -> role defaults.env -> placement.env`
+- runtime-managed variables are applied after those user-configured env layers
+  and win last
 - all VMs in the same placement share the same merged env payload
 - when you launch through the CRSBench CLI, `.env` is loaded first, so
   `os.environ/...` references can come from either the
@@ -861,5 +867,6 @@ sudo -iu crsbench env \
 
 - [Distributed Experiments](./distributed.md) -- full distributed experiment guide
 - [Configuration Reference](./config-reference.md) -- all experiment config fields
-- [Design: GCE Cloud Orchestration](../../design/distributed/gce-cloud-orchestration.md) -- architecture and contracts
+- [Design: Cloud Orchestration](../../design/distributed/cloud-orchestration.md) -- shared cloud contract
+- [Design: GCE Cloud Orchestration](../../design/distributed/gce-cloud-orchestration.md) -- GCE-specific implementation details
 - [Design: GCE Cloud Orchestrator Launch](../../design/distributed/gce-cloud-orchestrator.md) -- remote-orchestrator launch contract

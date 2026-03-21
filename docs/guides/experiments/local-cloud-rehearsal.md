@@ -3,6 +3,10 @@
 Use this flow to exercise the cloud startup scripts locally before launching real
 VMs.
 
+The cloud config shape is provider-neutral, but this rehearsal harness exercises
+the current managed backend implementation: GCE startup scripts and metadata
+layout.
+
 The rehearsal runs:
 
 - one orchestrator container
@@ -20,6 +24,8 @@ The rehearsal runs:
   mode inside the Docker harness under the non-root `crsbench` user
 - the startup scripts work with file-backed metadata, not only the GCE metadata
   endpoint
+- provider-neutral cloud env layering resolves the same way it does for a real
+  managed launch
 - the orchestrator binds Valkey on loopback plus the discovered container IP, so
   workers/evaluators can still reach `orchestrator:6379` without exposing
   `0.0.0.0`
