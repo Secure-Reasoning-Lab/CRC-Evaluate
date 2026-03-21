@@ -74,7 +74,7 @@ def _ensure_checkout(
     if dest.exists():
         logger.info(f"Updating Atlantis checkout at {dest} to {ref}")
         subprocess.run(
-            ["git", "fetch", "--recurse-submodules", "origin", ref],
+            ["git", "fetch", "--recurse-submodules", "--tags", "--force", "origin"],
             cwd=dest,
             check=True,
             capture_output=True,
@@ -82,7 +82,7 @@ def _ensure_checkout(
             errors="replace",
         )
         subprocess.run(
-            ["git", "checkout", ref],
+            ["git", "checkout", "--force", ref],
             cwd=dest,
             check=True,
             capture_output=True,
@@ -403,6 +403,7 @@ def prepare_uniafl_backend(
     )
     _, readiness_issues = get_uniafl_prepare_readiness(repo_root)
     if not readiness_issues:
+        logger.info("Atlantis coverage backend already prepared, nothing to do")
         return 0
 
     published_release_checkout = _checkout_matches_published_release(repo_root)
@@ -418,6 +419,7 @@ def prepare_uniafl_backend(
                 issue.startswith("missing local image:") for issue in readiness_issues
             ):
                 _write_prepare_state(repo_root)
+                logger.info("Atlantis coverage backend prepared (images pulled)")
                 return 0
         else:
             logger.warning(
@@ -441,6 +443,7 @@ def prepare_uniafl_backend(
         uniafl_root=repo_root,
     )
 
+    logger.info("Building Atlantis images locally via oss-crs prepare")
     stdout, stderr, returncode = run_oss_crs_prepare(
         compose_file,
         work_dir,
@@ -452,4 +455,5 @@ def prepare_uniafl_backend(
         raise RuntimeError(f"oss-crs prepare failed (rc={returncode}): {detail}")
 
     _write_prepare_state(repo_root)
+    logger.info("Atlantis coverage backend prepared (images built locally)")
     return 0

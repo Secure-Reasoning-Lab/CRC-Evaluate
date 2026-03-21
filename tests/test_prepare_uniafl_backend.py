@@ -138,13 +138,14 @@ def test_ensure_checkout_fetches_pinned_release_when_exists(tmp_path: Path) -> N
     with patch("crsbench.prepare.uniafl_backend.subprocess.run", side_effect=mock_run):
         _ensure_checkout(dest)
 
-    # Should fetch the pinned release ref, then checkout it
+    # Should fetch tags, then force-checkout the pinned release
     assert len(captured_cmds) == 2
     fetch_cmd = captured_cmds[0]
     checkout_cmd = captured_cmds[1]
     assert "fetch" in fetch_cmd
-    assert DEFAULT_UNIAFL_RELEASE in fetch_cmd
+    assert "--tags" in fetch_cmd
     assert "checkout" in checkout_cmd
+    assert "--force" in checkout_cmd
     assert DEFAULT_UNIAFL_RELEASE in checkout_cmd
 
 
