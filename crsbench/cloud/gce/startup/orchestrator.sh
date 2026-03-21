@@ -756,6 +756,8 @@ mkdir -p "${STATE_DIR}"
 
 # --- Install system packages ---
 ensure_system_packages
+ENV_PASSTHROUGH_B64="$(metadata_get_optional "crsbench-env-passthrough-b64")"
+export_passthrough_env "${ENV_PASSTHROUGH_B64}"
 ensure_timezone
 ensure_docker_ready
 ensure_crsbench_user
@@ -770,12 +772,10 @@ GIT_REF="$(metadata_get_optional "crsbench-git-ref")"
 EXPERIMENT_CONFIG_B64="$(metadata_get "crsbench-experiment-config-b64")"
 REDIS_PASSWORD="$(metadata_get "crsbench-redis-password")"
 GITHUB_DEPLOY_KEY="$(metadata_get_optional "crsbench-github-deploy-key")"
-ENV_PASSTHROUGH_B64="$(metadata_get_optional "crsbench-env-passthrough-b64")"
 REDIS_BIND_HOST="$(discover_redis_bind_host)"
 
 # --- GitHub SSH setup (if deploy key provided) ---
 configure_clone_ssh "${GITHUB_DEPLOY_KEY}"
-export_passthrough_env "${ENV_PASSTHROUGH_B64}"
 
 # --- Install crsbench from a repo checkout ---
 if [[ -z "${INSTALL_SPEC}" || "${INSTALL_SPEC}" != git+* ]]; then

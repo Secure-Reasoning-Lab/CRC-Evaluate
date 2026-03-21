@@ -263,6 +263,7 @@ prefer first-class layered `env` maps:
 cloud:
   env:
     CRSBENCH_LLM_UPSTREAM_BASE_URL: os.environ/LITELLM_BASE_URL
+    CRSBENCH_TIMEZONE: America/Los_Angeles
 
   providers:
     gce:
@@ -317,6 +318,10 @@ Semantics:
 - missing or empty referenced values fail launch before any VM is created
 - runtime-managed variables such as `CRSBENCH_REDIS_HOST` and
   `CRSBENCH_REDIS_PASSWORD` are rejected and must not be overridden
+- startup-time settings such as `CRSBENCH_TIMEZONE` should be set through these
+  env layers; for example, `cloud.env.CRSBENCH_TIMEZONE: America/Los_Angeles`
+  changes the host timezone on orchestrator and worker/evaluator VMs during
+  bootstrap
 
 ### Generate a deploy key
 
@@ -465,7 +470,10 @@ starting Valkey. Transport-level connection failures are retried until the
 readiness timeout, while fatal Redis auth/config errors still fail immediately
 with bootstrap evidence.
 The same startup scripts also support local rehearsal via file-backed metadata
-and a foreground launcher mode for non-`systemd` containers. On real GCE VMs,
+and a foreground launcher mode for non-`systemd` containers. Startup-time
+settings such as `CRSBENCH_TIMEZONE` can be overridden through `cloud.env` or
+the role/profile env layers; when unset, bootstrap still defaults to
+`America/New_York`. On real GCE VMs,
 the scripts now create a dedicated `crsbench` user, grant passwordless `sudo`
 for disposable-host bootstrap, install the user-session support package needed
 for `/run/user/<uid>/bus`, enforce Docker `cgroupfs`, and run the long-lived
@@ -744,9 +752,9 @@ sudo -iu crsbench env \
   journalctl --user -u crsbench-worker.service -f
 ```
 
-During bootstrap, both orchestrator and worker VMs also normalize the host
-timezone to `America/New_York` and configure Docker to use the `cgroupfs`
-driver expected by `oss-crs`. On Ubuntu-based GCE images, CRSBench now installs
+During bootstrap, both orchestrator and worker VMs normalize the host timezone
+to `CRSBENCH_TIMEZONE` (default `America/New_York`) and configure Docker to use
+the `cgroupfs` driver expected by `oss-crs`. On Ubuntu-based GCE images, CRSBench now installs
 Docker Engine from Docker's official apt repository rather than the distro
 `docker.io` packages. If you inspect a VM manually, verify these with
 `timedatectl`, `cat /etc/timezone`, `docker info --format '{{.CgroupDriver}}'`,

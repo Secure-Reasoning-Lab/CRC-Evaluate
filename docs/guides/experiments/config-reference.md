@@ -31,7 +31,9 @@ Managed cloud execution uses a provider-neutral top-level shape:
 - `cloud.remote.experiment_root`: remote-VM experiment root used by
   `cloud collect` / `cloud teardown`; defaults to
   `storage.experiment_filestore` when unset for backward compatibility
-- `cloud.env`: global environment variables merged into all launched cloud roles
+- `cloud.env`: global environment variables merged into all launched cloud roles;
+  this is also the top-level place to set startup-script overrides such as
+  `CRSBENCH_TIMEZONE`
 - `cloud.orchestrator`: instance-profile reference for the remote orchestrator
   VM, plus optional orchestrator-only `region`, `regions`, `zones`,
   `fallback`, and `env`

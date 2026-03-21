@@ -20,6 +20,12 @@ This page is the canonical index for CRSBench environment variables.
 These variables are consumed by the cloud startup scripts and are primarily for
 local rehearsal or non-GCE bring-up.
 
+For managed GCE launches, startup-script variables that are safe to override
+should be configured through the cloud env layers in the experiment config
+(`cloud.env`, `cloud.orchestrator.env`, `cloud.workers.defaults.env`,
+`cloud.workers.placements[].env`, and the evaluator equivalents), not by
+editing the VM manually after launch.
+
 | Variable | Purpose |
 |---|---|
 | `CRSBENCH_METADATA_ROOT_DIR` | Read instance metadata from mounted files instead of an HTTP metadata service. |
@@ -27,8 +33,9 @@ local rehearsal or non-GCE bring-up.
 | `CRSBENCH_METADATA_HEADER_NAME` | Override the metadata-service header name (default `Metadata-Flavor`). |
 | `CRSBENCH_METADATA_HEADER_VALUE` | Override the metadata-service header value (default `Google`). |
 | `CRSBENCH_SERVICE_MANAGER` | Worker/orchestrator startup mode: `auto` (default), `systemd`, or `foreground`. |
+| `CRSBENCH_STARTUP_MODE` | Shared startup-script role override: `worker` (default) or `evaluator`; mainly used by local rehearsal and non-GCE bring-up. |
 | `CRSBENCH_USER` | Non-root account created by the startup scripts for checkout/install/runtime handoff (default `crsbench`). |
-| `CRSBENCH_TIMEZONE` | Host timezone enforced during startup (default `America/New_York`). |
+| `CRSBENCH_TIMEZONE` | Host timezone enforced during startup (default `America/New_York`). For managed GCE launches, set it through the cloud env layers, for example `cloud.env.CRSBENCH_TIMEZONE: America/Los_Angeles`. |
 | `CRSBENCH_STATE_DIR` | Override the startup-script state directory (default `/var/lib/crsbench`). |
 | `CRSBENCH_CLONE_DIR` | Override the checkout target directory used during startup (default `/opt/crsbench`). |
 

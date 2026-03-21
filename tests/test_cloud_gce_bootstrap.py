@@ -602,6 +602,20 @@ def test_startup_script_preserves_passthrough_env_for_checkout_bootstrap():
     assert 'sudo -E -H -u "${CRSBENCH_USER}" "$@"' in script
 
 
+def test_startup_script_loads_passthrough_env_before_timezone_normalization():
+    """Worker startup must load metadata-passed env before ensure_timezone runs."""
+    from crsbench.cloud.gce.metadata import load_startup_script
+
+    script = load_startup_script()
+
+    env_load_index = script.index(
+        'ENV_PASSTHROUGH_B64="$(metadata_get_optional "crsbench-env-passthrough-b64")"'
+    )
+    timezone_index = script.rindex("\nensure_timezone\n")
+
+    assert env_load_index < timezone_index
+
+
 def test_startup_script_supports_file_backed_metadata_and_foreground_service_mode():
     """Worker bootstrap should run outside GCE/systemd for local Docker rehearsal."""
     from crsbench.cloud.gce.metadata import load_startup_script
@@ -858,6 +872,20 @@ def test_orchestrator_startup_script_consumes_config_payload_and_preprovisioned_
     assert "crsbench-experiment-config-b64" in script
     assert "crsbench-env-passthrough-b64" in script
     assert "CRSBENCH_CLOUD_PREPROVISIONED_WORKERS" in script
+
+
+def test_orchestrator_startup_script_loads_passthrough_env_before_timezone_normalization():
+    """Orchestrator startup must load metadata-passed env before ensure_timezone runs."""
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+
+    env_load_index = script.index(
+        'ENV_PASSTHROUGH_B64="$(metadata_get_optional "crsbench-env-passthrough-b64")"'
+    )
+    timezone_index = script.rindex("\nensure_timezone\n")
+
+    assert env_load_index < timezone_index
     assert "crsbench-redis-password" in script
     assert "loginctl enable-linger" in script
     assert "NOPASSWD:ALL" in script
