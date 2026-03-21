@@ -55,7 +55,11 @@ cloud:
     gce:
       project: aixcc-426805
       ssh_via_iap: true
-      region: us-east5
+      regions:
+        - us-east5
+        - us-east1
+        - us-south1
+      fallback: true
       profile_defaults:
         machine_type: n2d-standard-16
         boot_disk_size_gb: 100
@@ -74,7 +78,7 @@ cloud:
       count: 1
     placements:
       - {} # inherit provider region
-      - region: us-east1
+      - {} # inherit provider region
   evaluators:
     defaults:
       instance_profile: gce-evaluator-n2d

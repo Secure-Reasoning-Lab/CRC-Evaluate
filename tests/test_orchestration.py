@@ -913,6 +913,9 @@ class TestIntegrationWithSampleConfigs:
         experiment_name: str,
         expected_cloud_env: dict[str, str],
         expected_services: set[str],
+        expected_provider_region: str | None = "us-east5",
+        expected_provider_regions: list[str] | None = None,
+        expected_worker_regions: list[str | None] | None = None,
     ) -> None:
         """Checked-in remote GCE smoke configs should keep the same launch topology."""
         assert config.cloud is not None
@@ -931,7 +934,12 @@ class TestIntegrationWithSampleConfigs:
         assert config.cloud.providers.gce is not None
         assert config.cloud.defaults is not None
         assert config.cloud.providers.gce.profile_defaults is not None
-        assert config.cloud.providers.gce.region == "us-east5"
+        assert config.cloud.providers.gce.region == expected_provider_region
+        assert config.cloud.providers.gce.regions == (
+            expected_provider_regions
+            if expected_provider_regions is not None
+            else (["us-east5"] if expected_provider_region is not None else [])
+        )
         assert config.cloud.workers is not None
         assert config.cloud.evaluators is not None
         assert config.cloud.orchestrator is not None
@@ -988,10 +996,9 @@ class TestIntegrationWithSampleConfigs:
         )
         assert config.cloud.orchestrator.region is None
         assert config.cloud.orchestrator.zones == []
-        assert [placement.region for placement in config.cloud.workers.placements] == [
-            None,
-            "us-east1",
-        ]
+        assert [placement.region for placement in config.cloud.workers.placements] == (
+            expected_worker_regions or [None, "us-east1"]
+        )
         assert [placement.count for placement in config.cloud.workers.placements] == [
             1,
             1,
@@ -1068,6 +1075,9 @@ class TestIntegrationWithSampleConfigs:
             experiment_name="gce-sanity-mgf-1o2w1e",
             expected_cloud_env={"OSS_CRS_DEBUG": "1"},
             expected_services={"atlantis-multilang-given_fuzzer"},
+            expected_provider_region="us-east5",
+            expected_provider_regions=["us-east5", "us-east1", "us-south1"],
+            expected_worker_regions=[None, None],
         )
         assert [placement.zones for placement in config.cloud.workers.placements] == [
             [],
