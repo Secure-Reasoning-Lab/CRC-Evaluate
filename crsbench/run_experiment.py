@@ -1862,15 +1862,15 @@ def run_experiment_distributed(
                 readiness_store=session.cloud_readiness
             )
             assert cloud_config is not None
-            from crsbench.cloud.gce.launch_preflight import (
-                prepare_gce_launch_inputs,
-            )
-            from crsbench.cloud.gce.provider import GceProviderAdapter
             from crsbench.cloud.models import build_cloud_launch_plan
+            from crsbench.cloud.providers import (
+                prepare_launch_inputs,
+                provider_adapter_for_launch_plan,
+            )
             from crsbench.cloud.quota import QuotaValidator
 
             launch_plan = build_cloud_launch_plan(config)
-            adapter = GceProviderAdapter()
+            adapter = provider_adapter_for_launch_plan(launch_plan)
             has_evaluator_placements = bool(launch_plan.evaluator_placements)
             if os.environ.get("CRSBENCH_CLOUD_PREPROVISIONED_WORKERS") == "1":
                 logger.info(
@@ -1888,7 +1888,7 @@ def run_experiment_distributed(
                         adapter=adapter,
                     )
             else:
-                preflight = prepare_gce_launch_inputs(
+                preflight = prepare_launch_inputs(
                     plan=launch_plan,
                     cwd=Path.cwd(),
                 )

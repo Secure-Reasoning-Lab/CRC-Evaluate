@@ -1232,7 +1232,9 @@ def test_run_launch_fails_on_quota_shortage_before_creating_instances(tmp_path: 
             "crsbench.cloud.cli._launch.load_experiment_config",
             return_value=_make_provider_neutral_experiment_config(),
         ),
-        patch("crsbench.cloud.cli._launch.GceProviderAdapter") as mock_adapter_cls,
+        patch(
+            "crsbench.cloud.cli._launch.provider_adapter_for_launch_plan"
+        ) as mock_adapter_cls,
         patch("crsbench.cloud.cli._launch.QuotaValidator") as mock_validator_cls,
     ):
         mock_adapter = mock_adapter_cls.return_value
@@ -2050,8 +2052,8 @@ class TestLaunch:
     """Tests for run_launch() orchestration."""
 
     @patch("crsbench.cloud.cli._launch.load_launch_state")
-    @patch("crsbench.cloud.cli._launch.prepare_gce_launch_inputs")
-    @patch("crsbench.cloud.cli._launch.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._launch.prepare_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.provider_adapter_for_launch_plan")
     @patch("crsbench.cloud.cli._launch.QuotaValidator")
     @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
     @patch("crsbench.cloud.cli._launch.load_experiment_config")
@@ -2096,8 +2098,8 @@ class TestLaunch:
         mock_adapter.create_workers.assert_not_called()
 
     @patch("crsbench.cloud.cli._launch.load_launch_state", return_value=None)
-    @patch("crsbench.cloud.cli._launch.prepare_gce_launch_inputs")
-    @patch("crsbench.cloud.cli._launch.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._launch.prepare_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.provider_adapter_for_launch_plan")
     @patch("crsbench.cloud.cli._launch.QuotaValidator")
     @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
     @patch("crsbench.cloud.cli._launch.load_experiment_config")
@@ -2148,8 +2150,8 @@ class TestLaunch:
     )
     @patch("crsbench.cloud.cli._launch.append_created_instance_records")
     @patch("crsbench.cloud.cli._launch.save_launch_state")
-    @patch("crsbench.cloud.cli._launch.prepare_gce_launch_inputs")
-    @patch("crsbench.cloud.cli._launch.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._launch.prepare_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.provider_adapter_for_launch_plan")
     @patch("crsbench.cloud.cli._launch.QuotaValidator")
     @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
     @patch("crsbench.cloud.cli._launch.load_experiment_config")
@@ -2243,14 +2245,14 @@ class TestLaunch:
     @patch(
         "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
     )
-    @patch("crsbench.cloud.cli._launch.GceProvisioner")
+    @patch("crsbench.cloud.cli._launch.provisioner_for_provider")
     @patch("crsbench.cloud.cli._launch.append_created_instance_records")
     @patch(
         "crsbench.cloud.cli._launch.save_launch_state",
         side_effect=RuntimeError("disk full"),
     )
-    @patch("crsbench.cloud.cli._launch.prepare_gce_launch_inputs")
-    @patch("crsbench.cloud.cli._launch.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._launch.prepare_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.provider_adapter_for_launch_plan")
     @patch("crsbench.cloud.cli._launch.QuotaValidator")
     @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
     @patch("crsbench.cloud.cli._launch.logger")
@@ -2315,14 +2317,14 @@ class TestLaunch:
     @patch(
         "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
     )
-    @patch("crsbench.cloud.cli._launch.GceProvisioner")
+    @patch("crsbench.cloud.cli._launch.provisioner_for_provider")
     @patch("crsbench.cloud.cli._launch.append_created_instance_records")
     @patch(
         "crsbench.cloud.cli._launch.save_launch_state",
         side_effect=RuntimeError("disk full"),
     )
-    @patch("crsbench.cloud.cli._launch.prepare_gce_launch_inputs")
-    @patch("crsbench.cloud.cli._launch.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._launch.prepare_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.provider_adapter_for_launch_plan")
     @patch("crsbench.cloud.cli._launch.QuotaValidator")
     @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
     @patch("crsbench.cloud.cli._launch.logger")
@@ -2391,8 +2393,8 @@ class TestLaunch:
         "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
     )
     @patch("crsbench.cloud.cli._launch.append_created_instance_records")
-    @patch("crsbench.cloud.cli._launch.prepare_gce_launch_inputs")
-    @patch("crsbench.cloud.cli._launch.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._launch.prepare_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.provider_adapter_for_launch_plan")
     @patch("crsbench.cloud.cli._launch.QuotaValidator")
     @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
     @patch("crsbench.cloud.cli._launch.logger")
@@ -2450,8 +2452,8 @@ class TestLaunch:
         "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
     )
     @patch("crsbench.cloud.cli._launch.save_launch_state")
-    @patch("crsbench.cloud.cli._launch.prepare_gce_launch_inputs")
-    @patch("crsbench.cloud.cli._launch.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._launch.prepare_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.provider_adapter_for_launch_plan")
     @patch("crsbench.cloud.cli._launch.QuotaValidator")
     @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
     @patch("crsbench.cloud.cli._launch.load_experiment_config")
@@ -2546,8 +2548,8 @@ class TestLaunch:
         "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
     )
     @patch("crsbench.cloud.cli._launch.save_launch_state")
-    @patch("crsbench.cloud.cli._launch.prepare_gce_launch_inputs")
-    @patch("crsbench.cloud.cli._launch.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._launch.prepare_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.provider_adapter_for_launch_plan")
     @patch("crsbench.cloud.cli._launch.QuotaValidator")
     @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
     @patch("crsbench.cloud.cli._launch.load_experiment_config")
@@ -2636,8 +2638,8 @@ class TestLaunch:
         "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
     )
     @patch("crsbench.cloud.cli._launch.save_launch_state")
-    @patch("crsbench.cloud.cli._launch.prepare_gce_launch_inputs")
-    @patch("crsbench.cloud.cli._launch.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._launch.prepare_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.provider_adapter_for_launch_plan")
     @patch("crsbench.cloud.cli._launch.QuotaValidator")
     @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
     @patch("crsbench.cloud.cli._launch.load_experiment_config")

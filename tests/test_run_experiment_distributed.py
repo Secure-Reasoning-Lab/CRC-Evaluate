@@ -874,11 +874,11 @@ def test_provider_neutral_cloud_workers_validate_quota_before_bringup(
             return_value=launch_plan,
         ),
         patch(
-            "crsbench.cloud.gce.launch_preflight.prepare_gce_launch_inputs",
+            "crsbench.cloud.providers.prepare_launch_inputs",
             return_value=MagicMock(resolved_plan=resolved_plan),
         ),
         patch(
-            "crsbench.cloud.gce.provider.GceProviderAdapter",
+            "crsbench.cloud.providers.provider_adapter_for_launch_plan",
             return_value=adapter,
         ),
         patch(
@@ -960,7 +960,7 @@ def test_provider_neutral_cloud_workers_resolve_secret_refs_before_bringup(
             return_value=launch_plan,
         ),
         patch(
-            "crsbench.cloud.gce.provider.GceProviderAdapter",
+            "crsbench.cloud.providers.provider_adapter_for_launch_plan",
             return_value=adapter,
         ),
         patch(
@@ -1046,7 +1046,7 @@ def test_provider_neutral_cloud_workers_pass_layered_env_payloads(
             return_value=launch_plan,
         ),
         patch(
-            "crsbench.cloud.gce.launch_preflight.prepare_gce_launch_inputs",
+            "crsbench.cloud.providers.prepare_launch_inputs",
             return_value=MagicMock(
                 resolved_plan=resolved_plan,
                 worker_placement_envs=[
@@ -1062,7 +1062,7 @@ def test_provider_neutral_cloud_workers_pass_layered_env_payloads(
             ),
         ) as mock_preflight,
         patch(
-            "crsbench.cloud.gce.provider.GceProviderAdapter",
+            "crsbench.cloud.providers.provider_adapter_for_launch_plan",
             return_value=adapter,
         ),
         patch(
@@ -1159,7 +1159,7 @@ def test_provider_neutral_cloud_instances_with_evaluators_pass_layered_env_paylo
             return_value=launch_plan,
         ),
         patch(
-            "crsbench.cloud.gce.launch_preflight.prepare_gce_launch_inputs",
+            "crsbench.cloud.providers.prepare_launch_inputs",
             return_value=MagicMock(
                 resolved_plan=resolved_plan,
                 worker_placement_envs=[
@@ -1185,7 +1185,7 @@ def test_provider_neutral_cloud_instances_with_evaluators_pass_layered_env_paylo
             ),
         ) as mock_preflight,
         patch(
-            "crsbench.cloud.gce.provider.GceProviderAdapter",
+            "crsbench.cloud.providers.provider_adapter_for_launch_plan",
             return_value=adapter,
         ),
         patch(
@@ -1261,7 +1261,7 @@ def test_provider_neutral_preprovisioned_wait_does_not_resolve_secret_refs_again
             return_value=launch_plan,
         ),
         patch(
-            "crsbench.cloud.gce.provider.GceProviderAdapter",
+            "crsbench.cloud.providers.provider_adapter_for_launch_plan",
             return_value=adapter,
         ),
         patch(
@@ -1324,7 +1324,7 @@ def test_provider_neutral_preprovisioned_evaluators_use_combined_wait(
             return_value=launch_plan,
         ),
         patch(
-            "crsbench.cloud.gce.provider.GceProviderAdapter",
+            "crsbench.cloud.providers.provider_adapter_for_launch_plan",
             return_value=adapter,
         ),
         patch(

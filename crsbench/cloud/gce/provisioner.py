@@ -6,6 +6,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Protocol, cast
 
+from crsbench.cloud.errors import CloudProvisioningError
 from crsbench.cloud.gce.metadata import (
     build_evaluator_labels,
     build_evaluator_metadata,
@@ -26,7 +27,7 @@ if TYPE_CHECKING:
     from crsbench.validation.schemas import GceOrchestratorConfig, GceWorkerFleetConfig
 
 
-class GceProvisioningError(RuntimeError):
+class GceProvisioningError(CloudProvisioningError):
     """Raised when the GCE control plane cannot satisfy a fleet request."""
 
 

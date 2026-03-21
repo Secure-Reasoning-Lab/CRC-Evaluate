@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import Mapping
 
@@ -15,19 +15,10 @@ from crsbench.cloud.models import (
     CloudPlacementPlan,
     ResolvedInstanceProfile,
 )
+from crsbench.cloud.preflight import CloudLaunchPreflight
 from crsbench.cloud.secret_refs import resolve_secret_path, resolve_secret_text
 
-
-@dataclass(frozen=True)
-class GceLaunchPreflight:
-    """Resolved launch inputs for provisioning plus redacted persistence copies."""
-
-    resolved_plan: CloudLaunchPlan
-    redacted_worker_fleets: list = field(default_factory=list)
-    redacted_evaluator_fleets: list = field(default_factory=list)
-    orchestrator_env: dict[str, str] = field(default_factory=dict)
-    worker_placement_envs: list[dict[str, str]] = field(default_factory=list)
-    evaluator_placement_envs: list[dict[str, str]] = field(default_factory=list)
+GceLaunchPreflight = CloudLaunchPreflight
 
 
 def prepare_gce_launch_inputs(

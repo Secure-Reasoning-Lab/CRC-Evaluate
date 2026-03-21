@@ -297,6 +297,46 @@ class GceProviderAdapter:
             next_evaluator_index += placement.count
         return fleets
 
+    def expected_worker_names(self, *, plan: CloudLaunchPlan) -> list[str]:
+        """Return the deterministic worker instance names for one launch plan."""
+        names: list[str] = []
+        for fleet in self.build_worker_fleets(plan):
+            names.extend(
+                self._provisioner.build_worker_names(
+                    experiment_name=plan.experiment_name,
+                    fleet=fleet,
+                )
+            )
+        return names
+
+    def expected_evaluator_names(self, *, plan: CloudLaunchPlan) -> list[str]:
+        """Return the deterministic evaluator instance names for one launch plan."""
+        names: list[str] = []
+        for fleet in self.build_evaluator_fleets(plan):
+            names.extend(
+                self._provisioner.build_worker_names(
+                    experiment_name=plan.experiment_name,
+                    fleet=fleet,
+                )
+            )
+        return names
+
+    def max_worker_readiness_timeout(self, *, plan: CloudLaunchPlan) -> int:
+        """Return the maximum worker readiness timeout across placements."""
+        return max(
+            fleet.readiness_timeout_sec for fleet in self.build_worker_fleets(plan)
+        )
+
+    def max_instance_readiness_timeout(self, *, plan: CloudLaunchPlan) -> int:
+        """Return the maximum readiness timeout across worker/evaluator placements."""
+        timeouts = [
+            fleet.readiness_timeout_sec for fleet in self.build_worker_fleets(plan)
+        ]
+        timeouts.extend(
+            fleet.readiness_timeout_sec for fleet in self.build_evaluator_fleets(plan)
+        )
+        return max(timeouts)
+
     def quota_requirements(
         self,
         plan: CloudLaunchPlan,

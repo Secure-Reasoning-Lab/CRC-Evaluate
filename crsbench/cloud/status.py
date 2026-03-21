@@ -5,7 +5,6 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, cast
 
-from crsbench.cloud.gce.provisioner import GceProvisioner
 from crsbench.cloud.readiness import (
     CloudFleetSnapshot,
     CloudInstanceRole,
@@ -26,10 +25,8 @@ if TYPE_CHECKING:
     from typing import Protocol
 
     from crsbench.cloud.bootstrap import CloudVmBootstrapInputs
-    from crsbench.cloud.gce.provider import GceProviderAdapter
     from crsbench.cloud.models import CloudLaunchPlan
     from crsbench.distributed.registry import RuntimeRegistration
-    from crsbench.validation.schemas import GceWorkerFleetConfig
 
     class CloudInstanceLike(Protocol):
         name: str
@@ -43,6 +40,18 @@ if TYPE_CHECKING:
         labels: dict[str, str]
         provider_metadata: dict[str, object]
         provider: CloudProvider
+
+    class CloudProviderAdapterLike(Protocol):
+        def create_workers(self, **kwargs): ...
+        def create_evaluators(self, **kwargs): ...
+        def list_workers(self, *, plan: "CloudLaunchPlan"): ...
+        def list_evaluators(self, *, plan: "CloudLaunchPlan"): ...
+        def delete_workers(self, *, plan: "CloudLaunchPlan"): ...
+        def delete_evaluators(self, *, plan: "CloudLaunchPlan"): ...
+        def expected_worker_names(self, *, plan: "CloudLaunchPlan") -> list[str]: ...
+        def expected_evaluator_names(self, *, plan: "CloudLaunchPlan") -> list[str]: ...
+        def max_worker_readiness_timeout(self, *, plan: "CloudLaunchPlan") -> int: ...
+        def max_instance_readiness_timeout(self, *, plan: "CloudLaunchPlan") -> int: ...
 
 
 class CloudFleetBringupError(RuntimeError):
@@ -64,13 +73,13 @@ class CloudFleetStatusManager:
         self,
         *,
         readiness_store: CloudReadinessStore,
-        provisioner: GceProvisioner | None = None,
+        provisioner: object | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         poll_interval_sec: float = 5.0,
     ) -> None:
+        del provisioner
         self._readiness_store = readiness_store
-        self._provisioner = provisioner or GceProvisioner()
         self._clock = clock
         self._sleep = sleep
         self._poll_interval_sec = poll_interval_sec
@@ -116,7 +125,7 @@ class CloudFleetStatusManager:
         self,
         *,
         plan: "CloudLaunchPlan",
-        adapter: "GceProviderAdapter",
+        adapter: "CloudProviderAdapterLike",
         redis_host: str,
         redis_password: str | None = None,
         registration: "RuntimeRegistration",
@@ -195,26 +204,12 @@ class CloudFleetStatusManager:
         self,
         *,
         plan: "CloudLaunchPlan",
-        adapter: "GceProviderAdapter",
+        adapter: "CloudProviderAdapterLike",
     ) -> CloudFleetSnapshot:
         """Wait for all pre-provisioned workers and evaluators to report ready."""
-        expected_workers: list[str] = []
-        expected_evaluators: list[str] = []
+        expected_workers = adapter.expected_worker_names(plan=plan)
+        expected_evaluators = adapter.expected_evaluator_names(plan=plan)
         timeout_sec = self._max_instance_readiness_timeout(adapter, plan)
-        for fleet in adapter.build_worker_fleets(plan):
-            expected_workers.extend(
-                self._provisioner.build_worker_names(
-                    experiment_name=plan.experiment_name,
-                    fleet=fleet,
-                )
-            )
-        for fleet in adapter.build_evaluator_fleets(plan):
-            expected_evaluators.extend(
-                self._provisioner.build_worker_names(
-                    experiment_name=plan.experiment_name,
-                    fleet=fleet,
-                )
-            )
 
         deadline = self._clock() + timeout_sec
         while True:
@@ -331,59 +326,11 @@ class CloudFleetStatusManager:
             return worker.instance_name
         return f"{worker.instance_name}[{worker.role.value}]"
 
-    def _teardown_gce_workers(
-        self,
-        *,
-        experiment_name: str,
-        fleet: GceWorkerFleetConfig,
-        workers: list[CloudInstanceRecord],
-    ) -> None:
-        for worker in workers:
-            provider_status = coerce_gce_provider_status(worker.status)
-            self._readiness_store.record(
-                CloudWorkerStatus(
-                    experiment_name=experiment_name,
-                    instance_id=worker.instance_id,
-                    instance_name=worker.name,
-                    zone=_required_zone(worker),
-                    state=CloudWorkerState.DELETING,
-                    provider_status=provider_status,
-                    internal_ip=worker.internal_ip,
-                    external_ip=worker.external_ip,
-                    detail="Deleting worker after failed bring-up",
-                )
-            )
-
-        try:
-            deleted_workers = _normalize_cloud_instances(
-                self._provisioner.delete_workers(
-                    experiment_name=experiment_name,
-                    fleet=fleet,
-                )
-            )
-        except Exception:
-            return
-        for worker in deleted_workers:
-            provider_status = coerce_gce_provider_status(worker.status)
-            self._readiness_store.record(
-                CloudWorkerStatus(
-                    experiment_name=experiment_name,
-                    instance_id=worker.instance_id,
-                    instance_name=worker.name,
-                    zone=_required_zone(worker),
-                    state=CloudWorkerState.DELETED,
-                    provider_status=provider_status,
-                    internal_ip=worker.internal_ip,
-                    external_ip=worker.external_ip,
-                    detail="Deleted after failed bring-up",
-                )
-            )
-
     def bring_up_workers(
         self,
         *,
         plan: "CloudLaunchPlan",
-        adapter: "GceProviderAdapter",
+        adapter: "CloudProviderAdapterLike",
         redis_host: str,
         redis_password: str | None = None,
         registration: "RuntimeRegistration",
@@ -422,18 +369,11 @@ class CloudFleetStatusManager:
         self,
         *,
         plan: "CloudLaunchPlan",
-        adapter: "GceProviderAdapter",
+        adapter: "CloudProviderAdapterLike",
     ) -> CloudFleetSnapshot:
         """Wait for all pre-provisioned workers in a launch plan to appear and report ready."""
-        expected_names: list[str] = []
+        expected_names = adapter.expected_worker_names(plan=plan)
         timeout_sec = self._max_readiness_timeout(adapter, plan)
-        for fleet in adapter.build_worker_fleets(plan):
-            expected_names.extend(
-                self._provisioner.build_worker_names(
-                    experiment_name=plan.experiment_name,
-                    fleet=fleet,
-                )
-            )
 
         deadline = self._clock() + timeout_sec
         while True:
@@ -468,26 +408,17 @@ class CloudFleetStatusManager:
 
     def _max_readiness_timeout(
         self,
-        adapter: "GceProviderAdapter",
+        adapter: "CloudProviderAdapterLike",
         plan: "CloudLaunchPlan",
     ) -> int:
-        return max(
-            fleet.readiness_timeout_sec for fleet in adapter.build_worker_fleets(plan)
-        )
+        return adapter.max_worker_readiness_timeout(plan=plan)
 
     def _max_instance_readiness_timeout(
         self,
-        adapter: "GceProviderAdapter",
+        adapter: "CloudProviderAdapterLike",
         plan: "CloudLaunchPlan",
     ) -> int:
-        timeouts = [
-            fleet.readiness_timeout_sec for fleet in adapter.build_worker_fleets(plan)
-        ]
-        timeouts.extend(
-            fleet.readiness_timeout_sec
-            for fleet in adapter.build_evaluator_fleets(plan)
-        )
-        return max(timeouts)
+        return adapter.max_instance_readiness_timeout(plan=plan)
 
     def wait_for_instances(
         self,
@@ -598,7 +529,7 @@ class CloudFleetStatusManager:
         self,
         *,
         plan: "CloudLaunchPlan",
-        adapter: "GceProviderAdapter",
+        adapter: "CloudProviderAdapterLike",
         workers: list[CloudInstanceRecord],
     ) -> None:
         for worker in workers:
@@ -643,7 +574,7 @@ class CloudFleetStatusManager:
         self,
         *,
         plan: "CloudLaunchPlan",
-        adapter: "GceProviderAdapter",
+        adapter: "CloudProviderAdapterLike",
         workers: list[CloudInstanceRecord],
         evaluators: list[CloudInstanceRecord],
     ) -> None:

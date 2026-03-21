@@ -9,9 +9,7 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel
 
 from crsbench.cloud.bootstrap import CloudVmBootstrapInputs
-from crsbench.cloud.gce.launch_preflight import prepare_gce_launch_inputs
-from crsbench.cloud.gce.provider import GceProviderAdapter
-from crsbench.cloud.gce.provisioner import GceProvisioner, GceProvisioningError
+from crsbench.cloud.errors import CloudProvisioningError
 from crsbench.cloud.launch_state import (
     CloudLaunchState,
     CreatedCloudInstanceRecord,
@@ -21,6 +19,11 @@ from crsbench.cloud.launch_state import (
     save_launch_state,
 )
 from crsbench.cloud.models import build_cloud_launch_plan
+from crsbench.cloud.providers import (
+    prepare_launch_inputs,
+    provider_adapter_for_launch_plan,
+    provisioner_for_provider,
+)
 from crsbench.cloud.quota import CloudQuotaValidationError, QuotaValidator
 from crsbench.cloud.records import CloudFleetPlacementRecord
 from crsbench.cloud.types import CloudProvider
@@ -31,14 +34,14 @@ from crsbench.utils.logger import get_logger
 if TYPE_CHECKING:
     import argparse
 
-    from crsbench.validation.schemas import GceWorkerFleetConfig
+    from crsbench.cloud.preflight import CloudLaunchPreflight
 
 logger = get_logger(__name__)
 
 
 def _normalize_fleet_records(
-    adapter: GceProviderAdapter,
-    fleets: list[CloudFleetPlacementRecord | GceWorkerFleetConfig],
+    adapter,
+    fleets: list[CloudFleetPlacementRecord | object],
     *,
     role: str,
 ) -> list[CloudFleetPlacementRecord]:
@@ -56,7 +59,7 @@ def _assert_experiment_launch_target_is_clear(
     *,
     config_path: Path,
     experiment_name: str,
-    adapter: GceProviderAdapter,
+    adapter,
     plan,
 ) -> None:
     """Reject duplicate launch attempts for an experiment before provisioning starts."""
@@ -77,7 +80,7 @@ def _assert_experiment_launch_target_is_clear(
         conflicts.append(f"live cloud instances already exist: {live_names}")
 
     if conflicts:
-        raise GceProvisioningError(
+        raise CloudProvisioningError(
             f"Experiment {experiment_name!r} already has cloud launch state; "
             f"{'; '.join(conflicts)}. Tear it down before launching again."
         )
@@ -123,7 +126,6 @@ def _project_for_fleet_record(
 def _rollback_created_instances(
     records: list[CreatedCloudInstanceRecord],
 ) -> None:
-    provisioner = GceProvisioner()
     for record in reversed(records):
         if record.project is None:
             logger.warning(
@@ -131,6 +133,7 @@ def _rollback_created_instances(
                 record.instance_name,
             )
             continue
+        provisioner = provisioner_for_provider(record.provider)
         provisioner.delete_instance(
             project=record.project,
             zone=record.zone,
@@ -172,18 +175,18 @@ def run_launch(args: argparse.Namespace) -> int:
     evaluator_created_records: list[CreatedCloudInstanceRecord] = []
     try:
         if registration is None:
-            raise GceProvisioningError(
+            raise CloudProvisioningError(
                 "Runtime registration is required for cloud launch"
             )
 
         launch_plan = build_cloud_launch_plan(config)
-        preflight = prepare_gce_launch_inputs(
+        preflight: CloudLaunchPreflight = prepare_launch_inputs(
             plan=launch_plan,
             cwd=Path.cwd(),
         )
         provisioning_plan = preflight.resolved_plan
         assert preflight.redacted_worker_fleets is not None
-        adapter = GceProviderAdapter()
+        adapter = provider_adapter_for_launch_plan(provisioning_plan)
         resolved_orchestrator_config = adapter.build_orchestrator_config(
             provisioning_plan
         )
@@ -204,7 +207,7 @@ def run_launch(args: argparse.Namespace) -> int:
         )
 
         if not orchestrator_record.internal_ip:
-            raise GceProvisioningError(
+            raise CloudProvisioningError(
                 f"Provisioned orchestrator {orchestrator_record.name} has no internal IP"
             )
 

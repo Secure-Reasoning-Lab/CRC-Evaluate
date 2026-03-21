@@ -303,12 +303,9 @@ def test_bring_up_workers_deletes_all_provider_neutral_placements_after_timeout(
             self.deleted.append(plan)
             return []
 
-        def build_worker_fleets(self, plan) -> list[SimpleNamespace]:
+        def max_worker_readiness_timeout(self, *, plan) -> int:
             del plan
-            return [
-                SimpleNamespace(readiness_timeout_sec=900),
-                SimpleNamespace(readiness_timeout_sec=900),
-            ]
+            return 900
 
     store = CloudReadinessStore(_FakeRedis())
     adapter = _Adapter()
@@ -380,13 +377,9 @@ def test_bring_up_instances_deletes_worker_and_evaluator_placements_after_timeou
             self.deleted_evaluators.append(plan)
             return []
 
-        def build_worker_fleets(self, plan) -> list[SimpleNamespace]:
+        def max_instance_readiness_timeout(self, *, plan) -> int:
             del plan
-            return [SimpleNamespace(readiness_timeout_sec=900)]
-
-        def build_evaluator_fleets(self, plan) -> list[SimpleNamespace]:
-            del plan
-            return [SimpleNamespace(readiness_timeout_sec=900)]
+            return 900
 
     store = CloudReadinessStore(_FakeRedis())
     adapter = _Adapter()
@@ -414,3 +407,53 @@ def test_bring_up_instances_deletes_worker_and_evaluator_placements_after_timeou
 
     assert adapter.deleted_workers == [plan]
     assert adapter.deleted_evaluators == [plan]
+
+
+def test_wait_for_existing_workers_uses_adapter_expected_names_and_timeouts() -> None:
+    """Shared readiness should not require GCE fleet configs for pre-provisioned workers."""
+    from crsbench.cloud.readiness import (
+        CloudReadinessStore,
+        CloudWorkerState,
+        CloudWorkerStatus,
+    )
+    from crsbench.cloud.status import CloudFleetStatusManager
+
+    class _Adapter:
+        def expected_worker_names(self, *, plan) -> list[str]:
+            del plan
+            return ["gce-worker-001"]
+
+        def max_worker_readiness_timeout(self, *, plan) -> int:
+            del plan
+            return 900
+
+        def list_workers(self, *, plan) -> list[GceWorkerRecord]:
+            del plan
+            return [_make_worker()]
+
+    store = CloudReadinessStore(_FakeRedis())
+    store.record(
+        CloudWorkerStatus(
+            experiment_name="exp-cloud-42",
+            instance_id="1001",
+            instance_name="gce-worker-001",
+            zone="us-central1-a",
+            state=CloudWorkerState.READY,
+            provider_status=CloudProviderInstanceStatus.RUNNING,
+        )
+    )
+
+    manager = CloudFleetStatusManager(
+        readiness_store=store,
+        provisioner=None,
+        clock=lambda: 0.0,
+        sleep=lambda _seconds: None,
+        poll_interval_sec=0.0,
+    )
+
+    snapshot = manager.wait_for_existing_workers(
+        plan=SimpleNamespace(experiment_name="exp-cloud-42"),
+        adapter=_Adapter(),
+    )
+
+    assert snapshot.ready_count == 1

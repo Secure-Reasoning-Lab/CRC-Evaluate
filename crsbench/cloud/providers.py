@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from crsbench.cloud.gce.launch_preflight import prepare_gce_launch_inputs
 from crsbench.cloud.gce.provider import GceProviderAdapter
 from crsbench.cloud.gce.provisioner import GceProvisioner
 from crsbench.cloud.types import (
@@ -15,6 +16,7 @@ from crsbench.cloud.types import (
 if TYPE_CHECKING:
     from crsbench.cloud.cli._config_reconnect import ResolvedCloudContext
     from crsbench.cloud.models import CloudLaunchPlan
+    from crsbench.cloud.preflight import CloudLaunchPreflight
 
 
 def provider_for_launch_plan(plan: "CloudLaunchPlan") -> CloudProvider:
@@ -91,4 +93,19 @@ def provider_adapter_for_context(
     return provider_adapter_for_provider(
         provider_for_context(context),
         provisioner=provisioner,
+    )
+
+
+def prepare_launch_inputs(
+    *,
+    plan: "CloudLaunchPlan",
+    cwd,
+    env=None,
+) -> CloudLaunchPreflight:
+    """Resolve provider-specific launch secrets behind a shared preflight interface."""
+    provider = provider_for_launch_plan(plan)
+    if provider is CloudProvider.GCE:
+        return prepare_gce_launch_inputs(plan=plan, cwd=cwd, env=env)
+    raise NotImplementedError(
+        f"Cloud preflight is not implemented for {provider.value}"
     )
