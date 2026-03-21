@@ -52,6 +52,8 @@ def _normalize_fleet_records(
             continue
         normalized.append(adapter.to_cloud_fleet_placement_record(fleet, role=role))
     return normalized
+
+
 def _project_for_worker_record(
     worker_name: str,
     *,
