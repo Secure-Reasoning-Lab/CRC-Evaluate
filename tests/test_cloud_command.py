@@ -2180,10 +2180,43 @@ def test_run_monitor_treats_keyboard_interrupt_as_normal_exit(
     assert rc == 130
 
 
+def test_find_launch_target_conflicts_reports_saved_state_and_live_instances():
+    from crsbench.cloud.launch_checks import find_launch_target_conflicts
+
+    config_path = Path("/tmp/config.yaml")
+    adapter = MagicMock()
+    adapter.list_orchestrators.return_value = [
+        _make_gce_worker("gce-orchestrator-test-exp", ip="10.0.0.50")
+    ]
+    adapter.list_workers.return_value = [
+        _make_gce_worker("worker-b"),
+        _make_gce_worker("worker-a"),
+    ]
+    adapter.list_evaluators.return_value = [
+        _make_gce_worker("worker-a"),
+    ]
+
+    with patch(
+        "crsbench.cloud.launch_checks.load_launch_state",
+        return_value=_make_launch_state(),
+    ):
+        conflicts = find_launch_target_conflicts(
+            config_path=config_path,
+            experiment_name="test-exp",
+            adapter=adapter,
+            plan=MagicMock(),
+        )
+
+    assert conflicts == [
+        "saved launch state exists at /tmp/.crsbench-cloud/test-exp.json",
+        "live cloud instances already exist: gce-orchestrator-test-exp, worker-a, worker-b",
+    ]
+
+
 class TestLaunch:
     """Tests for run_launch() orchestration."""
 
-    @patch("crsbench.cloud.cli._launch.load_launch_state")
+    @patch("crsbench.cloud.launch_checks.load_launch_state")
     @patch("crsbench.cloud.cli._launch.prepare_launch_inputs")
     @patch("crsbench.cloud.cli._launch.provider_adapter_for_launch_plan")
     @patch("crsbench.cloud.cli._launch.QuotaValidator")
@@ -2229,7 +2262,7 @@ class TestLaunch:
         mock_adapter.create_orchestrator.assert_not_called()
         mock_adapter.create_workers.assert_not_called()
 
-    @patch("crsbench.cloud.cli._launch.load_launch_state", return_value=None)
+    @patch("crsbench.cloud.launch_checks.load_launch_state", return_value=None)
     @patch("crsbench.cloud.cli._launch.prepare_launch_inputs")
     @patch("crsbench.cloud.cli._launch.provider_adapter_for_launch_plan")
     @patch("crsbench.cloud.cli._launch.QuotaValidator")
