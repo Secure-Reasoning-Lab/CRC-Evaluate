@@ -597,8 +597,16 @@ uv run crsbench cloud --config config.yaml ssh
 
 `cloud ssh` infers the experiment name from `experiment.name` and reuses the
 live zone chosen at launch time. The interactive shell immediately runs
-`sudo -iu crsbench env -C /opt/crsbench bash -il`, so you land in the
-`crsbench` user environment with `/opt/crsbench` as the working directory.
+`sudo -iu crsbench env -C /opt/crsbench bash -lc ...`, sourcing the
+role-specific runtime env file from `/var/lib/crsbench/` first:
+
+- worker: `/var/lib/crsbench/worker.env`
+- evaluator: `/var/lib/crsbench/evaluator.env`
+- orchestrator: `/var/lib/crsbench/orchestrator.env`
+
+That means `cloud ssh` / `cloud shell` now attach with the same generated
+runtime environment that the managed CRSBench service uses, not just the
+`crsbench` Unix user and checkout directory.
 
 ## Remote Command Execution
 

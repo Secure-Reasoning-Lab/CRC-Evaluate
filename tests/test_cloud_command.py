@@ -3503,7 +3503,7 @@ class TestSsh:
             "crsbench-test-exp-work-001",
             "--zone=us-central1-a",
             "--ssh-flag=-t",
-            "--command=sudo -iu crsbench env -C /opt/crsbench bash -il",
+            '--command=sudo -iu crsbench env -C /opt/crsbench bash -lc \'if [[ -f "/var/lib/crsbench/worker.env" ]]; then set -a; source "/var/lib/crsbench/worker.env"; set +a; fi; exec bash -il\'',
         ]
         mock_run.return_value = _make_completed_process(0)
 
@@ -3522,7 +3522,8 @@ class TestSsh:
                 "-C",
                 "/opt/crsbench",
                 "bash",
-                "-il",
+                "-lc",
+                'if [[ -f "/var/lib/crsbench/worker.env" ]]; then set -a; source "/var/lib/crsbench/worker.env"; set +a; fi; exec bash -il',
             ],
             tty=True,
         )
@@ -3598,13 +3599,65 @@ class TestSsh:
                 "-C",
                 "/opt/crsbench",
                 "bash",
-                "-il",
+                "-lc",
+                'if [[ -f "/var/lib/crsbench/worker.env" ]]; then set -a; source "/var/lib/crsbench/worker.env"; set +a; fi; exec bash -il',
             ],
             tty=True,
         )
         cmd = mock_run.call_args.args[0]
         assert cmd == mock_build_ssh_command.return_value
         mock_select_target.assert_called_once()
+
+    @patch("crsbench.cloud.cli._ssh.subprocess.run")
+    @patch("crsbench.cloud.cli._ssh.build_ssh_command")
+    @patch("crsbench.cloud.cli._ssh.resolve_effective_experiment_name")
+    @patch("crsbench.cloud.cli._ssh.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._ssh.provisioner_for_context")
+    def test_ssh_uses_orchestrator_env_file_for_orchestrator_role(
+        self,
+        mock_provisioner_cls,
+        mock_resolve_context,
+        mock_resolve_experiment_name,
+        mock_build_ssh_command,
+        mock_run,
+    ):
+        mock_resolve_experiment_name.return_value = "test-exp"
+        context = _make_resolved_cloud_context(_make_launch_state())
+        mock_resolve_context.return_value = context
+        provisioner = mock_provisioner_cls.return_value
+        provisioner.list_workers.return_value = []
+        provisioner.list_evaluators.return_value = []
+        provisioner.get_instance_record.return_value = _make_gce_worker(
+            "crsbench-test-exp-orch",
+            zone="us-east5-b",
+            ip="10.0.0.50",
+        )
+        provisioner.get_instance_record.return_value.labels["crsbench-role"] = (
+            "orchestrator"
+        )
+        mock_build_ssh_command.return_value = ["gcloud", "compute", "ssh", "dummy"]
+        mock_run.return_value = _make_completed_process(0)
+
+        from crsbench.cloud.cli._ssh import run_ssh
+
+        rc = run_ssh(_make_ssh_args(instance="orch"))
+
+        assert rc == 0
+        mock_build_ssh_command.assert_called_once_with(
+            mock.ANY,
+            remote_command=[
+                "sudo",
+                "-iu",
+                "crsbench",
+                "env",
+                "-C",
+                "/opt/crsbench",
+                "bash",
+                "-lc",
+                'if [[ -f "/var/lib/crsbench/orchestrator.env" ]]; then set -a; source "/var/lib/crsbench/orchestrator.env"; set +a; fi; exec bash -il',
+            ],
+            tty=True,
+        )
 
     @patch("crsbench.cloud.cli._ssh.resolve_effective_experiment_name")
     @patch("crsbench.cloud.cli._ssh.resolve_cloud_context")
