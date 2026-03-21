@@ -65,7 +65,10 @@ def test_default_uniafl_root_uses_repo_third_party_checkout() -> None:
 def test_default_uniafl_image_prefix_uses_ghcr_default() -> None:
     from crsbench.prepare.uniafl_backend import default_uniafl_image_prefix
 
-    assert default_uniafl_image_prefix() == "ghcr.io/team-atlanta"
+    assert (
+        default_uniafl_image_prefix()
+        == "ghcr.io/team-atlanta/atlantis-multilang-given_fuzzer"
+    )
 
 
 def test_prepare_image_refs_use_default_registry_prefix() -> None:
@@ -77,12 +80,13 @@ def test_prepare_image_refs_use_default_registry_prefix() -> None:
     )
 
 
-def test_published_prepare_image_refs_use_default_registry_prefix() -> None:
+def test_published_prepare_image_refs_use_given_prefix() -> None:
     from crsbench.prepare.uniafl_backend import published_prepare_image_refs
 
-    assert published_prepare_image_refs(image_tag="stable")[:2] == (
-        "ghcr.io/team-atlanta/multilang-given_fuzzer-clang:stable",
-        "ghcr.io/team-atlanta/multilang-given_fuzzer-builder:stable",
+    prefix = "ghcr.io/team-atlanta/atlantis-multilang-given_fuzzer"
+    assert published_prepare_image_refs(image_tag="stable", prefix=prefix)[:2] == (
+        f"{prefix}/multilang-given_fuzzer-clang:stable",
+        f"{prefix}/multilang-given_fuzzer-builder:stable",
     )
 
 
@@ -355,7 +359,10 @@ def test_prepare_uniafl_backend_pulls_ghcr_images_before_local_build(
     ):
         assert prepare_uniafl_backend(repo_root) == 0
 
-    mock_pull.assert_called_once_with()
+    mock_pull.assert_called_once()
+    # Verify prefix was read from the checkout's crs.yaml (fallback for test stubs)
+    call_kwargs = mock_pull.call_args[1]
+    assert "prefix" in call_kwargs
     mock_prepare.assert_not_called()
     mock_write_state.assert_called_once_with(repo_root.resolve())
 

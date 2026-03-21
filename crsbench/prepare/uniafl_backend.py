@@ -7,12 +7,15 @@ import json
 import subprocess
 from pathlib import Path
 
+import yaml
+
 from crsbench.evaluation.adapter.compose_common import run_oss_crs_prepare
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-DEFAULT_UNIAFL_IMAGE_PREFIX = "ghcr.io/team-atlanta"
+# Fallback when crs.yaml is not yet available (before checkout).
+_FALLBACK_IMAGE_PREFIX = "ghcr.io/team-atlanta/atlantis-multilang-given_fuzzer"
 DEFAULT_UNIAFL_REPO_URL = (
     "https://github.com/Team-Atlanta/atlantis-multilang-given_fuzzer.git"
 )
@@ -38,6 +41,23 @@ def default_uniafl_root() -> Path:
     """Return the repository-local Atlantis checkout path."""
     repo_root = Path(__file__).resolve().parents[2]
     return repo_root / "third_party" / DEFAULT_UNIAFL_ROOT_BASENAME
+
+
+def _read_image_prefix(repo_root: Path) -> str:
+    """Read ``docker_registry`` from the CRS's ``crs.yaml``.
+
+    Falls back to the hardcoded default if the file is missing or
+    doesn't contain the field.
+    """
+    crs_yaml = repo_root / "oss-crs" / "crs.yaml"
+    if not crs_yaml.exists():
+        return _FALLBACK_IMAGE_PREFIX
+    try:
+        data = yaml.safe_load(crs_yaml.read_text())
+        registry = (data or {}).get("docker_registry", "")
+        return registry.strip() if registry else _FALLBACK_IMAGE_PREFIX
+    except Exception:
+        return _FALLBACK_IMAGE_PREFIX
 
 
 def _ensure_checkout(
@@ -89,14 +109,25 @@ def _ensure_checkout(
         )
 
 
-def default_uniafl_image_prefix() -> str:
-    """Return the registry/repository prefix for Atlantis images."""
-    return DEFAULT_UNIAFL_IMAGE_PREFIX
+def default_uniafl_image_prefix(uniafl_root: Path | None = None) -> str:
+    """Return the registry/repository prefix for Atlantis images.
+
+    Reads ``docker_registry`` from the CRS checkout's ``crs.yaml`` when
+    available, otherwise falls back to the hardcoded default.
+    """
+    repo_root = Path(uniafl_root or default_uniafl_root()).resolve()
+    return _read_image_prefix(repo_root)
 
 
-def qualify_uniafl_image(image_name: str, *, tag: str = DEFAULT_UNIAFL_RELEASE) -> str:
+def qualify_uniafl_image(
+    image_name: str,
+    *,
+    tag: str = DEFAULT_UNIAFL_RELEASE,
+    prefix: str | None = None,
+) -> str:
     """Return the fully qualified Atlantis image reference."""
-    return f"{default_uniafl_image_prefix()}/{image_name}:{tag}"
+    effective_prefix = prefix if prefix is not None else default_uniafl_image_prefix()
+    return f"{effective_prefix}/{image_name}:{tag}"
 
 
 def local_uniafl_image(
@@ -117,11 +148,13 @@ def prepare_image_refs(
 
 
 def published_prepare_image_refs(
-    *, image_tag: str = DEFAULT_UNIAFL_RELEASE
+    *,
+    image_tag: str = DEFAULT_UNIAFL_RELEASE,
+    prefix: str | None = None,
 ) -> tuple[str, ...]:
     """Return the published Atlantis prepare image references."""
     return tuple(
-        qualify_uniafl_image(image_name, tag=image_tag)
+        qualify_uniafl_image(image_name, tag=image_tag, prefix=prefix)
         for image_name in UNIAFL_PREPARE_IMAGES
     )
 
@@ -178,10 +211,12 @@ def current_prepare_image_ids(
     return image_ids
 
 
-def _pull_prepare_images(*, image_tag: str = DEFAULT_UNIAFL_RELEASE) -> list[str]:
+def _pull_prepare_images(
+    *, image_tag: str = DEFAULT_UNIAFL_RELEASE, prefix: str | None = None
+) -> list[str]:
     failures: list[str] = []
     for image_name in UNIAFL_PREPARE_IMAGES:
-        published_ref = qualify_uniafl_image(image_name, tag=image_tag)
+        published_ref = qualify_uniafl_image(image_name, tag=image_tag, prefix=prefix)
         local_ref = local_uniafl_image(image_name)
         pull = subprocess.run(
             ["docker", "pull", published_ref],
@@ -362,7 +397,10 @@ def prepare_uniafl_backend(
             f"Atlantis checkout not found or incomplete after clone/pull: {repo_root}"
         )
 
-    logger.info(f"Preparing UniAFL coverage backend from {repo_root}")
+    image_prefix = _read_image_prefix(repo_root)
+    logger.info(
+        f"Preparing UniAFL coverage backend from {repo_root} (registry: {image_prefix})"
+    )
     _, readiness_issues = get_uniafl_prepare_readiness(repo_root)
     if not readiness_issues:
         return 0
@@ -372,8 +410,8 @@ def prepare_uniafl_backend(
         issue for issue in readiness_issues if issue.startswith("missing local image:")
     ]
     if missing_image_issues and published_release_checkout:
-        logger.info("Pulling canonical Atlantis prepare images from GHCR")
-        pull_failures = _pull_prepare_images()
+        logger.info(f"Pulling Atlantis prepare images from {image_prefix}")
+        pull_failures = _pull_prepare_images(prefix=image_prefix)
         if not pull_failures:
             _, readiness_issues = get_uniafl_prepare_readiness(repo_root)
             if not any(
