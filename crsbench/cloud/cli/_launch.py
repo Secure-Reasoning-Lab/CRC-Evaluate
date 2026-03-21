@@ -22,6 +22,7 @@ from crsbench.cloud.launch_state import (
 )
 from crsbench.cloud.models import build_cloud_launch_plan
 from crsbench.cloud.quota import CloudQuotaValidationError, QuotaValidator
+from crsbench.cloud.records import CloudFleetPlacementRecord
 from crsbench.cloud.types import CloudProvider
 from crsbench.distributed.registry import RuntimeRegistration
 from crsbench.run_experiment import load_experiment_config
@@ -33,6 +34,22 @@ if TYPE_CHECKING:
     from crsbench.validation.schemas import GceWorkerFleetConfig
 
 logger = get_logger(__name__)
+
+
+def _normalize_fleet_records(
+    adapter: GceProviderAdapter,
+    fleets: list[CloudFleetPlacementRecord | GceWorkerFleetConfig],
+    *,
+    role: str,
+) -> list[CloudFleetPlacementRecord]:
+    """Normalize launch-state fleet records into provider-neutral placements."""
+    normalized: list[CloudFleetPlacementRecord] = []
+    for fleet in fleets:
+        if isinstance(fleet, CloudFleetPlacementRecord):
+            normalized.append(fleet)
+            continue
+        normalized.append(adapter.to_cloud_fleet_placement_record(fleet, role=role))
+    return normalized
 
 
 def _assert_experiment_launch_target_is_clear(
@@ -70,7 +87,7 @@ def _project_for_worker_record(
     worker_name: str,
     *,
     worker_zone: str,
-    worker_fleet_configs: list[GceWorkerFleetConfig],
+    worker_fleet_configs: list[CloudFleetPlacementRecord],
 ) -> str | None:
     zone_projects = {
         fleet.project for fleet in worker_fleet_configs if fleet.zone == worker_zone
@@ -94,7 +111,7 @@ def _project_for_fleet_record(
     instance_name: str,
     *,
     instance_zone: str,
-    fleet_configs: list[GceWorkerFleetConfig],
+    fleet_configs: list[CloudFleetPlacementRecord],
 ) -> str | None:
     return _project_for_worker_record(
         instance_name,
@@ -148,8 +165,8 @@ def run_launch(args: argparse.Namespace) -> int:
     provisioning_plan = None
     adapter = None
     resolved_orchestrator_config = None
-    worker_fleet_configs: list[GceWorkerFleetConfig] = []
-    evaluator_fleet_configs: list[GceWorkerFleetConfig] = []
+    worker_fleet_configs: list[CloudFleetPlacementRecord] = []
+    evaluator_fleet_configs: list[CloudFleetPlacementRecord] = []
     orchestrator_created_records: list[CreatedCloudInstanceRecord] = []
     worker_created_records: list[CreatedCloudInstanceRecord] = []
     evaluator_created_records: list[CreatedCloudInstanceRecord] = []
@@ -230,8 +247,16 @@ def run_launch(args: argparse.Namespace) -> int:
         )
 
         assert preflight.redacted_worker_fleets is not None
-        worker_fleet_configs = preflight.redacted_worker_fleets
-        evaluator_fleet_configs = preflight.redacted_evaluator_fleets or []
+        worker_fleet_configs = _normalize_fleet_records(
+            adapter,
+            list(preflight.redacted_worker_fleets),
+            role="worker",
+        )
+        evaluator_fleet_configs = _normalize_fleet_records(
+            adapter,
+            list(preflight.redacted_evaluator_fleets or []),
+            role="evaluator",
+        )
         orchestrator_ssh_via_iap = resolved_orchestrator_config.ssh_via_iap
 
         if workers:

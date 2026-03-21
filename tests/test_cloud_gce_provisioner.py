@@ -1780,3 +1780,53 @@ def test_create_orchestrator_rejects_invalid_gce_name_length():
             experiment_config_path="config.yaml",
             redis_password="shared-secret",
         )
+
+
+def test_gce_provider_adapter_translates_worker_record_to_cloud_instance_record() -> (
+    None
+):
+    from crsbench.cloud.gce.models import GceWorkerRecord
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+
+    adapter = GceProviderAdapter()
+
+    record = adapter.to_cloud_instance_record(
+        GceWorkerRecord(
+            name="crsbench-test-work-001",
+            instance_id="1001",
+            status="RUNNING",
+            zone="us-east5-b",
+            internal_ip="10.0.0.10",
+            external_ip=None,
+            labels={"crsbench-role": "worker"},
+        ),
+        project="test-project",
+        ssh_via_iap=True,
+    )
+
+    assert record.provider.value == "gce"
+    assert record.role == "worker"
+    assert record.project == "test-project"
+    assert record.zone == "us-east5-b"
+    assert record.region == "us-east5"
+    assert record.ssh_via_iap is True
+
+
+def test_gce_provider_adapter_translates_worker_fleet_to_cloud_placement_record() -> (
+    None
+):
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+    from crsbench.cloud.models import build_cloud_launch_plan
+
+    adapter = GceProviderAdapter()
+    plan = build_cloud_launch_plan(_make_provider_neutral_experiment_config())
+
+    fleets = adapter.build_worker_fleets(plan)
+    placement = adapter.to_cloud_fleet_placement_record(fleets[0], role="worker")
+
+    assert placement.provider.value == "gce"
+    assert placement.role == "worker"
+    assert placement.project == "test-project"
+    assert placement.zone == "us-east5-b"
+    assert placement.count == 2
+    assert placement.name_prefix == f"crsbench-{plan.experiment_name}-work"

@@ -13,7 +13,6 @@ from crsbench.cloud.gce.provider import GceProviderAdapter
 from crsbench.cloud.launch_state import (
     CloudLaunchState,
     load_launch_state,
-    redact_worker_fleet_config,
     save_launch_state,
 )
 from crsbench.cloud.models import CloudLaunchPlan, build_cloud_launch_plan
@@ -30,22 +29,22 @@ from crsbench.validation.schemas import CloudOrchestratorPlacementConfig
 
 if TYPE_CHECKING:
     from crsbench.cloud.readiness import ReadinessRedisProtocol
+    from crsbench.cloud.records import CloudFleetPlacementRecord
     from crsbench.distributed.job_lifecycle import LifecycleRedisProtocol
-    from crsbench.validation.schemas import GceWorkerFleetConfig
 
 
 @dataclasses.dataclass(frozen=True)
 class ResolvedCloudContext:
     """Resolved cloud runtime context for standalone operational commands."""
 
-    worker_fleet_configs: list["GceWorkerFleetConfig"]
+    worker_fleet_configs: list[CloudFleetPlacementRecord]
     launch_state: CloudLaunchState | None
     experiment_filestore: Path
     remote_experiment_root: Path
     redis_host: str
     redis_password: str | None
     launch_plan: CloudLaunchPlan | None = None
-    evaluator_fleet_configs: list["GceWorkerFleetConfig"] = dataclasses.field(
+    evaluator_fleet_configs: list[CloudFleetPlacementRecord] = dataclasses.field(
         default_factory=list
     )
 
@@ -111,8 +110,8 @@ def resolve_cloud_context(
         raise SystemExit("Experiment config has no 'cloud' section.")
 
     launch_plan: CloudLaunchPlan | None = None
-    derived_worker_fleets: list["GceWorkerFleetConfig"] = []
-    derived_evaluator_fleets: list["GceWorkerFleetConfig"] = []
+    derived_worker_fleets: list[CloudFleetPlacementRecord] = []
+    derived_evaluator_fleets: list[CloudFleetPlacementRecord] = []
     uses_provider_neutral_cloud = (
         config.cloud.providers is not None
         and config.cloud.workers is not None
@@ -124,8 +123,14 @@ def resolve_cloud_context(
         )
     launch_plan = build_cloud_launch_plan(config)
     adapter = GceProviderAdapter()
-    derived_worker_fleets = adapter.build_worker_fleets(launch_plan)
-    derived_evaluator_fleets = adapter.build_evaluator_fleets(launch_plan)
+    derived_worker_fleets = [
+        adapter.to_cloud_fleet_placement_record(fleet, role="worker")
+        for fleet in adapter.build_worker_fleets(launch_plan)
+    ]
+    derived_evaluator_fleets = [
+        adapter.to_cloud_fleet_placement_record(fleet, role="evaluator")
+        for fleet in adapter.build_evaluator_fleets(launch_plan)
+    ]
 
     launch_state = load_launch_state(Path(config_path), experiment_name)
     launch_state_changed = False
@@ -140,13 +145,9 @@ def resolve_cloud_context(
                 _resolve_remote_experiment_root_from_config(config)
             )
         if not launch_state.worker_fleet_configs and derived_worker_fleets:
-            launch_state_updates["worker_fleet_configs"] = [
-                redact_worker_fleet_config(fleet) for fleet in derived_worker_fleets
-            ]
+            launch_state_updates["worker_fleet_configs"] = derived_worker_fleets
         if not launch_state.evaluator_fleet_configs and derived_evaluator_fleets:
-            launch_state_updates["evaluator_fleet_configs"] = [
-                redact_worker_fleet_config(fleet) for fleet in derived_evaluator_fleets
-            ]
+            launch_state_updates["evaluator_fleet_configs"] = derived_evaluator_fleets
         if launch_state_updates:
             launch_state = launch_state.model_copy(update=launch_state_updates)
             launch_state_changed = True

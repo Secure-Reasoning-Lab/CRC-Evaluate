@@ -17,6 +17,7 @@ from crsbench.cloud.models import (
     QuotaShortage,
     ResolvedInstanceProfile,
 )
+from crsbench.cloud.records import CloudFleetPlacementRecord, CloudInstanceRecord
 from crsbench.cloud.types import CloudProvider
 from crsbench.validation.schemas import GceOrchestratorConfig, GceWorkerFleetConfig
 
@@ -94,6 +95,84 @@ class GceProviderAdapter:
                 )
             ),
         )
+
+    def to_cloud_instance_record(
+        self,
+        worker: "GceWorkerRecord",
+        *,
+        project: str | None,
+        ssh_via_iap: bool,
+        role: str | None = None,
+    ) -> CloudInstanceRecord:
+        """Translate one normalized GCE instance into a shared cloud record."""
+        resolved_role = role or worker.labels.get("crsbench-role", "worker")
+        return CloudInstanceRecord(
+            provider=CloudProvider.GCE,
+            role=resolved_role,
+            name=worker.name,
+            instance_id=worker.instance_id,
+            status=worker.status,
+            project=project,
+            zone=worker.zone,
+            region=zone_to_region(worker.zone),
+            internal_ip=worker.internal_ip,
+            external_ip=worker.external_ip,
+            ssh_via_iap=ssh_via_iap,
+            labels=dict(worker.labels),
+            provider_metadata={"service_account_email": worker.service_account_email},
+        )
+
+    def to_cloud_fleet_placement_record(
+        self,
+        fleet: GceWorkerFleetConfig,
+        *,
+        role: str,
+    ) -> CloudFleetPlacementRecord:
+        """Translate one GCE fleet config into a shared persisted placement record."""
+        provider_metadata = fleet.model_dump(exclude_none=True, exclude_unset=True)
+        return CloudFleetPlacementRecord(
+            provider=CloudProvider.GCE,
+            role=role,
+            project=fleet.project,
+            zone=fleet.zone,
+            zones=list(fleet.zones),
+            region=fleet.region,
+            regions=list(fleet.regions),
+            count=fleet.worker_count,
+            name_prefix=fleet.worker_name_prefix or "",
+            name_start_index=fleet.worker_name_start_index,
+            ssh_via_iap=fleet.ssh_via_iap,
+            labels=dict(fleet.labels),
+            owner_label=fleet.owner_label,
+            provider_metadata=provider_metadata,
+        )
+
+    def worker_fleet_from_cloud_placement_record(
+        self,
+        record: CloudFleetPlacementRecord,
+    ) -> GceWorkerFleetConfig:
+        """Rebuild a GCE fleet config from a shared placement record."""
+        if record.provider is not CloudProvider.GCE:
+            raise ValueError(
+                f"Cannot build GCE fleet from non-GCE placement provider {record.provider.value}"
+            )
+        payload = dict(record.provider_metadata)
+        payload.update(
+            {
+                "project": record.project,
+                "zone": record.zone,
+                "zones": list(record.zones),
+                "region": record.region,
+                "regions": list(record.regions),
+                "worker_count": record.count,
+                "worker_name_prefix": record.name_prefix,
+                "worker_name_start_index": record.name_start_index,
+                "ssh_via_iap": record.ssh_via_iap,
+                "labels": dict(record.labels),
+                "owner_label": record.owner_label,
+            }
+        )
+        return GceWorkerFleetConfig.model_validate(payload)
 
     def build_orchestrator_config(self, plan: CloudLaunchPlan) -> GceOrchestratorConfig:
         """Build the legacy GCE orchestrator config consumed by the provisioner."""

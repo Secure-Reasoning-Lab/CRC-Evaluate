@@ -11,6 +11,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from crsbench.cloud.records import CloudFleetPlacementRecord
 from crsbench.cloud.types import CloudProvider
 from crsbench.distributed.queue import RedisConnectionProbe
 from crsbench.validation.schemas import (
@@ -187,15 +188,32 @@ def _make_launch_state():
         orchestrator_external_ip="34.1.2.50",
         orchestrator_ssh_via_iap=True,
         worker_fleet_configs=[
-            GceWorkerFleetConfig(
+            CloudFleetPlacementRecord(
+                provider=CloudProvider.GCE,
+                role="worker",
                 project="test-project",
                 zone="us-central1-a",
-                worker_count=2,
-                machine_type="e2-standard-4",
-                boot_disk_size_gb=100,
-                image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+                zones=["us-central1-a"],
+                region="us-central1",
                 owner_label="team-crs",
+                count=2,
+                name_prefix="crsbench-test-exp-work",
+                name_start_index=1,
+                ssh_via_iap=True,
+                provider_metadata={
+                    "project": "test-project",
+                    "zone": "us-central1-a",
+                    "zones": ["us-central1-a"],
+                    "worker_count": 2,
+                    "worker_name_start_index": 1,
+                    "worker_name_prefix": "crsbench-test-exp-work",
+                    "machine_type": "e2-standard-4",
+                    "boot_disk_size_gb": 100,
+                    "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                    "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                    "owner_label": "team-crs",
+                    "ssh_via_iap": True,
+                },
             )
         ],
     )
@@ -219,27 +237,59 @@ def _make_provider_neutral_launch_state():
         orchestrator_external_ip="34.1.2.50",
         orchestrator_ssh_via_iap=True,
         worker_fleet_configs=[
-            GceWorkerFleetConfig(
+            CloudFleetPlacementRecord(
+                provider=CloudProvider.GCE,
+                role="worker",
                 project="test-project",
                 zone="us-east5-b",
-                worker_count=2,
-                machine_type="n2d-standard-16",
-                boot_disk_size_gb=100,
-                image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+                zones=["us-east5-b"],
+                region="us-east5",
                 owner_label="team-crs",
-                worker_name_prefix="test-exp-us-east5-b",
+                count=2,
+                name_prefix="test-exp-us-east5-b",
+                name_start_index=1,
+                ssh_via_iap=True,
+                provider_metadata={
+                    "project": "test-project",
+                    "zone": "us-east5-b",
+                    "zones": ["us-east5-b"],
+                    "worker_count": 2,
+                    "worker_name_start_index": 1,
+                    "worker_name_prefix": "test-exp-us-east5-b",
+                    "machine_type": "n2d-standard-16",
+                    "boot_disk_size_gb": 100,
+                    "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                    "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                    "owner_label": "team-crs",
+                    "ssh_via_iap": True,
+                },
             ),
-            GceWorkerFleetConfig(
+            CloudFleetPlacementRecord(
+                provider=CloudProvider.GCE,
+                role="worker",
                 project="test-project",
                 zone="us-east1-b",
-                worker_count=1,
-                machine_type="n2d-standard-16",
-                boot_disk_size_gb=100,
-                image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+                zones=["us-east1-b"],
+                region="us-east1",
                 owner_label="team-crs",
-                worker_name_prefix="test-exp-us-east1-b",
+                count=1,
+                name_prefix="test-exp-us-east1-b",
+                name_start_index=3,
+                ssh_via_iap=True,
+                provider_metadata={
+                    "project": "test-project",
+                    "zone": "us-east1-b",
+                    "zones": ["us-east1-b"],
+                    "worker_count": 1,
+                    "worker_name_start_index": 3,
+                    "worker_name_prefix": "test-exp-us-east1-b",
+                    "machine_type": "n2d-standard-16",
+                    "boot_disk_size_gb": 100,
+                    "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                    "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                    "owner_label": "team-crs",
+                    "ssh_via_iap": True,
+                },
             ),
         ],
     )
@@ -270,19 +320,65 @@ def _make_stable_worker_fleet(
     start_index: int,
     worker_count: int,
     prefix: str = "crsbench-test-exp-work",
-) -> GceWorkerFleetConfig:
-    return GceWorkerFleetConfig(
+) -> CloudFleetPlacementRecord:
+    return CloudFleetPlacementRecord(
+        provider=CloudProvider.GCE,
+        role="worker",
         project="test-project",
         zone=zone,
         zones=zones or [zone],
-        worker_count=worker_count,
-        worker_name_start_index=start_index,
-        machine_type="n2d-standard-16",
-        boot_disk_size_gb=100,
-        image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-        service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+        region=zone.rsplit("-", 1)[0],
         owner_label="team-crs",
-        worker_name_prefix=prefix,
+        count=worker_count,
+        name_start_index=start_index,
+        name_prefix=prefix,
+        provider_metadata={
+            "project": "test-project",
+            "zone": zone,
+            "zones": zones or [zone],
+            "worker_count": worker_count,
+            "worker_name_start_index": start_index,
+            "worker_name_prefix": prefix,
+            "machine_type": "n2d-standard-16",
+            "boot_disk_size_gb": 100,
+            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+            "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+            "owner_label": "team-crs",
+        },
+    )
+
+
+def _make_stable_evaluator_fleet(
+    *,
+    zone: str,
+    start_index: int = 1,
+    evaluator_count: int = 1,
+    prefix: str = "evaluator-test-exp",
+) -> CloudFleetPlacementRecord:
+    return CloudFleetPlacementRecord(
+        provider=CloudProvider.GCE,
+        role="evaluator",
+        project="test-project",
+        zone=zone,
+        zones=[zone],
+        region=zone.rsplit("-", 1)[0],
+        owner_label="team-crs",
+        count=evaluator_count,
+        name_start_index=start_index,
+        name_prefix=prefix,
+        provider_metadata={
+            "project": "test-project",
+            "zone": zone,
+            "zones": [zone],
+            "worker_count": evaluator_count,
+            "worker_name_start_index": start_index,
+            "worker_name_prefix": prefix,
+            "machine_type": "c3-standard-8",
+            "boot_disk_size_gb": 50,
+            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+            "service_account_email": "crsbench-evaluator@test-project.iam.gserviceaccount.com",
+            "owner_label": "team-crs",
+        },
     )
 
 
@@ -290,15 +386,24 @@ def _make_resolved_cloud_context(launch_state=None):
     from crsbench.cloud.cli._config_reconnect import ResolvedCloudContext
 
     if launch_state is None:
-        fleet = GceWorkerFleetConfig(
-            project="test-project",
+        fleet = _make_stable_worker_fleet(
             zone="us-central1-a",
+            start_index=1,
             worker_count=2,
-            machine_type="e2-standard-4",
-            boot_disk_size_gb=100,
-            image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-            service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
-            owner_label="team-crs",
+        ).model_copy(
+            update={
+                "region": "us-central1",
+                "zones": ["us-central1-a"],
+                "provider_metadata": {
+                    **_make_stable_worker_fleet(
+                        zone="us-central1-a",
+                        start_index=1,
+                        worker_count=2,
+                    ).provider_metadata,
+                    "zone": "us-central1-a",
+                    "zones": ["us-central1-a"],
+                },
+            }
         )
         return ResolvedCloudContext(
             worker_fleet_configs=[fleet],
@@ -2522,16 +2627,9 @@ class TestLaunch:
             _make_provider_neutral_launch_state().worker_fleet_configs
         )
         expected_evaluator_fleets = [
-            GceWorkerFleetConfig(
-                project="test-project",
+            _make_stable_evaluator_fleet(
                 zone="us-east1-b",
-                worker_count=1,
-                machine_type="c3-standard-8",
-                boot_disk_size_gb=50,
-                image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
-                service_account_email="crsbench-evaluator@test-project.iam.gserviceaccount.com",
-                owner_label="team-crs",
-                worker_name_prefix="evaluator-test-exp-us-east1-b",
+                prefix="evaluator-test-exp-us-east1-b",
             )
         ]
         mock_build_plan.return_value = launch_plan
@@ -2613,11 +2711,19 @@ def test_save_launch_state_redacts_secret_bearing_worker_fields(tmp_path: Path) 
             encoding="utf-8"
         )
     )
-    assert raw_state["worker_fleet_configs"][0]["github_deploy_key_path"] is None
+    assert (
+        raw_state["worker_fleet_configs"][0]["provider_metadata"][
+            "github_deploy_key_path"
+        ]
+        is None
+    )
 
     loaded_state = load_launch_state(config_path, "test-exp")
     assert loaded_state is not None
-    assert loaded_state.worker_fleet_configs[0].github_deploy_key_path is None
+    assert (
+        loaded_state.worker_fleet_configs[0].provider_metadata["github_deploy_key_path"]
+        is None
+    )
 
 
 def test_append_created_instance_records_appends_jsonl_entries(tmp_path: Path) -> None:
@@ -2723,7 +2829,7 @@ def test_collect_resolves_fallback_worker_fleet_by_stable_name_index():
 
     fleet = _resolve_instance_fleet(context, worker)
 
-    assert fleet.worker_name_start_index == 3
+    assert fleet.name_start_index == 3
 
 
 def test_teardown_delete_live_instances_prefers_persisted_fleets_when_launch_state_present():
@@ -2765,7 +2871,7 @@ def test_teardown_resolves_fallback_worker_fleet_by_stable_name_index():
 
     fleet = _resolve_instance_fleet(context, worker)
 
-    assert fleet.worker_name_start_index == 3
+    assert fleet.name_start_index == 3
 
 
 # ---------------------------------------------------------------------------

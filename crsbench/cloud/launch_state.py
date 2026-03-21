@@ -9,11 +9,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from crsbench.cloud.gce.models import GceWorkerRecord
+from crsbench.cloud.records import (
+    CloudFleetPlacementRecord,
+    cloud_fleet_placement_record_from_legacy_gce_dict,
+)
 from crsbench.cloud.types import CloudProvider, coerce_cloud_provider
-from crsbench.validation.schemas import GceWorkerFleetConfig  # noqa: TC001
+from crsbench.validation.schemas import GceWorkerFleetConfig
 
 _STATE_DIRNAME = ".crsbench-cloud"
 _INSTANCE_CACHE_BASENAME = "created-instances.cache"
@@ -48,8 +52,20 @@ class CloudLaunchState(BaseModel):
     orchestrator_internal_ip: str | None = None
     orchestrator_external_ip: str | None = None
     orchestrator_ssh_via_iap: bool = False
-    worker_fleet_configs: list[GceWorkerFleetConfig] = Field(default_factory=list)
-    evaluator_fleet_configs: list[GceWorkerFleetConfig] = Field(default_factory=list)
+    worker_fleet_configs: list[CloudFleetPlacementRecord] = Field(default_factory=list)
+    evaluator_fleet_configs: list[CloudFleetPlacementRecord] = Field(
+        default_factory=list
+    )
+
+    @field_validator("worker_fleet_configs", mode="before")
+    @classmethod
+    def normalize_worker_fleet_configs(cls, value):
+        return _normalize_fleet_records(value, role="worker")
+
+    @field_validator("evaluator_fleet_configs", mode="before")
+    @classmethod
+    def normalize_evaluator_fleet_configs(cls, value):
+        return _normalize_fleet_records(value, role="evaluator")
 
     def as_orchestrator_record(self) -> GceWorkerRecord:
         """Build a collector-compatible instance record for the orchestrator VM."""
@@ -71,22 +87,60 @@ class CloudLaunchState(BaseModel):
             ssh_via_iap=self.orchestrator_ssh_via_iap,
         )
 
-    def resolved_worker_fleets(self) -> list[GceWorkerFleetConfig]:
+    def resolved_worker_fleets(self) -> list[CloudFleetPlacementRecord]:
         """Return all worker fleet configs recorded for this launch."""
         return list(self.worker_fleet_configs)
 
-    def resolved_evaluator_fleets(self) -> list[GceWorkerFleetConfig]:
+    def resolved_evaluator_fleets(self) -> list[CloudFleetPlacementRecord]:
         """Return all evaluator fleet configs recorded for this launch."""
         return list(self.evaluator_fleet_configs)
 
 
-def redact_worker_fleet_config(fleet: GceWorkerFleetConfig) -> GceWorkerFleetConfig:
-    """Return a fleet config safe to persist in local launch state."""
-    return fleet.model_copy(
-        update={
-            "github_deploy_key_path": None,
-        }
-    )
+def _normalize_fleet_records(
+    value,
+    *,
+    role: str,
+) -> list[CloudFleetPlacementRecord]:
+    if value in (None, ""):
+        return []
+    normalized: list[CloudFleetPlacementRecord] = []
+    for item in value:
+        if isinstance(item, CloudFleetPlacementRecord):
+            normalized.append(item)
+            continue
+        if isinstance(item, GceWorkerFleetConfig):
+            normalized.append(
+                cloud_fleet_placement_record_from_legacy_gce_dict(
+                    item.model_dump(mode="json", exclude_none=True, exclude_unset=True),
+                    role=role,
+                )
+            )
+            continue
+        if isinstance(item, dict):
+            if {"provider", "name_prefix", "count"} <= set(item.keys()):
+                normalized.append(CloudFleetPlacementRecord.model_validate(item))
+                continue
+            normalized.append(
+                cloud_fleet_placement_record_from_legacy_gce_dict(item, role=role)
+            )
+            continue
+        normalized.append(item)
+    return normalized
+
+
+def redact_worker_fleet_config(
+    fleet: CloudFleetPlacementRecord | GceWorkerFleetConfig,
+) -> CloudFleetPlacementRecord | GceWorkerFleetConfig:
+    """Return a fleet record safe to persist in local launch state."""
+    if isinstance(fleet, GceWorkerFleetConfig):
+        payload = fleet.model_dump(mode="json", exclude_none=True, exclude_unset=True)
+        if "github_deploy_key_path" in payload:
+            payload["github_deploy_key_path"] = None
+        return GceWorkerFleetConfig.model_validate(payload)
+    provider_metadata = dict(fleet.provider_metadata)
+    if "github_deploy_key_path" in provider_metadata:
+        provider_metadata["github_deploy_key_path"] = None
+    return fleet.model_copy(update={"provider_metadata": provider_metadata})
 
 
 def redact_launch_state(state: CloudLaunchState) -> CloudLaunchState:

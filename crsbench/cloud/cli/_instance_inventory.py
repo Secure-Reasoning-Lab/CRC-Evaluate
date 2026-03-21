@@ -97,22 +97,26 @@ def list_live_instances(
     provisioner: "GceProvisioner",
 ) -> list["GceWorkerRecord"]:
     """List live worker/evaluator instances for the current cloud context."""
+    adapter = GceProviderAdapter(provisioner=provisioner)
     if context.launch_state is not None:
         workers: list[GceWorkerRecord] = []
         for fleet in context.worker_fleet_configs:
             workers.extend(
-                provisioner.list_workers(experiment_name=experiment_name, fleet=fleet)
+                provisioner.list_workers(
+                    experiment_name=experiment_name,
+                    fleet=adapter.worker_fleet_from_cloud_placement_record(fleet),
+                )
             )
         for fleet in context.evaluator_fleet_configs:
             workers.extend(
                 provisioner.list_evaluators(
-                    experiment_name=experiment_name, fleet=fleet
+                    experiment_name=experiment_name,
+                    fleet=adapter.worker_fleet_from_cloud_placement_record(fleet),
                 )
             )
         return workers
 
     if context.launch_plan is not None:
-        adapter = GceProviderAdapter(provisioner=provisioner)
         workers = adapter.list_workers(plan=context.launch_plan)
         if context.evaluator_fleet_configs:
             workers.extend(adapter.list_evaluators(plan=context.launch_plan))
@@ -121,11 +125,17 @@ def list_live_instances(
     workers = []
     for fleet in context.worker_fleet_configs:
         workers.extend(
-            provisioner.list_workers(experiment_name=experiment_name, fleet=fleet)
+            provisioner.list_workers(
+                experiment_name=experiment_name,
+                fleet=adapter.worker_fleet_from_cloud_placement_record(fleet),
+            )
         )
     for fleet in context.evaluator_fleet_configs:
         workers.extend(
-            provisioner.list_evaluators(experiment_name=experiment_name, fleet=fleet)
+            provisioner.list_evaluators(
+                experiment_name=experiment_name,
+                fleet=adapter.worker_fleet_from_cloud_placement_record(fleet),
+            )
         )
     return workers
 
@@ -199,7 +209,7 @@ def _inventory_sort_key(row: CloudInstanceInventoryRow) -> tuple[int, str]:
 
 
 def _fleet_matches_instance_name(fleet, instance_name: str) -> bool:
-    prefix = fleet.worker_name_prefix
+    prefix = getattr(fleet, "name_prefix", getattr(fleet, "worker_name_prefix", None))
     if not isinstance(prefix, str) or not prefix:
         return False
     if not instance_name.startswith(f"{prefix}-"):
@@ -208,8 +218,13 @@ def _fleet_matches_instance_name(fleet, instance_name: str) -> bool:
     if not suffix.isdigit():
         return False
     index = int(suffix)
-    start = fleet.worker_name_start_index
-    return start <= index < start + fleet.worker_count
+    start = getattr(
+        fleet,
+        "name_start_index",
+        getattr(fleet, "worker_name_start_index", 1),
+    )
+    count = getattr(fleet, "count", getattr(fleet, "worker_count", 0))
+    return start <= index < start + count
 
 
 def _fleet_targets_zone(fleet, zone: str) -> bool:

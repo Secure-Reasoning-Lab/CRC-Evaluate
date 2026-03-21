@@ -273,24 +273,36 @@ def _delete_live_instances(
     experiment_name: str,
     provisioner: GceProvisioner,
 ) -> None:
+    adapter = GceProviderAdapter(provisioner=provisioner)
     if context.launch_state is not None:
         for fleet in context.worker_fleet_configs:
-            provisioner.delete_workers(experiment_name=experiment_name, fleet=fleet)
+            provisioner.delete_workers(
+                experiment_name=experiment_name,
+                fleet=adapter.worker_fleet_from_cloud_placement_record(fleet),
+            )
         for fleet in context.evaluator_fleet_configs:
-            provisioner.delete_evaluators(experiment_name=experiment_name, fleet=fleet)
+            provisioner.delete_evaluators(
+                experiment_name=experiment_name,
+                fleet=adapter.worker_fleet_from_cloud_placement_record(fleet),
+            )
         return
 
     if context.launch_plan is not None:
-        adapter = GceProviderAdapter(provisioner=provisioner)
         adapter.delete_workers(plan=context.launch_plan)
         if context.evaluator_fleet_configs:
             adapter.delete_evaluators(plan=context.launch_plan)
         return
 
     for fleet in context.worker_fleet_configs:
-        provisioner.delete_workers(experiment_name=experiment_name, fleet=fleet)
+        provisioner.delete_workers(
+            experiment_name=experiment_name,
+            fleet=adapter.worker_fleet_from_cloud_placement_record(fleet),
+        )
     for fleet in context.evaluator_fleet_configs:
-        provisioner.delete_workers(experiment_name=experiment_name, fleet=fleet)
+        provisioner.delete_workers(
+            experiment_name=experiment_name,
+            fleet=adapter.worker_fleet_from_cloud_placement_record(fleet),
+        )
 
 
 def _resolve_instance_fleet(
