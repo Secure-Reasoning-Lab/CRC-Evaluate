@@ -3088,10 +3088,11 @@ class TestPreflight:
     def test_preflight_dispatches_through_run_cloud(self, mock_run_preflight):
         from crsbench.cloud.cli.cloud_command import run_cloud
 
-        rc = run_cloud(_make_preflight_args())
+        args = _make_preflight_args()
+        rc = run_cloud(args)
 
         assert rc == 0
-        mock_run_preflight.assert_called_once()
+        mock_run_preflight.assert_called_once_with(args)
 
     @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
     def test_preflight_ready_path_reports_summary(
@@ -3172,13 +3173,54 @@ class TestPreflight:
         capsys,
     ):
         del mock_load_launch_state
-        mock_load_config.return_value = _make_provider_neutral_experiment_config()
+        config = _make_provider_neutral_experiment_config()
+        mock_load_config.return_value = config
 
-        from crsbench.cloud.cli._preflight import run_preflight
+        launch_plan = MagicMock(experiment_name="test-exp")
+        preflight = MagicMock(
+            resolved_plan=MagicMock(experiment_name="test-exp"),
+            redacted_worker_fleets=[],
+            redacted_evaluator_fleets=[],
+            orchestrator_env={},
+            worker_placement_envs=[],
+            evaluator_placement_envs=[],
+        )
+        adapter = MagicMock()
+        adapter.list_orchestrators.return_value = []
+        adapter.list_workers.return_value = []
+        adapter.list_evaluators.return_value = []
 
-        rc = run_preflight(_make_preflight_args(json_output=True))
+        with (
+            patch("crsbench.cloud.models.build_cloud_launch_plan", return_value=launch_plan)
+            as mock_build_launch_plan,
+            patch(
+                "crsbench.cloud.providers.prepare_launch_inputs",
+                return_value=preflight,
+            ) as mock_prepare_launch_inputs,
+            patch(
+                "crsbench.cloud.providers.provider_adapter_for_launch_plan",
+                return_value=adapter,
+            ) as mock_provider_adapter_for_launch_plan,
+            patch("crsbench.cloud.quota.QuotaValidator") as mock_quota_validator_cls,
+        ):
+            mock_quota_validator = mock_quota_validator_cls.return_value
+            mock_quota_validator.validate.return_value = None
+
+            from crsbench.cloud.cli._preflight import run_preflight
+
+            rc = run_preflight(_make_preflight_args(json_output=True))
 
         assert rc == 0
+        mock_load_config.assert_called_once_with(Path("/tmp/config.yaml"))
+        mock_build_launch_plan.assert_called_once_with(config)
+        mock_prepare_launch_inputs.assert_called_once_with(
+            plan=launch_plan,
+            cwd=Path.cwd(),
+        )
+        mock_provider_adapter_for_launch_plan.assert_called_once_with(
+            preflight.resolved_plan
+        )
+        mock_quota_validator.validate.assert_called_once_with(launch_plan)
         payload = json.loads(capsys.readouterr().out)
         assert payload["schema_version"] == 1
         assert payload["provider"] == "gce"
@@ -3350,13 +3392,54 @@ class TestPreflight:
         capsys,
     ):
         del mock_load_launch_state
-        mock_load_config.return_value = self._make_config_without_remote_root()
+        config = self._make_config_without_remote_root()
+        mock_load_config.return_value = config
 
-        from crsbench.cloud.cli._preflight import run_preflight
+        launch_plan = MagicMock(experiment_name="test-exp")
+        preflight = MagicMock(
+            resolved_plan=MagicMock(experiment_name="test-exp"),
+            redacted_worker_fleets=[],
+            redacted_evaluator_fleets=[],
+            orchestrator_env={},
+            worker_placement_envs=[],
+            evaluator_placement_envs=[],
+        )
+        adapter = MagicMock()
+        adapter.list_orchestrators.return_value = []
+        adapter.list_workers.return_value = []
+        adapter.list_evaluators.return_value = []
 
-        rc = run_preflight(_make_preflight_args())
+        with (
+            patch("crsbench.cloud.models.build_cloud_launch_plan", return_value=launch_plan)
+            as mock_build_launch_plan,
+            patch(
+                "crsbench.cloud.providers.prepare_launch_inputs",
+                return_value=preflight,
+            ) as mock_prepare_launch_inputs,
+            patch(
+                "crsbench.cloud.providers.provider_adapter_for_launch_plan",
+                return_value=adapter,
+            ) as mock_provider_adapter_for_launch_plan,
+            patch("crsbench.cloud.quota.QuotaValidator") as mock_quota_validator_cls,
+        ):
+            mock_quota_validator = mock_quota_validator_cls.return_value
+            mock_quota_validator.validate.return_value = None
+
+            from crsbench.cloud.cli._preflight import run_preflight
+
+            rc = run_preflight(_make_preflight_args())
 
         assert rc == 0
+        mock_load_config.assert_called_once_with(Path("/tmp/config.yaml"))
+        mock_build_launch_plan.assert_called_once_with(config)
+        mock_prepare_launch_inputs.assert_called_once_with(
+            plan=launch_plan,
+            cwd=Path.cwd(),
+        )
+        mock_provider_adapter_for_launch_plan.assert_called_once_with(
+            preflight.resolved_plan
+        )
+        mock_quota_validator.validate.assert_called_once_with(launch_plan)
         output = capsys.readouterr().out.lower()
         assert "warning" in output
         assert "remote" in output
@@ -3374,13 +3457,54 @@ class TestPreflight:
         capsys,
     ):
         del mock_load_launch_state
-        mock_load_config.return_value = self._make_config_without_remote_root()
+        config = self._make_config_without_remote_root()
+        mock_load_config.return_value = config
 
-        from crsbench.cloud.cli._preflight import run_preflight
+        launch_plan = MagicMock(experiment_name="test-exp")
+        preflight = MagicMock(
+            resolved_plan=MagicMock(experiment_name="test-exp"),
+            redacted_worker_fleets=[],
+            redacted_evaluator_fleets=[],
+            orchestrator_env={},
+            worker_placement_envs=[],
+            evaluator_placement_envs=[],
+        )
+        adapter = MagicMock()
+        adapter.list_orchestrators.return_value = []
+        adapter.list_workers.return_value = []
+        adapter.list_evaluators.return_value = []
 
-        rc = run_preflight(_make_preflight_args(strict=True))
+        with (
+            patch("crsbench.cloud.models.build_cloud_launch_plan", return_value=launch_plan)
+            as mock_build_launch_plan,
+            patch(
+                "crsbench.cloud.providers.prepare_launch_inputs",
+                return_value=preflight,
+            ) as mock_prepare_launch_inputs,
+            patch(
+                "crsbench.cloud.providers.provider_adapter_for_launch_plan",
+                return_value=adapter,
+            ) as mock_provider_adapter_for_launch_plan,
+            patch("crsbench.cloud.quota.QuotaValidator") as mock_quota_validator_cls,
+        ):
+            mock_quota_validator = mock_quota_validator_cls.return_value
+            mock_quota_validator.validate.return_value = None
+
+            from crsbench.cloud.cli._preflight import run_preflight
+
+            rc = run_preflight(_make_preflight_args(strict=True))
 
         assert rc == 1
+        mock_load_config.assert_called_once_with(Path("/tmp/config.yaml"))
+        mock_build_launch_plan.assert_called_once_with(config)
+        mock_prepare_launch_inputs.assert_called_once_with(
+            plan=launch_plan,
+            cwd=Path.cwd(),
+        )
+        mock_provider_adapter_for_launch_plan.assert_called_once_with(
+            preflight.resolved_plan
+        )
+        mock_quota_validator.validate.assert_called_once_with(launch_plan)
         output = capsys.readouterr().out.lower()
         assert "warning" in output
         assert "blocked" in output
@@ -3396,13 +3520,54 @@ class TestPreflight:
         mock_save_launch_state,
     ):
         del mock_load_launch_state
-        mock_load_config.return_value = _make_provider_neutral_experiment_config()
+        config = _make_provider_neutral_experiment_config()
+        mock_load_config.return_value = config
 
-        from crsbench.cloud.cli._preflight import run_preflight
+        launch_plan = MagicMock(experiment_name="test-exp")
+        preflight = MagicMock(
+            resolved_plan=MagicMock(experiment_name="test-exp"),
+            redacted_worker_fleets=[],
+            redacted_evaluator_fleets=[],
+            orchestrator_env={},
+            worker_placement_envs=[],
+            evaluator_placement_envs=[],
+        )
+        adapter = MagicMock()
+        adapter.list_orchestrators.return_value = []
+        adapter.list_workers.return_value = []
+        adapter.list_evaluators.return_value = []
 
-        rc = run_preflight(_make_preflight_args())
+        with (
+            patch("crsbench.cloud.models.build_cloud_launch_plan", return_value=launch_plan)
+            as mock_build_launch_plan,
+            patch(
+                "crsbench.cloud.providers.prepare_launch_inputs",
+                return_value=preflight,
+            ) as mock_prepare_launch_inputs,
+            patch(
+                "crsbench.cloud.providers.provider_adapter_for_launch_plan",
+                return_value=adapter,
+            ) as mock_provider_adapter_for_launch_plan,
+            patch("crsbench.cloud.quota.QuotaValidator") as mock_quota_validator_cls,
+        ):
+            mock_quota_validator = mock_quota_validator_cls.return_value
+            mock_quota_validator.validate.return_value = None
+
+            from crsbench.cloud.cli._preflight import run_preflight
+
+            rc = run_preflight(_make_preflight_args())
 
         assert rc == 0
+        mock_load_config.assert_called_once_with(Path("/tmp/config.yaml"))
+        mock_build_launch_plan.assert_called_once_with(config)
+        mock_prepare_launch_inputs.assert_called_once_with(
+            plan=launch_plan,
+            cwd=Path.cwd(),
+        )
+        mock_provider_adapter_for_launch_plan.assert_called_once_with(
+            preflight.resolved_plan
+        )
+        mock_quota_validator.validate.assert_called_once_with(launch_plan)
         mock_save_launch_state.assert_not_called()
 
 
