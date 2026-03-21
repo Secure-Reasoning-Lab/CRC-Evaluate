@@ -3135,8 +3135,6 @@ class TestPreflight:
         mock_load_config,
         capsys,
     ):
-        from crsbench.cloud.quota import QuotaValidator
-
         config = _make_provider_neutral_experiment_config()
         mock_load_config.return_value = config
 

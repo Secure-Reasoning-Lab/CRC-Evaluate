@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from crsbench.cloud.launch_state import launch_state_path, load_launch_state
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def find_launch_target_conflicts(
