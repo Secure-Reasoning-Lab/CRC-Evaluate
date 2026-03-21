@@ -13,6 +13,9 @@ from crsbench.utils.logger import get_logger
 logger = get_logger(__name__)
 
 DEFAULT_UNIAFL_IMAGE_PREFIX = "ghcr.io/team-atlanta"
+DEFAULT_UNIAFL_REPO_URL = (
+    "https://github.com/Team-Atlanta/atlantis-multilang-given_fuzzer.git"
+)
 DEFAULT_UNIAFL_ROOT_BASENAME = "atlantis-multilang-given_fuzzer"
 DEFAULT_UNIAFL_RUNTIME_IMAGE_NAME = "multilang-given_fuzzer-crs"
 DEFAULT_UNIAFL_RUNTIME_IMAGE_JVM_NAME = "multilang-given_fuzzer-crs"
@@ -20,7 +23,6 @@ DEFAULT_UNIAFL_BUILDER_IMAGE_NAME = "multilang-given_fuzzer-builder"
 DEFAULT_UNIAFL_CLANG_IMAGE_NAME = "multilang-given_fuzzer-clang"
 DEFAULT_UNIAFL_RELEASE = "1.0.0"
 DEFAULT_UNIAFL_LOCAL_IMAGE_TAG = "latest"
-DEFAULT_UNIAFL_SETUP_HINT = "scripts/setup-third-party.sh"
 UNIAFL_PREPARE_IMAGES = (
     "multilang-given_fuzzer-clang",
     "multilang-given_fuzzer-builder",
@@ -36,6 +38,55 @@ def default_uniafl_root() -> Path:
     """Return the repository-local Atlantis checkout path."""
     repo_root = Path(__file__).resolve().parents[2]
     return repo_root / "third_party" / DEFAULT_UNIAFL_ROOT_BASENAME
+
+
+def _ensure_checkout(
+    dest: Path,
+    *,
+    url: str = DEFAULT_UNIAFL_REPO_URL,
+    ref: str = DEFAULT_UNIAFL_RELEASE,
+) -> None:
+    """Clone or update the Atlantis checkout to the pinned release.
+
+    If *dest* does not exist, clones from *url* at *ref*.
+    If it exists, fetches and resets to ``origin/{ref}``.
+    """
+    if dest.exists():
+        logger.info(f"Updating Atlantis checkout at {dest} to {ref}")
+        subprocess.run(
+            ["git", "fetch", "--recurse-submodules", "origin", ref],
+            cwd=dest,
+            check=True,
+            capture_output=True,
+            text=True,
+            errors="replace",
+        )
+        subprocess.run(
+            ["git", "checkout", ref],
+            cwd=dest,
+            check=True,
+            capture_output=True,
+            text=True,
+            errors="replace",
+        )
+    else:
+        logger.info(f"Cloning Atlantis from {url} at {ref} to {dest}")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "--recurse-submodules",
+                "--branch",
+                ref,
+                url,
+                str(dest),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            errors="replace",
+        )
 
 
 def default_uniafl_image_prefix() -> str:
@@ -305,10 +356,10 @@ def prepare_uniafl_backend(
 ) -> int:
     """Prepare the Atlantis coverage backend via oss-crs prepare."""
     repo_root = Path(uniafl_root or default_uniafl_root()).resolve()
+    _ensure_checkout(repo_root)
     if not (repo_root / "oss-crs" / "crs.yaml").exists():
         raise FileNotFoundError(
-            "Atlantis checkout not found or incomplete: "
-            f"{repo_root}. Run {DEFAULT_UNIAFL_SETUP_HINT} first."
+            f"Atlantis checkout not found or incomplete after clone/pull: {repo_root}"
         )
 
     logger.info(f"Preparing UniAFL coverage backend from {repo_root}")
