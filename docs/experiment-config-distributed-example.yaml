@@ -152,7 +152,7 @@ cloud:
     experiment_root: /data/crsbench/experiments
   defaults:
     readiness_timeout_sec: 900
-    crsbench_install_spec: "git+https://github.com/your-org/CRSBench.git"
+    crsbench_install_spec: "git+https://github.com/sslab-gatech/CRSBench.git"
     crsbench_git_ref: main
   providers:
     gce:

@@ -44,7 +44,9 @@ is the source of truth for fleet shape. The cloud contract is:
 
 - worker fleets are declared through `cloud.providers.gce` plus `cloud.workers.placements`, not in lab-specific host maps
 - evaluator fleets are declared through `cloud.providers.gce` plus `cloud.evaluators.placements`, not in lab-specific host maps
-- Phase 1 supports explicit zone placements only; region selectors are not supported
+- managed placement supports explicit zonal declarations plus regional placement through `region` / `regions`
+- optional `zones` act as an allowlist inside the effective region set when regional placement is used
+- fallback policy is config-driven: recognized capacity failures may retry later declared regions or zones only when `fallback: true`
 - provisioned workers/evaluators carry experiment identity plus operator ownership labels
 - supported operator access remains OS Login-compatible SSH with host
   verification enabled

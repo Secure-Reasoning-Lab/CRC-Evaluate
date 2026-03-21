@@ -142,7 +142,10 @@ cloud:
 
 Phase 1 contract notes:
 - `cloud.providers.gce` plus `cloud.workers.defaults` / `cloud.workers.placements` is the canonical GCE declaration surface.
-- Phase 1 supports explicit zone placements only; region selectors are not supported.
+- Managed GCE placement supports both explicit zonal declarations and regional placement via `region` / `regions`.
+- When an effective `region` or ordered `regions` list is present, CRSBench uses GCE regional bulk insert with `ANY_SINGLE_ZONE`.
+- Optional `zones` act as an allowlist inside the effective region set rather than an ordered retry list.
+- `fallback: true` retries later declared regions or zones only for recognized capacity failures; `fallback: false` fails that logical placement and rolls back the launch.
 - Access is OS Login-compatible SSH only; keep host verification enabled.
 - Use a dedicated worker service account rather than default project
   credentials.
@@ -163,6 +166,9 @@ Phase 1 contract notes:
 - First-class `cloud.env` / profile `env` / placement `env` maps are the
   supported way to shard upstream credentials or URLs across cloud worker
   groups.
+- For the full remote-orchestrator lifecycle, including `cloud launch`,
+  `cloud monitor`, `cloud collect`, and `cloud teardown`, use
+  [GCE Cloud Orchestration](./gce-cloud-orchestration.md).
 
 ## Queue Behavior and Cleanup
 
