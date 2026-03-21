@@ -597,8 +597,9 @@ uv run crsbench cloud --config config.yaml ssh
 
 `cloud ssh` infers the experiment name from `experiment.name` and reuses the
 live zone chosen at launch time. The interactive shell immediately switches to
-`sudo su - crsbench`, so you land in the same user environment that runs the
-CRSBench services.
+`sudo su - crsbench`, changes into `/opt/crsbench`, and then starts a login
+shell there. That lands you in the same user environment and checkout that run
+the CRSBench services.
 
 ## Remote Command Execution
 

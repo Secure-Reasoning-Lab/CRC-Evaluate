@@ -40,7 +40,14 @@ def run_ssh(args: argparse.Namespace) -> int:
 
         cmd = build_ssh_command(
             selected,
-            remote_command=["sudo", "su", "-", "crsbench"],
+            remote_command=[
+                "sudo",
+                "su",
+                "-",
+                "crsbench",
+                "-c",
+                'cd /opt/crsbench && exec "${SHELL:-/bin/bash}" -l',
+            ],
             tty=True,
         )
         return subprocess.run(cmd, check=False).returncode

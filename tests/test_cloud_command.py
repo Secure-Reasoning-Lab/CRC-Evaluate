@@ -3503,7 +3503,7 @@ class TestSsh:
             "crsbench-test-exp-work-001",
             "--zone=us-central1-a",
             "--ssh-flag=-t",
-            "--command=sudo su - crsbench",
+            "--command=sudo su - crsbench -c 'cd /opt/crsbench && exec \"${SHELL:-/bin/bash}\" -l'",
         ]
         mock_run.return_value = _make_completed_process(0)
 
@@ -3514,7 +3514,14 @@ class TestSsh:
         assert rc == 0
         mock_build_ssh_command.assert_called_once_with(
             mock.ANY,
-            remote_command=["sudo", "su", "-", "crsbench"],
+            remote_command=[
+                "sudo",
+                "su",
+                "-",
+                "crsbench",
+                "-c",
+                'cd /opt/crsbench && exec "${SHELL:-/bin/bash}" -l',
+            ],
             tty=True,
         )
         cmd = mock_run.call_args.args[0]
@@ -3581,7 +3588,14 @@ class TestSsh:
         assert rc == 0
         mock_build_ssh_command.assert_called_once_with(
             mock_select_target.return_value,
-            remote_command=["sudo", "su", "-", "crsbench"],
+            remote_command=[
+                "sudo",
+                "su",
+                "-",
+                "crsbench",
+                "-c",
+                'cd /opt/crsbench && exec "${SHELL:-/bin/bash}" -l',
+            ],
             tty=True,
         )
         cmd = mock_run.call_args.args[0]
