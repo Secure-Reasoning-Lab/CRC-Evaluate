@@ -432,6 +432,42 @@ The local orchestrator will:
 
 ### Remote Orchestrator + GCE Workers
 
+Before you provision anything, use `cloud preflight` to answer two questions:
+
+1. What would CRSBench launch from this config?
+2. Will launch fail immediately because of config, duplicate-launch, provider,
+   or quota problems?
+
+```bash
+uv run crsbench cloud preflight --config config.yaml
+```
+
+`cloud preflight` is read-only. It does not create VMs, does not refresh
+`.crsbench-cloud/<experiment>.json`, and does not mutate remote state. The
+default output is a human-readable report with:
+
+- `Summary`: experiment, provider, and verdict
+- `Plan`: orchestrator, worker, and evaluator placements CRSBench would launch
+- `Defaults`: resolved launch/bootstrap defaults
+- `Environment`: redacted env-layer summary, including runtime-managed vars
+- `Checks`: duplicate-launch guard, provider preflight, quota results, and warnings
+- `Reconnect Notes`: which later commands need Redis/control-plane reachability
+
+Useful flags:
+
+- `--json`: emit the same report in a machine-readable schema for CI or wrapper tooling
+- `--strict`: treat warning-only preflight results as a non-zero exit
+
+Common outcomes:
+
+- `ready`: launch can proceed
+- `warning`: launch can proceed, but an operator-visible caveat exists
+- `blocked`: fix the reported issue before running `cloud launch`
+
+One common warning is that `cloud.remote.experiment_root` is unset. In that
+case, standalone `cloud collect` and `cloud teardown` fall back to the legacy
+remote path derived from `storage.experiment_filestore`.
+
 When you use `cloud launch`, the local operator machine provisions the
 orchestrator VM and the worker/evaluator placements declared in the same config:
 
@@ -763,27 +799,30 @@ uv run crsbench cloud teardown my-experiment \
 # 0. Generate deploy key (one-time) and add public key to GitHub
 uv run crsbench cloud keygen
 
-# 1. Local-orchestrator mode only: start Valkey accessible from GCE workers
+# 1. Check the managed-cloud plan without provisioning anything
+uv run crsbench cloud preflight --config config.yaml
+
+# 2. Local-orchestrator mode only: start Valkey accessible from GCE workers
 uv run python scripts/valkey-helper.py --password start
 
-# 2. Local-orchestrator mode: run experiment from this machine
+# 3. Local-orchestrator mode: run experiment from this machine
 uv run crsbench run --experiment-config config.yaml
 
-# 3. Remote-orchestrator mode: provision orchestrator + workers from this machine
+# 4. Remote-orchestrator mode: provision orchestrator + workers from this machine
 uv run crsbench cloud launch --config config.yaml
 
-# 4. Check status during the run
+# 5. Check status during the run
 uv run crsbench cloud status my-experiment --config config.yaml
 
-# 5. After completion, collect artifacts
+# 6. After completion, collect artifacts
 uv run crsbench cloud collect \
     --config config.yaml
 
-# 6. Tear down the fleet (and remote orchestrator, if used)
+# 7. Tear down the fleet (and remote orchestrator, if used)
 uv run crsbench cloud teardown \
     --config config.yaml
 
-# 7. Generate report
+# 8. Generate report
 uv run python scripts/cpv_report.py /data/experiments/my-experiment --csv
 ```
 

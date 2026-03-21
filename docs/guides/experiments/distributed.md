@@ -168,8 +168,8 @@ Phase 1 contract notes:
   supported way to shard upstream credentials or URLs across cloud worker
   groups.
 - For the full managed-cloud lifecycle on the current GCE backend, including
-  `cloud launch`, `cloud monitor`, `cloud collect`, and `cloud teardown`, use
-  [GCE Cloud Orchestration](./gce-cloud-orchestration.md).
+  read-only `cloud preflight`, `cloud launch`, `cloud monitor`, `cloud collect`,
+  and `cloud teardown`, use [GCE Cloud Orchestration](./gce-cloud-orchestration.md).
 
 ## Queue Behavior and Cleanup
 

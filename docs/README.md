@@ -14,7 +14,8 @@ Use this page as the primary navigation hub.
    [Experiment Guides](./guides/experiments/README.md) and
    [Distributed Experiments](./guides/experiments/distributed.md)
 4. Run managed cloud experiments on GCE
-   [GCE Cloud Orchestration](./guides/experiments/gce-cloud-orchestration.md) and
+   [GCE Cloud Orchestration](./guides/experiments/gce-cloud-orchestration.md) for
+   `cloud preflight`, `cloud launch`, `cloud collect`, and `cloud teardown`, and
    [Local Cloud Rehearsal](./guides/experiments/local-cloud-rehearsal.md)
 5. Run benchmark CI
    [Benchmark CI Guides](./guides/benchmark-ci/README.md) and

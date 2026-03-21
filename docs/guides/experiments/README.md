@@ -7,6 +7,6 @@ Start here based on what you need:
 - [Single-machine experiments](./single-machine.md)
 - [Distributed experiments](./distributed.md)
 - [Queue cleanup and recovery](./queue-and-recovery.md)
-- [Cloud orchestration on GCE](./gce-cloud-orchestration.md)
+- [Cloud orchestration on GCE](./gce-cloud-orchestration.md) for `cloud preflight`, launch, collect, and teardown
 - [Local cloud rehearsal](./local-cloud-rehearsal.md)
 - [Configuration reference](./config-reference.md)
