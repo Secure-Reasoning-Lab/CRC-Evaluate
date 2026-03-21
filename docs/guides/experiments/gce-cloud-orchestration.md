@@ -569,10 +569,16 @@ By default, `cloud collect` infers:
   when `cloud.remote.experiment_root` is set
 - otherwise, for legacy configs, `<storage.experiment_filestore>/<experiment.name>`
 
-`storage.experiment_filestore` is always the local publish destination.
-`cloud.remote.experiment_root` is the remote-VM source root used by `cloud collect`
-and `cloud teardown`. If you omit `cloud.remote.experiment_root`, CRSBench falls
-back to the legacy behavior of reusing `storage.experiment_filestore` for both.
+In plain terms, `cloud collect` copies trial artifacts and VM diagnostics from
+the cloud VMs back into a local directory on the machine where you run the
+command. By default, CRSBench merges worker artifacts into the existing local
+experiment directory if one already exists.
+
+`storage.experiment_filestore` is the local destination on your machine.
+`cloud.remote.experiment_root` is the remote source root on the VMs used by
+`cloud collect` and `cloud teardown`. If you omit
+`cloud.remote.experiment_root`, CRSBench falls back to the legacy behavior of
+reusing `storage.experiment_filestore` for both.
 
 You can still override either value explicitly:
 
@@ -581,8 +587,8 @@ uv run crsbench cloud --config config.yaml collect my-experiment \
     --remote-dir /data/experiments/my-experiment
 ```
 
-Use `--force` to skip the overwrite prompt when collecting into an existing
-local destination, for example in non-interactive automation:
+Use `--force` when you want to merge into an existing local destination without
+being prompted, for example in non-interactive automation:
 
 ```bash
 uv run crsbench cloud --config config.yaml collect my-experiment \
@@ -590,9 +596,12 @@ uv run crsbench cloud --config config.yaml collect my-experiment \
     --force
 ```
 
-Use `--timestamp` to always collect into a fresh sibling directory under
-`storage.experiment_filestore`, for example
-`/tmp/crsbench/experiment-data/my-experiment-2026-03-21-17-45`:
+Use `--timestamp` when the run will publish worker artifacts and you want those
+artifacts written into a fresh sibling directory instead of merged into the
+default local experiment directory. CRSBench names that sibling with a UTC
+minute timestamp such as
+`/tmp/crsbench/experiment-data/my-experiment-2026-03-21-17-45`; if that path is
+already taken, it appends `-02`, `-03`, and so on:
 
 ```bash
 uv run crsbench cloud --config config.yaml collect my-experiment \
@@ -605,7 +614,10 @@ uv run crsbench cloud --config config.yaml collect my-experiment \
 - Continues to remaining worker/evaluator VMs if one fails; exits with code 1 on partial failure
 - Evaluator VMs are log-only for collection; they do not rsync `/tmp/crsbench/experiment-data/<experiment>` because build/verify work stays in transient evaluator scratch space instead of a worker-style experiment tree
 - Safe to run multiple times (incremental rsync), but when the local destination already exists CRSBench warns before merging into it
-- Interactive runs prompt `Continue and merge into the existing destination? [Y/n/t]`; `t` reroutes that collect run into a fresh timestamped sibling, while non-interactive runs still fail unless you pass `--force` or explicitly use `--timestamp`
+- Interactive runs prompt `Continue and merge into the existing destination? [Y/n/t]`
+- Press `Enter` or `y` to merge into the existing destination
+- Press `t` to use the same fresh-sibling behavior as `--timestamp`
+- In non-interactive runs, `--force` merges into the existing destination without prompting, while `--timestamp` chooses a fresh artifact destination when worker artifacts are being published
 - Successful collect runs that actually publish worker artifact data refresh a hidden local marker at `<local-destination>/.crsbench-collect.json` with the last successful artifact collect time and best-effort experiment start time
 - Also collects VM diagnostics under `.crsbench-cloud/remote-logs/<experiment>/`, including:
   - `google-startup-scripts.service` and `google-guest-agent.service` journals
