@@ -871,6 +871,7 @@ setup_user_systemd_runtime
 setup_oss_crs_for_crsbench
 
 : > "${ENV_PATH}"
+write_passthrough_env_vars "${ENV_PASSTHROUGH_B64}"
 write_env_var "CRSBENCH_REDIS_HOST" "${REDIS_HOST}"
 if [[ -n "${REDIS_PASSWORD}" ]]; then
   write_env_var "CRSBENCH_REDIS_PASSWORD" "${REDIS_PASSWORD}"
@@ -899,7 +900,6 @@ else
   write_env_var "CRSBENCH_WORKER_CPU_TAG" "${WORKER_CPU_TAG}"
   write_env_var "CRSBENCH_CLOUD_INSTANCE_NAME" "${WORKER_NAME}"
 fi
-write_passthrough_env_vars "${ENV_PASSTHROUGH_B64}"
 if [[ -n "${VENV_BIN:-}" ]]; then
   write_env_var "PATH" "${VENV_BIN}:${CRSBENCH_USER_HOME}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 fi

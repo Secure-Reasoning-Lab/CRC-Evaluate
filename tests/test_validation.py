@@ -1401,6 +1401,28 @@ class TestExperimentConfigSchema:
             "SHARED_KEY": "evaluator-placement-value",
         }
 
+    @pytest.mark.parametrize(
+        "reserved_name",
+        [
+            "CRSBENCH_CLOUD_ROLE",
+            "CRSBENCH_READINESS_TIMEOUT_SEC",
+            "CRSBENCH_EVALUATOR_IDLE_TIMEOUT",
+            "CRSBENCH_EXPERIMENT_CONFIG_PATH",
+        ],
+    )
+    def test_cloud_provider_contract_rejects_runtime_managed_env_names(
+        self, reserved_name: str
+    ):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["env"] = {reserved_name: "override"}
+
+        with pytest.raises(
+            PydanticValidationError,
+            match=rf"runtime-managed environment variable {reserved_name}",
+        ):
+            ExperimentConfig(**data)
+
     def test_cloud_provider_contract_requires_worker_placement_zone(self):
         data = self._base_kwargs()
         data["cloud"] = self._provider_neutral_cloud_kwargs()

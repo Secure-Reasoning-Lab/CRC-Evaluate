@@ -312,6 +312,22 @@ def test_load_evaluator_startup_script_contains_managed_evaluator_service_bootst
     assert "dbus-user-session" in startup_script
 
 
+def test_load_startup_script_writes_passthrough_env_before_runtime_managed_env():
+    """Runtime-managed launcher env must override passthrough values on conflict."""
+    from crsbench.cloud.gce.metadata import load_startup_script
+
+    startup_script = load_startup_script()
+
+    passthrough_index = startup_script.index(
+        'write_passthrough_env_vars "${ENV_PASSTHROUGH_B64}"'
+    )
+    managed_index = startup_script.index(
+        'write_env_var "CRSBENCH_CLOUD_ROLE" "${CRSBENCH_STARTUP_MODE}"'
+    )
+
+    assert passthrough_index < managed_index
+
+
 def test_build_instance_metadata_includes_install_spec_from_fleet_config():
     """Install spec from fleet config field should appear in instance metadata."""
     from crsbench.cloud.gce.metadata import build_instance_metadata
