@@ -424,6 +424,42 @@ def _make_resolved_cloud_context(launch_state=None):
     )
 
 
+@patch("crsbench.cloud.cli._config_reconnect.provider_adapter_for_launch_plan")
+@patch("crsbench.cloud.cli._config_reconnect.build_cloud_launch_plan")
+@patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+def test_resolve_cloud_context_resolves_adapter_from_launch_plan(
+    mock_load_config,
+    mock_build_launch_plan,
+    mock_provider_adapter_for_launch_plan,
+):
+    config = _make_provider_neutral_experiment_config()
+    mock_load_config.return_value = config
+    launch_plan = MagicMock()
+    mock_build_launch_plan.return_value = launch_plan
+    adapter = MagicMock()
+    adapter.build_worker_fleets.return_value = [MagicMock()]
+    adapter.build_evaluator_fleets.return_value = []
+    adapter.to_cloud_fleet_placement_record.return_value = CloudFleetPlacementRecord(
+        provider=CloudProvider.GCE,
+        role="worker",
+        project="test-project",
+        zone="us-central1-a",
+        zones=["us-central1-a"],
+        region="us-central1",
+        count=1,
+        name_prefix="crsbench-test-exp-work",
+        name_start_index=1,
+        ssh_via_iap=True,
+    )
+    mock_provider_adapter_for_launch_plan.return_value = adapter
+
+    from crsbench.cloud.cli._config_reconnect import resolve_cloud_context
+
+    resolve_cloud_context("/tmp/config.yaml", "test-exp")
+
+    mock_provider_adapter_for_launch_plan.assert_called_once_with(launch_plan)
+
+
 def _make_provider_neutral_experiment_config() -> ExperimentConfig:
     return ExperimentConfig.model_validate(
         {
@@ -4173,7 +4209,7 @@ class TestCollect:
 
     @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
-    @patch("crsbench.cloud.cli._collect.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._collect.provider_adapter_for_context")
     @patch("crsbench.cloud.cli._collect.provisioner_for_context")
     @patch("crsbench.cloud.cli._collect.reconnect")
     def test_collect_provider_neutral_context_uses_adapter_for_multi_zone_workers(
@@ -4218,7 +4254,7 @@ class TestCollect:
 
     @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
-    @patch("crsbench.cloud.cli._collect.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._collect.provider_adapter_for_context")
     @patch("crsbench.cloud.cli._collect.provisioner_for_context")
     @patch("crsbench.cloud.cli._collect.reconnect")
     def test_collect_provider_neutral_context_also_collects_evaluators(
@@ -4752,7 +4788,7 @@ class TestTeardown:
     @patch("crsbench.cloud.cli._teardown.delete_launch_state")
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
-    @patch("crsbench.cloud.cli._teardown.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._teardown.provider_adapter_for_context")
     @patch("crsbench.cloud.cli._teardown.provisioner_for_context")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_provider_neutral_context_deletes_multi_zone_workers_via_adapter(
@@ -4802,7 +4838,7 @@ class TestTeardown:
     @patch("crsbench.cloud.cli._teardown.delete_launch_state")
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
-    @patch("crsbench.cloud.cli._teardown.GceProviderAdapter")
+    @patch("crsbench.cloud.cli._teardown.provider_adapter_for_context")
     @patch("crsbench.cloud.cli._teardown.provisioner_for_context")
     @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_provider_neutral_context_deletes_evaluators_via_adapter(

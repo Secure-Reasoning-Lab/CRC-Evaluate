@@ -16,8 +16,10 @@ from crsbench.cloud.cli._instance_inventory import (
 from crsbench.cloud.cli._instance_inventory import (
     resolve_instance_fleet as shared_resolve_instance_fleet,
 )
-from crsbench.cloud.gce.provider import GceProviderAdapter
-from crsbench.cloud.providers import provisioner_for_context
+from crsbench.cloud.providers import (
+    provider_adapter_for_context,
+    provisioner_for_context,
+)
 from crsbench.cloud.readiness import CloudInstanceRole
 
 if TYPE_CHECKING:
@@ -142,7 +144,7 @@ def _list_live_instances(
     provisioner,
 ) -> list["GceWorkerRecord"]:
     if context.launch_plan is not None and context.launch_state is None:
-        adapter = GceProviderAdapter(provisioner=provisioner)
+        adapter = provider_adapter_for_context(context, provisioner=provisioner)
         workers = adapter.list_workers(plan=context.launch_plan)
         if context.evaluator_fleet_configs:
             workers.extend(adapter.list_evaluators(plan=context.launch_plan))

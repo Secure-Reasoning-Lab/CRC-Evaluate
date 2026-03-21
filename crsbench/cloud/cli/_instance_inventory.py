@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
-from crsbench.cloud.gce.provider import GceProviderAdapter
 from crsbench.cloud.gce.quota import zone_to_region
+from crsbench.cloud.providers import provider_adapter_for_context
 
 if TYPE_CHECKING:
     from crsbench.cloud.cli._config_reconnect import ResolvedCloudContext
@@ -94,10 +94,10 @@ def list_cloud_instances(
 def list_live_instances(
     context: "ResolvedCloudContext",
     experiment_name: str,
-    provisioner: "GceProvisioner",
+    provisioner,
 ) -> list["GceWorkerRecord"]:
     """List live worker/evaluator instances for the current cloud context."""
-    adapter = GceProviderAdapter(provisioner=provisioner)
+    adapter = provider_adapter_for_context(context, provisioner=provisioner)
     if context.launch_state is not None:
         workers: list[GceWorkerRecord] = []
         for fleet in context.worker_fleet_configs:

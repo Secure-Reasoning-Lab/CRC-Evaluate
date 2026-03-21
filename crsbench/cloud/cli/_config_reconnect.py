@@ -9,7 +9,6 @@ import weakref
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from crsbench.cloud.gce.provider import GceProviderAdapter
 from crsbench.cloud.launch_state import (
     CloudLaunchState,
     load_launch_state,
@@ -17,6 +16,7 @@ from crsbench.cloud.launch_state import (
 )
 from crsbench.cloud.models import CloudLaunchPlan, build_cloud_launch_plan
 from crsbench.cloud.orchestrator_tunnel import OrchestratorRedisTunnel
+from crsbench.cloud.providers import provider_adapter_for_launch_plan
 from crsbench.cloud.readiness import CloudReadinessStore
 from crsbench.distributed.job_lifecycle import JobLifecycleStore
 from crsbench.distributed.queue import (
@@ -122,7 +122,7 @@ def resolve_cloud_context(
             "Experiment config must use provider-neutral cloud.providers/cloud.orchestrator/cloud.workers"
         )
     launch_plan = build_cloud_launch_plan(config)
-    adapter = GceProviderAdapter()
+    adapter = provider_adapter_for_launch_plan(launch_plan)
     derived_worker_fleets = [
         adapter.to_cloud_fleet_placement_record(fleet, role="worker")
         for fleet in adapter.build_worker_fleets(launch_plan)

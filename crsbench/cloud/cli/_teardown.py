@@ -18,9 +18,11 @@ from crsbench.cloud.cli._instance_inventory import (
     resolve_instance_fleet as shared_resolve_instance_fleet,
 )
 from crsbench.cloud.collection import ArtifactCollector
-from crsbench.cloud.gce.provider import GceProviderAdapter
 from crsbench.cloud.launch_state import delete_launch_state
-from crsbench.cloud.providers import provisioner_for_context
+from crsbench.cloud.providers import (
+    provider_adapter_for_context,
+    provisioner_for_context,
+)
 from crsbench.cloud.readiness import CloudInstanceRole
 from crsbench.utils.logger import get_logger
 
@@ -273,7 +275,7 @@ def _delete_live_instances(
     experiment_name: str,
     provisioner,
 ) -> None:
-    adapter = GceProviderAdapter(provisioner=provisioner)
+    adapter = provider_adapter_for_context(context, provisioner=provisioner)
     if context.launch_state is not None:
         for fleet in context.worker_fleet_configs:
             provisioner.delete_workers(

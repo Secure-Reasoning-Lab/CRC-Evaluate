@@ -34,6 +34,12 @@ def provider_for_context(context: "ResolvedCloudContext") -> CloudProvider:
         return context.launch_state.orchestrator_provider
     if context.launch_plan is not None:
         return provider_for_launch_plan(context.launch_plan)
+    fleet_providers = [
+        *(fleet.provider for fleet in context.worker_fleet_configs),
+        *(fleet.provider for fleet in context.evaluator_fleet_configs),
+    ]
+    if fleet_providers:
+        return validate_single_cloud_provider(fleet_providers)
     raise ValueError("Cloud context does not contain launch state or a launch plan")
 
 
@@ -61,6 +67,18 @@ def provider_adapter_for_provider(
         return GceProviderAdapter(provisioner=provisioner or GceProvisioner())
     raise NotImplementedError(
         f"Cloud provider adapter is not implemented for {provider}"
+    )
+
+
+def provider_adapter_for_launch_plan(
+    plan: "CloudLaunchPlan",
+    *,
+    provisioner=None,
+):
+    """Return the provider-neutral adapter for one launch plan."""
+    return provider_adapter_for_provider(
+        provider_for_launch_plan(plan),
+        provisioner=provisioner,
     )
 
 
