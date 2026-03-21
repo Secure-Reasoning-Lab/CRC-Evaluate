@@ -4254,6 +4254,51 @@ class TestCollect:
         assert rc == 1
         mock_coll.collect.assert_not_called()
 
+    def test_collect_existing_destination_with_no_live_instances_returns_zero(
+        self,
+        tmp_path: Path,
+    ):
+        experiment_filestore = tmp_path / "filestore"
+        (experiment_filestore / "test-exp").mkdir(parents=True)
+        with (
+            patch(
+                "crsbench.cloud.cli._collect.resolve_cloud_context"
+            ) as mock_resolve_context,
+            patch("crsbench.cloud.cli._collect.ArtifactCollector") as mock_coll_cls,
+            patch(
+                "crsbench.cloud.cli._collect.provisioner_for_context"
+            ) as mock_prov_cls,
+            patch("crsbench.cloud.cli._collect.reconnect") as mock_reconnect,
+            patch("sys.stdin.isatty", return_value=False),
+        ):
+            mock_prov = MagicMock()
+            mock_prov.list_workers.return_value = []
+            mock_prov_cls.return_value = mock_prov
+            mock_resolve_context.return_value = _make_collect_context(
+                experiment_filestore=experiment_filestore,
+                remote_experiment_root=tmp_path / "remote-root",
+            )
+
+            mock_coll = MagicMock()
+            mock_coll_cls.return_value = mock_coll
+
+            readiness = MagicMock()
+            readiness.list_workers.return_value = []
+            mock_reconnect.return_value = (
+                MagicMock(),
+                MagicMock(),
+                readiness,
+                MagicMock(),
+                experiment_filestore,
+            )
+
+            from crsbench.cloud.cli._collect import run_collect
+
+            rc = run_collect(_make_collect_args(force=False))
+
+        assert rc == 0
+        mock_coll.collect.assert_not_called()
+
     def test_collect_existing_destination_accepts_empty_interactive_confirmation(
         self,
         tmp_path: Path,

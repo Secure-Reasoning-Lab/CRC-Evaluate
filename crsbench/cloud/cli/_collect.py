@@ -53,9 +53,6 @@ def run_collect(args: argparse.Namespace) -> int:
     experiment_filestore = context.experiment_filestore
     destination = experiment_filestore / experiment_name
 
-    if not _confirm_destination_overwrite(destination, force=args.force):
-        return 1
-
     readiness = None
     try:
         _context, _redis_conn, readiness, _lifecycle, experiment_filestore = reconnect(
@@ -92,6 +89,10 @@ def run_collect(args: argparse.Namespace) -> int:
             "No live GCE instances found for experiment '{}'", experiment_name
         )
         return 0
+
+    if any(_collects_experiment_artifacts(worker) for worker in live_instances):
+        if not _confirm_destination_overwrite(destination, force=args.force):
+            return 1
 
     remote_experiment_dir = resolve_remote_experiment_dir(
         context.remote_experiment_root,

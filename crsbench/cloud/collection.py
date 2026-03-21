@@ -151,13 +151,16 @@ def _parse_metadata_timestamp(
 ) -> tuple[datetime, str] | None:
     """Parse a timestamp field from metadata JSON, returning ``(parsed_dt, raw)``."""
     raw = metadata.get(key)
-    if not isinstance(raw, str):
-        return None
-
-    normalized = raw.replace("Z", "+00:00")
-    try:
-        parsed = datetime.fromisoformat(normalized)
-    except ValueError:
+    if isinstance(raw, (int, float)):
+        parsed = datetime.fromtimestamp(raw, tz=timezone.utc)
+        return parsed, parsed.isoformat()
+    if isinstance(raw, str):
+        normalized = raw.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+    else:
         return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
