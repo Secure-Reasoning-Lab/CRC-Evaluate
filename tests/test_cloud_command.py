@@ -3503,7 +3503,7 @@ class TestSsh:
             "crsbench-test-exp-work-001",
             "--zone=us-central1-a",
             "--ssh-flag=-t",
-            "--command=sudo su - crsbench -c 'cd /opt/crsbench && exec \"${SHELL:-/bin/bash}\" -l'",
+            "--command=sudo -iu crsbench env -C /opt/crsbench bash -il",
         ]
         mock_run.return_value = _make_completed_process(0)
 
@@ -3516,11 +3516,13 @@ class TestSsh:
             mock.ANY,
             remote_command=[
                 "sudo",
-                "su",
-                "-",
+                "-iu",
                 "crsbench",
-                "-c",
-                'cd /opt/crsbench && exec "${SHELL:-/bin/bash}" -l',
+                "env",
+                "-C",
+                "/opt/crsbench",
+                "bash",
+                "-il",
             ],
             tty=True,
         )
@@ -3590,11 +3592,13 @@ class TestSsh:
             mock_select_target.return_value,
             remote_command=[
                 "sudo",
-                "su",
-                "-",
+                "-iu",
                 "crsbench",
-                "-c",
-                'cd /opt/crsbench && exec "${SHELL:-/bin/bash}" -l',
+                "env",
+                "-C",
+                "/opt/crsbench",
+                "bash",
+                "-il",
             ],
             tty=True,
         )

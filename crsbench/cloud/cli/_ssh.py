@@ -42,11 +42,13 @@ def run_ssh(args: argparse.Namespace) -> int:
             selected,
             remote_command=[
                 "sudo",
-                "su",
-                "-",
+                "-iu",
                 "crsbench",
-                "-c",
-                'cd /opt/crsbench && exec "${SHELL:-/bin/bash}" -l',
+                "env",
+                "-C",
+                "/opt/crsbench",
+                "bash",
+                "-il",
             ],
             tty=True,
         )
