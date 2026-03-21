@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from crsbench.cloud.cli._config_reconnect import (
     reconnect,
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     import argparse
 
     from crsbench.cloud.cli._config_reconnect import ResolvedCloudContext
-    from crsbench.cloud.gce.models import GceWorkerRecord
+    from crsbench.cloud.records import CloudInstanceLike
 
 logger = get_logger(__name__)
 
@@ -169,7 +169,7 @@ def run_teardown(args: argparse.Namespace) -> int:
         orchestrator_worker = launch_state.as_orchestrator_record()
         try:
             collector.collect_logs(
-                worker=orchestrator_worker,
+                worker=cast("CloudInstanceLike", orchestrator_worker),
                 fleet=launch_state.as_transport_config(),
                 experiment_name=experiment_name,
                 experiment_filestore=experiment_filestore,
@@ -240,7 +240,7 @@ def _list_live_instances(
     context: "ResolvedCloudContext",
     experiment_name: str,
     provisioner,
-) -> list["GceWorkerRecord"]:
+) -> list["CloudInstanceLike"]:
     return shared_list_live_instances(context, experiment_name, provisioner)
 
 
@@ -309,12 +309,12 @@ def _delete_live_instances(
 
 def _resolve_instance_fleet(
     context: "ResolvedCloudContext",
-    worker: "GceWorkerRecord",
+    worker: "CloudInstanceLike",
 ):
     return shared_resolve_instance_fleet(context, worker)
 
 
-def _collects_experiment_artifacts(worker: "GceWorkerRecord") -> bool:
+def _collects_experiment_artifacts(worker: "CloudInstanceLike") -> bool:
     """Return whether this instance owns a worker-style experiment artifact tree."""
     return worker.labels.get("crsbench-role") != CloudInstanceRole.EVALUATOR.value
 

@@ -66,3 +66,29 @@ def test_cloud_fleet_placement_record_from_legacy_gce_dict_preserves_common_fiel
     assert record.name_start_index == 3
     assert record.ssh_via_iap is True
     assert record.provider_metadata["github_deploy_key_path"] is None
+
+
+def test_launch_state_orchestrator_record_uses_neutral_instance_model() -> None:
+    from crsbench.cloud.launch_state import CloudLaunchState
+    from crsbench.cloud.records import CloudInstanceRecord
+
+    state = CloudLaunchState(
+        experiment_name="test-exp",
+        config_path="/tmp/config.yaml",
+        redis_host="10.0.0.1:6379",
+        redis_password="secret",
+        orchestrator_provider=CloudProvider.GCE,
+        orchestrator_name="crsbench-test-orch",
+        orchestrator_project="test-project",
+        orchestrator_zone="us-east5-b",
+        orchestrator_internal_ip="10.0.0.50",
+        orchestrator_external_ip="34.1.2.3",
+        orchestrator_ssh_via_iap=True,
+    )
+
+    record = state.as_orchestrator_record()
+
+    assert isinstance(record, CloudInstanceRecord)
+    assert record.provider is CloudProvider.GCE
+    assert record.role == "orchestrator"
+    assert record.region == "us-east5"

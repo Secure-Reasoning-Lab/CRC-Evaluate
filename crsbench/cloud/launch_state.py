@@ -11,9 +11,10 @@ from types import SimpleNamespace
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from crsbench.cloud.gce.models import GceWorkerRecord
+from crsbench.cloud.locations import region_for_provider_zone
 from crsbench.cloud.records import (
     CloudFleetPlacementRecord,
+    CloudInstanceRecord,
     cloud_fleet_placement_record_from_legacy_gce_dict,
 )
 from crsbench.cloud.types import CloudProvider, coerce_cloud_provider
@@ -67,15 +68,23 @@ class CloudLaunchState(BaseModel):
     def normalize_evaluator_fleet_configs(cls, value):
         return _normalize_fleet_records(value, role="evaluator")
 
-    def as_orchestrator_record(self) -> GceWorkerRecord:
-        """Build a collector-compatible instance record for the orchestrator VM."""
-        return GceWorkerRecord(
+    def as_orchestrator_record(self) -> CloudInstanceRecord:
+        """Build a collector-compatible neutral instance record for the orchestrator."""
+        return CloudInstanceRecord(
+            provider=self.orchestrator_provider,
+            role="orchestrator",
             name=self.orchestrator_name,
             instance_id=f"orchestrator:{self.orchestrator_name}",
             status="RUNNING",
+            project=self.orchestrator_project,
             zone=self.orchestrator_zone,
+            region=region_for_provider_zone(
+                self.orchestrator_provider,
+                self.orchestrator_zone,
+            ),
             internal_ip=self.orchestrator_internal_ip,
             external_ip=self.orchestrator_external_ip,
+            ssh_via_iap=self.orchestrator_ssh_via_iap,
             labels={"crsbench-role": "orchestrator"},
         )
 

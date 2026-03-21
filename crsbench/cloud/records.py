@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from crsbench.cloud.gce.quota import zone_to_region
+from crsbench.cloud.locations import region_for_provider_zone
 from crsbench.cloud.types import CloudProvider, coerce_cloud_provider
 
 
@@ -28,6 +28,18 @@ class CloudInstanceRecord(BaseModel):
     ssh_via_iap: bool = False
     labels: dict[str, str] = Field(default_factory=dict)
     provider_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CloudInstanceLike(Protocol):
+    """Minimal shared live-instance shape used by generic cloud operations."""
+
+    name: str
+    instance_id: str
+    status: str
+    zone: str
+    internal_ip: str | None
+    external_ip: str | None
+    labels: dict[str, str]
 
 
 class CloudFleetPlacementRecord(BaseModel):
@@ -60,15 +72,18 @@ def cloud_instance_record_from_legacy_gce_dict(
 ) -> CloudInstanceRecord:
     """Translate legacy persisted GCE orchestrator fields into a neutral record."""
     zone = value.get("zone")
+    provider = coerce_cloud_provider(value.get("provider", CloudProvider.GCE))
     return CloudInstanceRecord(
-        provider=coerce_cloud_provider(value.get("provider", CloudProvider.GCE)),
+        provider=provider,
         role=role,
         name=str(value["name"]),
         instance_id=str(value.get("instance_id", f"{role}:{value['name']}")),
         status=str(value.get("status", "RUNNING")),
         project=project,
         zone=zone,
-        region=zone_to_region(zone) if isinstance(zone, str) and zone else None,
+        region=region_for_provider_zone(provider, zone)
+        if isinstance(zone, str) and zone
+        else None,
         internal_ip=value.get("internal_ip"),
         external_ip=value.get("external_ip"),
         ssh_via_iap=ssh_via_iap,
@@ -90,10 +105,11 @@ def cloud_fleet_placement_record_from_legacy_gce_dict(
     regions = [str(region) for region in value.get("regions", [])]
     region = value.get("region")
     zone = value.get("zone")
+    provider = coerce_cloud_provider(value.get("provider", CloudProvider.GCE))
     if region is None and zones:
-        region = zone_to_region(zones[0])
+        region = region_for_provider_zone(provider, zones[0])
     return CloudFleetPlacementRecord(
-        provider=coerce_cloud_provider(value.get("provider", CloudProvider.GCE)),
+        provider=provider,
         role=role,
         project=str(value["project"]),
         zone=str(zone) if zone is not None else None,

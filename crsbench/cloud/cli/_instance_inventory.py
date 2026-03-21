@@ -5,13 +5,12 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
-from crsbench.cloud.gce.quota import zone_to_region
+from crsbench.cloud.locations import region_for_provider_zone
 from crsbench.cloud.providers import provider_adapter_for_context
 
 if TYPE_CHECKING:
     from crsbench.cloud.cli._config_reconnect import ResolvedCloudContext
-    from crsbench.cloud.gce.models import GceWorkerRecord
-    from crsbench.cloud.gce.provisioner import GceProvisioner
+    from crsbench.cloud.records import CloudInstanceLike
 
 
 @dataclass(frozen=True)
@@ -38,7 +37,7 @@ class CloudInstanceInventoryRow:
 def list_cloud_instances(
     context: "ResolvedCloudContext",
     experiment_name: str,
-    provisioner: "GceProvisioner",
+    provisioner,
 ) -> list[CloudInstanceInventoryRow]:
     """Return live orchestrator/worker/evaluator rows for one experiment."""
     rows: list[CloudInstanceInventoryRow] = []
@@ -58,10 +57,17 @@ def list_cloud_instances(
                     alias="orch",
                     name=orchestrator.name,
                     role="orchestrator",
-                    provider="gce",
+                    provider=launch_state.orchestrator_provider.value,
                     project=launch_state.orchestrator_project,
                     zone=orchestrator.zone,
-                    region=zone_to_region(orchestrator.zone),
+                    region=(
+                        getattr(orchestrator, "region", None)
+                        or region_for_provider_zone(
+                            launch_state.orchestrator_provider,
+                            orchestrator.zone,
+                        )
+                        or ""
+                    ),
                     status=orchestrator.status,
                     internal_ip=orchestrator.internal_ip,
                     external_ip=orchestrator.external_ip,
@@ -77,10 +83,10 @@ def list_cloud_instances(
                 alias=_instance_alias(experiment_name, instance.name, role),
                 name=instance.name,
                 role=role,
-                provider="gce",
+                provider=fleet.provider.value,
                 project=fleet.project,
                 zone=instance.zone,
-                region=zone_to_region(instance.zone),
+                region=region_for_provider_zone(fleet.provider, instance.zone) or "",
                 status=instance.status,
                 internal_ip=instance.internal_ip,
                 external_ip=instance.external_ip,
@@ -95,11 +101,11 @@ def list_live_instances(
     context: "ResolvedCloudContext",
     experiment_name: str,
     provisioner,
-) -> list["GceWorkerRecord"]:
+) -> list[CloudInstanceLike]:
     """List live worker/evaluator instances for the current cloud context."""
     adapter = provider_adapter_for_context(context, provisioner=provisioner)
     if context.launch_state is not None:
-        workers: list[GceWorkerRecord] = []
+        workers: list[CloudInstanceLike] = []
         for fleet in context.worker_fleet_configs:
             workers.extend(
                 provisioner.list_workers(
@@ -142,7 +148,7 @@ def list_live_instances(
 
 def resolve_instance_fleet(
     context: "ResolvedCloudContext",
-    worker: "GceWorkerRecord",
+    worker: CloudInstanceLike,
 ):
     """Resolve the fleet config that owns one live worker/evaluator VM."""
     role = worker.labels.get("crsbench-role")

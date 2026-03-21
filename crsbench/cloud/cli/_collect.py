@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from crsbench.cloud.cli._config_reconnect import (
     reconnect,
@@ -16,19 +16,19 @@ from crsbench.cloud.cli._instance_inventory import (
 from crsbench.cloud.cli._instance_inventory import (
     resolve_instance_fleet as shared_resolve_instance_fleet,
 )
+from crsbench.cloud.collection import ArtifactCollectionError, ArtifactCollector
 from crsbench.cloud.providers import (
     provider_adapter_for_context,
     provisioner_for_context,
 )
 from crsbench.cloud.readiness import CloudInstanceRole
+from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
     import argparse
 
     from crsbench.cloud.cli._config_reconnect import ResolvedCloudContext
-    from crsbench.cloud.gce.models import GceWorkerRecord
-from crsbench.cloud.collection import ArtifactCollectionError, ArtifactCollector
-from crsbench.utils.logger import get_logger
+    from crsbench.cloud.records import CloudInstanceLike
 
 logger = get_logger(__name__)
 
@@ -122,7 +122,7 @@ def run_collect(args: argparse.Namespace) -> int:
         orchestrator_worker = launch_state.as_orchestrator_record()
         try:
             collector.collect_logs(
-                worker=orchestrator_worker,
+                worker=cast("CloudInstanceLike", orchestrator_worker),
                 fleet=launch_state.as_transport_config(),
                 experiment_name=experiment_name,
                 experiment_filestore=experiment_filestore,
@@ -142,7 +142,7 @@ def _list_live_instances(
     context: "ResolvedCloudContext",
     experiment_name: str,
     provisioner,
-) -> list["GceWorkerRecord"]:
+) -> list["CloudInstanceLike"]:
     if context.launch_plan is not None and context.launch_state is None:
         adapter = provider_adapter_for_context(context, provisioner=provisioner)
         workers = adapter.list_workers(plan=context.launch_plan)
@@ -154,7 +154,7 @@ def _list_live_instances(
 
 def _resolve_instance_fleet(
     context: "ResolvedCloudContext",
-    worker: "GceWorkerRecord",
+    worker: "CloudInstanceLike",
 ):
     return shared_resolve_instance_fleet(context, worker)
 
@@ -170,6 +170,6 @@ def _list_readiness_instances(readiness, experiment_name: str):
     return workers
 
 
-def _collects_experiment_artifacts(worker: "GceWorkerRecord") -> bool:
+def _collects_experiment_artifacts(worker: "CloudInstanceLike") -> bool:
     """Return whether this instance owns a worker-style experiment artifact tree."""
     return worker.labels.get("crsbench-role") != CloudInstanceRole.EVALUATOR.value

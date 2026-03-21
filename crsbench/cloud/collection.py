@@ -26,7 +26,7 @@ from crsbench.cloud.transport import CloudTransport, transport_for_provider
 from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from crsbench.cloud.gce.models import GceWorkerRecord
+    from crsbench.cloud.records import CloudInstanceLike
 
 
 class SshTransportConfig(Protocol):
@@ -67,7 +67,7 @@ class ArtifactCollector:
 
     def collect(
         self,
-        worker: GceWorkerRecord,
+        worker: CloudInstanceLike,
         fleet: SshTransportConfig,
         experiment_name: str,
         experiment_filestore: Path,
@@ -135,7 +135,7 @@ class ArtifactCollector:
 
     def collect_logs(
         self,
-        worker: GceWorkerRecord,
+        worker: CloudInstanceLike,
         fleet: SshTransportConfig,
         experiment_name: str,
         experiment_filestore: Path,
@@ -215,7 +215,7 @@ class ArtifactCollector:
 
     def _build_rsync_cmd(
         self,
-        worker: GceWorkerRecord,
+        worker: CloudInstanceLike,
         fleet: SshTransportConfig,
         remote_experiment_dir: str,
         staging_dir: Path,
@@ -265,7 +265,7 @@ class ArtifactCollector:
 
     def _build_log_rsync_cmd(
         self,
-        worker: GceWorkerRecord,
+        worker: CloudInstanceLike,
         fleet: SshTransportConfig,
         remote_experiment_dir: str,
         staging_dir: Path,
@@ -311,7 +311,7 @@ class ArtifactCollector:
 
     def _build_ssh_command(
         self,
-        worker: GceWorkerRecord,
+        worker: CloudInstanceLike,
         fleet: SshTransportConfig,
         known_hosts_path: Path | None = None,
     ) -> str:
@@ -326,7 +326,7 @@ class ArtifactCollector:
     def _build_iap_tunnel_command(
         self,
         *,
-        worker: GceWorkerRecord,
+        worker: CloudInstanceLike,
         fleet: SshTransportConfig,
         local_port: int,
     ) -> list[str]:
@@ -395,7 +395,7 @@ class ArtifactCollector:
 
     def _remote_host(
         self,
-        worker: GceWorkerRecord,
+        worker: CloudInstanceLike,
         fleet: SshTransportConfig,
     ) -> str:
         """Return the SSH/rsync host token for one worker."""
@@ -406,7 +406,7 @@ class ArtifactCollector:
     def _prepare_ssh_access(
         self,
         *,
-        worker: GceWorkerRecord,
+        worker: CloudInstanceLike,
         fleet: SshTransportConfig,
         experiment_filestore: Path,
     ) -> Path | None:
@@ -428,7 +428,7 @@ class ArtifactCollector:
     def _open_iap_tunnel(
         self,
         *,
-        worker: GceWorkerRecord,
+        worker: CloudInstanceLike,
         fleet: SshTransportConfig,
     ) -> Iterator[int]:
         """Open a temporary local TCP tunnel to a worker's SSH port through IAP."""
@@ -476,7 +476,7 @@ class ArtifactCollector:
     def _run_artifact_rsync(
         self,
         *,
-        worker: GceWorkerRecord,
+        worker: CloudInstanceLike,
         fleet: SshTransportConfig,
         remote_experiment_dir: str,
         staging_dir: Path,
@@ -524,7 +524,7 @@ class ArtifactCollector:
     def _run_log_rsync(
         self,
         *,
-        worker: GceWorkerRecord,
+        worker: CloudInstanceLike,
         fleet: SshTransportConfig,
         remote_experiment_dir: str,
         staging_dir: Path,
@@ -572,7 +572,7 @@ class ArtifactCollector:
     def _run_remote_command(
         self,
         *,
-        worker: GceWorkerRecord,
+        worker: CloudInstanceLike,
         fleet: SshTransportConfig,
         known_hosts_path: Path | None,
         ssh_user: str | None,
@@ -627,7 +627,7 @@ class ArtifactCollector:
     def _remote_path_exists(
         self,
         *,
-        worker: GceWorkerRecord,
+        worker: CloudInstanceLike,
         fleet: SshTransportConfig,
         known_hosts_path: Path | None,
         ssh_user: str | None,
@@ -662,7 +662,7 @@ class ArtifactCollector:
         self._ssh_users_by_project[project] = username
         return username
 
-    def _service_name(self, worker: GceWorkerRecord) -> str:
+    def _service_name(self, worker: CloudInstanceLike) -> str:
         """Return the CRSBench user service name expected on the target VM."""
         role = worker.labels.get("crsbench-role")
         if role == "orchestrator":
@@ -671,7 +671,7 @@ class ArtifactCollector:
             return "crsbench-evaluator.service"
         return "crsbench-worker.service"
 
-    def _log_commands(self, worker: GceWorkerRecord) -> dict[Path, str]:
+    def _log_commands(self, worker: CloudInstanceLike) -> dict[Path, str]:
         """Return remote commands for service journals and runtime summaries."""
         service_name = self._service_name(worker)
         service_log_name = service_name.removesuffix(".service")
