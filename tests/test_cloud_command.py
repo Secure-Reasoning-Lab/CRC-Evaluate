@@ -3301,6 +3301,48 @@ class TestStatusOutput:
         )
         assert evaluator_entry["role"] == "evaluator"
 
+    @patch("crsbench.cloud.cli._status.resolve_effective_experiment_name")
+    @patch("crsbench.cloud.cli._status.reconnect")
+    def test_status_uses_resolved_experiment_name_when_cli_experiment_is_omitted(
+        self,
+        mock_reconnect,
+        mock_resolve_experiment_name,
+        fake_redis,
+    ):
+        """Status should query Redis using the config-resolved experiment name."""
+        from crsbench.cloud.readiness import CloudReadinessStore
+        from crsbench.distributed.job_lifecycle import JobLifecycleStore
+
+        mock_resolve_experiment_name.return_value = "resolved-exp"
+        fake_redis.hset(
+            "crsbench:cloud:workers:resolved-exp",
+            "id-worker-1",
+            json.dumps(_make_worker_status("worker-1", state="ready")),
+        )
+        fake_redis.rpush(
+            "crsbench:recovery-events:resolved-exp",
+            json.dumps(_make_recovery_event()),
+        )
+        readiness = CloudReadinessStore(fake_redis)
+        lifecycle = JobLifecycleStore(fake_redis)
+        mock_reconnect.return_value = (
+            MagicMock(),
+            fake_redis,
+            readiness,
+            lifecycle,
+            Path("/tmp"),
+        )
+
+        from crsbench.cloud.cli._status import run_status
+
+        rc = run_status(_make_status_args(experiment=None, json_output=True))
+        assert rc == 0
+        mock_reconnect.assert_called_once_with(
+            "/tmp/config.yaml",
+            "resolved-exp",
+            wait_for_remote_redis=True,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Events sub-action tests
@@ -3385,6 +3427,41 @@ class TestEventsOutput:
         assert isinstance(data, list)
         assert len(data) == 2  # 2 orphan_detected events
         assert all(e["type"] == "orphan_detected" for e in data)
+
+    @patch("crsbench.cloud.cli._events.resolve_effective_experiment_name")
+    @patch("crsbench.cloud.cli._events.reconnect")
+    def test_events_uses_resolved_experiment_name_when_cli_experiment_is_omitted(
+        self,
+        mock_reconnect,
+        mock_resolve_experiment_name,
+        fake_redis,
+        capsys,
+    ):
+        """Events should query Redis using the config-resolved experiment name."""
+        mock_resolve_experiment_name.return_value = "resolved-exp"
+        fake_redis.rpush(
+            "crsbench:recovery-events:resolved-exp",
+            json.dumps(_make_recovery_event()),
+        )
+        mock_reconnect.return_value = (
+            MagicMock(),
+            fake_redis,
+            None,
+            None,
+            Path("/tmp"),
+        )
+
+        from crsbench.cloud.cli._events import run_events
+
+        rc = run_events(_make_events_args(experiment=None, json_output=True))
+        assert rc == 0
+        mock_reconnect.assert_called_once_with(
+            "/tmp/config.yaml",
+            "resolved-exp",
+            wait_for_remote_redis=True,
+        )
+        data = json.loads(capsys.readouterr().out)
+        assert len(data) == 1
 
 
 # ---------------------------------------------------------------------------

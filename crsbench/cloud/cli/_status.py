@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from crsbench.cloud.cli._config_reconnect import reconnect
+from crsbench.cloud.cli._config_reconnect import (
+    reconnect,
+    resolve_effective_experiment_name,
+)
 from crsbench.cloud.readiness import CloudInstanceRole
 from crsbench.distributed import queue as queue_module
 from crsbench.distributed.job_lifecycle import JobState
@@ -50,10 +53,11 @@ def _load_status_jobs(redis_conn, lifecycle, experiment_name: str):
 
 def run_status(args: argparse.Namespace) -> int:
     """Show experiment fleet, job, collection, and recovery event summary."""
+    experiment_name = resolve_effective_experiment_name(args.config, args.experiment)
     try:
         _context, redis_conn, readiness, lifecycle, _filestore = reconnect(
             args.config,
-            args.experiment,
+            experiment_name,
             wait_for_remote_redis=True,
         )
     except Exception as exc:
@@ -61,18 +65,18 @@ def run_status(args: argparse.Namespace) -> int:
         return 1
 
     # Query data
-    workers = readiness.list_workers(args.experiment)
+    workers = readiness.list_workers(experiment_name)
     evaluators = readiness.list_workers(
-        args.experiment,
+        experiment_name,
         role=CloudInstanceRole.EVALUATOR,
     )
     instances = sorted(
         [*workers, *evaluators],
         key=lambda worker: (worker.role.value, worker.instance_name),
     )
-    jobs = _load_status_jobs(redis_conn, lifecycle, args.experiment)
+    jobs = _load_status_jobs(redis_conn, lifecycle, experiment_name)
     raw_events = redis_conn.lrange(
-        f"crsbench:recovery-events:{args.experiment}", -5, -1
+        f"crsbench:recovery-events:{experiment_name}", -5, -1
     )
     recent_events = [json.loads(e) for e in raw_events]
 
