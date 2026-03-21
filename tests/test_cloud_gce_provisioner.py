@@ -2,8 +2,10 @@
 
 import base64
 import json
+from unittest.mock import MagicMock
 
 import pytest
+from crsbench.cloud.gce.models import GceWorkerRecord
 from crsbench.cloud.models import build_cloud_launch_plan
 from crsbench.distributed.registry import RuntimeRegistration
 from crsbench.validation.schemas import (
@@ -1248,6 +1250,56 @@ def test_list_workers_uses_region_scoped_listing_when_only_region_is_configured(
     )
 
     assert [worker.zone for worker in workers] == ["us-east5-c"]
+
+
+def test_gce_provider_adapter_deduplicates_workers_across_overlapping_placements() -> (
+    None
+):
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+
+    config = _make_provider_neutral_experiment_config().model_dump(
+        mode="json", exclude_none=True
+    )
+    config["cloud"]["providers"]["gce"]["regions"] = ["us-east5", "us-east1"]
+    config["cloud"]["providers"]["gce"]["fallback"] = True
+    config["cloud"]["providers"]["gce"].pop("region", None)
+    config["cloud"]["orchestrator"] = {
+        "instance_profile": "gce-orchestrator-n2d",
+    }
+    config["cloud"]["workers"]["placements"] = [{}, {}]
+    config = ExperimentConfig.model_validate(config)
+    plan = build_cloud_launch_plan(config)
+    provisioner = MagicMock()
+    provisioner.list_workers.return_value = [
+        GceWorkerRecord(
+            name="crsbench-exp-cloud-42-work-001",
+            instance_id="1001",
+            status="RUNNING",
+            zone="us-east5-b",
+            labels={
+                "crsbench-experiment": "exp-cloud-42",
+                "crsbench-role": "worker",
+            },
+        ),
+        GceWorkerRecord(
+            name="crsbench-exp-cloud-42-work-002",
+            instance_id="1002",
+            status="RUNNING",
+            zone="us-east5-b",
+            labels={
+                "crsbench-experiment": "exp-cloud-42",
+                "crsbench-role": "worker",
+            },
+        ),
+    ]
+    adapter = GceProviderAdapter(provisioner=provisioner)
+
+    workers = adapter.list_workers(plan=plan)
+
+    assert [(worker.zone, worker.name) for worker in workers] == [
+        ("us-east5-b", "crsbench-exp-cloud-42-work-001"),
+        ("us-east5-b", "crsbench-exp-cloud-42-work-002"),
+    ]
 
 
 def test_google_compute_client_accepts_extended_operation_objects() -> None:

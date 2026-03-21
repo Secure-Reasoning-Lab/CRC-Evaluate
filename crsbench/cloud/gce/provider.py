@@ -623,15 +623,14 @@ class GceProviderAdapter:
 
     def list_workers(self, *, plan: CloudLaunchPlan) -> list["GceWorkerRecord"]:
         """List workers across all placements in a provider-neutral launch plan."""
-        workers: list[GceWorkerRecord] = []
+        workers: dict[tuple[str, str], GceWorkerRecord] = {}
         for fleet in self.build_worker_fleets(plan):
-            workers.extend(
-                self._provisioner.list_workers(
-                    experiment_name=plan.experiment_name,
-                    fleet=fleet,
-                )
-            )
-        return workers
+            for worker in self._provisioner.list_workers(
+                experiment_name=plan.experiment_name,
+                fleet=fleet,
+            ):
+                workers[(worker.zone, worker.name)] = worker
+        return list(workers.values())
 
     def list_orchestrators(self, *, plan: CloudLaunchPlan) -> list["GceWorkerRecord"]:
         """List orchestrators belonging to a provider-neutral launch plan."""
@@ -692,15 +691,14 @@ class GceProviderAdapter:
 
     def list_evaluators(self, *, plan: CloudLaunchPlan) -> list["GceWorkerRecord"]:
         """List evaluators across all placements in a provider-neutral launch plan."""
-        evaluators: list[GceWorkerRecord] = []
+        evaluators: dict[tuple[str, str], GceWorkerRecord] = {}
         for fleet in self.build_evaluator_fleets(plan):
-            evaluators.extend(
-                self._provisioner.list_evaluators(
-                    experiment_name=plan.experiment_name,
-                    fleet=fleet,
-                )
-            )
-        return evaluators
+            for evaluator in self._provisioner.list_evaluators(
+                experiment_name=plan.experiment_name,
+                fleet=fleet,
+            ):
+                evaluators[(evaluator.zone, evaluator.name)] = evaluator
+        return list(evaluators.values())
 
     def delete_evaluators(self, *, plan: CloudLaunchPlan) -> list["GceWorkerRecord"]:
         """Delete evaluators across all placements in a provider-neutral launch plan."""

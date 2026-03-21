@@ -120,13 +120,13 @@ def list_live_instances(
                     fleet=adapter.worker_fleet_from_cloud_placement_record(fleet),
                 )
             )
-        return workers
+        return _dedupe_instances(workers)
 
     if context.launch_plan is not None:
         workers = adapter.list_workers(plan=context.launch_plan)
         if context.evaluator_fleet_configs:
             workers.extend(adapter.list_evaluators(plan=context.launch_plan))
-        return workers
+        return _dedupe_instances(workers)
 
     workers = []
     for fleet in context.worker_fleet_configs:
@@ -143,7 +143,7 @@ def list_live_instances(
                 fleet=adapter.worker_fleet_from_cloud_placement_record(fleet),
             )
         )
-    return workers
+    return _dedupe_instances(workers)
 
 
 def resolve_instance_fleet(
@@ -237,3 +237,13 @@ def _fleet_targets_zone(fleet, zone: str) -> bool:
     if getattr(fleet, "zones", None):
         return zone in fleet.zones
     return fleet.zone == zone
+
+
+def _dedupe_instances(
+    instances: list[CloudInstanceLike],
+) -> list[CloudInstanceLike]:
+    deduped: dict[tuple[str, str, str], CloudInstanceLike] = {}
+    for instance in instances:
+        role = instance.labels.get("crsbench-role", "worker")
+        deduped[(role, instance.zone, instance.name)] = instance
+    return list(deduped.values())

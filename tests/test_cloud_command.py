@@ -2845,6 +2845,35 @@ def test_collect_list_live_instances_prefers_persisted_fleets_when_launch_state_
     assert provisioner.list_workers.call_count == 2
 
 
+def test_collect_list_live_instances_deduplicates_overlapping_persisted_fleets():
+    from crsbench.cloud.cli._collect import _list_live_instances
+
+    launch_state = _make_provider_neutral_launch_state()
+    context = MagicMock()
+    context.launch_state = launch_state
+    context.launch_plan = MagicMock(experiment_name="test-exp")
+    context.worker_fleet_configs = launch_state.worker_fleet_configs
+    context.evaluator_fleet_configs = []
+
+    repeated_workers = [
+        _make_gce_worker("crsbench-test-exp-work-001", zone="us-east5-b"),
+        _make_gce_worker("crsbench-test-exp-work-002", zone="us-east5-b"),
+    ]
+    provisioner = MagicMock()
+    provisioner.list_workers.side_effect = [
+        repeated_workers,
+        repeated_workers,
+    ]
+
+    workers = _list_live_instances(context, "test-exp", provisioner)
+
+    assert [worker.name for worker in workers] == [
+        "crsbench-test-exp-work-001",
+        "crsbench-test-exp-work-002",
+    ]
+    assert provisioner.list_workers.call_count == 2
+
+
 def test_collect_resolves_fallback_worker_fleet_by_stable_name_index():
     from crsbench.cloud.cli._collect import _resolve_instance_fleet
 
