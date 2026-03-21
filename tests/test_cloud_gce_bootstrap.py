@@ -743,6 +743,32 @@ def test_startup_script_waits_for_redis_before_starting_worker_service():
     assert "Timed out waiting for Redis" in script
 
 
+def test_startup_script_mirrors_worker_and_evaluator_logs_to_role_file():
+    """Worker/evaluator launchers should tee stdout/stderr into a role-specific log file."""
+    from crsbench.cloud.gce.metadata import (
+        load_evaluator_startup_script,
+        load_startup_script,
+    )
+
+    worker_script = load_startup_script()
+    evaluator_script = load_evaluator_startup_script()
+
+    assert 'LOG_PATH="${STATE_DIR}/${CRSBENCH_STARTUP_MODE}.log"' in worker_script
+    assert 'write_env_var "LOG_PATH" "${LOG_PATH}"' in worker_script
+    assert 'exec > >(tee -a "${LOG_PATH}") 2>&1' in worker_script
+    assert 'touch "${LOG_PATH}"' in worker_script
+    assert (
+        'chown "${CRSBENCH_USER}:${CRSBENCH_USER}" "${PAYLOAD_PATH}" "${ENV_PATH}" "${LAUNCHER_PATH}" "${LOG_PATH}"'
+        in worker_script
+    )
+    assert (
+        'CRSBENCH_STARTUP_MODE="${CRSBENCH_STARTUP_MODE:-evaluator}"'
+        in evaluator_script
+    )
+    assert 'LOG_PATH="${STATE_DIR}/${CRSBENCH_STARTUP_MODE}.log"' in evaluator_script
+    assert 'exec > >(tee -a "${LOG_PATH}") 2>&1' in evaluator_script
+
+
 def test_wait_for_redis_fails_fast_on_fatal_probe_error(tmp_path):
     """Launcher should stop immediately on fatal Redis auth/config probe failures."""
     from crsbench.cloud.gce.metadata import load_startup_script

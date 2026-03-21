@@ -15,6 +15,7 @@ STATE_DIR="${CRSBENCH_STATE_DIR:-/var/lib/crsbench}"
 PAYLOAD_PATH="${STATE_DIR}/bootstrap.json"
 LAUNCHER_PATH="${STATE_DIR}/launch-worker.sh"
 ENV_PATH="${STATE_DIR}/worker.env"
+LOG_PATH="${STATE_DIR}/${CRSBENCH_STARTUP_MODE}.log"
 EXPERIMENT_CONFIG_PATH="${STATE_DIR}/experiment-config.yaml"
 CLONE_DIR="${CRSBENCH_CLONE_DIR:-/opt/crsbench}"
 DOCKER_DAEMON_CONFIG_PATH="${CRSBENCH_DOCKER_DAEMON_CONFIG_PATH:-/etc/docker/daemon.json}"
@@ -903,6 +904,7 @@ fi
 if [[ -n "${VENV_BIN:-}" ]]; then
   write_env_var "PATH" "${VENV_BIN}:${CRSBENCH_USER_HOME}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 fi
+write_env_var "LOG_PATH" "${LOG_PATH}"
 
 cat > "${LAUNCHER_PATH}" <<'EOF'
 #!/usr/bin/env bash
@@ -914,6 +916,8 @@ CRSBENCH_ENV_PATH="__CRSBENCH_ENV_PATH__"
 set -a
 source "${CRSBENCH_ENV_PATH}"
 set +a
+
+exec > >(tee -a "${LOG_PATH}") 2>&1
 
 report_bootstrap_failure() {
   local evidence="$1"
@@ -1072,10 +1076,11 @@ launcher_path.write_text(
 )
 PY
 chmod +x "${LAUNCHER_PATH}"
+touch "${LOG_PATH}"
 if [[ "${CRSBENCH_STARTUP_MODE}" == "evaluator" ]]; then
-  chown "${CRSBENCH_USER}:${CRSBENCH_USER}" "${PAYLOAD_PATH}" "${ENV_PATH}" "${LAUNCHER_PATH}" "${EXPERIMENT_CONFIG_PATH}"
+  chown "${CRSBENCH_USER}:${CRSBENCH_USER}" "${PAYLOAD_PATH}" "${ENV_PATH}" "${LAUNCHER_PATH}" "${LOG_PATH}" "${EXPERIMENT_CONFIG_PATH}"
 else
-  chown "${CRSBENCH_USER}:${CRSBENCH_USER}" "${PAYLOAD_PATH}" "${ENV_PATH}" "${LAUNCHER_PATH}"
+  chown "${CRSBENCH_USER}:${CRSBENCH_USER}" "${PAYLOAD_PATH}" "${ENV_PATH}" "${LAUNCHER_PATH}" "${LOG_PATH}"
 fi
 
 SERVICE_DESCRIPTION="CRSBench worker service"

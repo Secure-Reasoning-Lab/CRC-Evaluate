@@ -858,6 +858,11 @@ sudo -iu crsbench env \
   journalctl --user -u crsbench-worker.service -f
 ```
 
+The worker and evaluator launchers also mirror stdout/stderr into role-specific
+files under `/var/lib/crsbench/`, so you can inspect `/var/lib/crsbench/worker.log`
+or `/var/lib/crsbench/evaluator.log` directly on the VM. The remote orchestrator
+continues to mirror into `/var/lib/crsbench/orchestrator.log`.
+
 During bootstrap, both orchestrator and worker VMs normalize the host timezone
 to `CRSBENCH_TIMEZONE` (default `America/New_York`) and configure Docker to use
 the `cgroupfs` driver expected by `oss-crs`. On Ubuntu-based GCE images, CRSBench now installs
