@@ -2261,6 +2261,7 @@ class TestLaunch:
         mock_load_state.assert_called_once_with(Path("/tmp/config.yaml"), "test-exp")
         mock_adapter.create_orchestrator.assert_not_called()
         mock_adapter.create_workers.assert_not_called()
+        mock_adapter.create_evaluators.assert_not_called()
 
     @patch("crsbench.cloud.launch_checks.load_launch_state", return_value=None)
     @patch("crsbench.cloud.cli._launch.prepare_launch_inputs")
@@ -2309,6 +2310,7 @@ class TestLaunch:
         mock_adapter.list_orchestrators.assert_called_once_with(plan=resolved_plan)
         mock_adapter.create_orchestrator.assert_not_called()
         mock_adapter.create_workers.assert_not_called()
+        mock_adapter.create_evaluators.assert_not_called()
 
     @patch(
         "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
