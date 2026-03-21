@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from crsbench.cloud.gce.provisioner import GceProvisioner
 from crsbench.cloud.readiness import (
@@ -13,17 +13,36 @@ from crsbench.cloud.readiness import (
     CloudWorkerState,
     CloudWorkerStatus,
 )
-from crsbench.cloud.types import CloudProviderInstanceStatus, coerce_gce_provider_status
+from crsbench.cloud.records import CloudInstanceRecord
+from crsbench.cloud.types import (
+    CloudProvider,
+    CloudProviderInstanceStatus,
+    coerce_cloud_provider,
+    coerce_gce_provider_status,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
+    from typing import Protocol
 
     from crsbench.cloud.bootstrap import CloudVmBootstrapInputs
-    from crsbench.cloud.gce.models import GceWorkerRecord
     from crsbench.cloud.gce.provider import GceProviderAdapter
     from crsbench.cloud.models import CloudLaunchPlan
     from crsbench.distributed.registry import RuntimeRegistration
     from crsbench.validation.schemas import GceWorkerFleetConfig
+
+    class CloudInstanceLike(Protocol):
+        name: str
+        instance_id: str
+        status: str
+        project: str | None
+        zone: str | None
+        internal_ip: str | None
+        external_ip: str | None
+        ssh_via_iap: bool
+        labels: dict[str, str]
+        provider_metadata: dict[str, object]
+        provider: CloudProvider
 
 
 class CloudFleetBringupError(RuntimeError):
@@ -60,11 +79,12 @@ class CloudFleetStatusManager:
         self,
         *,
         experiment_name: str,
-        workers: list[GceWorkerRecord],
+        workers: Sequence[object],
         timeout_sec: int,
     ) -> CloudFleetSnapshot:
         """Wait until all expected workers report `ready` in the readiness store."""
-        expected_instance_ids = [worker.instance_id for worker in workers]
+        normalized_workers = _normalize_cloud_instances(workers)
+        expected_instance_ids = [worker.instance_id for worker in normalized_workers]
         deadline = self._clock() + timeout_sec
 
         while True:
@@ -113,32 +133,37 @@ class CloudFleetStatusManager:
                 CloudInstanceRole.EVALUATOR,
             ),
         )
-        workers: list[GceWorkerRecord] = []
-        evaluators: list[GceWorkerRecord] = []
+        workers: list[CloudInstanceRecord] = []
+        evaluators: list[CloudInstanceRecord] = []
         try:
-            workers = adapter.create_workers(
-                plan=plan,
-                redis_host=redis_host,
-                redis_password=redis_password,
-                registration=registration,
-                bootstrap_inputs=bootstrap_inputs,
-                env_passthrough_by_placement=worker_env_passthrough_by_placement,
+            workers = _normalize_cloud_instances(
+                adapter.create_workers(
+                    plan=plan,
+                    redis_host=redis_host,
+                    redis_password=redis_password,
+                    registration=registration,
+                    bootstrap_inputs=bootstrap_inputs,
+                    env_passthrough_by_placement=worker_env_passthrough_by_placement,
+                )
             )
             if plan.evaluator_placements:
                 if evaluator_experiment_config is None:
                     raise ValueError(
                         "Evaluator placements require serialized experiment config"
                     )
-                evaluators = adapter.create_evaluators(
-                    plan=plan,
-                    redis_host=redis_host,
-                    redis_password=redis_password,
-                    registration=registration,
-                    experiment_config_path=evaluator_experiment_config,
-                    bootstrap_inputs=bootstrap_inputs,
-                    env_passthrough_by_placement=(
-                        evaluator_env_passthrough_by_placement
+                evaluators = _normalize_cloud_instances(
+                    adapter.create_evaluators(
+                        plan=plan,
+                        redis_host=redis_host,
+                        redis_password=redis_password,
+                        registration=registration,
+                        experiment_config_path=evaluator_experiment_config,
+                        bootstrap_inputs=bootstrap_inputs,
+                        env_passthrough_by_placement=(
+                            evaluator_env_passthrough_by_placement
+                        ),
                     ),
+                    role=CloudInstanceRole.EVALUATOR,
                 )
 
             self._record_initial_workers(
@@ -193,8 +218,11 @@ class CloudFleetStatusManager:
 
         deadline = self._clock() + timeout_sec
         while True:
-            workers = adapter.list_workers(plan=plan)
-            evaluators = adapter.list_evaluators(plan=plan)
+            workers = _normalize_cloud_instances(adapter.list_workers(plan=plan))
+            evaluators = _normalize_cloud_instances(
+                adapter.list_evaluators(plan=plan),
+                role=CloudInstanceRole.EVALUATOR,
+            )
             workers_by_name = {worker.name: worker for worker in workers}
             evaluators_by_name = {worker.name: worker for worker in evaluators}
             missing_names = [
@@ -239,7 +267,7 @@ class CloudFleetStatusManager:
                 )
             self._sleep(self._poll_interval_sec)
 
-    def _initial_state(self, worker: GceWorkerRecord) -> CloudWorkerState:
+    def _initial_state(self, worker: CloudInstanceRecord) -> CloudWorkerState:
         provider_status = coerce_gce_provider_status(worker.status)
         if provider_status is CloudProviderInstanceStatus.RUNNING:
             return CloudWorkerState.BOOTING
@@ -249,7 +277,7 @@ class CloudFleetStatusManager:
         self,
         *,
         experiment_name: str,
-        workers: list[GceWorkerRecord],
+        workers: list[CloudInstanceRecord],
         role: CloudInstanceRole = CloudInstanceRole.WORKER,
     ) -> None:
         for worker in workers:
@@ -268,7 +296,7 @@ class CloudFleetStatusManager:
                     experiment_name=experiment_name,
                     instance_id=worker.instance_id,
                     instance_name=worker.name,
-                    zone=worker.zone,
+                    zone=_required_zone(worker),
                     state=self._initial_state(worker),
                     role=role,
                     provider_status=provider_status,
@@ -308,7 +336,7 @@ class CloudFleetStatusManager:
         *,
         experiment_name: str,
         fleet: GceWorkerFleetConfig,
-        workers: list[GceWorkerRecord],
+        workers: list[CloudInstanceRecord],
     ) -> None:
         for worker in workers:
             provider_status = coerce_gce_provider_status(worker.status)
@@ -317,7 +345,7 @@ class CloudFleetStatusManager:
                     experiment_name=experiment_name,
                     instance_id=worker.instance_id,
                     instance_name=worker.name,
-                    zone=worker.zone,
+                    zone=_required_zone(worker),
                     state=CloudWorkerState.DELETING,
                     provider_status=provider_status,
                     internal_ip=worker.internal_ip,
@@ -327,9 +355,11 @@ class CloudFleetStatusManager:
             )
 
         try:
-            deleted_workers = self._provisioner.delete_workers(
-                experiment_name=experiment_name,
-                fleet=fleet,
+            deleted_workers = _normalize_cloud_instances(
+                self._provisioner.delete_workers(
+                    experiment_name=experiment_name,
+                    fleet=fleet,
+                )
             )
         except Exception:
             return
@@ -340,7 +370,7 @@ class CloudFleetStatusManager:
                     experiment_name=experiment_name,
                     instance_id=worker.instance_id,
                     instance_name=worker.name,
-                    zone=worker.zone,
+                    zone=_required_zone(worker),
                     state=CloudWorkerState.DELETED,
                     provider_status=provider_status,
                     internal_ip=worker.internal_ip,
@@ -362,15 +392,17 @@ class CloudFleetStatusManager:
     ) -> CloudFleetSnapshot:
         """Provision workers across all placements in a launch plan and wait for readiness."""
         self._readiness_store.clear_experiment(plan.experiment_name)
-        workers: list[GceWorkerRecord] = []
+        workers: list[CloudInstanceRecord] = []
         try:
-            workers = adapter.create_workers(
-                plan=plan,
-                redis_host=redis_host,
-                redis_password=redis_password,
-                registration=registration,
-                bootstrap_inputs=bootstrap_inputs,
-                env_passthrough_by_placement=env_passthrough_by_placement,
+            workers = _normalize_cloud_instances(
+                adapter.create_workers(
+                    plan=plan,
+                    redis_host=redis_host,
+                    redis_password=redis_password,
+                    registration=registration,
+                    bootstrap_inputs=bootstrap_inputs,
+                    env_passthrough_by_placement=env_passthrough_by_placement,
+                )
             )
             self._record_initial_workers(
                 experiment_name=plan.experiment_name,
@@ -405,7 +437,7 @@ class CloudFleetStatusManager:
 
         deadline = self._clock() + timeout_sec
         while True:
-            workers = adapter.list_workers(plan=plan)
+            workers = _normalize_cloud_instances(adapter.list_workers(plan=plan))
             workers_by_name = {worker.name: worker for worker in workers}
             missing_names = [
                 worker_name
@@ -461,8 +493,8 @@ class CloudFleetStatusManager:
         self,
         *,
         experiment_name: str,
-        workers: list["GceWorkerRecord"],
-        evaluators: list["GceWorkerRecord"],
+        workers: list[CloudInstanceRecord],
+        evaluators: list[CloudInstanceRecord],
         timeout_sec: int,
     ) -> CloudFleetSnapshot:
         """Wait until all expected workers and evaluators report `ready`."""
@@ -501,7 +533,7 @@ class CloudFleetStatusManager:
         self,
         *,
         experiment_name: str,
-        workers_by_role: dict[CloudInstanceRole, list["GceWorkerRecord"]],
+        workers_by_role: dict[CloudInstanceRole, list[CloudInstanceRecord]],
     ) -> CloudFleetSnapshot:
         expected_instance_ids: list[str] = []
         ready_workers: list[CloudWorkerStatus] = []
@@ -567,7 +599,7 @@ class CloudFleetStatusManager:
         *,
         plan: "CloudLaunchPlan",
         adapter: "GceProviderAdapter",
-        workers: list[GceWorkerRecord],
+        workers: list[CloudInstanceRecord],
     ) -> None:
         for worker in workers:
             provider_status = coerce_gce_provider_status(worker.status)
@@ -576,7 +608,7 @@ class CloudFleetStatusManager:
                     experiment_name=plan.experiment_name,
                     instance_id=worker.instance_id,
                     instance_name=worker.name,
-                    zone=worker.zone,
+                    zone=_required_zone(worker),
                     state=CloudWorkerState.DELETING,
                     provider_status=provider_status,
                     internal_ip=worker.internal_ip,
@@ -586,7 +618,9 @@ class CloudFleetStatusManager:
             )
 
         try:
-            deleted_workers = adapter.delete_workers(plan=plan)
+            deleted_workers = _normalize_cloud_instances(
+                adapter.delete_workers(plan=plan)
+            )
         except Exception:
             return
         for worker in deleted_workers:
@@ -596,7 +630,7 @@ class CloudFleetStatusManager:
                     experiment_name=plan.experiment_name,
                     instance_id=worker.instance_id,
                     instance_name=worker.name,
-                    zone=worker.zone,
+                    zone=_required_zone(worker),
                     state=CloudWorkerState.DELETED,
                     provider_status=provider_status,
                     internal_ip=worker.internal_ip,
@@ -610,8 +644,8 @@ class CloudFleetStatusManager:
         *,
         plan: "CloudLaunchPlan",
         adapter: "GceProviderAdapter",
-        workers: list["GceWorkerRecord"],
-        evaluators: list["GceWorkerRecord"],
+        workers: list[CloudInstanceRecord],
+        evaluators: list[CloudInstanceRecord],
     ) -> None:
         for worker in workers:
             provider_status = coerce_gce_provider_status(worker.status)
@@ -620,7 +654,7 @@ class CloudFleetStatusManager:
                     experiment_name=plan.experiment_name,
                     instance_id=worker.instance_id,
                     instance_name=worker.name,
-                    zone=worker.zone,
+                    zone=_required_zone(worker),
                     state=CloudWorkerState.DELETING,
                     role=CloudInstanceRole.WORKER,
                     provider_status=provider_status,
@@ -636,7 +670,7 @@ class CloudFleetStatusManager:
                     experiment_name=plan.experiment_name,
                     instance_id=evaluator.instance_id,
                     instance_name=evaluator.name,
-                    zone=evaluator.zone,
+                    zone=_required_zone(evaluator),
                     state=CloudWorkerState.DELETING,
                     role=CloudInstanceRole.EVALUATOR,
                     provider_status=provider_status,
@@ -647,11 +681,16 @@ class CloudFleetStatusManager:
             )
 
         try:
-            deleted_workers = adapter.delete_workers(plan=plan)
+            deleted_workers = _normalize_cloud_instances(
+                adapter.delete_workers(plan=plan)
+            )
         except Exception:
             deleted_workers = []
         try:
-            deleted_evaluators = adapter.delete_evaluators(plan=plan)
+            deleted_evaluators = _normalize_cloud_instances(
+                adapter.delete_evaluators(plan=plan),
+                role=CloudInstanceRole.EVALUATOR,
+            )
         except Exception:
             deleted_evaluators = []
 
@@ -662,7 +701,7 @@ class CloudFleetStatusManager:
                     experiment_name=plan.experiment_name,
                     instance_id=worker.instance_id,
                     instance_name=worker.name,
-                    zone=worker.zone,
+                    zone=_required_zone(worker),
                     state=CloudWorkerState.DELETED,
                     role=CloudInstanceRole.WORKER,
                     provider_status=provider_status,
@@ -678,7 +717,7 @@ class CloudFleetStatusManager:
                     experiment_name=plan.experiment_name,
                     instance_id=evaluator.instance_id,
                     instance_name=evaluator.name,
-                    zone=evaluator.zone,
+                    zone=_required_zone(evaluator),
                     state=CloudWorkerState.DELETED,
                     role=CloudInstanceRole.EVALUATOR,
                     provider_status=provider_status,
@@ -687,3 +726,63 @@ class CloudFleetStatusManager:
                     detail="Deleted after failed bring-up",
                 )
             )
+
+
+def _normalize_cloud_instances(
+    instances: Sequence[object],
+    *,
+    role: CloudInstanceRole = CloudInstanceRole.WORKER,
+) -> list[CloudInstanceRecord]:
+    """Coerce provider-specific instance objects into shared cloud records."""
+    normalized: list[CloudInstanceRecord] = []
+    for instance in instances:
+        if isinstance(instance, CloudInstanceRecord):
+            if instance.role != role.value:
+                normalized.append(instance.model_copy(update={"role": role.value}))
+            else:
+                normalized.append(instance)
+            continue
+        provider_instance = cast("CloudInstanceLike", instance)
+        labels = dict(getattr(instance, "labels", {}) or {})
+        normalized.append(
+            CloudInstanceRecord(
+                provider=coerce_cloud_provider(
+                    _optional_instance_attr(
+                        provider_instance, "provider", CloudProvider.GCE
+                    )
+                ),
+                role=str(labels.get("crsbench-role", role.value)),
+                name=str(provider_instance.name),
+                instance_id=str(provider_instance.instance_id),
+                status=str(provider_instance.status),
+                project=_optional_instance_attr(provider_instance, "project"),
+                zone=provider_instance.zone,
+                internal_ip=provider_instance.internal_ip,
+                external_ip=provider_instance.external_ip,
+                ssh_via_iap=bool(
+                    _optional_instance_attr(
+                        provider_instance,
+                        "ssh_via_iap",
+                        default=False,
+                    )
+                ),
+                labels=labels,
+                provider_metadata=dict(
+                    _optional_instance_attr(provider_instance, "provider_metadata", {})
+                    or {}
+                ),
+            )
+        )
+    return normalized
+
+
+def _required_zone(instance: CloudInstanceRecord) -> str:
+    """Return a non-empty zone for readiness/status bookkeeping."""
+    if instance.zone is None or not str(instance.zone).strip():
+        raise ValueError(f"Cloud instance {instance.name} is missing a zone")
+    return instance.zone
+
+
+def _optional_instance_attr(instance: object, name: str, default=None):
+    """Read an optional provider-specific field without requiring every adapter shape."""
+    return getattr(instance, name, default)

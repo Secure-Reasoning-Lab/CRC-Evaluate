@@ -7,7 +7,12 @@ from types import SimpleNamespace
 
 import pytest
 from crsbench.cloud.gce.models import GceWorkerRecord
-from crsbench.cloud.types import CloudProviderInstanceStatus, coerce_gce_provider_status
+from crsbench.cloud.records import CloudInstanceRecord
+from crsbench.cloud.types import (
+    CloudProvider,
+    CloudProviderInstanceStatus,
+    coerce_gce_provider_status,
+)
 
 
 class _FakeRedis:
@@ -38,6 +43,19 @@ def _make_worker() -> GceWorkerRecord:
         service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
         labels={"crsbench-experiment": "exp-cloud-42", "owner": "team-crs"},
         raw={},
+    )
+
+
+def _make_cloud_instance(*, role: str = "worker") -> CloudInstanceRecord:
+    return CloudInstanceRecord(
+        provider=CloudProvider.GCE,
+        role=role,
+        name="gce-worker-001",
+        instance_id="1001",
+        status="RUNNING",
+        zone="us-central1-a",
+        internal_ip="10.0.0.10",
+        labels={"crsbench-experiment": "exp-cloud-42", "owner": "team-crs"},
     )
 
 
@@ -218,6 +236,44 @@ def test_wait_for_gce_workers_surfaces_startup_failure_evidence() -> None:
             workers=[_make_worker()],
             timeout_sec=900,
         )
+
+
+def test_wait_for_gce_workers_accepts_neutral_cloud_instance_records() -> None:
+    """Shared readiness gating should not require provider-specific worker models."""
+    from crsbench.cloud.readiness import (
+        CloudReadinessStore,
+        CloudWorkerState,
+        CloudWorkerStatus,
+    )
+    from crsbench.cloud.status import CloudFleetStatusManager
+
+    store = CloudReadinessStore(_FakeRedis())
+    store.record(
+        CloudWorkerStatus(
+            experiment_name="exp-cloud-42",
+            instance_id="1001",
+            instance_name="gce-worker-001",
+            zone="us-central1-a",
+            state=CloudWorkerState.READY,
+            provider_status=CloudProviderInstanceStatus.RUNNING,
+        )
+    )
+
+    manager = CloudFleetStatusManager(
+        readiness_store=store,
+        provisioner=None,
+        clock=lambda: 0.0,
+        sleep=lambda _seconds: None,
+        poll_interval_sec=0.0,
+    )
+
+    snapshot = manager.wait_for_gce_workers(
+        experiment_name="exp-cloud-42",
+        workers=[_make_cloud_instance()],
+        timeout_sec=900,
+    )
+
+    assert snapshot.ready_count == 1
 
 
 def test_bring_up_workers_deletes_all_provider_neutral_placements_after_timeout() -> (
