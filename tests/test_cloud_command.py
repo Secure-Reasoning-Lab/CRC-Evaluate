@@ -1733,6 +1733,26 @@ class TestArgParsing:
         assert args.cloud_command == "launch"
         assert args.config == "c.yaml"
 
+    def test_parse_preflight(self):
+        parser = self._build_parser()
+        args = parser.parse_args(["cloud", "preflight", "--config", "c.yaml"])
+        assert args.command == "cloud"
+        assert args.cloud_command == "preflight"
+        assert args.config == "c.yaml"
+        assert args.json_output is False
+        assert args.strict is False
+
+    def test_parse_preflight_json_strict(self):
+        parser = self._build_parser()
+        args = parser.parse_args(
+            ["cloud", "preflight", "--config", "c.yaml", "--json", "--strict"]
+        )
+        assert args.command == "cloud"
+        assert args.cloud_command == "preflight"
+        assert args.config == "c.yaml"
+        assert args.json_output is True
+        assert args.strict is True
+
     def test_parse_monitor(self):
         parser = self._build_parser()
         args = parser.parse_args(["cloud", "monitor", "my-exp", "--config", "c.yaml"])
@@ -1843,6 +1863,20 @@ def _make_launch_args(config: str = "/tmp/config.yaml"):
     return argparse.Namespace(
         config=config,
         cloud_command="launch",
+    )
+
+
+def _make_preflight_args(
+    config: str = "/tmp/config.yaml",
+    *,
+    json_output: bool = False,
+    strict: bool = False,
+):
+    return argparse.Namespace(
+        config=config,
+        json_output=json_output,
+        strict=strict,
+        cloud_command="preflight",
     )
 
 
@@ -3037,6 +3071,195 @@ def test_teardown_resolves_fallback_worker_fleet_by_stable_name_index():
     fleet = _resolve_instance_fleet(context, worker)
 
     assert fleet.name_start_index == 3
+
+
+class TestPreflight:
+    """Tests for run_preflight() orchestration."""
+
+    def _make_config_without_remote_root(self) -> ExperimentConfig:
+        config = _make_provider_neutral_experiment_config()
+        assert config.cloud is not None
+        assert config.cloud.remote is not None
+        config = config.model_copy(deep=True)
+        config.cloud.remote.experiment_root = None
+        return config
+
+    @patch("crsbench.cloud.cli._preflight.run_preflight", return_value=0)
+    def test_preflight_dispatches_through_run_cloud(self, mock_run_preflight):
+        from crsbench.cloud.cli.cloud_command import run_cloud
+
+        rc = run_cloud(_make_preflight_args())
+
+        assert rc == 0
+        mock_run_preflight.assert_called_once()
+
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_preflight_ready_path_reports_summary(
+        self,
+        mock_load_config,
+        capsys,
+    ):
+        mock_load_config.return_value = _make_provider_neutral_experiment_config()
+
+        from crsbench.cloud.cli._preflight import run_preflight
+
+        rc = run_preflight(_make_preflight_args())
+
+        assert rc == 0
+        output = capsys.readouterr().out.lower()
+        assert "test-exp" in output
+        assert "gce" in output
+        assert "verdict" in output
+
+    @patch("crsbench.cloud.cli._config_reconnect.save_launch_state")
+    @patch("crsbench.cloud.cli._config_reconnect.load_launch_state", return_value=None)
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_preflight_json_shape_excludes_warning_and_error_top_level_keys(
+        self,
+        mock_load_config,
+        mock_load_launch_state,
+        mock_save_launch_state,
+        capsys,
+    ):
+        del mock_load_launch_state
+        mock_load_config.return_value = _make_provider_neutral_experiment_config()
+
+        from crsbench.cloud.cli._preflight import run_preflight
+
+        rc = run_preflight(_make_preflight_args(json_output=True))
+
+        assert rc == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["schema_version"] == 1
+        assert payload["provider"] == "gce"
+        assert "verdict" in payload
+        assert "checks" in payload
+        assert "warnings" not in payload
+        assert "errors" not in payload
+        mock_save_launch_state.assert_not_called()
+
+    @patch("crsbench.cloud.cli._config_reconnect.save_launch_state")
+    @patch("crsbench.cloud.cli._config_reconnect.load_launch_state")
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_preflight_blocks_duplicate_saved_launch_state(
+        self,
+        mock_load_config,
+        mock_load_launch_state,
+        mock_save_launch_state,
+    ):
+        mock_load_config.return_value = _make_provider_neutral_experiment_config()
+        mock_load_launch_state.return_value = _make_launch_state()
+
+        from crsbench.cloud.cli._preflight import run_preflight
+
+        rc = run_preflight(_make_preflight_args())
+
+        assert rc == 1
+        mock_save_launch_state.assert_not_called()
+
+    @patch("crsbench.cloud.cli._config_reconnect.save_launch_state")
+    @patch("crsbench.cloud.cli._config_reconnect.load_launch_state", return_value=None)
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_preflight_blocks_duplicate_live_instances(
+        self,
+        mock_load_config,
+        mock_load_launch_state,
+        mock_save_launch_state,
+    ):
+        del mock_load_launch_state
+        mock_load_config.return_value = _make_provider_neutral_experiment_config()
+
+        from crsbench.cloud.cli._preflight import run_preflight
+
+        rc = run_preflight(_make_preflight_args())
+
+        assert rc == 1
+        mock_save_launch_state.assert_not_called()
+
+    @patch("crsbench.cloud.cli._config_reconnect.save_launch_state")
+    @patch("crsbench.cloud.cli._config_reconnect.load_launch_state", return_value=None)
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_preflight_blocks_quota_validation_failure(
+        self,
+        mock_load_config,
+        mock_load_launch_state,
+        mock_save_launch_state,
+    ):
+        del mock_load_launch_state
+        mock_load_config.return_value = _make_provider_neutral_experiment_config()
+
+        from crsbench.cloud.cli._preflight import run_preflight
+
+        rc = run_preflight(_make_preflight_args())
+
+        assert rc == 1
+        mock_save_launch_state.assert_not_called()
+
+    @patch("crsbench.cloud.cli._config_reconnect.save_launch_state")
+    @patch("crsbench.cloud.cli._config_reconnect.load_launch_state", return_value=None)
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_preflight_warns_on_legacy_remote_path_fallback(
+        self,
+        mock_load_config,
+        mock_load_launch_state,
+        mock_save_launch_state,
+        capsys,
+    ):
+        del mock_load_launch_state
+        mock_load_config.return_value = self._make_config_without_remote_root()
+
+        from crsbench.cloud.cli._preflight import run_preflight
+
+        rc = run_preflight(_make_preflight_args())
+
+        assert rc == 0
+        output = capsys.readouterr().out.lower()
+        assert "warning" in output
+        assert "remote" in output
+        assert "fallback" in output
+        mock_save_launch_state.assert_not_called()
+
+    @patch("crsbench.cloud.cli._config_reconnect.save_launch_state")
+    @patch("crsbench.cloud.cli._config_reconnect.load_launch_state", return_value=None)
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_preflight_strict_upgrades_warning_to_block(
+        self,
+        mock_load_config,
+        mock_load_launch_state,
+        mock_save_launch_state,
+        capsys,
+    ):
+        del mock_load_launch_state
+        mock_load_config.return_value = self._make_config_without_remote_root()
+
+        from crsbench.cloud.cli._preflight import run_preflight
+
+        rc = run_preflight(_make_preflight_args(strict=True))
+
+        assert rc == 1
+        output = capsys.readouterr().out.lower()
+        assert "warning" in output
+        assert "blocked" in output
+        mock_save_launch_state.assert_not_called()
+
+    @patch("crsbench.cloud.cli._config_reconnect.save_launch_state")
+    @patch("crsbench.cloud.cli._config_reconnect.load_launch_state", return_value=None)
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_preflight_does_not_persist_launch_state(
+        self,
+        mock_load_config,
+        mock_load_launch_state,
+        mock_save_launch_state,
+    ):
+        del mock_load_launch_state
+        mock_load_config.return_value = _make_provider_neutral_experiment_config()
+
+        from crsbench.cloud.cli._preflight import run_preflight
+
+        rc = run_preflight(_make_preflight_args())
+
+        assert rc == 0
+        mock_save_launch_state.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
