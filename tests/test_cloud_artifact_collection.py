@@ -6,7 +6,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from crsbench.cloud.collection import ArtifactCollectionError, ArtifactCollector
@@ -141,6 +141,30 @@ class TestRsyncCmdIap:
         assert "--project=test-project" in cmd
         assert "--zone=us-central1-a" in cmd
         assert "--local-host-port=127.0.0.1:2222" in cmd
+
+    def test_iap_tunnel_command_delegates_to_provider_transport(self) -> None:
+        """IAP transport details should come from the provider adapter, not shared code."""
+        worker = _make_worker(zone="us-central1-a")
+        fleet = _make_fleet(ssh_via_iap=True, zone="us-central1-a")
+        transport = MagicMock()
+        transport.build_iap_tunnel_command.return_value = ["provider-tunnel"]
+
+        collector = ArtifactCollector(transport=transport)
+
+        cmd = collector._build_iap_tunnel_command(
+            worker=worker,
+            fleet=fleet,
+            local_port=2222,
+        )
+
+        assert cmd == ["provider-tunnel"]
+        transport.build_iap_tunnel_command.assert_called_once_with(
+            instance_name="gce-worker-001",
+            project="test-project",
+            zone="us-central1-a",
+            local_port=2222,
+            remote_port=22,
+        )
 
     def test_rsync_cmd_iap_uses_local_ssh_transport(self, tmp_path: Path) -> None:
         """IAP rsync should use a local ssh command against the tunneled localhost port."""

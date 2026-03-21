@@ -3540,6 +3540,44 @@ class TestSsh:
         assert rc == 130
 
 
+class TestRemoteAccess:
+    """Tests for provider-neutral remote access helpers."""
+
+    @patch("crsbench.cloud.cli._remote_access.transport_for_provider")
+    def test_build_ssh_command_delegates_to_provider_transport(
+        self,
+        mock_transport_for_provider,
+    ):
+        from crsbench.cloud.cli._instance_inventory import CloudInstanceInventoryRow
+        from crsbench.cloud.cli._remote_access import build_ssh_command
+
+        target = CloudInstanceInventoryRow(
+            alias="work-001",
+            name="crsbench-test-exp-work-001",
+            role="worker",
+            provider="gce",
+            project="test-project",
+            zone="us-east5-b",
+            region="us-east5",
+            status="RUNNING",
+            internal_ip="10.0.0.11",
+            external_ip=None,
+            ssh_via_iap=True,
+        )
+        transport = MagicMock()
+        transport.build_ssh_command.return_value = ["provider-ssh", "target"]
+        mock_transport_for_provider.return_value = transport
+
+        cmd = build_ssh_command(target, remote_command=["echo", "hi"])
+
+        assert cmd == ["provider-ssh", "target"]
+        mock_transport_for_provider.assert_called_once_with("gce")
+        transport.build_ssh_command.assert_called_once_with(
+            target,
+            remote_command=["echo", "hi"],
+        )
+
+
 class TestExec:
     """Tests for run_exec() sub-action."""
 

@@ -134,6 +134,30 @@ def test_build_iap_tunnel_command():
     assert "--local-host-port=127.0.0.1:2222" in cmd
 
 
+@patch("crsbench.cloud.orchestrator_tunnel.transport_for_provider")
+def test_build_iap_tunnel_command_delegates_to_provider_transport(
+    mock_transport_for_provider,
+):
+    launch_state = _make_launch_state(ssh_via_iap=True)
+    transport = mock_transport_for_provider.return_value
+    transport.build_iap_tunnel_command.return_value = ["provider-tunnel"]
+
+    cmd = build_iap_tunnel_command(
+        launch_state,
+        local_port=2222,
+    )
+
+    assert cmd == ["provider-tunnel"]
+    mock_transport_for_provider.assert_called_once_with(CloudProvider.GCE)
+    transport.build_iap_tunnel_command.assert_called_once_with(
+        instance_name="gce-orchestrator-test-exp",
+        project="test-project",
+        zone="us-east5-b",
+        local_port=2222,
+        remote_port="22",
+    )
+
+
 def test_tunnel_waits_for_local_port_before_returning():
     iap_process = _DummyProcess()
     process = _DummyProcess()

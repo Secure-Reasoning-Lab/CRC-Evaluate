@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from crsbench.cloud.launch_state import CloudLaunchState, cloud_state_dir
+from crsbench.cloud.transport import transport_for_provider
+from crsbench.cloud.types import CloudProvider
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -26,89 +28,37 @@ class OrchestratorTunnelError(RuntimeError):
 
 
 def resolve_direct_ssh_user(project: str) -> str:
-    """Return the local OS Login username for direct GCE SSH."""
-    result = subprocess.run(
-        [
-            "gcloud",
-            "compute",
-            "os-login",
-            "describe-profile",
-            f"--project={project}",
-            "--format=value(posixAccounts[0].username)",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    username = result.stdout.strip()
-    if not username:
-        raise OrchestratorTunnelError(
-            f"Unable to resolve OS Login username for project {project}"
+    """Return the local direct-SSH username for the active provider."""
+    try:
+        return transport_for_provider(CloudProvider.GCE).resolve_direct_ssh_user(
+            project
         )
-    return username
+    except RuntimeError as exc:
+        raise OrchestratorTunnelError(str(exc)) from exc
 
 
 def prepare_known_hosts(base_path: Path | str, remote_host: str) -> Path:
     """Seed direct-SSH host trust in a config-adjacent known_hosts file."""
     known_hosts_path = cloud_state_dir(base_path) / "known_hosts"
-    known_hosts_path.parent.mkdir(parents=True, exist_ok=True)
-    known_hosts_path.touch(exist_ok=True)
-    known_hosts_path.chmod(0o600)
-
-    subprocess.run(
-        [
-            "ssh-keygen",
-            "-R",
-            remote_host,
-            "-f",
-            str(known_hosts_path),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    keyscan = subprocess.run(
-        [
-            "ssh-keyscan",
-            "-T",
-            "5",
-            "-t",
-            "ed25519",
-            remote_host,
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    if not keyscan.stdout.strip():
-        raise OrchestratorTunnelError(
-            f"ssh-keyscan returned no host key for {remote_host}"
+    try:
+        return transport_for_provider(CloudProvider.GCE).prepare_known_hosts(
+            known_hosts_path=known_hosts_path,
+            remote_host=remote_host,
         )
-    with known_hosts_path.open("a", encoding="utf-8") as handle:
-        handle.write(keyscan.stdout)
-    return known_hosts_path
+    except RuntimeError as exc:
+        raise OrchestratorTunnelError(str(exc)) from exc
 
 
 def prepare_iap_known_hosts(base_path: Path | str, host_key_alias: str) -> Path:
     """Prepare the localhost-tunnel known_hosts file used for IAP-backed SSH."""
     known_hosts_path = cloud_state_dir(base_path) / "known_hosts_iap"
-    known_hosts_path.parent.mkdir(parents=True, exist_ok=True)
-    known_hosts_path.touch(exist_ok=True)
-    known_hosts_path.chmod(0o600)
-
-    subprocess.run(
-        [
-            "ssh-keygen",
-            "-R",
-            host_key_alias,
-            "-f",
-            str(known_hosts_path),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return known_hosts_path
+    try:
+        return transport_for_provider(CloudProvider.GCE).prepare_iap_known_hosts(
+            known_hosts_path=known_hosts_path,
+            host_key_alias=host_key_alias,
+        )
+    except RuntimeError as exc:
+        raise OrchestratorTunnelError(str(exc)) from exc
 
 
 def build_iap_tunnel_command(
@@ -116,17 +66,15 @@ def build_iap_tunnel_command(
     *,
     local_port: int,
 ) -> list[str]:
-    """Build the gcloud command that opens an IAP tunnel to remote SSH."""
-    return [
-        "gcloud",
-        "compute",
-        "start-iap-tunnel",
-        launch_state.orchestrator_name,
-        _IAP_REMOTE_SSH_PORT,
-        f"--project={launch_state.orchestrator_project}",
-        f"--zone={launch_state.orchestrator_zone}",
-        f"--local-host-port=127.0.0.1:{local_port}",
-    ]
+    """Build the provider command that opens an IAP tunnel to remote SSH."""
+    transport = transport_for_provider(launch_state.orchestrator_provider)
+    return transport.build_iap_tunnel_command(
+        instance_name=launch_state.orchestrator_name,
+        project=launch_state.orchestrator_project,
+        zone=launch_state.orchestrator_zone,
+        local_port=local_port,
+        remote_port=_IAP_REMOTE_SSH_PORT,
+    )
 
 
 def build_tunnel_command(
@@ -137,7 +85,7 @@ def build_tunnel_command(
     iap_ssh_port: int | None = None,
 ) -> list[str]:
     """Build the subprocess command used for the local Redis forward."""
-    forward = f"{local_port}:{_REMOTE_REDIS_BIND}"
+    transport = transport_for_provider(launch_state.orchestrator_provider)
 
     if launch_state.orchestrator_ssh_via_iap:
         if iap_ssh_port is None:
@@ -149,28 +97,20 @@ def build_tunnel_command(
             launch_state.orchestrator_name,
         )
         ssh_user = resolve_direct_ssh_user(launch_state.orchestrator_project)
-        cmd = [
-            "ssh",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "CheckHostIP=no",
-            "-o",
-            f"HostKeyAlias={launch_state.orchestrator_name}",
-            "-o",
-            f"UserKnownHostsFile={known_hosts_path}",
-            "-o",
-            "ConnectTimeout=10",
-            "-p",
-            str(iap_ssh_port),
-        ]
-        identity_file = Path.home() / ".ssh" / "google_compute_engine"
-        if identity_file.is_file():
-            cmd.extend(["-i", str(identity_file), "-o", "IdentitiesOnly=yes"])
-        cmd.extend(["-N", "-L", forward, f"{ssh_user}@127.0.0.1"])
-        return cmd
+        try:
+            return transport.build_local_forward_command(
+                project=launch_state.orchestrator_project,
+                remote_host="127.0.0.1",
+                local_port=local_port,
+                remote_bind=_REMOTE_REDIS_BIND,
+                ssh_via_iap=True,
+                known_hosts_path=known_hosts_path,
+                ssh_user=ssh_user,
+                host_key_alias=launch_state.orchestrator_name,
+                iap_ssh_port=iap_ssh_port,
+            )
+        except RuntimeError as exc:
+            raise OrchestratorTunnelError(str(exc)) from exc
 
     remote_host = (
         launch_state.orchestrator_external_ip
@@ -179,22 +119,18 @@ def build_tunnel_command(
     )
     known_hosts_path = prepare_known_hosts(base_path, remote_host)
     ssh_user = resolve_direct_ssh_user(launch_state.orchestrator_project)
-    cmd = [
-        "ssh",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "StrictHostKeyChecking=yes",
-        "-o",
-        "ConnectTimeout=10",
-        "-o",
-        f"UserKnownHostsFile={known_hosts_path}",
-    ]
-    identity_file = Path.home() / ".ssh" / "google_compute_engine"
-    if identity_file.is_file():
-        cmd.extend(["-i", str(identity_file), "-o", "IdentitiesOnly=yes"])
-    cmd.extend(["-N", "-L", forward, f"{ssh_user}@{remote_host}"])
-    return cmd
+    try:
+        return transport.build_local_forward_command(
+            project=launch_state.orchestrator_project,
+            remote_host=remote_host,
+            local_port=local_port,
+            remote_bind=_REMOTE_REDIS_BIND,
+            ssh_via_iap=False,
+            known_hosts_path=known_hosts_path,
+            ssh_user=ssh_user,
+        )
+    except RuntimeError as exc:
+        raise OrchestratorTunnelError(str(exc)) from exc
 
 
 def wait_for_local_port(

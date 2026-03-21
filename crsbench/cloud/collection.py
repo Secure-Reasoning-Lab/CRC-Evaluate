@@ -22,6 +22,7 @@ import tenacity
 
 from crsbench.cloud.launch_state import cloud_state_dir, remote_logs_dir
 from crsbench.cloud.orchestrator_tunnel import allocate_local_port, wait_for_local_port
+from crsbench.cloud.transport import CloudTransport, transport_for_provider
 from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -57,10 +58,12 @@ class ArtifactCollector:
         *,
         base_path: Path | str | None = None,
         journal_lines: int = 2000,
+        transport: CloudTransport | None = None,
     ) -> None:
         self._base_path = Path(base_path) if base_path is not None else None
         self._journal_lines = journal_lines
         self._ssh_users_by_project: dict[str, str] = {}
+        self._transport = transport or transport_for_provider("gce")
 
     def collect(
         self,
@@ -313,34 +316,12 @@ class ArtifactCollector:
         known_hosts_path: Path | None = None,
     ) -> str:
         """Return the ``-e`` argument string for direct-IP rsync SSH transport."""
-        del worker, fleet
-        parts = [
-            "ssh",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "StrictHostKeyChecking=yes",
-            "-o",
-            "ConnectTimeout=10",
-        ]
-        identity_file = Path.home() / ".ssh" / "google_compute_engine"
-        if identity_file.is_file():
-            parts.extend(
-                [
-                    "-i",
-                    shlex.quote(str(identity_file)),
-                    "-o",
-                    "IdentitiesOnly=yes",
-                ]
-            )
-        if known_hosts_path is not None:
-            parts.extend(
-                [
-                    "-o",
-                    f"UserKnownHostsFile={shlex.quote(str(known_hosts_path))}",
-                ]
-            )
-        return " ".join(parts)
+        del worker
+        return self._transport.build_rsync_ssh_command(
+            project=fleet.project,
+            ssh_via_iap=False,
+            known_hosts_path=known_hosts_path,
+        )
 
     def _build_iap_tunnel_command(
         self,
@@ -349,18 +330,15 @@ class ArtifactCollector:
         fleet: SshTransportConfig,
         local_port: int,
     ) -> list[str]:
-        """Return the gcloud command that opens a local IAP tunnel to remote SSH."""
+        """Return the provider command that opens a local IAP tunnel to remote SSH."""
         zone = worker.zone or fleet.zone or ""
-        return [
-            "gcloud",
-            "compute",
-            "start-iap-tunnel",
-            worker.name,
-            str(_IAP_TUNNEL_PORT),
-            f"--project={fleet.project}",
-            f"--zone={zone}",
-            f"--local-host-port=127.0.0.1:{local_port}",
-        ]
+        return self._transport.build_iap_tunnel_command(
+            instance_name=worker.name,
+            project=fleet.project,
+            zone=zone,
+            local_port=local_port,
+            remote_port=_IAP_TUNNEL_PORT,
+        )
 
     def _build_iap_ssh_command(
         self,
@@ -371,40 +349,14 @@ class ArtifactCollector:
         host_key_alias: str,
     ) -> str:
         """Return a localhost-targeted ssh command for rsync over an active IAP tunnel."""
-        known_hosts_path.parent.mkdir(parents=True, exist_ok=True)
-        known_hosts_path.touch(exist_ok=True)
-        known_hosts_path.chmod(0o600)
-
-        parts = [
-            "ssh",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "CheckHostIP=no",
-            "-o",
-            f"HostKeyAlias={shlex.quote(host_key_alias)}",
-            "-o",
-            f"UserKnownHostsFile={shlex.quote(str(known_hosts_path))}",
-            "-o",
-            "ConnectTimeout=10",
-            "-p",
-            str(local_port),
-            "-l",
-            shlex.quote(ssh_user),
-        ]
-        identity_file = Path.home() / ".ssh" / "google_compute_engine"
-        if identity_file.is_file():
-            parts.extend(
-                [
-                    "-i",
-                    shlex.quote(str(identity_file)),
-                    "-o",
-                    "IdentitiesOnly=yes",
-                ]
-            )
-        return " ".join(parts)
+        return self._transport.build_rsync_ssh_command(
+            project="",
+            ssh_via_iap=True,
+            known_hosts_path=known_hosts_path,
+            ssh_user=ssh_user,
+            local_port=local_port,
+            host_key_alias=host_key_alias,
+        )
 
     def _state_dir(self, experiment_filestore: Path) -> Path:
         """Return the local state directory used for SSH trust and log capture."""
@@ -436,22 +388,10 @@ class ArtifactCollector:
     ) -> Path:
         """Clear any stale stable-name host key before reconnecting over an IAP SSH tunnel."""
         known_hosts_path = self._iap_known_hosts_path(experiment_filestore)
-        known_hosts_path.parent.mkdir(parents=True, exist_ok=True)
-        known_hosts_path.touch(exist_ok=True)
-        known_hosts_path.chmod(0o600)
-        subprocess.run(
-            [
-                "ssh-keygen",
-                "-R",
-                host_key_alias,
-                "-f",
-                str(known_hosts_path),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
+        return self._transport.prepare_iap_known_hosts(
+            known_hosts_path=known_hosts_path,
+            host_key_alias=host_key_alias,
         )
-        return known_hosts_path
 
     def _remote_host(
         self,
@@ -475,43 +415,14 @@ class ArtifactCollector:
             return None
 
         known_hosts_path = self._known_hosts_path(experiment_filestore)
-        known_hosts_path.parent.mkdir(parents=True, exist_ok=True)
-        known_hosts_path.touch(exist_ok=True)
-        known_hosts_path.chmod(0o600)
-
         remote_host = self._remote_host(worker, fleet)
-        subprocess.run(
-            [
-                "ssh-keygen",
-                "-R",
-                remote_host,
-                "-f",
-                str(known_hosts_path),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        keyscan = subprocess.run(
-            [
-                "ssh-keyscan",
-                "-T",
-                "5",
-                "-t",
-                "ed25519",
-                remote_host,
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        if not keyscan.stdout.strip():
-            raise ArtifactCollectionError(
-                f"ssh-keyscan returned no host key for {remote_host}"
+        try:
+            return self._transport.prepare_known_hosts(
+                known_hosts_path=known_hosts_path,
+                remote_host=remote_host,
             )
-        with known_hosts_path.open("a", encoding="utf-8") as handle:
-            handle.write(keyscan.stdout)
-        return known_hosts_path
+        except RuntimeError as exc:
+            raise ArtifactCollectionError(str(exc)) from exc
 
     @contextmanager
     def _open_iap_tunnel(
@@ -679,14 +590,16 @@ class ArtifactCollector:
                 host_key_alias=worker.name,
             )
             with self._open_iap_tunnel(worker=worker, fleet=fleet) as local_port:
-                ssh_command = self._build_iap_ssh_command(
-                    local_port=local_port,
-                    ssh_user=ssh_user,
+                cmd = self._transport.build_local_ssh_command(
+                    project=fleet.project,
+                    remote_host="127.0.0.1",
+                    ssh_via_iap=True,
                     known_hosts_path=iap_known_hosts_path,
+                    ssh_user=ssh_user,
+                    local_port=local_port,
                     host_key_alias=worker.name,
+                    remote_command=command,
                 )
-                cmd = shlex.split(ssh_command)
-                cmd.extend(["127.0.0.1", command])
                 return subprocess.run(
                     cmd,
                     check=False,
@@ -695,24 +608,14 @@ class ArtifactCollector:
                 )
         else:
             remote_host = self._remote_host(worker, fleet)
-            ssh_target = (
-                f"{ssh_user}@{remote_host}" if ssh_user is not None else remote_host
+            cmd = self._transport.build_local_ssh_command(
+                project=fleet.project,
+                remote_host=remote_host,
+                ssh_via_iap=False,
+                known_hosts_path=known_hosts_path,
+                ssh_user=ssh_user,
+                remote_command=command,
             )
-            cmd = [
-                "ssh",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "StrictHostKeyChecking=yes",
-                "-o",
-                "ConnectTimeout=10",
-            ]
-            identity_file = Path.home() / ".ssh" / "google_compute_engine"
-            if identity_file.is_file():
-                cmd.extend(["-i", str(identity_file), "-o", "IdentitiesOnly=yes"])
-            if known_hosts_path is not None:
-                cmd.extend(["-o", f"UserKnownHostsFile={str(known_hosts_path)}"])
-            cmd.extend([ssh_target, command])
 
         return subprocess.run(
             cmd,
@@ -752,24 +655,10 @@ class ArtifactCollector:
         if cached is not None:
             return cached
 
-        result = subprocess.run(
-            [
-                "gcloud",
-                "compute",
-                "os-login",
-                "describe-profile",
-                f"--project={project}",
-                "--format=value(posixAccounts[0].username)",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        username = result.stdout.strip()
-        if not username:
-            raise ArtifactCollectionError(
-                f"Unable to resolve OS Login username for project {project}"
-            )
+        try:
+            username = self._transport.resolve_direct_ssh_user(project)
+        except RuntimeError as exc:
+            raise ArtifactCollectionError(str(exc)) from exc
         self._ssh_users_by_project[project] = username
         return username
 
