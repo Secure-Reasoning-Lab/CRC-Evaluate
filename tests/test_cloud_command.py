@@ -4164,6 +4164,27 @@ class TestCollect:
             _format_collect_timestamp("2026-03-21T21:45:59+00:00") == "2026-03-21-21-45"
         )
 
+    def test_fresh_timestamp_destination_reserves_unique_siblings(
+        self,
+        tmp_path: Path,
+    ):
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        with patch(
+            "crsbench.cloud.cli._collect._format_collect_timestamp",
+            return_value="2026-03-21-21-45",
+        ):
+            from crsbench.cloud.cli._collect import _fresh_timestamp_destination
+
+            first = _fresh_timestamp_destination(experiment_filestore, "test-exp")
+            second = _fresh_timestamp_destination(experiment_filestore, "test-exp")
+
+        assert first == experiment_filestore / "test-exp-2026-03-21-21-45"
+        assert second == experiment_filestore / "test-exp-2026-03-21-21-45-02"
+        assert first.is_dir()
+        assert second.is_dir()
+
     @patch("crsbench.cloud.cli._collect.reconnect")
     @patch("crsbench.cloud.cli._collect.provisioner_for_context")
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")

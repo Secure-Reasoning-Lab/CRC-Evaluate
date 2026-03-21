@@ -231,7 +231,7 @@ def _confirm_destination_overwrite(
     if not sys.stdin.isatty():
         logger.error(
             "Local destination already exists and stdin is not interactive. "
-            "Rerun with --force to continue."
+            "Rerun with --force to merge into it or --timestamp for a fresh sibling."
         )
         return None
 
@@ -273,17 +273,17 @@ def _format_collect_timestamp(value: str | datetime | None = None) -> str:
 def _fresh_timestamp_destination(
     experiment_filestore: Path, experiment_name: str
 ) -> Path:
-    """Return a fresh timestamped sibling directory for local collection."""
+    """Reserve and return a fresh timestamped sibling directory."""
     base_name = f"{experiment_name}-{_format_collect_timestamp()}"
-    destination = experiment_filestore / base_name
-    if not destination.exists():
-        return destination
-    suffix = 2
+    suffix = 0
     while True:
-        candidate = experiment_filestore / f"{base_name}-{suffix:02d}"
-        if not candidate.exists():
+        candidate_name = base_name if suffix == 0 else f"{base_name}-{suffix + 1:02d}"
+        candidate = experiment_filestore / candidate_name
+        try:
+            candidate.mkdir(parents=True, exist_ok=False)
             return candidate
-        suffix += 1
+        except FileExistsError:
+            suffix += 1
 
 
 def _build_collect_marker(
