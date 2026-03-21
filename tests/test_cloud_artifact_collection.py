@@ -9,7 +9,15 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from crsbench.cloud.collection import ArtifactCollectionError, ArtifactCollector
+from crsbench.cloud.collection import (
+    ArtifactCollectionError,
+    ArtifactCollector,
+    collect_marker_path,
+    discover_experiment_start_time_from_staging,
+    merge_experiment_start_time,
+    read_collect_marker,
+    write_collect_marker,
+)
 from crsbench.cloud.gce.models import GceWorkerRecord
 from crsbench.reporting.snapshot_loader import discover_trials
 from crsbench.validation.schemas import GceWorkerFleetConfig
@@ -114,6 +122,12 @@ def _build_trial_tree(
         os.utime(seed_file, (mtime, mtime))
 
     return trial_dir
+
+
+def _write_trial_metadata(trial_dir: Path, payload: dict[str, object]) -> None:
+    """Write `metadata.json` directly with the supplied payload."""
+    metadata_path = trial_dir / "metadata.json"
+    metadata_path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +397,60 @@ class TestStagingAndPublish:
             assert not worker_staging.exists(), (
                 "Worker staging dir should be cleaned up"
             )
+
+    def test_collect_reports_start_time_observation_from_staging(
+        self, tmp_path: Path
+    ) -> None:
+        """Successful collection should report current-run start-time metadata from staging."""
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        _write_trial_metadata(
+            trial_dir,
+            {
+                "timestamp_start": "2026-03-11T09:00:00+00:00",
+                "timestamp": "2026-03-10T09:00:00+00:00",
+                "trial_num": 1,
+                "crs": "oss-crs",
+                "benchmark": "curl-delta-01",
+                "harness": "fuzz_http",
+                "mode": "bug_finding",
+                "source": {"path": "/src/curl", "commit": "abc123"},
+            },
+        )
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+        start_time_observations: list[tuple[str | None, str]] = []
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            staging_dest = Path(cmd[-1].rstrip("/"))
+            shutil.copytree(
+                source_root / "exp-42",
+                staging_dest,
+                dirs_exist_ok=True,
+            )
+            return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+                start_time_observations=start_time_observations,
+            )
+
+        assert start_time_observations == [
+            ("2026-03-11T09:00:00+00:00", "earliest_trial_timestamp_start")
+        ]
 
     def test_publish_overwrites_read_only_files_and_preserves_broken_symlinks(
         self, tmp_path: Path
@@ -840,3 +908,162 @@ class TestRemoteLogCollection:
         assert f"UserKnownHostsFile={known_hosts_path}" in ssh_cmd
         assert "127.0.0.1" in ssh_cmd
         assert "echo hello" in ssh_cmd
+
+
+# ---------------------------------------------------------------------------
+# Collect marker helpers
+# ---------------------------------------------------------------------------
+
+
+class TestCollectMarker:
+    """test_collect_marker — collect marker metadata read/write round-trip."""
+
+    def test_collect_marker_roundtrip(self, tmp_path: Path) -> None:
+        """Collect marker write/read round-trip preserves a hidden marker payload."""
+        destination = tmp_path / "exp-42"
+        payload: dict[str, object] = {
+            "schema_version": 1,
+            "experiment_name": "exp-42",
+            "local_destination": str(destination),
+            "last_collect_time": "2026-03-20T12:00:00+00:00",
+            "experiment_start_time": "2026-03-20T11:00:00+00:00",
+            "experiment_start_time_source": "earliest_trial_timestamp_start",
+        }
+
+        write_collect_marker(destination, payload)
+        assert (
+            collect_marker_path(destination) == destination / ".crsbench-collect.json"
+        )
+        assert read_collect_marker(destination) == payload
+
+    def test_read_collect_marker_returns_none_for_malformed_json(
+        self, tmp_path: Path
+    ) -> None:
+        """Malformed `.crsbench-collect.json` files must be treated as missing markers."""
+        destination = tmp_path / "exp-42"
+        destination.mkdir(parents=True, exist_ok=True)
+        marker_path = collect_marker_path(destination)
+        marker_path.write_text("{bad json", encoding="utf-8")
+
+        assert read_collect_marker(destination) is None
+
+
+class TestExperimentStartTimeDiscovery:
+    """test_experiment_start_time — start time inference from current staging trees."""
+
+    def test_discover_experiment_start_time_prefers_earliest_timestamp_start(
+        self, tmp_path: Path
+    ) -> None:
+        """When timestamp_start exists, use the earliest value and source it."""
+        stage_a = tmp_path / "stage-a"
+        stage_b = tmp_path / "stage-b"
+
+        trial_a = _build_trial_tree(stage_a, experiment_name="exp-42", trial_n=1)
+        trial_b = _build_trial_tree(stage_a, experiment_name="exp-42", trial_n=2)
+        _write_trial_metadata(
+            trial_a,
+            {
+                "timestamp_start": "2026-03-12T10:00:00+00:00",
+                "timestamp": "2026-03-11T10:00:00+00:00",
+            },
+        )
+        _write_trial_metadata(
+            trial_b,
+            {
+                "timestamp_start": "2026-03-11T09:00:00+00:00",
+                "timestamp": "2026-03-10T09:00:00+00:00",
+            },
+        )
+        trial_c = _build_trial_tree(stage_b, experiment_name="exp-42", trial_n=1)
+        _write_trial_metadata(
+            trial_c,
+            {
+                "timestamp": "2026-03-09T08:00:00+00:00",
+            },
+        )
+
+        start_time, source = discover_experiment_start_time_from_staging(
+            [stage_a, stage_b]
+        )
+        assert start_time == "2026-03-11T09:00:00+00:00"
+        assert source == "earliest_trial_timestamp_start"
+
+    def test_discover_experiment_start_time_falls_back_to_legacy_timestamp(
+        self, tmp_path: Path
+    ) -> None:
+        """Without timestamp_start fields, fallback to earliest legacy timestamp."""
+        stage_a = tmp_path / "stage-a"
+        stage_b = tmp_path / "stage-b"
+
+        trial_a = _build_trial_tree(stage_a, experiment_name="exp-42", trial_n=1)
+        trial_b = _build_trial_tree(stage_a, experiment_name="exp-42", trial_n=2)
+        _write_trial_metadata(
+            trial_a,
+            {
+                "timestamp": "2026-03-11T10:00:00+00:00",
+            },
+        )
+        _write_trial_metadata(
+            trial_b,
+            {
+                "timestamp": "2026-03-10T09:00:00+00:00",
+            },
+        )
+        trial_c = _build_trial_tree(stage_b, experiment_name="exp-42", trial_n=1)
+        _write_trial_metadata(
+            trial_c,
+            {
+                "timestamp": "2026-03-12T08:00:00+00:00",
+            },
+        )
+
+        start_time, source = discover_experiment_start_time_from_staging(
+            [stage_a, stage_b]
+        )
+        assert start_time == "2026-03-10T09:00:00+00:00"
+        assert source == "earliest_trial_timestamp"
+
+    def test_discover_experiment_start_time_returns_unknown_when_missing(
+        self, tmp_path: Path
+    ) -> None:
+        """Missing timestamp fields returns an unknown start-time tuple."""
+        stage_a = tmp_path / "stage-a"
+        stage_b = tmp_path / "stage-b"
+
+        trial_a = _build_trial_tree(
+            stage_a, experiment_name="exp-42", trial_n=1, include_metadata=False
+        )
+        trial_b = _build_trial_tree(
+            stage_b, experiment_name="exp-42", trial_n=1, include_metadata=False
+        )
+        _write_trial_metadata(trial_a, {"status": "complete"})
+        _write_trial_metadata(trial_b, {"status": "complete"})
+
+        start_time, source = discover_experiment_start_time_from_staging(
+            [stage_a, stage_b]
+        )
+        assert start_time is None
+        assert source == "unknown"
+
+
+class TestMergeExperimentStartTime:
+    """test_merge_experiment_start_time — preserve prior marker data as fallback."""
+
+    def test_merge_experiment_start_time_preserves_prior_marker_when_current_unknown(
+        self,
+    ) -> None:
+        """Prior marker values are preserved if current run has unknown start time."""
+        prior_marker = {
+            "schema_version": 1,
+            "experiment_name": "exp-42",
+            "experiment_start_time": "2026-03-19T05:00:00+00:00",
+            "experiment_start_time_source": "earliest_trial_timestamp",
+        }
+        current = (None, "unknown")
+
+        start_time, source = merge_experiment_start_time(
+            current=current,
+            prior=prior_marker,
+        )
+        assert start_time == "2026-03-19T05:00:00+00:00"
+        assert source == "earliest_trial_timestamp"

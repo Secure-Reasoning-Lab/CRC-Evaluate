@@ -581,12 +581,23 @@ uv run crsbench cloud --config config.yaml collect my-experiment \
     --remote-dir /data/experiments/my-experiment
 ```
 
+Use `--force` to skip the overwrite prompt when collecting into an existing
+local destination, for example in non-interactive automation:
+
+```bash
+uv run crsbench cloud --config config.yaml collect my-experiment \
+    --remote-dir /data/experiments/my-experiment \
+    --force
+```
+
 - Uses rsync (via IAP tunnel or direct SSH depending on config)
 - For direct SSH, seeds a config-adjacent `.crsbench-cloud/known_hosts` file and reuses the local GCE OS Login username
 - Stages worker artifacts in a temporary directory, verifies at least one valid trial exists, then publishes to the experiment filestore
 - Continues to remaining worker/evaluator VMs if one fails; exits with code 1 on partial failure
 - Evaluator VMs are log-only for collection; they do not rsync `/tmp/crsbench/experiment-data/<experiment>` because build/verify work stays in transient evaluator scratch space instead of a worker-style experiment tree
-- Safe to run multiple times (incremental rsync)
+- Safe to run multiple times (incremental rsync), but when the local destination already exists CRSBench warns before merging into it
+- Interactive runs prompt `Continue and merge into the existing destination? [Y/n]`; non-interactive runs fail unless you pass `--force`
+- Successful collect runs refresh a hidden local marker at `<storage.experiment_filestore>/<experiment>/.crsbench-collect.json` with the last successful collect time and best-effort experiment start time
 - Also collects VM diagnostics under `.crsbench-cloud/remote-logs/<experiment>/`, including:
   - `google-startup-scripts.service` and `google-guest-agent.service` journals
   - `crsbench-worker.service`, `crsbench-evaluator.service`, or `crsbench-orchestrator.service` user journals

@@ -99,6 +99,11 @@ Examples:
         dest="remote_dir",
         help="Absolute path on workers containing the experiment tree",
     )
+    collect_p.add_argument(
+        "--force",
+        action="store_true",
+        help="Skip overwrite confirmation when the local destination already exists",
+    )
 
     # list
     list_p = cloud_subparsers.add_parser(

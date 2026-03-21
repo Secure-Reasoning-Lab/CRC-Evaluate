@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, cast
 
 from crsbench.cloud.cli._config_reconnect import (
@@ -16,7 +18,14 @@ from crsbench.cloud.cli._instance_inventory import (
 from crsbench.cloud.cli._instance_inventory import (
     resolve_instance_fleet as shared_resolve_instance_fleet,
 )
-from crsbench.cloud.collection import ArtifactCollectionError, ArtifactCollector
+from crsbench.cloud.collection import (
+    ArtifactCollectionError,
+    ArtifactCollector,
+    collect_marker_path,
+    merge_experiment_start_time,
+    read_collect_marker,
+    write_collect_marker,
+)
 from crsbench.cloud.providers import (
     provider_adapter_for_context,
     provisioner_for_context,
@@ -42,6 +51,11 @@ def run_collect(args: argparse.Namespace) -> int:
     context = resolve_cloud_context(args.config, experiment_name)
     launch_state = context.launch_state
     experiment_filestore = context.experiment_filestore
+    destination = experiment_filestore / experiment_name
+
+    if not _confirm_destination_overwrite(destination, force=args.force):
+        return 1
+
     readiness = None
     try:
         _context, _redis_conn, readiness, _lifecycle, experiment_filestore = reconnect(
@@ -85,6 +99,7 @@ def run_collect(args: argparse.Namespace) -> int:
         args.remote_dir,
     )
     failed = 0
+    start_time_observations: list[tuple[str | None, str]] = []
 
     for worker in live_instances:
         try:
@@ -107,6 +122,7 @@ def run_collect(args: argparse.Namespace) -> int:
                     experiment_name=experiment_name,
                     experiment_filestore=experiment_filestore,
                     remote_experiment_dir=remote_experiment_dir,
+                    start_time_observations=start_time_observations,
                 )
                 logger.info("Collection succeeded: {}", worker.name)
             except (ArtifactCollectionError, Exception) as exc:
@@ -135,7 +151,129 @@ def run_collect(args: argparse.Namespace) -> int:
             )
             failed += 1
 
-    return 1 if failed else 0
+    if failed:
+        return 1
+
+    if not destination.exists():
+        return 0
+
+    current_start_time = _resolve_current_run_start_time(start_time_observations)
+    marker = _build_collect_marker(
+        destination=destination,
+        experiment_name=experiment_name,
+        prior_marker=read_collect_marker(destination),
+        current_start_time=current_start_time,
+    )
+    try:
+        write_collect_marker(destination, marker)
+    except OSError as exc:
+        logger.error("Failed to write collect marker {}: {}", destination, exc)
+        return 1
+
+    return 0
+
+
+def _confirm_destination_overwrite(destination, *, force: bool) -> bool:
+    """Gate collection when the local destination already exists."""
+    if force or not destination.exists():
+        return True
+
+    marker = read_collect_marker(destination)
+    marker_path = collect_marker_path(destination)
+    if marker is None and marker_path.exists():
+        logger.warning(
+            "Local collect marker is malformed; ignoring prior collect metadata: {}",
+            marker_path,
+        )
+
+    logger.warning("Local destination already exists: {}", destination)
+    if marker is not None:
+        last_collect_time = marker.get("last_collect_time")
+        experiment_start_time = marker.get("experiment_start_time")
+        if isinstance(last_collect_time, str):
+            logger.warning("Last collected: {}", last_collect_time)
+        if isinstance(experiment_start_time, str):
+            logger.warning("Experiment started: {}", experiment_start_time)
+    logger.warning("Rerun with --force to skip this prompt.")
+
+    if not sys.stdin.isatty():
+        logger.error(
+            "Local destination already exists and stdin is not interactive. "
+            "Rerun with --force to continue."
+        )
+        return False
+
+    while True:
+        answer = (
+            input("Continue and merge into the existing destination? [Y/n] ")
+            .strip()
+            .lower()
+        )
+        if answer in {"", "y", "yes"}:
+            return True
+        if answer in {"n", "no"}:
+            logger.info("Cancelled.")
+            return False
+        logger.warning("Please answer y, yes, n, or no.")
+
+
+def _build_collect_marker(
+    *,
+    destination,
+    experiment_name: str,
+    prior_marker: dict[str, object] | None,
+    current_start_time: tuple[str | None, str],
+) -> dict[str, object]:
+    experiment_start_time, experiment_start_time_source = merge_experiment_start_time(
+        current=current_start_time,
+        prior=prior_marker,
+    )
+    return {
+        "schema_version": 1,
+        "experiment_name": experiment_name,
+        "local_destination": str(destination),
+        "last_collect_time": _current_time_iso8601(),
+        "experiment_start_time": experiment_start_time,
+        "experiment_start_time_source": experiment_start_time_source,
+    }
+
+
+def _resolve_current_run_start_time(
+    observations: list[tuple[str | None, str]],
+) -> tuple[str | None, str]:
+    timestamp_start_values = sorted(
+        (
+            value
+            for value, source in observations
+            if value is not None and source == "earliest_trial_timestamp_start"
+        ),
+        key=_sort_timestamp,
+    )
+    if timestamp_start_values:
+        return timestamp_start_values[0], "earliest_trial_timestamp_start"
+
+    timestamp_values = sorted(
+        (
+            value
+            for value, source in observations
+            if value is not None and source == "earliest_trial_timestamp"
+        ),
+        key=_sort_timestamp,
+    )
+    if timestamp_values:
+        return timestamp_values[0], "earliest_trial_timestamp"
+    return None, "unknown"
+
+
+def _sort_timestamp(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _current_time_iso8601() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 def _list_live_instances(

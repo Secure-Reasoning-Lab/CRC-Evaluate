@@ -11,10 +11,12 @@ Covers ARTF-01 through ARTF-04.
 
 from __future__ import annotations
 
+import json
 import shlex
 import shutil
 import subprocess
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path  # noqa: TC003
 from typing import TYPE_CHECKING, Iterator, Protocol
 
@@ -41,6 +43,110 @@ logger = get_logger(__name__)
 
 _IAP_TUNNEL_PORT = 22
 _IAP_TUNNEL_STARTUP_TIMEOUT_SEC = 30.0
+_COLLECT_MARKER_FILENAME = ".crsbench-collect.json"
+
+
+def collect_marker_path(destination: Path) -> Path:
+    """Return the metadata marker path for *destination*."""
+    return destination / _COLLECT_MARKER_FILENAME
+
+
+def read_collect_marker(destination: Path) -> dict[str, object] | None:
+    """Read and parse collect marker JSON payload from *destination*.
+
+    Returns ``None`` when marker is missing or malformed.
+    """
+    marker_path = collect_marker_path(destination)
+    if not marker_path.exists():
+        return None
+
+    try:
+        payload = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def write_collect_marker(destination: Path, payload: dict[str, object]) -> None:
+    """Persist *payload* to the hidden collect marker at *destination*."""
+    marker_path = collect_marker_path(destination)
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def discover_experiment_start_time_from_staging(
+    staging_dirs: list[Path],
+) -> tuple[str | None, str]:
+    """Discover the experiment start time and source from one or more staging trees."""
+    timestamp_starts: list[tuple[datetime, str]] = []
+    legacy_timestamps: list[tuple[datetime, str]] = []
+
+    for staging_dir in staging_dirs:
+        if not staging_dir.exists():
+            continue
+        for metadata_path in staging_dir.rglob("metadata.json"):
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(metadata, dict):
+                continue
+
+            timestamp_start = _parse_metadata_timestamp(metadata, "timestamp_start")
+            if timestamp_start is not None:
+                timestamp_starts.append(timestamp_start)
+                continue
+
+            legacy_timestamp = _parse_metadata_timestamp(metadata, "timestamp")
+            if legacy_timestamp is not None:
+                legacy_timestamps.append(legacy_timestamp)
+
+    if timestamp_starts:
+        _, start_time = min(timestamp_starts, key=lambda item: item[0])
+        return start_time, "earliest_trial_timestamp_start"
+    if legacy_timestamps:
+        _, start_time = min(legacy_timestamps, key=lambda item: item[0])
+        return start_time, "earliest_trial_timestamp"
+    return None, "unknown"
+
+
+def merge_experiment_start_time(
+    current: tuple[str | None, str], prior: dict[str, object] | None
+) -> tuple[str | None, str]:
+    """Return prior experiment start time/source when current run has no start time."""
+    if current[0] is not None:
+        return current
+
+    if not isinstance(prior, dict):
+        return current
+
+    prior_start_time = prior.get("experiment_start_time")
+    prior_source = prior.get("experiment_start_time_source")
+    if isinstance(prior_start_time, str) and isinstance(prior_source, str):
+        return prior_start_time, prior_source
+    return current
+
+
+def _parse_metadata_timestamp(
+    metadata: dict[str, object], key: str
+) -> tuple[datetime, str] | None:
+    """Parse a timestamp field from metadata JSON, returning ``(parsed_dt, raw)``."""
+    raw = metadata.get(key)
+    if not isinstance(raw, str):
+        return None
+
+    normalized = raw.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+    return parsed, raw
 
 
 class ArtifactCollectionError(Exception):
@@ -72,6 +178,7 @@ class ArtifactCollector:
         experiment_name: str,
         experiment_filestore: Path,
         remote_experiment_dir: str,
+        start_time_observations: list[tuple[str | None, str]] | None = None,
     ) -> Path:
         """Rsync trial artifacts from *worker* and publish them to *experiment_filestore*.
 
@@ -116,6 +223,10 @@ class ArtifactCollector:
 
         # Verify before publishing
         self._verify_staging(staging_dir)
+        if start_time_observations is not None:
+            start_time_observations.append(
+                discover_experiment_start_time_from_staging([staging_dir])
+            )
 
         final_dir = experiment_filestore / experiment_name
         self._publish(staging_dir, final_dir)

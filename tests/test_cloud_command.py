@@ -12,6 +12,7 @@ from unittest import mock
 from unittest.mock import MagicMock, patch
 
 import pytest
+from crsbench.cloud.collection import collect_marker_path, read_collect_marker
 from crsbench.cloud.records import CloudFleetPlacementRecord
 from crsbench.cloud.types import CloudProvider
 from crsbench.distributed.queue import RedisConnectionProbe
@@ -423,6 +424,52 @@ def _make_resolved_cloud_context(launch_state=None):
         redis_host=launch_state.redis_host,
         redis_password=launch_state.redis_password,
     )
+
+
+def _make_collect_context(
+    *,
+    experiment_filestore: Path,
+    remote_experiment_root: Path | None = None,
+    launch_state=None,
+):
+    """Build a resolved cloud context for collect tests with explicit paths."""
+    context = _make_resolved_cloud_context(launch_state)
+    return context.__class__(
+        worker_fleet_configs=context.worker_fleet_configs,
+        launch_state=context.launch_state,
+        experiment_filestore=experiment_filestore,
+        remote_experiment_root=remote_experiment_root
+        if remote_experiment_root is not None
+        else context.remote_experiment_root,
+        redis_host=context.redis_host,
+        redis_password=context.redis_password,
+        launch_plan=context.launch_plan,
+        evaluator_fleet_configs=context.evaluator_fleet_configs,
+    )
+
+
+def _write_collect_marker_metadata(
+    destination: Path,
+    *,
+    last_collect_time: str,
+    experiment_start_time: str,
+) -> Path:
+    """Create explicit marker metadata for overwrite-preflight warning tests."""
+    destination.mkdir(parents=True, exist_ok=True)
+    marker_path = destination / ".crsbench-collect.json"
+    marker_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "experiment_name": destination.name,
+                "local_destination": str(destination),
+                "last_collect_time": last_collect_time,
+                "experiment_start_time": experiment_start_time,
+                "experiment_start_time_source": "earliest_trial_timestamp_start",
+            }
+        )
+    )
+    return marker_path
 
 
 @patch("crsbench.cloud.cli._config_reconnect.provider_adapter_for_launch_plan")
@@ -1626,6 +1673,21 @@ class TestArgParsing:
         )
         assert args.cloud_command == "collect"
         assert args.remote_dir == "/home/user/experiments/my-exp"
+
+    def test_parse_collect_force(self):
+        parser = self._build_parser()
+        args = parser.parse_args(
+            [
+                "cloud",
+                "collect",
+                "my-exp",
+                "--config",
+                "c.yaml",
+                "--force",
+            ]
+        )
+        assert args.cloud_command == "collect"
+        assert args.force is True
 
     def test_parse_collect_allows_inferred_experiment_and_remote_dir(self):
         parser = self._build_parser()
@@ -3333,11 +3395,14 @@ def _make_collect_args(
     experiment: str = "test-exp",
     config: str = "/tmp/config.yaml",
     remote_dir: str = "/home/user/crsbench-experiments/test-exp",
+    *,
+    force: bool = False,
 ):
     return argparse.Namespace(
         experiment=experiment,
         config=config,
         remote_dir=remote_dir,
+        force=force,
         cloud_command="collect",
     )
 
@@ -4142,6 +4207,443 @@ class TestCollect:
         rc = run_collect(_make_collect_args())
         assert rc == 0
         assert mock_coll.collect.call_count == 2
+
+    def test_collect_existing_destination_requires_force_when_noninteractive(
+        self,
+        tmp_path: Path,
+    ):
+        experiment_filestore = tmp_path / "filestore"
+        (experiment_filestore / "test-exp").mkdir(parents=True)
+        with (
+            patch(
+                "crsbench.cloud.cli._collect.resolve_cloud_context"
+            ) as mock_resolve_context,
+            patch("crsbench.cloud.cli._collect.ArtifactCollector") as mock_coll_cls,
+            patch(
+                "crsbench.cloud.cli._collect.provisioner_for_context"
+            ) as mock_prov_cls,
+            patch("crsbench.cloud.cli._collect.reconnect") as mock_reconnect,
+            patch("sys.stdin.isatty", return_value=False),
+        ):
+            mock_prov = MagicMock()
+            mock_prov.list_workers.return_value = [_make_gce_worker("w-1")]
+            mock_prov_cls.return_value = mock_prov
+            mock_resolve_context.return_value = _make_collect_context(
+                experiment_filestore=experiment_filestore,
+                remote_experiment_root=tmp_path / "remote-root",
+            )
+
+            mock_coll = MagicMock()
+            mock_coll_cls.return_value = mock_coll
+
+            readiness = MagicMock()
+            readiness.list_workers.return_value = []
+            mock_reconnect.return_value = (
+                MagicMock(),
+                MagicMock(),
+                readiness,
+                MagicMock(),
+                experiment_filestore,
+            )
+
+            from crsbench.cloud.cli._collect import run_collect
+
+            rc = run_collect(_make_collect_args(force=False))
+
+        assert rc == 1
+        mock_coll.collect.assert_not_called()
+
+    def test_collect_existing_destination_accepts_empty_interactive_confirmation(
+        self,
+        tmp_path: Path,
+    ):
+        experiment_filestore = tmp_path / "filestore"
+        (experiment_filestore / "test-exp").mkdir(parents=True)
+        with (
+            patch(
+                "crsbench.cloud.cli._collect.resolve_cloud_context"
+            ) as mock_resolve_context,
+            patch("crsbench.cloud.cli._collect.ArtifactCollector") as mock_coll_cls,
+            patch(
+                "crsbench.cloud.cli._collect.provisioner_for_context"
+            ) as mock_prov_cls,
+            patch("crsbench.cloud.cli._collect.reconnect") as mock_reconnect,
+            patch("sys.stdin.isatty", return_value=True),
+            patch("builtins.input", return_value="") as mock_input,
+        ):
+            mock_prov = MagicMock()
+            mock_prov.list_workers.return_value = [_make_gce_worker("w-1")]
+            mock_prov_cls.return_value = mock_prov
+            mock_resolve_context.return_value = _make_collect_context(
+                experiment_filestore=experiment_filestore,
+                remote_experiment_root=tmp_path / "remote-root",
+            )
+
+            mock_coll = MagicMock()
+            mock_coll_cls.return_value = mock_coll
+
+            readiness = MagicMock()
+            readiness.list_workers.return_value = []
+            mock_reconnect.return_value = (
+                MagicMock(),
+                MagicMock(),
+                readiness,
+                MagicMock(),
+                experiment_filestore,
+            )
+
+            from crsbench.cloud.cli._collect import run_collect
+
+            rc = run_collect(_make_collect_args(force=False))
+
+        assert rc == 0
+        mock_input.assert_called()
+
+    def test_collect_existing_destination_reprompts_on_invalid_input(
+        self,
+        tmp_path: Path,
+    ):
+        experiment_filestore = tmp_path / "filestore"
+        (experiment_filestore / "test-exp").mkdir(parents=True)
+        with (
+            patch(
+                "crsbench.cloud.cli._collect.resolve_cloud_context"
+            ) as mock_resolve_context,
+            patch("crsbench.cloud.cli._collect.ArtifactCollector") as mock_coll_cls,
+            patch(
+                "crsbench.cloud.cli._collect.provisioner_for_context"
+            ) as mock_prov_cls,
+            patch("crsbench.cloud.cli._collect.reconnect") as mock_reconnect,
+            patch("sys.stdin.isatty", return_value=True),
+            patch("builtins.input", side_effect=["maybe", "n"]) as mock_input,
+        ):
+            mock_prov = MagicMock()
+            mock_prov.list_workers.return_value = [_make_gce_worker("w-1")]
+            mock_prov_cls.return_value = mock_prov
+            mock_resolve_context.return_value = _make_collect_context(
+                experiment_filestore=experiment_filestore,
+                remote_experiment_root=tmp_path / "remote-root",
+            )
+
+            mock_coll = MagicMock()
+            mock_coll_cls.return_value = mock_coll
+
+            readiness = MagicMock()
+            readiness.list_workers.return_value = []
+            mock_reconnect.return_value = (
+                MagicMock(),
+                MagicMock(),
+                readiness,
+                MagicMock(),
+                experiment_filestore,
+            )
+
+            from crsbench.cloud.cli._collect import run_collect
+
+            rc = run_collect(_make_collect_args(force=False))
+
+        assert rc == 1
+        assert mock_input.call_count >= 2
+
+    def test_collect_existing_destination_interactive_warning_includes_marker_context(
+        self,
+        tmp_path: Path,
+    ):
+        experiment_filestore = tmp_path / "filestore"
+        destination = experiment_filestore / "test-exp"
+        _write_collect_marker_metadata(
+            destination,
+            last_collect_time="2026-03-10T01:02:03+00:00",
+            experiment_start_time="2026-03-09T23:00:00+00:00",
+        )
+        with (
+            patch(
+                "crsbench.cloud.cli._collect.resolve_cloud_context"
+            ) as mock_resolve_context,
+            patch("crsbench.cloud.cli._collect.ArtifactCollector") as mock_coll_cls,
+            patch(
+                "crsbench.cloud.cli._collect.provisioner_for_context"
+            ) as mock_prov_cls,
+            patch("crsbench.cloud.cli._collect.reconnect") as mock_reconnect,
+            patch("sys.stdin.isatty", return_value=True),
+            patch("builtins.input", return_value="") as mock_input,
+            patch("crsbench.cloud.cli._collect.logger") as mock_logger,
+        ):
+            mock_prov = MagicMock()
+            mock_prov.list_workers.return_value = [_make_gce_worker("w-1")]
+            mock_prov_cls.return_value = mock_prov
+            mock_resolve_context.return_value = _make_collect_context(
+                experiment_filestore=experiment_filestore,
+                remote_experiment_root=tmp_path / "remote-root",
+            )
+
+            mock_coll = MagicMock()
+            mock_coll_cls.return_value = mock_coll
+
+            readiness = MagicMock()
+            readiness.list_workers.return_value = []
+            mock_reconnect.return_value = (
+                MagicMock(),
+                MagicMock(),
+                readiness,
+                MagicMock(),
+                experiment_filestore,
+            )
+
+            from crsbench.cloud.cli._collect import run_collect
+
+            rc = run_collect(_make_collect_args(force=False))
+
+        assert rc == 0
+        warning_calls = [str(call) for call in mock_logger.warning.call_args_list]
+        warning_text = "\n".join(warning_calls)
+        assert "Last collected:" in warning_text
+        assert "Experiment started:" in warning_text
+        assert "2026-03-10T01:02:03+00:00" in warning_text
+        assert "2026-03-09T23:00:00+00:00" in warning_text
+        assert "--force" in warning_text
+
+    def test_collect_success_writes_marker_after_successful_collection(
+        self,
+        tmp_path: Path,
+    ):
+        experiment_filestore = tmp_path / "filestore"
+        destination = experiment_filestore / "test-exp"
+        with (
+            patch(
+                "crsbench.cloud.cli._collect.resolve_cloud_context"
+            ) as mock_resolve_context,
+            patch("crsbench.cloud.cli._collect.ArtifactCollector") as mock_coll_cls,
+            patch(
+                "crsbench.cloud.cli._collect.provisioner_for_context"
+            ) as mock_prov_cls,
+            patch("crsbench.cloud.cli._collect.reconnect") as mock_reconnect,
+        ):
+            mock_prov = MagicMock()
+            mock_prov.list_workers.return_value = [_make_gce_worker("w-1")]
+            mock_prov_cls.return_value = mock_prov
+            mock_resolve_context.return_value = _make_collect_context(
+                experiment_filestore=experiment_filestore,
+                remote_experiment_root=tmp_path / "remote-root",
+            )
+
+            mock_coll = MagicMock()
+
+            def _collect_side_effect(**kwargs):
+                kwargs["start_time_observations"].append(
+                    (
+                        "2026-03-09T23:00:00+00:00",
+                        "earliest_trial_timestamp_start",
+                    )
+                )
+                destination.mkdir(parents=True, exist_ok=True)
+                return destination
+
+            mock_coll.collect.side_effect = _collect_side_effect
+            mock_coll_cls.return_value = mock_coll
+
+            readiness = MagicMock()
+            readiness.list_workers.return_value = []
+            mock_reconnect.return_value = (
+                MagicMock(),
+                MagicMock(),
+                readiness,
+                MagicMock(),
+                experiment_filestore,
+            )
+
+            from crsbench.cloud.cli._collect import run_collect
+
+            rc = run_collect(_make_collect_args())
+
+        assert rc == 0
+        marker = read_collect_marker(destination)
+        assert marker is not None
+        assert marker["schema_version"] == 1
+        assert marker["experiment_name"] == "test-exp"
+        assert marker["local_destination"] == str(destination)
+        assert marker["experiment_start_time"] == "2026-03-09T23:00:00+00:00"
+        assert (
+            marker["experiment_start_time_source"] == "earliest_trial_timestamp_start"
+        )
+        assert isinstance(marker["last_collect_time"], str)
+
+    def test_collect_success_preserves_prior_start_time_when_current_run_has_none(
+        self,
+        tmp_path: Path,
+    ):
+        experiment_filestore = tmp_path / "filestore"
+        destination = experiment_filestore / "test-exp"
+        prior_marker = {
+            "schema_version": 1,
+            "experiment_name": "test-exp",
+            "local_destination": str(destination),
+            "last_collect_time": "2026-03-10T01:02:03+00:00",
+            "experiment_start_time": "2026-03-09T23:00:00+00:00",
+            "experiment_start_time_source": "earliest_trial_timestamp_start",
+        }
+        destination.mkdir(parents=True, exist_ok=True)
+        collect_marker_path(destination).write_text(json.dumps(prior_marker))
+        with (
+            patch(
+                "crsbench.cloud.cli._collect.resolve_cloud_context"
+            ) as mock_resolve_context,
+            patch("crsbench.cloud.cli._collect.ArtifactCollector") as mock_coll_cls,
+            patch(
+                "crsbench.cloud.cli._collect.provisioner_for_context"
+            ) as mock_prov_cls,
+            patch("crsbench.cloud.cli._collect.reconnect") as mock_reconnect,
+        ):
+            mock_prov = MagicMock()
+            mock_prov.list_workers.return_value = [_make_gce_worker("w-1")]
+            mock_prov_cls.return_value = mock_prov
+            mock_resolve_context.return_value = _make_collect_context(
+                experiment_filestore=experiment_filestore,
+                remote_experiment_root=tmp_path / "remote-root",
+            )
+
+            mock_coll = MagicMock()
+            mock_coll.collect.side_effect = lambda **_kwargs: destination
+            mock_coll_cls.return_value = mock_coll
+
+            readiness = MagicMock()
+            readiness.list_workers.return_value = []
+            mock_reconnect.return_value = (
+                MagicMock(),
+                MagicMock(),
+                readiness,
+                MagicMock(),
+                experiment_filestore,
+            )
+
+            from crsbench.cloud.cli._collect import run_collect
+
+            rc = run_collect(_make_collect_args(force=True))
+
+        assert rc == 0
+        marker = read_collect_marker(destination)
+        assert marker is not None
+        assert marker["experiment_start_time"] == "2026-03-09T23:00:00+00:00"
+        assert (
+            marker["experiment_start_time_source"] == "earliest_trial_timestamp_start"
+        )
+
+    def test_collect_partial_failure_does_not_update_existing_marker(
+        self,
+        tmp_path: Path,
+    ):
+        experiment_filestore = tmp_path / "filestore"
+        destination = experiment_filestore / "test-exp"
+        prior_marker = {
+            "schema_version": 1,
+            "experiment_name": "test-exp",
+            "local_destination": str(destination),
+            "last_collect_time": "2026-03-10T01:02:03+00:00",
+            "experiment_start_time": "2026-03-09T23:00:00+00:00",
+            "experiment_start_time_source": "earliest_trial_timestamp_start",
+        }
+        destination.mkdir(parents=True, exist_ok=True)
+        collect_marker_path(destination).write_text(json.dumps(prior_marker))
+        with (
+            patch(
+                "crsbench.cloud.cli._collect.resolve_cloud_context"
+            ) as mock_resolve_context,
+            patch("crsbench.cloud.cli._collect.ArtifactCollector") as mock_coll_cls,
+            patch(
+                "crsbench.cloud.cli._collect.provisioner_for_context"
+            ) as mock_prov_cls,
+            patch("crsbench.cloud.cli._collect.reconnect") as mock_reconnect,
+        ):
+            mock_prov = MagicMock()
+            mock_prov.list_workers.return_value = [_make_gce_worker("w-1")]
+            mock_prov_cls.return_value = mock_prov
+            mock_resolve_context.return_value = _make_collect_context(
+                experiment_filestore=experiment_filestore,
+                remote_experiment_root=tmp_path / "remote-root",
+            )
+
+            mock_coll = MagicMock()
+            from crsbench.cloud.collection import ArtifactCollectionError
+
+            mock_coll.collect.side_effect = ArtifactCollectionError("rsync failed")
+            mock_coll_cls.return_value = mock_coll
+
+            readiness = MagicMock()
+            readiness.list_workers.return_value = []
+            mock_reconnect.return_value = (
+                MagicMock(),
+                MagicMock(),
+                readiness,
+                MagicMock(),
+                experiment_filestore,
+            )
+
+            from crsbench.cloud.cli._collect import run_collect
+
+            rc = run_collect(_make_collect_args(force=True))
+
+        assert rc == 1
+        assert read_collect_marker(destination) == prior_marker
+
+    def test_collect_marker_write_failure_returns_non_zero_after_publish(
+        self,
+        tmp_path: Path,
+    ):
+        experiment_filestore = tmp_path / "filestore"
+        destination = experiment_filestore / "test-exp"
+        with (
+            patch(
+                "crsbench.cloud.cli._collect.resolve_cloud_context"
+            ) as mock_resolve_context,
+            patch("crsbench.cloud.cli._collect.ArtifactCollector") as mock_coll_cls,
+            patch(
+                "crsbench.cloud.cli._collect.provisioner_for_context"
+            ) as mock_prov_cls,
+            patch("crsbench.cloud.cli._collect.reconnect") as mock_reconnect,
+            patch(
+                "crsbench.cloud.cli._collect.write_collect_marker",
+                side_effect=OSError("disk full"),
+            ),
+        ):
+            mock_prov = MagicMock()
+            mock_prov.list_workers.return_value = [_make_gce_worker("w-1")]
+            mock_prov_cls.return_value = mock_prov
+            mock_resolve_context.return_value = _make_collect_context(
+                experiment_filestore=experiment_filestore,
+                remote_experiment_root=tmp_path / "remote-root",
+            )
+
+            mock_coll = MagicMock()
+
+            def _collect_side_effect(**kwargs):
+                kwargs["start_time_observations"].append(
+                    (
+                        "2026-03-09T23:00:00+00:00",
+                        "earliest_trial_timestamp_start",
+                    )
+                )
+                destination.mkdir(parents=True, exist_ok=True)
+                return destination
+
+            mock_coll.collect.side_effect = _collect_side_effect
+            mock_coll_cls.return_value = mock_coll
+
+            readiness = MagicMock()
+            readiness.list_workers.return_value = []
+            mock_reconnect.return_value = (
+                MagicMock(),
+                MagicMock(),
+                readiness,
+                MagicMock(),
+                experiment_filestore,
+            )
+
+            from crsbench.cloud.cli._collect import run_collect
+
+            rc = run_collect(_make_collect_args())
+
+        assert rc == 1
+        assert destination.exists()
 
     @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
     @patch("crsbench.cloud.cli._collect.logger")
