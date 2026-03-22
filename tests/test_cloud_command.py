@@ -1643,6 +1643,21 @@ class TestArgParsing:
         )
         assert args.force is True
 
+    def test_parse_teardown_timestamp(self):
+        parser = self._build_parser()
+        args = parser.parse_args(
+            [
+                "cloud",
+                "teardown",
+                "my-exp",
+                "--config",
+                "c.yaml",
+                "--timestamp",
+            ]
+        )
+        assert args.cloud_command == "teardown"
+        assert args.timestamp is True
+
     def test_parse_teardown_allows_inferred_experiment_and_remote_dir(self):
         parser = self._build_parser()
         args = parser.parse_args(
@@ -6099,12 +6114,14 @@ def _make_teardown_args(
     remote_dir: str = "/home/user/crsbench-experiments/test-exp",
     *,
     force: bool = False,
+    timestamp: bool = False,
 ):
     return argparse.Namespace(
         experiment=experiment,
         config=config,
         remote_dir=remote_dir,
         force=force,
+        timestamp=timestamp,
         cloud_command="teardown",
     )
 
@@ -6147,6 +6164,73 @@ def _setup_teardown_mocks(
 
 class TestTeardown:
     """Tests for run_teardown() sub-action."""
+
+    def test_teardown_timestamp_flag_uses_fresh_sibling_destination(
+        self,
+        tmp_path: Path,
+    ):
+        experiment_filestore = tmp_path / "filestore"
+        base_destination = experiment_filestore / "test-exp"
+        timestamp_destination = experiment_filestore / "test-exp-2026-03-21-17-45"
+        base_destination.mkdir(parents=True)
+        with (
+            patch(
+                "crsbench.cloud.cli._teardown.resolve_cloud_context"
+            ) as mock_resolve_context,
+            patch("crsbench.cloud.cli._teardown.ArtifactCollector") as mock_coll_cls,
+            patch(
+                "crsbench.cloud.cli._teardown.provisioner_for_context"
+            ) as mock_prov_cls,
+            patch("crsbench.cloud.cli._teardown.reconnect") as mock_reconnect,
+            patch(
+                "crsbench.cloud.cli._teardown._fresh_timestamp_destination",
+                return_value=timestamp_destination,
+            ) as mock_timestamp_destination,
+        ):
+            mock_prov = MagicMock()
+            mock_prov.list_workers.return_value = [_make_gce_worker("w-1")]
+            mock_prov_cls.return_value = mock_prov
+            mock_resolve_context.return_value = _make_collect_context(
+                experiment_filestore=experiment_filestore,
+                remote_experiment_root=tmp_path / "remote-root",
+            )
+
+            mock_coll = MagicMock()
+
+            def _collect_side_effect(**kwargs):
+                kwargs["destination"].mkdir(parents=True, exist_ok=True)
+                return kwargs["destination"]
+
+            mock_coll.collect.side_effect = _collect_side_effect
+            mock_coll_cls.return_value = mock_coll
+
+            readiness = MagicMock()
+            readiness.list_workers.return_value = []
+            lifecycle = MagicMock()
+            lifecycle.list_jobs.return_value = []
+            mock_reconnect.return_value = (
+                MagicMock(),
+                MagicMock(),
+                readiness,
+                lifecycle,
+                experiment_filestore,
+            )
+
+            from crsbench.cloud.cli._teardown import run_teardown
+
+            rc = run_teardown(_make_teardown_args(force=True, timestamp=True))
+
+        assert rc == 0
+        mock_timestamp_destination.assert_called_once_with(
+            experiment_filestore,
+            "test-exp",
+        )
+        assert (
+            mock_coll.collect.call_args.kwargs["destination"] == timestamp_destination
+        )
+        marker = read_collect_marker(timestamp_destination)
+        assert marker is not None
+        assert marker["local_destination"] == str(timestamp_destination)
 
     @patch("crsbench.cloud.cli._teardown.resolve_effective_experiment_name")
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")

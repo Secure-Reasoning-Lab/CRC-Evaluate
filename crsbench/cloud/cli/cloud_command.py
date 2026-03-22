@@ -87,6 +87,11 @@ Examples:
         dest="remote_dir",
         help="Absolute path on workers containing the experiment tree",
     )
+    teardown_p.add_argument(
+        "--timestamp",
+        action="store_true",
+        help="Collect artifacts into a fresh timestamped sibling directory",
+    )
 
     # collect
     collect_p = cloud_subparsers.add_parser(

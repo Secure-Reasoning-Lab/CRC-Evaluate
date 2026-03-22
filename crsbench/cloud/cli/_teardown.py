@@ -5,6 +5,12 @@ from __future__ import annotations
 import sys
 from typing import TYPE_CHECKING, cast
 
+from crsbench.cloud.cli._collect import (
+    _build_collect_marker,
+    _confirm_destination_overwrite,
+    _fresh_timestamp_destination,
+    _resolve_current_run_start_time,
+)
 from crsbench.cloud.cli._config_reconnect import (
     reconnect,
     resolve_cloud_context,
@@ -17,7 +23,13 @@ from crsbench.cloud.cli._instance_inventory import (
 from crsbench.cloud.cli._instance_inventory import (
     resolve_instance_fleet as shared_resolve_instance_fleet,
 )
-from crsbench.cloud.collection import ArtifactCollector
+from crsbench.cloud.collection import (
+    ArtifactCollectionError,
+    ArtifactCollector,
+    collect_marker_path,
+    read_collect_marker,
+    write_collect_marker,
+)
 from crsbench.cloud.launch_state import delete_launch_state
 from crsbench.cloud.providers import (
     provider_adapter_for_context,
@@ -51,6 +63,7 @@ def run_teardown(args: argparse.Namespace) -> int:
     context = resolve_cloud_context(args.config, experiment_name)
     launch_state = context.launch_state
     experiment_filestore = context.experiment_filestore
+    base_destination = experiment_filestore / experiment_name
     readiness = None
     lifecycle = None
     try:
@@ -125,6 +138,28 @@ def run_teardown(args: argparse.Namespace) -> int:
         args.remote_dir,
     )
     collection_failed = False
+    artifact_publish_succeeded = False
+    start_time_observations: list[tuple[str | None, str]] = []
+    destination = base_destination
+    if any(_collects_experiment_artifacts(worker) for worker in live_instances):
+        if args.timestamp:
+            destination = _fresh_timestamp_destination(
+                experiment_filestore,
+                experiment_name,
+            )
+        else:
+            resolved_destination = _confirm_destination_overwrite(
+                base_destination,
+                force=args.force,
+                timestamp_destination_factory=lambda: _fresh_timestamp_destination(
+                    experiment_filestore,
+                    experiment_name,
+                ),
+            )
+            if resolved_destination is None:
+                return 1
+            destination = resolved_destination
+
     for worker in live_instances:
         try:
             collector.collect_logs(
@@ -135,7 +170,7 @@ def run_teardown(args: argparse.Namespace) -> int:
                 remote_experiment_dir=remote_experiment_dir,
             )
             logger.info("Log collection succeeded: {}", worker.name)
-        except Exception as exc:
+        except (ArtifactCollectionError, Exception) as exc:
             logger.error(
                 "Log collection failed for {}: {} -- continuing with teardown",
                 worker.name,
@@ -150,9 +185,12 @@ def run_teardown(args: argparse.Namespace) -> int:
                     experiment_name=experiment_name,
                     experiment_filestore=experiment_filestore,
                     remote_experiment_dir=remote_experiment_dir,
+                    start_time_observations=start_time_observations,
+                    destination=destination,
                 )
+                artifact_publish_succeeded = True
                 logger.info("Collection succeeded: {}", worker.name)
-            except Exception as exc:
+            except (ArtifactCollectionError, Exception) as exc:
                 logger.error(
                     "Collection failed for {}: {} -- continuing with teardown",
                     worker.name,
@@ -176,10 +214,28 @@ def run_teardown(args: argparse.Namespace) -> int:
                 remote_experiment_dir=remote_experiment_dir,
             )
             logger.info("Log collection succeeded: {}", orchestrator_worker.name)
-        except Exception as exc:
+        except (ArtifactCollectionError, Exception) as exc:
             logger.error(
                 "Log collection failed for {}: {} -- continuing with teardown",
                 orchestrator_worker.name,
+                exc,
+            )
+            collection_failed = True
+
+    if artifact_publish_succeeded and not collection_failed and destination.exists():
+        current_start_time = _resolve_current_run_start_time(start_time_observations)
+        marker = _build_collect_marker(
+            destination=destination,
+            experiment_name=experiment_name,
+            prior_marker=read_collect_marker(destination),
+            current_start_time=current_start_time,
+        )
+        try:
+            write_collect_marker(destination, marker)
+        except OSError as exc:
+            logger.error(
+                "Failed to write collect marker {}: {}",
+                collect_marker_path(destination),
                 exc,
             )
             collection_failed = True

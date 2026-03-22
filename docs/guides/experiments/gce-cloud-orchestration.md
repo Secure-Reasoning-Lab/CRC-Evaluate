@@ -784,6 +784,25 @@ Use `--force` to skip the confirmation prompt (e.g., in scripts):
 uv run crsbench cloud --config config.yaml teardown --force
 ```
 
+Use `--timestamp` when teardown should publish worker artifacts into a fresh
+timestamped sibling directory instead of merging into the default local
+experiment directory:
+
+```bash
+uv run crsbench cloud --config config.yaml teardown --timestamp --force
+```
+
+Teardown now reuses the same local destination safeguards as `cloud collect`:
+
+- When worker artifacts are being published, `--timestamp` chooses a fresh
+  sibling destination such as
+  `/tmp/crsbench/experiment-data/my-experiment-2026-03-21-17-45`
+- Without `--timestamp`, teardown prompts before merging into an existing local
+  destination unless `--force` is set
+- Successful teardown collections that publish worker artifacts refresh the same
+  `<local-destination>/.crsbench-collect.json` marker metadata used by
+  standalone `cloud collect`
+
 You can still override the inferred experiment name and remote directory:
 
 ```bash
