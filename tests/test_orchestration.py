@@ -1089,6 +1089,46 @@ class TestIntegrationWithSampleConfigs:
         assert config.inputs.sarif.level == 5
         assert config.inputs.diff.enabled is True
 
+    def test_remote_gce_usenix_r1_multilang_given_fuzzer_config_loads_for_cloud_launch(
+        self,
+    ):
+        """The Atlantis GCE usenix-r1 config should parse with launch defaults."""
+        config_path = Path(
+            "experiment-configs/cloud-testing/"
+            "gce-usenix-r1-1orch-2worker-1eval-multilang-given-fuzzer.yaml"
+        )
+
+        assert config_path.exists(), (
+            f"Expected checked-in sample config at {config_path}"
+        )
+
+        config = load_experiment_config(config_path)
+
+        self._assert_remote_gce_smoke_common(
+            config,
+            experiment_name="gce-usenix-r1-mgf-1o2w1e",
+            expected_cloud_env={
+                "OSS_CRS_DEBUG": "1",
+                "HF_TOKEN": "os.environ/HF_TOKEN",
+            },
+            expected_services={"atlantis-multilang-given_fuzzer"},
+            expected_provider_region="us-east5",
+            expected_provider_regions=["us-east5", "us-east1", "us-south1"],
+            expected_worker_regions=[None, None],
+        )
+        assert [placement.zones for placement in config.cloud.workers.placements] == [
+            [],
+            [],
+        ]
+
+        assert config.benchmark_suite == "usenix-r1"
+        assert config.run_timeout == 1800
+        assert config.worker.jobs == 4
+        assert config.pov_early_stop is True
+        assert config.inputs.sarif.enabled is True
+        assert config.inputs.sarif.level == 5
+        assert config.inputs.diff.enabled is True
+
     def test_remote_gce_hf_download_sample_config_loads_for_cloud_launch(self):
         """The GCE HF-download config should parse with launch defaults."""
         config_path = Path(

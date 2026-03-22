@@ -94,6 +94,8 @@ For GCE in v1:
   and
   `experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval-multilang-given-fuzzer.yaml`
   and
+  `experiment-configs/cloud-testing/gce-usenix-r1-1orch-2worker-1eval-multilang-given-fuzzer.yaml`
+  and
   `experiment-configs/cloud-testing/gce-hf-download-1orch-2worker-1eval.yaml`
   and
   `experiment-configs/cloud-testing/gce-sanity-zone-fallback-1orch-1worker-1eval.yaml`

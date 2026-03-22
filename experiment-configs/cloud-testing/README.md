@@ -1,9 +1,9 @@
-# Cloud Smoke Test Configs
+# Cloud Testing Configs
 
-This directory holds operator-facing smoke-test configs for real cloud bring-up.
+This directory holds operator-facing cloud configs for real remote bring-up.
 
-This directory currently ships five GCE smoke configs for the
-remote-orchestrator flow:
+This directory currently ships six GCE configs for the remote-orchestrator
+flow:
 
 - `gce-sanity-1orch-2worker-1eval.yaml`
   - uses `crs-libfuzzer`
@@ -11,6 +11,11 @@ remote-orchestrator flow:
 - `gce-sanity-1orch-2worker-1eval-multilang-given-fuzzer.yaml`
   - uses `atlantis-multilang-given_fuzzer`
   - checked-in experiment identifier: `gce-sanity-mgf-1o2w1e`
+- `gce-usenix-r1-1orch-2worker-1eval-multilang-given-fuzzer.yaml`
+  - uses `atlantis-multilang-given_fuzzer`
+  - benchmark suite: `usenix-r1`
+  - `runtime.run_timeout: 1800` and `worker.jobs: 4`
+  - checked-in experiment identifier: `gce-usenix-r1-mgf-1o2w1e`
 - `gce-hf-download-1orch-2worker-1eval.yaml`
   - uses `crs-libfuzzer`
   - benchmark suite: `smoke-test-bug-finding-hf-download`
@@ -35,7 +40,8 @@ The default sanity sample uses this regional GCE layout:
 - 1 evaluator that inherits the provider region
 - `n2d-standard-16` everywhere
 
-The Atlantis and HF-download samples keep the same regional shape:
+The Atlantis sanity, Atlantis usenix-r1, and HF-download samples keep the same
+regional shape:
 
 - provider-level `region: us-east5`
 - 1 orchestrator that inherits the provider region
@@ -80,6 +86,14 @@ For the HF-download preset, replace:
 - the remote dir `/tmp/crsbench/experiment-data/gce-sanity-1o2w1e` with
   `/tmp/crsbench/experiment-data/gce-hf-download-1o2w1e`
 
+For the usenix-r1 preset, replace:
+
+- the config path with
+  `experiment-configs/cloud-testing/gce-usenix-r1-1orch-2worker-1eval-multilang-given-fuzzer.yaml`
+- the experiment name `gce-sanity-1o2w1e` with `gce-usenix-r1-mgf-1o2w1e`
+- the remote dir `/tmp/crsbench/experiment-data/gce-sanity-1o2w1e` with
+  `/tmp/crsbench/experiment-data/gce-usenix-r1-mgf-1o2w1e`
+
 For the fallback preset, replace:
 
 - the config path with
@@ -113,15 +127,17 @@ validation. In the remote-orchestrator flow, the orchestrator VM rewrites its
 own config to `localhost:6379`, and workers are provisioned with the
 orchestrator VM's internal Redis address.
 
-These smoke configs use the checkout-first cloud bootstrap path:
+These cloud configs use the checkout-first cloud bootstrap path:
 
 - cloud VMs clone CRSBench from `crsbench_install_spec`
 - every VM runs `crsbench prepare`
-- `download_benchmarks: auto` is set for all five samples
+- `download_benchmarks: auto` is set for all six samples
 - the four `benchmark_suite: sanity` samples skip the VM-side benchmark download
 - the `gce-hf-download-1orch-2worker-1eval.yaml` sample runs the VM-side
   Hugging Face dataset download for
   `benchmark_suite: smoke-test-bug-finding-hf-download`
+- the `gce-usenix-r1-1orch-2worker-1eval-multilang-given-fuzzer.yaml` sample
+  also runs the VM-side benchmark download for `benchmark_suite: usenix-r1`
 - `cloud.defaults.readiness_timeout_sec: 1200` gives the whole fleet a
   20-minute bring-up window for cold-image bootstrap and Redis startup
 
@@ -130,13 +146,13 @@ order at runtime. If `us-east5-b` is exhausted, the orchestrator and inherited
 worker placement retry `us-east1-b`. The evaluator does not retry because its
 placement sets `fallback: false`.
 
-The default sanity, Atlantis, and HF-download samples are the references when
-you want to declare `region` instead of a fixed zonal create target. When
-`region` is present, CRSBench uses GCE regional bulk insert with
-`ANY_SINGLE_ZONE`. Optional `zones` become an allowlist inside that region, and
-config validation fails fast if any listed zone belongs to a different region.
-The checked-in regional samples intentionally omit `zones` so GCE can choose the
-actual zone within each requested region.
+The default sanity, Atlantis sanity, Atlantis usenix-r1, and HF-download
+samples are the references when you want to declare `region` instead of a fixed
+zonal create target. When `region` is present, CRSBench uses GCE regional bulk
+insert with `ANY_SINGLE_ZONE`. Optional `zones` become an allowlist inside that
+region, and config validation fails fast if any listed zone belongs to a
+different region. The checked-in regional samples intentionally omit `zones` so
+GCE can choose the actual zone within each requested region.
 
 If you want ordered regional fallback, use `regions` instead of a single
 `region`, for example `regions: [us-east5, us-east1]` with optional `fallback:
@@ -239,8 +255,12 @@ sample, `HF_TOKEN` is required because the worker bootstrap performs a real
 VM-side Hugging Face download for the
 `smoke-test-bug-finding-hf-download` benchmark suite. The Atlantis
 `gce-sanity-1orch-2worker-1eval-multilang-given-fuzzer.yaml` sample leaves
-`cloud.env` empty because that CRS does not need LLM credentials and the
-checked-in `sanity` bring-up skips VM-side benchmark download.
+`cloud.env` with only `OSS_CRS_DEBUG` because that CRS does not need LLM
+credentials and the checked-in `sanity` bring-up skips VM-side benchmark
+download. The Atlantis
+`gce-usenix-r1-1orch-2worker-1eval-multilang-given-fuzzer.yaml` sample also
+requires `HF_TOKEN` because `download_benchmarks: auto` downloads the
+`usenix-r1` suite before workers join Redis.
 
 The checked-in `gce-sanity-1orch-2worker-1eval.yaml` sample still declares
 `HF_TOKEN`, so launch preflight resolves it before provisioning even though
@@ -292,8 +312,8 @@ fine when you launch through the CRSBench CLI.
 
 The Atlantis
 `gce-sanity-1orch-2worker-1eval-multilang-given-fuzzer.yaml` sample does not
-declare any `cloud.env` secrets, so it does not require `CRSBENCH_LLM_*` or
-`HF_TOKEN` exports for launch preflight.
+declare any secret-bearing `cloud.env` entries, so it does not require
+`CRSBENCH_LLM_*` or `HF_TOKEN` exports for launch preflight.
 
 The `gce-hf-download-1orch-2worker-1eval.yaml` sample declares only:
 
@@ -301,6 +321,14 @@ The `gce-hf-download-1orch-2worker-1eval.yaml` sample declares only:
 
 That keeps the operator-side contract focused on the VM-side dataset-download
 path this sample is intended to validate.
+
+The `gce-usenix-r1-1orch-2worker-1eval-multilang-given-fuzzer.yaml` sample
+declares:
+
+- `HF_TOKEN`
+
+and sets `worker.jobs: 4` with `runtime.run_timeout: 1800` for longer
+per-harness fuzzing on each worker VM.
 
 4. Confirm quota is sufficient for this exact layout:
 

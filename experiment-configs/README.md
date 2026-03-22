@@ -24,6 +24,7 @@ Examples:
 - `afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-distributed-localhost.yaml`
 - `afc-final-bugfixing/crs-codex-gpt-5-4-full.yaml`
 - `afc-final-bugfixing/crs-claude-code-claude-sonnet-4-20250514-full.yaml`
+- `cloud-testing/gce-usenix-r1-1orch-2worker-1eval-multilang-given-fuzzer.yaml`
 - `sanity-bugfinding/atlantis-multilang-given_fuzzer-default-delta.yaml`
 - `sanity-bugfixing/crs-copilot-cli-gpt-5-3-codex-delta-sanity-mock-c.yaml`
 
