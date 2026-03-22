@@ -2,7 +2,7 @@ experiment:
   name: gce-usenix-r1-mgf-1o2w1e
   task: bugfinding
   benchmark_suite: usenix-r1
-  mode: delta
+  mode: all
 runtime:
   trials: 1
   max_total_time: 7200

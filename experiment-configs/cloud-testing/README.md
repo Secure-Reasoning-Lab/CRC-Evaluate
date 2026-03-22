@@ -14,6 +14,7 @@ flow:
 - `gce-usenix-r1-1orch-2worker-1eval-multilang-given-fuzzer.yaml`
   - uses `atlantis-multilang-given_fuzzer`
   - benchmark suite: `usenix-r1`
+  - `mode: all` so one run covers both delta and full members of the suite
   - `runtime.run_timeout: 1800` and `worker.jobs: 4`
   - checked-in experiment identifier: `gce-usenix-r1-mgf-1o2w1e`
 - `gce-hf-download-1orch-2worker-1eval.yaml`
@@ -262,8 +263,8 @@ command, so run the launch from the repo root if you keep the checked-in
 relative path.
 
 For the checked-in `gce-hf-download-1orch-2worker-1eval.yaml` `crs-libfuzzer`
-sample, `HF_TOKEN` is required because the worker bootstrap performs a real
-VM-side Hugging Face download for the
+sample, `HF_TOKEN` is required because cloud bootstrap performs a real VM-side
+Hugging Face download for the
 `smoke-test-bug-finding-hf-download` benchmark suite. The Atlantis
 `gce-sanity-1orch-2worker-1eval-multilang-given-fuzzer.yaml` sample leaves
 `cloud.env` with only `OSS_CRS_DEBUG` because that CRS does not need LLM
@@ -271,7 +272,7 @@ credentials and the checked-in `sanity` bring-up skips VM-side benchmark
 download. The Atlantis
 `gce-usenix-r1-1orch-2worker-1eval-multilang-given-fuzzer.yaml` sample also
 requires `HF_TOKEN` because `download_benchmarks: auto` downloads the
-`usenix-r1` suite before workers join Redis.
+`usenix-r1` suite during VM bootstrap.
 
 The checked-in `gce-sanity-1orch-2worker-1eval.yaml` sample still declares
 `HF_TOKEN`, so launch preflight resolves it before provisioning even though
@@ -479,20 +480,3 @@ Expected result:
 - log line similar to
   `Teardown complete: 2 workers deleted, 1 evaluator deleted, and orchestrator deleted`
 - `gcloud compute instances list` no longer shows the smoke-test VMs
-
-## Current Readiness
-
-Code path readiness:
-
-- remote orchestrator launches Valkey on the orchestrator VM
-- workers receive the orchestrator internal Redis address and Redis password
-- `cloud collect` and `cloud teardown` can operate from persisted launch state
-
-Operational blockers on this machine at the time of writing:
-
-- Application Default Credentials were missing
-- the checked-in GitHub ref `feat/gcp` was not publicly reachable through the
-  configured `git+https` install path
-
-Until those are fixed, the checked-in config is not runnable as-is from this
-machine.

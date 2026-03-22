@@ -928,8 +928,7 @@ class TestIntegrationWithSampleConfigs:
         assert config.cloud.bootstrap.prepare_mode == "full"
         assert config.cloud.bootstrap.download_benchmarks == "auto"
         assert config.cloud.env is not None
-        for key, value in expected_cloud_env.items():
-            assert config.cloud.env.get(key) == value
+        assert dict(config.cloud.env) == expected_cloud_env
         assert config.cloud.providers is not None
         assert config.cloud.providers.gce is not None
         assert config.cloud.defaults is not None
@@ -1126,6 +1125,7 @@ class TestIntegrationWithSampleConfigs:
         ]
 
         assert config.benchmark_suite == "usenix-r1"
+        assert config.mode == "all"
         assert config.run_timeout == 1800
         assert config.worker.jobs == 4
         assert config.cloud.bootstrap.download_benchmarks == "auto"
