@@ -1103,6 +1103,7 @@ class TestIntegrationWithSampleConfigs:
         )
 
         config = load_experiment_config(config_path)
+        plan = build_cloud_launch_plan(config)
 
         self._assert_remote_gce_smoke_common(
             config,
@@ -1124,10 +1125,26 @@ class TestIntegrationWithSampleConfigs:
         assert config.benchmark_suite == "usenix-r1"
         assert config.run_timeout == 1800
         assert config.worker.jobs == 4
+        assert config.cloud.bootstrap.download_benchmarks == "auto"
+        assert config.cloud.providers.gce.fallback is True
         assert config.pov_early_stop is True
         assert config.inputs.sarif.enabled is True
         assert config.inputs.sarif.level == 5
         assert config.inputs.diff.enabled is True
+        assert plan.orchestrator.regions == ["us-east5", "us-east1", "us-south1"]
+        assert plan.orchestrator.fallback is True
+        assert [placement.regions for placement in plan.worker_placements] == [
+            ["us-east5", "us-east1", "us-south1"],
+            ["us-east5", "us-east1", "us-south1"],
+        ]
+        assert [placement.fallback for placement in plan.worker_placements] == [
+            True,
+            True,
+        ]
+        assert [placement.regions for placement in plan.evaluator_placements] == [
+            ["us-east5", "us-east1", "us-south1"]
+        ]
+        assert [placement.fallback for placement in plan.evaluator_placements] == [True]
 
     def test_remote_gce_hf_download_sample_config_loads_for_cloud_launch(self):
         """The GCE HF-download config should parse with launch defaults."""
