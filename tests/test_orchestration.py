@@ -1091,8 +1091,11 @@ class TestIntegrationWithSampleConfigs:
 
     def test_remote_gce_usenix_r1_multilang_given_fuzzer_config_loads_for_cloud_launch(
         self,
+        tmp_path: Path,
     ):
         """The Atlantis GCE usenix-r1 config should parse with launch defaults."""
+        from crsbench.cloud.gce.launch_preflight import prepare_gce_launch_inputs
+
         config_path = Path(
             "experiment-configs/cloud-testing/"
             "gce-usenix-r1-1orch-2worker-1eval-multilang-given-fuzzer.yaml"
@@ -1145,6 +1148,31 @@ class TestIntegrationWithSampleConfigs:
             ["us-east5", "us-east1", "us-south1"]
         ]
         assert [placement.fallback for placement in plan.evaluator_placements] == [True]
+
+        key_dir = tmp_path / ".crsbench-keys"
+        key_dir.mkdir()
+        key_path = key_dir / "crsbench-deploy"
+        key_path.write_text("PRIVATE KEY", encoding="utf-8")
+
+        preflight = prepare_gce_launch_inputs(
+            plan=plan,
+            cwd=tmp_path,
+            env={"HF_TOKEN": "hf_test_token"},
+        )
+
+        assert plan.orchestrator.env["HF_TOKEN"] == "os.environ/HF_TOKEN"
+        assert preflight.orchestrator_env["HF_TOKEN"] == "hf_test_token"
+        assert preflight.worker_placement_envs == [
+            {"OSS_CRS_DEBUG": "1", "HF_TOKEN": "hf_test_token"},
+            {"OSS_CRS_DEBUG": "1", "HF_TOKEN": "hf_test_token"},
+        ]
+        assert preflight.evaluator_placement_envs == [
+            {"OSS_CRS_DEBUG": "1", "HF_TOKEN": "hf_test_token"}
+        ]
+        assert (
+            preflight.resolved_plan.orchestrator.launch_defaults.github_deploy_key_path
+            == str(key_path)
+        )
 
     def test_remote_gce_hf_download_sample_config_loads_for_cloud_launch(self):
         """The GCE HF-download config should parse with launch defaults."""

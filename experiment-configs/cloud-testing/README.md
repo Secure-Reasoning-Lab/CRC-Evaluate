@@ -349,9 +349,10 @@ per-harness fuzzing on each worker VM.
   because one worker is `n2d-standard-16`
 - for `gce-sanity-1orch-2worker-1eval-multilang-given-fuzzer.yaml` and
   `gce-usenix-r1-1orch-2worker-1eval-multilang-given-fuzzer.yaml`, budget
-  64 `n2d` vCPUs in whichever region wins from `us-east5`, `us-east1`, or
-  `us-south1`, because the orchestrator, both workers, and the evaluator all
-  inherit the same ordered region fallback
+  64 total `n2d` vCPUs across the fleet and enough headroom in the candidate
+  regions `us-east5`, `us-east1`, and `us-south1`, because orchestrator,
+  worker, and evaluator placements inherit the same ordered region list but may
+  fall back independently during launch
 
 ## Launch Steps
 
