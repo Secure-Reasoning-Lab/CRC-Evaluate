@@ -52,8 +52,9 @@ Examples:
   - `runtime.inputs.seed`
   - `runtime.inputs.diff`
 - Task constraints:
-  - `task: bugfinding` only supports `runtime.inputs.pov`
-  - `runtime.inputs.sarif/seed/diff` are for `task: bugfixing`
+  - `task: bugfinding` should declare `runtime.inputs.pov`
+  - `runtime.inputs.sarif/seed/diff` are optional and may be enabled when the
+    selected CRS flow consumes them
 
 Preferred `crs_compose` shape:
 - `crs_compose.oss_crs_infra` with exactly one CPU mode:

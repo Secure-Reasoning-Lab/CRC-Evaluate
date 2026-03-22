@@ -40,7 +40,7 @@ The default sanity sample uses this regional GCE layout:
 - 1 evaluator that inherits the provider region
 - `n2d-standard-16` everywhere
 
-The Atlantis sanity and HF-download samples keep the same regional shape:
+The HF-download sample keeps the same regional shape:
 
 - provider-level `region: us-east5`
 - 1 orchestrator that inherits the provider region
@@ -48,7 +48,8 @@ The Atlantis sanity and HF-download samples keep the same regional shape:
 - 1 worker that overrides to `region: us-east1` without a zone allowlist
 - 1 evaluator that inherits the provider region
 
-The Atlantis usenix-r1 sample uses ordered regional fallback instead:
+The Atlantis sanity and Atlantis usenix-r1 samples use ordered regional
+fallback instead:
 
 - provider-level `regions: [us-east5, us-east1, us-south1]`
 - provider-level `fallback: true`
@@ -153,16 +154,16 @@ order at runtime. If `us-east5-b` is exhausted, the orchestrator and inherited
 worker placement retry `us-east1-b`. The evaluator does not retry because its
 placement sets `fallback: false`.
 
-The default sanity, Atlantis sanity, and HF-download samples are the references
-when you want to declare `region` instead of a fixed zonal create target. When
-`region` is present, CRSBench uses GCE regional bulk insert with
-`ANY_SINGLE_ZONE`. Optional `zones` become an allowlist inside that region, and
-config validation fails fast if any listed zone belongs to a different region.
-The checked-in regional samples intentionally omit `zones` so GCE can choose the
-actual zone within each requested region.
+The default sanity and HF-download samples are the references when you want to
+declare `region` instead of a fixed zonal create target. When `region` is
+present, CRSBench uses GCE regional bulk insert with `ANY_SINGLE_ZONE`.
+Optional `zones` become an allowlist inside that region, and config validation
+fails fast if any listed zone belongs to a different region. The checked-in
+regional samples intentionally omit `zones` so GCE can choose the actual zone
+within each requested region.
 
-The Atlantis usenix-r1 sample is the reference when you want ordered regional
-fallback via `regions` instead of a single `region`.
+The Atlantis sanity and Atlantis usenix-r1 samples are the references when you
+want ordered regional fallback via `regions` instead of a single `region`.
 
 If you want ordered regional fallback, use `regions` instead of a single
 `region`, for example `regions: [us-east5, us-east1]` with optional `fallback:
@@ -346,7 +347,8 @@ per-harness fuzzing on each worker VM.
   because the orchestrator, one worker, and one evaluator are all `n2d-standard-16`
 - `us-east1`: 16 `n2d` vCPUs
   because one worker is `n2d-standard-16`
-- for `gce-usenix-r1-1orch-2worker-1eval-multilang-given-fuzzer.yaml`, budget
+- for `gce-sanity-1orch-2worker-1eval-multilang-given-fuzzer.yaml` and
+  `gce-usenix-r1-1orch-2worker-1eval-multilang-given-fuzzer.yaml`, budget
   64 `n2d` vCPUs in whichever region wins from `us-east5`, `us-east1`, or
   `us-south1`, because the orchestrator, both workers, and the evaluator all
   inherit the same ordered region fallback
