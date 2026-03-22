@@ -133,8 +133,8 @@ uv run crsbench run --experiment-config experiment-configs/cloud-testing/gce-san
 
 The checked-in `runtime.redis_host` value is only a placeholder for config
 validation. In the remote-orchestrator flow, the orchestrator VM rewrites its
-own config to `localhost:6379`, and workers are provisioned with the
-orchestrator VM's internal Redis address.
+own config to `localhost:6379`, and workers plus evaluators are provisioned
+with the orchestrator VM's internal Redis address.
 
 These cloud configs use the checkout-first cloud bootstrap path:
 
@@ -463,7 +463,8 @@ This infers:
 Expected result:
 
 - exit code `0`
-- `Collection succeeded:` lines for the two workers, the evaluator, and the orchestrator
+- `Collection succeeded:` lines for the two workers
+- `Log collection succeeded:` lines for the evaluator and the orchestrator
 - local experiment data appears under your configured experiment filestore
 
 Tear everything down:
@@ -478,5 +479,5 @@ Expected result:
 
 - exit code `0`
 - log line similar to
-  `Teardown complete: 2 workers deleted, 1 evaluator deleted, and orchestrator deleted`
+  `Teardown complete: 3 instances deleted and orchestrator deleted`
 - `gcloud compute instances list` no longer shows the smoke-test VMs
