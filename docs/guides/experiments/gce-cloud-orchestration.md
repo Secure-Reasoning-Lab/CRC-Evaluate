@@ -10,6 +10,69 @@ guide covers that current backend end to end.
 For a local preflight of the same startup scripts before touching GCE, use
 [Local Cloud Rehearsal](./local-cloud-rehearsal.md).
 
+## TL;DR Smoke Test
+
+If you just want to prove the remote-orchestrator path works end to end, use
+the checked-in multilang smoke config below. This assumes the prerequisites in
+the next section are already satisfied.
+
+```bash
+CONFIG=experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval-multilang-given-fuzzer.yaml
+EXPERIMENT=gce-sanity-mgf-1o2w1e
+```
+
+1. Create the deploy key used by VM bootstrap for the top-level CRSBench clone:
+
+```bash
+uv run crsbench cloud keygen
+```
+
+Expected result: `.crsbench-keys/crsbench-deploy` and
+`.crsbench-keys/crsbench-deploy.pub` exist locally.
+
+2. Add the public key to GitHub under the CRSBench repository's deploy keys:
+
+```bash
+cat .crsbench-keys/crsbench-deploy.pub
+```
+
+Then go to **Settings > Deploy keys > Add deploy key**, paste that public key,
+and leave write access disabled.
+
+3. Launch the checked-in multilang smoke run:
+
+```bash
+uv run crsbench cloud launch --config "$CONFIG"
+```
+
+This provisions 1 orchestrator, 2 workers, and 1 evaluator, then starts
+experiment `gce-sanity-mgf-1o2w1e`.
+
+4. Monitor the live queue from the operator machine:
+
+```bash
+uv run crsbench cloud --config "$CONFIG" monitor "$EXPERIMENT"
+```
+
+You can omit `"$EXPERIMENT"` here because `cloud monitor` infers it from the
+config.
+
+5. After the run finishes, collect artifacts and VM diagnostics back to the
+local machine:
+
+```bash
+uv run crsbench cloud --config "$CONFIG" collect
+```
+
+6. Tear down the fleet so you do not leave GCE resources running:
+
+```bash
+uv run crsbench cloud --config "$CONFIG" teardown --force
+```
+
+For the detailed preflight checks, config explanation, and troubleshooting
+flows, continue with the rest of this guide.
+
 ## Prerequisites
 
 1. **GCP project** with Compute Engine API enabled
