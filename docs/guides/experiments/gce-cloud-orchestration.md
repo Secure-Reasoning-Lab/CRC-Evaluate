@@ -13,7 +13,13 @@ For a local preflight of the same startup scripts before touching GCE, use
 ## Prerequisites
 
 1. **GCP project** with Compute Engine API enabled
-2. **gcloud CLI** authenticated:
+2. **gcloud CLI** installed and authenticated:
+   - Install it for your platform using the official Google Cloud CLI guide:
+     <https://cloud.google.com/sdk/docs/install>
+   - For archive-based installs on Linux or macOS, download the matching
+     package from that guide and run `./google-cloud-sdk/install.sh`
+   - Run `gcloud init` after installation to set your default project and
+     config
    - `gcloud auth login` for operator CLI use
    - `gcloud auth application-default login` for CRSBench's Python GCE client
 3. **Service account** for workers with minimal permissions:
@@ -26,6 +32,9 @@ For a local preflight of the same startup scripts before touching GCE, use
    VMs it provisions.
 5. **IAP** configured if using `ssh_via_iap: true`:
    - firewall rule allowing TCP port 22 from IAP range `35.235.240.0/20`
+     (for example, `gcloud compute firewall-rules create allow-ssh-from-iap
+     --project my-gcp-project --network my-vpc --direction=INGRESS
+     --action=ALLOW --rules=tcp:22 --source-ranges=35.235.240.0/20`)
    - operator IAM permissions to open IAP TCP tunnels and log in over SSH
 6. **Redis/Valkey** reachable from worker VMs
 7. **rsync** installed on the operator machine (for artifact collection)
@@ -91,64 +100,132 @@ cloud:
 
 ### Configuration Fields
 
+#### Shared Cloud Fields
+
 | Field | Required | Description |
 |---|---|---|
-| `cloud.defaults` | no | Provider-agnostic launch/bootstrap defaults merged into every cloud role |
+| `cloud.bootstrap.prepare_mode` | no | How cloud VMs run `crsbench prepare`; `full` or `skip_base_images` |
+| `cloud.bootstrap.download_benchmarks` | no | Whether cloud VMs download benchmarks before joining runtime; `auto`, `always`, or `never` |
+| `cloud.defaults.readiness_timeout_sec` | no | Max seconds launch waits for VM bootstrap and readiness before failing |
+| `cloud.defaults.crsbench_install_spec` | no | CRSBench install source for remote VMs; cloud launch expects a `git+...` spec |
+| `cloud.defaults.crsbench_git_ref` | no | Git ref checked out when `crsbench_install_spec` points at a Git source |
+| `cloud.defaults.github_deploy_key_path` | no | Optional secret reference for a private Git deploy key used during CRSBench install |
 | `cloud.remote.experiment_root` | no | Remote experiment root used by `cloud collect` / `cloud teardown`; defaults to `storage.experiment_filestore` for backward compatibility |
 | `cloud.env` | no | Global environment variables merged into every launched cloud role |
+
+#### GCE Provider Fields
+
+| Field | Required | Description |
+|---|---|---|
 | `cloud.providers.gce.project` | yes | GCP project ID used for all referenced GCE resources |
-| `cloud.providers.gce.defaults` | no | Provider-specific overrides for `cloud.defaults` |
+| `cloud.providers.gce.network` | no | Default VPC network name for GCE resources unless instance profiles override it |
+| `cloud.providers.gce.subnetwork` | no | Default VPC subnetwork name for GCE resources unless instance profiles override it |
+| `cloud.providers.gce.ssh_via_iap` | no | Default operator SSH transport; when true, operators connect through IAP-backed SSH by default |
+| `cloud.providers.gce.assign_external_ip` | no | Default external NAT policy for outbound internet access unless instance profiles override it |
+| `cloud.providers.gce.defaults.readiness_timeout_sec` | no | GCE-specific override for the shared launch readiness timeout |
+| `cloud.providers.gce.defaults.crsbench_install_spec` | no | GCE-specific override for the shared CRSBench install source |
+| `cloud.providers.gce.defaults.crsbench_git_ref` | no | GCE-specific override for the shared CRSBench Git ref |
+| `cloud.providers.gce.defaults.github_deploy_key_path` | no | GCE-specific override for the shared Git deploy key secret reference |
 | `cloud.providers.gce.region` | no | Default GCE region used when orchestrator or placements do not override `region` |
 | `cloud.providers.gce.regions` | no | Ordered default candidate regions used for regional placement and regional fallback |
 | `cloud.providers.gce.zones` | no | Ordered default candidate zones used when orchestrator or placements do not override `zones` |
-| `cloud.providers.gce.fallback` | no | Default policy for retrying later candidate zones after zonal placement failure |
+| `cloud.providers.gce.fallback` | no | Default policy for retrying later candidate regions or zones after recognized placement failure |
 | `cloud.providers.gce.profile_defaults` | no | Default instance-profile fields merged into every named GCE profile |
-| `cloud.providers.gce.instance_profiles.<name>` | yes | Reusable machine/image/service-account bundle for orchestrator or workers |
+| `cloud.providers.gce.profile_defaults.env` | no | Default environment variables merged into every named GCE instance profile |
+| `cloud.providers.gce.instance_profiles.<name>` | yes | Reusable machine/image/service-account bundle for orchestrator, workers, or evaluators |
+
+#### GCE Instance Profile Fields
+
+These field suffixes are valid under both
+`cloud.providers.gce.profile_defaults` and
+`cloud.providers.gce.instance_profiles.<name>`. `profile_defaults` supplies
+defaults; `instance_profiles.<name>` defines the effective per-VM contract.
+
+| Field suffix | Required on `instance_profiles.<name>` | Description |
+|---|---|---|
+| `machine_type` | yes when `image` is used | GCE machine type for image-based instances |
+| `boot_disk_size_gb` | yes when `image` is used | Boot disk size in GiB for image-based instances |
+| `image` | exactly one of `image` or `instance_template` | Image or image-family reference used for VM creation |
+| `instance_template` | exactly one of `image` or `instance_template` | Existing GCE instance template to use instead of explicit image and machine settings |
+| `network` | no | Optional VPC network override for this profile |
+| `subnetwork` | no | Optional VPC subnetwork override for this profile |
+| `service_account_email` | yes | Service account email used for instances created with this profile |
+| `owner_label` | required unless `labels.owner` is set | Ownership label applied to instances using this profile |
+| `labels` | no | Additional GCE labels applied to instances using this profile |
+| `metadata` | no | Additional instance metadata applied during bootstrap |
+| `env` | no | Environment variables merged into instances using this profile |
+| `startup_script_uri` | no | Optional URI for a maintained startup script payload |
+| `use_os_login` | must remain `true` | CRSBench supports only OS Login-compatible SSH access in this flow |
+| `ssh_via_iap` | no | Whether operators are expected to connect through IAP-backed SSH |
+| `assign_external_ip` | no | Whether instances receive an external NAT interface for outbound internet access |
+
+#### Orchestrator Fields
+
+| Field | Required | Description |
+|---|---|---|
 | `cloud.orchestrator.zone` | no | Backward-compatible single preferred orchestrator zone; normalized into `zones` |
 | `cloud.orchestrator.region` | no | Optional orchestrator region; enables regional bulk placement |
 | `cloud.orchestrator.regions` | no | Ordered candidate regions for regional placement plus runtime fallback |
 | `cloud.orchestrator.zones` | no | Ordered candidate zones for the orchestrator VM |
-| `cloud.orchestrator.fallback` | no | Override for orchestrator zone retry behavior |
+| `cloud.orchestrator.fallback` | no | Override for orchestrator region-or-zone retry behavior |
 | `cloud.orchestrator.instance_profile` | yes | Instance profile name for the orchestrator VM |
+| `cloud.orchestrator.env` | no | Environment variables injected only into the orchestrator VM |
+
+#### Worker Fields
+
+| Field | Required | Description |
+|---|---|---|
 | `cloud.workers.defaults.count` | no | Default number of workers to create per placement |
 | `cloud.workers.defaults.instance_profile` | no | Default worker instance profile |
 | `cloud.workers.defaults.region` | no | Role-level default region for worker placements |
 | `cloud.workers.defaults.regions` | no | Ordered role-level default candidate regions for worker placements |
-| `cloud.workers.defaults.zones` | no | Role-level default candidate zones for worker placements |
-| `cloud.workers.defaults.fallback` | no | Role-level default fallback policy for worker placements |
+| `cloud.workers.defaults.zones` | no | Ordered role-level default candidate zones for worker placements |
+| `cloud.workers.defaults.fallback` | no | Role-level default fallback policy for worker placements across regions or zones |
+| `cloud.workers.defaults.env` | no | Default environment variables merged into each worker placement |
 | `cloud.workers.placements[].zone` | no | Backward-compatible single preferred worker zone; normalized into `zones` |
 | `cloud.workers.placements[].region` | no | Optional worker region for regional bulk placement |
 | `cloud.workers.placements[].regions` | no | Ordered candidate regions for one worker placement |
 | `cloud.workers.placements[].zones` | no | Ordered candidate zones for one worker placement |
-| `cloud.workers.placements[].fallback` | no | Per-placement override for worker zone retry behavior |
+| `cloud.workers.placements[].fallback` | no | Per-placement override for worker region-or-zone retry behavior |
 | `cloud.workers.placements[].count` | no | Number of workers to create in that placement |
 | `cloud.workers.placements[].instance_profile` | no | Instance profile override for that placement |
+| `cloud.workers.placements[].env` | no | Environment variables injected into every worker VM in that placement |
+
+#### Evaluator Fields
+
+| Field | Required | Description |
+|---|---|---|
 | `cloud.evaluators.defaults.count` | no | Default number of evaluators to create per placement |
 | `cloud.evaluators.defaults.instance_profile` | no | Default evaluator instance profile |
 | `cloud.evaluators.defaults.region` | no | Role-level default region for evaluator placements |
 | `cloud.evaluators.defaults.regions` | no | Ordered role-level default candidate regions for evaluator placements |
-| `cloud.evaluators.defaults.zones` | no | Role-level default candidate zones for evaluator placements |
-| `cloud.evaluators.defaults.fallback` | no | Role-level default fallback policy for evaluator placements |
+| `cloud.evaluators.defaults.zones` | no | Ordered role-level default candidate zones for evaluator placements |
+| `cloud.evaluators.defaults.fallback` | no | Role-level default fallback policy for evaluator placements across regions or zones |
+| `cloud.evaluators.defaults.env` | no | Default environment variables merged into each evaluator placement |
 | `cloud.evaluators.placements[].zone` | no | Backward-compatible single preferred evaluator zone; normalized into `zones` |
 | `cloud.evaluators.placements[].region` | no | Optional evaluator region for regional bulk placement |
 | `cloud.evaluators.placements[].regions` | no | Ordered candidate regions for one evaluator placement |
 | `cloud.evaluators.placements[].zones` | no | Ordered candidate zones for one evaluator placement |
-| `cloud.evaluators.placements[].fallback` | no | Per-placement override for evaluator zone retry behavior |
+| `cloud.evaluators.placements[].fallback` | no | Per-placement override for evaluator region-or-zone retry behavior |
 | `cloud.evaluators.placements[].count` | no | Number of evaluators to create in that placement |
 | `cloud.evaluators.placements[].instance_profile` | no | Instance profile override for that placement |
+| `cloud.evaluators.placements[].env` | no | Environment variables injected into every evaluator VM in that placement |
 
 Provider-neutral configs do not repeat `provider` on orchestrator or
 placements. CRSBench resolves the provider from the referenced
 `cloud.providers.<provider>.instance_profiles` catalog, and one launch cannot
 mix providers across orchestrator, workers, and evaluators.
+Launchable configs require `cloud.providers`, `cloud.orchestrator`, and
+`cloud.workers`. `cloud.evaluators` is optional, but when present it must
+declare at least one placement.
 Instance-profile keys must also be globally unique across provider catalogs, so
 the same profile name cannot be reused under multiple `cloud.providers.*`
 entries. Today the only supported catalog is `cloud.providers.gce`.
 
 Instance profiles carry the per-VM details such as `machine_type`,
-`boot_disk_size_gb`, `image` or `instance_template`, `service_account_email`,
-`owner_label`, `labels`, `metadata`, `ssh_via_iap`, and
-`assign_external_ip`.
+`boot_disk_size_gb`, `image` or `instance_template`, `network`, `subnetwork`,
+`service_account_email`, `owner_label`, `labels`, `metadata`, `env`,
+`startup_script_uri`, `ssh_via_iap`, and `assign_external_ip`.
 
 `ssh_via_iap` controls how operators connect. `assign_external_ip` controls
 whether GCE attaches an external NAT interface for outbound package installs,
@@ -160,7 +237,9 @@ When an effective `region` or ordered `regions` list is present, CRSBench uses
 GCE regional bulk insert with `ANY_SINGLE_ZONE`. Optional `zones` become an
 allowlist inside the effective region set. CRSBench validates that every listed
 zone belongs to one of the effective regions before any VM create request is
-sent.
+sent. On each regional attempt, CRSBench first filters that `zones` list down
+to only the zones that belong to the current region, then sends that filtered
+zone list as the regional bulk-insert location policy.
 
 Launch/bootstrap defaults live outside instance profiles:
 
@@ -188,11 +267,77 @@ If no effective regions are declared, zonal selection falls back to:
 2. role `defaults.zones`
 3. `cloud.providers.gce.zones`
 
+In zonal mode, CRSBench tries those effective zones in listed order, one zone
+at a time.
+
 Fallback policy uses the same precedence, ending with `true` if nothing is
 configured. When `fallback: true`, CRSBench retries later declared regions or
 zones only for recognized placement failures. When `fallback: false`, the first
 placement failure for that logical slot fails the launch and tears down any
 instances that were already created.
+
+Singular `region` and `zone` are just shorthand. CRSBench normalizes them into
+the same effective selection flow as `regions` and `zones`, so the real
+decision model is: use effective `regions` first; if none are declared, use
+effective `zones`.
+
+Example:
+
+```yaml
+cloud:
+  providers:
+    gce:
+      project: my-gcp-project
+      regions:
+        - us-east5
+        - us-central1
+      zones:
+        - us-east5-b
+        - us-central1-a
+      fallback: true
+      instance_profiles:
+        gce-worker:
+          machine_type: n2d-standard-16
+          boot_disk_size_gb: 100
+          image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+          service_account_email: crsbench@my-gcp-project.iam.gserviceaccount.com
+          owner_label: my-team
+  workers:
+    defaults:
+      instance_profile: gce-worker
+    placements:
+      - count: 2
+        regions:
+          - us-east5
+          - us-central1
+        zones:
+          - us-east5-b
+          - us-central1-a
+        fallback: true
+      - count: 1
+        zone: us-east5-c
+        fallback: false
+```
+
+What CRSBench does with this config:
+
+1. For the first placement, effective `regions` are `us-east5`, then
+   `us-central1` from `placements[0].regions`.
+2. Because effective `regions` exist, CRSBench uses regional bulk insert with
+   `ANY_SINGLE_ZONE`; the placement `zones` list is only an allowlist inside
+   those regions, not an ordered zonal retry list.
+   For the `us-east5` attempt, CRSBench sends only `us-east5-b` to GCE. If it
+   falls back to `us-central1`, it sends only `us-central1-a`.
+3. If GCE returns a recognized regional capacity failure in `us-east5`,
+   `fallback: true` lets CRSBench retry the same logical placement in
+   `us-central1`.
+4. For the second placement, `zone: us-east5-c` is normalized to
+   `zones: [us-east5-c]`. No placement or default `regions` are present for
+   that placement, so CRSBench uses zonal selection instead of regional bulk
+   insert.
+5. Because that placement sets `fallback: false`, a recognized placement
+   failure in `us-east5-c` fails that logical slot immediately instead of
+   trying another zone.
 
 By default, provisioned instance names sort naturally in the GCP console:
 `crsbench-<experiment>-orch`,
