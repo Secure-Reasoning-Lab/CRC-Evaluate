@@ -647,13 +647,15 @@ After `cloud launch`, you can attach to the remote orchestrator's live trial
 queue from the operator machine:
 
 ```bash
-uv run crsbench cloud --config config.yaml monitor my-experiment
+uv run crsbench cloud --config config.yaml monitor [my-experiment]
 ```
 
 This command requires the config-adjacent launch state written by
 `cloud launch`. CRSBench opens a temporary SSH or IAP tunnel to the remote
 orchestrator automatically, attaches to the orchestrator-local Redis service,
 and renders the same live queue progress view used by `crsbench run`.
+If you omit `my-experiment`, `cloud monitor` infers the experiment name from
+the config file.
 If the orchestrator is still finishing bootstrap, `cloud monitor` waits for
 the tunneled Redis endpoint to become ready up to `readiness_timeout_sec`
 instead of failing on the first connection refusal.
@@ -672,36 +674,29 @@ instance as running. Size `readiness_timeout_sec` for package install, repo
 checkout, `crsbench prepare`, optional benchmark download, and Redis/queue
 listener startup.
 
-Worker bootstrap now polls the configured Redis endpoint before starting the
-managed `crsbench worker` process, and evaluator bootstrap uses the same host
-bootstrap path before launching a managed `crsbench evaluator` service with the
-experiment config embedded in VM metadata. That closes the gap where workers or
-evaluators could terminally fail before the remote orchestrator had finished
-starting Valkey. Transport-level connection failures are retried until the
-readiness timeout, while fatal Redis auth/config errors still fail immediately
-with bootstrap evidence.
-The same startup scripts also support local rehearsal via file-backed metadata
-and a foreground launcher mode for non-`systemd` containers. Startup-time
-settings such as `CRSBENCH_TIMEZONE` and `CRSBENCH_GIT_SSH_HOST` can be
-overridden through `cloud.env` or the role/profile env layers; when unset,
-bootstrap still defaults to `America/New_York` and `github.com`. On real GCE
-orchestrators, `CRSBENCH_VALKEY_IMAGE` can be overridden through
-`cloud.orchestrator.env` while still defaulting to `valkey/valkey:8.0-alpine`.
-On real GCE VMs,
-the scripts now create a dedicated `crsbench` user, grant passwordless `sudo`
-for disposable-host bootstrap, install the user-session support package needed
-for `/run/user/<uid>/bus`, enforce Docker `cgroupfs`, and run the long-lived
-orchestrator/worker processes as `systemd --user` services while pre-creating
-the delegated `user@<uid>.service/crsbench` and
-`user@<uid>.service/oss-crs` cgroup hierarchies expected by the CRSBench
-runtime and the `oss-crs` CLI.
-The checked-in smoke configs use `cloud.defaults.readiness_timeout_sec: 1200`,
-`boot_disk_size_gb: 100` via `cloud.providers.gce.profile_defaults`, and
-`runtime.build_timeout: 3600` so fresh-image smoke runs have room to finish
-bootstrap plus a real CRS prepare/build cycle. The Atlantis
-`atlantis-multilang-given_fuzzer` sample also enables `runtime.pov_early_stop`
-plus `inputs.sarif` and `inputs.diff` to match the existing Atlantis sanity
-bug-finding preset shape.
+Bootstrap behavior:
+
+- Worker and evaluator startup waits for Redis before launching managed
+  `crsbench worker` / `crsbench evaluator` services.
+- Transport-level Redis connection failures retry until the readiness timeout;
+  fatal auth or config errors fail immediately with bootstrap evidence.
+- The same startup scripts support local rehearsal via file-backed metadata and
+  a foreground mode for non-`systemd` containers.
+- `CRSBENCH_TIMEZONE` and `CRSBENCH_GIT_SSH_HOST` can be set through
+  `cloud.env` or the role/profile env layers; defaults are
+  `America/New_York` and `github.com`.
+- On real GCE orchestrators, `CRSBENCH_VALKEY_IMAGE` can be overridden through
+  `cloud.orchestrator.env`; the default is `valkey/valkey:8.0-alpine`.
+- On real GCE VMs, bootstrap creates a dedicated `crsbench` user, configures
+  passwordless `sudo` for setup, enforces Docker `cgroupfs`, and runs the
+  long-lived services as `systemd --user` units with the delegated cgroup
+  hierarchy expected by CRSBench and `oss-crs`.
+- The checked-in smoke configs use `cloud.defaults.readiness_timeout_sec: 1200`,
+  `boot_disk_size_gb: 100`, and `runtime.build_timeout: 3600` so fresh-image
+  runs have time to finish bootstrap plus a real prepare/build cycle.
+- The Atlantis `atlantis-multilang-given_fuzzer` sample also enables
+  `runtime.pov_early_stop`, `inputs.sarif`, and `inputs.diff` to match the
+  existing Atlantis sanity bug-finding preset.
 
 ## Monitoring
 
@@ -757,15 +752,16 @@ By default, `cloud collect` infers:
 - otherwise, for legacy configs, `<storage.experiment_filestore>/<experiment.name>`
 
 In plain terms, `cloud collect` copies trial artifacts and VM diagnostics from
-the cloud VMs back into a local directory on the machine where you run the
-command. By default, CRSBench merges worker artifacts into the existing local
-experiment directory if one already exists.
+the cloud VMs back to a local directory on the machine where you run the
+command.
 
-`storage.experiment_filestore` is the local destination on your machine.
-`cloud.remote.experiment_root` is the remote source root on the VMs used by
-`cloud collect` and `cloud teardown`. If you omit
-`cloud.remote.experiment_root`, CRSBench falls back to the legacy behavior of
-reusing `storage.experiment_filestore` for both.
+Key paths:
+
+- `storage.experiment_filestore`: local destination on your machine
+- `cloud.remote.experiment_root`: remote source root on the VMs used by
+  `cloud collect` and `cloud teardown`
+- If `cloud.remote.experiment_root` is unset, CRSBench falls back to the
+  legacy behavior of reusing `storage.experiment_filestore` for both
 
 You can still override either value explicitly:
 
@@ -795,26 +791,49 @@ uv run crsbench cloud --config config.yaml collect my-experiment \
     --timestamp
 ```
 
-- Uses rsync (via IAP tunnel or direct SSH depending on config)
-- For direct SSH, seeds a config-adjacent `.crsbench-cloud/known_hosts` file and reuses the local GCE OS Login username
-- Stages worker artifacts in a temporary directory, verifies at least one valid trial exists, then publishes to the experiment filestore
-- Continues to remaining worker/evaluator VMs if one fails; exits with code 1 on partial failure
-- Evaluator VMs are log-only for collection; they do not rsync `/tmp/crsbench/experiment-data/<experiment>` because build/verify work stays in transient evaluator scratch space instead of a worker-style experiment tree
-- Safe to run multiple times (incremental rsync), but when the local destination already exists CRSBench warns before merging into it
-- Interactive runs prompt `Continue and merge into the existing destination? [Y/n/t]`
-- Press `Enter` or `y` to merge into the existing destination
-- Press `n` or `no` to cancel the collect run without changing the local destination
-- Press `t` to use the same fresh-sibling behavior as `--timestamp`
-- In non-interactive runs, an existing destination causes `cloud collect` to fail unless you pass `--force` or `--timestamp` when the run will publish worker artifacts
-- In non-interactive runs, `--force` merges into the existing destination without prompting, while `--timestamp` chooses a fresh artifact destination when worker artifacts are being published
-- Successful collect runs that actually publish worker artifact data refresh a hidden local marker at `<local-destination>/.crsbench-collect.json` with the last successful artifact collect time and best-effort experiment start time
-- Also collects VM diagnostics under `.crsbench-cloud/remote-logs/<experiment>/`, including:
-  - `google-startup-scripts.service` and `google-guest-agent.service` journals
-  - `crsbench-worker.service`, `crsbench-evaluator.service`, or `crsbench-orchestrator.service` user journals
-  - `runtime-summary.txt` with timezone, Docker cgroup driver, user-bus, linger, and Redis listener state
-  - lightweight per-trial observability files such as `worker.log`, `metadata.json`, `.success`, `.failure`, and the orchestrator `trial_matrix.json`
-- In remote-orchestrator mode, collects orchestrator logs and control-plane files, but trial artifact publication still comes from workers
-- If Redis is unavailable, falls back to the persisted launch state plus live GCE inventory
+Collection behavior:
+
+- Uses `rsync` via IAP tunnel or direct SSH, depending on config
+- For direct SSH, seeds a config-adjacent `.crsbench-cloud/known_hosts` file
+  and reuses the local GCE OS Login username
+- Stages worker artifacts in a temporary directory, verifies at least one valid
+  trial exists, then publishes to the experiment filestore
+- Continues to remaining worker and evaluator VMs if one fails; exits with code
+  `1` on partial failure
+- Evaluator VMs are log-only for collection; they do not rsync
+  `/tmp/crsbench/experiment-data/<experiment>`
+- In remote-orchestrator mode, collects orchestrator logs and control-plane
+  files, but worker artifact publication still comes from workers
+- If Redis is unavailable, falls back to the persisted launch state plus live
+  GCE inventory
+
+Destination behavior:
+
+- Safe to run multiple times with incremental rsync
+- If the local destination already exists, CRSBench warns before merging into it
+- Interactive prompt: `Continue and merge into the existing destination? [Y/n/t]`
+- `Enter` or `y`: merge into the existing destination
+- `n` or `no`: cancel without changing the local destination
+- `t`: use the same fresh-sibling behavior as `--timestamp`
+- In non-interactive runs, an existing destination fails unless you pass
+  `--force` or `--timestamp` when worker artifacts will be published
+- `--force` merges without prompting
+- `--timestamp` chooses a fresh artifact destination when worker artifacts are
+  being published
+- Successful publishes refresh
+  `<local-destination>/.crsbench-collect.json` with the last successful collect
+  time and best-effort experiment start time
+
+Diagnostics collected under `.crsbench-cloud/remote-logs/<experiment>/`:
+
+- `google-startup-scripts.service` and `google-guest-agent.service` journals
+- `crsbench-worker.service`, `crsbench-evaluator.service`, or
+  `crsbench-orchestrator.service` user journals
+- `runtime-summary.txt` with timezone, Docker cgroup driver, user-bus, linger,
+  and Redis listener state
+- Lightweight per-trial observability files such as `worker.log`,
+  `metadata.json`, `.success`, `.failure`, and the orchestrator
+  `trial_matrix.json`
 
 ## Listing Instances
 
@@ -1022,24 +1041,32 @@ sudo -iu crsbench env \
   journalctl --user -u crsbench-worker.service -f
 ```
 
-The worker and evaluator launchers also mirror stdout/stderr into role-specific
-files under `/var/lib/crsbench/`, so you can inspect `/var/lib/crsbench/worker.log`
-or `/var/lib/crsbench/evaluator.log` directly on the VM. The remote orchestrator
-continues to mirror into `/var/lib/crsbench/orchestrator.log`.
+Useful manual checks:
 
-During bootstrap, both orchestrator and worker VMs normalize the host timezone
-to `CRSBENCH_TIMEZONE` (default `America/New_York`) and configure Docker to use
-the `cgroupfs` driver expected by `oss-crs`. On Ubuntu-based GCE images, CRSBench now installs
-Docker Engine from Docker's official apt repository rather than the distro
-`docker.io` packages. If you inspect a VM manually, verify these with
-`timedatectl`, `cat /etc/timezone`, `docker info --format '{{.CgroupDriver}}'`,
-and `apt-cache policy docker-ce`.
-Bootstrap also installs `iftop`, `rg`, and `fdfind`, and bootstraps Docker
-Buildx for the default builder context so ad hoc network and Docker debugging
-on the VM uses the same toolchain as CRSBench. Verify that with
-`command -v iftop`, `docker buildx ls`, or `docker buildx inspect`.
-You can also verify the delegated cgroup setup that both CRSBench and
-`oss-crs` depend on with:
+- Role logs are mirrored under `/var/lib/crsbench/`:
+  `/var/lib/crsbench/worker.log`,
+  `/var/lib/crsbench/evaluator.log`, and
+  `/var/lib/crsbench/orchestrator.log`
+- Bootstrap normalizes the host timezone to `CRSBENCH_TIMEZONE` (default
+  `America/New_York`) and configures Docker to use the `cgroupfs` driver
+  expected by `oss-crs`
+- On Ubuntu-based GCE images, CRSBench installs Docker Engine from Docker's
+  official apt repository rather than the distro `docker.io` packages
+- Bootstrap also installs `iftop`, `rg`, and `fdfind`, and bootstraps Docker
+  Buildx for the default builder context
+
+You can verify those with:
+
+- `timedatectl`
+- `cat /etc/timezone`
+- `docker info --format '{{.CgroupDriver}}'`
+- `apt-cache policy docker-ce`
+- `command -v iftop`
+- `docker buildx ls`
+- `docker buildx inspect`
+
+You can also verify the delegated cgroup setup that both CRSBench and `oss-crs`
+depend on with:
 
 ```bash
 sudo ls -ld \
