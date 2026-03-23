@@ -1,7 +1,8 @@
 """Interactive experiment config generator.
 
 Prompts users for required fields and generates a valid grouped-format
-experiment config YAML file. Uses questionary for arrow-key selection UI.
+experiment config YAML file. Uses InquirerPy for interactive TUI prompts
+with arrow-key selection and fuzzy autocomplete.
 """
 
 from __future__ import annotations
@@ -9,9 +10,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import questionary
 import yaml
-from questionary import Choice
+from humanfriendly import parse_timespan
+from InquirerPy import inquirer
+from InquirerPy.base.control import Choice
+from InquirerPy.validator import NumberValidator
 
 # ---------------------------------------------------------------------------
 # Discovery helpers
@@ -88,64 +91,70 @@ def discover_crs_names(
 
 
 # ---------------------------------------------------------------------------
-# Interactive prompting (questionary-based)
+# Choice definitions
 # ---------------------------------------------------------------------------
 
 _TASK_CHOICES = [
     Choice(
-        title="bugfinding  — CRS discovers vulnerabilities by generating POVs",
         value="bugfinding",
+        name="bugfinding  — CRS discovers vulnerabilities by generating POVs",
     ),
     Choice(
-        title="bugfixing   — CRS generates patches for known vulnerabilities",
         value="bugfixing",
+        name="bugfixing   — CRS generates patches for known vulnerabilities",
     ),
 ]
 
 _MODE_CHOICES = [
     Choice(
-        title="delta — evaluate on code diffs between two commits (most common)",
         value="delta",
+        name="delta — evaluate on code diffs between two commits (most common)",
     ),
     Choice(
-        title="full  — evaluate on a single vulnerable commit snapshot",
         value="full",
+        name="full  — evaluate on a single vulnerable commit snapshot",
     ),
     Choice(
-        title="all   — run both delta and full modes for each benchmark",
         value="all",
+        name="all   — run both delta and full modes for each benchmark",
     ),
     Choice(
-        title="auto  — pick available mode per benchmark (delta preferred)",
         value="auto",
+        name="auto  — pick available mode per benchmark (delta preferred)",
     ),
 ]
 
 _LITELLM_MODE_CHOICES = [
     Choice(
-        title="external  — use an external LiteLLM proxy (most common)",
         value="external",
+        name="external — use an external LiteLLM proxy (most common)",
     ),
     Choice(
-        title="skip      — no LLM needed (pure fuzzer CRS like crs-libfuzzer)",
         value="skip",
+        name="skip     — no LLM needed (pure fuzzer CRS like crs-libfuzzer)",
     ),
 ]
 
 _SANITIZER_CHOICES = [
     Choice(
-        title="address   — AddressSanitizer (heap/stack buffer overflows, use-after-free)",
         value="address",
+        name="address   — AddressSanitizer (heap/stack buffer overflows, use-after-free)",
+        enabled=True,
     ),
     Choice(
-        title="memory    — MemorySanitizer (uninitialized memory reads)",
         value="memory",
+        name="memory    — MemorySanitizer (uninitialized memory reads)",
     ),
     Choice(
-        title="undefined — UBSan (undefined behavior: signed overflow, null deref, etc.)",
         value="undefined",
+        name="undefined — UBSan (undefined behavior: signed overflow, null deref, etc.)",
     ),
 ]
+
+
+# ---------------------------------------------------------------------------
+# Interactive prompting
+# ---------------------------------------------------------------------------
 
 
 def prompt_config_interactive(
@@ -154,8 +163,8 @@ def prompt_config_interactive(
 ) -> Dict[str, Any]:
     """Interactively prompt for experiment config values.
 
-    Uses questionary for arrow-key navigable selection menus
-    with descriptions for each option.
+    Uses InquirerPy for arrow-key navigable selection menus
+    with fuzzy autocomplete and descriptions.
 
     Args:
         suites_root: Benchmark suites directory.
@@ -164,45 +173,47 @@ def prompt_config_interactive(
     Returns:
         Config dict in grouped format ready for YAML serialization.
     """
-    print("\n=== CRSBench Experiment Config Generator ===\n")
+    print("\n=== CRSBench Experiment Config Generator ===")  # noqa: T201
 
     # --- Experiment section ---
-    print("-- Experiment --")
+    print("\n-- Experiment --")  # noqa: T201
 
-    name = questionary.text(
-        "Experiment name:",
-        instruction="(unique identifier for this experiment run)",
-        validate=lambda v: True if v.strip() else "Experiment name is required",
-    ).unsafe_ask()
+    name = inquirer.text(
+        message="Experiment name:",
+        long_instruction="Unique identifier for this experiment run (used in paths and reports)",
+        validate=lambda val: len(val.strip()) > 0,
+        invalid_message="Experiment name is required",
+    ).execute()
 
-    description = questionary.text(
-        "Description:",
-        instruction="(optional — human-readable note for reports, leave empty to skip)",
-    ).unsafe_ask()
-    description = description.strip() or None
+    description_raw = inquirer.text(
+        message="Description:",
+        default="",
+        long_instruction="Optional human-readable note shown in reports. Leave empty to skip",
+    ).execute()
+    description = description_raw.strip() or None
 
-    task = questionary.select(
-        "Task type:",
+    task = inquirer.select(
+        message="Task type:",
         choices=_TASK_CHOICES,
         default="bugfinding",
-        instruction="(use arrow keys)",
-    ).unsafe_ask()
+        long_instruction="Determines what the CRS is expected to produce (POVs vs patches)",
+    ).execute()
 
-    mode = questionary.select(
-        "Evaluation mode:",
+    mode = inquirer.select(
+        message="Evaluation mode:",
         choices=_MODE_CHOICES,
         default="delta",
-        instruction="(use arrow keys)",
-    ).unsafe_ask()
+        long_instruction="Controls which benchmark commits are used for evaluation",
+    ).execute()
 
     # Benchmark selection
     available_suites = discover_benchmark_suites(suites_root)
 
-    use_suite = questionary.confirm(
-        "Use a benchmark suite (rather than listing individual benchmarks)?",
+    use_suite = inquirer.confirm(
+        message="Use a benchmark suite (pre-defined benchmark list)?",
         default=True,
-        instruction="(suites are pre-defined benchmark lists)",
-    ).unsafe_ask()
+        long_instruction="Suites are curated lists of benchmarks. Otherwise enter names manually",
+    ).execute()
 
     benchmark_suite: Optional[str] = None
     benchmarks: Optional[List[str]] = None
@@ -210,168 +221,134 @@ def prompt_config_interactive(
     if use_suite and available_suites:
         suite_choices = [
             Choice(
-                title=f"{s['name']:30s} — {s['description']} ({s['count']} benchmarks)"
+                value=s["name"],
+                name=f"{s['name']:30s} — {s['description']} ({s['count']} benchmarks)"
                 if s["description"]
                 else f"{s['name']:30s} ({s['count']} benchmarks)",
-                value=s["name"],
             )
             for s in available_suites
         ]
-        benchmark_suite = questionary.select(
-            "Benchmark suite:",
+        benchmark_suite = inquirer.fuzzy(
+            message="Benchmark suite:",
             choices=suite_choices,
-            instruction="(use arrow keys)",
-        ).unsafe_ask()
+            long_instruction="Type to filter. Each suite is a pre-defined list of benchmarks",
+        ).execute()
     elif use_suite and not available_suites:
-        print("  No benchmark suites found in", suites_root)
-        print("  Falling back to manual benchmark entry.\n")
+        print(f"  No benchmark suites found in {suites_root}. Enter manually.")  # noqa: T201
         use_suite = False
 
     if not use_suite:
-        raw = questionary.text(
-            "Benchmarks (comma-separated):",
-            instruction="(e.g., afc-curl-delta-05, afc-libxml2-delta-03)",
-            validate=lambda v: True if v.strip() else "At least one benchmark required",
-        ).unsafe_ask()
+        raw = inquirer.text(
+            message="Benchmarks (comma-separated):",
+            long_instruction="e.g. afc-curl-delta-05, afc-libxml2-delta-03",
+            validate=lambda val: len(val.strip()) > 0,
+            invalid_message="At least one benchmark required",
+        ).execute()
         benchmarks = [b.strip() for b in raw.split(",") if b.strip()]
 
-    sanitizers = questionary.checkbox(
-        "Sanitizers:",
+    sanitizers = inquirer.checkbox(
+        message="Sanitizers:",
         choices=_SANITIZER_CHOICES,
-        instruction="(space to toggle, enter to confirm)",
-        validate=lambda v: True if v else "Select at least one sanitizer",
-    ).unsafe_ask()
+        long_instruction="Each sanitizer creates separate trials. Space to toggle, Enter to confirm",
+        validate=lambda val: len(val) > 0,
+        invalid_message="Select at least one sanitizer",
+    ).execute()
 
     # --- CRS Compose section ---
-    print("\n-- CRS Configuration --")
+    print("\n-- CRS Configuration --")  # noqa: T201
     available_crs = discover_crs_registry(registry_dir)
 
-    crs_services: Dict[str, Any] = {}
-    while True:
-        if available_crs:
-            crs_choices = []
-            for entry in available_crs:
-                types_str = ", ".join(entry["types"]) if entry["types"] else "unknown"
-                already = " (already selected)" if entry["name"] in crs_services else ""
-                crs_choices.append(
-                    Choice(
-                        title=f"{entry['name']:40s} [{types_str}]{already}",
-                        value=entry["name"],
-                    ),
-                )
-            crs_choices.append(
-                Choice(title="(enter custom CRS name)", value="__custom__"),
+    selected_crs_names: List[str] = []
+    if available_crs:
+        crs_choices: list[Any] = [
+            Choice(
+                value=entry["name"],
+                name=f"{entry['name']:40s} [{', '.join(entry['types']) or 'unknown'}]",
             )
-            if crs_services:
-                crs_choices.append(
-                    Choice(title="(done — no more CRS to add)", value="__done__"),
-                )
-            selected = questionary.select(
-                "Select CRS:" if not crs_services else "Add another CRS:",
-                choices=crs_choices,
-                instruction="(use arrow keys)",
-            ).unsafe_ask()
-            if selected == "__done__":
-                break
-            if selected == "__custom__":
-                crs_name = questionary.text(
-                    "Custom CRS name:",
-                    validate=lambda v: True if v.strip() else "CRS name is required",
-                ).unsafe_ask()
-            else:
-                crs_name = selected
-        else:
-            crs_name = questionary.text(
-                "CRS name:" if not crs_services else "CRS name (empty to finish):",
-            ).unsafe_ask()
-            if not crs_name.strip():
-                if crs_services:
-                    break
-                print("  At least one CRS is required.")
-                continue
-            crs_name = crs_name.strip()
+            for entry in available_crs
+        ]
+        selected_crs_names = inquirer.checkbox(
+            message="Select CRS:",
+            choices=crs_choices,
+            long_instruction="Space to toggle, Enter to confirm. Resource config follows",
+            validate=lambda val: len(val) > 0,
+            invalid_message="Select at least one CRS",
+        ).execute()
 
-        num_cores_str = questionary.text(
-            f"  CPU cores for '{crs_name}':",
-            default="8",
-            instruction="(integer, minimum 1)",
-            validate=_validate_positive_int,
-        ).unsafe_ask()
+        if inquirer.confirm(
+            message="Add a custom CRS not in the registry?", default=False
+        ).execute():
+            custom = inquirer.text(
+                message="Custom CRS names (comma-separated):",
+                validate=lambda val: len(val.strip()) > 0,
+                invalid_message="Enter at least one name",
+            ).execute()
+            selected_crs_names.extend(c.strip() for c in custom.split(",") if c.strip())
+    else:
+        raw_crs = inquirer.text(
+            message="CRS names (comma-separated):",
+            validate=lambda val: len(val.strip()) > 0,
+            invalid_message="At least one CRS is required",
+        ).execute()
+        selected_crs_names = [c.strip() for c in raw_crs.split(",") if c.strip()]
 
-        mem_limit = questionary.text(
-            f"  Memory limit for '{crs_name}':",
+    # Per-CRS resource configuration
+    crs_services: Dict[str, Any] = {}
+    for crs_name in selected_crs_names:
+        print(f"\n  -- {crs_name} --")  # noqa: T201
+        num_cores = int(
+            inquirer.text(
+                message=f"  CPU cores for '{crs_name}':",
+                default="8",
+                long_instruction="Number of CPU cores allocated to this CRS container",
+                validate=NumberValidator(float_allowed=False),
+                invalid_message="Enter a positive integer",
+            ).execute()
+        )
+        mem_limit = inquirer.text(
+            message=f"  Memory limit for '{crs_name}':",
             default="",
-            instruction="(e.g., 8G, 16G — leave empty for unlimited)",
-        ).unsafe_ask()
+            long_instruction="Docker memory limit (e.g. 8G, 16G). Leave empty for unlimited",
+        ).execute()
 
-        service_config: Dict[str, Any] = {"num_cores": int(num_cores_str)}
+        service_config: Dict[str, Any] = {"num_cores": num_cores}
         if mem_limit.strip():
             service_config["mem_limit"] = mem_limit.strip()
         crs_services[crs_name] = service_config
 
-        if not questionary.confirm("  Add another CRS?", default=False).unsafe_ask():
-            break
-
     # --- Runtime section ---
-    print("\n-- Runtime --")
+    print("\n-- Runtime --")  # noqa: T201
 
-    trials_str = questionary.text(
-        "Number of trials:",
-        default="1",
-        instruction="(how many times to repeat the experiment)",
-        validate=_validate_positive_int,
-    ).unsafe_ask()
-    trials = int(trials_str)
-
-    max_total_str = questionary.text(
-        "Max total time per trial (seconds):",
-        default="28800",
-        instruction="(28800 = 8 hours — upper bound for build+run+verify)",
-        validate=_validate_positive_int,
-    ).unsafe_ask()
-    max_total_time = int(max_total_str)
-
-    build_str = questionary.text(
-        "Build timeout (seconds):",
-        default="3600",
-        instruction="(3600 = 1 hour — CRS Docker image build phase)",
-        validate=_validate_positive_int,
-    ).unsafe_ask()
-    build_timeout = int(build_str)
-
-    run_str = questionary.text(
-        "Run timeout (seconds):",
-        default="14400",
-        instruction="(14400 = 4 hours — CRS execution phase)",
-        validate=_validate_positive_int,
-    ).unsafe_ask()
-    run_timeout = int(run_str)
-
-    verify_str = questionary.text(
-        "Verify timeout (seconds):",
-        default="7200",
-        instruction="(7200 = 2 hours — POV/patch verification phase)",
-        validate=_validate_positive_int,
-    ).unsafe_ask()
-    verify_timeout = int(verify_str)
+    trials = int(
+        inquirer.text(
+            message="Number of trials:",
+            default="1",
+            long_instruction="How many times to repeat the full experiment for statistical significance",
+            validate=NumberValidator(float_allowed=False),
+        ).execute()
+    )
+    max_total_time = _prompt_duration("Max total time per trial:", default="8h")
+    build_timeout = _prompt_duration("Build timeout:", default="1h")
+    run_timeout = _prompt_duration("Run timeout:", default="4h")
+    verify_timeout = _prompt_duration("Verify timeout:", default="2h")
 
     pov_early_stop = False
     if task == "bugfinding":
-        pov_early_stop = questionary.confirm(
-            "Enable POV early stop?",
+        pov_early_stop = inquirer.confirm(
+            message="Enable POV early stop?",
             default=False,
-            instruction="(stop trial early when all CPVs for a harness are confirmed)",
-        ).unsafe_ask()
+            long_instruction="Terminate trial early when all CPVs for a harness are confirmed",
+        ).execute()
 
     # --- LiteLLM section ---
-    print("\n-- LLM Configuration --")
+    print("\n-- LLM Configuration --")  # noqa: T201
 
-    litellm_selection = questionary.select(
-        "LiteLLM mode:",
+    litellm_selection = inquirer.select(
+        message="LiteLLM mode:",
         choices=_LITELLM_MODE_CHOICES,
         default="external",
-        instruction="(use arrow keys)",
-    ).unsafe_ask()
+        long_instruction="LLM-based CRS need 'external'. Pure fuzzers can 'skip'",
+    ).execute()
 
     skip_litellm = litellm_selection == "skip"
     litellm_mode: Optional[str] = None if skip_litellm else litellm_selection
@@ -379,99 +356,92 @@ def prompt_config_interactive(
     litellm_cost_budget: Optional[float] = None
 
     if not skip_litellm:
-        llm_tracking_enabled = questionary.confirm(
-            "Enable LLM usage tracking?",
+        llm_tracking_enabled = inquirer.confirm(
+            message="Enable LLM usage tracking?",
             default=True,
-            instruction="(track per-trial cost and token metrics via LiteLLM Virtual Keys)",
-        ).unsafe_ask()
+            long_instruction="Track per-trial cost and token metrics via LiteLLM Virtual Keys",
+        ).execute()
 
-        set_budget = questionary.confirm(
-            "Set a per-trial LLM cost budget?",
+        if inquirer.confirm(
+            message="Set a per-trial LLM cost budget?",
             default=False,
-            instruction="(limit LLM spending in USD per trial)",
-        ).unsafe_ask()
-
-        if set_budget:
-            budget_str = questionary.text(
-                "Cost budget (USD):",
+            long_instruction="When budget is exceeded, the CRS LLM key is revoked",
+        ).execute():
+            budget_str = inquirer.text(
+                message="Cost budget (USD):",
                 default="10.0",
-                instruction="(e.g., 10.0 — CRS key is revoked when budget is exceeded)",
-                validate=_validate_positive_float,
-            ).unsafe_ask()
+                long_instruction="Maximum LLM spend in USD per trial",
+                validate=lambda val: _is_positive_float(val),
+                invalid_message="Enter a positive number",
+            ).execute()
             litellm_cost_budget = float(budget_str)
 
     # --- Storage section ---
-    print("\n-- Storage --")
+    print("\n-- Storage --")  # noqa: T201
 
-    experiment_filestore = questionary.text(
-        "Experiment filestore path:",
+    experiment_filestore = inquirer.text(
+        message="Experiment filestore path:",
         default="./experiment-data",
-        instruction="(directory for trial outputs and raw data)",
-    ).unsafe_ask()
+        long_instruction="Directory for trial outputs, logs, and raw data",
+    ).execute()
 
-    report_filestore = questionary.text(
-        "Report filestore path:",
+    report_filestore = inquirer.text(
+        message="Report filestore path:",
         default="./report-data",
-        instruction="(directory for HTML reports and summaries)",
-    ).unsafe_ask()
+        long_instruction="Directory for HTML reports and summary data",
+    ).execute()
 
     # --- Distributed / Parallel section ---
-    print("\n-- Distributed / Parallel Processing --")
+    print("\n-- Distributed / Parallel Processing --")  # noqa: T201
 
-    use_distributed = questionary.confirm(
-        "Enable distributed mode (multiple workers/evaluators via Redis)?",
+    use_distributed = inquirer.confirm(
+        message="Enable distributed mode?",
         default=False,
-        instruction="(requires a Redis server for job coordination)",
-    ).unsafe_ask()
+        long_instruction="Run workers/evaluators on multiple machines via Redis job queue",
+    ).execute()
 
     redis_host: Optional[str] = None
-    worker_config: Optional[Dict[str, Any]] = None
-    evaluator_config: Optional[Dict[str, Any]] = None
-
     if use_distributed:
-        redis_host = questionary.text(
-            "Redis host:",
+        redis_host = inquirer.text(
+            message="Redis host:",
             default="localhost:6379",
-            instruction="(hostname:port for the Redis job queue)",
-        ).unsafe_ask()
+            long_instruction="hostname:port for the Redis job queue server",
+        ).execute()
 
-    # Worker config — always ask
-    print("")
-    worker_jobs_str = questionary.text(
-        "Worker parallel jobs:",
-        default="1",
-        instruction="(concurrent trial executions per worker process)",
-        validate=_validate_positive_int,
-    ).unsafe_ask()
-    worker_jobs = int(worker_jobs_str)
-
-    worker_cores_str = questionary.text(
-        "Worker cores per job:",
-        default="8",
-        instruction="(CPU cores allocated to each parallel trial)",
-        validate=_validate_positive_int,
-    ).unsafe_ask()
-    worker_cores = int(worker_cores_str)
-
+    worker_jobs = int(
+        inquirer.text(
+            message="Worker parallel jobs:",
+            default="1",
+            long_instruction="Concurrent trial executions per worker process",
+            validate=NumberValidator(float_allowed=False),
+        ).execute()
+    )
+    worker_cores = int(
+        inquirer.text(
+            message="Worker cores per job:",
+            default="8",
+            long_instruction="CPU cores allocated to each parallel trial",
+            validate=NumberValidator(float_allowed=False),
+        ).execute()
+    )
     worker_config = {"jobs": worker_jobs, "cores_per_job": worker_cores}
 
-    # Evaluator config — always ask
-    evaluator_jobs_str = questionary.text(
-        "Evaluator parallel jobs:",
-        default="4",
-        instruction="(concurrent build/verify tasks for POV evaluation)",
-        validate=_validate_positive_int,
-    ).unsafe_ask()
-    evaluator_jobs = int(evaluator_jobs_str)
-
-    evaluator_cores_str = questionary.text(
-        "Evaluator cores per job:",
-        default="4",
-        instruction="(CPU cores allocated to each evaluator task)",
-        validate=_validate_positive_int,
-    ).unsafe_ask()
-    evaluator_cores = int(evaluator_cores_str)
-
+    evaluator_jobs = int(
+        inquirer.text(
+            message="Evaluator parallel jobs:",
+            default="4",
+            long_instruction="Concurrent build/verify tasks for POV evaluation",
+            validate=NumberValidator(float_allowed=False),
+        ).execute()
+    )
+    evaluator_cores = int(
+        inquirer.text(
+            message="Evaluator cores per job:",
+            default="4",
+            long_instruction="CPU cores allocated to each evaluator build/verify task",
+            validate=NumberValidator(float_allowed=False),
+        ).execute()
+    )
     evaluator_config = {"jobs": evaluator_jobs, "cores_per_job": evaluator_cores}
 
     # --- Build config dict ---
@@ -502,26 +472,38 @@ def prompt_config_interactive(
     )
 
 
-def _validate_positive_int(val: str) -> bool | str:
-    """Questionary validator for positive integer input."""
+def _is_positive_float(val: str) -> bool:
+    """Check if value is a positive float."""
     try:
-        n = int(val)
+        return float(val) > 0
     except ValueError:
-        return "Please enter a valid integer"
-    if n < 1:
-        return "Must be >= 1"
-    return True
+        return False
 
 
-def _validate_positive_float(val: str) -> bool | str:
-    """Questionary validator for positive float input."""
+def _validate_duration(val: str) -> bool:
+    """Check if value is a valid duration (e.g. 1h, 30m, 3600)."""
     try:
-        n = float(val)
-    except ValueError:
-        return "Please enter a valid number"
-    if n <= 0:
-        return "Must be > 0"
-    return True
+        return int(parse_timespan(val)) >= 1
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _prompt_duration(message: str, *, default: str) -> int:
+    """Prompt for a duration value, accepting human-friendly formats.
+
+    Accepts formats like: 1h, 30m, 4h, 90s, 3600, or '1 hour'.
+
+    Returns:
+        Duration in seconds as int.
+    """
+    raw = inquirer.text(
+        message=message,
+        default=default,
+        long_instruction="Formats: 1h, 30m, 2h, 90s, or plain seconds (3600)",
+        validate=_validate_duration,
+        invalid_message="Invalid duration. Try: 1h, 30m, 8h, 3600",
+    ).execute()
+    return int(parse_timespan(raw))
 
 
 def _assemble_config(
@@ -843,14 +825,14 @@ def generate_config(
 
         result = validate_experiment_config_from_string(yaml_content)
         if not result.is_valid:
-            print("\nValidation errors in generated config:")
+            print("\nValidation errors in generated config:")  # noqa: T201
             for error in result.errors:
-                print(f"  - {error.message}")
-            print("\nConfig was NOT written. Fix the issues and try again.")
+                print(f"  - {error.message}")  # noqa: T201
+            print("\nConfig was NOT written. Fix the issues and try again.")  # noqa: T201
             return False
-        print("\nGenerated config passed validation.")
+        print("\nGenerated config passed validation.")  # noqa: T201
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(yaml_content, encoding="utf-8")
-    print(f"\nConfig written to: {output_path}")
+    print(f"\nConfig written to: {output_path}")  # noqa: T201
     return True
