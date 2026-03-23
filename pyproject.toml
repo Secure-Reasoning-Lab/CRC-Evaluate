@@ -33,7 +33,7 @@ dependencies = [
     "setproctitle>=1.3.7",
     "huggingface_hub>=0.25.0",
     "matplotlib>=3.10.8",
-    "questionary>=2.1.0",
+    "InquirerPy>=0.3.4",
 ]
 
 [project.optional-dependencies]
@@ -159,7 +159,7 @@ ignore = [
 ]
 "tests/fixtures/**/*.py" = ["PTH123"]  # Fixtures can use open()
 "crsbench/genconfig/generator.py" = [
-    "T201",     # print is intentional for interactive CLI prompts
+    "T201",     # print is intentional for interactive CLI section headers
 ]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
