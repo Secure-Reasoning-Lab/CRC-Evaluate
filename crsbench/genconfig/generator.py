@@ -258,14 +258,23 @@ def prompt_config_interactive(
     print("\n-- CRS Configuration --")  # noqa: T201
     available_crs = discover_crs_registry(registry_dir)
 
+    # Filter CRS entries to those matching the selected task type.
+    # Task values are "bugfinding"/"bugfixing"; registry uses "bug-finding"/"bug-fixing".
+    task_type_prefix = "bug-finding" if task == "bugfinding" else "bug-fixing"
+    compatible_crs = [
+        entry
+        for entry in available_crs
+        if any(t.startswith(task_type_prefix) for t in entry["types"])
+    ]
+
     selected_crs_names: List[str] = []
-    if available_crs:
+    if compatible_crs:
         crs_choices: list[Any] = [
             Choice(
                 value=entry["name"],
                 name=f"{entry['name']:40s} [{', '.join(entry['types']) or 'unknown'}]",
             )
-            for entry in available_crs
+            for entry in compatible_crs
         ]
         selected_crs_names = inquirer.checkbox(
             message="Select CRS:",
@@ -284,6 +293,16 @@ def prompt_config_interactive(
                 invalid_message="Enter at least one name",
             ).execute()
             selected_crs_names.extend(c.strip() for c in custom.split(",") if c.strip())
+    elif available_crs:
+        print(  # noqa: T201
+            f"  No registered CRS supports '{task_type_prefix}'. Enter manually."
+        )
+        raw_crs = inquirer.text(
+            message="CRS names (comma-separated):",
+            validate=lambda val: len(val.strip()) > 0,
+            invalid_message="At least one CRS is required",
+        ).execute()
+        selected_crs_names = [c.strip() for c in raw_crs.split(",") if c.strip()]
     else:
         raw_crs = inquirer.text(
             message="CRS names (comma-separated):",
@@ -293,23 +312,28 @@ def prompt_config_interactive(
         selected_crs_names = [c.strip() for c in raw_crs.split(",") if c.strip()]
 
     # Per-CRS resource configuration
+    # Carry forward the previous CRS's values as defaults for the next one.
+    default_cores = "8"
+    default_mem = ""
     crs_services: Dict[str, Any] = {}
     for crs_name in selected_crs_names:
         print(f"\n  -- {crs_name} --")  # noqa: T201
-        num_cores = int(
-            inquirer.text(
-                message=f"  CPU cores for '{crs_name}':",
-                default="8",
-                long_instruction="Number of CPU cores allocated to this CRS container",
-                validate=NumberValidator(float_allowed=False),
-                invalid_message="Enter a positive integer",
-            ).execute()
-        )
+        cores_raw = inquirer.text(
+            message=f"  CPU cores for '{crs_name}':",
+            default=default_cores,
+            long_instruction="Number of CPU cores allocated to this CRS container",
+            validate=NumberValidator(float_allowed=False),
+            invalid_message="Enter a positive integer",
+        ).execute()
+        num_cores = int(cores_raw)
+        default_cores = str(num_cores)
+
         mem_limit = inquirer.text(
             message=f"  Memory limit for '{crs_name}':",
-            default="",
+            default=default_mem,
             long_instruction="Docker memory limit (e.g. 8G, 16G). Leave empty for unlimited",
         ).execute()
+        default_mem = mem_limit.strip()
 
         service_config: Dict[str, Any] = {"num_cores": num_cores}
         if mem_limit.strip():
