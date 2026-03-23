@@ -32,8 +32,8 @@ Examples:
         "--output",
         "-o",
         type=str,
-        default="experiment-config.yaml",
-        help="Output file path (default: experiment-config.yaml)",
+        default="experiment-configs/experiment-config.yaml",
+        help="Output file path (default: experiment-configs/experiment-config.yaml)",
     )
     parser.add_argument(
         "--validate",
