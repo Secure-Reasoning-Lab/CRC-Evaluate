@@ -7,6 +7,19 @@ from unittest.mock import patch
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _no_real_git_checkout(request):
+    """Prevent _ensure_checkout from running real git commands in tests.
+
+    Tests marked with ``@pytest.mark.real_checkout`` bypass this fixture.
+    """
+    if "real_checkout" in {m.name for m in request.node.iter_markers()}:
+        yield
+    else:
+        with patch("crsbench.prepare.uniafl_backend._ensure_checkout"):
+            yield
+
+
 def _write_uniafl_checkout(repo_root: Path) -> None:
     (repo_root / "oss-crs").mkdir(parents=True, exist_ok=True)
     (repo_root / "oss-crs" / "crs.yaml").write_text("name: atlantis\n")
@@ -52,7 +65,10 @@ def test_default_uniafl_root_uses_repo_third_party_checkout() -> None:
 def test_default_uniafl_image_prefix_uses_ghcr_default() -> None:
     from crsbench.prepare.uniafl_backend import default_uniafl_image_prefix
 
-    assert default_uniafl_image_prefix() == "ghcr.io/team-atlanta"
+    assert (
+        default_uniafl_image_prefix()
+        == "ghcr.io/team-atlanta/atlantis-multilang-given_fuzzer"
+    )
 
 
 def test_prepare_image_refs_use_default_registry_prefix() -> None:
@@ -64,12 +80,13 @@ def test_prepare_image_refs_use_default_registry_prefix() -> None:
     )
 
 
-def test_published_prepare_image_refs_use_default_registry_prefix() -> None:
+def test_published_prepare_image_refs_use_given_prefix() -> None:
     from crsbench.prepare.uniafl_backend import published_prepare_image_refs
 
-    assert published_prepare_image_refs(image_tag="stable")[:2] == (
-        "ghcr.io/team-atlanta/multilang-given_fuzzer-clang:stable",
-        "ghcr.io/team-atlanta/multilang-given_fuzzer-builder:stable",
+    prefix = "ghcr.io/team-atlanta/atlantis-multilang-given_fuzzer"
+    assert published_prepare_image_refs(image_tag="stable", prefix=prefix)[:2] == (
+        f"{prefix}/multilang-given_fuzzer-clang:stable",
+        f"{prefix}/multilang-given_fuzzer-builder:stable",
     )
 
 
@@ -80,11 +97,69 @@ def test_default_uniafl_runtime_image_uses_local_canonical_tag() -> None:
     assert default_uniafl_runtime_image("jvm") == "multilang-given_fuzzer-crs:latest"
 
 
-def test_prepare_uniafl_backend_requires_checkout(tmp_path: Path) -> None:
+@pytest.mark.real_checkout
+def test_ensure_checkout_clones_at_pinned_release(tmp_path: Path) -> None:
+    from crsbench.prepare.uniafl_backend import (
+        DEFAULT_UNIAFL_RELEASE,
+        DEFAULT_UNIAFL_REPO_URL,
+        _ensure_checkout,
+    )
+
+    dest = tmp_path / "missing"
+    captured_cmd: list[str] = []
+
+    def mock_run(cmd, **_kwargs):
+        if cmd[0] == "git" and "clone" in cmd:
+            captured_cmd.extend(cmd)
+            dest.mkdir(parents=True, exist_ok=True)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    with patch("crsbench.prepare.uniafl_backend.subprocess.run", side_effect=mock_run):
+        _ensure_checkout(dest)
+
+    assert "--branch" in captured_cmd
+    branch_idx = captured_cmd.index("--branch")
+    assert captured_cmd[branch_idx + 1] == DEFAULT_UNIAFL_RELEASE
+    assert DEFAULT_UNIAFL_REPO_URL in captured_cmd
+
+
+@pytest.mark.real_checkout
+def test_ensure_checkout_fetches_pinned_release_when_exists(tmp_path: Path) -> None:
+    from crsbench.prepare.uniafl_backend import DEFAULT_UNIAFL_RELEASE, _ensure_checkout
+
+    dest = tmp_path / "existing"
+    dest.mkdir()
+    captured_cmds: list[list[str]] = []
+
+    def mock_run(cmd, **_kwargs):
+        captured_cmds.append(list(cmd))
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    with patch("crsbench.prepare.uniafl_backend.subprocess.run", side_effect=mock_run):
+        _ensure_checkout(dest)
+
+    # Should fetch tags, then force-checkout the pinned release
+    assert len(captured_cmds) == 2
+    fetch_cmd = captured_cmds[0]
+    checkout_cmd = captured_cmds[1]
+    assert "fetch" in fetch_cmd
+    assert "--tags" in fetch_cmd
+    assert "checkout" in checkout_cmd
+    assert "--force" in checkout_cmd
+    assert DEFAULT_UNIAFL_RELEASE in checkout_cmd
+
+
+def test_prepare_uniafl_backend_fails_if_crs_yaml_missing_after_checkout(
+    tmp_path: Path,
+) -> None:
     from crsbench.prepare.uniafl_backend import prepare_uniafl_backend
 
-    with pytest.raises(FileNotFoundError):
-        prepare_uniafl_backend(tmp_path / "missing")
+    dest = tmp_path / "missing"
+    dest.mkdir(parents=True)
+    # No crs.yaml — simulates broken checkout
+
+    with pytest.raises(FileNotFoundError, match="incomplete after clone"):
+        prepare_uniafl_backend(dest)
 
 
 def test_get_uniafl_prepare_readiness_reports_missing_state_and_images(
@@ -285,7 +360,10 @@ def test_prepare_uniafl_backend_pulls_ghcr_images_before_local_build(
     ):
         assert prepare_uniafl_backend(repo_root) == 0
 
-    mock_pull.assert_called_once_with()
+    mock_pull.assert_called_once()
+    # Verify prefix was read from the checkout's crs.yaml (fallback for test stubs)
+    call_kwargs = mock_pull.call_args[1]
+    assert "prefix" in call_kwargs
     mock_prepare.assert_not_called()
     mock_write_state.assert_called_once_with(repo_root.resolve())
 

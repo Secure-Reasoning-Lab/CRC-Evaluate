@@ -7,12 +7,18 @@ import json
 import subprocess
 from pathlib import Path
 
+import yaml
+
 from crsbench.evaluation.adapter.compose_common import run_oss_crs_prepare
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-DEFAULT_UNIAFL_IMAGE_PREFIX = "ghcr.io/team-atlanta"
+# Fallback when crs.yaml is not yet available (before checkout).
+_FALLBACK_IMAGE_PREFIX = "ghcr.io/team-atlanta/atlantis-multilang-given_fuzzer"
+DEFAULT_UNIAFL_REPO_URL = (
+    "https://github.com/Team-Atlanta/atlantis-multilang-given_fuzzer.git"
+)
 DEFAULT_UNIAFL_ROOT_BASENAME = "atlantis-multilang-given_fuzzer"
 DEFAULT_UNIAFL_RUNTIME_IMAGE_NAME = "multilang-given_fuzzer-crs"
 DEFAULT_UNIAFL_RUNTIME_IMAGE_JVM_NAME = "multilang-given_fuzzer-crs"
@@ -20,7 +26,6 @@ DEFAULT_UNIAFL_BUILDER_IMAGE_NAME = "multilang-given_fuzzer-builder"
 DEFAULT_UNIAFL_CLANG_IMAGE_NAME = "multilang-given_fuzzer-clang"
 DEFAULT_UNIAFL_RELEASE = "1.0.0"
 DEFAULT_UNIAFL_LOCAL_IMAGE_TAG = "latest"
-DEFAULT_UNIAFL_SETUP_HINT = "scripts/setup-third-party.sh"
 UNIAFL_PREPARE_IMAGES = (
     "multilang-given_fuzzer-clang",
     "multilang-given_fuzzer-builder",
@@ -38,14 +43,91 @@ def default_uniafl_root() -> Path:
     return repo_root / "third_party" / DEFAULT_UNIAFL_ROOT_BASENAME
 
 
-def default_uniafl_image_prefix() -> str:
-    """Return the registry/repository prefix for Atlantis images."""
-    return DEFAULT_UNIAFL_IMAGE_PREFIX
+def _read_image_prefix(repo_root: Path) -> str:
+    """Read ``docker_registry`` from the CRS's ``crs.yaml``.
+
+    Falls back to the hardcoded default if the file is missing or
+    doesn't contain the field.
+    """
+    crs_yaml = repo_root / "oss-crs" / "crs.yaml"
+    if not crs_yaml.exists():
+        return _FALLBACK_IMAGE_PREFIX
+    try:
+        data = yaml.safe_load(crs_yaml.read_text())
+        registry = (data or {}).get("docker_registry", "")
+        return registry.strip() if registry else _FALLBACK_IMAGE_PREFIX
+    except Exception:
+        return _FALLBACK_IMAGE_PREFIX
 
 
-def qualify_uniafl_image(image_name: str, *, tag: str = DEFAULT_UNIAFL_RELEASE) -> str:
+def _ensure_checkout(
+    dest: Path,
+    *,
+    url: str = DEFAULT_UNIAFL_REPO_URL,
+    ref: str = DEFAULT_UNIAFL_RELEASE,
+) -> None:
+    """Clone or update the Atlantis checkout to the pinned release.
+
+    If *dest* does not exist, clones from *url* at *ref*.
+    If it exists, fetches and resets to ``origin/{ref}``.
+    """
+    if dest.exists():
+        logger.info(f"Updating Atlantis checkout at {dest} to {ref}")
+        subprocess.run(
+            ["git", "fetch", "--recurse-submodules", "--tags", "--force", "origin"],
+            cwd=dest,
+            check=True,
+            capture_output=True,
+            text=True,
+            errors="replace",
+        )
+        subprocess.run(
+            ["git", "checkout", "--force", ref],
+            cwd=dest,
+            check=True,
+            capture_output=True,
+            text=True,
+            errors="replace",
+        )
+    else:
+        logger.info(f"Cloning Atlantis from {url} at {ref} to {dest}")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "--recurse-submodules",
+                "--branch",
+                ref,
+                url,
+                str(dest),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            errors="replace",
+        )
+
+
+def default_uniafl_image_prefix(uniafl_root: Path | None = None) -> str:
+    """Return the registry/repository prefix for Atlantis images.
+
+    Reads ``docker_registry`` from the CRS checkout's ``crs.yaml`` when
+    available, otherwise falls back to the hardcoded default.
+    """
+    repo_root = Path(uniafl_root or default_uniafl_root()).resolve()
+    return _read_image_prefix(repo_root)
+
+
+def qualify_uniafl_image(
+    image_name: str,
+    *,
+    tag: str = DEFAULT_UNIAFL_RELEASE,
+    prefix: str | None = None,
+) -> str:
     """Return the fully qualified Atlantis image reference."""
-    return f"{default_uniafl_image_prefix()}/{image_name}:{tag}"
+    effective_prefix = prefix if prefix is not None else default_uniafl_image_prefix()
+    return f"{effective_prefix}/{image_name}:{tag}"
 
 
 def local_uniafl_image(
@@ -66,11 +148,13 @@ def prepare_image_refs(
 
 
 def published_prepare_image_refs(
-    *, image_tag: str = DEFAULT_UNIAFL_RELEASE
+    *,
+    image_tag: str = DEFAULT_UNIAFL_RELEASE,
+    prefix: str | None = None,
 ) -> tuple[str, ...]:
     """Return the published Atlantis prepare image references."""
     return tuple(
-        qualify_uniafl_image(image_name, tag=image_tag)
+        qualify_uniafl_image(image_name, tag=image_tag, prefix=prefix)
         for image_name in UNIAFL_PREPARE_IMAGES
     )
 
@@ -127,10 +211,12 @@ def current_prepare_image_ids(
     return image_ids
 
 
-def _pull_prepare_images(*, image_tag: str = DEFAULT_UNIAFL_RELEASE) -> list[str]:
+def _pull_prepare_images(
+    *, image_tag: str = DEFAULT_UNIAFL_RELEASE, prefix: str | None = None
+) -> list[str]:
     failures: list[str] = []
     for image_name in UNIAFL_PREPARE_IMAGES:
-        published_ref = qualify_uniafl_image(image_name, tag=image_tag)
+        published_ref = qualify_uniafl_image(image_name, tag=image_tag, prefix=prefix)
         local_ref = local_uniafl_image(image_name)
         pull = subprocess.run(
             ["docker", "pull", published_ref],
@@ -305,15 +391,19 @@ def prepare_uniafl_backend(
 ) -> int:
     """Prepare the Atlantis coverage backend via oss-crs prepare."""
     repo_root = Path(uniafl_root or default_uniafl_root()).resolve()
+    _ensure_checkout(repo_root)
     if not (repo_root / "oss-crs" / "crs.yaml").exists():
         raise FileNotFoundError(
-            "Atlantis checkout not found or incomplete: "
-            f"{repo_root}. Run {DEFAULT_UNIAFL_SETUP_HINT} first."
+            f"Atlantis checkout not found or incomplete after clone/pull: {repo_root}"
         )
 
-    logger.info(f"Preparing UniAFL coverage backend from {repo_root}")
+    image_prefix = _read_image_prefix(repo_root)
+    logger.info(
+        f"Preparing UniAFL coverage backend from {repo_root} (registry: {image_prefix})"
+    )
     _, readiness_issues = get_uniafl_prepare_readiness(repo_root)
     if not readiness_issues:
+        logger.info("Atlantis coverage backend already prepared, nothing to do")
         return 0
 
     published_release_checkout = _checkout_matches_published_release(repo_root)
@@ -321,19 +411,20 @@ def prepare_uniafl_backend(
         issue for issue in readiness_issues if issue.startswith("missing local image:")
     ]
     if missing_image_issues and published_release_checkout:
-        logger.info("Pulling canonical Atlantis prepare images from GHCR")
-        pull_failures = _pull_prepare_images()
+        logger.info(f"Pulling Atlantis prepare images from {image_prefix}")
+        pull_failures = _pull_prepare_images(prefix=image_prefix)
         if not pull_failures:
             _, readiness_issues = get_uniafl_prepare_readiness(repo_root)
             if not any(
                 issue.startswith("missing local image:") for issue in readiness_issues
             ):
                 _write_prepare_state(repo_root)
+                logger.info("Atlantis coverage backend prepared (images pulled)")
                 return 0
         else:
             logger.warning(
-                "Falling back to local Atlantis image build after GHCR pull failed: %s",
-                "; ".join(pull_failures),
+                "Falling back to local Atlantis image build after GHCR pull "
+                f"failed: {'; '.join(pull_failures)}"
             )
     if published_release_checkout and not any(
         issue.startswith("missing local image:") for issue in readiness_issues
@@ -352,6 +443,7 @@ def prepare_uniafl_backend(
         uniafl_root=repo_root,
     )
 
+    logger.info("Building Atlantis images locally via oss-crs prepare")
     stdout, stderr, returncode = run_oss_crs_prepare(
         compose_file,
         work_dir,
@@ -363,4 +455,5 @@ def prepare_uniafl_backend(
         raise RuntimeError(f"oss-crs prepare failed (rc={returncode}): {detail}")
 
     _write_prepare_state(repo_root)
+    logger.info("Atlantis coverage backend prepared (images built locally)")
     return 0

@@ -2405,7 +2405,7 @@ def main() -> None:
         # Filter benchmarks by mode early (before resolving harnesses)
         benchmarks_root = resolve_benchmarks_root(config.benchmarks_root)
         mode_str = config.mode.value  # Get string value from enum
-        if mode_str != "all":
+        if mode_str not in ("all", "auto"):
             original_count = len(benchmark_names)
             benchmark_names = filter_benchmarks_by_mode(
                 benchmark_names, mode_str, benchmarks_root

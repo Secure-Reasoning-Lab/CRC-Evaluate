@@ -1161,8 +1161,9 @@ class ExperimentPovInputs(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: Optional[bool] = Field(
-        default=False,
-        description="Whether CRSBench should stage explicit POV inputs when available.",
+        default=None,
+        description="Whether CRSBench should stage explicit POV inputs when available. "
+        "Defaults to False for bug-finding, True for bug-fixing.",
     )
     max_variants_per_cpv: Optional[int] = Field(
         default=1,
@@ -1242,7 +1243,7 @@ class ExperimentInputsConfig(BaseModel):
                 continue
             if isinstance(value, dict):
                 section = dict(value)
-                if "enabled" not in section:
+                if "enabled" not in section and key != "pov":
                     section["enabled"] = True
                 normalized[key] = section
         return normalized
@@ -1891,6 +1892,29 @@ class ExperimentConfig(BaseModel):
 
         # Runtime environment secrets are validated during execution preflight,
         # not schema parsing, so configs remain portable across machines.
+        return self
+
+    @model_validator(mode="after")
+    def resolve_pov_input_defaults(self):
+        """Resolve POV input defaults by task type and reject invalid combos.
+
+        When ``inputs.pov.enabled`` is not explicitly set (None):
+        - bug-finding → False  (POV staging leaks ground-truth answers)
+        - bug-fixing  → True   (POV inputs are the normal workflow)
+
+        Explicitly enabling POV inputs for bug-finding is always an error.
+        """
+        if self.inputs.pov.enabled is None:
+            if self.task == "bugfixing":
+                self.inputs.pov.enabled = True
+            else:
+                self.inputs.pov.enabled = False
+        elif self.inputs.pov.enabled and self.task == "bugfinding":
+            raise ValueError(
+                "inputs.pov.enabled=true is incompatible with task='bugfinding'. "
+                "POV inputs stage ground-truth crash blobs that short-circuit "
+                "bug-finding evaluation. Disable POV inputs or change the task type."
+            )
         return self
 
     @model_validator(mode="after")

@@ -660,6 +660,7 @@ class TestOssCrsAdapterBugFindFull:
         adapter._work_dir = tmp_path / "trial1" / "oss-crs-workdir"
         adapter._resolved_artifacts = {"exchange_dir": {"base": "/tmp/exchange"}}
         adapter._built_projects.add("proj1")
+        adapter._prepared = True
 
         adapter.configure({"sanitizer": "undefined"})
 
@@ -668,6 +669,7 @@ class TestOssCrsAdapterBugFindFull:
         assert adapter._work_dir is None
         assert adapter._resolved_artifacts is None
         assert adapter._built_projects == set()
+        assert adapter._prepared is False
 
     def test_configure_sanitizer_change_preserves_explicit_work_dir(
         self, tmp_path: Path
@@ -762,6 +764,261 @@ class TestOssCrsAdapterBugFindFull:
 
         with pytest.raises(RuntimeError, match="build-target failed"):
             adapter.build(bench, tmp_path / "trial")
+
+    # ------------------------------------------------------------------
+    # Prepare lock tests
+    # ------------------------------------------------------------------
+
+    def test_prepare_lock_file_path_uses_crs_name_only(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Prepare lock should be CRS-scoped, not benchmark-scoped."""
+        monkeypatch.setenv("CRSBENCH_OSS_CRS_BUILD_LOCK_DIR", str(tmp_path / "locks"))
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"sanitizer": "address"})
+
+        lock_path = adapter._prepare_lock_file_path()
+
+        assert lock_path.parent == (tmp_path / "locks")
+        assert lock_path.name == "crsbench-oss-crs-prepare-test-crs.lock"
+
+    def test_prepare_lock_path_independent_of_sanitizer(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same CRS should get same prepare lock regardless of sanitizer."""
+        monkeypatch.setenv("CRSBENCH_OSS_CRS_BUILD_LOCK_DIR", str(tmp_path / "locks"))
+        adapter = self._make_adapter(tmp_path)
+
+        adapter.configure({"sanitizer": "address"})
+        path_asan = adapter._prepare_lock_file_path()
+
+        adapter.configure({"sanitizer": "undefined"})
+        path_ubsan = adapter._prepare_lock_file_path()
+
+        assert path_asan == path_ubsan
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_prepare_runs_once_across_two_benchmarks_same_adapter(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """Within one adapter instance, prepare should run once, not per benchmark."""
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+
+        bench1 = tmp_path / "benchmarks" / "proj1"
+        bench1.mkdir(parents=True)
+        bench2 = tmp_path / "benchmarks" / "proj2"
+        bench2.mkdir(parents=True)
+        trial = tmp_path / "trial"
+        trial.mkdir()
+
+        adapter.build(bench1, trial)
+        adapter.build(bench2, trial)
+
+        # Should be: prepare(1) + build-target(1) + build-target(2) = 3
+        # prepare NOT called again for proj2
+        assert mock_run.call_count == 3
+        cmds = [call[0][0][1] for call in mock_run.call_args_list]
+        assert cmds == ["prepare", "build-target", "build-target"]
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_sanitizer_change_resets_prepared_flag(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """Changing sanitizer must re-prepare because compose env embeds SANITIZER."""
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t", "sanitizer": "address"})
+
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        trial1 = tmp_path / "trial1"
+        trial1.mkdir()
+        adapter.build(bench, trial1)
+
+        # prepare(1) + build-target(1) = 2
+        assert mock_run.call_count == 2
+        assert adapter._prepared is True
+
+        # Change sanitizer — must reset _prepared because compose env changes.
+        mock_run.reset_mock()
+        adapter.configure({"docker_registry": "ghcr.io/t", "sanitizer": "undefined"})
+        assert adapter._prepared is False
+
+        trial2 = tmp_path / "trial2"
+        trial2.mkdir()
+        adapter.build(bench, trial2)
+
+        # prepare + build-target again (new sanitizer env)
+        assert mock_run.call_count == 2
+        cmds = [call[0][0][1] for call in mock_run.call_args_list]
+        assert cmds == ["prepare", "build-target"]
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_prepare_failure_does_not_set_prepared_flag(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """If prepare fails, _prepared should stay False so retry is possible."""
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="prepare error"
+        )
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+
+        with pytest.raises(RuntimeError, match="prepare failed"):
+            adapter.build(bench, tmp_path / "trial")
+
+        assert adapter._prepared is False
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_prepare_retried_after_failure(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """After a prepare failure, the next build() should retry prepare."""
+        mock_run.side_effect = [
+            # First build: prepare fails
+            subprocess.CompletedProcess(
+                args=[], returncode=1, stdout="", stderr="prepare error"
+            ),
+            # Second build: prepare succeeds, build-target succeeds
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr=""),
+        ]
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+
+        with pytest.raises(RuntimeError, match="prepare failed"):
+            adapter.build(bench, tmp_path / "trial1")
+
+        # Retry should call prepare again
+        trial2 = tmp_path / "trial2"
+        trial2.mkdir()
+        adapter.build(bench, trial2)
+
+        assert adapter._prepared is True
+        assert mock_run.call_count == 3
+        cmds = [call[0][0][1] for call in mock_run.call_args_list]
+        assert cmds == ["prepare", "prepare", "build-target"]
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_build_lock_serializes_same_project_different_harnesses(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """Two builds for same project share a build lock key."""
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"sanitizer": "address"})
+
+        path1 = adapter._build_lock_file_path("proj1")
+        path2 = adapter._build_lock_file_path("proj1")
+        assert path1 == path2
+
+        # Different projects get different locks
+        path3 = adapter._build_lock_file_path("proj2")
+        assert path1 != path3
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_concurrent_prepare_serialized_by_flock(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """Verify that flock file is created during prepare."""
+        call_count = 0
+
+        def track_calls(*args, **_kwargs):
+            nonlocal call_count
+            call_count += 1
+            cmd = args[0]
+            if cmd[1] == "prepare":
+                # Verify the lock file exists while prepare runs
+                lock_path = adapter._prepare_lock_file_path()
+                assert lock_path.exists(), "Lock file should exist during prepare"
+            return subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="ok", stderr=""
+            )
+
+        mock_run.side_effect = track_calls
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        trial = tmp_path / "trial"
+        trial.mkdir()
+
+        adapter.build(bench, trial)
+        assert call_count == 2  # prepare + build-target
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_two_adapters_both_call_prepare(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """Separate adapter instances (simulating separate workers) both run prepare.
+
+        Cross-process deduplication relies on Docker cache, not sentinel files.
+        Each adapter instance should call prepare independently.
+        """
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+
+        # Use separate base dirs to simulate truly separate worker processes
+        # (each worker creates its own adapter instance)
+        base1 = tmp_path / "worker1"
+        base1.mkdir()
+        bench1 = base1 / "benchmarks" / "proj1"
+        bench1.mkdir(parents=True)
+        adapter1 = self._make_adapter(base1)
+        adapter1.configure({"docker_registry": "ghcr.io/t"})
+        trial1 = base1 / "trial1"
+        trial1.mkdir()
+        adapter1.build(bench1, trial1)
+
+        base2 = tmp_path / "worker2"
+        base2.mkdir()
+        bench2 = base2 / "benchmarks" / "proj1"
+        bench2.mkdir(parents=True)
+        adapter2 = self._make_adapter(base2)
+        adapter2.configure({"docker_registry": "ghcr.io/t"})
+        trial2 = base2 / "trial2"
+        trial2.mkdir()
+        adapter2.build(bench2, trial2)
+
+        # Both adapters call prepare + build-target = 4 total.
+        # Cross-process deduplication relies on Docker cache, not sentinel files.
+        assert mock_run.call_count == 4
+        cmds = [call[0][0][1] for call in mock_run.call_args_list]
+        assert cmds == ["prepare", "build-target", "prepare", "build-target"]
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_build_target_failure_does_not_affect_prepared_flag(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """build-target failure should not reset the _prepared flag."""
+        mock_run.side_effect = [
+            # prepare succeeds
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr=""),
+            # build-target fails
+            subprocess.CompletedProcess(
+                args=[], returncode=1, stdout="", stderr="build error"
+            ),
+        ]
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+
+        with pytest.raises(RuntimeError, match="build-target failed"):
+            adapter.build(bench, tmp_path / "trial")
+
+        # prepare succeeded, so flag should be set
+        assert adapter._prepared is True
 
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
@@ -2594,9 +2851,10 @@ class TestBugFixInputStaging:
         assert not (stale_input / "old").exists()
         assert not (stale_cpvs / "old").exists()
 
-    def test_prepare_runtime_inputs_bugfinding_ignores_target_cpv_for_pov_staging(
+    def test_prepare_runtime_inputs_bugfinding_skips_pov_staging(
         self, tmp_path: Path
     ) -> None:
+        """Bug-finding must never stage ground-truth POVs, even when pov_input_enabled."""
         benchmark = self._make_benchmark_with_variants(tmp_path)
         trial_dir = tmp_path / "trial"
         trial_dir.mkdir()
@@ -2613,13 +2871,13 @@ class TestBugFixInputStaging:
             sarif_input_enabled=False,
         )
 
-        # target_cpv_id is irrelevant for bug-finding and should not hard-fail.
         runner._prepare_runtime_inputs(
             benchmark, "fuzz_target", trial_dir, target_cpv_id="cpv_missing"
         )
 
-        staged = {p.name for p in (trial_dir / "povs").iterdir()}
-        assert staged == {"cpv_0", "cpv_1"}
+        # POV staging must be skipped for bug-finding to avoid leaking answers.
+        assert not (trial_dir / "povs").exists()
+        assert not (trial_dir / "crs-input" / "povs").exists()
 
     def test_prepare_runtime_inputs_fails_when_sarif_enabled_but_missing(
         self, tmp_path: Path
