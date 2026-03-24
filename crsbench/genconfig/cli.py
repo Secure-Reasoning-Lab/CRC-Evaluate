@@ -32,8 +32,8 @@ Examples:
         "--output",
         "-o",
         type=str,
-        default="experiment-configs/experiment-config.yaml",
-        help="Output file path (default: experiment-configs/experiment-config.yaml)",
+        default=None,
+        help="Output file path (default: experiment-configs/<experiment-name>.yaml)",
     )
     parser.add_argument(
         "--validate",
@@ -65,9 +65,9 @@ def run_gen_config(args: argparse.Namespace) -> int:
     """
     from crsbench.genconfig.generator import generate_config
 
-    output_path = Path(args.output)
+    output_path = Path(args.output) if args.output else None
 
-    if output_path.exists():
+    if output_path and output_path.exists():
         confirm = input(f"File '{output_path}' already exists. Overwrite? [y/N]: ")
         if confirm.strip().lower() not in ("y", "yes"):
             logger.info("Aborted.")

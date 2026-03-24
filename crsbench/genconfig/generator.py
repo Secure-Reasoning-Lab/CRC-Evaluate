@@ -7,6 +7,7 @@ with arrow-key selection and fuzzy autocomplete.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -812,8 +813,18 @@ def render_config_yaml(config: Dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _slugify(text: str) -> str:
+    """Convert text to a filesystem-friendly slug.
+
+    Lowercases, replaces non-alphanumeric characters with hyphens,
+    collapses consecutive hyphens, and strips leading/trailing hyphens.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower())
+    return slug.strip("-") or "experiment-config"
+
+
 def generate_config(
-    output_path: Path,
+    output_path: Optional[Path] = None,
     answers: Optional[Dict[str, Any]] = None,
     *,
     validate: bool = False,
@@ -823,7 +834,9 @@ def generate_config(
     """Generate an experiment config file.
 
     Args:
-        output_path: Path to write the generated YAML.
+        output_path: Path to write the generated YAML.  When *None*, the
+            filename is derived from the experiment name entered during
+            the interactive prompt (e.g. ``experiment-configs/<name>.yaml``).
         answers: Pre-filled answers dict (skips interactive prompts).
         validate: Whether to validate the generated config.
         suites_root: Benchmark suites directory.
@@ -839,6 +852,11 @@ def generate_config(
             suites_root=suites_root,
             registry_dir=registry_dir,
         )
+
+    # Derive output path from experiment name when not explicitly given.
+    if output_path is None:
+        experiment_name = config.get("experiment", {}).get("name", "experiment-config")
+        output_path = Path("experiment-configs") / f"{_slugify(experiment_name)}.yaml"
 
     yaml_content = render_config_yaml(config)
 
