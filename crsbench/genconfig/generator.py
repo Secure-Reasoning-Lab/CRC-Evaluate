@@ -332,7 +332,9 @@ def prompt_config_interactive(
         mem_limit = inquirer.text(
             message=f"  Memory limit for '{crs_name}':",
             default=default_mem,
-            long_instruction="Docker memory limit (e.g. 8G, 16G). Leave empty for unlimited",
+            long_instruction="Docker memory limit (e.g. 8G, 16GB, 1024M). Leave empty for unlimited",
+            validate=_validate_memory,
+            invalid_message="Invalid memory format. Try: 8G, 16GB, 1024M, 2048MB",
         ).execute()
         default_mem = mem_limit.strip()
 
@@ -503,6 +505,18 @@ def _is_positive_float(val: str) -> bool:
         return float(val) > 0
     except ValueError:
         return False
+
+
+def _validate_memory(val: str) -> bool:
+    """Check if value is a valid Docker memory limit (e.g. 8G, 16GB, 1024M).
+
+    Empty strings are allowed (means unlimited).
+    """
+    if not val.strip():
+        return True
+    return bool(
+        re.match(r"^\d+(\.\d+)?\s*(B|K|KB|M|MB|G|GB|T|TB)$", val.strip(), re.IGNORECASE)
+    )
 
 
 def _validate_duration(val: str) -> bool:
