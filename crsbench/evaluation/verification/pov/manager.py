@@ -818,6 +818,7 @@ class POVVerificationManager:
             self._mark_pending_as_error()
         else:
             logger.info("All pending async verdicts drained successfully")
+            self.store.save()
 
     def _mark_pending_as_error(self) -> None:
         """Mark POVs with pending async verdicts as error after drain timeout."""

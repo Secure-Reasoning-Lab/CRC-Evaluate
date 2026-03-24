@@ -1066,6 +1066,54 @@ class TestAsyncMode:
             sanitizer="undefined",
         )
 
+    @patch("crsbench.distributed.verify_queue.poll_single_pov_verdicts")
+    def test_drain_pending_saves_store_on_success(
+        self, mock_poll, tmp_path: Path
+    ) -> None:
+        """drain_pending calls store.save() after all verdicts drained."""
+        from crsbench.distributed.evaluator_jobs import PovVerdict, SinglePovResult
+
+        verdict = PovVerdict(
+            pov_id="test.blob:abc123hash",
+            triggered_bug=True,
+            status="cpv",
+            cpv_matches=["cpv_0"],
+        )
+        result = SinglePovResult(
+            trial_id="trial-1",
+            benchmark="test-benchmark",
+            harness="fuzz_parser",
+            verdict=verdict,
+            completed_at=1700000100.0,
+        )
+
+        # First poll returns all completed, no remaining
+        mock_poll.return_value = ([result.to_dict()], [])
+
+        manager = self._make_manager(tmp_path, redis_host="redis.local")
+        manager._pending_job_ids = ["job-123"]
+        manager.store.save = MagicMock()
+
+        manager.drain_pending()
+
+        manager.store.save.assert_called_once()
+
+    @patch("crsbench.distributed.verify_queue.poll_single_pov_verdicts")
+    def test_drain_pending_saves_store_on_timeout(
+        self, mock_poll, tmp_path: Path
+    ) -> None:
+        """drain_pending calls store.save() via _mark_pending_as_error on timeout."""
+        # Poll never returns completed results
+        mock_poll.return_value = ([], ["job-123"])
+
+        manager = self._make_manager(tmp_path, redis_host="redis.local")
+        manager._pending_job_ids = ["job-123"]
+        manager.store.save = MagicMock()
+
+        manager.drain_pending(per_pov_timeout=1, verify_timeout=1, poll_interval=0.1)
+
+        manager.store.save.assert_called_once()
+
 
 class TestExchangeDirScanning:
     """Tests for EXCHANGE_DIR POV discovery via pre-resolved exchange_pov_dir."""
