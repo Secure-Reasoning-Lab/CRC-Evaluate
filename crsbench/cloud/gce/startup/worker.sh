@@ -11,6 +11,8 @@ CRSBENCH_TIMEZONE="${CRSBENCH_TIMEZONE:-America/New_York}"
 CRSBENCH_GIT_SSH_HOST="${CRSBENCH_GIT_SSH_HOST:-github.com}"
 CRSBENCH_USER="${CRSBENCH_USER:-crsbench}"
 CRSBENCH_USER_HOME="${CRSBENCH_USER_HOME:-/home/${CRSBENCH_USER}}"
+CRSBENCH_MANAGED_BIN_DIR="${CRSBENCH_MANAGED_BIN_DIR:-/opt/crsbench/bin}"
+CRSBENCH_GITCACHE_ENABLED="${CRSBENCH_GITCACHE_ENABLED:-0}"
 STATE_DIR="${CRSBENCH_STATE_DIR:-/var/lib/crsbench}"
 PAYLOAD_PATH="${STATE_DIR}/bootstrap.json"
 LAUNCHER_PATH="${STATE_DIR}/launch-worker.sh"
@@ -395,11 +397,12 @@ ensure_crsbench_user() {
   CRSBENCH_USER_RUNTIME_DIR="/run/user/${CRSBENCH_USER_UID}"
   CRSBENCH_USER_DBUS_ADDRESS="unix:path=${CRSBENCH_USER_RUNTIME_DIR}/bus"
   CRSBENCH_USER_LOCAL_BIN="${CRSBENCH_USER_HOME}/.local/bin"
-  CRSBENCH_USER_PATH="${CRSBENCH_USER_LOCAL_BIN}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  CRSBENCH_USER_PATH="${CRSBENCH_MANAGED_BIN_DIR}:${CRSBENCH_USER_LOCAL_BIN}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   CRSBENCH_USER_SERVICE_CGROUP="/sys/fs/cgroup/user.slice/user-${CRSBENCH_USER_UID}.slice/user@${CRSBENCH_USER_UID}.service"
   CRSBENCH_RUNTIME_CGROUP="${CRSBENCH_USER_SERVICE_CGROUP}/crsbench"
   CRSBENCH_OSS_CRS_CGROUP="${CRSBENCH_USER_SERVICE_CGROUP}/oss-crs"
 
+  install -d -m 0755 "${CRSBENCH_MANAGED_BIN_DIR}"
   install -d -o "${CRSBENCH_USER}" -g "${CRSBENCH_USER}" -m 0755 "${CRSBENCH_USER_HOME}"
   install -d -o "${CRSBENCH_USER}" -g "${CRSBENCH_USER}" -m 0755 "${CRSBENCH_USER_HOME}/.config"
   install -d -o "${CRSBENCH_USER}" -g "${CRSBENCH_USER}" -m 0755 "${USER_SERVICE_DIR}"
@@ -486,10 +489,99 @@ clone_repo_as_crsbench() {
   fi
 
   if [[ -n "${CLONE_GIT_SSH_COMMAND}" ]]; then
-    sudo -H -u "${CRSBENCH_USER}" env GIT_SSH_COMMAND="${CLONE_GIT_SSH_COMMAND}" git clone --no-single-branch "${repo_url}" "${clone_dir}"
+    sudo -H -u "${CRSBENCH_USER}" env PATH="${CRSBENCH_USER_PATH}" HOME="${CRSBENCH_USER_HOME}" GIT_SSH_COMMAND="${CLONE_GIT_SSH_COMMAND}" git clone --no-single-branch "${repo_url}" "${clone_dir}"
     return
   fi
-  run_as_crsbench git clone --no-single-branch "${repo_url}" "${clone_dir}"
+  run_as_crsbench env PATH="${CRSBENCH_USER_PATH}" HOME="${CRSBENCH_USER_HOME}" git clone --no-single-branch "${repo_url}" "${clone_dir}"
+}
+
+gitcache_release_asset_name() {
+  local arch
+  arch="$(uname -m)"
+  case "${arch}" in
+    x86_64|amd64)
+      arch="x86_64"
+      ;;
+    aarch64|arm64)
+      arch="aarch64"
+      ;;
+    *)
+      echo "Unsupported gitcache architecture: ${arch}" >&2
+      return 1
+      ;;
+  esac
+
+  local os_id=""
+  local version_id=""
+  if [[ -f /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    os_id="${ID:-}"
+    version_id="${VERSION_ID:-}"
+  fi
+
+  case "${os_id}:${version_id}:${arch}" in
+    ubuntu:24.04:x86_64)
+      printf '%s\n' "gitcache_v1.0.31_Ubuntu24.04_x86_64"
+      ;;
+    ubuntu:24.04:aarch64)
+      printf '%s\n' "gitcache_v1.0.31_Ubuntu24.04_aarch64"
+      ;;
+    ubuntu:22.04:x86_64)
+      printf '%s\n' "gitcache_v1.0.31_Ubuntu22.04_x86_64"
+      ;;
+    ubuntu:22.04:aarch64)
+      printf '%s\n' "gitcache_v1.0.31_Ubuntu22.04_aarch64"
+      ;;
+    alpine:3.20:x86_64)
+      printf '%s\n' "gitcache_v1.0.31_Alpine3.20_x86_64"
+      ;;
+    *)
+      echo "Unsupported gitcache platform: ${os_id:-unknown} ${version_id:-unknown} ${arch}" >&2
+      return 1
+      ;;
+  esac
+}
+
+install_gitcache_binary() {
+  local asset_name release_url tmp_path
+  asset_name="$(gitcache_release_asset_name)"
+  release_url="https://github.com/seeraven/gitcache/releases/download/v1.0.31/${asset_name}"
+  tmp_path="$(mktemp)"
+  if ! curl -fsSL "${release_url}" -o "${tmp_path}"; then
+    rm -f "${tmp_path}"
+    return 1
+  fi
+  install -d -m 0755 "${CRSBENCH_MANAGED_BIN_DIR}"
+  install -m 0755 "${tmp_path}" "${CRSBENCH_MANAGED_BIN_DIR}/gitcache"
+  rm -f "${tmp_path}"
+}
+
+enable_gitcache_wrapper() {
+  install -d -m 0755 "${CRSBENCH_MANAGED_BIN_DIR}"
+  ln -sfn "${CRSBENCH_MANAGED_BIN_DIR}/gitcache" "${CRSBENCH_MANAGED_BIN_DIR}/git"
+}
+
+disable_gitcache_wrapper() {
+  rm -f "${CRSBENCH_MANAGED_BIN_DIR}/git"
+}
+
+ensure_gitcache_ready() {
+  if ! install_gitcache_binary; then
+    echo "gitcache install failed; continuing with system git" >&2
+    disable_gitcache_wrapper
+    if [[ "${CRSBENCH_GITCACHE_ENABLED}" == "1" ]]; then
+      return 1
+    fi
+    return 0
+  fi
+
+  if [[ "${CRSBENCH_GITCACHE_ENABLED}" == "1" ]]; then
+    enable_gitcache_wrapper
+    return 0
+  fi
+
+  disable_gitcache_wrapper
 }
 
 ensure_uv_for_crsbench() {
@@ -744,6 +836,7 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 mode = sys.argv[2]
 print(payload["redis_host"])
 print(payload["experiment"])
+print("1" if payload.get("gitcache") else "0")
 if mode == "evaluator":
     print(payload.get("evaluator_name") or "")
     print(payload.get("evaluator_build_jobs") or "")
@@ -763,6 +856,7 @@ PY
 
 REDIS_HOST="${PAYLOAD_FIELDS[0]}"
 EXPERIMENT_NAME="${PAYLOAD_FIELDS[1]}"
+CRSBENCH_GITCACHE_ENABLED="${PAYLOAD_FIELDS[2]}"
 READINESS_TIMEOUT_SEC=""
 WORKER_NAME=""
 WORKER_JOBS=""
@@ -776,26 +870,26 @@ EVALUATOR_VERIFY_CORES_PER_JOB=""
 EVALUATOR_IDLE_TIMEOUT=""
 EVALUATOR_CPU_TAG=""
 if [[ "${CRSBENCH_STARTUP_MODE}" == "evaluator" ]]; then
-  EVALUATOR_NAME="${PAYLOAD_FIELDS[2]}"
+  EVALUATOR_NAME="${PAYLOAD_FIELDS[3]}"
   if [[ -z "${EVALUATOR_NAME}" ]]; then
     EVALUATOR_NAME="$(instance_metadata_get "name")"
   fi
-  EVALUATOR_BUILD_JOBS="${PAYLOAD_FIELDS[3]}"
-  EVALUATOR_BUILD_CORES_PER_JOB="${PAYLOAD_FIELDS[4]}"
-  EVALUATOR_VERIFY_JOBS="${PAYLOAD_FIELDS[5]}"
-  EVALUATOR_VERIFY_CORES_PER_JOB="${PAYLOAD_FIELDS[6]}"
-  EVALUATOR_IDLE_TIMEOUT="${PAYLOAD_FIELDS[7]}"
-  EVALUATOR_CPU_TAG="${PAYLOAD_FIELDS[8]}"
-  READINESS_TIMEOUT_SEC="${PAYLOAD_FIELDS[9]}"
+  EVALUATOR_BUILD_JOBS="${PAYLOAD_FIELDS[4]}"
+  EVALUATOR_BUILD_CORES_PER_JOB="${PAYLOAD_FIELDS[5]}"
+  EVALUATOR_VERIFY_JOBS="${PAYLOAD_FIELDS[6]}"
+  EVALUATOR_VERIFY_CORES_PER_JOB="${PAYLOAD_FIELDS[7]}"
+  EVALUATOR_IDLE_TIMEOUT="${PAYLOAD_FIELDS[8]}"
+  EVALUATOR_CPU_TAG="${PAYLOAD_FIELDS[9]}"
+  READINESS_TIMEOUT_SEC="${PAYLOAD_FIELDS[10]}"
 else
-  WORKER_NAME="${PAYLOAD_FIELDS[2]}"
+  WORKER_NAME="${PAYLOAD_FIELDS[3]}"
   if [[ -z "${WORKER_NAME}" ]]; then
     WORKER_NAME="$(instance_metadata_get "name")"
   fi
-  WORKER_JOBS="${PAYLOAD_FIELDS[3]}"
-  WORKER_CORES_PER_JOB="${PAYLOAD_FIELDS[4]}"
-  WORKER_CPU_TAG="${PAYLOAD_FIELDS[5]}"
-  READINESS_TIMEOUT_SEC="${PAYLOAD_FIELDS[6]}"
+  WORKER_JOBS="${PAYLOAD_FIELDS[4]}"
+  WORKER_CORES_PER_JOB="${PAYLOAD_FIELDS[5]}"
+  WORKER_CPU_TAG="${PAYLOAD_FIELDS[6]}"
+  READINESS_TIMEOUT_SEC="${PAYLOAD_FIELDS[7]}"
 fi
 REDIS_PASSWORD="$(metadata_get_optional "crsbench-redis-password")"
 INSTANCE_ID="$(instance_metadata_get "id")"
@@ -833,6 +927,8 @@ fi
 
 trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR
 
+ensure_gitcache_ready
+
 INSTALL_SPEC="$(metadata_get_optional "crsbench-install-spec")"
 GIT_REF="$(metadata_get_optional "crsbench-git-ref")"
 GITHUB_DEPLOY_KEY="$(metadata_get_optional "crsbench-github-deploy-key")"
@@ -852,7 +948,7 @@ run_crsbench_shell "cd $(printf '%q' "${CLONE_DIR}") && git checkout $(printf '%
 ensure_uv_for_crsbench
 run_crsbench_shell "cd $(printf '%q' "${CLONE_DIR}") && uv sync --all-extras && uv pip install -e ."
 VENV_BIN="${CLONE_DIR}/.venv/bin"
-CRSBENCH_USER_PATH="${VENV_BIN}:${CRSBENCH_USER_HOME}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+CRSBENCH_USER_PATH="${VENV_BIN}:${CRSBENCH_MANAGED_BIN_DIR}:${CRSBENCH_USER_HOME}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 run_as_crsbench env PATH="${CRSBENCH_USER_PATH}" HOME="${CRSBENCH_USER_HOME}" /bin/bash -lc "cd $(printf '%q' "${CLONE_DIR}") && python3 - $(printf '%q' "${PAYLOAD_PATH}") <<'PY'
 import json
@@ -902,7 +998,7 @@ else
   write_env_var "CRSBENCH_CLOUD_INSTANCE_NAME" "${WORKER_NAME}"
 fi
 if [[ -n "${VENV_BIN:-}" ]]; then
-  write_env_var "PATH" "${VENV_BIN}:${CRSBENCH_USER_HOME}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  write_env_var "PATH" "${VENV_BIN}:${CRSBENCH_MANAGED_BIN_DIR}:${CRSBENCH_USER_HOME}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 fi
 write_env_var "LOG_PATH" "${LOG_PATH}"
 

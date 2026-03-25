@@ -698,6 +698,30 @@ def test_startup_script_supports_apt_and_apk_bootstrap_dependencies():
     assert "Docker daemon is unavailable after waiting" in script
 
 
+def test_load_startup_script_installs_gitcache_binary_and_managed_wrapper():
+    """Worker bootstrap should install gitcache and optionally expose it as git."""
+    from crsbench.cloud.gce.metadata import load_startup_script
+
+    script = load_startup_script()
+
+    assert "gitcache_release_asset_name()" in script
+    assert "install_gitcache_binary()" in script
+    assert "enable_gitcache_wrapper()" in script
+    assert "ensure_gitcache_ready()" in script
+    assert "seeraven/gitcache" in script
+    assert "gitcache_v1.0.31_Ubuntu24.04_x86_64" in script
+    assert (
+        'ln -sfn "${CRSBENCH_MANAGED_BIN_DIR}/gitcache" '
+        '"${CRSBENCH_MANAGED_BIN_DIR}/git"'
+    ) in script
+    assert (
+        'CRSBENCH_MANAGED_BIN_DIR="${CRSBENCH_MANAGED_BIN_DIR:-/opt/crsbench/bin}"'
+        in script
+    )
+    assert 'CRSBENCH_GITCACHE_ENABLED="${CRSBENCH_GITCACHE_ENABLED:-0}"' in script
+    assert 'print("1" if payload.get("gitcache") else "0")' in script
+
+
 def test_startup_script_bootstraps_default_buildx_builder():
     """Worker bootstrap should bootstrap the default buildx builder."""
     from crsbench.cloud.gce.metadata import load_startup_script
@@ -838,6 +862,86 @@ def probe_redis_connection(redis_host: str, timeout: int = 2):
     assert result.returncode == 1
     assert "Fatal Redis bootstrap error" in report_path.read_text(encoding="utf-8")
     assert "bad password" in report_path.read_text(encoding="utf-8")
+
+
+def test_worker_gitcache_install_failure_warns_and_continues_when_disabled(tmp_path):
+    """Disabled wrapper mode should treat gitcache download failure as warning-only."""
+    from crsbench.cloud.gce.metadata import load_startup_script
+
+    script = load_startup_script()
+    function_start = script.index("gitcache_release_asset_name() {")
+    function_end = script.index("\n\nrequire_cmd curl", function_start)
+    gitcache_helpers = script[function_start:function_end]
+
+    harness_path = tmp_path / "gitcache-disabled.sh"
+    harness_path.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                "set -euo pipefail",
+                f"TMPROOT={shlex.quote(str(tmp_path / 'runtime'))}",
+                'CRSBENCH_MANAGED_BIN_DIR="${TMPROOT}/bin"',
+                'CRSBENCH_GITCACHE_ENABLED="${CRSBENCH_GITCACHE_ENABLED:-0}"',
+                'mkdir -p "${TMPROOT}"',
+                gitcache_helpers,
+                "curl() { return 1; }",
+                "ensure_gitcache_ready",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", str(harness_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=tmp_path,
+        timeout=2,
+    )
+
+    assert result.returncode == 0
+    assert "gitcache install failed" in result.stderr
+
+
+def test_worker_gitcache_install_failure_fails_when_wrapper_enabled(tmp_path):
+    """Enabled wrapper mode should fail bootstrap if gitcache download fails."""
+    from crsbench.cloud.gce.metadata import load_startup_script
+
+    script = load_startup_script()
+    function_start = script.index("gitcache_release_asset_name() {")
+    function_end = script.index("\n\nrequire_cmd curl", function_start)
+    gitcache_helpers = script[function_start:function_end]
+
+    harness_path = tmp_path / "gitcache-enabled.sh"
+    harness_path.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                "set -euo pipefail",
+                f"TMPROOT={shlex.quote(str(tmp_path / 'runtime'))}",
+                'CRSBENCH_MANAGED_BIN_DIR="${TMPROOT}/bin"',
+                "CRSBENCH_GITCACHE_ENABLED=1",
+                'mkdir -p "${TMPROOT}"',
+                gitcache_helpers,
+                "curl() { return 1; }",
+                "ensure_gitcache_ready",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", str(harness_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=tmp_path,
+        timeout=2,
+    )
+
+    assert result.returncode == 1
+    assert "gitcache install failed" in result.stderr
 
 
 def test_build_orchestrator_metadata_embeds_config_payload_and_redis_password(tmp_path):
