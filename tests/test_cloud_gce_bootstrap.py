@@ -715,11 +715,15 @@ def test_load_startup_script_installs_gitcache_binary_and_managed_wrapper():
         '"${CRSBENCH_MANAGED_BIN_DIR}/git"'
     ) in script
     assert (
-        'CRSBENCH_MANAGED_BIN_DIR="${CRSBENCH_MANAGED_BIN_DIR:-/opt/crsbench/bin}"'
+        'CRSBENCH_MANAGED_BIN_DIR="${CRSBENCH_MANAGED_BIN_DIR:-/opt/crsbench-managed/bin}"'
         in script
     )
     assert 'CRSBENCH_GITCACHE_ENABLED="${CRSBENCH_GITCACHE_ENABLED:-0}"' in script
     assert 'print("1" if payload.get("gitcache") else "0")' in script
+    assert (
+        'CRSBENCH_MANAGED_BIN_DIR="${CRSBENCH_MANAGED_BIN_DIR:-/opt/crsbench/bin}"'
+        not in script
+    )
 
 
 def test_startup_script_bootstraps_default_buildx_builder():
@@ -1180,8 +1184,12 @@ def test_load_orchestrator_startup_script_installs_gitcache_binary_and_managed_w
         '"${CRSBENCH_MANAGED_BIN_DIR}/git"'
     ) in script
     assert (
-        'CRSBENCH_MANAGED_BIN_DIR="${CRSBENCH_MANAGED_BIN_DIR:-/opt/crsbench/bin}"'
+        'CRSBENCH_MANAGED_BIN_DIR="${CRSBENCH_MANAGED_BIN_DIR:-/opt/crsbench-managed/bin}"'
         in script
+    )
+    assert (
+        'CRSBENCH_MANAGED_BIN_DIR="${CRSBENCH_MANAGED_BIN_DIR:-/opt/crsbench/bin}"'
+        not in script
     )
     assert 'CRSBENCH_GITCACHE_ENABLED="${CRSBENCH_GITCACHE_ENABLED:-0}"' in script
 
