@@ -1,3 +1,6 @@
+from unittest.mock import patch
+
+import crsbench.genconfig_tui.app as gen_config_tui_app
 import pytest
 from crsbench.genconfig_tui.app import ConfigBuilderApp
 from textual.widgets import Input
@@ -48,6 +51,22 @@ def test_app_has_escape_binding_for_section_list():
 def test_app_does_not_expose_load_path_input():
     assert "#loaded-path" in ConfigBuilderApp.CSS
     assert "#load-path" not in ConfigBuilderApp.CSS
+
+
+def test_programmatic_main_does_not_reparse_cli_args_when_config_is_none():
+    with (
+        patch.object(
+            gen_config_tui_app,
+            "build_argument_parser",
+            side_effect=AssertionError("should not parse argv"),
+        ),
+        patch.object(gen_config_tui_app, "ConfigBuilderApp") as mock_app_cls,
+    ):
+        result = gen_config_tui_app.main(config_path=None)
+
+    assert result == 0
+    mock_app_cls.assert_called_once_with(initial_path=None)
+    mock_app_cls.return_value.run.assert_called_once_with()
 
 
 @pytest.mark.anyio

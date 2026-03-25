@@ -577,10 +577,16 @@ def build_argument_parser() -> ArgumentParser:
 
 
 def main(config_path: Path | None = None) -> int:
-    if config_path is None:
-        parser = build_argument_parser()
-        args = parser.parse_args()
-        config_path = args.config
     app = ConfigBuilderApp(initial_path=config_path)
     app.run()
     return 0
+
+
+def cli_main() -> int:
+    parser = build_argument_parser()
+    args = parser.parse_args()
+    return main(config_path=args.config)
+
+
+if __name__ == "__main__":
+    raise SystemExit(cli_main())
