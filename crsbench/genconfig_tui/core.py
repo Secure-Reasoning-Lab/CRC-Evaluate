@@ -101,6 +101,17 @@ def _build_inputs(runtime_state: Mapping[str, Any]) -> dict[str, Any]:
     return _prune(inputs)
 
 
+def _build_runtime_litellm(runtime_state: Mapping[str, Any]) -> dict[str, Any]:
+    return _prune(
+        {
+            "mode": runtime_state.get("litellm_mode"),
+            "tracking_enabled": runtime_state.get("llm_tracking_enabled"),
+            "cost_budget": runtime_state.get("litellm_cost_budget"),
+            "skip": runtime_state.get("skip_litellm"),
+        }
+    )
+
+
 def _build_crs_compose_section(state: Mapping[str, Any]) -> dict[str, Any]:
     infra_shared = state.get("infra_shared")
     infra_num_cores = state.get("infra_num_cores")
@@ -255,9 +266,7 @@ def build_grouped_config(
             "verify_timeout": runtime_state.get("verify_timeout"),
             "per_pov_verify_timeout": runtime_state.get("per_pov_verify_timeout"),
             "redis_host": runtime_state.get("redis_host"),
-            "skip_litellm": runtime_state.get("skip_litellm"),
-            "litellm_mode": runtime_state.get("litellm_mode"),
-            "llm_tracking_enabled": runtime_state.get("llm_tracking_enabled"),
+            "litellm": _build_runtime_litellm(runtime_state),
             "patch_verify_variants": runtime_state.get("patch_verify_variants"),
             "snapshot_period": runtime_state.get("snapshot_period"),
             "pov_early_stop": runtime_state.get("pov_early_stop"),
@@ -326,6 +335,7 @@ def load_state_from_grouped_config(
     cloud = deepcopy(dict(grouped_dict.get("cloud", {})))
 
     inputs = deepcopy(dict(_pop_known(runtime, "inputs") or {}))
+    litellm = deepcopy(dict(_pop_known(runtime, "litellm") or {}))
     pov = deepcopy(dict(_pop_known(inputs, "pov") or {}))
     sarif = deepcopy(dict(_pop_known(inputs, "sarif") or {}))
     seed = deepcopy(dict(_pop_known(inputs, "seed") or {}))
@@ -383,6 +393,7 @@ def load_state_from_grouped_config(
                         "skip_litellm",
                         "litellm_mode",
                         "llm_tracking_enabled",
+                        "litellm_cost_budget",
                         "patch_verify_variants",
                         "snapshot_period",
                         "pov_early_stop",
@@ -398,6 +409,14 @@ def load_state_from_grouped_config(
                 "seed_enabled": seed.get("enabled"),
                 "seed_max_time": seed.get("max_time"),
                 "diff_enabled": diff.get("enabled"),
+                "skip_litellm": litellm.get("skip", runtime.get("skip_litellm")),
+                "litellm_mode": litellm.get("mode", runtime.get("litellm_mode")),
+                "llm_tracking_enabled": litellm.get(
+                    "tracking_enabled", runtime.get("llm_tracking_enabled")
+                ),
+                "litellm_cost_budget": litellm.get(
+                    "cost_budget", runtime.get("litellm_cost_budget")
+                ),
             }
         ),
         "storage": storage,

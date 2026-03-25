@@ -3,7 +3,7 @@ from unittest.mock import patch
 import crsbench.genconfig_tui.app as gen_config_tui_app
 import pytest
 from crsbench.genconfig_tui.app import ConfigBuilderApp
-from textual.widgets import Input
+from textual.widgets import Input, SelectionList
 
 
 def test_app_constructs():
@@ -30,6 +30,93 @@ async def test_first_tab_from_section_selector_goes_to_first_field():
         await pilot.press("tab")
         assert app.focused is not None
         assert app.focused.id == "field--experiment--name"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_down_arrow_moves_focus_to_next_visible_field():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+        await pilot.press("tab")
+        assert app.focused is not None
+        assert app.focused.id == "field--experiment--name"
+
+        await pilot.press("down")
+
+        assert app.focused is not None
+        assert app.focused.id == "field--experiment--task"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_up_arrow_moves_focus_to_previous_visible_field():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+        await pilot.press("tab")
+        await pilot.press("down")
+        assert app.focused is not None
+        assert app.focused.id == "field--experiment--task"
+
+        await pilot.press("up")
+
+        assert app.focused is not None
+        assert app.focused.id == "field--experiment--name"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_down_arrow_moves_within_sanitizer_list_before_leaving_field():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+        await pilot.press("tab", "down", "down", "down", "down", "down")
+
+        sanitizers = app.query_one("#field--experiment--sanitizers", SelectionList)
+        assert app.focused is sanitizers
+        assert sanitizers.highlighted == 0
+
+        await pilot.press("down")
+
+        assert app.focused is sanitizers
+        assert sanitizers.highlighted == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_up_arrow_on_first_sanitizer_item_moves_to_previous_field():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+        await pilot.press("tab", "down", "down", "down", "down", "down")
+
+        sanitizers = app.query_one("#field--experiment--sanitizers", SelectionList)
+        assert app.focused is sanitizers
+        assert sanitizers.highlighted == 0
+
+        await pilot.press("up")
+
+        assert app.focused is not None
+        assert app.focused.id == "field--experiment--mode"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_down_arrow_on_last_sanitizer_item_moves_to_next_field():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+        await pilot.press("tab", "down", "down", "down", "down", "down")
+
+        sanitizers = app.query_one("#field--experiment--sanitizers", SelectionList)
+        sanitizers.highlighted = sanitizers.option_count - 1
+        await pilot.pause()
+
+        await pilot.press("down")
+
+        assert app.focused is not None
+        assert app.focused.id == "field--experiment--only_cpv_harnesses"
 
 
 def test_app_css_prioritizes_form_width():
@@ -71,6 +158,21 @@ def test_programmatic_main_does_not_reparse_cli_args_when_config_is_none():
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_initial_missing_path_reports_error_and_keeps_ui_running(tmp_path):
+    missing_path = tmp_path / "missing.yaml"
+    app = ConfigBuilderApp(initial_path=missing_path)
+
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+
+        assert app.focused is not None
+        assert app.focused.id == "section-list"
+        assert app.loaded_path is None
+        assert "No config loaded" in app._loaded_path_text()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_app_uses_plain_text_status_widget():
     app = ConfigBuilderApp()
     async with app.run_test(size=(100, 24)) as pilot:
@@ -107,3 +209,49 @@ async def test_invalid_memory_format_errors_when_field_blurs():
         app.set_focus(cores)
         await pilot.pause()
         assert "Invalid memory format" in app.status_text
+        assert memory.has_class("invalid")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_valid_blur_does_not_replace_status_with_validated_message():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        app.current_section = "resources"
+        app._refresh_ui()
+        memory = app.query_one("#field--resources--memory_per_trial", Input)
+        cores = app.query_one("#field--resources--cores_per_trial", Input)
+        app.set_focus(memory)
+        await pilot.pause()
+        memory.value = "1G"
+        await pilot.pause()
+        app.set_focus(cores)
+        await pilot.pause()
+        assert "Validated" not in app.status_text
+        assert not memory.has_class("invalid")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_invalid_field_state_clears_after_valid_value_blurs():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        app.current_section = "resources"
+        app._refresh_ui()
+        memory = app.query_one("#field--resources--memory_per_trial", Input)
+        cores = app.query_one("#field--resources--cores_per_trial", Input)
+        app.set_focus(memory)
+        await pilot.pause()
+        memory.value = "123"
+        await pilot.pause()
+        app.set_focus(cores)
+        await pilot.pause()
+        assert memory.has_class("invalid")
+
+        app.set_focus(memory)
+        await pilot.pause()
+        memory.value = "1G"
+        await pilot.pause()
+        app.set_focus(cores)
+        await pilot.pause()
+        assert not memory.has_class("invalid")

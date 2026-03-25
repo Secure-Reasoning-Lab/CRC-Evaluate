@@ -123,6 +123,57 @@ def test_load_state_from_grouped_config_flattens_known_sections():
     assert extras == {}
 
 
+def test_load_state_from_grouped_config_round_trips_nested_litellm_block():
+    grouped = {
+        "experiment": {
+            "name": "loaded-exp",
+            "task": "bugfinding",
+            "benchmark_suite": "sanity",
+            "mode": "delta",
+        },
+        "runtime": {
+            "trials": 2,
+            "max_total_time": 7201,
+            "build_timeout": 3600,
+            "run_timeout": 600,
+            "verify_timeout": 600,
+            "litellm": {
+                "mode": "external",
+                "tracking_enabled": True,
+                "cost_budget": 10,
+                "skip": False,
+            },
+        },
+        "storage": {
+            "experiment_filestore": "/tmp/exp",
+            "report_filestore": "/tmp/report",
+        },
+        "crs_compose": {
+            "oss_crs_infra": {"shared": True},
+            "crs-libfuzzer": {"num_cores": 2},
+        },
+    }
+
+    state, extras = load_state_from_grouped_config(grouped)
+
+    assert state["runtime"]["litellm_mode"] == "external"
+    assert state["runtime"]["llm_tracking_enabled"] is True
+    assert state["runtime"]["litellm_cost_budget"] == 10
+    assert state["runtime"]["skip_litellm"] is False
+
+    rebuilt = build_grouped_config(state, section_extras=extras)
+
+    assert rebuilt["runtime"]["litellm"] == {
+        "mode": "external",
+        "tracking_enabled": True,
+        "cost_budget": 10,
+        "skip": False,
+    }
+    assert "litellm_mode" not in rebuilt["runtime"]
+    assert "llm_tracking_enabled" not in rebuilt["runtime"]
+    assert "skip_litellm" not in rebuilt["runtime"]
+
+
 def test_load_state_from_grouped_config_maps_cloud_fields_and_preserves_unknowns():
     grouped = {
         "experiment": {

@@ -112,10 +112,23 @@ class ConfigBuilderApp(App[None]):
         margin-bottom: 1;
     }
 
+    .field-wrap.invalid > .field-label {
+        color: $error;
+    }
+
     .field-wrap > Input,
     .field-wrap > Select,
     .field-wrap > SelectionList {
         width: 1fr;
+    }
+
+    .field-wrap.invalid > Input,
+    .field-wrap.invalid > Select,
+    .field-wrap.invalid > SelectionList,
+    Input.invalid,
+    Select.invalid,
+    SelectionList.invalid {
+        border: solid $error;
     }
 
     .field-label {
@@ -253,7 +266,15 @@ class ConfigBuilderApp(App[None]):
         section_list.focus()
         self._sync_widgets_from_state()
         if self.initial_path is not None:
-            self._load_from_path(self.initial_path)
+            try:
+                self._load_from_path(self.initial_path)
+            except Exception as exc:  # noqa: BLE001
+                self.loaded_path = None
+                self.query_one("#loaded-path", Static).update(self._loaded_path_text())
+                self.notify(str(exc), severity="error")
+                self._refresh_ui()
+                section_list.focus()
+                self._set_status(f"Load failed: {exc}")
         else:
             self._refresh_ui()
 
@@ -290,6 +311,7 @@ class ConfigBuilderApp(App[None]):
                         widget.deselect_all()
                         for selected_value in value or []:
                             widget.select(selected_value)
+                    self._set_widget_invalid_state(widget, False)
         finally:
             self._setting_fields = False
 
@@ -362,22 +384,73 @@ class ConfigBuilderApp(App[None]):
             return list(widget.selected)
         raise ValueError(f"Unsupported field kind: {field.kind}")
 
+    def _set_widget_invalid_state(self, widget: Any, invalid: bool) -> None:
+        widget.set_class(invalid, "invalid")
+        field_info = self._field_from_widget_id(widget.id)
+        if field_info is None:
+            return
+        section, field = field_info
+        wrapper = self.query_one(f"#{_wrap_id(section, field.key)}", VerticalGroup)
+        wrapper.set_class(invalid, "invalid")
+
     def _validate_widget(self, widget: Any) -> None:
         field_info = self._field_from_widget_id(widget.id)
         if field_info is None:
             return
         section, field = field_info
-        value = self._coerce_widget_value_for_validation(field, widget)
-        validate_field_value(section, field.key, value)
-        grouped = self._merged_grouped_config()
-        validate_grouped_config(grouped)
-        self._set_status(f"Validated {field.label}")
+        try:
+            value = self._coerce_widget_value_for_validation(field, widget)
+            validate_field_value(section, field.key, value)
+            grouped = self._merged_grouped_config()
+            validate_grouped_config(grouped)
+        except Exception:
+            self._set_widget_invalid_state(widget, True)
+            raise
+        self._set_widget_invalid_state(widget, False)
 
     def _is_form_field_widget(self, widget: Any) -> bool:
         if not (widget.id and widget.id.startswith("field--")):
             return False
         form_scroll = self.query_one("#form-scroll", VerticalScroll)
         return widget in form_scroll.query("*")
+
+    def _visible_field_widgets(self) -> list[Any]:
+        section_state = self.form_state.get(self.current_section, {})
+        widgets: list[Any] = []
+        for field in SECTION_SPECS[self.current_section].fields:
+            if not field.is_visible(section_state):
+                continue
+            widgets.append(
+                self.query_one(f"#{_widget_id(self.current_section, field.key)}")
+            )
+        return widgets
+
+    def _move_field_focus(self, step: int) -> bool:
+        focused = self.focused
+        if not self._is_form_field_widget(focused):
+            return False
+
+        if isinstance(focused, SelectionList):
+            highlighted = focused.highlighted
+            if highlighted is None:
+                return False
+            if step < 0 and highlighted != 0:
+                return False
+            if step > 0 and highlighted != focused.option_count - 1:
+                return False
+
+        widgets = self._visible_field_widgets()
+        try:
+            current_index = widgets.index(focused)
+        except ValueError:
+            return False
+
+        next_index = current_index + step
+        if next_index < 0 or next_index >= len(widgets):
+            return False
+
+        widgets[next_index].focus()
+        return True
 
     def _field_from_widget_id(
         self, widget_id: str | None
@@ -501,6 +574,16 @@ class ConfigBuilderApp(App[None]):
             self._validate_widget(widget)
         except Exception as exc:  # noqa: BLE001
             self._set_status(str(exc))
+
+    @on(events.Key)
+    def handle_field_arrow_navigation(self, event: events.Key) -> None:
+        if event.key == "up" and self._move_field_focus(-1):
+            event.stop()
+            event.prevent_default()
+            return
+        if event.key == "down" and self._move_field_focus(1):
+            event.stop()
+            event.prevent_default()
 
     @on(Input.Changed)
     def handle_input_changed(self, event: Input.Changed) -> None:
