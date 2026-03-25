@@ -95,6 +95,7 @@ class CloudVmBootstrapInputs:
 
     prepare_mode: PrepareMode = "full"
     download_benchmarks: DownloadBenchmarksMode = "auto"
+    gitcache: bool = False
     benchmark_suite: str | None = None
     benchmarks: BenchmarkSelectorList | None = None
     benchmarks_root: Path | str = DEFAULT_BENCHMARKS_ROOT
@@ -116,6 +117,7 @@ class CloudVmBootstrapInputs:
             download_benchmarks=(
                 bootstrap.download_benchmarks if bootstrap is not None else "auto"
             ),
+            gitcache=bootstrap.gitcache if bootstrap is not None else False,
             benchmark_suite=config.benchmark_suite,
             benchmarks=config.benchmarks,
             benchmarks_root=_restore_default_root(
@@ -136,6 +138,7 @@ def bootstrap_inputs_from_payload(payload: dict[str, Any]) -> CloudVmBootstrapIn
         download_benchmarks=_coerce_download_benchmarks_mode(
             payload.get("download_benchmarks")
         ),
+        gitcache=bool(payload.get("gitcache", False)),
         benchmark_suite=_normalize_optional_string(
             _coerce_optional_string(payload.get("benchmark_suite"))
         ),

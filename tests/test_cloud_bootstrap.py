@@ -111,6 +111,7 @@ def test_bootstrap_inputs_from_payload_restores_defaults_and_explicit_fields():
             "prepare_mode": "skip_base_images",
             "download_benchmarks": "always",
             "benchmark_suite": "afc-final",
+            "gitcache": True,
             "benchmarks_root": "benchmarks",
             "benchmark_suites_root": "benchmark-suites-custom",
         }
@@ -119,6 +120,7 @@ def test_bootstrap_inputs_from_payload_restores_defaults_and_explicit_fields():
     assert inputs.prepare_mode == "skip_base_images"
     assert inputs.download_benchmarks == "always"
     assert inputs.benchmark_suite == "afc-final"
+    assert inputs.gitcache is True
     assert inputs.benchmarks is None
     assert inputs.benchmarks_root == Path("benchmarks")
     assert inputs.benchmark_suites_root == Path("benchmark-suites-custom")
@@ -239,6 +241,9 @@ def test_from_experiment_config_restores_repo_default_roots() -> None:
         benchmark_suite="sanity",
         crs_compose={"test-crs": {"num_cores": 1}},
         cloud={
+            "bootstrap": {
+                "gitcache": True,
+            },
             "providers": {
                 "gce": {
                     "project": "test-project",
@@ -279,5 +284,6 @@ def test_from_experiment_config_restores_repo_default_roots() -> None:
 
     inputs = CloudVmBootstrapInputs.from_experiment_config(config)
 
+    assert inputs.gitcache is True
     assert inputs.benchmarks_root == Path("benchmarks")
     assert inputs.benchmark_suites_root == Path("benchmark-suites")

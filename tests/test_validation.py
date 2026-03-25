@@ -971,6 +971,18 @@ class TestExperimentConfigSchema:
         assert config.cloud.bootstrap.prepare_mode == "full"
         assert config.cloud.bootstrap.download_benchmarks == download_benchmarks
 
+    def test_cloud_bootstrap_gitcache_flag_valid(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["bootstrap"] = {"gitcache": True}
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.bootstrap.gitcache is True
+        assert config.cloud.bootstrap.prepare_mode == "full"
+        assert config.cloud.bootstrap.download_benchmarks == "auto"
+
     def test_cloud_bootstrap_rejects_env_passthrough(self):
         data = self._base_kwargs()
         data["cloud"] = self._provider_neutral_cloud_kwargs()

@@ -2742,6 +2742,13 @@ class CloudBootstrapConfig(BaseModel):
         default="auto",
         description="Whether cloud VMs download benchmarks before runtime startup.",
     )
+    gitcache: bool = Field(
+        default=False,
+        description=(
+            "Whether cloud VMs activate gitcache as the managed git wrapper "
+            "after installing the gitcache binary."
+        ),
+    )
 
 
 class CloudRemoteConfig(BaseModel):
