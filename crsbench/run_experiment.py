@@ -365,6 +365,25 @@ Examples:
 
     add_gen_config_subparser(subparsers)
 
+    # 'gen-config-tui' subcommand - Textual config scaffolding
+    gen_config_tui_parser = subparsers.add_parser(
+        "gen-config-tui",
+        help="Launch the Textual experiment config generator",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s gen-config-tui
+  %(prog)s gen-config-tui experiment-configs/example.yaml
+        """,
+    )
+    gen_config_tui_parser.add_argument(
+        "config_path",
+        nargs="?",
+        type=Path,
+        help="Optional existing grouped CRSBench YAML config to load",
+    )
+    gen_config_tui_parser.set_defaults(command="gen-config-tui")
+
     # 'run' subcommand - experiment execution
     run_parser = subparsers.add_parser(
         "run",
@@ -478,6 +497,13 @@ def validate_arguments(args: argparse.Namespace) -> None:
         )
 
     logger.info(f"Experiment configuration: {config_path}")
+
+
+def run_gen_config_tui(args: argparse.Namespace) -> int:
+    """Execute the gen-config-tui command."""
+    from crsbench.genconfig_tui.app import main as run_app
+
+    return run_app(config_path=Path(args.config_path) if args.config_path else None)
 
 
 def validate_filestore_permissions(config: ExperimentConfig) -> None:
@@ -2922,6 +2948,9 @@ def main() -> None:
         from crsbench.genconfig.cli import run_gen_config
 
         sys.exit(run_gen_config(args))
+
+    if args.command == "gen-config-tui":
+        sys.exit(run_gen_config_tui(args))
 
     if args.command == "verify":
         # Handle verify command

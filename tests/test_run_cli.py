@@ -1,7 +1,11 @@
 """CLI parser contract tests for `crsbench run`."""
 
 import sys
+from argparse import Namespace
+from pathlib import Path
+from unittest.mock import patch
 
+import crsbench.run_experiment as run_experiment
 import pytest
 from crsbench.run_experiment import parse_arguments
 
@@ -57,3 +61,54 @@ def test_run_cli_retry_failed_flag_parsing() -> None:
     )
     assert args.command == "run"
     assert args.retry_failed is True
+
+
+def test_run_cli_accepts_gen_config_tui() -> None:
+    args = _parse(
+        [
+            "crsbench",
+            "gen-config-tui",
+        ]
+    )
+    assert args.command == "gen-config-tui"
+
+
+def test_run_cli_accepts_gen_config_tui_config_path() -> None:
+    args = _parse(
+        [
+            "crsbench",
+            "gen-config-tui",
+            "experiment-configs/example.yaml",
+        ]
+    )
+    assert args.command == "gen-config-tui"
+    assert args.config_path == Path("experiment-configs/example.yaml")
+
+
+def test_run_cli_dispatches_gen_config_tui() -> None:
+    with (
+        patch.object(
+            run_experiment,
+            "parse_arguments",
+            return_value=Namespace(command="gen-config-tui"),
+        ),
+        patch.object(run_experiment, "run_gen_config_tui", return_value=0) as mock_run,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        run_experiment.main()
+
+    assert exc_info.value.code == 0
+    mock_run.assert_called_once()
+
+
+def test_run_gen_config_tui_passes_config_path_to_app() -> None:
+    args = Namespace(
+        command="gen-config-tui",
+        config_path=Path("experiment-configs/example.yaml"),
+    )
+
+    with patch("crsbench.genconfig_tui.app.main", return_value=0) as mock_main:
+        result = run_experiment.run_gen_config_tui(args)
+
+    assert result == 0
+    mock_main.assert_called_once_with(config_path=args.config_path)
