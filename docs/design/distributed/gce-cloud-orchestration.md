@@ -168,21 +168,25 @@ The startup script (`cloud/gce/startup/worker.sh`) runs on the VM:
    - local rehearsal may instead mount file-backed metadata and set
      `CRSBENCH_METADATA_ROOT_DIR`; the shell contract prefers that source and
      falls back to the GCE metadata endpoint
-2. Requires a `git+...` `crsbench-install-spec`, creates a dedicated `crsbench` user, clones CRSBench into `/opt/crsbench`, and installs the checkout as that user
+2. Installs the pinned `gitcache` release binary into a CRSBench-managed bin directory on every cloud VM
+   - `cloud.bootstrap.gitcache: true` adds a managed `git -> gitcache` wrapper in the CRSBench process PATH
+   - `cloud.bootstrap.gitcache: false` leaves the system `git` unchanged while still making `gitcache` available as a command
+   - install failure is warning-only when wrapper mode is disabled and bootstrap-fatal when wrapper mode is enabled
+3. Requires a `git+...` `crsbench-install-spec`, creates a dedicated `crsbench` user, clones CRSBench into `/opt/crsbench`, and installs the checkout as that user
    - when a deploy key is configured, SSH is scoped to the top-level CRSBench clone only
    - submodules continue to use the URLs declared in `.gitmodules`, so public submodules can remain on HTTPS
-3. Normalizes the host timezone, configures Docker to use the `cgroupfs` driver expected by `oss-crs`, and grants passwordless `sudo` for the disposable-host bootstrap
-4. On `systemd` hosts, enables linger and delegated controllers for `crsbench`, then runs `oss-crs setup --yes` from the checkout so the user-service cgroup hierarchy is ready
-5. Runs `crsbench prepare` from that checkout and optionally downloads benchmarks according to `cloud.bootstrap`
-6. Imports resolved first-class cloud env vars plus runtime-managed vars and writes them to a state-scoped env file under `/var/lib/crsbench`
-7. Creates and enables the role-appropriate `systemd --user` unit with `WorkingDirectory=/opt/crsbench` (`Restart=always`) when `systemd` is available
+4. Normalizes the host timezone, configures Docker to use the `cgroupfs` driver expected by `oss-crs`, and grants passwordless `sudo` for the disposable-host bootstrap
+5. On `systemd` hosts, enables linger and delegated controllers for `crsbench`, then runs `oss-crs setup --yes` from the checkout so the user-service cgroup hierarchy is ready
+6. Runs `crsbench prepare` from that checkout and optionally downloads benchmarks according to `cloud.bootstrap`
+7. Imports resolved first-class cloud env vars plus runtime-managed vars and writes them to a state-scoped env file under `/var/lib/crsbench`
+8. Creates and enables the role-appropriate `systemd --user` unit with `WorkingDirectory=/opt/crsbench` (`Restart=always`) when `systemd` is available
    - local rehearsal and other non-`systemd` hosts may set
      `CRSBENCH_SERVICE_MANAGER=foreground`, which skips unit management and
      `exec`s the same launcher directly as `crsbench`
-8. `CRSBENCH_STARTUP_MODE=evaluator` switches the shared bootstrap into evaluator mode so it launches `crsbench evaluator` with the embedded experiment config instead of `crsbench worker`
-9. The managed launcher polls the configured Redis endpoint up to `readiness_timeout_sec` before starting the role-specific CRSBench runtime; retryable connection timeouts are retried, while fatal Redis auth/config errors fail immediately
-10. Only after bootstrap succeeds and Redis becomes reachable does the worker/evaluator connect to Redis and report readiness
-11. On failure: ERR trap or launcher timeout calls `report_cloud_worker_state_from_env()` with `bootstrap_failed` and evidence string
+9. `CRSBENCH_STARTUP_MODE=evaluator` switches the shared bootstrap into evaluator mode so it launches `crsbench evaluator` with the embedded experiment config instead of `crsbench worker`
+10. The managed launcher polls the configured Redis endpoint up to `readiness_timeout_sec` before starting the role-specific CRSBench runtime; retryable connection timeouts are retried, while fatal Redis auth/config errors fail immediately
+11. Only after bootstrap succeeds and Redis becomes reachable does the worker/evaluator connect to Redis and report readiness
+12. On failure: ERR trap or launcher timeout calls `report_cloud_worker_state_from_env()` with `bootstrap_failed` and evidence string
 
 Cloud env contract:
 

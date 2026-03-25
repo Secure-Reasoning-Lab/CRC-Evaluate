@@ -169,6 +169,7 @@ cloud:
 |---|---|---|
 | `cloud.bootstrap.prepare_mode` | no | How cloud VMs run `crsbench prepare`; `full` or `skip_base_images` |
 | `cloud.bootstrap.download_benchmarks` | no | Whether cloud VMs download benchmarks before joining runtime; `auto`, `always`, or `never` |
+| `cloud.bootstrap.gitcache` | no | `gitcache` wrapper policy for cloud VMs; CRSBench always installs the binary, and `true` makes CRSBench-managed `git` calls use it |
 | `cloud.defaults.readiness_timeout_sec` | no | Max seconds launch waits for VM bootstrap and readiness before failing |
 | `cloud.defaults.crsbench_install_spec` | no | CRSBench install source for remote VMs; cloud launch expects a `git+...` spec |
 | `cloud.defaults.crsbench_git_ref` | no | Git ref checked out when `crsbench_install_spec` points at a Git source |
@@ -426,10 +427,17 @@ remote orchestrator is counted as ready:
 
 - `prepare_mode: full | skip_base_images`
 - `download_benchmarks: auto | always | never`
+- `gitcache: false | true`
 
 Cloud VMs always run `crsbench prepare`. `download_benchmarks: auto` skips the
 VM-side download only when `benchmark_suite: sanity`; other suites download
 before the worker joins Redis.
+
+Cloud VMs also always install the pinned `gitcache` binary in a CRSBench-managed
+bin directory. `gitcache: false` leaves the normal `git` command unchanged.
+`gitcache: true` adds a managed `git -> gitcache` wrapper in the CRSBench PATH,
+so CRSBench-managed clone/fetch/update steps use `gitcache` without rewriting
+the host-global `git` binary or shell profile.
 
 On the remote orchestrator, the startup script binds Valkey on `127.0.0.1` for
 the local `crsbench run` path and on the VM's discovered internal address for
