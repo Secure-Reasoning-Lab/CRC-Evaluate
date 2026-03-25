@@ -231,23 +231,28 @@ def test_resolve_dynamic_placement_env_merges_shared_and_profile_layers(
         "HF_TOKEN": "os.environ/HF_TOKEN",
         "SHARED_LITERAL": "shared-value",
     }
+    config.cloud.workers.defaults.env = {
+        "ROLE_ONLY": "worker-default",
+        "SHARED_LITERAL": "worker-default-wins",
+    }
     config.cloud.providers.gce.instance_profiles["gce-worker-n2d"].env = {
         "PROFILE_ONLY": "file:profile-secret.txt",
-        "SHARED_LITERAL": "profile-wins",
     }
     (tmp_path / "profile-secret.txt").write_text("profile-secret", encoding="utf-8")
     monkeypatch.setenv("HF_TOKEN", "hf-secret")
 
     resolved = resolve_dynamic_placement_env(
         config=config,
+        role="worker",
         instance_profile="gce-worker-n2d",
         cwd=tmp_path,
     )
 
     assert resolved == {
         "HF_TOKEN": "hf-secret",
-        "SHARED_LITERAL": "profile-wins",
+        "SHARED_LITERAL": "worker-default-wins",
         "PROFILE_ONLY": "profile-secret",
+        "ROLE_ONLY": "worker-default",
     }
 
 

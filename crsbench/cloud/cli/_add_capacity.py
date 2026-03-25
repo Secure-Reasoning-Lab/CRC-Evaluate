@@ -115,6 +115,7 @@ def _apply_runtime_added_placement(
             bootstrap_inputs = CloudVmBootstrapInputs.from_experiment_config(config)
             env_passthrough = resolve_dynamic_placement_env(
                 config=config,
+                role="worker",
                 instance_profile=request.instance_profile,
                 cwd=base_cwd,
             )
@@ -203,6 +204,7 @@ def _apply_runtime_added_placement(
         bootstrap_inputs = CloudVmBootstrapInputs.from_experiment_config(config)
         env_passthrough = resolve_dynamic_placement_env(
             config=config,
+            role="evaluator",
             instance_profile=request.instance_profile,
             cwd=base_cwd,
         )

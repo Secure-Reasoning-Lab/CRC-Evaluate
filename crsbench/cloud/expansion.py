@@ -97,6 +97,7 @@ def next_name_start_index(fleet_records: Sequence[object], *, role: str) -> int:
 def resolve_dynamic_placement_env(
     *,
     config,
+    role: str,
     instance_profile: str,
     cwd: Path | str | None = None,
     env: Mapping[str, str] | None = None,
@@ -110,6 +111,12 @@ def resolve_dynamic_placement_env(
         raise ValueError(
             f"runtime-added placement instance profile '{instance_profile}' was not found"
         )
+    role_container = getattr(
+        cloud, "workers" if role == "worker" else "evaluators", None
+    )
+    role_defaults_env = (
+        getattr(getattr(role_container, "defaults", None), "env", None) or {}
+    )
     profile_env = getattr(gce.instance_profiles[instance_profile], "env", None) or {}
     base_cwd = Path.cwd() if cwd is None else Path(cwd)
     resolved_shared_env = resolve_cloud_env_map(
@@ -124,7 +131,14 @@ def resolve_dynamic_placement_env(
         cwd=base_cwd,
         env=env,
     )
+    resolved_role_defaults_env = resolve_cloud_env_map(
+        role_defaults_env,
+        field_prefix=f"cloud.{'workers' if role == 'worker' else 'evaluators'}.defaults.env",
+        cwd=base_cwd,
+        env=env,
+    )
     return {
         **resolved_shared_env,
         **resolved_profile_env,
+        **resolved_role_defaults_env,
     }
