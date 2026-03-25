@@ -1162,6 +1162,30 @@ def test_orchestrator_startup_script_supports_apt_and_apk_bootstrap_dependencies
     assert "Docker daemon is unavailable after waiting" in script
 
 
+def test_load_orchestrator_startup_script_installs_gitcache_binary_and_managed_wrapper():
+    """Orchestrator bootstrap should install gitcache and optionally expose it as git."""
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+
+    assert "gitcache_release_asset_name()" in script
+    assert "install_gitcache_binary()" in script
+    assert "enable_gitcache_wrapper()" in script
+    assert "ensure_gitcache_ready()" in script
+    assert "read_gitcache_flag_from_config()" in script
+    assert "seeraven/gitcache" in script
+    assert "gitcache_v1.0.31_Ubuntu24.04_x86_64" in script
+    assert (
+        'ln -sfn "${CRSBENCH_MANAGED_BIN_DIR}/gitcache" '
+        '"${CRSBENCH_MANAGED_BIN_DIR}/git"'
+    ) in script
+    assert (
+        'CRSBENCH_MANAGED_BIN_DIR="${CRSBENCH_MANAGED_BIN_DIR:-/opt/crsbench/bin}"'
+        in script
+    )
+    assert 'CRSBENCH_GITCACHE_ENABLED="${CRSBENCH_GITCACHE_ENABLED:-0}"' in script
+
+
 def test_orchestrator_startup_script_bootstraps_default_buildx_builder():
     """Orchestrator bootstrap should bootstrap the default buildx builder."""
     from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
@@ -1234,6 +1258,88 @@ def test_orchestrator_startup_script_does_not_globally_rewrite_sslab_gatech_http
         '"https://github.com/sslab-gatech/"'
     ) not in script
     assert "GIT_SSH_COMMAND" in script
+
+
+def test_orchestrator_gitcache_install_failure_warns_and_continues_when_disabled(
+    tmp_path,
+):
+    """Disabled wrapper mode should treat orchestrator gitcache download failure as warning-only."""
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+    function_start = script.index("gitcache_release_asset_name() {")
+    function_end = script.index("\n\nrequire_cmd curl", function_start)
+    gitcache_helpers = script[function_start:function_end]
+
+    harness_path = tmp_path / "orchestrator-gitcache-disabled.sh"
+    harness_path.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                "set -euo pipefail",
+                f"TMPROOT={shlex.quote(str(tmp_path / 'runtime'))}",
+                'CRSBENCH_MANAGED_BIN_DIR="${TMPROOT}/bin"',
+                'CRSBENCH_GITCACHE_ENABLED="${CRSBENCH_GITCACHE_ENABLED:-0}"',
+                'mkdir -p "${TMPROOT}"',
+                gitcache_helpers,
+                "curl() { return 1; }",
+                "ensure_gitcache_ready",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", str(harness_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=tmp_path,
+        timeout=2,
+    )
+
+    assert result.returncode == 0
+    assert "gitcache install failed" in result.stderr
+
+
+def test_orchestrator_gitcache_install_failure_fails_when_wrapper_enabled(tmp_path):
+    """Enabled wrapper mode should fail orchestrator bootstrap if gitcache download fails."""
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+    function_start = script.index("gitcache_release_asset_name() {")
+    function_end = script.index("\n\nrequire_cmd curl", function_start)
+    gitcache_helpers = script[function_start:function_end]
+
+    harness_path = tmp_path / "orchestrator-gitcache-enabled.sh"
+    harness_path.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                "set -euo pipefail",
+                f"TMPROOT={shlex.quote(str(tmp_path / 'runtime'))}",
+                'CRSBENCH_MANAGED_BIN_DIR="${TMPROOT}/bin"',
+                "CRSBENCH_GITCACHE_ENABLED=1",
+                'mkdir -p "${TMPROOT}"',
+                gitcache_helpers,
+                "curl() { return 1; }",
+                "ensure_gitcache_ready",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", str(harness_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=tmp_path,
+        timeout=2,
+    )
+
+    assert result.returncode == 1
+    assert "gitcache install failed" in result.stderr
 
 
 def test_patch_orchestrator_config_adds_top_level_and_nested_runtime_redis_host(
