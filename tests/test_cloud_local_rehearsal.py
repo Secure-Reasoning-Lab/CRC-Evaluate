@@ -283,6 +283,116 @@ def test_build_local_rehearsal_layout_preserves_sanity_always_download_policy(
     assert worker_payload["download_benchmarks"] == "always"
 
 
+def test_build_local_rehearsal_layout_preserves_gitcache_bootstrap_flag(
+    tmp_path,
+) -> None:
+    """Local rehearsal metadata should preserve gitcache bootstrap policy."""
+    from crsbench.cloud.local_rehearsal import build_local_rehearsal_layout
+
+    config_path = tmp_path / "local-experiment-gitcache.yaml"
+    config_path.write_text(
+        """
+experiment:
+  name: local-cloud-rehearsal-gitcache
+  task: bugfinding
+  benchmark_suite: sanity
+  mode: delta
+runtime:
+  trials: 1
+  max_total_time: 7200
+  build_timeout: 3600
+  run_timeout: 600
+  verify_timeout: 600
+  redis_host: ignored:6379
+  litellm:
+    skip: true
+  inputs:
+    pov:
+      max_variants_per_cpv: 1
+storage:
+  experiment_filestore: /tmp/crsbench/experiment-data
+  report_filestore: /tmp/crsbench/report-data
+resources:
+  cores_per_trial: 2
+  memory_per_trial: 4G
+worker:
+  jobs: 1
+  cores_per_job: 2
+evaluator:
+  jobs: 1
+  cores_per_job: 2
+crs_compose:
+  oss_crs_infra:
+    shared: true
+  crs-libfuzzer:
+    num_cores: 2
+cloud:
+  bootstrap:
+    gitcache: true
+  providers:
+    gce:
+      project: local-rehearsal
+      profile_defaults:
+        machine_type: n2d-standard-8
+        boot_disk_size_gb: 50
+        image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+        service_account_email: crsbench@local-rehearsal.invalid
+        owner_label: local-rehearsal
+      instance_profiles:
+        local-orchestrator-n2d: {}
+        local-worker-n2d: {}
+        local-evaluator-n2d: {}
+  orchestrator:
+    zone: local-docker-a
+    instance_profile: local-orchestrator-n2d
+  workers:
+    defaults:
+      instance_profile: local-worker-n2d
+      count: 1
+    placements:
+      - zone: local-docker-a
+  evaluators:
+    defaults:
+      instance_profile: local-evaluator-n2d
+      count: 1
+    placements:
+      - zone: local-docker-a
+""".strip(),
+        encoding="utf-8",
+    )
+
+    layout = build_local_rehearsal_layout(
+        output_dir=tmp_path / "rehearsal",
+        experiment_config_path=config_path,
+        repo_mount_path="/src/CRSBench",
+        worker_count=1,
+        evaluator_count=1,
+        git_ref="test-ref",
+    )
+
+    worker_payload = json.loads(
+        base64.b64decode(
+            (
+                layout.worker_metadata_dirs[0]
+                / "attributes"
+                / "crsbench-bootstrap-payload"
+            ).read_text(encoding="utf-8")
+        ).decode("utf-8")
+    )
+    evaluator_payload = json.loads(
+        base64.b64decode(
+            (
+                layout.evaluator_metadata_dirs[0]
+                / "attributes"
+                / "crsbench-bootstrap-payload"
+            ).read_text(encoding="utf-8")
+        ).decode("utf-8")
+    )
+
+    assert worker_payload["gitcache"] is True
+    assert evaluator_payload["gitcache"] is True
+
+
 def test_rehearsal_wrapper_only_resets_state_for_bringup() -> None:
     """Read-only compose subcommands should not wipe the previous rehearsal state."""
     wrapper_text = Path("scripts/cloud-rehearsal/run-local-rehearsal.sh").read_text(

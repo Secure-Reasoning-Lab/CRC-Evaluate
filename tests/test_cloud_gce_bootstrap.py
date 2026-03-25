@@ -127,6 +127,7 @@ def test_build_instance_metadata_includes_vm_bootstrap_policy_and_selector():
         bootstrap_inputs=CloudVmBootstrapInputs(
             prepare_mode="skip_base_images",
             download_benchmarks="always",
+            gitcache=True,
             benchmark_suite="afc-final",
             benchmarks_root=Path("/srv/benchmarks"),
             benchmark_suites_root=Path("/srv/benchmark-suites"),
@@ -139,6 +140,7 @@ def test_build_instance_metadata_includes_vm_bootstrap_policy_and_selector():
 
     assert payload["prepare_mode"] == "skip_base_images"
     assert payload["download_benchmarks"] == "always"
+    assert payload["gitcache"] is True
     assert payload["benchmark_suite"] == "afc-final"
     assert payload["benchmarks_root"] == "/srv/benchmarks"
     assert payload["benchmark_suites_root"] == "/srv/benchmark-suites"
@@ -238,6 +240,10 @@ def test_build_evaluator_metadata_embeds_startup_script_and_config_payload(tmp_p
         fleet=_make_fleet(worker_name_prefix="gce-evaluator"),
         redis_host="redis.internal:6380",
         registration=_make_registration(),
+        bootstrap_inputs=CloudVmBootstrapInputs(
+            benchmark_suite="sanity",
+            gitcache=True,
+        ),
         evaluator_name="gce-evaluator-001",
         experiment_config_path=config_path,
         startup_script="#!/usr/bin/env bash\necho boot\n",
@@ -253,6 +259,7 @@ def test_build_evaluator_metadata_embeds_startup_script_and_config_payload(tmp_p
     assert payload["evaluator_verify_cores_per_job"] == 4
     assert payload["evaluator_idle_timeout"] == 600
     assert payload["evaluator_cpu_tag"] == "c3d"
+    assert payload["gitcache"] is True
 
 
 def test_build_evaluator_metadata_omits_evaluator_name_for_regional_bulk_insert(

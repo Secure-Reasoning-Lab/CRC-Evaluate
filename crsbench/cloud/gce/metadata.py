@@ -158,6 +158,7 @@ def build_bootstrap_payload(
         {
             "prepare_mode": bootstrap_inputs.prepare_mode,
             "download_benchmarks": bootstrap_inputs.download_benchmarks,
+            "gitcache": bootstrap_inputs.gitcache,
             "benchmarks_root": str(selector.effective_benchmarks_root()),
         }
     )
@@ -205,6 +206,7 @@ def build_evaluator_bootstrap_payload(
         {
             "prepare_mode": bootstrap_inputs.prepare_mode,
             "download_benchmarks": bootstrap_inputs.download_benchmarks,
+            "gitcache": bootstrap_inputs.gitcache,
             "benchmarks_root": str(selector.effective_benchmarks_root()),
         }
     )
