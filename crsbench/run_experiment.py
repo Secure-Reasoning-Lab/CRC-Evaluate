@@ -335,6 +335,11 @@ Examples:
 
     add_prepare_subparser(subparsers)
 
+    # 'gen-config' subcommand - interactive config scaffolding
+    from crsbench.genconfig.cli import add_gen_config_subparser
+
+    add_gen_config_subparser(subparsers)
+
     # 'run' subcommand - experiment execution
     run_parser = subparsers.add_parser(
         "run",
@@ -2276,6 +2281,11 @@ def main() -> None:
     args = parse_arguments()
 
     # Dispatch to appropriate command handler
+    if args.command == "gen-config":
+        from crsbench.genconfig.cli import run_gen_config
+
+        sys.exit(run_gen_config(args))
+
     if args.command == "verify":
         # Handle verify command
         from crsbench.evaluation.verification.cli.pov_verify_command import run_verify
