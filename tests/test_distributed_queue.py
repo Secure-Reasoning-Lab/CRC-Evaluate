@@ -144,3 +144,51 @@ def test_wait_for_redis_connection_raises_on_fatal_probe(
             redis_password="shared-secret",
             timeout_sec=30,
         )
+
+
+@patch.object(queue_module.redis, "Redis")
+def test_create_redis_connection_sets_socket_timeout_for_password_probe(
+    mock_redis_cls: Mock,
+) -> None:
+    """Redis probes should bound read waits as well as connect waits."""
+    connection = Mock()
+    mock_redis_cls.return_value = connection
+    queue_module._auth_required = None
+
+    queue_module.create_redis_connection(
+        "redis.internal:6379",
+        socket_connect_timeout=7,
+        redis_password="shared-secret",
+    )
+
+    mock_redis_cls.assert_called_once_with(
+        host="redis.internal",
+        port=6379,
+        password="shared-secret",
+        socket_connect_timeout=7,
+        socket_timeout=7,
+    )
+    connection.ping.assert_called_once_with()
+
+
+@patch.object(queue_module.redis, "Redis")
+def test_create_redis_connection_sets_socket_timeout_for_cached_no_auth(
+    mock_redis_cls: Mock,
+) -> None:
+    """Cached no-auth reconnects should also bound read waits."""
+    connection = Mock()
+    mock_redis_cls.return_value = connection
+    queue_module._auth_required = False
+
+    queue_module.create_redis_connection(
+        "redis.internal:6379",
+        socket_connect_timeout=4,
+    )
+
+    mock_redis_cls.assert_called_once_with(
+        host="redis.internal",
+        port=6379,
+        socket_connect_timeout=4,
+        socket_timeout=4,
+    )
+    connection.ping.assert_called_once_with()

@@ -301,9 +301,10 @@ def run_add_capacity(args: argparse.Namespace) -> int:
     """Add one runtime worker or evaluator placement to an active launch."""
     role = "worker" if args.cloud_command == "add-workers" else "evaluator"
     try:
+        config_path = Path(args.config)
         experiment_name = resolve_effective_experiment_name(args.config, None)
         context = require_launch_state(args.config, experiment_name)
-        config = load_experiment_config(args.config)
+        config = load_experiment_config(config_path)
         request = build_dynamic_placement_request(
             role=role,
             config=config,

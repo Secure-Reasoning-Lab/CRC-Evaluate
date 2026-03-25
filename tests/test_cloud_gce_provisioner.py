@@ -1303,6 +1303,144 @@ def test_gce_provider_adapter_deduplicates_workers_across_overlapping_placements
     ]
 
 
+def test_list_and_delete_workers_scope_to_expected_name_slice() -> None:
+    """One fleet placement must not list or delete sibling placement instances."""
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+
+    client = _RecordingClient()
+    client.region_listed_instances = {
+        "us-east5": [
+            {
+                "id": "1001",
+                "name": "gce-worker-001",
+                "status": "RUNNING",
+                "zone": "zones/us-east5-b",
+                "labels": {
+                    "crsbench-experiment": "exp-cloud-42",
+                    "crsbench-role": "worker",
+                    "env": "prod",
+                    "owner": "team-crs",
+                },
+                "serviceAccounts": [
+                    {"email": "crsbench-worker@test-project.iam.gserviceaccount.com"}
+                ],
+            },
+            {
+                "id": "1002",
+                "name": "gce-worker-002",
+                "status": "RUNNING",
+                "zone": "zones/us-east5-c",
+                "labels": {
+                    "crsbench-experiment": "exp-cloud-42",
+                    "crsbench-role": "worker",
+                    "env": "prod",
+                    "owner": "team-crs",
+                },
+                "serviceAccounts": [
+                    {"email": "crsbench-worker@test-project.iam.gserviceaccount.com"}
+                ],
+            },
+        ]
+    }
+    provisioner = GceProvisioner(client=client)
+    fleet = _make_fleet(
+        zone=None,
+        region="us-east5",
+        zones=[],
+        worker_count=1,
+        worker_name_start_index=1,
+    )
+
+    workers = provisioner.list_workers(
+        experiment_name="Exp.Cloud 42",
+        fleet=fleet,
+    )
+    deleted = provisioner.delete_workers(
+        experiment_name="Exp.Cloud 42",
+        fleet=fleet,
+    )
+
+    assert [worker.name for worker in workers] == ["gce-worker-001"]
+    assert [worker.name for worker in deleted] == ["gce-worker-001"]
+    assert client.deleted == [("test-project", "us-east5-b", "gce-worker-001")]
+
+
+def test_delete_workers_ignores_missing_instance() -> None:
+    """Teardown should treat already-deleted workers as successfully gone."""
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+    from google.api_core.exceptions import NotFound
+
+    client = _RecordingClient()
+    client.listed_instances = [
+        {
+            "id": "1001",
+            "name": "gce-worker-001",
+            "status": "RUNNING",
+            "zone": "zones/us-central1-a",
+            "labels": {
+                "crsbench-experiment": "exp-cloud-42",
+                "crsbench-role": "worker",
+                "env": "prod",
+                "owner": "team-crs",
+            },
+            "serviceAccounts": [
+                {"email": "crsbench-worker@test-project.iam.gserviceaccount.com"}
+            ],
+        }
+    ]
+    provisioner = GceProvisioner(client=client)
+
+    def _missing_delete(**_kwargs):
+        raise NotFound("resource missing")
+
+    client.delete_instance = _missing_delete
+
+    deleted = provisioner.delete_workers(
+        experiment_name="Exp.Cloud 42",
+        fleet=_make_fleet(worker_count=1),
+    )
+
+    assert [worker.name for worker in deleted] == ["gce-worker-001"]
+
+
+def test_delete_orchestrators_ignores_missing_instance() -> None:
+    """Teardown should treat already-deleted orchestrators as successfully gone."""
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+    from google.api_core.exceptions import NotFound
+
+    client = _RecordingClient()
+    client.listed_instances = [
+        {
+            "id": "1001",
+            "name": "gce-orchestrator-exp-cloud-42",
+            "status": "RUNNING",
+            "zone": "zones/us-central1-a",
+            "labels": {
+                "crsbench-experiment": "exp-cloud-42",
+                "crsbench-role": "orchestrator",
+                "env": "prod",
+                "owner": "team-crs",
+            },
+            "serviceAccounts": [
+                {"email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com"}
+            ],
+        }
+    ]
+    provisioner = GceProvisioner(client=client)
+
+    def _missing_delete(**_kwargs):
+        raise NotFound("resource missing")
+
+    client.delete_instance = _missing_delete
+
+    deleted = provisioner.delete_orchestrators(
+        experiment_name="Exp.Cloud 42",
+        orchestrator=_make_orchestrator(),
+    )
+
+    assert [worker.name for worker in deleted] == ["gce-orchestrator-exp-cloud-42"]
+
+
 def test_google_compute_client_accepts_extended_operation_objects() -> None:
     """Real GCE insert/delete calls return ExtendedOperation objects, not dicts."""
     from crsbench.cloud.gce.provisioner import GoogleComputeClient

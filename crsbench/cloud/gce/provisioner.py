@@ -464,6 +464,14 @@ def _extract_operation_errors(result: Mapping[str, object]) -> list[str]:
     return messages
 
 
+def _instance_missing(error: object) -> bool:
+    text = str(error).lower()
+    if "resource_not_found" in text or "not found" in text:
+        return True
+    code = getattr(error, "code", None)
+    return code == 404
+
+
 def _is_retryable_zonal_capacity_error(exc: Exception) -> bool:
     if not isinstance(exc, GceProvisioningError):
         return False
@@ -943,21 +951,12 @@ class GceProvisioner:
             orchestrator=orchestrator,
         )
         for instance in deleted_instances:
-            operation = self._client.delete_instance(
+            self._delete_instance_if_present(
                 project=orchestrator.project,
                 zone=instance.zone,
-                instance=instance.name,
+                instance_name=instance.name,
+                role_label="orchestrator",
             )
-            result = self._client.wait_for_zone_operation(
-                project=orchestrator.project,
-                zone=instance.zone,
-                operation=_extract_operation_name(operation),
-            )
-            errors = _extract_operation_errors(result)
-            if errors:
-                raise GceProvisioningError(
-                    f"Failed to delete orchestrator {instance.name}: {'; '.join(errors)}"
-                )
         return deleted_instances
 
     def delete_instance(
@@ -968,21 +967,11 @@ class GceProvisioner:
         instance_name: str,
     ) -> None:
         """Delete one named instance and wait for the zonal operation."""
-        operation = self._client.delete_instance(
+        self._delete_instance_if_present(
             project=project,
             zone=zone,
-            instance=instance_name,
+            instance_name=instance_name,
         )
-        result = self._client.wait_for_zone_operation(
-            project=project,
-            zone=zone,
-            operation=_extract_operation_name(operation),
-        )
-        errors = _extract_operation_errors(result)
-        if errors:
-            raise GceProvisioningError(
-                f"Failed to delete instance {instance_name}: {'; '.join(errors)}"
-            )
 
     def get_instance_record(
         self,
@@ -1010,6 +999,12 @@ class GceProvisioner:
         expected_labels = build_worker_labels(
             experiment_name=experiment_name, fleet=fleet
         )
+        expected_names = set(
+            self.build_worker_names(
+                experiment_name=experiment_name,
+                fleet=fleet,
+            )
+        )
         candidate_regions = self._candidate_regions_for_fleet(fleet)
         if candidate_regions:
             records: dict[tuple[str, str], GceWorkerRecord] = {}
@@ -1023,6 +1018,8 @@ class GceProvisioner:
                         region=region,
                     ),
                 ):
+                    if worker.name not in expected_names:
+                        continue
                     records[(worker.zone, worker.name)] = worker
             return list(records.values())
         workers: dict[tuple[str, str], GceWorkerRecord] = {}
@@ -1036,9 +1033,12 @@ class GceProvisioner:
                 )
             ]
             for worker in zone_workers:
-                if all(
-                    worker.labels.get(key) == value
-                    for key, value in expected_labels.items()
+                if (
+                    all(
+                        worker.labels.get(key) == value
+                        for key, value in expected_labels.items()
+                    )
+                    and worker.name in expected_names
                 ):
                     workers[(worker.zone, worker.name)] = worker
         return list(workers.values())
@@ -1055,21 +1055,12 @@ class GceProvisioner:
             fleet=fleet,
         )
         for worker in deleted_workers:
-            operation = self._client.delete_instance(
+            self._delete_instance_if_present(
                 project=fleet.project,
                 zone=worker.zone,
-                instance=worker.name,
+                instance_name=worker.name,
+                role_label="worker",
             )
-            result = self._client.wait_for_zone_operation(
-                project=fleet.project,
-                zone=worker.zone,
-                operation=_extract_operation_name(operation),
-            )
-            errors = _extract_operation_errors(result)
-            if errors:
-                raise GceProvisioningError(
-                    f"Failed to delete worker {worker.name}: {'; '.join(errors)}"
-                )
         return deleted_workers
 
     def list_evaluators(
@@ -1082,6 +1073,12 @@ class GceProvisioner:
         expected_labels = build_evaluator_labels(
             experiment_name=experiment_name,
             fleet=fleet,
+        )
+        expected_names = set(
+            self.build_worker_names(
+                experiment_name=experiment_name,
+                fleet=fleet,
+            )
         )
         candidate_regions = self._candidate_regions_for_fleet(fleet)
         if candidate_regions:
@@ -1096,6 +1093,8 @@ class GceProvisioner:
                         region=region,
                     ),
                 ):
+                    if worker.name not in expected_names:
+                        continue
                     records[(worker.zone, worker.name)] = worker
             return list(records.values())
         workers: dict[tuple[str, str], GceWorkerRecord] = {}
@@ -1109,9 +1108,12 @@ class GceProvisioner:
                 )
             ]
             for worker in zone_workers:
-                if all(
-                    worker.labels.get(key) == value
-                    for key, value in expected_labels.items()
+                if (
+                    all(
+                        worker.labels.get(key) == value
+                        for key, value in expected_labels.items()
+                    )
+                    and worker.name in expected_names
                 ):
                     workers[(worker.zone, worker.name)] = worker
         return list(workers.values())
@@ -1128,22 +1130,44 @@ class GceProvisioner:
             fleet=fleet,
         )
         for worker in deleted_workers:
-            operation = self._client.delete_instance(
+            self._delete_instance_if_present(
                 project=fleet.project,
                 zone=worker.zone,
-                instance=worker.name,
+                instance_name=worker.name,
+                role_label="evaluator",
             )
-            result = self._client.wait_for_zone_operation(
-                project=fleet.project,
-                zone=worker.zone,
-                operation=_extract_operation_name(operation),
-            )
-            errors = _extract_operation_errors(result)
-            if errors:
-                raise GceProvisioningError(
-                    f"Failed to delete evaluator {worker.name}: {'; '.join(errors)}"
-                )
         return deleted_workers
+
+    def _delete_instance_if_present(
+        self,
+        *,
+        project: str,
+        zone: str,
+        instance_name: str,
+        role_label: str = "instance",
+    ) -> None:
+        try:
+            operation = self._client.delete_instance(
+                project=project,
+                zone=zone,
+                instance=instance_name,
+            )
+        except Exception as exc:
+            if _instance_missing(exc):
+                return
+            raise
+        result = self._client.wait_for_zone_operation(
+            project=project,
+            zone=zone,
+            operation=_extract_operation_name(operation),
+        )
+        errors = _extract_operation_errors(result)
+        if errors and all(_instance_missing(error) for error in errors):
+            return
+        if errors:
+            raise GceProvisioningError(
+                f"Failed to delete {role_label} {instance_name}: {'; '.join(errors)}"
+            )
 
     def _create_requests_with_zone_fallback(
         self,

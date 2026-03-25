@@ -194,6 +194,7 @@ def create_redis_connection(
             port=resolved_port,
             password=password,
             socket_connect_timeout=socket_connect_timeout,
+            socket_timeout=socket_connect_timeout,
         )
         conn.ping()
         return conn
@@ -202,6 +203,7 @@ def create_redis_connection(
             host=resolved_host,
             port=resolved_port,
             socket_connect_timeout=socket_connect_timeout,
+            socket_timeout=socket_connect_timeout,
         )
         conn.ping()
         return conn
@@ -214,6 +216,7 @@ def create_redis_connection(
                 port=resolved_port,
                 password=password,
                 socket_connect_timeout=socket_connect_timeout,
+                socket_timeout=socket_connect_timeout,
             )
             conn.ping()
             _auth_required = True
@@ -228,6 +231,7 @@ def create_redis_connection(
                 host=resolved_host,
                 port=resolved_port,
                 socket_connect_timeout=socket_connect_timeout,
+                socket_timeout=socket_connect_timeout,
             )
             conn.ping()
             _auth_required = False
@@ -239,6 +243,7 @@ def create_redis_connection(
             host=resolved_host,
             port=resolved_port,
             socket_connect_timeout=socket_connect_timeout,
+            socket_timeout=socket_connect_timeout,
         )
         conn.ping()
         _auth_required = False

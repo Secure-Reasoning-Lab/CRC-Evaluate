@@ -2146,6 +2146,49 @@ def test_run_add_capacity_requires_launch_state(
     mock_require_launch_state.assert_called_once()
 
 
+@patch("crsbench.cloud.cli._add_capacity._apply_runtime_added_placement", create=True)
+@patch("crsbench.cloud.cli._add_capacity.build_dynamic_placement_request")
+@patch("crsbench.cloud.cli._add_capacity.load_experiment_config")
+@patch("crsbench.cloud.cli._add_capacity.require_launch_state")
+@patch("crsbench.cloud.cli._add_capacity.resolve_effective_experiment_name")
+def test_run_add_capacity_loads_config_from_path_object(
+    mock_resolve_experiment_name,
+    mock_require_launch_state,
+    mock_load_experiment_config,
+    mock_build_request,
+    mock_apply_runtime_added_placement,
+):
+    from pathlib import Path
+
+    from crsbench.cloud.cli._add_capacity import run_add_capacity
+    from crsbench.cloud.expansion import CloudDynamicPlacementRequest
+
+    mock_resolve_experiment_name.return_value = "test-exp"
+    mock_require_launch_state.return_value = _make_provider_neutral_operational_context(
+        include_launch_state=True
+    )
+    mock_load_experiment_config.return_value = (
+        _make_provider_neutral_experiment_config()
+    )
+    mock_build_request.return_value = CloudDynamicPlacementRequest(
+        role="worker",
+        provider=CloudProvider.GCE,
+        instance_profile="gce-worker-n2d",
+        count=1,
+        regions=("us-east5",),
+        zones=(),
+    )
+    mock_apply_runtime_added_placement.return_value = 0
+
+    rc = run_add_capacity(
+        _make_add_capacity_args(cloud_command="add-workers", force=True)
+    )
+
+    assert rc == 0
+    config_arg = mock_load_experiment_config.call_args.args[0]
+    assert isinstance(config_arg, Path)
+
+
 @patch("crsbench.cloud.cli._add_capacity.logger")
 @patch("crsbench.cloud.cli._add_capacity._apply_runtime_added_placement", create=True)
 @patch("crsbench.cloud.cli._add_capacity.build_dynamic_placement_request")
