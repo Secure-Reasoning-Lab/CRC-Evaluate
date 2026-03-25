@@ -19,13 +19,18 @@ from crsbench.cloud.models import (
     ResolvedInstanceProfile,
 )
 from crsbench.cloud.records import CloudFleetPlacementRecord, CloudInstanceRecord
+from crsbench.cloud.secret_refs import resolve_secret_path
 from crsbench.cloud.types import CloudProvider
 from crsbench.validation.schemas import GceOrchestratorConfig, GceWorkerFleetConfig
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from crsbench.cloud.bootstrap import CloudVmBootstrapInputs
+    from crsbench.cloud.expansion import CloudDynamicPlacementRequest
     from crsbench.cloud.gce.models import GceWorkerRecord
     from crsbench.distributed.registry import RuntimeRegistration
+    from crsbench.validation.schemas import ExperimentConfig
 
 
 @dataclass(frozen=True)
@@ -128,6 +133,7 @@ class GceProviderAdapter:
         fleet: GceWorkerFleetConfig,
         *,
         role: str,
+        placement_source: str = "config",
     ) -> CloudFleetPlacementRecord:
         """Translate one GCE fleet config into a shared persisted placement record."""
         provider_metadata = fleet.model_dump(exclude_none=True, exclude_unset=True)
@@ -145,6 +151,7 @@ class GceProviderAdapter:
             ssh_via_iap=fleet.ssh_via_iap,
             labels=dict(fleet.labels),
             owner_label=fleet.owner_label,
+            placement_source=placement_source,
             provider_metadata=provider_metadata,
         )
 
@@ -297,6 +304,96 @@ class GceProviderAdapter:
             )
             next_evaluator_index += placement.count
         return fleets
+
+    def build_dynamic_worker_fleet(
+        self,
+        *,
+        experiment_name: str,
+        config: "ExperimentConfig",
+        request: "CloudDynamicPlacementRequest",
+        name_start_index: int,
+        cwd: Path | str | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> GceWorkerFleetConfig:
+        """Build one runtime-added worker fleet from operator input plus config defaults."""
+        resolved = self.resolve_instance_profile(
+            _resolve_dynamic_instance_profile(config, request.instance_profile)
+        )
+        defaults = _resolve_dynamic_launch_defaults(config, cwd=cwd, env=env)
+        return GceWorkerFleetConfig(
+            project=resolved.project,
+            zone=None if request.regions else _primary_zone(request.zones),
+            zones=list(request.zones),
+            regions=list(request.regions),
+            region=request.regions[0] if request.regions else None,
+            fallback=request.fallback,
+            worker_count=request.count,
+            worker_name_start_index=name_start_index,
+            machine_type=resolved.machine_type,
+            boot_disk_size_gb=resolved.boot_disk_size_gb,
+            image=resolved.image,
+            instance_template=resolved.instance_template,
+            network=resolved.network,
+            subnetwork=resolved.subnetwork,
+            service_account_email=resolved.service_account_email,
+            owner_label=resolved.owner_label,
+            labels=resolved.labels,
+            metadata=resolved.metadata,
+            worker_name_prefix=f"crsbench-{experiment_name}-work",
+            startup_script_uri=resolved.startup_script_uri,
+            use_os_login=resolved.use_os_login,
+            ssh_via_iap=resolved.ssh_via_iap,
+            assign_external_ip=resolved.assign_external_ip,
+            readiness_timeout_sec=defaults.readiness_timeout_sec or 900,
+            crsbench_install_spec=defaults.crsbench_install_spec,
+            crsbench_git_ref=defaults.crsbench_git_ref or "main",
+            github_deploy_key_path=defaults.github_deploy_key_path,
+        )
+
+    def build_dynamic_evaluator_fleet(
+        self,
+        *,
+        experiment_name: str,
+        config: "ExperimentConfig",
+        request: "CloudDynamicPlacementRequest",
+        name_start_index: int,
+        cwd: Path | str | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> GceWorkerFleetConfig:
+        """Build one runtime-added evaluator fleet from operator input plus config defaults."""
+        resolved = self.resolve_instance_profile(
+            _resolve_dynamic_instance_profile(config, request.instance_profile)
+        )
+        defaults = _resolve_dynamic_launch_defaults(config, cwd=cwd, env=env)
+        return GceWorkerFleetConfig(
+            project=resolved.project,
+            zone=None if request.regions else _primary_zone(request.zones),
+            zones=list(request.zones),
+            regions=list(request.regions),
+            region=request.regions[0] if request.regions else None,
+            fallback=request.fallback,
+            worker_count=request.count,
+            worker_name_start_index=name_start_index,
+            machine_type=resolved.machine_type,
+            boot_disk_size_gb=resolved.boot_disk_size_gb,
+            image=resolved.image,
+            instance_template=resolved.instance_template,
+            network=resolved.network,
+            subnetwork=resolved.subnetwork,
+            service_account_email=resolved.service_account_email,
+            owner_label=resolved.owner_label,
+            labels=resolved.labels,
+            metadata=resolved.metadata,
+            worker_name_prefix=f"crsbench-{experiment_name}-eval",
+            startup_script_uri=resolved.startup_script_uri,
+            use_os_login=resolved.use_os_login,
+            ssh_via_iap=resolved.ssh_via_iap,
+            assign_external_ip=resolved.assign_external_ip,
+            readiness_timeout_sec=defaults.readiness_timeout_sec or 900,
+            crsbench_install_spec=defaults.crsbench_install_spec,
+            crsbench_git_ref=defaults.crsbench_git_ref or "main",
+            github_deploy_key_path=defaults.github_deploy_key_path,
+        )
 
     def expected_worker_names(self, *, plan: CloudLaunchPlan) -> list[str]:
         """Return the deterministic worker instance names for one launch plan."""
@@ -522,6 +619,28 @@ class GceProviderAdapter:
                     )
                 )
         return shortages
+
+    def quota_shortages_for_dynamic_fleet(
+        self,
+        *,
+        fleet: GceWorkerFleetConfig,
+    ) -> list[QuotaShortage]:
+        """Return quota shortages for one runtime-added fleet delta."""
+        if fleet.machine_type is None:
+            raise ValueError(
+                "GCE quota validation requires instance profiles with explicit machine_type"
+            )
+        candidate_regions = _candidate_regions_for_quota(
+            regions=fleet.regions,
+            zones=fleet.zones,
+        )
+        return self._quota_shortages_for_requirement(
+            project=fleet.project,
+            candidate_regions=candidate_regions,
+            fallback=fleet.fallback,
+            family=machine_type_to_family(fleet.machine_type),
+            required=machine_type_to_vcpus(fleet.machine_type) * fleet.worker_count,
+        )
 
     def _quota_shortages_for_requirement(
         self,
@@ -765,6 +884,78 @@ def _candidate_regions_for_quota(
         candidate_regions.append(region)
         seen.add(region)
     return candidate_regions
+
+
+def _resolve_dynamic_instance_profile(
+    config: "ExperimentConfig",
+    profile_name: str,
+) -> ResolvedInstanceProfile:
+    providers = getattr(getattr(config, "cloud", None), "providers", None)
+    gce = getattr(providers, "gce", None)
+    if gce is None or profile_name not in gce.instance_profiles:
+        raise ValueError(
+            f"runtime-added placement instance profile '{profile_name}' was not found"
+        )
+    profile = gce.instance_profiles[profile_name]
+    return ResolvedInstanceProfile(
+        provider=CloudProvider.GCE,
+        name=profile_name,
+        provider_config=gce.model_dump(exclude_none=True, exclude_unset=True),
+        profile_config=profile.model_dump(exclude_none=True, exclude_unset=True),
+    )
+
+
+def _resolve_dynamic_launch_defaults(
+    config: "ExperimentConfig",
+    *,
+    cwd: Path | str | None = None,
+    env: Mapping[str, str] | None = None,
+):
+    from crsbench.cloud.models import CloudLaunchDefaults
+
+    cloud = getattr(config, "cloud", None)
+    provider_defaults = getattr(
+        getattr(getattr(cloud, "providers", None), "gce", None),
+        "defaults",
+        None,
+    )
+    shared_defaults = getattr(cloud, "defaults", None)
+    return CloudLaunchDefaults(
+        readiness_timeout_sec=(
+            getattr(provider_defaults, "readiness_timeout_sec", None)
+            if provider_defaults is not None
+            and getattr(provider_defaults, "readiness_timeout_sec", None) is not None
+            else getattr(shared_defaults, "readiness_timeout_sec", None)
+        ),
+        crsbench_install_spec=(
+            getattr(provider_defaults, "crsbench_install_spec", None)
+            if provider_defaults is not None
+            and getattr(provider_defaults, "crsbench_install_spec", None) is not None
+            else getattr(shared_defaults, "crsbench_install_spec", None)
+        ),
+        crsbench_git_ref=(
+            getattr(provider_defaults, "crsbench_git_ref", None)
+            if provider_defaults is not None
+            and getattr(provider_defaults, "crsbench_git_ref", None) is not None
+            else getattr(shared_defaults, "crsbench_git_ref", None)
+        ),
+        github_deploy_key_path=(
+            resolve_secret_path(
+                getattr(provider_defaults, "github_deploy_key_path", None),
+                field_path="cloud.providers.gce.defaults.github_deploy_key_path",
+                cwd=cwd,
+                env=env,
+            )
+            if provider_defaults is not None
+            and getattr(provider_defaults, "github_deploy_key_path", None) is not None
+            else resolve_secret_path(
+                getattr(shared_defaults, "github_deploy_key_path", None),
+                field_path="cloud.defaults.github_deploy_key_path",
+                cwd=cwd,
+                env=env,
+            )
+        ),
+    )
 
 
 def _max_assignable_single_zone_capacity(

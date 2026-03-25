@@ -272,6 +272,42 @@ class CloudFleetStatusManager:
                 )
             self._sleep(self._poll_interval_sec)
 
+    def wait_for_added_instances(
+        self,
+        *,
+        experiment_name: str,
+        workers: list[CloudInstanceRecord],
+        evaluators: list[CloudInstanceRecord],
+        timeout_sec: int,
+    ) -> CloudFleetSnapshot:
+        """Wait only for newly added worker/evaluator instances without clearing the fleet."""
+        self._clear_failed_records_for_instances(
+            experiment_name=experiment_name,
+            workers=workers,
+            role=CloudInstanceRole.WORKER,
+        )
+        self._clear_failed_records_for_instances(
+            experiment_name=experiment_name,
+            workers=evaluators,
+            role=CloudInstanceRole.EVALUATOR,
+        )
+        self._record_initial_workers(
+            experiment_name=experiment_name,
+            workers=workers,
+            role=CloudInstanceRole.WORKER,
+        )
+        self._record_initial_workers(
+            experiment_name=experiment_name,
+            workers=evaluators,
+            role=CloudInstanceRole.EVALUATOR,
+        )
+        return self.wait_for_instances(
+            experiment_name=experiment_name,
+            workers=workers,
+            evaluators=evaluators,
+            timeout_sec=timeout_sec,
+        )
+
     def _initial_state(self, worker: CloudInstanceRecord) -> CloudWorkerState:
         provider_status = coerce_gce_provider_status(worker.status)
         if provider_status is CloudProviderInstanceStatus.RUNNING:

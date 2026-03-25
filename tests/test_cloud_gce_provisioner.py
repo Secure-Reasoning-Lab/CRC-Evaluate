@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 from crsbench.cloud.gce.models import GceWorkerRecord
 from crsbench.cloud.models import build_cloud_launch_plan
+from crsbench.cloud.types import CloudProvider
 from crsbench.distributed.registry import RuntimeRegistration
 from crsbench.validation.schemas import (
     ExperimentConfig,
@@ -1882,3 +1883,100 @@ def test_gce_provider_adapter_translates_worker_fleet_to_cloud_placement_record(
     assert placement.zone == "us-east5-b"
     assert placement.count == 2
     assert placement.name_prefix == f"crsbench-{plan.experiment_name}-work"
+
+
+def test_gce_provider_adapter_builds_dynamic_worker_fleet() -> None:
+    from crsbench.cloud.expansion import CloudDynamicPlacementRequest
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+
+    adapter = GceProviderAdapter()
+    config = _make_provider_neutral_experiment_config()
+
+    fleet = adapter.build_dynamic_worker_fleet(
+        experiment_name=config.experiment,
+        config=config,
+        request=CloudDynamicPlacementRequest(
+            role="worker",
+            provider=CloudProvider.GCE,
+            instance_profile="gce-worker-n2d",
+            count=2,
+            regions=("us-east5", "us-east1"),
+            zones=("us-east5-b", "us-east1-b"),
+        ),
+        name_start_index=4,
+    )
+
+    assert fleet.project == "test-project"
+    assert fleet.region == "us-east5"
+    assert fleet.regions == ["us-east5", "us-east1"]
+    assert fleet.zones == ["us-east5-b", "us-east1-b"]
+    assert fleet.worker_count == 2
+    assert fleet.worker_name_start_index == 4
+    assert fleet.worker_name_prefix == f"crsbench-{config.experiment}-work"
+    assert fleet.machine_type == "n2d-standard-16"
+    assert (
+        fleet.service_account_email == "crsbench@test-project.iam.gserviceaccount.com"
+    )
+
+
+def test_gce_provider_adapter_builds_dynamic_evaluator_fleet() -> None:
+    from crsbench.cloud.expansion import CloudDynamicPlacementRequest
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+
+    adapter = GceProviderAdapter()
+    config = _make_provider_neutral_experiment_config_with_evaluators()
+
+    fleet = adapter.build_dynamic_evaluator_fleet(
+        experiment_name=config.experiment,
+        config=config,
+        request=CloudDynamicPlacementRequest(
+            role="evaluator",
+            provider=CloudProvider.GCE,
+            instance_profile="gce-evaluator-c3",
+            count=1,
+            regions=(),
+            zones=("us-central1-a",),
+        ),
+        name_start_index=4,
+    )
+
+    assert fleet.project == "test-project"
+    assert fleet.zone == "us-central1-a"
+    assert fleet.zones == ["us-central1-a"]
+    assert fleet.worker_count == 1
+    assert fleet.worker_name_start_index == 4
+    assert fleet.worker_name_prefix == f"crsbench-{config.experiment}-eval"
+    assert fleet.machine_type == "c3-standard-8"
+    assert (
+        fleet.service_account_email
+        == "crsbench-evaluator@test-project.iam.gserviceaccount.com"
+    )
+
+
+def test_gce_provider_adapter_reports_quota_shortage_for_dynamic_fleet() -> None:
+    from crsbench.cloud.expansion import CloudDynamicPlacementRequest
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+
+    quota_client = MagicMock()
+    quota_client.get_available_capacity.return_value = 0
+    adapter = GceProviderAdapter(quota_client=quota_client)
+    config = _make_provider_neutral_experiment_config()
+    fleet = adapter.build_dynamic_worker_fleet(
+        experiment_name=config.experiment,
+        config=config,
+        request=CloudDynamicPlacementRequest(
+            role="worker",
+            provider=CloudProvider.GCE,
+            instance_profile="gce-worker-n2d",
+            count=2,
+            regions=("us-east5",),
+            zones=("us-east5-b",),
+        ),
+        name_start_index=4,
+    )
+
+    shortages = adapter.quota_shortages_for_dynamic_fleet(fleet=fleet)
+
+    assert len(shortages) == 1
+    assert shortages[0].provider is CloudProvider.GCE
+    assert shortages[0].scope == "us-east5"

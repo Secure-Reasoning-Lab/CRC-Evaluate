@@ -168,6 +168,27 @@ def redact_launch_state(state: CloudLaunchState) -> CloudLaunchState:
     )
 
 
+def append_fleet_records(
+    state: CloudLaunchState,
+    *,
+    workers: list[CloudFleetPlacementRecord] | None = None,
+    evaluators: list[CloudFleetPlacementRecord] | None = None,
+) -> CloudLaunchState:
+    """Return launch state with additional worker/evaluator fleet records appended."""
+    return state.model_copy(
+        update={
+            "worker_fleet_configs": [
+                *state.worker_fleet_configs,
+                *(workers or []),
+            ],
+            "evaluator_fleet_configs": [
+                *state.evaluator_fleet_configs,
+                *(evaluators or []),
+            ],
+        }
+    )
+
+
 def _resolve_launch_state_dir(base_path: Path | str) -> Path:
     from pathlib import Path as _Path
 

@@ -158,6 +158,70 @@ Examples:
     )
     _add_config_argument(launch_p, suppress_default=True)
 
+    # add-workers
+    add_workers_p = cloud_subparsers.add_parser(
+        "add-workers",
+        help="Add one new worker placement to an active cloud launch",
+    )
+    _add_config_argument(add_workers_p, suppress_default=True)
+    add_workers_p.add_argument(
+        "--instance-profile",
+        required=True,
+        dest="instance_profile",
+        help="Existing instance profile name to use for the new worker placement",
+    )
+    add_workers_p.add_argument(
+        "--count",
+        required=True,
+        type=int,
+        help="Number of workers to add in this placement",
+    )
+    add_workers_p.add_argument(
+        "--regions",
+        help="Comma-separated candidate regions for the new worker placement",
+    )
+    add_workers_p.add_argument(
+        "--zones",
+        help="Comma-separated zones for the new worker placement",
+    )
+    add_workers_p.add_argument(
+        "--force",
+        action="store_true",
+        help="Skip the confirmation prompt",
+    )
+
+    # add-evaluators
+    add_evaluators_p = cloud_subparsers.add_parser(
+        "add-evaluators",
+        help="Add one new evaluator placement to an active cloud launch",
+    )
+    _add_config_argument(add_evaluators_p, suppress_default=True)
+    add_evaluators_p.add_argument(
+        "--instance-profile",
+        required=True,
+        dest="instance_profile",
+        help="Existing instance profile name to use for the new evaluator placement",
+    )
+    add_evaluators_p.add_argument(
+        "--count",
+        required=True,
+        type=int,
+        help="Number of evaluators to add in this placement",
+    )
+    add_evaluators_p.add_argument(
+        "--regions",
+        help="Comma-separated candidate regions for the new evaluator placement",
+    )
+    add_evaluators_p.add_argument(
+        "--zones",
+        help="Comma-separated zones for the new evaluator placement",
+    )
+    add_evaluators_p.add_argument(
+        "--force",
+        action="store_true",
+        help="Skip the confirmation prompt",
+    )
+
     # preflight
     preflight_p = cloud_subparsers.add_parser(
         "preflight",
@@ -253,6 +317,11 @@ def run_cloud(args: argparse.Namespace) -> int:
         from crsbench.cloud.cli._log import run_log
 
         return run_log(args)
+
+    if cmd in {"add-workers", "add-evaluators"}:
+        from crsbench.cloud.cli._add_capacity import run_add_capacity
+
+        return run_add_capacity(args)
 
     if cmd == "events":
         from crsbench.cloud.cli._events import run_events

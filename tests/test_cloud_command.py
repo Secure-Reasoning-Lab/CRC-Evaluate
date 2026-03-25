@@ -1768,6 +1768,59 @@ class TestArgParsing:
         assert args.json_output is True
         assert args.strict is True
 
+    def test_parse_add_workers(self):
+        parser = self._build_parser()
+        args = parser.parse_args(
+            [
+                "cloud",
+                "add-workers",
+                "--config",
+                "c.yaml",
+                "--instance-profile",
+                "gce-worker-n2d",
+                "--count",
+                "2",
+                "--regions",
+                "us-east5,us-east1",
+                "--zones",
+                "us-east5-b,us-east1-b",
+            ]
+        )
+        assert args.command == "cloud"
+        assert args.cloud_command == "add-workers"
+        assert args.config == "c.yaml"
+        assert args.instance_profile == "gce-worker-n2d"
+        assert args.count == 2
+        assert args.regions == "us-east5,us-east1"
+        assert args.zones == "us-east5-b,us-east1-b"
+        assert args.force is False
+
+    def test_parse_add_evaluators(self):
+        parser = self._build_parser()
+        args = parser.parse_args(
+            [
+                "cloud",
+                "add-evaluators",
+                "--config",
+                "c.yaml",
+                "--instance-profile",
+                "gce-evaluator-n2d",
+                "--count",
+                "1",
+                "--zones",
+                "us-central1-a",
+                "--force",
+            ]
+        )
+        assert args.command == "cloud"
+        assert args.cloud_command == "add-evaluators"
+        assert args.config == "c.yaml"
+        assert args.instance_profile == "gce-evaluator-n2d"
+        assert args.count == 1
+        assert args.regions is None
+        assert args.zones == "us-central1-a"
+        assert args.force is True
+
     def test_parse_monitor(self):
         parser = self._build_parser()
         args = parser.parse_args(["cloud", "monitor", "my-exp", "--config", "c.yaml"])
@@ -1906,6 +1959,27 @@ def _make_monitor_args(
     )
 
 
+def _make_add_capacity_args(
+    *,
+    cloud_command: str,
+    config: str = "/tmp/config.yaml",
+    instance_profile: str = "gce-worker-n2d",
+    count: int = 2,
+    regions: str | None = "us-east5,us-east1",
+    zones: str | None = "us-east5-b,us-east1-b",
+    force: bool = False,
+):
+    return argparse.Namespace(
+        config=config,
+        cloud_command=cloud_command,
+        instance_profile=instance_profile,
+        count=count,
+        regions=regions,
+        zones=zones,
+        force=force,
+    )
+
+
 def _make_list_args(
     config: str = "/tmp/config.yaml",
     *,
@@ -2020,6 +2094,533 @@ def test_run_cloud_dispatches_log(mock_run_log):
 
     assert rc == 0
     mock_run_log.assert_called_once()
+
+
+@patch("crsbench.cloud.cli._add_capacity.run_add_capacity", return_value=0)
+def test_run_cloud_dispatches_add_workers(mock_run_add_capacity):
+    from crsbench.cloud.cli.cloud_command import run_cloud
+
+    rc = run_cloud(_make_add_capacity_args(cloud_command="add-workers"))
+
+    assert rc == 0
+    mock_run_add_capacity.assert_called_once()
+
+
+@patch("crsbench.cloud.cli._add_capacity.run_add_capacity", return_value=0)
+def test_run_cloud_dispatches_add_evaluators(mock_run_add_capacity):
+    from crsbench.cloud.cli.cloud_command import run_cloud
+
+    rc = run_cloud(
+        _make_add_capacity_args(
+            cloud_command="add-evaluators",
+            instance_profile="gce-evaluator-c3",
+            count=1,
+            regions=None,
+            zones="us-central1-a",
+            force=True,
+        )
+    )
+
+    assert rc == 0
+    mock_run_add_capacity.assert_called_once()
+
+
+@patch(
+    "crsbench.cloud.cli._add_capacity.require_launch_state",
+    side_effect=SystemExit(
+        "cloud add-workers requires saved remote launch state for the target experiment"
+    ),
+)
+@patch("crsbench.cloud.cli._add_capacity.resolve_effective_experiment_name")
+def test_run_add_capacity_requires_launch_state(
+    mock_resolve_experiment_name,
+    mock_require_launch_state,
+):
+    from crsbench.cloud.cli._add_capacity import run_add_capacity
+
+    mock_resolve_experiment_name.return_value = "test-exp"
+
+    rc = run_add_capacity(_make_add_capacity_args(cloud_command="add-workers"))
+
+    assert rc == 1
+    mock_require_launch_state.assert_called_once()
+
+
+@patch("crsbench.cloud.cli._add_capacity.logger")
+@patch("crsbench.cloud.cli._add_capacity._apply_runtime_added_placement", create=True)
+@patch("crsbench.cloud.cli._add_capacity.build_dynamic_placement_request")
+@patch("crsbench.cloud.cli._add_capacity.load_experiment_config")
+@patch("crsbench.cloud.cli._add_capacity.require_launch_state")
+@patch("crsbench.cloud.cli._add_capacity.resolve_effective_experiment_name")
+def test_run_add_capacity_confirmation_prompt_no(
+    mock_resolve_experiment_name,
+    mock_require_launch_state,
+    mock_load_experiment_config,
+    mock_build_request,
+    mock_apply_runtime_added_placement,
+    mock_logger,
+):
+    from crsbench.cloud.cli._add_capacity import run_add_capacity
+    from crsbench.cloud.expansion import CloudDynamicPlacementRequest
+
+    mock_resolve_experiment_name.return_value = "test-exp"
+    mock_require_launch_state.return_value = _make_provider_neutral_operational_context(
+        include_launch_state=True
+    )
+    mock_load_experiment_config.return_value = (
+        _make_provider_neutral_experiment_config()
+    )
+    mock_build_request.return_value = CloudDynamicPlacementRequest(
+        role="worker",
+        provider=CloudProvider.GCE,
+        instance_profile="gce-worker-n2d",
+        count=2,
+        regions=("us-east5", "us-east1"),
+        zones=("us-east5-b", "us-east1-b"),
+    )
+
+    with (
+        patch("builtins.input", return_value="no"),
+        patch("sys.stdin") as mock_stdin,
+    ):
+        mock_stdin.isatty.return_value = True
+        rc = run_add_capacity(_make_add_capacity_args(cloud_command="add-workers"))
+
+    assert rc == 0
+    mock_apply_runtime_added_placement.assert_not_called()
+    info_calls = [str(call) for call in mock_logger.info.call_args_list]
+    assert any("Projected totals after apply" in call for call in info_calls)
+
+
+@patch("crsbench.cloud.cli._add_capacity.logger")
+@patch("crsbench.cloud.cli._add_capacity._apply_runtime_added_placement", create=True)
+@patch("crsbench.cloud.cli._add_capacity.build_dynamic_placement_request")
+@patch("crsbench.cloud.cli._add_capacity.load_experiment_config")
+@patch("crsbench.cloud.cli._add_capacity.require_launch_state")
+@patch("crsbench.cloud.cli._add_capacity.resolve_effective_experiment_name")
+def test_run_add_capacity_non_tty_without_force(
+    mock_resolve_experiment_name,
+    mock_require_launch_state,
+    mock_load_experiment_config,
+    mock_build_request,
+    mock_apply_runtime_added_placement,
+    mock_logger,
+):
+    from crsbench.cloud.cli._add_capacity import run_add_capacity
+    from crsbench.cloud.expansion import CloudDynamicPlacementRequest
+
+    mock_resolve_experiment_name.return_value = "test-exp"
+    mock_require_launch_state.return_value = _make_provider_neutral_operational_context(
+        include_launch_state=True
+    )
+    mock_load_experiment_config.return_value = (
+        _make_provider_neutral_experiment_config()
+    )
+    mock_build_request.return_value = CloudDynamicPlacementRequest(
+        role="worker",
+        provider=CloudProvider.GCE,
+        instance_profile="gce-worker-n2d",
+        count=2,
+        regions=("us-east5",),
+        zones=("us-east5-b",),
+    )
+
+    with patch("sys.stdin") as mock_stdin:
+        mock_stdin.isatty.return_value = False
+        rc = run_add_capacity(_make_add_capacity_args(cloud_command="add-workers"))
+
+    assert rc == 1
+    mock_apply_runtime_added_placement.assert_not_called()
+    error_calls = [str(call) for call in mock_logger.error.call_args_list]
+    assert any("--force" in call for call in error_calls)
+
+
+@patch("crsbench.cloud.cli._add_capacity._apply_runtime_added_placement", create=True)
+@patch("crsbench.cloud.cli._add_capacity.build_dynamic_placement_request")
+@patch("crsbench.cloud.cli._add_capacity.load_experiment_config")
+@patch("crsbench.cloud.cli._add_capacity.require_launch_state")
+@patch("crsbench.cloud.cli._add_capacity.resolve_effective_experiment_name")
+def test_run_add_capacity_force_skips_prompt(
+    mock_resolve_experiment_name,
+    mock_require_launch_state,
+    mock_load_experiment_config,
+    mock_build_request,
+    mock_apply_runtime_added_placement,
+):
+    from crsbench.cloud.cli._add_capacity import run_add_capacity
+    from crsbench.cloud.expansion import CloudDynamicPlacementRequest
+
+    mock_resolve_experiment_name.return_value = "test-exp"
+    mock_require_launch_state.return_value = _make_provider_neutral_operational_context(
+        include_launch_state=True
+    )
+    mock_load_experiment_config.return_value = (
+        _make_provider_neutral_experiment_config()
+    )
+    mock_build_request.return_value = CloudDynamicPlacementRequest(
+        role="worker",
+        provider=CloudProvider.GCE,
+        instance_profile="gce-worker-n2d",
+        count=2,
+        regions=("us-east5",),
+        zones=("us-east5-b",),
+    )
+    mock_apply_runtime_added_placement.return_value = 0
+
+    with patch("builtins.input") as mock_input:
+        rc = run_add_capacity(
+            _make_add_capacity_args(cloud_command="add-workers", force=True)
+        )
+
+    assert rc == 0
+    mock_input.assert_not_called()
+    mock_apply_runtime_added_placement.assert_called_once()
+
+
+@patch("crsbench.cloud.cli._add_capacity.save_launch_state")
+@patch("crsbench.cloud.cli._add_capacity.append_created_instance_records")
+@patch("crsbench.cloud.cli._add_capacity.CloudFleetStatusManager")
+@patch("crsbench.cloud.cli._add_capacity.reconnect")
+@patch("crsbench.cloud.cli._add_capacity.provisioner_for_context")
+@patch("crsbench.cloud.cli._add_capacity.provider_adapter_for_context")
+@patch("crsbench.cloud.cli._add_capacity.CloudVmBootstrapInputs.from_experiment_config")
+@patch("crsbench.cloud.cli._add_capacity.RuntimeRegistration.from_experiment_config")
+def test_apply_runtime_added_worker_placement_saves_launch_state(
+    mock_runtime_registration,
+    mock_bootstrap_inputs,
+    mock_provider_adapter_for_context,
+    mock_provisioner_for_context,
+    mock_reconnect,
+    mock_status_manager_cls,
+    mock_append_created_instance_records,
+    mock_save_launch_state,
+):
+    from crsbench.cloud.cli._add_capacity import _apply_runtime_added_placement
+    from crsbench.cloud.expansion import CloudDynamicPlacementRequest
+    from crsbench.cloud.gce.models import GceWorkerRecord
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+
+    config = _make_provider_neutral_experiment_config()
+    context = _make_provider_neutral_operational_context(include_launch_state=True)
+    request = CloudDynamicPlacementRequest(
+        role="worker",
+        provider=CloudProvider.GCE,
+        instance_profile="gce-worker-n2d",
+        count=2,
+        regions=("us-east5",),
+        zones=("us-east5-b",),
+    )
+    args = _make_add_capacity_args(cloud_command="add-workers", force=True)
+
+    provisioner = MagicMock()
+    provisioner.create_workers.return_value = [
+        GceWorkerRecord(
+            name="crsbench-test-exp-work-004",
+            instance_id="1004",
+            status="RUNNING",
+            zone="us-east5-b",
+            internal_ip="10.0.0.14",
+            external_ip=None,
+            service_account_email="crsbench@test-project.iam.gserviceaccount.com",
+            labels={"crsbench-role": "worker", "owner": "team-crs"},
+            raw={},
+        )
+    ]
+    adapter = GceProviderAdapter(provisioner=provisioner)
+    adapter.quota_shortages_for_dynamic_fleet = MagicMock(return_value=[])
+    mock_provider_adapter_for_context.return_value = adapter
+    mock_provisioner_for_context.return_value = provisioner
+    mock_runtime_registration.return_value = MagicMock()
+    mock_bootstrap_inputs.return_value = MagicMock()
+    mock_reconnect.return_value = (
+        context,
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        Path("/tmp/filestore"),
+    )
+    mock_status_manager = mock_status_manager_cls.return_value
+    mock_status_manager.wait_for_added_instances.return_value = MagicMock(
+        requested_count=1,
+        ready_count=1,
+    )
+
+    rc = _apply_runtime_added_placement(
+        args,
+        context=context,
+        config=config,
+        request=request,
+    )
+
+    assert rc == 0
+    provisioner.create_workers.assert_called_once()
+    mock_status_manager.wait_for_added_instances.assert_called_once()
+    mock_append_created_instance_records.assert_called_once()
+    mock_save_launch_state.assert_called_once()
+    saved_state = mock_save_launch_state.call_args.args[1]
+    assert saved_state.worker_fleet_configs[-1].placement_source == "runtime_added"
+    assert saved_state.worker_fleet_configs[-1].role == "worker"
+
+
+@patch("crsbench.cloud.cli._add_capacity.save_launch_state")
+@patch("crsbench.cloud.cli._add_capacity.append_created_instance_records")
+@patch("crsbench.cloud.cli._add_capacity.CloudFleetStatusManager")
+@patch("crsbench.cloud.cli._add_capacity.reconnect")
+@patch("crsbench.cloud.cli._add_capacity.provisioner_for_context")
+@patch("crsbench.cloud.cli._add_capacity.provider_adapter_for_context")
+@patch("crsbench.cloud.cli._add_capacity.CloudVmBootstrapInputs.from_experiment_config")
+@patch("crsbench.cloud.cli._add_capacity.RuntimeRegistration.from_experiment_config")
+def test_apply_runtime_added_evaluator_placement_saves_launch_state(
+    mock_runtime_registration,
+    mock_bootstrap_inputs,
+    mock_provider_adapter_for_context,
+    mock_provisioner_for_context,
+    mock_reconnect,
+    mock_status_manager_cls,
+    mock_append_created_instance_records,
+    mock_save_launch_state,
+):
+    from crsbench.cloud.cli._add_capacity import _apply_runtime_added_placement
+    from crsbench.cloud.expansion import CloudDynamicPlacementRequest
+    from crsbench.cloud.gce.models import GceWorkerRecord
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+
+    config = _make_provider_neutral_experiment_config_with_evaluators()
+    context = _make_provider_neutral_operational_context(include_launch_state=True)
+    request = CloudDynamicPlacementRequest(
+        role="evaluator",
+        provider=CloudProvider.GCE,
+        instance_profile="gce-evaluator-c3",
+        count=1,
+        zones=("us-east1-b",),
+    )
+    args = _make_add_capacity_args(
+        cloud_command="add-evaluators",
+        instance_profile="gce-evaluator-c3",
+        count=1,
+        regions=None,
+        zones="us-east1-b",
+        force=True,
+    )
+
+    provisioner = MagicMock()
+    provisioner.create_evaluators.return_value = [
+        GceWorkerRecord(
+            name="crsbench-test-exp-eval-001",
+            instance_id="2001",
+            status="RUNNING",
+            zone="us-east1-b",
+            internal_ip="10.0.0.24",
+            external_ip=None,
+            service_account_email="crsbench@test-project.iam.gserviceaccount.com",
+            labels={"crsbench-role": "evaluator", "owner": "team-crs"},
+            raw={},
+        )
+    ]
+    adapter = GceProviderAdapter(provisioner=provisioner)
+    adapter.quota_shortages_for_dynamic_fleet = MagicMock(return_value=[])
+    mock_provider_adapter_for_context.return_value = adapter
+    mock_provisioner_for_context.return_value = provisioner
+    mock_runtime_registration.return_value = MagicMock()
+    mock_bootstrap_inputs.return_value = MagicMock()
+    mock_reconnect.return_value = (
+        context,
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        Path("/tmp/filestore"),
+    )
+    mock_status_manager = mock_status_manager_cls.return_value
+    mock_status_manager.wait_for_added_instances.return_value = MagicMock(
+        requested_count=1,
+        ready_count=1,
+    )
+
+    rc = _apply_runtime_added_placement(
+        args,
+        context=context,
+        config=config,
+        request=request,
+    )
+
+    assert rc == 0
+    provisioner.create_evaluators.assert_called_once()
+    provisioner.delete_evaluators.assert_not_called()
+    mock_status_manager.wait_for_added_instances.assert_called_once()
+    mock_append_created_instance_records.assert_called_once()
+    mock_save_launch_state.assert_called_once()
+    saved_state = mock_save_launch_state.call_args.args[1]
+    assert saved_state.evaluator_fleet_configs[-1].placement_source == "runtime_added"
+    assert saved_state.evaluator_fleet_configs[-1].role == "evaluator"
+
+
+@patch("crsbench.cloud.cli._add_capacity.save_launch_state")
+@patch("crsbench.cloud.cli._add_capacity.append_created_instance_records")
+@patch("crsbench.cloud.cli._add_capacity.CloudFleetStatusManager")
+@patch("crsbench.cloud.cli._add_capacity.reconnect")
+@patch("crsbench.cloud.cli._add_capacity.provisioner_for_context")
+@patch("crsbench.cloud.cli._add_capacity.provider_adapter_for_context")
+@patch("crsbench.cloud.cli._add_capacity.CloudVmBootstrapInputs.from_experiment_config")
+@patch("crsbench.cloud.cli._add_capacity.RuntimeRegistration.from_experiment_config")
+def test_apply_runtime_added_worker_placement_rolls_back_on_readiness_failure(
+    mock_runtime_registration,
+    mock_bootstrap_inputs,
+    mock_provider_adapter_for_context,
+    mock_provisioner_for_context,
+    mock_reconnect,
+    mock_status_manager_cls,
+    mock_append_created_instance_records,
+    mock_save_launch_state,
+):
+    from crsbench.cloud.cli._add_capacity import _apply_runtime_added_placement
+    from crsbench.cloud.expansion import CloudDynamicPlacementRequest
+    from crsbench.cloud.gce.models import GceWorkerRecord
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+
+    config = _make_provider_neutral_experiment_config()
+    context = _make_provider_neutral_operational_context(include_launch_state=True)
+    request = CloudDynamicPlacementRequest(
+        role="worker",
+        provider=CloudProvider.GCE,
+        instance_profile="gce-worker-n2d",
+        count=1,
+        regions=("us-east5",),
+        zones=("us-east5-b",),
+    )
+    args = _make_add_capacity_args(
+        cloud_command="add-workers",
+        count=1,
+        regions="us-east5",
+        zones="us-east5-b",
+        force=True,
+    )
+
+    provisioner = MagicMock()
+    provisioner.create_workers.return_value = [
+        GceWorkerRecord(
+            name="crsbench-test-exp-work-004",
+            instance_id="1004",
+            status="RUNNING",
+            zone="us-east5-b",
+            internal_ip="10.0.0.14",
+            external_ip=None,
+            service_account_email="crsbench@test-project.iam.gserviceaccount.com",
+            labels={"crsbench-role": "worker", "owner": "team-crs"},
+            raw={},
+        )
+    ]
+    adapter = GceProviderAdapter(provisioner=provisioner)
+    adapter.quota_shortages_for_dynamic_fleet = MagicMock(return_value=[])
+    mock_provider_adapter_for_context.return_value = adapter
+    mock_provisioner_for_context.return_value = provisioner
+    mock_runtime_registration.return_value = MagicMock()
+    mock_bootstrap_inputs.return_value = MagicMock()
+    mock_reconnect.return_value = (
+        context,
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        Path("/tmp/filestore"),
+    )
+    mock_status_manager = mock_status_manager_cls.return_value
+    mock_status_manager.wait_for_added_instances.side_effect = RuntimeError(
+        "bootstrap failed"
+    )
+
+    rc = _apply_runtime_added_placement(
+        args,
+        context=context,
+        config=config,
+        request=request,
+    )
+
+    assert rc == 1
+    provisioner.create_workers.assert_called_once()
+    provisioner.delete_workers.assert_called_once()
+    mock_append_created_instance_records.assert_not_called()
+    mock_save_launch_state.assert_not_called()
+
+
+@patch("crsbench.cloud.cli._add_capacity.save_launch_state")
+@patch("crsbench.cloud.cli._add_capacity.append_created_instance_records")
+@patch("crsbench.cloud.cli._add_capacity.CloudFleetStatusManager")
+@patch("crsbench.cloud.cli._add_capacity.reconnect")
+@patch("crsbench.cloud.cli._add_capacity.provisioner_for_context")
+@patch("crsbench.cloud.cli._add_capacity.provider_adapter_for_context")
+@patch("crsbench.cloud.cli._add_capacity.CloudVmBootstrapInputs.from_experiment_config")
+@patch("crsbench.cloud.cli._add_capacity.RuntimeRegistration.from_experiment_config")
+def test_apply_runtime_added_worker_placement_stops_on_quota_shortage(
+    mock_runtime_registration,
+    mock_bootstrap_inputs,
+    mock_provider_adapter_for_context,
+    mock_provisioner_for_context,
+    mock_reconnect,
+    mock_status_manager_cls,
+    mock_append_created_instance_records,
+    mock_save_launch_state,
+):
+    from crsbench.cloud.cli._add_capacity import _apply_runtime_added_placement
+    from crsbench.cloud.expansion import CloudDynamicPlacementRequest
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+    from crsbench.cloud.models import QuotaShortage
+
+    config = _make_provider_neutral_experiment_config()
+    context = _make_provider_neutral_operational_context(include_launch_state=True)
+    request = CloudDynamicPlacementRequest(
+        role="worker",
+        provider=CloudProvider.GCE,
+        instance_profile="gce-worker-n2d",
+        count=4,
+        regions=("us-east5",),
+        zones=("us-east5-b",),
+    )
+    args = _make_add_capacity_args(
+        cloud_command="add-workers",
+        count=4,
+        regions="us-east5",
+        zones="us-east5-b",
+        force=True,
+    )
+
+    provisioner = MagicMock()
+    adapter = GceProviderAdapter(provisioner=provisioner)
+    adapter.quota_shortages_for_dynamic_fleet = MagicMock(
+        return_value=[
+            QuotaShortage(
+                provider=CloudProvider.GCE,
+                scope="us-east5",
+                resource_family="N2D_CPUS",
+                required=64,
+                available=0,
+            )
+        ]
+    )
+    mock_provider_adapter_for_context.return_value = adapter
+    mock_provisioner_for_context.return_value = provisioner
+    mock_runtime_registration.return_value = MagicMock()
+    mock_bootstrap_inputs.return_value = MagicMock()
+    mock_reconnect.return_value = (
+        context,
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        Path("/tmp/filestore"),
+    )
+
+    rc = _apply_runtime_added_placement(
+        args,
+        context=context,
+        config=config,
+        request=request,
+    )
+
+    assert rc == 1
+    provisioner.create_workers.assert_not_called()
+    provisioner.delete_workers.assert_not_called()
+    mock_reconnect.assert_not_called()
+    mock_status_manager_cls.assert_not_called()
+    mock_append_created_instance_records.assert_not_called()
+    mock_save_launch_state.assert_not_called()
 
 
 @patch("crsbench.cloud.cli._monitor.initialize_queue")
@@ -3862,6 +4463,81 @@ class TestStatusOutput:
         assert "collection" in data
         assert "events" in data
 
+    @patch("crsbench.cloud.cli._status.reconnect")
+    def test_status_json_output_marks_runtime_added_instances(
+        self, mock_reconnect, fake_redis, capsys
+    ):
+        """JSON status output should expose runtime-added fleet provenance."""
+        from crsbench.cloud.readiness import CloudReadinessStore
+        from crsbench.distributed.job_lifecycle import JobLifecycleStore
+
+        fake_redis.hset(
+            "crsbench:cloud:workers:test-exp",
+            "id-worker-3",
+            json.dumps(
+                _make_worker_status(
+                    "crsbench-test-exp-work-003",
+                    state="ready",
+                    internal_ip="10.0.0.3",
+                )
+            ),
+        )
+        readiness = CloudReadinessStore(fake_redis)
+        lifecycle = JobLifecycleStore(fake_redis)
+        base_launch_state = _make_launch_state()
+        launch_state = base_launch_state.model_copy(
+            update={
+                "worker_fleet_configs": [
+                    *base_launch_state.worker_fleet_configs,
+                    CloudFleetPlacementRecord(
+                        provider=CloudProvider.GCE,
+                        role="worker",
+                        project="test-project",
+                        zone="us-central1-a",
+                        zones=["us-central1-a"],
+                        region="us-central1",
+                        count=1,
+                        name_prefix="crsbench-test-exp-work",
+                        name_start_index=3,
+                        ssh_via_iap=True,
+                        owner_label="team-crs",
+                        placement_source="runtime_added",
+                        provider_metadata={
+                            **base_launch_state.worker_fleet_configs[
+                                0
+                            ].provider_metadata,
+                            "project": "test-project",
+                            "zone": "us-central1-a",
+                            "zones": ["us-central1-a"],
+                            "worker_count": 1,
+                            "worker_name_start_index": 3,
+                            "worker_name_prefix": "crsbench-test-exp-work",
+                        },
+                    ),
+                ]
+            }
+        )
+        mock_reconnect.return_value = (
+            _make_resolved_cloud_context(launch_state),
+            fake_redis,
+            readiness,
+            lifecycle,
+            Path("/tmp"),
+        )
+
+        from crsbench.cloud.cli._status import run_status
+
+        rc = run_status(_make_status_args(json_output=True))
+        assert rc == 0
+
+        data = json.loads(capsys.readouterr().out)
+        worker_entry = next(
+            entry
+            for entry in data["fleet"]
+            if entry["instance_name"] == "crsbench-test-exp-work-003"
+        )
+        assert worker_entry["placement_source"] == "runtime_added"
+
     @patch("crsbench.cloud.cli._status._load_status_jobs", create=True)
     @patch("crsbench.cloud.cli._status.reconnect")
     def test_status_json_output_falls_back_to_queue_snapshot_when_lifecycle_empty(
@@ -3968,10 +4644,11 @@ class TestStatusOutput:
 
         assert rc == 0
         fleet_headers, fleet_rows = mock_table.call_args_list[0].args
-        assert fleet_headers == ["Instance", "Role", "State", "Zone", "IP"]
+        assert fleet_headers == ["Instance", "Role", "Source", "State", "Zone", "IP"]
         assert [
             "evaluator-1",
             "evaluator",
+            "unknown",
             "ready",
             "us-central1-a",
             "10.0.1.10",
@@ -4330,6 +5007,70 @@ class TestList:
             "crsbench-test-exp-work-001",
         ]
 
+    @patch("crsbench.cloud.cli._list.resolve_effective_experiment_name")
+    @patch("crsbench.cloud.cli._list.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._list.provisioner_for_context")
+    def test_list_json_output_marks_runtime_added_instances(
+        self,
+        mock_provisioner_cls,
+        mock_resolve_context,
+        mock_resolve_experiment_name,
+        capsys,
+    ):
+        mock_resolve_experiment_name.return_value = "test-exp"
+        base_launch_state = _make_launch_state()
+        launch_state = base_launch_state.model_copy(
+            update={
+                "worker_fleet_configs": [
+                    *base_launch_state.worker_fleet_configs,
+                    CloudFleetPlacementRecord(
+                        provider=CloudProvider.GCE,
+                        role="worker",
+                        project="test-project",
+                        zone="us-central1-a",
+                        zones=["us-central1-a"],
+                        region="us-central1",
+                        count=1,
+                        name_prefix="crsbench-test-exp-work",
+                        name_start_index=3,
+                        ssh_via_iap=True,
+                        owner_label="team-crs",
+                        placement_source="runtime_added",
+                        provider_metadata={
+                            **base_launch_state.worker_fleet_configs[
+                                0
+                            ].provider_metadata,
+                            "project": "test-project",
+                            "zone": "us-central1-a",
+                            "zones": ["us-central1-a"],
+                            "worker_count": 1,
+                            "worker_name_start_index": 3,
+                            "worker_name_prefix": "crsbench-test-exp-work",
+                        },
+                    ),
+                ]
+            }
+        )
+        context = _make_resolved_cloud_context(launch_state)
+        mock_resolve_context.return_value = context
+        provisioner = mock_provisioner_cls.return_value
+        provisioner.list_workers.return_value = [
+            _make_gce_worker("crsbench-test-exp-work-003")
+        ]
+        provisioner.list_evaluators.return_value = []
+        provisioner.get_instance_record.return_value = None
+
+        from crsbench.cloud.cli._list import run_list
+
+        rc = run_list(_make_list_args(json_output=True))
+
+        assert rc == 0
+        payload = json.loads(capsys.readouterr().out)
+        worker_entry = next(
+            row for row in payload if row["name"] == "crsbench-test-exp-work-003"
+        )
+        assert worker_entry["placement_source"] == "runtime_added"
+
     @patch("crsbench.cloud.cli._list.provisioner_for_context")
     @patch("crsbench.cloud.cli._list.resolve_effective_experiment_name")
     @patch("crsbench.cloud.cli._list.resolve_cloud_context")
@@ -4640,6 +5381,7 @@ class TestRemoteAccess:
             alias="work-001",
             name="crsbench-test-exp-work-001",
             role="worker",
+            placement_source="config",
             provider="gce",
             project="test-project",
             zone="us-east5-b",

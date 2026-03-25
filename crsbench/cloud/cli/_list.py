@@ -43,6 +43,7 @@ def _print_rows(rows) -> None:
         ("ALIAS", "alias"),
         ("NAME", "name"),
         ("ROLE", "role"),
+        ("SOURCE", "placement_source"),
         ("ZONE", "zone"),
         ("STATUS", "status"),
         ("INTERNAL_IP", "internal_ip"),

@@ -89,6 +89,7 @@ Experiment YAML
 | Module | Responsibility |
 |---|---|
 | `cloud/models.py` | provider-neutral launch plan consumed by GCE resolution |
+| `cloud/expansion.py` | runtime-added placement request parsing and inherited env resolution |
 | `cloud/providers.py` | provider selection that routes launches to GCE today |
 | `cloud/transport.py` | provider-neutral transport interface implemented by GCE |
 | `cloud/gce/models.py` | `GceInstanceRequest`, `GceWorkerInstance` data models |
@@ -128,6 +129,28 @@ Rollback:
 - Rollback errors are silently caught to avoid masking the original creation error
 - Before any VM is created, launch fails fast if the same experiment already has
   a persisted launch-state file or matching live orchestrator/worker/evaluator VMs
+
+## Contract: Runtime Capacity Expansion
+
+- Runtime capacity expansion is operator-driven only; GCE does not autoscale
+  CRSBench fleets from queue depth.
+- `cloud add-workers` and `cloud add-evaluators` require saved remote launch
+  state from a prior `cloud launch`.
+- Each command adds exactly one new worker or evaluator placement.
+- Runtime overrides are limited to a named instance profile, `count`, and
+  `regions` / `zones`; GCE fallback policy, launch defaults, deploy-key path,
+  and inherited env layers continue to come from config-owned defaults.
+- Delta quota validation happens before any new VM create call.
+- `regions` plus `zones` keeps the same GCE semantics as launch-time config:
+  regional bulk insert first, with `zones` restricted to the current region on
+  each attempt.
+- Confirmation is interactive by default; `--force` skips only the prompt.
+- Provisioning and readiness waiting apply only to the new placement. Failures
+  trigger rollback of only that placement and leave the existing fleet running.
+- Successful runtime-added placements are appended to launch state with
+  `placement_source=runtime_added`; `cloud status` and `cloud list` surface that
+  provenance, and `cloud collect` / `cloud teardown` consume the updated launch
+  state automatically.
 
 ## Contract: GCE Inputs To Shared Readiness
 

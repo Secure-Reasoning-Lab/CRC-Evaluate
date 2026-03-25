@@ -133,6 +133,8 @@ Shared readiness invariants:
 The shared cloud control plane includes:
 
 - `cloud launch`: create the declared fleet and persist reconnect state
+- `cloud add-workers`, `cloud add-evaluators`: append one runtime placement to
+  an already launched experiment without mutating the checked-in config
 - `cloud preflight`: resolve the launch plan, duplicate-launch guard, provider launch-input preflight, and quota checks without provisioning or mutating launch state
 - `cloud status`: return a one-shot fleet, job, and recovery snapshot
 - `cloud events`: return recovery-event history from the active experiment control plane
@@ -146,11 +148,25 @@ Shared reconnect semantics:
 
 - `status`, `events`, and `monitor` are control-plane reconnect commands and may
   require runtime/backend reachability in addition to launch state
+- `add-workers` and `add-evaluators` require saved launch state plus backend
+  reachability because they must gate the new placement on shared readiness
 - `preflight` is read-only and must not write or refresh persisted launch state
 - `list`, `ssh`, `exec`, `log`, `collect`, and `teardown` must be able to reuse
   persisted launch state plus live provider inventory
 - `collect` and `teardown` should continue from persisted state when the runtime
   backend is unavailable, subject to provider inventory still being resolvable
+
+Shared runtime-expansion semantics:
+
+- runtime expansion is operator-driven, not automatic scaling
+- each add-capacity command appends exactly one new worker or evaluator placement
+- runtime changes are limited to named instance profile, count, and location
+  selectors; all other behavior remains inherited from config defaults
+- quota validation applies to the delta placement before any provider create call
+- failures during provisioning or readiness roll back only the new placement and
+  leave the existing fleet untouched
+- persisted launch state records runtime-added placements explicitly so later
+  status, list, collect, and teardown commands include them automatically
 
 Shared preflight semantics:
 

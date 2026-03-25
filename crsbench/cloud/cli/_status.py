@@ -9,6 +9,7 @@ from crsbench.cloud.cli._config_reconnect import (
     reconnect,
     resolve_effective_experiment_name,
 )
+from crsbench.cloud.cli._instance_inventory import resolve_instance_fleet_record
 from crsbench.cloud.readiness import CloudInstanceRole
 from crsbench.distributed import queue as queue_module
 from crsbench.distributed.job_lifecycle import JobState
@@ -51,11 +52,27 @@ def _load_status_jobs(redis_conn, lifecycle, experiment_name: str):
     return list_queue_job_entries(queue, experiment_name)
 
 
+def _placement_source_for_status_instance(context, instance) -> str:
+    """Resolve fleet provenance for one readiness-backed worker/evaluator row."""
+    if not hasattr(context, "worker_fleet_configs"):
+        return "unknown"
+    try:
+        fleet = resolve_instance_fleet_record(
+            context,
+            instance_name=instance.instance_name,
+            zone=instance.zone,
+            role=instance.role.value,
+        )
+    except Exception:
+        return "unknown"
+    return getattr(fleet, "placement_source", "config")
+
+
 def run_status(args: argparse.Namespace) -> int:
     """Show experiment fleet, job, collection, and recovery event summary."""
     experiment_name = resolve_effective_experiment_name(args.config, args.experiment)
     try:
-        _context, redis_conn, readiness, lifecycle, _filestore = reconnect(
+        context, redis_conn, readiness, lifecycle, _filestore = reconnect(
             args.config,
             experiment_name,
             wait_for_remote_redis=True,
@@ -102,6 +119,10 @@ def run_status(args: argparse.Namespace) -> int:
                 {
                     "instance_name": w.instance_name,
                     "role": w.role.value,
+                    "placement_source": _placement_source_for_status_instance(
+                        context,
+                        w,
+                    ),
                     "state": w.state.value,
                     "zone": w.zone,
                     "internal_ip": w.internal_ip,
@@ -136,10 +157,17 @@ def run_status(args: argparse.Namespace) -> int:
     # Human-readable output
     log_section("Fleet Summary")
     fleet_rows = [
-        [w.instance_name, w.role.value, w.state.value, w.zone, w.internal_ip or "-"]
+        [
+            w.instance_name,
+            w.role.value,
+            _placement_source_for_status_instance(context, w),
+            w.state.value,
+            w.zone,
+            w.internal_ip or "-",
+        ]
         for w in instances
     ]
-    log_table(["Instance", "Role", "State", "Zone", "IP"], fleet_rows)
+    log_table(["Instance", "Role", "Source", "State", "Zone", "IP"], fleet_rows)
 
     log_section("Job Summary")
     job_rows = [

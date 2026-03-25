@@ -20,6 +20,7 @@ class CloudInstanceInventoryRow:
     alias: str
     name: str
     role: str
+    placement_source: str
     provider: str
     project: str
     zone: str
@@ -57,6 +58,7 @@ def list_cloud_instances(
                     alias="orch",
                     name=orchestrator.name,
                     role="orchestrator",
+                    placement_source="config",
                     provider=launch_state.orchestrator_provider.value,
                     project=launch_state.orchestrator_project,
                     zone=orchestrator.zone,
@@ -83,6 +85,7 @@ def list_cloud_instances(
                 alias=_instance_alias(experiment_name, instance.name, role),
                 name=instance.name,
                 role=role,
+                placement_source=getattr(fleet, "placement_source", "config"),
                 provider=fleet.provider.value,
                 project=fleet.project,
                 zone=instance.zone,
@@ -151,7 +154,23 @@ def resolve_instance_fleet(
     worker: CloudInstanceLike,
 ):
     """Resolve the fleet config that owns one live worker/evaluator VM."""
-    role = worker.labels.get("crsbench-role")
+    role = worker.labels.get("crsbench-role", "worker")
+    return resolve_instance_fleet_record(
+        context,
+        instance_name=worker.name,
+        zone=worker.zone,
+        role=role,
+    )
+
+
+def resolve_instance_fleet_record(
+    context: "ResolvedCloudContext",
+    *,
+    instance_name: str,
+    zone: str,
+    role: str,
+):
+    """Resolve the fleet config that owns one live or persisted instance row."""
     candidate_fleets = (
         context.evaluator_fleet_configs
         if role == "evaluator"
@@ -160,25 +179,25 @@ def resolve_instance_fleet(
     name_matches = [
         fleet
         for fleet in candidate_fleets
-        if _fleet_matches_instance_name(fleet, worker.name)
+        if _fleet_matches_instance_name(fleet, instance_name)
     ]
     if len(name_matches) == 1:
         return name_matches[0]
 
     zone_filtered_name_matches = [
-        fleet for fleet in name_matches if _fleet_targets_zone(fleet, worker.zone)
+        fleet for fleet in name_matches if _fleet_targets_zone(fleet, zone)
     ]
     if zone_filtered_name_matches:
         return zone_filtered_name_matches[0]
 
     zone_matches = [
-        fleet for fleet in candidate_fleets if _fleet_targets_zone(fleet, worker.zone)
+        fleet for fleet in candidate_fleets if _fleet_targets_zone(fleet, zone)
     ]
     if zone_matches:
         return zone_matches[0]
 
     raise RuntimeError(
-        f"No cloud fleet config matched instance {worker.name} in zone {worker.zone}"
+        f"No cloud fleet config matched instance {instance_name} in zone {zone}"
     )
 
 

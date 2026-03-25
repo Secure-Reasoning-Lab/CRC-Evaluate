@@ -60,6 +60,7 @@ class CloudFleetPlacementRecord(BaseModel):
     ssh_via_iap: bool = False
     labels: dict[str, str] = Field(default_factory=dict)
     owner_label: str | None = None
+    placement_source: str = "config"
     provider_metadata: dict[str, Any] = Field(default_factory=dict)
 
 

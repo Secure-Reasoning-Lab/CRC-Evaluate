@@ -533,3 +533,67 @@ def test_wait_for_existing_workers_clears_stale_bootstrap_failure_for_same_insta
     )
 
     assert snapshot.ready_count == 1
+
+
+def test_wait_for_added_instances_keeps_existing_ready_workers() -> None:
+    from crsbench.cloud.readiness import (
+        CloudReadinessStore,
+        CloudWorkerState,
+        CloudWorkerStatus,
+    )
+    from crsbench.cloud.status import CloudFleetStatusManager
+
+    store = CloudReadinessStore(_FakeRedis())
+    store.record(
+        CloudWorkerStatus(
+            experiment_name="exp-cloud-42",
+            instance_id="1000",
+            instance_name="gce-worker-000",
+            zone="us-central1-a",
+            state=CloudWorkerState.READY,
+            provider_status=CloudProviderInstanceStatus.RUNNING,
+        )
+    )
+    store.record(
+        CloudWorkerStatus(
+            experiment_name="exp-cloud-42",
+            instance_id="1001",
+            instance_name="gce-worker-001",
+            zone="us-east1-b",
+            state=CloudWorkerState.READY,
+            provider_status=CloudProviderInstanceStatus.RUNNING,
+        )
+    )
+
+    manager = CloudFleetStatusManager(
+        readiness_store=store,
+        provisioner=None,
+        clock=lambda: 0.0,
+        sleep=lambda _seconds: None,
+        poll_interval_sec=0.0,
+    )
+
+    snapshot = manager.wait_for_added_instances(
+        experiment_name="exp-cloud-42",
+        workers=[
+            CloudInstanceRecord(
+                provider=CloudProvider.GCE,
+                role="worker",
+                name="gce-worker-001",
+                instance_id="1001",
+                status="RUNNING",
+                zone="us-east1-b",
+                internal_ip="10.0.1.10",
+                labels={"crsbench-experiment": "exp-cloud-42", "owner": "team-crs"},
+            )
+        ],
+        evaluators=[],
+        timeout_sec=900,
+    )
+
+    assert snapshot.requested_count == 1
+    assert snapshot.ready_count == 1
+    assert [status.instance_name for status in store.list_workers("exp-cloud-42")] == [
+        "gce-worker-000",
+        "gce-worker-001",
+    ]

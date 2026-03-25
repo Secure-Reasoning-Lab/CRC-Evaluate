@@ -704,6 +704,53 @@ CRSBench also appends every created VM name to
 `.crsbench-cloud/created-instances.cache` as local JSONL history so you still
 have a garbage-collection ledger even if you forget to tear down a prior run.
 
+### Adding Capacity After Launch
+
+Use `cloud add-workers` or `cloud add-evaluators` when you want to append one
+new placement to an already launched remote-orchestrator experiment without
+editing the YAML config.
+
+Worker example:
+
+```bash
+uv run crsbench cloud add-workers --config config.yaml \
+  --instance-profile gce-worker-n2d \
+  --count 2 \
+  --regions us-east5,us-east1 \
+  --zones us-east5-b,us-east1-b
+```
+
+Evaluator example:
+
+```bash
+uv run crsbench cloud add-evaluators --config config.yaml \
+  --instance-profile gce-evaluator-c3 \
+  --count 1 \
+  --zones us-central1-a
+```
+
+Key behavior:
+
+- Each command adds exactly one new placement.
+- The placement must use an existing named `cloud.providers.gce.instance_profiles.*`
+  entry.
+- Runtime overrides are limited to `instance_profile`, `count`, and
+  `regions`/`zones`.
+- `regions` plus `zones` uses the same semantics as launch-time config:
+  regional mode first, with `zones` acting as a per-region allowlist.
+- Fallback, bootstrap defaults, deploy-key path, and inherited env layers still
+  come from the config.
+- CRSBench validates quota for only the requested delta placement before
+  creating anything.
+- By default CRSBench prints a confirmation summary with the delta placement and
+  projected fleet totals; use `--force` to skip the prompt in automation.
+- On readiness or provisioning failure, CRSBench rolls back only the new
+  placement from that command; the existing fleet stays untouched.
+- On success, CRSBench appends the new placement to
+  `.crsbench-cloud/<experiment>.json` with source `runtime_added`, so later
+  `cloud status`, `cloud list`, `cloud collect`, and `cloud teardown` include it
+  automatically.
+
 ### Live Queue Attach
 
 After `cloud launch`, you can attach to the remote orchestrator's live trial
@@ -728,6 +775,8 @@ remote-orchestrator launches it now waits for the tunneled Redis endpoint
 during bootstrap, then reports lifecycle records when present or falls back to
 the live RQ queue/registry view when lifecycle tracking is still empty. Use
 `cloud monitor` when you want the continuously updating queue view.
+`cloud status --json` and `cloud list --json` include `placement_source` so you
+can tell config-declared placements from `runtime_added` ones.
 
 Bootstrap failures are reported with per-instance evidence, so you can
 diagnose issues without SSH-ing into VMs.
