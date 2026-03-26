@@ -256,6 +256,7 @@ class ConfigBuilderApp(App[None]):
     BINDINGS = [
         ("escape", "focus_section_list", "Sections"),
         ("ctrl+r", "reload_file", "Reload"),
+        ("ctrl+s", "save", "Save"),
         ("ctrl+w", "write_timestamped", "Save As"),
         ("ctrl+u", "update_loaded", "Update Loaded"),
         ("ctrl+v", "validate_config", "Validate"),
@@ -686,6 +687,12 @@ class ConfigBuilderApp(App[None]):
             SavePathScreen(default_path=self._default_save_path()),
             self._handle_save_path_selected,
         )
+
+    def action_save(self) -> None:
+        if self.loaded_path is None:
+            self.action_write_timestamped()
+            return
+        self.action_update_loaded()
 
     def action_update_loaded(self) -> None:
         if self.loaded_path is None:

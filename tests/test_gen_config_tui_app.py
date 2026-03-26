@@ -244,6 +244,10 @@ def test_app_has_escape_binding_for_section_list():
     assert hasattr(ConfigBuilderApp, "action_focus_section_list")
 
 
+def test_app_has_ctrl_s_binding_for_save():
+    assert any(binding[0] == "ctrl+s" for binding in ConfigBuilderApp.BINDINGS)
+
+
 def test_app_does_not_expose_load_path_input():
     assert "#loaded-path" in ConfigBuilderApp.CSS
     assert "#load-path" not in ConfigBuilderApp.CSS
@@ -782,6 +786,41 @@ async def test_invalid_save_path_keeps_save_modal_open():
         await pilot.pause()
 
         assert isinstance(app.screen, gen_config_tui_app.SavePathScreen)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_ctrl_s_opens_save_as_when_no_file_is_loaded():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        assert isinstance(app.screen, gen_config_tui_app.SavePathScreen)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_ctrl_s_updates_loaded_file_when_config_is_loaded(tmp_path):
+    source = tmp_path / "source.yaml"
+    source.write_text("experiment:\n  name: old-name\n", encoding="utf-8")
+
+    app = ConfigBuilderApp(initial_path=source)
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+
+        name = app.query_one("#field--experiment--name", Input)
+        app.set_focus(name)
+        await pilot.pause()
+        name.value = "new-name"
+        await pilot.pause()
+
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+    written = source.read_text(encoding="utf-8")
+    assert "name: new-name" in written
 
 
 @pytest.mark.anyio
