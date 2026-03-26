@@ -185,12 +185,12 @@ class ConfigBuilderApp(App[None]):
     #form-scroll {
         width: 2fr;
         padding-right: 1;
-        min-width: 40;
+        min-width: 34;
     }
 
     #preview-column {
-        width: 40;
-        min-width: 32;
+        width: 3fr;
+        min-width: 40;
     }
 
     .panel-title, .form-title {

@@ -232,7 +232,10 @@ async def test_enter_on_select_opens_overlay_without_moving_to_next_field():
 def test_app_css_prioritizes_form_width():
     assert "#form-scroll" in ConfigBuilderApp.CSS
     assert "width: 2fr;" in ConfigBuilderApp.CSS
+    assert "min-width: 34;" in ConfigBuilderApp.CSS
     assert "#preview-column" in ConfigBuilderApp.CSS
+    assert "width: 3fr;" in ConfigBuilderApp.CSS
+    assert "min-width: 40;" in ConfigBuilderApp.CSS
 
 
 def test_app_has_focus_scroll_handler():
