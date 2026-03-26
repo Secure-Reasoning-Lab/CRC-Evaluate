@@ -293,6 +293,14 @@ SECTION_SPECS: dict[str, SectionSpec] = {
                 visible_when=_when_true("enabled"),
             ),
             FieldSpec(
+                "profile_boot_disk_type",
+                "Boot disk type",
+                "text",
+                "",
+                placeholder="optional, e.g. pd-ssd or pd-balanced",
+                visible_when=_when_true("enabled"),
+            ),
+            FieldSpec(
                 "profile_image",
                 "Base image",
                 "text",

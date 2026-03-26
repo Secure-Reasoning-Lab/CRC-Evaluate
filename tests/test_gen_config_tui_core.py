@@ -209,6 +209,7 @@ def test_load_state_from_grouped_config_maps_cloud_fields_and_preserves_unknowns
                     "profile_defaults": {
                         "machine_type": "n2d-standard-16",
                         "boot_disk_size_gb": 100,
+                        "boot_disk_type": "pd-balanced",
                         "image": "ubuntu-image",
                         "service_account_email": "svc@example.com",
                         "owner_label": "owner",
@@ -229,6 +230,7 @@ def test_load_state_from_grouped_config_maps_cloud_fields_and_preserves_unknowns
     assert state["cloud"]["provider_region"] == "us-east5"
     assert state["cloud"]["provider_ssh_via_iap"] is True
     assert state["cloud"]["profile_machine_type"] == "n2d-standard-16"
+    assert state["cloud"]["profile_boot_disk_type"] == "pd-balanced"
     assert state["cloud"]["worker_count"] == 2
     assert state["cloud"]["worker_region"] == "us-east1"
     assert extras == {"cloud": {"custom_block": {"keep": "me"}}}
@@ -305,6 +307,61 @@ def test_build_grouped_config_preserves_section_extras():
     )
 
     assert grouped["runtime"]["custom_runtime"] == {"preserve": True}
+
+
+def test_build_grouped_config_keeps_generated_cloud_instance_profiles():
+    grouped = build_grouped_config(
+        {
+            "experiment": {
+                "name": "demo-exp",
+                "task": "bugfixing",
+                "benchmark_suite": "sanity",
+                "mode": "delta",
+            },
+            "runtime": {
+                "trials": 1,
+                "max_total_time": 4001,
+                "build_timeout": 1200,
+                "run_timeout": 600,
+                "verify_timeout": 600,
+                "skip_litellm": True,
+                "pov_enabled": True,
+                "pov_max_variants_per_cpv": 1,
+            },
+            "storage": {
+                "experiment_filestore": "/tmp/exp",
+                "report_filestore": "/tmp/report",
+            },
+            "crs_compose": {
+                "service_name": "crs-libfuzzer",
+                "service_num_cores": 2,
+                "infra_shared": True,
+            },
+            "cloud": {
+                "enabled": True,
+                "provider_project": "aixcc-426805",
+                "provider_region": "us-east5",
+                "provider_ssh_via_iap": True,
+                "profile_machine_type": "n2d-standard-16",
+                "profile_boot_disk_size_gb": 100,
+                "profile_boot_disk_type": "pd-balanced",
+                "profile_image": "ubuntu-image",
+                "profile_service_account_email": "svc@example.com",
+                "profile_owner_label": "owner",
+                "worker_count": 1,
+                "evaluator_count": 1,
+                "worker_region": "us-east5",
+                "evaluator_region": "us-east5",
+            },
+        }
+    )
+
+    assert grouped["cloud"]["providers"]["gce"]["instance_profiles"] == {
+        "gce-orchestrator-n2d": {},
+        "gce-worker-n2d": {},
+        "gce-evaluator-n2d": {},
+    }
+    validate_grouped_config(grouped)
 
 
 def test_cloud_round_trip_preserves_empty_inherited_placements():

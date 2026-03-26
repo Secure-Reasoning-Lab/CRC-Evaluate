@@ -4,7 +4,7 @@ from copy import deepcopy
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 import yaml
 from ruamel.yaml import YAML
@@ -100,12 +100,24 @@ def _section(state: Mapping[str, Any], name: str) -> dict[str, Any]:
     return dict(value)
 
 
+def _is_blank_mapping_list(value: Any) -> bool:
+    return isinstance(value, list) and all(
+        isinstance(item, Mapping) and not item for item in value
+    )
+
+
 def _deep_merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
     merged = deepcopy(dict(base))
     for key, value in override.items():
         existing = merged.get(key)
         if isinstance(existing, Mapping) and isinstance(value, Mapping):
             merged[key] = _deep_merge(existing, value)
+        elif _is_blank_mapping_list(existing) and _is_blank_mapping_list(value):
+            existing_list = cast("list[Any]", existing)
+            value_list = cast("list[Any]", value)
+            merged[key] = deepcopy(
+                existing_list if len(existing_list) >= len(value_list) else value_list
+            )
         else:
             merged[key] = deepcopy(value)
     return merged
@@ -248,6 +260,7 @@ def _build_cloud_section(
                     "profile_defaults": {
                         "machine_type": state.get("profile_machine_type"),
                         "boot_disk_size_gb": state.get("profile_boot_disk_size_gb"),
+                        "boot_disk_type": state.get("profile_boot_disk_type"),
                         "image": state.get("profile_image"),
                         "service_account_email": state.get(
                             "profile_service_account_email"
@@ -278,7 +291,8 @@ def _build_cloud_section(
                 },
                 "placements": [evaluator_placement],
             },
-        }
+        },
+        path=("cloud",),
     )
 
 
@@ -538,6 +552,7 @@ def load_state_from_grouped_config(
                 "provider_ssh_via_iap": gce.get("ssh_via_iap"),
                 "profile_machine_type": profile_defaults.get("machine_type"),
                 "profile_boot_disk_size_gb": profile_defaults.get("boot_disk_size_gb"),
+                "profile_boot_disk_type": profile_defaults.get("boot_disk_type"),
                 "profile_image": profile_defaults.get("image"),
                 "profile_service_account_email": profile_defaults.get(
                     "service_account_email"

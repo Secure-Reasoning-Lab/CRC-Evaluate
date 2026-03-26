@@ -43,6 +43,60 @@ def _valid_loaded_yaml_with_unknown_cloud_block() -> str:
     return dump_yaml(grouped)
 
 
+def _valid_loaded_yaml_with_cloud_boot_disk_type(boot_disk_type: str) -> str:
+    grouped = build_grouped_config(
+        {
+            "experiment": {
+                "name": "demo-exp",
+                "task": "bugfixing",
+                "benchmark_suite": "sanity",
+                "mode": "delta",
+            },
+            "runtime": {
+                "trials": 1,
+                "max_total_time": 4001,
+                "build_timeout": 1200,
+                "run_timeout": 600,
+                "verify_timeout": 600,
+                "skip_litellm": True,
+                "pov_enabled": True,
+                "pov_max_variants_per_cpv": 1,
+            },
+            "storage": {
+                "experiment_filestore": "/tmp/exp",
+                "report_filestore": "/tmp/report",
+            },
+            "crs_compose": {
+                "service_name": "crs-libfuzzer",
+                "service_num_cores": 2,
+                "infra_shared": True,
+            },
+            "cloud": {
+                "enabled": True,
+                "provider_project": "aixcc-426805",
+                "provider_region": "us-east5",
+                "provider_ssh_via_iap": True,
+                "profile_machine_type": "n2d-standard-16",
+                "profile_boot_disk_size_gb": 100,
+                "profile_boot_disk_type": boot_disk_type,
+                "profile_image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                "profile_service_account_email": "153298433405-compute@developer.gserviceaccount.com",
+                "profile_owner_label": "yufu",
+                "worker_count": 1,
+                "evaluator_count": 1,
+                "worker_region": "us-east5",
+                "evaluator_region": "us-east5",
+            },
+        }
+    )
+    grouped["cloud"]["providers"]["gce"]["instance_profiles"] = {
+        "gce-orchestrator-n2d": {},
+        "gce-worker-n2d": {},
+        "gce-evaluator-n2d": {},
+    }
+    return dump_yaml(grouped)
+
+
 def test_app_constructs():
     app = ConfigBuilderApp()
     assert isinstance(app, ConfigBuilderApp)
@@ -584,6 +638,37 @@ async def test_save_as_preserves_unknown_cloud_block_without_injecting_defaults(
     assert "orchestrator:" not in written
     assert "workers:" not in written
     assert "evaluators:" not in written
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_save_as_updates_cloud_boot_disk_type_field(tmp_path):
+    source = tmp_path / "source.yaml"
+    source.write_text(
+        _valid_loaded_yaml_with_cloud_boot_disk_type("pd-balanced"),
+        encoding="utf-8",
+    )
+
+    app = ConfigBuilderApp(initial_path=source)
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+
+        app.current_section = "cloud"
+        app._refresh_ui()
+        await pilot.pause()
+
+        disk_type = app.query_one("#field--cloud--profile_boot_disk_type", Input)
+        app.set_focus(disk_type)
+        await pilot.pause()
+        disk_type.value = "pd-ssd"
+        await pilot.pause()
+
+        app._write_to_requested_path(str(tmp_path / "copy.yaml"))
+        await pilot.pause()
+
+    written = (tmp_path / "copy.yaml").read_text(encoding="utf-8")
+    assert "boot_disk_type: pd-ssd" in written
+    assert "boot_disk_type: pd-balanced" not in written
 
 
 @pytest.mark.anyio
