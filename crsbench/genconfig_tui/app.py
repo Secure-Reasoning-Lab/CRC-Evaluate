@@ -3,8 +3,9 @@ from __future__ import annotations
 from argparse import ArgumentParser
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
+from rich.markup import escape
 from textual import events, on
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalGroup, VerticalScroll
@@ -45,6 +46,9 @@ def _widget_id(section: str, key: str) -> str:
 
 def _wrap_id(section: str, key: str) -> str:
     return f"field-wrap--{section}--{key}"
+
+
+NotificationSeverity = Literal["information", "warning", "error"]
 
 
 class ConfigBuilderApp(App[None]):
@@ -271,7 +275,7 @@ class ConfigBuilderApp(App[None]):
             except Exception as exc:  # noqa: BLE001
                 self.loaded_path = None
                 self.query_one("#loaded-path", Static).update(self._loaded_path_text())
-                self.notify(str(exc), severity="error")
+                self._notify_plain(str(exc), severity="error")
                 self._refresh_ui()
                 section_list.focus()
                 self._set_status(f"Load failed: {exc}")
@@ -281,6 +285,13 @@ class ConfigBuilderApp(App[None]):
     def _set_status(self, text: str) -> None:
         self.status_text = text
         self.query_one("#status", Static).update(text)
+
+    def _notify_plain(
+        self,
+        message: str,
+        severity: NotificationSeverity = "information",
+    ) -> None:
+        self.notify(escape(message), severity=severity)
 
     def _merged_grouped_config(self) -> dict[str, Any]:
         return build_grouped_config(self.form_state, section_extras=self.section_extras)
@@ -491,7 +502,7 @@ class ConfigBuilderApp(App[None]):
 
     def action_reload_file(self) -> None:
         if self.loaded_path is None:
-            self.notify(
+            self._notify_plain(
                 "No config loaded. Pass a file path as a CLI argument.",
                 severity="warning",
             )
@@ -499,43 +510,45 @@ class ConfigBuilderApp(App[None]):
         try:
             self._load_from_path(self.loaded_path)
         except Exception as exc:  # noqa: BLE001
-            self.notify(str(exc), severity="error")
+            self._notify_plain(str(exc), severity="error")
             self._set_status(f"Load failed: {exc}")
 
     def action_validate_config(self) -> None:
         try:
             grouped = self._validated_config()
         except Exception as exc:  # noqa: BLE001
-            self.notify(str(exc), severity="error")
+            self._notify_plain(str(exc), severity="error")
             self._set_status(f"Validation failed: {exc}")
             return
         self._refresh_previews()
-        self.notify("Config is valid", severity="information")
+        self._notify_plain("Config is valid", severity="information")
         self._set_status(f"Validation passed for {len(grouped)} populated sections")
 
     def action_write_timestamped(self) -> None:
         try:
             grouped = self._validated_config()
         except Exception as exc:  # noqa: BLE001
-            self.notify(str(exc), severity="error")
+            self._notify_plain(str(exc), severity="error")
             self._set_status(f"Write failed: {exc}")
             return
         path = write_grouped_config(grouped)
-        self.notify(f"Wrote {path}", severity="information")
+        self._notify_plain(f"Wrote {path}", severity="information")
         self._set_status(f"Wrote timestamped config to {path}")
 
     def action_update_loaded(self) -> None:
         if self.loaded_path is None:
-            self.notify("Load a config first to update it in place", severity="warning")
+            self._notify_plain(
+                "Load a config first to update it in place", severity="warning"
+            )
             return
         try:
             grouped = self._validated_config()
         except Exception as exc:  # noqa: BLE001
-            self.notify(str(exc), severity="error")
+            self._notify_plain(str(exc), severity="error")
             self._set_status(f"Update failed: {exc}")
             return
         path = write_grouped_config(grouped, output_path=self.loaded_path)
-        self.notify(f"Updated {path}", severity="information")
+        self._notify_plain(f"Updated {path}", severity="information")
         self._set_status(f"Updated loaded config at {path}")
 
     def action_focus_section_list(self) -> None:

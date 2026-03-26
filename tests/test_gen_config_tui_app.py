@@ -3,6 +3,7 @@ from unittest.mock import patch
 import crsbench.genconfig_tui.app as gen_config_tui_app
 import pytest
 from crsbench.genconfig_tui.app import ConfigBuilderApp
+from rich.markup import escape
 from textual.widgets import Input, Select, SelectionList
 
 
@@ -326,3 +327,19 @@ async def test_blur_validation_does_not_run_whole_config_schema():
             assert (
                 "whole-config validation should not run on blur" not in app.status_text
             )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_validate_action_escapes_markup_in_error_notifications():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        message = "boom [input_type=dict] {'defaults': {'instance_type': 'worker-n2d'}}"
+        with (
+            patch.object(app, "_validated_config", side_effect=ValueError(message)),
+            patch.object(app, "notify") as mock_notify,
+        ):
+            app.action_validate_config()
+            await pilot.pause()
+            assert "Validation failed:" in app.status_text
+            mock_notify.assert_called_once_with(escape(message), severity="error")
