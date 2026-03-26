@@ -617,7 +617,7 @@ def _merge_roundtrip_document(
                 payload[section],
                 (section,),
             )
-        elif section in document:
+        elif section in document and not _is_blank(document[section]):
             del document[section]
     return document
 

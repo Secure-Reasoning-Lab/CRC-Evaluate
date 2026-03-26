@@ -444,6 +444,28 @@ def test_round_trip_write_preserves_unknown_blocks_and_section_extras(tmp_path):
     assert "keep: me" in written
 
 
+def test_round_trip_write_preserves_empty_commented_loaded_section(tmp_path):
+    source = tmp_path / "source.yaml"
+    source.write_text(
+        "experiment:\n"
+        "  name: demo-exp\n"
+        "worker:\n"
+        "  # keep this empty section\n",
+        encoding="utf-8",
+    )
+
+    write_grouped_config(
+        {"experiment": {"name": "demo-exp-updated"}},
+        output_path=tmp_path / "copy.yaml",
+        source_roundtrip_path=source,
+    )
+
+    written = (tmp_path / "copy.yaml").read_text(encoding="utf-8")
+    assert "name: demo-exp-updated" in written
+    assert "worker:" in written
+    assert "# keep this empty section" in written
+
+
 def test_round_trip_write_preserves_empty_cloud_placeholders(tmp_path):
     source = tmp_path / "source.yaml"
     source.write_text(
