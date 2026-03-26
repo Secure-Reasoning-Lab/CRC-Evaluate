@@ -207,6 +207,18 @@ write_passthrough_env_vars() {
   done < <(for_each_passthrough_env "${encoded}")
 }
 
+write_passthrough_env_file() {
+  local encoded="$1" dest="$2"
+  : > "${dest}"
+  chmod 0600 "${dest}"
+  while IFS=$'\t' read -r env_name env_value_b64; do
+    [[ -z "${env_name}" ]] && continue
+    local env_value
+    env_value="$(printf "%s" "${env_value_b64}" | base64 --decode)"
+    printf "%s=%q\n" "${env_name}" "${env_value}" >> "${dest}"
+  done < <(for_each_passthrough_env "${encoded}")
+}
+
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "missing required command: $1" >&2
@@ -882,6 +894,9 @@ export_passthrough_env "${ENV_PASSTHROUGH_B64}"
 ensure_timezone
 ensure_docker_ready
 ensure_crsbench_user
+BOOTSTRAP_ENV_FILE="${STATE_DIR}/bootstrap-env"
+write_passthrough_env_file "${ENV_PASSTHROUGH_B64}" "${BOOTSTRAP_ENV_FILE}"
+chown "${CRSBENCH_USER}:${CRSBENCH_USER}" "${BOOTSTRAP_ENV_FILE}"
 ensure_passwordless_sudo
 ensure_docker_group_membership
 ensure_docker_buildx_builder
@@ -966,7 +981,7 @@ except Exception:
 patch_experiment_config_for_local_redis(sys.argv[1], redis_host='localhost:6379')
 PY"
 
-run_as_crsbench env PATH="${CRSBENCH_USER_PATH}" HOME="${CRSBENCH_USER_HOME}" /bin/bash -lc "cd $(printf '%q' "${CLONE_DIR}") && python3 - $(printf '%q' "${CONFIG_PATH}") <<'PY'
+run_as_crsbench env PATH="${CRSBENCH_USER_PATH}" HOME="${CRSBENCH_USER_HOME}" /bin/bash -lc "set -a; source $(printf '%q' "${BOOTSTRAP_ENV_FILE}") 2>/dev/null; set +a; cd $(printf '%q' "${CLONE_DIR}") && python3 - $(printf '%q' "${CONFIG_PATH}") <<'PY'
 import sys
 from pathlib import Path
 

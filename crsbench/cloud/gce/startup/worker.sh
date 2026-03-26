@@ -730,6 +730,18 @@ write_passthrough_env_vars() {
   done < <(for_each_passthrough_env "${encoded}")
 }
 
+write_passthrough_env_file() {
+  local encoded="$1" dest="$2"
+  : > "${dest}"
+  chmod 0600 "${dest}"
+  while IFS=$'\t' read -r env_name env_value_b64; do
+    [[ -z "${env_name}" ]] && continue
+    local env_value
+    env_value="$(printf "%s" "${env_value_b64}" | base64 --decode)"
+    printf "%s=%q\n" "${env_name}" "${env_value}" >> "${dest}"
+  done < <(for_each_passthrough_env "${encoded}")
+}
+
 report_bootstrap_failure() {
   local evidence="$1"
   python3 - "${CRSBENCH_REDIS_HOST:-}" "${evidence}" <<'PY' || true
@@ -818,6 +830,9 @@ export_passthrough_env "${ENV_PASSTHROUGH_B64}"
 ensure_timezone
 ensure_docker_ready
 ensure_crsbench_user
+BOOTSTRAP_ENV_FILE="${STATE_DIR}/bootstrap-env"
+write_passthrough_env_file "${ENV_PASSTHROUGH_B64}" "${BOOTSTRAP_ENV_FILE}"
+chown "${CRSBENCH_USER}:${CRSBENCH_USER}" "${BOOTSTRAP_ENV_FILE}"
 ensure_passwordless_sudo
 ensure_docker_group_membership
 ensure_docker_buildx_builder
@@ -950,7 +965,7 @@ run_crsbench_shell "cd $(printf '%q' "${CLONE_DIR}") && uv sync --all-extras && 
 VENV_BIN="${CLONE_DIR}/.venv/bin"
 CRSBENCH_USER_PATH="${VENV_BIN}:${CRSBENCH_MANAGED_BIN_DIR}:${CRSBENCH_USER_HOME}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-run_as_crsbench env PATH="${CRSBENCH_USER_PATH}" HOME="${CRSBENCH_USER_HOME}" /bin/bash -lc "cd $(printf '%q' "${CLONE_DIR}") && python3 - $(printf '%q' "${PAYLOAD_PATH}") <<'PY'
+run_as_crsbench env PATH="${CRSBENCH_USER_PATH}" HOME="${CRSBENCH_USER_HOME}" /bin/bash -lc "set -a; source $(printf '%q' "${BOOTSTRAP_ENV_FILE}") 2>/dev/null; set +a; cd $(printf '%q' "${CLONE_DIR}") && python3 - $(printf '%q' "${PAYLOAD_PATH}") <<'PY'
 import json
 import sys
 from pathlib import Path
