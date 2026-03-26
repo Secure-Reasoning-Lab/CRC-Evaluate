@@ -365,23 +365,26 @@ def test_write_grouped_config_writes_timestamped_yaml(tmp_path):
 
 def test_write_grouped_config_round_trips_loaded_yaml_comments(tmp_path):
     source = tmp_path / "source.yaml"
-    source.write_text(
+    original_source = (
         "# top comment\n"
         "experiment:\n"
         "  # keep me\n"
-        "  name: old-name\n",
-        encoding="utf-8",
+        "  name: old-name\n"
     )
+    source.write_text(original_source, encoding="utf-8")
 
     grouped = {"experiment": {"name": "new-name"}}
 
-    write_grouped_config(
+    written_path = write_grouped_config(
         grouped,
         output_path=tmp_path / "copy.yaml",
         source_roundtrip_path=source,
     )
 
     written = (tmp_path / "copy.yaml").read_text(encoding="utf-8")
+    assert written_path == tmp_path / "copy.yaml"
     assert "# top comment" in written
     assert "# keep me" in written
     assert "name: new-name" in written
+    assert "old-name" not in written
+    assert source.read_text(encoding="utf-8") == original_source
