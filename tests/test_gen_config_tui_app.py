@@ -264,8 +264,6 @@ def test_app_has_nano_style_undo_redo_bindings():
     ]
     assert any(binding.key == "alt+u" and binding.priority for binding in bindings)
     assert any(binding.key == "alt+e" and binding.priority for binding in bindings)
-    assert any(binding.key == "escape,u" for binding in bindings)
-    assert any(binding.key == "escape,e" for binding in bindings)
 
 
 def test_app_does_not_expose_load_path_input():
@@ -887,6 +885,25 @@ async def test_alt_e_redoes_last_undone_field_edit():
 
         assert app.form_state["experiment"]["name"] == "edited-name"
         assert name.value == "edited-name"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_escape_still_focuses_section_list_from_input():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+
+        name = app.query_one("#field--experiment--name", Input)
+        app.set_focus(name)
+        await pilot.pause()
+        assert app.focused is name
+
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert app.focused is not None
+        assert app.focused.id == "section-list"
 
 
 @pytest.mark.anyio
