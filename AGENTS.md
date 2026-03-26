@@ -139,5 +139,6 @@ Then re-run the quality gate command above.
 - Deployment/cloud: `docs/design/distributed/deployment-guide.md`
 - Configless runtime: `docs/design/distributed/configless-runtime.md`
 - Evaluation flow: `docs/design/evaluation/evaluation.md`
+- Gen-config TUI YAML round-trip editing: `docs/design/validation/gen-config-tui-yaml-roundtrip.md`
 - Testing setup: `docs/contributors/testing.md`
 - Coding standards: `docs/contributors/coding-standards.md`
