@@ -29,18 +29,52 @@ def _is_blank(value: Any) -> bool:
     return False
 
 
-def _prune(value: Any) -> Any:
+def _should_preserve_empty_mapping(path: tuple[Any, ...]) -> bool:
+    if len(path) >= 5 and path[:4] == (
+        "cloud",
+        "providers",
+        "gce",
+        "instance_profiles",
+    ):
+        return True
+    if (
+        len(path) >= 4
+        and path[0] == "cloud"
+        and path[1] in {"workers", "evaluators"}
+        and path[2] == "placements"
+        and isinstance(path[3], int)
+    ):
+        return True
+    return False
+
+
+def _prune(value: Any, path: tuple[Any, ...] = ()) -> Any:
     if isinstance(value, dict):
         cleaned: dict[str, Any] = {}
         for key, item in value.items():
-            pruned = _prune(item)
-            if _is_blank(pruned):
+            child_path = (*path, key)
+            pruned = _prune(item, child_path)
+            if _is_blank(pruned) and not (
+                isinstance(pruned, dict)
+                and not pruned
+                and _should_preserve_empty_mapping(child_path)
+            ):
                 continue
             cleaned[key] = pruned
         return cleaned
     if isinstance(value, list):
-        cleaned_list = [_prune(item) for item in value]
-        return [item for item in cleaned_list if not _is_blank(item)]
+        cleaned_list: list[Any] = []
+        for index, item in enumerate(value):
+            child_path = (*path, index)
+            pruned = _prune(item, child_path)
+            if _is_blank(pruned) and not (
+                isinstance(pruned, dict)
+                and not pruned
+                and _should_preserve_empty_mapping(child_path)
+            ):
+                continue
+            cleaned_list.append(pruned)
+        return cleaned_list
     if isinstance(value, str):
         stripped = value.strip()
         return stripped if stripped else None
@@ -487,7 +521,8 @@ def load_state_from_grouped_config(
             _deep_difference(
                 grouped_dict.get(section_name, {}),
                 generated_known.get(section_name, {}),
-            )
+            ),
+            path=(section_name,),
         )
         if section_value:
             extras[section_name] = section_value

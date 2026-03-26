@@ -8,6 +8,7 @@ from crsbench.genconfig_tui.core import (
     make_output_path,
     write_grouped_config,
 )
+from crsbench.genconfig_tui.schema_bridge import validate_grouped_config
 
 
 def test_build_grouped_config_omits_empty_optional_sections():
@@ -266,6 +267,70 @@ def test_build_grouped_config_preserves_section_extras():
     )
 
     assert grouped["runtime"]["custom_runtime"] == {"preserve": True}
+
+
+def test_cloud_round_trip_preserves_empty_inherited_placements():
+    grouped = {
+        "experiment": {
+            "name": "loaded-exp",
+            "task": "bugfinding",
+            "benchmark_suite": "sanity",
+            "mode": "delta",
+        },
+        "runtime": {
+            "trials": 1,
+            "max_total_time": 7201,
+            "build_timeout": 3600,
+            "run_timeout": 600,
+            "verify_timeout": 600,
+        },
+        "storage": {
+            "experiment_filestore": "/tmp/exp",
+            "report_filestore": "/tmp/report",
+        },
+        "crs_compose": {
+            "oss_crs_infra": {"shared": True},
+            "crs-libfuzzer": {"num_cores": 2},
+        },
+        "cloud": {
+            "providers": {
+                "gce": {
+                    "project": "demo-project",
+                    "regions": ["us-east5", "us-east1"],
+                    "fallback": True,
+                    "profile_defaults": {
+                        "machine_type": "n2d-standard-16",
+                        "boot_disk_size_gb": 100,
+                        "image": "ubuntu-image",
+                        "service_account_email": "svc@example.com",
+                        "owner_label": "owner",
+                    },
+                    "instance_profiles": {
+                        "gce-orchestrator-n2d": {},
+                        "gce-worker-n2d": {},
+                        "gce-evaluator-n2d": {},
+                    },
+                }
+            },
+            "orchestrator": {"instance_profile": "gce-orchestrator-n2d"},
+            "workers": {
+                "defaults": {"instance_profile": "gce-worker-n2d", "count": 1},
+                "placements": [{}, {}],
+            },
+            "evaluators": {
+                "defaults": {"instance_profile": "gce-evaluator-n2d", "count": 1},
+                "placements": [{}],
+            },
+        },
+    }
+
+    state, extras = load_state_from_grouped_config(grouped)
+    rebuilt = build_grouped_config(state, section_extras=extras)
+
+    assert rebuilt["cloud"]["providers"]["gce"]["regions"] == ["us-east5", "us-east1"]
+    assert rebuilt["cloud"]["workers"]["placements"] == [{}, {}]
+    assert rebuilt["cloud"]["evaluators"]["placements"] == [{}]
+    validate_grouped_config(rebuilt)
 
 
 def test_build_grouped_config_uses_exactly_one_crs_infra_cpu_mode():
