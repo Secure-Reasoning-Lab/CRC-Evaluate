@@ -1,7 +1,7 @@
 # Gen-Config TUI YAML Round-Trip Editing
 - Audience: contributors working on `crsbench gen-config-tui` and config serialization
 - Scope: contract for preserving loaded YAML structure, comments, and ordering when the TUI edits and writes experiment configs
-- Related: [Validation Contract](../validation.md), [Design Documentation](../README.md)
+- Related: [Validation Contract](../../modules/validation.md), [Design Documentation](../README.md)
 
 ## Goals and Non-goals
 
