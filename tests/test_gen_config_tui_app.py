@@ -6,7 +6,7 @@ from crsbench.genconfig_tui.app import ConfigBuilderApp
 from crsbench.genconfig_tui.core import build_grouped_config, dump_yaml
 from rich.markup import escape
 from textual.binding import Binding
-from textual.widgets import Input, Select, SelectionList
+from textual.widgets import Input, Select, SelectionList, TextArea
 
 
 def _valid_loaded_yaml_with_unknown_cloud_block() -> str:
@@ -694,6 +694,44 @@ async def test_save_as_updates_cloud_boot_disk_type_field(tmp_path):
     written = (tmp_path / "copy.yaml").read_text(encoding="utf-8")
     assert "boot_disk_type: pd-ssd" in written
     assert "boot_disk_type: pd-balanced" not in written
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_section_preview_scrolls_to_edited_input_field_value(tmp_path):
+    source = tmp_path / "source.yaml"
+    source.write_text(
+        _valid_loaded_yaml_with_cloud_boot_disk_type("pd-balanced"),
+        encoding="utf-8",
+    )
+
+    app = ConfigBuilderApp(initial_path=source)
+    async with app.run_test(size=(100, 12)) as pilot:
+        await pilot.pause()
+
+        app.current_section = "cloud"
+        app._refresh_ui()
+        await pilot.pause()
+
+        preview = app.query_one("#section-preview", TextArea)
+        service_account = app.query_one(
+            "#field--cloud--profile_service_account_email", Input
+        )
+        updated_value = "updated-service-account@example.com"
+
+        app.set_focus(service_account)
+        await pilot.pause()
+        service_account.value = updated_value
+        await pilot.pause()
+
+        matching_row = next(
+            index
+            for index, line in enumerate(preview.text.splitlines())
+            if updated_value in line
+        )
+
+        assert preview.cursor_location[0] == matching_row
+        assert preview.scroll_offset.y > 0
 
 
 @pytest.mark.anyio

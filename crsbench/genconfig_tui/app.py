@@ -489,6 +489,16 @@ class ConfigBuilderApp(App[None]):
         )
         final_preview.text = dump_yaml(grouped)
 
+    def _scroll_section_preview_to_value(self, value: Any) -> None:
+        search_text = str(value).strip() if value is not None else ""
+        if not search_text:
+            return
+        section_preview = self.query_one("#section-preview", TextArea)
+        for row, line in enumerate(section_preview.text.splitlines()):
+            if search_text in line:
+                section_preview.move_cursor((row, 0), center=True)
+                return
+
     def _refresh_ui(self) -> None:
         self._refresh_field_visibility()
         self._refresh_previews()
@@ -839,6 +849,8 @@ class ConfigBuilderApp(App[None]):
         self._update_field_value(section, field, value)
         self._record_history(previous_state)
         self._refresh_ui()
+        if section == self.current_section:
+            self._scroll_section_preview_to_value(value)
 
     @on(Switch.Changed)
     def handle_switch_changed(self, event: Switch.Changed) -> None:
