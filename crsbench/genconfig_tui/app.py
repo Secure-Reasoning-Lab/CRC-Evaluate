@@ -26,6 +26,7 @@ from textual.widgets import (
 
 from crsbench.genconfig_tui.core import (
     SECTION_ORDER,
+    _load_roundtrip_document,
     build_grouped_config,
     dump_yaml,
     load_state_from_grouped_config,
@@ -271,6 +272,7 @@ class ConfigBuilderApp(App[None]):
         self._status_source_widget_id: str | None = None
         self._last_focused_field_widget: Any = None
         self._field_validation_messages: dict[str, str] = {}
+        self._loaded_roundtrip_yaml: Any | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -401,6 +403,19 @@ class ConfigBuilderApp(App[None]):
             return
         self._write_to_requested_path(raw_path)
 
+    def _write_grouped_config_for_path(
+        self,
+        grouped: dict[str, Any],
+        path: Path,
+    ) -> Path:
+        if self._loaded_roundtrip_yaml is None:
+            return write_grouped_config(grouped, output_path=path)
+        return write_grouped_config(
+            grouped,
+            output_path=path,
+            source_roundtrip_document=self._loaded_roundtrip_yaml,
+        )
+
     def _merged_grouped_config(self) -> dict[str, Any]:
         return build_grouped_config(self.form_state, section_extras=self.section_extras)
 
@@ -475,11 +490,14 @@ class ConfigBuilderApp(App[None]):
         self.form_state = merged_state
 
     def _load_from_path(self, path: Path) -> None:
+        self._loaded_roundtrip_yaml = None
         grouped = read_grouped_config(path)
+        roundtrip_yaml = _load_roundtrip_document(path)
         loaded_state, extras = load_state_from_grouped_config(grouped)
         self._apply_loaded_state(loaded_state)
         self.section_extras = extras
         self.loaded_path = path
+        self._loaded_roundtrip_yaml = roundtrip_yaml
         self.query_one("#loaded-path", Static).update(self._loaded_path_text())
         self._sync_widgets_from_state()
         self._refresh_ui()
@@ -622,7 +640,7 @@ class ConfigBuilderApp(App[None]):
         try:
             grouped = self._validated_config()
             path = self._resolve_requested_output_path(raw_path)
-            written_path = write_grouped_config(grouped, output_path=path)
+            written_path = self._write_grouped_config_for_path(grouped, path)
         except Exception as exc:  # noqa: BLE001
             self._notify_plain(str(exc), severity="error")
             self._set_status(f"Write failed: {exc}")
@@ -668,11 +686,11 @@ class ConfigBuilderApp(App[None]):
             return
         try:
             grouped = self._validated_config()
+            path = self._write_grouped_config_for_path(grouped, self.loaded_path)
         except Exception as exc:  # noqa: BLE001
             self._notify_plain(str(exc), severity="error")
             self._set_status(f"Update failed: {exc}")
             return
-        path = write_grouped_config(grouped, output_path=self.loaded_path)
         self._notify_plain(f"Updated {path}", severity="information")
         self._set_status(f"Updated loaded config at {path}")
 

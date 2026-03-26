@@ -420,6 +420,34 @@ def test_round_trip_write_updates_loaded_file_preserves_comments_and_order(tmp_p
     assert "old-name" not in written
 
 
+def test_write_grouped_config_uses_in_memory_roundtrip_document_when_disk_changes(
+    tmp_path,
+):
+    source = tmp_path / "source.yaml"
+    source.write_text(
+        "# loaded comment\nexperiment:\n  # keep loaded\n  name: old-name\n",
+        encoding="utf-8",
+    )
+    loaded_document = genconfig_core._load_roundtrip_document(source)
+    source.write_text(
+        "# disk changed later\nexperiment:\n  # changed on disk\n  name: disk-name\n",
+        encoding="utf-8",
+    )
+
+    write_grouped_config(
+        {"experiment": {"name": "new-name"}},
+        output_path=tmp_path / "copy.yaml",
+        source_roundtrip_document=loaded_document,
+    )
+
+    written = (tmp_path / "copy.yaml").read_text(encoding="utf-8")
+    assert "# loaded comment" in written
+    assert "# keep loaded" in written
+    assert "# disk changed later" not in written
+    assert "# changed on disk" not in written
+    assert "name: new-name" in written
+
+
 def test_round_trip_write_preserves_unknown_blocks_and_section_extras(tmp_path):
     source = tmp_path / "source.yaml"
     source.write_text(
@@ -447,10 +475,7 @@ def test_round_trip_write_preserves_unknown_blocks_and_section_extras(tmp_path):
 def test_round_trip_write_preserves_empty_commented_loaded_section(tmp_path):
     source = tmp_path / "source.yaml"
     source.write_text(
-        "experiment:\n"
-        "  name: demo-exp\n"
-        "worker:\n"
-        "  # keep this empty section\n",
+        "experiment:\n  name: demo-exp\nworker:\n  # keep this empty section\n",
         encoding="utf-8",
     )
 

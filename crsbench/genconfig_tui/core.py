@@ -646,12 +646,19 @@ def write_grouped_config(
     now: datetime | None = None,
     output_path: Path | None = None,
     source_roundtrip_path: Path | None = None,
+    source_roundtrip_document: CommentedMap | None = None,
 ) -> Path:
     path = output_path or make_output_path(
         output_dir=output_dir,
         prefix=prefix,
         now=now,
     )
+    if source_roundtrip_document is not None:
+        document = deepcopy(source_roundtrip_document)
+        merged = _merge_roundtrip_document(document, data)
+        path.write_text(_dump_roundtrip_yaml(merged), encoding="utf-8")
+        return path
+
     if source_roundtrip_path is not None:
         document = _load_roundtrip_document(source_roundtrip_path)
         merged = _merge_roundtrip_document(document, data)

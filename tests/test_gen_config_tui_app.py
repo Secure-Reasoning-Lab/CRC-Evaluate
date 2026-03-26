@@ -452,6 +452,121 @@ async def test_write_requested_path_uses_current_dir_for_relative_prefixes(tmp_p
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_save_as_uses_loaded_yaml_as_preservation_base(tmp_path):
+    source = tmp_path / "source.yaml"
+    source.write_text(
+        "# top comment\nexperiment:\n  # keep me\n  name: old-name\n",
+        encoding="utf-8",
+    )
+
+    app = ConfigBuilderApp(initial_path=source)
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+        name = app.query_one("#field--experiment--name", Input)
+        app.set_focus(name)
+        await pilot.pause()
+        name.value = "new-name"
+        await pilot.pause()
+
+        app._write_to_requested_path(str(tmp_path / "copy.yaml"))
+        await pilot.pause()
+
+    written = (tmp_path / "copy.yaml").read_text(encoding="utf-8")
+    assert "# top comment" in written
+    assert "# keep me" in written
+    assert "name: new-name" in written
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_save_as_uses_in_memory_loaded_yaml_when_disk_file_changes(tmp_path):
+    source = tmp_path / "source.yaml"
+    source.write_text(
+        "# loaded comment\nexperiment:\n  # keep loaded\n  name: old-name\n",
+        encoding="utf-8",
+    )
+
+    app = ConfigBuilderApp(initial_path=source)
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+        source.write_text(
+            "# disk changed later\nexperiment:\n  # changed on disk\n  name: disk-name\n",
+            encoding="utf-8",
+        )
+
+        name = app.query_one("#field--experiment--name", Input)
+        app.set_focus(name)
+        await pilot.pause()
+        name.value = "new-name"
+        await pilot.pause()
+
+        app._write_to_requested_path(str(tmp_path / "copy.yaml"))
+        await pilot.pause()
+
+    written = (tmp_path / "copy.yaml").read_text(encoding="utf-8")
+    assert "# loaded comment" in written
+    assert "# keep loaded" in written
+    assert "# disk changed later" not in written
+    assert "# changed on disk" not in written
+    assert "name: new-name" in written
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_update_loaded_uses_loaded_yaml_as_preservation_base(tmp_path):
+    source = tmp_path / "source.yaml"
+    source.write_text(
+        "# top comment\nexperiment:\n  # keep me\n  name: old-name\n",
+        encoding="utf-8",
+    )
+
+    app = ConfigBuilderApp(initial_path=source)
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+        name = app.query_one("#field--experiment--name", Input)
+        app.set_focus(name)
+        await pilot.pause()
+        name.value = "new-name"
+        await pilot.pause()
+
+        app.action_update_loaded()
+        await pilot.pause()
+
+    written = source.read_text(encoding="utf-8")
+    assert "# top comment" in written
+    assert "# keep me" in written
+    assert "name: new-name" in written
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_failed_reload_clears_loaded_yaml_preservation_base(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "source.yaml"
+    source.write_text(
+        "experiment:\n  name: ok\n",
+        encoding="utf-8",
+    )
+
+    app = ConfigBuilderApp(initial_path=source)
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+        assert app._loaded_roundtrip_yaml is not None
+
+        monkeypatch.setattr(
+            gen_config_tui_app,
+            "read_grouped_config",
+            lambda _: (_ for _ in ()).throw(ValueError("boom")),
+        )
+        app.action_reload_file()
+        await pilot.pause()
+
+        assert app._loaded_roundtrip_yaml is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_invalid_save_path_keeps_save_modal_open():
     app = ConfigBuilderApp()
     async with app.run_test(size=(100, 24)) as pilot:
