@@ -236,6 +236,10 @@ class UniAFLCoverageSession(CoverageSession):
             self._start_container()
             self._prepare_harness()
         except Exception:
+            try:
+                self._remove_container()
+            except RuntimeError:
+                pass
             if self._exchange_dir.exists():
                 shutil.rmtree(self._exchange_dir, ignore_errors=True)
             raise
