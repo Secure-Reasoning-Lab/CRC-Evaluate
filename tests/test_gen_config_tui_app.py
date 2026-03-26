@@ -7,6 +7,7 @@ from crsbench.genconfig_tui.core import build_grouped_config, dump_yaml
 from rich.markup import escape
 from textual.binding import Binding
 from textual.widgets import Input, Select, SelectionList, TextArea
+from textual.widgets._footer import FooterKey
 
 
 def _valid_loaded_yaml_with_unknown_cloud_block() -> str:
@@ -275,6 +276,61 @@ def test_app_has_alt_s_binding_for_focus_cycle():
         for binding in ConfigBuilderApp.BINDINGS
     ]
     assert any(binding.key == "alt+s" and binding.priority for binding in bindings)
+
+
+def test_app_has_ctrl_q_binding_for_guarded_quit():
+    bindings = [
+        binding if isinstance(binding, Binding) else Binding(*binding)
+        for binding in ConfigBuilderApp.BINDINGS
+    ]
+    assert any(
+        binding.key == "ctrl+q"
+        and binding.action == "quit_with_confirm"
+        and binding.show
+        and binding.priority
+        for binding in bindings
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_footer_places_ctrl_q_helper_on_right():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+
+        quit_keys = [
+            key
+            for key in app.query(FooterKey)
+            if isinstance(key, FooterKey) and key.action == "quit_with_confirm"
+        ]
+
+        assert len(quit_keys) == 1
+        assert quit_keys[0].has_class("-right-helper")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_footer_right_helpers_do_not_overlap():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+
+        helpers = {
+            key.action: key
+            for key in app.query(FooterKey)
+            if isinstance(key, FooterKey)
+            and key.action in {"quit_with_confirm", "command_palette"}
+        }
+
+        quit_key = helpers["quit_with_confirm"]
+        palette_key = helpers["command_palette"]
+
+        assert quit_key.region.right <= palette_key.region.x or (
+            palette_key.region.right <= quit_key.region.x
+        )
+
+
 def test_app_does_not_expose_load_path_input():
     assert "#loaded-path" in ConfigBuilderApp.CSS
     assert "#load-path" not in ConfigBuilderApp.CSS
@@ -304,6 +360,48 @@ def test_write_action_opens_save_path_prompt():
     screen = mock_push.call_args.args[0]
     assert isinstance(screen, gen_config_tui_app.SavePathScreen)
     assert screen.default_path == "gen-experiment-config.yaml"
+
+
+def test_quit_action_exits_immediately_without_session_edits():
+    app = ConfigBuilderApp()
+    with (
+        patch.object(app, "exit") as mock_exit,
+        patch.object(app, "push_screen") as mock_push,
+    ):
+        app.action_quit_with_confirm()
+
+    mock_exit.assert_called_once_with()
+    mock_push.assert_not_called()
+
+
+def test_quit_action_prompts_after_session_edits():
+    app = ConfigBuilderApp()
+    app._has_session_edits = True
+    with (
+        patch.object(app, "exit") as mock_exit,
+        patch.object(app, "push_screen") as mock_push,
+    ):
+        app.action_quit_with_confirm()
+
+    mock_exit.assert_not_called()
+    screen = mock_push.call_args.args[0]
+    assert isinstance(screen, gen_config_tui_app.QuitConfirmScreen)
+
+
+def test_confirmed_quit_exits():
+    app = ConfigBuilderApp()
+    with patch.object(app, "exit") as mock_exit:
+        app._handle_quit_confirmed("quit")
+
+    mock_exit.assert_called_once_with()
+
+
+def test_canceled_quit_does_not_exit():
+    app = ConfigBuilderApp()
+    with patch.object(app, "exit") as mock_exit:
+        app._handle_quit_confirmed("cancel")
+
+    mock_exit.assert_not_called()
 
 
 def test_resolve_requested_output_path_uses_current_dir_for_relative_prefixes(tmp_path):
@@ -1070,3 +1168,43 @@ async def test_validate_action_escapes_markup_in_error_notifications():
             await pilot.pause()
             assert "Validation failed:" in app.status_text
             mock_notify.assert_called_once_with(escape(message), severity="error")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_q_opens_quit_confirm_after_session_edit():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+
+        name = app.query_one("#field--experiment--name", Input)
+        app.set_focus(name)
+        await pilot.pause()
+        name.value = "edited-name"
+        await pilot.pause()
+
+        await pilot.press("escape")
+        await pilot.pause()
+        await pilot.press("q")
+        await pilot.pause()
+
+        assert isinstance(app.screen, gen_config_tui_app.QuitConfirmScreen)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_ctrl_q_opens_quit_confirm_from_focused_input_after_session_edit():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+
+        name = app.query_one("#field--experiment--name", Input)
+        app.set_focus(name)
+        await pilot.pause()
+        name.value = "edited-name"
+        await pilot.pause()
+
+        await pilot.press("ctrl+q")
+        await pilot.pause()
+
+        assert isinstance(app.screen, gen_config_tui_app.QuitConfirmScreen)

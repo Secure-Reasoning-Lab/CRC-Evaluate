@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from argparse import ArgumentParser
+from collections import defaultdict
 from copy import deepcopy
+from itertools import groupby
 from pathlib import Path
 from typing import Any, Literal, Mapping
 
@@ -24,6 +26,7 @@ from textual.widgets import (
     Switch,
     TextArea,
 )
+from textual.widgets._footer import FooterKey, FooterLabel, KeyGroup
 
 from crsbench.genconfig_tui.core import (
     SECTION_ORDER,
@@ -69,6 +72,116 @@ def resolve_requested_output_path(raw_path: str, cwd: Path | None = None) -> Pat
     elif path.suffix not in {".yaml", ".yml"}:
         raise ValueError("Saved config path must end with .yaml or .yml.")
     return path
+
+
+class ConfigFooter(Footer):
+    DEFAULT_CSS = (
+        Footer.DEFAULT_CSS
+        + """
+    .footer-right {
+        dock: right;
+        width: auto;
+        height: 1;
+        layout: horizontal;
+    }
+
+    .footer-right FooterKey.-right-helper {
+        border-left: vkey $foreground 20%;
+    }
+    """
+    )
+
+    def compose(self) -> ComposeResult:
+        if not self._bindings_ready:
+            return
+
+        active_bindings = self.screen.active_bindings
+        bindings = [
+            (binding, enabled, tooltip)
+            for (_, binding, enabled, tooltip) in active_bindings.values()
+            if binding.show
+        ]
+        action_to_bindings: defaultdict[str, list[tuple[Binding, bool, str]]]
+        action_to_bindings = defaultdict(list)
+        for binding, enabled, tooltip in bindings:
+            action_to_bindings[binding.action].append((binding, enabled, tooltip))
+
+        self.styles.grid_size_columns = len(action_to_bindings)
+        quit_binding_group: tuple[Binding, bool, str] | None = None
+        command_palette_binding: tuple[Binding, bool, str] | None = None
+
+        for group, multi_bindings_iterable in groupby(
+            action_to_bindings.values(),
+            lambda multi_bindings_: multi_bindings_[0][0].group,
+        ):
+            multi_bindings_list = list(multi_bindings_iterable)
+            if group is not None and len(multi_bindings_list) > 1:
+                with KeyGroup(classes="-compact" if group.compact else ""):
+                    for grouped_bindings in multi_bindings_list:
+                        binding, enabled, tooltip = grouped_bindings[0]
+                        if binding.action == "quit_with_confirm":
+                            quit_binding_group = (binding, enabled, tooltip)
+                            continue
+                        yield FooterKey(
+                            binding.key,
+                            self.app.get_key_display(binding),
+                            "",
+                            binding.action,
+                            disabled=not enabled,
+                            tooltip=tooltip or binding.description,
+                            classes="-grouped",
+                        ).data_bind(compact=Footer.compact)
+                yield FooterLabel(group.description)
+                continue
+
+            for grouped_bindings in multi_bindings_list:
+                binding, enabled, tooltip = grouped_bindings[0]
+                if binding.action == "quit_with_confirm":
+                    quit_binding_group = (binding, enabled, tooltip)
+                    continue
+                yield FooterKey(
+                    binding.key,
+                    self.app.get_key_display(binding),
+                    binding.description,
+                    binding.action,
+                    disabled=not enabled,
+                    tooltip=tooltip,
+                ).data_bind(compact=Footer.compact)
+
+        if self.show_command_palette and self.app.ENABLE_COMMAND_PALETTE:
+            try:
+                _node, binding, enabled, tooltip = active_bindings[
+                    self.app.COMMAND_PALETTE_BINDING
+                ]
+            except KeyError:
+                pass
+            else:
+                command_palette_binding = (binding, enabled, tooltip)
+
+        if quit_binding_group is not None or command_palette_binding is not None:
+            with Horizontal(classes="footer-right"):
+                if quit_binding_group is not None:
+                    binding, enabled, tooltip = quit_binding_group
+                    yield FooterKey(
+                        binding.key,
+                        self.app.get_key_display(binding),
+                        binding.description,
+                        binding.action,
+                        classes="-right-helper",
+                        disabled=not enabled,
+                        tooltip=tooltip or binding.description,
+                    )
+                if command_palette_binding is not None:
+                    binding, enabled, tooltip = command_palette_binding
+                    yield FooterKey(
+                        binding.key,
+                        self.app.get_key_display(binding),
+                        binding.description,
+                        binding.action,
+                        classes="-right-helper",
+                        disabled=not enabled,
+                        tooltip=tooltip or binding.description,
+                    )
 
 
 class SavePathScreen(ModalScreen[str | None]):
@@ -148,6 +261,58 @@ class SavePathScreen(ModalScreen[str | None]):
     def handle_confirm(self) -> None:
         value = self.query_one("#save-path-input", Input).value
         self._submit_path(value)
+
+
+class QuitConfirmScreen(ModalScreen[Literal["quit", "cancel"]]):
+    CSS = """
+    QuitConfirmScreen {
+        align: center middle;
+    }
+
+    #quit-dialog {
+        width: 56;
+        max-width: 100%;
+        height: auto;
+        padding: 1 2;
+        border: solid $panel;
+        background: $surface;
+    }
+
+    #quit-help {
+        margin: 1 0;
+        color: $text-muted;
+    }
+
+    #quit-actions {
+        height: auto;
+        align: right middle;
+        margin-top: 1;
+    }
+    """
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="quit-dialog"):
+            yield Label("Quit without saving?", classes="panel-title")
+            yield Static(
+                "This session has edits. Press Quit again only if you want to discard them.",
+                id="quit-help",
+            )
+            with Horizontal(id="quit-actions"):
+                yield Button("Cancel", id="cancel-quit")
+                yield Button("Quit", id="confirm-quit", variant="error")
+
+    def action_cancel(self) -> None:
+        self.dismiss("cancel")
+
+    @on(Button.Pressed, "#cancel-quit")
+    def handle_cancel(self) -> None:
+        self.dismiss("cancel")
+
+    @on(Button.Pressed, "#confirm-quit")
+    def handle_confirm(self) -> None:
+        self.dismiss("quit")
 
 
 class ConfigBuilderApp(App[None]):
@@ -266,12 +431,13 @@ class ConfigBuilderApp(App[None]):
         ),
         Binding("alt+u", "undo_edit", "Undo", key_display="Alt+U", priority=True),
         Binding("alt+e", "redo_edit", "Redo", key_display="Alt+E", priority=True),
+        Binding("ctrl+q", "quit_with_confirm", "Quit", priority=True),
         ("ctrl+r", "reload_file", "Reload"),
         ("ctrl+s", "save", "Save"),
         ("ctrl+w", "write_timestamped", "Save As"),
         ("ctrl+u", "update_loaded", "Update Loaded"),
         ("ctrl+v", "validate_config", "Validate"),
-        ("q", "quit", "Quit"),
+        ("q", "quit_with_confirm", "Quit"),
     ]
 
     def __init__(self, initial_path: Path | None = None) -> None:
@@ -291,6 +457,7 @@ class ConfigBuilderApp(App[None]):
         self._undo_stack: list[UndoSnapshot] = []
         self._redo_stack: list[UndoSnapshot] = []
         self._restoring_history = False
+        self._has_session_edits = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -338,7 +505,7 @@ class ConfigBuilderApp(App[None]):
                     read_only=True,
                 )
         yield Static(id="status", markup=False)
-        yield Footer()
+        yield ConfigFooter()
 
     def _build_field_widget(self, section: str, field: FieldSpec):
         widget_id = _widget_id(section, field.key)
@@ -535,6 +702,7 @@ class ConfigBuilderApp(App[None]):
             return
         if previous_state == self.form_state:
             return
+        self._has_session_edits = True
         self._undo_stack.append(previous_state)
         if len(self._undo_stack) > 200:
             self._undo_stack.pop(0)
@@ -545,6 +713,7 @@ class ConfigBuilderApp(App[None]):
         self.section_extras = {}
         self._undo_stack.clear()
         self._redo_stack.clear()
+        self._has_session_edits = False
         grouped = read_grouped_config(path)
         roundtrip_yaml = load_roundtrip_document(path)
         loaded_state, extras = load_state_from_grouped_config(grouped)
@@ -798,6 +967,16 @@ class ConfigBuilderApp(App[None]):
             return
         self._notify_plain(f"Updated {path}", severity="information")
         self._set_status(f"Updated loaded config at {path}")
+
+    def _handle_quit_confirmed(self, result: Literal["quit", "cancel"] | None) -> None:
+        if result == "quit":
+            self.exit()
+
+    def action_quit_with_confirm(self) -> None:
+        if not self._has_session_edits:
+            self.exit()
+            return
+        self.push_screen(QuitConfirmScreen(), self._handle_quit_confirmed)
 
     def action_focus_section_list(self) -> None:
         self.query_one("#section-list", OptionList).focus()
