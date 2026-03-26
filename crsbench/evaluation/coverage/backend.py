@@ -8,7 +8,6 @@ import os
 import shlex
 import shutil
 import subprocess
-import tempfile
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
@@ -20,11 +19,9 @@ from crsbench.prepare.uniafl_backend import (
     default_uniafl_root,
     default_uniafl_runtime_image,
 )
-from crsbench.utils.docker import fix_docker_ownership
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
-RUNTIME_OUT_IGNORES = frozenset({".crsbench-repo"})
 
 
 CoverageData = dict[str, dict]
@@ -202,65 +199,42 @@ class UniAFLCoverageSession(CoverageSession):
         )
         self.cpu_set = cpu_set
         self.session_label = session_label
-        self._tempdir = tempfile.TemporaryDirectory(prefix="crsbench-uniafl-session-")
-        self.workspace = Path(self._tempdir.name)
-        self.runtime_benchmark_dir = self.workspace / "benchmark"
-        self.runtime_build_output_dir = self.workspace / "out"
-        self.worker_script_path = self.workspace / "crsbench_cov_worker.py"
+        # Mount the original benchmark and build output directories directly
+        # instead of copying them into a tempdir. The container makes small
+        # idempotent writes (/src/.aixcc/config.yaml, /out/*.options) which
+        # are acceptable and don't corrupt the originals.
+        self.runtime_benchmark_dir = self.benchmark_path
+        self.runtime_build_output_dir = self.build_output_dir
+
+        # Light workspace: holds only the worker script and per-run seed/output
+        # exchange dirs. This is what gets mounted at /workspace in the container.
+        # Stored under output_dir so coverage results survive process kills.
+        # Per-session suffix prevents collision when ShardedCoverageSession
+        # creates multiple sessions sharing the same output_dir.
+        _exchange_suffix = f"-{session_label}" if session_label else ""
+        self._exchange_dir = self.output_dir / f".exchange{_exchange_suffix}"
+        self._exchange_dir.mkdir(parents=True, exist_ok=True)
+        self.workspace = self._exchange_dir
+        self.worker_script_path = self._exchange_dir / "crsbench_cov_worker.py"
         worker_log_stem = (
             "worker" if session_label is None else f"worker.{session_label}"
         )
         self.worker_stdout_path = self.raw_dir / f"{worker_log_stem}.stdout.log"
         self.worker_stderr_path = self.raw_dir / f"{worker_log_stem}.stderr.log"
-        self.runs_dir = self.workspace / "runs"
+        self.runs_dir = self._exchange_dir / "runs"
         self.container_name = (
             f"crsbench-uniafl-{self.project_name[:20]}-{uuid.uuid4().hex[:10]}"
         )
         self._collected_results: dict[str, CoverageRunResult] = {}
         self._session_broken = False
-        self._write_worker_script()
-        self._prepare_runtime_benchmark()
-        self._prepare_runtime_build_output()
-        self._start_container()
-        self._prepare_harness()
-
-    def _prepare_runtime_benchmark(self) -> None:
-        self.runtime_benchmark_dir.mkdir(parents=True, exist_ok=True)
-        for child in list(self.runtime_benchmark_dir.iterdir()):
-            if child.is_dir():
-                shutil.rmtree(child)
-            else:
-                child.unlink()
-        shutil.copytree(
-            self.benchmark_path.resolve(),
-            self.runtime_benchmark_dir,
-            dirs_exist_ok=True,
-            symlinks=True,
-        )
-
-    def _prepare_runtime_build_output(self) -> None:
-        fix_docker_ownership(self.build_output_dir)
-        self.runtime_build_output_dir.mkdir(parents=True, exist_ok=True)
-        for child in list(self.runtime_build_output_dir.iterdir()):
-            if child.is_dir():
-                shutil.rmtree(child)
-            else:
-                child.unlink()
-
-        def _ignore_runtime_entries(_directory: str, names: list[str]) -> list[str]:
-            return [
-                name
-                for name in names
-                if name in RUNTIME_OUT_IGNORES or "_corpus" in name
-            ]
-
-        shutil.copytree(
-            self.build_output_dir.resolve(),
-            self.runtime_build_output_dir,
-            dirs_exist_ok=True,
-            ignore=_ignore_runtime_entries,
-            symlinks=True,
-        )
+        try:
+            self._write_worker_script()
+            self._start_container()
+            self._prepare_harness()
+        except Exception:
+            if self._exchange_dir.exists():
+                shutil.rmtree(self._exchange_dir, ignore_errors=True)
+            raise
 
     def _resolve_host_source_path(self, src: str) -> str:
         if not src:
@@ -586,7 +560,9 @@ class UniAFLCoverageSession(CoverageSession):
             self._remove_container()
         except RuntimeError:
             pass
-        self._tempdir.cleanup()
+        # Clean up the lightweight exchange dir (worker script, empty runs dir).
+        if self._exchange_dir.exists():
+            shutil.rmtree(self._exchange_dir, ignore_errors=True)
 
 
 def _content_hash(path: Path) -> str:
