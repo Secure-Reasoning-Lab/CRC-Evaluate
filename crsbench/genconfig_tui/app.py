@@ -303,8 +303,36 @@ class QuitConfirmScreen(ModalScreen[Literal["quit", "cancel"]]):
                 yield Button("Cancel", id="cancel-quit")
                 yield Button("Quit", id="confirm-quit", variant="error")
 
+    def on_mount(self) -> None:
+        self.query_one("#cancel-quit", Button).focus()
+
     def action_cancel(self) -> None:
         self.dismiss("cancel")
+
+    def _move_button_focus(self, step: int) -> bool:
+        buttons = [
+            self.query_one("#cancel-quit", Button),
+            self.query_one("#confirm-quit", Button),
+        ]
+        focused = self.focused
+        if focused not in buttons:
+            return False
+        current_index = buttons.index(focused)
+        next_index = current_index + step
+        if not 0 <= next_index < len(buttons):
+            return False
+        buttons[next_index].focus()
+        return True
+
+    @on(events.Key)
+    def handle_button_arrow_navigation(self, event: events.Key) -> None:
+        if event.key == "left" and self._move_button_focus(-1):
+            event.stop()
+            event.prevent_default()
+            return
+        if event.key == "right" and self._move_button_focus(1):
+            event.stop()
+            event.prevent_default()
 
     @on(Button.Pressed, "#cancel-quit")
     def handle_cancel(self) -> None:
@@ -1050,6 +1078,41 @@ class ConfigBuilderApp(App[None]):
             event.prevent_default()
             return
         if event.key == "down" and self._move_field_focus(1):
+            event.stop()
+            event.prevent_default()
+            return
+        focused = self.focused
+        if (
+            event.key == "right"
+            and focused is not None
+            and focused.id == "section-list"
+        ):
+            target = self._preferred_field_widget()
+            if target is not None:
+                target.focus()
+                event.stop()
+                event.prevent_default()
+            return
+        if (
+            event.key == "left"
+            and focused is not None
+            and focused.id == "section-preview"
+        ):
+            target = self._preferred_field_widget()
+            if target is not None:
+                target.focus()
+                event.stop()
+                event.prevent_default()
+            return
+        if not isinstance(focused, Input) or not focused.selection.is_empty:
+            return
+        if event.key == "left" and focused.cursor_at_start:
+            self.query_one("#section-list", OptionList).focus()
+            event.stop()
+            event.prevent_default()
+            return
+        if event.key == "right" and focused.cursor_at_end:
+            self.query_one("#section-preview", TextArea).focus()
             event.stop()
             event.prevent_default()
 

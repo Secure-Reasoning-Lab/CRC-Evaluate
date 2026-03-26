@@ -160,6 +160,98 @@ async def test_up_arrow_moves_focus_to_previous_visible_field():
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_left_arrow_on_input_start_focuses_section_selector():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+        await pilot.press("tab")
+
+        name = app.query_one("#field--experiment--name", Input)
+        assert app.focused is name
+        name.cursor_position = 0
+
+        await pilot.press("left")
+
+        assert app.focused is not None
+        assert app.focused.id == "section-list"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_right_arrow_on_input_end_focuses_section_preview():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+        await pilot.press("tab")
+
+        name = app.query_one("#field--experiment--name", Input)
+        assert app.focused is name
+        name.cursor_position = len(name.value)
+
+        await pilot.press("right")
+
+        assert app.focused is not None
+        assert app.focused.id == "section-preview"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_right_arrow_on_section_selector_focuses_first_visible_field():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "section-list"
+
+        await pilot.press("right")
+
+        assert app.focused is not None
+        assert app.focused.id == "field--experiment--name"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_left_arrow_on_section_preview_focuses_remembered_field():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+
+        task = app.query_one("#field--experiment--task", Select)
+        app.set_focus(task)
+        await pilot.pause()
+
+        preview = app.query_one("#section-preview", TextArea)
+        app.set_focus(preview)
+        await pilot.pause()
+
+        await pilot.press("left")
+
+        assert app.focused is task
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_left_right_arrows_keep_normal_cursor_movement_inside_input():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+        await pilot.press("tab")
+
+        name = app.query_one("#field--experiment--name", Input)
+        assert app.focused is name
+        name.cursor_position = 3
+
+        await pilot.press("left")
+        assert app.focused is name
+        assert name.cursor_position == 2
+
+        await pilot.press("right")
+        assert app.focused is name
+        assert name.cursor_position == 3
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_down_arrow_moves_within_sanitizer_list_before_leaving_field():
     app = ConfigBuilderApp()
     async with app.run_test(size=(100, 24)) as pilot:
@@ -402,6 +494,26 @@ def test_canceled_quit_does_not_exit():
         app._handle_quit_confirmed("cancel")
 
     mock_exit.assert_not_called()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_quit_confirm_left_right_moves_between_buttons():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        app.push_screen(gen_config_tui_app.QuitConfirmScreen())
+        await pilot.pause()
+
+        cancel = app.screen.query_one("#cancel-quit")
+        confirm = app.screen.query_one("#confirm-quit")
+        app.set_focus(cancel)
+        await pilot.pause()
+
+        await pilot.press("right")
+        assert app.focused is confirm
+
+        await pilot.press("left")
+        assert app.focused is cancel
 
 
 def test_resolve_requested_output_path_uses_current_dir_for_relative_prefixes(tmp_path):
