@@ -25,12 +25,12 @@ from textual.widgets import (
 )
 
 from crsbench.genconfig_tui.core import (
-    RoundTripDocument,
     SECTION_ORDER,
+    RoundTripDocument,
     build_grouped_config,
     dump_yaml,
-    load_state_from_grouped_config,
     load_roundtrip_document,
+    load_state_from_grouped_config,
     read_grouped_config,
     write_grouped_config,
 )
