@@ -374,7 +374,7 @@ class UniAFLCoverageSession(CoverageSession):
                 self.harness_name,
             ],
             env={"CRSBENCH_CFG_NCPU": str(ncpu)},
-            timeout=3600,  # 1h for large binaries (wireshark, libavif)
+            timeout=86400,  # 24h — no practical timeout, match original given_fuzzer
         )
         if result.returncode != 0:
             self.worker_stdout_path.write_text(result.stdout or "")
