@@ -19,6 +19,7 @@ from crsbench.prepare.uniafl_backend import (
     default_uniafl_root,
     default_uniafl_runtime_image,
 )
+from crsbench.utils.docker import fix_docker_ownership
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -203,8 +204,11 @@ class UniAFLCoverageSession(CoverageSession):
         # instead of copying them into a tempdir. The container makes small
         # idempotent writes (/src/.aixcc/config.yaml, /out/*.options) which
         # are acceptable and don't corrupt the originals.
+        # Fix ownership of root-owned artifacts from previous container runs
+        # so the current session can access them cleanly.
         self.runtime_benchmark_dir = self.benchmark_path
         self.runtime_build_output_dir = self.build_output_dir
+        fix_docker_ownership(self.runtime_build_output_dir)
 
         # Light workspace: holds only the worker script and per-run seed/output
         # exchange dirs. This is what gets mounted at /workspace in the container.
