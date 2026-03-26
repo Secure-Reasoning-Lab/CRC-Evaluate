@@ -838,6 +838,9 @@ ensure_docker_group_membership
 ensure_docker_buildx_builder
 ensure_user_systemd_support_packages
 
+# --- Ensure cloud data directories are writable by crsbench user ---
+install -d -o "${CRSBENCH_USER}" -g "${CRSBENCH_USER}" -m 0755 /data/crsbench
+
 metadata_get "crsbench-bootstrap-payload" | base64 --decode > "${PAYLOAD_PATH}"
 
 readarray -t PAYLOAD_FIELDS < <(

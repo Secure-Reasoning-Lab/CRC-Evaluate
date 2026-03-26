@@ -931,6 +931,9 @@ run_crsbench_shell "cd $(printf '%q' "${CLONE_DIR}") && uv sync --all-extras && 
 VENV_BIN="${CLONE_DIR}/.venv/bin"
 CRSBENCH_USER_PATH="${VENV_BIN}:${CRSBENCH_MANAGED_BIN_DIR}:${CRSBENCH_USER_HOME}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
+# --- Ensure cloud data directories are writable by crsbench user ---
+install -d -o "${CRSBENCH_USER}" -g "${CRSBENCH_USER}" -m 0755 /data/crsbench
+
 # --- Decode experiment config and patch redis_host ---
 chown "${CRSBENCH_USER}:${CRSBENCH_USER}" "${CONFIG_PATH}"
 
