@@ -8,6 +8,7 @@ from typing import Any, Literal, Mapping
 from rich.markup import escape
 from textual import events, on
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalGroup, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import (
@@ -53,6 +54,7 @@ def _wrap_id(section: str, key: str) -> str:
 
 
 NotificationSeverity = Literal["information", "warning", "error"]
+UndoSnapshot = dict[str, dict[str, Any]]
 
 
 def resolve_requested_output_path(raw_path: str, cwd: Path | None = None) -> Path:
@@ -255,6 +257,8 @@ class ConfigBuilderApp(App[None]):
 
     BINDINGS = [
         ("escape", "focus_section_list", "Sections"),
+        Binding("escape,u", "undo_edit", "Undo", key_display="Alt+U"),
+        Binding("escape,e", "redo_edit", "Redo", key_display="Alt+E"),
         ("ctrl+r", "reload_file", "Reload"),
         ("ctrl+s", "save", "Save"),
         ("ctrl+w", "write_timestamped", "Save As"),
@@ -276,6 +280,9 @@ class ConfigBuilderApp(App[None]):
         self._last_focused_field_widget: Any = None
         self._field_validation_messages: dict[str, str] = {}
         self._loaded_roundtrip_yaml: RoundTripDocument | None = None
+        self._undo_stack: list[UndoSnapshot] = []
+        self._redo_stack: list[UndoSnapshot] = []
+        self._restoring_history = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -497,9 +504,35 @@ class ConfigBuilderApp(App[None]):
             )
         self.form_state = merged_state
 
+    def _snapshot_form_state(self) -> UndoSnapshot:
+        return deepcopy(self.form_state)
+
+    def _restore_form_state(self, snapshot: Mapping[str, Mapping[str, Any]]) -> None:
+        self._restoring_history = True
+        try:
+            self.form_state = {
+                section: deepcopy(dict(values)) for section, values in snapshot.items()
+            }
+            self._sync_widgets_from_state()
+            self._refresh_ui()
+        finally:
+            self._restoring_history = False
+
+    def _record_history(self, previous_state: UndoSnapshot) -> None:
+        if self._setting_fields or self._restoring_history:
+            return
+        if previous_state == self.form_state:
+            return
+        self._undo_stack.append(previous_state)
+        if len(self._undo_stack) > 200:
+            self._undo_stack.pop(0)
+        self._redo_stack.clear()
+
     def _load_from_path(self, path: Path) -> None:
         self._loaded_roundtrip_yaml = None
         self.section_extras = {}
+        self._undo_stack.clear()
+        self._redo_stack.clear()
         grouped = read_grouped_config(path)
         roundtrip_yaml = load_roundtrip_document(path)
         loaded_state, extras = load_state_from_grouped_config(grouped)
@@ -694,6 +727,26 @@ class ConfigBuilderApp(App[None]):
             return
         self.action_update_loaded()
 
+    def action_undo_edit(self) -> None:
+        if not self._undo_stack:
+            self._set_status("Nothing to undo")
+            return
+        current_state = self._snapshot_form_state()
+        previous_state = self._undo_stack.pop()
+        self._redo_stack.append(current_state)
+        self._restore_form_state(previous_state)
+        self._set_status("Undid last edit")
+
+    def action_redo_edit(self) -> None:
+        if not self._redo_stack:
+            self._set_status("Nothing to redo")
+            return
+        current_state = self._snapshot_form_state()
+        next_state = self._redo_stack.pop()
+        self._undo_stack.append(current_state)
+        self._restore_form_state(next_state)
+        self._set_status("Redid last edit")
+
     def action_update_loaded(self) -> None:
         if self.loaded_path is None:
             self._notify_plain(
@@ -775,12 +828,16 @@ class ConfigBuilderApp(App[None]):
         if field_info is None:
             return
         section, field = field_info
+        previous_state = self._snapshot_form_state()
         try:
             value = self._parse_input_value(field, event.value)
         except ValueError:
             self._set_status(f"{field.label} expects an integer")
             return
+        if self.form_state.get(section, {}).get(field.key) == value:
+            return
         self._update_field_value(section, field, value)
+        self._record_history(previous_state)
         self._refresh_ui()
 
     @on(Switch.Changed)
@@ -791,7 +848,11 @@ class ConfigBuilderApp(App[None]):
         if field_info is None:
             return
         section, field = field_info
+        if self.form_state.get(section, {}).get(field.key) == event.value:
+            return
+        previous_state = self._snapshot_form_state()
         self._update_field_value(section, field, event.value)
+        self._record_history(previous_state)
         self._refresh_ui()
 
     @on(Select.Changed)
@@ -802,7 +863,11 @@ class ConfigBuilderApp(App[None]):
         if field_info is None:
             return
         section, field = field_info
+        if self.form_state.get(section, {}).get(field.key) == event.value:
+            return
+        previous_state = self._snapshot_form_state()
         self._update_field_value(section, field, event.value)
+        self._record_history(previous_state)
         self._refresh_ui()
 
     @on(SelectionList.SelectedChanged)
@@ -815,7 +880,12 @@ class ConfigBuilderApp(App[None]):
         if field_info is None:
             return
         section, field = field_info
-        self._update_field_value(section, field, list(event.selection_list.selected))
+        selected_values = list(event.selection_list.selected)
+        if self.form_state.get(section, {}).get(field.key) == selected_values:
+            return
+        previous_state = self._snapshot_form_state()
+        self._update_field_value(section, field, selected_values)
+        self._record_history(previous_state)
         self._refresh_ui()
 
     @on(Button.Pressed, "#reload-button")

@@ -5,6 +5,7 @@ import pytest
 from crsbench.genconfig_tui.app import ConfigBuilderApp
 from crsbench.genconfig_tui.core import build_grouped_config, dump_yaml
 from rich.markup import escape
+from textual.binding import Binding
 from textual.widgets import Input, Select, SelectionList
 
 
@@ -240,12 +241,29 @@ def test_app_has_focus_scroll_handler():
 
 
 def test_app_has_escape_binding_for_section_list():
-    assert any(binding[0] == "escape" for binding in ConfigBuilderApp.BINDINGS)
+    bindings = [
+        binding if isinstance(binding, Binding) else Binding(*binding)
+        for binding in ConfigBuilderApp.BINDINGS
+    ]
+    assert any(binding.key == "escape" for binding in bindings)
     assert hasattr(ConfigBuilderApp, "action_focus_section_list")
 
 
 def test_app_has_ctrl_s_binding_for_save():
-    assert any(binding[0] == "ctrl+s" for binding in ConfigBuilderApp.BINDINGS)
+    bindings = [
+        binding if isinstance(binding, Binding) else Binding(*binding)
+        for binding in ConfigBuilderApp.BINDINGS
+    ]
+    assert any(binding.key == "ctrl+s" for binding in bindings)
+
+
+def test_app_has_nano_style_undo_redo_bindings():
+    bindings = [
+        binding if isinstance(binding, Binding) else Binding(*binding)
+        for binding in ConfigBuilderApp.BINDINGS
+    ]
+    assert any(binding.key == "escape,u" for binding in bindings)
+    assert any(binding.key == "escape,e" for binding in bindings)
 
 
 def test_app_does_not_expose_load_path_input():
@@ -821,6 +839,52 @@ async def test_ctrl_s_updates_loaded_file_when_config_is_loaded(tmp_path):
 
     written = source.read_text(encoding="utf-8")
     assert "name: new-name" in written
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_alt_u_undoes_last_field_edit():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+
+        name = app.query_one("#field--experiment--name", Input)
+        original_value = app.form_state["experiment"]["name"]
+        app.set_focus(name)
+        await pilot.pause()
+
+        name.value = "edited-name"
+        await pilot.pause()
+        assert app.form_state["experiment"]["name"] == "edited-name"
+
+        await pilot.press("escape", "u")
+        await pilot.pause()
+
+        assert app.form_state["experiment"]["name"] == original_value
+        assert name.value == original_value
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_alt_e_redoes_last_undone_field_edit():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+
+        name = app.query_one("#field--experiment--name", Input)
+        app.set_focus(name)
+        await pilot.pause()
+
+        name.value = "edited-name"
+        await pilot.pause()
+        await pilot.press("escape", "u")
+        await pilot.pause()
+
+        await pilot.press("escape", "e")
+        await pilot.pause()
+
+        assert app.form_state["experiment"]["name"] == "edited-name"
+        assert name.value == "edited-name"
 
 
 @pytest.mark.anyio
