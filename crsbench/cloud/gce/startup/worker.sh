@@ -839,6 +839,7 @@ ensure_docker_buildx_builder
 ensure_user_systemd_support_packages
 
 # --- Ensure cloud data directories are writable by crsbench user ---
+mkdir -p /data
 install -d -o "${CRSBENCH_USER}" -g "${CRSBENCH_USER}" -m 0755 /data/crsbench
 
 metadata_get "crsbench-bootstrap-payload" | base64 --decode > "${PAYLOAD_PATH}"
@@ -968,7 +969,7 @@ run_crsbench_shell "cd $(printf '%q' "${CLONE_DIR}") && uv sync --all-extras && 
 VENV_BIN="${CLONE_DIR}/.venv/bin"
 CRSBENCH_USER_PATH="${VENV_BIN}:${CRSBENCH_MANAGED_BIN_DIR}:${CRSBENCH_USER_HOME}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-run_as_crsbench env PATH="${CRSBENCH_USER_PATH}" HOME="${CRSBENCH_USER_HOME}" /bin/bash -lc "set -a; source $(printf '%q' "${BOOTSTRAP_ENV_FILE}") 2>/dev/null; set +a; cd $(printf '%q' "${CLONE_DIR}") && python3 - $(printf '%q' "${PAYLOAD_PATH}") <<'PY'
+run_as_crsbench env PATH="${CRSBENCH_USER_PATH}" HOME="${CRSBENCH_USER_HOME}" /bin/bash -lc "set -a; source $(printf '%q' "${BOOTSTRAP_ENV_FILE}"); set +a; cd $(printf '%q' "${CLONE_DIR}") && python3 - $(printf '%q' "${PAYLOAD_PATH}") <<'PY'
 import json
 import sys
 from pathlib import Path
