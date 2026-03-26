@@ -29,7 +29,6 @@ from crsbench.genconfig_tui.core import (
     build_grouped_config,
     dump_yaml,
     load_state_from_grouped_config,
-    make_output_path,
     read_grouped_config,
     write_grouped_config,
 )
@@ -367,7 +366,7 @@ class ConfigBuilderApp(App[None]):
         self.notify(escape(message), severity=severity)
 
     def _default_save_path(self) -> str:
-        return make_output_path(output_dir=Path.cwd()).name
+        return "gen-experiment-config.yaml"
 
     def _resolve_requested_output_path(self, raw_path: str) -> Path:
         path_text = raw_path.strip()

@@ -182,7 +182,7 @@ def test_write_action_opens_save_path_prompt():
 
     screen = mock_push.call_args.args[0]
     assert isinstance(screen, gen_config_tui_app.SavePathScreen)
-    assert screen.default_path.endswith(".yaml")
+    assert screen.default_path == "gen-experiment-config.yaml"
 
 
 def test_resolve_requested_output_path_uses_current_dir_for_relative_prefixes(tmp_path):
