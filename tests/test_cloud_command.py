@@ -1477,9 +1477,10 @@ class TestReconnect:
         assert context.redis_host == "10.0.0.50:6379"
 
     @patch("crsbench.cloud.cli._config_reconnect.load_launch_state")
+    @patch("crsbench.cloud.cli._config_reconnect.warn_for_persisted_storage_roots")
     @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
     def test_resolve_cloud_context_uses_config_for_provider_neutral_local_runs(
-        self, mock_load, mock_state
+        self, mock_load, mock_warn, mock_state
     ):
         """Provider-neutral configs without launch state should still reconnect for local runs."""
         config = _make_provider_neutral_experiment_config()
@@ -1498,6 +1499,38 @@ class TestReconnect:
         assert context.redis_host == "localhost:6379"
         assert context.experiment_filestore == Path("/tmp/filestore")
         assert context.remote_experiment_root == Path("/tmp/remote-root")
+        mock_warn.assert_called_once_with(
+            experiment_filestore=Path("/tmp/filestore"),
+            report_filestore=None,
+            copy_results_after_trial=False,
+            results_filestore=None,
+            remote_experiment_root=Path("/tmp/remote-root"),
+        )
+
+    @patch("crsbench.cloud.cli._config_reconnect.load_launch_state")
+    @patch("crsbench.cloud.cli._config_reconnect.warn_for_persisted_storage_roots")
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_resolve_cloud_context_warns_for_remote_root_fallback(
+        self, mock_load, mock_warn, mock_state
+    ):
+        """Unset remote roots should warn on the effective filestore fallback."""
+        config = _make_provider_neutral_experiment_config()
+        config.cloud.remote.experiment_root = None
+        mock_load.return_value = config
+        mock_state.return_value = None
+
+        from crsbench.cloud.cli._config_reconnect import resolve_cloud_context
+
+        context = resolve_cloud_context("/tmp/config.yaml", "test-exp")
+
+        assert context.remote_experiment_root == Path("/tmp/filestore")
+        mock_warn.assert_called_once_with(
+            experiment_filestore=Path("/tmp/filestore"),
+            report_filestore=None,
+            copy_results_after_trial=False,
+            results_filestore=None,
+            remote_experiment_root=Path("/tmp/filestore"),
+        )
 
     @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
     def test_resolve_effective_experiment_name_uses_config_when_omitted(
@@ -1525,6 +1558,33 @@ class TestReconnect:
 
         assert remote_dir == "/tmp/remote-root/test-exp"
 
+    @patch("crsbench.cloud.cli._config_reconnect.load_launch_state")
+    @patch("crsbench.cloud.cli._config_reconnect.warn_for_persisted_storage_roots")
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_resolve_cloud_context_falls_back_remote_root_to_experiment_filestore(
+        self, mock_load, mock_warn, mock_state
+    ):
+        config = _make_provider_neutral_experiment_config().model_copy(deep=True)
+        assert config.cloud is not None
+        assert config.cloud.remote is not None
+        config.cloud.remote.experiment_root = None
+        mock_load.return_value = config
+        mock_state.side_effect = [None, None]
+
+        from crsbench.cloud.cli._config_reconnect import resolve_cloud_context
+
+        context = resolve_cloud_context("/tmp/config.yaml", "test-exp")
+
+        assert context.remote_experiment_root == Path("/tmp/filestore")
+        mock_warn.assert_called_once_with(
+            experiment_filestore=Path("/tmp/filestore"),
+            report_filestore=None,
+            copy_results_after_trial=False,
+            results_filestore=None,
+            remote_experiment_root=Path("/tmp/filestore"),
+        )
+
+    @patch("crsbench.cloud.cli._config_reconnect.warn_for_persisted_storage_roots")
     @patch("crsbench.cloud.cli._config_reconnect.save_launch_state")
     @patch("crsbench.cloud.cli._config_reconnect.load_launch_state")
     @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
@@ -1533,6 +1593,7 @@ class TestReconnect:
         mock_load,
         mock_state,
         mock_save_state,
+        mock_warn,
     ):
         mock_load.return_value = _make_provider_neutral_experiment_config()
         launch_state = _make_provider_neutral_launch_state().model_copy(
@@ -1546,6 +1607,13 @@ class TestReconnect:
 
         assert context.remote_experiment_root == Path("/tmp/remote-root")
         mock_save_state.assert_called_once()
+        mock_warn.assert_called_once_with(
+            experiment_filestore=Path("/tmp/filestore"),
+            report_filestore=None,
+            copy_results_after_trial=False,
+            results_filestore=None,
+            remote_experiment_root=Path("/tmp/remote-root"),
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -212,6 +212,13 @@ the orchestrator:
 - `worker.storage.report_filestore`
 - `worker.storage.results_filestore`
 
+Avoid using `/tmp` for persisted storage roots such as
+`storage.experiment_filestore`, `storage.report_filestore`,
+`storage.results_filestore`, `worker.storage.*`, or
+`cloud.remote.experiment_root`. On Linux these paths are often backed by
+`tmpfs`, so large experiments can consume RAM instead of disk. Use another
+location for large-scale runs.
+
 ## Related
 
 - Distributed workflow: [distributed.md](./distributed.md)

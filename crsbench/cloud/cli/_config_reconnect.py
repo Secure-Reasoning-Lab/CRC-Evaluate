@@ -25,6 +25,7 @@ from crsbench.distributed.queue import (
 )
 from crsbench.run_experiment import load_experiment_config
 from crsbench.utils.logger import get_logger
+from crsbench.utils.storage_warning import warn_for_persisted_storage_roots
 from crsbench.validation.schemas import CloudOrchestratorPlacementConfig
 
 if TYPE_CHECKING:
@@ -174,7 +175,7 @@ def resolve_cloud_context(
             raise SystemExit(
                 "Remote orchestrator launch state missing worker fleet config"
             )
-        return ResolvedCloudContext(
+        context = ResolvedCloudContext(
             worker_fleet_configs=launch_state.resolved_worker_fleets(),
             evaluator_fleet_configs=launch_state.resolved_evaluator_fleets(),
             launch_state=launch_state,
@@ -184,11 +185,13 @@ def resolve_cloud_context(
             redis_password=launch_state.redis_password,
             launch_plan=launch_plan,
         )
+        _warn_for_cloud_storage_roots(context)
+        return context
 
     if not derived_worker_fleets:
         raise SystemExit("Experiment config has no supported cloud worker config.")
 
-    return ResolvedCloudContext(
+    context = ResolvedCloudContext(
         worker_fleet_configs=derived_worker_fleets,
         evaluator_fleet_configs=derived_evaluator_fleets,
         launch_state=launch_state,
@@ -197,6 +200,19 @@ def resolve_cloud_context(
         redis_host=config.redis_host or "localhost",
         redis_password=os.environ.get("CRSBENCH_REDIS_PASSWORD"),
         launch_plan=launch_plan,
+    )
+    _warn_for_cloud_storage_roots(context)
+    return context
+
+
+def _warn_for_cloud_storage_roots(context: ResolvedCloudContext) -> None:
+    """Warn when resolved cloud storage roots use Linux /tmp-backed paths."""
+    warn_for_persisted_storage_roots(
+        experiment_filestore=context.experiment_filestore,
+        report_filestore=None,
+        copy_results_after_trial=False,
+        results_filestore=None,
+        remote_experiment_root=context.remote_experiment_root,
     )
 
 
