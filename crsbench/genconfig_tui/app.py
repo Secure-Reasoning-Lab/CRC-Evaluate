@@ -9,6 +9,7 @@ from rich.markup import escape
 from textual import events, on
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalGroup, VerticalScroll
+from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
     Footer,
@@ -28,6 +29,7 @@ from crsbench.genconfig_tui.core import (
     build_grouped_config,
     dump_yaml,
     load_state_from_grouped_config,
+    make_output_path,
     read_grouped_config,
     write_grouped_config,
 )
@@ -49,6 +51,76 @@ def _wrap_id(section: str, key: str) -> str:
 
 
 NotificationSeverity = Literal["information", "warning", "error"]
+
+
+class SavePathScreen(ModalScreen[str | None]):
+    CSS = """
+    SavePathScreen {
+        align: center middle;
+    }
+
+    #save-dialog {
+        width: 72;
+        max-width: 100%;
+        height: auto;
+        padding: 1 2;
+        border: solid $panel;
+        background: $surface;
+    }
+
+    #save-help {
+        margin: 1 0;
+        color: $text-muted;
+    }
+
+    #save-actions {
+        height: auto;
+        align: right middle;
+        margin-top: 1;
+    }
+
+    #save-path-input {
+        width: 1fr;
+    }
+    """
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, default_path: str) -> None:
+        super().__init__()
+        self.default_path = default_path
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="save-dialog"):
+            yield Label("Save config", classes="panel-title")
+            yield Static(
+                "Enter a relative filename to save in the current directory, "
+                "or an absolute path. Bare prefixes are saved as .yaml.",
+                id="save-help",
+            )
+            yield Input(self.default_path, id="save-path-input")
+            with Horizontal(id="save-actions"):
+                yield Button("Cancel", id="cancel-save")
+                yield Button("Save", id="confirm-save", variant="primary")
+
+    def on_mount(self) -> None:
+        self.query_one("#save-path-input", Input).focus()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Input.Submitted, "#save-path-input")
+    def handle_submit(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value)
+
+    @on(Button.Pressed, "#cancel-save")
+    def handle_cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#confirm-save")
+    def handle_confirm(self) -> None:
+        value = self.query_one("#save-path-input", Input).value
+        self.dismiss(value)
 
 
 class ConfigBuilderApp(App[None]):
@@ -159,7 +231,7 @@ class ConfigBuilderApp(App[None]):
     BINDINGS = [
         ("escape", "focus_section_list", "Sections"),
         ("ctrl+r", "reload_file", "Reload"),
-        ("ctrl+w", "write_timestamped", "Write Copy"),
+        ("ctrl+w", "write_timestamped", "Save As"),
         ("ctrl+u", "update_loaded", "Update Loaded"),
         ("ctrl+v", "validate_config", "Validate"),
         ("q", "quit", "Quit"),
@@ -175,6 +247,7 @@ class ConfigBuilderApp(App[None]):
         self._setting_fields = False
         self.status_text = ""
         self._last_focused_field_widget: Any = None
+        self._field_validation_messages: dict[str, str] = {}
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -187,7 +260,7 @@ class ConfigBuilderApp(App[None]):
                 )
                 yield Button("Reload", id="reload-button", variant="primary")
                 yield Button("Validate", id="validate-button")
-                yield Button("Write /tmp Copy", id="write-button")
+                yield Button("Save As...", id="write-button")
                 yield Button(
                     "Update Loaded File", id="update-button", variant="warning"
                 )
@@ -293,6 +366,27 @@ class ConfigBuilderApp(App[None]):
     ) -> None:
         self.notify(escape(message), severity=severity)
 
+    def _default_save_path(self) -> str:
+        return make_output_path(output_dir=Path.cwd()).name
+
+    def _resolve_requested_output_path(self, raw_path: str) -> Path:
+        path_text = raw_path.strip()
+        if not path_text:
+            raise ValueError("Enter a filename or absolute path to save the config.")
+        path = Path(path_text).expanduser()
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        if path.suffix == "":
+            path = path.with_suffix(".yaml")
+        elif path.suffix not in {".yaml", ".yml"}:
+            raise ValueError("Saved config path must end with .yaml or .yml.")
+        return path
+
+    def _handle_save_path_selected(self, raw_path: str | None) -> None:
+        if raw_path is None:
+            return
+        self._write_to_requested_path(raw_path)
+
     def _merged_grouped_config(self) -> dict[str, Any]:
         return build_grouped_config(self.form_state, section_extras=self.section_extras)
 
@@ -322,6 +416,7 @@ class ConfigBuilderApp(App[None]):
                         widget.deselect_all()
                         for selected_value in value or []:
                             widget.select(selected_value)
+                    self._field_validation_messages.pop(widget.id, None)
                     self._set_widget_invalid_state(widget, invalid=False)
         finally:
             self._setting_fields = False
@@ -409,15 +504,17 @@ class ConfigBuilderApp(App[None]):
         if field_info is None:
             return
         section, field = field_info
-        was_invalid = widget.has_class("invalid")
+        previous_error = self._field_validation_messages.get(widget.id)
         try:
             value = self._coerce_widget_value_for_validation(field, widget)
             validate_field_value(section, field.key, value)
-        except Exception:
+        except Exception as exc:
+            self._field_validation_messages[widget.id] = str(exc)
             self._set_widget_invalid_state(widget, invalid=True)
             raise
+        self._field_validation_messages.pop(widget.id, None)
         self._set_widget_invalid_state(widget, invalid=False)
-        if was_invalid:
+        if previous_error is not None and self.status_text == previous_error:
             self._set_status("")
 
     def _is_form_field_widget(self, widget: Any) -> bool:
@@ -500,6 +597,18 @@ class ConfigBuilderApp(App[None]):
         validate_grouped_config(grouped)
         return grouped
 
+    def _write_to_requested_path(self, raw_path: str) -> None:
+        try:
+            grouped = self._validated_config()
+            path = self._resolve_requested_output_path(raw_path)
+            written_path = write_grouped_config(grouped, output_path=path)
+        except Exception as exc:  # noqa: BLE001
+            self._notify_plain(str(exc), severity="error")
+            self._set_status(f"Write failed: {exc}")
+            return
+        self._notify_plain(f"Wrote {written_path}", severity="information")
+        self._set_status(f"Wrote config to {written_path}")
+
     def action_reload_file(self) -> None:
         if self.loaded_path is None:
             self._notify_plain(
@@ -525,15 +634,10 @@ class ConfigBuilderApp(App[None]):
         self._set_status(f"Validation passed for {len(grouped)} populated sections")
 
     def action_write_timestamped(self) -> None:
-        try:
-            grouped = self._validated_config()
-        except Exception as exc:  # noqa: BLE001
-            self._notify_plain(str(exc), severity="error")
-            self._set_status(f"Write failed: {exc}")
-            return
-        path = write_grouped_config(grouped)
-        self._notify_plain(f"Wrote {path}", severity="information")
-        self._set_status(f"Wrote timestamped config to {path}")
+        self.push_screen(
+            SavePathScreen(default_path=self._default_save_path()),
+            self._handle_save_path_selected,
+        )
 
     def action_update_loaded(self) -> None:
         if self.loaded_path is None:

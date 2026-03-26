@@ -175,6 +175,42 @@ def test_programmatic_main_does_not_reparse_cli_args_when_config_is_none():
     mock_app_cls.return_value.run.assert_called_once_with()
 
 
+def test_write_action_opens_save_path_prompt():
+    app = ConfigBuilderApp()
+    with patch.object(app, "push_screen") as mock_push:
+        app.action_write_timestamped()
+
+    screen = mock_push.call_args.args[0]
+    assert isinstance(screen, gen_config_tui_app.SavePathScreen)
+    assert screen.default_path.endswith(".yaml")
+
+
+def test_resolve_requested_output_path_uses_current_dir_for_relative_prefixes(tmp_path):
+    app = ConfigBuilderApp()
+    with patch.object(gen_config_tui_app.Path, "cwd", return_value=tmp_path):
+        path = app._resolve_requested_output_path("saved")
+
+    assert path == tmp_path / "saved.yaml"
+
+
+def test_resolve_requested_output_path_preserves_absolute_yaml_paths(tmp_path):
+    app = ConfigBuilderApp()
+    path = app._resolve_requested_output_path(str(tmp_path / "saved.yaml"))
+    assert path == tmp_path / "saved.yaml"
+
+
+def test_resolve_requested_output_path_appends_yaml_to_absolute_prefixes(tmp_path):
+    app = ConfigBuilderApp()
+    path = app._resolve_requested_output_path(str(tmp_path / "saved"))
+    assert path == tmp_path / "saved.yaml"
+
+
+def test_resolve_requested_output_path_rejects_non_yaml_suffixes():
+    app = ConfigBuilderApp()
+    with pytest.raises(ValueError, match=r"\.yaml or \.yml"):
+        app._resolve_requested_output_path("saved.txt")
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_initial_missing_path_reports_error_and_keeps_ui_running(tmp_path):
@@ -279,6 +315,33 @@ async def test_invalid_field_state_clears_after_valid_value_blurs():
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_fixing_field_does_not_clear_unrelated_status_message():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        app.current_section = "resources"
+        app._refresh_ui()
+        memory = app.query_one("#field--resources--memory_per_trial", Input)
+        cores = app.query_one("#field--resources--cores_per_trial", Input)
+        app.set_focus(memory)
+        await pilot.pause()
+        memory.value = "123"
+        await pilot.pause()
+        app.set_focus(cores)
+        await pilot.pause()
+        assert "Invalid memory format" in app.status_text
+
+        app._set_status("Write failed: disk full")
+        app.set_focus(memory)
+        await pilot.pause()
+        memory.value = "1G"
+        await pilot.pause()
+        app.set_focus(cores)
+        await pilot.pause()
+        assert app.status_text == "Write failed: disk full"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_invalid_field_does_not_mark_other_blurred_fields_invalid():
     app = ConfigBuilderApp()
     async with app.run_test(size=(100, 24)) as pilot:
@@ -327,6 +390,28 @@ async def test_blur_validation_does_not_run_whole_config_schema():
             assert (
                 "whole-config validation should not run on blur" not in app.status_text
             )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_write_requested_path_uses_current_dir_for_relative_prefixes(tmp_path):
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        with (
+            patch.object(app, "_validated_config", return_value={"experiment": {}}),
+            patch.object(gen_config_tui_app.Path, "cwd", return_value=tmp_path),
+            patch.object(
+                gen_config_tui_app,
+                "write_grouped_config",
+                return_value=tmp_path / "saved.yaml",
+            ) as mock_write,
+        ):
+            app._write_to_requested_path("saved")
+            await pilot.pause()
+            mock_write.assert_called_once_with(
+                {"experiment": {}}, output_path=tmp_path / "saved.yaml"
+            )
+            assert "Wrote config to" in app.status_text
 
 
 @pytest.mark.anyio
