@@ -6,7 +6,7 @@ from crsbench.genconfig_tui.app import ConfigBuilderApp
 from crsbench.genconfig_tui.core import build_grouped_config, dump_yaml
 from rich.markup import escape
 from textual.binding import Binding
-from textual.widgets import Input, Select, SelectionList, TextArea
+from textual.widgets import Button, Input, OptionList, Select, SelectionList, TextArea
 from textual.widgets._footer import FooterKey
 
 
@@ -174,6 +174,134 @@ async def test_left_arrow_on_input_start_focuses_section_selector():
 
         assert app.focused is not None
         assert app.focused.id == "section-list"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_cloud_collection_blocks_render_when_cloud_enabled():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.pause()
+
+        app.form_state["cloud"]["enabled"] = True
+        app.current_section = "cloud"
+        app._sync_widgets_from_state()
+        app._refresh_ui()
+        await pilot.pause()
+
+        assert app.query_one("#cloud-block--provider_regions").display is True
+        assert app.query_one("#cloud-block--instance_profiles").display is True
+        assert app.query_one("#cloud-block--worker_placements").display is True
+        assert app.query_one("#cloud-block--evaluator_placements").display is True
+        assert isinstance(app.query_one("#cloud-add--provider_regions", Button), Button)
+        assert isinstance(
+            app.query_one("#cloud-list--instance_profiles", OptionList), OptionList
+        )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_cloud_region_add_remove_updates_state_and_preview():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.pause()
+
+        app.form_state["cloud"]["enabled"] = True
+        app.current_section = "cloud"
+        app._sync_widgets_from_state()
+        app._refresh_ui()
+        await pilot.pause()
+
+        add_button = app.query_one("#cloud-add--provider_regions", Button)
+        add_button.press()
+        await pilot.pause()
+
+        assert app.form_state["cloud"]["provider_regions"] == [""]
+        regions_list = app.query_one("#cloud-list--provider_regions", OptionList)
+        assert regions_list.option_count == 1
+
+        region_input = app.query_one("#cloud-detail--provider_regions--value", Input)
+        app.set_focus(region_input)
+        await pilot.press("u", "s", "-", "e", "a", "s", "t", "5")
+
+        assert app.form_state["cloud"]["provider_regions"] == ["us-east5"]
+        assert "- us-east5" in app.query_one("#section-preview", TextArea).text
+
+        remove_button = app.query_one("#cloud-remove--provider_regions", Button)
+        remove_button.press()
+        await pilot.pause()
+
+        assert app.form_state["cloud"]["provider_regions"] == []
+        assert regions_list.option_count == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_cloud_instance_profile_add_and_edit_updates_preview():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.pause()
+
+        app.form_state["cloud"]["enabled"] = True
+        app.current_section = "cloud"
+        app._sync_widgets_from_state()
+        app._refresh_ui()
+        await pilot.pause()
+
+        app.query_one("#cloud-add--instance_profiles", Button).press()
+        await pilot.pause()
+
+        assert app.form_state["cloud"]["instance_profiles"] == [
+            {"name": "new-profile-1"}
+        ]
+
+        machine_type = app.query_one(
+            "#cloud-detail--instance_profiles--machine_type", Input
+        )
+        app.set_focus(machine_type)
+        await pilot.press(
+            "n", "2", "d", "-", "s", "t", "a", "n", "d", "a", "r", "d", "-", "3", "2"
+        )
+
+        assert app.form_state["cloud"]["instance_profiles"] == [
+            {"name": "new-profile-1", "machine_type": "n2d-standard-32"}
+        ]
+        final_preview = app.query_one("#final-preview", TextArea).text
+        assert "new-profile-1:" in final_preview
+        assert "machine_type: n2d-standard-32" in final_preview
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_cloud_worker_placement_add_and_edit_updates_preview():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.pause()
+
+        app.form_state["cloud"]["enabled"] = True
+        app.current_section = "cloud"
+        app._sync_widgets_from_state()
+        app._refresh_ui()
+        await pilot.pause()
+
+        app.query_one("#cloud-add--worker_placements", Button).press()
+        await pilot.pause()
+
+        region_input = app.query_one("#cloud-detail--worker_placements--region", Input)
+        app.set_focus(region_input)
+        await pilot.press("u", "s", "-", "e", "a", "s", "t", "1")
+
+        count_input = app.query_one("#cloud-detail--worker_placements--count", Input)
+        app.set_focus(count_input)
+        await pilot.press("2")
+
+        assert app.form_state["cloud"]["worker_placements"] == [
+            {"region": "us-east1", "count": 2}
+        ]
+        final_preview = app.query_one("#final-preview", TextArea).text
+        assert "placements:" in final_preview
+        assert "region: us-east1" in final_preview
+        assert "count: 2" in final_preview
 
 
 @pytest.mark.anyio

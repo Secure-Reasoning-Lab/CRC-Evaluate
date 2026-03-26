@@ -269,7 +269,16 @@ SECTION_SPECS: dict[str, SectionSpec] = {
                 "GCE region",
                 "text",
                 "us-east5",
-                visible_when=_when_true("enabled"),
+                visible_when=lambda state: bool(state.get("enabled"))
+                and not bool(state.get("provider_regions")),
+            ),
+            FieldSpec(
+                "provider_fallback",
+                "Fallback across regions",
+                "bool",
+                default=True,
+                visible_when=lambda state: bool(state.get("enabled"))
+                and bool(state.get("provider_regions")),
             ),
             FieldSpec(
                 "provider_ssh_via_iap",
@@ -319,6 +328,27 @@ SECTION_SPECS: dict[str, SectionSpec] = {
                 "Owner label",
                 "text",
                 "yufu",
+                visible_when=_when_true("enabled"),
+            ),
+            FieldSpec(
+                "orchestrator_profile",
+                "Orchestrator profile",
+                "text",
+                "gce-orchestrator-n2d",
+                visible_when=_when_true("enabled"),
+            ),
+            FieldSpec(
+                "worker_profile",
+                "Worker default profile",
+                "text",
+                "gce-worker-n2d",
+                visible_when=_when_true("enabled"),
+            ),
+            FieldSpec(
+                "evaluator_profile",
+                "Evaluator default profile",
+                "text",
+                "gce-evaluator-n2d",
                 visible_when=_when_true("enabled"),
             ),
             FieldSpec(

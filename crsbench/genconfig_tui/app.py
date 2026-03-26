@@ -5,7 +5,7 @@ from collections import defaultdict
 from copy import deepcopy
 from itertools import groupby
 from pathlib import Path
-from typing import Any, Literal, Mapping
+from typing import Any, Literal, Mapping, cast
 
 from rich.markup import escape
 from textual import events, on
@@ -31,6 +31,7 @@ from textual.widgets._footer import FooterKey, FooterLabel, KeyGroup
 from crsbench.genconfig_tui.core import (
     SECTION_ORDER,
     RoundTripDocument,
+    _is_blank,
     build_grouped_config,
     dump_yaml,
     load_roundtrip_document,
@@ -59,6 +60,31 @@ def _wrap_id(section: str, key: str) -> str:
 NotificationSeverity = Literal["information", "warning", "error"]
 UndoSnapshot = dict[str, dict[str, Any]]
 
+CLOUD_COLLECTION_TITLES = {
+    "provider_regions": "GCE Regions",
+    "instance_profiles": "Instance Profiles",
+    "worker_placements": "Worker Placements",
+    "evaluator_placements": "Evaluator Placements",
+}
+
+CLOUD_PROFILE_DETAIL_FIELDS = (
+    ("name", "Profile name", "text"),
+    ("machine_type", "Machine type", "text"),
+    ("boot_disk_size_gb", "Boot disk size (GiB)", "int"),
+    ("boot_disk_type", "Boot disk type", "text"),
+    ("image", "Base image", "text"),
+    ("service_account_email", "Service account email", "text"),
+    ("owner_label", "Owner label", "text"),
+)
+
+CLOUD_PLACEMENT_DETAIL_FIELDS = (
+    ("region", "Region", "text"),
+    ("zone", "Zone", "text"),
+    ("instance_profile", "Instance profile", "text"),
+    ("count", "Count", "int"),
+    ("fallback", "Fallback", "bool"),
+)
+
 
 def resolve_requested_output_path(raw_path: str, cwd: Path | None = None) -> Path:
     path_text = raw_path.strip()
@@ -72,6 +98,26 @@ def resolve_requested_output_path(raw_path: str, cwd: Path | None = None) -> Pat
     elif path.suffix not in {".yaml", ".yml"}:
         raise ValueError("Saved config path must end with .yaml or .yml.")
     return path
+
+
+def _cloud_block_id(key: str) -> str:
+    return f"cloud-block--{key}"
+
+
+def _cloud_list_id(key: str) -> str:
+    return f"cloud-list--{key}"
+
+
+def _cloud_add_id(key: str) -> str:
+    return f"cloud-add--{key}"
+
+
+def _cloud_remove_id(key: str) -> str:
+    return f"cloud-remove--{key}"
+
+
+def _cloud_detail_id(key: str, field: str) -> str:
+    return f"cloud-detail--{key}--{field}"
 
 
 class ConfigFooter(Footer):
@@ -432,6 +478,39 @@ class ConfigBuilderApp(App[None]):
         margin-bottom: 1;
     }
 
+    .cloud-collection {
+        display: none;
+        width: 1fr;
+        margin-bottom: 1;
+        padding: 1;
+        border: round $panel;
+    }
+
+    .cloud-collection-toolbar {
+        height: auto;
+        margin-bottom: 1;
+    }
+
+    .cloud-collection-buttons {
+        width: auto;
+        height: auto;
+        align: right top;
+    }
+
+    .cloud-collection-buttons Button {
+        width: 14;
+        margin-left: 1;
+    }
+
+    .cloud-collection-list {
+        height: 8;
+        margin-bottom: 1;
+    }
+
+    .cloud-detail-wrap {
+        margin-bottom: 1;
+    }
+
     .field-help {
         color: $text-muted;
     }
@@ -486,6 +565,9 @@ class ConfigBuilderApp(App[None]):
         self._redo_stack: list[UndoSnapshot] = []
         self._restoring_history = False
         self._has_session_edits = False
+        self._cloud_collection_selection: dict[str, int | None] = dict.fromkeys(
+            CLOUD_COLLECTION_TITLES, None
+        )
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -519,6 +601,8 @@ class ConfigBuilderApp(App[None]):
                                 yield self._build_field_widget(section, field)
                                 if field.help_text:
                                     yield Static(field.help_text, classes="field-help")
+                        if section == "cloud":
+                            yield from self._compose_cloud_collection_widgets()
             with Vertical(id="preview-column"):
                 yield Label("Section preview", classes="panel-title")
                 yield TextArea.code_editor(
@@ -563,6 +647,69 @@ class ConfigBuilderApp(App[None]):
                 id=widget_id,
             )
         raise ValueError(f"Unsupported field kind: {field.kind}")
+
+    def _compose_cloud_collection_widgets(self) -> ComposeResult:
+        with VerticalGroup(
+            id=_cloud_block_id("provider_regions"), classes="cloud-collection"
+        ):
+            yield Label("GCE regions", classes="field-label")
+            with Horizontal(classes="cloud-collection-toolbar"):
+                yield OptionList(
+                    id=_cloud_list_id("provider_regions"),
+                    classes="cloud-collection-list",
+                )
+                with Vertical(classes="cloud-collection-buttons"):
+                    yield Button("+ Add", id=_cloud_add_id("provider_regions"))
+                    yield Button("- Remove", id=_cloud_remove_id("provider_regions"))
+            with VerticalGroup(classes="cloud-detail"):
+                yield Label("Region", classes="field-label")
+                yield Input(id=_cloud_detail_id("provider_regions", "value"))
+
+        with VerticalGroup(
+            id=_cloud_block_id("instance_profiles"), classes="cloud-collection"
+        ):
+            yield Label("Instance profiles", classes="field-label")
+            with Horizontal(classes="cloud-collection-toolbar"):
+                yield OptionList(
+                    id=_cloud_list_id("instance_profiles"),
+                    classes="cloud-collection-list",
+                )
+                with Vertical(classes="cloud-collection-buttons"):
+                    yield Button("+ Add", id=_cloud_add_id("instance_profiles"))
+                    yield Button("- Remove", id=_cloud_remove_id("instance_profiles"))
+            for field_key, label, kind in CLOUD_PROFILE_DETAIL_FIELDS:
+                with VerticalGroup(classes="cloud-detail-wrap"):
+                    yield Label(label, classes="field-label")
+                    if kind == "bool":
+                        yield Switch(
+                            id=_cloud_detail_id("instance_profiles", field_key)
+                        )
+                    else:
+                        yield Input(id=_cloud_detail_id("instance_profiles", field_key))
+
+        for collection_key, title in (
+            ("worker_placements", "Worker placements"),
+            ("evaluator_placements", "Evaluator placements"),
+        ):
+            with VerticalGroup(
+                id=_cloud_block_id(collection_key), classes="cloud-collection"
+            ):
+                yield Label(title, classes="field-label")
+                with Horizontal(classes="cloud-collection-toolbar"):
+                    yield OptionList(
+                        id=_cloud_list_id(collection_key),
+                        classes="cloud-collection-list",
+                    )
+                    with Vertical(classes="cloud-collection-buttons"):
+                        yield Button("+ Add", id=_cloud_add_id(collection_key))
+                        yield Button("- Remove", id=_cloud_remove_id(collection_key))
+                for field_key, label, kind in CLOUD_PLACEMENT_DETAIL_FIELDS:
+                    with VerticalGroup(classes="cloud-detail-wrap"):
+                        yield Label(label, classes="field-label")
+                        if kind == "bool":
+                            yield Switch(id=_cloud_detail_id(collection_key, field_key))
+                        else:
+                            yield Input(id=_cloud_detail_id(collection_key, field_key))
 
     def _loaded_path_text(self) -> str:
         if self.loaded_path is None:
@@ -659,8 +806,200 @@ class ConfigBuilderApp(App[None]):
                             widget.select(selected_value)
                     self._field_validation_messages.pop(widget.id, None)
                     self._set_widget_invalid_state(widget, invalid=False)
+            self._sync_cloud_collection_widgets()
         finally:
             self._setting_fields = False
+
+    def _cloud_collection_items(self, key: str) -> list[Any]:
+        cloud_state = self.form_state.get("cloud", {})
+        if not isinstance(cloud_state, Mapping):
+            return []
+        items = cloud_state.get(key)
+        return items if isinstance(items, list) else []
+
+    def _ensure_cloud_collection_selection(self, key: str) -> None:
+        items = self._cloud_collection_items(key)
+        selected = self._cloud_collection_selection.get(key)
+        if not items:
+            self._cloud_collection_selection[key] = None
+            return
+        if selected is None or selected >= len(items):
+            self._cloud_collection_selection[key] = 0
+
+    def _cloud_option_prompts(self, key: str, items: list[Any]) -> list[str]:
+        prompts: list[str] = []
+        for index, item in enumerate(items, start=1):
+            if key == "provider_regions":
+                value = str(item).strip() if item is not None else ""
+                prompts.append(value or f"Region {index}")
+                continue
+            if key == "instance_profiles" and isinstance(item, Mapping):
+                name = str(item.get("name", "")).strip() or f"Profile {index}"
+                machine_type = str(item.get("machine_type", "")).strip()
+                prompts.append(f"{name} [{machine_type}]" if machine_type else name)
+                continue
+            if isinstance(item, Mapping):
+                parts = []
+                region = str(item.get("region", "")).strip()
+                zone = str(item.get("zone", "")).strip()
+                instance_profile = str(item.get("instance_profile", "")).strip()
+                count = item.get("count")
+                if region:
+                    parts.append(region)
+                if zone:
+                    parts.append(zone)
+                if instance_profile:
+                    parts.append(instance_profile)
+                if count not in (None, ""):
+                    parts.append(f"x{count}")
+                prompts.append(" | ".join(parts) or f"Placement {index} (inherit)")
+                continue
+            prompts.append(str(item))
+        return prompts
+
+    def _sync_cloud_collection_widgets(self) -> None:
+        cloud_enabled = bool(self.form_state.get("cloud", {}).get("enabled"))
+        for key in CLOUD_COLLECTION_TITLES:
+            items = self._cloud_collection_items(key)
+            self._ensure_cloud_collection_selection(key)
+            list_widget = self.query_one(f"#{_cloud_list_id(key)}", OptionList)
+            prompts = self._cloud_option_prompts(key, items)
+            list_widget.set_options(prompts)
+            list_widget.highlighted = self._cloud_collection_selection[key]
+            add_button = self.query_one(f"#{_cloud_add_id(key)}", Button)
+            remove_button = self.query_one(f"#{_cloud_remove_id(key)}", Button)
+            add_button.disabled = not cloud_enabled
+            remove_button.disabled = (
+                not cloud_enabled or self._cloud_collection_selection[key] is None
+            )
+            self._sync_cloud_collection_detail_widgets(key, cloud_enabled)
+
+    def _set_cloud_detail_disabled(
+        self, collection_key: str, field_key: str, disabled: bool
+    ) -> None:
+        widget = self.query_one(f"#{_cloud_detail_id(collection_key, field_key)}")
+        widget.disabled = disabled
+
+    def _sync_cloud_collection_detail_widgets(
+        self, collection_key: str, cloud_enabled: bool
+    ) -> None:
+        items = self._cloud_collection_items(collection_key)
+        index = self._cloud_collection_selection[collection_key]
+        if collection_key == "provider_regions":
+            widget = self.query_one(
+                f"#{_cloud_detail_id(collection_key, 'value')}", Input
+            )
+            widget.disabled = not cloud_enabled or index is None
+            widget.value = (
+                "" if index is None else str(items[index] if index < len(items) else "")
+            )
+            return
+
+        detail_fields = (
+            CLOUD_PROFILE_DETAIL_FIELDS
+            if collection_key == "instance_profiles"
+            else CLOUD_PLACEMENT_DETAIL_FIELDS
+        )
+        selected_item = (
+            items[index]
+            if index is not None
+            and index < len(items)
+            and isinstance(items[index], Mapping)
+            else {}
+        )
+        for field_key, _label, kind in detail_fields:
+            widget = self.query_one(f"#{_cloud_detail_id(collection_key, field_key)}")
+            disabled = not cloud_enabled or index is None
+            widget.disabled = disabled
+            value = (
+                selected_item.get(field_key)
+                if isinstance(selected_item, Mapping)
+                else None
+            )
+            if kind == "bool":
+                cast("Switch", widget).value = bool(value)
+            else:
+                cast("Input", widget).value = "" if value is None else str(value)
+
+    def _cloud_collection_items_copy(self, key: str) -> list[Any]:
+        return deepcopy(self._cloud_collection_items(key))
+
+    def _replace_cloud_collection_items(self, key: str, items: list[Any]) -> None:
+        self.form_state.setdefault("cloud", {})[key] = items
+        self._ensure_cloud_collection_selection(key)
+
+    def _next_profile_name(self) -> str:
+        existing_names = {
+            str(item.get("name", "")).strip()
+            for item in self._cloud_collection_items("instance_profiles")
+            if isinstance(item, Mapping)
+        }
+        counter = 1
+        while True:
+            candidate = f"new-profile-{counter}"
+            if candidate not in existing_names:
+                return candidate
+            counter += 1
+
+    def _add_cloud_collection_item(self, key: str) -> None:
+        previous_state = self._snapshot_form_state()
+        items = self._cloud_collection_items_copy(key)
+        if key == "provider_regions":
+            items.append("")
+        elif key == "instance_profiles":
+            items.append({"name": self._next_profile_name()})
+        else:
+            items.append({})
+        self._replace_cloud_collection_items(key, items)
+        self._cloud_collection_selection[key] = len(items) - 1
+        self._record_history(previous_state)
+        self._sync_cloud_collection_widgets()
+        self._refresh_previews()
+
+    def _remove_cloud_collection_item(self, key: str) -> None:
+        index = self._cloud_collection_selection.get(key)
+        items = self._cloud_collection_items(key)
+        if index is None or index >= len(items):
+            return
+        previous_state = self._snapshot_form_state()
+        items_copy = self._cloud_collection_items_copy(key)
+        items_copy.pop(index)
+        self._replace_cloud_collection_items(key, items_copy)
+        if items_copy:
+            self._cloud_collection_selection[key] = min(index, len(items_copy) - 1)
+        else:
+            self._cloud_collection_selection[key] = None
+        self._record_history(previous_state)
+        self._sync_cloud_collection_widgets()
+        self._refresh_previews()
+
+    def _update_cloud_collection_detail(
+        self,
+        collection_key: str,
+        field_key: str,
+        value: Any,
+    ) -> None:
+        index = self._cloud_collection_selection.get(collection_key)
+        if index is None:
+            return
+        previous_state = self._snapshot_form_state()
+        items = self._cloud_collection_items_copy(collection_key)
+        if collection_key == "provider_regions":
+            items[index] = value
+        else:
+            existing_item = items[index] if isinstance(items[index], Mapping) else {}
+            updated_item = deepcopy(dict(existing_item))
+            if _is_blank(value):
+                updated_item.pop(field_key, None)
+            else:
+                updated_item[field_key] = value
+            items[index] = updated_item
+        if items == self._cloud_collection_items(collection_key):
+            return
+        self._replace_cloud_collection_items(collection_key, items)
+        self._record_history(previous_state)
+        self._sync_cloud_collection_widgets()
+        self._refresh_previews()
 
     def _refresh_field_visibility(self) -> None:
         for section in SECTION_ORDER:
@@ -676,6 +1015,10 @@ class ConfigBuilderApp(App[None]):
                 wrapper.display = section == self.current_section and field.is_visible(
                     section_state
                 )
+        cloud_enabled = bool(self.form_state.get("cloud", {}).get("enabled"))
+        for key in CLOUD_COLLECTION_TITLES:
+            block = self.query_one(f"#{_cloud_block_id(key)}", VerticalGroup)
+            block.display = self.current_section == "cloud" and cloud_enabled
 
     def _refresh_previews(self) -> None:
         grouped = self._grouped_config()
@@ -698,6 +1041,7 @@ class ConfigBuilderApp(App[None]):
 
     def _refresh_ui(self) -> None:
         self._refresh_field_visibility()
+        self._sync_cloud_collection_widgets()
         self._refresh_previews()
 
     def _apply_loaded_state(self, loaded_state: dict[str, dict[str, Any]]) -> None:
@@ -1147,9 +1491,53 @@ class ConfigBuilderApp(App[None]):
             event.stop()
             event.prevent_default()
 
+    @on(OptionList.OptionHighlighted)
+    def handle_cloud_collection_highlighted(
+        self, event: OptionList.OptionHighlighted
+    ) -> None:
+        if self._setting_fields or not event.option_list.id:
+            return
+        if not event.option_list.id.startswith("cloud-list--"):
+            return
+        collection_key = event.option_list.id.removeprefix("cloud-list--")
+        self._cloud_collection_selection[collection_key] = event.option_index
+        self._sync_cloud_collection_detail_widgets(
+            collection_key,
+            bool(self.form_state.get("cloud", {}).get("enabled")),
+        )
+
+    @on(Button.Pressed)
+    def handle_cloud_collection_button_pressed(self, event: Button.Pressed) -> None:
+        if not event.button.id:
+            return
+        if event.button.id.startswith("cloud-add--"):
+            self._add_cloud_collection_item(event.button.id.removeprefix("cloud-add--"))
+            event.stop()
+            return
+        if event.button.id.startswith("cloud-remove--"):
+            self._remove_cloud_collection_item(
+                event.button.id.removeprefix("cloud-remove--")
+            )
+            event.stop()
+
     @on(Input.Changed)
     def handle_input_changed(self, event: Input.Changed) -> None:
         if self._setting_fields:
+            return
+        if event.input.id and event.input.id.startswith("cloud-detail--"):
+            _, collection_key, field_key = event.input.id.split("--", 2)
+            if field_key == "value":
+                value = event.value.strip()
+            elif field_key in {"boot_disk_size_gb", "count"}:
+                stripped = event.value.strip()
+                try:
+                    value = None if not stripped else int(stripped)
+                except ValueError:
+                    self._set_status("Expected an integer value")
+                    return
+            else:
+                value = event.value.strip()
+            self._update_cloud_collection_detail(collection_key, field_key, value)
             return
         field_info = self._field_from_widget_id(event.input.id)
         if field_info is None:
@@ -1172,6 +1560,10 @@ class ConfigBuilderApp(App[None]):
     @on(Switch.Changed)
     def handle_switch_changed(self, event: Switch.Changed) -> None:
         if self._setting_fields:
+            return
+        if event.switch.id and event.switch.id.startswith("cloud-detail--"):
+            _, collection_key, field_key = event.switch.id.split("--", 2)
+            self._update_cloud_collection_detail(collection_key, field_key, event.value)
             return
         field_info = self._field_from_widget_id(event.switch.id)
         if field_info is None:

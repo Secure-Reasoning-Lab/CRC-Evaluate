@@ -20,6 +20,7 @@ Non-goals:
 ## Constraints
 
 - The TUI already uses a normalized grouped-config representation for previews, field editing, and schema validation.
+- The editable surface now includes collection-backed cloud structures such as GCE regions, named instance profiles, and ordered worker/evaluator placements.
 - The write path must remain correct for provider-neutral cloud configs and other configs that rely on empty placeholder mappings such as `{}`.
 - A user may load one file and save to a different path; the loaded file remains the authoritative preservation base.
 - New configs created without loading a file first do not have an existing YAML document to preserve.
@@ -55,6 +56,7 @@ The normalization path is correct for semantics but lossy for presentation. Rege
 - Edited fields must be reflected in the written YAML even if this changes nearby formatting or comments tied directly to the edited node.
 - Unknown blocks and preserved extras that are outside the TUI’s editable surface must remain in the output unless they are semantically removed by the grouped-config model.
 - Meaningful empty mappings used for inheritance or defaults, such as empty cloud placement entries and empty instance profile mappings, must survive round-trip writes.
+- Ordered cloud collections edited through the TUI, including provider region lists and placement lists, must preserve their user-selected order in the written YAML.
 
 ### Destination Semantics
 
@@ -104,6 +106,7 @@ Validation required:
 - Regression tests for load-edit-save-as-to-new-file preserving the loaded file’s scaffolding.
 - Regression tests for new-from-scratch saves continuing to emit valid normalized YAML.
 - Regression tests for inherited empty cloud placeholders surviving round-trip writes.
+- Regression tests for collection-backed cloud edits preserving ordered regions, named instance profiles, and ordered worker/evaluator placements.
 
 ## Implementation Pointers
 
