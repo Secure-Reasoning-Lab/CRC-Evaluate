@@ -3,7 +3,7 @@ from __future__ import annotations
 from argparse import ArgumentParser
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 from rich.markup import escape
 from textual import events, on
@@ -31,6 +31,7 @@ from crsbench.genconfig_tui.core import (
     dump_yaml,
     load_roundtrip_document,
     load_state_from_grouped_config,
+    merge_section_extras,
     read_grouped_config,
     write_grouped_config,
 )
@@ -417,8 +418,13 @@ class ConfigBuilderApp(App[None]):
             source_roundtrip_document=self._loaded_roundtrip_yaml,
         )
 
-    def _merged_grouped_config(self) -> dict[str, Any]:
-        return build_grouped_config(self.form_state, section_extras=self.section_extras)
+    def _grouped_config(self) -> dict[str, Any]:
+        return build_grouped_config(self.form_state)
+
+    def _grouped_config_with_preserved_extras(
+        self, grouped: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        return merge_section_extras(grouped, self.section_extras)
 
     def _task_default_pov_enabled(self, task: str | None) -> bool:
         return task == "bugfixing"
@@ -467,7 +473,7 @@ class ConfigBuilderApp(App[None]):
                 )
 
     def _refresh_previews(self) -> None:
-        grouped = self._merged_grouped_config()
+        grouped = self._grouped_config()
         section_preview = self.query_one("#section-preview", TextArea)
         final_preview = self.query_one("#final-preview", TextArea)
         section_preview.text = dump_yaml(
@@ -492,6 +498,7 @@ class ConfigBuilderApp(App[None]):
 
     def _load_from_path(self, path: Path) -> None:
         self._loaded_roundtrip_yaml = None
+        self.section_extras = {}
         grouped = read_grouped_config(path)
         roundtrip_yaml = load_roundtrip_document(path)
         loaded_state, extras = load_state_from_grouped_config(grouped)
@@ -633,13 +640,14 @@ class ConfigBuilderApp(App[None]):
                     self._setting_fields = False
 
     def _validated_config(self) -> dict[str, Any]:
-        grouped = self._merged_grouped_config()
+        grouped = self._grouped_config()
         validate_grouped_config(grouped)
         return grouped
 
     def _write_to_requested_path(self, raw_path: str) -> None:
         try:
             grouped = self._validated_config()
+            grouped = self._grouped_config_with_preserved_extras(grouped)
             path = self._resolve_requested_output_path(raw_path)
             written_path = self._write_grouped_config_for_path(grouped, path)
         except Exception as exc:  # noqa: BLE001
@@ -685,8 +693,17 @@ class ConfigBuilderApp(App[None]):
                 "Load a config first to update it in place", severity="warning"
             )
             return
+        if self._loaded_roundtrip_yaml is None:
+            message = (
+                "Loaded file can no longer be updated in place until it is "
+                "reloaded successfully"
+            )
+            self._notify_plain(message, severity="error")
+            self._set_status(f"Update failed: {message}")
+            return
         try:
             grouped = self._validated_config()
+            grouped = self._grouped_config_with_preserved_extras(grouped)
             path = self._write_grouped_config_for_path(grouped, self.loaded_path)
         except Exception as exc:  # noqa: BLE001
             self._notify_plain(str(exc), severity="error")

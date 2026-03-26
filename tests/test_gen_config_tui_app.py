@@ -3,8 +3,44 @@ from unittest.mock import patch
 import crsbench.genconfig_tui.app as gen_config_tui_app
 import pytest
 from crsbench.genconfig_tui.app import ConfigBuilderApp
+from crsbench.genconfig_tui.core import build_grouped_config, dump_yaml
 from rich.markup import escape
 from textual.widgets import Input, Select, SelectionList
+
+
+def _valid_loaded_yaml_with_unknown_cloud_block() -> str:
+    grouped = build_grouped_config(
+        {
+            "experiment": {
+                "name": "demo-exp",
+                "task": "bugfixing",
+                "benchmark_suite": "sanity",
+                "mode": "delta",
+            },
+            "runtime": {
+                "trials": 1,
+                "max_total_time": 4001,
+                "build_timeout": 1200,
+                "run_timeout": 600,
+                "verify_timeout": 600,
+                "skip_litellm": True,
+                "pov_enabled": True,
+                "pov_max_variants_per_cpv": 1,
+            },
+            "storage": {
+                "experiment_filestore": "/tmp/exp",
+                "report_filestore": "/tmp/report",
+            },
+            "crs_compose": {
+                "service_name": "crs-libfuzzer",
+                "service_num_cores": 2,
+                "infra_shared": True,
+            },
+            "cloud": {},
+        }
+    )
+    grouped["cloud"] = {"custom_block": {"keep": "me"}}
+    return dump_yaml(grouped)
 
 
 def test_app_constructs():
@@ -433,8 +469,9 @@ async def test_blur_validation_does_not_run_whole_config_schema():
 async def test_write_requested_path_uses_current_dir_for_relative_prefixes(tmp_path):
     app = ConfigBuilderApp()
     async with app.run_test(size=(100, 24)) as pilot:
+        grouped = {"experiment": {"name": "demo-exp"}}
         with (
-            patch.object(app, "_validated_config", return_value={"experiment": {}}),
+            patch.object(app, "_validated_config", return_value=grouped),
             patch.object(gen_config_tui_app.Path, "cwd", return_value=tmp_path),
             patch.object(
                 gen_config_tui_app,
@@ -445,7 +482,7 @@ async def test_write_requested_path_uses_current_dir_for_relative_prefixes(tmp_p
             app._write_to_requested_path("saved")
             await pilot.pause()
             mock_write.assert_called_once_with(
-                {"experiment": {}}, output_path=tmp_path / "saved.yaml"
+                grouped, output_path=tmp_path / "saved.yaml"
             )
             assert "Wrote config to" in app.status_text
 
@@ -513,6 +550,44 @@ async def test_save_as_uses_in_memory_loaded_yaml_when_disk_file_changes(tmp_pat
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_validate_loaded_unknown_cloud_block_ignores_preserved_extras(tmp_path):
+    source = tmp_path / "source.yaml"
+    source.write_text(_valid_loaded_yaml_with_unknown_cloud_block(), encoding="utf-8")
+
+    app = ConfigBuilderApp(initial_path=source)
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+
+        app.action_validate_config()
+        await pilot.pause()
+
+        assert app.status_text.startswith("Validation passed for ")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_save_as_preserves_unknown_cloud_block_without_injecting_defaults(
+    tmp_path,
+):
+    source = tmp_path / "source.yaml"
+    source.write_text(_valid_loaded_yaml_with_unknown_cloud_block(), encoding="utf-8")
+
+    app = ConfigBuilderApp(initial_path=source)
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+
+        app._write_to_requested_path(str(tmp_path / "copy.yaml"))
+        await pilot.pause()
+
+    written = (tmp_path / "copy.yaml").read_text(encoding="utf-8")
+    assert "custom_block:\n    keep: me" in written
+    assert "orchestrator:" not in written
+    assert "workers:" not in written
+    assert "evaluators:" not in written
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_update_loaded_uses_loaded_yaml_as_preservation_base(tmp_path):
     source = tmp_path / "source.yaml"
     source.write_text(
@@ -563,6 +638,47 @@ async def test_failed_reload_clears_loaded_yaml_preservation_base(
         await pilot.pause()
 
         assert app._loaded_roundtrip_yaml is None
+        assert app.section_extras == {}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_update_loaded_fails_after_reload_clears_preservation_base(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "source.yaml"
+    original = "# top comment\nexperiment:\n  # keep me\n  name: old-name\n"
+    source.write_text(original, encoding="utf-8")
+
+    app = ConfigBuilderApp(initial_path=source)
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+
+        name = app.query_one("#field--experiment--name", Input)
+        app.set_focus(name)
+        await pilot.pause()
+        name.value = "new-name"
+        await pilot.pause()
+
+        monkeypatch.setattr(
+            gen_config_tui_app,
+            "read_grouped_config",
+            lambda _: (_ for _ in ()).throw(ValueError("boom")),
+        )
+        app.action_reload_file()
+        await pilot.pause()
+
+        app.action_update_loaded()
+        await pilot.pause()
+
+        assert app._loaded_roundtrip_yaml is None
+        assert app.loaded_path == source
+        assert app.status_text == (
+            "Update failed: Loaded file can no longer be updated in place until it is "
+            "reloaded successfully"
+        )
+
+    assert source.read_text(encoding="utf-8") == original
 
 
 @pytest.mark.anyio

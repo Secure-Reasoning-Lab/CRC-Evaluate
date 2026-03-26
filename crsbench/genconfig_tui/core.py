@@ -282,6 +282,46 @@ def _build_cloud_section(
     )
 
 
+def _loaded_cloud_has_known_structure(cloud: Mapping[str, Any]) -> bool:
+    return any(
+        key in cloud
+        for key in (
+            "providers",
+            "workers",
+            "evaluators",
+            "orchestrator",
+            "remote",
+            "defaults",
+            "bootstrap",
+            "env",
+        )
+    )
+
+
+def merge_section_extras(
+    grouped: Mapping[str, Any],
+    section_extras: Mapping[str, Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    pruned = _prune(dict(grouped))
+    if not section_extras:
+        return pruned
+
+    merged_with_extras: dict[str, Any] = {}
+    for section in SECTION_ORDER:
+        section_value = pruned.get(section)
+        extras_value = section_extras.get(section)
+        if isinstance(section_value, Mapping) and isinstance(extras_value, Mapping):
+            merged_value = _deep_merge(extras_value, section_value)
+        elif section_value is not None:
+            merged_value = section_value
+        else:
+            merged_value = deepcopy(extras_value)
+        pruned_merged_value = _prune(merged_value, (section,))
+        if not _is_blank(pruned_merged_value):
+            merged_with_extras[section] = pruned_merged_value
+    return _prune(merged_with_extras)
+
+
 def build_grouped_config(
     state: Mapping[str, Any],
     section_extras: Mapping[str, Mapping[str, Any]] | None = None,
@@ -335,20 +375,7 @@ def build_grouped_config(
         "crs_compose": _build_crs_compose_section(_section(state, "crs_compose")),
         "cloud": _build_cloud_section(_section(state, "cloud"), storage_state),
     }
-    pruned = _prune(grouped)
-
-    if section_extras:
-        merged_with_extras: dict[str, Any] = {}
-        for section in pruned:
-            section_value = pruned.get(section, {})
-            extras_value = section_extras.get(section, {})
-            if isinstance(section_value, Mapping) and isinstance(extras_value, Mapping):
-                merged_with_extras[section] = _deep_merge(extras_value, section_value)
-            else:
-                merged_with_extras[section] = section_value
-        return _prune(merged_with_extras)
-
-    return pruned
+    return merge_section_extras(grouped, section_extras)
 
 
 def dump_yaml(data: Mapping[str, Any]) -> str:
@@ -379,6 +406,7 @@ def load_state_from_grouped_config(
     evaluator = deepcopy(dict(grouped_dict.get("evaluator", {})))
     crs_compose = deepcopy(dict(grouped_dict.get("crs_compose", {})))
     cloud = deepcopy(dict(grouped_dict.get("cloud", {})))
+    cloud_enabled = _loaded_cloud_has_known_structure(cloud)
 
     inputs = deepcopy(dict(_pop_known(runtime, "inputs") or {}))
     litellm = deepcopy(dict(_pop_known(runtime, "litellm") or {}))
@@ -484,7 +512,7 @@ def load_state_from_grouped_config(
         ),
         "cloud": _prune(
             {
-                "enabled": bool(grouped_dict.get("cloud")),
+                "enabled": cloud_enabled,
                 "remote_experiment_root": remote_cfg.get("experiment_root"),
                 "defaults_readiness_timeout_sec": defaults_cfg.get(
                     "readiness_timeout_sec"

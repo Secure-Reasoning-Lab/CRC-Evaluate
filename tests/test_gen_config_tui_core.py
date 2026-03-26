@@ -234,6 +234,42 @@ def test_load_state_from_grouped_config_maps_cloud_fields_and_preserves_unknowns
     assert extras == {"cloud": {"custom_block": {"keep": "me"}}}
 
 
+def test_load_state_from_grouped_config_does_not_enable_cloud_for_unknown_only_block():
+    grouped = {
+        "experiment": {
+            "name": "loaded-exp",
+            "task": "bugfinding",
+            "benchmark_suite": "sanity",
+            "mode": "delta",
+        },
+        "runtime": {
+            "trials": 2,
+            "max_total_time": 7201,
+            "build_timeout": 3600,
+            "run_timeout": 600,
+            "verify_timeout": 600,
+        },
+        "storage": {
+            "experiment_filestore": "/tmp/exp",
+            "report_filestore": "/tmp/report",
+        },
+        "crs_compose": {
+            "oss_crs_infra": {"shared": True},
+            "crs-libfuzzer": {"num_cores": 2},
+        },
+        "cloud": {
+            "custom_block": {"keep": "me"},
+        },
+    }
+
+    state, extras = load_state_from_grouped_config(grouped)
+    rebuilt = build_grouped_config(state, section_extras=extras)
+
+    assert state["cloud"] == {"enabled": False}
+    assert extras == {"cloud": {"custom_block": {"keep": "me"}}}
+    assert rebuilt["cloud"] == {"custom_block": {"keep": "me"}}
+
+
 def test_build_grouped_config_preserves_section_extras():
     state = {
         "experiment": {
