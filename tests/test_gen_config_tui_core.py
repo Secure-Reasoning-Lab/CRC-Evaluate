@@ -428,6 +428,151 @@ def test_cloud_round_trip_preserves_empty_inherited_placements():
     validate_grouped_config(rebuilt)
 
 
+def test_load_state_from_grouped_config_exposes_cloud_collection_state():
+    grouped = {
+        "experiment": {
+            "name": "loaded-exp",
+            "task": "bugfinding",
+            "benchmark_suite": "sanity",
+            "mode": "delta",
+        },
+        "runtime": {
+            "trials": 1,
+            "max_total_time": 7201,
+            "build_timeout": 3600,
+            "run_timeout": 600,
+            "verify_timeout": 600,
+        },
+        "storage": {
+            "experiment_filestore": "/tmp/exp",
+            "report_filestore": "/tmp/report",
+        },
+        "crs_compose": {
+            "oss_crs_infra": {"shared": True},
+            "crs-libfuzzer": {"num_cores": 2},
+        },
+        "cloud": {
+            "providers": {
+                "gce": {
+                    "project": "demo-project",
+                    "regions": ["us-east5", "us-east1", "us-south1"],
+                    "fallback": True,
+                    "profile_defaults": {
+                        "machine_type": "n2d-standard-16",
+                        "boot_disk_size_gb": 100,
+                        "image": "ubuntu-image",
+                        "service_account_email": "svc@example.com",
+                        "owner_label": "owner",
+                    },
+                    "instance_profiles": {
+                        "gce-orchestrator-n2d": {},
+                        "gce-worker-n2d": {"machine_type": "n2d-standard-32"},
+                        "gce-evaluator-n2d": {},
+                    },
+                }
+            },
+            "orchestrator": {"instance_profile": "gce-orchestrator-n2d"},
+            "workers": {
+                "defaults": {"instance_profile": "gce-worker-n2d", "count": 1},
+                "placements": [{}, {"region": "us-east1", "count": 2}],
+            },
+            "evaluators": {
+                "defaults": {"instance_profile": "gce-evaluator-n2d", "count": 1},
+                "placements": [{"zone": "us-east5-b"}],
+            },
+        },
+    }
+
+    state, extras = load_state_from_grouped_config(grouped)
+
+    assert state["cloud"]["provider_regions"] == ["us-east5", "us-east1", "us-south1"]
+    assert state["cloud"]["provider_fallback"] is True
+    assert state["cloud"]["instance_profiles"] == [
+        {"name": "gce-orchestrator-n2d"},
+        {"name": "gce-worker-n2d", "machine_type": "n2d-standard-32"},
+        {"name": "gce-evaluator-n2d"},
+    ]
+    assert state["cloud"]["worker_placements"] == [
+        {},
+        {"region": "us-east1", "count": 2},
+    ]
+    assert state["cloud"]["evaluator_placements"] == [{"zone": "us-east5-b"}]
+    assert extras == {}
+
+
+def test_build_grouped_config_prefers_cloud_collection_state():
+    grouped = build_grouped_config(
+        {
+            "experiment": {
+                "name": "demo-exp",
+                "task": "bugfixing",
+                "benchmark_suite": "sanity",
+                "mode": "delta",
+            },
+            "runtime": {
+                "trials": 1,
+                "max_total_time": 4001,
+                "build_timeout": 1200,
+                "run_timeout": 600,
+                "verify_timeout": 600,
+                "skip_litellm": True,
+            },
+            "storage": {
+                "experiment_filestore": "/tmp/exp",
+                "report_filestore": "/tmp/report",
+            },
+            "crs_compose": {
+                "service_name": "crs-libfuzzer",
+                "service_num_cores": 2,
+                "infra_shared": True,
+            },
+            "cloud": {
+                "enabled": True,
+                "provider_project": "demo-project",
+                "provider_region": "legacy-region-should-not-win",
+                "provider_regions": ["us-east5", "us-east1", "us-south1"],
+                "provider_fallback": True,
+                "provider_ssh_via_iap": True,
+                "profile_machine_type": "n2d-standard-16",
+                "profile_boot_disk_size_gb": 100,
+                "profile_image": "ubuntu-image",
+                "profile_service_account_email": "svc@example.com",
+                "profile_owner_label": "owner",
+                "orchestrator_profile": "gce-orchestrator-n2d",
+                "worker_profile": "gce-worker-n2d",
+                "evaluator_profile": "gce-evaluator-n2d",
+                "worker_count": 1,
+                "evaluator_count": 1,
+                "instance_profiles": [
+                    {"name": "gce-orchestrator-n2d"},
+                    {"name": "gce-worker-n2d", "machine_type": "n2d-standard-32"},
+                    {"name": "gce-evaluator-n2d"},
+                ],
+                "worker_placements": [{}, {"region": "us-east1", "count": 2}],
+                "evaluator_placements": [{"zone": "us-east5-b"}],
+            },
+        }
+    )
+
+    assert grouped["cloud"]["providers"]["gce"]["regions"] == [
+        "us-east5",
+        "us-east1",
+        "us-south1",
+    ]
+    assert grouped["cloud"]["providers"]["gce"]["fallback"] is True
+    assert grouped["cloud"]["providers"]["gce"]["instance_profiles"] == {
+        "gce-orchestrator-n2d": {},
+        "gce-worker-n2d": {"machine_type": "n2d-standard-32"},
+        "gce-evaluator-n2d": {},
+    }
+    assert grouped["cloud"]["workers"]["placements"] == [
+        {},
+        {"region": "us-east1", "count": 2},
+    ]
+    assert grouped["cloud"]["evaluators"]["placements"] == [{"zone": "us-east5-b"}]
+    validate_grouped_config(grouped)
+
+
 def test_build_grouped_config_uses_exactly_one_crs_infra_cpu_mode():
     grouped = build_grouped_config(
         {

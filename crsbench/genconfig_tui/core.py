@@ -23,6 +23,26 @@ SECTION_ORDER = (
     "cloud",
 )
 
+PROFILE_OVERRIDE_KEYS = (
+    "machine_type",
+    "boot_disk_size_gb",
+    "boot_disk_type",
+    "image",
+    "service_account_email",
+    "owner_label",
+)
+
+PLACEMENT_KEYS = (
+    "region",
+    "regions",
+    "zone",
+    "zones",
+    "instance_profile",
+    "count",
+    "fallback",
+    "env",
+)
+
 
 def _make_roundtrip_yaml() -> YAML:
     yaml_rt = YAML(typ="rt")
@@ -55,6 +75,12 @@ def _should_preserve_empty_mapping(path: tuple[Any, ...]) -> bool:
         and path[1] in {"workers", "evaluators"}
         and path[2] == "placements"
         and isinstance(path[3], int)
+    ):
+        return True
+    if (
+        len(path) >= 2
+        and path[-2] in {"worker_placements", "evaluator_placements"}
+        and isinstance(path[-1], int)
     ):
         return True
     return False
@@ -221,9 +247,18 @@ def _build_cloud_section(
     evaluator_profile = state.get("evaluator_profile") or "gce-evaluator-n2d"
     worker_region = state.get("worker_region")
     evaluator_region = state.get("evaluator_region")
+    provider_regions = deepcopy(state.get("provider_regions"))
 
-    worker_placement = _prune({"region": worker_region}) or {}
-    evaluator_placement = _prune({"region": evaluator_region}) or {}
+    worker_placements = _cloud_state_placements(
+        state,
+        key="worker_placements",
+        fallback_region=worker_region,
+    )
+    evaluator_placements = _cloud_state_placements(
+        state,
+        key="evaluator_placements",
+        fallback_region=evaluator_region,
+    )
 
     env = {}
     for env_key in (
@@ -234,6 +269,30 @@ def _build_cloud_section(
         value = state.get(f"env_{env_key}")
         if not _is_blank(value):
             env[env_key] = value
+
+    provider_scope = {
+        "project": state.get("provider_project"),
+        "ssh_via_iap": state.get("provider_ssh_via_iap"),
+        "profile_defaults": {
+            "machine_type": state.get("profile_machine_type"),
+            "boot_disk_size_gb": state.get("profile_boot_disk_size_gb"),
+            "boot_disk_type": state.get("profile_boot_disk_type"),
+            "image": state.get("profile_image"),
+            "service_account_email": state.get("profile_service_account_email"),
+            "owner_label": state.get("profile_owner_label"),
+        },
+        "instance_profiles": _cloud_state_instance_profiles(
+            state,
+            orchestrator_profile=orchestrator_profile,
+            worker_profile=worker_profile,
+            evaluator_profile=evaluator_profile,
+        ),
+    }
+    if isinstance(provider_regions, list):
+        provider_scope["regions"] = deepcopy(provider_regions)
+        provider_scope["fallback"] = state.get("provider_fallback")
+    else:
+        provider_scope["region"] = state.get("provider_region")
 
     return _prune(
         {
@@ -252,28 +311,7 @@ def _build_cloud_section(
                 "prepare_mode": state.get("bootstrap_prepare_mode"),
                 "download_benchmarks": state.get("bootstrap_download_benchmarks"),
             },
-            "providers": {
-                "gce": {
-                    "project": state.get("provider_project"),
-                    "region": state.get("provider_region"),
-                    "ssh_via_iap": state.get("provider_ssh_via_iap"),
-                    "profile_defaults": {
-                        "machine_type": state.get("profile_machine_type"),
-                        "boot_disk_size_gb": state.get("profile_boot_disk_size_gb"),
-                        "boot_disk_type": state.get("profile_boot_disk_type"),
-                        "image": state.get("profile_image"),
-                        "service_account_email": state.get(
-                            "profile_service_account_email"
-                        ),
-                        "owner_label": state.get("profile_owner_label"),
-                    },
-                    "instance_profiles": {
-                        orchestrator_profile: {},
-                        worker_profile: {},
-                        evaluator_profile: {},
-                    },
-                }
-            },
+            "providers": {"gce": provider_scope},
             "orchestrator": {
                 "instance_profile": orchestrator_profile,
             },
@@ -282,18 +320,71 @@ def _build_cloud_section(
                     "instance_profile": worker_profile,
                     "count": state.get("worker_count"),
                 },
-                "placements": [worker_placement],
+                "placements": worker_placements,
             },
             "evaluators": {
                 "defaults": {
                     "instance_profile": evaluator_profile,
                     "count": state.get("evaluator_count"),
                 },
-                "placements": [evaluator_placement],
+                "placements": evaluator_placements,
             },
         },
         path=("cloud",),
     )
+
+
+def _cloud_state_instance_profiles(
+    cloud_state: Mapping[str, Any],
+    *,
+    orchestrator_profile: str,
+    worker_profile: str,
+    evaluator_profile: str,
+) -> dict[str, Any]:
+    if "instance_profiles" in cloud_state:
+        profiles = cast(
+            "list[Mapping[str, Any]]", cloud_state.get("instance_profiles") or []
+        )
+        built_profiles: dict[str, Any] = {}
+        for profile in profiles:
+            name = str(profile.get("name", "")).strip()
+            if not name:
+                continue
+            built_profiles[name] = (
+                _prune(
+                    {key: deepcopy(profile.get(key)) for key in PROFILE_OVERRIDE_KEYS}
+                )
+                or {}
+            )
+        return built_profiles
+
+    return {
+        orchestrator_profile: {},
+        worker_profile: {},
+        evaluator_profile: {},
+    }
+
+
+def _cloud_state_placements(
+    cloud_state: Mapping[str, Any],
+    *,
+    key: str,
+    fallback_region: Any,
+) -> list[dict[str, Any]]:
+    if key in cloud_state:
+        placements = cast("list[Mapping[str, Any]]", cloud_state.get(key) or [])
+        return [
+            _prune(
+                {
+                    placement_key: deepcopy(item.get(placement_key))
+                    for placement_key in PLACEMENT_KEYS
+                }
+            )
+            or {}
+            for item in placements
+        ]
+
+    return [_prune({"region": fallback_region}) or {}]
 
 
 def _loaded_cloud_has_known_structure(cloud: Mapping[str, Any]) -> bool:
@@ -446,6 +537,7 @@ def load_state_from_grouped_config(
     providers = deepcopy(dict(_pop_known(cloud, "providers") or {}))
     gce = deepcopy(dict(providers.get("gce", {})))
     profile_defaults = deepcopy(dict(gce.get("profile_defaults", {})))
+    instance_profiles_cfg = deepcopy(dict(gce.get("instance_profiles", {})))
     workers_cfg = deepcopy(dict(_pop_known(cloud, "workers") or {}))
     worker_defaults = deepcopy(dict(workers_cfg.get("defaults", {})))
     worker_placements = deepcopy(list(workers_cfg.get("placements", [])))
@@ -549,6 +641,8 @@ def load_state_from_grouped_config(
                 ),
                 "provider_project": gce.get("project"),
                 "provider_region": gce.get("region"),
+                "provider_regions": deepcopy(gce.get("regions")),
+                "provider_fallback": gce.get("fallback"),
                 "provider_ssh_via_iap": gce.get("ssh_via_iap"),
                 "profile_machine_type": profile_defaults.get("machine_type"),
                 "profile_boot_disk_size_gb": profile_defaults.get("boot_disk_size_gb"),
@@ -563,6 +657,11 @@ def load_state_from_grouped_config(
                 "evaluator_profile": evaluator_defaults.get("instance_profile"),
                 "worker_count": worker_defaults.get("count"),
                 "evaluator_count": evaluator_defaults.get("count"),
+                "instance_profiles": _load_cloud_instance_profiles(
+                    instance_profiles_cfg
+                ),
+                "worker_placements": _load_cloud_placements(worker_placements),
+                "evaluator_placements": _load_cloud_placements(evaluator_placements),
                 "worker_region": first_worker_placement.get("region"),
                 "evaluator_region": first_evaluator_placement.get("region"),
             }
@@ -583,6 +682,31 @@ def load_state_from_grouped_config(
             extras[section_name] = section_value
 
     return state, extras
+
+
+def _load_cloud_instance_profiles(
+    instance_profiles: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    loaded_profiles: list[dict[str, Any]] = []
+    for name, value in instance_profiles.items():
+        profile = {"name": name}
+        if isinstance(value, Mapping):
+            profile.update(
+                _prune({key: deepcopy(value.get(key)) for key in PROFILE_OVERRIDE_KEYS})
+                or {}
+            )
+        loaded_profiles.append(profile)
+    return loaded_profiles
+
+
+def _load_cloud_placements(placements: list[Any]) -> list[dict[str, Any]]:
+    loaded_placements: list[dict[str, Any]] = []
+    for item in placements:
+        if isinstance(item, Mapping):
+            loaded_placements.append(
+                _prune({key: deepcopy(item.get(key)) for key in PLACEMENT_KEYS}) or {}
+            )
+    return loaded_placements
 
 
 def read_grouped_config(path: Path) -> dict[str, Any]:
