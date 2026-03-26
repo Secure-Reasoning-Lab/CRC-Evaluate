@@ -342,6 +342,42 @@ async def test_fixing_field_does_not_clear_unrelated_status_message():
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_fixing_one_memory_field_does_not_clear_another_memory_field_error():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        app.current_section = "crs_compose"
+        app._refresh_ui()
+        service_mem_limit = app.query_one(
+            "#field--crs_compose--service_mem_limit", Input
+        )
+        infra_mem_limit = app.query_one("#field--crs_compose--infra_mem_limit", Input)
+        work_dir = app.query_one("#field--crs_compose--work_dir", Input)
+
+        app.set_focus(service_mem_limit)
+        await pilot.pause()
+        service_mem_limit.value = "123"
+        await pilot.pause()
+        app.set_focus(infra_mem_limit)
+        await pilot.pause()
+        assert "Invalid memory format" in app.status_text
+
+        infra_mem_limit.value = "456"
+        await pilot.pause()
+        app.set_focus(work_dir)
+        await pilot.pause()
+        assert "Invalid memory format" in app.status_text
+
+        app.set_focus(service_mem_limit)
+        await pilot.pause()
+        service_mem_limit.value = "1G"
+        await pilot.pause()
+        app.set_focus(work_dir)
+        await pilot.pause()
+        assert "Invalid memory format" in app.status_text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_invalid_field_does_not_mark_other_blurred_fields_invalid():
     app = ConfigBuilderApp()
     async with app.run_test(size=(100, 24)) as pilot:
@@ -412,6 +448,24 @@ async def test_write_requested_path_uses_current_dir_for_relative_prefixes(tmp_p
                 {"experiment": {}}, output_path=tmp_path / "saved.yaml"
             )
             assert "Wrote config to" in app.status_text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_invalid_save_path_keeps_save_modal_open():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        app.action_write_timestamped()
+        await pilot.pause()
+        assert isinstance(app.screen, gen_config_tui_app.SavePathScreen)
+
+        save_input = app.screen.query_one("#save-path-input", Input)
+        save_input.value = "saved.txt"
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert isinstance(app.screen, gen_config_tui_app.SavePathScreen)
 
 
 @pytest.mark.anyio

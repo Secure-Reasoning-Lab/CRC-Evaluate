@@ -52,6 +52,20 @@ def _wrap_id(section: str, key: str) -> str:
 NotificationSeverity = Literal["information", "warning", "error"]
 
 
+def resolve_requested_output_path(raw_path: str, cwd: Path | None = None) -> Path:
+    path_text = raw_path.strip()
+    if not path_text:
+        raise ValueError("Enter a filename or absolute path to save the config.")
+    path = Path(path_text).expanduser()
+    if not path.is_absolute():
+        path = (cwd or Path.cwd()) / path
+    if path.suffix == "":
+        path = path.with_suffix(".yaml")
+    elif path.suffix not in {".yaml", ".yml"}:
+        raise ValueError("Saved config path must end with .yaml or .yml.")
+    return path
+
+
 class SavePathScreen(ModalScreen[str | None]):
     CSS = """
     SavePathScreen {
@@ -108,9 +122,18 @@ class SavePathScreen(ModalScreen[str | None]):
     def action_cancel(self) -> None:
         self.dismiss(None)
 
+    def _submit_path(self, raw_path: str) -> None:
+        try:
+            resolve_requested_output_path(raw_path)
+        except ValueError as exc:
+            self.notify(escape(str(exc)), severity="error")
+            self.query_one("#save-path-input", Input).focus()
+            return
+        self.dismiss(raw_path)
+
     @on(Input.Submitted, "#save-path-input")
     def handle_submit(self, event: Input.Submitted) -> None:
-        self.dismiss(event.value)
+        self._submit_path(event.value)
 
     @on(Button.Pressed, "#cancel-save")
     def handle_cancel(self) -> None:
@@ -119,7 +142,7 @@ class SavePathScreen(ModalScreen[str | None]):
     @on(Button.Pressed, "#confirm-save")
     def handle_confirm(self) -> None:
         value = self.query_one("#save-path-input", Input).value
-        self.dismiss(value)
+        self._submit_path(value)
 
 
 class ConfigBuilderApp(App[None]):
@@ -245,6 +268,7 @@ class ConfigBuilderApp(App[None]):
         self.section_extras: dict[str, dict[str, Any]] = {}
         self._setting_fields = False
         self.status_text = ""
+        self._status_source_widget_id: str | None = None
         self._last_focused_field_widget: Any = None
         self._field_validation_messages: dict[str, str] = {}
 
@@ -354,8 +378,9 @@ class ConfigBuilderApp(App[None]):
         else:
             self._refresh_ui()
 
-    def _set_status(self, text: str) -> None:
+    def _set_status(self, text: str, *, source_widget_id: str | None = None) -> None:
         self.status_text = text
+        self._status_source_widget_id = source_widget_id
         self.query_one("#status", Static).update(text)
 
     def _notify_plain(
@@ -369,17 +394,7 @@ class ConfigBuilderApp(App[None]):
         return "gen-experiment-config.yaml"
 
     def _resolve_requested_output_path(self, raw_path: str) -> Path:
-        path_text = raw_path.strip()
-        if not path_text:
-            raise ValueError("Enter a filename or absolute path to save the config.")
-        path = Path(path_text).expanduser()
-        if not path.is_absolute():
-            path = Path.cwd() / path
-        if path.suffix == "":
-            path = path.with_suffix(".yaml")
-        elif path.suffix not in {".yaml", ".yml"}:
-            raise ValueError("Saved config path must end with .yaml or .yml.")
-        return path
+        return resolve_requested_output_path(raw_path)
 
     def _handle_save_path_selected(self, raw_path: str | None) -> None:
         if raw_path is None:
@@ -498,6 +513,13 @@ class ConfigBuilderApp(App[None]):
         wrapper = self.query_one(f"#{_wrap_id(section, field.key)}", VerticalGroup)
         wrapper.set_class(invalid, "invalid")
 
+    def _set_field_error_status(self, widget: Any, message: str) -> None:
+        self._set_status(message, source_widget_id=widget.id)
+
+    def _clear_status_if_owned_by(self, widget_id: str | None) -> None:
+        if widget_id and self._status_source_widget_id == widget_id:
+            self._set_status("")
+
     def _validate_widget(self, widget: Any) -> None:
         field_info = self._field_from_widget_id(widget.id)
         if field_info is None:
@@ -513,8 +535,8 @@ class ConfigBuilderApp(App[None]):
             raise
         self._field_validation_messages.pop(widget.id, None)
         self._set_widget_invalid_state(widget, invalid=False)
-        if previous_error is not None and self.status_text == previous_error:
-            self._set_status("")
+        if previous_error is not None:
+            self._clear_status_if_owned_by(widget.id)
 
     def _is_form_field_widget(self, widget: Any) -> bool:
         if not (widget.id and widget.id.startswith("field--")):
@@ -676,7 +698,7 @@ class ConfigBuilderApp(App[None]):
             try:
                 self._validate_widget(previous)
             except Exception as exc:  # noqa: BLE001
-                self._set_status(str(exc))
+                self._set_field_error_status(previous, str(exc))
         self._last_focused_field_widget = widget
         widget.scroll_visible(animate=False, immediate=True)
 
@@ -690,7 +712,7 @@ class ConfigBuilderApp(App[None]):
         try:
             self._validate_widget(widget)
         except Exception as exc:  # noqa: BLE001
-            self._set_status(str(exc))
+            self._set_field_error_status(widget, str(exc))
 
     @on(events.Key)
     def handle_field_arrow_navigation(self, event: events.Key) -> None:
