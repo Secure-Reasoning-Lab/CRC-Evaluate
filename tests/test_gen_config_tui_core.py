@@ -1,6 +1,8 @@
 from datetime import datetime
 from pathlib import Path
 
+import crsbench.genconfig_tui.core as genconfig_core
+import pytest
 from crsbench.genconfig_tui.core import (
     build_grouped_config,
     dump_yaml,
@@ -365,12 +367,7 @@ def test_write_grouped_config_writes_timestamped_yaml(tmp_path):
 
 def test_write_grouped_config_round_trips_loaded_yaml_comments(tmp_path):
     source = tmp_path / "source.yaml"
-    original_source = (
-        "# top comment\n"
-        "experiment:\n"
-        "  # keep me\n"
-        "  name: old-name\n"
-    )
+    original_source = "# top comment\nexperiment:\n  # keep me\n  name: old-name\n"
     source.write_text(original_source, encoding="utf-8")
 
     grouped = {"experiment": {"name": "new-name"}}
@@ -388,3 +385,131 @@ def test_write_grouped_config_round_trips_loaded_yaml_comments(tmp_path):
     assert "name: new-name" in written
     assert "old-name" not in written
     assert source.read_text(encoding="utf-8") == original_source
+
+
+def test_round_trip_write_updates_loaded_file_preserves_comments_and_order(tmp_path):
+    source = tmp_path / "source.yaml"
+    source.write_text(
+        "# top comment\n"
+        "experiment:\n"
+        "  # keep me\n"
+        "  name: old-name\n"
+        "runtime:\n"
+        "  trials: 1\n",
+        encoding="utf-8",
+    )
+
+    grouped = {
+        "experiment": {"name": "new-name"},
+        "runtime": {"trials": 2},
+    }
+
+    written_path = write_grouped_config(
+        grouped,
+        output_path=source,
+        source_roundtrip_path=source,
+    )
+
+    written = source.read_text(encoding="utf-8")
+    assert written_path == source
+    assert "# top comment" in written
+    assert "# keep me" in written
+    assert written.index("experiment:") < written.index("runtime:")
+    assert "name: new-name" in written
+    assert "trials: 2" in written
+    assert "old-name" not in written
+
+
+def test_round_trip_write_preserves_unknown_blocks_and_section_extras(tmp_path):
+    source = tmp_path / "source.yaml"
+    source.write_text(
+        "experiment:\n  name: old-name\ncloud:\n  custom_block:\n    keep: me\n",
+        encoding="utf-8",
+    )
+
+    grouped = {
+        "experiment": {"name": "new-name"},
+        "cloud": {"custom_block": {"keep": "me"}},
+    }
+
+    write_grouped_config(
+        grouped,
+        output_path=tmp_path / "copy.yaml",
+        source_roundtrip_path=source,
+    )
+
+    written = (tmp_path / "copy.yaml").read_text(encoding="utf-8")
+    assert "name: new-name" in written
+    assert "custom_block:" in written
+    assert "keep: me" in written
+
+
+def test_round_trip_write_preserves_empty_cloud_placeholders(tmp_path):
+    source = tmp_path / "source.yaml"
+    source.write_text(
+        "cloud:\n"
+        "  workers:\n"
+        "    defaults:\n"
+        "      instance_profile: gce-worker-n2d\n"
+        "      count: 1\n"
+        "    placements:\n"
+        "      - {}\n",
+        encoding="utf-8",
+    )
+
+    grouped = {
+        "cloud": {
+            "workers": {
+                "defaults": {"instance_profile": "gce-worker-n2d", "count": 1},
+                "placements": [{}],
+            }
+        }
+    }
+
+    write_grouped_config(
+        grouped,
+        output_path=tmp_path / "out.yaml",
+        source_roundtrip_path=source,
+    )
+
+    assert "      - {}" in (tmp_path / "out.yaml").read_text(encoding="utf-8")
+
+
+def test_round_trip_write_merge_failure_does_not_fall_back_to_normalized_yaml(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "source.yaml"
+    output = tmp_path / "out.yaml"
+    source.write_text("experiment:\n  name: old-name\n", encoding="utf-8")
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("merge failed")
+
+    monkeypatch.setattr(
+        genconfig_core,
+        "_merge_roundtrip_document",
+        _boom,
+        raising=False,
+    )
+
+    with pytest.raises(RuntimeError, match="merge failed"):
+        write_grouped_config(
+            {"experiment": {"name": "new-name"}},
+            output_path=output,
+            source_roundtrip_path=source,
+        )
+
+    assert not output.exists()
+
+
+def test_write_grouped_config_without_roundtrip_base_emits_normalized_yaml(tmp_path):
+    output = tmp_path / "out.yaml"
+
+    write_grouped_config(
+        {"runtime": {"trials": 1}, "experiment": {"name": "demo-exp"}},
+        output_path=output,
+    )
+
+    assert output.read_text(encoding="utf-8").strip() == (
+        "runtime:\n  trials: 1\nexperiment:\n  name: demo-exp"
+    )

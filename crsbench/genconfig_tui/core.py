@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime
+from io import StringIO
 from pathlib import Path
 from typing import Any, Mapping
 
 import yaml
+from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
 SECTION_ORDER = (
     "experiment",
@@ -17,6 +20,13 @@ SECTION_ORDER = (
     "crs_compose",
     "cloud",
 )
+
+
+def _make_roundtrip_yaml() -> YAML:
+    yaml_rt = YAML(typ="rt")
+    yaml_rt.default_flow_style = False
+    yaml_rt.indent(mapping=2, sequence=4, offset=2)
+    return yaml_rt
 
 
 def _is_blank(value: Any) -> bool:
@@ -537,6 +547,88 @@ def read_grouped_config(path: Path) -> dict[str, Any]:
     return loaded
 
 
+def _load_roundtrip_document(path: Path) -> CommentedMap:
+    yaml_rt = _make_roundtrip_yaml()
+    loaded = yaml_rt.load(path.read_text(encoding="utf-8"))
+    if not isinstance(loaded, CommentedMap):
+        raise ValueError(f"Expected mapping at top level in {path}")
+    return loaded
+
+
+def _grouped_to_roundtrip_payload(value: Any, path: tuple[Any, ...] = ()) -> Any:
+    if isinstance(value, Mapping):
+        mapping = CommentedMap()
+        for key, item in value.items():
+            mapping[key] = _grouped_to_roundtrip_payload(item, (*path, key))
+        if not mapping and _should_preserve_empty_mapping(path):
+            mapping.fa.set_flow_style()
+        return mapping
+    if isinstance(value, list):
+        sequence = CommentedSeq()
+        for index, item in enumerate(value):
+            sequence.append(_grouped_to_roundtrip_payload(item, (*path, index)))
+        return sequence
+    return deepcopy(value)
+
+
+def _merge_roundtrip_node(target: Any, payload: Any, path: tuple[Any, ...]) -> Any:
+    if isinstance(payload, CommentedMap):
+        if not isinstance(target, CommentedMap):
+            return deepcopy(payload)
+        for key, value in payload.items():
+            child_path = (*path, key)
+            if key in target:
+                target[key] = _merge_roundtrip_node(target[key], value, child_path)
+            else:
+                target[key] = deepcopy(value)
+        for key in list(target):
+            if key not in payload:
+                del target[key]
+        if not target and _should_preserve_empty_mapping(path):
+            target.fa.set_flow_style()
+        return target
+
+    if isinstance(payload, CommentedSeq):
+        if not isinstance(target, CommentedSeq):
+            return deepcopy(payload)
+        for index, value in enumerate(payload):
+            child_path = (*path, index)
+            if index < len(target):
+                target[index] = _merge_roundtrip_node(target[index], value, child_path)
+            else:
+                target.append(deepcopy(value))
+        while len(target) > len(payload):
+            del target[len(target) - 1]
+        return target
+
+    return deepcopy(payload)
+
+
+def _merge_roundtrip_document(
+    document: CommentedMap,
+    grouped: Mapping[str, Any],
+) -> CommentedMap:
+    payload = _grouped_to_roundtrip_payload(grouped)
+    for section in SECTION_ORDER:
+        if section in payload:
+            existing = document.get(section)
+            document[section] = _merge_roundtrip_node(
+                existing,
+                payload[section],
+                (section,),
+            )
+        elif section in document:
+            del document[section]
+    return document
+
+
+def _dump_roundtrip_yaml(document: CommentedMap) -> str:
+    yaml_rt = _make_roundtrip_yaml()
+    buffer = StringIO()
+    yaml_rt.dump(document, buffer)
+    return buffer.getvalue()
+
+
 def make_output_path(
     output_dir: Path = Path("/tmp"),
     prefix: str = "gce-mgf-dynamic",
@@ -553,11 +645,18 @@ def write_grouped_config(
     prefix: str = "gce-mgf-dynamic",
     now: datetime | None = None,
     output_path: Path | None = None,
+    source_roundtrip_path: Path | None = None,
 ) -> Path:
     path = output_path or make_output_path(
         output_dir=output_dir,
         prefix=prefix,
         now=now,
     )
+    if source_roundtrip_path is not None:
+        document = _load_roundtrip_document(source_roundtrip_path)
+        merged = _merge_roundtrip_document(document, data)
+        path.write_text(_dump_roundtrip_yaml(merged), encoding="utf-8")
+        return path
+
     path.write_text(dump_yaml(data), encoding="utf-8")
     return path
