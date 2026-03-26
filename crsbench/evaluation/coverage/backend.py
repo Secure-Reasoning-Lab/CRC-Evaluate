@@ -349,6 +349,19 @@ class UniAFLCoverageSession(CoverageSession):
         )
 
     def _prepare_harness(self) -> None:
+        # Detect available CPUs for cfg_analyzer parallelism.
+        # Inside the container, the cpuset determines available cores.
+        ncpu = os.cpu_count() or 1
+        if self.cpu_set:
+            # Parse cpuset like "0-31" or "0,1,2,3" to count cores
+            count = 0
+            for part in self.cpu_set.split(","):
+                if "-" in part:
+                    lo, hi = part.split("-", 1)
+                    count += int(hi) - int(lo) + 1
+                else:
+                    count += 1
+            ncpu = max(1, count)
         result = self._docker_exec(
             [
                 "python3",
@@ -356,7 +369,8 @@ class UniAFLCoverageSession(CoverageSession):
                 "prepare",
                 self.harness_name,
             ],
-            timeout=300,
+            env={"CRSBENCH_CFG_NCPU": str(ncpu)},
+            timeout=3600,  # 1h for large binaries (wireshark, libavif)
         )
         if result.returncode != 0:
             self.worker_stdout_path.write_text(result.stdout or "")
@@ -751,7 +765,7 @@ def _prepare(harness_name: str) -> int:
                 "--redis_url",
                 redis_url,
                 "--ncpu",
-                "1",
+                os.environ.get("CRSBENCH_CFG_NCPU", "1"),
             ],
             env=env,
             check=True,
