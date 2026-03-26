@@ -269,6 +269,12 @@ def test_app_has_nano_style_undo_redo_bindings():
     assert any(binding.key == "alt+e" and binding.priority for binding in bindings)
 
 
+def test_app_has_alt_s_binding_for_focus_cycle():
+    bindings = [
+        binding if isinstance(binding, Binding) else Binding(*binding)
+        for binding in ConfigBuilderApp.BINDINGS
+    ]
+    assert any(binding.key == "alt+s" and binding.priority for binding in bindings)
 def test_app_does_not_expose_load_path_input():
     assert "#loaded-path" in ConfigBuilderApp.CSS
     assert "#load-path" not in ConfigBuilderApp.CSS
@@ -926,6 +932,109 @@ async def test_alt_e_redoes_last_undone_field_edit():
 
         assert app.form_state["experiment"]["name"] == "edited-name"
         assert name.value == "edited-name"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_alt_s_cycles_focus_through_panes_and_remembers_last_field():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "section-list"
+
+        await pilot.press("alt+s")
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "field--experiment--name"
+
+        await pilot.press("alt+s")
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "section-preview"
+
+        await pilot.press("alt+s")
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "final-preview"
+
+        await pilot.press("alt+s")
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "section-list"
+
+        task = app.query_one("#field--experiment--task", Select)
+        app.set_focus(task)
+        await pilot.pause()
+
+        await pilot.press("alt+s")
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "section-preview"
+
+        await pilot.press("alt+s")
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "final-preview"
+
+        await pilot.press("alt+s")
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "section-list"
+
+        await pilot.press("alt+s")
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "field--experiment--task"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_alt_s_uses_first_field_after_section_change():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+
+        task = app.query_one("#field--experiment--task", Select)
+        app.set_focus(task)
+        await pilot.pause()
+
+        await pilot.press("alt+s", "alt+s", "alt+s")
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "section-list"
+
+        section_list = app.query_one("#section-list")
+        section_list.highlighted = 1
+        await pilot.pause()
+
+        await pilot.press("alt+s")
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "field--runtime--trials"
+
+        await pilot.press("escape")
+        await pilot.pause()
+        section_list.highlighted = 0
+        await pilot.pause()
+
+        await pilot.press("alt+s")
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "field--experiment--name"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_toolbar_buttons_are_removed():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+
+        assert not list(app.query("#reload-button"))
+        assert not list(app.query("#validate-button"))
+        assert not list(app.query("#write-button"))
+        assert not list(app.query("#update-button"))
 
 
 @pytest.mark.anyio

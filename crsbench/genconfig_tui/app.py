@@ -257,6 +257,13 @@ class ConfigBuilderApp(App[None]):
 
     BINDINGS = [
         ("escape", "focus_section_list", "Sections"),
+        Binding(
+            "alt+s",
+            "cycle_focus_ring",
+            "Cycle Panes",
+            key_display="Alt+S",
+            priority=True,
+        ),
         Binding("alt+u", "undo_edit", "Undo", key_display="Alt+U", priority=True),
         Binding("alt+e", "redo_edit", "Redo", key_display="Alt+E", priority=True),
         ("ctrl+r", "reload_file", "Reload"),
@@ -278,6 +285,7 @@ class ConfigBuilderApp(App[None]):
         self.status_text = ""
         self._status_source_widget_id: str | None = None
         self._last_focused_field_widget: Any = None
+        self._last_focused_field_key_by_section: dict[str, str] = {}
         self._field_validation_messages: dict[str, str] = {}
         self._loaded_roundtrip_yaml: RoundTripDocument | None = None
         self._undo_stack: list[UndoSnapshot] = []
@@ -292,12 +300,6 @@ class ConfigBuilderApp(App[None]):
                 yield Static(
                     self._loaded_path_text(),
                     id="loaded-path",
-                )
-                yield Button("Reload", id="reload-button", variant="primary")
-                yield Button("Validate", id="validate-button")
-                yield Button("Save As...", id="write-button")
-                yield Button(
-                    "Update Loaded File", id="update-button", variant="warning"
                 )
         with Horizontal(id="body"):
             yield OptionList(
@@ -625,6 +627,21 @@ class ConfigBuilderApp(App[None]):
             )
         return widgets
 
+    def _preferred_field_widget(self, section: str | None = None) -> Any | None:
+        target_section = section or self.current_section
+        section_state = self.form_state.get(target_section, {})
+        remembered_key = self._last_focused_field_key_by_section.get(target_section)
+        first_visible_widget: Any | None = None
+        for field in SECTION_SPECS[target_section].fields:
+            if not field.is_visible(section_state):
+                continue
+            widget = self.query_one(f"#{_widget_id(target_section, field.key)}")
+            if first_visible_widget is None:
+                first_visible_widget = widget
+            if field.key == remembered_key:
+                return widget
+        return first_visible_widget
+
     def _move_field_focus(self, step: int) -> bool:
         focused = self.focused
         if not self._is_form_field_widget(focused):
@@ -786,11 +803,34 @@ class ConfigBuilderApp(App[None]):
         self.query_one("#section-list", OptionList).focus()
         self._set_status("Focused section selector")
 
+    def action_cycle_focus_ring(self) -> None:
+        focused = self.focused
+        if focused is None or focused.id == "final-preview":
+            self.query_one("#section-list", OptionList).focus()
+            return
+        if focused.id == "section-list":
+            target = self._preferred_field_widget()
+            if target is None:
+                self.query_one("#section-preview", TextArea).focus()
+                return
+            target.focus()
+            return
+        if self._is_form_field_widget(focused):
+            self.query_one("#section-preview", TextArea).focus()
+            return
+        if focused.id == "section-preview":
+            self.query_one("#final-preview", TextArea).focus()
+            return
+        self.query_one("#section-list", OptionList).focus()
+
     @on(OptionList.OptionHighlighted, "#section-list")
     def handle_section_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         if event.option_index is None:
             return
-        self.current_section = SECTION_ORDER[event.option_index]
+        next_section = SECTION_ORDER[event.option_index]
+        if next_section != self.current_section:
+            self._last_focused_field_key_by_section.pop(next_section, None)
+        self.current_section = next_section
         self._refresh_ui()
         self._set_status(f"Editing {SECTION_SPECS[self.current_section].title}")
 
@@ -806,6 +846,10 @@ class ConfigBuilderApp(App[None]):
             except Exception as exc:  # noqa: BLE001
                 self._set_field_error_status(previous, str(exc))
         self._last_focused_field_widget = widget
+        field_info = self._field_from_widget_id(widget.id)
+        if field_info is not None:
+            section, field = field_info
+            self._last_focused_field_key_by_section[section] = field.key
         widget.scroll_visible(animate=False, immediate=True)
 
     @on(events.DescendantBlur)
