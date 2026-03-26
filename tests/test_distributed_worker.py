@@ -306,6 +306,35 @@ class TestWorkerStdinDetachment:
         mock_supervisor.assert_called_once()
 
     @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
+    def test_main_cpuset_supervisor_reports_ready_before_launch(self):
+        """Burst cpuset worker should report ready before entering supervisor."""
+        from crsbench.distributed.worker import main
+
+        with (
+            patch(
+                "crsbench.distributed.worker._report_cloud_worker_state"
+            ) as mock_report,
+            patch("crsbench.distributed.worker._detach_stdin_to_devnull"),
+            patch(
+                "crsbench.distributed.ci_supervisor.run_ci_supervisor",
+                return_value=0,
+            ),
+        ):
+            result = main(
+                redis_host="localhost",
+                experiment_name="exp",
+                worker_name="worker-0",
+                num_workers=2,
+                use_cpuset=True,
+            )
+
+        assert result == 0
+        assert [call.kwargs["state"] for call in mock_report.call_args_list] == [
+            "registering",
+            "ready",
+        ]
+
+    @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
     def test_run_worker_continuous_cpuset_detaches_stdin_before_launch(self):
         """Continuous cpuset mode should detach stdin before starting supervisor."""
         from crsbench.distributed.worker import run_worker_continuous
@@ -329,6 +358,34 @@ class TestWorkerStdinDetachment:
 
         mock_detach.assert_called_once_with()
         mock_supervisor.assert_called_once()
+
+    @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
+    def test_run_worker_continuous_cpuset_reports_ready_before_launch(self):
+        """Continuous cpuset worker should report ready before entering supervisor."""
+        from crsbench.distributed.worker import run_worker_continuous
+
+        with (
+            patch(
+                "crsbench.distributed.worker._report_cloud_worker_state"
+            ) as mock_report,
+            patch("crsbench.distributed.worker._detach_stdin_to_devnull"),
+            patch(
+                "crsbench.distributed.ci_supervisor.run_ci_supervisor",
+                return_value=0,
+            ),
+        ):
+            run_worker_continuous(
+                redis_host="localhost",
+                experiment_name="exp",
+                worker_name="worker-0",
+                num_workers=2,
+                use_cpuset=True,
+            )
+
+        assert [call.kwargs["state"] for call in mock_report.call_args_list] == [
+            "registering",
+            "ready",
+        ]
 
     @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
     def test_spawn_workers_standard_multiworker_detaches_stdin_before_spawn(self):

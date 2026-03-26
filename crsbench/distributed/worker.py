@@ -381,6 +381,11 @@ def main(
         from crsbench.distributed.ci_supervisor import run_ci_supervisor
 
         _detach_stdin_to_devnull()
+        _report_cloud_worker_state(
+            redis_host,
+            state="ready",
+            detail=f"Worker supervisor managing queue {queue_name}",
+        )
 
         return run_ci_supervisor(
             redis_host=redis_host,
@@ -704,6 +709,11 @@ def run_worker_continuous(
             f"Starting supervisor with {num_workers} workers and CPU affinity for: {experiment_name}"
         )
         _detach_stdin_to_devnull()
+        _report_cloud_worker_state(
+            redis_host,
+            state="ready",
+            detail=f"Worker supervisor managing queue {queue_name}",
+        )
         exit_code = run_ci_supervisor(
             redis_host=redis_host,
             build_queue_name=queue_name,
