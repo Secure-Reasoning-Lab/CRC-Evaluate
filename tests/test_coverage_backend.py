@@ -260,10 +260,12 @@ def test_uniafl_session_uses_isolated_runtime_out_dir(tmp_path: Path) -> None:
         src_mount = next(
             mount for mount in docker_run if mount.endswith(":/src")
         ).removesuffix(":/src")
-        assert Path(out_mount) != build_output_dir.resolve()
+        # After the workspace split, /src and /out mount the originals directly
+        # (no more copies) to avoid multi-GB /tmp bloat.
+        assert Path(out_mount) == build_output_dir.resolve()
         assert Path(out_mount).is_dir()
         assert (Path(out_mount) / "fuzz_target").exists()
-        assert Path(src_mount) != benchmark_dir.resolve()
+        assert Path(src_mount) == benchmark_dir.resolve()
         assert Path(src_mount).is_dir()
         assert (Path(src_mount) / ".aixcc").is_dir()
     finally:
