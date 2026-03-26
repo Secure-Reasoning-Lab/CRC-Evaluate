@@ -1104,6 +1104,37 @@ class ConfigBuilderApp(App[None]):
                 event.stop()
                 event.prevent_default()
             return
+        if (
+            event.key == "down"
+            and isinstance(focused, TextArea)
+            and focused.id == "section-preview"
+            and focused.cursor_at_last_line
+        ):
+            self.query_one("#final-preview", TextArea).focus()
+            event.stop()
+            event.prevent_default()
+            return
+        if (
+            event.key == "up"
+            and isinstance(focused, TextArea)
+            and focused.id == "final-preview"
+            and focused.cursor_at_first_line
+        ):
+            self.query_one("#section-preview", TextArea).focus()
+            event.stop()
+            event.prevent_default()
+            return
+        if (
+            event.key == "left"
+            and focused is not None
+            and focused.id == "final-preview"
+        ):
+            target = self._preferred_field_widget()
+            if target is not None:
+                target.focus()
+                event.stop()
+                event.prevent_default()
+            return
         if not isinstance(focused, Input) or not focused.selection.is_empty:
             return
         if event.key == "left" and focused.cursor_at_start:

@@ -231,6 +231,98 @@ async def test_left_arrow_on_section_preview_focuses_remembered_field():
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_down_arrow_in_section_preview_moves_cursor_before_handoff():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+
+        preview = app.query_one("#section-preview", TextArea)
+        app.set_focus(preview)
+        await pilot.pause()
+        preview.cursor_location = (0, 0)
+
+        await pilot.press("down")
+
+        assert app.focused is preview
+        assert preview.cursor_location[0] == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_down_arrow_on_section_preview_focuses_final_preview_at_last_line():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+
+        preview = app.query_one("#section-preview", TextArea)
+        preview.cursor_location = (preview.document.line_count - 1, 0)
+        app.set_focus(preview)
+        await pilot.pause()
+
+        await pilot.press("down")
+
+        assert app.focused is not None
+        assert app.focused.id == "final-preview"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_up_arrow_in_final_preview_moves_cursor_before_handoff():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+
+        final_preview = app.query_one("#final-preview", TextArea)
+        final_preview.cursor_location = (1, 0)
+        app.set_focus(final_preview)
+        await pilot.pause()
+
+        await pilot.press("up")
+
+        assert app.focused is final_preview
+        assert final_preview.cursor_location[0] == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_up_arrow_on_final_preview_focuses_section_preview_at_first_line():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+
+        final_preview = app.query_one("#final-preview", TextArea)
+        final_preview.cursor_location = (0, 0)
+        app.set_focus(final_preview)
+        await pilot.pause()
+
+        await pilot.press("up")
+
+        assert app.focused is not None
+        assert app.focused.id == "section-preview"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_left_arrow_on_final_preview_focuses_remembered_field():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+
+        task = app.query_one("#field--experiment--task", Select)
+        app.set_focus(task)
+        await pilot.pause()
+
+        final_preview = app.query_one("#final-preview", TextArea)
+        app.set_focus(final_preview)
+        await pilot.pause()
+
+        await pilot.press("left")
+
+        assert app.focused is task
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_left_right_arrows_keep_normal_cursor_movement_inside_input():
     app = ConfigBuilderApp()
     async with app.run_test(size=(100, 24)) as pilot:
