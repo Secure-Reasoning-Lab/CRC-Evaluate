@@ -428,7 +428,7 @@ def test_write_grouped_config_uses_in_memory_roundtrip_document_when_disk_change
         "# loaded comment\nexperiment:\n  # keep loaded\n  name: old-name\n",
         encoding="utf-8",
     )
-    loaded_document = genconfig_core._load_roundtrip_document(source)
+    loaded_document = genconfig_core.load_roundtrip_document(source)
     source.write_text(
         "# disk changed later\nexperiment:\n  # changed on disk\n  name: disk-name\n",
         encoding="utf-8",

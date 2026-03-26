@@ -10,6 +10,8 @@ import yaml
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
+RoundTripDocument = CommentedMap
+
 SECTION_ORDER = (
     "experiment",
     "runtime",
@@ -547,7 +549,7 @@ def read_grouped_config(path: Path) -> dict[str, Any]:
     return loaded
 
 
-def _load_roundtrip_document(path: Path) -> CommentedMap:
+def load_roundtrip_document(path: Path) -> RoundTripDocument:
     yaml_rt = _make_roundtrip_yaml()
     loaded = yaml_rt.load(path.read_text(encoding="utf-8"))
     if not isinstance(loaded, CommentedMap):
@@ -605,9 +607,9 @@ def _merge_roundtrip_node(target: Any, payload: Any, path: tuple[Any, ...]) -> A
 
 
 def _merge_roundtrip_document(
-    document: CommentedMap,
+    document: RoundTripDocument,
     grouped: Mapping[str, Any],
-) -> CommentedMap:
+) -> RoundTripDocument:
     payload = _grouped_to_roundtrip_payload(grouped)
     for section in SECTION_ORDER:
         if section in payload:
@@ -622,7 +624,7 @@ def _merge_roundtrip_document(
     return document
 
 
-def _dump_roundtrip_yaml(document: CommentedMap) -> str:
+def _dump_roundtrip_yaml(document: RoundTripDocument) -> str:
     yaml_rt = _make_roundtrip_yaml()
     buffer = StringIO()
     yaml_rt.dump(document, buffer)
@@ -646,7 +648,7 @@ def write_grouped_config(
     now: datetime | None = None,
     output_path: Path | None = None,
     source_roundtrip_path: Path | None = None,
-    source_roundtrip_document: CommentedMap | None = None,
+    source_roundtrip_document: RoundTripDocument | None = None,
 ) -> Path:
     path = output_path or make_output_path(
         output_dir=output_dir,
@@ -660,7 +662,7 @@ def write_grouped_config(
         return path
 
     if source_roundtrip_path is not None:
-        document = _load_roundtrip_document(source_roundtrip_path)
+        document = load_roundtrip_document(source_roundtrip_path)
         merged = _merge_roundtrip_document(document, data)
         path.write_text(_dump_roundtrip_yaml(merged), encoding="utf-8")
         return path

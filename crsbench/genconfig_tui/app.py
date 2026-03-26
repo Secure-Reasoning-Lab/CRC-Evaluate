@@ -25,11 +25,12 @@ from textual.widgets import (
 )
 
 from crsbench.genconfig_tui.core import (
+    RoundTripDocument,
     SECTION_ORDER,
-    _load_roundtrip_document,
     build_grouped_config,
     dump_yaml,
     load_state_from_grouped_config,
+    load_roundtrip_document,
     read_grouped_config,
     write_grouped_config,
 )
@@ -272,7 +273,7 @@ class ConfigBuilderApp(App[None]):
         self._status_source_widget_id: str | None = None
         self._last_focused_field_widget: Any = None
         self._field_validation_messages: dict[str, str] = {}
-        self._loaded_roundtrip_yaml: Any | None = None
+        self._loaded_roundtrip_yaml: RoundTripDocument | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -492,7 +493,7 @@ class ConfigBuilderApp(App[None]):
     def _load_from_path(self, path: Path) -> None:
         self._loaded_roundtrip_yaml = None
         grouped = read_grouped_config(path)
-        roundtrip_yaml = _load_roundtrip_document(path)
+        roundtrip_yaml = load_roundtrip_document(path)
         loaded_state, extras = load_state_from_grouped_config(grouped)
         self._apply_loaded_state(loaded_state)
         self.section_extras = extras
