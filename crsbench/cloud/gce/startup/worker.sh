@@ -1119,6 +1119,7 @@ if [[ "${CRSBENCH_CLOUD_ROLE:-worker}" == "evaluator" ]]; then
     "${CRSBENCH_EXPERIMENT_CONFIG_PATH}"
     --worker-name
     "${CRSBENCH_EVALUATOR_NAME}"
+    --cpuset "0-$(( $(nproc) - 1 ))"
   )
 
   if [[ -n "${CRSBENCH_EVALUATOR_BUILD_JOBS:-}" ]]; then
@@ -1151,6 +1152,7 @@ else
     "${CRSBENCH_EXPERIMENT_NAME}"
     --worker-name
     "${CRSBENCH_WORKER_NAME}"
+    --cpuset "0-$(( $(nproc) - 1 ))"
   )
 
   if [[ -n "${CRSBENCH_WORKER_JOBS:-}" ]]; then
