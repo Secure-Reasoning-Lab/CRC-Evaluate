@@ -262,6 +262,8 @@ def test_app_has_nano_style_undo_redo_bindings():
         binding if isinstance(binding, Binding) else Binding(*binding)
         for binding in ConfigBuilderApp.BINDINGS
     ]
+    assert any(binding.key == "alt+u" and binding.priority for binding in bindings)
+    assert any(binding.key == "alt+e" and binding.priority for binding in bindings)
     assert any(binding.key == "escape,u" for binding in bindings)
     assert any(binding.key == "escape,e" for binding in bindings)
 
@@ -857,7 +859,7 @@ async def test_alt_u_undoes_last_field_edit():
         await pilot.pause()
         assert app.form_state["experiment"]["name"] == "edited-name"
 
-        await pilot.press("escape", "u")
+        await pilot.press("alt+u")
         await pilot.pause()
 
         assert app.form_state["experiment"]["name"] == original_value
@@ -877,10 +879,10 @@ async def test_alt_e_redoes_last_undone_field_edit():
 
         name.value = "edited-name"
         await pilot.pause()
-        await pilot.press("escape", "u")
+        await pilot.press("alt+u")
         await pilot.pause()
 
-        await pilot.press("escape", "e")
+        await pilot.press("alt+e")
         await pilot.pause()
 
         assert app.form_state["experiment"]["name"] == "edited-name"

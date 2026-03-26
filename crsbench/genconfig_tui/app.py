@@ -257,8 +257,10 @@ class ConfigBuilderApp(App[None]):
 
     BINDINGS = [
         ("escape", "focus_section_list", "Sections"),
-        Binding("escape,u", "undo_edit", "Undo", key_display="Alt+U"),
-        Binding("escape,e", "redo_edit", "Redo", key_display="Alt+E"),
+        Binding("alt+u", "undo_edit", "Undo", key_display="Alt+U", priority=True),
+        Binding("alt+e", "redo_edit", "Redo", key_display="Alt+E", priority=True),
+        Binding("escape,u", "undo_edit", show=False, priority=True),
+        Binding("escape,e", "redo_edit", show=False, priority=True),
         ("ctrl+r", "reload_file", "Reload"),
         ("ctrl+s", "save", "Save"),
         ("ctrl+w", "write_timestamped", "Save As"),
