@@ -3,7 +3,7 @@ from unittest.mock import patch
 import crsbench.genconfig_tui.app as gen_config_tui_app
 import pytest
 from crsbench.genconfig_tui.app import ConfigBuilderApp
-from textual.widgets import Input, SelectionList
+from textual.widgets import Input, Select, SelectionList
 
 
 def test_app_constructs():
@@ -117,6 +117,24 @@ async def test_down_arrow_on_last_sanitizer_item_moves_to_next_field():
 
         assert app.focused is not None
         assert app.focused.id == "field--experiment--only_cpv_harnesses"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_enter_on_select_opens_overlay_without_moving_to_next_field():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+        await pilot.press("tab", "down")
+
+        task = app.query_one("#field--experiment--task", Select)
+        benchmark_suite = app.query_one("#field--experiment--benchmark_suite", Input)
+        assert app.focused is task
+
+        await pilot.press("enter")
+
+        assert app.focused is not benchmark_suite
+        assert task.has_class("-expanded")
 
 
 def test_app_css_prioritizes_form_width():
@@ -255,3 +273,56 @@ async def test_invalid_field_state_clears_after_valid_value_blurs():
         app.set_focus(cores)
         await pilot.pause()
         assert not memory.has_class("invalid")
+        assert "Invalid memory format" not in app.status_text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_invalid_field_does_not_mark_other_blurred_fields_invalid():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        app.current_section = "resources"
+        app._refresh_ui()
+        memory = app.query_one("#field--resources--memory_per_trial", Input)
+        cores = app.query_one("#field--resources--cores_per_trial", Input)
+        cpu_tag = app.query_one("#field--resources--cpu_tag", Input)
+
+        app.set_focus(memory)
+        await pilot.pause()
+        memory.value = "123"
+        await pilot.pause()
+        app.set_focus(cores)
+        await pilot.pause()
+        assert memory.has_class("invalid")
+
+        cores.value = "2"
+        await pilot.pause()
+        app.set_focus(cpu_tag)
+        await pilot.pause()
+        assert not cores.has_class("invalid")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_blur_validation_does_not_run_whole_config_schema():
+    app = ConfigBuilderApp()
+    with patch.object(
+        gen_config_tui_app,
+        "validate_grouped_config",
+        side_effect=AssertionError("whole-config validation should not run on blur"),
+    ):
+        async with app.run_test(size=(100, 24)) as pilot:
+            app.current_section = "resources"
+            app._refresh_ui()
+            memory = app.query_one("#field--resources--memory_per_trial", Input)
+            cores = app.query_one("#field--resources--cores_per_trial", Input)
+            app.set_focus(memory)
+            await pilot.pause()
+            memory.value = "1G"
+            await pilot.pause()
+            app.set_focus(cores)
+            await pilot.pause()
+            assert not memory.has_class("invalid")
+            assert (
+                "whole-config validation should not run on blur" not in app.status_text
+            )

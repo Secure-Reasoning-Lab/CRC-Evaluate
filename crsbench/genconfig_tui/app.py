@@ -311,7 +311,7 @@ class ConfigBuilderApp(App[None]):
                         widget.deselect_all()
                         for selected_value in value or []:
                             widget.select(selected_value)
-                    self._set_widget_invalid_state(widget, False)
+                    self._set_widget_invalid_state(widget, invalid=False)
         finally:
             self._setting_fields = False
 
@@ -398,15 +398,16 @@ class ConfigBuilderApp(App[None]):
         if field_info is None:
             return
         section, field = field_info
+        was_invalid = widget.has_class("invalid")
         try:
             value = self._coerce_widget_value_for_validation(field, widget)
             validate_field_value(section, field.key, value)
-            grouped = self._merged_grouped_config()
-            validate_grouped_config(grouped)
         except Exception:
-            self._set_widget_invalid_state(widget, True)
+            self._set_widget_invalid_state(widget, invalid=True)
             raise
-        self._set_widget_invalid_state(widget, False)
+        self._set_widget_invalid_state(widget, invalid=False)
+        if was_invalid:
+            self._set_status("")
 
     def _is_form_field_widget(self, widget: Any) -> bool:
         if not (widget.id and widget.id.startswith("field--")):
