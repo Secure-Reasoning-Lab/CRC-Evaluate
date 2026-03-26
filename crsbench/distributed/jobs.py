@@ -42,6 +42,7 @@ from crsbench.utils.logger import (
     set_trial_context,
 )
 from crsbench.utils.run_helper import ensure_oss_fuzz_root
+from crsbench.utils.storage_warning import warn_for_persisted_storage_roots
 
 # Import file-based metadata schema (distinct from evaluation.results.TrialMetadata)
 from crsbench.validation.schemas import (
@@ -826,40 +827,45 @@ def _apply_worker_overrides(config: ExperimentConfig) -> None:
     use shared storage with consistent mount points instead.
     """
     wc = config.worker
-    if wc is None:
-        return
-
-    path_fields = ["registry_dir", "benchmarks_root", "benchmark_suites_root"]
-    for field in path_fields:
-        value = getattr(wc, field, None)
-        if value is not None:
-            setattr(config, field, value)
-            logger.info(f"Worker override applied: {field} = {value}")
-
-    storage_overrides = wc.storage
-    if storage_overrides:
-        storage_path_fields = [
-            "experiment_filestore",
-            "report_filestore",
-            "results_filestore",
-        ]
-        for field in storage_path_fields:
-            value = getattr(storage_overrides, field, None)
+    if wc is not None:
+        path_fields = ["registry_dir", "benchmarks_root", "benchmark_suites_root"]
+        for field in path_fields:
+            value = getattr(wc, field, None)
             if value is not None:
                 setattr(config, field, value)
-                logger.info(f"Worker storage override applied: {field} = {value}")
+                logger.info(f"Worker override applied: {field} = {value}")
 
-    if storage_overrides:
-        storage_bool_fields = [
-            "keep_only_results",
-            "cleanup_after_trial",
-            "copy_results_after_trial",
-        ]
-        for field in storage_bool_fields:
-            value = getattr(storage_overrides, field, None)
-            if value is not None:
-                setattr(config, field, value)
-                logger.info(f"Worker storage override applied: {field} = {value}")
+        storage_overrides = wc.storage
+        if storage_overrides:
+            storage_path_fields = [
+                "experiment_filestore",
+                "report_filestore",
+                "results_filestore",
+            ]
+            for field in storage_path_fields:
+                value = getattr(storage_overrides, field, None)
+                if value is not None:
+                    setattr(config, field, value)
+                    logger.info(f"Worker storage override applied: {field} = {value}")
+
+        if storage_overrides:
+            storage_bool_fields = [
+                "keep_only_results",
+                "cleanup_after_trial",
+                "copy_results_after_trial",
+            ]
+            for field in storage_bool_fields:
+                value = getattr(storage_overrides, field, None)
+                if value is not None:
+                    setattr(config, field, value)
+                    logger.info(f"Worker storage override applied: {field} = {value}")
+
+    warn_for_persisted_storage_roots(
+        experiment_filestore=config.experiment_filestore,
+        report_filestore=config.report_filestore,
+        copy_results_after_trial=config.copy_results_after_trial,
+        results_filestore=config.results_filestore,
+    )
 
 
 def run_crs_trial(

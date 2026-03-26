@@ -66,6 +66,7 @@ from crsbench.utils.benchmark_utils import (
     get_available_modes_for_benchmark,
 )
 from crsbench.utils.logger import configure_logger, get_logger
+from crsbench.utils.storage_warning import warn_for_persisted_storage_roots
 from crsbench.validation.ground_truth_paths import GroundTruthPaths
 from crsbench.validation.meta_adapter import MetaYamlAdapter
 from crsbench.validation.schemas import (
@@ -474,6 +475,13 @@ def validate_filestore_permissions(config: ExperimentConfig) -> None:
     Raises:
         SystemExit: If directory creation fails or write permission is denied
     """
+    warn_for_persisted_storage_roots(
+        experiment_filestore=config.experiment_filestore,
+        report_filestore=config.report_filestore,
+        copy_results_after_trial=config.copy_results_after_trial,
+        results_filestore=config.results_filestore,
+    )
+
     directories_to_check = [
         ("experiment_filestore", config.experiment_filestore),
         ("report_filestore", config.report_filestore),

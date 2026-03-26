@@ -25,6 +25,7 @@ from crsbench.run_experiment import (
     load_experiment_config,
     resolve_benchmark_harnesses,
     should_use_distributed_mode,
+    validate_filestore_permissions,
 )
 from crsbench.validation.schemas import (
     POV,
@@ -286,6 +287,67 @@ benchmarks: [bench1]
         assert config.experiment == "minimal-experiment"
         assert config.trials == 1
         assert config.redis_host is None  # Optional field
+
+    def test_validate_filestore_permissions_warns_using_effective_storage_values(
+        self, tmp_path
+    ):
+        """Local runs should warn on the effective persisted storage roots they use."""
+        config = ExperimentConfig(
+            experiment="warning-experiment",
+            trials=1,
+            mode="delta",
+            max_total_time=20000,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
+            experiment_filestore=tmp_path / "experiment-data",
+            report_filestore=tmp_path / "report-data",
+            results_filestore=tmp_path / "results-data",
+            copy_results_after_trial=True,
+            crs_compose={"crs1": {"num_cores": 1}},
+            benchmarks=["bench1"],
+        )
+
+        with patch(
+            "crsbench.run_experiment.warn_for_persisted_storage_roots"
+        ) as mock_warn_storage:
+            validate_filestore_permissions(config)
+
+        mock_warn_storage.assert_called_once_with(
+            experiment_filestore=config.experiment_filestore,
+            report_filestore=config.report_filestore,
+            copy_results_after_trial=True,
+            results_filestore=config.results_filestore,
+        )
+
+    @patch("crsbench.run_experiment.warn_for_persisted_storage_roots")
+    def test_load_experiment_config_does_not_warn_on_parse_only(
+        self, mock_warn_storage, tmp_path
+    ):
+        """Config parsing alone should not warn before runtime paths are effective."""
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            f"""
+experiment: warning-experiment
+trials: 1
+mode: delta
+max_total_time: 20000
+inputs:
+  pov:
+    enabled: true
+    max_variants_per_cpv: 1
+experiment_filestore: {tmp_path / "experiment-data"}
+report_filestore: {tmp_path / "report-data"}
+copy_results_after_trial: true
+results_filestore: {tmp_path / "results-data"}
+crs_compose:
+  crs1:
+    num_cores: 1
+benchmarks: [bench1]
+"""
+        )
+
+        load_experiment_config(config_path)
+
+        mock_warn_storage.assert_not_called()
 
 
 # ============================================================================
