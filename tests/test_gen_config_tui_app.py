@@ -590,6 +590,14 @@ def test_app_has_alt_s_binding_for_focus_cycle():
     assert any(binding.key == "alt+s" and binding.priority for binding in bindings)
 
 
+def test_app_has_alt_a_binding_for_reverse_focus_cycle():
+    bindings = [
+        binding if isinstance(binding, Binding) else Binding(*binding)
+        for binding in ConfigBuilderApp.BINDINGS
+    ]
+    assert any(binding.key == "alt+a" and binding.priority for binding in bindings)
+
+
 def test_app_has_ctrl_q_binding_for_guarded_quit():
     bindings = [
         binding if isinstance(binding, Binding) else Binding(*binding)
@@ -1452,6 +1460,68 @@ async def test_alt_s_uses_first_field_after_section_change():
         await pilot.pause()
         assert app.focused is not None
         assert app.focused.id == "field--experiment--name"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_alt_a_cycles_focus_backward_through_panes():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "section-list"
+
+        await pilot.press("alt+a")
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "final-preview"
+
+        await pilot.press("alt+a")
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "section-preview"
+
+        await pilot.press("alt+a")
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "field--experiment--name"
+
+        await pilot.press("alt+a")
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "section-list"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_alt_a_uses_remembered_field_when_cycling_backward():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+
+        task = app.query_one("#field--experiment--task", Select)
+        app.set_focus(task)
+        await pilot.pause()
+
+        await pilot.press("alt+a")
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "section-list"
+
+        await pilot.press("alt+a")
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "final-preview"
+
+        await pilot.press("alt+a")
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "section-preview"
+
+        await pilot.press("alt+a")
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "field--experiment--task"
 
 
 @pytest.mark.anyio

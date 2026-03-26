@@ -536,6 +536,13 @@ class ConfigBuilderApp(App[None]):
             key_display="Alt+S",
             priority=True,
         ),
+        Binding(
+            "alt+a",
+            "cycle_focus_ring_backward",
+            "Cycle Panes Back",
+            key_display="Alt+A",
+            priority=True,
+        ),
         Binding("alt+u", "undo_edit", "Undo", key_display="Alt+U", priority=True),
         Binding("alt+e", "redo_edit", "Redo", key_display="Alt+E", priority=True),
         Binding("ctrl+q", "quit_with_confirm", "Quit", priority=True),
@@ -568,6 +575,9 @@ class ConfigBuilderApp(App[None]):
         self._cloud_collection_selection: dict[str, int | None] = dict.fromkeys(
             CLOUD_COLLECTION_TITLES, None
         )
+
+    async def on_event(self, event: events.Event) -> None:
+        await super().on_event(event)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -1354,25 +1364,58 @@ class ConfigBuilderApp(App[None]):
         self.query_one("#section-list", OptionList).focus()
         self._set_status("Focused section selector")
 
-    def action_cycle_focus_ring(self) -> None:
+    def _cycle_focus_ring(self, step: int) -> None:
         focused = self.focused
-        if focused is None or focused.id == "final-preview":
-            self.query_one("#section-list", OptionList).focus()
+        if focused is None:
+            if step > 0:
+                self.query_one("#section-list", OptionList).focus()
+            else:
+                self.query_one("#final-preview", TextArea).focus()
             return
+
         if focused.id == "section-list":
+            if step < 0:
+                self.query_one("#final-preview", TextArea).focus()
+                return
             target = self._preferred_field_widget()
             if target is None:
                 self.query_one("#section-preview", TextArea).focus()
                 return
             target.focus()
             return
+
         if self._is_form_field_widget(focused):
-            self.query_one("#section-preview", TextArea).focus()
+            if step > 0:
+                self.query_one("#section-preview", TextArea).focus()
+            else:
+                self.query_one("#section-list", OptionList).focus()
             return
+
         if focused.id == "section-preview":
-            self.query_one("#final-preview", TextArea).focus()
+            if step > 0:
+                self.query_one("#final-preview", TextArea).focus()
+            else:
+                target = self._preferred_field_widget()
+                if target is None:
+                    self.query_one("#section-list", OptionList).focus()
+                    return
+                target.focus()
             return
+
+        if focused.id == "final-preview":
+            if step > 0:
+                self.query_one("#section-list", OptionList).focus()
+            else:
+                self.query_one("#section-preview", TextArea).focus()
+            return
+
         self.query_one("#section-list", OptionList).focus()
+
+    def action_cycle_focus_ring(self) -> None:
+        self._cycle_focus_ring(1)
+
+    def action_cycle_focus_ring_backward(self) -> None:
+        self._cycle_focus_ring(-1)
 
     @on(OptionList.OptionHighlighted, "#section-list")
     def handle_section_highlighted(self, event: OptionList.OptionHighlighted) -> None:
