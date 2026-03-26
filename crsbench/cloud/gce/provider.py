@@ -40,6 +40,7 @@ class ResolvedGceInstanceProfile:
     project: str
     machine_type: str | None
     boot_disk_size_gb: int | None
+    boot_disk_type: str | None
     image: str | None
     instance_template: str | None
     network: str | None
@@ -76,6 +77,7 @@ class GceProviderAdapter:
             project=str(provider_config["project"]),
             machine_type=_get_optional_str(profile_config, "machine_type"),
             boot_disk_size_gb=_get_optional_int(profile_config, "boot_disk_size_gb"),
+            boot_disk_type=_get_optional_str(profile_config, "boot_disk_type"),
             image=_get_optional_str(profile_config, "image"),
             instance_template=_get_optional_str(profile_config, "instance_template"),
             network=_get_optional_str(profile_config, "network")
@@ -196,6 +198,7 @@ class GceProviderAdapter:
             fallback=plan.orchestrator.fallback,
             machine_type=resolved.machine_type,
             boot_disk_size_gb=resolved.boot_disk_size_gb,
+            boot_disk_type=resolved.boot_disk_type,
             image=resolved.image,
             instance_template=resolved.instance_template,
             network=resolved.network,
@@ -234,6 +237,7 @@ class GceProviderAdapter:
                     worker_name_start_index=next_worker_index,
                     machine_type=resolved.machine_type,
                     boot_disk_size_gb=resolved.boot_disk_size_gb,
+                    boot_disk_type=resolved.boot_disk_type,
                     image=resolved.image,
                     instance_template=resolved.instance_template,
                     network=resolved.network,
@@ -281,6 +285,7 @@ class GceProviderAdapter:
                     worker_name_start_index=next_evaluator_index,
                     machine_type=resolved.machine_type,
                     boot_disk_size_gb=resolved.boot_disk_size_gb,
+                    boot_disk_type=resolved.boot_disk_type,
                     image=resolved.image,
                     instance_template=resolved.instance_template,
                     network=resolved.network,
@@ -331,6 +336,7 @@ class GceProviderAdapter:
             worker_name_start_index=name_start_index,
             machine_type=resolved.machine_type,
             boot_disk_size_gb=resolved.boot_disk_size_gb,
+            boot_disk_type=resolved.boot_disk_type,
             image=resolved.image,
             instance_template=resolved.instance_template,
             network=resolved.network,
@@ -376,6 +382,7 @@ class GceProviderAdapter:
             worker_name_start_index=name_start_index,
             machine_type=resolved.machine_type,
             boot_disk_size_gb=resolved.boot_disk_size_gb,
+            boot_disk_type=resolved.boot_disk_type,
             image=resolved.image,
             instance_template=resolved.instance_template,
             network=resolved.network,

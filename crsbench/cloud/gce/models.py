@@ -23,6 +23,7 @@ class GceInstanceRequest:
     assign_external_ip: bool
     machine_type: str | None = None
     boot_disk_size_gb: int | None = None
+    boot_disk_type: str | None = None
     image: str | None = None
     instance_template: str | None = None
     network: str | None = None
@@ -60,14 +61,19 @@ class GceInstanceRequest:
             resource["machine_type"] = (
                 f"zones/{self.zone}/machineTypes/{self.machine_type}"
             )
+            init_params: dict[str, object] = {
+                "source_image": self.image,
+                "disk_size_gb": str(self.boot_disk_size_gb),
+            }
+            if self.boot_disk_type:
+                init_params["disk_type"] = (
+                    f"zones/{self.zone}/diskTypes/{self.boot_disk_type}"
+                )
             resource["disks"] = [
                 {
                     "boot": True,
                     "auto_delete": True,
-                    "initialize_params": {
-                        "source_image": self.image,
-                        "disk_size_gb": str(self.boot_disk_size_gb),
-                    },
+                    "initialize_params": init_params,
                 }
             ]
 
@@ -108,14 +114,17 @@ class GceInstanceRequest:
                     "machine_type and image are required when no instance template is set"
                 )
             resource["machine_type"] = self.machine_type
+            init_params: dict[str, object] = {
+                "source_image": self.image,
+                "disk_size_gb": str(self.boot_disk_size_gb),
+            }
+            if self.boot_disk_type:
+                init_params["disk_type"] = self.boot_disk_type
             resource["disks"] = [
                 {
                     "boot": True,
                     "auto_delete": True,
-                    "initialize_params": {
-                        "source_image": self.image,
-                        "disk_size_gb": str(self.boot_disk_size_gb),
-                    },
+                    "initialize_params": init_params,
                 }
             ]
 

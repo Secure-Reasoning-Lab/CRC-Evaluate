@@ -1212,6 +1212,10 @@ class GceWorkerFleetConfig(BaseModel):
         ge=10,
         description="Boot disk size in GiB when creating VMs from an image.",
     )
+    boot_disk_type: Optional[str] = Field(
+        default=None,
+        description="GCE boot disk type (e.g. pd-ssd, pd-balanced, pd-standard).",
+    )
     image: Optional[str] = Field(
         default=None,
         description="Image or image-family reference used for worker VM creation.",
@@ -1300,6 +1304,7 @@ class GceWorkerFleetConfig(BaseModel):
         "machine_type",
         "image",
         "instance_template",
+        "boot_disk_type",
         "network",
         "subnetwork",
         "service_account_email",
@@ -1425,10 +1430,12 @@ class GceWorkerFleetConfig(BaseModel):
                 )
 
         if has_template and (
-            self.machine_type is not None or self.boot_disk_size_gb is not None
+            self.machine_type is not None
+            or self.boot_disk_size_gb is not None
+            or self.boot_disk_type is not None
         ):
             raise ValueError(
-                "cloud.gce.instance_template cannot be combined with explicit machine_type or boot_disk_size_gb"
+                "cloud.gce.instance_template cannot be combined with explicit machine_type, boot_disk_size_gb, or boot_disk_type"
             )
 
         return self
@@ -1468,6 +1475,10 @@ class GceOrchestratorConfig(BaseModel):
         default=None,
         ge=10,
         description="Boot disk size in GiB when creating the orchestrator VM from an image.",
+    )
+    boot_disk_type: Optional[str] = Field(
+        default=None,
+        description="GCE boot disk type (e.g. pd-ssd, pd-balanced, pd-standard).",
     )
     image: Optional[str] = Field(
         default=None,
@@ -1551,6 +1562,7 @@ class GceOrchestratorConfig(BaseModel):
         "machine_type",
         "image",
         "instance_template",
+        "boot_disk_type",
         "network",
         "subnetwork",
         "service_account_email",
@@ -1689,10 +1701,12 @@ class GceOrchestratorConfig(BaseModel):
                 )
 
         if has_template and (
-            self.machine_type is not None or self.boot_disk_size_gb is not None
+            self.machine_type is not None
+            or self.boot_disk_size_gb is not None
+            or self.boot_disk_type is not None
         ):
             raise ValueError(
-                "cloud.orchestrator.instance_template cannot be combined with explicit machine_type or boot_disk_size_gb"
+                "cloud.orchestrator.instance_template cannot be combined with explicit machine_type, boot_disk_size_gb, or boot_disk_type"
             )
 
         return self
@@ -1933,6 +1947,7 @@ class GceInstanceProfileDefaultsConfig(BaseModel):
 
     machine_type: Optional[str] = Field(default=None)
     boot_disk_size_gb: Optional[int] = Field(default=None, ge=10)
+    boot_disk_type: Optional[str] = Field(default=None)
     image: Optional[str] = Field(default=None)
     instance_template: Optional[str] = Field(default=None)
     network: Optional[str] = Field(default=None)
@@ -1949,6 +1964,7 @@ class GceInstanceProfileDefaultsConfig(BaseModel):
 
     @field_validator(
         "machine_type",
+        "boot_disk_type",
         "image",
         "instance_template",
         "network",
@@ -1992,6 +2008,10 @@ class GceInstanceProfileConfig(BaseModel):
         default=None,
         ge=10,
         description="Boot disk size in GiB when creating instances from an image.",
+    )
+    boot_disk_type: Optional[str] = Field(
+        default=None,
+        description="GCE boot disk type (e.g. pd-ssd, pd-balanced, pd-standard).",
     )
     image: Optional[str] = Field(
         default=None,
@@ -2051,6 +2071,7 @@ class GceInstanceProfileConfig(BaseModel):
 
     @field_validator(
         "machine_type",
+        "boot_disk_type",
         "image",
         "instance_template",
         "network",
@@ -2126,10 +2147,12 @@ class GceInstanceProfileConfig(BaseModel):
                 )
 
         if has_template and (
-            self.machine_type is not None or self.boot_disk_size_gb is not None
+            self.machine_type is not None
+            or self.boot_disk_size_gb is not None
+            or self.boot_disk_type is not None
         ):
             raise ValueError(
-                "cloud.providers.gce.instance_profiles.instance_template cannot be combined with explicit machine_type or boot_disk_size_gb"
+                "cloud.providers.gce.instance_profiles.instance_template cannot be combined with explicit machine_type, boot_disk_size_gb, or boot_disk_type"
             )
 
         return self

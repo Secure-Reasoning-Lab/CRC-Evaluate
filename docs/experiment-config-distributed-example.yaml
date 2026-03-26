@@ -161,6 +161,7 @@ cloud:
       profile_defaults:
         machine_type: e2-standard-16
         boot_disk_size_gb: 200
+        # boot_disk_type: pd-ssd  # GCE disk type (pd-ssd, pd-balanced, pd-standard)
         image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
         service_account_email: crsbench@example-project.iam.gserviceaccount.com
         owner_label: team-crs

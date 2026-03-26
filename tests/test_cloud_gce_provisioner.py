@@ -492,6 +492,83 @@ def test_instance_request_can_disable_external_nat() -> None:
     assert "access_configs" not in resource["network_interfaces"][0]
 
 
+def test_instance_request_renders_boot_disk_type_zonal() -> None:
+    """Zonal instance resource should render disk_type with zone prefix."""
+    from crsbench.cloud.gce.models import GceInstanceRequest
+
+    request = GceInstanceRequest(
+        project="test-project",
+        zone="us-central1-a",
+        name="gce-worker-001",
+        labels={"owner": "team-crs"},
+        metadata={},
+        service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+        ssh_via_iap=True,
+        assign_external_ip=True,
+        machine_type="e2-standard-16",
+        boot_disk_size_gb=200,
+        boot_disk_type="pd-ssd",
+        image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+    )
+
+    resource = request.to_instance_resource()
+    init_params = resource["disks"][0]["initialize_params"]
+
+    assert init_params["disk_type"] == "zones/us-central1-a/diskTypes/pd-ssd"
+    assert init_params["disk_size_gb"] == "200"
+
+
+def test_instance_request_renders_boot_disk_type_regional() -> None:
+    """Regional bulk-insert should render disk_type as bare type name."""
+    from crsbench.cloud.gce.models import GceInstanceRequest
+
+    request = GceInstanceRequest(
+        project="test-project",
+        zone=None,
+        name="gce-worker-001",
+        labels={"owner": "team-crs"},
+        metadata={},
+        service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+        ssh_via_iap=True,
+        assign_external_ip=True,
+        machine_type="e2-standard-16",
+        boot_disk_size_gb=200,
+        boot_disk_type="pd-ssd",
+        image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+    )
+
+    props = request.to_bulk_insert_instance_properties()
+    init_params = props["disks"][0]["initialize_params"]
+
+    assert init_params["disk_type"] == "pd-ssd"
+    assert init_params["disk_size_gb"] == "200"
+
+
+def test_instance_request_omits_disk_type_when_unset() -> None:
+    """When boot_disk_type is None, disk_type should not appear in init params."""
+    from crsbench.cloud.gce.models import GceInstanceRequest
+
+    request = GceInstanceRequest(
+        project="test-project",
+        zone="us-central1-a",
+        name="gce-worker-001",
+        labels={"owner": "team-crs"},
+        metadata={},
+        service_account_email="crsbench-worker@test-project.iam.gserviceaccount.com",
+        ssh_via_iap=True,
+        assign_external_ip=True,
+        machine_type="e2-standard-16",
+        boot_disk_size_gb=200,
+        image="projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+    )
+
+    zonal = request.to_instance_resource()
+    assert "disk_type" not in zonal["disks"][0]["initialize_params"]
+
+    regional = request.to_bulk_insert_instance_properties()
+    assert "disk_type" not in regional["disks"][0]["initialize_params"]
+
+
 def test_gce_provider_adapter_resolves_named_instance_profile():
     from crsbench.cloud.gce.provider import GceProviderAdapter
 
