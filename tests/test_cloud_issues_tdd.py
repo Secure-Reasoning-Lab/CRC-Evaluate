@@ -207,30 +207,51 @@ class TestQuotaPreflightPerRegion:
 class TestHfTokenPreflight:
     """Cloud launch should validate HF_TOKEN when downloading gated datasets."""
 
-    def test_preflight_warns_when_hf_token_missing_for_gated_dataset(self):
+    def test_preflight_detects_missing_hf_token(self):
         """When download_benchmarks != 'never' and cloud.env has no HF_TOKEN,
-        preflight should warn or fail."""
-        from crsbench.cloud.gce.launch_preflight import GceLaunchPreflight
+        a validation function should detect the missing token."""
+        from crsbench.cloud.gce.launch_preflight import check_hf_token_for_download
 
         config = _make_config_with_regions()
-        assert config.cloud is not None
-        config.cloud.bootstrap = config.cloud.bootstrap or {}
-        # download_benchmarks=auto means VMs will try to download
         plan = build_cloud_launch_plan(config)
 
-        preflight = GceLaunchPreflight.from_launch_plan(
-            plan,
-            config_path=Path("/tmp/config.yaml"),
-            cwd=Path("/tmp"),
-            env={},  # No HF_TOKEN
+        # No HF_TOKEN in the resolved env
+        result = check_hf_token_for_download(
+            plan=plan,
+            resolved_env={},
         )
 
-        # Should have a warning about missing HF_TOKEN
-        assert any(
-            "HF_TOKEN" in str(check)
-            for check in preflight.checks
-            if hasattr(check, "status") and check.status == "warning"
-        ) or any("HF_TOKEN" in w for w in getattr(preflight, "warnings", []))
+        assert result is not None, "Should return a warning when HF_TOKEN is missing"
+        assert "HF_TOKEN" in result
+
+    def test_preflight_passes_when_hf_token_present(self):
+        """When HF_TOKEN is in the resolved env, no warning."""
+        from crsbench.cloud.gce.launch_preflight import check_hf_token_for_download
+
+        config = _make_config_with_regions()
+        plan = build_cloud_launch_plan(config)
+
+        result = check_hf_token_for_download(
+            plan=plan,
+            resolved_env={"HF_TOKEN": "hf_test_token"},
+        )
+
+        assert result is None, "Should not warn when HF_TOKEN is present"
+
+    def test_preflight_passes_when_download_disabled(self):
+        """When download_benchmarks='never', HF_TOKEN is not required."""
+        from crsbench.cloud.gce.launch_preflight import check_hf_token_for_download
+
+        config = _make_config_with_regions()
+        plan = build_cloud_launch_plan(config)
+
+        result = check_hf_token_for_download(
+            plan=plan,
+            resolved_env={},
+            download_benchmarks="never",
+        )
+
+        assert result is None, "Should not warn when downloads are disabled"
 
 
 # ===========================================================================

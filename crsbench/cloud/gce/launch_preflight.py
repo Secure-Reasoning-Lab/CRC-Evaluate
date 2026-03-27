@@ -215,6 +215,34 @@ def _validate_checkout_install_specs_for_plan(plan: CloudLaunchPlan) -> None:
         )
 
 
+def check_hf_token_for_download(
+    *,
+    plan: CloudLaunchPlan,
+    resolved_env: Mapping[str, str],
+    download_benchmarks: str = "auto",
+) -> str | None:
+    """Check if HF_TOKEN is available when benchmark downloads are enabled.
+
+    Args:
+        plan: Cloud launch plan.
+        resolved_env: Resolved environment variables that will be injected into VMs.
+        download_benchmarks: Bootstrap download_benchmarks setting
+            ("auto", "always", or "never").
+
+    Returns a warning message if HF_TOKEN is missing and downloads are enabled,
+    or None if everything is fine.
+    """
+    if download_benchmarks == "never":
+        return None
+    if "HF_TOKEN" in resolved_env:
+        return None
+    return (
+        "HF_TOKEN is not set in cloud.env but download_benchmarks is "
+        f"'{download_benchmarks}'. VMs downloading from gated HuggingFace datasets "
+        "will fail. Add 'HF_TOKEN: os.environ/HF_TOKEN' to cloud.env."
+    )
+
+
 def _validate_checkout_install_spec(value: object, *, field_path: str) -> None:
     if value is None or not str(value).strip():
         raise ValueError(
