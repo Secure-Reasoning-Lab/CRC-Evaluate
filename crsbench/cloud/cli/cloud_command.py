@@ -114,6 +114,12 @@ Examples:
         action="store_true",
         help="Collect into a fresh timestamped sibling directory",
     )
+    collect_p.add_argument(
+        "--dest",
+        dest="dest",
+        default=None,
+        help="Override local destination directory for collected artifacts",
+    )
 
     # list
     list_p = cloud_subparsers.add_parser(

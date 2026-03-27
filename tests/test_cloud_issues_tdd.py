@@ -243,20 +243,24 @@ class TestCloudCollectDestFlag:
 
     def test_collect_cli_accepts_dest_flag(self):
         """The collect subcommand should accept --dest argument."""
-        from crsbench.cloud.cli._monitor import run_monitor  # noqa: F401
+        from crsbench.cloud.cli.cloud_command import add_cloud_subparser
 
-        # Check that the collect parser accepts --dest
         import argparse
-
-        from crsbench.cloud.cli._collect import add_collect_subparser
 
         parent = argparse.ArgumentParser()
         sub = parent.add_subparsers()
-        add_collect_subparser(sub)
+        add_cloud_subparser(sub)
 
         # Should parse without error
         args = parent.parse_args(
-            ["collect", "--config", "config.yaml", "--dest", "/tmp/my-output"]
+            [
+                "cloud",
+                "collect",
+                "--config",
+                "config.yaml",
+                "--dest",
+                "/tmp/my-output",
+            ]
         )
         assert args.dest == "/tmp/my-output"
 
