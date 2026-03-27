@@ -994,8 +994,13 @@ ZONE="${ZONE_PATH##*/}"
 printf '%s' "${EXPERIMENT_CONFIG_B64}" | base64 --decode > "${CONFIG_PATH}"
 EXPERIMENT_NAME="$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))['experiment'])" "${CONFIG_PATH}")"
 
-# Set ERR trap now that Redis host is known for failure reporting
+# Export cloud identity vars for ERR trap failure reporting
 export CRSBENCH_REDIS_HOST="localhost:6379"
+export CRSBENCH_CLOUD_EXPERIMENT="${EXPERIMENT_NAME}"
+export CRSBENCH_CLOUD_INSTANCE_ID="${INSTANCE_ID}"
+export CRSBENCH_CLOUD_ROLE="orchestrator"
+export CRSBENCH_CLOUD_ZONE="${ZONE}"
+export CRSBENCH_CLOUD_INSTANCE_NAME="crsbench-${EXPERIMENT_NAME}-orch"
 trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR
 
 CRSBENCH_GITCACHE_ENABLED="$(read_gitcache_flag_from_config "${CONFIG_PATH}")"

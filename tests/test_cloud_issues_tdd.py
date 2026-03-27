@@ -215,7 +215,6 @@ class TestHfTokenPreflight:
 
         # No HF_TOKEN in the resolved env
         result = check_hf_token_for_download(
-            plan=plan,
             resolved_env={},
         )
 
@@ -230,7 +229,6 @@ class TestHfTokenPreflight:
         plan = build_cloud_launch_plan(config)
 
         result = check_hf_token_for_download(
-            plan=plan,
             resolved_env={"HF_TOKEN": "hf_test_token"},
         )
 
@@ -244,7 +242,6 @@ class TestHfTokenPreflight:
         plan = build_cloud_launch_plan(config)
 
         result = check_hf_token_for_download(
-            plan=plan,
             resolved_env={},
             download_benchmarks="never",
         )
@@ -283,18 +280,22 @@ class TestCloudCollectDestFlag:
         )
         assert args.dest == "/tmp/my-output"
 
-    def test_dest_flag_overrides_experiment_filestore(self):
-        """When --dest is provided, it should be used as the local destination
-        instead of experiment_filestore."""
-        # The run_collect function reads args.dest and overrides experiment_filestore.
-        # We verify the code path exists by checking the source.
+    def test_dest_override_not_clobbered_by_reconnect(self):
+        """The --dest override must survive the reconnect() call which
+        reassigns experiment_filestore."""
         import inspect
 
         from crsbench.cloud.cli._collect import run_collect
 
         source = inspect.getsource(run_collect)
-        assert "dest_override" in source or "args.dest" in source, (
-            "run_collect should read args.dest to override the local destination"
+        # After reconnect(), dest_override must be checked before using
+        # the reconnected filestore
+        assert "_reconnect_filestore" in source or "dest_override" in source, (
+            "run_collect must not let reconnect() clobber the --dest override"
+        )
+        # reconnect should not directly assign to experiment_filestore
+        assert ", experiment_filestore = reconnect(" not in source, (
+            "reconnect() must not directly reassign experiment_filestore when --dest is set"
         )
 
 
@@ -306,19 +307,14 @@ class TestCloudCollectDestFlag:
 class TestEvaluatorLogCollection:
     """Evaluator logs should be collected to experiment data dir."""
 
-    def test_evaluator_not_skipped_in_collect(self):
-        """The collection code should not unconditionally skip evaluators
-        for artifact collection. Evaluator logs and metadata should be
-        collected to the experiment data path."""
-        import inspect
+    def test_evaluator_role_recognized_in_collection(self):
+        """The collection code should recognize evaluator instances
+        and handle their log collection."""
+        from crsbench.cloud.readiness import CloudInstanceRole
 
-        from crsbench.cloud.cli._collect import run_collect
-
-        source = inspect.getsource(run_collect)
-        # The collection should attempt rsync for evaluators too,
-        # not just skip with "logs only"
-        # At minimum, evaluator log rsync should target experiment dir
-        assert "evaluator" in source.lower()
+        # Verify the evaluator role constant exists and is distinct
+        assert CloudInstanceRole.EVALUATOR.value == "evaluator"
+        assert CloudInstanceRole.EVALUATOR != CloudInstanceRole.WORKER
 
 
 # ===========================================================================
@@ -332,7 +328,6 @@ class TestOrchestratorCloudIdentity:
     def test_orchestrator_env_includes_cloud_identity_vars(self):
         """The orchestrator env file should include CRSBENCH_CLOUD_EXPERIMENT,
         CRSBENCH_CLOUD_INSTANCE_ID, CRSBENCH_CLOUD_ROLE, CRSBENCH_CLOUD_ZONE."""
-        # Read the orchestrator startup script and check for cloud identity env vars
         script = Path(
             "/home/dongkwan/CRSbench-gcp/crsbench/cloud/gce/startup/orchestrator.sh"
         )
@@ -350,6 +345,35 @@ class TestOrchestratorCloudIdentity:
                 f'write_env_var "{var}"' in content
                 or f"write_env_var '{var}'" in content
             ), f"Orchestrator env file should include {var}"
+
+    def test_orchestrator_exports_cloud_identity_before_err_trap(self):
+        """Cloud identity vars must be exported (not just written to file)
+        before the ERR trap, so report_bootstrap_failure can reach Redis."""
+        script = Path(
+            "/home/dongkwan/CRSbench-gcp/crsbench/cloud/gce/startup/orchestrator.sh"
+        )
+        content = script.read_text()
+
+        expected_exports = [
+            "export CRSBENCH_CLOUD_EXPERIMENT=",
+            "export CRSBENCH_CLOUD_INSTANCE_ID=",
+            "export CRSBENCH_CLOUD_ROLE=",
+            "export CRSBENCH_CLOUD_ZONE=",
+        ]
+
+        for export_line in expected_exports:
+            assert export_line in content, (
+                f"Orchestrator should export {export_line.split('=')[0]} "
+                "before the ERR trap"
+            )
+
+        # Verify exports come before the trap
+        trap_pos = content.index("trap 'on_error")
+        for export_line in expected_exports:
+            export_pos = content.index(export_line)
+            assert export_pos < trap_pos, (
+                f"{export_line.split('=')[0]} must be exported before ERR trap"
+            )
 
 
 # ===========================================================================

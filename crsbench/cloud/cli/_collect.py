@@ -61,9 +61,11 @@ def run_collect(args: argparse.Namespace) -> int:
 
     readiness = None
     try:
-        _context, _redis_conn, readiness, _lifecycle, experiment_filestore = reconnect(
+        _context, _redis_conn, readiness, _lifecycle, _reconnect_filestore = reconnect(
             args.config, experiment_name
         )
+        if not dest_override:
+            experiment_filestore = _reconnect_filestore
     except Exception as exc:
         logger.warning(
             "Redis reconnect unavailable for experiment {}; "
