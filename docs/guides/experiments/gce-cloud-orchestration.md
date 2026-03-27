@@ -209,6 +209,7 @@ defaults; `instance_profiles.<name>` defines the effective per-VM contract.
 |---|---|---|
 | `machine_type` | yes when `image` is used | GCE machine type for image-based instances |
 | `boot_disk_size_gb` | yes when `image` is used | Boot disk size in GiB for image-based instances |
+| `boot_disk_type` | no | GCE disk type (`pd-ssd`, `pd-balanced`, `pd-standard`); defaults to GCE platform default (`pd-standard`) when omitted |
 | `image` | exactly one of `image` or `instance_template` | Image or image-family reference used for VM creation |
 | `instance_template` | exactly one of `image` or `instance_template` | Existing GCE instance template to use instead of explicit image and machine settings |
 | `network` | no | Optional VPC network override for this profile |
@@ -443,6 +444,56 @@ On the remote orchestrator, the startup script binds Valkey on `127.0.0.1` for
 the local `crsbench run` path and on the VM's discovered internal address for
 workers. It does not expose Redis on `0.0.0.0`.
 
+### SSD Boot Disks
+
+Use `boot_disk_type` in instance profiles to select SSD storage:
+
+```yaml
+cloud:
+  providers:
+    gce:
+      profile_defaults:
+        boot_disk_type: pd-ssd   # pd-ssd, pd-balanced, or pd-standard
+        boot_disk_size_gb: 1024
+      instance_profiles:
+        gce-evaluator:
+          boot_disk_size_gb: 2048  # evaluator needs more for build cache
+          # inherits pd-ssd from profile_defaults
+```
+
+### Region Pinning for Quota Management
+
+When the total fleet exceeds a single region's CPU quota, pin placements
+to specific regions instead of relying on fallback:
+
+```yaml
+cloud:
+  workers:
+    defaults:
+      instance_profile: gce-worker-n2d
+      count: 1
+    placements:
+      # us-central1: 4 workers (quota: 1000 N2D vCPUs)
+      - region: us-central1
+      - region: us-central1
+      - region: us-central1
+      - region: us-central1
+      # us-south1: 2 workers (quota: 776 N2D vCPUs)
+      - region: us-south1
+      - region: us-south1
+```
+
+Without pinning, all placements attempt the first region in the fallback
+list before retrying. CRSBench preflight detects when greedy first-region
+demand exceeds that region's quota.
+
+Check quotas with:
+
+```bash
+gcloud compute regions describe us-central1 --project=PROJECT \
+  --format="table(quotas.filter(metric:N2D_CPUS))"
+```
+
 ### Using Instance Templates
 
 Instead of specifying `image` + `machine_type` + `boot_disk_size_gb`, you can reference a pre-configured instance template:
@@ -478,6 +529,29 @@ script can authenticate automatically.
 These credential fields stay supported even when you use a public CRSBench
 repository or a public dataset mirror, because downstream adopters may still
 need private forks or gated datasets.
+
+### HuggingFace Token for Gated Datasets
+
+When `cloud.bootstrap.download_benchmarks` is `auto` or `always` and the
+benchmark dataset is gated, VMs need a HuggingFace token:
+
+```yaml
+cloud:
+  env:
+    HF_TOKEN: os.environ/HF_TOKEN
+```
+
+Export the token locally before launching:
+
+```bash
+export HF_TOKEN="hf_your_token_here"
+uv run crsbench cloud launch --config "$CONFIG"
+```
+
+CRSBench preflight warns when `HF_TOKEN` is missing and downloads are
+enabled.
+
+### Secret Field Syntax
 
 Cloud secret-bearing fields accept three forms at launch time:
 
@@ -818,6 +892,29 @@ Bootstrap behavior:
   `runtime.pov_early_stop`, `inputs.sarif`, and `inputs.diff` to match the
   existing Atlantis sanity bug-finding preset.
 
+### CPU Pinning
+
+Cloud workers and evaluators automatically use `--cpuset 0-(N-1)` where
+N is the VM's core count. This assigns non-overlapping core ranges to
+concurrent jobs:
+
+- Worker with `jobs: 14, cores_per_job: 16` on `n2d-standard-224`:
+  job 1 gets cores 0-15, job 2 gets 16-31, ..., job 14 gets 208-223
+- Evaluator with `jobs: 8, cores_per_job: 16` on `n2d-standard-128`:
+  each build/verify job gets a dedicated 16-core slice
+
+Verify on a running worker:
+
+```bash
+gcloud compute ssh WORKER --tunnel-through-iap \
+  --command="sudo -H -u crsbench docker ps --format '{{.Names}}' | \
+    while read c; do
+      cpuset=\$(sudo -H -u crsbench docker inspect \
+        --format '{{.HostConfig.CpusetCpus}}' \"\$c\")
+      echo \"\$c: cpuset=\$cpuset\"
+    done"
+```
+
 ## Monitoring
 
 ### Fleet and Job Status
@@ -874,6 +971,16 @@ By default, `cloud collect` infers:
 In plain terms, `cloud collect` copies trial artifacts and VM diagnostics from
 the cloud VMs back to a local directory on the machine where you run the
 command.
+
+Override the local destination with `--dest`:
+
+```bash
+uv run crsbench cloud --config config.yaml collect --dest ~/my-results --force
+```
+
+Without `--dest`, results go to `storage.experiment_filestore`. With
+`--dest`, collect to any writable path regardless of the VM-side
+storage configuration.
 
 Key paths:
 
@@ -1217,6 +1324,11 @@ sudo -iu crsbench env \
 | Teardown returns non-zero | Collection or deletion failed for at least one VM | Check the logged worker/orchestrator errors, then rerun `cloud collect` or `cloud teardown` as needed |
 | `use_os_login must be true` | Config validation | OS Login is required; do not set `use_os_login: false` |
 | `exactly one of image or instance_template` | Config validation | Provide either `image` + `machine_type` + `boot_disk_size_gb` or `instance_template`, not both |
+| Docker network pool exhaustion (`all predefined network addresses are exhausted`) | Too many concurrent Docker compose networks on one VM | CRSBench configures Docker with an expanded address pool (`172.16.0.0/12` with `/24` subnets, up to 4096 networks) automatically via the startup script |
+| HF download fails with 401 Unauthorized | Missing `HF_TOKEN` for gated HuggingFace datasets | Add `HF_TOKEN: os.environ/HF_TOKEN` to `cloud.env` and export `HF_TOKEN` locally before launching |
+| Quota exceeded on first region | All placements attempt the first region in the fallback list | Pin placements to specific regions using `region:` on each placement entry; CRSBench preflight now warns about greedy first-region overcommit |
+| Workers stuck at "registering" | Worker supervisor did not report ready state | Ensure `feat/gcp` branch includes the readiness fix (commit `16e4d584`); workers with `--cpuset` now report ready before entering the supervisor loop |
+| Collect fails with Permission denied on `/data` | OS Login user cannot read crsbench-owned experiment data | CRSBench uses `--rsync-path="sudo rsync"` on the remote side; ensure the crsbench user has passwordless sudo |
 
 ## See Also
 
