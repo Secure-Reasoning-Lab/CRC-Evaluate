@@ -625,6 +625,38 @@ class GceProviderAdapter:
                         available=max_assignable,
                     )
                 )
+            elif total_required > 0 and len(requirements) > 1:
+                # Check greedy-first-region overcommit: the provisioner uses
+                # regional bulk insert which places ALL instances from one
+                # placement in a single region before falling back. When
+                # multiple placements share the same first candidate region,
+                # the provisioner may try to place them all there, exceeding
+                # that region's capacity. This only matters when multiple
+                # placements compete for the same first region.
+                first_region_totals: dict[str, int] = {}
+                for candidate_regions, required in requirements:
+                    first = candidate_regions[0]
+                    first_region_totals[first] = (
+                        first_region_totals.get(first, 0) + required
+                    )
+                for region, greedy_total in first_region_totals.items():
+                    region_capacity = capacities.get(region, 0)
+                    if greedy_total > region_capacity:
+                        shortages.append(
+                            QuotaShortage(
+                                provider=CloudProvider.GCE,
+                                scope=region,
+                                resource_family=family,
+                                required=greedy_total
+                                + aggregated_requirements.get(
+                                    (region, family), 0
+                                ),
+                                available=region_capacity
+                                + aggregated_requirements.get(
+                                    (region, family), 0
+                                ),
+                            )
+                        )
         return shortages
 
     def quota_shortages_for_dynamic_fleet(
