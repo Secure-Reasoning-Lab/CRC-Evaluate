@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from crsbench.cloud.cli._config_reconnect import (
@@ -35,7 +36,6 @@ from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
     import argparse
-    from pathlib import Path
 
     from crsbench.cloud.cli._config_reconnect import ResolvedCloudContext
     from crsbench.cloud.records import CloudInstanceLike

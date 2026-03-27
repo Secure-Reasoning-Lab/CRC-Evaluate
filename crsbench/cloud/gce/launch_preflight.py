@@ -217,7 +217,7 @@ def _validate_checkout_install_specs_for_plan(plan: CloudLaunchPlan) -> None:
 
 def check_hf_token_for_download(
     *,
-    plan: CloudLaunchPlan,
+    plan: CloudLaunchPlan,  # noqa: ARG001 — reserved for future suite-specific checks
     resolved_env: Mapping[str, str],
     download_benchmarks: str = "auto",
 ) -> str | None:

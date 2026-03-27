@@ -648,13 +648,9 @@ class GceProviderAdapter:
                                 scope=region,
                                 resource_family=family,
                                 required=greedy_total
-                                + aggregated_requirements.get(
-                                    (region, family), 0
-                                ),
+                                + aggregated_requirements.get((region, family), 0),
                                 available=region_capacity
-                                + aggregated_requirements.get(
-                                    (region, family), 0
-                                ),
+                                + aggregated_requirements.get((region, family), 0),
                             )
                         )
         return shortages

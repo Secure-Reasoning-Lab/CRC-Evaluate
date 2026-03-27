@@ -7,12 +7,10 @@ Tests are written to fail first (TDD), then implementation makes them pass.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from crsbench.cloud.models import build_cloud_launch_plan
 from crsbench.validation.schemas import ExperimentConfig
-
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -264,9 +262,9 @@ class TestCloudCollectDestFlag:
 
     def test_collect_cli_accepts_dest_flag(self):
         """The collect subcommand should accept --dest argument."""
-        from crsbench.cloud.cli.cloud_command import add_cloud_subparser
-
         import argparse
+
+        from crsbench.cloud.cli.cloud_command import add_cloud_subparser
 
         parent = argparse.ArgumentParser()
         sub = parent.add_subparsers()
@@ -288,11 +286,11 @@ class TestCloudCollectDestFlag:
     def test_dest_flag_overrides_experiment_filestore(self):
         """When --dest is provided, it should be used as the local destination
         instead of experiment_filestore."""
-        from crsbench.cloud.cli._collect import run_collect
-
         # The run_collect function reads args.dest and overrides experiment_filestore.
         # We verify the code path exists by checking the source.
         import inspect
+
+        from crsbench.cloud.cli._collect import run_collect
 
         source = inspect.getsource(run_collect)
         assert "dest_override" in source or "args.dest" in source, (
@@ -370,9 +368,8 @@ class TestOrchestratorErrTrap:
         )
         content = script.read_text()
 
-        assert "trap" in content and "ERR" in content, (
-            "Orchestrator startup should set an ERR trap for failure reporting"
-        )
+        assert "trap" in content, "Orchestrator startup should set a trap"
+        assert "ERR" in content, "Orchestrator trap should catch ERR signals"
 
     def test_orchestrator_has_report_bootstrap_failure(self):
         """The orchestrator startup script should have a report_bootstrap_failure
