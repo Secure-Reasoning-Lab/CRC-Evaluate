@@ -51,8 +51,13 @@ def run_collect(args: argparse.Namespace) -> int:
     experiment_name = resolve_effective_experiment_name(args.config, args.experiment)
     context = resolve_cloud_context(args.config, experiment_name)
     launch_state = context.launch_state
-    experiment_filestore = context.experiment_filestore
-    base_destination = experiment_filestore / experiment_name
+    dest_override = getattr(args, "dest", None)
+    if dest_override:
+        experiment_filestore = Path(dest_override)
+        base_destination = experiment_filestore
+    else:
+        experiment_filestore = context.experiment_filestore
+        base_destination = experiment_filestore / experiment_name
 
     readiness = None
     try:
