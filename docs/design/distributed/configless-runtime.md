@@ -27,7 +27,8 @@ Runtime registration and queue discovery work as follows:
 
 - the orchestrator registers experiment metadata in Redis before enqueueing jobs
 - when managed cloud workers are configured, the orchestrator also records per-instance
-  readiness state in Redis and gates trial enqueue on explicit worker readiness
+  readiness state in Redis and uses it for cloud health tracking without
+  requiring the whole pre-provisioned fleet to be ready before enqueue
 - configless workers discover trial queues from the registry and may serve multiple experiments
 - experiment-pinned workers serve one experiment queue without loading a config file
 - configless evaluators discover build/verify queues from the registry and may serve multiple experiments
@@ -78,8 +79,9 @@ separate cloud-worker readiness contract:
 - allowed states are `provisioning`, `booting`, `registering`, `ready`,
   `bootstrap_failed`, `deleting`, and `deleted`
 - VM `RUNNING` is not equivalent to schedulable readiness
-- the orchestrator only treats the fleet as usable when all requested workers
-  reach explicit `ready`
+- for pre-provisioned cloud mode, the orchestrator waits for the declared
+  instances to exist and records their readiness state, but it does not block
+  job enqueue on full-fleet `ready`
 - startup failure evidence is carried in readiness records so operators can
   inspect bootstrap failures without interactive SSH
 - failed bring-up transitions matching workers through `deleting`/`deleted`

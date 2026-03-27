@@ -120,6 +120,11 @@ Provider-observed states such as VM creation or `RUNNING` are only inputs to
 CRSBench readiness. A role becomes schedulable only when CRSBench records
 explicit readiness for that experiment and `instance_id`.
 
+For pre-provisioned remote-orchestrator mode, that schedulable signal is used
+for operator visibility and failure evidence, not as a hard requirement that
+every declared worker/evaluator reach `ready` before the orchestrator enqueues
+jobs.
+
 Shared readiness invariants:
 
 - readiness is keyed by experiment plus provider instance identity

@@ -156,8 +156,10 @@ Phase 1 contract notes:
   from generic Redis worker visibility.
 - Bootstrapped cloud workers stay pinned to the declaring experiment instead
   of joining the shared configless worker pool.
-- `crsbench run` waits for the requested fleet to report explicit readiness
-  before it enqueues trial jobs.
+- In pre-provisioned cloud mode, `crsbench run` waits for the declared fleet
+  to exist, then enqueues jobs even if some workers or evaluators are still
+  booting. Explicit readiness remains a health/reporting signal rather than a
+  hard enqueue gate.
 - A VM in GCE `RUNNING` state is still non-ready until CRSBench records
   `ready`.
 - Bootstrap failures are surfaced through per-instance startup evidence, so

@@ -697,7 +697,7 @@ This path:
 2. Provisions one orchestrator VM
 3. Waits for the orchestrator VM to have an internal address
 4. Provisions workers across all `cloud.workers.placements` and evaluators across all `cloud.evaluators.placements`, passing the orchestrator Redis host/password
-5. Lets the remote orchestrator VM clone CRSBench, run `crsbench prepare`, optionally download benchmarks, start Valkey, rewrite the experiment config to use local Redis, wait for the pre-provisioned workers/evaluators to report ready, and run `crsbench run`
+5. Lets the remote orchestrator VM clone CRSBench, run `crsbench prepare`, optionally download benchmarks, start Valkey, rewrite the experiment config to use local Redis, wait for the pre-provisioned workers/evaluators to exist in GCE inventory, and run `crsbench run` while late workers/evaluators continue booting in the background
 
 `cloud launch` persists local launch state next to the config file under
 `.crsbench-cloud/<experiment>.json`. Later `cloud status`, `cloud collect`, and

@@ -1208,10 +1208,10 @@ def test_provider_neutral_cloud_instances_with_evaluators_pass_layered_env_paylo
     manager.bring_up_workers.assert_not_called()
 
 
-def test_provider_neutral_preprovisioned_wait_does_not_resolve_secret_refs_again(
+def test_provider_neutral_preprovisioned_observe_does_not_resolve_secret_refs_again(
     tmp_path: Path,
 ) -> None:
-    """Remote orchestrator wait path must not require operator-only secret sources."""
+    """Remote orchestrator observe path must not require operator-only secret sources."""
     config = _add_secret_refs_to_provider_neutral_run_config(
         _make_provider_neutral_run_config(tmp_path)
     )
@@ -1227,15 +1227,15 @@ def test_provider_neutral_preprovisioned_wait_does_not_resolve_secret_refs_again
     adapter = MagicMock()
     manager = MagicMock()
 
-    def _wait_for_existing_workers(**kwargs):
+    def _observe_existing_workers(**kwargs):
         unresolved_plan = kwargs["plan"]
         assert (
             unresolved_plan.worker_placements[0].env["HF_TOKEN"]
             == "os.environ/HF_TOKEN"
         )
-        raise RuntimeError("stop after existing-worker wait")
+        raise RuntimeError("stop after existing-worker observe")
 
-    manager.wait_for_existing_workers.side_effect = _wait_for_existing_workers
+    manager.observe_existing_workers.side_effect = _observe_existing_workers
 
     with (
         patch.dict(
@@ -1269,17 +1269,17 @@ def test_provider_neutral_preprovisioned_wait_does_not_resolve_secret_refs_again
             return_value=manager,
         ),
     ):
-        with pytest.raises(RuntimeError, match="stop after existing-worker wait"):
+        with pytest.raises(RuntimeError, match="stop after existing-worker observe"):
             run_experiment_distributed("exp-test", config, [_make_trial(None)])
 
-    manager.wait_for_existing_workers.assert_called_once()
+    manager.observe_existing_workers.assert_called_once()
     manager.bring_up_workers.assert_not_called()
 
 
-def test_provider_neutral_preprovisioned_evaluators_use_combined_wait(
+def test_provider_neutral_preprovisioned_evaluators_use_combined_observe(
     tmp_path: Path,
 ) -> None:
-    """Pre-provisioned evaluator fleets should use the combined wait path."""
+    """Pre-provisioned evaluator fleets should use the combined observe path."""
     config = _with_evaluator_placements(_make_provider_neutral_run_config(tmp_path))
 
     session = MagicMock()
@@ -1293,12 +1293,12 @@ def test_provider_neutral_preprovisioned_evaluators_use_combined_wait(
     adapter = MagicMock()
     manager = MagicMock()
 
-    def _wait_for_existing_instances(**kwargs):
+    def _observe_existing_instances(**kwargs):
         unresolved_plan = kwargs["plan"]
         assert unresolved_plan.evaluator_placements == launch_plan.evaluator_placements
-        raise RuntimeError("stop after existing-instance wait")
+        raise RuntimeError("stop after existing-instance observe")
 
-    manager.wait_for_existing_instances.side_effect = _wait_for_existing_instances
+    manager.observe_existing_instances.side_effect = _observe_existing_instances
 
     with (
         patch.dict(
@@ -1332,11 +1332,11 @@ def test_provider_neutral_preprovisioned_evaluators_use_combined_wait(
             return_value=manager,
         ),
     ):
-        with pytest.raises(RuntimeError, match="stop after existing-instance wait"):
+        with pytest.raises(RuntimeError, match="stop after existing-instance observe"):
             run_experiment_distributed("exp-test", config, [_make_trial(None)])
 
-    manager.wait_for_existing_instances.assert_called_once()
-    manager.wait_for_existing_workers.assert_not_called()
+    manager.observe_existing_instances.assert_called_once()
+    manager.observe_existing_workers.assert_not_called()
     manager.bring_up_instances.assert_not_called()
     manager.bring_up_workers.assert_not_called()
 
@@ -1426,7 +1426,7 @@ def test_cloud_fleet_bringup_is_skipped_when_no_trials_remain(tmp_path: Path) ->
 def test_cloud_fleet_bringup_is_skipped_for_preprovisioned_remote_orchestrator(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """Remote orchestrator mode should wait for existing workers instead of reprovisioning."""
+    """Remote orchestrator mode should observe existing workers instead of reprovisioning."""
     monkeypatch.setenv("CRSBENCH_CLOUD_PREPROVISIONED_WORKERS", "1")
     config = _make_provider_neutral_run_config(tmp_path)
 
@@ -1465,4 +1465,4 @@ def test_cloud_fleet_bringup_is_skipped_for_preprovisioned_remote_orchestrator(
             run_experiment_distributed("exp-test", config, [_make_trial(None)])
 
     manager.bring_up_workers.assert_not_called()
-    manager.wait_for_existing_workers.assert_called_once()
+    manager.observe_existing_workers.assert_called_once()

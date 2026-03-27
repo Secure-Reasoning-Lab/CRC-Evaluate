@@ -467,6 +467,114 @@ def test_wait_for_existing_workers_uses_adapter_expected_names_and_timeouts() ->
     assert snapshot.ready_count == 1
 
 
+def test_observe_existing_workers_returns_after_instances_exist_without_ready() -> None:
+    """Pre-provisioned observe path should not block on full worker readiness."""
+    from crsbench.cloud.readiness import CloudReadinessStore, CloudWorkerState
+    from crsbench.cloud.status import CloudFleetStatusManager
+
+    class _Adapter:
+        def expected_worker_names(self, *, plan) -> list[str]:
+            del plan
+            return ["gce-worker-001"]
+
+        def max_worker_readiness_timeout(self, *, plan) -> int:
+            del plan
+            return 900
+
+        def list_workers(self, *, plan) -> list[GceWorkerRecord]:
+            del plan
+            return [_make_worker()]
+
+    manager = CloudFleetStatusManager(
+        readiness_store=CloudReadinessStore(_FakeRedis()),
+        provisioner=None,
+        clock=lambda: 0.0,
+        sleep=lambda _seconds: None,
+        poll_interval_sec=0.0,
+    )
+
+    snapshot = manager.observe_existing_workers(
+        plan=SimpleNamespace(experiment_name="exp-cloud-42"),
+        adapter=_Adapter(),
+    )
+
+    assert snapshot.requested_count == 1
+    assert snapshot.ready_count == 0
+    assert tuple(worker.state for worker in snapshot.pending_workers) == (
+        CloudWorkerState.BOOTING,
+    )
+
+
+def test_observe_existing_instances_returns_after_instances_exist_without_ready() -> (
+    None
+):
+    """Pre-provisioned observe path should return once worker/evaluator VMs exist."""
+    from crsbench.cloud.readiness import (
+        CloudInstanceRole,
+        CloudReadinessStore,
+        CloudWorkerState,
+    )
+    from crsbench.cloud.status import CloudFleetStatusManager
+
+    class _Adapter:
+        def expected_worker_names(self, *, plan) -> list[str]:
+            del plan
+            return ["gce-worker-001"]
+
+        def expected_evaluator_names(self, *, plan) -> list[str]:
+            del plan
+            return ["gce-evaluator-001"]
+
+        def max_instance_readiness_timeout(self, *, plan) -> int:
+            del plan
+            return 900
+
+        def list_workers(self, *, plan) -> list[GceWorkerRecord]:
+            del plan
+            return [_make_worker()]
+
+        def list_evaluators(self, *, plan) -> list[GceWorkerRecord]:
+            del plan
+            return [
+                replace(
+                    _make_worker(),
+                    name="gce-evaluator-001",
+                    instance_id="2001",
+                    zone="us-east1-b",
+                    internal_ip="10.0.2.10",
+                    labels={
+                        "crsbench-experiment": "exp-cloud-42",
+                        "owner": "team-crs",
+                        "crsbench-role": "evaluator",
+                    },
+                )
+            ]
+
+    manager = CloudFleetStatusManager(
+        readiness_store=CloudReadinessStore(_FakeRedis()),
+        provisioner=None,
+        clock=lambda: 0.0,
+        sleep=lambda _seconds: None,
+        poll_interval_sec=0.0,
+    )
+
+    snapshot = manager.observe_existing_instances(
+        plan=SimpleNamespace(experiment_name="exp-cloud-42"),
+        adapter=_Adapter(),
+    )
+
+    assert snapshot.requested_count == 2
+    assert snapshot.ready_count == 0
+    assert len(snapshot.pending_workers) == 2
+    assert {worker.role for worker in snapshot.pending_workers} == {
+        CloudInstanceRole.WORKER,
+        CloudInstanceRole.EVALUATOR,
+    }
+    assert {worker.state for worker in snapshot.pending_workers} == {
+        CloudWorkerState.BOOTING,
+    }
+
+
 def test_wait_for_existing_workers_clears_stale_bootstrap_failure_for_same_instance_id() -> (
     None
 ):

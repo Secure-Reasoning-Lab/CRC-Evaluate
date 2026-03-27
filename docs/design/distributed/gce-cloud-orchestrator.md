@@ -107,7 +107,7 @@ Happy path:
 2. local control plane validates config and creates an orchestrator VM
 3. local control plane waits until the orchestrator VM has a usable internal address
 4. local control plane creates the worker fleet with Redis host/password metadata targeting the orchestrator VM
-5. orchestrator VM bootstraps CRSBench, starts Valkey, rewrites/derives the experiment config for remote-orchestrator mode, waits for the pre-provisioned worker fleet to report ready, and runs `crsbench run`
+5. orchestrator VM bootstraps CRSBench, starts Valkey, rewrites/derives the experiment config for remote-orchestrator mode, waits for the pre-provisioned worker/evaluator fleet to exist in provider inventory, snapshots the current readiness state, and runs `crsbench run`
 6. workers bootstrap, connect to the orchestrator-hosted Redis, and process trial jobs
 7. operator uses local `cloud status`, `cloud collect`, and `cloud teardown`
 
@@ -160,7 +160,7 @@ Failure behavior:
 
 - race between orchestrator creation and worker launch: mitigated by waiting for a usable orchestrator address before creating workers
 - double-provisioning workers from the orchestrator VM: mitigated by deriving an orchestrator-only runtime config
-- job enqueue before workers are actually available: mitigated by explicit readiness waiting for the pre-provisioned worker fleet on the orchestrator VM
+- job enqueue before every worker is actually available: accepted by design; the queue is durable and late workers/evaluators may join after enqueue. Readiness is still recorded for operator visibility and bootstrap failure evidence.
 - stale cloud resources after partial launch failure: mitigated by local rollback of both orchestrator and workers
 - secret drift between orchestrator and workers: validated by an end-to-end launch test covering shared Redis auth
 

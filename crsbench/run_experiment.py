@@ -1886,14 +1886,23 @@ def run_experiment_distributed(
                     "CRSBENCH_CLOUD_PREPROVISIONED_WORKERS=1"
                 )
                 if has_evaluator_placements:
-                    fleet_status = fleet_status_manager.wait_for_existing_instances(
+                    fleet_status = fleet_status_manager.observe_existing_instances(
                         plan=launch_plan,
                         adapter=adapter,
                     )
                 else:
-                    fleet_status = fleet_status_manager.wait_for_existing_workers(
+                    fleet_status = fleet_status_manager.observe_existing_workers(
                         plan=launch_plan,
                         adapter=adapter,
+                    )
+                if fleet_status.ready_count != fleet_status.requested_count:
+                    logger.info(
+                        "Proceeding before full pre-provisioned readiness: "
+                        "{}/{} ready, {} pending, {} failed",
+                        fleet_status.ready_count,
+                        fleet_status.requested_count,
+                        len(fleet_status.pending_workers),
+                        len(fleet_status.failed_workers),
                     )
             else:
                 preflight = prepare_launch_inputs(
