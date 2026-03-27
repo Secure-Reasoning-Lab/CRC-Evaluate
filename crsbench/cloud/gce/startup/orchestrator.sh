@@ -441,6 +441,56 @@ PY
   fi
 }
 
+ensure_docker_address_pool() {
+  mkdir -p "$(dirname "${DOCKER_DAEMON_CONFIG_PATH}")"
+  local changed
+  changed="$(
+    python3 - "${DOCKER_DAEMON_CONFIG_PATH}" <<'PY'
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+config_path = Path(sys.argv[1])
+config: dict
+if config_path.exists():
+    try:
+        loaded = json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        config = {}
+    else:
+        config = loaded if isinstance(loaded, dict) else {}
+else:
+    config = {}
+
+desired = [{"base": "172.16.0.0/12", "size": 24}]
+if config.get("default-address-pools") == desired:
+    print("0")
+    raise SystemExit(0)
+
+config["default-address-pools"] = desired
+rendered = json.dumps(config, indent=2, sort_keys=True) + "\n"
+
+current = config_path.read_text(encoding="utf-8") if config_path.exists() else None
+if current == rendered:
+    print("0")
+    raise SystemExit(0)
+
+fd, tmp_path = tempfile.mkstemp(prefix=f"{config_path.name}.", dir=config_path.parent)
+os.close(fd)
+tmp_file = Path(tmp_path)
+tmp_file.write_text(rendered, encoding="utf-8")
+os.replace(tmp_file, config_path)
+print("1")
+PY
+  )"
+
+  if [[ "${changed}" == "1" ]]; then
+    restart_docker_service
+  fi
+}
+
 ensure_docker_ready() {
   if ! command -v docker >/dev/null 2>&1 || \
      ! docker compose version >/dev/null 2>&1 || \
@@ -469,6 +519,7 @@ ensure_docker_ready() {
   fi
 
   ensure_docker_cgroupfs
+  ensure_docker_address_pool
   if ! wait_for_docker; then
     echo "Docker daemon is unavailable after waiting" >&2
     exit 1
