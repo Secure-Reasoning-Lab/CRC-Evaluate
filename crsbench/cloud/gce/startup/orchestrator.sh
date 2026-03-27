@@ -934,6 +934,33 @@ start_orchestrator_runtime() {
   exec sudo -H -u "${CRSBENCH_USER}" /bin/bash "${LAUNCHER_PATH}"
 }
 
+report_bootstrap_failure() {
+  local evidence="$1"
+  python3 - "${CRSBENCH_REDIS_HOST:-}" "${evidence}" <<'PY' || true
+import sys
+
+try:
+    from crsbench.cloud.runtime import report_cloud_worker_state_from_env
+except Exception:
+    raise SystemExit(0)
+
+redis_host = sys.argv[1]
+if not redis_host:
+    raise SystemExit(0)
+
+report_cloud_worker_state_from_env(
+    redis_host=redis_host,
+    state="bootstrap_failed",
+    detail="GCE orchestrator bootstrap failed",
+    startup_evidence=sys.argv[2],
+)
+PY
+}
+
+on_error() {
+  report_bootstrap_failure "startup script failed at line $1: $2"
+}
+
 require_cmd curl
 
 mkdir -p "${STATE_DIR}"
@@ -966,6 +993,11 @@ ZONE="${ZONE_PATH##*/}"
 
 printf '%s' "${EXPERIMENT_CONFIG_B64}" | base64 --decode > "${CONFIG_PATH}"
 EXPERIMENT_NAME="$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))['experiment'])" "${CONFIG_PATH}")"
+
+# Set ERR trap now that Redis host is known for failure reporting
+export CRSBENCH_REDIS_HOST="localhost:6379"
+trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR
+
 CRSBENCH_GITCACHE_ENABLED="$(read_gitcache_flag_from_config "${CONFIG_PATH}")"
 ensure_gitcache_ready
 
