@@ -17,6 +17,7 @@ from crsbench.run_experiment import (
     build_trial_id,
     get_crs_cpu_count,
     get_crs_memory,
+    monitor_jobs,
     run_experiment_distributed,
 )
 from crsbench.validation.schemas import (
@@ -656,6 +657,58 @@ def test_monitor_jobs_basic_delegates_to_shared_monitor() -> None:
 
     shared_monitor.assert_called_once()
     assert results == [job.result]
+
+
+def test_monitor_jobs_uses_basic_renderer_when_stdout_is_not_tty() -> None:
+    queue = MagicMock()
+    config = MagicMock()
+    job = MagicMock()
+
+    with (
+        patch(
+            "crsbench.run_experiment.importlib.util.find_spec", return_value=object()
+        ),
+        patch("sys.stdout.isatty", return_value=False),
+        patch("crsbench.run_experiment._monitor_jobs_basic", return_value=[]) as basic,
+        patch("crsbench.run_experiment._monitor_jobs_rich", return_value=[]) as rich,
+    ):
+        monitor_jobs(queue, [job], "exp-test", config)
+
+    basic.assert_called_once_with(
+        queue,
+        [job],
+        "exp-test",
+        config,
+        disk_skipped=0,
+        registry=None,
+    )
+    rich.assert_not_called()
+
+
+def test_monitor_jobs_uses_rich_renderer_when_stdout_is_tty() -> None:
+    queue = MagicMock()
+    config = MagicMock()
+    job = MagicMock()
+
+    with (
+        patch(
+            "crsbench.run_experiment.importlib.util.find_spec", return_value=object()
+        ),
+        patch("sys.stdout.isatty", return_value=True),
+        patch("crsbench.run_experiment._monitor_jobs_basic", return_value=[]) as basic,
+        patch("crsbench.run_experiment._monitor_jobs_rich", return_value=[]) as rich,
+    ):
+        monitor_jobs(queue, [job], "exp-test", config)
+
+    rich.assert_called_once_with(
+        queue,
+        [job],
+        "exp-test",
+        config,
+        disk_skipped=0,
+        registry=None,
+    )
+    basic.assert_not_called()
 
 
 def test_get_experiment_queue_stats_uses_experiment_scoped_counts() -> None:

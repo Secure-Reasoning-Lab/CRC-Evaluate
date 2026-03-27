@@ -82,6 +82,15 @@ load_dotenv()
 logger = get_logger(__name__)
 
 
+def _rich_console_available() -> bool:
+    """Return True when Rich is installed and stdout is interactive."""
+    return (
+        importlib.util.find_spec("rich") is not None
+        and hasattr(sys.stdout, "isatty")
+        and sys.stdout.isatty()
+    )
+
+
 def sanitize_trial_id(raw_id: str) -> str:
     """Sanitize trial_id for Docker Compose project name compatibility.
 
@@ -964,8 +973,7 @@ def display_trial_matrix(trials: List[Trial], start_index: int = 0) -> None:
         sys.stdout.write("No trials to display.\n")
         return
 
-    # Check if Rich is available
-    rich_available = importlib.util.find_spec("rich") is not None
+    rich_available = _rich_console_available()
 
     if rich_available:
         _display_trial_matrix_rich(trials, start_index)
@@ -1301,9 +1309,7 @@ def monitor_jobs(
     Returns:
         List of TrialResult objects
     """
-    import importlib.util
-
-    rich_available = importlib.util.find_spec("rich") is not None
+    rich_available = _rich_console_available()
     if not rich_available:
         logger.warning("Rich library not available, using basic progress display")
 

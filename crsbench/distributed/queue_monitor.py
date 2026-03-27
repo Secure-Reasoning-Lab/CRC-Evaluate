@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
@@ -19,6 +20,15 @@ if TYPE_CHECKING:
     from crsbench.distributed.registry import RegistryClient
 
 logger = get_logger(__name__)
+
+
+def _rich_console_available() -> bool:
+    """Return True when Rich is installed and stdout is interactive."""
+    return (
+        importlib.util.find_spec("rich") is not None
+        and hasattr(sys.stdout, "isatty")
+        and sys.stdout.isatty()
+    )
 
 
 @dataclass(frozen=True)
@@ -167,7 +177,7 @@ def monitor_queue(
     del tracked_job_ids  # Reserved for future queue-only tracked attach mode.
 
     if use_rich is None:
-        use_rich = importlib.util.find_spec("rich") is not None
+        use_rich = _rich_console_available()
 
     callbacks = callbacks or QueueMonitorCallbacks()
 

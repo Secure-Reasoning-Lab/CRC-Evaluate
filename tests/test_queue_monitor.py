@@ -256,3 +256,26 @@ def test_monitor_queue_plain_and_rich_paths_share_snapshot_builder() -> None:
         )
 
     assert rich_builder.call_count == 1
+
+
+def test_monitor_queue_auto_detection_requires_interactive_stdout() -> None:
+    queue = MagicMock()
+
+    with (
+        patch(
+            "crsbench.distributed.queue_monitor.importlib.util.find_spec",
+            return_value=object(),
+        ),
+        patch("sys.stdout.isatty", return_value=False),
+        patch("crsbench.distributed.queue_monitor._monitor_queue_basic") as basic,
+        patch("crsbench.distributed.queue_monitor._monitor_queue_rich") as rich,
+    ):
+        monitor_queue(
+            queue,
+            "exp-1",
+            tracked_job_ids=None,
+            callbacks=QueueMonitorCallbacks(),
+        )
+
+    basic.assert_called_once()
+    rich.assert_not_called()
