@@ -83,7 +83,7 @@ def run_storage(args: argparse.Namespace) -> int:
     )
 
     # Print table
-    console = Console(force_terminal=not no_color)
+    console = Console(no_color=no_color)
     table = Table(title="Storage Usage by Benchmark", show_footer=True)
 
     table.add_column("Benchmark", style="cyan", footer="Total")
