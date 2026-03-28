@@ -124,6 +124,10 @@ The queue layer treats the following as terminal outcomes:
 - once `claimed_by` moves to a replacement worker, the superseded worker must
   stop emitting shadow-lifecycle heartbeats and must not publish terminal
   worker-side artifacts for that logical trial
+- when the current worker fails while it still owns the active lifecycle
+  record, worker-side `.fail` publication must happen before the lifecycle
+  transition clears `claimed_by`; owned failures must still materialize the
+  canonical failure marker and post-trial side effects
 - worker-side terminal publication must also preserve a preexisting
   contradictory canonical marker for the logical trial; a late duplicate
   physical attempt must not flip `.success` to `.fail` or vice versa
@@ -230,9 +234,11 @@ The queue layer treats the following as terminal outcomes:
 - shared monitor callbacks must treat terminal callbacks for non-active
   lifecycle records as stale no-ops: they may be consumed to avoid monitor
   livelock, but they must not write or overwrite orchestrator markers
-- shared monitor callbacks must leave lifecycle-backed callbacks retryable when
-  the lifecycle record cannot be read, is missing for a tracked distributed
-  job, or is active with no owner
+- shared monitor callbacks must leave callbacks retryable when lifecycle state
+  cannot be read or when an active lifecycle record has no owner
+- shared monitor callbacks must treat a missing lifecycle record on an already
+  terminal RQ job as legacy or untracked carryover state: the callback may be
+  consumed and materialized rather than retried forever
 - when orphan recovery increments lifecycle `retry_count`, it must also project
   that retry count into the concrete RQ job metadata so queue-derived operator
   views report the same retry budget state as the shadow lifecycle
@@ -245,6 +251,9 @@ The queue layer treats the following as terminal outcomes:
 - worker startup must not advance `claimed -> running` unless the lifecycle
   record is already claimed by that same worker; initialization must never steal
   ownership from another worker that already holds the shadow claim
+- experiment-scoped purge paths such as `fresh` mode and queue cleanup must
+  remove both concrete RQ jobs and the corresponding lifecycle/heartbeat hashes
+  so shadow state cannot outlive the executable queue state
 - operator safety views such as status and teardown must merge lifecycle records
   with queue-only jobs that have not yet been projected into lifecycle, so
   queue residue cannot disappear from human-facing summaries once lifecycle

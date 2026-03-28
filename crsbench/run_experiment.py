@@ -1583,10 +1583,10 @@ def _build_monitor_callbacks(
             return False, False
         if record is None:
             logger.warning(
-                "Missing lifecycle ownership for %s; leaving callback retryable",
+                "Missing lifecycle ownership for %s; treating terminal callback as legacy/untracked",
                 job_id[:8],
             )
-            return False, False
+            return True, True
         if record.state not in {JobState.CLAIMED, JobState.RUNNING, JobState.SYNCING}:
             logger.warning(
                 "Skipping stale terminal update for %s because lifecycle state is %s",

@@ -86,6 +86,8 @@ class LifecycleRedisProtocol(Protocol):
 
     def hgetall(self, key: str) -> Mapping[str | bytes, str | bytes]: ...
 
+    def delete(self, *keys: str) -> int | None: ...
+
     def rpush(self, key: str, value: str) -> int: ...
 
 
@@ -148,6 +150,10 @@ class JobLifecycleStore:
         for raw in payloads.values():
             records.append(self._deserialize(_decode(raw)))
         return records
+
+    def clear_experiment(self, experiment: str) -> None:
+        """Remove all lifecycle and heartbeat state for one experiment."""
+        self._conn.delete(self._key(experiment), self._heartbeat_key(experiment))
 
     # ------------------------------------------------------------------
     # Transition

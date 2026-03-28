@@ -9,9 +9,13 @@ import re
 import time
 from datetime import datetime, timezone
 from enum import StrEnum
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, cast
 
-from crsbench.distributed.job_lifecycle import JobLifecycleStore, JobState
+from crsbench.distributed.job_lifecycle import (
+    JobLifecycleStore,
+    JobState,
+    LifecycleRedisProtocol,
+)
 from crsbench.utils.logger import get_logger
 
 try:
@@ -732,6 +736,16 @@ def clear_experiment_jobs(queue: "rq.Queue", experiment_name: str) -> int:
     for job_id in sorted(job_ids):
         if remove_job_by_id(queue, job_id):
             removed += 1
+
+    try:
+        lifecycle_connection = cast("LifecycleRedisProtocol", queue.connection)
+        JobLifecycleStore(lifecycle_connection).clear_experiment(experiment_name)
+    except Exception as e:
+        logger.warning(
+            "Failed to clear lifecycle state for experiment=%s: %s",
+            experiment_name,
+            e,
+        )
 
     if removed > 0:
         logger.info(

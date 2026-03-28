@@ -1946,6 +1946,62 @@ def test_monitor_callbacks_retry_when_lifecycle_lookup_fails() -> None:
     marker.assert_not_called()
 
 
+def test_monitor_callbacks_allow_finished_updates_without_lifecycle_record() -> None:
+    config = MagicMock()
+    result = _make_result(success=True, worker_machine="worker-new")
+
+    job = MagicMock()
+    job.id = "job-1"
+    job.meta = {"worker_name": "worker-new"}
+    job.result = result
+
+    lifecycle_store = MagicMock()
+    lifecycle_store.get.return_value = None
+
+    callbacks = _build_monitor_callbacks(
+        config,
+        experiment_name="exp-test",
+        lifecycle_store=lifecycle_store,
+    )
+
+    with patch("crsbench.run_experiment._write_orchestrator_marker") as marker:
+        assert callbacks.on_job_finished(job) is True
+
+    marker.assert_called_once_with(result, config)
+
+
+def test_monitor_callbacks_allow_failed_updates_without_lifecycle_record() -> None:
+    config = MagicMock()
+
+    job = MagicMock()
+    job.id = "job-1"
+    job.meta = {"worker_name": "worker-new"}
+    job.kwargs = {
+        "crs": "crs-a",
+        "benchmark": "bench-a",
+        "harness_name": "fuzz_target",
+        "mode": "delta",
+        "sanitizer": "address",
+        "trial_num": 1,
+        "target_cpv_id": None,
+    }
+    job.exc_info = "legacy failure"
+
+    lifecycle_store = MagicMock()
+    lifecycle_store.get.return_value = None
+
+    callbacks = _build_monitor_callbacks(
+        config,
+        experiment_name="exp-test",
+        lifecycle_store=lifecycle_store,
+    )
+
+    with patch("crsbench.run_experiment._write_orchestrator_marker") as marker:
+        assert callbacks.on_job_failed(job) is True
+
+    marker.assert_called_once()
+
+
 def test_monitor_callbacks_retry_when_active_lifecycle_owner_missing() -> None:
     config = MagicMock()
     result = _make_result(success=True, worker_machine="worker-new")

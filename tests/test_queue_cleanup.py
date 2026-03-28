@@ -148,6 +148,42 @@ def test_clear_experiment_jobs_removes_all_physical_duplicate_jobs(monkeypatch) 
     assert removed_ids == ["job-a", "job-b"]
 
 
+def test_clear_experiment_jobs_clears_lifecycle_and_heartbeat_state(
+    monkeypatch,
+) -> None:
+    queue = MagicMock()
+    queue.connection = MagicMock()
+    job = MagicMock()
+    job.id = "job-a"
+
+    monkeypatch.setattr(queue_module, "REDIS_AVAILABLE", True)
+    monkeypatch.setattr(
+        queue_module,
+        "get_existing_trial_jobs",
+        lambda _queue, **_kwargs: {
+            "queued": [job],
+            "started": [],
+            "failed": [],
+            "finished": [],
+            "deferred": [],
+            "scheduled": [],
+        },
+    )
+    monkeypatch.setattr(
+        queue_module,
+        "remove_job_by_id",
+        lambda _queue, job_id: job_id == "job-a",
+    )
+
+    removed = clear_experiment_jobs(queue, "exp-test")
+
+    assert removed == 1
+    queue.connection.delete.assert_any_call(
+        "crsbench:jobs:exp-test",
+        "crsbench:heartbeats:exp-test",
+    )
+
+
 def test_get_existing_trial_jobs_filters_to_requested_experiment(monkeypatch) -> None:
     queue = MagicMock()
     queue.connection = MagicMock()

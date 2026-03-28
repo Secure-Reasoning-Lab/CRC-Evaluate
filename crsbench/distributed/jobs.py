@@ -1735,13 +1735,7 @@ def run_crs_trial(
         execution_time = time.time() - start_time
         error_msg = escape_loguru_braces(str(e))
         logger.error(f"[Trial {trial_num}] Benchmark not found: {error_msg}")
-        _finish_job_lifecycle(
-            lifecycle_runtime,
-            success=False,
-            detail=f"Benchmark not found: {e!s}",
-        )
-        _stop_job_lifecycle_heartbeat(heartbeat_runtime)
-        # Create .fail marker if trial_output_dir exists
+        # Publish worker-side failure artifacts while this worker still owns the attempt.
         if "trial_output_dir" in locals() and trial_output_dir.exists():
             _publish_trial_terminal_artifacts(
                 config=config,
@@ -1750,6 +1744,12 @@ def run_crs_trial(
                 results_timestamp=results_timestamp,
                 lifecycle_runtime=lifecycle_runtime,
             )
+        _finish_job_lifecycle(
+            lifecycle_runtime,
+            success=False,
+            detail=f"Benchmark not found: {e!s}",
+        )
+        _stop_job_lifecycle_heartbeat(heartbeat_runtime)
         return TrialResult(
             crs=crs,
             benchmark=benchmark,
@@ -1776,13 +1776,7 @@ def run_crs_trial(
         execution_time = time.time() - start_time
         error_msg = escape_loguru_braces(str(e))
         logger.error(f"[Trial {trial_num}] Invalid benchmark format: {error_msg}")
-        _finish_job_lifecycle(
-            lifecycle_runtime,
-            success=False,
-            detail=f"Invalid benchmark format: {e!s}",
-        )
-        _stop_job_lifecycle_heartbeat(heartbeat_runtime)
-        # Create .fail marker if trial_output_dir exists
+        # Publish worker-side failure artifacts while this worker still owns the attempt.
         if "trial_output_dir" in locals() and trial_output_dir.exists():
             _publish_trial_terminal_artifacts(
                 config=config,
@@ -1791,6 +1785,12 @@ def run_crs_trial(
                 results_timestamp=results_timestamp,
                 lifecycle_runtime=lifecycle_runtime,
             )
+        _finish_job_lifecycle(
+            lifecycle_runtime,
+            success=False,
+            detail=f"Invalid benchmark format: {e!s}",
+        )
+        _stop_job_lifecycle_heartbeat(heartbeat_runtime)
         return TrialResult(
             crs=crs,
             benchmark=benchmark,
@@ -1817,13 +1817,7 @@ def run_crs_trial(
         execution_time = time.time() - start_time
         error_msg = escape_loguru_braces(str(e))
         logger.exception("[Trial {}] Failed with error: {}", trial_num, error_msg)
-        _finish_job_lifecycle(
-            lifecycle_runtime,
-            success=False,
-            detail=str(e),
-        )
-        _stop_job_lifecycle_heartbeat(heartbeat_runtime)
-        # Create .fail marker if trial_output_dir exists
+        # Publish worker-side failure artifacts while this worker still owns the attempt.
         if "trial_output_dir" in locals() and trial_output_dir.exists():
             _publish_trial_terminal_artifacts(
                 config=config,
@@ -1832,6 +1826,12 @@ def run_crs_trial(
                 results_timestamp=results_timestamp,
                 lifecycle_runtime=lifecycle_runtime,
             )
+        _finish_job_lifecycle(
+            lifecycle_runtime,
+            success=False,
+            detail=str(e),
+        )
+        _stop_job_lifecycle_heartbeat(heartbeat_runtime)
         return TrialResult(
             crs=crs,
             benchmark=benchmark,

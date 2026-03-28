@@ -1,5 +1,5 @@
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from crsbench.distributed.job_lifecycle import (
     JobLifecycleRecord,
@@ -14,6 +14,7 @@ from crsbench.distributed.jobs import (
     _initialize_job_lifecycle_runtime,
     _lifecycle_runtime_is_current_owner,
     _publish_trial_terminal_artifacts,
+    run_crs_trial,
 )
 from crsbench.validation.schemas import EvaluationMode, ExperimentConfig
 
@@ -37,6 +38,16 @@ class _FakeRedis:
         bucket = self._lists.setdefault(key, [])
         bucket.append(value)
         return len(bucket)
+
+    def delete(self, key: str) -> int:
+        removed = 0
+        if key in self._hashes:
+            del self._hashes[key]
+            removed += 1
+        if key in self._lists:
+            del self._lists[key]
+            removed += 1
+        return removed
 
 
 def test_apply_worker_overrides_uses_grouped_storage(tmp_path: Path):
@@ -476,3 +487,145 @@ def test_publish_trial_terminal_artifacts_skips_when_runtime_missing_for_active_
     assert published is False
     assert not (trial_output_dir / ".success").exists()
     assert not (trial_output_dir / ".fail").exists()
+
+
+def test_run_crs_trial_publishes_fail_marker_before_failed_lifecycle_transition(
+    tmp_path: Path,
+) -> None:
+    fake = _FakeRedis()
+    store = JobLifecycleStore(fake)
+    store.set(
+        "exp-1",
+        JobLifecycleRecord(
+            job_id="job-1",
+            trial_key="trial-1",
+            state=JobState.RUNNING,
+            claimed_by="worker-1",
+        ),
+    )
+    runtime = JobLifecycleRuntime(
+        experiment_name="exp-1",
+        job_id="job-1",
+        worker_name="worker-1",
+        store=store,
+    )
+    config = ExperimentConfig(
+        experiment="exp-1",
+        trials=1,
+        mode=EvaluationMode.DELTA,
+        max_total_time=21600,
+        inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
+        experiment_filestore=tmp_path / "experiment-store",
+        report_filestore=tmp_path / "report-store",
+        crs_compose={"test-crs": {"num_cores": 1}},
+        benchmarks=["test-bench"],
+        skip_litellm=True,
+    )
+
+    class _EffectiveInputs:
+        hints_enabled = False
+        hint_sarif_level = 0
+        hint_corpus_level = 0
+        seed_corpus_enabled = False
+        seed_corpus_max_time = 0
+        diff_enabled = False
+        pov_enabled = True
+        max_pov_variants_per_cpv = 1
+        patch_verify_variants = 0
+
+        @staticmethod
+        def to_dict() -> dict[str, object]:
+            return {
+                "hints_enabled": False,
+                "seed_corpus_enabled": False,
+                "diff_enabled": False,
+                "pov_enabled": True,
+                "max_pov_variants_per_cpv": 1,
+                "patch_verify_variants": 0,
+            }
+
+    class _NoopResourceContext:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    benchmark_path = tmp_path / "benchmark"
+    benchmark_path.mkdir()
+    oss_fuzz_path = tmp_path / "oss-fuzz"
+    oss_fuzz_path.mkdir()
+
+    runner = MagicMock()
+    runner.run_benchmark.side_effect = RuntimeError("boom")
+    adapter = MagicMock()
+
+    with (
+        patch(
+            "crsbench.distributed.jobs._resolve_effective_input_settings",
+            return_value=_EffectiveInputs(),
+        ),
+        patch("crsbench.distributed.jobs._check_existing_trial", return_value=None),
+        patch(
+            "crsbench.distributed.jobs._initialize_job_lifecycle_runtime",
+            return_value=runtime,
+        ),
+        patch(
+            "crsbench.distributed.jobs._start_job_lifecycle_heartbeat",
+            return_value=None,
+        ),
+        patch(
+            "crsbench.distributed.jobs.ensure_oss_fuzz_root",
+            return_value=str(oss_fuzz_path),
+        ),
+        patch("crsbench.distributed.jobs.get_crs_type", return_value="bug-finding"),
+        patch("crsbench.distributed.jobs.create_adapter", return_value=adapter),
+        patch(
+            "crsbench.distributed.jobs._resolve_benchmark_path",
+            return_value=benchmark_path,
+        ),
+        patch("crsbench.distributed.jobs._load_benchmark_language", return_value="c"),
+        patch("crsbench.distributed.jobs.BenchmarkRunner", return_value=runner),
+        patch("crsbench.distributed.jobs._ensure_project_symlink"),
+        patch("crsbench.distributed.jobs.add_file_handler", return_value=object()),
+        patch("crsbench.distributed.jobs.remove_file_handler"),
+        patch("crsbench.distributed.jobs.set_trial_context"),
+        patch("crsbench.distributed.jobs._cleanup_llm_tracking"),
+        patch(
+            "crsbench.evaluation.resource_context.ResourceContext", _NoopResourceContext
+        ),
+        patch("rq.get_current_job", return_value=None),
+    ):
+        result = run_crs_trial(
+            crs="test-crs",
+            benchmark="test-bench",
+            harness_name="fuzz_target",
+            harness_path="./fuzz_target.c",
+            trial_num=1,
+            trial_id="trial-1",
+            config_dict=config.model_dump(mode="json"),
+            mode="delta",
+            sanitizer="address",
+        )
+
+    trial_output_dir = _build_trial_output_path(
+        filestore=config.experiment_filestore.resolve(),
+        experiment_name=config.experiment,
+        crs="test-crs",
+        benchmark="test-bench",
+        harness="fuzz_target",
+        mode="delta",
+        sanitizer="address",
+        trial_num=1,
+        target_cpv_id=None,
+    )
+
+    assert result.success is False
+    assert result.error == "boom"
+    assert (trial_output_dir / ".fail").exists()
+    record = store.get("exp-1", "job-1")
+    assert record is not None
+    assert record.state is JobState.FAILED
