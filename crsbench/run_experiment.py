@@ -1549,6 +1549,8 @@ def _build_monitor_callbacks(
 ) -> QueueMonitorCallbacks:
     """Build marker-writing callbacks for the shared queue monitor."""
     marked_jobs: set[str] = set()
+    session_written_trial_keys: set[str] = set()
+    initial_marker_state_by_trial_key: dict[str, JobState | None] = {}
 
     def _is_authoritative_terminal_update(job) -> bool:
         if lifecycle_store is None:
@@ -1579,6 +1581,28 @@ def _build_monitor_callbacks(
             return False
         return True
 
+    def _marker_write_policy(result: TrialResult) -> tuple[bool, bool]:
+        """Return (should_write_marker, should_mark_processed)."""
+        trial_key = _trial_result_key(result)
+        if trial_key in session_written_trial_keys:
+            return True, True
+
+        if trial_key not in initial_marker_state_by_trial_key:
+            initial_marker_state_by_trial_key[trial_key] = _canonical_result_state(
+                result, config
+            )
+        existing_state = initial_marker_state_by_trial_key[trial_key]
+        if existing_state is None:
+            return True, True
+
+        desired_state = JobState.COMPLETED if result.success else JobState.FAILED
+        if existing_state is not desired_state:
+            logger.warning(
+                f"Skipping conflicting terminal update for logical trial {trial_key}; "
+                f"canonical marker already reports {existing_state.value}"
+            )
+        return False, True
+
     def on_job_finished(job) -> bool:
         job_id = getattr(job, "id", None)
         if not isinstance(job_id, str) or job_id in marked_jobs:
@@ -1589,16 +1613,19 @@ def _build_monitor_callbacks(
             result = job.result
             if result is None:
                 logger.warning(f"Job {job_id[:8]} finished but result is None")
-                _write_orchestrator_marker(_build_missing_job_result(job), config)
-            else:
+                result = _build_missing_job_result(job)
+            should_write_marker, should_mark_processed = _marker_write_policy(result)
+            if should_write_marker:
                 _write_orchestrator_marker(result, config)
+                session_written_trial_keys.add(_trial_result_key(result))
         except Exception as exc:
             logger.warning(
                 f"Failed to write orchestrator marker for {job_id[:8]}: {exc}"
             )
             return False
-        marked_jobs.add(job_id)
-        return True
+        if should_mark_processed:
+            marked_jobs.add(job_id)
+        return should_mark_processed
 
     def on_job_failed(job) -> bool:
         job_id = getattr(job, "id", None)
@@ -1607,12 +1634,17 @@ def _build_monitor_callbacks(
         if not _is_authoritative_terminal_update(job):
             return False
         try:
-            _write_orchestrator_marker(_build_failed_job_result(job), config)
+            result = _build_failed_job_result(job)
+            should_write_marker, should_mark_processed = _marker_write_policy(result)
+            if should_write_marker:
+                _write_orchestrator_marker(result, config)
+                session_written_trial_keys.add(_trial_result_key(result))
         except Exception as exc:
             logger.warning(f"Failed to write orchestrator fail marker: {exc}")
             return False
-        marked_jobs.add(job_id)
-        return True
+        if should_mark_processed:
+            marked_jobs.add(job_id)
+        return should_mark_processed
 
     return QueueMonitorCallbacks(
         on_job_finished=on_job_finished,

@@ -1243,6 +1243,49 @@ def test_monitor_callbacks_retry_marker_write_after_transient_failure() -> None:
     assert marker.call_count == 2
 
 
+def test_monitor_callbacks_preserve_preexisting_canonical_marker_for_conflict(
+    tmp_path: Path,
+) -> None:
+    config = MagicMock()
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+
+    trial_dir = _build_trial_output_path(
+        filestore=tmp_path.resolve(),
+        experiment_name="exp-test",
+        crs="crs-a",
+        benchmark="bench-a",
+        harness="fuzz_target",
+        mode="delta",
+        sanitizer="address",
+        trial_num=1,
+        target_cpv_id=None,
+    )
+    trial_dir.mkdir(parents=True, exist_ok=True)
+    (trial_dir / ".success").touch()
+
+    job = MagicMock()
+    job.id = "job-failed"
+    job.meta = {}
+    job.kwargs = {
+        "crs": "crs-a",
+        "benchmark": "bench-a",
+        "harness_name": "fuzz_target",
+        "mode": "delta",
+        "sanitizer": "address",
+        "trial_num": 1,
+        "target_cpv_id": None,
+    }
+    job.exc_info = "stale failure"
+
+    callbacks = _build_monitor_callbacks(config, experiment_name="exp-test")
+
+    with patch("crsbench.run_experiment._write_orchestrator_marker") as marker:
+        assert callbacks.on_job_failed(job) is not False
+
+    marker.assert_not_called()
+
+
 def test_get_experiment_queue_stats_uses_experiment_scoped_counts() -> None:
     """Monitor stats must ignore unrelated jobs in the shared flat queue."""
     queue = MagicMock()
