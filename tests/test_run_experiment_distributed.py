@@ -1171,7 +1171,97 @@ def test_continue_mode_monitors_resume_collection_jobs_before_early_exit(
                 retry_failed=False,
             )
 
-    fetch_job.assert_called_once_with(queue, ["job-syncing"])
+    fetch_job.assert_called_once_with(
+        queue,
+        ["job-syncing"],
+        strict_missing=True,
+    )
+    monitor_jobs_mock.assert_called_once()
+    assert monitor_jobs_mock.call_args.args[1] == [syncing_job]
+
+
+def test_continue_mode_reconciles_resume_state_after_fresh_lock_acquisition(
+    tmp_path: Path,
+) -> None:
+    """Continue mode must reconcile syncing/artifact state even if the old lock already expired."""
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = False
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+
+    session = MagicMock()
+    queue = MagicMock()
+    queue.connection = MagicMock()
+    session.trial_queue = queue
+    session.register_or_raise.return_value = None
+    session.resume_or_raise.return_value = ["job-syncing"]
+    session.registry = MagicMock()
+
+    syncing_job = MagicMock()
+    syncing_job.id = "job-syncing"
+
+    existing = {
+        "queued": {},
+        "started": {},
+        "failed": {},
+        "finished": {},
+        "deferred": {},
+        "scheduled": {},
+    }
+    physical_existing = {
+        "queued": [],
+        "started": [],
+        "failed": [],
+        "finished": [],
+        "deferred": [],
+        "scheduled": [],
+    }
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value=existing,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            return_value=physical_existing,
+        ),
+        patch("crsbench.distributed.queue.handle_orphaned_jobs", return_value=0),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "crsbench.run_experiment.monitor_jobs",
+            side_effect=RuntimeError("stop after monitor"),
+        ) as monitor_jobs_mock,
+        patch(
+            "crsbench.run_experiment._fetch_jobs_by_id",
+            return_value=[syncing_job],
+        ) as fetch_job,
+    ):
+        with pytest.raises(RuntimeError, match="stop after monitor"):
+            run_experiment_distributed(
+                "exp-test",
+                config,
+                [],
+                queue_mode="continue",
+                retry_failed=False,
+            )
+
+    session.resume_or_raise.assert_called_once()
+    fetch_job.assert_called_once_with(
+        queue,
+        ["job-syncing"],
+        strict_missing=True,
+    )
     monitor_jobs_mock.assert_called_once()
     assert monitor_jobs_mock.call_args.args[1] == [syncing_job]
 
@@ -1648,6 +1738,7 @@ def test_monitor_jobs_uses_basic_renderer_when_stdout_is_not_tty() -> None:
         disk_skipped=0,
         registry=None,
         lifecycle_store=None,
+        defer_failed_retry_to_lifecycle=True,
     )
     rich.assert_not_called()
 
@@ -1675,6 +1766,7 @@ def test_monitor_jobs_uses_rich_renderer_when_stdout_is_tty() -> None:
         disk_skipped=0,
         registry=None,
         lifecycle_store=None,
+        defer_failed_retry_to_lifecycle=True,
     )
     basic.assert_not_called()
 
@@ -1759,6 +1851,47 @@ def test_monitor_callbacks_defer_failed_updates_for_retried_active_jobs() -> Non
     marker.assert_not_called()
 
 
+def test_monitor_callbacks_consume_retried_failed_updates_without_lifecycle_monitor() -> (
+    None
+):
+    config = MagicMock()
+
+    job = MagicMock()
+    job.id = "job-1"
+    job.meta = {"worker_name": "worker-new", "retry_count": 1}
+    job.kwargs = {
+        "crs": "crs-a",
+        "benchmark": "bench-a",
+        "harness_name": "fuzz_target",
+        "mode": "delta",
+        "sanitizer": "address",
+        "trial_num": 1,
+        "target_cpv_id": None,
+    }
+    job.exc_info = "stale infra failure"
+
+    lifecycle_store = MagicMock()
+    lifecycle_store.get.return_value = JobLifecycleRecord(
+        job_id="job-1",
+        trial_key="trial-1",
+        state=JobState.RUNNING,
+        claimed_by="worker-new",
+        retry_count=1,
+    )
+
+    callbacks = _build_monitor_callbacks(
+        config,
+        experiment_name="exp-test",
+        lifecycle_store=lifecycle_store,
+        defer_failed_retry_to_lifecycle=False,
+    )
+
+    with patch("crsbench.run_experiment._write_orchestrator_marker") as marker:
+        assert callbacks.on_job_failed(job) is True
+
+    marker.assert_not_called()
+
+
 def test_monitor_callbacks_allow_finished_updates_for_retried_active_jobs() -> None:
     config = MagicMock()
     result = _make_result(success=True, worker_machine="worker-new")
@@ -1787,6 +1920,60 @@ def test_monitor_callbacks_allow_finished_updates_for_retried_active_jobs() -> N
         assert callbacks.on_job_finished(job) is True
 
     marker.assert_called_once_with(result, config)
+
+
+def test_monitor_callbacks_retry_when_lifecycle_lookup_fails() -> None:
+    config = MagicMock()
+    result = _make_result(success=True, worker_machine="worker-new")
+
+    job = MagicMock()
+    job.id = "job-1"
+    job.meta = {"worker_name": "worker-new"}
+    job.result = result
+
+    lifecycle_store = MagicMock()
+    lifecycle_store.get.side_effect = RuntimeError("redis unavailable")
+
+    callbacks = _build_monitor_callbacks(
+        config,
+        experiment_name="exp-test",
+        lifecycle_store=lifecycle_store,
+    )
+
+    with patch("crsbench.run_experiment._write_orchestrator_marker") as marker:
+        assert callbacks.on_job_finished(job) is False
+
+    marker.assert_not_called()
+
+
+def test_monitor_callbacks_retry_when_active_lifecycle_owner_missing() -> None:
+    config = MagicMock()
+    result = _make_result(success=True, worker_machine="worker-new")
+
+    job = MagicMock()
+    job.id = "job-1"
+    job.meta = {}
+    job.result = result
+
+    lifecycle_store = MagicMock()
+    lifecycle_store.get.return_value = JobLifecycleRecord(
+        job_id="job-1",
+        trial_key="trial-1",
+        state=JobState.RUNNING,
+        claimed_by=None,
+        retry_count=0,
+    )
+
+    callbacks = _build_monitor_callbacks(
+        config,
+        experiment_name="exp-test",
+        lifecycle_store=lifecycle_store,
+    )
+
+    with patch("crsbench.run_experiment._write_orchestrator_marker") as marker:
+        assert callbacks.on_job_finished(job) is False
+
+    marker.assert_not_called()
 
 
 def test_monitor_callbacks_consume_non_active_lifecycle_without_marker_write() -> None:

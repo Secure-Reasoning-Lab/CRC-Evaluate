@@ -802,12 +802,6 @@ def handle_orphaned_jobs(
     if not REDIS_AVAILABLE:
         raise RuntimeError("Redis and RQ packages are required")
 
-    active_workers = rq.Worker.all(connection=queue.connection)  # type: ignore[attr-defined]
-    queue_name = str(queue.name)
-    queue_worker_count = sum(
-        1 for worker in active_workers if _worker_listens_to_queue(worker, queue_name)
-    )
-
     jobs = list(
         started_jobs.values() if isinstance(started_jobs, dict) else started_jobs
     )
@@ -829,9 +823,7 @@ def handle_orphaned_jobs(
         survivor_started_job_id_by_trial[trial_bucket] = sorted(job_ids)[0]
 
     for job in jobs:
-        if queue_worker_count > 0 and not _is_stale_started_job(
-            job, stale_started_grace_seconds
-        ):
+        if not _is_stale_started_job(job, stale_started_grace_seconds):
             continue
         experiment_name = get_job_experiment_name(job)
         trial_key = get_trial_key(job)
@@ -873,6 +865,15 @@ def handle_orphaned_jobs(
             )
             if preparation == "skip":
                 continue
+            if preparation == "discard":
+                if remove_job_by_id(queue, job.id):
+                    count += 1
+                    logger.warning(
+                        "Removed terminal started-job residue %s for logical trial %s",
+                        job.id[:8],
+                        trial_key,
+                    )
+                continue
             if preparation == "quarantine":
                 job.set_status(rq.job.JobStatus.FAILED)  # type: ignore[attr-defined]
                 count += 1
@@ -908,7 +909,7 @@ def _prepare_requeued_started_job_lifecycle(
     job: "rq.job.Job",
     *,
     lifecycle_store: JobLifecycleStore | None,
-) -> Literal["ready", "skip", "quarantine"]:
+) -> Literal["ready", "skip", "discard", "quarantine"]:
     """Repair lifecycle ownership before continue-mode stale started-job requeue."""
     experiment_name = get_job_experiment_name(job)
     job_id = getattr(job, "id", None)
@@ -924,8 +925,8 @@ def _prepare_requeued_started_job_lifecycle(
         record = lifecycle_store.get(experiment_name, job_id)
         if record is None:
             return "ready"
-        if record.state is JobState.COMPLETED:
-            return "skip"
+        if record.state in {JobState.COMPLETED, JobState.FAILED}:
+            return "discard"
 
         if record.state in {JobState.CLAIMED, JobState.RUNNING, JobState.SYNCING}:
             record = lifecycle_store.transition(
@@ -1044,47 +1045,6 @@ def _is_stale_started_job(
         started_at = started_at.replace(tzinfo=timezone.utc)
     age_seconds = (datetime.now(timezone.utc) - started_at).total_seconds()
     return age_seconds > (timeout_seconds + stale_started_grace_seconds)
-
-
-def _worker_listens_to_queue(worker: object, queue_name: str) -> bool:
-    """Return True when worker is subscribed to the given queue name."""
-    if queue_name in _extract_worker_queue_names(worker):
-        return True
-    return False
-
-
-def _extract_worker_queue_names(worker: object) -> set[str]:
-    """Extract worker queue names across RQ versions/mocks."""
-    queue_names: set[str] = set()
-
-    queues = getattr(worker, "queues", None)
-    if isinstance(queues, list | tuple | set):
-        for worker_queue in queues:
-            name = getattr(worker_queue, "name", None)
-            parsed = _normalize_queue_name(name)
-            if parsed:
-                queue_names.add(parsed)
-
-    queue_names_attr = getattr(worker, "queue_names", None)
-    if callable(queue_names_attr):
-        try:
-            queue_names_value = queue_names_attr()
-        except Exception:
-            queue_names_value = None
-    else:
-        queue_names_value = queue_names_attr
-
-    if isinstance(queue_names_value, str | bytes):
-        parsed = _normalize_queue_name(queue_names_value)
-        if parsed:
-            queue_names.add(parsed)
-    elif isinstance(queue_names_value, list | tuple | set):
-        for name in queue_names_value:
-            parsed = _normalize_queue_name(name)
-            if parsed:
-                queue_names.add(parsed)
-
-    return queue_names
 
 
 def _normalize_queue_name(name: object) -> str | None:

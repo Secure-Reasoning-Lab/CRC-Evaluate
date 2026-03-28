@@ -110,6 +110,9 @@ The queue layer treats the following as terminal outcomes:
 - continue-mode recovery of `started` jobs must use per-job timeout-plus-grace
   staleness; the presence of another live worker on the same queue must not
   suppress recovery of a stale started job
+- if lifecycle/artifact reconciliation has already made a stale `started` job
+  terminal, continue-mode cleanup must remove the stale RQ residue instead of
+  leaving it in `started` and tracking it forever
 - when continue mode recovers a stale `started` job for retry, it must also
   resurrect the corresponding shadow lifecycle back to `queued` with ownership
   cleared before the replacement worker can initialize
@@ -131,8 +134,12 @@ The queue layer treats the following as terminal outcomes:
   by the terminal `TrialResult` payload rather than mutable shared `job.meta`
   that may already have been overwritten by a replacement attempt
 - for hard failed RQ callbacks on retried active jobs, orchestrator monitoring
-  must defer to lifecycle timeout/recovery rather than treat mutable queue
-  metadata as authoritative for terminalization
+  must defer to lifecycle timeout/recovery only while that recovery loop is
+  running; otherwise the stale callback must be consumed without publishing a
+  canonical marker
+- if lifecycle ownership cannot be read, is missing for a tracked distributed
+  job, or an active lifecycle record has no owner, orchestrator monitoring must
+  leave the callback retryable rather than consuming it optimistically
 - once orchestrator monitoring has materialized a canonical marker for a
   logical trial in the current session, later duplicate physical callbacks for
   that same trial must not flip the published verdict
@@ -188,6 +195,9 @@ The queue layer treats the following as terminal outcomes:
   an existing queue record already represents that trial
 - if a prior orchestrator left a stale experiment lock behind, continue mode
   must attempt stale-lock takeover before aborting queue recovery
+- continue mode must always run resume reconciliation after acquiring or
+  reclaiming the experiment lock, even when the old lock has already expired,
+  so artifact-backed `syncing` work is collapsed before early exit decisions
 - after stale-lock takeover, the resumed controller must either adopt the
   existing experiment registry entry or republish it if missing, so cleanup can
   reliably clear registry state at the end of the resumed run
@@ -220,6 +230,9 @@ The queue layer treats the following as terminal outcomes:
 - shared monitor callbacks must treat terminal callbacks for non-active
   lifecycle records as stale no-ops: they may be consumed to avoid monitor
   livelock, but they must not write or overwrite orchestrator markers
+- shared monitor callbacks must leave lifecycle-backed callbacks retryable when
+  the lifecycle record cannot be read, is missing for a tracked distributed
+  job, or is active with no owner
 - when orphan recovery increments lifecycle `retry_count`, it must also project
   that retry count into the concrete RQ job metadata so queue-derived operator
   views report the same retry budget state as the shadow lifecycle

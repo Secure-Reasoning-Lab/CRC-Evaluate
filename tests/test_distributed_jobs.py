@@ -154,6 +154,10 @@ def test_lifecycle_runtime_is_current_owner_rejects_non_active_states() -> None:
     assert _lifecycle_runtime_is_current_owner(runtime) is False
 
 
+def test_lifecycle_runtime_is_current_owner_rejects_missing_runtime() -> None:
+    assert _lifecycle_runtime_is_current_owner(None) is False
+
+
 def test_initialize_job_lifecycle_runtime_skips_heartbeat_for_terminal_record() -> None:
     fake = _FakeRedis()
     store = JobLifecycleStore(fake)
@@ -424,3 +428,51 @@ def test_publish_trial_terminal_artifacts_preserves_preexisting_canonical_marker
     assert (trial_output_dir / ".success").exists()
     assert not (trial_output_dir / ".fail").exists()
     assert marker_attempted is False
+
+
+def test_publish_trial_terminal_artifacts_skips_when_runtime_missing_for_active_rq_job(
+    tmp_path: Path,
+) -> None:
+    config = ExperimentConfig(
+        experiment="exp-1",
+        trials=1,
+        mode=EvaluationMode.DELTA,
+        max_total_time=21600,
+        inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
+        experiment_filestore=tmp_path / "experiment-store",
+        report_filestore=tmp_path / "report-store",
+        crs_compose={"test-crs": {"num_cores": 1}},
+        benchmarks=["test-bench"],
+    )
+
+    trial_output_dir = _build_trial_output_path(
+        filestore=config.experiment_filestore.resolve(),
+        experiment_name=config.experiment,
+        crs="test-crs",
+        benchmark="test-bench",
+        harness="fuzz_target",
+        mode="delta",
+        sanitizer="address",
+        trial_num=1,
+        target_cpv_id=None,
+    )
+    trial_output_dir.mkdir(parents=True, exist_ok=True)
+
+    rq_job = type(
+        "CurrentJob",
+        (),
+        {"connection": _FakeRedis(), "id": "job-1"},
+    )()
+
+    with patch("rq.get_current_job", return_value=rq_job):
+        published = _publish_trial_terminal_artifacts(
+            config=config,
+            trial_output_dir=trial_output_dir,
+            success=True,
+            results_timestamp="20260327-120000",
+            lifecycle_runtime=None,
+        )
+
+    assert published is False
+    assert not (trial_output_dir / ".success").exists()
+    assert not (trial_output_dir / ".fail").exists()

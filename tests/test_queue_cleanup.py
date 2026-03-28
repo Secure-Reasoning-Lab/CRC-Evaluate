@@ -215,6 +215,9 @@ def test_handle_orphaned_jobs_requeues_when_only_unrelated_workers_exist(
 
     job = MagicMock()
     job.id = "job-1"
+    job.get_status.return_value = queue_module.rq.job.JobStatus.STARTED  # type: ignore[union-attr]
+    job.started_at = datetime.now(timezone.utc) - timedelta(seconds=4000)
+    job.timeout = 300
     started_jobs = {"trial-1": job}
 
     other_queue_worker = SimpleNamespace(
@@ -245,6 +248,9 @@ def test_handle_orphaned_jobs_accepts_physical_job_list(monkeypatch) -> None:
 
     job = MagicMock()
     job.id = "job-1"
+    job.get_status.return_value = queue_module.rq.job.JobStatus.STARTED  # type: ignore[union-attr]
+    job.started_at = datetime.now(timezone.utc) - timedelta(seconds=4000)
+    job.timeout = 300
 
     monkeypatch.setattr(
         queue_module.rq.Worker,  # type: ignore[union-attr]
@@ -272,6 +278,9 @@ def test_handle_orphaned_jobs_repairs_lifecycle_after_requeue(monkeypatch) -> No
     job = MagicMock()
     job.id = "job-1"
     job.meta = {"experiment_name": "exp-test"}
+    job.get_status.return_value = queue_module.rq.job.JobStatus.STARTED  # type: ignore[union-attr]
+    job.started_at = datetime.now(timezone.utc) - timedelta(seconds=4000)
+    job.timeout = 300
 
     lifecycle_store = MagicMock()
     lifecycle_store.get.return_value = JobLifecycleRecord(
@@ -343,6 +352,9 @@ def test_handle_orphaned_jobs_rolls_back_lifecycle_when_metadata_write_fails(
     job.id = "job-1"
     job.meta = {"experiment_name": "exp-test"}
     job.save_meta.side_effect = RuntimeError("meta write failed")
+    job.get_status.return_value = queue_module.rq.job.JobStatus.STARTED  # type: ignore[union-attr]
+    job.started_at = datetime.now(timezone.utc) - timedelta(seconds=4000)
+    job.timeout = 300
 
     lifecycle_store = MagicMock()
     lifecycle_store.get.return_value = JobLifecycleRecord(
@@ -551,6 +563,36 @@ def test_handle_orphaned_jobs_skips_when_queue_worker_exists(monkeypatch) -> Non
     queue.enqueue_job.assert_not_called()
 
 
+def test_handle_orphaned_jobs_keeps_fresh_started_job_without_workers(
+    monkeypatch,
+) -> None:
+    if not queue_module.REDIS_AVAILABLE:
+        pytest.skip("Redis/RQ not available")
+
+    queue = MagicMock()
+    queue.name = "crsbench_trial"
+    queue.connection = MagicMock()
+
+    job = MagicMock()
+    job.id = "job-1"
+    job.get_status.return_value = queue_module.rq.job.JobStatus.STARTED  # type: ignore[union-attr]
+    job.started_at = datetime.now(timezone.utc)
+    job.timeout = 300
+    started_jobs = {"trial-1": job}
+
+    monkeypatch.setattr(
+        queue_module.rq.Worker,  # type: ignore[union-attr]
+        "all",
+        lambda **_kwargs: [],
+    )
+
+    handled = queue_module.handle_orphaned_jobs(queue, started_jobs)
+
+    assert handled == 0
+    job.set_status.assert_not_called()
+    queue.enqueue_job.assert_not_called()
+
+
 def test_handle_orphaned_jobs_recovers_stale_started_job_with_live_queue_worker(
     monkeypatch,
 ) -> None:
@@ -585,3 +627,47 @@ def test_handle_orphaned_jobs_recovers_stale_started_job_with_live_queue_worker(
         queue_module.rq.job.JobStatus.FAILED  # type: ignore[union-attr]
     )
     queue.enqueue_job.assert_called_once_with(job)
+
+
+def test_handle_orphaned_jobs_removes_terminal_started_job_residue(monkeypatch) -> None:
+    if not queue_module.REDIS_AVAILABLE:
+        pytest.skip("Redis/RQ not available")
+
+    queue = MagicMock()
+    queue.name = "crsbench_trial"
+    queue.connection = MagicMock()
+
+    job = MagicMock()
+    job.id = "job-1"
+    job.meta = {"experiment_name": "exp-test"}
+    job.get_status.return_value = queue_module.rq.job.JobStatus.STARTED  # type: ignore[union-attr]
+    job.started_at = datetime.now(timezone.utc) - timedelta(seconds=4000)
+    job.timeout = 300
+
+    lifecycle_store = MagicMock()
+    lifecycle_store.get.return_value = JobLifecycleRecord(
+        job_id="job-1",
+        trial_key="trial-1",
+        state=JobState.COMPLETED,
+        claimed_by=None,
+        retry_count=0,
+    )
+
+    monkeypatch.setattr(
+        queue_module.rq.Worker,  # type: ignore[union-attr]
+        "all",
+        lambda **_kwargs: [],
+    )
+    remove_job = MagicMock(return_value=True)
+    monkeypatch.setattr(queue_module, "remove_job_by_id", remove_job)
+
+    handled = queue_module.handle_orphaned_jobs(
+        queue,
+        [job],
+        lifecycle_store=lifecycle_store,
+    )
+
+    assert handled == 1
+    remove_job.assert_called_once_with(queue, "job-1")
+    job.set_status.assert_not_called()
+    queue.enqueue_job.assert_not_called()

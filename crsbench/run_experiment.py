@@ -1465,6 +1465,7 @@ def monitor_jobs(
     disk_skipped: int = 0,
     registry=None,
     lifecycle_store=None,
+    defer_failed_retry_to_lifecycle: bool = True,
 ) -> List[TrialResult]:
     """Monitor job progress and display status.
 
@@ -1492,6 +1493,7 @@ def monitor_jobs(
             disk_skipped=disk_skipped,
             registry=registry,
             lifecycle_store=lifecycle_store,
+            defer_failed_retry_to_lifecycle=defer_failed_retry_to_lifecycle,
         )
     return _monitor_jobs_basic(
         queue,
@@ -1501,6 +1503,7 @@ def monitor_jobs(
         disk_skipped=disk_skipped,
         registry=registry,
         lifecycle_store=lifecycle_store,
+        defer_failed_retry_to_lifecycle=defer_failed_retry_to_lifecycle,
     )
 
 
@@ -1546,6 +1549,7 @@ def _build_monitor_callbacks(
     *,
     experiment_name: str,
     lifecycle_store=None,
+    defer_failed_retry_to_lifecycle: bool = True,
 ) -> QueueMonitorCallbacks:
     """Build marker-writing callbacks for the shared queue monitor."""
     marked_jobs: set[str] = set()
@@ -1576,9 +1580,13 @@ def _build_monitor_callbacks(
                 job_id[:8],
                 exc,
             )
-            return True, True
+            return False, False
         if record is None:
-            return True, True
+            logger.warning(
+                "Missing lifecycle ownership for %s; leaving callback retryable",
+                job_id[:8],
+            )
+            return False, False
         if record.state not in {JobState.CLAIMED, JobState.RUNNING, JobState.SYNCING}:
             logger.warning(
                 "Skipping stale terminal update for %s because lifecycle state is %s",
@@ -1587,19 +1595,31 @@ def _build_monitor_callbacks(
             )
             return False, True
         if callback_kind == "failed" and record.retry_count > 0:
+            if defer_failed_retry_to_lifecycle:
+                logger.warning(
+                    "Deferring failed terminal update for retried active job %s to lifecycle recovery",
+                    job_id[:8],
+                )
+                return False, False
             logger.warning(
-                "Deferring failed terminal update for retried active job %s to lifecycle recovery",
+                "Consuming retried failed callback for %s without marker because lifecycle recovery is unavailable",
+                job_id[:8],
+            )
+            return False, True
+        if record.claimed_by is None:
+            logger.warning(
+                "Active lifecycle record for %s has no owner; leaving callback retryable",
                 job_id[:8],
             )
             return False, False
-        if record.claimed_by is None:
-            return True, True
         worker_name = reported_worker_name
         if worker_name is None:
             meta = getattr(job, "meta", {}) or {}
             meta_worker_name = meta.get("worker_name")
             if isinstance(meta_worker_name, str) and meta_worker_name:
                 worker_name = meta_worker_name
+        if callback_kind == "failed" and worker_name is None:
+            worker_name = record.claimed_by
         if worker_name != record.claimed_by:
             logger.warning(
                 "Skipping stale terminal update for %s from worker %r; current owner is %r",
@@ -1719,6 +1739,7 @@ def _monitor_jobs_basic(
     disk_skipped: int = 0,
     registry=None,
     lifecycle_store=None,
+    defer_failed_retry_to_lifecycle: bool = True,
 ) -> List[TrialResult]:
     """Basic job monitoring without Rich UI."""
     logger.info(f"\nMonitoring {len(job_list)} jobs for experiment: {experiment_name}")
@@ -1733,6 +1754,7 @@ def _monitor_jobs_basic(
             config,
             experiment_name=experiment_name,
             lifecycle_store=lifecycle_store,
+            defer_failed_retry_to_lifecycle=defer_failed_retry_to_lifecycle,
         ),
         use_rich=False,
     )
@@ -1748,6 +1770,7 @@ def _monitor_jobs_rich(
     disk_skipped: int = 0,
     registry=None,
     lifecycle_store=None,
+    defer_failed_retry_to_lifecycle: bool = True,
 ) -> List[TrialResult]:
     """Monitor jobs with Rich UI."""
     monitor_queue(
@@ -1761,6 +1784,7 @@ def _monitor_jobs_rich(
             config,
             experiment_name=experiment_name,
             lifecycle_store=lifecycle_store,
+            defer_failed_retry_to_lifecycle=defer_failed_retry_to_lifecycle,
         ),
         use_rich=True,
         poll_interval=1.0,
@@ -1833,24 +1857,38 @@ def _active_existing_jobs(existing_by_status: dict[str, list]) -> List:
     return _dedupe_jobs_by_id(active)
 
 
-def _fetch_jobs_by_id(queue, job_ids: List[str]) -> List:
-    """Fetch concrete RQ jobs by id, skipping missing entries with a warning."""
+def _fetch_jobs_by_id(
+    queue, job_ids: List[str], *, strict_missing: bool = False
+) -> List:
+    """Fetch concrete RQ jobs by id, optionally failing if Redis entries are missing."""
     if not job_ids:
         return []
 
     import rq.job
 
     fetched: List = []
+    missing: List[str] = []
     for job_id in job_ids:
         try:
             job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
         except Exception as exc:
+            if strict_missing:
+                missing.append(job_id)
+                logger.warning(
+                    "Failed to fetch resume collection job %s: %s", job_id, exc
+                )
+                continue
             logger.warning("Failed to fetch resume collection job %s: %s", job_id, exc)
             continue
         if job is None:
+            if strict_missing:
+                missing.append(job_id)
             logger.warning("Resume collection job %s no longer exists in Redis", job_id)
             continue
         fetched.append(job)
+    if strict_missing and missing:
+        missing_list = ", ".join(sorted(missing))
+        raise RuntimeError(f"Resume collection jobs missing from Redis: {missing_list}")
     return _dedupe_jobs_by_id(fetched)
 
 
@@ -2195,21 +2233,23 @@ def run_experiment_distributed(
                     session.register_or_raise(registration)
                     lock_acquired = True
                 except LockContentionError:
-                    try:
-                        resume_collection_job_ids = session.resume_or_raise(
-                            artifact_checker=_build_artifact_checker(config),
-                            registration=registration,
-                        )
-                        lock_acquired = True
-                        logger.info(
-                            "Resumed stale experiment lock for continue-mode recovery"
-                        )
-                    except LockContentionError:
-                        logger.error(
-                            f"Experiment '{experiment_name}' is already running. "
-                            "Use a different experiment name or wait for the current run to finish."
-                        )
-                        return
+                    pass
+            try:
+                resume_collection_job_ids = session.resume_or_raise(
+                    artifact_checker=_build_artifact_checker(config),
+                    registration=registration,
+                )
+                if not lock_acquired:
+                    logger.info(
+                        "Resumed stale experiment lock for continue-mode recovery"
+                    )
+                lock_acquired = True
+            except LockContentionError:
+                logger.error(
+                    f"Experiment '{experiment_name}' is already running. "
+                    "Use a different experiment name or wait for the current run to finish."
+                )
+                return
 
             queue_state_mutated = False
 
@@ -2328,7 +2368,11 @@ def run_experiment_distributed(
 
         if resume_collection_job_ids:
             resume_jobs = _filter_resume_collection_jobs(
-                _fetch_jobs_by_id(queue, resume_collection_job_ids),
+                _fetch_jobs_by_id(
+                    queue,
+                    resume_collection_job_ids,
+                    strict_missing=True,
+                ),
                 active_existing_jobs,
             )
 
@@ -2571,6 +2615,7 @@ def run_experiment_distributed(
             disk_skipped=disk_skipped,
             registry=session.registry,
             lifecycle_store=session.lifecycle_store,
+            defer_failed_retry_to_lifecycle=session._monitor is not None,
         )
 
         # Generate final report

@@ -308,7 +308,7 @@ def _update_job_lifecycle_heartbeat(runtime: JobLifecycleRuntime | None) -> None
 def _lifecycle_runtime_is_current_owner(runtime: JobLifecycleRuntime | None) -> bool:
     """Return whether the current worker still owns lifecycle writes for this job."""
     if runtime is None:
-        return True
+        return False
 
     try:
         record = runtime.store.get(runtime.experiment_name, runtime.job_id)
@@ -419,7 +419,27 @@ def _publish_trial_terminal_artifacts(
     metadata_writer: Callable[[], None] | None = None,
 ) -> bool:
     """Publish terminal worker-side artifacts only for the current lifecycle owner."""
-    if not _lifecycle_runtime_is_current_owner(lifecycle_runtime):
+    lifecycle_owned = True
+    if lifecycle_runtime is None:
+        try:
+            import rq
+
+            job = rq.get_current_job()
+        except Exception:
+            job = None
+        if (
+            job is not None
+            and getattr(job, "id", None)
+            and getattr(job, "connection", None) is not None
+        ):
+            logger.warning(
+                "Skipping terminal artifact publication because lifecycle initialization failed for active RQ job %s",
+                job.id,
+            )
+            return False
+    else:
+        lifecycle_owned = _lifecycle_runtime_is_current_owner(lifecycle_runtime)
+    if not lifecycle_owned:
         if lifecycle_runtime is not None:
             logger.warning(
                 "Skipping terminal artifact publication for superseded worker %s on job %s",
