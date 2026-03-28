@@ -178,6 +178,15 @@ The nineteenth model is meant to catch worker-side marker stability bugs:
 - worker-side terminal publication must not overwrite the existing canonical
   verdict
 
+The twentieth model is meant to catch same-session monitor marker stability
+bugs:
+
+- no canonical marker exists when monitoring begins
+- one physical job writes `.success` for a logical trial
+- a later duplicate physical job in the same controller session reports `.fail`
+- shared monitor callbacks must preserve the first canonical verdict rather than
+  overwrite it
+
 The fifteenth model is meant to catch resume-collection restart bugs:
 
 - continue mode resumes a stale lock
