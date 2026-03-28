@@ -471,6 +471,90 @@ def test_continue_mode_retry_failed_revives_lifecycle_before_requeue(
     )
 
 
+def test_continue_mode_retry_failed_skips_when_lifecycle_is_already_completed(
+    tmp_path: Path,
+) -> None:
+    """Explicit retry must not resurrect a failed RQ job behind a completed shadow record."""
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = False
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.register_or_raise.return_value = None
+    session.lifecycle_store = MagicMock()
+    session.lifecycle_store.get.return_value = JobLifecycleRecord(
+        job_id="job-1",
+        trial_key="trial-1",
+        state=JobState.COMPLETED,
+        claimed_by=None,
+    )
+
+    failed_job = MagicMock()
+    failed_job.id = "job-1"
+    failed_job.meta = {}
+    failed_job.kwargs = {}
+
+    existing = {
+        "queued": {},
+        "started": {},
+        "failed": {"f": failed_job},
+        "finished": {},
+        "deferred": {},
+        "scheduled": {},
+    }
+    physical_existing = {
+        "queued": [],
+        "started": [],
+        "failed": [failed_job],
+        "finished": [],
+        "deferred": [],
+        "scheduled": [],
+    }
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value=existing,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            return_value=physical_existing,
+        ),
+        patch("crsbench.distributed.queue.handle_orphaned_jobs", return_value=0),
+        patch(
+            "crsbench.run_experiment._prepare_trial_dir_for_retry", return_value=True
+        ),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+        patch(
+            "crsbench.run_experiment.dump_trial_matrix",
+            side_effect=RuntimeError("stop after queue handling"),
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="stop after queue handling"):
+            run_experiment_distributed(
+                "exp-test",
+                config,
+                [],
+                queue_mode="continue",
+                retry_failed=True,
+            )
+
+    queue.enqueue_job.assert_not_called()
+    failed_job.save_meta.assert_not_called()
+    session.lifecycle_store.transition.assert_not_called()
+
+
 def test_continue_mode_monitors_existing_finished_jobs_without_reenqueue(
     tmp_path: Path,
 ) -> None:

@@ -1879,8 +1879,15 @@ def _revive_failed_lifecycle_for_retry(session, experiment_name: str, job) -> bo
         )
         return False
 
-    if record is None or record.state is not JobState.FAILED:
+    if record is None or not isinstance(record, JobLifecycleRecord):
         return True
+    if record.state is not JobState.FAILED:
+        logger.warning(
+            "Skipping explicit retry for {} because lifecycle state is {}, not failed",
+            job_id[:8],
+            record.state.value,
+        )
+        return False
 
     try:
         lifecycle_store.transition(

@@ -194,6 +194,9 @@ The queue layer treats the following as terminal outcomes:
 - explicit `retry_failed` requeue of a terminal job must also resurrect the
   corresponding shadow lifecycle record back to `queued` before the physical
   job becomes runnable again
+- explicit `retry_failed` must only resurrect lifecycle records currently in
+  `failed`; if the shadow lifecycle already says `completed`, stale failed RQ
+  residue must be ignored rather than retried behind the terminal record
 - resume-only syncing jobs must be excluded from monitoring when another active
   queued/deferred/started attempt already exists for the same logical trial
 - only active lifecycle states (`claimed`, `running`, `syncing`) may retain
