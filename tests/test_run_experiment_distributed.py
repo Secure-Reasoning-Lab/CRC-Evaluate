@@ -369,6 +369,108 @@ def test_continue_mode_retry_failed_requeues(tmp_path: Path) -> None:
     failed_job.save_meta.assert_called_once()
 
 
+def test_continue_mode_retry_failed_revives_lifecycle_before_requeue(
+    tmp_path: Path,
+) -> None:
+    """Explicit retry must move the shadow lifecycle back to QUEUED before requeue."""
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = False
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.register_or_raise.return_value = None
+    session.lifecycle_store = MagicMock()
+    session.lifecycle_store.get.return_value = JobLifecycleRecord(
+        job_id="job-1",
+        trial_key="trial-1",
+        state=JobState.FAILED,
+        claimed_by="worker-old",
+    )
+
+    failed_job = MagicMock()
+    failed_job.id = "job-1"
+    failed_job.meta = {}
+    failed_job.kwargs = {}
+
+    existing = {
+        "queued": {},
+        "started": {},
+        "failed": {"f": failed_job},
+        "finished": {},
+        "deferred": {},
+        "scheduled": {},
+    }
+    physical_existing = {
+        "queued": [],
+        "started": [],
+        "failed": [failed_job],
+        "finished": [],
+        "deferred": [],
+        "scheduled": [],
+    }
+
+    call_order: list[str] = []
+
+    def _transition(*args, **kwargs):
+        del args, kwargs
+        call_order.append("transition")
+
+    def _enqueue(job):
+        assert job is failed_job
+        call_order.append("enqueue")
+
+    session.lifecycle_store.transition.side_effect = _transition
+    queue.enqueue_job.side_effect = _enqueue
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value=existing,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            return_value=physical_existing,
+        ),
+        patch("crsbench.distributed.queue.handle_orphaned_jobs", return_value=0),
+        patch(
+            "crsbench.run_experiment._prepare_trial_dir_for_retry", return_value=True
+        ),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+        patch(
+            "crsbench.run_experiment.dump_trial_matrix",
+            side_effect=RuntimeError("stop after queue handling"),
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="stop after queue handling"):
+            run_experiment_distributed(
+                "exp-test",
+                config,
+                [],
+                queue_mode="continue",
+                retry_failed=True,
+            )
+
+    assert call_order == ["transition", "enqueue"]
+    session.lifecycle_store.transition.assert_called_once_with(
+        "exp-test",
+        "job-1",
+        JobState.QUEUED,
+        claimed_by=None,
+        detail="retry requested by orchestrator",
+    )
+
+
 def test_continue_mode_monitors_existing_finished_jobs_without_reenqueue(
     tmp_path: Path,
 ) -> None:
@@ -779,6 +881,110 @@ def test_continue_mode_monitors_resume_collection_jobs_before_early_exit(
     fetch_job.assert_called_once_with(queue, ["job-syncing"])
     monitor_jobs_mock.assert_called_once()
     assert monitor_jobs_mock.call_args.args[1] == [syncing_job]
+
+
+def test_continue_mode_skips_resume_collection_job_when_active_retry_exists(
+    tmp_path: Path,
+) -> None:
+    """Resume-only syncing work must not stay tracked when active work for the same trial exists."""
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = False
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+
+    session = MagicMock()
+    queue = MagicMock()
+    queue.connection = MagicMock()
+    session.trial_queue = queue
+    session.register_or_raise.side_effect = LockContentionError("busy")
+    session.resume_or_raise.return_value = ["job-syncing"]
+    session.registry = MagicMock()
+
+    queued_job = MagicMock()
+    queued_job.id = "job-queued"
+    queued_job.meta = {
+        "experiment_name": "exp-test",
+        "crs": "crs-a",
+        "benchmark": "bench-a",
+        "harness": "fuzz_target",
+        "mode": "delta",
+        "sanitizer": "address",
+        "trial_num": 1,
+        "target_cpv_id": None,
+    }
+    queued_job.kwargs = {
+        "crs": "crs-a",
+        "benchmark": "bench-a",
+        "harness_name": "fuzz_target",
+        "mode": "delta",
+        "sanitizer": "address",
+        "trial_num": 1,
+        "target_cpv_id": None,
+    }
+
+    syncing_job = MagicMock()
+    syncing_job.id = "job-syncing"
+    syncing_job.kwargs = dict(queued_job.kwargs)
+    syncing_job.meta = dict(queued_job.meta)
+
+    existing = {
+        "queued": {"trial-1": queued_job},
+        "started": {},
+        "failed": {},
+        "finished": {},
+        "deferred": {},
+        "scheduled": {},
+    }
+    physical_existing = {
+        "queued": [queued_job],
+        "started": [],
+        "failed": [],
+        "finished": [],
+        "deferred": [],
+        "scheduled": [],
+    }
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value=existing,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            return_value=physical_existing,
+        ),
+        patch("crsbench.distributed.queue.handle_orphaned_jobs", return_value=0),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "crsbench.run_experiment.monitor_jobs",
+            side_effect=RuntimeError("stop after monitor"),
+        ) as monitor_jobs_mock,
+        patch(
+            "crsbench.run_experiment._fetch_jobs_by_id",
+            return_value=[syncing_job],
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="stop after monitor"):
+            run_experiment_distributed(
+                "exp-test",
+                config,
+                [],
+                queue_mode="continue",
+                retry_failed=False,
+            )
+
+    monitor_jobs_mock.assert_called_once()
+    assert monitor_jobs_mock.call_args.args[1] == [queued_job]
 
 
 def test_queue_mode_fresh_acquires_lock_before_clearing(tmp_path: Path) -> None:

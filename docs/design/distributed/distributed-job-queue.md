@@ -191,6 +191,11 @@ The queue layer treats the following as terminal outcomes:
 - if continue mode requeues failed work or mutates queue state during orphan
   recovery, it must refresh its queue snapshot before deciding cloud bring-up
   and monitoring scope; retry-created active work must not be treated as absent
+- explicit `retry_failed` requeue of a terminal job must also resurrect the
+  corresponding shadow lifecycle record back to `queued` before the physical
+  job becomes runnable again
+- resume-only syncing jobs must be excluded from monitoring when another active
+  queued/deferred/started attempt already exists for the same logical trial
 - restart reconciliation must check published terminal artifacts before leaving a
   lifecycle record in `syncing`; artifact-backed in-flight records should be
   collapsed to `completed` / `failed` rather than left waiting for collection

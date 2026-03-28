@@ -1810,6 +1810,81 @@ def _fetch_jobs_by_id(queue, job_ids: List[str]) -> List:
     return _dedupe_jobs_by_id(fetched)
 
 
+def _job_trial_key(job) -> str | None:
+    """Return the logical trial key for a concrete RQ job when derivable."""
+    try:
+        from crsbench.distributed.queue import get_trial_key
+
+        return get_trial_key(job)
+    except Exception as exc:
+        job_id = getattr(job, "id", "<unknown>")
+        logger.warning("Failed to derive logical trial key for %s: %s", job_id, exc)
+        return None
+
+
+def _filter_resume_collection_jobs(resume_jobs: List, active_jobs: List) -> List:
+    """Drop resume-only syncing jobs shadowed by an active attempt for the same trial."""
+    active_trial_keys = {
+        trial_key
+        for trial_key in (_job_trial_key(job) for job in active_jobs)
+        if trial_key is not None
+    }
+    if not active_trial_keys:
+        return _dedupe_jobs_by_id(resume_jobs)
+
+    filtered: List = []
+    for job in resume_jobs:
+        trial_key = _job_trial_key(job)
+        if trial_key is not None and trial_key in active_trial_keys:
+            logger.warning(
+                "Skipping resume collection job %s for logical trial %s because active work already exists",
+                getattr(job, "id", "<unknown>"),
+                trial_key,
+            )
+            continue
+        filtered.append(job)
+    return _dedupe_jobs_by_id(filtered)
+
+
+def _revive_failed_lifecycle_for_retry(session, experiment_name: str, job) -> bool:
+    """Move an explicitly retried terminal lifecycle record back to QUEUED."""
+    lifecycle_store = getattr(session, "lifecycle_store", None)
+    job_id = getattr(job, "id", None)
+    if lifecycle_store is None or not isinstance(job_id, str):
+        return True
+
+    try:
+        record = lifecycle_store.get(experiment_name, job_id)
+    except Exception as exc:
+        logger.warning(
+            "Failed to read lifecycle record for explicit retry on %s: %s",
+            job_id[:8],
+            exc,
+        )
+        return False
+
+    if record is None or record.state is not JobState.FAILED:
+        return True
+
+    try:
+        lifecycle_store.transition(
+            experiment_name,
+            job_id,
+            JobState.QUEUED,
+            claimed_by=None,
+            detail="retry requested by orchestrator",
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to revive lifecycle record for explicit retry on %s: %s",
+            job_id[:8],
+            exc,
+        )
+        return False
+
+    return True
+
+
 def prompt_queue_mode(existing: dict[str, dict]) -> str:
     """
     Prompt user interactively for queue mode when stale jobs are detected.
@@ -1992,6 +2067,7 @@ def run_experiment_distributed(
     lock_acquired = False
     requeued_failed_jobs = 0
     resume_collection_job_ids: List[str] = []
+    resume_jobs: List = []
 
     normalized_queue_mode = queue_mode.lower() if queue_mode else None
     if normalized_queue_mode == "continue":
@@ -2076,6 +2152,10 @@ def run_experiment_distributed(
                 for failed_job in physical_existing["failed"]:
                     if not _prepare_trial_dir_for_retry(config, failed_job):
                         continue
+                    if not _revive_failed_lifecycle_for_retry(
+                        session, experiment_name, failed_job
+                    ):
+                        continue
                     failed_job.meta["force_retry"] = True
                     failed_job.save_meta()
                     try:
@@ -2127,14 +2207,6 @@ def run_experiment_distributed(
             existing_tracked_jobs = _flatten_existing_jobs(physical_existing)
             active_existing_jobs = _active_existing_jobs(physical_existing)
 
-        if resume_collection_job_ids:
-            existing_tracked_jobs = _dedupe_jobs_by_id(
-                [
-                    *existing_tracked_jobs,
-                    *_fetch_jobs_by_id(queue, resume_collection_job_ids),
-                ]
-            )
-
         # Disk-based filtering: skip trials with .success markers on orchestrator disk
         # This catches trials completed by remote workers in previous runs
         original_count = len(trials)
@@ -2157,11 +2229,17 @@ def run_experiment_distributed(
         if disk_skipped > 0:
             logger.info(f"Skipping {disk_skipped} trials already complete on disk")
 
+        if resume_collection_job_ids:
+            resume_jobs = _filter_resume_collection_jobs(
+                _fetch_jobs_by_id(queue, resume_collection_job_ids),
+                active_existing_jobs,
+            )
+
         # Dump trial matrix to JSON
         dump_trial_matrix(trials, config)
 
         logger.info(f"Total trials to enqueue: {len(trials)}")
-        if not trials and not existing_tracked_jobs:
+        if not trials and not existing_tracked_jobs and not resume_jobs:
             if requeued_failed_jobs == 0:
                 logger.info(
                     "No trial work remains after queue and disk filtering; "
@@ -2379,7 +2457,10 @@ def run_experiment_distributed(
 
         logger.info(f"✓ Enqueued {len(jobs)} jobs successfully")
 
-        tracked_jobs = _dedupe_jobs_by_id([*existing_tracked_jobs, *jobs])
+        if resume_jobs and jobs:
+            resume_jobs = _filter_resume_collection_jobs(resume_jobs, jobs)
+
+        tracked_jobs = _dedupe_jobs_by_id([*existing_tracked_jobs, *resume_jobs, *jobs])
 
         # Monitor progress
         logger.info(
