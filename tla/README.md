@@ -41,6 +41,9 @@
 - `DistributedMonitorMarkerWrite.tla`: model of retryable orchestrator marker writes
 - `DistributedMonitorMarkerWriteBuggy.cfg`: buggy config where callback failure still consumes the finished job
 - `DistributedMonitorMarkerWriteHealthy.cfg`: fixed config where marker-write failure leaves the callback retryable
+- `DistributedMonitorLifecycleGate.tla`: model of monitor callbacks after lifecycle has already gone non-active
+- `DistributedMonitorLifecycleGateBuggy.cfg`: buggy config where a late callback still writes a marker after lifecycle failed
+- `DistributedMonitorLifecycleGateHealthy.cfg`: fixed config where non-active lifecycle records consume callbacks without writing markers
 - `DistributedStartedJobRecovery.tla`: model of continue-mode stale started-job recovery
 - `DistributedStartedJobRecoveryBuggy.cfg`: buggy config where any live queue worker blocks stale started-job recovery
 - `DistributedStartedJobRecoveryHealthy.cfg`: fixed config where stale started jobs recover by their own timeout window
@@ -215,6 +218,13 @@ The twenty-fourth model is meant to catch lifecycle ownership-clearing bugs:
 - recovery or terminalization moves the record into a non-active state
 - `claimed_by` must be cleared immediately so stale workers cannot keep write
   authority after they have been orphaned, failed, requeued, or completed
+
+The twenty-fifth model is meant to catch non-active lifecycle callback bugs:
+
+- lifecycle has already moved a job into a non-active terminal state
+- a late finished callback still arrives from RQ
+- the callback may be consumed so monitoring can complete, but it must not write
+  a new orchestrator marker once lifecycle is no longer active
 
 The fifteenth model is meant to catch resume-collection restart bugs:
 
