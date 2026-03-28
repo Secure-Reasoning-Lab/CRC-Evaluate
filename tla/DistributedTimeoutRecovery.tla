@@ -266,6 +266,53 @@ EventuallyResolvedAfterTimeout ==
                 )
         )
 
+EventuallyCompletedOrFailed ==
+    \A j \in Jobs :
+        <>(lcState[j] \in {"completed", "failed"})
+
+TerminalLifecycleSticky ==
+    \A j \in Jobs :
+        [](
+            lcState[j] \in {"completed", "failed"} =>
+                [](
+                    /\ lcState[j] \in {"completed", "failed"}
+                    /\ (lcState[j] = "completed" => rqState[j] = "rq_done")
+                    /\ (lcState[j] = "failed" => rqState[j] = "rq_failed")
+                )
+        )
+
+AdvanceRunningOrClaimed(j) ==
+    EnterSyncing(j) \/ ExplicitFail(j)
+
+AdvanceSyncing(j) ==
+    PublishArtifacts(j) \/ CompleteJob(j) \/ ExplicitFail(j)
+
+TimeoutRecover(j) ==
+    TimeoutRecoverToCompletedFromArtifact(j)
+        \/ TimeoutRecoverToFailed(j)
+        \/ TimeoutRecoverToQueuedIntended(j)
+
+\* Assumption bundle for the "healthy infra exists" model:
+\* - at least one healthy worker eventually claims queued work
+\* - started work eventually either advances toward success or explicitly fails
+\* - if a worker dies, heartbeat staleness and timeout recovery are eventually observed
+\* - a healthy evaluator eventually publishes artifacts for successful runs
+HealthyInfraFairness ==
+    \A j \in Jobs :
+        /\ WF_vars(ClaimJob(j))
+        /\ WF_vars(StartJob(j))
+        /\ WF_vars(StaleHeartbeat(j))
+        /\ WF_vars(AdvanceRunningOrClaimed(j))
+        /\ WF_vars(AdvanceSyncing(j))
+        /\ WF_vars(TimeoutScanGrace(j))
+        /\ WF_vars(TimeoutRecover(j))
+
 Spec == Init /\ [][Next]_vars
+
+HealthySpec ==
+    /\ Init
+    /\ [][Next]_vars
+    /\ ~BuggyRequeueEnabled
+    /\ HealthyInfraFairness
 
 =============================================================================
