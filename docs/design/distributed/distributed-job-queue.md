@@ -103,6 +103,9 @@ The queue layer treats the following as terminal outcomes:
 ### Stale or missing state
 - missing queue metadata for a supposedly pending job is an infrastructure failure
 - `started` jobs that exceed timeout plus grace are treated as stale infrastructure failures
+- continue-mode recovery of `started` jobs must use per-job timeout-plus-grace
+  staleness; the presence of another live worker on the same queue must not
+  suppress recovery of a stale started job
 - timeout recovery must not leave the shadow lifecycle in `queued` unless the
   concrete queue entry is executable again
 - once `claimed_by` moves to a replacement worker, the superseded worker must

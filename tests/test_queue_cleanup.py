@@ -1,5 +1,6 @@
 """Tests for experiment-scoped queue cleanup helpers."""
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -285,3 +286,39 @@ def test_handle_orphaned_jobs_skips_when_queue_worker_exists(monkeypatch) -> Non
     assert handled == 0
     job.set_status.assert_not_called()
     queue.enqueue_job.assert_not_called()
+
+
+def test_handle_orphaned_jobs_recovers_stale_started_job_with_live_queue_worker(
+    monkeypatch,
+) -> None:
+    if not queue_module.REDIS_AVAILABLE:
+        pytest.skip("Redis/RQ not available")
+
+    queue = MagicMock()
+    queue.name = "crsbench_trial"
+    queue.connection = MagicMock()
+
+    job = MagicMock()
+    job.id = "job-1"
+    job.get_status.return_value = queue_module.rq.job.JobStatus.STARTED  # type: ignore[union-attr]
+    job.started_at = datetime.now(timezone.utc) - timedelta(seconds=4000)
+    job.timeout = 300
+    started_jobs = {"trial-1": job}
+
+    unrelated_live_worker = SimpleNamespace(
+        name="worker-live",
+        queues=[SimpleNamespace(name="crsbench_trial")],
+    )
+    monkeypatch.setattr(
+        queue_module.rq.Worker,  # type: ignore[union-attr]
+        "all",
+        lambda **_kwargs: [unrelated_live_worker],
+    )
+
+    handled = queue_module.handle_orphaned_jobs(queue, started_jobs)
+
+    assert handled == 1
+    job.set_status.assert_called_once_with(
+        queue_module.rq.job.JobStatus.FAILED  # type: ignore[union-attr]
+    )
+    queue.enqueue_job.assert_called_once_with(job)

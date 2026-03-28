@@ -7,6 +7,7 @@ for distributed CRS trial execution.
 import os
 import re
 import time
+from datetime import datetime, timezone
 from enum import StrEnum
 from typing import List, Optional
 
@@ -772,7 +773,10 @@ def requeue_failed_jobs(queue: "rq.Queue", failed_jobs: list["rq.job.Job"]) -> i
 
 
 def handle_orphaned_jobs(
-    queue: "rq.Queue", started_jobs: dict[str, "rq.job.Job"] | list["rq.job.Job"]
+    queue: "rq.Queue",
+    started_jobs: dict[str, "rq.job.Job"] | list["rq.job.Job"],
+    *,
+    stale_started_grace_seconds: int = 120,
 ) -> int:
     """
     Move orphaned started jobs to failed and requeue for retry.
@@ -801,16 +805,14 @@ def handle_orphaned_jobs(
     queue_worker_count = sum(
         1 for worker in active_workers if _worker_listens_to_queue(worker, queue_name)
     )
-    if queue_worker_count > 0:
-        logger.debug(
-            f"Workers exist for queue {queue_name} ({queue_worker_count}) - "
-            "not handling started jobs as orphaned"
-        )
-        return 0
 
     count = 0
     jobs = started_jobs.values() if isinstance(started_jobs, dict) else started_jobs
     for job in jobs:
+        if queue_worker_count > 0 and not _is_stale_started_job(
+            job, stale_started_grace_seconds
+        ):
+            continue
         try:
             # Move to failed registry
             job.set_status(rq.job.JobStatus.FAILED)  # type: ignore[attr-defined]
@@ -824,6 +826,25 @@ def handle_orphaned_jobs(
     if count > 0:
         logger.info(f"Handled {count} orphaned jobs (moved to failed + requeued)")
     return count
+
+
+def _is_stale_started_job(
+    job: "rq.job.Job",
+    stale_started_grace_seconds: int,
+) -> bool:
+    """Return whether a started job has exceeded timeout plus grace."""
+    status_value = getattr(job.get_status(), "value", job.get_status())
+    if str(status_value).lower() != "started":
+        return False
+
+    started_at = getattr(job, "started_at", None)
+    timeout_seconds = int(getattr(job, "timeout", 3600) or 3600)
+    if started_at is None:
+        return False
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    age_seconds = (datetime.now(timezone.utc) - started_at).total_seconds()
+    return age_seconds > (timeout_seconds + stale_started_grace_seconds)
 
 
 def _worker_listens_to_queue(worker: object, queue_name: str) -> bool:
