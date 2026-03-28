@@ -41,6 +41,9 @@
 - `DistributedMonitorMarkerWrite.tla`: model of retryable orchestrator marker writes
 - `DistributedMonitorMarkerWriteBuggy.cfg`: buggy config where callback failure still consumes the finished job
 - `DistributedMonitorMarkerWriteHealthy.cfg`: fixed config where marker-write failure leaves the callback retryable
+- `DistributedStartedJobRecovery.tla`: model of continue-mode stale started-job recovery
+- `DistributedStartedJobRecoveryBuggy.cfg`: buggy config where any live queue worker blocks stale started-job recovery
+- `DistributedStartedJobRecoveryHealthy.cfg`: fixed config where stale started jobs recover by their own timeout window
 
 ## Purpose
 
@@ -133,6 +136,12 @@ The thirteenth model is meant to catch marker-write durability bugs:
 - a terminal callback runs for a finished job
 - the marker write fails transiently
 - the callback must not consume the `job_id` until a later retry succeeds
+
+The fourteenth model is meant to catch stale started-job recovery bugs:
+
+- a started job's original owner is gone
+- the job has exceeded timeout plus grace
+- an unrelated live worker on the same queue must not block requeue of that stale job
 
 ## Run TLC
 
@@ -629,6 +638,40 @@ source .envrc
 java tlc2.TLC \
   -config tla/DistributedMonitorMarkerWriteHealthy.cfg \
   tla/DistributedMonitorMarkerWrite.tla
+```
+
+Expected result:
+
+- TLC completes with no errors
+
+## Started Job Recovery Model
+
+This model corresponds to continue-mode queue recovery for started jobs:
+
+- `handle_orphaned_jobs()` examines started trial jobs on restart
+- stale started jobs should be requeued by their own timeout-plus-grace window
+- a different live worker on the same queue must not suppress that recovery
+
+Buggy run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedStartedJobRecoveryBuggy.cfg \
+  tla/DistributedStartedJobRecovery.tla
+```
+
+Expected result:
+
+- `UnrelatedWorkerCannotBlockStaleRecovery` fails
+
+Healthy run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedStartedJobRecoveryHealthy.cfg \
+  tla/DistributedStartedJobRecovery.tla
 ```
 
 Expected result:
