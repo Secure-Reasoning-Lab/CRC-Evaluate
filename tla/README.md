@@ -5,6 +5,9 @@
 - `DistributedTimeoutRecovery.tla`: minimal dual-state model of queue state plus shadow lifecycle state
 - `DistributedTimeoutRecovery.cfg`: TLC config that intentionally enables the buggy timeout-requeue path
 - `DistributedTimeoutRecoveryHealthy.cfg`: TLC config for the intended protocol under healthy worker/evaluator fairness assumptions
+- `DistributedTrialKeySnapshot.tla`: model of physical RQ jobs vs logical `trial_key` snapshots
+- `DistributedTrialKeySnapshotDuplicate.cfg`: intentionally allows two physical jobs to share one logical trial key
+- `DistributedTrialKeySnapshotUnique.cfg`: fixed configuration where each physical job has a distinct logical trial key
 
 ## Purpose
 
@@ -15,6 +18,15 @@ This first model is meant to catch a specific bug class:
 - but the concrete executable queue entry is not restored
 
 That produces a stalled job even though the lifecycle layer says it is runnable again.
+
+The second model is meant to catch a different code-correspondent bug class:
+
+- trial jobs are physically distinct RQ jobs
+- `trial_id` payloads include a run suffix and are not the RQ identity
+- queue inspection groups jobs by logical `trial_key`
+- duplicate physical jobs for one logical trial collapse to a single visible row
+
+That can hide duplicate work from queue status, cleanup, and orphan recovery.
 
 ## Run TLC
 
@@ -100,3 +112,39 @@ Verified locally on March 27, 2026:
 - `DistributedTimeoutRecovery.cfg` still fails `QueuedMeansExecutable` with the
   intended buggy requeue counterexample
 - `DistributedTimeoutRecoveryHealthy.cfg` completes with no TLC errors
+
+## Trial Key Snapshot Model
+
+This model corresponds directly to the distributed trial queue code:
+
+- `run_experiment.py` enqueues trial jobs with a per-run `trial_id` payload
+- `get_existing_trials()` in `crsbench/distributed/queue.py` stores one job per
+  logical `trial_key`
+- `queue_monitor.py` and cleanup/orphan paths used that grouped view
+
+Duplicate-allowed run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedTrialKeySnapshotDuplicate.cfg \
+  tla/DistributedTrialKeySnapshot.tla
+```
+
+Expected result:
+
+- `NoDuplicateLogicalTrialInFlight` fails
+- `SnapshotCoversAllActivePhysicalJobs` fails
+
+Fixed run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedTrialKeySnapshotUnique.cfg \
+  tla/DistributedTrialKeySnapshot.tla
+```
+
+Expected result:
+
+- TLC completes with no errors
