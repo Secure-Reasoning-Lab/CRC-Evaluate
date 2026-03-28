@@ -26,6 +26,9 @@
 - `DistributedHeartbeatProjection.tla`: model of heartbeat projection from the side-channel heartbeat hash into lifecycle record fields
 - `DistributedHeartbeatProjectionBuggy.cfg`: buggy config where the heartbeat hash is refreshed but lifecycle fields stay stale
 - `DistributedHeartbeatProjectionHealthy.cfg`: fixed config where lifecycle heartbeat fields match the side channel
+- `DistributedRetryTerminalFence.tla`: model of explicit failed-job retry against terminal lifecycle state
+- `DistributedRetryTerminalFenceBuggy.cfg`: buggy config where a failed physical job is retried even though lifecycle already says completed
+- `DistributedRetryTerminalFenceHealthy.cfg`: fixed config where explicit retry is fenced to lifecycle records currently in failed
 - `DistributedRetryExclusivity.tla`: model of at-most-one authoritative live attempt across retries
 - `DistributedRetryExclusivityBuggy.cfg`: buggy config where superseded and replacement attempts are both live
 - `DistributedRetryExclusivityHealthy.cfg`: fenced config where only one authoritative live attempt remains
@@ -245,6 +248,13 @@ The twenty-seventh model is meant to catch heartbeat-projection bugs:
 - the separate heartbeat hash is refreshed
 - the lifecycle record also exposes `last_heartbeat`
 - both layers must advance together so lifecycle snapshots do not lie about liveness
+
+The twenty-eighth model is meant to catch terminal-retry fence bugs:
+
+- continue mode discovers a failed physical RQ job
+- the shadow lifecycle for that same job already says `completed`
+- explicit retry must not resurrect that stale failed residue behind the
+  terminal authoritative record
 
 The fifteenth model is meant to catch resume-collection restart bugs:
 
