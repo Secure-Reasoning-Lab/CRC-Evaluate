@@ -275,7 +275,11 @@ def _initialize_job_lifecycle_runtime(
                 JobState.CLAIMED,
                 claimed_by=runtime_worker_name,
             )
-        if record is not None and record.state is JobState.CLAIMED:
+        if (
+            record is not None
+            and record.state is JobState.CLAIMED
+            and record.claimed_by == runtime_worker_name
+        ):
             store.transition(
                 runtime.experiment_name,
                 runtime.job_id,

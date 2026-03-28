@@ -217,6 +217,9 @@ The queue layer treats the following as terminal outcomes:
 - worker startup must apply the same ownership fence before emitting its first
   lifecycle heartbeat; stale or terminal records must not regain fresh
   heartbeats just because a late worker process reached initialization
+- worker startup must not advance `claimed -> running` unless the lifecycle
+  record is already claimed by that same worker; initialization must never steal
+  ownership from another worker that already holds the shadow claim
 - operator safety views such as status and teardown must merge lifecycle records
   with queue-only jobs that have not yet been projected into lifecycle, so
   queue residue cannot disappear from human-facing summaries once lifecycle

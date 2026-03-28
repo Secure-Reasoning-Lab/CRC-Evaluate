@@ -198,6 +198,50 @@ def test_initialize_job_lifecycle_runtime_skips_heartbeat_for_terminal_record() 
     assert fetched.last_heartbeat is None
 
 
+def test_initialize_job_lifecycle_runtime_does_not_steal_foreign_claim() -> None:
+    fake = _FakeRedis()
+    store = JobLifecycleStore(fake)
+    store.set(
+        "exp-1",
+        JobLifecycleRecord(
+            job_id="job-1",
+            trial_key="trial-1",
+            state=JobState.CLAIMED,
+            claimed_by="worker-2",
+        ),
+    )
+    config = ExperimentConfig(
+        experiment="exp-1",
+        trials=1,
+        mode=EvaluationMode.DELTA,
+        max_total_time=21600,
+        inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
+        experiment_filestore=Path("/tmp/exp"),
+        report_filestore=Path("/tmp/report"),
+        crs_compose={"test-crs": {"num_cores": 1}},
+        benchmarks=["test-bench"],
+    )
+    rq_job = type(
+        "CurrentJob",
+        (),
+        {"connection": fake, "id": "job-1"},
+    )()
+
+    with patch("rq.get_current_job", return_value=rq_job):
+        runtime = _initialize_job_lifecycle_runtime(
+            config=config,
+            trial_key="trial-1",
+            runtime_worker_name="worker-1",
+        )
+
+    assert runtime is not None
+    fetched = store.get("exp-1", "job-1")
+    assert fetched is not None
+    assert fetched.state is JobState.CLAIMED
+    assert fetched.claimed_by == "worker-2"
+    assert fetched.last_heartbeat is None
+
+
 def test_finish_job_lifecycle_noops_for_superseded_worker() -> None:
     fake = _FakeRedis()
     store = JobLifecycleStore(fake)
