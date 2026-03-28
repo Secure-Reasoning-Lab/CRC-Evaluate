@@ -575,6 +575,105 @@ def test_continue_mode_retry_failed_rolls_back_lifecycle_when_requeue_fails(
     ]
 
 
+def test_continue_mode_retry_failed_rolls_back_lifecycle_when_save_meta_fails(
+    tmp_path: Path,
+) -> None:
+    """Explicit retry must roll lifecycle back when metadata write fails before enqueue."""
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = False
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.register_or_raise.return_value = None
+    session.lifecycle_store = MagicMock()
+    session.lifecycle_store.get.return_value = JobLifecycleRecord(
+        job_id="job-1",
+        trial_key="trial-1",
+        state=JobState.FAILED,
+        claimed_by=None,
+    )
+
+    failed_job = MagicMock()
+    failed_job.id = "job-1"
+    failed_job.meta = {}
+    failed_job.kwargs = {}
+    failed_job.save_meta.side_effect = RuntimeError("meta write failed")
+
+    existing = {
+        "queued": {},
+        "started": {},
+        "failed": {"f": failed_job},
+        "finished": {},
+        "deferred": {},
+        "scheduled": {},
+    }
+    physical_existing = {
+        "queued": [],
+        "started": [],
+        "failed": [failed_job],
+        "finished": [],
+        "deferred": [],
+        "scheduled": [],
+    }
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value=existing,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            return_value=physical_existing,
+        ),
+        patch("crsbench.distributed.queue.handle_orphaned_jobs", return_value=0),
+        patch(
+            "crsbench.run_experiment._prepare_trial_dir_for_retry", return_value=True
+        ),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+        patch(
+            "crsbench.run_experiment.dump_trial_matrix",
+            side_effect=RuntimeError("stop after queue handling"),
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="stop after queue handling"):
+            run_experiment_distributed(
+                "exp-test",
+                config,
+                [],
+                queue_mode="continue",
+                retry_failed=True,
+            )
+
+    queue.enqueue_job.assert_not_called()
+    assert session.lifecycle_store.transition.call_args_list == [
+        call(
+            "exp-test",
+            "job-1",
+            JobState.QUEUED,
+            claimed_by=None,
+            detail="retry requested by orchestrator",
+        ),
+        call(
+            "exp-test",
+            "job-1",
+            JobState.FAILED,
+            claimed_by=None,
+            detail="retry metadata update failed: meta write failed",
+        ),
+    ]
+
+
 def test_continue_mode_retry_failed_skips_when_lifecycle_is_already_completed(
     tmp_path: Path,
 ) -> None:
@@ -1620,6 +1719,44 @@ def test_monitor_callbacks_skip_stale_owner_until_authoritative_result() -> None
         assert callbacks.on_job_finished(job) is not False
 
     marker.assert_called_once_with(current_result, config)
+
+
+def test_monitor_callbacks_defer_failed_updates_for_retried_active_jobs() -> None:
+    config = MagicMock()
+
+    job = MagicMock()
+    job.id = "job-1"
+    job.meta = {"worker_name": "worker-new", "retry_count": 1}
+    job.kwargs = {
+        "crs": "crs-a",
+        "benchmark": "bench-a",
+        "harness_name": "fuzz_target",
+        "mode": "delta",
+        "sanitizer": "address",
+        "trial_num": 1,
+        "target_cpv_id": None,
+    }
+    job.exc_info = "stale infra failure"
+
+    lifecycle_store = MagicMock()
+    lifecycle_store.get.return_value = JobLifecycleRecord(
+        job_id="job-1",
+        trial_key="trial-1",
+        state=JobState.RUNNING,
+        claimed_by="worker-new",
+        retry_count=1,
+    )
+
+    callbacks = _build_monitor_callbacks(
+        config,
+        experiment_name="exp-test",
+        lifecycle_store=lifecycle_store,
+    )
+
+    with patch("crsbench.run_experiment._write_orchestrator_marker") as marker:
+        assert callbacks.on_job_failed(job) is False
+
+    marker.assert_not_called()
 
 
 def test_monitor_callbacks_consume_non_active_lifecycle_without_marker_write() -> None:

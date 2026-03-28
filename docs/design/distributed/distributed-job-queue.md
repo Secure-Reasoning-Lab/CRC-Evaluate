@@ -130,6 +130,9 @@ The queue layer treats the following as terminal outcomes:
 - for finished jobs, that ownership fence must use the worker identity carried
   by the terminal `TrialResult` payload rather than mutable shared `job.meta`
   that may already have been overwritten by a replacement attempt
+- for hard failed RQ callbacks on retried active jobs, orchestrator monitoring
+  must defer to lifecycle timeout/recovery rather than treat mutable queue
+  metadata as authoritative for terminalization
 - once orchestrator monitoring has materialized a canonical marker for a
   logical trial in the current session, later duplicate physical callbacks for
   that same trial must not flip the published verdict

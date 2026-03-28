@@ -9,7 +9,7 @@ import re
 import time
 from datetime import datetime, timezone
 from enum import StrEnum
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from crsbench.distributed.job_lifecycle import JobLifecycleStore, JobState
 from crsbench.utils.logger import get_logger
@@ -867,9 +867,19 @@ def handle_orphaned_jobs(
                 )
             continue
         try:
-            if not _prepare_requeued_started_job_lifecycle(
-                job, lifecycle_store=lifecycle_store
-            ):
+            preparation = _prepare_requeued_started_job_lifecycle(
+                job,
+                lifecycle_store=lifecycle_store,
+            )
+            if preparation == "skip":
+                continue
+            if preparation == "quarantine":
+                job.set_status(rq.job.JobStatus.FAILED)  # type: ignore[attr-defined]
+                count += 1
+                logger.warning(
+                    "Quarantined stale started job %s after lifecycle repair failure",
+                    job.id[:8],
+                )
                 continue
             # Move to failed registry
             job.set_status(rq.job.JobStatus.FAILED)  # type: ignore[attr-defined]
@@ -898,24 +908,24 @@ def _prepare_requeued_started_job_lifecycle(
     job: "rq.job.Job",
     *,
     lifecycle_store: JobLifecycleStore | None,
-) -> bool:
+) -> Literal["ready", "skip", "quarantine"]:
     """Repair lifecycle ownership before continue-mode stale started-job requeue."""
     experiment_name = get_job_experiment_name(job)
     job_id = getattr(job, "id", None)
     if not isinstance(experiment_name, str) or not experiment_name:
-        return True
+        return "ready"
     if not isinstance(job_id, str) or not job_id:
-        return True
+        return "ready"
 
     if lifecycle_store is None:
-        return True
+        return "ready"
 
     try:
         record = lifecycle_store.get(experiment_name, job_id)
         if record is None:
-            return True
+            return "ready"
         if record.state is JobState.COMPLETED:
-            return False
+            return "skip"
 
         if record.state in {JobState.CLAIMED, JobState.RUNNING, JobState.SYNCING}:
             record = lifecycle_store.transition(
@@ -944,13 +954,18 @@ def _prepare_requeued_started_job_lifecycle(
             detail="recovered stale started job",
         )
     except Exception as exc:
+        _rollback_requeued_started_job_lifecycle(
+            job,
+            reason=f"retry metadata update failed: {exc}",
+            lifecycle_store=lifecycle_store,
+        )
         logger.warning(
             "Failed to repair lifecycle for recovered stale started job %s: %s",
             job_id[:8],
             exc,
         )
-        return False
-    return True
+        return "quarantine"
+    return "ready"
 
 
 def _rollback_requeued_started_job_lifecycle(

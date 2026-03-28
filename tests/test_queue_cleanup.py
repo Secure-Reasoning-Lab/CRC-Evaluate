@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import crsbench.distributed.queue as queue_module
 import pytest
@@ -327,6 +327,82 @@ def test_handle_orphaned_jobs_repairs_lifecycle_after_requeue(monkeypatch) -> No
         claimed_by=None,
         detail="recovered stale started job",
     )
+
+
+def test_handle_orphaned_jobs_rolls_back_lifecycle_when_metadata_write_fails(
+    monkeypatch,
+) -> None:
+    if not queue_module.REDIS_AVAILABLE:
+        pytest.skip("Redis/RQ not available")
+
+    queue = MagicMock()
+    queue.name = "crsbench_trial"
+    queue.connection = MagicMock()
+
+    job = MagicMock()
+    job.id = "job-1"
+    job.meta = {"experiment_name": "exp-test"}
+    job.save_meta.side_effect = RuntimeError("meta write failed")
+
+    lifecycle_store = MagicMock()
+    lifecycle_store.get.return_value = JobLifecycleRecord(
+        job_id="job-1",
+        trial_key="trial-1",
+        state=JobState.RUNNING,
+        claimed_by="worker-old",
+        retry_count=2,
+    )
+    lifecycle_store.transition.side_effect = [
+        JobLifecycleRecord(
+            job_id="job-1",
+            trial_key="trial-1",
+            state=JobState.ORPHANED,
+            claimed_by=None,
+            retry_count=2,
+        ),
+        JobLifecycleRecord(
+            job_id="job-1",
+            trial_key="trial-1",
+            state=JobState.FAILED,
+            claimed_by=None,
+            retry_count=3,
+        ),
+    ]
+    lifecycle_store.increment_retry.return_value = 3
+
+    monkeypatch.setattr(
+        queue_module.rq.Worker,  # type: ignore[union-attr]
+        "all",
+        lambda **_kwargs: [],
+    )
+
+    handled = queue_module.handle_orphaned_jobs(
+        queue,
+        [job],
+        lifecycle_store=lifecycle_store,
+    )
+
+    assert handled == 1
+    queue.enqueue_job.assert_not_called()
+    job.set_status.assert_called_once_with(
+        queue_module.rq.job.JobStatus.FAILED  # type: ignore[union-attr]
+    )
+    assert lifecycle_store.transition.call_args_list == [
+        call(
+            "exp-test",
+            "job-1",
+            JobState.ORPHANED,
+            claimed_by=None,
+            detail="recovered stale started job",
+        ),
+        call(
+            "exp-test",
+            "job-1",
+            JobState.FAILED,
+            claimed_by=None,
+            detail="started-job retry enqueue failed: retry metadata update failed: meta write failed",
+        ),
+    ]
 
 
 def test_handle_orphaned_jobs_drops_stale_started_duplicate_when_active_peer_exists(

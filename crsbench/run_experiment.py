@@ -1560,6 +1560,7 @@ def _build_monitor_callbacks(
         job,
         *,
         reported_worker_name: str | None = None,
+        callback_kind: str = "finished",
     ) -> tuple[bool, bool]:
         """Return (should_write_marker, should_mark_processed) for one callback."""
         if lifecycle_store is None:
@@ -1585,6 +1586,12 @@ def _build_monitor_callbacks(
                 record.state.value,
             )
             return False, True
+        if callback_kind == "failed" and record.retry_count > 0:
+            logger.warning(
+                "Deferring failed terminal update for retried active job %s to lifecycle recovery",
+                job_id[:8],
+            )
+            return False, False
         if record.claimed_by is None:
             return True, True
         worker_name = reported_worker_name
@@ -1634,6 +1641,7 @@ def _build_monitor_callbacks(
             should_write_marker, should_mark_processed = _terminal_update_policy(
                 job,
                 reported_worker_name=_result_worker_machine(result),
+                callback_kind="failed",
             )
             if not should_write_marker:
                 if should_mark_processed:
@@ -1663,6 +1671,7 @@ def _build_monitor_callbacks(
             should_write_marker, should_mark_processed = _terminal_update_policy(
                 job,
                 reported_worker_name=_result_worker_machine(result),
+                callback_kind="failed",
             )
             if not should_write_marker:
                 if should_mark_processed:
@@ -1942,7 +1951,7 @@ def _rollback_failed_lifecycle_retry(
             job_id,
             JobState.FAILED,
             claimed_by=None,
-            detail=f"retry enqueue failed: {reason}",
+            detail=reason,
         )
     except Exception as exc:
         logger.warning(
@@ -2227,13 +2236,28 @@ def run_experiment_distributed(
                         continue
                     failed_job.meta["force_retry"] = True
                     failed_job.meta.pop("worker_name", None)
-                    failed_job.save_meta()
+                    try:
+                        failed_job.save_meta()
+                    except Exception as e:
+                        _rollback_failed_lifecycle_retry(
+                            session,
+                            experiment_name,
+                            failed_job,
+                            f"retry metadata update failed: {e}",
+                        )
+                        logger.warning(
+                            f"Failed to update retry metadata for {failed_job.id[:8]}: {e}"
+                        )
+                        continue
                     try:
                         queue.enqueue_job(failed_job)
                         retried += 1
                     except Exception as e:
                         _rollback_failed_lifecycle_retry(
-                            session, experiment_name, failed_job, str(e)
+                            session,
+                            experiment_name,
+                            failed_job,
+                            f"retry enqueue failed: {e}",
                         )
                         logger.warning(
                             f"Failed to requeue failed job {failed_job.id[:8]}: {e}"
