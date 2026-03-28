@@ -1410,6 +1410,132 @@ def test_queue_mode_fresh_acquires_lock_before_clearing(tmp_path: Path) -> None:
     clear_jobs.assert_not_called()
 
 
+def test_queue_mode_fresh_preserves_lifecycle_when_started_job_was_purged(
+    tmp_path: Path,
+) -> None:
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = False
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+
+    queue = MagicMock()
+    session = MagicMock()
+    session.trial_queue = queue
+    session.lifecycle_store = MagicMock()
+
+    existing = {
+        "queued": {},
+        "started": {"k": MagicMock()},
+        "failed": {},
+        "finished": {},
+    }
+    physical_existing_before = {
+        "queued": [],
+        "started": [MagicMock()],
+        "failed": [],
+        "finished": [],
+        "deferred": [],
+        "scheduled": [],
+    }
+    physical_existing_after = {
+        "queued": [],
+        "started": [],
+        "failed": [],
+        "finished": [],
+        "deferred": [],
+        "scheduled": [],
+    }
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value=existing,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            side_effect=[physical_existing_before, physical_existing_after],
+        ),
+        patch("crsbench.distributed.queue.clear_experiment_jobs") as clear_jobs,
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch("crsbench.run_experiment.monitor_jobs", return_value=[]),
+    ):
+        run_experiment_distributed("exp-test", config, [], queue_mode="fresh")
+
+    clear_jobs.assert_called_once_with(queue, "exp-test")
+    session.lifecycle_store.clear_experiment.assert_not_called()
+
+
+def test_queue_mode_fresh_lifecycle_clear_is_best_effort(tmp_path: Path) -> None:
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = False
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+
+    queue = MagicMock()
+    session = MagicMock()
+    session.trial_queue = queue
+    session.lifecycle_store = MagicMock()
+    session.lifecycle_store.clear_experiment.side_effect = OSError("redis down")
+
+    existing = {
+        "queued": {"k": MagicMock()},
+        "started": {},
+        "failed": {},
+        "finished": {},
+    }
+    physical_existing = {
+        "queued": [MagicMock()],
+        "started": [],
+        "failed": [],
+        "finished": [],
+        "deferred": [],
+        "scheduled": [],
+    }
+    remaining_after_purge = {
+        "queued": [],
+        "started": [],
+        "failed": [],
+        "finished": [],
+        "deferred": [],
+        "scheduled": [],
+    }
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value=existing,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            side_effect=[physical_existing, remaining_after_purge],
+        ),
+        patch("crsbench.distributed.queue.clear_experiment_jobs"),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch("crsbench.run_experiment.monitor_jobs", return_value=[]),
+    ):
+        run_experiment_distributed("exp-test", config, [], queue_mode="fresh")
+
+    session.lifecycle_store.clear_experiment.assert_called_once_with("exp-test")
+
+
 def test_prepare_trial_dir_for_retry_cleans_results_filestore(tmp_path: Path) -> None:
     config = MagicMock()
     config.experiment = "exp-test"
@@ -2006,16 +2132,15 @@ def test_monitor_callbacks_allow_failed_updates_without_lifecycle_record_for_leg
     marker.assert_called_once()
 
 
-def test_monitor_callbacks_retry_when_tracked_job_lifecycle_record_missing() -> None:
+def test_monitor_callbacks_allow_finished_updates_without_lifecycle_record_for_tracked_job() -> (
+    None
+):
     config = MagicMock()
     result = _make_result(success=True, worker_machine="worker-new")
 
     job = MagicMock()
     job.id = "job-1"
-    job.meta = {
-        "worker_name": "worker-new",
-        "expects_lifecycle_tracking": True,
-    }
+    job.meta = {"worker_name": "worker-new"}
     job.result = result
 
     lifecycle_store = MagicMock()
@@ -2028,9 +2153,9 @@ def test_monitor_callbacks_retry_when_tracked_job_lifecycle_record_missing() -> 
     )
 
     with patch("crsbench.run_experiment._write_orchestrator_marker") as marker:
-        assert callbacks.on_job_finished(job) is False
+        assert callbacks.on_job_finished(job) is True
 
-    marker.assert_not_called()
+    marker.assert_called_once_with(result, config)
 
 
 def test_monitor_callbacks_retry_when_active_lifecycle_owner_missing() -> None:

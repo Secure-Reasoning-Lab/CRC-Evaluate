@@ -92,11 +92,16 @@ def clean_experiment_queues(
     queue_names = resolve_scope_queue_names(experiment_name, normalized_scopes)
     total_removed = 0
     total_matched = 0
+    saw_started_trial_jobs = False
 
     for queue_name in queue_names:
         queue = rq.Queue(queue_name, connection=redis_conn)  # type: ignore[attr-defined]
         existing = get_existing_trial_jobs(queue, experiment_name=experiment_name)
         matched = sum(len(v) for v in existing.values())
+        if queue_name == resolve_queue_names(experiment_name)[0] and existing.get(
+            "started"
+        ):
+            saw_started_trial_jobs = True
         total_matched += matched
         if dry_run:
             continue
@@ -109,9 +114,18 @@ def clean_experiment_queues(
             trial_queue,
             experiment_name=experiment_name,
         )
-        if not any(remaining_trial_jobs.values()):
-            lifecycle_connection = cast("LifecycleRedisProtocol", redis_conn)
-            JobLifecycleStore(lifecycle_connection).clear_experiment(experiment_name)
+        if not saw_started_trial_jobs and not any(remaining_trial_jobs.values()):
+            try:
+                lifecycle_connection = cast("LifecycleRedisProtocol", redis_conn)
+                JobLifecycleStore(lifecycle_connection).clear_experiment(
+                    experiment_name
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to clear lifecycle state for experiment=%s: %s",
+                    experiment_name,
+                    exc,
+                )
 
     removed_registry_entry = False
     removed_lock = False
