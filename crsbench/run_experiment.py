@@ -1551,12 +1551,13 @@ def _build_monitor_callbacks(
     marked_jobs: set[str] = set()
     initial_marker_state_by_trial_key: dict[str, JobState | None] = {}
 
-    def _is_authoritative_terminal_update(job) -> bool:
+    def _terminal_update_policy(job) -> tuple[bool, bool]:
+        """Return (should_write_marker, should_mark_processed) for one callback."""
         if lifecycle_store is None:
-            return True
+            return True, True
         job_id = getattr(job, "id", None)
         if not isinstance(job_id, str):
-            return True
+            return True, True
         try:
             record = lifecycle_store.get(experiment_name, job_id)
         except Exception as exc:
@@ -1565,9 +1566,18 @@ def _build_monitor_callbacks(
                 job_id[:8],
                 exc,
             )
-            return True
-        if record is None or record.claimed_by is None:
-            return True
+            return True, True
+        if record is None:
+            return True, True
+        if record.state not in {JobState.CLAIMED, JobState.RUNNING, JobState.SYNCING}:
+            logger.warning(
+                "Skipping stale terminal update for %s because lifecycle state is %s",
+                job_id[:8],
+                record.state.value,
+            )
+            return False, True
+        if record.claimed_by is None:
+            return True, True
         meta = getattr(job, "meta", {}) or {}
         worker_name = meta.get("worker_name")
         if not isinstance(worker_name, str) or worker_name != record.claimed_by:
@@ -1577,8 +1587,8 @@ def _build_monitor_callbacks(
                 worker_name,
                 record.claimed_by,
             )
-            return False
-        return True
+            return False, False
+        return True, True
 
     def _marker_write_policy(result: TrialResult) -> tuple[bool, bool]:
         """Return (should_write_marker, should_mark_processed)."""
@@ -1603,8 +1613,11 @@ def _build_monitor_callbacks(
         job_id = getattr(job, "id", None)
         if not isinstance(job_id, str) or job_id in marked_jobs:
             return True
-        if not _is_authoritative_terminal_update(job):
-            return False
+        should_write_marker, should_mark_processed = _terminal_update_policy(job)
+        if not should_write_marker:
+            if should_mark_processed:
+                marked_jobs.add(job_id)
+            return should_mark_processed
         try:
             result = job.result
             if result is None:
@@ -1629,8 +1642,11 @@ def _build_monitor_callbacks(
         job_id = getattr(job, "id", None)
         if not isinstance(job_id, str) or job_id in marked_jobs:
             return True
-        if not _is_authoritative_terminal_update(job):
-            return False
+        should_write_marker, should_mark_processed = _terminal_update_policy(job)
+        if not should_write_marker:
+            if should_mark_processed:
+                marked_jobs.add(job_id)
+            return should_mark_processed
         try:
             result = _build_failed_job_result(job)
             should_write_marker, should_mark_processed = _marker_write_policy(result)

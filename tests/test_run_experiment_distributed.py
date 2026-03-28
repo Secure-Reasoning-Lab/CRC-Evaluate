@@ -1429,6 +1429,35 @@ def test_monitor_callbacks_skip_stale_owner_until_authoritative_result() -> None
     marker.assert_called_once_with(current_result, config)
 
 
+def test_monitor_callbacks_consume_non_active_lifecycle_without_marker_write() -> None:
+    config = MagicMock()
+    result = MagicMock(name="late_result")
+
+    job = MagicMock()
+    job.id = "job-1"
+    job.meta = {"worker_name": "worker-old"}
+    job.result = result
+
+    lifecycle_store = MagicMock()
+    lifecycle_store.get.return_value = JobLifecycleRecord(
+        job_id="job-1",
+        trial_key="trial-1",
+        state=JobState.FAILED,
+        claimed_by=None,
+    )
+
+    callbacks = _build_monitor_callbacks(
+        config,
+        experiment_name="exp-test",
+        lifecycle_store=lifecycle_store,
+    )
+
+    with patch("crsbench.run_experiment._write_orchestrator_marker") as marker:
+        assert callbacks.on_job_finished(job) is not False
+
+    marker.assert_not_called()
+
+
 def test_monitor_callbacks_retry_marker_write_after_transient_failure() -> None:
     config = MagicMock()
 
