@@ -280,6 +280,10 @@ Examples:
 
 def run_cloud(args: argparse.Namespace) -> int:
     """Dispatch cloud sub-actions."""
+    from dotenv import load_dotenv
+
+    load_dotenv()
+
     cmd = args.cloud_command
 
     if cmd == "keygen":
