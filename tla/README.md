@@ -35,6 +35,9 @@
 - `DistributedInitHeartbeatFence.tla`: model of the worker's first lifecycle heartbeat during startup
 - `DistributedInitHeartbeatFenceBuggy.cfg`: buggy config where startup heartbeats refresh terminal or foreign-owned records
 - `DistributedInitHeartbeatFenceHealthy.cfg`: fixed config where startup heartbeats require current active ownership
+- `DistributedStartupOwnershipFence.tla`: model of worker startup transitioning claimed jobs into running
+- `DistributedStartupOwnershipFenceBuggy.cfg`: buggy config where startup steals a claim from another worker
+- `DistributedStartupOwnershipFenceHealthy.cfg`: fixed config where startup only advances claims already owned by the current worker
 - `DistributedRetryExclusivity.tla`: model of at-most-one authoritative live attempt across retries
 - `DistributedRetryExclusivityBuggy.cfg`: buggy config where superseded and replacement attempts are both live
 - `DistributedRetryExclusivityHealthy.cfg`: fenced config where only one authoritative live attempt remains
@@ -275,6 +278,13 @@ The thirtieth model is meant to catch startup-heartbeat fence bugs:
 - the corresponding shadow record may already be terminal or owned by another worker
 - the very first lifecycle heartbeat must obey the same ownership fence as the
   background heartbeat loop
+
+The thirty-first model is meant to catch startup ownership-steal bugs:
+
+- a shadow lifecycle record is already in `claimed`
+- that claim may belong to another worker
+- startup must not advance the job to `running` while replacing the owner with
+  the current worker
 
 The fifteenth model is meant to catch resume-collection restart bugs:
 
