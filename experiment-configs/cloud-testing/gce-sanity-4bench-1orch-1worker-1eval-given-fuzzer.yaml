@@ -59,12 +59,12 @@ crs_compose:
   atlantis-multilang-given_fuzzer:
     num_cores: 8
 worker:
-  jobs: 1
+  jobs: 2
   cores_per_job: 8
   storage:
     cleanup_after_trial: false  # keep all data for inspection
 evaluator:
-  jobs: 1
+  jobs: 4
   cores_per_job: 8
 cloud:
   remote:
@@ -90,16 +90,17 @@ cloud:
         - us-east1
       fallback: true
       profile_defaults:
-        machine_type: n2d-standard-16
+        machine_type: n2d-standard-32
         boot_disk_size_gb: 200
         boot_disk_type: pd-ssd
         image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
         service_account_email: 153298433405-compute@developer.gserviceaccount.com
         owner_label: dongkwan
       instance_profiles:
-        gce-orchestrator-n2d: {} # n2d-standard-16, 200 GB pd-ssd
-        gce-worker-n2d: {}      # n2d-standard-16, 200 GB pd-ssd
-        gce-evaluator-n2d: {}   # n2d-standard-16, 200 GB pd-ssd
+        gce-orchestrator-n2d:
+          machine_type: n2d-standard-16  # orchestrator only needs 16 vCPUs
+        gce-worker-n2d: {}      # n2d-standard-32: 2 jobs × 8 cores = 16 vCPUs used
+        gce-evaluator-n2d: {}   # n2d-standard-32: 2 jobs × 8 cores = 16 vCPUs used
   orchestrator:
     instance_profile: gce-orchestrator-n2d
   workers:
@@ -107,10 +108,11 @@ cloud:
       instance_profile: gce-worker-n2d
       count: 1
     placements:
-      - {} # 1 worker VM (1 job x 8 cores = 8 vCPUs)
+      - {} # worker 1: 2 concurrent jobs × 8 cores
+      - {} # worker 2: 2 concurrent jobs × 8 cores
   evaluators:
     defaults:
       instance_profile: gce-evaluator-n2d
       count: 1
     placements:
-      - {} # 1 evaluator VM (1 job x 8 cores = 8 vCPUs)
+      - {} # 1 evaluator VM: 2 concurrent build/verify jobs

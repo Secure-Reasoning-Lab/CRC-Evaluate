@@ -328,9 +328,7 @@ class TestOrchestratorCloudIdentity:
     def test_orchestrator_env_includes_cloud_identity_vars(self):
         """The orchestrator env file should include CRSBENCH_CLOUD_EXPERIMENT,
         CRSBENCH_CLOUD_INSTANCE_ID, CRSBENCH_CLOUD_ROLE, CRSBENCH_CLOUD_ZONE."""
-        script = Path(
-            "/home/dongkwan/CRSbench-gcp/crsbench/cloud/gce/startup/orchestrator.sh"
-        )
+        script = Path(__file__).resolve().parent.parent / "crsbench" / "cloud" / "gce" / "startup" / "orchestrator.sh"
         content = script.read_text()
 
         expected_vars = [
@@ -349,9 +347,7 @@ class TestOrchestratorCloudIdentity:
     def test_orchestrator_exports_cloud_identity_before_err_trap(self):
         """Cloud identity vars must be exported (not just written to file)
         before the ERR trap, so report_bootstrap_failure can reach Redis."""
-        script = Path(
-            "/home/dongkwan/CRSbench-gcp/crsbench/cloud/gce/startup/orchestrator.sh"
-        )
+        script = Path(__file__).resolve().parent.parent / "crsbench" / "cloud" / "gce" / "startup" / "orchestrator.sh"
         content = script.read_text()
 
         expected_exports = [
@@ -387,9 +383,7 @@ class TestOrchestratorErrTrap:
     def test_orchestrator_has_err_trap(self):
         """The orchestrator startup script should set an ERR trap
         to report bootstrap failures to Redis."""
-        script = Path(
-            "/home/dongkwan/CRSbench-gcp/crsbench/cloud/gce/startup/orchestrator.sh"
-        )
+        script = Path(__file__).resolve().parent.parent / "crsbench" / "cloud" / "gce" / "startup" / "orchestrator.sh"
         content = script.read_text()
 
         assert "trap" in content, "Orchestrator startup should set a trap"
@@ -398,9 +392,7 @@ class TestOrchestratorErrTrap:
     def test_orchestrator_has_report_bootstrap_failure(self):
         """The orchestrator startup script should have a report_bootstrap_failure
         function matching the worker pattern."""
-        script = Path(
-            "/home/dongkwan/CRSbench-gcp/crsbench/cloud/gce/startup/orchestrator.sh"
-        )
+        script = Path(__file__).resolve().parent.parent / "crsbench" / "cloud" / "gce" / "startup" / "orchestrator.sh"
         content = script.read_text()
 
         assert "report_bootstrap_failure" in content or "on_error" in content, (
