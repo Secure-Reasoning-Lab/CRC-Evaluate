@@ -6,12 +6,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from crsbench.cloud.models import build_cloud_launch_plan
-from crsbench.distributed.job_lifecycle import JobState
+from crsbench.distributed.job_lifecycle import JobLifecycleRecord, JobState
 from crsbench.distributed.jobs import _build_trial_output_path
 from crsbench.distributed.runtime_session import LockContentionError
 from crsbench.run_experiment import (
     Trial,
     _build_artifact_checker,
+    _build_monitor_callbacks,
     _get_experiment_queue_stats,
     _monitor_jobs_basic,
     _monitor_jobs_rich,
@@ -972,6 +973,7 @@ def test_monitor_jobs_uses_basic_renderer_when_stdout_is_not_tty() -> None:
         config,
         disk_skipped=0,
         registry=None,
+        lifecycle_store=None,
     )
     rich.assert_not_called()
 
@@ -998,8 +1000,52 @@ def test_monitor_jobs_uses_rich_renderer_when_stdout_is_tty() -> None:
         config,
         disk_skipped=0,
         registry=None,
+        lifecycle_store=None,
     )
     basic.assert_not_called()
+
+
+def test_monitor_callbacks_skip_stale_owner_until_authoritative_result() -> None:
+    config = MagicMock()
+    stale_result = MagicMock(name="stale_result")
+    current_result = MagicMock(name="current_result")
+
+    job = MagicMock()
+    job.id = "job-1"
+    job.meta = {"worker_name": "worker-old"}
+    job.result = stale_result
+
+    lifecycle_store = MagicMock()
+    lifecycle_store.get.side_effect = [
+        JobLifecycleRecord(
+            job_id="job-1",
+            trial_key="trial-1",
+            state=JobState.RUNNING,
+            claimed_by="worker-new",
+        ),
+        JobLifecycleRecord(
+            job_id="job-1",
+            trial_key="trial-1",
+            state=JobState.RUNNING,
+            claimed_by="worker-new",
+        ),
+    ]
+
+    callbacks = _build_monitor_callbacks(
+        config,
+        experiment_name="exp-test",
+        lifecycle_store=lifecycle_store,
+    )
+
+    with patch("crsbench.run_experiment._write_orchestrator_marker") as marker:
+        assert callbacks.on_job_finished(job) is False
+
+        job.meta = {"worker_name": "worker-new"}
+        job.result = current_result
+
+        assert callbacks.on_job_finished(job) is not False
+
+    marker.assert_called_once_with(current_result, config)
 
 
 def test_get_experiment_queue_stats_uses_experiment_scoped_counts() -> None:

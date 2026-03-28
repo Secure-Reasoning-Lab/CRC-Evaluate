@@ -1385,6 +1385,7 @@ def monitor_jobs(
     *,
     disk_skipped: int = 0,
     registry=None,
+    lifecycle_store=None,
 ) -> List[TrialResult]:
     """Monitor job progress and display status.
 
@@ -1411,6 +1412,7 @@ def monitor_jobs(
             config,
             disk_skipped=disk_skipped,
             registry=registry,
+            lifecycle_store=lifecycle_store,
         )
     return _monitor_jobs_basic(
         queue,
@@ -1419,6 +1421,7 @@ def monitor_jobs(
         config,
         disk_skipped=disk_skipped,
         registry=registry,
+        lifecycle_store=lifecycle_store,
     )
 
 
@@ -1461,14 +1464,48 @@ def _build_failed_job_result(job) -> TrialResult:
 
 def _build_monitor_callbacks(
     config: ExperimentConfig,
+    *,
+    experiment_name: str,
+    lifecycle_store=None,
 ) -> QueueMonitorCallbacks:
     """Build marker-writing callbacks for the shared queue monitor."""
     marked_jobs: set[str] = set()
 
-    def on_job_finished(job) -> None:
+    def _is_authoritative_terminal_update(job) -> bool:
+        if lifecycle_store is None:
+            return True
+        job_id = getattr(job, "id", None)
+        if not isinstance(job_id, str):
+            return True
+        try:
+            record = lifecycle_store.get(experiment_name, job_id)
+        except Exception as exc:
+            logger.warning(
+                "Failed to read lifecycle ownership for %s: %s",
+                job_id[:8],
+                exc,
+            )
+            return True
+        if record is None or record.claimed_by is None:
+            return True
+        meta = getattr(job, "meta", {}) or {}
+        worker_name = meta.get("worker_name")
+        if not isinstance(worker_name, str) or worker_name != record.claimed_by:
+            logger.warning(
+                "Skipping stale terminal update for %s from worker %r; current owner is %r",
+                job_id[:8],
+                worker_name,
+                record.claimed_by,
+            )
+            return False
+        return True
+
+    def on_job_finished(job) -> bool:
         job_id = getattr(job, "id", None)
         if not isinstance(job_id, str) or job_id in marked_jobs:
-            return
+            return True
+        if not _is_authoritative_terminal_update(job):
+            return False
         try:
             result = job.result
             if result is None:
@@ -1480,19 +1517,21 @@ def _build_monitor_callbacks(
             logger.warning(
                 f"Failed to write orchestrator marker for {job_id[:8]}: {exc}"
             )
-        finally:
-            marked_jobs.add(job_id)
+        marked_jobs.add(job_id)
+        return True
 
-    def on_job_failed(job) -> None:
+    def on_job_failed(job) -> bool:
         job_id = getattr(job, "id", None)
         if not isinstance(job_id, str) or job_id in marked_jobs:
-            return
+            return True
+        if not _is_authoritative_terminal_update(job):
+            return False
         try:
             _write_orchestrator_marker(_build_failed_job_result(job), config)
         except Exception as exc:
             logger.warning(f"Failed to write orchestrator fail marker: {exc}")
-        finally:
-            marked_jobs.add(job_id)
+        marked_jobs.add(job_id)
+        return True
 
     return QueueMonitorCallbacks(
         on_job_finished=on_job_finished,
@@ -1522,6 +1561,7 @@ def _monitor_jobs_basic(
     *,
     disk_skipped: int = 0,
     registry=None,
+    lifecycle_store=None,
 ) -> List[TrialResult]:
     """Basic job monitoring without Rich UI."""
     logger.info(f"\nMonitoring {len(job_list)} jobs for experiment: {experiment_name}")
@@ -1532,7 +1572,11 @@ def _monitor_jobs_basic(
         total_jobs=len(job_list),
         disk_skipped=disk_skipped,
         registry=registry,
-        callbacks=_build_monitor_callbacks(config),
+        callbacks=_build_monitor_callbacks(
+            config,
+            experiment_name=experiment_name,
+            lifecycle_store=lifecycle_store,
+        ),
         use_rich=False,
     )
     return _collect_monitored_results(job_list)
@@ -1546,6 +1590,7 @@ def _monitor_jobs_rich(
     *,
     disk_skipped: int = 0,
     registry=None,
+    lifecycle_store=None,
 ) -> List[TrialResult]:
     """Monitor jobs with Rich UI."""
     monitor_queue(
@@ -1555,7 +1600,11 @@ def _monitor_jobs_rich(
         total_jobs=len(job_list),
         disk_skipped=disk_skipped,
         registry=registry,
-        callbacks=_build_monitor_callbacks(config),
+        callbacks=_build_monitor_callbacks(
+            config,
+            experiment_name=experiment_name,
+            lifecycle_store=lifecycle_store,
+        ),
         use_rich=True,
         poll_interval=1.0,
     )
@@ -2183,6 +2232,7 @@ def run_experiment_distributed(
             config,
             disk_skipped=disk_skipped,
             registry=session.registry,
+            lifecycle_store=session.lifecycle_store,
         )
 
         # Generate final report

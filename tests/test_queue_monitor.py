@@ -260,6 +260,49 @@ def test_monitor_queue_attach_mode_is_read_only() -> None:
     callbacks.on_job_failed.assert_not_called()
 
 
+def test_monitor_queue_retries_finished_callback_until_processed() -> None:
+    queue = MagicMock()
+    callbacks = QueueMonitorCallbacks(
+        on_job_finished=MagicMock(side_effect=[False, True])
+    )
+
+    active = QueueMonitorSnapshot(
+        stats={"queued": 1, "started": 0, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[],
+    )
+
+    job = MagicMock()
+    job.id = "job-1"
+    job.is_failed = False
+
+    refresh_calls = {"count": 0}
+
+    def _refresh() -> None:
+        refresh_calls["count"] += 1
+        job.is_finished = True
+
+    job.refresh.side_effect = _refresh
+
+    with (
+        patch(
+            "crsbench.distributed.queue_monitor.build_monitor_snapshot",
+            side_effect=[active, active],
+        ),
+        patch("crsbench.distributed.queue_monitor.time.sleep"),
+    ):
+        monitor_queue(
+            queue,
+            "exp-1",
+            tracked_jobs=[job],
+            callbacks=callbacks,
+            use_rich=False,
+            poll_interval=0,
+        )
+
+    assert callbacks.on_job_finished.call_count == 2
+    assert refresh_calls["count"] == 2
+
+
 def test_monitor_queue_attach_mode_can_wait_while_idle() -> None:
     queue = MagicMock()
     idle = QueueMonitorSnapshot(

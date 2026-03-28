@@ -108,6 +108,9 @@ The queue layer treats the following as terminal outcomes:
 - once `claimed_by` moves to a replacement worker, the superseded worker must
   stop emitting shadow-lifecycle heartbeats and must not publish terminal
   worker-side artifacts for that logical trial
+- orchestrator-side queue monitoring must apply the same ownership fence before
+  consuming finished/failed callbacks; a stale terminal event must not mark the
+  `job_id` as processed ahead of the current owner
 - queue-derived operator views must only expose an active owner for concrete
   running jobs; queued/deferred/terminal RQ entries may retain stale
   `worker_name` metadata and must not be treated as currently claimed

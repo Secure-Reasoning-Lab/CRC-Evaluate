@@ -69,8 +69,8 @@ class QueueMonitorSnapshot:
 class QueueMonitorCallbacks:
     """Optional side-effect hooks for tracked jobs in local-run mode."""
 
-    on_job_finished: Callable[[object], None] | None = None
-    on_job_failed: Callable[[object], None] | None = None
+    on_job_finished: Callable[[object], bool | None] | None = None
+    on_job_failed: Callable[[object], bool | None] | None = None
 
 
 def get_experiment_queue_stats(queue, experiment_name: str) -> dict[str, int]:
@@ -235,13 +235,17 @@ def _process_tracked_jobs(
         if not isinstance(job_id, str):
             continue
         if getattr(job, "is_finished", False) and job_id not in seen_finished:
+            processed = True
             if callbacks.on_job_finished is not None:
-                callbacks.on_job_finished(job)
-            seen_finished.add(job_id)
+                processed = callbacks.on_job_finished(job) is not False
+            if processed:
+                seen_finished.add(job_id)
         elif getattr(job, "is_failed", False) and job_id not in seen_failed:
+            processed = True
             if callbacks.on_job_failed is not None:
-                callbacks.on_job_failed(job)
-            seen_failed.add(job_id)
+                processed = callbacks.on_job_failed(job) is not False
+            if processed:
+                seen_failed.add(job_id)
 
     return len(seen_finished), len(seen_failed)
 
