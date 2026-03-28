@@ -14,6 +14,18 @@
 - `DistributedAttemptOwnership.tla`: model of stale-worker split brain after orphan recovery
 - `DistributedAttemptOwnershipBuggy.cfg`: no fencing; superseded worker can still publish
 - `DistributedAttemptOwnershipHealthy.cfg`: publication is fenced to the current owner
+- `DistributedTerminalMarkers.tla`: model of worker/orchestrator terminal marker publication
+- `DistributedTerminalMarkersBuggy.cfg`: buggy config where writers accumulate contradictory markers
+- `DistributedTerminalMarkersHealthy.cfg`: fixed config where writers replace the opposite marker
+- `DistributedRetryBudget.tla`: model of exact retry-budget behavior during orphan recovery
+- `DistributedRetryBudgetBuggy.cfg`: off-by-one retry budget bug that burns the final retry early
+- `DistributedRetryBudgetHealthy.cfg`: exact-budget config with one final retry and then permanent failure
+- `DistributedRetryExclusivity.tla`: model of at-most-one authoritative live attempt across retries
+- `DistributedRetryExclusivityBuggy.cfg`: buggy config where superseded and replacement attempts are both live
+- `DistributedRetryExclusivityHealthy.cfg`: fenced config where only one authoritative live attempt remains
+- `DistributedCleanupScope.tla`: model of experiment-scoped cleanup on shared queues
+- `DistributedCleanupScopeBuggy.cfg`: buggy config where cleanup drops other experiments' jobs too
+- `DistributedCleanupScopeHealthy.cfg`: fixed config where cleanup removes only the targeted experiment
 
 ## Purpose
 
@@ -51,6 +63,30 @@ The fourth model is meant to catch a split-brain bug class:
 
 Without ownership fencing, the superseded worker can still publish terminal
 artifacts after ownership has moved.
+
+The fifth model is meant to catch contradictory terminal marker bugs:
+
+- a worker or orchestrator writes `.success` / `.fail`
+- an opposite terminal marker already exists from an earlier attempt
+- the writer must replace the old verdict, not leave both markers behind
+
+The sixth model is meant to catch retry-budget off-by-one bugs:
+
+- a job reaches `retry_count = max_retries - 1`
+- stale recovery should grant exactly one final requeue
+- the next stale recovery should fail permanently, not early and not late
+
+The seventh model is meant to catch retry exclusivity bugs:
+
+- a logical `trial_key` is retried after stale recovery
+- the replacement attempt becomes authoritative
+- the protocol must not leave two authoritative live attempts for the same trial
+
+The eighth model is meant to catch cleanup scoping bugs:
+
+- multiple experiments share the same flat queue
+- cleanup is requested for one experiment
+- only that experiment's jobs may be removed
 
 ## Run TLC
 
@@ -202,6 +238,142 @@ source .envrc
 java tlc2.TLC \
   -config tla/DistributedAttemptOwnershipHealthy.cfg \
   tla/DistributedAttemptOwnership.tla
+```
+
+Expected result:
+
+- TLC completes with no errors
+
+## Terminal Marker Model
+
+This model corresponds to worker-side and orchestrator-side terminal marker writes:
+
+- `jobs.py` publishes worker-side `.success` / `.fail`
+- `run_experiment.py` publishes orchestrator-side `.success` / `.fail`
+- a fresh write must replace the opposite terminal marker rather than accumulate both
+
+Buggy run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedTerminalMarkersBuggy.cfg \
+  tla/DistributedTerminalMarkers.tla
+```
+
+Expected result:
+
+- `NoTerminalMarkerContradiction` fails
+
+Healthy run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedTerminalMarkersHealthy.cfg \
+  tla/DistributedTerminalMarkers.tla
+```
+
+Expected result:
+
+- TLC completes with no errors
+
+## Retry Budget Model
+
+This model corresponds to retry counting during orphan recovery:
+
+- `retry_count` is stored in the lifecycle shadow record
+- orphan recovery either requeues and increments, or permanently fails
+- the budget boundary must allow the final retry exactly once
+
+Buggy run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedRetryBudgetBuggy.cfg \
+  tla/DistributedRetryBudget.tla
+```
+
+Expected result:
+
+- `NoEarlyPermanentFailure` fails
+
+Healthy run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedRetryBudgetHealthy.cfg \
+  tla/DistributedRetryBudget.tla
+```
+
+Expected result:
+
+- TLC completes with no errors
+
+## Retry Exclusivity Model
+
+This model corresponds to one logical trial being retried after a stale-worker recovery:
+
+- the original attempt starts first
+- stale recovery makes a replacement attempt authoritative
+- only one authoritative live attempt may remain for that `trial_key`
+
+Buggy run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedRetryExclusivityBuggy.cfg \
+  tla/DistributedRetryExclusivity.tla
+```
+
+Expected result:
+
+- `AtMostOneLiveAttemptPerTrialKeyAcrossRetries` fails
+
+Healthy run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedRetryExclusivityHealthy.cfg \
+  tla/DistributedRetryExclusivity.tla
+```
+
+Expected result:
+
+- TLC completes with no errors
+
+## Cleanup Scope Model
+
+This model corresponds to experiment-scoped cleanup on shared queues:
+
+- multiple experiments share one queue
+- cleanup for one experiment should remove only that experiment's jobs
+- unrelated jobs must survive the cleanup pass
+
+Buggy run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedCleanupScopeBuggy.cfg \
+  tla/DistributedCleanupScope.tla
+```
+
+Expected result:
+
+- `CleanupScopedToExperiment` fails
+
+Healthy run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedCleanupScopeHealthy.cfg \
+  tla/DistributedCleanupScope.tla
 ```
 
 Expected result:
