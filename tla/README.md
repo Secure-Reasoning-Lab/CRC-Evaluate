@@ -47,6 +47,9 @@
 - `DistributedStartedDuplicateRecovery.tla`: model of stale started-duplicate recovery when another runnable peer already exists
 - `DistributedStartedDuplicateRecoveryBuggy.cfg`: buggy config where recovery requeues the stale started duplicate and leaves two runnable jobs
 - `DistributedStartedDuplicateRecoveryHealthy.cfg`: fixed config where recovery removes the stale duplicate and leaves one active job
+- `DistributedCarryoverMarkerStability.tla`: model of restart monitoring when a contradictory carryover terminal duplicate appears after a canonical marker already exists
+- `DistributedCarryoverMarkerStabilityBuggy.cfg`: buggy config where the contradictory carryover report overwrites the existing marker
+- `DistributedCarryoverMarkerStabilityHealthy.cfg`: fixed config where the preexisting canonical marker remains authoritative
 - `DistributedResumeCollection.tla`: model of continue-mode restart when only syncing collection work remains
 - `DistributedResumeCollectionBuggy.cfg`: buggy config where continue mode exits before attaching resume collection jobs
 - `DistributedResumeCollectionHealthy.cfg`: fixed config where resume-only syncing work is tracked before exit
@@ -158,6 +161,13 @@ The seventeenth model is meant to catch stale started-duplicate recovery bugs:
 - another physical job for that same trial is already runnable
 - continue-mode orphan recovery must not requeue the stale duplicate and create
   two active jobs for the same logical trial
+
+The eighteenth model is meant to catch carryover marker stability bugs:
+
+- continue mode attaches a contradictory terminal duplicate after restart
+- the logical trial already has a canonical `.success` / `.fail` marker
+- restart monitoring must not let that stale carryover overwrite the existing
+  canonical verdict
 
 The fifteenth model is meant to catch resume-collection restart bugs:
 
