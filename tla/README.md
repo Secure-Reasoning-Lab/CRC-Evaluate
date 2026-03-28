@@ -20,6 +20,9 @@
 - `DistributedRetryBudget.tla`: model of exact retry-budget behavior during orphan recovery
 - `DistributedRetryBudgetBuggy.cfg`: off-by-one retry budget bug that burns the final retry early
 - `DistributedRetryBudgetHealthy.cfg`: exact-budget config with one final retry and then permanent failure
+- `DistributedRetryMetadataProjection.tla`: model of retry-count projection from lifecycle recovery into RQ metadata
+- `DistributedRetryMetadataProjectionBuggy.cfg`: buggy config where lifecycle retry_count increments but RQ metadata stays stale
+- `DistributedRetryMetadataProjectionHealthy.cfg`: fixed config where queue-visible retry metadata matches lifecycle retry_count
 - `DistributedRetryExclusivity.tla`: model of at-most-one authoritative live attempt across retries
 - `DistributedRetryExclusivityBuggy.cfg`: buggy config where superseded and replacement attempts are both live
 - `DistributedRetryExclusivityHealthy.cfg`: fenced config where only one authoritative live attempt remains
@@ -225,6 +228,13 @@ The twenty-fifth model is meant to catch non-active lifecycle callback bugs:
 - a late finished callback still arrives from RQ
 - the callback may be consumed so monitoring can complete, but it must not write
   a new orchestrator marker once lifecycle is no longer active
+
+The twenty-sixth model is meant to catch retry-metadata projection bugs:
+
+- orphan recovery requeues a concrete RQ job
+- lifecycle retry_count increments for the logical job
+- queue-derived operator views still read retry_count from RQ metadata
+- the concrete metadata must be updated so both layers report the same retry budget state
 
 The fifteenth model is meant to catch resume-collection restart bugs:
 
