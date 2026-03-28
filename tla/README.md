@@ -38,6 +38,9 @@
 - `DistributedMonitorCallbacks.tla`: model of orchestrator terminal callback fencing after ownership handoff
 - `DistributedMonitorCallbacksBuggy.cfg`: buggy config where stale terminal callbacks consume the job id too early
 - `DistributedMonitorCallbacksHealthy.cfg`: fixed config where only the current owner can finalize monitor callbacks
+- `DistributedMonitorMarkerWrite.tla`: model of retryable orchestrator marker writes
+- `DistributedMonitorMarkerWriteBuggy.cfg`: buggy config where callback failure still consumes the finished job
+- `DistributedMonitorMarkerWriteHealthy.cfg`: fixed config where marker-write failure leaves the callback retryable
 
 ## Purpose
 
@@ -124,6 +127,12 @@ The twelfth model is meant to catch stale terminal-callback bugs:
 - a superseded worker reports `finished` first for the same `job_id`
 - the shared queue monitor must not consume that stale terminal event and block
   the current owner's result from writing the orchestrator marker
+
+The thirteenth model is meant to catch marker-write durability bugs:
+
+- a terminal callback runs for a finished job
+- the marker write fails transiently
+- the callback must not consume the `job_id` until a later retry succeeds
 
 ## Run TLC
 
@@ -586,6 +595,40 @@ source .envrc
 java tlc2.TLC \
   -config tla/DistributedMonitorCallbacksHealthy.cfg \
   tla/DistributedMonitorCallbacks.tla
+```
+
+Expected result:
+
+- TLC completes with no errors
+
+## Monitor Marker Write Model
+
+This model corresponds to the marker-write retry boundary:
+
+- `_build_monitor_callbacks()` writes orchestrator terminal markers
+- `_process_tracked_jobs()` only advances once the callback accepts the event
+- a transient marker-write failure must leave the finished job retryable
+
+Buggy run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedMonitorMarkerWriteBuggy.cfg \
+  tla/DistributedMonitorMarkerWrite.tla
+```
+
+Expected result:
+
+- `WriteFailureCannotConsumeFinishedJob` fails
+
+Healthy run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedMonitorMarkerWriteHealthy.cfg \
+  tla/DistributedMonitorMarkerWrite.tla
 ```
 
 Expected result:
