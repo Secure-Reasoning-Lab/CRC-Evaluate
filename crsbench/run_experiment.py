@@ -1517,6 +1517,7 @@ def _build_monitor_callbacks(
             logger.warning(
                 f"Failed to write orchestrator marker for {job_id[:8]}: {exc}"
             )
+            return False
         marked_jobs.add(job_id)
         return True
 
@@ -1530,6 +1531,7 @@ def _build_monitor_callbacks(
             _write_orchestrator_marker(_build_failed_job_result(job), config)
         except Exception as exc:
             logger.warning(f"Failed to write orchestrator fail marker: {exc}")
+            return False
         marked_jobs.add(job_id)
         return True
 

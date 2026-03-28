@@ -1048,6 +1048,26 @@ def test_monitor_callbacks_skip_stale_owner_until_authoritative_result() -> None
     marker.assert_called_once_with(current_result, config)
 
 
+def test_monitor_callbacks_retry_marker_write_after_transient_failure() -> None:
+    config = MagicMock()
+
+    job = MagicMock()
+    job.id = "job-1"
+    job.meta = {"worker_name": "worker-1"}
+    job.result = MagicMock(name="result")
+
+    callbacks = _build_monitor_callbacks(config, experiment_name="exp-test")
+
+    with patch(
+        "crsbench.run_experiment._write_orchestrator_marker",
+        side_effect=[OSError("disk busy"), None],
+    ) as marker:
+        assert callbacks.on_job_finished(job) is False
+        assert callbacks.on_job_finished(job) is not False
+
+    assert marker.call_count == 2
+
+
 def test_get_experiment_queue_stats_uses_experiment_scoped_counts() -> None:
     """Monitor stats must ignore unrelated jobs in the shared flat queue."""
     queue = MagicMock()
