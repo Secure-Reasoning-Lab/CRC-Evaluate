@@ -169,6 +169,15 @@ The eighteenth model is meant to catch carryover marker stability bugs:
 - restart monitoring must not let that stale carryover overwrite the existing
   canonical verdict
 
+The nineteenth model is meant to catch worker-side marker stability bugs:
+
+- a physical worker attempt passes the lifecycle ownership fence for its own
+  `job_id`
+- the logical trial already has a canonical `.success` / `.fail` marker on disk
+- a late duplicate physical attempt reports the opposite verdict
+- worker-side terminal publication must not overwrite the existing canonical
+  verdict
+
 The fifteenth model is meant to catch resume-collection restart bugs:
 
 - continue mode resumes a stale lock
