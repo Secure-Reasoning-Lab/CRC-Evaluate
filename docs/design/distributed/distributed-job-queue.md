@@ -124,6 +124,9 @@ The queue layer treats the following as terminal outcomes:
 - orchestrator-side queue monitoring must apply the same ownership fence before
   consuming finished/failed callbacks; a stale terminal event must not mark the
   `job_id` as processed ahead of the current owner
+- once orchestrator monitoring has materialized a canonical marker for a
+  logical trial in the current session, later duplicate physical callbacks for
+  that same trial must not flip the published verdict
 - orchestrator-side terminal callbacks must only mark a `job_id` as processed
   after the corresponding `.success` / `.fail` marker write succeeds; transient
   marker-write failures must remain retryable

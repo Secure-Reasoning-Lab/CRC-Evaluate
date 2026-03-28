@@ -1286,6 +1286,41 @@ def test_monitor_callbacks_preserve_preexisting_canonical_marker_for_conflict(
     marker.assert_not_called()
 
 
+def test_monitor_callbacks_preserve_session_canonical_marker_for_conflict(
+    tmp_path: Path,
+) -> None:
+    config = MagicMock()
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+
+    success_job = MagicMock()
+    success_job.id = "job-success"
+    success_job.meta = {}
+    success_job.result = _make_result(success=True)
+
+    failed_job = MagicMock()
+    failed_job.id = "job-failed"
+    failed_job.meta = {}
+    failed_job.kwargs = {
+        "crs": "crs-a",
+        "benchmark": "bench-a",
+        "harness_name": "fuzz_target",
+        "mode": "delta",
+        "sanitizer": "address",
+        "trial_num": 1,
+        "target_cpv_id": None,
+    }
+    failed_job.exc_info = "late duplicate failure"
+
+    callbacks = _build_monitor_callbacks(config, experiment_name="exp-test")
+
+    with patch("crsbench.run_experiment._write_orchestrator_marker") as marker:
+        assert callbacks.on_job_finished(success_job) is not False
+        assert callbacks.on_job_failed(failed_job) is not False
+
+    marker.assert_called_once_with(success_job.result, config)
+
+
 def test_get_experiment_queue_stats_uses_experiment_scoped_counts() -> None:
     """Monitor stats must ignore unrelated jobs in the shared flat queue."""
     queue = MagicMock()

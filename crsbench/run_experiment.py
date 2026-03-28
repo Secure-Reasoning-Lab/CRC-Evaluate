@@ -1549,7 +1549,6 @@ def _build_monitor_callbacks(
 ) -> QueueMonitorCallbacks:
     """Build marker-writing callbacks for the shared queue monitor."""
     marked_jobs: set[str] = set()
-    session_written_trial_keys: set[str] = set()
     initial_marker_state_by_trial_key: dict[str, JobState | None] = {}
 
     def _is_authoritative_terminal_update(job) -> bool:
@@ -1584,9 +1583,6 @@ def _build_monitor_callbacks(
     def _marker_write_policy(result: TrialResult) -> tuple[bool, bool]:
         """Return (should_write_marker, should_mark_processed)."""
         trial_key = _trial_result_key(result)
-        if trial_key in session_written_trial_keys:
-            return True, True
-
         if trial_key not in initial_marker_state_by_trial_key:
             initial_marker_state_by_trial_key[trial_key] = _canonical_result_state(
                 result, config
@@ -1617,7 +1613,9 @@ def _build_monitor_callbacks(
             should_write_marker, should_mark_processed = _marker_write_policy(result)
             if should_write_marker:
                 _write_orchestrator_marker(result, config)
-                session_written_trial_keys.add(_trial_result_key(result))
+                initial_marker_state_by_trial_key[_trial_result_key(result)] = (
+                    JobState.COMPLETED if result.success else JobState.FAILED
+                )
         except Exception as exc:
             logger.warning(
                 f"Failed to write orchestrator marker for {job_id[:8]}: {exc}"
@@ -1638,7 +1636,9 @@ def _build_monitor_callbacks(
             should_write_marker, should_mark_processed = _marker_write_policy(result)
             if should_write_marker:
                 _write_orchestrator_marker(result, config)
-                session_written_trial_keys.add(_trial_result_key(result))
+                initial_marker_state_by_trial_key[_trial_result_key(result)] = (
+                    JobState.COMPLETED if result.success else JobState.FAILED
+                )
         except Exception as exc:
             logger.warning(f"Failed to write orchestrator fail marker: {exc}")
             return False
