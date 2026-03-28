@@ -26,6 +26,12 @@
 - `DistributedCleanupScope.tla`: model of experiment-scoped cleanup on shared queues
 - `DistributedCleanupScopeBuggy.cfg`: buggy config where cleanup drops other experiments' jobs too
 - `DistributedCleanupScopeHealthy.cfg`: fixed config where cleanup removes only the targeted experiment
+- `DistributedQueueOwnership.tla`: model of queue-monitor ownership rows vs lifecycle ownership
+- `DistributedQueueOwnershipBuggy.cfg`: buggy config where queued or failed jobs keep stale worker ownership metadata
+- `DistributedQueueOwnershipHealthy.cfg`: fixed config where only running jobs expose an owner
+- `DistributedResumeArtifacts.tla`: model of restart reconciliation when terminal artifacts already exist
+- `DistributedResumeArtifactsBuggy.cfg`: buggy config where resume ignores artifacts and leaves syncing work unresolved
+- `DistributedResumeArtifactsHealthy.cfg`: fixed config where resume collapses artifact-backed work to terminal state
 
 ## Purpose
 
@@ -87,6 +93,18 @@ The eighth model is meant to catch cleanup scoping bugs:
 - multiple experiments share the same flat queue
 - cleanup is requested for one experiment
 - only that experiment's jobs may be removed
+
+The ninth model is meant to catch queue-ownership display bugs:
+
+- workers stamp `job.meta["worker_name"]` when they start a job
+- retry/requeue can leave that metadata on non-running RQ jobs
+- queue-derived operator views must not present that stale metadata as an active owner
+
+The tenth model is meant to catch restart-artifact reconciliation bugs:
+
+- a trial already published `.success` / `.fail`
+- lifecycle still says `syncing` when the controller restarts
+- resume reconciliation must collapse that record to terminal instead of leaving collection backlog behind
 
 ## Run TLC
 
@@ -374,6 +392,76 @@ source .envrc
 java tlc2.TLC \
   -config tla/DistributedCleanupScopeHealthy.cfg \
   tla/DistributedCleanupScope.tla
+```
+
+Expected result:
+
+- TLC completes with no errors
+
+## Queue Ownership Model
+
+This model corresponds to queue-derived ownership rows:
+
+- workers stamp `job.meta["worker_name"]` when they start running work
+- RQ metadata can outlive active ownership after retry, requeue, or failure
+- queue monitor views must only expose `claimed_by` for concrete running jobs
+
+Buggy run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedQueueOwnershipBuggy.cfg \
+  tla/DistributedQueueOwnership.tla
+```
+
+Expected result:
+
+- `LifecycleMatchesRQOwnership` fails
+
+Healthy run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedQueueOwnershipHealthy.cfg \
+  tla/DistributedQueueOwnership.tla
+```
+
+Expected result:
+
+- TLC completes with no errors
+
+## Resume Artifact Model
+
+This model corresponds to restart reconciliation when terminal artifacts already
+exist:
+
+- a worker already published `.success` / `.fail`
+- lifecycle is still `syncing` when the controller restarts
+- resume reconciliation must collapse that record to terminal instead of
+  returning collection backlog for already-terminal work
+
+Buggy run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedResumeArtifactsBuggy.cfg \
+  tla/DistributedResumeArtifacts.tla
+```
+
+Expected result:
+
+- `NoArtifactBackedSyncingAfterResume` fails
+
+Healthy run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedResumeArtifactsHealthy.cfg \
+  tla/DistributedResumeArtifacts.tla
 ```
 
 Expected result:
