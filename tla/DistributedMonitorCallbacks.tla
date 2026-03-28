@@ -10,6 +10,8 @@ EXTENDS TLC
 \*   markers from finished/failed jobs
 \* - finished callbacks fence on the worker identity carried by the terminal
 \*   result payload, not mutable shared `job.meta`
+\* - retried hard-fail callbacks are intentionally deferred to lifecycle
+\*   recovery and are not modeled as authoritative terminalization events here
 \* - the monitor must not consume a stale worker's terminal event after
 \*   lifecycle ownership has moved to a replacement worker
 

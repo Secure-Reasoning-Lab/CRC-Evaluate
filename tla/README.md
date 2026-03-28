@@ -56,9 +56,9 @@
 - `DistributedStaleLockResume.tla`: model of continue-mode stale-lock takeover on orchestrator restart
 - `DistributedStaleLockResumeBuggy.cfg`: buggy config where continue mode aborts instead of attempting resume
 - `DistributedStaleLockResumeHealthy.cfg`: fixed config where stale locks are reclaimed before queue recovery
-- `DistributedMonitorCallbacks.tla`: model of orchestrator terminal callback fencing after ownership handoff
+- `DistributedMonitorCallbacks.tla`: model of orchestrator finished-callback fencing after ownership handoff
 - `DistributedMonitorCallbacksBuggy.cfg`: buggy config where stale terminal callbacks consume the job id too early
-- `DistributedMonitorCallbacksHealthy.cfg`: fixed config where only the current owner can finalize monitor callbacks
+- `DistributedMonitorCallbacksHealthy.cfg`: fixed config where only the current owner can finalize finished callbacks
 - `DistributedMonitorMarkerWrite.tla`: model of retryable orchestrator marker writes
 - `DistributedMonitorMarkerWriteBuggy.cfg`: buggy config where callback failure still consumes the finished job
 - `DistributedMonitorMarkerWriteHealthy.cfg`: fixed config where marker-write failure leaves the callback retryable
@@ -245,7 +245,7 @@ The twenty-fifth model is meant to catch non-active lifecycle callback bugs:
 
 - lifecycle has already moved a job into a non-active terminal state
 - a late finished callback still arrives from RQ
-- the callback may be consumed so monitoring can complete, but it must not write
+- the finished callback may be consumed so monitoring can complete, but it must not write
   a new orchestrator marker once lifecycle is no longer active
 
 The twenty-sixth model is meant to catch retry-metadata projection bugs:
@@ -254,8 +254,9 @@ The twenty-sixth model is meant to catch retry-metadata projection bugs:
 - lifecycle retry_count increments for the logical job
 - queue-derived operator views still read retry_count from RQ metadata
 - the concrete metadata must be updated so both layers report the same retry budget state
-- this model abstracts the successful metadata-save path; the runtime logs and
-  continues if `job.save_meta()` fails during projection
+- this model abstracts the successful metadata-save path; explicit retry and
+  started-job recovery now roll lifecycle back when `job.save_meta()` fails,
+  but orphan-recovery metadata projection still remains best-effort
 
 The twenty-seventh model is meant to catch heartbeat-projection bugs:
 
@@ -747,8 +748,10 @@ This model corresponds to the shared queue monitor callback boundary:
 
 - `_process_tracked_jobs()` keeps `seen_finished` per `job_id`
 - `_build_monitor_callbacks()` writes orchestrator markers from finished jobs
-- after lifecycle ownership moves, a stale worker's terminal event must not
+- after lifecycle ownership moves, a stale worker's finished event must not
   consume the `job_id` before the current owner's result arrives
+- retried hard-fail callbacks are intentionally deferred to lifecycle recovery
+  and are outside this model's authoritative-finished-event boundary
 
 Buggy run:
 
