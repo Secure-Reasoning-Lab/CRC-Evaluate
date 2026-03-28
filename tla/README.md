@@ -32,6 +32,9 @@
 - `DistributedResumeArtifacts.tla`: model of restart reconciliation when terminal artifacts already exist
 - `DistributedResumeArtifactsBuggy.cfg`: buggy config where resume ignores artifacts and leaves syncing work unresolved
 - `DistributedResumeArtifactsHealthy.cfg`: fixed config where resume collapses artifact-backed work to terminal state
+- `DistributedStaleLockResume.tla`: model of continue-mode stale-lock takeover on orchestrator restart
+- `DistributedStaleLockResumeBuggy.cfg`: buggy config where continue mode aborts instead of attempting resume
+- `DistributedStaleLockResumeHealthy.cfg`: fixed config where stale locks are reclaimed before queue recovery
 
 ## Purpose
 
@@ -105,6 +108,12 @@ The tenth model is meant to catch restart-artifact reconciliation bugs:
 - a trial already published `.success` / `.fail`
 - lifecycle still says `syncing` when the controller restarts
 - resume reconciliation must collapse that record to terminal instead of leaving collection backlog behind
+
+The eleventh model is meant to catch stale-lock restart bugs:
+
+- a prior orchestrator left a stale experiment lock behind
+- continue mode should attempt resume rather than abort immediately
+- stale-lock takeover must happen before queue recovery mutates existing work
 
 ## Run TLC
 
@@ -462,6 +471,40 @@ source .envrc
 java tlc2.TLC \
   -config tla/DistributedResumeArtifactsHealthy.cfg \
   tla/DistributedResumeArtifacts.tla
+```
+
+Expected result:
+
+- TLC completes with no errors
+
+## Stale Lock Resume Model
+
+This model corresponds to continue-mode lock handoff after an orchestrator restart:
+
+- continue mode first tries normal lock acquisition
+- if the previous controller left a stale lock behind, resume should reclaim it
+- queue recovery should proceed only after the stale lock has been reclaimed
+
+Buggy run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedStaleLockResumeBuggy.cfg \
+  tla/DistributedStaleLockResume.tla
+```
+
+Expected result:
+
+- `StaleLockCanRecover` fails
+
+Healthy run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedStaleLockResumeHealthy.cfg \
+  tla/DistributedStaleLockResume.tla
 ```
 
 Expected result:
