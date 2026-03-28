@@ -242,6 +242,11 @@ def build_trial_id(experiment_name: str, trial: Trial, trial_suffix: str) -> str
     return sanitize_trial_id(raw_trial_id)
 
 
+def build_trial_queue_job_id(experiment_name: str, trial: Trial) -> str:
+    """Build the deterministic RQ job id for one logical distributed trial."""
+    return build_trial_id(experiment_name, trial, "")
+
+
 def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     """Add arguments for the 'run' subcommand.
 
@@ -1736,12 +1741,19 @@ def run_experiment_distributed(
     # Check for existing jobs in queue (queue sanity check)
     from crsbench.distributed.queue import (
         clear_experiment_jobs,
+        get_existing_trial_jobs,
         get_existing_trials,
         handle_orphaned_jobs,
     )
 
     existing = get_existing_trials(queue, experiment_name=experiment_name)
-    has_existing = any(existing.values())
+    physical_existing = get_existing_trial_jobs(queue, experiment_name=experiment_name)
+    if any(existing.values()) and not any(physical_existing.values()):
+        physical_existing = {
+            bucket_name: list(jobs_by_key.values())
+            for bucket_name, jobs_by_key in existing.items()
+        }
+    has_existing = any(physical_existing.values())
     from crsbench.distributed.registry import RuntimeRegistration
 
     registration = RuntimeRegistration.from_experiment_config(config)
@@ -1790,7 +1802,7 @@ def run_experiment_distributed(
                         "Use a different experiment name or wait for the current run to finish."
                     )
                     return
-                total_existing = sum(len(v) for v in existing.values())
+                total_existing = sum(len(v) for v in physical_existing.values())
                 logger.warning(
                     f"Purging {total_existing} existing jobs from queue for experiment={experiment_name}"
                 )
@@ -1808,15 +1820,18 @@ def run_experiment_distributed(
                     return
 
             # Handle orphaned started jobs (move to failed + retry)
-            if existing["started"]:
-                orphaned_count = handle_orphaned_jobs(queue, existing["started"])
+            if physical_existing["started"]:
+                orphaned_count = handle_orphaned_jobs(
+                    queue,
+                    physical_existing["started"],
+                )
                 if orphaned_count > 0:
                     logger.info(f"Handled {orphaned_count} orphaned jobs")
 
             # Optional failed retries require explicit opt-in and clean trial dirs.
-            if retry_failed and existing["failed"]:
+            if retry_failed and physical_existing["failed"]:
                 retried = 0
-                for failed_job in existing["failed"].values():
+                for failed_job in physical_existing["failed"]:
                     if not _prepare_trial_dir_for_retry(config, failed_job):
                         continue
                     failed_job.meta["force_retry"] = True
@@ -2085,6 +2100,7 @@ def run_experiment_distributed(
                     "cpu_tag": cpu_tag,
                     "experiment_name": experiment_name,
                 },
+                job_id=build_trial_queue_job_id(experiment_name, trial),
             )
             _seed_lifecycle_record(
                 session,

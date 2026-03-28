@@ -17,6 +17,7 @@ from crsbench.run_experiment import (
     _monitor_jobs_rich,
     _prepare_trial_dir_for_retry,
     build_trial_id,
+    build_trial_queue_job_id,
     get_crs_cpu_count,
     get_crs_memory,
     monitor_jobs,
@@ -628,6 +629,12 @@ def test_build_trial_id_avoids_cpv_normalization_collisions() -> None:
     assert id_a != id_b
 
 
+def test_build_trial_queue_job_id_is_deterministic_and_suffix_free() -> None:
+    trial = _make_trial("cpv/slash")
+
+    assert build_trial_queue_job_id("exp", trial) == build_trial_id("exp", trial, "")
+
+
 def test_monitor_jobs_basic_includes_finished_none_result() -> None:
     queue = MagicMock()
     config = MagicMock()
@@ -772,14 +779,14 @@ def test_get_experiment_queue_stats_uses_experiment_scoped_counts() -> None:
             },
         ),
         patch(
-            "crsbench.distributed.queue_monitor.get_existing_trials",
+            "crsbench.distributed.queue_monitor.get_existing_trial_jobs",
             return_value={
-                "queued": {f"q{i}": MagicMock() for i in range(51)},
-                "started": {f"s{i}": MagicMock() for i in range(12)},
-                "finished": {},
-                "failed": {},
-                "deferred": {},
-                "scheduled": {},
+                "queued": [MagicMock() for _ in range(51)],
+                "started": [MagicMock() for _ in range(12)],
+                "finished": [],
+                "failed": [],
+                "deferred": [],
+                "scheduled": [],
             },
         ),
     ):
@@ -792,6 +799,48 @@ def test_get_experiment_queue_stats_uses_experiment_scoped_counts() -> None:
         "failed": 0,
         "workers": 12,
     }
+
+
+def test_distributed_enqueue_uses_deterministic_trial_job_id(tmp_path: Path) -> None:
+    config = _make_provider_neutral_run_config(tmp_path)
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.cloud_readiness = MagicMock()
+    session.register_or_raise.return_value = None
+
+    trial = _make_trial("cpv-0")
+
+    def _enqueue(*_args, **kwargs):
+        assert kwargs["job_id"] == build_trial_queue_job_id("exp-test", trial)
+        assert kwargs["trial_id"] != kwargs["job_id"]
+        raise RuntimeError("stop after enqueue")
+
+    queue.enqueue.side_effect = _enqueue
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={"queued": {}, "started": {}, "failed": {}, "finished": {}},
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config",
+            return_value=MagicMock(),
+        ),
+        patch("crsbench.cloud.quota.QuotaValidator") as mock_quota_validator_cls,
+        patch(
+            "crsbench.cloud.status.CloudFleetStatusManager", return_value=MagicMock()
+        ),
+    ):
+        mock_quota_validator_cls.return_value.validate.return_value = None
+        with pytest.raises(RuntimeError, match="stop after enqueue"):
+            run_experiment_distributed("exp-test", config, [trial])
 
 
 def test_monitor_jobs_rich_includes_finished_none_result() -> None:

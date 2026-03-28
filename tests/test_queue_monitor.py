@@ -15,24 +15,6 @@ from crsbench.distributed.queue_monitor import (
 )
 
 
-def _existing_jobs(
-    *,
-    queued: int = 0,
-    started: dict[str, object] | None = None,
-    finished: int = 0,
-    failed: int = 0,
-) -> dict[str, dict[str, object]]:
-    started_jobs = started or {}
-    return {
-        "queued": {f"q{i}": MagicMock() for i in range(queued)},
-        "started": started_jobs,
-        "finished": {f"f{i}": MagicMock() for i in range(finished)},
-        "failed": {f"x{i}": MagicMock() for i in range(failed)},
-        "deferred": {},
-        "scheduled": {},
-    }
-
-
 def test_build_monitor_snapshot_uses_experiment_scoped_counts() -> None:
     queue = MagicMock()
     started_job = MagicMock()
@@ -59,13 +41,15 @@ def test_build_monitor_snapshot_uses_experiment_scoped_counts() -> None:
             },
         ),
         patch(
-            "crsbench.distributed.queue_monitor.get_existing_trials",
-            return_value=_existing_jobs(
-                queued=2,
-                started={"started-1": started_job},
-                finished=3,
-                failed=1,
-            ),
+            "crsbench.distributed.queue_monitor.get_existing_trial_jobs",
+            return_value={
+                "queued": [MagicMock(), MagicMock()],
+                "started": [started_job],
+                "finished": [MagicMock() for _ in range(3)],
+                "failed": [MagicMock()],
+                "deferred": [],
+                "scheduled": [],
+            },
         ),
     ):
         snapshot = build_monitor_snapshot(queue, "exp-1")
@@ -96,15 +80,14 @@ def test_list_queue_job_entries_maps_registry_states_to_status_rows() -> None:
 
     with (
         patch(
-            "crsbench.distributed.queue_monitor.get_existing_trials",
-            return_value=_existing_jobs(
-                queued=0,
-                started={"started-1": started_job},
-                failed=0,
-            )
-            | {
-                "queued": {"queued-1": queued_job},
-                "failed": {"failed-1": failed_job},
+            "crsbench.distributed.queue_monitor.get_existing_trial_jobs",
+            return_value={
+                "queued": [queued_job],
+                "started": [started_job],
+                "finished": [],
+                "failed": [failed_job],
+                "deferred": [],
+                "scheduled": [],
             },
         ),
         patch(
@@ -135,6 +118,52 @@ def test_list_queue_job_entries_maps_registry_states_to_status_rows() -> None:
             state="running",
             claimed_by="worker-1",
             retry_count=2,
+        ),
+    ]
+
+
+def test_list_queue_job_entries_preserves_duplicate_physical_jobs() -> None:
+    queue = MagicMock()
+    job_a = MagicMock()
+    job_a.id = "job-a"
+    job_a.meta = {"retry_count": 0}
+    job_b = MagicMock()
+    job_b.id = "job-b"
+    job_b.meta = {"retry_count": 1}
+
+    with (
+        patch(
+            "crsbench.distributed.queue_monitor.get_existing_trial_jobs",
+            return_value={
+                "queued": [job_a, job_b],
+                "started": [],
+                "finished": [],
+                "failed": [],
+                "deferred": [],
+                "scheduled": [],
+            },
+        ),
+        patch(
+            "crsbench.distributed.queue_monitor.get_trial_key",
+            return_value="trial:duplicate",
+        ),
+    ):
+        entries = list_queue_job_entries(queue, "exp-1")
+
+    assert entries == [
+        QueueJobEntry(
+            job_id="job-a",
+            trial_key="trial:duplicate",
+            state="queued",
+            claimed_by=None,
+            retry_count=0,
+        ),
+        QueueJobEntry(
+            job_id="job-b",
+            trial_key="trial:duplicate",
+            state="queued",
+            claimed_by=None,
+            retry_count=1,
         ),
     ]
 

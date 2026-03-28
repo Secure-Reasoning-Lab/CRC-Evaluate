@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
 from crsbench.distributed.queue import (
-    get_existing_trials,
+    get_existing_trial_jobs,
     get_queue_stats,
     get_trial_key,
 )
@@ -76,7 +76,7 @@ class QueueMonitorCallbacks:
 def get_experiment_queue_stats(queue, experiment_name: str) -> dict[str, int]:
     """Return experiment-scoped queue counts plus global worker visibility."""
     global_stats = get_queue_stats(queue)
-    existing = get_existing_trials(queue, experiment_name=experiment_name)
+    existing = get_existing_trial_jobs(queue, experiment_name=experiment_name)
     return {
         "queued": len(existing["queued"]),
         "started": len(existing["started"]),
@@ -88,11 +88,11 @@ def get_experiment_queue_stats(queue, experiment_name: str) -> dict[str, int]:
 
 def build_monitor_snapshot(queue, experiment_name: str) -> QueueMonitorSnapshot:
     """Build one experiment-scoped operator snapshot from Redis/RQ state."""
-    existing = get_existing_trials(queue, experiment_name=experiment_name)
+    existing = get_existing_trial_jobs(queue, experiment_name=experiment_name)
     stats = get_experiment_queue_stats(queue, experiment_name)
     running_jobs: list[RunningJobInfo] = []
 
-    for job in existing["started"].values():
+    for job in existing["started"]:
         refresh = getattr(job, "refresh", None)
         if callable(refresh):
             refresh()
@@ -122,7 +122,7 @@ def build_monitor_snapshot(queue, experiment_name: str) -> QueueMonitorSnapshot:
 
 def list_queue_job_entries(queue, experiment_name: str) -> list[QueueJobEntry]:
     """Return queue-derived per-job status rows for one experiment."""
-    existing = get_existing_trials(queue, experiment_name=experiment_name)
+    existing = get_existing_trial_jobs(queue, experiment_name=experiment_name)
     entries: list[QueueJobEntry] = []
     state_map = (
         ("queued", "queued"),
@@ -134,7 +134,7 @@ def list_queue_job_entries(queue, experiment_name: str) -> list[QueueJobEntry]:
     )
 
     for bucket_name, state in state_map:
-        for job in existing[bucket_name].values():
+        for job in existing[bucket_name]:
             refresh = getattr(job, "refresh", None)
             if callable(refresh):
                 refresh()

@@ -50,6 +50,10 @@ Trial jobs execute one fully-expanded experiment unit:
 - trial number
 - optional CPV target
 
+The RQ `job_id` for a trial job is deterministic for that logical trial. The
+runtime payload `trial_id` may still include a per-run suffix for filesystem or
+compose isolation, but that payload field is not the queue identity.
+
 ### Build jobs
 Build jobs prepare artifacts needed by later verification or CI stages. Build jobs are authoritative for build-context creation; verify paths must not silently rebuild missing prerequisites unless the owning flow explicitly allows that.
 
@@ -62,6 +66,9 @@ Verify jobs consume prepared artifacts and produce verdicts. In non-local deploy
 - duplicate enqueue attempts must resolve to reuse or explicit refresh, not ambiguous duplication
 - build and verify jobs must encode the mode/sanitizer/source parameters that affect artifact compatibility
 - stale queued/deferred/scheduled records may be refreshed when the orchestrator intentionally re-enqueues work
+- operator status, cleanup, and orphan recovery must reason over physical queue
+  jobs; a grouped `trial_key -> job` snapshot is only a logical summary view and
+  must not hide duplicate physical jobs from maintenance paths
 
 ## State and Failure Semantics
 

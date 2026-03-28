@@ -570,6 +570,60 @@ def get_trial_key(job: "rq.job.Job") -> str:
     return f"job:{experiment}:{job.id or 'unknown'}"
 
 
+def get_existing_trial_jobs(
+    queue: "rq.Queue", experiment_name: str | None = None
+) -> dict[str, list["rq.job.Job"]]:
+    """Get all existing physical jobs grouped by queue status.
+
+    Unlike ``get_existing_trials()``, this preserves every matching RQ job even
+    when multiple physical jobs share the same logical ``trial_key``.
+    """
+    if not REDIS_AVAILABLE:
+        raise RuntimeError("Redis and RQ packages are required")
+
+    result: dict[str, list["rq.job.Job"]] = {
+        "queued": [],
+        "started": [],
+        "deferred": [],
+        "scheduled": [],
+        "finished": [],
+        "failed": [],
+    }
+
+    try:
+        for job in get_all_jobs(queue):
+            if job.is_queued and is_job_for_experiment(job, experiment_name):
+                result["queued"].append(job)
+
+        for bucket_name, registry in (
+            ("started", queue.started_job_registry),
+            ("finished", queue.finished_job_registry),
+            ("deferred", queue.deferred_job_registry),
+            ("failed", queue.failed_job_registry),
+        ):
+            for job_id in registry.get_job_ids():
+                try:
+                    job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
+                    if job and is_job_for_experiment(job, experiment_name):
+                        result[bucket_name].append(job)
+                except Exception as e:
+                    logger.warning(f"Failed to fetch {bucket_name} job {job_id}: {e}")
+
+        if hasattr(queue, "scheduled_job_registry"):
+            for job_id in queue.scheduled_job_registry.get_job_ids():
+                try:
+                    job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
+                    if job and is_job_for_experiment(job, experiment_name):
+                        result["scheduled"].append(job)
+                except Exception as e:
+                    logger.warning(f"Failed to fetch scheduled job {job_id}: {e}")
+
+        return result
+    except Exception as e:
+        logger.error(f"Failed to get existing physical jobs: {e}")
+        return result
+
+
 def get_existing_trials(
     queue: "rq.Queue", experiment_name: str | None = None
 ) -> dict[str, dict[str, "rq.job.Job"]]:
@@ -594,10 +648,7 @@ def get_existing_trials(
         >>> existing = get_existing_trials(queue)
         >>> print(f"Queued: {len(existing['queued'])}")
     """
-    if not REDIS_AVAILABLE:
-        raise RuntimeError("Redis and RQ packages are required")
-
-    result = {
+    result: dict[str, dict[str, "rq.job.Job"]] = {
         "queued": {},
         "started": {},
         "deferred": {},
@@ -606,63 +657,21 @@ def get_existing_trials(
         "failed": {},
     }
 
-    try:
-        # Get queued jobs
-        for job in get_all_jobs(queue):
-            if job.is_queued and is_job_for_experiment(job, experiment_name):
-                result["queued"][get_trial_key(job)] = job
-
-        # Get started jobs
-        for job_id in queue.started_job_registry.get_job_ids():
-            try:
-                job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
-                if job and is_job_for_experiment(job, experiment_name):
-                    result["started"][get_trial_key(job)] = job
-            except Exception as e:
-                logger.warning(f"Failed to fetch started job {job_id}: {e}")
-
-        # Get finished jobs
-        for job_id in queue.finished_job_registry.get_job_ids():
-            try:
-                job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
-                if job and is_job_for_experiment(job, experiment_name):
-                    result["finished"][get_trial_key(job)] = job
-            except Exception as e:
-                logger.warning(f"Failed to fetch finished job {job_id}: {e}")
-
-        # Get deferred jobs
-        for job_id in queue.deferred_job_registry.get_job_ids():
-            try:
-                job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
-                if job and is_job_for_experiment(job, experiment_name):
-                    result["deferred"][get_trial_key(job)] = job
-            except Exception as e:
-                logger.warning(f"Failed to fetch deferred job {job_id}: {e}")
-
-        # Get scheduled jobs
-        if hasattr(queue, "scheduled_job_registry"):
-            for job_id in queue.scheduled_job_registry.get_job_ids():
-                try:
-                    job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
-                    if job and is_job_for_experiment(job, experiment_name):
-                        result["scheduled"][get_trial_key(job)] = job
-                except Exception as e:
-                    logger.warning(f"Failed to fetch scheduled job {job_id}: {e}")
-
-        # Get failed jobs
-        for job_id in queue.failed_job_registry.get_job_ids():
-            try:
-                job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
-                if job and is_job_for_experiment(job, experiment_name):
-                    result["failed"][get_trial_key(job)] = job
-            except Exception as e:
-                logger.warning(f"Failed to fetch failed job {job_id}: {e}")
-
-        return result
-
-    except Exception as e:
-        logger.error(f"Failed to get existing trials: {e}")
-        return result
+    physical_jobs = get_existing_trial_jobs(queue, experiment_name=experiment_name)
+    for bucket_name, jobs in physical_jobs.items():
+        duplicate_keys: set[str] = set()
+        for job in jobs:
+            trial_key = get_trial_key(job)
+            if trial_key in result[bucket_name]:
+                duplicate_keys.add(trial_key)
+            result[bucket_name][trial_key] = job
+        if duplicate_keys:
+            duplicate_list = ", ".join(sorted(duplicate_keys))
+            logger.warning(
+                f"Detected duplicate logical trial keys in {bucket_name} registry: "
+                f"{duplicate_list}"
+            )
+    return result
 
 
 def remove_job_by_id(queue: "rq.Queue", job_id: str) -> bool:
@@ -710,10 +719,10 @@ def clear_experiment_jobs(queue: "rq.Queue", experiment_name: str) -> int:
     if not REDIS_AVAILABLE:
         raise RuntimeError("Redis and RQ packages are required")
 
-    existing = get_existing_trials(queue, experiment_name=experiment_name)
+    existing = get_existing_trial_jobs(queue, experiment_name=experiment_name)
     job_ids: set[str] = set()
-    for jobs_by_key in existing.values():
-        for job in jobs_by_key.values():
+    for jobs in existing.values():
+        for job in jobs:
             if job.id:
                 job_ids.add(job.id)
 
@@ -763,7 +772,7 @@ def requeue_failed_jobs(queue: "rq.Queue", failed_jobs: list["rq.job.Job"]) -> i
 
 
 def handle_orphaned_jobs(
-    queue: "rq.Queue", started_jobs: dict[str, "rq.job.Job"]
+    queue: "rq.Queue", started_jobs: dict[str, "rq.job.Job"] | list["rq.job.Job"]
 ) -> int:
     """
     Move orphaned started jobs to failed and requeue for retry.
@@ -773,7 +782,8 @@ def handle_orphaned_jobs(
 
     Args:
         queue: RQ queue instance
-        started_jobs: Dict of trial_key -> Job for started jobs
+        started_jobs: Started jobs to recover. Accepts either the grouped
+            ``trial_key -> Job`` mapping or a physical list of jobs.
 
     Returns:
         int: Number of orphaned jobs handled
@@ -799,7 +809,8 @@ def handle_orphaned_jobs(
         return 0
 
     count = 0
-    for job in started_jobs.values():
+    jobs = started_jobs.values() if isinstance(started_jobs, dict) else started_jobs
+    for job in jobs:
         try:
             # Move to failed registry
             job.set_status(rq.job.JobStatus.FAILED)  # type: ignore[attr-defined]

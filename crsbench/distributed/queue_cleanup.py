@@ -12,7 +12,7 @@ from typing import Iterable
 
 from crsbench.distributed.queue import (
     clear_experiment_jobs,
-    get_existing_trials,
+    get_existing_trial_jobs,
     resolve_queue_names,
     validate_queue_name_component,
 )
@@ -93,7 +93,7 @@ def clean_experiment_queues(
 
     for queue_name in queue_names:
         queue = rq.Queue(queue_name, connection=redis_conn)  # type: ignore[attr-defined]
-        existing = get_existing_trials(queue, experiment_name=experiment_name)
+        existing = get_existing_trial_jobs(queue, experiment_name=experiment_name)
         matched = sum(len(v) for v in existing.values())
         total_matched += matched
         if dry_run:

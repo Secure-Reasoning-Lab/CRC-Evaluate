@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import crsbench.distributed.queue as queue_module
 import pytest
-from crsbench.distributed.queue import get_trial_key
+from crsbench.distributed.queue import clear_experiment_jobs, get_trial_key
 from crsbench.distributed.queue_cleanup import clean_experiment_queues
 
 
@@ -29,12 +29,14 @@ def test_clean_experiment_queues_dry_run(monkeypatch) -> None:
         lambda name, **_kwargs: queue_map[name],
     )
     monkeypatch.setattr(
-        "crsbench.distributed.queue_cleanup.get_existing_trials",
+        "crsbench.distributed.queue_cleanup.get_existing_trial_jobs",
         lambda _queue, **_kwargs: {
-            "queued": {"a": object()},
-            "started": {},
-            "failed": {},
-            "finished": {},
+            "queued": [object()],
+            "started": [],
+            "failed": [],
+            "finished": [],
+            "deferred": [],
+            "scheduled": [],
         },
     )
     clear_mock = MagicMock(return_value=1)
@@ -69,12 +71,14 @@ def test_clean_experiment_queues_applies_registry_and_lock(monkeypatch) -> None:
         lambda _name, **_kwargs: queue,
     )
     monkeypatch.setattr(
-        "crsbench.distributed.queue_cleanup.get_existing_trials",
+        "crsbench.distributed.queue_cleanup.get_existing_trial_jobs",
         lambda _queue, **_kwargs: {
-            "queued": {"a": object()},
-            "started": {"b": object()},
-            "failed": {},
-            "finished": {},
+            "queued": [object()],
+            "started": [object()],
+            "failed": [],
+            "finished": [],
+            "deferred": [],
+            "scheduled": [],
         },
     )
     monkeypatch.setattr(
@@ -109,6 +113,39 @@ def test_get_trial_key_falls_back_for_non_trial_jobs() -> None:
     assert get_trial_key(job) == "job:exp-x:job-123"
 
 
+def test_clear_experiment_jobs_removes_all_physical_duplicate_jobs(monkeypatch) -> None:
+    queue = MagicMock()
+    job_a = MagicMock()
+    job_a.id = "job-a"
+    job_b = MagicMock()
+    job_b.id = "job-b"
+    removed_ids: list[str] = []
+
+    monkeypatch.setattr(queue_module, "REDIS_AVAILABLE", True)
+    monkeypatch.setattr(
+        queue_module,
+        "get_existing_trial_jobs",
+        lambda _queue, **_kwargs: {
+            "queued": [job_a, job_b],
+            "started": [],
+            "failed": [],
+            "finished": [],
+            "deferred": [],
+            "scheduled": [],
+        },
+    )
+    monkeypatch.setattr(
+        queue_module,
+        "remove_job_by_id",
+        lambda _queue, job_id: removed_ids.append(job_id) or True,
+    )
+
+    removed = clear_experiment_jobs(queue, "exp-test")
+
+    assert removed == 2
+    assert removed_ids == ["job-a", "job-b"]
+
+
 def test_handle_orphaned_jobs_requeues_when_only_unrelated_workers_exist(
     monkeypatch,
 ) -> None:
@@ -133,6 +170,32 @@ def test_handle_orphaned_jobs_requeues_when_only_unrelated_workers_exist(
     )
 
     handled = queue_module.handle_orphaned_jobs(queue, started_jobs)
+
+    assert handled == 1
+    job.set_status.assert_called_once_with(
+        queue_module.rq.job.JobStatus.FAILED  # type: ignore[union-attr]
+    )
+    queue.enqueue_job.assert_called_once_with(job)
+
+
+def test_handle_orphaned_jobs_accepts_physical_job_list(monkeypatch) -> None:
+    if not queue_module.REDIS_AVAILABLE:
+        pytest.skip("Redis/RQ not available")
+
+    queue = MagicMock()
+    queue.name = "crsbench_trial"
+    queue.connection = MagicMock()
+
+    job = MagicMock()
+    job.id = "job-1"
+
+    monkeypatch.setattr(
+        queue_module.rq.Worker,  # type: ignore[union-attr]
+        "all",
+        lambda **_kwargs: [],
+    )
+
+    handled = queue_module.handle_orphaned_jobs(queue, [job])
 
     assert handled == 1
     job.set_status.assert_called_once_with(
