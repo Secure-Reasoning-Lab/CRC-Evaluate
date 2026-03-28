@@ -11,6 +11,7 @@ from crsbench.distributed.jobs import (
     _apply_worker_overrides,
     _build_trial_output_path,
     _finish_job_lifecycle,
+    _initialize_job_lifecycle_runtime,
     _lifecycle_runtime_is_current_owner,
     _publish_trial_terminal_artifacts,
 )
@@ -151,6 +152,50 @@ def test_lifecycle_runtime_is_current_owner_rejects_non_active_states() -> None:
     )
 
     assert _lifecycle_runtime_is_current_owner(runtime) is False
+
+
+def test_initialize_job_lifecycle_runtime_skips_heartbeat_for_terminal_record() -> None:
+    fake = _FakeRedis()
+    store = JobLifecycleStore(fake)
+    store.set(
+        "exp-1",
+        JobLifecycleRecord(
+            job_id="job-1",
+            trial_key="trial-1",
+            state=JobState.COMPLETED,
+            claimed_by=None,
+        ),
+    )
+    config = ExperimentConfig(
+        experiment="exp-1",
+        trials=1,
+        mode=EvaluationMode.DELTA,
+        max_total_time=21600,
+        inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
+        experiment_filestore=Path("/tmp/exp"),
+        report_filestore=Path("/tmp/report"),
+        crs_compose={"test-crs": {"num_cores": 1}},
+        benchmarks=["test-bench"],
+    )
+
+    rq_job = type(
+        "CurrentJob",
+        (),
+        {"connection": fake, "id": "job-1"},
+    )()
+
+    with patch("rq.get_current_job", return_value=rq_job):
+        runtime = _initialize_job_lifecycle_runtime(
+            config=config,
+            trial_key="trial-1",
+            runtime_worker_name="worker-1",
+        )
+
+    assert runtime is not None
+    fetched = store.get("exp-1", "job-1")
+    assert fetched is not None
+    assert fetched.state is JobState.COMPLETED
+    assert fetched.last_heartbeat is None
 
 
 def test_finish_job_lifecycle_noops_for_superseded_worker() -> None:

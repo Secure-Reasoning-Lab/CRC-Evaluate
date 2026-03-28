@@ -214,6 +214,9 @@ The queue layer treats the following as terminal outcomes:
 - worker heartbeat updates must project into both the heartbeat hash and the
   lifecycle record's `last_heartbeat` / `updated_at` fields so lifecycle
   snapshots never report stale liveness data while the heartbeat side channel is fresh
+- worker startup must apply the same ownership fence before emitting its first
+  lifecycle heartbeat; stale or terminal records must not regain fresh
+  heartbeats just because a late worker process reached initialization
 - operator safety views such as status and teardown must merge lifecycle records
   with queue-only jobs that have not yet been projected into lifecycle, so
   queue residue cannot disappear from human-facing summaries once lifecycle

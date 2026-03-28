@@ -282,7 +282,7 @@ def _initialize_job_lifecycle_runtime(
                 JobState.RUNNING,
                 claimed_by=runtime_worker_name,
             )
-        store.update_heartbeat(runtime.experiment_name, runtime.job_id)
+        _update_job_lifecycle_heartbeat(runtime)
         return runtime
     except Exception as exc:
         logger.warning(f"Failed to initialize job lifecycle tracking: {exc}")
