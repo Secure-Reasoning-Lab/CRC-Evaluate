@@ -421,14 +421,22 @@ def _publish_trial_terminal_artifacts(
             )
         return False
 
-    if metadata_writer is not None:
-        metadata_writer()
-
     marker_file = trial_output_dir / (".success" if success else ".fail")
     opposite_marker = trial_output_dir / (".fail" if success else ".success")
+    if opposite_marker.exists() and not marker_file.exists():
+        logger.warning(
+            "Skipping conflicting worker terminal update for %s; canonical marker %s already exists",
+            trial_output_dir,
+            opposite_marker.name,
+        )
+        return False
+
+    if metadata_writer is not None:
+        metadata_writer()
     if opposite_marker.exists():
         opposite_marker.unlink()
-    marker_file.touch()
+    if not marker_file.exists():
+        marker_file.touch()
 
     if config.copy_results_after_trial and config.results_filestore:
         experiment_dir = resolve_experiment_dir(

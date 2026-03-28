@@ -97,8 +97,9 @@ The queue layer treats the following as terminal outcomes:
 - `stopped`
 - `canceled`
 - worker-side and orchestrator-side terminal marker writers must leave exactly
-  one verdict marker on disk for a trial; writing `.success` must remove stale
-  `.fail`, and writing `.fail` must remove stale `.success`
+  one verdict marker on disk for a trial; when publishing a new canonical
+  verdict, writing `.success` must remove stale `.fail`, and writing `.fail`
+  must remove stale `.success`
 - orchestrator-visible final reporting must collapse duplicate physical attempt
   results onto one logical trial outcome; the canonical verdict is the terminal
   marker state in the logical trial directory, not the count of physical RQ jobs
@@ -117,6 +118,9 @@ The queue layer treats the following as terminal outcomes:
 - once `claimed_by` moves to a replacement worker, the superseded worker must
   stop emitting shadow-lifecycle heartbeats and must not publish terminal
   worker-side artifacts for that logical trial
+- worker-side terminal publication must also preserve a preexisting
+  contradictory canonical marker for the logical trial; a late duplicate
+  physical attempt must not flip `.success` to `.fail` or vice versa
 - orchestrator-side queue monitoring must apply the same ownership fence before
   consuming finished/failed callbacks; a stale terminal event must not mark the
   `job_id` as processed ahead of the current owner
