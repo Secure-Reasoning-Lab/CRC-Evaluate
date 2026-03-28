@@ -29,6 +29,9 @@
 - `DistributedRetryTerminalFence.tla`: model of explicit failed-job retry against terminal lifecycle state
 - `DistributedRetryTerminalFenceBuggy.cfg`: buggy config where a failed physical job is retried even though lifecycle already says completed
 - `DistributedRetryTerminalFenceHealthy.cfg`: fixed config where explicit retry is fenced to lifecycle records currently in failed
+- `DistributedResumeRegistryOwnership.tla`: model of stale-lock resume ownership over experiment registry state
+- `DistributedResumeRegistryOwnershipBuggy.cfg`: buggy config where a resumed controller takes the lock but never owns the registry entry for cleanup
+- `DistributedResumeRegistryOwnershipHealthy.cfg`: fixed config where stale-lock resume adopts or republishes registry state before cleanup
 - `DistributedRetryExclusivity.tla`: model of at-most-one authoritative live attempt across retries
 - `DistributedRetryExclusivityBuggy.cfg`: buggy config where superseded and replacement attempts are both live
 - `DistributedRetryExclusivityHealthy.cfg`: fenced config where only one authoritative live attempt remains
@@ -255,6 +258,13 @@ The twenty-eighth model is meant to catch terminal-retry fence bugs:
 - the shadow lifecycle for that same job already says `completed`
 - explicit retry must not resurrect that stale failed residue behind the
   terminal authoritative record
+
+The twenty-ninth model is meant to catch stale-lock registry-ownership bugs:
+
+- a resumed controller force-takes a stale experiment lock
+- the old experiment registry entry may already exist, or may be missing
+- the resumed controller must own the registry state strongly enough that
+  `cleanup()` clears it at the end of the resumed run
 
 The fifteenth model is meant to catch resume-collection restart bugs:
 
