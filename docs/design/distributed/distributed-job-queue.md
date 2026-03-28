@@ -155,6 +155,8 @@ The queue layer treats the following as terminal outcomes:
 ### Continue-mode restart behavior
 - `crsbench run --queue-mode continue` may skip enqueue for a logical trial when
   an existing queue record already represents that trial
+- if a prior orchestrator left a stale experiment lock behind, continue mode
+  must attempt stale-lock takeover before aborting queue recovery
 - if the existing physical job is already terminal but the orchestrator marker is
   still missing, the controller must attach that carryover job to the monitor and
   materialize `.success` / `.fail` before exit

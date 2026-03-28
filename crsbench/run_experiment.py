@@ -1859,11 +1859,18 @@ def run_experiment_distributed(
                     session.register_or_raise(registration)
                     lock_acquired = True
                 except LockContentionError:
-                    logger.error(
-                        f"Experiment '{experiment_name}' is already running. "
-                        "Use a different experiment name or wait for the current run to finish."
-                    )
-                    return
+                    try:
+                        session.resume_or_raise()
+                        lock_acquired = True
+                        logger.info(
+                            "Resumed stale experiment lock for continue-mode recovery"
+                        )
+                    except LockContentionError:
+                        logger.error(
+                            f"Experiment '{experiment_name}' is already running. "
+                            "Use a different experiment name or wait for the current run to finish."
+                        )
+                        return
 
             # Handle orphaned started jobs (move to failed + retry)
             if physical_existing["started"]:
