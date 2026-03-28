@@ -2144,7 +2144,8 @@ def run_experiment_distributed(
                 except LockContentionError:
                     try:
                         resume_collection_job_ids = session.resume_or_raise(
-                            artifact_checker=_build_artifact_checker(config)
+                            artifact_checker=_build_artifact_checker(config),
+                            registration=registration,
                         )
                         lock_acquired = True
                         logger.info(

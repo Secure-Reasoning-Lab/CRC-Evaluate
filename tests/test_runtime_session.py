@@ -99,6 +99,7 @@ def test_resume_or_raise_reconciles_without_started_monitor() -> None:
         lifecycle_store=MagicMock(),
     )
     session.lease.try_resume_lock.return_value = True
+    session.registry.get_experiment.return_value = MagicMock()
     artifact_checker = MagicMock(return_value=None)
     monitor = MagicMock()
     monitor.reconcile_on_resume.return_value = ["job-syncing"]
@@ -112,3 +113,23 @@ def test_resume_or_raise_reconciles_without_started_monitor() -> None:
     assert needs_collection == ["job-syncing"]
     monitor_cls.assert_called_once()
     monitor.reconcile_on_resume.assert_called_once_with()
+    assert session.lease.registration_published is True
+
+
+def test_resume_or_raise_republishes_registration_when_missing() -> None:
+    session = DistributedRuntimeSession(
+        experiment_name="exp",
+        redis_host="localhost",
+        redis_conn=MagicMock(),
+        registry=MagicMock(),
+        lease=MagicMock(),
+        lifecycle_store=None,
+    )
+    session.lease.try_resume_lock.return_value = True
+    session.registry.get_experiment.return_value = None
+    registration = MagicMock(experiment="exp")
+
+    needs_collection = session.resume_or_raise(registration=registration)
+
+    assert needs_collection == []
+    session.lease.register.assert_called_once_with(registration)

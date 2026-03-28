@@ -787,6 +787,7 @@ def test_continue_mode_lock_contention_skips_queue_mutations(tmp_path: Path) -> 
         "failed": {"f": failed_job},
         "finished": {},
     }
+    registration = MagicMock(experiment="exp-test")
 
     with (
         patch(
@@ -804,7 +805,8 @@ def test_continue_mode_lock_contention_skips_queue_mutations(tmp_path: Path) -> 
             "crsbench.run_experiment._prepare_trial_dir_for_retry", return_value=True
         ),
         patch(
-            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config",
+            return_value=registration,
         ),
     ):
         run_experiment_distributed(
@@ -818,6 +820,7 @@ def test_continue_mode_lock_contention_skips_queue_mutations(tmp_path: Path) -> 
     handle_orphaned.assert_not_called()
     queue.enqueue_job.assert_not_called()
     session.resume_or_raise.assert_called_once()
+    assert session.resume_or_raise.call_args.kwargs["registration"] is registration
 
 
 def test_continue_mode_reclaims_stale_lock_and_continues_recovery(
@@ -848,6 +851,7 @@ def test_continue_mode_reclaims_stale_lock_and_continues_recovery(
         "failed": {"f": failed_job},
         "finished": {},
     }
+    registration = MagicMock(experiment="exp-test")
 
     with (
         patch(
@@ -865,7 +869,8 @@ def test_continue_mode_reclaims_stale_lock_and_continues_recovery(
             "crsbench.run_experiment._prepare_trial_dir_for_retry", return_value=True
         ),
         patch(
-            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config",
+            return_value=registration,
         ),
         patch(
             "crsbench.run_experiment.dump_trial_matrix",
@@ -882,6 +887,7 @@ def test_continue_mode_reclaims_stale_lock_and_continues_recovery(
             )
 
     session.resume_or_raise.assert_called_once()
+    assert session.resume_or_raise.call_args.kwargs["registration"] is registration
     handle_orphaned.assert_called_once()
     queue.enqueue_job.assert_called_once_with(failed_job)
 

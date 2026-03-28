@@ -167,6 +167,7 @@ class DistributedRuntimeSession:
         self,
         *,
         artifact_checker: "Callable[[str], JobState | None] | None" = None,
+        registration: "RuntimeRegistration | None" = None,
     ) -> list[str]:
         """Take over a stale experiment lock and resume monitoring after a restart.
 
@@ -183,6 +184,12 @@ class DistributedRuntimeSession:
             raise LockContentionError(
                 f"Experiment '{self.experiment_name}' lock is actively held — cannot resume."
             )
+        existing_registration = self.registry.get_experiment(self.experiment_name)
+        if existing_registration is None:
+            if registration is not None:
+                self.lease.register(registration)
+        else:
+            self.lease.registration_published = True
         needs_collection: list[str] = []
         if self.lifecycle_store is not None:
             monitor = self._monitor or JobMonitorLoop(
