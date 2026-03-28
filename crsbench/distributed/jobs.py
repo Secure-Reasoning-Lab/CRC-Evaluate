@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional, cast
+from typing import Any, Callable, Dict, Optional, cast
 
 import yaml
 
@@ -70,6 +70,7 @@ class JobLifecycleRuntime:
 
     experiment_name: str
     job_id: str
+    worker_name: str
     store: JobLifecycleStore
 
 
@@ -250,6 +251,7 @@ def _initialize_job_lifecycle_runtime(
         runtime = JobLifecycleRuntime(
             experiment_name=config.experiment,
             job_id=job.id,
+            worker_name=runtime_worker_name,
             store=store,
         )
 
@@ -292,9 +294,27 @@ def _update_job_lifecycle_heartbeat(runtime: JobLifecycleRuntime | None) -> None
     if runtime is None:
         return
     try:
+        if not _lifecycle_runtime_is_current_owner(runtime):
+            return
         runtime.store.update_heartbeat(runtime.experiment_name, runtime.job_id)
     except Exception as exc:
         logger.warning(f"Failed to update job lifecycle heartbeat: {exc}")
+
+
+def _lifecycle_runtime_is_current_owner(runtime: JobLifecycleRuntime | None) -> bool:
+    """Return whether the current worker still owns lifecycle writes for this job."""
+    if runtime is None:
+        return True
+
+    try:
+        record = runtime.store.get(runtime.experiment_name, runtime.job_id)
+    except Exception as exc:
+        logger.warning(f"Failed to read job lifecycle ownership: {exc}")
+        return False
+
+    if record is None:
+        return False
+    return record.claimed_by == runtime.worker_name
 
 
 def _transition_job_lifecycle_syncing(runtime: JobLifecycleRuntime | None) -> None:
@@ -304,6 +324,8 @@ def _transition_job_lifecycle_syncing(runtime: JobLifecycleRuntime | None) -> No
     try:
         record = runtime.store.get(runtime.experiment_name, runtime.job_id)
         if record is None:
+            return
+        if record.claimed_by != runtime.worker_name:
             return
         if record.state is JobState.RUNNING:
             runtime.store.transition(
@@ -328,6 +350,13 @@ def _finish_job_lifecycle(
     try:
         record = runtime.store.get(runtime.experiment_name, runtime.job_id)
         if record is None:
+            return
+        if record.claimed_by != runtime.worker_name:
+            logger.warning(
+                "Skipping lifecycle finalization for superseded worker %s on job %s",
+                runtime.worker_name,
+                runtime.job_id,
+            )
             return
         if success:
             if record.state is JobState.RUNNING:
@@ -371,6 +400,50 @@ def _finish_job_lifecycle(
             )
     except Exception as exc:
         logger.warning(f"Failed to finalize job lifecycle state: {exc}")
+
+
+def _publish_trial_terminal_artifacts(
+    *,
+    config: ExperimentConfig,
+    trial_output_dir: Path,
+    success: bool,
+    results_timestamp: str | None,
+    lifecycle_runtime: JobLifecycleRuntime | None,
+    metadata_writer: Callable[[], None] | None = None,
+) -> bool:
+    """Publish terminal worker-side artifacts only for the current lifecycle owner."""
+    if not _lifecycle_runtime_is_current_owner(lifecycle_runtime):
+        if lifecycle_runtime is not None:
+            logger.warning(
+                "Skipping terminal artifact publication for superseded worker %s on job %s",
+                lifecycle_runtime.worker_name,
+                lifecycle_runtime.job_id,
+            )
+        return False
+
+    if metadata_writer is not None:
+        metadata_writer()
+
+    marker_file = trial_output_dir / (".success" if success else ".fail")
+    marker_file.touch()
+
+    if config.copy_results_after_trial and config.results_filestore:
+        experiment_dir = resolve_experiment_dir(
+            config.experiment_filestore.resolve(), config.experiment
+        )
+        rel_path = trial_relative_to_experiment(trial_output_dir, experiment_dir)
+        folder_name = _generate_results_folder_name(
+            config.experiment, results_timestamp
+        )
+        dest_dir = (
+            Path(config.results_filestore) / folder_name / "experiment-data" / rel_path
+        )
+        copy_trial_results(trial_output_dir, dest_dir)
+
+    if config.cleanup_after_trial:
+        cleanup_trial_directory(trial_output_dir)
+
+    return True
 
 
 def _start_job_lifecycle_heartbeat(
@@ -1595,37 +1668,22 @@ def run_crs_trial(
         # Log completion message
         logger.info(trial_result.log_summary())
 
-        # Update metadata.json with build/run timing
-        if build_time is not None or run_time is not None:
+        def _write_final_metadata() -> None:
+            if build_time is None and run_time is None:
+                return
             file_metadata.build_time = build_time
             file_metadata.run_time = run_time
             with metadata_file.open("w") as f:
                 json.dump(file_metadata.model_dump(mode="json"), f, indent=2)
 
-        # Create success/fail marker file
-        marker_file = trial_output_dir / (".success" if result.success else ".fail")
-        marker_file.touch()
-
-        # Per-trial copy if enabled (before cleanup)
-        if config.copy_results_after_trial and config.results_filestore:
-            experiment_dir = resolve_experiment_dir(
-                config.experiment_filestore.resolve(), config.experiment
-            )
-            rel_path = trial_relative_to_experiment(trial_output_dir, experiment_dir)
-            folder_name = _generate_results_folder_name(
-                config.experiment, results_timestamp
-            )
-            dest_dir = (
-                Path(config.results_filestore)
-                / folder_name
-                / "experiment-data"
-                / rel_path
-            )
-            copy_trial_results(trial_output_dir, dest_dir)
-
-        # Per-trial cleanup if enabled
-        if config.cleanup_after_trial:
-            cleanup_trial_directory(trial_output_dir)
+        _publish_trial_terminal_artifacts(
+            config=config,
+            trial_output_dir=trial_output_dir,
+            success=result.success,
+            results_timestamp=results_timestamp,
+            lifecycle_runtime=lifecycle_runtime,
+            metadata_writer=_write_final_metadata,
+        )
 
         _finish_job_lifecycle(
             lifecycle_runtime,
@@ -1647,28 +1705,13 @@ def run_crs_trial(
         _stop_job_lifecycle_heartbeat(heartbeat_runtime)
         # Create .fail marker if trial_output_dir exists
         if "trial_output_dir" in locals() and trial_output_dir.exists():
-            (trial_output_dir / ".fail").touch()
-            # Per-trial copy if enabled (before cleanup, even for failed trials)
-            if config.copy_results_after_trial and config.results_filestore:
-                experiment_dir = resolve_experiment_dir(
-                    config.experiment_filestore.resolve(), config.experiment
-                )
-                rel_path = trial_relative_to_experiment(
-                    trial_output_dir, experiment_dir
-                )
-                folder_name = _generate_results_folder_name(
-                    config.experiment, results_timestamp
-                )
-                dest_dir = (
-                    Path(config.results_filestore)
-                    / folder_name
-                    / "experiment-data"
-                    / rel_path
-                )
-                copy_trial_results(trial_output_dir, dest_dir)
-            # Per-trial cleanup if enabled (even for failed trials)
-            if config.cleanup_after_trial:
-                cleanup_trial_directory(trial_output_dir)
+            _publish_trial_terminal_artifacts(
+                config=config,
+                trial_output_dir=trial_output_dir,
+                success=False,
+                results_timestamp=results_timestamp,
+                lifecycle_runtime=lifecycle_runtime,
+            )
         return TrialResult(
             crs=crs,
             benchmark=benchmark,
@@ -1702,28 +1745,13 @@ def run_crs_trial(
         _stop_job_lifecycle_heartbeat(heartbeat_runtime)
         # Create .fail marker if trial_output_dir exists
         if "trial_output_dir" in locals() and trial_output_dir.exists():
-            (trial_output_dir / ".fail").touch()
-            # Per-trial copy if enabled (before cleanup, even for failed trials)
-            if config.copy_results_after_trial and config.results_filestore:
-                experiment_dir = resolve_experiment_dir(
-                    config.experiment_filestore.resolve(), config.experiment
-                )
-                rel_path = trial_relative_to_experiment(
-                    trial_output_dir, experiment_dir
-                )
-                folder_name = _generate_results_folder_name(
-                    config.experiment, results_timestamp
-                )
-                dest_dir = (
-                    Path(config.results_filestore)
-                    / folder_name
-                    / "experiment-data"
-                    / rel_path
-                )
-                copy_trial_results(trial_output_dir, dest_dir)
-            # Per-trial cleanup if enabled (even for failed trials)
-            if config.cleanup_after_trial:
-                cleanup_trial_directory(trial_output_dir)
+            _publish_trial_terminal_artifacts(
+                config=config,
+                trial_output_dir=trial_output_dir,
+                success=False,
+                results_timestamp=results_timestamp,
+                lifecycle_runtime=lifecycle_runtime,
+            )
         return TrialResult(
             crs=crs,
             benchmark=benchmark,
@@ -1757,28 +1785,13 @@ def run_crs_trial(
         _stop_job_lifecycle_heartbeat(heartbeat_runtime)
         # Create .fail marker if trial_output_dir exists
         if "trial_output_dir" in locals() and trial_output_dir.exists():
-            (trial_output_dir / ".fail").touch()
-            # Per-trial copy if enabled (before cleanup, even for failed trials)
-            if config.copy_results_after_trial and config.results_filestore:
-                experiment_dir = resolve_experiment_dir(
-                    config.experiment_filestore.resolve(), config.experiment
-                )
-                rel_path = trial_relative_to_experiment(
-                    trial_output_dir, experiment_dir
-                )
-                folder_name = _generate_results_folder_name(
-                    config.experiment, results_timestamp
-                )
-                dest_dir = (
-                    Path(config.results_filestore)
-                    / folder_name
-                    / "experiment-data"
-                    / rel_path
-                )
-                copy_trial_results(trial_output_dir, dest_dir)
-            # Per-trial cleanup if enabled (even for failed trials)
-            if config.cleanup_after_trial:
-                cleanup_trial_directory(trial_output_dir)
+            _publish_trial_terminal_artifacts(
+                config=config,
+                trial_output_dir=trial_output_dir,
+                success=False,
+                results_timestamp=results_timestamp,
+                lifecycle_runtime=lifecycle_runtime,
+            )
         return TrialResult(
             crs=crs,
             benchmark=benchmark,

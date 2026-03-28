@@ -102,6 +102,9 @@ The queue layer treats the following as terminal outcomes:
 - `started` jobs that exceed timeout plus grace are treated as stale infrastructure failures
 - timeout recovery must not leave the shadow lifecycle in `queued` unless the
   concrete queue entry is executable again
+- once `claimed_by` moves to a replacement worker, the superseded worker must
+  stop emitting shadow-lifecycle heartbeats and must not publish terminal
+  worker-side artifacts for that logical trial
 - published terminal artifacts on orchestrator storage are authoritative for
   stale-job recovery: `.success` maps to `completed`, `.fail` maps to `failed`
 - retry policy must distinguish infra failures from benchmark-result failures
