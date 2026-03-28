@@ -221,3 +221,45 @@ def test_publish_trial_terminal_artifacts_skips_superseded_worker(
     assert (trial_output_dir / ".success").exists() is False
     assert (trial_output_dir / ".fail").exists() is False
     assert payload.exists()
+
+
+def test_publish_trial_terminal_artifacts_removes_opposite_terminal_marker(
+    tmp_path: Path,
+) -> None:
+    config = ExperimentConfig(
+        experiment="exp-1",
+        trials=1,
+        mode=EvaluationMode.DELTA,
+        max_total_time=21600,
+        inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
+        experiment_filestore=tmp_path / "experiment-store",
+        report_filestore=tmp_path / "report-store",
+        crs_compose={"test-crs": {"num_cores": 1}},
+        benchmarks=["test-bench"],
+    )
+
+    trial_output_dir = _build_trial_output_path(
+        filestore=config.experiment_filestore.resolve(),
+        experiment_name=config.experiment,
+        crs="test-crs",
+        benchmark="test-bench",
+        harness="fuzz_target",
+        mode="delta",
+        sanitizer="address",
+        trial_num=1,
+        target_cpv_id=None,
+    )
+    trial_output_dir.mkdir(parents=True, exist_ok=True)
+    (trial_output_dir / ".fail").touch()
+
+    published = _publish_trial_terminal_artifacts(
+        config=config,
+        trial_output_dir=trial_output_dir,
+        success=True,
+        results_timestamp="20260327-120000",
+        lifecycle_runtime=None,
+    )
+
+    assert published is True
+    assert (trial_output_dir / ".success").exists()
+    assert not (trial_output_dir / ".fail").exists()

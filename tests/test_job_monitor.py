@@ -381,6 +381,52 @@ def test_requeue_under_max_retries() -> None:
     queue.enqueue_job.assert_called_once_with(fetched_job)
 
 
+def test_retry_budget_allows_exact_final_retry() -> None:
+    """A job at max_retries-1 gets one final requeue and lands exactly on the limit."""
+    from crsbench.distributed.job_lifecycle import JobState
+    from crsbench.distributed.job_monitor import JobMonitorLoop
+    from rq.job import JobStatus
+
+    fake = _FakeRedis()
+    store = _make_store_with_job(
+        fake,
+        "exp6c",
+        "j6c",
+        "trial-f",
+        "running",
+        retry_count=2,
+        heartbeat_age_seconds=300,
+    )
+
+    monitor = JobMonitorLoop(
+        lifecycle_store=store,
+        experiment_name="exp6c",
+        connection=fake,
+        heartbeat_timeout_seconds=180,
+        cloud_liveness_checker=MagicMock(return_value=False),
+        artifact_checker=MagicMock(return_value=False),
+        max_retries=3,
+    )
+
+    fetched_job = MagicMock()
+    fetched_job.origin = "crsbench_trial"
+    queue = MagicMock()
+
+    with (
+        patch("rq.job.Job.fetch", return_value=fetched_job),
+        patch("rq.Queue", return_value=queue),
+    ):
+        monitor._scan_and_recover()
+        monitor._scan_and_recover()
+
+    record = store.get("exp6c", "j6c")
+    assert record is not None
+    assert record.state is JobState.QUEUED
+    assert record.retry_count == 3
+    fetched_job.set_status.assert_called_once_with(JobStatus.FAILED)
+    queue.enqueue_job.assert_called_once_with(fetched_job)
+
+
 def test_requeue_failure_marks_failed() -> None:
     """If concrete RQ requeue fails, recovery must not claim the job is queued."""
     from crsbench.distributed.job_lifecycle import JobState

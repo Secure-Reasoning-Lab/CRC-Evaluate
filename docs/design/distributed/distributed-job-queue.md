@@ -96,6 +96,9 @@ The queue layer treats the following as terminal outcomes:
 - `failed`
 - `stopped`
 - `canceled`
+- worker-side and orchestrator-side terminal marker writers must leave exactly
+  one verdict marker on disk for a trial; writing `.success` must remove stale
+  `.fail`, and writing `.fail` must remove stale `.success`
 
 ### Stale or missing state
 - missing queue metadata for a supposedly pending job is an infrastructure failure
@@ -111,6 +114,8 @@ The queue layer treats the following as terminal outcomes:
 
 ### Retry principles
 - retries must preserve deterministic job identity semantics
+- retry budget is exact: a job at `max_retries - 1` gets one final requeue, and
+  the next stale recovery must fail permanently rather than requeue again
 - active non-terminal jobs are reused rather than duplicated
 - refresh of terminal jobs is a policy decision at submit time, not a hidden worker behavior
 

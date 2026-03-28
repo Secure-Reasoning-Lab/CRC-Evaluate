@@ -425,6 +425,9 @@ def _publish_trial_terminal_artifacts(
         metadata_writer()
 
     marker_file = trial_output_dir / (".success" if success else ".fail")
+    opposite_marker = trial_output_dir / (".fail" if success else ".success")
+    if opposite_marker.exists():
+        opposite_marker.unlink()
     marker_file.touch()
 
     if config.copy_results_after_trial and config.results_filestore:

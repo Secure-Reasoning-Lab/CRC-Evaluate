@@ -146,6 +146,61 @@ def test_clear_experiment_jobs_removes_all_physical_duplicate_jobs(monkeypatch) 
     assert removed_ids == ["job-a", "job-b"]
 
 
+def test_get_existing_trial_jobs_filters_to_requested_experiment(monkeypatch) -> None:
+    queue = MagicMock()
+    queue.connection = MagicMock()
+    queue.get_job_ids.return_value = ["queued-test", "queued-other"]
+    queue.started_job_registry.get_job_ids.return_value = [
+        "started-test",
+        "started-other",
+    ]
+    queue.finished_job_registry.get_job_ids.return_value = []
+    queue.failed_job_registry.get_job_ids.return_value = []
+    queue.deferred_job_registry.get_job_ids.return_value = []
+
+    queued_test = MagicMock()
+    queued_test.id = "queued-test"
+    queued_test.is_queued = True
+    queued_test.meta = {"experiment_name": "exp-test"}
+
+    queued_other = MagicMock()
+    queued_other.id = "queued-other"
+    queued_other.is_queued = True
+    queued_other.meta = {"experiment_name": "exp-other"}
+
+    started_test = MagicMock()
+    started_test.id = "started-test"
+    started_test.meta = {"experiment_name": "exp-test"}
+
+    started_other = MagicMock()
+    started_other.id = "started-other"
+    started_other.meta = {"experiment_name": "exp-other"}
+
+    jobs_by_id = {
+        "queued-test": queued_test,
+        "queued-other": queued_other,
+        "started-test": started_test,
+        "started-other": started_other,
+    }
+
+    monkeypatch.setattr(queue_module, "REDIS_AVAILABLE", True)
+    monkeypatch.setattr(
+        queue_module, "get_all_jobs", lambda _queue: [queued_test, queued_other]
+    )
+    monkeypatch.setattr(
+        queue_module.rq.job,  # type: ignore[union-attr]
+        "Job",
+        SimpleNamespace(fetch=lambda job_id, **_kwargs: jobs_by_id[job_id]),
+    )
+
+    existing = queue_module.get_existing_trial_jobs(queue, experiment_name="exp-test")
+
+    assert existing["queued"] == [queued_test]
+    assert existing["started"] == [started_test]
+    assert existing["failed"] == []
+    assert existing["finished"] == []
+
+
 def test_handle_orphaned_jobs_requeues_when_only_unrelated_workers_exist(
     monkeypatch,
 ) -> None:

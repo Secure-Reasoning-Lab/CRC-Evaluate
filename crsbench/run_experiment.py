@@ -1255,6 +1255,9 @@ def _write_orchestrator_marker(
     # Write marker
     marker_name = ".success" if trial_result.success else ".fail"
     marker_path = trial_dir / marker_name
+    opposite_marker = trial_dir / (".fail" if trial_result.success else ".success")
+    if opposite_marker.exists():
+        opposite_marker.unlink()
     if not marker_path.exists():
         marker_path.touch()
 
