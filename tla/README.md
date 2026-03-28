@@ -44,6 +44,9 @@
 - `DistributedStartedJobRecovery.tla`: model of continue-mode stale started-job recovery
 - `DistributedStartedJobRecoveryBuggy.cfg`: buggy config where any live queue worker blocks stale started-job recovery
 - `DistributedStartedJobRecoveryHealthy.cfg`: fixed config where stale started jobs recover by their own timeout window
+- `DistributedResumeCollection.tla`: model of continue-mode restart when only syncing collection work remains
+- `DistributedResumeCollectionBuggy.cfg`: buggy config where continue mode exits before attaching resume collection jobs
+- `DistributedResumeCollectionHealthy.cfg`: fixed config where resume-only syncing work is tracked before exit
 
 ## Purpose
 
@@ -142,6 +145,12 @@ The fourteenth model is meant to catch stale started-job recovery bugs:
 - a started job's original owner is gone
 - the job has exceeded timeout plus grace
 - an unrelated live worker on the same queue must not block requeue of that stale job
+
+The fifteenth model is meant to catch resume-collection restart bugs:
+
+- continue mode resumes a stale lock
+- lifecycle reconciliation reports job ids still needing collection
+- the controller must not exit before attaching that resume-only work to monitoring
 
 ## Run TLC
 
@@ -672,6 +681,41 @@ source .envrc
 java tlc2.TLC \
   -config tla/DistributedStartedJobRecoveryHealthy.cfg \
   tla/DistributedStartedJobRecovery.tla
+```
+
+Expected result:
+
+- TLC completes with no errors
+
+## Resume Collection Model
+
+This model corresponds to continue-mode restart when only syncing collection
+work remains:
+
+- `resume_or_raise()` can report job ids still needing collection
+- there may be no visible queue entries and no new trials
+- continue mode must still attach those resumed jobs before any early exit
+
+Buggy run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedResumeCollectionBuggy.cfg \
+  tla/DistributedResumeCollection.tla
+```
+
+Expected result:
+
+- `NeedsCollectionPreventsEarlyExit` fails
+
+Healthy run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedResumeCollectionHealthy.cfg \
+  tla/DistributedResumeCollection.tla
 ```
 
 Expected result:
