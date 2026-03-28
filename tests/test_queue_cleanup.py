@@ -260,6 +260,124 @@ def test_handle_orphaned_jobs_accepts_physical_job_list(monkeypatch) -> None:
     queue.enqueue_job.assert_called_once_with(job)
 
 
+def test_handle_orphaned_jobs_drops_stale_started_duplicate_when_active_peer_exists(
+    monkeypatch,
+) -> None:
+    if not queue_module.REDIS_AVAILABLE:
+        pytest.skip("Redis/RQ not available")
+
+    queue = MagicMock()
+    queue.name = "crsbench_trial"
+    queue.connection = MagicMock()
+
+    stale_started = MagicMock()
+    stale_started.id = "job-started"
+    stale_started.meta = {"experiment_name": "exp-test"}
+    stale_started.get_status.return_value = queue_module.rq.job.JobStatus.STARTED  # type: ignore[union-attr]
+    stale_started.timeout = 60
+    stale_started.started_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+
+    queued_duplicate = MagicMock()
+    queued_duplicate.id = "job-queued"
+    queued_duplicate.meta = {"experiment_name": "exp-test"}
+
+    monkeypatch.setattr(
+        queue_module.rq.Worker,  # type: ignore[union-attr]
+        "all",
+        lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        queue_module,
+        "get_existing_trial_jobs",
+        lambda _queue, **_kwargs: {
+            "queued": [queued_duplicate],
+            "started": [stale_started],
+            "failed": [],
+            "finished": [],
+            "deferred": [],
+            "scheduled": [],
+        },
+    )
+    monkeypatch.setattr(
+        queue_module,
+        "get_trial_key",
+        lambda job: "trial-1" if job.id in {"job-started", "job-queued"} else job.id,
+    )
+    removed_ids: list[str] = []
+    monkeypatch.setattr(
+        queue_module,
+        "remove_job_by_id",
+        lambda _queue, job_id: removed_ids.append(job_id) or True,
+    )
+
+    handled = queue_module.handle_orphaned_jobs(queue, [stale_started])
+
+    assert handled == 1
+    assert removed_ids == ["job-started"]
+    queue.enqueue_job.assert_not_called()
+    stale_started.set_status.assert_not_called()
+
+
+def test_handle_orphaned_jobs_keeps_one_stale_started_survivor_per_trial(
+    monkeypatch,
+) -> None:
+    if not queue_module.REDIS_AVAILABLE:
+        pytest.skip("Redis/RQ not available")
+
+    queue = MagicMock()
+    queue.name = "crsbench_trial"
+    queue.connection = MagicMock()
+
+    stale_a = MagicMock()
+    stale_a.id = "job-a"
+    stale_a.meta = {"experiment_name": "exp-test"}
+    stale_a.get_status.return_value = queue_module.rq.job.JobStatus.STARTED  # type: ignore[union-attr]
+    stale_a.timeout = 60
+    stale_a.started_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+
+    stale_b = MagicMock()
+    stale_b.id = "job-b"
+    stale_b.meta = {"experiment_name": "exp-test"}
+    stale_b.get_status.return_value = queue_module.rq.job.JobStatus.STARTED  # type: ignore[union-attr]
+    stale_b.timeout = 60
+    stale_b.started_at = datetime.now(timezone.utc) - timedelta(minutes=11)
+
+    monkeypatch.setattr(
+        queue_module.rq.Worker,  # type: ignore[union-attr]
+        "all",
+        lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        queue_module,
+        "get_existing_trial_jobs",
+        lambda _queue, **_kwargs: {
+            "queued": [],
+            "started": [stale_a, stale_b],
+            "failed": [],
+            "finished": [],
+            "deferred": [],
+            "scheduled": [],
+        },
+    )
+    monkeypatch.setattr(queue_module, "get_trial_key", lambda _job: "trial-1")
+    removed_ids: list[str] = []
+    monkeypatch.setattr(
+        queue_module,
+        "remove_job_by_id",
+        lambda _queue, job_id: removed_ids.append(job_id) or True,
+    )
+
+    handled = queue_module.handle_orphaned_jobs(queue, [stale_a, stale_b])
+
+    assert handled == 2
+    assert removed_ids == ["job-b"]
+    queue.enqueue_job.assert_called_once_with(stale_a)
+    stale_a.set_status.assert_called_once_with(
+        queue_module.rq.job.JobStatus.FAILED  # type: ignore[union-attr]
+    )
+    stale_b.set_status.assert_not_called()
+
+
 def test_handle_orphaned_jobs_skips_when_queue_worker_exists(monkeypatch) -> None:
     if not queue_module.REDIS_AVAILABLE:
         pytest.skip("Redis/RQ not available")

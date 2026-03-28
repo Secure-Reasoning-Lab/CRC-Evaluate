@@ -806,12 +806,63 @@ def handle_orphaned_jobs(
         1 for worker in active_workers if _worker_listens_to_queue(worker, queue_name)
     )
 
+    jobs = list(
+        started_jobs.values() if isinstance(started_jobs, dict) else started_jobs
+    )
     count = 0
-    jobs = started_jobs.values() if isinstance(started_jobs, dict) else started_jobs
+    requeued_count = 0
+    removed_duplicate_count = 0
+    active_jobs_by_experiment: dict[str | None, dict[str, list["rq.job.Job"]]] = {}
+    stale_started_ids_by_trial: dict[tuple[str | None, str], set[str]] = {}
+    survivor_started_job_id_by_trial: dict[tuple[str | None, str], str] = {}
+
+    for job in jobs:
+        job_id = getattr(job, "id", None)
+        if not isinstance(job_id, str) or not job_id:
+            continue
+        trial_bucket = (get_job_experiment_name(job), get_trial_key(job))
+        stale_started_ids_by_trial.setdefault(trial_bucket, set()).add(job_id)
+
+    for trial_bucket, job_ids in stale_started_ids_by_trial.items():
+        survivor_started_job_id_by_trial[trial_bucket] = sorted(job_ids)[0]
+
     for job in jobs:
         if queue_worker_count > 0 and not _is_stale_started_job(
             job, stale_started_grace_seconds
         ):
+            continue
+        experiment_name = get_job_experiment_name(job)
+        trial_key = get_trial_key(job)
+        trial_bucket = (experiment_name, trial_key)
+        if experiment_name not in active_jobs_by_experiment:
+            active_jobs_by_experiment[experiment_name] = get_existing_trial_jobs(
+                queue, experiment_name=experiment_name
+            )
+        if _has_other_active_trial_job(
+            job,
+            active_jobs_by_experiment[experiment_name],
+            stale_started_ids_by_trial.get(trial_bucket, set()),
+        ):
+            if remove_job_by_id(queue, job.id):
+                count += 1
+                removed_duplicate_count += 1
+                logger.warning(
+                    f"Removed stale duplicate started job {job.id[:8]} for logical "
+                    f"trial {trial_key}"
+                )
+            continue
+        if (
+            len(stale_started_ids_by_trial.get(trial_bucket, set())) > 1
+            and survivor_started_job_id_by_trial.get(trial_bucket) != job.id
+        ):
+            if remove_job_by_id(queue, job.id):
+                count += 1
+                removed_duplicate_count += 1
+                logger.warning(
+                    f"Removed extra stale started duplicate {job.id[:8]} for logical "
+                    f"trial {trial_key}; survivor="
+                    f"{survivor_started_job_id_by_trial[trial_bucket][:8]}"
+                )
             continue
         try:
             # Move to failed registry
@@ -819,13 +870,40 @@ def handle_orphaned_jobs(
             # Requeue for retry
             queue.enqueue_job(job)
             count += 1
+            requeued_count += 1
             logger.debug(f"Handled orphaned job {job.id[:8]}")
         except Exception as e:
             logger.warning(f"Failed to handle orphaned job {job.id[:8]}: {e}")
 
     if count > 0:
-        logger.info(f"Handled {count} orphaned jobs (moved to failed + requeued)")
+        logger.info(
+            f"Handled {count} orphaned jobs ({requeued_count} requeued, "
+            f"{removed_duplicate_count} stale duplicates removed)"
+        )
     return count
+
+
+def _has_other_active_trial_job(
+    job: "rq.job.Job",
+    existing: dict[str, list["rq.job.Job"]],
+    sibling_started_ids: set[str],
+) -> bool:
+    """Return whether another active physical job already exists for this trial."""
+    job_id = getattr(job, "id", None)
+    if not isinstance(job_id, str) or not job_id:
+        return False
+
+    trial_key = get_trial_key(job)
+    for bucket_name in ("queued", "deferred", "scheduled", "started"):
+        for other in existing[bucket_name]:
+            other_id = getattr(other, "id", None)
+            if not isinstance(other_id, str) or other_id == job_id:
+                continue
+            if get_trial_key(other) != trial_key:
+                continue
+            if bucket_name != "started" or other_id not in sibling_started_ids:
+                return True
+    return False
 
 
 def _is_stale_started_job(

@@ -109,6 +109,9 @@ The queue layer treats the following as terminal outcomes:
 - continue-mode recovery of `started` jobs must use per-job timeout-plus-grace
   staleness; the presence of another live worker on the same queue must not
   suppress recovery of a stale started job
+- if a stale `started` duplicate exists while another physical job for the same
+  logical trial is already runnable, recovery must remove the stale duplicate
+  instead of requeueing it and creating two active jobs
 - timeout recovery must not leave the shadow lifecycle in `queued` unless the
   concrete queue entry is executable again
 - once `claimed_by` moves to a replacement worker, the superseded worker must
