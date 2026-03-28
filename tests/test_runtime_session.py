@@ -87,3 +87,28 @@ def test_ensure_registered_if_missing_skips_when_existing() -> None:
     assert registered is False
     session.lease.acquire_lock.assert_not_called()
     session.lease.register.assert_not_called()
+
+
+def test_resume_or_raise_reconciles_without_started_monitor() -> None:
+    session = DistributedRuntimeSession(
+        experiment_name="exp",
+        redis_host="localhost",
+        redis_conn=MagicMock(),
+        registry=MagicMock(),
+        lease=MagicMock(),
+        lifecycle_store=MagicMock(),
+    )
+    session.lease.try_resume_lock.return_value = True
+    artifact_checker = MagicMock(return_value=None)
+    monitor = MagicMock()
+    monitor.reconcile_on_resume.return_value = ["job-syncing"]
+
+    with patch(
+        "crsbench.distributed.runtime_session.JobMonitorLoop",
+        return_value=monitor,
+    ) as monitor_cls:
+        needs_collection = session.resume_or_raise(artifact_checker=artifact_checker)
+
+    assert needs_collection == ["job-syncing"]
+    monitor_cls.assert_called_once()
+    monitor.reconcile_on_resume.assert_called_once_with()

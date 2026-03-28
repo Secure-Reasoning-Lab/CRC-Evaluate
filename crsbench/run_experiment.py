@@ -1933,7 +1933,9 @@ def run_experiment_distributed(
                     lock_acquired = True
                 except LockContentionError:
                     try:
-                        resume_collection_job_ids = session.resume_or_raise()
+                        resume_collection_job_ids = session.resume_or_raise(
+                            artifact_checker=_build_artifact_checker(config)
+                        )
                         lock_acquired = True
                         logger.info(
                             "Resumed stale experiment lock for continue-mode recovery"

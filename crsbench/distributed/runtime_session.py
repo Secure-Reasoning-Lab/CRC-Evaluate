@@ -163,7 +163,11 @@ class DistributedRuntimeSession:
             self._monitor.stop()
             self._monitor = None
 
-    def resume_or_raise(self) -> list[str]:
+    def resume_or_raise(
+        self,
+        *,
+        artifact_checker: "Callable[[str], JobState | None] | None" = None,
+    ) -> list[str]:
         """Take over a stale experiment lock and resume monitoring after a restart.
 
         Calls try_resume_lock() and, if the monitor is already running,
@@ -180,8 +184,14 @@ class DistributedRuntimeSession:
                 f"Experiment '{self.experiment_name}' lock is actively held — cannot resume."
             )
         needs_collection: list[str] = []
-        if self.lifecycle_store is not None and self._monitor is not None:
-            needs_collection = self._monitor.reconcile_on_resume()
+        if self.lifecycle_store is not None:
+            monitor = self._monitor or JobMonitorLoop(
+                lifecycle_store=self.lifecycle_store,
+                experiment_name=self.experiment_name,
+                connection=cast("LifecycleRedisProtocol", self.redis_conn),
+                artifact_checker=artifact_checker,
+            )
+            needs_collection = monitor.reconcile_on_resume()
         return needs_collection
 
     def cleanup(self) -> None:
