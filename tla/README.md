@@ -8,6 +8,9 @@
 - `DistributedTrialKeySnapshot.tla`: model of physical RQ jobs vs logical `trial_key` snapshots
 - `DistributedTrialKeySnapshotDuplicate.cfg`: intentionally allows two physical jobs to share one logical trial key
 - `DistributedTrialKeySnapshotUnique.cfg`: fixed configuration where each physical job has a distinct logical trial key
+- `DistributedContinueCarryover.tla`: model of continue-mode carryover collection after controller restart
+- `DistributedContinueCarryoverBuggy.cfg`: buggy config where continue mode skips re-enqueue and exits without attaching carryover jobs
+- `DistributedContinueCarryoverHealthy.cfg`: fixed config where continue mode attaches carryover jobs and writes markers before exit
 
 ## Purpose
 
@@ -27,6 +30,15 @@ The second model is meant to catch a different code-correspondent bug class:
 - duplicate physical jobs for one logical trial collapse to a single visible row
 
 That can hide duplicate work from queue status, cleanup, and orphan recovery.
+
+The third model is meant to catch a restart/continue bug class:
+
+- a previous controller run already left a terminal physical RQ job behind
+- the logical trial is skipped in `--queue-mode continue`
+- but the replacement controller must still attach that carryover job for
+  monitoring so `.success` / `.fail` markers get written
+
+Otherwise the controller can silently drop terminal results during restart.
 
 ## Run TLC
 
@@ -143,6 +155,42 @@ source .envrc
 java tlc2.TLC \
   -config tla/DistributedTrialKeySnapshotUnique.cfg \
   tla/DistributedTrialKeySnapshot.tla
+```
+
+Expected result:
+
+- TLC completes with no errors
+
+## Continue Carryover Model
+
+This model corresponds directly to the continue-mode restart path:
+
+- `run_experiment.py` skips enqueue when `get_existing_trials()` reports an
+  existing logical trial key
+- terminal carryover jobs still need to pass through `monitor_jobs()` so the
+  orchestrator marker callbacks run
+- exiting before attaching those jobs loses terminal results
+
+Buggy run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedContinueCarryoverBuggy.cfg \
+  tla/DistributedContinueCarryover.tla
+```
+
+Expected result:
+
+- `DoneImpliesMarker` fails because the controller exits with no marker written
+
+Fixed run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedContinueCarryoverHealthy.cfg \
+  tla/DistributedContinueCarryover.tla
 ```
 
 Expected result:
