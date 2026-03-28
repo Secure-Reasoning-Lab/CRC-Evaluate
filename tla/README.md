@@ -35,6 +35,9 @@
 - `DistributedStaleLockResume.tla`: model of continue-mode stale-lock takeover on orchestrator restart
 - `DistributedStaleLockResumeBuggy.cfg`: buggy config where continue mode aborts instead of attempting resume
 - `DistributedStaleLockResumeHealthy.cfg`: fixed config where stale locks are reclaimed before queue recovery
+- `DistributedMonitorCallbacks.tla`: model of orchestrator terminal callback fencing after ownership handoff
+- `DistributedMonitorCallbacksBuggy.cfg`: buggy config where stale terminal callbacks consume the job id too early
+- `DistributedMonitorCallbacksHealthy.cfg`: fixed config where only the current owner can finalize monitor callbacks
 
 ## Purpose
 
@@ -114,6 +117,13 @@ The eleventh model is meant to catch stale-lock restart bugs:
 - a prior orchestrator left a stale experiment lock behind
 - continue mode should attempt resume rather than abort immediately
 - stale-lock takeover must happen before queue recovery mutates existing work
+
+The twelfth model is meant to catch stale terminal-callback bugs:
+
+- lifecycle ownership moves to a replacement worker
+- a superseded worker reports `finished` first for the same `job_id`
+- the shared queue monitor must not consume that stale terminal event and block
+  the current owner's result from writing the orchestrator marker
 
 ## Run TLC
 
@@ -541,6 +551,41 @@ source .envrc
 java tlc2.TLC \
   -config tla/DistributedContinueCarryoverHealthy.cfg \
   tla/DistributedContinueCarryover.tla
+```
+
+Expected result:
+
+- TLC completes with no errors
+
+## Monitor Callback Model
+
+This model corresponds to the shared queue monitor callback boundary:
+
+- `_process_tracked_jobs()` keeps `seen_finished` per `job_id`
+- `_build_monitor_callbacks()` writes orchestrator markers from finished jobs
+- after lifecycle ownership moves, a stale worker's terminal event must not
+  consume the `job_id` before the current owner's result arrives
+
+Buggy run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedMonitorCallbacksBuggy.cfg \
+  tla/DistributedMonitorCallbacks.tla
+```
+
+Expected result:
+
+- `StaleOwnerCannotConsumeFinishedCallback` fails
+
+Healthy run:
+
+```bash
+source .envrc
+java tlc2.TLC \
+  -config tla/DistributedMonitorCallbacksHealthy.cfg \
+  tla/DistributedMonitorCallbacks.tla
 ```
 
 Expected result:
