@@ -32,6 +32,9 @@
 - `DistributedResumeRegistryOwnership.tla`: model of stale-lock resume ownership over experiment registry state
 - `DistributedResumeRegistryOwnershipBuggy.cfg`: buggy config where a resumed controller takes the lock but never owns the registry entry for cleanup
 - `DistributedResumeRegistryOwnershipHealthy.cfg`: fixed config where stale-lock resume adopts or republishes registry state before cleanup
+- `DistributedInitHeartbeatFence.tla`: model of the worker's first lifecycle heartbeat during startup
+- `DistributedInitHeartbeatFenceBuggy.cfg`: buggy config where startup heartbeats refresh terminal or foreign-owned records
+- `DistributedInitHeartbeatFenceHealthy.cfg`: fixed config where startup heartbeats require current active ownership
 - `DistributedRetryExclusivity.tla`: model of at-most-one authoritative live attempt across retries
 - `DistributedRetryExclusivityBuggy.cfg`: buggy config where superseded and replacement attempts are both live
 - `DistributedRetryExclusivityHealthy.cfg`: fenced config where only one authoritative live attempt remains
@@ -265,6 +268,13 @@ The twenty-ninth model is meant to catch stale-lock registry-ownership bugs:
 - the old experiment registry entry may already exist, or may be missing
 - the resumed controller must own the registry state strongly enough that
   `cleanup()` clears it at the end of the resumed run
+
+The thirtieth model is meant to catch startup-heartbeat fence bugs:
+
+- a worker begins lifecycle initialization for an RQ job
+- the corresponding shadow record may already be terminal or owned by another worker
+- the very first lifecycle heartbeat must obey the same ownership fence as the
+  background heartbeat loop
 
 The fifteenth model is meant to catch resume-collection restart bugs:
 
