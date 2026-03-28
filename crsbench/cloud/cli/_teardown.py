@@ -36,6 +36,9 @@ from crsbench.cloud.providers import (
     provisioner_for_context,
 )
 from crsbench.cloud.readiness import CloudInstanceRole
+from crsbench.distributed import queue as queue_module
+from crsbench.distributed.job_lifecycle import JobState
+from crsbench.distributed.queue_monitor import list_queue_job_entries
 from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -45,6 +48,45 @@ if TYPE_CHECKING:
     from crsbench.cloud.records import CloudInstanceLike
 
 logger = get_logger(__name__)
+
+
+def _job_state_value(job) -> str:
+    state = getattr(job, "state", "")
+    return state.value if hasattr(state, "value") else str(state)
+
+
+def _load_teardown_jobs(redis_conn, lifecycle, experiment_name: str):
+    """Load teardown-visible jobs from lifecycle plus uncovered live queue state."""
+    lifecycle_jobs = lifecycle.list_jobs(experiment_name) if lifecycle else []
+    lifecycle_job_ids = {job.job_id for job in lifecycle_jobs}
+    if (
+        redis_conn is None
+        or not queue_module.REDIS_AVAILABLE
+        or queue_module.rq is None
+    ):
+        return lifecycle_jobs
+
+    trial_queue_name, _build_queue_name, _verify_queue_name = (
+        queue_module.resolve_queue_names(experiment_name)
+    )
+    queue = queue_module.rq.Queue(
+        trial_queue_name,
+        connection=redis_conn,
+    )
+    queue_entries = list_queue_job_entries(queue, experiment_name)
+    if not lifecycle_jobs:
+        return queue_entries
+    return [
+        *lifecycle_jobs,
+        *(job for job in queue_entries if job.job_id not in lifecycle_job_ids),
+    ]
+
+
+def _count_uncollected_jobs(redis_conn, lifecycle, experiment_name: str) -> int:
+    """Count non-terminal jobs across lifecycle and any uncovered queue entries."""
+    jobs = _load_teardown_jobs(redis_conn, lifecycle, experiment_name)
+    terminal_states = {JobState.COMPLETED.value, JobState.FAILED.value}
+    return sum(1 for job in jobs if _job_state_value(job) not in terminal_states)
 
 
 def run_teardown(args: argparse.Namespace) -> int:
@@ -66,8 +108,9 @@ def run_teardown(args: argparse.Namespace) -> int:
     base_destination = experiment_filestore / experiment_name
     readiness = None
     lifecycle = None
+    redis_conn = None
     try:
-        _context, _redis_conn, readiness, lifecycle, experiment_filestore = reconnect(
+        _context, redis_conn, readiness, lifecycle, experiment_filestore = reconnect(
             args.config, experiment_name
         )
     except Exception as exc:
@@ -110,8 +153,11 @@ def run_teardown(args: argparse.Namespace) -> int:
         return 0
 
     # Query uncollected jobs
-    jobs = lifecycle.list_jobs(experiment_name) if lifecycle else []
-    uncollected_count = sum(1 for j in jobs if j.state not in ("completed", "failed"))
+    uncollected_count = _count_uncollected_jobs(
+        redis_conn,
+        lifecycle,
+        experiment_name,
+    )
 
     # Confirmation prompt
     if not args.force:

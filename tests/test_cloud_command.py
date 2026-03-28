@@ -7104,6 +7104,50 @@ def _setup_teardown_mocks(
 class TestTeardown:
     """Tests for run_teardown() sub-action."""
 
+    @patch("crsbench.cloud.cli._teardown.list_queue_job_entries")
+    @patch("crsbench.cloud.cli._teardown.queue_module.rq")
+    @patch("crsbench.cloud.cli._teardown.queue_module.REDIS_AVAILABLE", new=True)
+    def test_count_uncollected_jobs_merges_queue_only_jobs_when_lifecycle_is_partial(
+        self,
+        mock_rq,
+        mock_list_queue_job_entries,
+    ):
+        """Teardown safety should count uncovered queue work, not just lifecycle rows."""
+        from crsbench.cloud.cli._teardown import _count_uncollected_jobs
+        from crsbench.distributed.job_lifecycle import JobLifecycleRecord, JobState
+
+        lifecycle = MagicMock()
+        lifecycle.list_jobs.return_value = [
+            JobLifecycleRecord(
+                job_id="job-completed",
+                trial_key="trial-1",
+                state=JobState.COMPLETED,
+                claimed_by=None,
+                retry_count=0,
+            )
+        ]
+        mock_rq.Queue.return_value = MagicMock()
+        mock_list_queue_job_entries.return_value = [
+            SimpleNamespace(
+                job_id="job-completed",
+                trial_key="trial-1",
+                state="completed",
+                claimed_by=None,
+                retry_count=0,
+            ),
+            SimpleNamespace(
+                job_id="job-running",
+                trial_key="trial-2",
+                state="running",
+                claimed_by="worker-1",
+                retry_count=0,
+            ),
+        ]
+
+        count = _count_uncollected_jobs(MagicMock(), lifecycle, "test-exp")
+
+        assert count == 1
+
     def test_teardown_timestamp_flag_uses_fresh_sibling_destination(
         self,
         tmp_path: Path,
