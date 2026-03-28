@@ -84,8 +84,13 @@ case where at least one healthy worker and a healthy evaluator exist:
 
 Under those assumptions, `DistributedTimeoutRecoveryHealthy.cfg` checks:
 
+- `NoDuplicateActiveOwner`
+- `RetryCountMatchesRequeues`
 - `EventuallyCompletedOrFailed`
-- `TerminalLifecycleSticky`
+- `TerminalJobsNeverResurrect`
+- `ArtifactTerminalStateMatchesLifecycle`
+- `ResumeReconciliationIsComplete`
+- `HealthyWorkerCannotBeOrphaned`
 
 That is the stronger guarantee: every job eventually reaches terminal
 `completed` or `failed`, and once terminal, it stays terminal.
