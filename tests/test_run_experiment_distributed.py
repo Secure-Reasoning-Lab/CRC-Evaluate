@@ -6,10 +6,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from crsbench.cloud.models import build_cloud_launch_plan
+from crsbench.distributed.job_lifecycle import JobState
 from crsbench.distributed.jobs import _build_trial_output_path
 from crsbench.distributed.runtime_session import LockContentionError
 from crsbench.run_experiment import (
     Trial,
+    _build_artifact_checker,
     _get_experiment_queue_stats,
     _monitor_jobs_basic,
     _monitor_jobs_rich,
@@ -26,6 +28,49 @@ from crsbench.validation.schemas import (
     ExperimentConfig,
     HarnessFile,
 )
+
+
+def test_build_artifact_checker_recognizes_success_and_fail_markers(
+    tmp_path: Path,
+) -> None:
+    """Timeout recovery should treat either terminal marker as authoritative."""
+    config = MagicMock()
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+
+    checker = _build_artifact_checker(config)
+
+    success_dir = _build_trial_output_path(
+        filestore=tmp_path.resolve(),
+        experiment_name="exp-test",
+        crs="crs-a",
+        benchmark="bench-a",
+        harness="fuzz_target",
+        mode="delta",
+        sanitizer="address",
+        trial_num=1,
+        target_cpv_id=None,
+    )
+    success_dir.mkdir(parents=True, exist_ok=True)
+    (success_dir / ".success").touch()
+
+    fail_dir = _build_trial_output_path(
+        filestore=tmp_path.resolve(),
+        experiment_name="exp-test",
+        crs="crs-b",
+        benchmark="bench-b",
+        harness="harness-b",
+        mode="delta",
+        sanitizer="address",
+        trial_num=2,
+        target_cpv_id=None,
+    )
+    fail_dir.mkdir(parents=True, exist_ok=True)
+    (fail_dir / ".fail").touch()
+
+    assert checker("crs-a:bench-a:fuzz_target:delta:address:1:-") is JobState.COMPLETED
+    assert checker("crs-b:bench-b:harness-b:delta:address:2:-") is JobState.FAILED
+    assert checker("crs-c:bench-c:harness-c:delta:address:3:-") is None
 
 
 def test_register_failure_cleans_registry_lease() -> None:
@@ -949,6 +994,63 @@ def test_provider_neutral_cloud_workers_validate_quota_before_bringup(
     validator.validate.assert_called_once_with(launch_plan, include_orchestrator=False)
     manager.bring_up_workers.assert_called_once()
     manager.bring_up_instances.assert_not_called()
+
+
+def test_provider_neutral_cloud_workers_seed_lifecycle_and_start_monitor(
+    tmp_path: Path,
+) -> None:
+    """Cloud-backed distributed runs should seed lifecycle records and start monitor."""
+    config = _make_provider_neutral_run_config(tmp_path)
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.cloud_readiness = MagicMock()
+    session.lifecycle_store = MagicMock()
+    session.register_or_raise.return_value = None
+
+    registration = MagicMock()
+    manager = MagicMock()
+    manager.bring_up_workers.return_value = MagicMock(ready_count=1, requested_count=1)
+
+    queued_job = MagicMock()
+    queued_job.id = "job-123"
+    queue.enqueue.return_value = queued_job
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={"queued": {}, "started": {}, "failed": {}, "finished": {}},
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config",
+            return_value=registration,
+        ),
+        patch("crsbench.cloud.quota.QuotaValidator") as mock_quota_validator_cls,
+        patch(
+            "crsbench.cloud.status.CloudFleetStatusManager",
+            return_value=manager,
+        ),
+        patch(
+            "crsbench.run_experiment.monitor_jobs",
+            side_effect=RuntimeError("stop after monitor setup"),
+        ),
+    ):
+        mock_quota_validator_cls.return_value.validate.return_value = None
+        with pytest.raises(RuntimeError, match="stop after monitor setup"):
+            run_experiment_distributed("exp-test", config, [_make_trial(None)])
+
+    session.start_monitor.assert_called_once()
+    session.lifecycle_store.set.assert_called_once()
+    seeded_record = session.lifecycle_store.set.call_args.args[1]
+    assert seeded_record.job_id == "job-123"
+    assert seeded_record.trial_key == "crs-a:bench-a:fuzz_target:delta:address:1:-"
+    assert seeded_record.state.value == "queued"
 
 
 def test_provider_neutral_cloud_workers_resolve_secret_refs_before_bringup(

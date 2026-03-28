@@ -6,7 +6,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional, cast
 
 from crsbench.cloud.readiness import CloudReadinessStore, ReadinessRedisProtocol
-from crsbench.distributed.job_lifecycle import JobLifecycleStore, LifecycleRedisProtocol
+from crsbench.distributed.job_lifecycle import (
+    JobLifecycleStore,
+    JobState,
+    LifecycleRedisProtocol,
+)
 from crsbench.distributed.job_monitor import JobMonitorLoop
 from crsbench.distributed.patch_queue import initialize_patch_queues
 from crsbench.distributed.queue import create_redis_connection, initialize_queue
@@ -128,14 +132,14 @@ class DistributedRuntimeSession:
     def start_monitor(
         self,
         cloud_liveness_checker: "Callable[[str], bool]",
-        artifact_checker: "Callable[[str], bool]",
+        artifact_checker: "Callable[[str], JobState | None]",
         scan_interval: float = 90.0,
     ) -> None:
         """Start the job monitor background thread.
 
         Args:
             cloud_liveness_checker: callable(instance_name) -> bool.
-            artifact_checker: callable(trial_key) -> bool.
+            artifact_checker: callable(trial_key) -> terminal lifecycle state or None.
             scan_interval: Seconds between scan cycles.
         """
         if self.lifecycle_store is None:

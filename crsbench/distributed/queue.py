@@ -37,6 +37,26 @@ FLAT_BUILD_QUEUE = "crsbench_build"
 FLAT_VERIFY_QUEUE = "crsbench_verify"
 
 
+def build_trial_key(
+    *,
+    crs: str,
+    benchmark: str,
+    harness: str,
+    mode: str | object,
+    sanitizer: str | object,
+    trial_num: int | object,
+    target_cpv_id: str | None,
+) -> str:
+    """Build the canonical distributed trial key used across queue state."""
+    return (
+        f"{crs}:{benchmark}:{harness}:"
+        f"{mode if mode is not None else '-'}:"
+        f"{sanitizer if sanitizer is not None else '-'}:"
+        f"{trial_num if trial_num is not None else '-'}:"
+        f"{target_cpv_id or '-'}"
+    )
+
+
 def get_job_experiment_name(job: "rq.job.Job") -> str | None:
     """Extract experiment name from an RQ job (supports old/new payload layouts)."""
     meta = job.meta or {}
@@ -537,12 +557,14 @@ def get_trial_key(job: "rq.job.Job") -> str:
     benchmark = meta.get("benchmark")
     harness = meta.get("harness")
     if isinstance(crs, str) and isinstance(benchmark, str) and isinstance(harness, str):
-        return (
-            f"{crs}:{benchmark}:{harness}:"
-            f"{meta.get('mode', '-')}:"
-            f"{meta.get('sanitizer', '-')}:"
-            f"{meta.get('trial_num', '-')}:"
-            f"{meta.get('target_cpv_id') or '-'}"
+        return build_trial_key(
+            crs=crs,
+            benchmark=benchmark,
+            harness=harness,
+            mode=meta.get("mode", "-"),
+            sanitizer=meta.get("sanitizer", "-"),
+            trial_num=meta.get("trial_num", "-"),
+            target_cpv_id=meta.get("target_cpv_id"),
         )
     experiment = get_job_experiment_name(job) or "-"
     return f"job:{experiment}:{job.id or 'unknown'}"

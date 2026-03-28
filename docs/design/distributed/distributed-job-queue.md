@@ -65,6 +65,24 @@ Verify jobs consume prepared artifacts and produce verdicts. In non-local deploy
 
 ## State and Failure Semantics
 
+### Shadow lifecycle contract
+Cloud-backed trial execution maintains a Redis-backed shadow lifecycle in addition
+to the concrete RQ job state. The shadow lifecycle exists to make stale-worker
+recovery explicit across controller restarts and cloud-instance loss.
+
+The active lifecycle states are:
+- `queued`
+- `claimed`
+- `running`
+- `syncing`
+
+The terminal lifecycle states are:
+- `completed`
+- `failed`
+
+`orphaned` is an internal recovery state entered only while stale-job handling is
+in progress.
+
 ### Terminal states
 The queue layer treats the following as terminal outcomes:
 - `finished`
@@ -75,6 +93,10 @@ The queue layer treats the following as terminal outcomes:
 ### Stale or missing state
 - missing queue metadata for a supposedly pending job is an infrastructure failure
 - `started` jobs that exceed timeout plus grace are treated as stale infrastructure failures
+- timeout recovery must not leave the shadow lifecycle in `queued` unless the
+  concrete queue entry is executable again
+- published terminal artifacts on orchestrator storage are authoritative for
+  stale-job recovery: `.success` maps to `completed`, `.fail` maps to `failed`
 - retry policy must distinguish infra failures from benchmark-result failures
 
 ### Retry principles
@@ -107,8 +129,10 @@ The queue layer treats the following as terminal outcomes:
 ### Failure path
 1. dequeue or execution fails
 2. failure is recorded with infrastructure-vs-result semantics
-3. retry/refresh policy decides whether the logical job is resubmitted or treated as terminal
-4. aggregate reporting preserves `ERROR` vs `FAIL` distinctions where applicable
+3. stale-worker recovery first checks for published terminal artifacts, then
+   either marks the shadow lifecycle terminal or re-enqueues the concrete job
+4. retry/refresh policy decides whether the logical job is resubmitted or treated as terminal
+5. aggregate reporting preserves `ERROR` vs `FAIL` distinctions where applicable
 
 ## Decisions and Tradeoffs
 

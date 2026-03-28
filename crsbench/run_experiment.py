@@ -40,11 +40,14 @@ from dotenv import load_dotenv
 from pydantic import BaseModel
 
 from crsbench.cloud.bootstrap import CloudVmBootstrapInputs
+from crsbench.cloud.readiness import CloudWorkerState
+from crsbench.distributed.job_lifecycle import JobLifecycleRecord, JobState
 from crsbench.distributed.jobs import (
     _build_trial_output_path,
     _check_existing_trial,
     get_crs_type,
 )
+from crsbench.distributed.queue import build_trial_key
 from crsbench.distributed.queue_monitor import (
     QueueMonitorCallbacks,
     monitor_queue,
@@ -1287,6 +1290,85 @@ def _write_orchestrator_marker(
     )
 
 
+def _seed_lifecycle_record(
+    session,
+    *,
+    experiment_name: str,
+    trial: Trial,
+    job_id: str | None,
+) -> None:
+    """Create an initial shadow lifecycle record for one enqueued trial job."""
+    if session.lifecycle_store is None or not job_id:
+        return
+
+    trial_key = build_trial_key(
+        crs=trial.crs,
+        benchmark=trial.benchmark_harness.name,
+        harness=trial.benchmark_harness.harness.name,
+        mode=trial.mode,
+        sanitizer=trial.sanitizer,
+        trial_num=trial.trial_num,
+        target_cpv_id=trial.target_cpv_id,
+    )
+    session.lifecycle_store.set(
+        experiment_name,
+        JobLifecycleRecord(
+            job_id=job_id,
+            trial_key=trial_key,
+            state=JobState.QUEUED,
+            claimed_by=None,
+        ),
+    )
+
+
+def _build_cloud_liveness_checker(readiness_store, experiment_name: str):
+    """Return a cloud worker liveness predicate keyed by instance name."""
+
+    def _is_alive(instance_name: str) -> bool:
+        for worker in readiness_store.list_workers(experiment_name):
+            if worker.instance_name != instance_name:
+                continue
+            return worker.state not in {
+                CloudWorkerState.BOOTSTRAP_FAILED,
+                CloudWorkerState.DELETED,
+            }
+        return False
+
+    return _is_alive
+
+
+def _build_artifact_checker(config: ExperimentConfig):
+    """Return a checker for published terminal markers on orchestrator storage."""
+
+    def _artifacts_exist(trial_key: str) -> JobState | None:
+        parts = trial_key.split(":", 6)
+        if len(parts) != 7:
+            return None
+        crs, benchmark, harness, mode, sanitizer, trial_num_str, target_cpv_id = parts
+        try:
+            trial_num = int(trial_num_str)
+        except ValueError:
+            return None
+        trial_dir = _build_trial_output_path(
+            filestore=config.experiment_filestore.resolve(),
+            experiment_name=config.experiment,
+            crs=crs,
+            benchmark=benchmark,
+            harness=harness,
+            mode=mode,
+            sanitizer=sanitizer,
+            trial_num=trial_num,
+            target_cpv_id=None if target_cpv_id == "-" else target_cpv_id,
+        )
+        if (trial_dir / ".success").exists():
+            return JobState.COMPLETED
+        if (trial_dir / ".fail").exists():
+            return JobState.FAILED
+        return None
+
+    return _artifacts_exist
+
+
 def monitor_jobs(
     queue,
     job_list: List,
@@ -1869,6 +1951,10 @@ def run_experiment_distributed(
                 raise RuntimeError(
                     "Distributed runtime session missing cloud readiness store"
                 )
+            if session.lifecycle_store is None:
+                raise RuntimeError(
+                    "Distributed runtime session missing lifecycle store"
+                )
 
             from crsbench.cloud.status import CloudFleetStatusManager
 
@@ -1954,6 +2040,13 @@ def run_experiment_distributed(
                     f"{fleet_status.ready_count}/{fleet_status.requested_count}"
                 )
 
+            session.start_monitor(
+                cloud_liveness_checker=_build_cloud_liveness_checker(
+                    session.cloud_readiness, experiment_name
+                ),
+                artifact_checker=_build_artifact_checker(config),
+            )
+
         jobs = []
         for trial in trials:
             bh = trial.benchmark_harness
@@ -1992,6 +2085,12 @@ def run_experiment_distributed(
                     "cpu_tag": cpu_tag,
                     "experiment_name": experiment_name,
                 },
+            )
+            _seed_lifecycle_record(
+                session,
+                experiment_name=experiment_name,
+                trial=trial,
+                job_id=job.id,
             )
             jobs.append(job)
             logger.debug(

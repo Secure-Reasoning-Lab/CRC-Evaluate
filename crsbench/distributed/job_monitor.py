@@ -26,6 +26,9 @@ logger = get_logger(__name__)
 _ACTIVE_STATES = {JobState.CLAIMED, JobState.RUNNING, JobState.SYNCING}
 
 
+ArtifactTerminalStateChecker = Callable[[str], JobState | bool | None]
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -49,7 +52,8 @@ class JobMonitorLoop:
         scan_interval: Seconds between scan cycles.
         max_retries: Maximum retry attempts before permanent failure.
         cloud_liveness_checker: callable(instance_name: str) -> bool. Injected for testing.
-        artifact_checker: callable(trial_key: str) -> bool. Returns True if artifacts exist.
+        artifact_checker: callable(trial_key: str) -> terminal lifecycle state if
+            artifacts prove the job already finished, else None.
     """
 
     def __init__(
@@ -61,7 +65,7 @@ class JobMonitorLoop:
         scan_interval: float = 90.0,
         max_retries: int = 3,
         cloud_liveness_checker: Callable[[str], bool] | None = None,
-        artifact_checker: Callable[[str], bool] | None = None,
+        artifact_checker: ArtifactTerminalStateChecker | None = None,
     ) -> None:
         self._store = lifecycle_store
         self._experiment = experiment_name
@@ -70,7 +74,7 @@ class JobMonitorLoop:
         self._scan_interval = scan_interval
         self._max_retries = max_retries
         self._cloud_liveness = cloud_liveness_checker or (lambda _: True)
-        self._artifact_checker = artifact_checker or (lambda _: False)
+        self._artifact_checker = artifact_checker or (lambda _: None)
 
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -177,17 +181,30 @@ class JobMonitorLoop:
             {"event": "orphan_detected", "job_id": job_id, "trial_key": trial_key},
         )
 
-        # Check if artifacts already published
-        if self._artifact_checker(trial_key):
-            self._store.transition(self._experiment, job_id, JobState.COMPLETED)
+        # Check if artifacts already published and indicate a terminal state.
+        terminal_state = self._resolve_terminal_artifact_state(
+            self._artifact_checker(trial_key)
+        )
+        if terminal_state is not None:
+            self._store.transition(self._experiment, job_id, terminal_state)
+            event_name = (
+                "completed_from_artifact"
+                if terminal_state is JobState.COMPLETED
+                else "failed_from_artifact"
+            )
             log_recovery_event(
                 self._conn,
                 self._experiment,
-                {"event": "completed_from_artifact", "job_id": job_id},
+                {
+                    "event": event_name,
+                    "job_id": job_id,
+                    "state": terminal_state.value,
+                },
             )
             logger.info(
-                "Job '{}' completed from published artifacts — no requeue needed",
+                "Job '{}' marked {} from published artifacts — no requeue needed",
                 job_id,
+                terminal_state.value,
             )
             return
 
@@ -216,7 +233,26 @@ class JobMonitorLoop:
             )
             return
 
-        # Requeue with incremented retry count
+        # Requeue the concrete RQ job first, then mark shadow state executable again.
+        try:
+            self._requeue_rq_job(job_id)
+        except Exception as exc:
+            detail = f"requeue failed after orphan recovery: {exc}"
+            self._store.transition(
+                self._experiment, job_id, JobState.FAILED, detail=detail
+            )
+            log_recovery_event(
+                self._conn,
+                self._experiment,
+                {
+                    "event": "requeue_failed",
+                    "job_id": job_id,
+                    "detail": str(exc),
+                },
+            )
+            logger.warning("Failed to requeue orphaned job '%s': %s", job_id, exc)
+            return
+
         self._store.increment_retry(self._experiment, job_id)
         self._store.transition(self._experiment, job_id, JobState.QUEUED)
         log_recovery_event(
@@ -230,6 +266,29 @@ class JobMonitorLoop:
             retry_count + 1,
             self._max_retries,
         )
+
+    def _requeue_rq_job(self, job_id: str) -> None:
+        """Move a recovered orphaned job back into its concrete RQ queue."""
+        import rq
+        from rq.job import JobStatus
+
+        job = rq.job.Job.fetch(job_id, connection=self._conn)  # type: ignore[attr-defined]
+        if not job.origin:
+            raise RuntimeError(f"job {job_id!r} is missing origin queue metadata")
+
+        queue = rq.Queue(job.origin, connection=self._conn)  # type: ignore[attr-defined]
+        job.set_status(JobStatus.FAILED)
+        queue.enqueue_job(job)
+
+    def _resolve_terminal_artifact_state(
+        self, artifact_result: JobState | bool | None
+    ) -> JobState | None:
+        """Normalize artifact checker outputs for backward-compatible callers."""
+        if artifact_result is True:
+            return JobState.COMPLETED
+        if artifact_result in {False, None}:
+            return None
+        return artifact_result
 
     # ------------------------------------------------------------------
     # Resume reconciliation
