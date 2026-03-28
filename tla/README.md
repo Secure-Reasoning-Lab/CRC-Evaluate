@@ -56,13 +56,13 @@
 - `DistributedStaleLockResume.tla`: model of continue-mode stale-lock takeover on orchestrator restart
 - `DistributedStaleLockResumeBuggy.cfg`: buggy config where continue mode aborts instead of attempting resume
 - `DistributedStaleLockResumeHealthy.cfg`: fixed config where stale locks are reclaimed before queue recovery
-- `DistributedMonitorCallbacks.tla`: model of orchestrator finished-callback fencing after ownership handoff
+- `DistributedMonitorCallbacks.tla`: model of orchestrator finished-callback fencing after ownership handoff on the lifecycle-backed happy path
 - `DistributedMonitorCallbacksBuggy.cfg`: buggy config where stale terminal callbacks consume the job id too early
 - `DistributedMonitorCallbacksHealthy.cfg`: fixed config where only the current owner can finalize finished callbacks
 - `DistributedMonitorMarkerWrite.tla`: model of retryable orchestrator marker writes
 - `DistributedMonitorMarkerWriteBuggy.cfg`: buggy config where callback failure still consumes the finished job
 - `DistributedMonitorMarkerWriteHealthy.cfg`: fixed config where marker-write failure leaves the callback retryable
-- `DistributedMonitorLifecycleGate.tla`: model of monitor callbacks after lifecycle has already gone non-active
+- `DistributedMonitorLifecycleGate.tla`: model of monitor callbacks after lifecycle has already gone non-active on the readable-lifecycle branch
 - `DistributedMonitorLifecycleGateBuggy.cfg`: buggy config where a late callback still writes a marker after lifecycle failed
 - `DistributedMonitorLifecycleGateHealthy.cfg`: fixed config where non-active lifecycle records consume callbacks without writing markers
 - `DistributedStartedJobRecovery.tla`: model of continue-mode stale started-job recovery
@@ -178,6 +178,8 @@ The fourteenth model is meant to catch stale started-job recovery bugs:
 - a started job's original owner is gone
 - the job has exceeded timeout plus grace
 - an unrelated live worker on the same queue must not block requeue of that stale job
+- if lifecycle/artifact reconciliation has already made the started record
+  terminal, the stale queue residue must be removed instead of kept tracked
 
 The seventeenth model is meant to catch stale started-duplicate recovery bugs:
 
@@ -243,7 +245,8 @@ The twenty-fourth model is meant to catch lifecycle ownership-clearing bugs:
 
 The twenty-fifth model is meant to catch non-active lifecycle callback bugs:
 
-- lifecycle has already moved a job into a non-active terminal state
+- lifecycle has already moved a job into a non-active terminal state and that
+  record is still readable
 - a late finished callback still arrives from RQ
 - the finished callback may be consumed so monitoring can complete, but it must not write
   a new orchestrator marker once lifecycle is no longer active
@@ -395,12 +398,15 @@ Verified locally on March 27, 2026:
 
 ## Trial Key Snapshot Model
 
-This model corresponds directly to the distributed trial queue code:
+This model captures the historical grouped-snapshot bug class in the distributed
+trial queue code:
 
 - `run_experiment.py` enqueues trial jobs with a per-run `trial_id` payload
 - `get_existing_trials()` in `crsbench/distributed/queue.py` stores one job per
   logical `trial_key`
-- `queue_monitor.py` and cleanup/orphan paths used that grouped view
+- `queue_monitor.py` and cleanup/orphan paths used that grouped view before the
+  physical-job split was introduced; the current runtime now uses
+  `get_existing_trial_jobs()` at those boundaries
 
 Duplicate-allowed run:
 
@@ -500,7 +506,8 @@ Expected result:
 
 ## Retry Budget Model
 
-This model corresponds to retry counting during orphan recovery:
+This model corresponds to retry counting during background heartbeat-based
+orphan recovery:
 
 - `retry_count` is stored in the lifecycle shadow record
 - orphan recovery either requeues and increments, or permanently fails
@@ -748,10 +755,14 @@ This model corresponds to the shared queue monitor callback boundary:
 
 - `_process_tracked_jobs()` keeps `seen_finished` per `job_id`
 - `_build_monitor_callbacks()` writes orchestrator markers from finished jobs
+- this model abstracts the lifecycle-backed branch where lifecycle lookup
+  succeeds and an owned active/non-active record exists
 - after lifecycle ownership moves, a stale worker's finished event must not
   consume the `job_id` before the current owner's result arrives
-- retried hard-fail callbacks are intentionally deferred to lifecycle recovery
-  and are outside this model's authoritative-finished-event boundary
+- retried hard-fail callbacks are deferred only while the lifecycle recovery
+  loop is running; otherwise the runtime consumes them without writing a marker
+- lifecycle lookup failures, missing lifecycle rows, and ownerless active
+  records stay retryable in the runtime and are outside this model
 
 Buggy run:
 
@@ -820,6 +831,8 @@ This model corresponds to continue-mode queue recovery for started jobs:
 - `handle_orphaned_jobs()` examines started trial jobs on restart
 - stale started jobs should be requeued by their own timeout-plus-grace window
 - a different live worker on the same queue must not suppress that recovery
+- if lifecycle/artifact reconciliation has already made a started record
+  terminal, the stale queue residue should be removed instead of tracked
 - the recovered attempt must also resurrect shadow lifecycle state so the
   replacement worker is not fenced off by stale ownership
 

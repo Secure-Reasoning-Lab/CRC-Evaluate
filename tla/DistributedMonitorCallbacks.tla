@@ -8,10 +8,17 @@ EXTENDS TLC
 \* - `queue_monitor._process_tracked_jobs()` maintains per-job `seen_finished`
 \* - `_build_monitor_callbacks()` in `run_experiment.py` writes orchestrator
 \*   markers from finished/failed jobs
-\* - finished callbacks fence on the worker identity carried by the terminal
-\*   result payload, not mutable shared `job.meta`
+\* - this model abstracts the lifecycle-backed finished-callback path where a
+\*   lifecycle record is present/readable and the terminal payload carries the
+\*   worker identity used for fencing
+\* - the runtime falls back to mutable `job.meta["worker_name"]` for
+\*   synthetic/missing-worker results; that fail-open fallback is outside this
+\*   model
 \* - retried hard-fail callbacks are intentionally deferred to lifecycle
-\*   recovery and are not modeled as authoritative terminalization events here
+\*   recovery only when that recovery loop is running; otherwise the runtime
+\*   consumes them without writing a canonical marker
+\* - lifecycle lookup failures or ownerless active records leave callbacks
+\*   retryable in the runtime; those degraded branches are outside this model
 \* - the monitor must not consume a stale worker's terminal event after
 \*   lifecycle ownership has moved to a replacement worker
 

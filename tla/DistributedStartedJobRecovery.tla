@@ -8,6 +8,9 @@ EXTENDS TLC
 \* - stale recovery should be based on the specific job's timeout-plus-grace
 \* - an unrelated live worker on the same queue must not block recovery of a
 \*   stale started job whose original owner is gone
+\* - if lifecycle/artifact reconciliation has already made that started record
+\*   terminal, the runtime removes the stale queue residue instead of
+\*   requeueing it; that terminal-residue cleanup branch is outside this model
 \* - once requeued, the shadow lifecycle must also return to `queued` with
 \*   ownership cleared so the replacement worker can proceed
 

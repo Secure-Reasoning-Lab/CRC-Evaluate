@@ -3,6 +3,10 @@ EXTENDS TLC
 
 \* Code-correspondent model for monitor callbacks after lifecycle state has
 \* already gone non-active:
+\* - this model abstracts the branch where lifecycle state is readable and a
+\*   non-active record is present for the callback's `job_id`
+\* - the runtime remains fail-open when lifecycle lookup is unavailable or the
+\*   record is missing; that degradation path is outside this model
 \* - the lifecycle record is terminal or otherwise non-active
 \* - a late finished callback still arrives from RQ
 \* - the callback may be consumed so the monitor can make progress
