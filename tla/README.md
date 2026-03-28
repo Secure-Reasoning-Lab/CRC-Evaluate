@@ -209,6 +209,13 @@ The twenty-third model is meant to catch resume-vs-active convergence bugs:
 - the resume-only candidate must be filtered so it cannot win the canonical
   marker race ahead of the active retry
 
+The twenty-fourth model is meant to catch lifecycle ownership-clearing bugs:
+
+- a worker owns an active attempt
+- recovery or terminalization moves the record into a non-active state
+- `claimed_by` must be cleared immediately so stale workers cannot keep write
+  authority after they have been orphaned, failed, requeued, or completed
+
 The fifteenth model is meant to catch resume-collection restart bugs:
 
 - continue mode resumes a stale lock
