@@ -187,6 +187,14 @@ bugs:
 - shared monitor callbacks must preserve the first canonical verdict rather than
   overwrite it
 
+The twenty-first model is meant to catch retry-refresh bring-up bugs:
+
+- continue mode starts with only failed work in its queue snapshot
+- failed-job retry requeues that logical trial into active queued work
+- cloud bring-up is decided from the controller snapshot
+- the snapshot must be refreshed after retry so the controller does not skip
+  worker bring-up for newly reactivated work
+
 The fifteenth model is meant to catch resume-collection restart bugs:
 
 - continue mode resumes a stale lock
