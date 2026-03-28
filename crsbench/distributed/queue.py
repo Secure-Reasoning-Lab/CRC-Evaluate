@@ -1056,7 +1056,16 @@ def has_potentially_live_started_jobs(
     for job in started_jobs:
         if not hasattr(job, "get_status"):
             return True
-        if not _is_stale_started_job(job, stale_started_grace_seconds):
+        try:
+            status_value = getattr(job.get_status(), "value", job.get_status())
+        except Exception:
+            return True
+        if str(status_value).lower() != "started":
+            continue
+        try:
+            if not _is_stale_started_job(job, stale_started_grace_seconds):
+                return True
+        except Exception:
             return True
     return False
 

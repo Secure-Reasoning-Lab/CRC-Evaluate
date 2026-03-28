@@ -373,6 +373,67 @@ def test_clean_experiment_queues_stale_started_trial_job_clears_lifecycle_state(
     )
 
 
+def test_clean_experiment_queues_non_started_registry_residue_clears_lifecycle_state(
+    monkeypatch,
+) -> None:
+    queue_trial = MagicMock()
+    redis_conn = MagicMock()
+    finished_registry_job = MagicMock()
+    finished_registry_job.get_status.return_value = "finished"
+    states = iter(
+        [
+            {
+                "queued": [],
+                "started": [finished_registry_job],
+                "failed": [],
+                "finished": [],
+                "deferred": [],
+                "scheduled": [],
+            },
+            {
+                "queued": [],
+                "started": [],
+                "failed": [],
+                "finished": [],
+                "deferred": [],
+                "scheduled": [],
+            },
+        ]
+    )
+
+    monkeypatch.setattr(
+        "crsbench.distributed.queue_cleanup.resolve_queue_names",
+        lambda _experiment: ("q-trial", "q-build", "q-verify"),
+    )
+    monkeypatch.setattr(
+        "crsbench.distributed.queue_cleanup.rq.Queue",
+        lambda _name, **_kwargs: queue_trial,
+    )
+    monkeypatch.setattr(
+        "crsbench.distributed.queue_cleanup.get_existing_trial_jobs",
+        lambda _queue, **_kwargs: next(states),
+    )
+    monkeypatch.setattr(
+        "crsbench.distributed.queue_cleanup.clear_experiment_jobs",
+        lambda _queue, _experiment_name: 1,
+    )
+
+    result = clean_experiment_queues(
+        redis_conn,
+        experiment_name="exp-test",
+        scopes=("trial",),
+        include_registry=False,
+        include_lock=False,
+        dry_run=False,
+    )
+
+    assert result.removed_jobs == 1
+    redis_conn.delete.assert_called_once_with(
+        "crsbench:jobs:exp-test",
+        "crsbench:heartbeats:exp-test",
+    )
+
+
 def test_clean_experiment_queues_lifecycle_clear_is_best_effort(monkeypatch) -> None:
     queue_trial = MagicMock()
     redis_conn = MagicMock()

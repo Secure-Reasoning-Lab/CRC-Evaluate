@@ -1608,6 +1608,71 @@ def test_queue_mode_fresh_clears_lifecycle_for_stale_started_job(
     session.lifecycle_store.clear_experiment.assert_called_once_with("exp-test")
 
 
+def test_queue_mode_fresh_clears_lifecycle_for_non_started_registry_residue(
+    tmp_path: Path,
+) -> None:
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = False
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+
+    queue = MagicMock()
+    session = MagicMock()
+    session.trial_queue = queue
+    session.lifecycle_store = MagicMock()
+    finished_registry_job = MagicMock()
+    finished_registry_job.get_status.return_value = "finished"
+
+    existing = {
+        "queued": {},
+        "started": {"k": MagicMock()},
+        "failed": {},
+        "finished": {},
+    }
+    physical_existing_before = {
+        "queued": [],
+        "started": [finished_registry_job],
+        "failed": [],
+        "finished": [],
+        "deferred": [],
+        "scheduled": [],
+    }
+    physical_existing_after = {
+        "queued": [],
+        "started": [],
+        "failed": [],
+        "finished": [],
+        "deferred": [],
+        "scheduled": [],
+    }
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value=existing,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            side_effect=[physical_existing_before, physical_existing_after],
+        ),
+        patch("crsbench.distributed.queue.clear_experiment_jobs"),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch("crsbench.run_experiment.monitor_jobs", return_value=[]),
+    ):
+        run_experiment_distributed("exp-test", config, [], queue_mode="fresh")
+
+    session.lifecycle_store.clear_experiment.assert_called_once_with("exp-test")
+
+
 def test_prepare_trial_dir_for_retry_cleans_results_filestore(tmp_path: Path) -> None:
     config = MagicMock()
     config.experiment = "exp-test"
