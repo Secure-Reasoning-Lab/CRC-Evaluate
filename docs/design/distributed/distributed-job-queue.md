@@ -141,6 +141,15 @@ The queue layer treats the following as terminal outcomes:
 4. retry/refresh policy decides whether the logical job is resubmitted or treated as terminal
 5. aggregate reporting preserves `ERROR` vs `FAIL` distinctions where applicable
 
+### Continue-mode restart behavior
+- `crsbench run --queue-mode continue` may skip enqueue for a logical trial when
+  an existing queue record already represents that trial
+- if the existing physical job is already terminal but the orchestrator marker is
+  still missing, the controller must attach that carryover job to the monitor and
+  materialize `.success` / `.fail` before exit
+- continue mode must not silently drop terminal carryover jobs just because no
+  new trial was enqueued for the same logical trial
+
 ## Decisions and Tradeoffs
 
 - decision: use queue-backed role separation rather than a monolithic runtime

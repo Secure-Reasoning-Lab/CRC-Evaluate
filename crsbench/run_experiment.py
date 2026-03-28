@@ -1585,6 +1585,45 @@ def _build_missing_job_result(job) -> TrialResult:
     )
 
 
+def _dedupe_jobs_by_id(jobs: List) -> List:
+    """Preserve one job object per RQ job id while keeping first-seen order."""
+    seen: set[str] = set()
+    deduped: List = []
+    for job in jobs:
+        job_id = getattr(job, "id", None)
+        if not isinstance(job_id, str) or not job_id:
+            deduped.append(job)
+            continue
+        if job_id in seen:
+            continue
+        seen.add(job_id)
+        deduped.append(job)
+    return deduped
+
+
+def _flatten_existing_jobs(existing_by_status: dict[str, list]) -> List:
+    """Flatten physical jobs across queue statuses for continue-mode monitoring."""
+    flattened: List = []
+    for bucket_name in (
+        "queued",
+        "deferred",
+        "scheduled",
+        "started",
+        "finished",
+        "failed",
+    ):
+        flattened.extend(existing_by_status.get(bucket_name, []))
+    return _dedupe_jobs_by_id(flattened)
+
+
+def _active_existing_jobs(existing_by_status: dict[str, list]) -> List:
+    """Return existing non-terminal physical jobs that may still need execution."""
+    active: List = []
+    for bucket_name in ("queued", "deferred", "scheduled", "started"):
+        active.extend(existing_by_status.get(bucket_name, []))
+    return _dedupe_jobs_by_id(active)
+
+
 def prompt_queue_mode(existing: dict[str, dict]) -> str:
     """
     Prompt user interactively for queue mode when stale jobs are detected.
@@ -1754,6 +1793,8 @@ def run_experiment_distributed(
             for bucket_name, jobs_by_key in existing.items()
         }
     has_existing = any(physical_existing.values())
+    existing_tracked_jobs: List = []
+    active_existing_jobs = _active_existing_jobs(physical_existing)
     from crsbench.distributed.registry import RuntimeRegistration
 
     registration = RuntimeRegistration.from_experiment_config(config)
@@ -1766,6 +1807,8 @@ def run_experiment_distributed(
     requeued_failed_jobs = 0
 
     normalized_queue_mode = queue_mode.lower() if queue_mode else None
+    if normalized_queue_mode == "continue":
+        existing_tracked_jobs = _flatten_existing_jobs(physical_existing)
 
     try:
         if has_existing and normalized_queue_mode is None:
@@ -1870,6 +1913,8 @@ def run_experiment_distributed(
                 logger.info(
                     f"Skipping {skipped_count} existing trials, enqueueing {len(trials)} new trials"
                 )
+            existing_tracked_jobs = _flatten_existing_jobs(physical_existing)
+            active_existing_jobs = _active_existing_jobs(physical_existing)
 
         # Disk-based filtering: skip trials with .success markers on orchestrator disk
         # This catches trials completed by remote workers in previous runs
@@ -1897,7 +1942,7 @@ def run_experiment_distributed(
         dump_trial_matrix(trials, config)
 
         logger.info(f"Total trials to enqueue: {len(trials)}")
-        if not trials and not existing["queued"] and not existing["started"]:
+        if not trials and not existing_tracked_jobs:
             if requeued_failed_jobs == 0:
                 logger.info(
                     "No trial work remains after queue and disk filtering; "
@@ -1961,7 +2006,7 @@ def run_experiment_distributed(
             and cloud_config.workers is not None
             and cloud_config.orchestrator is not None
         )
-        if uses_provider_neutral_cloud:
+        if uses_provider_neutral_cloud and (trials or active_existing_jobs):
             if session.cloud_readiness is None:
                 raise RuntimeError(
                     "Distributed runtime session missing cloud readiness store"
@@ -2115,11 +2160,15 @@ def run_experiment_distributed(
 
         logger.info(f"✓ Enqueued {len(jobs)} jobs successfully")
 
+        tracked_jobs = _dedupe_jobs_by_id([*existing_tracked_jobs, *jobs])
+
         # Monitor progress
-        logger.info("\nMonitoring job progress...")
+        logger.info(
+            f"\nMonitoring job progress for {len(tracked_jobs)} tracked jobs..."
+        )
         results = monitor_jobs(
             queue,
-            jobs,
+            tracked_jobs,
             experiment_name,
             config,
             disk_skipped=disk_skipped,

@@ -166,7 +166,8 @@ class DistributedRuntimeSession:
     def resume_or_raise(self) -> list[str]:
         """Take over a stale experiment lock and resume monitoring after a restart.
 
-        Calls try_resume_lock(), re-registers if needed, and reconciles uncollected jobs.
+        Calls try_resume_lock() and, if the monitor is already running,
+        reconciles uncollected jobs.
 
         Returns:
             List of job_ids needing collection attention (from reconcile_on_resume).

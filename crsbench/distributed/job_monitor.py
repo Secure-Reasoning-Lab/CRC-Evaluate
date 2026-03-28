@@ -298,8 +298,7 @@ class JobMonitorLoop:
         """Identify jobs needing collection attention after a controller restart.
 
         Returns:
-            List of job_ids in SYNCING state (or COMPLETED without confirmed artifacts)
-            that need collection follow-up.
+            List of job_ids in SYNCING state that need collection follow-up.
         """
         jobs = self._store.list_jobs(self._experiment)
         needs_collection: list[str] = []

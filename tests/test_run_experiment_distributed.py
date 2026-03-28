@@ -274,6 +274,175 @@ def test_continue_mode_retry_failed_requeues(tmp_path: Path) -> None:
     failed_job.save_meta.assert_called_once()
 
 
+def test_continue_mode_monitors_existing_finished_jobs_without_reenqueue(
+    tmp_path: Path,
+) -> None:
+    """Restarted continue mode must collect pre-existing terminal jobs."""
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = False
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.register_or_raise.return_value = None
+    session.registry = MagicMock()
+
+    finished_job = MagicMock()
+    finished_job.id = "job-finished"
+    finished_job.kwargs = {"trial_num": 1}
+
+    existing = {
+        "queued": {},
+        "started": {},
+        "failed": {},
+        "finished": {"k": finished_job},
+        "deferred": {},
+        "scheduled": {},
+    }
+    physical_existing = {
+        "queued": [],
+        "started": [],
+        "failed": [],
+        "finished": [finished_job],
+        "deferred": [],
+        "scheduled": [],
+    }
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value=existing,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            return_value=physical_existing,
+        ),
+        patch("crsbench.distributed.queue.handle_orphaned_jobs", return_value=0),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "crsbench.run_experiment.monitor_jobs",
+            side_effect=RuntimeError("stop after monitor"),
+        ) as monitor_jobs_mock,
+    ):
+        with pytest.raises(RuntimeError, match="stop after monitor"):
+            run_experiment_distributed(
+                "exp-test",
+                config,
+                [],
+                queue_mode="continue",
+                retry_failed=False,
+            )
+
+    queue.enqueue.assert_not_called()
+    monitor_jobs_mock.assert_called_once()
+    assert monitor_jobs_mock.call_args.args[1] == [finished_job]
+
+
+def test_continue_mode_monitors_existing_terminal_jobs_alongside_new_enqueues(
+    tmp_path: Path,
+) -> None:
+    """Continue mode should attach carryover terminal jobs to the monitored set."""
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = False
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+    config.results_filestore = None
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.register_or_raise.return_value = None
+    session.registry = MagicMock()
+
+    finished_job = MagicMock()
+    finished_job.id = "job-finished"
+    finished_job.kwargs = {"trial_num": 1}
+
+    new_job = MagicMock()
+    new_job.id = "job-new"
+    queue.enqueue.return_value = new_job
+
+    finished_trial = _make_trial(None)
+    new_trial = Trial(
+        crs="crs-a",
+        benchmark_harness=finished_trial.benchmark_harness,
+        trial_num=2,
+        mode="delta",
+        sanitizer="address",
+        target_cpv_id=None,
+    )
+
+    existing = {
+        "queued": {},
+        "started": {},
+        "failed": {},
+        "finished": {
+            "crs-a:bench-a:fuzz_target:delta:address:1:-": finished_job,
+        },
+        "deferred": {},
+        "scheduled": {},
+    }
+    physical_existing = {
+        "queued": [],
+        "started": [],
+        "failed": [],
+        "finished": [finished_job],
+        "deferred": [],
+        "scheduled": [],
+    }
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value=existing,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            return_value=physical_existing,
+        ),
+        patch("crsbench.distributed.queue.handle_orphaned_jobs", return_value=0),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "crsbench.run_experiment.monitor_jobs",
+            side_effect=RuntimeError("stop after monitor"),
+        ) as monitor_jobs_mock,
+    ):
+        with pytest.raises(RuntimeError, match="stop after monitor"):
+            run_experiment_distributed(
+                "exp-test",
+                config,
+                [finished_trial, new_trial],
+                queue_mode="continue",
+                retry_failed=False,
+            )
+
+    queue.enqueue.assert_called_once()
+    monitor_jobs_mock.assert_called_once()
+    assert monitor_jobs_mock.call_args.args[1] == [finished_job, new_job]
+
+
 def test_queue_mode_quit_exits_without_registration(tmp_path: Path) -> None:
     """queue_mode=quit should return early when existing jobs are present."""
     config = MagicMock()
