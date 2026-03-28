@@ -23,6 +23,9 @@
 - `DistributedRetryMetadataProjection.tla`: model of retry-count projection from lifecycle recovery into RQ metadata
 - `DistributedRetryMetadataProjectionBuggy.cfg`: buggy config where lifecycle retry_count increments but RQ metadata stays stale
 - `DistributedRetryMetadataProjectionHealthy.cfg`: fixed config where queue-visible retry metadata matches lifecycle retry_count
+- `DistributedHeartbeatProjection.tla`: model of heartbeat projection from the side-channel heartbeat hash into lifecycle record fields
+- `DistributedHeartbeatProjectionBuggy.cfg`: buggy config where the heartbeat hash is refreshed but lifecycle fields stay stale
+- `DistributedHeartbeatProjectionHealthy.cfg`: fixed config where lifecycle heartbeat fields match the side channel
 - `DistributedRetryExclusivity.tla`: model of at-most-one authoritative live attempt across retries
 - `DistributedRetryExclusivityBuggy.cfg`: buggy config where superseded and replacement attempts are both live
 - `DistributedRetryExclusivityHealthy.cfg`: fenced config where only one authoritative live attempt remains
@@ -235,6 +238,13 @@ The twenty-sixth model is meant to catch retry-metadata projection bugs:
 - lifecycle retry_count increments for the logical job
 - queue-derived operator views still read retry_count from RQ metadata
 - the concrete metadata must be updated so both layers report the same retry budget state
+
+The twenty-seventh model is meant to catch heartbeat-projection bugs:
+
+- a worker emits a lifecycle heartbeat update
+- the separate heartbeat hash is refreshed
+- the lifecycle record also exposes `last_heartbeat`
+- both layers must advance together so lifecycle snapshots do not lie about liveness
 
 The fifteenth model is meant to catch resume-collection restart bugs:
 
