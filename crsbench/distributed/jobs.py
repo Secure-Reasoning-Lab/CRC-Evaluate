@@ -484,6 +484,15 @@ def _publish_trial_terminal_artifacts(
     return True
 
 
+def _publish_trial_terminal_artifacts_best_effort(**kwargs: Any) -> bool:
+    """Publish worker terminal artifacts without masking an existing trial failure."""
+    try:
+        return _publish_trial_terminal_artifacts(**kwargs)
+    except Exception as exc:
+        logger.warning(f"Failed to publish worker terminal artifacts: {exc}")
+        return False
+
+
 def _start_job_lifecycle_heartbeat(
     runtime: JobLifecycleRuntime | None,
     *,
@@ -1737,7 +1746,7 @@ def run_crs_trial(
         logger.error(f"[Trial {trial_num}] Benchmark not found: {error_msg}")
         # Publish worker-side failure artifacts while this worker still owns the attempt.
         if "trial_output_dir" in locals() and trial_output_dir.exists():
-            _publish_trial_terminal_artifacts(
+            _publish_trial_terminal_artifacts_best_effort(
                 config=config,
                 trial_output_dir=trial_output_dir,
                 success=False,
@@ -1778,7 +1787,7 @@ def run_crs_trial(
         logger.error(f"[Trial {trial_num}] Invalid benchmark format: {error_msg}")
         # Publish worker-side failure artifacts while this worker still owns the attempt.
         if "trial_output_dir" in locals() and trial_output_dir.exists():
-            _publish_trial_terminal_artifacts(
+            _publish_trial_terminal_artifacts_best_effort(
                 config=config,
                 trial_output_dir=trial_output_dir,
                 success=False,
@@ -1819,7 +1828,7 @@ def run_crs_trial(
         logger.exception("[Trial {}] Failed with error: {}", trial_num, error_msg)
         # Publish worker-side failure artifacts while this worker still owns the attempt.
         if "trial_output_dir" in locals() and trial_output_dir.exists():
-            _publish_trial_terminal_artifacts(
+            _publish_trial_terminal_artifacts_best_effort(
                 config=config,
                 trial_output_dir=trial_output_dir,
                 success=False,

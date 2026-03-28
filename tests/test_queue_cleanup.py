@@ -148,20 +148,83 @@ def test_clear_experiment_jobs_removes_all_physical_duplicate_jobs(monkeypatch) 
     assert removed_ids == ["job-a", "job-b"]
 
 
-def test_clear_experiment_jobs_clears_lifecycle_and_heartbeat_state(
+def test_clean_experiment_queues_trial_scope_clears_lifecycle_when_empty(
     monkeypatch,
 ) -> None:
-    queue = MagicMock()
-    queue.connection = MagicMock()
-    job = MagicMock()
-    job.id = "job-a"
+    queue_trial = MagicMock()
+    redis_conn = MagicMock()
+    states = iter(
+        [
+            {
+                "queued": [object()],
+                "started": [],
+                "failed": [],
+                "finished": [],
+                "deferred": [],
+                "scheduled": [],
+            },
+            {
+                "queued": [],
+                "started": [],
+                "failed": [],
+                "finished": [],
+                "deferred": [],
+                "scheduled": [],
+            },
+        ]
+    )
 
-    monkeypatch.setattr(queue_module, "REDIS_AVAILABLE", True)
     monkeypatch.setattr(
-        queue_module,
-        "get_existing_trial_jobs",
+        "crsbench.distributed.queue_cleanup.resolve_queue_names",
+        lambda _experiment: ("q-trial", "q-build", "q-verify"),
+    )
+    monkeypatch.setattr(
+        "crsbench.distributed.queue_cleanup.rq.Queue",
+        lambda _name, **_kwargs: queue_trial,
+    )
+    monkeypatch.setattr(
+        "crsbench.distributed.queue_cleanup.get_existing_trial_jobs",
+        lambda _queue, **_kwargs: next(states),
+    )
+    monkeypatch.setattr(
+        "crsbench.distributed.queue_cleanup.clear_experiment_jobs",
+        lambda _queue, _experiment_name: 1,
+    )
+
+    result = clean_experiment_queues(
+        redis_conn,
+        experiment_name="exp-test",
+        scopes=("trial",),
+        include_registry=False,
+        include_lock=False,
+        dry_run=False,
+    )
+
+    assert result.removed_jobs == 1
+    redis_conn.delete.assert_called_once_with(
+        "crsbench:jobs:exp-test",
+        "crsbench:heartbeats:exp-test",
+    )
+
+
+def test_clean_experiment_queues_partial_scope_preserves_lifecycle_state(
+    monkeypatch,
+) -> None:
+    queue_build = MagicMock()
+    redis_conn = MagicMock()
+
+    monkeypatch.setattr(
+        "crsbench.distributed.queue_cleanup.resolve_queue_names",
+        lambda _experiment: ("q-trial", "q-build", "q-verify"),
+    )
+    monkeypatch.setattr(
+        "crsbench.distributed.queue_cleanup.rq.Queue",
+        lambda _name, **_kwargs: queue_build,
+    )
+    monkeypatch.setattr(
+        "crsbench.distributed.queue_cleanup.get_existing_trial_jobs",
         lambda _queue, **_kwargs: {
-            "queued": [job],
+            "queued": [object()],
             "started": [],
             "failed": [],
             "finished": [],
@@ -170,18 +233,21 @@ def test_clear_experiment_jobs_clears_lifecycle_and_heartbeat_state(
         },
     )
     monkeypatch.setattr(
-        queue_module,
-        "remove_job_by_id",
-        lambda _queue, job_id: job_id == "job-a",
+        "crsbench.distributed.queue_cleanup.clear_experiment_jobs",
+        lambda _queue, _experiment_name: 1,
     )
 
-    removed = clear_experiment_jobs(queue, "exp-test")
-
-    assert removed == 1
-    queue.connection.delete.assert_any_call(
-        "crsbench:jobs:exp-test",
-        "crsbench:heartbeats:exp-test",
+    result = clean_experiment_queues(
+        redis_conn,
+        experiment_name="exp-test",
+        scopes=("build",),
+        include_registry=False,
+        include_lock=False,
+        dry_run=False,
     )
+
+    assert result.removed_jobs == 1
+    redis_conn.delete.assert_not_called()
 
 
 def test_get_existing_trial_jobs_filters_to_requested_experiment(monkeypatch) -> None:

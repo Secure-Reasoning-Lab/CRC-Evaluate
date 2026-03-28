@@ -1560,6 +1560,10 @@ def _build_monitor_callbacks(
         worker_name = getattr(metadata, "worker_machine", None)
         return worker_name if isinstance(worker_name, str) and worker_name else None
 
+    def _job_expects_lifecycle_tracking(job) -> bool:
+        meta = getattr(job, "meta", {}) or {}
+        return meta.get("expects_lifecycle_tracking") is True
+
     def _terminal_update_policy(
         job,
         *,
@@ -1582,6 +1586,12 @@ def _build_monitor_callbacks(
             )
             return False, False
         if record is None:
+            if _job_expects_lifecycle_tracking(job):
+                logger.warning(
+                    "Missing lifecycle ownership for tracked distributed job %s; leaving callback retryable",
+                    job_id[:8],
+                )
+                return False, False
             logger.warning(
                 "Missing lifecycle ownership for %s; treating terminal callback as legacy/untracked",
                 job_id[:8],
@@ -2227,6 +2237,12 @@ def run_experiment_distributed(
                     f"Purging {total_existing} existing jobs from queue for experiment={experiment_name}"
                 )
                 clear_experiment_jobs(queue, experiment_name)
+                if session.lifecycle_store is not None:
+                    remaining_after_purge = get_existing_trial_jobs(
+                        queue, experiment_name=experiment_name
+                    )
+                    if not any(remaining_after_purge.values()):
+                        session.lifecycle_store.clear_experiment(experiment_name)
         elif normalized_queue_mode == "continue":
             if not lock_acquired:
                 try:
@@ -2582,6 +2598,7 @@ def run_experiment_distributed(
                     "memory_limit": memory_limit,  # Explicit CRS/runtime memory limit, or None
                     "cpu_tag": cpu_tag,
                     "experiment_name": experiment_name,
+                    "expects_lifecycle_tracking": session.lifecycle_store is not None,
                 },
                 job_id=build_trial_queue_job_id(experiment_name, trial),
             )
