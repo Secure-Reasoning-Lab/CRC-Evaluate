@@ -169,6 +169,9 @@ The queue layer treats the following as terminal outcomes:
 - if the existing physical job is already terminal but the orchestrator marker is
   still missing, the controller must attach that carryover job to the monitor and
   materialize `.success` / `.fail` before exit
+- if stale-lock resume reports job ids still needing collection, continue mode
+  must attach those jobs even when there are no visible queue entries and no new
+  trials to enqueue; resume-only syncing work must not trigger early exit
 - restart reconciliation must check published terminal artifacts before leaving a
   lifecycle record in `syncing`; artifact-backed in-flight records should be
   collapsed to `completed` / `failed` rather than left waiting for collection

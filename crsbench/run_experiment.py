@@ -1678,6 +1678,27 @@ def _active_existing_jobs(existing_by_status: dict[str, list]) -> List:
     return _dedupe_jobs_by_id(active)
 
 
+def _fetch_jobs_by_id(queue, job_ids: List[str]) -> List:
+    """Fetch concrete RQ jobs by id, skipping missing entries with a warning."""
+    if not job_ids:
+        return []
+
+    import rq.job
+
+    fetched: List = []
+    for job_id in job_ids:
+        try:
+            job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
+        except Exception as exc:
+            logger.warning("Failed to fetch resume collection job %s: %s", job_id, exc)
+            continue
+        if job is None:
+            logger.warning("Resume collection job %s no longer exists in Redis", job_id)
+            continue
+        fetched.append(job)
+    return _dedupe_jobs_by_id(fetched)
+
+
 def prompt_queue_mode(existing: dict[str, dict]) -> str:
     """
     Prompt user interactively for queue mode when stale jobs are detected.
@@ -1859,6 +1880,7 @@ def run_experiment_distributed(
     )
     lock_acquired = False
     requeued_failed_jobs = 0
+    resume_collection_job_ids: List[str] = []
 
     normalized_queue_mode = queue_mode.lower() if queue_mode else None
     if normalized_queue_mode == "continue":
@@ -1905,13 +1927,13 @@ def run_experiment_distributed(
                 )
                 clear_experiment_jobs(queue, experiment_name)
         elif normalized_queue_mode == "continue":
-            if has_existing and not lock_acquired:
+            if not lock_acquired:
                 try:
                     session.register_or_raise(registration)
                     lock_acquired = True
                 except LockContentionError:
                     try:
-                        session.resume_or_raise()
+                        resume_collection_job_ids = session.resume_or_raise()
                         lock_acquired = True
                         logger.info(
                             "Resumed stale experiment lock for continue-mode recovery"
@@ -1976,6 +1998,14 @@ def run_experiment_distributed(
                 )
             existing_tracked_jobs = _flatten_existing_jobs(physical_existing)
             active_existing_jobs = _active_existing_jobs(physical_existing)
+
+        if resume_collection_job_ids:
+            existing_tracked_jobs = _dedupe_jobs_by_id(
+                [
+                    *existing_tracked_jobs,
+                    *_fetch_jobs_by_id(queue, resume_collection_job_ids),
+                ]
+            )
 
         # Disk-based filtering: skip trials with .success markers on orchestrator disk
         # This catches trials completed by remote workers in previous runs
