@@ -298,12 +298,39 @@ class JobMonitorLoop:
         """Identify jobs needing collection attention after a controller restart.
 
         Returns:
-            List of job_ids in SYNCING state that need collection follow-up.
+            List of job_ids still in SYNCING state after artifact reconciliation.
         """
         jobs = self._store.list_jobs(self._experiment)
         needs_collection: list[str] = []
 
         for record in jobs:
+            if record.state in _ACTIVE_STATES:
+                terminal_state = self._resolve_terminal_artifact_state(
+                    self._artifact_checker(record.trial_key)
+                )
+                if terminal_state is not None:
+                    self._transition_record_to_terminal(record, terminal_state)
+                    event_name = (
+                        "resume_completed_from_artifact"
+                        if terminal_state is JobState.COMPLETED
+                        else "resume_failed_from_artifact"
+                    )
+                    log_recovery_event(
+                        self._conn,
+                        self._experiment,
+                        {
+                            "event": event_name,
+                            "job_id": record.job_id,
+                            "state": terminal_state.value,
+                        },
+                    )
+                    logger.info(
+                        "Resume: job '%s' marked %s from published artifacts",
+                        record.job_id,
+                        terminal_state.value,
+                    )
+                    continue
+
             if record.state is JobState.SYNCING:
                 needs_collection.append(record.job_id)
                 log_recovery_event(
@@ -322,3 +349,32 @@ class JobMonitorLoop:
                 )
 
         return needs_collection
+
+    def _transition_record_to_terminal(
+        self, record: JobLifecycleRecord, terminal_state: JobState
+    ) -> None:
+        """Advance one lifecycle record through legal steps to a terminal state."""
+        current = self._store.get(self._experiment, record.job_id)
+        if current is None or current.state is terminal_state:
+            return
+
+        if terminal_state is JobState.FAILED:
+            if current.state in _ACTIVE_STATES or current.state is JobState.ORPHANED:
+                self._store.transition(
+                    self._experiment, current.job_id, JobState.FAILED
+                )
+            return
+
+        if terminal_state is not JobState.COMPLETED:
+            return
+
+        if current.state is JobState.CLAIMED:
+            current = self._store.transition(
+                self._experiment, current.job_id, JobState.RUNNING
+            )
+        if current.state is JobState.RUNNING:
+            current = self._store.transition(
+                self._experiment, current.job_id, JobState.SYNCING
+            )
+        if current.state in {JobState.SYNCING, JobState.ORPHANED}:
+            self._store.transition(self._experiment, current.job_id, JobState.COMPLETED)

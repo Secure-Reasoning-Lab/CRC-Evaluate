@@ -168,6 +168,62 @@ def test_list_queue_job_entries_preserves_duplicate_physical_jobs() -> None:
     ]
 
 
+def test_list_queue_job_entries_ignores_stale_worker_name_outside_running() -> None:
+    queue = MagicMock()
+    queued_job = MagicMock()
+    queued_job.id = "job-queued"
+    queued_job.meta = {"worker_name": "worker-stale", "retry_count": 1}
+    failed_job = MagicMock()
+    failed_job.id = "job-failed"
+    failed_job.meta = {"worker_name": "worker-stale", "retry_count": 2}
+    started_job = MagicMock()
+    started_job.id = "job-started"
+    started_job.meta = {"worker_name": "worker-live", "retry_count": 0}
+
+    with (
+        patch(
+            "crsbench.distributed.queue_monitor.get_existing_trial_jobs",
+            return_value={
+                "queued": [queued_job],
+                "started": [started_job],
+                "finished": [],
+                "failed": [failed_job],
+                "deferred": [],
+                "scheduled": [],
+            },
+        ),
+        patch(
+            "crsbench.distributed.queue_monitor.get_trial_key",
+            side_effect=lambda job: f"trial:{job.id}",
+        ),
+    ):
+        entries = list_queue_job_entries(queue, "exp-1")
+
+    assert entries == [
+        QueueJobEntry(
+            job_id="job-failed",
+            trial_key="trial:job-failed",
+            state="failed",
+            claimed_by=None,
+            retry_count=2,
+        ),
+        QueueJobEntry(
+            job_id="job-queued",
+            trial_key="trial:job-queued",
+            state="queued",
+            claimed_by=None,
+            retry_count=1,
+        ),
+        QueueJobEntry(
+            job_id="job-started",
+            trial_key="trial:job-started",
+            state="running",
+            claimed_by="worker-live",
+            retry_count=0,
+        ),
+    ]
+
+
 def test_monitor_queue_attach_mode_is_read_only() -> None:
     queue = MagicMock()
     callbacks = QueueMonitorCallbacks(

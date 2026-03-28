@@ -570,6 +570,48 @@ def test_resume_reconciles_uncollected() -> None:
     assert "resume_reconcile" in event_types
 
 
+def test_resume_reconcile_prefers_terminal_artifacts() -> None:
+    """Published terminal artifacts should collapse syncing jobs to terminal on resume."""
+    from crsbench.distributed.job_lifecycle import (
+        JobLifecycleRecord,
+        JobLifecycleStore,
+        JobState,
+    )
+    from crsbench.distributed.job_monitor import JobMonitorLoop
+
+    fake = _FakeRedis()
+    store = JobLifecycleStore(fake)
+    store.set(
+        "exp8-artifact",
+        JobLifecycleRecord(
+            job_id="j-syncing",
+            trial_key="trial-sync",
+            state=JobState.SYNCING,
+            claimed_by="worker-2",
+        ),
+    )
+
+    monitor = JobMonitorLoop(
+        lifecycle_store=store,
+        experiment_name="exp8-artifact",
+        connection=fake,
+        heartbeat_timeout_seconds=180,
+        cloud_liveness_checker=MagicMock(return_value=False),
+        artifact_checker=MagicMock(return_value=JobState.COMPLETED),
+    )
+
+    needs_collection = monitor.reconcile_on_resume()
+
+    assert needs_collection == []
+    record = store.get("exp8-artifact", "j-syncing")
+    assert record is not None
+    assert record.state is JobState.COMPLETED
+
+    events = fake.lrange("crsbench:recovery-events:exp8-artifact", 0, -1)
+    event_types = [json.loads(e)["event"] for e in events]
+    assert "resume_completed_from_artifact" in event_types
+
+
 def test_monitor_loop_start_stop() -> None:
     """Monitor thread starts and stops cleanly via Event."""
     from crsbench.distributed.job_lifecycle import JobLifecycleStore

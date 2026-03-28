@@ -142,7 +142,7 @@ def list_queue_job_entries(queue, experiment_name: str) -> list[QueueJobEntry]:
             retry_count = meta.get("retry_count", 0)
             if not isinstance(retry_count, int):
                 retry_count = 0
-            claimed_by = meta.get("worker_name")
+            claimed_by = meta.get("worker_name") if state == "running" else None
             if not isinstance(claimed_by, str) or not claimed_by.strip():
                 claimed_by = None
             entries.append(

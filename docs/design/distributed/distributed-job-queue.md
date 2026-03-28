@@ -108,6 +108,9 @@ The queue layer treats the following as terminal outcomes:
 - once `claimed_by` moves to a replacement worker, the superseded worker must
   stop emitting shadow-lifecycle heartbeats and must not publish terminal
   worker-side artifacts for that logical trial
+- queue-derived operator views must only expose an active owner for concrete
+  running jobs; queued/deferred/terminal RQ entries may retain stale
+  `worker_name` metadata and must not be treated as currently claimed
 - published terminal artifacts on orchestrator storage are authoritative for
   stale-job recovery: `.success` maps to `completed`, `.fail` maps to `failed`
 - retry policy must distinguish infra failures from benchmark-result failures
@@ -155,6 +158,9 @@ The queue layer treats the following as terminal outcomes:
 - if the existing physical job is already terminal but the orchestrator marker is
   still missing, the controller must attach that carryover job to the monitor and
   materialize `.success` / `.fail` before exit
+- restart reconciliation must check published terminal artifacts before leaving a
+  lifecycle record in `syncing`; artifact-backed in-flight records should be
+  collapsed to `completed` / `failed` rather than left waiting for collection
 - continue mode must not silently drop terminal carryover jobs just because no
   new trial was enqueued for the same logical trial
 
