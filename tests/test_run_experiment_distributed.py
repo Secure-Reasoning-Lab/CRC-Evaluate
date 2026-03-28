@@ -1759,6 +1759,36 @@ def test_monitor_callbacks_defer_failed_updates_for_retried_active_jobs() -> Non
     marker.assert_not_called()
 
 
+def test_monitor_callbacks_allow_finished_updates_for_retried_active_jobs() -> None:
+    config = MagicMock()
+    result = _make_result(success=True, worker_machine="worker-new")
+
+    job = MagicMock()
+    job.id = "job-1"
+    job.meta = {"worker_name": "worker-new", "retry_count": 1}
+    job.result = result
+
+    lifecycle_store = MagicMock()
+    lifecycle_store.get.return_value = JobLifecycleRecord(
+        job_id="job-1",
+        trial_key="trial-1",
+        state=JobState.RUNNING,
+        claimed_by="worker-new",
+        retry_count=1,
+    )
+
+    callbacks = _build_monitor_callbacks(
+        config,
+        experiment_name="exp-test",
+        lifecycle_store=lifecycle_store,
+    )
+
+    with patch("crsbench.run_experiment._write_orchestrator_marker") as marker:
+        assert callbacks.on_job_finished(job) is True
+
+    marker.assert_called_once_with(result, config)
+
+
 def test_monitor_callbacks_consume_non_active_lifecycle_without_marker_write() -> None:
     config = MagicMock()
     result = MagicMock(name="late_result")

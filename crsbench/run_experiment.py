@@ -1641,7 +1641,7 @@ def _build_monitor_callbacks(
             should_write_marker, should_mark_processed = _terminal_update_policy(
                 job,
                 reported_worker_name=_result_worker_machine(result),
-                callback_kind="failed",
+                callback_kind="finished",
             )
             if not should_write_marker:
                 if should_mark_processed:
