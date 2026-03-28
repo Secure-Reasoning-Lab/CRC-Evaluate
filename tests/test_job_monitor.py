@@ -364,6 +364,7 @@ def test_requeue_under_max_retries() -> None:
 
     fetched_job = MagicMock()
     fetched_job.origin = "crsbench_trial"
+    fetched_job.meta = {"retry_count": 0}
     queue = MagicMock()
 
     with (
@@ -377,6 +378,8 @@ def test_requeue_under_max_retries() -> None:
     assert record is not None
     assert record.state is JobState.QUEUED
     assert record.retry_count == 1
+    assert fetched_job.meta["retry_count"] == 1
+    fetched_job.save_meta.assert_called_once_with()
     fetched_job.set_status.assert_called_once_with(JobStatus.FAILED)
     queue.enqueue_job.assert_called_once_with(fetched_job)
 
@@ -410,6 +413,7 @@ def test_retry_budget_allows_exact_final_retry() -> None:
 
     fetched_job = MagicMock()
     fetched_job.origin = "crsbench_trial"
+    fetched_job.meta = {"retry_count": 2}
     queue = MagicMock()
 
     with (
@@ -423,6 +427,8 @@ def test_retry_budget_allows_exact_final_retry() -> None:
     assert record is not None
     assert record.state is JobState.QUEUED
     assert record.retry_count == 3
+    assert fetched_job.meta["retry_count"] == 3
+    fetched_job.save_meta.assert_called_once_with()
     fetched_job.set_status.assert_called_once_with(JobStatus.FAILED)
     queue.enqueue_job.assert_called_once_with(fetched_job)
 

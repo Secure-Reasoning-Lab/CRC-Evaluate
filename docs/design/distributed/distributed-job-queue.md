@@ -202,6 +202,9 @@ The queue layer treats the following as terminal outcomes:
 - shared monitor callbacks must treat terminal callbacks for non-active
   lifecycle records as stale no-ops: they may be consumed to avoid monitor
   livelock, but they must not write or overwrite orchestrator markers
+- when orphan recovery increments lifecycle `retry_count`, it must also project
+  that retry count into the concrete RQ job metadata so queue-derived operator
+  views report the same retry budget state as the shadow lifecycle
 - restart reconciliation must check published terminal artifacts before leaving a
   lifecycle record in `syncing`; artifact-backed in-flight records should be
   collapsed to `completed` / `failed` rather than left waiting for collection

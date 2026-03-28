@@ -235,7 +235,7 @@ class JobMonitorLoop:
 
         # Requeue the concrete RQ job first, then mark shadow state executable again.
         try:
-            self._requeue_rq_job(job_id)
+            rq_job = self._requeue_rq_job(job_id)
         except Exception as exc:
             detail = f"requeue failed after orphan recovery: {exc}"
             self._store.transition(
@@ -253,7 +253,8 @@ class JobMonitorLoop:
             logger.warning("Failed to requeue orphaned job '%s': %s", job_id, exc)
             return
 
-        self._store.increment_retry(self._experiment, job_id)
+        new_retry_count = self._store.increment_retry(self._experiment, job_id)
+        self._update_rq_retry_metadata(rq_job, retry_count=new_retry_count)
         self._store.transition(self._experiment, job_id, JobState.QUEUED)
         log_recovery_event(
             self._conn,
@@ -267,7 +268,7 @@ class JobMonitorLoop:
             self._max_retries,
         )
 
-    def _requeue_rq_job(self, job_id: str) -> None:
+    def _requeue_rq_job(self, job_id: str):
         """Move a recovered orphaned job back into its concrete RQ queue."""
         import rq
         from rq.job import JobStatus
@@ -279,6 +280,22 @@ class JobMonitorLoop:
         queue = rq.Queue(job.origin, connection=self._conn)  # type: ignore[attr-defined]
         job.set_status(JobStatus.FAILED)
         queue.enqueue_job(job)
+        return job
+
+    def _update_rq_retry_metadata(self, job, *, retry_count: int) -> None:
+        """Best-effort sync of lifecycle retry_count into concrete RQ metadata."""
+        try:
+            meta = getattr(job, "meta", None)
+            if not isinstance(meta, dict):
+                return
+            meta["retry_count"] = retry_count
+            job.save_meta()
+        except Exception as exc:
+            logger.warning(
+                "Failed to update retry metadata for requeued job %s: %s",
+                getattr(job, "id", "<unknown>"),
+                exc,
+            )
 
     def _resolve_terminal_artifact_state(
         self, artifact_result: JobState | bool | None
