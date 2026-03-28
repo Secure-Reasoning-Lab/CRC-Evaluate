@@ -47,6 +47,9 @@
 - `DistributedResumeCollection.tla`: model of continue-mode restart when only syncing collection work remains
 - `DistributedResumeCollectionBuggy.cfg`: buggy config where continue mode exits before attaching resume collection jobs
 - `DistributedResumeCollectionHealthy.cfg`: fixed config where resume-only syncing work is tracked before exit
+- `DistributedVisibleTrialResults.tla`: model of final report projection from physical jobs to one logical trial outcome
+- `DistributedVisibleTrialResultsBuggy.cfg`: buggy config where the report counts physical terminal jobs directly
+- `DistributedVisibleTrialResultsHealthy.cfg`: fixed config where the visible outcome follows the canonical per-trial marker
 
 ## Purpose
 
@@ -151,6 +154,13 @@ The fifteenth model is meant to catch resume-collection restart bugs:
 - continue mode resumes a stale lock
 - lifecycle reconciliation reports job ids still needing collection
 - the controller must not exit before attaching that resume-only work to monitoring
+
+The sixteenth model is meant to catch visible-result projection bugs:
+
+- duplicate physical jobs may still exist for one logical trial
+- terminal callbacks can therefore produce multiple physical `TrialResult` values
+- final reporting must project those values back to one logical trial outcome,
+  following the canonical `.success` / `.fail` marker on disk
 
 ## Run TLC
 
