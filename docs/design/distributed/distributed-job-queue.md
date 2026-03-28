@@ -110,6 +110,9 @@ The queue layer treats the following as terminal outcomes:
 - continue-mode recovery of `started` jobs must use per-job timeout-plus-grace
   staleness; the presence of another live worker on the same queue must not
   suppress recovery of a stale started job
+- when continue mode recovers a stale `started` job for retry, it must also
+  resurrect the corresponding shadow lifecycle back to `queued` with ownership
+  cleared before the replacement worker can initialize
 - if a stale `started` duplicate exists while another physical job for the same
   logical trial is already runnable, recovery must remove the stale duplicate
   instead of requeueing it and creating two active jobs
@@ -124,6 +127,9 @@ The queue layer treats the following as terminal outcomes:
 - orchestrator-side queue monitoring must apply the same ownership fence before
   consuming finished/failed callbacks; a stale terminal event must not mark the
   `job_id` as processed ahead of the current owner
+- for finished jobs, that ownership fence must use the worker identity carried
+  by the terminal `TrialResult` payload rather than mutable shared `job.meta`
+  that may already have been overwritten by a replacement attempt
 - once orchestrator monitoring has materialized a canonical marker for a
   logical trial in the current session, later duplicate physical callbacks for
   that same trial must not flip the published verdict
@@ -197,6 +203,9 @@ The queue layer treats the following as terminal outcomes:
 - explicit `retry_failed` requeue of a terminal job must also resurrect the
   corresponding shadow lifecycle record back to `queued` before the physical
   job becomes runnable again
+- if the explicit failed-job requeue itself fails, lifecycle must roll back to
+  `failed` so shadow state does not advertise runnable work that never reached
+  the queue
 - explicit `retry_failed` must only resurrect lifecycle records currently in
   `failed`; if the shadow lifecycle already says `completed`, stale failed RQ
   residue must be ignored rather than retried behind the terminal record

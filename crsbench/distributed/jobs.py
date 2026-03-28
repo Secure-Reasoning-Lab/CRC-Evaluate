@@ -1748,6 +1748,7 @@ def run_crs_trial(
                 timestamp_start=start_time,
                 timestamp_end=time.time(),
                 target_cpv_id=target_cpv_id,
+                worker_machine=runtime_worker_name,
             ),
         )
 
@@ -1788,6 +1789,7 @@ def run_crs_trial(
                 timestamp_start=start_time,
                 timestamp_end=time.time(),
                 target_cpv_id=target_cpv_id,
+                worker_machine=runtime_worker_name,
             ),
         )
 
@@ -1828,6 +1830,7 @@ def run_crs_trial(
                 timestamp_start=start_time,
                 timestamp_end=time.time(),
                 target_cpv_id=target_cpv_id,
+                worker_machine=runtime_worker_name,
             ),
         )
 

@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import crsbench.distributed.queue as queue_module
 import pytest
+from crsbench.distributed.job_lifecycle import JobLifecycleRecord, JobState
 from crsbench.distributed.queue import clear_experiment_jobs, get_trial_key
 from crsbench.distributed.queue_cleanup import clean_experiment_queues
 
@@ -258,6 +259,74 @@ def test_handle_orphaned_jobs_accepts_physical_job_list(monkeypatch) -> None:
         queue_module.rq.job.JobStatus.FAILED  # type: ignore[union-attr]
     )
     queue.enqueue_job.assert_called_once_with(job)
+
+
+def test_handle_orphaned_jobs_repairs_lifecycle_after_requeue(monkeypatch) -> None:
+    if not queue_module.REDIS_AVAILABLE:
+        pytest.skip("Redis/RQ not available")
+
+    queue = MagicMock()
+    queue.name = "crsbench_trial"
+    queue.connection = MagicMock()
+
+    job = MagicMock()
+    job.id = "job-1"
+    job.meta = {"experiment_name": "exp-test"}
+
+    lifecycle_store = MagicMock()
+    lifecycle_store.get.return_value = JobLifecycleRecord(
+        job_id="job-1",
+        trial_key="trial-1",
+        state=JobState.RUNNING,
+        claimed_by="worker-old",
+        retry_count=2,
+    )
+    lifecycle_store.transition.side_effect = [
+        JobLifecycleRecord(
+            job_id="job-1",
+            trial_key="trial-1",
+            state=JobState.ORPHANED,
+            claimed_by=None,
+            retry_count=2,
+        ),
+        JobLifecycleRecord(
+            job_id="job-1",
+            trial_key="trial-1",
+            state=JobState.QUEUED,
+            claimed_by=None,
+            retry_count=3,
+        ),
+    ]
+    lifecycle_store.increment_retry.return_value = 3
+
+    monkeypatch.setattr(
+        queue_module.rq.Worker,  # type: ignore[union-attr]
+        "all",
+        lambda **_kwargs: [],
+    )
+    handled = queue_module.handle_orphaned_jobs(
+        queue,
+        [job],
+        lifecycle_store=lifecycle_store,
+    )
+
+    assert handled == 1
+    queue.enqueue_job.assert_called_once_with(job)
+    lifecycle_store.transition.assert_any_call(
+        "exp-test",
+        "job-1",
+        JobState.ORPHANED,
+        claimed_by=None,
+        detail="recovered stale started job",
+    )
+    lifecycle_store.increment_retry.assert_called_once_with("exp-test", "job-1")
+    lifecycle_store.transition.assert_any_call(
+        "exp-test",
+        "job-1",
+        JobState.QUEUED,
+        claimed_by=None,
+        detail="recovered stale started job",
+    )
 
 
 def test_handle_orphaned_jobs_drops_stale_started_duplicate_when_active_peer_exists(

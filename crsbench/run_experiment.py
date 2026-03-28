@@ -1551,7 +1551,16 @@ def _build_monitor_callbacks(
     marked_jobs: set[str] = set()
     initial_marker_state_by_trial_key: dict[str, JobState | None] = {}
 
-    def _terminal_update_policy(job) -> tuple[bool, bool]:
+    def _result_worker_machine(result: TrialResult | object | None) -> str | None:
+        metadata = getattr(result, "metadata", None)
+        worker_name = getattr(metadata, "worker_machine", None)
+        return worker_name if isinstance(worker_name, str) and worker_name else None
+
+    def _terminal_update_policy(
+        job,
+        *,
+        reported_worker_name: str | None = None,
+    ) -> tuple[bool, bool]:
         """Return (should_write_marker, should_mark_processed) for one callback."""
         if lifecycle_store is None:
             return True, True
@@ -1578,9 +1587,13 @@ def _build_monitor_callbacks(
             return False, True
         if record.claimed_by is None:
             return True, True
-        meta = getattr(job, "meta", {}) or {}
-        worker_name = meta.get("worker_name")
-        if not isinstance(worker_name, str) or worker_name != record.claimed_by:
+        worker_name = reported_worker_name
+        if worker_name is None:
+            meta = getattr(job, "meta", {}) or {}
+            meta_worker_name = meta.get("worker_name")
+            if isinstance(meta_worker_name, str) and meta_worker_name:
+                worker_name = meta_worker_name
+        if worker_name != record.claimed_by:
             logger.warning(
                 "Skipping stale terminal update for %s from worker %r; current owner is %r",
                 job_id[:8],
@@ -1613,16 +1626,19 @@ def _build_monitor_callbacks(
         job_id = getattr(job, "id", None)
         if not isinstance(job_id, str) or job_id in marked_jobs:
             return True
-        should_write_marker, should_mark_processed = _terminal_update_policy(job)
-        if not should_write_marker:
-            if should_mark_processed:
-                marked_jobs.add(job_id)
-            return should_mark_processed
         try:
             result = job.result
             if result is None:
                 logger.warning(f"Job {job_id[:8]} finished but result is None")
                 result = _build_missing_job_result(job)
+            should_write_marker, should_mark_processed = _terminal_update_policy(
+                job,
+                reported_worker_name=_result_worker_machine(result),
+            )
+            if not should_write_marker:
+                if should_mark_processed:
+                    marked_jobs.add(job_id)
+                return should_mark_processed
             should_write_marker, should_mark_processed = _marker_write_policy(result)
             if should_write_marker:
                 _write_orchestrator_marker(result, config)
@@ -1642,13 +1658,16 @@ def _build_monitor_callbacks(
         job_id = getattr(job, "id", None)
         if not isinstance(job_id, str) or job_id in marked_jobs:
             return True
-        should_write_marker, should_mark_processed = _terminal_update_policy(job)
-        if not should_write_marker:
-            if should_mark_processed:
-                marked_jobs.add(job_id)
-            return should_mark_processed
         try:
             result = _build_failed_job_result(job)
+            should_write_marker, should_mark_processed = _terminal_update_policy(
+                job,
+                reported_worker_name=_result_worker_machine(result),
+            )
+            if not should_write_marker:
+                if should_mark_processed:
+                    marked_jobs.add(job_id)
+                return should_mark_processed
             should_write_marker, should_mark_processed = _marker_write_policy(result)
             if should_write_marker:
                 _write_orchestrator_marker(result, config)
@@ -1863,7 +1882,7 @@ def _filter_resume_collection_jobs(resume_jobs: List, active_jobs: List) -> List
 
 
 def _revive_failed_lifecycle_for_retry(session, experiment_name: str, job) -> bool:
-    """Move an explicitly retried terminal lifecycle record back to QUEUED."""
+    """Move an explicitly retried failed lifecycle record back to QUEUED."""
     lifecycle_store = getattr(session, "lifecycle_store", None)
     job_id = getattr(job, "id", None)
     if lifecycle_store is None or not isinstance(job_id, str):
@@ -1906,6 +1925,31 @@ def _revive_failed_lifecycle_for_retry(session, experiment_name: str, job) -> bo
         return False
 
     return True
+
+
+def _rollback_failed_lifecycle_retry(
+    session, experiment_name: str, job, reason: str
+) -> None:
+    """Restore a failed lifecycle state when explicit retry enqueue fails."""
+    lifecycle_store = getattr(session, "lifecycle_store", None)
+    job_id = getattr(job, "id", None)
+    if lifecycle_store is None or not isinstance(job_id, str):
+        return
+
+    try:
+        lifecycle_store.transition(
+            experiment_name,
+            job_id,
+            JobState.FAILED,
+            claimed_by=None,
+            detail=f"retry enqueue failed: {reason}",
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to roll back lifecycle record after explicit retry enqueue failure on %s: %s",
+            job_id[:8],
+            exc,
+        )
 
 
 def prompt_queue_mode(existing: dict[str, dict]) -> str:
@@ -2165,6 +2209,7 @@ def run_experiment_distributed(
                 orphaned_count = handle_orphaned_jobs(
                     queue,
                     physical_existing["started"],
+                    lifecycle_store=getattr(session, "lifecycle_store", None),
                 )
                 if orphaned_count > 0:
                     queue_state_mutated = True
@@ -2181,11 +2226,15 @@ def run_experiment_distributed(
                     ):
                         continue
                     failed_job.meta["force_retry"] = True
+                    failed_job.meta.pop("worker_name", None)
                     failed_job.save_meta()
                     try:
                         queue.enqueue_job(failed_job)
                         retried += 1
                     except Exception as e:
+                        _rollback_failed_lifecycle_retry(
+                            session, experiment_name, failed_job, str(e)
+                        )
                         logger.warning(
                             f"Failed to requeue failed job {failed_job.id[:8]}: {e}"
                         )

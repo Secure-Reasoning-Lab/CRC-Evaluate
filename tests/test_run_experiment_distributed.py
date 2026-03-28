@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 from crsbench.cloud.models import build_cloud_launch_plan
@@ -88,6 +88,7 @@ def _make_result(
     sanitizer: str = "address",
     success: bool = True,
     error: str | None = None,
+    worker_machine: str | None = None,
 ) -> TrialResult:
     return TrialResult(
         crs=crs,
@@ -101,7 +102,11 @@ def _make_result(
         execution_time=1.0,
         error=error,
         report={},
-        metadata=TrialMetadata(timestamp_start=0.0, timestamp_end=1.0),
+        metadata=TrialMetadata(
+            timestamp_start=0.0,
+            timestamp_end=1.0,
+            worker_machine=worker_machine,
+        ),
     )
 
 
@@ -372,7 +377,7 @@ def test_continue_mode_retry_failed_requeues(tmp_path: Path) -> None:
 def test_continue_mode_retry_failed_revives_lifecycle_before_requeue(
     tmp_path: Path,
 ) -> None:
-    """Explicit retry must move the shadow lifecycle back to QUEUED before requeue."""
+    """Explicit retry must revive lifecycle before the replacement worker can claim it."""
     config = MagicMock()
     config.redis_host = "localhost"
     config.resources = None
@@ -469,6 +474,105 @@ def test_continue_mode_retry_failed_revives_lifecycle_before_requeue(
         claimed_by=None,
         detail="retry requested by orchestrator",
     )
+
+
+def test_continue_mode_retry_failed_rolls_back_lifecycle_when_requeue_fails(
+    tmp_path: Path,
+) -> None:
+    """Explicit retry must roll lifecycle back to failed when enqueue fails."""
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = False
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.register_or_raise.return_value = None
+    session.lifecycle_store = MagicMock()
+    session.lifecycle_store.get.return_value = JobLifecycleRecord(
+        job_id="job-1",
+        trial_key="trial-1",
+        state=JobState.FAILED,
+        claimed_by=None,
+    )
+
+    failed_job = MagicMock()
+    failed_job.id = "job-1"
+    failed_job.meta = {}
+    failed_job.kwargs = {}
+
+    existing = {
+        "queued": {},
+        "started": {},
+        "failed": {"f": failed_job},
+        "finished": {},
+        "deferred": {},
+        "scheduled": {},
+    }
+    physical_existing = {
+        "queued": [],
+        "started": [],
+        "failed": [failed_job],
+        "finished": [],
+        "deferred": [],
+        "scheduled": [],
+    }
+
+    queue.enqueue_job.side_effect = RuntimeError("redis unavailable")
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value=existing,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            return_value=physical_existing,
+        ),
+        patch("crsbench.distributed.queue.handle_orphaned_jobs", return_value=0),
+        patch(
+            "crsbench.run_experiment._prepare_trial_dir_for_retry", return_value=True
+        ),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+        patch(
+            "crsbench.run_experiment.dump_trial_matrix",
+            side_effect=RuntimeError("stop after queue handling"),
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="stop after queue handling"):
+            run_experiment_distributed(
+                "exp-test",
+                config,
+                [],
+                queue_mode="continue",
+                retry_failed=True,
+            )
+
+    assert session.lifecycle_store.transition.call_args_list == [
+        call(
+            "exp-test",
+            "job-1",
+            JobState.QUEUED,
+            claimed_by=None,
+            detail="retry requested by orchestrator",
+        ),
+        call(
+            "exp-test",
+            "job-1",
+            JobState.FAILED,
+            claimed_by=None,
+            detail="retry enqueue failed: redis unavailable",
+        ),
+    ]
 
 
 def test_continue_mode_retry_failed_skips_when_lifecycle_is_already_completed(
@@ -1478,12 +1582,12 @@ def test_monitor_jobs_uses_rich_renderer_when_stdout_is_tty() -> None:
 
 def test_monitor_callbacks_skip_stale_owner_until_authoritative_result() -> None:
     config = MagicMock()
-    stale_result = MagicMock(name="stale_result")
-    current_result = MagicMock(name="current_result")
+    stale_result = _make_result(success=True, worker_machine="worker-old")
+    current_result = _make_result(success=True, worker_machine="worker-new")
 
     job = MagicMock()
     job.id = "job-1"
-    job.meta = {"worker_name": "worker-old"}
+    job.meta = {"worker_name": "worker-new"}
     job.result = stale_result
 
     lifecycle_store = MagicMock()
@@ -1511,7 +1615,6 @@ def test_monitor_callbacks_skip_stale_owner_until_authoritative_result() -> None
     with patch("crsbench.run_experiment._write_orchestrator_marker") as marker:
         assert callbacks.on_job_finished(job) is False
 
-        job.meta = {"worker_name": "worker-new"}
         job.result = current_result
 
         assert callbacks.on_job_finished(job) is not False

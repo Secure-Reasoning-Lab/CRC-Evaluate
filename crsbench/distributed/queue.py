@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from typing import List, Optional
 
+from crsbench.distributed.job_lifecycle import JobLifecycleStore, JobState
 from crsbench.utils.logger import get_logger
 
 try:
@@ -776,6 +777,7 @@ def handle_orphaned_jobs(
     queue: "rq.Queue",
     started_jobs: dict[str, "rq.job.Job"] | list["rq.job.Job"],
     *,
+    lifecycle_store: JobLifecycleStore | None = None,
     stale_started_grace_seconds: int = 120,
 ) -> int:
     """
@@ -865,6 +867,10 @@ def handle_orphaned_jobs(
                 )
             continue
         try:
+            if not _prepare_requeued_started_job_lifecycle(
+                job, lifecycle_store=lifecycle_store
+            ):
+                continue
             # Move to failed registry
             job.set_status(rq.job.JobStatus.FAILED)  # type: ignore[attr-defined]
             # Requeue for retry
@@ -873,6 +879,11 @@ def handle_orphaned_jobs(
             requeued_count += 1
             logger.debug(f"Handled orphaned job {job.id[:8]}")
         except Exception as e:
+            _rollback_requeued_started_job_lifecycle(
+                job,
+                reason=str(e),
+                lifecycle_store=lifecycle_store,
+            )
             logger.warning(f"Failed to handle orphaned job {job.id[:8]}: {e}")
 
     if count > 0:
@@ -881,6 +892,101 @@ def handle_orphaned_jobs(
             f"{removed_duplicate_count} stale duplicates removed)"
         )
     return count
+
+
+def _prepare_requeued_started_job_lifecycle(
+    job: "rq.job.Job",
+    *,
+    lifecycle_store: JobLifecycleStore | None,
+) -> bool:
+    """Repair lifecycle ownership before continue-mode stale started-job requeue."""
+    experiment_name = get_job_experiment_name(job)
+    job_id = getattr(job, "id", None)
+    if not isinstance(experiment_name, str) or not experiment_name:
+        return True
+    if not isinstance(job_id, str) or not job_id:
+        return True
+
+    if lifecycle_store is None:
+        return True
+
+    try:
+        record = lifecycle_store.get(experiment_name, job_id)
+        if record is None:
+            return True
+        if record.state is JobState.COMPLETED:
+            return False
+
+        if record.state in {JobState.CLAIMED, JobState.RUNNING, JobState.SYNCING}:
+            record = lifecycle_store.transition(
+                experiment_name,
+                job_id,
+                JobState.ORPHANED,
+                claimed_by=None,
+                detail="recovered stale started job",
+            )
+
+        if record.state is JobState.ORPHANED:
+            retry_count = lifecycle_store.increment_retry(experiment_name, job_id)
+            meta = getattr(job, "meta", None)
+            if isinstance(meta, dict):
+                meta["retry_count"] = retry_count
+                meta.pop("worker_name", None)
+                save_meta = getattr(job, "save_meta", None)
+                if callable(save_meta):
+                    save_meta()
+
+        lifecycle_store.transition(
+            experiment_name,
+            job_id,
+            JobState.QUEUED,
+            claimed_by=None,
+            detail="recovered stale started job",
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to repair lifecycle for recovered stale started job %s: %s",
+            job_id[:8],
+            exc,
+        )
+        return False
+    return True
+
+
+def _rollback_requeued_started_job_lifecycle(
+    job: "rq.job.Job",
+    *,
+    reason: str,
+    lifecycle_store: JobLifecycleStore | None,
+) -> None:
+    """Restore a terminal lifecycle state when started-job requeue fails."""
+    experiment_name = get_job_experiment_name(job)
+    job_id = getattr(job, "id", None)
+    if not isinstance(experiment_name, str) or not experiment_name:
+        return
+    if not isinstance(job_id, str) or not job_id:
+        return
+
+    if lifecycle_store is None:
+        return
+
+    try:
+        record = lifecycle_store.get(experiment_name, job_id)
+        if record is None or record.state is JobState.COMPLETED:
+            return
+        lifecycle_store.transition(
+            experiment_name,
+            job_id,
+            JobState.FAILED,
+            claimed_by=None,
+            detail=f"started-job retry enqueue failed: {reason}",
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to roll back lifecycle for recovered stale started job %s: %s",
+            job_id[:8],
+            exc,
+        )
 
 
 def _has_other_active_trial_job(
