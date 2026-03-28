@@ -14,6 +14,7 @@ from crsbench.distributed.job_lifecycle import JobLifecycleStore, LifecycleRedis
 from crsbench.distributed.queue import (
     clear_experiment_jobs,
     get_existing_trial_jobs,
+    has_potentially_live_started_jobs,
     resolve_queue_names,
     validate_queue_name_component,
 )
@@ -98,8 +99,8 @@ def clean_experiment_queues(
         queue = rq.Queue(queue_name, connection=redis_conn)  # type: ignore[attr-defined]
         existing = get_existing_trial_jobs(queue, experiment_name=experiment_name)
         matched = sum(len(v) for v in existing.values())
-        if queue_name == resolve_queue_names(experiment_name)[0] and existing.get(
-            "started"
+        if queue_name == resolve_queue_names(experiment_name)[0] and (
+            has_potentially_live_started_jobs(existing.get("started", []))
         ):
             saw_started_trial_jobs = True
         total_matched += matched

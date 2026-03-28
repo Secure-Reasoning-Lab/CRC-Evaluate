@@ -1,6 +1,7 @@
 """Regression tests for distributed run orchestration."""
 
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
@@ -1424,6 +1425,10 @@ def test_queue_mode_fresh_preserves_lifecycle_when_started_job_was_purged(
     session = MagicMock()
     session.trial_queue = queue
     session.lifecycle_store = MagicMock()
+    live_started_job = MagicMock()
+    live_started_job.get_status.return_value = "started"
+    live_started_job.started_at = datetime.now(timezone.utc)
+    live_started_job.timeout = 600
 
     existing = {
         "queued": {},
@@ -1433,7 +1438,7 @@ def test_queue_mode_fresh_preserves_lifecycle_when_started_job_was_purged(
     }
     physical_existing_before = {
         "queued": [],
-        "started": [MagicMock()],
+        "started": [live_started_job],
         "failed": [],
         "finished": [],
         "deferred": [],
@@ -1523,6 +1528,73 @@ def test_queue_mode_fresh_lifecycle_clear_is_best_effort(tmp_path: Path) -> None
         patch(
             "crsbench.distributed.queue.get_existing_trial_jobs",
             side_effect=[physical_existing, remaining_after_purge],
+        ),
+        patch("crsbench.distributed.queue.clear_experiment_jobs"),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch("crsbench.run_experiment.monitor_jobs", return_value=[]),
+    ):
+        run_experiment_distributed("exp-test", config, [], queue_mode="fresh")
+
+    session.lifecycle_store.clear_experiment.assert_called_once_with("exp-test")
+
+
+def test_queue_mode_fresh_clears_lifecycle_for_stale_started_job(
+    tmp_path: Path,
+) -> None:
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = False
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+
+    queue = MagicMock()
+    session = MagicMock()
+    session.trial_queue = queue
+    session.lifecycle_store = MagicMock()
+    stale_started_job = MagicMock()
+    stale_started_job.get_status.return_value = "started"
+    stale_started_job.started_at = datetime.now(timezone.utc) - timedelta(minutes=15)
+    stale_started_job.timeout = 60
+
+    existing = {
+        "queued": {},
+        "started": {"k": MagicMock()},
+        "failed": {},
+        "finished": {},
+    }
+    physical_existing_before = {
+        "queued": [],
+        "started": [stale_started_job],
+        "failed": [],
+        "finished": [],
+        "deferred": [],
+        "scheduled": [],
+    }
+    physical_existing_after = {
+        "queued": [],
+        "started": [],
+        "failed": [],
+        "finished": [],
+        "deferred": [],
+        "scheduled": [],
+    }
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value=existing,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            side_effect=[physical_existing_before, physical_existing_after],
         ),
         patch("crsbench.distributed.queue.clear_experiment_jobs"),
         patch(
@@ -2132,7 +2204,7 @@ def test_monitor_callbacks_allow_failed_updates_without_lifecycle_record_for_leg
     marker.assert_called_once()
 
 
-def test_monitor_callbacks_allow_finished_updates_without_lifecycle_record_for_tracked_job() -> (
+def test_monitor_callbacks_consume_tracked_job_without_lifecycle_record_without_marker() -> (
     None
 ):
     config = MagicMock()
@@ -2140,7 +2212,10 @@ def test_monitor_callbacks_allow_finished_updates_without_lifecycle_record_for_t
 
     job = MagicMock()
     job.id = "job-1"
-    job.meta = {"worker_name": "worker-new"}
+    job.meta = {
+        "worker_name": "worker-new",
+        "expects_lifecycle_tracking": True,
+    }
     job.result = result
 
     lifecycle_store = MagicMock()
@@ -2155,7 +2230,7 @@ def test_monitor_callbacks_allow_finished_updates_without_lifecycle_record_for_t
     with patch("crsbench.run_experiment._write_orchestrator_marker") as marker:
         assert callbacks.on_job_finished(job) is True
 
-    marker.assert_called_once_with(result, config)
+    marker.assert_not_called()
 
 
 def test_monitor_callbacks_retry_when_active_lifecycle_owner_missing() -> None:

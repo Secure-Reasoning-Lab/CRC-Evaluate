@@ -1047,6 +1047,20 @@ def _is_stale_started_job(
     return age_seconds > (timeout_seconds + stale_started_grace_seconds)
 
 
+def has_potentially_live_started_jobs(
+    started_jobs: list["rq.job.Job"],
+    *,
+    stale_started_grace_seconds: int = 120,
+) -> bool:
+    """Return whether any started job still looks live enough to preserve lifecycle state."""
+    for job in started_jobs:
+        if not hasattr(job, "get_status"):
+            return True
+        if not _is_stale_started_job(job, stale_started_grace_seconds):
+            return True
+    return False
+
+
 def _normalize_queue_name(name: object) -> str | None:
     """Convert queue name values from RQ/Redis formats to a normalized string."""
     if isinstance(name, bytes):
