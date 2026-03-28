@@ -144,6 +144,22 @@ def test_logger_adapter_compatibility():
     assert "Error from adapter" in output_str
 
 
+def test_logger_exception_includes_traceback():
+    """Test exception logging includes traceback details in the sink output."""
+    output = StringIO()
+    configure_logger(level="INFO", colorize=False, sink=output)
+
+    logger = get_logger("test_exception")
+    try:
+        raise RuntimeError("boom")
+    except RuntimeError:
+        logger.exception("Operation failed")
+
+    output_str = output.getvalue()
+    assert "Operation failed" in output_str
+    assert "RuntimeError: boom" in output_str
+
+
 def test_colorize_option():
     """Test that colorize option can be controlled."""
     output = StringIO()

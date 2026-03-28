@@ -87,14 +87,14 @@ class JobMonitorLoop:
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
-        logger.info("JobMonitorLoop started for experiment '%s'", self._experiment)
+        logger.info("JobMonitorLoop started for experiment '{}'", self._experiment)
 
     def stop(self, timeout: float = 10.0) -> None:
         """Signal the monitor thread to stop and wait for it to exit."""
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=timeout)
-            logger.info("JobMonitorLoop stopped for experiment '%s'", self._experiment)
+            logger.info("JobMonitorLoop stopped for experiment '{}'", self._experiment)
 
     # ------------------------------------------------------------------
     # Main loop
@@ -107,7 +107,7 @@ class JobMonitorLoop:
                 self._scan_and_recover()
             except Exception:
                 logger.exception(
-                    "Unhandled error in monitor scan for experiment '%s'",
+                    "Unhandled error in monitor scan for experiment '{}'",
                     self._experiment,
                 )
 
@@ -143,7 +143,7 @@ class JobMonitorLoop:
             # Instance appears dead: increment grace counter
             count = self._grace_tracker.get(record.job_id, 0) + 1
             self._grace_tracker[record.job_id] = count
-            logger.debug("Job '%s' stale (grace count=%d)", record.job_id, count)
+            logger.debug("Job '{}' stale (grace count={})", record.job_id, count)
 
             if count < 2:
                 # Grace period: flag but do not act yet
@@ -163,7 +163,7 @@ class JobMonitorLoop:
         trial_key = record.trial_key
 
         logger.info(
-            "Recovering orphaned job '%s' (trial=%s, retries=%d)",
+            "Recovering orphaned job '{}' (trial={}, retries={})",
             job_id,
             trial_key,
             record.retry_count,
@@ -186,7 +186,7 @@ class JobMonitorLoop:
                 {"event": "completed_from_artifact", "job_id": job_id},
             )
             logger.info(
-                "Job '%s' completed from published artifacts — no requeue needed",
+                "Job '{}' completed from published artifacts — no requeue needed",
                 job_id,
             )
             return
@@ -212,7 +212,7 @@ class JobMonitorLoop:
                 },
             )
             logger.warning(
-                "Job '%s' permanently failed after %d retries", job_id, retry_count
+                "Job '{}' permanently failed after {} retries", job_id, retry_count
             )
             return
 
@@ -225,7 +225,7 @@ class JobMonitorLoop:
             {"event": "requeued", "job_id": job_id, "trial_key": trial_key},
         )
         logger.info(
-            "Job '%s' requeued (retry %d/%d)",
+            "Job '{}' requeued (retry {}/{})",
             job_id,
             retry_count + 1,
             self._max_retries,
@@ -258,7 +258,7 @@ class JobMonitorLoop:
                     },
                 )
                 logger.info(
-                    "Resume: job '%s' in %s state needs collection",
+                    "Resume: job '{}' in {} state needs collection",
                     record.job_id,
                     record.state.value,
                 )

@@ -887,7 +887,7 @@ class OSSFuzzInfrastructure:
             image_name = f"gcr.io/oss-fuzz/{variant_name}:{image_tag}"
             if not self._docker_image_exists(image_name):
                 logger.debug(
-                    "Cache incomplete for %s: missing source image %s",
+                    "Cache incomplete for {}: missing source image {}",
                     variant_name,
                     image_name,
                 )

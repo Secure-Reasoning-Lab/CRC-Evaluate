@@ -221,10 +221,7 @@ def _enqueue_pre_builds(
                 if _is_duplicate_job_enqueue_error(e):
                     logger.debug(f"Pre-build job {job.job_id} already exists, skipping")
                     continue
-                logger.error(
-                    f"Failed to enqueue pre-build job {job.job_id}: {e}",
-                    exc_info=True,
-                )
+                logger.exception("Failed to enqueue pre-build job {}", job.job_id)
                 raise
 
     return enqueued
@@ -548,11 +545,11 @@ def _run_single_job(
                 )
                 pipeline.execute()
 
-            logger.error(f"Job {job_id} failed: {e}", exc_info=True)
+            logger.exception("Job {} failed", job_id)
             raise
 
-    except Exception as e:
-        logger.error(f"Evaluator worker error: {e}", exc_info=True)
+    except Exception:
+        logger.exception("Evaluator worker error")
         raise
 
 
@@ -645,10 +642,7 @@ def _enqueue_pre_builds_from_registration(
                 if _is_duplicate_job_enqueue_error(e):
                     logger.debug(f"Pre-build job {job.job_id} already exists, skipping")
                     continue
-                logger.error(
-                    f"Failed to enqueue pre-build job {job.job_id}: {e}",
-                    exc_info=True,
-                )
+                logger.exception("Failed to enqueue pre-build job {}", job.job_id)
                 raise
 
     return enqueued

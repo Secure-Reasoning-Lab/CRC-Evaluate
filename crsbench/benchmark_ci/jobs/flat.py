@@ -198,7 +198,7 @@ class BuildSingleVariantJob(Job):
                     missing = _missing_harnesses()
                     if missing and self.use_inc_build and not result.fallback_used:
                         logger.warning(
-                            "Missing harness outputs after inc-build for %s; "
+                            "Missing harness outputs after inc-build for {}; "
                             "retrying with non-inc full build",
                             result.variant_name,
                         )

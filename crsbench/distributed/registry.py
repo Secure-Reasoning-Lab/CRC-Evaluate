@@ -333,7 +333,7 @@ class RegistryClient:
         if result:
             self._lock_tokens[experiment] = token
             logger.info(
-                "Force-took experiment lock for '%s' (old lock TTL below threshold)",
+                "Force-took experiment lock for '{}' (old lock TTL below threshold)",
                 experiment,
             )
         return bool(result)

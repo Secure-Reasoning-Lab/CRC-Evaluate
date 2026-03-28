@@ -100,10 +100,9 @@ def _read_meminfo_value_kb(field: str) -> Optional[int]:
                     continue
                 return int(parts[1])
     except Exception:
-        logger.debug(
-            "Failed to read %s from /proc/meminfo",
+        logger.opt(exception=True).debug(
+            "Failed to read {} from /proc/meminfo",
             field,
-            exc_info=True,
         )
     return None
 
@@ -143,7 +142,7 @@ def _read_cgroup_memory_available_bytes() -> Optional[int]:
         current_bytes = int(current_text or "0")
         return max(limit_bytes - current_bytes, 1)
     except Exception:
-        logger.debug("Failed to derive cgroup memory limit", exc_info=True)
+        logger.opt(exception=True).debug("Failed to derive cgroup memory limit")
         return None
 
 
@@ -170,7 +169,7 @@ def _visible_memory_bytes() -> Optional[int]:
         if isinstance(page_size, int) and isinstance(available_pages, int):
             return max(page_size * available_pages, 1)
     except (AttributeError, OSError, ValueError):
-        logger.debug("Failed to derive visible memory via sysconf", exc_info=True)
+        logger.opt(exception=True).debug("Failed to derive visible memory via sysconf")
 
     return None
 
@@ -521,7 +520,7 @@ class OssCrsAdapter:
             if normalized is not None:
                 self._docker_registry = normalized
                 logger.warning(
-                    "Ignoring docker_registry override from CRSBench config (%s); "
+                    "Ignoring docker_registry override from CRSBench config ({}); "
                     "oss-crs registry config owns image resolution",
                     normalized,
                 )
@@ -914,7 +913,7 @@ class OssCrsAdapter:
                 and additional_env["FUZZING_LANGUAGE"] != self._fuzzing_language
             ):
                 logger.warning(
-                    "Overriding configured FUZZING_LANGUAGE=%s with benchmark language=%s for CRS=%s",
+                    "Overriding configured FUZZING_LANGUAGE={} with benchmark language={} for CRS={}",
                     additional_env["FUZZING_LANGUAGE"],
                     self._fuzzing_language,
                     crs_name,
@@ -1074,8 +1073,8 @@ class OssCrsAdapter:
             logger.info(f"Resolved artifacts for run_id={self._run_id}")
         except RuntimeError as err:
             logger.info(
-                "oss-crs artifacts pre-run unavailable for run_id=%s; "
-                "continuing and will refresh post-run: %s",
+                "oss-crs artifacts pre-run unavailable for run_id={}; "
+                "continuing and will refresh post-run: {}",
                 self._run_id,
                 err,
             )
@@ -1269,10 +1268,7 @@ class OssCrsAdapter:
             )
             logger.info(f"Refreshed artifacts after run for run_id={self._run_id}")
         except RuntimeError:
-            logger.warning(
-                "Failed to refresh artifacts post-run",
-                exc_info=True,
-            )
+            logger.opt(exception=True).warning("Failed to refresh artifacts post-run")
 
     def _collect_bugfix_results(
         self,

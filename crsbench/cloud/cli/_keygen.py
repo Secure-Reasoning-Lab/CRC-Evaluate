@@ -40,7 +40,7 @@ def run_keygen(args: argparse.Namespace) -> int:
     if key_path.exists() or pub_path.exists():
         if not args.force:
             logger.warning(
-                "Key already exists at %s — skipping generation. "
+                "Key already exists at {} — skipping generation. "
                 "Use --force to overwrite.",
                 key_path,
             )

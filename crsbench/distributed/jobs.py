@@ -1517,9 +1517,7 @@ def run_crs_trial(
     except Exception as e:
         execution_time = time.time() - start_time
         error_msg = escape_loguru_braces(str(e))
-        logger.error(
-            f"[Trial {trial_num}] Failed with error: {error_msg}", exc_info=True
-        )
+        logger.exception("[Trial {}] Failed with error: {}", trial_num, error_msg)
         # Create .fail marker if trial_output_dir exists
         if "trial_output_dir" in locals() and trial_output_dir.exists():
             (trial_output_dir / ".fail").touch()

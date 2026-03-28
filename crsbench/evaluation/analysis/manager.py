@@ -175,10 +175,11 @@ class AnalysisManager:
 
             return result
 
-        except Exception as e:
-            logger.warning(
-                f"Analyzer {crs_name} failed on snapshot {snapshot_dir}: {e}",
-                exc_info=True,
+        except Exception:
+            logger.opt(exception=True).warning(
+                "Analyzer {} failed on snapshot {}",
+                crs_name,
+                snapshot_dir,
             )
             return None
 
@@ -214,9 +215,11 @@ class AnalysisManager:
 
             return result
 
-        except Exception as e:
-            logger.warning(
-                f"Analyzer {crs_name} failed on trial {trial_dir}: {e}", exc_info=True
+        except Exception:
+            logger.opt(exception=True).warning(
+                "Analyzer {} failed on trial {}",
+                crs_name,
+                trial_dir,
             )
             return None
 
@@ -258,8 +261,9 @@ class AnalysisManager:
 
             return result
 
-        except Exception as e:
-            logger.warning(
-                f"Time-series analyzer {crs_name} failed: {e}", exc_info=True
+        except Exception:
+            logger.opt(exception=True).warning(
+                "Time-series analyzer {} failed",
+                crs_name,
             )
             return None

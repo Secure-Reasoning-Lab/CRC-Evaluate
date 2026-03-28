@@ -531,7 +531,7 @@ def _load_build_context_from_disk(
         missing_after_strict = required_variant_names - set(build_results.keys())
         if missing_after_strict:
             logger.info(
-                "Strict inc-build context load missed %d variant(s) for %s; "
+                "Strict inc-build context load missed {} variant(s) for {}; "
                 "retrying with fallback-compatible context load",
                 len(missing_after_strict),
                 benchmark_path.name,
@@ -1115,8 +1115,8 @@ def enqueue_and_poll_ci_jobs(
                 )
                 if is_stale_started:
                     logger.warning(
-                        "CI job %s has stale STARTED status "
-                        "(age=%.1fs timeout=%ss); deleting and re-enqueuing",
+                        "CI job {} has stale STARTED status "
+                        "(age={:.1f}s timeout={}s); deleting and re-enqueuing",
                         job.job_id,
                         age_seconds,
                         timeout_seconds,
@@ -1230,8 +1230,8 @@ def enqueue_and_poll_ci_jobs(
                 )
                 if is_stale_started:
                     logger.warning(
-                        "CI job %s has stale STARTED status "
-                        "(age=%.1fs timeout=%ss); deleting and re-enqueuing",
+                        "CI job {} has stale STARTED status "
+                        "(age={:.1f}s timeout={}s); deleting and re-enqueuing",
                         job.job_id,
                         age_seconds,
                         timeout_seconds,
@@ -1338,20 +1338,18 @@ def enqueue_and_poll_ci_jobs(
                 try:
                     _recover_orphaned_deferred_jobs(q, rq_jobs, pending)
                 except Exception:
-                    logger.warning(
-                        f"Recovery sweep failed for queue {q.name}, "
-                        f"will retry next interval",
-                        exc_info=True,
+                    logger.opt(exception=True).warning(
+                        "Recovery sweep failed for queue {}, will retry next interval",
+                        q.name,
                     )
                 try:
                     _mark_blocked_deferred_jobs(
                         q, rq_jobs, pending, missing_job_failures
                     )
                 except Exception:
-                    logger.warning(
-                        f"Blocked deferred sweep failed for queue {q.name}, "
-                        "will retry next interval",
-                        exc_info=True,
+                    logger.opt(exception=True).warning(
+                        "Blocked deferred sweep failed for queue {}, will retry next interval",
+                        q.name,
                     )
             last_recovery = now
 

@@ -182,7 +182,7 @@ class JobLifecycleStore:
         updated = replace(record, **update)
         self.set(experiment, updated)
         logger.debug(
-            "Job %s transitioned %s -> %s",
+            "Job {} transitioned {} -> {}",
             job_id,
             record.state.value,
             new_state.value,
@@ -245,4 +245,4 @@ def log_recovery_event(
         f"crsbench:recovery-events:{experiment}",
         json.dumps(entry, sort_keys=True),
     )
-    logger.debug("Recovery event logged for %s: %s", experiment, event_dict)
+    logger.debug("Recovery event logged for {}: {}", experiment, event_dict)
