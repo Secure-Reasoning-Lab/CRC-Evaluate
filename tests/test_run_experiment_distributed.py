@@ -9,16 +9,19 @@ from crsbench.cloud.models import build_cloud_launch_plan
 from crsbench.distributed.job_lifecycle import JobLifecycleRecord, JobState
 from crsbench.distributed.jobs import _build_trial_output_path
 from crsbench.distributed.runtime_session import LockContentionError
+from crsbench.evaluation.results import TrialMetadata, TrialResult
 from crsbench.run_experiment import (
     Trial,
     _build_artifact_checker,
     _build_monitor_callbacks,
+    _dedupe_results_by_logical_trial,
     _get_experiment_queue_stats,
     _monitor_jobs_basic,
     _monitor_jobs_rich,
     _prepare_trial_dir_for_retry,
     build_trial_id,
     build_trial_queue_job_id,
+    generate_final_report,
     get_crs_cpu_count,
     get_crs_memory,
     monitor_jobs,
@@ -73,6 +76,97 @@ def test_build_artifact_checker_recognizes_success_and_fail_markers(
     assert checker("crs-a:bench-a:fuzz_target:delta:address:1:-") is JobState.COMPLETED
     assert checker("crs-b:bench-b:harness-b:delta:address:2:-") is JobState.FAILED
     assert checker("crs-c:bench-c:harness-c:delta:address:3:-") is None
+
+
+def _make_result(
+    *,
+    crs: str = "crs-a",
+    benchmark: str = "bench-a",
+    harness: str = "fuzz_target",
+    trial_num: int = 1,
+    mode: str = "delta",
+    sanitizer: str = "address",
+    success: bool = True,
+    error: str | None = None,
+) -> TrialResult:
+    return TrialResult(
+        crs=crs,
+        benchmark=benchmark,
+        harness=harness,
+        trial_num=trial_num,
+        crs_type="bug-finding",
+        mode=mode,
+        sanitizer=sanitizer,
+        success=success,
+        execution_time=1.0,
+        error=error,
+        report={},
+        metadata=TrialMetadata(timestamp_start=0.0, timestamp_end=1.0),
+    )
+
+
+def test_dedupe_results_by_logical_trial_prefers_canonical_marker(
+    tmp_path: Path,
+) -> None:
+    config = MagicMock()
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+
+    trial_dir = _build_trial_output_path(
+        filestore=tmp_path.resolve(),
+        experiment_name="exp-test",
+        crs="crs-a",
+        benchmark="bench-a",
+        harness="fuzz_target",
+        mode="delta",
+        sanitizer="address",
+        trial_num=1,
+        target_cpv_id=None,
+    )
+    trial_dir.mkdir(parents=True, exist_ok=True)
+    (trial_dir / ".success").touch()
+
+    failed = _make_result(success=False, error="stale attempt")
+    succeeded = _make_result(success=True)
+
+    deduped = _dedupe_results_by_logical_trial([failed, succeeded], config)
+
+    assert deduped == [succeeded]
+
+
+def test_generate_final_report_counts_one_logical_trial_for_duplicate_attempts(
+    tmp_path: Path,
+) -> None:
+    config = MagicMock()
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+    config.report_filestore = tmp_path / "reports"
+
+    trial_dir = _build_trial_output_path(
+        filestore=tmp_path.resolve(),
+        experiment_name="exp-test",
+        crs="crs-a",
+        benchmark="bench-a",
+        harness="fuzz_target",
+        mode="delta",
+        sanitizer="address",
+        trial_num=1,
+        target_cpv_id=None,
+    )
+    trial_dir.mkdir(parents=True, exist_ok=True)
+    (trial_dir / ".success").touch()
+
+    failed = _make_result(success=False, error="stale attempt")
+    succeeded = _make_result(success=True)
+
+    with (
+        patch("crsbench.run_experiment._generate_html_json_reports"),
+        patch("crsbench.run_experiment.logger") as logger_mock,
+    ):
+        generate_final_report([failed, succeeded], "exp-test", config)
+
+    logger_mock.info.assert_any_call("Total trials: 1")
+    logger_mock.info.assert_any_call("Successful: 1 (100.0%)")
 
 
 def test_register_failure_cleans_registry_lease() -> None:

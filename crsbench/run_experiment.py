@@ -1377,6 +1377,85 @@ def _build_artifact_checker(config: ExperimentConfig):
     return _artifacts_exist
 
 
+def _trial_result_key(result: TrialResult) -> str:
+    """Build the canonical logical trial key for a TrialResult."""
+    return build_trial_key(
+        crs=result.crs,
+        benchmark=result.benchmark,
+        harness=result.harness,
+        mode=result.mode,
+        sanitizer=result.sanitizer,
+        trial_num=result.trial_num,
+        target_cpv_id=result.target_cpv_id,
+    )
+
+
+def _canonical_result_state(
+    result: TrialResult, config: ExperimentConfig
+) -> JobState | None:
+    """Return the terminal marker state currently published for a trial result."""
+    if not result.mode or not result.sanitizer:
+        return None
+
+    trial_dir = _build_trial_output_path(
+        filestore=config.experiment_filestore.resolve(),
+        experiment_name=config.experiment,
+        crs=result.crs,
+        benchmark=result.benchmark,
+        harness=result.harness,
+        mode=result.mode,
+        sanitizer=result.sanitizer,
+        trial_num=result.trial_num,
+        target_cpv_id=result.target_cpv_id,
+    )
+    if (trial_dir / ".success").exists():
+        return JobState.COMPLETED
+    if (trial_dir / ".fail").exists():
+        return JobState.FAILED
+    return None
+
+
+def _dedupe_results_by_logical_trial(
+    results: List[TrialResult], config: ExperimentConfig
+) -> List[TrialResult]:
+    """Collapse duplicate physical attempts onto one logical trial outcome.
+
+    The orchestrator's canonical visible state is the per-trial marker directory,
+    not the number of physical RQ jobs that happened to produce results.
+    """
+    grouped: dict[str, list[TrialResult]] = {}
+    order: list[str] = []
+    for result in results:
+        trial_key = _trial_result_key(result)
+        if trial_key not in grouped:
+            grouped[trial_key] = []
+            order.append(trial_key)
+        grouped[trial_key].append(result)
+
+    deduped: list[TrialResult] = []
+    for trial_key in order:
+        group = grouped[trial_key]
+        if len(group) == 1:
+            deduped.append(group[0])
+            continue
+
+        canonical_state = _canonical_result_state(group[-1], config)
+        if canonical_state is JobState.COMPLETED:
+            selected = next((r for r in reversed(group) if r.success), group[-1])
+        elif canonical_state is JobState.FAILED:
+            selected = next((r for r in reversed(group) if not r.success), group[-1])
+        else:
+            selected = group[-1]
+
+        logger.warning(
+            f"Collapsing {len(group)} physical results for logical trial "
+            f"{trial_key} to one visible outcome"
+        )
+        deduped.append(selected)
+
+    return deduped
+
+
 def monitor_jobs(
     queue,
     job_list: List,
@@ -2331,9 +2410,11 @@ def generate_final_report(
     logger.info(f"\nFinal Report for Experiment: {experiment_name}")
     logger.info("=" * 60)
 
+    visible_results = _dedupe_results_by_logical_trial(results, config)
+
     # Count successes and failures
-    total_trials = len(results)
-    successful_trials = sum(1 for r in results if r.success)
+    total_trials = len(visible_results)
+    successful_trials = sum(1 for r in visible_results if r.success)
     failed_trials = total_trials - successful_trials
 
     logger.info(f"Total trials: {total_trials}")
@@ -2347,8 +2428,8 @@ def generate_final_report(
 
     # Aggregate POV statistics
     if successful_trials > 0:
-        total_povs_found = sum(r.povs_found for r in results if r.success)
-        total_povs_available = sum(r.total_povs for r in results if r.success)
+        total_povs_found = sum(r.povs_found for r in visible_results if r.success)
+        total_povs_available = sum(r.total_povs for r in visible_results if r.success)
 
         if total_povs_available > 0:
             overall_success_rate = total_povs_found / total_povs_available
@@ -2361,7 +2442,7 @@ def generate_final_report(
     # Report failures
     if failed_trials > 0:
         logger.warning(f"\nFailed trials ({failed_trials}):")
-        for idx, result in enumerate(results):
+        for idx, result in enumerate(visible_results):
             if not result.success:
                 error = result.error or "Unknown error"
                 logger.warning(

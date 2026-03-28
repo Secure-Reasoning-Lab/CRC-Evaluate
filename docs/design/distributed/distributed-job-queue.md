@@ -99,6 +99,9 @@ The queue layer treats the following as terminal outcomes:
 - worker-side and orchestrator-side terminal marker writers must leave exactly
   one verdict marker on disk for a trial; writing `.success` must remove stale
   `.fail`, and writing `.fail` must remove stale `.success`
+- orchestrator-visible final reporting must collapse duplicate physical attempt
+  results onto one logical trial outcome; the canonical verdict is the terminal
+  marker state in the logical trial directory, not the count of physical RQ jobs
 
 ### Stale or missing state
 - missing queue metadata for a supposedly pending job is an infrastructure failure
