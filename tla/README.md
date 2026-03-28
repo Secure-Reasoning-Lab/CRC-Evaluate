@@ -44,6 +44,9 @@
 - `DistributedStartedJobRecovery.tla`: model of continue-mode stale started-job recovery
 - `DistributedStartedJobRecoveryBuggy.cfg`: buggy config where any live queue worker blocks stale started-job recovery
 - `DistributedStartedJobRecoveryHealthy.cfg`: fixed config where stale started jobs recover by their own timeout window
+- `DistributedStartedDuplicateRecovery.tla`: model of stale started-duplicate recovery when another runnable peer already exists
+- `DistributedStartedDuplicateRecoveryBuggy.cfg`: buggy config where recovery requeues the stale started duplicate and leaves two runnable jobs
+- `DistributedStartedDuplicateRecoveryHealthy.cfg`: fixed config where recovery removes the stale duplicate and leaves one active job
 - `DistributedResumeCollection.tla`: model of continue-mode restart when only syncing collection work remains
 - `DistributedResumeCollectionBuggy.cfg`: buggy config where continue mode exits before attaching resume collection jobs
 - `DistributedResumeCollectionHealthy.cfg`: fixed config where resume-only syncing work is tracked before exit
@@ -148,6 +151,13 @@ The fourteenth model is meant to catch stale started-job recovery bugs:
 - a started job's original owner is gone
 - the job has exceeded timeout plus grace
 - an unrelated live worker on the same queue must not block requeue of that stale job
+
+The seventeenth model is meant to catch stale started-duplicate recovery bugs:
+
+- a stale `started` duplicate exists for one logical trial
+- another physical job for that same trial is already runnable
+- continue-mode orphan recovery must not requeue the stale duplicate and create
+  two active jobs for the same logical trial
 
 The fifteenth model is meant to catch resume-collection restart bugs:
 
