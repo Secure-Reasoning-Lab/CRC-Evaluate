@@ -381,7 +381,7 @@ def test_list_jobs() -> None:
 
 
 def test_heartbeat_update() -> None:
-    """update_heartbeat writes a timestamp to the heartbeat hash."""
+    """update_heartbeat projects the timestamp into both heartbeat and lifecycle state."""
     from crsbench.distributed.job_lifecycle import (
         JobLifecycleRecord,
         JobLifecycleStore,
@@ -403,6 +403,10 @@ def test_heartbeat_update() -> None:
     store.update_heartbeat("exp-hb", "job-hb")
     ts = store.get_heartbeat("exp-hb", "job-hb")
     assert ts is not None
+    fetched = store.get("exp-hb", "job-hb")
+    assert fetched is not None
+    assert fetched.last_heartbeat == ts
+    assert fetched.updated_at == ts
     # Should be a valid ISO timestamp
     from datetime import datetime
 

@@ -204,7 +204,15 @@ class JobLifecycleStore:
 
     def update_heartbeat(self, experiment: str, job_id: str) -> None:
         """Write the current UTC timestamp as this job's heartbeat."""
-        self._conn.hset(self._heartbeat_key(experiment), job_id, _utc_now())
+        ts = _utc_now()
+        self._conn.hset(self._heartbeat_key(experiment), job_id, ts)
+        record = self.get(experiment, job_id)
+        if record is None:
+            return
+        self.set(
+            experiment,
+            replace(record, last_heartbeat=ts, updated_at=ts),
+        )
 
     def get_heartbeat(self, experiment: str, job_id: str) -> str | None:
         """Return the last heartbeat ISO timestamp for a job, or None."""

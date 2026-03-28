@@ -205,6 +205,9 @@ The queue layer treats the following as terminal outcomes:
 - when orphan recovery increments lifecycle `retry_count`, it must also project
   that retry count into the concrete RQ job metadata so queue-derived operator
   views report the same retry budget state as the shadow lifecycle
+- worker heartbeat updates must project into both the heartbeat hash and the
+  lifecycle record's `last_heartbeat` / `updated_at` fields so lifecycle
+  snapshots never report stale liveness data while the heartbeat side channel is fresh
 - restart reconciliation must check published terminal artifacts before leaving a
   lifecycle record in `syncing`; artifact-backed in-flight records should be
   collapsed to `completed` / `failed` rather than left waiting for collection
