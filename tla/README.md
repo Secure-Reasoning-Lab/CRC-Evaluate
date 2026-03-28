@@ -195,6 +195,20 @@ The twenty-first model is meant to catch retry-refresh bring-up bugs:
 - the snapshot must be refreshed after retry so the controller does not skip
   worker bring-up for newly reactivated work
 
+The twenty-second model is meant to catch explicit retry lifecycle-alignment
+bugs:
+
+- continue mode explicitly retries a previously failed physical job
+- the shadow lifecycle must be resurrected from `failed` back to `queued`
+- active physical attempts and non-terminal lifecycle state must stay aligned
+
+The twenty-third model is meant to catch resume-vs-active convergence bugs:
+
+- a stale syncing attempt is still discoverable through `resume_collection_job_ids`
+- an active retry already exists for the same logical trial
+- the resume-only candidate must be filtered so it cannot win the canonical
+  marker race ahead of the active retry
+
 The fifteenth model is meant to catch resume-collection restart bugs:
 
 - continue mode resumes a stale lock
