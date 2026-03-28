@@ -45,6 +45,13 @@ _JOB_ALLOWED_TRANSITIONS: dict[JobState, set[JobState]] = {
     JobState.ORPHANED: {JobState.QUEUED, JobState.COMPLETED, JobState.FAILED},
 }
 
+_OWNERLESS_STATES = {
+    JobState.QUEUED,
+    JobState.COMPLETED,
+    JobState.FAILED,
+    JobState.ORPHANED,
+}
+
 
 # ---------------------------------------------------------------------------
 # Data record
@@ -174,6 +181,8 @@ class JobLifecycleStore:
             "state": new_state,
             "updated_at": _utc_now(),
         }
+        if new_state in _OWNERLESS_STATES and "claimed_by" not in kwargs:
+            update["claimed_by"] = None
         # Apply allowed overrides
         for field in ("claimed_by", "detail"):
             if field in kwargs:

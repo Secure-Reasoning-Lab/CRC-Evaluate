@@ -314,7 +314,10 @@ def _lifecycle_runtime_is_current_owner(runtime: JobLifecycleRuntime | None) -> 
 
     if record is None:
         return False
-    return record.claimed_by == runtime.worker_name
+    return (
+        record.state in {JobState.CLAIMED, JobState.RUNNING, JobState.SYNCING}
+        and record.claimed_by == runtime.worker_name
+    )
 
 
 def _transition_job_lifecycle_syncing(runtime: JobLifecycleRuntime | None) -> None:

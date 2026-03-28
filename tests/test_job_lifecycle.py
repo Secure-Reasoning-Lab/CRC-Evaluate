@@ -263,6 +263,66 @@ def test_claim_records_instance() -> None:
     assert fetched.claimed_by == "worker-1"
 
 
+def test_non_active_transitions_clear_claimed_by() -> None:
+    """Ownership must be cleared when a job leaves active execution states."""
+    from crsbench.distributed.job_lifecycle import (
+        JobLifecycleRecord,
+        JobLifecycleStore,
+        JobState,
+    )
+
+    fake = _FakeRedis()
+    store = JobLifecycleStore(fake)
+
+    store.set(
+        "exp-clear",
+        JobLifecycleRecord(
+            job_id="job-orphan",
+            trial_key="trial-clear",
+            state=JobState.RUNNING,
+            claimed_by="worker-1",
+        ),
+    )
+    orphaned = store.transition("exp-clear", "job-orphan", JobState.ORPHANED)
+    assert orphaned.claimed_by is None
+
+    store.set(
+        "exp-clear",
+        JobLifecycleRecord(
+            job_id="job-complete",
+            trial_key="trial-clear",
+            state=JobState.SYNCING,
+            claimed_by="worker-1",
+        ),
+    )
+    completed = store.transition("exp-clear", "job-complete", JobState.COMPLETED)
+    assert completed.claimed_by is None
+
+    store.set(
+        "exp-clear",
+        JobLifecycleRecord(
+            job_id="job-fail",
+            trial_key="trial-clear",
+            state=JobState.RUNNING,
+            claimed_by="worker-1",
+        ),
+    )
+    failed = store.transition("exp-clear", "job-fail", JobState.FAILED)
+    assert failed.claimed_by is None
+
+    store.set(
+        "exp-clear",
+        JobLifecycleRecord(
+            job_id="job-retry",
+            trial_key="trial-clear",
+            state=JobState.FAILED,
+            claimed_by="worker-1",
+        ),
+    )
+    queued = store.transition("exp-clear", "job-retry", JobState.QUEUED)
+    assert queued.claimed_by is None
+
+
 def test_sync_gates_completion() -> None:
     """RUNNING cannot transition directly to COMPLETED (must go through SYNCING)."""
     import pytest

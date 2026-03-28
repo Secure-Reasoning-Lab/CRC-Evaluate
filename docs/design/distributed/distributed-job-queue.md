@@ -196,6 +196,9 @@ The queue layer treats the following as terminal outcomes:
   job becomes runnable again
 - resume-only syncing jobs must be excluded from monitoring when another active
   queued/deferred/started attempt already exists for the same logical trial
+- only active lifecycle states (`claimed`, `running`, `syncing`) may retain
+  `claimed_by`; transitions to `queued`, `orphaned`, `failed`, or `completed`
+  must clear ownership so superseded workers immediately lose write authority
 - restart reconciliation must check published terminal artifacts before leaving a
   lifecycle record in `syncing`; artifact-backed in-flight records should be
   collapsed to `completed` / `failed` rather than left waiting for collection

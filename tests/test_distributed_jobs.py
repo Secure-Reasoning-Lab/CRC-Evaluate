@@ -130,6 +130,29 @@ def test_lifecycle_runtime_is_current_owner_requires_matching_claimed_by() -> No
     assert _lifecycle_runtime_is_current_owner(runtime) is False
 
 
+def test_lifecycle_runtime_is_current_owner_rejects_non_active_states() -> None:
+    fake = _FakeRedis()
+    store = JobLifecycleStore(fake)
+    store.set(
+        "exp-1",
+        JobLifecycleRecord(
+            job_id="job-1",
+            trial_key="trial-1",
+            state=JobState.FAILED,
+            claimed_by="worker-1",
+        ),
+    )
+
+    runtime = JobLifecycleRuntime(
+        experiment_name="exp-1",
+        job_id="job-1",
+        worker_name="worker-1",
+        store=store,
+    )
+
+    assert _lifecycle_runtime_is_current_owner(runtime) is False
+
+
 def test_finish_job_lifecycle_noops_for_superseded_worker() -> None:
     fake = _FakeRedis()
     store = JobLifecycleStore(fake)
