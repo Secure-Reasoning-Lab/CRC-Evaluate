@@ -2058,6 +2058,8 @@ def run_experiment_distributed(
                         )
                         return
 
+            queue_state_mutated = False
+
             # Handle orphaned started jobs (move to failed + retry)
             if physical_existing["started"]:
                 orphaned_count = handle_orphaned_jobs(
@@ -2065,6 +2067,7 @@ def run_experiment_distributed(
                     physical_existing["started"],
                 )
                 if orphaned_count > 0:
+                    queue_state_mutated = True
                     logger.info(f"Handled {orphaned_count} orphaned jobs")
 
             # Optional failed retries require explicit opt-in and clean trial dirs.
@@ -2083,8 +2086,20 @@ def run_experiment_distributed(
                             f"Failed to requeue failed job {failed_job.id[:8]}: {e}"
                         )
                 if retried > 0:
+                    queue_state_mutated = True
                     requeued_failed_jobs = retried
                     logger.info(f"Requeued {retried} failed jobs with clean retry dirs")
+
+            if queue_state_mutated:
+                existing = get_existing_trials(queue, experiment_name=experiment_name)
+                physical_existing = get_existing_trial_jobs(
+                    queue, experiment_name=experiment_name
+                )
+                if any(existing.values()) and not any(physical_existing.values()):
+                    physical_existing = {
+                        bucket_name: list(jobs_by_key.values())
+                        for bucket_name, jobs_by_key in existing.items()
+                    }
 
         # Filter trials if in continue mode
         if normalized_queue_mode == "continue" and has_existing:

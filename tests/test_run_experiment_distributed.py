@@ -1660,6 +1660,112 @@ def test_provider_neutral_cloud_workers_seed_lifecycle_and_start_monitor(
     assert seeded_record.state.value == "queued"
 
 
+def test_provider_neutral_cloud_retry_failed_refreshes_active_existing_jobs(
+    tmp_path: Path,
+) -> None:
+    """Retried failed jobs must trigger cloud bring-up even with no new trials."""
+    config = _make_provider_neutral_run_config(tmp_path)
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.cloud_readiness = MagicMock()
+    session.register_or_raise.return_value = None
+
+    failed_job = MagicMock()
+    failed_job.id = "job-failed"
+    failed_job.meta = {}
+    failed_job.kwargs = {
+        "crs": "crs-a",
+        "benchmark": "bench-a",
+        "harness_name": "fuzz_target",
+        "mode": "delta",
+        "sanitizer": "address",
+        "trial_num": 1,
+        "target_cpv_id": None,
+    }
+
+    existing = {
+        "queued": {},
+        "started": {},
+        "failed": {"trial-1": failed_job},
+        "finished": {},
+        "deferred": {},
+        "scheduled": {},
+    }
+    refreshed_existing = {
+        "queued": {"trial-1": failed_job},
+        "started": {},
+        "failed": {},
+        "finished": {},
+        "deferred": {},
+        "scheduled": {},
+    }
+    physical_existing = {
+        "queued": [],
+        "started": [],
+        "failed": [failed_job],
+        "finished": [],
+        "deferred": [],
+        "scheduled": [],
+    }
+    refreshed_physical_existing = {
+        "queued": [failed_job],
+        "started": [],
+        "failed": [],
+        "finished": [],
+        "deferred": [],
+        "scheduled": [],
+    }
+
+    manager = MagicMock()
+    manager.bring_up_workers.side_effect = RuntimeError("stop after bringup")
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            side_effect=[existing, refreshed_existing],
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            side_effect=[physical_existing, refreshed_physical_existing],
+        ),
+        patch("crsbench.distributed.queue.handle_orphaned_jobs", return_value=0),
+        patch(
+            "crsbench.run_experiment._prepare_trial_dir_for_retry", return_value=True
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config",
+            return_value=MagicMock(),
+        ),
+        patch("crsbench.cloud.quota.QuotaValidator") as mock_quota_validator_cls,
+        patch(
+            "crsbench.cloud.status.CloudFleetStatusManager",
+            return_value=manager,
+        ),
+        patch(
+            "crsbench.run_experiment.monitor_jobs",
+            side_effect=RuntimeError("reached monitor without bringup"),
+        ),
+    ):
+        mock_quota_validator_cls.return_value.validate.return_value = None
+        with pytest.raises(RuntimeError, match="stop after bringup"):
+            run_experiment_distributed(
+                "exp-test",
+                config,
+                [],
+                queue_mode="continue",
+                retry_failed=True,
+            )
+
+    queue.enqueue_job.assert_called_once_with(failed_job)
+
+
 def test_provider_neutral_cloud_workers_resolve_secret_refs_before_bringup(
     tmp_path: Path,
 ) -> None:

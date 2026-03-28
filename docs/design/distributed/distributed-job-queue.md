@@ -188,6 +188,9 @@ The queue layer treats the following as terminal outcomes:
 - if stale-lock resume reports job ids still needing collection, continue mode
   must attach those jobs even when there are no visible queue entries and no new
   trials to enqueue; resume-only syncing work must not trigger early exit
+- if continue mode requeues failed work or mutates queue state during orphan
+  recovery, it must refresh its queue snapshot before deciding cloud bring-up
+  and monitoring scope; retry-created active work must not be treated as absent
 - restart reconciliation must check published terminal artifacts before leaving a
   lifecycle record in `syncing`; artifact-backed in-flight records should be
   collapsed to `completed` / `failed` rather than left waiting for collection
