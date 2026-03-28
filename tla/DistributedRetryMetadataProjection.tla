@@ -1,7 +1,8 @@
 ---- MODULE DistributedRetryMetadataProjection ----
 EXTENDS Naturals, TLC
 
-\* Code-correspondent model for retry-count projection after orphan recovery:
+\* Code-correspondent model for retry-count projection after orphan recovery on
+\* the successful metadata-write path:
 \* - orphan recovery requeues a concrete RQ job
 \* - lifecycle retry_count increments
 \* - queue-derived operator views read retry_count from RQ metadata

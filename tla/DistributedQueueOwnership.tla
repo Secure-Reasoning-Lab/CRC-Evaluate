@@ -1,7 +1,7 @@
 ---- MODULE DistributedQueueOwnership ----
 EXTENDS TLC
 
-\* Code-correspondent model for queue-monitor ownership display vs shadow
+\* Code-correspondent model for queue-monitor visible ownership rows vs shadow
 \* lifecycle ownership.
 \*
 \* Python correspondence:
@@ -10,7 +10,7 @@ EXTENDS TLC
 \* - `queue_monitor.list_queue_job_entries()` must not present stale metadata as
 \*   an active owner for non-running jobs
 
-CONSTANT PreserveStaleWorkerMeta
+CONSTANT PreserveStaleWorkerMeta, HideStaleWorkerMetaInView
 
 Workers == {"worker_1", "worker_2"}
 OwnerVals == Workers \cup {"none"}
@@ -75,16 +75,21 @@ TypeInvariant ==
     /\ lcState \in LCStates
     /\ claimedBy \in OwnerVals
 
-NonRunningQueueHasNoOwner ==
-    rqState # "running" => rqWorkerMeta = "none"
+VisibleQueueOwner ==
+    IF rqState = "running" \/ ~HideStaleWorkerMetaInView
+        THEN rqWorkerMeta
+        ELSE "none"
+
+NonRunningQueueExposesNoOwner ==
+    rqState # "running" => VisibleQueueOwner = "none"
 
 RunningQueueMatchesLifecycleOwner ==
-    rqState = "running" => /\ claimedBy = rqWorkerMeta
-                           /\ claimedBy # "none"
+    rqState = "running" => /\ claimedBy = VisibleQueueOwner
+                           /\ VisibleQueueOwner # "none"
                            /\ lcState = "running"
 
 LifecycleMatchesRQOwnership ==
-    /\ NonRunningQueueHasNoOwner
+    /\ NonRunningQueueExposesNoOwner
     /\ RunningQueueMatchesLifecycleOwner
 
 Spec ==

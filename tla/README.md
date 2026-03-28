@@ -22,13 +22,16 @@
 - `DistributedRetryBudgetHealthy.cfg`: exact-budget config with one final retry and then permanent failure
 - `DistributedRetryMetadataProjection.tla`: model of retry-count projection from lifecycle recovery into RQ metadata
 - `DistributedRetryMetadataProjectionBuggy.cfg`: buggy config where lifecycle retry_count increments but RQ metadata stays stale
-- `DistributedRetryMetadataProjectionHealthy.cfg`: fixed config where queue-visible retry metadata matches lifecycle retry_count
+- `DistributedRetryMetadataProjectionHealthy.cfg`: successful-write config where queue-visible retry metadata matches lifecycle retry_count
 - `DistributedHeartbeatProjection.tla`: model of heartbeat projection from the side-channel heartbeat hash into lifecycle record fields
 - `DistributedHeartbeatProjectionBuggy.cfg`: buggy config where the heartbeat hash is refreshed but lifecycle fields stay stale
-- `DistributedHeartbeatProjectionHealthy.cfg`: fixed config where lifecycle heartbeat fields match the side channel
+- `DistributedHeartbeatProjectionHealthy.cfg`: successful-write config where lifecycle heartbeat fields match the side channel
 - `DistributedRetryTerminalFence.tla`: model of explicit failed-job retry against terminal lifecycle state
 - `DistributedRetryTerminalFenceBuggy.cfg`: buggy config where a failed physical job is retried even though lifecycle already says completed
 - `DistributedRetryTerminalFenceHealthy.cfg`: fixed config where explicit retry is fenced to lifecycle records currently in failed
+- `DistributedRetryLifecycleAlignment.tla`: model of explicit retry requeue order vs lifecycle rollback
+- `DistributedRetryLifecycleAlignmentBuggy.cfg`: buggy config where failed enqueue leaves lifecycle queued
+- `DistributedRetryLifecycleAlignmentHealthy.cfg`: fixed config where failed enqueue rolls lifecycle back to failed
 - `DistributedResumeRegistryOwnership.tla`: model of stale-lock resume ownership over experiment registry state
 - `DistributedResumeRegistryOwnershipBuggy.cfg`: buggy config where a resumed controller takes the lock but never owns the registry entry for cleanup
 - `DistributedResumeRegistryOwnershipHealthy.cfg`: fixed config where stale-lock resume adopts or republishes registry state before cleanup
@@ -64,7 +67,7 @@
 - `DistributedMonitorLifecycleGateHealthy.cfg`: fixed config where non-active lifecycle records consume callbacks without writing markers
 - `DistributedStartedJobRecovery.tla`: model of continue-mode stale started-job recovery
 - `DistributedStartedJobRecoveryBuggy.cfg`: buggy config where any live queue worker blocks stale started-job recovery
-- `DistributedStartedJobRecoveryHealthy.cfg`: fixed config where stale started jobs recover by their own timeout window
+- `DistributedStartedJobRecoveryHealthy.cfg`: fixed config where stale started jobs recover by their own timeout window and resurrect lifecycle ownership
 - `DistributedStartedDuplicateRecovery.tla`: model of stale started-duplicate recovery when another runnable peer already exists
 - `DistributedStartedDuplicateRecoveryBuggy.cfg`: buggy config where recovery requeues the stale started duplicate and leaves two runnable jobs
 - `DistributedStartedDuplicateRecoveryHealthy.cfg`: fixed config where recovery removes the stale duplicate and leaves one active job
@@ -221,6 +224,7 @@ bugs:
 
 - continue mode explicitly retries a previously failed physical job
 - the shadow lifecycle must be resurrected from `failed` back to `queued`
+- if the subsequent physical requeue fails, lifecycle must roll back to `failed`
 - active physical attempts and non-terminal lifecycle state must stay aligned
 
 The twenty-third model is meant to catch resume-vs-active convergence bugs:
@@ -250,6 +254,8 @@ The twenty-sixth model is meant to catch retry-metadata projection bugs:
 - lifecycle retry_count increments for the logical job
 - queue-derived operator views still read retry_count from RQ metadata
 - the concrete metadata must be updated so both layers report the same retry budget state
+- this model abstracts the successful metadata-save path; the runtime logs and
+  continues if `job.save_meta()` fails during projection
 
 The twenty-seventh model is meant to catch heartbeat-projection bugs:
 
@@ -257,6 +263,8 @@ The twenty-seventh model is meant to catch heartbeat-projection bugs:
 - the separate heartbeat hash is refreshed
 - the lifecycle record also exposes `last_heartbeat`
 - both layers must advance together so lifecycle snapshots do not lie about liveness
+- this model abstracts the successful Redis-write path; the runtime heartbeat
+  update remains best-effort and warns on write failure
 
 The twenty-eighth model is meant to catch terminal-retry fence bugs:
 
@@ -598,6 +606,8 @@ This model corresponds to queue-derived ownership rows:
 - workers stamp `job.meta["worker_name"]` when they start running work
 - RQ metadata can outlive active ownership after retry, requeue, or failure
 - queue monitor views must only expose `claimed_by` for concrete running jobs
+- the healthy config models the operator-visible ownership row, not raw stored
+  metadata cleanup of non-running jobs
 
 Buggy run:
 
@@ -807,6 +817,8 @@ This model corresponds to continue-mode queue recovery for started jobs:
 - `handle_orphaned_jobs()` examines started trial jobs on restart
 - stale started jobs should be requeued by their own timeout-plus-grace window
 - a different live worker on the same queue must not suppress that recovery
+- the recovered attempt must also resurrect shadow lifecycle state so the
+  replacement worker is not fenced off by stale ownership
 
 Buggy run:
 

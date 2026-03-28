@@ -8,6 +8,8 @@ EXTENDS TLC
 \* - `queue_monitor._process_tracked_jobs()` maintains per-job `seen_finished`
 \* - `_build_monitor_callbacks()` in `run_experiment.py` writes orchestrator
 \*   markers from finished/failed jobs
+\* - finished callbacks fence on the worker identity carried by the terminal
+\*   result payload, not mutable shared `job.meta`
 \* - the monitor must not consume a stale worker's terminal event after
 \*   lifecycle ownership has moved to a replacement worker
 

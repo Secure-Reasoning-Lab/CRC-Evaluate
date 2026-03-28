@@ -8,36 +8,45 @@ EXTENDS TLC
 \* - stale recovery should be based on the specific job's timeout-plus-grace
 \* - an unrelated live worker on the same queue must not block recovery of a
 \*   stale started job whose original owner is gone
+\* - once requeued, the shadow lifecycle must also return to `queued` with
+\*   ownership cleared so the replacement worker can proceed
 
-CONSTANT PerJobStalenessEnabled
+CONSTANT PerJobStalenessEnabled, RepairLifecycleOnRequeue
 
-VARIABLES ownerAlive, unrelatedWorkerAlive, jobState, jobAge, blockedByWorkerGate
+Workers == {"worker_1", "worker_2"}
+OwnerVals == Workers \cup {"none"}
 
-vars == <<ownerAlive, unrelatedWorkerAlive, jobState, jobAge, blockedByWorkerGate>>
+VARIABLES ownerAlive, unrelatedWorkerAlive, rqState, lcState, claimedBy, jobAge, blockedByWorkerGate
+
+vars == <<ownerAlive, unrelatedWorkerAlive, rqState, lcState, claimedBy, jobAge, blockedByWorkerGate>>
 
 Init ==
     /\ ownerAlive = FALSE
     /\ unrelatedWorkerAlive = TRUE
-    /\ jobState = "started"
+    /\ rqState = "started"
+    /\ lcState = "running"
+    /\ claimedBy = "worker_1"
     /\ jobAge = "stale"
     /\ blockedByWorkerGate = FALSE
 
 \* Buggy gate: any queue worker causes the stale started job to be skipped.
 SkipBecauseAnyWorkerExists ==
-    /\ jobState = "started"
+    /\ rqState = "started"
     /\ jobAge = "stale"
     /\ unrelatedWorkerAlive
     /\ ~blockedByWorkerGate
     /\ ~PerJobStalenessEnabled
     /\ blockedByWorkerGate' = TRUE
-    /\ UNCHANGED <<ownerAlive, unrelatedWorkerAlive, jobState, jobAge>>
+    /\ UNCHANGED <<ownerAlive, unrelatedWorkerAlive, rqState, lcState, claimedBy, jobAge>>
 
 \* Fixed behavior: stale started jobs are recovered based on their own age.
 RecoverStaleStartedJob ==
-    /\ jobState = "started"
+    /\ rqState = "started"
     /\ jobAge = "stale"
     /\ IF PerJobStalenessEnabled THEN TRUE ELSE ~unrelatedWorkerAlive
-    /\ jobState' = "queued"
+    /\ rqState' = "queued"
+    /\ lcState' = IF RepairLifecycleOnRequeue THEN "queued" ELSE lcState
+    /\ claimedBy' = IF RepairLifecycleOnRequeue THEN "none" ELSE claimedBy
     /\ blockedByWorkerGate' = FALSE
     /\ UNCHANGED <<ownerAlive, unrelatedWorkerAlive, jobAge>>
 
@@ -52,15 +61,21 @@ Next ==
 TypeInvariant ==
     /\ ownerAlive \in BOOLEAN
     /\ unrelatedWorkerAlive \in BOOLEAN
-    /\ jobState \in {"started", "queued"}
+    /\ rqState \in {"started", "queued"}
+    /\ lcState \in {"running", "queued"}
+    /\ claimedBy \in OwnerVals
     /\ jobAge \in {"fresh", "stale"}
     /\ blockedByWorkerGate \in BOOLEAN
 
 UnrelatedWorkerCannotBlockStaleRecovery ==
     ~blockedByWorkerGate
 
+RequeuedStartedJobMatchesLifecycle ==
+    rqState = "queued" => /\ lcState = "queued"
+                          /\ claimedBy = "none"
+
 StaleStartedJobEventuallyRequeues ==
-    <>(jobState = "queued")
+    <>(rqState = "queued")
 
 Spec ==
     Init /\ [][Next]_vars

@@ -1,7 +1,7 @@
 ---- MODULE DistributedHeartbeatProjection ----
 EXTENDS TLC
 
-\* Code-correspondent model for heartbeat projection:
+\* Code-correspondent model for heartbeat projection on the successful-write path:
 \* - a worker emits a lifecycle heartbeat update
 \* - the separate heartbeat side channel is refreshed
 \* - the lifecycle record must also refresh last_heartbeat / updated_at
