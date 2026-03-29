@@ -9,7 +9,6 @@ from crsbench.distributed.queue_monitor import (
     QueueJobEntry,
     QueueMonitorCallbacks,
     QueueMonitorSnapshot,
-    _renew_registry,
     build_monitor_snapshot,
     list_queue_job_entries,
     monitor_queue,
