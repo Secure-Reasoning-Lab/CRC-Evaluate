@@ -1610,7 +1610,7 @@ def _build_monitor_callbacks(
             record = lifecycle_store.get(experiment_name, job_id)
         except Exception as exc:
             logger.warning(
-                "Failed to read lifecycle ownership for %s: %s",
+                "Failed to read lifecycle ownership for {}: {}",
                 job_id[:8],
                 exc,
             )
@@ -1618,12 +1618,12 @@ def _build_monitor_callbacks(
         if record is None:
             if _job_expects_lifecycle_tracking(job):
                 logger.warning(
-                    "Missing lifecycle ownership for tracked distributed job %s; consuming callback without marker",
+                    "Missing lifecycle ownership for tracked distributed job {}; consuming callback without marker",
                     job_id[:8],
                 )
                 return False, True
             logger.warning(
-                "Missing lifecycle ownership for %s; treating terminal callback as legacy/untracked",
+                "Missing lifecycle ownership for {}; treating terminal callback as legacy/untracked",
                 job_id[:8],
             )
             return True, True
@@ -1634,7 +1634,7 @@ def _build_monitor_callbacks(
             if callback_kind == "failed" and record.state is JobState.FAILED:
                 return True, True
             logger.warning(
-                "Skipping stale terminal update for %s because lifecycle state is %s",
+                "Skipping stale terminal update for {} because lifecycle state is {}",
                 job_id[:8],
                 record.state.value,
             )
@@ -1642,30 +1642,30 @@ def _build_monitor_callbacks(
         if callback_kind == "failed" and record.retry_count > 0:
             if defer_failed_retry_to_lifecycle:
                 logger.warning(
-                    "Deferring failed terminal update for retried active job %s to lifecycle recovery",
+                    "Deferring failed terminal update for retried active job {} to lifecycle recovery",
                     job_id[:8],
                 )
                 return False, False
             logger.warning(
-                "Consuming retried failed callback for %s without marker because lifecycle recovery is unavailable",
+                "Consuming retried failed callback for {} without marker because lifecycle recovery is unavailable",
                 job_id[:8],
             )
             return False, True
         if callback_kind == "failed" and _job_failure_requires_lifecycle_recovery(job):
             if defer_failed_retry_to_lifecycle:
                 logger.warning(
-                    "Deferring abandoned failed callback for active job %s to lifecycle recovery",
+                    "Deferring abandoned failed callback for active job {} to lifecycle recovery",
                     job_id[:8],
                 )
                 return False, False
             logger.warning(
-                "Consuming abandoned failed callback for %s without marker because lifecycle recovery is unavailable",
+                "Consuming abandoned failed callback for {} without marker because lifecycle recovery is unavailable",
                 job_id[:8],
             )
             return False, True
         if record.claimed_by is None:
             logger.warning(
-                "Active lifecycle record for %s has no owner; leaving callback retryable",
+                "Active lifecycle record for {} has no owner; leaving callback retryable",
                 job_id[:8],
             )
             return False, False
@@ -1679,7 +1679,7 @@ def _build_monitor_callbacks(
             worker_name = record.claimed_by
         if worker_name != record.claimed_by:
             logger.warning(
-                "Skipping stale terminal update for %s from worker %r; current owner is %r",
+                "Skipping stale terminal update for {} from worker {!r}; current owner is {!r}",
                 job_id[:8],
                 worker_name,
                 record.claimed_by,
@@ -1984,15 +1984,15 @@ def _fetch_jobs_by_id(
             if strict_missing:
                 missing.append(job_id)
                 logger.warning(
-                    "Failed to fetch resume collection job %s: %s", job_id, exc
+                    "Failed to fetch resume collection job {}: {}", job_id, exc
                 )
                 continue
-            logger.warning("Failed to fetch resume collection job %s: %s", job_id, exc)
+            logger.warning("Failed to fetch resume collection job {}: {}", job_id, exc)
             continue
         if job is None:
             if strict_missing:
                 missing.append(job_id)
-            logger.warning("Resume collection job %s no longer exists in Redis", job_id)
+            logger.warning("Resume collection job {} no longer exists in Redis", job_id)
             continue
         fetched.append(job)
     if strict_missing and missing:
@@ -2009,7 +2009,7 @@ def _job_trial_key(job) -> str | None:
         return get_trial_key(job)
     except Exception as exc:
         job_id = getattr(job, "id", "<unknown>")
-        logger.warning("Failed to derive logical trial key for %s: %s", job_id, exc)
+        logger.warning("Failed to derive logical trial key for {}: {}", job_id, exc)
         return None
 
 
@@ -2028,7 +2028,7 @@ def _filter_resume_collection_jobs(resume_jobs: List, active_jobs: List) -> List
         trial_key = _job_trial_key(job)
         if trial_key is not None and trial_key in active_trial_keys:
             logger.warning(
-                "Skipping resume collection job %s for logical trial %s because active work already exists",
+                "Skipping resume collection job {} for logical trial {} because active work already exists",
                 getattr(job, "id", "<unknown>"),
                 trial_key,
             )
@@ -2048,7 +2048,7 @@ def _revive_failed_lifecycle_for_retry(session, experiment_name: str, job) -> bo
         record = lifecycle_store.get(experiment_name, job_id)
     except Exception as exc:
         logger.warning(
-            "Failed to read lifecycle record for explicit retry on %s: %s",
+            "Failed to read lifecycle record for explicit retry on {}: {}",
             job_id[:8],
             exc,
         )
@@ -2074,7 +2074,7 @@ def _revive_failed_lifecycle_for_retry(session, experiment_name: str, job) -> bo
         )
     except Exception as exc:
         logger.warning(
-            "Failed to revive lifecycle record for explicit retry on %s: %s",
+            "Failed to revive lifecycle record for explicit retry on {}: {}",
             job_id[:8],
             exc,
         )
@@ -2102,7 +2102,7 @@ def _rollback_failed_lifecycle_retry(
         )
     except Exception as exc:
         logger.warning(
-            "Failed to roll back lifecycle record after explicit retry enqueue failure on %s: %s",
+            "Failed to roll back lifecycle record after explicit retry enqueue failure on {}: {}",
             job_id[:8],
             exc,
         )
@@ -2348,7 +2348,7 @@ def run_experiment_distributed(
                             session.lifecycle_store.clear_experiment(experiment_name)
                         except Exception as exc:
                             logger.warning(
-                                "Failed to clear lifecycle state for experiment=%s: %s",
+                                "Failed to clear lifecycle state for experiment={}: {}",
                                 experiment_name,
                                 exc,
                             )

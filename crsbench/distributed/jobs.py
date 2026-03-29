@@ -360,7 +360,7 @@ def _finish_job_lifecycle(
             return
         if record.claimed_by != runtime.worker_name:
             logger.warning(
-                "Skipping lifecycle finalization for superseded worker %s on job %s",
+                "Skipping lifecycle finalization for superseded worker {} on job {}",
                 runtime.worker_name,
                 runtime.job_id,
             )
@@ -433,7 +433,7 @@ def _publish_trial_terminal_artifacts(
             and getattr(job, "connection", None) is not None
         ):
             logger.warning(
-                "Skipping terminal artifact publication because lifecycle initialization failed for active RQ job %s",
+                "Skipping terminal artifact publication because lifecycle initialization failed for active RQ job {}",
                 job.id,
             )
             return False
@@ -442,7 +442,7 @@ def _publish_trial_terminal_artifacts(
     if not lifecycle_owned:
         if lifecycle_runtime is not None:
             logger.warning(
-                "Skipping terminal artifact publication for superseded worker %s on job %s",
+                "Skipping terminal artifact publication for superseded worker {} on job {}",
                 lifecycle_runtime.worker_name,
                 lifecycle_runtime.job_id,
             )
@@ -452,7 +452,7 @@ def _publish_trial_terminal_artifacts(
     opposite_marker = trial_output_dir / (".fail" if success else ".success")
     if opposite_marker.exists() and not marker_file.exists():
         logger.warning(
-            "Skipping conflicting worker terminal update for %s; canonical marker %s already exists",
+            "Skipping conflicting worker terminal update for {}; canonical marker {} already exists",
             trial_output_dir,
             opposite_marker.name,
         )

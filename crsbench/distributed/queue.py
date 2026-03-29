@@ -869,7 +869,7 @@ def handle_orphaned_jobs(
                 if remove_job_by_id(queue, job.id):
                     count += 1
                     logger.warning(
-                        "Removed terminal started-job residue %s for logical trial %s",
+                        "Removed terminal started-job residue {} for logical trial {}",
                         job.id[:8],
                         trial_key,
                     )
@@ -878,7 +878,7 @@ def handle_orphaned_jobs(
                 job.set_status(rq.job.JobStatus.FAILED)  # type: ignore[attr-defined]
                 count += 1
                 logger.warning(
-                    "Quarantined stale started job %s after lifecycle repair failure",
+                    "Quarantined stale started job {} after lifecycle repair failure",
                     job.id[:8],
                 )
                 continue
@@ -961,7 +961,7 @@ def _prepare_requeued_started_job_lifecycle(
             lifecycle_store=lifecycle_store,
         )
         logger.warning(
-            "Failed to repair lifecycle for recovered stale started job %s: %s",
+            "Failed to repair lifecycle for recovered stale started job {}: {}",
             job_id[:8],
             exc,
         )
@@ -999,7 +999,7 @@ def _rollback_requeued_started_job_lifecycle(
         )
     except Exception as exc:
         logger.warning(
-            "Failed to roll back lifecycle for recovered stale started job %s: %s",
+            "Failed to roll back lifecycle for recovered stale started job {}: {}",
             job_id[:8],
             exc,
         )

@@ -250,7 +250,7 @@ class JobMonitorLoop:
                     "detail": str(exc),
                 },
             )
-            logger.warning("Failed to requeue orphaned job '%s': %s", job_id, exc)
+            logger.warning("Failed to requeue orphaned job '{}': {}", job_id, exc)
             return
 
         new_retry_count = self._store.increment_retry(self._experiment, job_id)
@@ -292,7 +292,7 @@ class JobMonitorLoop:
             job.save_meta()
         except Exception as exc:
             logger.warning(
-                "Failed to update retry metadata for requeued job %s: %s",
+                "Failed to update retry metadata for requeued job {}: {}",
                 getattr(job, "id", "<unknown>"),
                 exc,
             )
@@ -342,7 +342,7 @@ class JobMonitorLoop:
                         },
                     )
                     logger.info(
-                        "Resume: job '%s' marked %s from published artifacts",
+                        "Resume: job '{}' marked {} from published artifacts",
                         record.job_id,
                         terminal_state.value,
                     )

@@ -123,7 +123,7 @@ def clean_experiment_queues(
                 )
             except Exception as exc:
                 logger.warning(
-                    "Failed to clear lifecycle state for experiment=%s: %s",
+                    "Failed to clear lifecycle state for experiment={}: {}",
                     experiment_name,
                     exc,
                 )
