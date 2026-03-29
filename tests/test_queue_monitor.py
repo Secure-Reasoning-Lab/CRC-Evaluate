@@ -9,6 +9,7 @@ from crsbench.distributed.queue_monitor import (
     QueueJobEntry,
     QueueMonitorCallbacks,
     QueueMonitorSnapshot,
+    _renew_registry,
     build_monitor_snapshot,
     list_queue_job_entries,
     monitor_queue,
@@ -301,6 +302,125 @@ def test_monitor_queue_retries_finished_callback_until_processed() -> None:
 
     assert callbacks.on_job_finished.call_count == 2
     assert refresh_calls["count"] == 2
+
+
+def test_monitor_queue_clears_stale_failed_tracking_when_job_reactivates() -> None:
+    queue = MagicMock()
+    callbacks = QueueMonitorCallbacks(
+        on_job_finished=MagicMock(return_value=True),
+        on_job_failed=MagicMock(return_value=True),
+    )
+
+    active = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 1, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[],
+    )
+
+    retrying_job = MagicMock()
+    retrying_job.id = "job-retry"
+
+    retry_states = iter(
+        [
+            (False, True),
+            (False, False),
+            (False, False),
+            (True, False),
+        ]
+    )
+
+    def _refresh_retrying() -> None:
+        is_finished, is_failed = next(retry_states)
+        retrying_job.is_finished = is_finished
+        retrying_job.is_failed = is_failed
+
+    retrying_job.refresh.side_effect = _refresh_retrying
+
+    peer_job = MagicMock()
+    peer_job.id = "job-peer"
+
+    peer_states = iter(
+        [
+            (False, False),
+            (False, False),
+            (True, False),
+            (True, False),
+        ]
+    )
+
+    def _refresh_peer() -> None:
+        is_finished, is_failed = next(peer_states)
+        peer_job.is_finished = is_finished
+        peer_job.is_failed = is_failed
+
+    peer_job.refresh.side_effect = _refresh_peer
+
+    with (
+        patch(
+            "crsbench.distributed.queue_monitor.build_monitor_snapshot",
+            side_effect=[active, active, active, active],
+        ),
+        patch("crsbench.distributed.queue_monitor.time.sleep"),
+    ):
+        monitor_queue(
+            queue,
+            "exp-1",
+            tracked_jobs=[retrying_job, peer_job],
+            callbacks=callbacks,
+            use_rich=False,
+            poll_interval=0,
+        )
+
+    callbacks.on_job_failed.assert_called_once_with(retrying_job)
+    assert callbacks.on_job_finished.call_count == 2
+    callbacks.on_job_finished.assert_any_call(peer_job)
+    callbacks.on_job_finished.assert_any_call(retrying_job)
+
+
+def test_monitor_queue_tolerates_transient_refresh_errors() -> None:
+    queue = MagicMock()
+    callbacks = QueueMonitorCallbacks(on_job_finished=MagicMock(return_value=True))
+
+    active = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 1, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[],
+    )
+    done = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 0, "finished": 1, "failed": 0, "workers": 1},
+        running_jobs=[],
+    )
+
+    job = MagicMock()
+    job.id = "job-1"
+    job.is_failed = False
+
+    refresh_calls = {"count": 0}
+
+    def _refresh() -> None:
+        refresh_calls["count"] += 1
+        if refresh_calls["count"] == 1:
+            raise RuntimeError("redis down")
+        job.is_finished = True
+
+    job.refresh.side_effect = _refresh
+
+    with (
+        patch(
+            "crsbench.distributed.queue_monitor.build_monitor_snapshot",
+            side_effect=[active, done],
+        ),
+        patch("crsbench.distributed.queue_monitor.time.sleep"),
+    ):
+        monitor_queue(
+            queue,
+            "exp-1",
+            tracked_jobs=[job],
+            callbacks=callbacks,
+            use_rich=False,
+            poll_interval=0,
+        )
+
+    assert refresh_calls["count"] == 2
+    callbacks.on_job_finished.assert_called_once_with(job)
 
 
 def test_monitor_queue_attach_mode_can_wait_while_idle() -> None:

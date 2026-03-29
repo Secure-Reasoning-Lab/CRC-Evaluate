@@ -230,17 +230,34 @@ def _process_tracked_jobs(
     for job in tracked_jobs:
         refresh = getattr(job, "refresh", None)
         if callable(refresh):
-            refresh()
+            try:
+                refresh()
+            except Exception as exc:
+                job_id = getattr(job, "id", "<unknown>")
+                logger.warning(
+                    f"Failed to refresh tracked job {job_id}; will retry on next scan: {exc}"
+                )
+                continue
         job_id = getattr(job, "id", None)
         if not isinstance(job_id, str):
             continue
-        if getattr(job, "is_finished", False) and job_id not in seen_finished:
+        is_finished = bool(getattr(job, "is_finished", False))
+        is_failed = bool(getattr(job, "is_failed", False))
+        if not is_finished and not is_failed:
+            seen_finished.discard(job_id)
+            seen_failed.discard(job_id)
+            continue
+        if is_finished:
+            seen_failed.discard(job_id)
+        elif is_failed:
+            seen_finished.discard(job_id)
+        if is_finished and job_id not in seen_finished:
             processed = True
             if callbacks.on_job_finished is not None:
                 processed = callbacks.on_job_finished(job) is not False
             if processed:
                 seen_finished.add(job_id)
-        elif getattr(job, "is_failed", False) and job_id not in seen_failed:
+        elif is_failed and job_id not in seen_failed:
             processed = True
             if callbacks.on_job_failed is not None:
                 processed = callbacks.on_job_failed(job) is not False

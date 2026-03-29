@@ -1518,8 +1518,14 @@ def _get_experiment_queue_stats(queue, experiment_name: str) -> dict:
     return get_shared_queue_stats(queue, experiment_name)
 
 
-def _build_failed_job_result(job) -> TrialResult:
-    """Create a synthetic failed TrialResult for RQ-level job failures."""
+def _build_synthetic_job_result(
+    job,
+    *,
+    success: bool,
+    error: str | None,
+    error_type: str | None,
+) -> TrialResult:
+    """Create a synthetic TrialResult from persisted RQ job metadata."""
     kwargs = job.kwargs or {}
     meta = job.meta or {}
     return TrialResult(
@@ -1531,16 +1537,40 @@ def _build_failed_job_result(job) -> TrialResult:
         mode=kwargs.get("mode"),
         sanitizer=kwargs.get("sanitizer"),
         target_cpv_id=kwargs.get("target_cpv_id"),
-        success=False,
+        success=success,
         execution_time=0.0,
-        error=f"Job failed: {job.exc_info}",
-        error_type="RQJobFailure",
+        error=error,
+        error_type=error_type,
         report={},
         metadata=TrialMetadata(
             timestamp_start=0.0,
             timestamp_end=0.0,
             worker_machine=meta.get("worker_name"),
         ),
+    )
+
+
+def _build_failed_job_result(job) -> TrialResult:
+    """Create a synthetic failed TrialResult for RQ-level job failures."""
+    return _build_synthetic_job_result(
+        job,
+        success=False,
+        error=f"Job failed: {job.exc_info}",
+        error_type="RQJobFailure",
+    )
+
+
+def _job_failure_requires_lifecycle_recovery(job) -> bool:
+    """Return whether an RQ failure should defer to lifecycle/orphan recovery."""
+    exc_info = getattr(job, "exc_info", None)
+    if not isinstance(exc_info, str):
+        return False
+
+    lowered = exc_info.lower()
+    return (
+        "abandonedjoberror" in lowered
+        or "work horse terminated unexpectedly" in lowered
+        or "work-horse terminated unexpectedly" in lowered
     )
 
 
@@ -1597,7 +1627,12 @@ def _build_monitor_callbacks(
                 job_id[:8],
             )
             return True, True
-        if record.state not in {JobState.CLAIMED, JobState.RUNNING, JobState.SYNCING}:
+        active_states = {JobState.CLAIMED, JobState.RUNNING, JobState.SYNCING}
+        if record.state not in active_states:
+            if callback_kind == "finished" and record.state is JobState.COMPLETED:
+                return True, True
+            if callback_kind == "failed" and record.state is JobState.FAILED:
+                return True, True
             logger.warning(
                 "Skipping stale terminal update for %s because lifecycle state is %s",
                 job_id[:8],
@@ -1613,6 +1648,18 @@ def _build_monitor_callbacks(
                 return False, False
             logger.warning(
                 "Consuming retried failed callback for %s without marker because lifecycle recovery is unavailable",
+                job_id[:8],
+            )
+            return False, True
+        if callback_kind == "failed" and _job_failure_requires_lifecycle_recovery(job):
+            if defer_failed_retry_to_lifecycle:
+                logger.warning(
+                    "Deferring abandoned failed callback for active job %s to lifecycle recovery",
+                    job_id[:8],
+                )
+                return False, False
+            logger.warning(
+                "Consuming abandoned failed callback for %s without marker because lifecycle recovery is unavailable",
                 job_id[:8],
             )
             return False, True
@@ -1667,11 +1714,17 @@ def _build_monitor_callbacks(
             result = job.result
             if result is None:
                 logger.warning(f"Job {job_id[:8]} finished but result is None")
-                result = _build_missing_job_result(job)
+                result = _build_missing_job_result(
+                    job,
+                    config=config,
+                    experiment_name=experiment_name,
+                    lifecycle_store=lifecycle_store,
+                )
+            callback_kind = "finished" if result.success else "failed"
             should_write_marker, should_mark_processed = _terminal_update_policy(
                 job,
                 reported_worker_name=_result_worker_machine(result),
-                callback_kind="finished",
+                callback_kind=callback_kind,
             )
             if not should_write_marker:
                 if should_mark_processed:
@@ -1726,7 +1779,13 @@ def _build_monitor_callbacks(
     )
 
 
-def _collect_monitored_results(job_list: List) -> List[TrialResult]:
+def _collect_monitored_results(
+    job_list: List,
+    *,
+    config: ExperimentConfig | None = None,
+    experiment_name: str | None = None,
+    lifecycle_store=None,
+) -> List[TrialResult]:
     """Collect trial results after the shared queue monitor exits."""
     results: List[TrialResult] = []
     for job in job_list:
@@ -1734,7 +1793,14 @@ def _collect_monitored_results(job_list: List) -> List[TrialResult]:
         if job.result is not None:
             results.append(job.result)
         elif job.is_finished:
-            results.append(_build_missing_job_result(job))
+            results.append(
+                _build_missing_job_result(
+                    job,
+                    config=config,
+                    experiment_name=experiment_name,
+                    lifecycle_store=lifecycle_store,
+                )
+            )
         elif job.is_failed:
             results.append(_build_failed_job_result(job))
     return results
@@ -1768,7 +1834,12 @@ def _monitor_jobs_basic(
         ),
         use_rich=False,
     )
-    return _collect_monitored_results(job_list)
+    return _collect_monitored_results(
+        job_list,
+        config=config,
+        experiment_name=experiment_name,
+        lifecycle_store=lifecycle_store,
+    )
 
 
 def _monitor_jobs_rich(
@@ -1799,33 +1870,61 @@ def _monitor_jobs_rich(
         use_rich=True,
         poll_interval=1.0,
     )
-    return _collect_monitored_results(job_list)
+    return _collect_monitored_results(
+        job_list,
+        config=config,
+        experiment_name=experiment_name,
+        lifecycle_store=lifecycle_store,
+    )
 
 
-def _build_missing_job_result(job) -> TrialResult:
-    """Create a synthetic failed TrialResult for finished jobs with no result."""
-    kwargs = job.kwargs or {}
-    meta = job.meta or {}
-    return TrialResult(
-        crs=kwargs.get("crs", meta.get("crs", "unknown")),
-        benchmark=kwargs.get("benchmark", meta.get("benchmark", "unknown")),
-        harness=kwargs.get("harness_name", meta.get("harness", "unknown")),
-        trial_num=kwargs.get("trial_num", meta.get("trial_num", 0)),
-        crs_type="bug-finding",
-        mode=kwargs.get("mode", meta.get("mode")),
-        sanitizer=kwargs.get("sanitizer"),
-        target_cpv_id=kwargs.get("target_cpv_id", meta.get("target_cpv_id")),
+def _build_missing_job_result(
+    job,
+    *,
+    config: ExperimentConfig | None = None,
+    experiment_name: str | None = None,
+    lifecycle_store=None,
+) -> TrialResult:
+    """Create a synthetic TrialResult for finished jobs with no result payload."""
+    result = _build_synthetic_job_result(
+        job,
         success=False,
-        execution_time=0.0,
         error="Job finished without TrialResult payload",
         error_type="MissingJobResult",
-        report={},
-        metadata=TrialMetadata(
-            timestamp_start=0.0,
-            timestamp_end=0.0,
-            worker_machine=meta.get("worker_name"),
-        ),
     )
+    job_id = getattr(job, "id", None)
+
+    if (
+        lifecycle_store is not None
+        and experiment_name is not None
+        and isinstance(job_id, str)
+    ):
+        try:
+            record = lifecycle_store.get(experiment_name, job_id)
+        except Exception:
+            record = None
+        if record is not None:
+            if record.state is JobState.COMPLETED:
+                return _build_synthetic_job_result(
+                    job,
+                    success=True,
+                    error=None,
+                    error_type=None,
+                )
+            if record.state is JobState.FAILED:
+                return result
+
+    if config is not None:
+        canonical_state = _canonical_result_state(result, config)
+        if canonical_state is JobState.COMPLETED:
+            return _build_synthetic_job_result(
+                job,
+                success=True,
+                error=None,
+                error_type=None,
+            )
+
+    return result
 
 
 def _dedupe_jobs_by_id(jobs: List) -> List:
