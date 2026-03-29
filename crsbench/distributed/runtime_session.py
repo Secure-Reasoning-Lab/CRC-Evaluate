@@ -6,7 +6,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional, cast
 
 from crsbench.cloud.readiness import CloudReadinessStore, ReadinessRedisProtocol
-from crsbench.distributed.job_lifecycle import JobLifecycleStore, LifecycleRedisProtocol
+from crsbench.distributed.job_lifecycle import (
+    JobLifecycleStore,
+    JobState,
+    LifecycleRedisProtocol,
+)
 from crsbench.distributed.job_monitor import JobMonitorLoop
 from crsbench.distributed.patch_queue import initialize_patch_queues
 from crsbench.distributed.queue import create_redis_connection, initialize_queue
@@ -128,14 +132,14 @@ class DistributedRuntimeSession:
     def start_monitor(
         self,
         cloud_liveness_checker: "Callable[[str], bool]",
-        artifact_checker: "Callable[[str], bool]",
+        artifact_checker: "Callable[[str], JobState | None]",
         scan_interval: float = 90.0,
     ) -> None:
         """Start the job monitor background thread.
 
         Args:
             cloud_liveness_checker: callable(instance_name) -> bool.
-            artifact_checker: callable(trial_key) -> bool.
+            artifact_checker: callable(trial_key) -> terminal lifecycle state or None.
             scan_interval: Seconds between scan cycles.
         """
         if self.lifecycle_store is None:
@@ -159,10 +163,16 @@ class DistributedRuntimeSession:
             self._monitor.stop()
             self._monitor = None
 
-    def resume_or_raise(self) -> list[str]:
+    def resume_or_raise(
+        self,
+        *,
+        artifact_checker: "Callable[[str], JobState | None] | None" = None,
+        registration: "RuntimeRegistration | None" = None,
+    ) -> list[str]:
         """Take over a stale experiment lock and resume monitoring after a restart.
 
-        Calls try_resume_lock(), re-registers if needed, and reconciles uncollected jobs.
+        Calls try_resume_lock() and, if the monitor is already running,
+        reconciles uncollected jobs.
 
         Returns:
             List of job_ids needing collection attention (from reconcile_on_resume).
@@ -174,9 +184,21 @@ class DistributedRuntimeSession:
             raise LockContentionError(
                 f"Experiment '{self.experiment_name}' lock is actively held — cannot resume."
             )
+        existing_registration = self.registry.get_experiment(self.experiment_name)
+        if existing_registration is None:
+            if registration is not None:
+                self.lease.register(registration)
+        else:
+            self.lease.registration_published = True
         needs_collection: list[str] = []
-        if self.lifecycle_store is not None and self._monitor is not None:
-            needs_collection = self._monitor.reconcile_on_resume()
+        if self.lifecycle_store is not None:
+            monitor = self._monitor or JobMonitorLoop(
+                lifecycle_store=self.lifecycle_store,
+                experiment_name=self.experiment_name,
+                connection=cast("LifecycleRedisProtocol", self.redis_conn),
+                artifact_checker=artifact_checker,
+            )
+            needs_collection = monitor.reconcile_on_resume()
         return needs_collection
 
     def cleanup(self) -> None:

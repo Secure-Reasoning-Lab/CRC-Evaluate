@@ -120,7 +120,7 @@ def _make_recovery_event(
     worker: str = "worker-1",
 ) -> dict[str, Any]:
     return {
-        "type": event_type,
+        "event": event_type,
         "job_id": job_id,
         "worker": worker,
         "detail": f"{event_type} for {job_id}",
@@ -4544,6 +4544,8 @@ class TestStatusOutput:
         assert rc == 0
         # Should have called log_table for fleet, jobs, and events sections
         assert mock_table.call_count >= 3
+        _headers, event_rows = mock_table.call_args_list[-1].args
+        assert event_rows[0][1] == "orphan_detected"
 
     @patch("crsbench.cloud.cli._status.reconnect")
     def test_status_json_output(self, mock_reconnect, fake_redis, capsys):
@@ -4714,6 +4716,50 @@ class TestStatusOutput:
             "job-completed",
         }
         mock_load_status_jobs.assert_called_once()
+
+    @patch("crsbench.cloud.cli._status.list_queue_job_entries")
+    @patch("crsbench.cloud.cli._status.queue_module.rq")
+    @patch("crsbench.cloud.cli._status.queue_module.REDIS_AVAILABLE", new=True)
+    def test_load_status_jobs_merges_queue_only_jobs_when_lifecycle_is_partial(
+        self,
+        mock_rq,
+        mock_list_queue_job_entries,
+    ):
+        """Status should not hide queue-only jobs once lifecycle tracking has started."""
+        from crsbench.cloud.cli._status import _load_status_jobs
+        from crsbench.distributed.job_lifecycle import JobLifecycleRecord, JobState
+
+        lifecycle = MagicMock()
+        lifecycle.list_jobs.return_value = [
+            JobLifecycleRecord(
+                job_id="job-1",
+                trial_key="trial-1",
+                state=JobState.RUNNING,
+                claimed_by="worker-1",
+                retry_count=0,
+            )
+        ]
+        mock_rq.Queue.return_value = MagicMock()
+        mock_list_queue_job_entries.return_value = [
+            SimpleNamespace(
+                job_id="job-1",
+                trial_key="trial-1",
+                state="running",
+                claimed_by="worker-1",
+                retry_count=0,
+            ),
+            SimpleNamespace(
+                job_id="job-2",
+                trial_key="trial-2",
+                state="queued",
+                claimed_by=None,
+                retry_count=0,
+            ),
+        ]
+
+        jobs = _load_status_jobs(MagicMock(), lifecycle, "test-exp")
+
+        assert [job.job_id for job in jobs] == ["job-1", "job-2"]
 
     @patch("crsbench.cloud.cli._status.reconnect")
     def test_status_output_includes_evaluator_role(self, mock_reconnect, fake_redis):
@@ -4961,7 +5007,47 @@ class TestEventsOutput:
         data = json.loads(captured.out)
         assert isinstance(data, list)
         assert len(data) == 2  # 2 orphan_detected events
-        assert all(e["type"] == "orphan_detected" for e in data)
+        assert all(e["event"] == "orphan_detected" for e in data)
+
+    @patch("crsbench.cloud.cli._events.reconnect")
+    def test_events_filter_accepts_legacy_type_field(self, mock_reconnect, fake_redis):
+        """Event filtering remains compatible with older records keyed by type."""
+        fake_redis.rpush(
+            "crsbench:recovery-events:test-exp",
+            json.dumps(
+                {
+                    "type": "requeued",
+                    "job_id": "job-1",
+                    "worker": "worker-1",
+                    "detail": "requeued for job-1",
+                    "ts": "2026-03-13T00:00:00+00:00",
+                }
+            ),
+        )
+        mock_reconnect.return_value = (
+            MagicMock(),
+            fake_redis,
+            None,
+            None,
+            Path("/tmp"),
+        )
+
+        from crsbench.cloud.cli._events import run_events
+
+        with patch("crsbench.cloud.cli._events.log_table") as mock_table:
+            rc = run_events(_make_events_args(event_type="requeued"))
+
+        assert rc == 0
+        _headers, rows = mock_table.call_args.args
+        assert rows == [
+            [
+                "2026-03-13T00:00:00+00:00",
+                "requeued",
+                "job-1",
+                "worker-1",
+                "requeued for job-1",
+            ]
+        ]
 
     @patch("crsbench.cloud.cli._events.resolve_effective_experiment_name")
     @patch("crsbench.cloud.cli._events.reconnect")
@@ -7017,6 +7103,50 @@ def _setup_teardown_mocks(
 
 class TestTeardown:
     """Tests for run_teardown() sub-action."""
+
+    @patch("crsbench.cloud.cli._teardown.list_queue_job_entries")
+    @patch("crsbench.cloud.cli._teardown.queue_module.rq")
+    @patch("crsbench.cloud.cli._teardown.queue_module.REDIS_AVAILABLE", new=True)
+    def test_count_uncollected_jobs_merges_queue_only_jobs_when_lifecycle_is_partial(
+        self,
+        mock_rq,
+        mock_list_queue_job_entries,
+    ):
+        """Teardown safety should count uncovered queue work, not just lifecycle rows."""
+        from crsbench.cloud.cli._teardown import _count_uncollected_jobs
+        from crsbench.distributed.job_lifecycle import JobLifecycleRecord, JobState
+
+        lifecycle = MagicMock()
+        lifecycle.list_jobs.return_value = [
+            JobLifecycleRecord(
+                job_id="job-completed",
+                trial_key="trial-1",
+                state=JobState.COMPLETED,
+                claimed_by=None,
+                retry_count=0,
+            )
+        ]
+        mock_rq.Queue.return_value = MagicMock()
+        mock_list_queue_job_entries.return_value = [
+            SimpleNamespace(
+                job_id="job-completed",
+                trial_key="trial-1",
+                state="completed",
+                claimed_by=None,
+                retry_count=0,
+            ),
+            SimpleNamespace(
+                job_id="job-running",
+                trial_key="trial-2",
+                state="running",
+                claimed_by="worker-1",
+                retry_count=0,
+            ),
+        ]
+
+        count = _count_uncollected_jobs(MagicMock(), lifecycle, "test-exp")
+
+        assert count == 1
 
     def test_teardown_timestamp_flag_uses_fresh_sibling_destination(
         self,

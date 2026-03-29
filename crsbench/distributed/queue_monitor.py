@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
 from crsbench.distributed.queue import (
-    get_existing_trials,
+    get_existing_trial_jobs,
     get_queue_stats,
     get_trial_key,
 )
@@ -69,14 +69,14 @@ class QueueMonitorSnapshot:
 class QueueMonitorCallbacks:
     """Optional side-effect hooks for tracked jobs in local-run mode."""
 
-    on_job_finished: Callable[[object], None] | None = None
-    on_job_failed: Callable[[object], None] | None = None
+    on_job_finished: Callable[[object], bool | None] | None = None
+    on_job_failed: Callable[[object], bool | None] | None = None
 
 
 def get_experiment_queue_stats(queue, experiment_name: str) -> dict[str, int]:
     """Return experiment-scoped queue counts plus global worker visibility."""
     global_stats = get_queue_stats(queue)
-    existing = get_existing_trials(queue, experiment_name=experiment_name)
+    existing = get_existing_trial_jobs(queue, experiment_name=experiment_name)
     return {
         "queued": len(existing["queued"]),
         "started": len(existing["started"]),
@@ -88,11 +88,11 @@ def get_experiment_queue_stats(queue, experiment_name: str) -> dict[str, int]:
 
 def build_monitor_snapshot(queue, experiment_name: str) -> QueueMonitorSnapshot:
     """Build one experiment-scoped operator snapshot from Redis/RQ state."""
-    existing = get_existing_trials(queue, experiment_name=experiment_name)
+    existing = get_existing_trial_jobs(queue, experiment_name=experiment_name)
     stats = get_experiment_queue_stats(queue, experiment_name)
     running_jobs: list[RunningJobInfo] = []
 
-    for job in existing["started"].values():
+    for job in existing["started"]:
         refresh = getattr(job, "refresh", None)
         if callable(refresh):
             refresh()
@@ -122,7 +122,7 @@ def build_monitor_snapshot(queue, experiment_name: str) -> QueueMonitorSnapshot:
 
 def list_queue_job_entries(queue, experiment_name: str) -> list[QueueJobEntry]:
     """Return queue-derived per-job status rows for one experiment."""
-    existing = get_existing_trials(queue, experiment_name=experiment_name)
+    existing = get_existing_trial_jobs(queue, experiment_name=experiment_name)
     entries: list[QueueJobEntry] = []
     state_map = (
         ("queued", "queued"),
@@ -134,7 +134,7 @@ def list_queue_job_entries(queue, experiment_name: str) -> list[QueueJobEntry]:
     )
 
     for bucket_name, state in state_map:
-        for job in existing[bucket_name].values():
+        for job in existing[bucket_name]:
             refresh = getattr(job, "refresh", None)
             if callable(refresh):
                 refresh()
@@ -142,7 +142,7 @@ def list_queue_job_entries(queue, experiment_name: str) -> list[QueueJobEntry]:
             retry_count = meta.get("retry_count", 0)
             if not isinstance(retry_count, int):
                 retry_count = 0
-            claimed_by = meta.get("worker_name")
+            claimed_by = meta.get("worker_name") if state == "running" else None
             if not isinstance(claimed_by, str) or not claimed_by.strip():
                 claimed_by = None
             entries.append(
@@ -230,18 +230,39 @@ def _process_tracked_jobs(
     for job in tracked_jobs:
         refresh = getattr(job, "refresh", None)
         if callable(refresh):
-            refresh()
+            try:
+                refresh()
+            except Exception as exc:
+                job_id = getattr(job, "id", "<unknown>")
+                logger.warning(
+                    f"Failed to refresh tracked job {job_id}; will retry on next scan: {exc}"
+                )
+                continue
         job_id = getattr(job, "id", None)
         if not isinstance(job_id, str):
             continue
-        if getattr(job, "is_finished", False) and job_id not in seen_finished:
+        is_finished = bool(getattr(job, "is_finished", False))
+        is_failed = bool(getattr(job, "is_failed", False))
+        if not is_finished and not is_failed:
+            seen_finished.discard(job_id)
+            seen_failed.discard(job_id)
+            continue
+        if is_finished:
+            seen_failed.discard(job_id)
+        elif is_failed:
+            seen_finished.discard(job_id)
+        if is_finished and job_id not in seen_finished:
+            processed = True
             if callbacks.on_job_finished is not None:
-                callbacks.on_job_finished(job)
-            seen_finished.add(job_id)
-        elif getattr(job, "is_failed", False) and job_id not in seen_failed:
+                processed = callbacks.on_job_finished(job) is not False
+            if processed:
+                seen_finished.add(job_id)
+        elif is_failed and job_id not in seen_failed:
+            processed = True
             if callbacks.on_job_failed is not None:
-                callbacks.on_job_failed(job)
-            seen_failed.add(job_id)
+                processed = callbacks.on_job_failed(job) is not False
+            if processed:
+                seen_failed.add(job_id)
 
     return len(seen_finished), len(seen_failed)
 

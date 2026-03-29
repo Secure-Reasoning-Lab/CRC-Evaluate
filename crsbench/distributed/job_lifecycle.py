@@ -45,6 +45,13 @@ _JOB_ALLOWED_TRANSITIONS: dict[JobState, set[JobState]] = {
     JobState.ORPHANED: {JobState.QUEUED, JobState.COMPLETED, JobState.FAILED},
 }
 
+_OWNERLESS_STATES = {
+    JobState.QUEUED,
+    JobState.COMPLETED,
+    JobState.FAILED,
+    JobState.ORPHANED,
+}
+
 
 # ---------------------------------------------------------------------------
 # Data record
@@ -78,6 +85,8 @@ class LifecycleRedisProtocol(Protocol):
     def hget(self, key: str, field: str) -> str | bytes | None: ...
 
     def hgetall(self, key: str) -> Mapping[str | bytes, str | bytes]: ...
+
+    def delete(self, *keys: str) -> int | None: ...
 
     def rpush(self, key: str, value: str) -> int: ...
 
@@ -142,6 +151,10 @@ class JobLifecycleStore:
             records.append(self._deserialize(_decode(raw)))
         return records
 
+    def clear_experiment(self, experiment: str) -> None:
+        """Remove all lifecycle and heartbeat state for one experiment."""
+        self._conn.delete(self._key(experiment), self._heartbeat_key(experiment))
+
     # ------------------------------------------------------------------
     # Transition
     # ------------------------------------------------------------------
@@ -174,6 +187,8 @@ class JobLifecycleStore:
             "state": new_state,
             "updated_at": _utc_now(),
         }
+        if new_state in _OWNERLESS_STATES and "claimed_by" not in kwargs:
+            update["claimed_by"] = None
         # Apply allowed overrides
         for field in ("claimed_by", "detail"):
             if field in kwargs:
@@ -195,7 +210,15 @@ class JobLifecycleStore:
 
     def update_heartbeat(self, experiment: str, job_id: str) -> None:
         """Write the current UTC timestamp as this job's heartbeat."""
-        self._conn.hset(self._heartbeat_key(experiment), job_id, _utc_now())
+        ts = _utc_now()
+        self._conn.hset(self._heartbeat_key(experiment), job_id, ts)
+        record = self.get(experiment, job_id)
+        if record is None:
+            return
+        self.set(
+            experiment,
+            replace(record, last_heartbeat=ts, updated_at=ts),
+        )
 
     def get_heartbeat(self, experiment: str, job_id: str) -> str | None:
         """Return the last heartbeat ISO timestamp for a job, or None."""

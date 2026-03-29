@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # Fake Redis (extended from Plan 01 patterns)
@@ -238,7 +238,7 @@ def test_artifact_check_prevents_requeue() -> None:
     )
 
     liveness = MagicMock(return_value=False)
-    artifact_checker = MagicMock(return_value=True)  # artifacts exist!
+    artifact_checker = MagicMock(return_value=JobState.COMPLETED)
 
     monitor = JobMonitorLoop(
         lifecycle_store=store,
@@ -256,6 +256,40 @@ def test_artifact_check_prevents_requeue() -> None:
     record = store.get("exp4", "j4")
     assert record is not None
     assert record.state is JobState.COMPLETED
+
+
+def test_fail_artifact_marks_failed_without_requeue() -> None:
+    """Published fail markers must prevent retries after a stale heartbeat."""
+    from crsbench.distributed.job_lifecycle import JobState
+    from crsbench.distributed.job_monitor import JobMonitorLoop
+
+    fake = _FakeRedis()
+    store = _make_store_with_job(
+        fake, "exp4b", "j4b", "trial-d", "running", heartbeat_age_seconds=300
+    )
+
+    liveness = MagicMock(return_value=False)
+    artifact_checker = MagicMock(return_value=JobState.FAILED)
+
+    monitor = JobMonitorLoop(
+        lifecycle_store=store,
+        experiment_name="exp4b",
+        connection=fake,
+        heartbeat_timeout_seconds=180,
+        cloud_liveness_checker=liveness,
+        artifact_checker=artifact_checker,
+    )
+
+    monitor._scan_and_recover()
+    monitor._scan_and_recover()
+
+    record = store.get("exp4b", "j4b")
+    assert record is not None
+    assert record.state is JobState.FAILED
+
+    events = fake.lrange("crsbench:recovery-events:exp4b", 0, -1)
+    event_types = [json.loads(e)["event"] for e in events]
+    assert "failed_from_artifact" in event_types
 
 
 def test_max_retries_permanently_failed() -> None:
@@ -302,6 +336,7 @@ def test_requeue_under_max_retries() -> None:
     """Orphaned job with retry_count < max_retries and no artifacts -> requeued (QUEUED)."""
     from crsbench.distributed.job_lifecycle import JobState
     from crsbench.distributed.job_monitor import JobMonitorLoop
+    from rq.job import JobStatus
 
     fake = _FakeRedis()
     store = _make_store_with_job(
@@ -327,12 +362,126 @@ def test_requeue_under_max_retries() -> None:
         max_retries=3,
     )
 
-    monitor._scan_and_recover()
-    monitor._scan_and_recover()
+    fetched_job = MagicMock()
+    fetched_job.origin = "crsbench_trial"
+    fetched_job.meta = {"retry_count": 0}
+    queue = MagicMock()
+
+    with (
+        patch("rq.job.Job.fetch", return_value=fetched_job),
+        patch("rq.Queue", return_value=queue),
+    ):
+        monitor._scan_and_recover()
+        monitor._scan_and_recover()
 
     record = store.get("exp6", "j6")
     assert record is not None
     assert record.state is JobState.QUEUED
+    assert record.retry_count == 1
+    assert fetched_job.meta["retry_count"] == 1
+    fetched_job.save_meta.assert_called_once_with()
+    fetched_job.set_status.assert_called_once_with(JobStatus.FAILED)
+    queue.enqueue_job.assert_called_once_with(fetched_job)
+
+
+def test_retry_budget_allows_exact_final_retry() -> None:
+    """A job at max_retries-1 gets one final requeue and lands exactly on the limit."""
+    from crsbench.distributed.job_lifecycle import JobState
+    from crsbench.distributed.job_monitor import JobMonitorLoop
+    from rq.job import JobStatus
+
+    fake = _FakeRedis()
+    store = _make_store_with_job(
+        fake,
+        "exp6c",
+        "j6c",
+        "trial-f",
+        "running",
+        retry_count=2,
+        heartbeat_age_seconds=300,
+    )
+
+    monitor = JobMonitorLoop(
+        lifecycle_store=store,
+        experiment_name="exp6c",
+        connection=fake,
+        heartbeat_timeout_seconds=180,
+        cloud_liveness_checker=MagicMock(return_value=False),
+        artifact_checker=MagicMock(return_value=False),
+        max_retries=3,
+    )
+
+    fetched_job = MagicMock()
+    fetched_job.origin = "crsbench_trial"
+    fetched_job.meta = {"retry_count": 2}
+    queue = MagicMock()
+
+    with (
+        patch("rq.job.Job.fetch", return_value=fetched_job),
+        patch("rq.Queue", return_value=queue),
+    ):
+        monitor._scan_and_recover()
+        monitor._scan_and_recover()
+
+    record = store.get("exp6c", "j6c")
+    assert record is not None
+    assert record.state is JobState.QUEUED
+    assert record.retry_count == 3
+    assert fetched_job.meta["retry_count"] == 3
+    fetched_job.save_meta.assert_called_once_with()
+    fetched_job.set_status.assert_called_once_with(JobStatus.FAILED)
+    queue.enqueue_job.assert_called_once_with(fetched_job)
+
+
+def test_requeue_failure_marks_failed() -> None:
+    """If concrete RQ requeue fails, recovery must not claim the job is queued."""
+    from crsbench.distributed.job_lifecycle import JobState
+    from crsbench.distributed.job_monitor import JobMonitorLoop
+    from rq.job import JobStatus
+
+    fake = _FakeRedis()
+    store = _make_store_with_job(
+        fake,
+        "exp6b",
+        "j6b",
+        "trial-f",
+        "running",
+        retry_count=0,
+        heartbeat_age_seconds=300,
+    )
+
+    liveness = MagicMock(return_value=False)
+    artifact_checker = MagicMock(return_value=False)
+
+    monitor = JobMonitorLoop(
+        lifecycle_store=store,
+        experiment_name="exp6b",
+        connection=fake,
+        heartbeat_timeout_seconds=180,
+        cloud_liveness_checker=liveness,
+        artifact_checker=artifact_checker,
+        max_retries=3,
+    )
+
+    fetched_job = MagicMock()
+    fetched_job.origin = "crsbench_trial"
+    queue = MagicMock()
+    queue.enqueue_job.side_effect = RuntimeError("enqueue boom")
+
+    with (
+        patch("rq.job.Job.fetch", return_value=fetched_job),
+        patch("rq.Queue", return_value=queue),
+    ):
+        monitor._scan_and_recover()
+        monitor._scan_and_recover()
+
+    record = store.get("exp6b", "j6b")
+    assert record is not None
+    assert record.state is JobState.FAILED
+    assert record.detail is not None
+    assert "requeue failed" in record.detail.lower()
+    fetched_job.set_status.assert_called_once_with(JobStatus.FAILED)
+    queue.enqueue_job.assert_called_once_with(fetched_job)
 
 
 def test_recovery_event_log() -> None:
@@ -357,8 +506,16 @@ def test_recovery_event_log() -> None:
         max_retries=3,
     )
 
-    monitor._scan_and_recover()
-    monitor._scan_and_recover()
+    fetched_job = MagicMock()
+    fetched_job.origin = "crsbench_trial"
+    queue = MagicMock()
+
+    with (
+        patch("rq.job.Job.fetch", return_value=fetched_job),
+        patch("rq.Queue", return_value=queue),
+    ):
+        monitor._scan_and_recover()
+        monitor._scan_and_recover()
 
     events = fake.lrange("crsbench:recovery-events:exp7", 0, -1)
     assert len(events) >= 2
@@ -417,6 +574,48 @@ def test_resume_reconciles_uncollected() -> None:
     events = fake.lrange("crsbench:recovery-events:exp8", 0, -1)
     event_types = [json.loads(e)["event"] for e in events]
     assert "resume_reconcile" in event_types
+
+
+def test_resume_reconcile_prefers_terminal_artifacts() -> None:
+    """Published terminal artifacts should collapse syncing jobs to terminal on resume."""
+    from crsbench.distributed.job_lifecycle import (
+        JobLifecycleRecord,
+        JobLifecycleStore,
+        JobState,
+    )
+    from crsbench.distributed.job_monitor import JobMonitorLoop
+
+    fake = _FakeRedis()
+    store = JobLifecycleStore(fake)
+    store.set(
+        "exp8-artifact",
+        JobLifecycleRecord(
+            job_id="j-syncing",
+            trial_key="trial-sync",
+            state=JobState.SYNCING,
+            claimed_by="worker-2",
+        ),
+    )
+
+    monitor = JobMonitorLoop(
+        lifecycle_store=store,
+        experiment_name="exp8-artifact",
+        connection=fake,
+        heartbeat_timeout_seconds=180,
+        cloud_liveness_checker=MagicMock(return_value=False),
+        artifact_checker=MagicMock(return_value=JobState.COMPLETED),
+    )
+
+    needs_collection = monitor.reconcile_on_resume()
+
+    assert needs_collection == []
+    record = store.get("exp8-artifact", "j-syncing")
+    assert record is not None
+    assert record.state is JobState.COMPLETED
+
+    events = fake.lrange("crsbench:recovery-events:exp8-artifact", 0, -1)
+    event_types = [json.loads(e)["event"] for e in events]
+    assert "resume_completed_from_artifact" in event_types
 
 
 def test_monitor_loop_start_stop() -> None:

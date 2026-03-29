@@ -7,14 +7,22 @@ job queue system. Jobs are enqueued by the orchestrator and executed by workers.
 import json
 import os
 import socket
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional, cast
 
 import yaml
 
+from crsbench.distributed.job_lifecycle import (
+    JobLifecycleRecord,
+    JobLifecycleStore,
+    JobState,
+    LifecycleRedisProtocol,
+)
+from crsbench.distributed.queue import build_trial_key
 from crsbench.evaluation.adapter import create_adapter
 from crsbench.evaluation.cleanup import cleanup_trial_directory, copy_trial_results
 from crsbench.evaluation.litellm_tracker import (
@@ -54,6 +62,16 @@ from crsbench.validation.schemas import (
 from crsbench.validation.schemas import TrialMetadata as TrialMetadataFile
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class JobLifecycleRuntime:
+    """Bound lifecycle state access for the current RQ trial job."""
+
+    experiment_name: str
+    job_id: str
+    worker_name: str
+    store: JobLifecycleStore
 
 
 @dataclass(frozen=True)
@@ -213,6 +231,301 @@ def _generate_results_folder_name(
     if timestamp is None:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     return f"{experiment_name}_{hostname}_{timestamp}"
+
+
+def _initialize_job_lifecycle_runtime(
+    *,
+    config: ExperimentConfig,
+    trial_key: str,
+    runtime_worker_name: str,
+) -> JobLifecycleRuntime | None:
+    """Bind the current RQ job to the shadow lifecycle store and mark it running."""
+    try:
+        import rq
+
+        job = rq.get_current_job()
+        if job is None or job.connection is None or not job.id:
+            return None
+
+        store = JobLifecycleStore(cast("LifecycleRedisProtocol", job.connection))
+        runtime = JobLifecycleRuntime(
+            experiment_name=config.experiment,
+            job_id=job.id,
+            worker_name=runtime_worker_name,
+            store=store,
+        )
+
+        record = store.get(runtime.experiment_name, runtime.job_id)
+        if record is None:
+            store.set(
+                runtime.experiment_name,
+                JobLifecycleRecord(
+                    job_id=runtime.job_id,
+                    trial_key=trial_key,
+                    state=JobState.QUEUED,
+                    claimed_by=None,
+                ),
+            )
+            record = store.get(runtime.experiment_name, runtime.job_id)
+
+        if record is not None and record.state is JobState.QUEUED:
+            record = store.transition(
+                runtime.experiment_name,
+                runtime.job_id,
+                JobState.CLAIMED,
+                claimed_by=runtime_worker_name,
+            )
+        if (
+            record is not None
+            and record.state is JobState.CLAIMED
+            and record.claimed_by == runtime_worker_name
+        ):
+            store.transition(
+                runtime.experiment_name,
+                runtime.job_id,
+                JobState.RUNNING,
+                claimed_by=runtime_worker_name,
+            )
+        _update_job_lifecycle_heartbeat(runtime)
+        return runtime
+    except Exception as exc:
+        logger.warning(f"Failed to initialize job lifecycle tracking: {exc}")
+        return None
+
+
+def _update_job_lifecycle_heartbeat(runtime: JobLifecycleRuntime | None) -> None:
+    """Best-effort lifecycle heartbeat update."""
+    if runtime is None:
+        return
+    try:
+        if not _lifecycle_runtime_is_current_owner(runtime):
+            return
+        runtime.store.update_heartbeat(runtime.experiment_name, runtime.job_id)
+    except Exception as exc:
+        logger.warning(f"Failed to update job lifecycle heartbeat: {exc}")
+
+
+def _lifecycle_runtime_is_current_owner(runtime: JobLifecycleRuntime | None) -> bool:
+    """Return whether the current worker still owns lifecycle writes for this job."""
+    if runtime is None:
+        return False
+
+    try:
+        record = runtime.store.get(runtime.experiment_name, runtime.job_id)
+    except Exception as exc:
+        logger.warning(f"Failed to read job lifecycle ownership: {exc}")
+        return False
+
+    if record is None:
+        return False
+    return (
+        record.state in {JobState.CLAIMED, JobState.RUNNING, JobState.SYNCING}
+        and record.claimed_by == runtime.worker_name
+    )
+
+
+def _transition_job_lifecycle_syncing(runtime: JobLifecycleRuntime | None) -> None:
+    """Move a running lifecycle record into SYNCING when output collection begins."""
+    if runtime is None:
+        return
+    try:
+        record = runtime.store.get(runtime.experiment_name, runtime.job_id)
+        if record is None:
+            return
+        if record.claimed_by != runtime.worker_name:
+            return
+        if record.state is JobState.RUNNING:
+            runtime.store.transition(
+                runtime.experiment_name,
+                runtime.job_id,
+                JobState.SYNCING,
+            )
+        _update_job_lifecycle_heartbeat(runtime)
+    except Exception as exc:
+        logger.warning(f"Failed to transition job lifecycle to syncing: {exc}")
+
+
+def _finish_job_lifecycle(
+    runtime: JobLifecycleRuntime | None,
+    *,
+    success: bool,
+    detail: str | None = None,
+) -> None:
+    """Best-effort terminal lifecycle update for the current job."""
+    if runtime is None:
+        return
+    try:
+        record = runtime.store.get(runtime.experiment_name, runtime.job_id)
+        if record is None:
+            return
+        if record.claimed_by != runtime.worker_name:
+            logger.warning(
+                "Skipping lifecycle finalization for superseded worker {} on job {}",
+                runtime.worker_name,
+                runtime.job_id,
+            )
+            return
+        if success:
+            if record.state is JobState.RUNNING:
+                record = runtime.store.transition(
+                    runtime.experiment_name,
+                    runtime.job_id,
+                    JobState.SYNCING,
+                )
+            if record.state is JobState.CLAIMED:
+                record = runtime.store.transition(
+                    runtime.experiment_name,
+                    runtime.job_id,
+                    JobState.RUNNING,
+                )
+                record = runtime.store.transition(
+                    runtime.experiment_name,
+                    runtime.job_id,
+                    JobState.SYNCING,
+                )
+            if record.state is JobState.SYNCING:
+                runtime.store.transition(
+                    runtime.experiment_name,
+                    runtime.job_id,
+                    JobState.COMPLETED,
+                    detail=detail,
+                )
+            return
+
+        if record.state in {
+            JobState.QUEUED,
+            JobState.CLAIMED,
+            JobState.RUNNING,
+            JobState.SYNCING,
+            JobState.ORPHANED,
+        }:
+            runtime.store.transition(
+                runtime.experiment_name,
+                runtime.job_id,
+                JobState.FAILED,
+                detail=detail,
+            )
+    except Exception as exc:
+        logger.warning(f"Failed to finalize job lifecycle state: {exc}")
+
+
+def _publish_trial_terminal_artifacts(
+    *,
+    config: ExperimentConfig,
+    trial_output_dir: Path,
+    success: bool,
+    results_timestamp: str | None,
+    lifecycle_runtime: JobLifecycleRuntime | None,
+    metadata_writer: Callable[[], None] | None = None,
+) -> bool:
+    """Publish terminal worker-side artifacts only for the current lifecycle owner."""
+    lifecycle_owned = True
+    if lifecycle_runtime is None:
+        try:
+            import rq
+
+            job = rq.get_current_job()
+        except Exception:
+            job = None
+        if (
+            job is not None
+            and getattr(job, "id", None)
+            and getattr(job, "connection", None) is not None
+        ):
+            logger.warning(
+                "Skipping terminal artifact publication because lifecycle initialization failed for active RQ job {}",
+                job.id,
+            )
+            return False
+    else:
+        lifecycle_owned = _lifecycle_runtime_is_current_owner(lifecycle_runtime)
+    if not lifecycle_owned:
+        if lifecycle_runtime is not None:
+            logger.warning(
+                "Skipping terminal artifact publication for superseded worker {} on job {}",
+                lifecycle_runtime.worker_name,
+                lifecycle_runtime.job_id,
+            )
+        return False
+
+    marker_file = trial_output_dir / (".success" if success else ".fail")
+    opposite_marker = trial_output_dir / (".fail" if success else ".success")
+    if opposite_marker.exists() and not marker_file.exists():
+        logger.warning(
+            "Skipping conflicting worker terminal update for {}; canonical marker {} already exists",
+            trial_output_dir,
+            opposite_marker.name,
+        )
+        return False
+
+    if metadata_writer is not None:
+        metadata_writer()
+    if opposite_marker.exists():
+        opposite_marker.unlink()
+    if not marker_file.exists():
+        marker_file.touch()
+
+    if config.copy_results_after_trial and config.results_filestore:
+        experiment_dir = resolve_experiment_dir(
+            config.experiment_filestore.resolve(), config.experiment
+        )
+        rel_path = trial_relative_to_experiment(trial_output_dir, experiment_dir)
+        folder_name = _generate_results_folder_name(
+            config.experiment, results_timestamp
+        )
+        dest_dir = (
+            Path(config.results_filestore) / folder_name / "experiment-data" / rel_path
+        )
+        copy_trial_results(trial_output_dir, dest_dir)
+
+    if config.cleanup_after_trial:
+        cleanup_trial_directory(trial_output_dir)
+
+    return True
+
+
+def _publish_trial_terminal_artifacts_best_effort(**kwargs: Any) -> bool:
+    """Publish worker terminal artifacts without masking an existing trial failure."""
+    try:
+        return _publish_trial_terminal_artifacts(**kwargs)
+    except Exception as exc:
+        logger.warning(f"Failed to publish worker terminal artifacts: {exc}")
+        return False
+
+
+def _start_job_lifecycle_heartbeat(
+    runtime: JobLifecycleRuntime | None,
+    *,
+    interval_seconds: float = 60.0,
+) -> tuple[threading.Event, threading.Thread] | None:
+    """Start a background heartbeat loop for long-running distributed jobs."""
+    if runtime is None:
+        return None
+
+    stop_event = threading.Event()
+
+    def _heartbeat_loop() -> None:
+        while not stop_event.wait(interval_seconds):
+            _update_job_lifecycle_heartbeat(runtime)
+
+    thread = threading.Thread(
+        target=_heartbeat_loop,
+        name=f"job-heartbeat-{runtime.job_id[:12]}",
+        daemon=True,
+    )
+    thread.start()
+    return stop_event, thread
+
+
+def _stop_job_lifecycle_heartbeat(
+    heartbeat_runtime: tuple[threading.Event, threading.Thread] | None,
+) -> None:
+    """Stop and join a background heartbeat loop."""
+    if heartbeat_runtime is None:
+        return
+    stop_event, thread = heartbeat_runtime
+    stop_event.set()
+    thread.join(timeout=2.0)
 
 
 def _setup_llm_tracking(
@@ -483,7 +796,7 @@ def build_crs_environment(
         }
 
 
-def _create_phase_callbacks():
+def _create_phase_callbacks(lifecycle_runtime: JobLifecycleRuntime | None = None):
     """Create callbacks for updating job phase metadata in RQ.
 
     Returns:
@@ -505,6 +818,7 @@ def _create_phase_callbacks():
                     logger.debug(f"Job {job.id[:8]} phase -> building")
         except Exception as e:
             logger.warning(f"Failed to update job metadata: {e}")
+        _update_job_lifecycle_heartbeat(lifecycle_runtime)
 
     def on_run_start():
         """Update job metadata when CRS run phase starts."""
@@ -519,6 +833,7 @@ def _create_phase_callbacks():
                 logger.debug(f"Updated job metadata for job {job.id}")
         except Exception as e:
             logger.warning(f"Failed to update job metadata: {e}")
+        _update_job_lifecycle_heartbeat(lifecycle_runtime)
 
     def on_verification_start():
         """Update job metadata when verification phase starts."""
@@ -533,6 +848,7 @@ def _create_phase_callbacks():
                 logger.debug(f"Job {job.id[:8]} phase -> verifying")
         except Exception as e:
             logger.warning(f"Failed to update job metadata: {e}")
+        _transition_job_lifecycle_syncing(lifecycle_runtime)
 
     return on_build_start, on_run_start, on_verification_start
 
@@ -925,6 +1241,15 @@ def run_crs_trial(
     effective_inputs = _resolve_effective_input_settings(
         config, config_dict, trial_mode=mode
     )
+    trial_key = build_trial_key(
+        crs=crs,
+        benchmark=benchmark,
+        harness=harness_name,
+        mode=mode,
+        sanitizer=sanitizer,
+        trial_num=trial_num,
+        target_cpv_id=target_cpv_id,
+    )
 
     # Apply worker overrides from config.worker section (if present)
     _apply_worker_overrides(config)
@@ -951,6 +1276,12 @@ def run_crs_trial(
     runtime_worker_name = (
         os.environ.get("CRSBENCH_WORKER_DISPLAY_NAME") or socket.gethostname()
     )
+    lifecycle_runtime = _initialize_job_lifecycle_runtime(
+        config=config,
+        trial_key=trial_key,
+        runtime_worker_name=runtime_worker_name,
+    )
+    heartbeat_runtime = _start_job_lifecycle_heartbeat(lifecycle_runtime)
 
     # Update runtime job metadata for monitoring (RQ 2.x)
     # Note: Static fields (crs, benchmark, harness, mode, trial_num) are set at enqueue time
@@ -1106,7 +1437,9 @@ def run_crs_trial(
         logger.debug(f"POV config: early_stop={pov_early_stop}")
 
         # Create phase callbacks for job metadata tracking
-        on_build_start, on_run_start, on_verification_start = _create_phase_callbacks()
+        on_build_start, on_run_start, on_verification_start = _create_phase_callbacks(
+            lifecycle_runtime
+        )
 
         # Set up LLM tracking/runtime only when LiteLLM is enabled for this trial.
         llm_tracker = None
@@ -1382,68 +1715,50 @@ def run_crs_trial(
         # Log completion message
         logger.info(trial_result.log_summary())
 
-        # Update metadata.json with build/run timing
-        if build_time is not None or run_time is not None:
+        def _write_final_metadata() -> None:
+            if build_time is None and run_time is None:
+                return
             file_metadata.build_time = build_time
             file_metadata.run_time = run_time
             with metadata_file.open("w") as f:
                 json.dump(file_metadata.model_dump(mode="json"), f, indent=2)
 
-        # Create success/fail marker file
-        marker_file = trial_output_dir / (".success" if result.success else ".fail")
-        marker_file.touch()
+        _publish_trial_terminal_artifacts(
+            config=config,
+            trial_output_dir=trial_output_dir,
+            success=result.success,
+            results_timestamp=results_timestamp,
+            lifecycle_runtime=lifecycle_runtime,
+            metadata_writer=_write_final_metadata,
+        )
 
-        # Per-trial copy if enabled (before cleanup)
-        if config.copy_results_after_trial and config.results_filestore:
-            experiment_dir = resolve_experiment_dir(
-                config.experiment_filestore.resolve(), config.experiment
-            )
-            rel_path = trial_relative_to_experiment(trial_output_dir, experiment_dir)
-            folder_name = _generate_results_folder_name(
-                config.experiment, results_timestamp
-            )
-            dest_dir = (
-                Path(config.results_filestore)
-                / folder_name
-                / "experiment-data"
-                / rel_path
-            )
-            copy_trial_results(trial_output_dir, dest_dir)
-
-        # Per-trial cleanup if enabled
-        if config.cleanup_after_trial:
-            cleanup_trial_directory(trial_output_dir)
-
+        _finish_job_lifecycle(
+            lifecycle_runtime,
+            success=result.success,
+            detail=trial_result.error,
+        )
+        _stop_job_lifecycle_heartbeat(heartbeat_runtime)
         return trial_result
 
     except FileNotFoundError as e:
         execution_time = time.time() - start_time
         error_msg = escape_loguru_braces(str(e))
         logger.error(f"[Trial {trial_num}] Benchmark not found: {error_msg}")
-        # Create .fail marker if trial_output_dir exists
+        # Publish worker-side failure artifacts while this worker still owns the attempt.
         if "trial_output_dir" in locals() and trial_output_dir.exists():
-            (trial_output_dir / ".fail").touch()
-            # Per-trial copy if enabled (before cleanup, even for failed trials)
-            if config.copy_results_after_trial and config.results_filestore:
-                experiment_dir = resolve_experiment_dir(
-                    config.experiment_filestore.resolve(), config.experiment
-                )
-                rel_path = trial_relative_to_experiment(
-                    trial_output_dir, experiment_dir
-                )
-                folder_name = _generate_results_folder_name(
-                    config.experiment, results_timestamp
-                )
-                dest_dir = (
-                    Path(config.results_filestore)
-                    / folder_name
-                    / "experiment-data"
-                    / rel_path
-                )
-                copy_trial_results(trial_output_dir, dest_dir)
-            # Per-trial cleanup if enabled (even for failed trials)
-            if config.cleanup_after_trial:
-                cleanup_trial_directory(trial_output_dir)
+            _publish_trial_terminal_artifacts_best_effort(
+                config=config,
+                trial_output_dir=trial_output_dir,
+                success=False,
+                results_timestamp=results_timestamp,
+                lifecycle_runtime=lifecycle_runtime,
+            )
+        _finish_job_lifecycle(
+            lifecycle_runtime,
+            success=False,
+            detail=f"Benchmark not found: {e!s}",
+        )
+        _stop_job_lifecycle_heartbeat(heartbeat_runtime)
         return TrialResult(
             crs=crs,
             benchmark=benchmark,
@@ -1462,6 +1777,7 @@ def run_crs_trial(
                 timestamp_start=start_time,
                 timestamp_end=time.time(),
                 target_cpv_id=target_cpv_id,
+                worker_machine=runtime_worker_name,
             ),
         )
 
@@ -1469,30 +1785,21 @@ def run_crs_trial(
         execution_time = time.time() - start_time
         error_msg = escape_loguru_braces(str(e))
         logger.error(f"[Trial {trial_num}] Invalid benchmark format: {error_msg}")
-        # Create .fail marker if trial_output_dir exists
+        # Publish worker-side failure artifacts while this worker still owns the attempt.
         if "trial_output_dir" in locals() and trial_output_dir.exists():
-            (trial_output_dir / ".fail").touch()
-            # Per-trial copy if enabled (before cleanup, even for failed trials)
-            if config.copy_results_after_trial and config.results_filestore:
-                experiment_dir = resolve_experiment_dir(
-                    config.experiment_filestore.resolve(), config.experiment
-                )
-                rel_path = trial_relative_to_experiment(
-                    trial_output_dir, experiment_dir
-                )
-                folder_name = _generate_results_folder_name(
-                    config.experiment, results_timestamp
-                )
-                dest_dir = (
-                    Path(config.results_filestore)
-                    / folder_name
-                    / "experiment-data"
-                    / rel_path
-                )
-                copy_trial_results(trial_output_dir, dest_dir)
-            # Per-trial cleanup if enabled (even for failed trials)
-            if config.cleanup_after_trial:
-                cleanup_trial_directory(trial_output_dir)
+            _publish_trial_terminal_artifacts_best_effort(
+                config=config,
+                trial_output_dir=trial_output_dir,
+                success=False,
+                results_timestamp=results_timestamp,
+                lifecycle_runtime=lifecycle_runtime,
+            )
+        _finish_job_lifecycle(
+            lifecycle_runtime,
+            success=False,
+            detail=f"Invalid benchmark format: {e!s}",
+        )
+        _stop_job_lifecycle_heartbeat(heartbeat_runtime)
         return TrialResult(
             crs=crs,
             benchmark=benchmark,
@@ -1511,6 +1818,7 @@ def run_crs_trial(
                 timestamp_start=start_time,
                 timestamp_end=time.time(),
                 target_cpv_id=target_cpv_id,
+                worker_machine=runtime_worker_name,
             ),
         )
 
@@ -1518,30 +1826,21 @@ def run_crs_trial(
         execution_time = time.time() - start_time
         error_msg = escape_loguru_braces(str(e))
         logger.exception("[Trial {}] Failed with error: {}", trial_num, error_msg)
-        # Create .fail marker if trial_output_dir exists
+        # Publish worker-side failure artifacts while this worker still owns the attempt.
         if "trial_output_dir" in locals() and trial_output_dir.exists():
-            (trial_output_dir / ".fail").touch()
-            # Per-trial copy if enabled (before cleanup, even for failed trials)
-            if config.copy_results_after_trial and config.results_filestore:
-                experiment_dir = resolve_experiment_dir(
-                    config.experiment_filestore.resolve(), config.experiment
-                )
-                rel_path = trial_relative_to_experiment(
-                    trial_output_dir, experiment_dir
-                )
-                folder_name = _generate_results_folder_name(
-                    config.experiment, results_timestamp
-                )
-                dest_dir = (
-                    Path(config.results_filestore)
-                    / folder_name
-                    / "experiment-data"
-                    / rel_path
-                )
-                copy_trial_results(trial_output_dir, dest_dir)
-            # Per-trial cleanup if enabled (even for failed trials)
-            if config.cleanup_after_trial:
-                cleanup_trial_directory(trial_output_dir)
+            _publish_trial_terminal_artifacts_best_effort(
+                config=config,
+                trial_output_dir=trial_output_dir,
+                success=False,
+                results_timestamp=results_timestamp,
+                lifecycle_runtime=lifecycle_runtime,
+            )
+        _finish_job_lifecycle(
+            lifecycle_runtime,
+            success=False,
+            detail=str(e),
+        )
+        _stop_job_lifecycle_heartbeat(heartbeat_runtime)
         return TrialResult(
             crs=crs,
             benchmark=benchmark,
@@ -1560,6 +1859,7 @@ def run_crs_trial(
                 timestamp_start=start_time,
                 timestamp_end=time.time(),
                 target_cpv_id=target_cpv_id,
+                worker_machine=runtime_worker_name,
             ),
         )
 

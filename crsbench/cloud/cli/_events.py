@@ -18,6 +18,17 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+def _event_name(event: dict[str, object]) -> str:
+    """Return the recovery-event name across old and new payload shapes."""
+    raw = event.get("event")
+    if isinstance(raw, str) and raw.strip():
+        return raw
+    raw = event.get("type")
+    if isinstance(raw, str) and raw.strip():
+        return raw
+    return "-"
+
+
 def run_events(args: argparse.Namespace) -> int:
     """Show chronological recovery event timeline."""
     experiment_name = resolve_effective_experiment_name(args.config, args.experiment)
@@ -40,7 +51,7 @@ def run_events(args: argparse.Namespace) -> int:
 
     # Filter by type if requested
     if args.event_type:
-        events = [e for e in events if e.get("type") == args.event_type]
+        events = [e for e in events if _event_name(e) == args.event_type]
 
     if args.json_output:
         print(json.dumps(events, indent=2))  # noqa: T201
@@ -50,7 +61,7 @@ def run_events(args: argparse.Namespace) -> int:
     event_rows = [
         [
             e.get("ts", "-"),
-            e.get("type", "-"),
+            _event_name(e),
             e.get("job_id", "-"),
             e.get("worker", "-"),
             e.get("detail", "-"),

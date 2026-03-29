@@ -33,14 +33,24 @@ def _job_state_value(job) -> str:
     return state.value if hasattr(state, "value") else str(state)
 
 
+def _event_name(event: dict[str, object]) -> str:
+    """Return the recovery-event name across old and new payload shapes."""
+    raw = event.get("event")
+    if isinstance(raw, str) and raw.strip():
+        return raw
+    raw = event.get("type")
+    if isinstance(raw, str) and raw.strip():
+        return raw
+    return "-"
+
+
 def _load_status_jobs(redis_conn, lifecycle, experiment_name: str):
-    """Load status jobs from lifecycle records, or fall back to live queue state."""
+    """Load status jobs from lifecycle records plus any uncovered live queue state."""
     lifecycle_jobs = lifecycle.list_jobs(experiment_name)
-    if lifecycle_jobs:
-        return lifecycle_jobs
+    lifecycle_job_ids = {job.job_id for job in lifecycle_jobs}
 
     if not queue_module.REDIS_AVAILABLE or queue_module.rq is None:
-        return []
+        return lifecycle_jobs
 
     trial_queue_name, _build_queue_name, _verify_queue_name = (
         queue_module.resolve_queue_names(experiment_name)
@@ -49,7 +59,13 @@ def _load_status_jobs(redis_conn, lifecycle, experiment_name: str):
         trial_queue_name,
         connection=redis_conn,
     )
-    return list_queue_job_entries(queue, experiment_name)
+    queue_entries = list_queue_job_entries(queue, experiment_name)
+    if not lifecycle_jobs:
+        return queue_entries
+    return [
+        *lifecycle_jobs,
+        *(job for job in queue_entries if job.job_id not in lifecycle_job_ids),
+    ]
 
 
 def _placement_source_for_status_instance(context, instance) -> str:
@@ -200,7 +216,7 @@ def run_status(args: argparse.Namespace) -> int:
     event_rows = [
         [
             e.get("ts", "-"),
-            e.get("type", "-"),
+            _event_name(e),
             e.get("job_id", "-"),
             e.get("detail", "-"),
         ]
