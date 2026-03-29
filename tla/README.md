@@ -1,328 +1,64 @@
-# TLA+ Model Notes
-
-## Files
-
-- `DistributedTimeoutRecovery.tla`: minimal dual-state model of queue state plus shadow lifecycle state
-- `DistributedTimeoutRecovery.cfg`: TLC config that intentionally enables the buggy timeout-requeue path
-- `DistributedTimeoutRecoveryHealthy.cfg`: TLC config for the intended protocol under healthy worker/evaluator fairness assumptions
-- `DistributedTrialKeySnapshot.tla`: model of physical RQ jobs vs logical `trial_key` snapshots
-- `DistributedTrialKeySnapshotDuplicate.cfg`: intentionally allows two physical jobs to share one logical trial key
-- `DistributedTrialKeySnapshotUnique.cfg`: fixed configuration where each physical job has a distinct logical trial key
-- `DistributedContinueCarryover.tla`: model of continue-mode carryover collection after controller restart
-- `DistributedContinueCarryoverBuggy.cfg`: buggy config where continue mode skips re-enqueue and exits without attaching carryover jobs
-- `DistributedContinueCarryoverHealthy.cfg`: fixed config where continue mode attaches carryover jobs and writes markers before exit
-- `DistributedAttemptOwnership.tla`: model of stale-worker split brain after orphan recovery
-- `DistributedAttemptOwnershipBuggy.cfg`: no fencing; superseded worker can still publish
-- `DistributedAttemptOwnershipHealthy.cfg`: publication is fenced to the current owner
-- `DistributedTerminalMarkers.tla`: model of worker/orchestrator terminal marker publication
-- `DistributedTerminalMarkersBuggy.cfg`: buggy config where writers accumulate contradictory markers
-- `DistributedTerminalMarkersHealthy.cfg`: fixed config where writers replace the opposite marker
-- `DistributedRetryBudget.tla`: model of exact retry-budget behavior during orphan recovery
-- `DistributedRetryBudgetBuggy.cfg`: off-by-one retry budget bug that burns the final retry early
-- `DistributedRetryBudgetHealthy.cfg`: exact-budget config with one final retry and then permanent failure
-- `DistributedRetryMetadataProjection.tla`: model of retry-count projection from lifecycle recovery into RQ metadata
-- `DistributedRetryMetadataProjectionBuggy.cfg`: buggy config where lifecycle retry_count increments but RQ metadata stays stale
-- `DistributedRetryMetadataProjectionHealthy.cfg`: successful-write config where queue-visible retry metadata matches lifecycle retry_count
-- `DistributedHeartbeatProjection.tla`: model of heartbeat projection from the side-channel heartbeat hash into lifecycle record fields
-- `DistributedHeartbeatProjectionBuggy.cfg`: buggy config where the heartbeat hash is refreshed but lifecycle fields stay stale
-- `DistributedHeartbeatProjectionHealthy.cfg`: successful-write config where lifecycle heartbeat fields match the side channel
-- `DistributedRetryTerminalFence.tla`: model of explicit failed-job retry against terminal lifecycle state
-- `DistributedRetryTerminalFenceBuggy.cfg`: buggy config where a failed physical job is retried even though lifecycle already says completed
-- `DistributedRetryTerminalFenceHealthy.cfg`: fixed config where explicit retry is fenced to lifecycle records currently in failed
-- `DistributedRetryLifecycleAlignment.tla`: model of explicit retry requeue order vs lifecycle rollback
-- `DistributedRetryLifecycleAlignmentBuggy.cfg`: buggy config where failed enqueue leaves lifecycle queued
-- `DistributedRetryLifecycleAlignmentHealthy.cfg`: fixed config where failed enqueue rolls lifecycle back to failed
-- `DistributedResumeRegistryOwnership.tla`: model of stale-lock resume ownership over experiment registry state
-- `DistributedResumeRegistryOwnershipBuggy.cfg`: buggy config where a resumed controller takes the lock but never owns the registry entry for cleanup
-- `DistributedResumeRegistryOwnershipHealthy.cfg`: fixed config where stale-lock resume adopts or republishes registry state before cleanup
-- `DistributedInitHeartbeatFence.tla`: model of the worker's first lifecycle heartbeat during startup
-- `DistributedInitHeartbeatFenceBuggy.cfg`: buggy config where startup heartbeats refresh terminal or foreign-owned records
-- `DistributedInitHeartbeatFenceHealthy.cfg`: fixed config where startup heartbeats require current active ownership
-- `DistributedStartupOwnershipFence.tla`: model of worker startup transitioning claimed jobs into running
-- `DistributedStartupOwnershipFenceBuggy.cfg`: buggy config where startup steals a claim from another worker
-- `DistributedStartupOwnershipFenceHealthy.cfg`: fixed config where startup only advances claims already owned by the current worker
-- `DistributedRetryExclusivity.tla`: model of at-most-one authoritative live attempt across retries
-- `DistributedRetryExclusivityBuggy.cfg`: buggy config where superseded and replacement attempts are both live
-- `DistributedRetryExclusivityHealthy.cfg`: fenced config where only one authoritative live attempt remains
-- `DistributedCleanupScope.tla`: model of experiment-scoped cleanup on shared queues
-- `DistributedCleanupScopeBuggy.cfg`: buggy config where cleanup drops other experiments' jobs too
-- `DistributedCleanupScopeHealthy.cfg`: fixed config where cleanup removes only the targeted experiment
-- `DistributedQueueOwnership.tla`: model of queue-monitor ownership rows vs lifecycle ownership
-- `DistributedQueueOwnershipBuggy.cfg`: buggy config where queued or failed jobs keep stale worker ownership metadata
-- `DistributedQueueOwnershipHealthy.cfg`: fixed config where only running jobs expose an owner
-- `DistributedResumeArtifacts.tla`: model of restart reconciliation when terminal artifacts already exist
-- `DistributedResumeArtifactsBuggy.cfg`: buggy config where resume ignores artifacts and leaves syncing work unresolved
-- `DistributedResumeArtifactsHealthy.cfg`: fixed config where resume collapses artifact-backed work to terminal state
-- `DistributedStaleLockResume.tla`: model of continue-mode stale-lock takeover on orchestrator restart
-- `DistributedStaleLockResumeBuggy.cfg`: buggy config where continue mode aborts instead of attempting resume
-- `DistributedStaleLockResumeHealthy.cfg`: fixed config where stale locks are reclaimed before queue recovery
-- `DistributedMonitorCallbacks.tla`: model of orchestrator finished-callback fencing after ownership handoff on the lifecycle-backed happy path
-- `DistributedMonitorCallbacksBuggy.cfg`: buggy config where stale terminal callbacks consume the job id too early
-- `DistributedMonitorCallbacksHealthy.cfg`: fixed config where only the current owner can finalize finished callbacks
-- `DistributedMonitorMarkerWrite.tla`: model of retryable orchestrator marker writes
-- `DistributedMonitorMarkerWriteBuggy.cfg`: buggy config where callback failure still consumes the finished job
-- `DistributedMonitorMarkerWriteHealthy.cfg`: fixed config where marker-write failure leaves the callback retryable
-- `DistributedMonitorLifecycleGate.tla`: model of monitor callbacks after lifecycle has already gone non-active on the readable-lifecycle branch
-- `DistributedMonitorLifecycleGateBuggy.cfg`: buggy config where a late callback still writes a marker after lifecycle failed
-- `DistributedMonitorLifecycleGateHealthy.cfg`: fixed config where non-active lifecycle records consume callbacks without writing markers
-- `DistributedStartedJobRecovery.tla`: model of continue-mode stale started-job recovery
-- `DistributedStartedJobRecoveryBuggy.cfg`: buggy config where any live queue worker blocks stale started-job recovery
-- `DistributedStartedJobRecoveryHealthy.cfg`: fixed config where stale started jobs recover by their own timeout window and resurrect lifecycle ownership
-- `DistributedStartedDuplicateRecovery.tla`: model of stale started-duplicate recovery when another runnable peer already exists
-- `DistributedStartedDuplicateRecoveryBuggy.cfg`: buggy config where recovery requeues the stale started duplicate and leaves two runnable jobs
-- `DistributedStartedDuplicateRecoveryHealthy.cfg`: fixed config where recovery removes the stale duplicate and leaves one active job
-- `DistributedCarryoverMarkerStability.tla`: model of restart monitoring when a contradictory carryover terminal duplicate appears after a canonical marker already exists
-- `DistributedCarryoverMarkerStabilityBuggy.cfg`: buggy config where the contradictory carryover report overwrites the existing marker
-- `DistributedCarryoverMarkerStabilityHealthy.cfg`: fixed config where the preexisting canonical marker remains authoritative
-- `DistributedResumeCollection.tla`: model of continue-mode restart when only syncing collection work remains
-- `DistributedResumeCollectionBuggy.cfg`: buggy config where continue mode exits before attaching resume collection jobs
-- `DistributedResumeCollectionHealthy.cfg`: fixed config where resume-only syncing work is tracked before exit
-- `DistributedVisibleTrialResults.tla`: model of final report projection from physical jobs to one logical trial outcome
-- `DistributedVisibleTrialResultsBuggy.cfg`: buggy config where the report counts physical terminal jobs directly
-- `DistributedVisibleTrialResultsHealthy.cfg`: fixed config where the visible outcome follows the canonical per-trial marker
-
-## Purpose
-
-This first model is meant to catch a specific bug class:
-
-- a job times out
-- recovery updates lifecycle state back to `queued`
-- but the concrete executable queue entry is not restored
-
-That produces a stalled job even though the lifecycle layer says it is runnable again.
-
-The second model is meant to catch a different code-correspondent bug class:
-
-- trial jobs are physically distinct RQ jobs
-- `trial_id` payloads include a run suffix and are not the RQ identity
-- queue inspection groups jobs by logical `trial_key`
-- duplicate physical jobs for one logical trial collapse to a single visible row
-
-That can hide duplicate work from queue status, cleanup, and orphan recovery.
+# TLA+ Models
 
-The third model is meant to catch a restart/continue bug class:
+This directory holds small, code-correspondent TLA+ models for the distributed
+queue, worker, and orchestrator paths in CRSBench.
 
-- a previous controller run already left a terminal physical RQ job behind
-- the logical trial is skipped in `--queue-mode continue`
-- but the replacement controller must still attach that carryover job for
-  monitoring so `.success` / `.fail` markers get written
+The models are not a full system model. Each one isolates a concrete boundary
+where the Python runtime previously had a bug or where state can drift across:
 
-Otherwise the controller can silently drop terminal results during restart.
+- RQ queue state
+- shadow lifecycle state in Redis
+- marker files on disk
+- controller restart and resume state
+- queue-derived operator views
 
-The fourth model is meant to catch a split-brain bug class:
+## How To Read This Directory
 
-- worker 1 is marked orphaned and the logical trial is retried
-- worker 2 claims the retried logical attempt
-- worker 1 was only delayed, not dead, and finishes later
+Most models come as a triplet:
 
-Without ownership fencing, the superseded worker can still publish terminal
-artifacts after ownership has moved.
+- `Model.tla`: the abstract state machine
+- `ModelBuggy.cfg`: enables the historical or intentionally unsafe behavior
+- `ModelHealthy.cfg`: enables the intended behavior and should pass TLC
 
-The fifth model is meant to catch contradictory terminal marker bugs:
+Two older models use a different naming pattern:
 
-- a worker or orchestrator writes `.success` / `.fail`
-- an opposite terminal marker already exists from an earlier attempt
-- the writer must replace the old verdict, not leave both markers behind
+- `DistributedTimeoutRecovery.cfg` / `DistributedTimeoutRecoveryHealthy.cfg`
+- `DistributedTrialKeySnapshotDuplicate.cfg` / `DistributedTrialKeySnapshotUnique.cfg`
 
-The sixth model is meant to catch retry-budget off-by-one bugs:
+## Running TLC
 
-- a job reaches `retry_count = max_retries - 1`
-- stale recovery should grant exactly one final requeue
-- the next stale recovery should fail permanently, not early and not late
+### Install TLC
 
-The seventh model is meant to catch retry exclusivity bugs:
+TLC runs from `tla2tools.jar` and requires Java.
 
-- a logical `trial_key` is retried after stale recovery
-- the replacement attempt becomes authoritative
-- the protocol must not leave two authoritative live attempts for the same trial
+Stable releases are published here:
 
-The eighth model is meant to catch cleanup scoping bugs:
+- https://github.com/tlaplus/tlaplus/releases
 
-- multiple experiments share the same flat queue
-- cleanup is requested for one experiment
-- only that experiment's jobs may be removed
+Typical install:
 
-The ninth model is meant to catch queue-ownership display bugs:
+```bash
+mkdir -p "$HOME/tla"
+cd "$HOME/tla"
+curl -L -O https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+java -cp "$HOME/tla/tla2tools.jar" tlc2.TLC -help
+```
 
-- workers stamp `job.meta["worker_name"]` when they start a job
-- retry/requeue can leave that metadata on non-running RQ jobs
-- queue-derived operator views must not present that stale metadata as an active owner
+If you want the jar on `CLASSPATH` instead:
 
-The tenth model is meant to catch restart-artifact reconciliation bugs:
+```bash
+export CLASSPATH="$HOME/tla/tla2tools.jar"
+java tlc2.TLC -help
+```
 
-- a trial already published `.success` / `.fail`
-- lifecycle still says `syncing` when the controller restarts
-- resume reconciliation must collapse that record to terminal instead of leaving collection backlog behind
-
-The eleventh model is meant to catch stale-lock restart bugs:
-
-- a prior orchestrator left a stale experiment lock behind
-- continue mode should attempt resume rather than abort immediately
-- stale-lock takeover must happen before queue recovery mutates existing work
-
-The twelfth model is meant to catch stale terminal-callback bugs:
-
-- lifecycle ownership moves to a replacement worker
-- a superseded worker reports `finished` first for the same `job_id`
-- the shared queue monitor must not consume that stale terminal event and block
-  the current owner's result from writing the orchestrator marker
-
-The thirteenth model is meant to catch marker-write durability bugs:
-
-- a terminal callback runs for a finished job
-- the marker write fails transiently
-- the callback must not consume the `job_id` until a later retry succeeds
-
-The fourteenth model is meant to catch stale started-job recovery bugs:
-
-- a started job's original owner is gone
-- the job has exceeded timeout plus grace
-- an unrelated live worker on the same queue must not block requeue of that stale job
-- if lifecycle/artifact reconciliation has already made the started record
-  terminal, the stale queue residue must be removed instead of kept tracked
-
-The seventeenth model is meant to catch stale started-duplicate recovery bugs:
-
-- a stale `started` duplicate exists for one logical trial
-- another physical job for that same trial is already runnable
-- continue-mode orphan recovery must not requeue the stale duplicate and create
-  two active jobs for the same logical trial
-
-The eighteenth model is meant to catch carryover marker stability bugs:
-
-- continue mode attaches a contradictory terminal duplicate after restart
-- the logical trial already has a canonical `.success` / `.fail` marker
-- restart monitoring must not let that stale carryover overwrite the existing
-  canonical verdict
-
-The nineteenth model is meant to catch worker-side marker stability bugs:
-
-- a physical worker attempt passes the lifecycle ownership fence for its own
-  `job_id`
-- the logical trial already has a canonical `.success` / `.fail` marker on disk
-- a late duplicate physical attempt reports the opposite verdict
-- worker-side terminal publication must not overwrite the existing canonical
-  verdict
-
-The twentieth model is meant to catch same-session monitor marker stability
-bugs:
-
-- no canonical marker exists when monitoring begins
-- one physical job writes `.success` for a logical trial
-- a later duplicate physical job in the same controller session reports `.fail`
-- shared monitor callbacks must preserve the first canonical verdict rather than
-  overwrite it
-
-The twenty-first model is meant to catch retry-refresh bring-up bugs:
-
-- continue mode starts with only failed work in its queue snapshot
-- failed-job retry requeues that logical trial into active queued work
-- cloud bring-up is decided from the controller snapshot
-- the snapshot must be refreshed after retry so the controller does not skip
-  worker bring-up for newly reactivated work
-
-The twenty-second model is meant to catch explicit retry lifecycle-alignment
-bugs:
-
-- continue mode explicitly retries a previously failed physical job
-- the shadow lifecycle must be resurrected from `failed` back to `queued`
-- if the subsequent physical requeue fails, lifecycle must roll back to `failed`
-- active physical attempts and non-terminal lifecycle state must stay aligned
-
-The twenty-third model is meant to catch resume-vs-active convergence bugs:
-
-- a stale syncing attempt is still discoverable through `resume_collection_job_ids`
-- an active retry already exists for the same logical trial
-- the resume-only candidate must be filtered so it cannot win the canonical
-  marker race ahead of the active retry
-
-The twenty-fourth model is meant to catch lifecycle ownership-clearing bugs:
-
-- a worker owns an active attempt
-- recovery or terminalization moves the record into a non-active state
-- `claimed_by` must be cleared immediately so stale workers cannot keep write
-  authority after they have been orphaned, failed, requeued, or completed
-
-The twenty-fifth model is meant to catch non-active lifecycle callback bugs:
-
-- lifecycle has already moved a job into a non-active terminal state and that
-  record is still readable
-- a late finished callback still arrives from RQ
-- the finished callback may be consumed so monitoring can complete, but it must not write
-  a new orchestrator marker once lifecycle is no longer active
-
-The twenty-sixth model is meant to catch retry-metadata projection bugs:
-
-- orphan recovery requeues a concrete RQ job
-- lifecycle retry_count increments for the logical job
-- queue-derived operator views still read retry_count from RQ metadata
-- the concrete metadata must be updated so both layers report the same retry budget state
-- this model abstracts the successful metadata-save path; explicit retry and
-  started-job recovery now roll lifecycle back when `job.save_meta()` fails,
-  but orphan-recovery metadata projection still remains best-effort
-
-The twenty-seventh model is meant to catch heartbeat-projection bugs:
-
-- a worker emits a lifecycle heartbeat update
-- the separate heartbeat hash is refreshed
-- the lifecycle record also exposes `last_heartbeat`
-- both layers must advance together so lifecycle snapshots do not lie about liveness
-- this model abstracts the successful Redis-write path; the runtime heartbeat
-  update remains best-effort and warns on write failure
-
-The twenty-eighth model is meant to catch terminal-retry fence bugs:
-
-- continue mode discovers a failed physical RQ job
-- the shadow lifecycle for that same job already says `completed`
-- explicit retry must not resurrect that stale failed residue behind the
-  terminal authoritative record
-
-The twenty-ninth model is meant to catch stale-lock registry-ownership bugs:
-
-- a resumed controller force-takes a stale experiment lock
-- the old experiment registry entry may already exist, or may be missing
-- the resumed controller must own the registry state strongly enough that
-  `cleanup()` clears it at the end of the resumed run
-
-The thirtieth model is meant to catch startup-heartbeat fence bugs:
-
-- a worker begins lifecycle initialization for an RQ job
-- the corresponding shadow record may already be terminal or owned by another worker
-- the very first lifecycle heartbeat must obey the same ownership fence as the
-  background heartbeat loop
-
-The thirty-first model is meant to catch startup ownership-steal bugs:
-
-- a shadow lifecycle record is already in `claimed`
-- that claim may belong to another worker
-- startup must not advance the job to `running` while replacing the owner with
-  the current worker
-
-The fifteenth model is meant to catch resume-collection restart bugs:
-
-- continue mode resumes a stale lock
-- lifecycle reconciliation reports job ids still needing collection
-- the controller must not exit before attaching that resume-only work to monitoring
-
-The sixteenth model is meant to catch visible-result projection bugs:
-
-- duplicate physical jobs may still exist for one logical trial
-- terminal callbacks can therefore produce multiple physical `TrialResult` values
-- final reporting must project those values back to one logical trial outcome,
-  following the canonical `.success` / `.fail` marker on disk
-
-## Run TLC
-
-TLC is provided by `tla2tools.jar` and requires Java.
-
-This repo can use `.envrc` to expose the jar on `CLASSPATH`:
+If `.envrc` points `CLASSPATH` at `tla2tools.jar`, run TLC like this:
 
 ```bash
 source .envrc
 java tlc2.TLC -config tla/DistributedTimeoutRecovery.cfg tla/DistributedTimeoutRecovery.tla
 ```
 
-If you prefer not to rely on `CLASSPATH`:
+Without `CLASSPATH`:
 
 ```bash
 java -cp /path/to/tla2tools.jar tlc2.TLC \
@@ -330,569 +66,130 @@ java -cp /path/to/tla2tools.jar tlc2.TLC \
   tla/DistributedTimeoutRecovery.tla
 ```
 
-Healthy-infra proof run:
+Recommended first checks:
 
 ```bash
 source .envrc
+java tlc2.TLC \
+  -config tla/DistributedTimeoutRecovery.cfg \
+  tla/DistributedTimeoutRecovery.tla
+
 java tlc2.TLC \
   -config tla/DistributedTimeoutRecoveryHealthy.cfg \
   tla/DistributedTimeoutRecovery.tla
 ```
 
-## Expected First Result
+The buggy config should fail with the intended counterexample. The healthy
+config should complete with no TLC errors.
 
-With `BuggyRequeueEnabled = TRUE`, the initial model is expected to fail `QueuedMeansExecutable` and produce a short counterexample. That is intentional: the config is set up to demonstrate the timeout-recovery divergence bug class.
+## Model Catalog
 
-Observed counterexample shape:
+### Recovery And Lifecycle
 
-- `ClaimJob`
-- `StartJob`
-- `StaleHeartbeat`
-- `CrashWorker`
-- `TimeoutScanGrace`
-- `TimeoutRecoverToQueuedBuggy`
+| Model | Runtime boundary | Buggy config catches | Healthy config guarantees |
+| --- | --- | --- | --- |
+| `DistributedTimeoutRecovery` | timeout recovery after stale worker loss | lifecycle returns to `queued` without restoring executable queue state | timeout recovery keeps queue and lifecycle aligned |
+| `DistributedRetryBudget` | orphan recovery retry budget | final retry is burned too early or too late | retry budget is exact |
+| `DistributedRetryMetadataProjection` | retry count projected from lifecycle into queue metadata | lifecycle retry count changes but queue-visible metadata stays stale | operator-visible retry metadata matches lifecycle |
+| `DistributedHeartbeatProjection` | heartbeat side channel projected into lifecycle rows | heartbeat hash advances but lifecycle `last_heartbeat` stays stale | lifecycle snapshots reflect current heartbeat state |
+| `DistributedRetryLifecycleAlignment` | explicit retry rollback around failed requeue | lifecycle resurrects to `queued` and stays there after enqueue failure | lifecycle rolls back to `failed` when requeue fails |
+| `DistributedRetryTerminalFence` | explicit retry of stale failed RQ residue | retry resurrects work behind a lifecycle row already marked terminal | explicit retry is fenced to lifecycle rows still in `failed` |
+| `DistributedLifecycleOwnership` | clearing `claimed_by` on non-active transitions | stale worker retains ownership after orphan, fail, queue, or completion | non-active lifecycle states clear ownership immediately |
+| `DistributedInitHeartbeatFence` | worker startup heartbeat | startup heartbeat refreshes terminal or foreign-owned rows | startup heartbeat requires active ownership |
+| `DistributedStartupOwnershipFence` | worker startup `claimed -> running` transition | startup steals another worker's claim | startup only advances jobs already owned by the current worker |
 
-Final bad state:
+### Restart, Resume, And Continue Mode
+
+| Model | Runtime boundary | Buggy config catches | Healthy config guarantees |
+| --- | --- | --- | --- |
+| `DistributedContinueCarryover` | continue-mode carryover monitoring | controller skips enqueue and exits without attaching carryover terminal jobs | carryover jobs are attached so markers are written before exit |
+| `DistributedResumeArtifacts` | restart reconciliation with existing terminal artifacts | restart leaves artifact-backed work in `syncing` | resume collapses artifact-backed work to terminal |
+| `DistributedStaleLockResume` | stale experiment lock takeover | continue mode aborts instead of reclaiming a stale lock | stale locks are reclaimed before recovery proceeds |
+| `DistributedResumeCollection` | restart with resume-only syncing backlog | controller exits before attaching collection-only work | resume-only collection work is attached before exit |
+| `DistributedResumeRegistryOwnership` | resumed controller ownership of experiment registry state | resumed controller never adopts registry state strongly enough for cleanup | resumed controller owns registry state and cleanup can clear it |
+| `DistributedResumeActiveConvergence` | overlap between resume-only syncing work and an active retry | stale resume-only candidate wins the canonical marker race | resume-only candidate is filtered when active retry already exists |
+| `DistributedRetryRefreshBringup` | continue-mode retry followed by cloud bring-up | controller decides bring-up from stale snapshot and misses newly requeued work | snapshot is refreshed before bring-up decisions |
+| `DistributedStartedJobRecovery` | continue-mode stale started-job recovery | unrelated live worker blocks stale started-job recovery | stale started jobs recover by their own timeout window |
+| `DistributedStartedDuplicateRecovery` | continue-mode recovery with stale started duplicates | stale duplicate is requeued even though another runnable peer already exists | stale duplicate is removed and only one active job remains |
+
+### Ownership, Callbacks, And Marker Writes
+
+| Model | Runtime boundary | Buggy config catches | Healthy config guarantees |
+| --- | --- | --- | --- |
+| `DistributedAttemptOwnership` | stale-worker split brain after retry/orphan recovery | superseded worker still publishes after ownership moved | publication is fenced to the current owner |
+| `DistributedMonitorCallbacks` | shared queue finished-callback handling | stale callback consumes the `job_id` before the current owner's result arrives | stale callback cannot consume the authoritative finished event |
+| `DistributedMonitorMarkerWrite` | retryable orchestrator marker writes | transient marker-write failure still consumes finished job state | marker-write failure leaves callback retryable |
+| `DistributedMonitorLifecycleGate` | late finished callback after lifecycle is already non-active | callback writes a new orchestrator marker after lifecycle already failed or completed | callback may be consumed but cannot write a new marker once lifecycle is non-active |
+| `DistributedTerminalMarkers` | worker-side and orchestrator-side terminal marker publication | `.success` and `.fail` accumulate together | opposite terminal marker is replaced |
+| `DistributedWorkerMarkerStability` | worker-side publication after canonical marker exists | late duplicate worker overwrites canonical verdict | existing canonical marker stays authoritative |
+| `DistributedSessionMarkerStability` | same-session monitor callbacks for duplicate physical jobs | later duplicate callback flips earlier canonical marker | first canonical session verdict stays authoritative |
+| `DistributedCarryoverMarkerStability` | continue-mode monitoring of contradictory carryover duplicates | stale carryover report overwrites existing canonical marker | preexisting canonical marker remains authoritative |
+
+### Queue Projection, Reporting, And Cleanup
+
+| Model | Runtime boundary | Buggy config catches | Healthy config guarantees |
+| --- | --- | --- | --- |
+| `DistributedTrialKeySnapshot` | physical RQ jobs projected into logical `trial_key` rows | duplicate physical jobs collapse to one visible logical row | snapshot covers all active physical jobs |
+| `DistributedRetryExclusivity` | retry after stale-worker recovery | two authoritative live attempts remain for one logical trial | at most one authoritative live attempt remains |
+| `DistributedCleanupScope` | experiment-scoped cleanup on a shared queue | cleanup deletes other experiments' jobs too | cleanup is limited to the target experiment |
+| `DistributedQueueOwnership` | queue-derived owner display | queued or failed jobs still show stale worker ownership metadata | only actively running jobs expose an owner |
+| `DistributedVisibleTrialResults` | final report projection from physical jobs to logical trials | final report counts physical terminal jobs directly | final report collapses to one logical outcome per trial |
+
+## Timeout Recovery Model
+
+`DistributedTimeoutRecovery.tla` is the most complete model in this directory.
+It carries both queue state and shadow lifecycle state and is the best entry
+point when you want to understand the overall approach.
+
+The buggy config demonstrates this divergence:
+
+- a worker times out
+- lifecycle moves back to `queued`
+- the real executable queue entry is still absent
+
+The characteristic bad state is:
 
 - `lcState[j] = "queued"`
 - `rqState[j] = "rq_absent"`
 
-To explore the intended recovery behavior instead, set:
+`HealthySpec` in the same module adds fairness assumptions for the case where at
+least one healthy worker and one healthy evaluator exist. Under those
+assumptions the healthy config checks stronger properties such as:
 
-```tla
-BuggyRequeueEnabled = FALSE
-```
+- eventual terminal resolution
+- terminal-state stickiness
+- no duplicate active owner
+- artifact/lifecycle consistency
+- resume reconciliation completeness
+- no false orphaning for healthy workers
 
-in `tla/DistributedTimeoutRecovery.cfg` and re-run TLC.
+## Recommended Run Order
 
-## Stronger Termination Model
+If you want to sanity-check the directory quickly, run these in order:
 
-`HealthySpec` in `DistributedTimeoutRecovery.tla` adds fairness assumptions for the
-case where at least one healthy worker and a healthy evaluator exist:
+1. `DistributedTimeoutRecovery.cfg`
+2. `DistributedTimeoutRecoveryHealthy.cfg`
+3. `DistributedTrialKeySnapshotDuplicate.cfg`
+4. `DistributedTrialKeySnapshotUnique.cfg`
+5. any specific model that matches the runtime boundary you are editing
 
-- queued jobs are eventually claimed
-- claimed jobs are eventually started
-- running jobs eventually either advance or explicitly fail
-- syncing jobs eventually publish artifacts or explicitly fail
-- published artifacts are eventually collected into `completed`
-- stale heartbeats and timeout recovery are eventually observed
+For example:
 
-Under those assumptions, `DistributedTimeoutRecoveryHealthy.cfg` checks:
+- editing restart logic: start with `DistributedContinueCarryover`, `DistributedResumeArtifacts`, `DistributedResumeCollection`
+- editing worker ownership or callbacks: start with `DistributedAttemptOwnership`, `DistributedMonitorCallbacks`, `DistributedLifecycleOwnership`
+- editing queue/operator views: start with `DistributedTrialKeySnapshot`, `DistributedQueueOwnership`, `DistributedVisibleTrialResults`
 
-- `NoDuplicateActiveOwner`
-- `RetryCountMatchesRequeues`
-- `EventuallyCompletedOrFailed`
-- `TerminalJobsNeverResurrect`
-- `ArtifactTerminalStateMatchesLifecycle`
-- `ResumeReconciliationIsComplete`
-- `HealthyWorkerCannotBeOrphaned`
+## Scope And Limits
 
-That is the stronger guarantee: every job eventually reaches terminal
-`completed` or `failed`, and once terminal, it stays terminal.
+These models are intentionally narrow.
 
-Verified locally on March 27, 2026:
+They do not attempt to model:
 
-- `DistributedTimeoutRecovery.cfg` still fails `QueuedMeansExecutable` with the
-  intended buggy requeue counterexample
-- `DistributedTimeoutRecoveryHealthy.cfg` completes with no TLC errors
+- full benchmark execution semantics
+- the entire Redis schema
+- every cloud orchestration step
+- arbitrary numbers of workers and controllers
 
-## Trial Key Snapshot Model
-
-This model captures the historical grouped-snapshot bug class in the distributed
-trial queue code:
-
-- `run_experiment.py` enqueues trial jobs with a per-run `trial_id` payload
-- `get_existing_trials()` in `crsbench/distributed/queue.py` stores one job per
-  logical `trial_key`
-- `queue_monitor.py` and cleanup/orphan paths used that grouped view before the
-  physical-job split was introduced; the current runtime now uses
-  `get_existing_trial_jobs()` at those boundaries
-
-Duplicate-allowed run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedTrialKeySnapshotDuplicate.cfg \
-  tla/DistributedTrialKeySnapshot.tla
-```
-
-Expected result:
-
-- `NoDuplicateLogicalTrialInFlight` fails
-- `SnapshotCoversAllActivePhysicalJobs` fails
-
-Fixed run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedTrialKeySnapshotUnique.cfg \
-  tla/DistributedTrialKeySnapshot.tla
-```
-
-Expected result:
-
-- TLC completes with no errors
-
-## Attempt Ownership Model
-
-This model corresponds to the stale-worker recovery boundary:
-
-- lifecycle ownership moves via `claimed_by`
-- orphan recovery can make a logical trial runnable again
-- a replacement worker may start while the old worker is still alive
-- publication must be fenced to the current owner, not merely to the job id
-
-Buggy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedAttemptOwnershipBuggy.cfg \
-  tla/DistributedAttemptOwnership.tla
-```
-
-Expected result:
-
-- `SupersededWorkerCannotPublish` fails
-
-Healthy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedAttemptOwnershipHealthy.cfg \
-  tla/DistributedAttemptOwnership.tla
-```
-
-Expected result:
-
-- TLC completes with no errors
-
-## Terminal Marker Model
-
-This model corresponds to worker-side and orchestrator-side terminal marker writes:
-
-- `jobs.py` publishes worker-side `.success` / `.fail`
-- `run_experiment.py` publishes orchestrator-side `.success` / `.fail`
-- a fresh write must replace the opposite terminal marker rather than accumulate both
-
-Buggy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedTerminalMarkersBuggy.cfg \
-  tla/DistributedTerminalMarkers.tla
-```
-
-Expected result:
-
-- `NoTerminalMarkerContradiction` fails
-
-Healthy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedTerminalMarkersHealthy.cfg \
-  tla/DistributedTerminalMarkers.tla
-```
-
-Expected result:
-
-- TLC completes with no errors
-
-## Retry Budget Model
-
-This model corresponds to retry counting during background heartbeat-based
-orphan recovery:
-
-- `retry_count` is stored in the lifecycle shadow record
-- orphan recovery either requeues and increments, or permanently fails
-- the budget boundary must allow the final retry exactly once
-
-Buggy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedRetryBudgetBuggy.cfg \
-  tla/DistributedRetryBudget.tla
-```
-
-Expected result:
-
-- `NoEarlyPermanentFailure` fails
-
-Healthy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedRetryBudgetHealthy.cfg \
-  tla/DistributedRetryBudget.tla
-```
-
-Expected result:
-
-- TLC completes with no errors
-
-## Retry Exclusivity Model
-
-This model corresponds to one logical trial being retried after a stale-worker recovery:
-
-- the original attempt starts first
-- stale recovery makes a replacement attempt authoritative
-- only one authoritative live attempt may remain for that `trial_key`
-
-Buggy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedRetryExclusivityBuggy.cfg \
-  tla/DistributedRetryExclusivity.tla
-```
-
-Expected result:
-
-- `AtMostOneLiveAttemptPerTrialKeyAcrossRetries` fails
-
-Healthy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedRetryExclusivityHealthy.cfg \
-  tla/DistributedRetryExclusivity.tla
-```
-
-Expected result:
-
-- TLC completes with no errors
-
-## Cleanup Scope Model
-
-This model corresponds to experiment-scoped cleanup on shared queues:
-
-- multiple experiments share one queue
-- cleanup for one experiment should remove only that experiment's jobs
-- unrelated jobs must survive the cleanup pass
-
-Buggy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedCleanupScopeBuggy.cfg \
-  tla/DistributedCleanupScope.tla
-```
-
-Expected result:
-
-- `CleanupScopedToExperiment` fails
-
-Healthy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedCleanupScopeHealthy.cfg \
-  tla/DistributedCleanupScope.tla
-```
-
-Expected result:
-
-- TLC completes with no errors
-
-## Queue Ownership Model
-
-This model corresponds to queue-derived ownership rows:
-
-- workers stamp `job.meta["worker_name"]` when they start running work
-- RQ metadata can outlive active ownership after retry, requeue, or failure
-- queue monitor views must only expose `claimed_by` for concrete running jobs
-- the healthy config models the operator-visible ownership row, not raw stored
-  metadata cleanup of non-running jobs
-
-Buggy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedQueueOwnershipBuggy.cfg \
-  tla/DistributedQueueOwnership.tla
-```
-
-Expected result:
-
-- `LifecycleMatchesRQOwnership` fails
-
-Healthy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedQueueOwnershipHealthy.cfg \
-  tla/DistributedQueueOwnership.tla
-```
-
-Expected result:
-
-- TLC completes with no errors
-
-## Resume Artifact Model
-
-This model corresponds to restart reconciliation when terminal artifacts already
-exist:
-
-- a worker already published `.success` / `.fail`
-- lifecycle is still `syncing` when the controller restarts
-- resume reconciliation must collapse that record to terminal instead of
-  returning collection backlog for already-terminal work
-
-Buggy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedResumeArtifactsBuggy.cfg \
-  tla/DistributedResumeArtifacts.tla
-```
-
-Expected result:
-
-- `NoArtifactBackedSyncingAfterResume` fails
-
-Healthy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedResumeArtifactsHealthy.cfg \
-  tla/DistributedResumeArtifacts.tla
-```
-
-Expected result:
-
-- TLC completes with no errors
-
-## Stale Lock Resume Model
-
-This model corresponds to continue-mode lock handoff after an orchestrator restart:
-
-- continue mode first tries normal lock acquisition
-- if the previous controller left a stale lock behind, resume should reclaim it
-- queue recovery should proceed only after the stale lock has been reclaimed
-
-Buggy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedStaleLockResumeBuggy.cfg \
-  tla/DistributedStaleLockResume.tla
-```
-
-Expected result:
-
-- `StaleLockCanRecover` fails
-
-Healthy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedStaleLockResumeHealthy.cfg \
-  tla/DistributedStaleLockResume.tla
-```
-
-Expected result:
-
-- TLC completes with no errors
-
-## Continue Carryover Model
-
-This model corresponds directly to the continue-mode restart path:
-
-- `run_experiment.py` skips enqueue when `get_existing_trials()` reports an
-  existing logical trial key
-- terminal carryover jobs still need to pass through `monitor_jobs()` so the
-  orchestrator marker callbacks run
-- exiting before attaching those jobs loses terminal results
-
-Buggy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedContinueCarryoverBuggy.cfg \
-  tla/DistributedContinueCarryover.tla
-```
-
-Expected result:
-
-- `DoneImpliesMarker` fails because the controller exits with no marker written
-
-Fixed run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedContinueCarryoverHealthy.cfg \
-  tla/DistributedContinueCarryover.tla
-```
-
-Expected result:
-
-- TLC completes with no errors
-
-## Monitor Callback Model
-
-This model corresponds to the shared queue monitor callback boundary:
-
-- `_process_tracked_jobs()` keeps `seen_finished` per `job_id`
-- `_build_monitor_callbacks()` writes orchestrator markers from finished jobs
-- this model abstracts the lifecycle-backed branch where lifecycle lookup
-  succeeds and an owned active/non-active record exists
-- after lifecycle ownership moves, a stale worker's finished event must not
-  consume the `job_id` before the current owner's result arrives
-- retried hard-fail callbacks are deferred only while the lifecycle recovery
-  loop is running; otherwise the runtime consumes them without writing a marker
-- lifecycle lookup failures, missing lifecycle rows, and ownerless active
-  records stay retryable in the runtime and are outside this model
-
-Buggy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedMonitorCallbacksBuggy.cfg \
-  tla/DistributedMonitorCallbacks.tla
-```
-
-Expected result:
-
-- `StaleOwnerCannotConsumeFinishedCallback` fails
-
-Healthy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedMonitorCallbacksHealthy.cfg \
-  tla/DistributedMonitorCallbacks.tla
-```
-
-Expected result:
-
-- TLC completes with no errors
-
-## Monitor Marker Write Model
-
-This model corresponds to the marker-write retry boundary:
-
-- `_build_monitor_callbacks()` writes orchestrator terminal markers
-- `_process_tracked_jobs()` only advances once the callback accepts the event
-- a transient marker-write failure must leave the finished job retryable
-
-Buggy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedMonitorMarkerWriteBuggy.cfg \
-  tla/DistributedMonitorMarkerWrite.tla
-```
-
-Expected result:
-
-- `WriteFailureCannotConsumeFinishedJob` fails
-
-Healthy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedMonitorMarkerWriteHealthy.cfg \
-  tla/DistributedMonitorMarkerWrite.tla
-```
-
-Expected result:
-
-- TLC completes with no errors
-
-## Started Job Recovery Model
-
-This model corresponds to continue-mode queue recovery for started jobs:
-
-- `handle_orphaned_jobs()` examines started trial jobs on restart
-- stale started jobs should be requeued by their own timeout-plus-grace window
-- a different live worker on the same queue must not suppress that recovery
-- if lifecycle/artifact reconciliation has already made a started record
-  terminal, the stale queue residue should be removed instead of tracked
-- the recovered attempt must also resurrect shadow lifecycle state so the
-  replacement worker is not fenced off by stale ownership
-
-Buggy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedStartedJobRecoveryBuggy.cfg \
-  tla/DistributedStartedJobRecovery.tla
-```
-
-Expected result:
-
-- `UnrelatedWorkerCannotBlockStaleRecovery` fails
-
-Healthy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedStartedJobRecoveryHealthy.cfg \
-  tla/DistributedStartedJobRecovery.tla
-```
-
-Expected result:
-
-- TLC completes with no errors
-
-## Resume Collection Model
-
-This model corresponds to continue-mode restart when only syncing collection
-work remains:
-
-- `resume_or_raise()` can report job ids still needing collection
-- there may be no visible queue entries and no new trials
-- continue mode must still attach those resumed jobs before any early exit
-
-Buggy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedResumeCollectionBuggy.cfg \
-  tla/DistributedResumeCollection.tla
-```
-
-Expected result:
-
-- `NeedsCollectionPreventsEarlyExit` fails
-
-Healthy run:
-
-```bash
-source .envrc
-java tlc2.TLC \
-  -config tla/DistributedResumeCollectionHealthy.cfg \
-  tla/DistributedResumeCollection.tla
-```
-
-Expected result:
-
-- TLC completes with no errors
+They are useful because each model stays close to one real code path and one
+failure mode. When a runtime change modifies one of those boundaries, update the
+corresponding model and its healthy/buggy configs together.
