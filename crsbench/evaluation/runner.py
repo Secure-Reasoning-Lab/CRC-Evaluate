@@ -68,9 +68,11 @@ class EvaluationResult:
         self,
         report: EvaluationReport,
         verification_results: Optional[list] = None,
+        cpvs_found: Optional[list[str]] = None,
     ):
         self.report = report
         self.verification_results = verification_results or []
+        self.cpvs_found = cpvs_found or []
 
     @property
     def success_rate(self) -> float:
@@ -273,17 +275,20 @@ class BenchmarkRunner:
             self._pre_build_crs(benchmark_path, trial_output_dir)
 
             # Execution phase
-            harness_result, pov_verification_results, patch_verification_results = (
-                self._run_harness_evaluation(
-                    harness=harness,
-                    benchmark_path=benchmark_path,
-                    trial_output_dir=trial_output_dir or Path(),
-                    trial_start_time=trial_start_time,
-                    oss_fuzz_path=oss_fuzz_path,
-                    skip_verification=skip_verification,
-                    sanitizer=sanitizer,
-                    target_cpv_id=target_cpv_id,
-                )
+            (
+                harness_result,
+                pov_verification_results,
+                patch_verification_results,
+                cpvs_found,
+            ) = self._run_harness_evaluation(
+                harness=harness,
+                benchmark_path=benchmark_path,
+                trial_output_dir=trial_output_dir or Path(),
+                trial_start_time=trial_start_time,
+                oss_fuzz_path=oss_fuzz_path,
+                skip_verification=skip_verification,
+                sanitizer=sanitizer,
+                target_cpv_id=target_cpv_id,
             )
             collector.add_harness_result(harness_result)
 
@@ -300,7 +305,7 @@ class BenchmarkRunner:
             report = collector.finalize_report()
             self._log_evaluation_summary(report)
 
-            return EvaluationResult(report, pov_verification_results)
+            return EvaluationResult(report, pov_verification_results, cpvs_found)
 
         except BenchmarkFormatError:
             # Let validation errors propagate unchanged
@@ -517,7 +522,9 @@ class BenchmarkRunner:
         skip_verification: bool,
         sanitizer: str = "address",
         target_cpv_id: str | None = None,
-    ) -> tuple[HarnessResult, list[VerifResult], list[PatchVerificationResult]]:
+    ) -> tuple[
+        HarnessResult, list[VerifResult], list[PatchVerificationResult], list[str]
+    ]:
         """Run evaluation for a single harness with snapshot management and verification."""
         self.logger.info(f"Evaluating harness: {harness.name}")
 
@@ -614,7 +621,17 @@ class BenchmarkRunner:
                 target_cpv_id=target_cpv_id,
             )
 
-        return harness_result, pov_verification_results, patch_verification_results
+        # Collect CPVs found from POV verification manager
+        cpvs_found: list[str] = []
+        if pov_verification_manager:
+            cpvs_found = sorted(pov_verification_manager.found_cpvs)
+
+        return (
+            harness_result,
+            pov_verification_results,
+            patch_verification_results,
+            cpvs_found,
+        )
 
     def _execute_crs_with_managers(
         self,

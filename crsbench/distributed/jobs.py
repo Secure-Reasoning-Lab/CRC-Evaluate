@@ -338,15 +338,11 @@ def _cleanup_llm_tracking(
     trial_output_dir: Path,
     trial_id: str,
 ) -> None:
-    """Clean up LLM tracking after trial in a background thread.
+    """Clean up LLM tracking after trial.
 
-    Launches the tracking cleanup asynchronously so the worker can
-    immediately pick up the next job.  The background thread uses
-    retry+backoff (via the tracker) to handle transient API failures.
-
-    The thread is non-daemon so it survives worker shutdown and can
-    finish writing data. Previous cleanup threads are joined with a
-    short timeout before starting a new one to bound accumulation.
+    Writes usage/logs/summary files and deletes the API key synchronously
+    so that all LLM data files are guaranteed to exist before the trial
+    proceeds to copy/cleanup steps.
 
     Args:
         tracker: LiteLLMTracker instance (or None)
@@ -357,22 +353,7 @@ def _cleanup_llm_tracking(
     if not tracker or not api_key:
         return
 
-    import threading
-
-    # Join any previous cleanup thread (non-blocking — just reap if done)
-    prev = getattr(_cleanup_llm_tracking, "_prev_thread", None)
-    if prev is not None and prev.is_alive():
-        prev.join(timeout=1.0)
-
-    thread = threading.Thread(
-        target=_cleanup_llm_tracking_sync,
-        args=(tracker, api_key, trial_output_dir, trial_id),
-        name=f"llm-cleanup-{trial_id[:30]}",
-        daemon=False,
-    )
-    thread.start()
-    _cleanup_llm_tracking._prev_thread = thread  # type: ignore[attr-defined]
-    logger.debug(f"LLM tracking cleanup started in background thread: {thread.name}")
+    _cleanup_llm_tracking_sync(tracker, api_key, trial_output_dir, trial_id)
 
 
 def get_crs_type(crs_name: str, registry_dir: Path) -> str:
@@ -1308,11 +1289,6 @@ def run_crs_trial(
                     target_cpv_id=target_cpv_id,
                 )
             finally:
-                # Clean up per-trial logging
-                if "trial_log_handler" in locals() and trial_log_handler is not None:
-                    remove_file_handler(trial_log_handler)
-                set_trial_context(None)
-
                 # Clean up LLM tracking (write usage file and delete key)
                 _cleanup_llm_tracking(
                     tracker=llm_tracker,
@@ -1376,12 +1352,14 @@ def run_crs_trial(
         # Log completion message
         logger.info(trial_result.log_summary())
 
-        # Update metadata.json with build/run timing
-        if build_time is not None or run_time is not None:
+        # Update metadata.json with build/run timing and CPVs found
+        file_metadata.cpvs_found = result.cpvs_found
+        if build_time is not None:
             file_metadata.build_time = build_time
+        if run_time is not None:
             file_metadata.run_time = run_time
-            with metadata_file.open("w") as f:
-                json.dump(file_metadata.model_dump(mode="json"), f, indent=2)
+        with metadata_file.open("w") as f:
+            json.dump(file_metadata.model_dump(mode="json"), f, indent=2)
 
         # Create success/fail marker file
         marker_file = trial_output_dir / (".success" if result.success else ".fail")
@@ -1558,6 +1536,13 @@ def run_crs_trial(
                 target_cpv_id=target_cpv_id,
             ),
         )
+
+    finally:
+        # Clean up per-trial logging on ALL code paths
+        if "trial_log_handler" in locals() and trial_log_handler is not None:
+            remove_file_handler(trial_log_handler)
+        if "trial_id" in locals():
+            set_trial_context(None)
 
 
 def evaluate_crs_trial(trial_id: str, trial_data: Dict[str, Any]) -> Dict[str, Any]:
