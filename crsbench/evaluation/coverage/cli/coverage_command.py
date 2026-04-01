@@ -27,6 +27,7 @@ from crsbench.evaluation.trial_paths import (
 )
 from crsbench.utils.cpu_pool import CPUPool, format_cpuset
 from crsbench.utils.logger import get_logger
+from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
 logger = get_logger(__name__)
 
@@ -372,7 +373,9 @@ def _run_direct_seed_timeline(args: argparse.Namespace) -> int:
     if runtime_cpus is None:
         return 1
 
+    oss_fuzz_path = Path(ensure_oss_fuzz_root())
     engine = CoverageEngine(
+        oss_fuzz_path=oss_fuzz_path,
         jobs=jobs,
         runtime_workers=cores_per_job,
         runtime_cpus=runtime_cpus,
@@ -439,7 +442,9 @@ def _build_timeline_report(
     normalized_inputs = normalize_seed_inputs(
         seed_dir,
         base_time=time_origin_base,
-        clamp_negative_to_zero=(time_origin == "crs_run_start_time"),
+        clamp_negative_to_zero=(
+            time_origin in ("crs_run_start_time", "experiment_start_time")
+        ),
     )
     if not normalized_inputs:
         msg = f"No seeds found to analyze in {seed_dir}"
@@ -509,7 +514,9 @@ def _run_single_trial_job(
         experiment_dir=experiment_dir,
         output_base=args.output_dir,
     )
+    oss_fuzz_path = Path(ensure_oss_fuzz_root())
     engine = CoverageEngine(
+        oss_fuzz_path=oss_fuzz_path,
         jobs=1,
         runtime_workers=cores_per_job,
         runtime_cpus=allocated_cpus,

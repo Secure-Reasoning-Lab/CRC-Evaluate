@@ -24,6 +24,7 @@ Usage:
 import fcntl
 import inspect
 import json
+import os
 import shutil
 import threading
 import time
@@ -97,6 +98,22 @@ class _CoverageBuildWorkspace:
     def has_harness(self, variant_name: str, harness_name: str) -> bool:
         harness_path = self.get_build_output_path(variant_name) / harness_name
         return harness_path.exists() and harness_path.is_file()
+
+    def resolve_harness(self, variant_name: str, harness_name: str) -> str:
+        """Ensure *harness_name* is executable in the build output.
+
+        Some benchmarks (e.g. dav1d) ``chmod -x`` the raw binary and ship a
+        ``harness@NO_OOM`` shell wrapper that re-enables it before execution.
+        The wrapper produces identical code coverage.  Rather than substituting
+        the wrapper (which the CRS processor may not recognise as a harness),
+        we simply ``chmod +x`` the original ELF so the normal harness
+        discovery path works.
+        """
+        build_out = self.get_build_output_path(variant_name)
+        original = build_out / harness_name
+        if original.exists() and not os.access(original, os.X_OK):
+            original.chmod(original.stat().st_mode | 0o111)
+        return harness_name
 
     def cleanup_build_outputs(self, variant_name: str) -> None:
         targets = [
@@ -266,7 +283,8 @@ class CoverageEngine:
                 success=False,
             )
 
-        # Verify harness exists in build
+        # Verify harness exists in build; fall back to @NO_OOM wrapper
+        harness_name = self.workspace.resolve_harness(variant_name, harness_name)
         if not self.workspace.has_harness(variant_name, harness_name):
             logger.error(
                 f"Harness '{harness_name}' not found in build output for {variant_name}"
@@ -378,6 +396,7 @@ class CoverageEngine:
             msg = f"Failed to build coverage variant for {benchmark_path}"
             raise CoverageStrategyError(msg)
 
+        harness_name = self.workspace.resolve_harness(variant_name, harness_name)
         if not self.workspace.has_harness(variant_name, harness_name):
             msg = (
                 f"Harness '{harness_name}' not found in build output for {variant_name}"

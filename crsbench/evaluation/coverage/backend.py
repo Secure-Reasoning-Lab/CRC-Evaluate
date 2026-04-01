@@ -694,7 +694,7 @@ def _prepare(harness_name: str) -> int:
         }
         available_harnesses = set(get_harness_names(Path("/out")))
         if harness_name in available_harnesses and harness_name not in configured_harnesses:
-            generated_config.unlink()
+            generated_config.unlink(missing_ok=True)
             cp = init_cp_in_runner()
     harness = cp.get_harnesses()[harness_name]
 
