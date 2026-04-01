@@ -274,8 +274,19 @@ def _run_experiment_timeline(args: argparse.Namespace) -> int:
         return 1
 
     trial_jobs = []
+    skipped_count = 0
     try:
         for trial_dir in trial_dirs:
+            # Skip trials that already have coverage results (resumability)
+            output_dir = _resolve_trial_coverage_output_dir(
+                trial_dir=trial_dir,
+                experiment_dir=experiment_dir,
+                output_base=args.output_dir,
+            )
+            if (output_dir / "coverage_timeline.json").exists():
+                skipped_count += 1
+                continue
+
             try:
                 context = load_trial_context(trial_dir)
             except FileNotFoundError:
@@ -293,7 +304,15 @@ def _run_experiment_timeline(args: argparse.Namespace) -> int:
                 )
             )
 
+        if skipped_count:
+            logger.info(
+                f"Skipping {skipped_count} trial(s) with existing coverage results"
+            )
+
         if not trial_jobs:
+            if skipped_count:
+                logger.info("All trials already have coverage results")
+                return 0
             logger.error(
                 f"No analyzable trials with seeds found under {experiment_dir}"
             )
