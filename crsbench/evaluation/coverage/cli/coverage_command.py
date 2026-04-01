@@ -451,12 +451,6 @@ def _build_timeline_report(
                 "povs/pov_store.json"
             )
             raise ValueError(msg)
-        if timeline_duration_seconds is None:
-            msg = (
-                "Experiment-backed coverage requires run_time in trial metadata to "
-                "bound the timeline"
-            )
-            raise ValueError(msg)
 
     normalized_inputs = normalize_seed_inputs(
         seed_dir,
@@ -493,7 +487,7 @@ def _validate_experiment_timeline_context(context: object) -> Optional[str]:
         return "missing crs_run_start_time in povs/pov_store.json"
     timeline_duration_seconds = getattr(context, "timeline_duration_seconds", None)
     if timeline_duration_seconds is None:
-        return "missing run_time in metadata.json"
+        logger.debug("run_time missing in metadata — timeline chart will auto-scale")
     return None
 
 
