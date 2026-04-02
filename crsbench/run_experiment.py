@@ -569,18 +569,61 @@ def load_experiment_config(config_path: Path) -> ExperimentConfig:
     return config
 
 
+def _ensure_meta_yaml(
+    benchmark_path: Path,
+    oss_fuzz_path: Path | None,
+) -> None:
+    """Ensure .aixcc/meta.yaml exists, auto-generating for OSS-Fuzz projects.
+
+    If meta.yaml is missing but the directory is a valid OSS-Fuzz project,
+    build it and generate meta.yaml with discovered fuzz targets.
+    """
+    meta_yaml_path = GroundTruthPaths(benchmark_path).meta_yaml
+    if meta_yaml_path.exists():
+        return
+
+    from crsbench.benchmark.discovery import (
+        auto_generate_meta_yaml,
+        is_oss_fuzz_project,
+    )
+
+    if not is_oss_fuzz_project(benchmark_path):
+        raise FileNotFoundError(
+            f"meta.yaml not found and directory is not a valid OSS-Fuzz project: "
+            f"{benchmark_path}"
+        )
+
+    if not oss_fuzz_path:
+        raise FileNotFoundError(
+            f"meta.yaml not found for '{benchmark_path.name}' and oss_fuzz_path "
+            "is not set. Set oss_fuzz_path in experiment config to enable "
+            "auto-generation from OSS-Fuzz projects."
+        )
+
+    logger.info(
+        f"Auto-generating meta.yaml for OSS-Fuzz project '{benchmark_path.name}'..."
+    )
+    auto_generate_meta_yaml(benchmark_path, oss_fuzz_path)
+
+
 def resolve_benchmark_harnesses(
     benchmark_entries: List,
     benchmarks_root: Path,
+    *,
+    oss_fuzz_path: Path | None = None,
 ) -> List[BenchmarkHarness]:
     """Resolve BenchmarkHarness objects from BenchmarkEntry list.
 
     For entries with harnesses specified: use those harnesses
     For entries without harnesses: load all harnesses from meta.yaml
 
+    If a benchmark lacks .aixcc/meta.yaml but is a valid OSS-Fuzz project,
+    it is automatically built and meta.yaml is generated.
+
     Args:
         benchmark_entries: List of BenchmarkEntry objects
         benchmarks_root: Root directory containing benchmarks
+        oss_fuzz_path: Path to oss-fuzz checkout (for auto-generation)
 
     Returns:
         List of BenchmarkHarness objects with resolved paths and harnesses
@@ -603,9 +646,8 @@ def resolve_benchmark_harnesses(
                     f"Benchmark directory not found: {benchmark_path}"
                 )
 
+            _ensure_meta_yaml(benchmark_path, oss_fuzz_path)
             meta_yaml_path = GroundTruthPaths(benchmark_path).meta_yaml
-            if not meta_yaml_path.exists():
-                raise FileNotFoundError(f"meta.yaml not found: {meta_yaml_path}")
 
             with meta_yaml_path.open() as f:
                 meta_data = yaml.safe_load(f)
@@ -643,6 +685,9 @@ def resolve_benchmark_harnesses(
                     f"Benchmark directory not found: {benchmark_path}"
                 )
 
+            # Ensure meta.yaml exists (auto-generate for OSS-Fuzz projects)
+            _ensure_meta_yaml(benchmark_path, oss_fuzz_path)
+
             # Validate and load benchmark config
             validation_result = validate_benchmark(benchmark_path)
             if not validation_result.is_valid:
@@ -653,8 +698,6 @@ def resolve_benchmark_harnesses(
 
             # Load meta.yaml to get harnesses
             meta_yaml_path = GroundTruthPaths(benchmark_path).meta_yaml
-            if not meta_yaml_path.exists():
-                raise FileNotFoundError(f"meta.yaml not found: {meta_yaml_path}")
 
             with meta_yaml_path.open() as f:
                 meta_data = yaml.safe_load(f)
@@ -3066,7 +3109,9 @@ def main() -> None:
     # Resolve BenchmarkHarness objects
     try:
         benchmark_harnesses = resolve_benchmark_harnesses(
-            benchmark_entries, benchmarks_root
+            benchmark_entries,
+            benchmarks_root,
+            oss_fuzz_path=config.oss_fuzz_path,
         )
         logger.info(f"Resolved {len(benchmark_harnesses)} benchmark-harness pairs")
     except Exception as e:
