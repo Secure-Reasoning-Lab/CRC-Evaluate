@@ -3309,8 +3309,9 @@ class ExperimentConfig(BaseModel):
     )
     only_cpv_harnesses: bool = Field(
         default=True,
-        description="Skip harnesses without CPVs for bug-finding CRS (default: True). "
-        "Bug-fixing CRS always skips harnesses without CPVs regardless of this setting.",
+        description="Skip harnesses without CPVs (default: True). "
+        "Applies to all CRS types (bug-finding and bug-fixing). "
+        "Set to false for discovery-only runs on projects without ground truth.",
     )
     resources: Optional[ResourceConfig] = Field(
         default=None, description="Resource allocation configuration for trials"

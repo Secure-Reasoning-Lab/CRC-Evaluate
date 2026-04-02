@@ -749,12 +749,11 @@ def generate_trial_matrix(
         is_bug_fixing = crs_type == "bug-fixing"
 
         for benchmark_harness in benchmark_harnesses:
-            # Skip harnesses without CPVs:
-            # - Bug-fixing CRS: always skip (required for POV-based operation)
-            # - Bug-finding CRS: skip only when only_cpv_harnesses is enabled
-            should_check_cpvs = is_bug_fixing or config.only_cpv_harnesses
+            # Load harness metadata when needed:
+            # - For CPV-based filtering (only_cpv_harnesses=True)
+            # - For per-CPV trial splitting (bug-fixing CRS)
             harness = None
-            if should_check_cpvs:
+            if config.only_cpv_harnesses or is_bug_fixing:
                 meta_path = GroundTruthPaths(Path(benchmark_harness.path)).meta_yaml
                 adapter = MetaYamlAdapter.from_meta_yaml(
                     meta_path,
@@ -763,15 +762,15 @@ def generate_trial_matrix(
                     main_repo="",
                 )
                 harness = adapter.get_harness(benchmark_harness.harness.name)
-                if not harness or not harness.vulns:
-                    skip_reason = (
-                        "bug-fixing CRS" if is_bug_fixing else "only_cpv_harnesses=True"
-                    )
-                    logger.debug(
-                        f"Skipping {benchmark_harness.name}/{benchmark_harness.harness.name}: "
-                        f"no CPVs ({skip_reason})"
-                    )
-                    continue
+
+            # Skip harnesses without CPVs only when only_cpv_harnesses is enabled.
+            # When False, harnesses without CPVs are included (discovery-only mode).
+            if config.only_cpv_harnesses and (not harness or not harness.vulns):
+                logger.debug(
+                    f"Skipping {benchmark_harness.name}/{benchmark_harness.harness.name}: "
+                    f"no CPVs (only_cpv_harnesses=True)"
+                )
+                continue
             target_cpvs = benchmark_harness.target_cpvs
             target_cpv_set = set(target_cpvs) if target_cpvs else None
             # Determine which modes to run for this benchmark
@@ -805,7 +804,7 @@ def generate_trial_matrix(
             for mode in modes_to_run:
                 for sanitizer in config.sanitizers:
                     # Skip sanitizers that don't match any CPV in this harness
-                    if should_check_cpvs and harness:
+                    if harness and harness.vulns:
                         if not _filter_matched_cpvs(
                             harness, sanitizer.value, target_cpv_set
                         ):
@@ -814,7 +813,7 @@ def generate_trial_matrix(
                                 f"no CPVs with sanitizer {sanitizer.value}"
                             )
                             continue
-                    if is_bug_fixing and harness:
+                    if is_bug_fixing and harness and harness.vulns:
                         matched_cpvs = _filter_matched_cpvs(
                             harness, sanitizer.value, target_cpv_set
                         )
