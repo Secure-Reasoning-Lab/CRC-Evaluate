@@ -27,6 +27,7 @@ from crsbench.evaluation.trial_paths import (
 )
 from crsbench.utils.cpu_pool import CPUPool, format_cpuset
 from crsbench.utils.logger import get_logger
+from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
 logger = get_logger(__name__)
 
@@ -273,8 +274,19 @@ def _run_experiment_timeline(args: argparse.Namespace) -> int:
         return 1
 
     trial_jobs = []
+    skipped_count = 0
     try:
         for trial_dir in trial_dirs:
+            # Skip trials that already have coverage results (resumability)
+            output_dir = _resolve_trial_coverage_output_dir(
+                trial_dir=trial_dir,
+                experiment_dir=experiment_dir,
+                output_base=args.output_dir,
+            )
+            if (output_dir / "coverage_timeline.json").exists():
+                skipped_count += 1
+                continue
+
             try:
                 context = load_trial_context(trial_dir)
             except FileNotFoundError:
@@ -292,7 +304,15 @@ def _run_experiment_timeline(args: argparse.Namespace) -> int:
                 )
             )
 
+        if skipped_count:
+            logger.info(
+                f"Skipping {skipped_count} trial(s) with existing coverage results"
+            )
+
         if not trial_jobs:
+            if skipped_count:
+                logger.info("All trials already have coverage results")
+                return 0
             logger.error(
                 f"No analyzable trials with seeds found under {experiment_dir}"
             )
@@ -372,7 +392,9 @@ def _run_direct_seed_timeline(args: argparse.Namespace) -> int:
     if runtime_cpus is None:
         return 1
 
+    oss_fuzz_path = Path(ensure_oss_fuzz_root())
     engine = CoverageEngine(
+        oss_fuzz_path=oss_fuzz_path,
         jobs=jobs,
         runtime_workers=cores_per_job,
         runtime_cpus=runtime_cpus,
@@ -429,17 +451,13 @@ def _build_timeline_report(
                 "povs/pov_store.json"
             )
             raise ValueError(msg)
-        if timeline_duration_seconds is None:
-            msg = (
-                "Experiment-backed coverage requires run_time in trial metadata to "
-                "bound the timeline"
-            )
-            raise ValueError(msg)
 
     normalized_inputs = normalize_seed_inputs(
         seed_dir,
         base_time=time_origin_base,
-        clamp_negative_to_zero=(time_origin == "crs_run_start_time"),
+        clamp_negative_to_zero=(
+            time_origin in ("crs_run_start_time", "experiment_start_time")
+        ),
     )
     if not normalized_inputs:
         msg = f"No seeds found to analyze in {seed_dir}"
@@ -469,7 +487,7 @@ def _validate_experiment_timeline_context(context: object) -> Optional[str]:
         return "missing crs_run_start_time in povs/pov_store.json"
     timeline_duration_seconds = getattr(context, "timeline_duration_seconds", None)
     if timeline_duration_seconds is None:
-        return "missing run_time in metadata.json"
+        logger.debug("run_time missing in metadata — timeline chart will auto-scale")
     return None
 
 
@@ -509,7 +527,9 @@ def _run_single_trial_job(
         experiment_dir=experiment_dir,
         output_base=args.output_dir,
     )
+    oss_fuzz_path = Path(ensure_oss_fuzz_root())
     engine = CoverageEngine(
+        oss_fuzz_path=oss_fuzz_path,
         jobs=1,
         runtime_workers=cores_per_job,
         runtime_cpus=allocated_cpus,

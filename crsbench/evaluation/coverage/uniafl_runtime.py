@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
+import yaml
+
 from crsbench.evaluation.adapter.compose_common import (
     run_oss_crs_build_target,
 )
@@ -99,6 +101,24 @@ def _remove_path(path: Path) -> None:
 
 
 COVERAGE_STAGE_IGNORES = frozenset({".aixcc", ".agent", ".git"})
+
+
+def _read_project_sanitizer(project_dir: Path) -> str:
+    """Read the primary sanitizer from a benchmark's project.yaml.
+
+    Falls back to ``"address"`` when the file is missing or unparseable.
+    """
+    project_yaml = project_dir / "project.yaml"
+    if not project_yaml.exists():
+        return "address"
+    try:
+        data = yaml.safe_load(project_yaml.read_text())
+        sanitizers = data.get("sanitizers") if isinstance(data, dict) else None
+        if isinstance(sanitizers, list) and sanitizers:
+            return str(sanitizers[0])
+    except Exception:
+        pass
+    return "address"
 
 
 def _ignore_coverage_metadata(_directory: str, contents: list[str]) -> list[str]:
@@ -288,10 +308,12 @@ def build_atlantis_coverage_artifacts(
         detail = stderr or stdout
         raise RuntimeError(f"oss-crs build-target failed (rc={returncode}): {detail}")
 
+    sanitizer = _read_project_sanitizer(staged_project_dir)
     atlantis_build_output_dir, build_id = _resolve_atlantis_build_output(
         compose_file=compose_file,
         work_dir=work_dir,
         staged_project_dir=staged_project_dir,
+        sanitizer=sanitizer,
     )
     source_repo_dir = materialize_atlantis_build_output(
         atlantis_build_output_dir=atlantis_build_output_dir,

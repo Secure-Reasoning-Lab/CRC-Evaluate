@@ -513,30 +513,41 @@ def test_build_timeline_report_requires_crs_run_start_time_for_experiment_contex
         )
 
 
-def test_build_timeline_report_requires_run_time_for_experiment_context(
+def test_build_timeline_report_accepts_missing_run_time_for_experiment_context(
     tmp_path: Path,
 ) -> None:
+    """timeline_duration_seconds=None is now accepted (auto-scale chart)."""
     seed_dir = tmp_path / "seeds"
     seed_dir.mkdir()
-    (seed_dir / "seed.bin").write_bytes(b"seed")
+    seed = seed_dir / "seed.bin"
+    seed.write_bytes(b"seed")
+    # Set mtime after base_time so the seed is included
+    import os
+
+    os.utime(seed, (200.0, 200.0))
+
+    called = {}
 
     class _FakeEngine:
         def collect_timed_line_coverage(self, **kwargs):
-            raise AssertionError("engine should not be called")
+            called["yes"] = True
+            from crsbench.evaluation.coverage.models import CoverageSummary
 
-    with pytest.raises(ValueError, match="run_time"):
-        _build_timeline_report(
-            engine=_FakeEngine(),
-            benchmark_path=tmp_path / "bench",
-            harness_name="fuzz_target",
-            seed_dir=seed_dir,
-            time_origin_base=100.0,
-            time_origin="crs_run_start_time",
-            pov_markers=[],
-            timeline_duration_seconds=None,
-            force_rebuild=False,
-            output_dir=tmp_path / "coverage",
-        )
+            return kwargs["timed_inputs"], CoverageSummary()
+
+    _build_timeline_report(
+        engine=_FakeEngine(),
+        benchmark_path=tmp_path / "bench",
+        harness_name="fuzz_target",
+        seed_dir=seed_dir,
+        time_origin_base=100.0,
+        time_origin="crs_run_start_time",
+        pov_markers=[],
+        timeline_duration_seconds=None,
+        force_rebuild=False,
+        output_dir=tmp_path / "coverage",
+    )
+    assert "yes" in called, "engine should have been called"
 
 
 def test_run_coverage_rejects_experiment_config_with_benchmarks_and_harness(
@@ -939,13 +950,14 @@ def test_run_experiment_timeline_uses_jobs_and_cores_per_job(
     class _FakeEngine:
         def __init__(
             self,
+            oss_fuzz_path=None,
             *,
             jobs: int | None = None,
             runtime_workers: int | None = None,
             runtime_cpus: list[int] | None = None,
             source_mode: str = "pkgs",
         ):
-            del jobs, source_mode
+            del jobs, source_mode, oss_fuzz_path
             self.runtime_workers = runtime_workers
             self.runtime_cpus = runtime_cpus
 
@@ -975,6 +987,10 @@ def test_run_experiment_timeline_uses_jobs_and_cores_per_job(
         patch(
             "crsbench.evaluation.coverage.cli.coverage_command.CoverageEngine",
             _FakeEngine,
+        ),
+        patch(
+            "crsbench.evaluation.coverage.cli.coverage_command.ensure_oss_fuzz_root",
+            return_value="/tmp/fake-oss-fuzz",
         ),
         patch(
             "crsbench.evaluation.coverage.cli.coverage_command.load_trial_context",
@@ -1114,7 +1130,7 @@ def test_run_experiment_timeline_uses_output_dir_for_experiment_config(
 
 @pytest.mark.parametrize(
     ("missing_start", "missing_duration"),
-    [(True, False), (False, True)],
+    [(True, False)],
 )
 def test_run_experiment_timeline_rejects_missing_timing_metadata_before_scheduling(
     tmp_path: Path,
@@ -1235,12 +1251,14 @@ def test_run_direct_seed_timeline_pins_runtime_cpus(
     class _FakeEngine:
         def __init__(
             self,
+            oss_fuzz_path=None,
             *,
             jobs: int | None = None,
             runtime_workers: int | None = None,
             runtime_cpus: list[int] | None = None,
             source_mode: str = "pkgs",
         ):
+            del oss_fuzz_path
             engine_inits.append(
                 {
                     "jobs": jobs,
@@ -1281,6 +1299,10 @@ def test_run_direct_seed_timeline_pins_runtime_cpus(
         patch(
             "crsbench.evaluation.coverage.cli.coverage_command.CoverageEngine",
             _FakeEngine,
+        ),
+        patch(
+            "crsbench.evaluation.coverage.cli.coverage_command.ensure_oss_fuzz_root",
+            return_value="/tmp/fake-oss-fuzz",
         ),
         patch(
             "crsbench.evaluation.coverage.cli.coverage_command.resolve_benchmark_path",
