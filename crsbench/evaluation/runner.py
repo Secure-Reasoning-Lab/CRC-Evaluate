@@ -887,10 +887,11 @@ class BenchmarkRunner:
 
         harness = adapter.get_harness(harness_name)
         if harness is None or not harness.vulns:
-            raise EvaluationError(
-                "SARIF bug-candidate input enabled but harness/cpvs are unavailable: "
-                f"harness={harness_name}"
+            self.logger.warning(
+                "SARIF bug-candidate input enabled but no CPVs available: "
+                f"harness={harness_name}; skipping SARIF staging"
             )
+            return
 
         target_dir.mkdir(parents=True, exist_ok=True)
         copied = 0
