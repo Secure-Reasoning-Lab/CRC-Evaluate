@@ -3081,8 +3081,14 @@ def main() -> None:
             f"Benchmarks ({len(benchmark_names)}): {', '.join(benchmark_names)}"
         )
 
-        # Filter benchmarks by mode early (before resolving harnesses)
+        # Auto-generate meta.yaml for any OSS-Fuzz projects before filtering
         benchmarks_root = resolve_benchmarks_root(config.benchmarks_root)
+        for entry in benchmark_entries:
+            benchmark_path = benchmarks_root / entry.name
+            if benchmark_path.exists():
+                _ensure_meta_yaml(benchmark_path, config.oss_fuzz_path)
+
+        # Filter benchmarks by mode early (before resolving harnesses)
         mode_str = config.mode.value  # Get string value from enum
         if mode_str not in ("all", "auto"):
             original_count = len(benchmark_names)
