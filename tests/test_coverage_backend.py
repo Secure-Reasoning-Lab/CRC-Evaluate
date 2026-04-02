@@ -660,7 +660,7 @@ def test_uniafl_worker_script_falls_back_when_generated_config_is_empty() -> Non
     assert "yaml.safe_load(generated_config.read_text())" in script
     assert "configured_harnesses = {" in script
     assert "harness_name not in configured_harnesses" in script
-    assert "generated_config.unlink()" in script
+    assert "generated_config.unlink(missing_ok=True)" in script
     assert "cp = init_cp_in_runner()" in script
 
 
