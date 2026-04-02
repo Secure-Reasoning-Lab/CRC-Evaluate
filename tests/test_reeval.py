@@ -987,16 +987,17 @@ class TestAsyncPatchDrain:
 class TestPatchDiscovery:
     """Tests for re-eval patch discovery helpers."""
 
-    def test_discover_trial_patches_flat_layout_requires_target_cpv(
+    def test_discover_trial_patches_flat_layout_uses_unknown_without_target_cpv(
         self, tmp_path: Path
     ) -> None:
-        """Flat patch layout should be skipped when CPV cannot be inferred."""
+        """Flat patch layout maps to 'unknown' CPV when target cannot be inferred."""
         patch_dir = tmp_path / "output" / "patches"
         patch_dir.mkdir(parents=True)
         (patch_dir / "patch_0.diff").write_text("diff")
 
-        with pytest.raises(ValueError, match="target CPV could not be resolved"):
-            _discover_trial_patches(patch_dir, target_cpv_id=None)
+        result = _discover_trial_patches(patch_dir, target_cpv_id=None)
+        assert len(result) == 1
+        assert result[0][0] == "unknown"
 
     def test_discover_trial_patches_flat_layout_uses_metadata_target(
         self, tmp_path: Path
