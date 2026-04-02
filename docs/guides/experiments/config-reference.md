@@ -102,6 +102,30 @@ For GCE in v1:
   and
   `experiment-configs/cloud-testing/gce-sanity-zone-1orch-2worker-1eval.yaml`
 
+## Discovery-Only Mode
+
+To run against OSS-Fuzz-format projects without ground truth CPVs,
+disable CPV-based harness filtering and verification:
+
+```yaml
+experiment:
+  name: my-discovery-run
+  mode: full
+  only_cpv_harnesses: false
+runtime:
+  trials: 1
+  max_total_time: 3600
+  skip_verification: true
+```
+
+- `only_cpv_harnesses: false` includes harnesses regardless of CPV
+  availability. Applies to both bug-finding and bug-fixing CRS types.
+- `skip_verification: true` skips POV/patch verification (no ground
+  truth to verify against).
+
+CRS runs proceed normally, POVs and patches are collected as artifacts,
+and reports show raw discovery counts without CPV-based scoring.
+
 ## Input Contract
 
 `runtime.inputs` is presence-based:
