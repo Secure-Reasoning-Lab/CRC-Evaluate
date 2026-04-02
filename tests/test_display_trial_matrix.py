@@ -4,6 +4,7 @@ import re
 import sys
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from crsbench.run_experiment import Trial, display_trial_matrix
 from crsbench.validation.schemas import BenchmarkHarness, HarnessFile
@@ -153,3 +154,21 @@ class TestDisplayTrialMatrix:
 
         output = captured_output.getvalue()
         assert "No trials to display" in output
+
+    def test_uses_basic_output_when_rich_is_installed_but_stdout_is_not_tty(self):
+        """Auto Rich selection should require an interactive stdout."""
+        trials = [create_mock_trial(1)]
+
+        with (
+            patch(
+                "crsbench.run_experiment.importlib.util.find_spec",
+                return_value=object(),
+            ),
+            patch("sys.stdout.isatty", return_value=False),
+            patch("crsbench.run_experiment._display_trial_matrix_basic") as basic,
+            patch("crsbench.run_experiment._display_trial_matrix_rich") as rich,
+        ):
+            display_trial_matrix(trials, start_index=0)
+
+        basic.assert_called_once_with(trials, 0)
+        rich.assert_not_called()

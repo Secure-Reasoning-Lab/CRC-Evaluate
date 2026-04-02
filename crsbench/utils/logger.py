@@ -129,6 +129,12 @@ _PLAIN_FORMAT = (
 )
 
 
+def _finalize_format(record, format_string: str) -> str:
+    """Append exception details only when the record carries an exception."""
+    exception_suffix = "\n{exception}" if record["exception"] is not None else ""
+    return format_string + exception_suffix + "\n"
+
+
 def _custom_formatter(record):
     """Custom formatter that adds module_path to record."""
     # Add formatted module path to the record
@@ -136,7 +142,7 @@ def _custom_formatter(record):
 
     # Get the color scheme for this log level
     format_string = _COLOR_SCHEME.get(record["level"].name, _PLAIN_FORMAT)
-    return format_string + "\n"
+    return _finalize_format(record, format_string)
 
 
 # Auto-detect TTY and configure format accordingly
@@ -157,7 +163,7 @@ else:
     # Use plain format for non-TTY (e.g., file redirection, CI logs)
     def _plain_formatter(record):
         record["extra"]["module_path"] = _format_module_path(record)
-        return _PLAIN_FORMAT + "\n"
+        return _finalize_format(record, _PLAIN_FORMAT)
 
     _loguru_logger.add(
         sys.stdout,
@@ -234,7 +240,7 @@ def configure_logger(
         # Use plain format
         def _plain_formatter(record):
             record["extra"]["module_path"] = _format_module_path(record)
-            return _PLAIN_FORMAT + "\n"
+            return _finalize_format(record, _PLAIN_FORMAT)
 
         _loguru_logger.add(
             sink,

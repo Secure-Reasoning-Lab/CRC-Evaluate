@@ -138,10 +138,10 @@ class SnapshotManager:
                 # Capture snapshot
                 try:
                     self.capture_snapshot()
-                except Exception as e:
+                except Exception:
                     # Log error but don't crash - continue to next snapshot
                     # Note: self.cycle was already incremented inside capture_snapshot()
-                    logger.error(f"Snapshot {self.cycle} failed: {e}", exc_info=True)
+                    logger.exception("Snapshot {} failed", self.cycle)
 
         finally:
             self.running = False

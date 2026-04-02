@@ -50,6 +50,10 @@ Trial jobs execute one fully-expanded experiment unit:
 - trial number
 - optional CPV target
 
+The RQ `job_id` for a trial job is deterministic for that logical trial. The
+runtime payload `trial_id` may still include a per-run suffix for filesystem or
+compose isolation, but that payload field is not the queue identity.
+
 ### Build jobs
 Build jobs prepare artifacts needed by later verification or CI stages. Build jobs are authoritative for build-context creation; verify paths must not silently rebuild missing prerequisites unless the owning flow explicitly allows that.
 
@@ -62,8 +66,29 @@ Verify jobs consume prepared artifacts and produce verdicts. In non-local deploy
 - duplicate enqueue attempts must resolve to reuse or explicit refresh, not ambiguous duplication
 - build and verify jobs must encode the mode/sanitizer/source parameters that affect artifact compatibility
 - stale queued/deferred/scheduled records may be refreshed when the orchestrator intentionally re-enqueues work
+- operator status, cleanup, and orphan recovery must reason over physical queue
+  jobs; a grouped `trial_key -> job` snapshot is only a logical summary view and
+  must not hide duplicate physical jobs from maintenance paths
 
 ## State and Failure Semantics
+
+### Shadow lifecycle contract
+Cloud-backed trial execution maintains a Redis-backed shadow lifecycle in addition
+to the concrete RQ job state. The shadow lifecycle exists to make stale-worker
+recovery explicit across controller restarts and cloud-instance loss.
+
+The active lifecycle states are:
+- `queued`
+- `claimed`
+- `running`
+- `syncing`
+
+The terminal lifecycle states are:
+- `completed`
+- `failed`
+
+`orphaned` is an internal recovery state entered only while stale-job handling is
+in progress.
 
 ### Terminal states
 The queue layer treats the following as terminal outcomes:
@@ -71,14 +96,71 @@ The queue layer treats the following as terminal outcomes:
 - `failed`
 - `stopped`
 - `canceled`
+- worker-side and orchestrator-side terminal marker writers must leave exactly
+  one verdict marker on disk for a trial; when publishing a new canonical
+  verdict, writing `.success` must remove stale `.fail`, and writing `.fail`
+  must remove stale `.success`
+- orchestrator-visible final reporting must collapse duplicate physical attempt
+  results onto one logical trial outcome; the canonical verdict is the terminal
+  marker state in the logical trial directory, not the count of physical RQ jobs
 
 ### Stale or missing state
 - missing queue metadata for a supposedly pending job is an infrastructure failure
 - `started` jobs that exceed timeout plus grace are treated as stale infrastructure failures
+- continue-mode recovery of `started` jobs must use per-job timeout-plus-grace
+  staleness; the presence of another live worker on the same queue must not
+  suppress recovery of a stale started job
+- if lifecycle/artifact reconciliation has already made a stale `started` job
+  terminal, continue-mode cleanup must remove the stale RQ residue instead of
+  leaving it in `started` and tracking it forever
+- when continue mode recovers a stale `started` job for retry, it must also
+  resurrect the corresponding shadow lifecycle back to `queued` with ownership
+  cleared before the replacement worker can initialize
+- if a stale `started` duplicate exists while another physical job for the same
+  logical trial is already runnable, recovery must remove the stale duplicate
+  instead of requeueing it and creating two active jobs
+- timeout recovery must not leave the shadow lifecycle in `queued` unless the
+  concrete queue entry is executable again
+- once `claimed_by` moves to a replacement worker, the superseded worker must
+  stop emitting shadow-lifecycle heartbeats and must not publish terminal
+  worker-side artifacts for that logical trial
+- when the current worker fails while it still owns the active lifecycle
+  record, worker-side `.fail` publication must happen before the lifecycle
+  transition clears `claimed_by`; owned failures must still materialize the
+  canonical failure marker and post-trial side effects
+- worker-side terminal publication must also preserve a preexisting
+  contradictory canonical marker for the logical trial; a late duplicate
+  physical attempt must not flip `.success` to `.fail` or vice versa
+- orchestrator-side queue monitoring must apply the same ownership fence before
+  consuming finished/failed callbacks; a stale terminal event must not mark the
+  `job_id` as processed ahead of the current owner
+- for finished jobs, that ownership fence must use the worker identity carried
+  by the terminal `TrialResult` payload rather than mutable shared `job.meta`
+  that may already have been overwritten by a replacement attempt
+- for hard failed RQ callbacks on retried active jobs, orchestrator monitoring
+  must defer to lifecycle timeout/recovery only while that recovery loop is
+  running; otherwise the stale callback must be consumed without publishing a
+  canonical marker
+- if lifecycle ownership cannot be read, is missing for a tracked distributed
+  job, or an active lifecycle record has no owner, orchestrator monitoring must
+  leave the callback retryable rather than consuming it optimistically
+- once orchestrator monitoring has materialized a canonical marker for a
+  logical trial in the current session, later duplicate physical callbacks for
+  that same trial must not flip the published verdict
+- orchestrator-side terminal callbacks must only mark a `job_id` as processed
+  after the corresponding `.success` / `.fail` marker write succeeds; transient
+  marker-write failures must remain retryable
+- queue-derived operator views must only expose an active owner for concrete
+  running jobs; queued/deferred/terminal RQ entries may retain stale
+  `worker_name` metadata and must not be treated as currently claimed
+- published terminal artifacts on orchestrator storage are authoritative for
+  stale-job recovery: `.success` maps to `completed`, `.fail` maps to `failed`
 - retry policy must distinguish infra failures from benchmark-result failures
 
 ### Retry principles
 - retries must preserve deterministic job identity semantics
+- retry budget is exact: a job at `max_retries - 1` gets one final requeue, and
+  the next stale recovery must fail permanently rather than requeue again
 - active non-terminal jobs are reused rather than duplicated
 - refresh of terminal jobs is a policy decision at submit time, not a hidden worker behavior
 
@@ -107,8 +189,80 @@ The queue layer treats the following as terminal outcomes:
 ### Failure path
 1. dequeue or execution fails
 2. failure is recorded with infrastructure-vs-result semantics
-3. retry/refresh policy decides whether the logical job is resubmitted or treated as terminal
-4. aggregate reporting preserves `ERROR` vs `FAIL` distinctions where applicable
+3. stale-worker recovery first checks for published terminal artifacts, then
+   either marks the shadow lifecycle terminal or re-enqueues the concrete job
+4. retry/refresh policy decides whether the logical job is resubmitted or treated as terminal
+5. aggregate reporting preserves `ERROR` vs `FAIL` distinctions where applicable
+
+### Continue-mode restart behavior
+- `crsbench run --queue-mode continue` may skip enqueue for a logical trial when
+  an existing queue record already represents that trial
+- if a prior orchestrator left a stale experiment lock behind, continue mode
+  must attempt stale-lock takeover before aborting queue recovery
+- continue mode must always run resume reconciliation after acquiring or
+  reclaiming the experiment lock, even when the old lock has already expired,
+  so artifact-backed `syncing` work is collapsed before early exit decisions
+- after stale-lock takeover, the resumed controller must either adopt the
+  existing experiment registry entry or republish it if missing, so cleanup can
+  reliably clear registry state at the end of the resumed run
+- if the existing physical job is already terminal but the orchestrator marker is
+  still missing, the controller must attach that carryover job to the monitor and
+  materialize `.success` / `.fail` before exit
+- if a canonical orchestrator marker already exists for a logical trial, a
+  contradictory carryover terminal duplicate must not overwrite that marker
+  during restart monitoring
+- if stale-lock resume reports job ids still needing collection, continue mode
+  must attach those jobs even when there are no visible queue entries and no new
+  trials to enqueue; resume-only syncing work must not trigger early exit
+- if continue mode requeues failed work or mutates queue state during orphan
+  recovery, it must refresh its queue snapshot before deciding cloud bring-up
+  and monitoring scope; retry-created active work must not be treated as absent
+- explicit `retry_failed` requeue of a terminal job must also resurrect the
+  corresponding shadow lifecycle record back to `queued` before the physical
+  job becomes runnable again
+- if the explicit failed-job requeue itself fails, lifecycle must roll back to
+  `failed` so shadow state does not advertise runnable work that never reached
+  the queue
+- explicit `retry_failed` must only resurrect lifecycle records currently in
+  `failed`; if the shadow lifecycle already says `completed`, stale failed RQ
+  residue must be ignored rather than retried behind the terminal record
+- resume-only syncing jobs must be excluded from monitoring when another active
+  queued/deferred/started attempt already exists for the same logical trial
+- only active lifecycle states (`claimed`, `running`, `syncing`) may retain
+  `claimed_by`; transitions to `queued`, `orphaned`, `failed`, or `completed`
+  must clear ownership so superseded workers immediately lose write authority
+- shared monitor callbacks must treat terminal callbacks for non-active
+  lifecycle records as stale no-ops: they may be consumed to avoid monitor
+  livelock, but they must not write or overwrite orchestrator markers
+- shared monitor callbacks must leave callbacks retryable when lifecycle state
+  cannot be read or when an active lifecycle record has no owner
+- shared monitor callbacks must treat a missing lifecycle record on an already
+  terminal RQ job as legacy or untracked carryover state: the callback may be
+  consumed and materialized rather than retried forever
+- when orphan recovery increments lifecycle `retry_count`, it must also project
+  that retry count into the concrete RQ job metadata so queue-derived operator
+  views report the same retry budget state as the shadow lifecycle
+- worker heartbeat updates must project into both the heartbeat hash and the
+  lifecycle record's `last_heartbeat` / `updated_at` fields so lifecycle
+  snapshots never report stale liveness data while the heartbeat side channel is fresh
+- worker startup must apply the same ownership fence before emitting its first
+  lifecycle heartbeat; stale or terminal records must not regain fresh
+  heartbeats just because a late worker process reached initialization
+- worker startup must not advance `claimed -> running` unless the lifecycle
+  record is already claimed by that same worker; initialization must never steal
+  ownership from another worker that already holds the shadow claim
+- experiment-scoped purge paths such as `fresh` mode and queue cleanup must
+  remove both concrete RQ jobs and the corresponding lifecycle/heartbeat hashes
+  so shadow state cannot outlive the executable queue state
+- operator safety views such as status and teardown must merge lifecycle records
+  with queue-only jobs that have not yet been projected into lifecycle, so
+  queue residue cannot disappear from human-facing summaries once lifecycle
+  tracking is partially populated
+- restart reconciliation must check published terminal artifacts before leaving a
+  lifecycle record in `syncing`; artifact-backed in-flight records should be
+  collapsed to `completed` / `failed` rather than left waiting for collection
+- continue mode must not silently drop terminal carryover jobs just because no
+  new trial was enqueued for the same logical trial
 
 ## Decisions and Tradeoffs
 

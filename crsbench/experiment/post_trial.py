@@ -80,7 +80,7 @@ def create_post_trial_jobs(
         # Skip failed trials
         if not result.success:
             logger.debug(
-                "Skipping failed trial %s for post-trial analysis",
+                "Skipping failed trial {} for post-trial analysis",
                 result.trial_id,
             )
             continue
@@ -212,7 +212,7 @@ def _load_adapter(
     adapter = engine.load_adapter(benchmark_path)
     if not adapter:
         logger.warning(
-            "Failed to load adapter for %s, using default sanitizer",
+            "Failed to load adapter for {}, using default sanitizer",
             benchmark_path,
         )
     return adapter

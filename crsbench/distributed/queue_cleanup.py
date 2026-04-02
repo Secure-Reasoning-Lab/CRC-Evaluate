@@ -8,11 +8,13 @@ Supports both queue models:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, cast
 
+from crsbench.distributed.job_lifecycle import JobLifecycleStore, LifecycleRedisProtocol
 from crsbench.distributed.queue import (
     clear_experiment_jobs,
-    get_existing_trials,
+    get_existing_trial_jobs,
+    has_potentially_live_started_jobs,
     resolve_queue_names,
     validate_queue_name_component,
 )
@@ -87,18 +89,44 @@ def clean_experiment_queues(
     if not RQ_AVAILABLE:
         raise RuntimeError("Redis and RQ packages are required")
 
-    queue_names = resolve_scope_queue_names(experiment_name, scopes)
+    normalized_scopes = _normalize_scopes(scopes)
+    queue_names = resolve_scope_queue_names(experiment_name, normalized_scopes)
     total_removed = 0
     total_matched = 0
+    saw_started_trial_jobs = False
 
     for queue_name in queue_names:
         queue = rq.Queue(queue_name, connection=redis_conn)  # type: ignore[attr-defined]
-        existing = get_existing_trials(queue, experiment_name=experiment_name)
+        existing = get_existing_trial_jobs(queue, experiment_name=experiment_name)
         matched = sum(len(v) for v in existing.values())
+        if queue_name == resolve_queue_names(experiment_name)[0] and (
+            has_potentially_live_started_jobs(existing.get("started", []))
+        ):
+            saw_started_trial_jobs = True
         total_matched += matched
         if dry_run:
             continue
         total_removed += clear_experiment_jobs(queue, experiment_name)
+
+    if not dry_run and "trial" in normalized_scopes:
+        trial_queue_name, _, _ = resolve_queue_names(experiment_name)
+        trial_queue = rq.Queue(trial_queue_name, connection=redis_conn)  # type: ignore[attr-defined]
+        remaining_trial_jobs = get_existing_trial_jobs(
+            trial_queue,
+            experiment_name=experiment_name,
+        )
+        if not saw_started_trial_jobs and not any(remaining_trial_jobs.values()):
+            try:
+                lifecycle_connection = cast("LifecycleRedisProtocol", redis_conn)
+                JobLifecycleStore(lifecycle_connection).clear_experiment(
+                    experiment_name
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to clear lifecycle state for experiment={}: {}",
+                    experiment_name,
+                    exc,
+                )
 
     removed_registry_entry = False
     removed_lock = False

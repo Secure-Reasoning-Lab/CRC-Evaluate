@@ -135,8 +135,8 @@ class CoverageManager:
                     new_count = self.collector.process_new_corpus(self.corpus_dir)
                     if new_count > 0:
                         logger.debug(f"Processed {new_count} new corpus files")
-                except Exception as e:
-                    logger.error(f"Coverage collection failed: {e}", exc_info=True)
+                except Exception:
+                    logger.exception("Coverage collection failed")
 
                 # Sleep briefly to avoid busy-waiting (100ms check interval)
                 if self.shutdown_event.wait(0.1):

@@ -12,6 +12,7 @@ Operational runbooks and exact commands live in:
 
 Architecture details live in:
 
+- [Cloud Orchestration](./cloud-orchestration.md)
 - [Distributed Evaluation](./distributed-evaluation.md)
 - [Distributed Job Queue](./distributed-job-queue.md)
 
@@ -36,6 +37,71 @@ Deployment assumptions:
 - Remote workers and evaluators may connect to Redis directly or through tunnels.
 - Authentication, tunnels, and firewall policy are operational concerns, not protocol concerns.
 - CRSBench only requires that each process can reach the configured Redis host.
+
+## Cloud Fleet Contract
+
+When a deployment uses managed cloud workers or evaluators, the experiment config
+is the source of truth for fleet shape. The shared cloud contract is:
+
+- worker fleets are declared through `cloud.providers.<provider>` plus `cloud.workers.placements`, not in lab-specific host maps
+- evaluator fleets are declared through `cloud.providers.<provider>` plus `cloud.evaluators.placements`, not in lab-specific host maps
+- `cloud.bootstrap`, `cloud.defaults`, `cloud.remote.experiment_root`, and the `cloud.*.env` layers are provider-neutral config owned by CRSBench
+- one launch resolves to exactly one provider across orchestrator, workers, and evaluators
+- managed placement supports explicit zonal declarations plus regional placement when the selected provider supports them
+- fallback policy is config-driven: recognized provider placement failures may retry later declared regions or zones only when `fallback: true`
+- provisioned workers/evaluators carry experiment identity plus operator ownership labels
+- operator SSH/tunnel details are provider-specific, but host verification and explicit operator access remain mandatory
+- worker and evaluator service accounts or identities must be explicit and least-privileged
+- cloud readiness is a control-plane state distinct from raw provider VM status and from global Redis worker counts
+- bootstrapped workers and evaluators use experiment-pinned runtime paths rather than the shared configless worker/evaluator pool
+- readiness records are keyed by cloud `instance_id`, not by instance name alone
+- startup failure evidence must remain retrievable from the control path without interactive VM login
+
+Current implementation status:
+
+- the config and contract are provider-neutral
+- the only managed cloud backend implemented today is GCE
+
+## Remote Cloud Orchestrator Contract
+
+When a deployment uses `cloud.orchestrator` plus managed cloud
+`cloud.workers.placements` / `cloud.evaluators.placements`, the local
+operator machine remains the cloud control plane. The shared deployment contract is:
+
+- the operator machine provisions exactly one orchestrator VM plus the requested worker/evaluator fleets
+- the orchestrator VM runs `crsbench run` but does not create workers again
+- the operator machine generates the Redis/Valkey password for the run
+- workers and evaluators receive the orchestrator VM's worker-reachable Redis host, never `localhost`
+- local `cloud` commands reconnect through persisted launch state stored next to
+  the submitted config file under `.crsbench-cloud/`
+- local `status` and `events` still require Redis reachability from the
+  operator machine to the orchestrator VM
+- local `collect` and `teardown` may fall back to persisted launch state plus
+  provider inventory when Redis is unavailable
+
+Today this contract is realized only by the GCE implementation.
+
+## Cloud Readiness and Evidence
+
+Managed cloud bring-up is successful only when CRSBench sees an explicit ready
+fleet for the current experiment:
+
+- provider states such as `PROVISIONING` or VM `RUNNING` map to non-ready
+  CRSBench states like `provisioning` and `booting`
+- `registering` means the worker/evaluator runtime can report to Redis but is
+  not yet listening for work
+- workers and evaluators become schedulable only after the readiness store
+  records `ready`
+- `ready` means the worker/evaluator connected to Redis and is listening on the
+  expected experiment queue; it is not just a VM boot-complete signal
+- `bootstrap_failed` and `deleted` are terminal non-ready states during bring-up
+- startup evidence must include per-instance detail so operators can diagnose
+  failures without manual SSH
+- stale readiness is scoped away by experiment name plus `instance_id`
+- failed bring-up tears down the matching fleet before the orchestrator returns
+- `readiness_timeout_sec` covers clean-image bootstrap, CRSBench install,
+  service startup, Redis reachability, and queue-listener registration; it
+  must not be sized as a bare provider VM boot timeout
 
 ## Path and Storage Contract
 
@@ -63,6 +129,9 @@ Deployment assumptions:
 - Path mismatch on remote hosts: jobs fail unless host-local overrides or shared
   mounts make paths resolvable.
 - Queue cleanup must be experiment-scoped in shared flat-queue deployments.
+- Cloud worker/evaluator timeout or bootstrap failure: orchestrator startup
+  fails before trial enqueue, tears down the requested fleet, and surfaces
+  per-instance readiness evidence.
 
 ## Benchmark CI Deployment Contract
 

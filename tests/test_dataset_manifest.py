@@ -198,3 +198,33 @@ def test_plan_download_skips_when_local_is_current(tmp_path: Path) -> None:
         no_ground_truth=True,
     )
     assert plan_no_gt.download == []
+
+
+def test_plan_download_redownloads_existing_dirs_without_local_manifest(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "benchmarks"
+    benchmark_name = "afc-libxml2-delta-03"
+    benchmark_dir = output_dir / benchmark_name
+    _write(benchmark_dir / "Dockerfile", "FROM scratch\n")
+    _write(benchmark_dir / ".aixcc" / "meta.yaml", "id: 1\n")
+
+    remote = {
+        benchmark_name: BenchmarkManifestEntry(
+            benchmark=benchmark_name,
+            benchmark_source_sha256="bench-hash",
+            ground_truth_source_sha256="gt-hash",
+            has_ground_truth=True,
+        )
+    }
+
+    plan = _plan_download(
+        requested=[benchmark_name],
+        remote_manifest=remote,
+        local_manifest={},
+        output_dir=output_dir,
+        no_ground_truth=False,
+    )
+
+    assert plan.download == [benchmark_name]
+    assert plan.skipped == []

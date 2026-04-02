@@ -6,8 +6,12 @@ for distributed CRS trial execution.
 
 import os
 import re
-from typing import List, Optional
+import time
+from datetime import datetime, timezone
+from enum import StrEnum
+from typing import List, Literal, Optional
 
+from crsbench.distributed.job_lifecycle import JobLifecycleStore, JobState
 from crsbench.utils.logger import get_logger
 
 try:
@@ -33,6 +37,26 @@ QUEUE_MODEL_PER_EXPERIMENT = "per-experiment"
 FLAT_TRIAL_QUEUE = "crsbench_trial"
 FLAT_BUILD_QUEUE = "crsbench_build"
 FLAT_VERIFY_QUEUE = "crsbench_verify"
+
+
+def build_trial_key(
+    *,
+    crs: str,
+    benchmark: str,
+    harness: str,
+    mode: str | object,
+    sanitizer: str | object,
+    trial_num: int | object,
+    target_cpv_id: str | None,
+) -> str:
+    """Build the canonical distributed trial key used across queue state."""
+    return (
+        f"{crs}:{benchmark}:{harness}:"
+        f"{mode if mode is not None else '-'}:"
+        f"{sanitizer if sanitizer is not None else '-'}:"
+        f"{trial_num if trial_num is not None else '-'}:"
+        f"{target_cpv_id or '-'}"
+    )
 
 
 def get_job_experiment_name(job: "rq.job.Job") -> str | None:
@@ -116,6 +140,14 @@ def resolve_queue_names(experiment_name: str) -> tuple[str, str, str]:
 _auth_required: Optional[bool] = None
 
 
+class RedisConnectionProbe(StrEnum):
+    """Outcome classification for Redis connection checks."""
+
+    READY = "ready"
+    RETRYABLE = "retryable"
+    FATAL = "fatal"
+
+
 def _resolve_redis_endpoint(redis_host: str) -> tuple[str, int]:
     """Resolve Redis host/port from host string and environment.
 
@@ -139,6 +171,7 @@ def create_redis_connection(
     redis_host: str,
     *,
     socket_connect_timeout: int = 5,
+    redis_password: str | None = None,
 ) -> "redis.Redis":
     """Create a Redis connection with auto-detection of password requirement.
 
@@ -152,6 +185,8 @@ def create_redis_connection(
     Args:
         redis_host: Redis server hostname or IP address
         socket_connect_timeout: Connection timeout in seconds
+        redis_password: Optional explicit Redis password override. Falls back to
+            ``CRSBENCH_REDIS_PASSWORD`` when unset.
 
     Returns:
         Connected and pinged Redis client
@@ -170,7 +205,9 @@ def create_redis_connection(
         )
 
     resolved_host, resolved_port = _resolve_redis_endpoint(redis_host)
-    password = os.environ.get("CRSBENCH_REDIS_PASSWORD") or None
+    password = redis_password
+    if password is None:
+        password = os.environ.get("CRSBENCH_REDIS_PASSWORD") or None
 
     # Fast path: use cached auth decision
     if _auth_required is True and password:
@@ -179,6 +216,7 @@ def create_redis_connection(
             port=resolved_port,
             password=password,
             socket_connect_timeout=socket_connect_timeout,
+            socket_timeout=socket_connect_timeout,
         )
         conn.ping()
         return conn
@@ -187,6 +225,7 @@ def create_redis_connection(
             host=resolved_host,
             port=resolved_port,
             socket_connect_timeout=socket_connect_timeout,
+            socket_timeout=socket_connect_timeout,
         )
         conn.ping()
         return conn
@@ -199,6 +238,7 @@ def create_redis_connection(
                 port=resolved_port,
                 password=password,
                 socket_connect_timeout=socket_connect_timeout,
+                socket_timeout=socket_connect_timeout,
             )
             conn.ping()
             _auth_required = True
@@ -213,6 +253,7 @@ def create_redis_connection(
                 host=resolved_host,
                 port=resolved_port,
                 socket_connect_timeout=socket_connect_timeout,
+                socket_timeout=socket_connect_timeout,
             )
             conn.ping()
             _auth_required = False
@@ -224,6 +265,7 @@ def create_redis_connection(
             host=resolved_host,
             port=resolved_port,
             socket_connect_timeout=socket_connect_timeout,
+            socket_timeout=socket_connect_timeout,
         )
         conn.ping()
         _auth_required = False
@@ -232,6 +274,42 @@ def create_redis_connection(
         raise redis.AuthenticationError(
             "Redis server requires authentication. Set CRSBENCH_REDIS_PASSWORD environment variable."
         ) from None
+
+
+def probe_redis_connection(
+    redis_host: str,
+    timeout: int = 2,
+    *,
+    redis_password: str | None = None,
+) -> tuple[RedisConnectionProbe, str | None]:
+    """Classify Redis probe results for startup retry logic."""
+    if not REDIS_AVAILABLE:
+        detail = "Redis and RQ packages are required for distributed execution."
+        logger.warning(detail)
+        return RedisConnectionProbe.FATAL, detail
+
+    connection = None
+    try:
+        connection = create_redis_connection(
+            redis_host,
+            socket_connect_timeout=timeout,
+            redis_password=redis_password,
+        )
+        logger.debug(f"Redis server at {redis_host} is reachable")
+        return RedisConnectionProbe.READY, None
+    except redis.AuthenticationError as exc:
+        logger.error(f"Redis authentication failed for {redis_host}: {exc}")
+        return RedisConnectionProbe.FATAL, str(exc)
+    except (redis.ConnectionError, redis.TimeoutError) as exc:
+        logger.debug(f"Redis server at {redis_host} is not reachable: {exc}")
+        return RedisConnectionProbe.RETRYABLE, str(exc)
+    except Exception as exc:
+        logger.warning(f"Unexpected Redis probe error for {redis_host}: {exc}")
+        return RedisConnectionProbe.FATAL, str(exc)
+    finally:
+        close = getattr(connection, "close", None)
+        if callable(close):
+            close()
 
 
 def check_redis_available(redis_host: str, timeout: int = 2) -> bool:
@@ -249,29 +327,60 @@ def check_redis_available(redis_host: str, timeout: int = 2) -> bool:
         >>> if check_redis_available('localhost'):
         ...     print("Redis is available")
     """
-    if not REDIS_AVAILABLE:
-        logger.debug("Redis/RQ packages not installed")
-        return False
-
-    try:
-        create_redis_connection(redis_host, socket_connect_timeout=timeout)
-        logger.debug(f"Redis server at {redis_host} is reachable")
-        return True
-    except (redis.ConnectionError, redis.TimeoutError) as e:
-        logger.debug(f"Redis server at {redis_host} is not reachable: {e}")
-        return False
-    except Exception as e:
-        logger.warning(f"Unexpected error checking Redis availability: {e}")
-        return False
+    probe_state, _detail = probe_redis_connection(redis_host, timeout=timeout)
+    return probe_state is RedisConnectionProbe.READY
 
 
-def initialize_queue(redis_host: str, experiment_name: str) -> Optional["rq.Queue"]:
+def wait_for_redis_connection(
+    redis_host: str,
+    *,
+    redis_password: str | None = None,
+    timeout_sec: int,
+    poll_interval_sec: float = 5.0,
+    probe_timeout_sec: int = 2,
+) -> None:
+    """Wait until Redis responds successfully or fail on timeout/fatal errors."""
+    deadline = time.monotonic() + float(timeout_sec)
+    last_detail = "Redis did not become ready"
+
+    while True:
+        probe_state, detail = probe_redis_connection(
+            redis_host,
+            timeout=probe_timeout_sec,
+            redis_password=redis_password,
+        )
+        if probe_state is RedisConnectionProbe.READY:
+            return
+        if probe_state is RedisConnectionProbe.FATAL:
+            raise RuntimeError(
+                f"Failed to connect to Redis at {redis_host}: "
+                f"{detail or 'fatal Redis probe error'}"
+            )
+
+        last_detail = detail or last_detail
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(
+                f"Timed out waiting for Redis at {redis_host} after "
+                f"{timeout_sec}s: {last_detail}"
+            )
+        time.sleep(min(poll_interval_sec, remaining))
+
+
+def initialize_queue(
+    redis_host: str,
+    experiment_name: str,
+    *,
+    redis_password: str | None = None,
+) -> Optional["rq.Queue"]:
     """
     Initialize Redis-backed RQ queue for an experiment.
 
     Args:
         redis_host: Redis server hostname or IP address
         experiment_name: Experiment identifier for queue naming
+        redis_password: Optional explicit Redis password override. Falls back to
+            ``CRSBENCH_REDIS_PASSWORD`` when unset.
 
     Returns:
         rq.Queue: Initialized RQ queue, or None if Redis unavailable
@@ -298,7 +407,10 @@ def initialize_queue(redis_host: str, experiment_name: str) -> Optional["rq.Queu
     logger.info(f"Initializing queue: {queue_name}")
 
     try:
-        redis_connection = create_redis_connection(redis_host)
+        redis_connection = create_redis_connection(
+            redis_host,
+            redis_password=redis_password,
+        )
 
         queue = rq.Queue(queue_name, connection=redis_connection)  # type: ignore[attr-defined]
         logger.info(f"Queue initialized successfully: {queue_name}")
@@ -447,15 +559,71 @@ def get_trial_key(job: "rq.job.Job") -> str:
     benchmark = meta.get("benchmark")
     harness = meta.get("harness")
     if isinstance(crs, str) and isinstance(benchmark, str) and isinstance(harness, str):
-        return (
-            f"{crs}:{benchmark}:{harness}:"
-            f"{meta.get('mode', '-')}:"
-            f"{meta.get('sanitizer', '-')}:"
-            f"{meta.get('trial_num', '-')}:"
-            f"{meta.get('target_cpv_id') or '-'}"
+        return build_trial_key(
+            crs=crs,
+            benchmark=benchmark,
+            harness=harness,
+            mode=meta.get("mode", "-"),
+            sanitizer=meta.get("sanitizer", "-"),
+            trial_num=meta.get("trial_num", "-"),
+            target_cpv_id=meta.get("target_cpv_id"),
         )
     experiment = get_job_experiment_name(job) or "-"
     return f"job:{experiment}:{job.id or 'unknown'}"
+
+
+def get_existing_trial_jobs(
+    queue: "rq.Queue", experiment_name: str | None = None
+) -> dict[str, list["rq.job.Job"]]:
+    """Get all existing physical jobs grouped by queue status.
+
+    Unlike ``get_existing_trials()``, this preserves every matching RQ job even
+    when multiple physical jobs share the same logical ``trial_key``.
+    """
+    if not REDIS_AVAILABLE:
+        raise RuntimeError("Redis and RQ packages are required")
+
+    result: dict[str, list["rq.job.Job"]] = {
+        "queued": [],
+        "started": [],
+        "deferred": [],
+        "scheduled": [],
+        "finished": [],
+        "failed": [],
+    }
+
+    try:
+        for job in get_all_jobs(queue):
+            if job.is_queued and is_job_for_experiment(job, experiment_name):
+                result["queued"].append(job)
+
+        for bucket_name, registry in (
+            ("started", queue.started_job_registry),
+            ("finished", queue.finished_job_registry),
+            ("deferred", queue.deferred_job_registry),
+            ("failed", queue.failed_job_registry),
+        ):
+            for job_id in registry.get_job_ids():
+                try:
+                    job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
+                    if job and is_job_for_experiment(job, experiment_name):
+                        result[bucket_name].append(job)
+                except Exception as e:
+                    logger.warning(f"Failed to fetch {bucket_name} job {job_id}: {e}")
+
+        if hasattr(queue, "scheduled_job_registry"):
+            for job_id in queue.scheduled_job_registry.get_job_ids():
+                try:
+                    job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
+                    if job and is_job_for_experiment(job, experiment_name):
+                        result["scheduled"].append(job)
+                except Exception as e:
+                    logger.warning(f"Failed to fetch scheduled job {job_id}: {e}")
+
+        return result
+    except Exception as e:
+        logger.error(f"Failed to get existing physical jobs: {e}")
+        return result
 
 
 def get_existing_trials(
@@ -482,10 +650,7 @@ def get_existing_trials(
         >>> existing = get_existing_trials(queue)
         >>> print(f"Queued: {len(existing['queued'])}")
     """
-    if not REDIS_AVAILABLE:
-        raise RuntimeError("Redis and RQ packages are required")
-
-    result = {
+    result: dict[str, dict[str, "rq.job.Job"]] = {
         "queued": {},
         "started": {},
         "deferred": {},
@@ -494,63 +659,21 @@ def get_existing_trials(
         "failed": {},
     }
 
-    try:
-        # Get queued jobs
-        for job in get_all_jobs(queue):
-            if job.is_queued and is_job_for_experiment(job, experiment_name):
-                result["queued"][get_trial_key(job)] = job
-
-        # Get started jobs
-        for job_id in queue.started_job_registry.get_job_ids():
-            try:
-                job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
-                if job and is_job_for_experiment(job, experiment_name):
-                    result["started"][get_trial_key(job)] = job
-            except Exception as e:
-                logger.warning(f"Failed to fetch started job {job_id}: {e}")
-
-        # Get finished jobs
-        for job_id in queue.finished_job_registry.get_job_ids():
-            try:
-                job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
-                if job and is_job_for_experiment(job, experiment_name):
-                    result["finished"][get_trial_key(job)] = job
-            except Exception as e:
-                logger.warning(f"Failed to fetch finished job {job_id}: {e}")
-
-        # Get deferred jobs
-        for job_id in queue.deferred_job_registry.get_job_ids():
-            try:
-                job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
-                if job and is_job_for_experiment(job, experiment_name):
-                    result["deferred"][get_trial_key(job)] = job
-            except Exception as e:
-                logger.warning(f"Failed to fetch deferred job {job_id}: {e}")
-
-        # Get scheduled jobs
-        if hasattr(queue, "scheduled_job_registry"):
-            for job_id in queue.scheduled_job_registry.get_job_ids():
-                try:
-                    job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
-                    if job and is_job_for_experiment(job, experiment_name):
-                        result["scheduled"][get_trial_key(job)] = job
-                except Exception as e:
-                    logger.warning(f"Failed to fetch scheduled job {job_id}: {e}")
-
-        # Get failed jobs
-        for job_id in queue.failed_job_registry.get_job_ids():
-            try:
-                job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
-                if job and is_job_for_experiment(job, experiment_name):
-                    result["failed"][get_trial_key(job)] = job
-            except Exception as e:
-                logger.warning(f"Failed to fetch failed job {job_id}: {e}")
-
-        return result
-
-    except Exception as e:
-        logger.error(f"Failed to get existing trials: {e}")
-        return result
+    physical_jobs = get_existing_trial_jobs(queue, experiment_name=experiment_name)
+    for bucket_name, jobs in physical_jobs.items():
+        duplicate_keys: set[str] = set()
+        for job in jobs:
+            trial_key = get_trial_key(job)
+            if trial_key in result[bucket_name]:
+                duplicate_keys.add(trial_key)
+            result[bucket_name][trial_key] = job
+        if duplicate_keys:
+            duplicate_list = ", ".join(sorted(duplicate_keys))
+            logger.warning(
+                f"Detected duplicate logical trial keys in {bucket_name} registry: "
+                f"{duplicate_list}"
+            )
+    return result
 
 
 def remove_job_by_id(queue: "rq.Queue", job_id: str) -> bool:
@@ -598,10 +721,10 @@ def clear_experiment_jobs(queue: "rq.Queue", experiment_name: str) -> int:
     if not REDIS_AVAILABLE:
         raise RuntimeError("Redis and RQ packages are required")
 
-    existing = get_existing_trials(queue, experiment_name=experiment_name)
+    existing = get_existing_trial_jobs(queue, experiment_name=experiment_name)
     job_ids: set[str] = set()
-    for jobs_by_key in existing.values():
-        for job in jobs_by_key.values():
+    for jobs in existing.values():
+        for job in jobs:
             if job.id:
                 job_ids.add(job.id)
 
@@ -651,7 +774,11 @@ def requeue_failed_jobs(queue: "rq.Queue", failed_jobs: list["rq.job.Job"]) -> i
 
 
 def handle_orphaned_jobs(
-    queue: "rq.Queue", started_jobs: dict[str, "rq.job.Job"]
+    queue: "rq.Queue",
+    started_jobs: dict[str, "rq.job.Job"] | list["rq.job.Job"],
+    *,
+    lifecycle_store: JobLifecycleStore | None = None,
+    stale_started_grace_seconds: int = 120,
 ) -> int:
     """
     Move orphaned started jobs to failed and requeue for retry.
@@ -661,7 +788,8 @@ def handle_orphaned_jobs(
 
     Args:
         queue: RQ queue instance
-        started_jobs: Dict of trial_key -> Job for started jobs
+        started_jobs: Started jobs to recover. Accepts either the grouped
+            ``trial_key -> Job`` mapping or a physical list of jobs.
 
     Returns:
         int: Number of orphaned jobs handled
@@ -674,74 +802,272 @@ def handle_orphaned_jobs(
     if not REDIS_AVAILABLE:
         raise RuntimeError("Redis and RQ packages are required")
 
-    active_workers = rq.Worker.all(connection=queue.connection)  # type: ignore[attr-defined]
-    queue_name = str(queue.name)
-    queue_worker_count = sum(
-        1 for worker in active_workers if _worker_listens_to_queue(worker, queue_name)
+    jobs = list(
+        started_jobs.values() if isinstance(started_jobs, dict) else started_jobs
     )
-    if queue_worker_count > 0:
-        logger.debug(
-            f"Workers exist for queue {queue_name} ({queue_worker_count}) - "
-            "not handling started jobs as orphaned"
-        )
-        return 0
-
     count = 0
-    for job in started_jobs.values():
+    requeued_count = 0
+    removed_duplicate_count = 0
+    active_jobs_by_experiment: dict[str | None, dict[str, list["rq.job.Job"]]] = {}
+    stale_started_ids_by_trial: dict[tuple[str | None, str], set[str]] = {}
+    survivor_started_job_id_by_trial: dict[tuple[str | None, str], str] = {}
+
+    for job in jobs:
+        job_id = getattr(job, "id", None)
+        if not isinstance(job_id, str) or not job_id:
+            continue
+        trial_bucket = (get_job_experiment_name(job), get_trial_key(job))
+        stale_started_ids_by_trial.setdefault(trial_bucket, set()).add(job_id)
+
+    for trial_bucket, job_ids in stale_started_ids_by_trial.items():
+        survivor_started_job_id_by_trial[trial_bucket] = sorted(job_ids)[0]
+
+    for job in jobs:
+        if not _is_stale_started_job(job, stale_started_grace_seconds):
+            continue
+        experiment_name = get_job_experiment_name(job)
+        trial_key = get_trial_key(job)
+        trial_bucket = (experiment_name, trial_key)
+        if experiment_name not in active_jobs_by_experiment:
+            active_jobs_by_experiment[experiment_name] = get_existing_trial_jobs(
+                queue, experiment_name=experiment_name
+            )
+        if _has_other_active_trial_job(
+            job,
+            active_jobs_by_experiment[experiment_name],
+            stale_started_ids_by_trial.get(trial_bucket, set()),
+        ):
+            if remove_job_by_id(queue, job.id):
+                count += 1
+                removed_duplicate_count += 1
+                logger.warning(
+                    f"Removed stale duplicate started job {job.id[:8]} for logical "
+                    f"trial {trial_key}"
+                )
+            continue
+        if (
+            len(stale_started_ids_by_trial.get(trial_bucket, set())) > 1
+            and survivor_started_job_id_by_trial.get(trial_bucket) != job.id
+        ):
+            if remove_job_by_id(queue, job.id):
+                count += 1
+                removed_duplicate_count += 1
+                logger.warning(
+                    f"Removed extra stale started duplicate {job.id[:8]} for logical "
+                    f"trial {trial_key}; survivor="
+                    f"{survivor_started_job_id_by_trial[trial_bucket][:8]}"
+                )
+            continue
         try:
+            preparation = _prepare_requeued_started_job_lifecycle(
+                job,
+                lifecycle_store=lifecycle_store,
+            )
+            if preparation == "skip":
+                continue
+            if preparation == "discard":
+                if remove_job_by_id(queue, job.id):
+                    count += 1
+                    logger.warning(
+                        "Removed terminal started-job residue {} for logical trial {}",
+                        job.id[:8],
+                        trial_key,
+                    )
+                continue
+            if preparation == "quarantine":
+                job.set_status(rq.job.JobStatus.FAILED)  # type: ignore[attr-defined]
+                count += 1
+                logger.warning(
+                    "Quarantined stale started job {} after lifecycle repair failure",
+                    job.id[:8],
+                )
+                continue
             # Move to failed registry
             job.set_status(rq.job.JobStatus.FAILED)  # type: ignore[attr-defined]
             # Requeue for retry
             queue.enqueue_job(job)
             count += 1
+            requeued_count += 1
             logger.debug(f"Handled orphaned job {job.id[:8]}")
         except Exception as e:
+            _rollback_requeued_started_job_lifecycle(
+                job,
+                reason=str(e),
+                lifecycle_store=lifecycle_store,
+            )
             logger.warning(f"Failed to handle orphaned job {job.id[:8]}: {e}")
 
     if count > 0:
-        logger.info(f"Handled {count} orphaned jobs (moved to failed + requeued)")
+        logger.info(
+            f"Handled {count} orphaned jobs ({requeued_count} requeued, "
+            f"{removed_duplicate_count} stale duplicates removed)"
+        )
     return count
 
 
-def _worker_listens_to_queue(worker: object, queue_name: str) -> bool:
-    """Return True when worker is subscribed to the given queue name."""
-    if queue_name in _extract_worker_queue_names(worker):
-        return True
+def _prepare_requeued_started_job_lifecycle(
+    job: "rq.job.Job",
+    *,
+    lifecycle_store: JobLifecycleStore | None,
+) -> Literal["ready", "skip", "discard", "quarantine"]:
+    """Repair lifecycle ownership before continue-mode stale started-job requeue."""
+    experiment_name = get_job_experiment_name(job)
+    job_id = getattr(job, "id", None)
+    if not isinstance(experiment_name, str) or not experiment_name:
+        return "ready"
+    if not isinstance(job_id, str) or not job_id:
+        return "ready"
+
+    if lifecycle_store is None:
+        return "ready"
+
+    try:
+        record = lifecycle_store.get(experiment_name, job_id)
+        if record is None:
+            return "ready"
+        if record.state in {JobState.COMPLETED, JobState.FAILED}:
+            return "discard"
+
+        if record.state in {JobState.CLAIMED, JobState.RUNNING, JobState.SYNCING}:
+            record = lifecycle_store.transition(
+                experiment_name,
+                job_id,
+                JobState.ORPHANED,
+                claimed_by=None,
+                detail="recovered stale started job",
+            )
+
+        if record.state is JobState.ORPHANED:
+            retry_count = lifecycle_store.increment_retry(experiment_name, job_id)
+            meta = getattr(job, "meta", None)
+            if isinstance(meta, dict):
+                meta["retry_count"] = retry_count
+                meta.pop("worker_name", None)
+                save_meta = getattr(job, "save_meta", None)
+                if callable(save_meta):
+                    save_meta()
+
+        lifecycle_store.transition(
+            experiment_name,
+            job_id,
+            JobState.QUEUED,
+            claimed_by=None,
+            detail="recovered stale started job",
+        )
+    except Exception as exc:
+        _rollback_requeued_started_job_lifecycle(
+            job,
+            reason=f"retry metadata update failed: {exc}",
+            lifecycle_store=lifecycle_store,
+        )
+        logger.warning(
+            "Failed to repair lifecycle for recovered stale started job {}: {}",
+            job_id[:8],
+            exc,
+        )
+        return "quarantine"
+    return "ready"
+
+
+def _rollback_requeued_started_job_lifecycle(
+    job: "rq.job.Job",
+    *,
+    reason: str,
+    lifecycle_store: JobLifecycleStore | None,
+) -> None:
+    """Restore a terminal lifecycle state when started-job requeue fails."""
+    experiment_name = get_job_experiment_name(job)
+    job_id = getattr(job, "id", None)
+    if not isinstance(experiment_name, str) or not experiment_name:
+        return
+    if not isinstance(job_id, str) or not job_id:
+        return
+
+    if lifecycle_store is None:
+        return
+
+    try:
+        record = lifecycle_store.get(experiment_name, job_id)
+        if record is None or record.state is JobState.COMPLETED:
+            return
+        lifecycle_store.transition(
+            experiment_name,
+            job_id,
+            JobState.FAILED,
+            claimed_by=None,
+            detail=f"started-job retry enqueue failed: {reason}",
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to roll back lifecycle for recovered stale started job {}: {}",
+            job_id[:8],
+            exc,
+        )
+
+
+def _has_other_active_trial_job(
+    job: "rq.job.Job",
+    existing: dict[str, list["rq.job.Job"]],
+    sibling_started_ids: set[str],
+) -> bool:
+    """Return whether another active physical job already exists for this trial."""
+    job_id = getattr(job, "id", None)
+    if not isinstance(job_id, str) or not job_id:
+        return False
+
+    trial_key = get_trial_key(job)
+    for bucket_name in ("queued", "deferred", "scheduled", "started"):
+        for other in existing[bucket_name]:
+            other_id = getattr(other, "id", None)
+            if not isinstance(other_id, str) or other_id == job_id:
+                continue
+            if get_trial_key(other) != trial_key:
+                continue
+            if bucket_name != "started" or other_id not in sibling_started_ids:
+                return True
     return False
 
 
-def _extract_worker_queue_names(worker: object) -> set[str]:
-    """Extract worker queue names across RQ versions/mocks."""
-    queue_names: set[str] = set()
+def _is_stale_started_job(
+    job: "rq.job.Job",
+    stale_started_grace_seconds: int,
+) -> bool:
+    """Return whether a started job has exceeded timeout plus grace."""
+    status_value = getattr(job.get_status(), "value", job.get_status())
+    if str(status_value).lower() != "started":
+        return False
 
-    queues = getattr(worker, "queues", None)
-    if isinstance(queues, list | tuple | set):
-        for worker_queue in queues:
-            name = getattr(worker_queue, "name", None)
-            parsed = _normalize_queue_name(name)
-            if parsed:
-                queue_names.add(parsed)
+    started_at = getattr(job, "started_at", None)
+    timeout_seconds = int(getattr(job, "timeout", 3600) or 3600)
+    if started_at is None:
+        return False
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    age_seconds = (datetime.now(timezone.utc) - started_at).total_seconds()
+    return age_seconds > (timeout_seconds + stale_started_grace_seconds)
 
-    queue_names_attr = getattr(worker, "queue_names", None)
-    if callable(queue_names_attr):
+
+def has_potentially_live_started_jobs(
+    started_jobs: list["rq.job.Job"],
+    *,
+    stale_started_grace_seconds: int = 120,
+) -> bool:
+    """Return whether any started job still looks live enough to preserve lifecycle state."""
+    for job in started_jobs:
+        if not hasattr(job, "get_status"):
+            return True
         try:
-            queue_names_value = queue_names_attr()
+            status_value = getattr(job.get_status(), "value", job.get_status())
         except Exception:
-            queue_names_value = None
-    else:
-        queue_names_value = queue_names_attr
-
-    if isinstance(queue_names_value, str | bytes):
-        parsed = _normalize_queue_name(queue_names_value)
-        if parsed:
-            queue_names.add(parsed)
-    elif isinstance(queue_names_value, list | tuple | set):
-        for name in queue_names_value:
-            parsed = _normalize_queue_name(name)
-            if parsed:
-                queue_names.add(parsed)
-
-    return queue_names
+            return True
+        if str(status_value).lower() != "started":
+            continue
+        try:
+            if not _is_stale_started_job(job, stale_started_grace_seconds):
+                return True
+        except Exception:
+            return True
+    return False
 
 
 def _normalize_queue_name(name: object) -> str | None:

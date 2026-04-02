@@ -471,7 +471,7 @@ class PatchVerificationEngine:
                 # failure and retry once via clean fallback build.
                 if inc_available and not fallback_to_full:
                     logger.warning(
-                        "Inc-build produced no harness output for %s/%s; "
+                        "Inc-build produced no harness output for {}/{}; "
                         "retrying clean fallback build",
                         variant_name,
                         harness,

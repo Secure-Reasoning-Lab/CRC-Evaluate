@@ -12,9 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Utilities for OSS-Fuzz infrastructure."""
-# ruff: noqa: TID251, PTH109, PTH110, PTH116, PTH118, PTH119, PTH122, PTH123, FBT002
+# ruff: noqa: PTH109, PTH110, PTH116, PTH118, PTH119, PTH122, PTH123, FBT002
 
-import logging
 import os
 import posixpath
 import re
@@ -23,10 +22,14 @@ import stat
 import subprocess
 import sys
 
+from crsbench.utils.logger import get_logger
+
 ALLOWED_FUZZ_TARGET_EXTENSIONS = ["", ".exe"]
 FUZZ_TARGET_SEARCH_STRING = "LLVMFuzzerTestOneInput"
 VALID_TARGET_NAME_REGEX = re.compile(r"^[a-zA-Z0-9_-]+$")
 BLOCKLISTED_TARGET_NAME_REGEX = re.compile(r"^(jazzer_driver.*)$")
+
+logger = get_logger(__name__)
 
 
 def command_to_string(command):
@@ -70,7 +73,7 @@ def execute(command, env=None, location=None, check_result=False, log_command=Tr
         display_err = "redacted"
 
     if err:
-        logging.debug('Stderr of command "%s" is: %s.', command_str, display_err)
+        logger.debug('Stderr of command "{}" is: {}.', command_str, display_err)
     if check_result and process.returncode:
         raise RuntimeError(
             'Executing command "{0}" failed with error: {1}.'.format(

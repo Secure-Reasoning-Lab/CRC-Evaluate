@@ -230,7 +230,7 @@ class TrialDirectoryPreparer:
             )
 
         except Exception as e:
-            logger.error(f"Trial preparation failed: {e}", exc_info=True)
+            logger.exception("Trial preparation failed")
             return TrialPreparationResult(
                 trial_dir=None,
                 build_dir=None,
@@ -520,7 +520,7 @@ class TrialDirectoryPreparer:
             return None
 
         except Exception as e:
-            logger.error(f"POVs preparation failed: {e}", exc_info=True)
+            logger.exception("POVs preparation failed")
             raise POVsPreparationError(f"Failed to prepare POVs: {e}") from e
 
     def _should_include_cpv(self, cpv_id: str) -> bool:

@@ -784,7 +784,7 @@ class BenchmarkRunner:
                 self.logger.info(f"Adapter collect_results: {collect_meta}")
             except Exception as collect_err:
                 self.logger.warning(
-                    "Failed to collect adapter results: %s", collect_err
+                    "Failed to collect adapter results: {}", collect_err
                 )
 
         except Exception as e:
@@ -1319,10 +1319,8 @@ class BenchmarkRunner:
 
             return manager
 
-        except Exception as e:
-            self.logger.error(
-                f"Failed to create POV verification manager: {e}", exc_info=True
-            )
+        except Exception:
+            self.logger.exception("Failed to create POV verification manager")
             return None
 
     def _start_patch_verification_manager(
@@ -1381,10 +1379,8 @@ class BenchmarkRunner:
 
             return manager
 
-        except Exception as e:
-            self.logger.error(
-                f"Failed to create patch verification manager: {e}", exc_info=True
-            )
+        except Exception:
+            self.logger.exception("Failed to create patch verification manager")
             return None
 
     def _start_snapshot_manager(
@@ -1518,7 +1514,7 @@ class BenchmarkRunner:
         if cleanup_errors:
             summary = "; ".join(cleanup_errors)
             self.logger.error(
-                "Manager cleanup completed with issues for harness '%s': %s",
+                "Manager cleanup completed with issues for harness '{}': {}",
                 harness_name,
                 summary,
             )
@@ -1694,10 +1690,10 @@ class BenchmarkRunner:
 
         except PatchDiscoveryError:
             raise
-        except Exception as e:
-            self.logger.error(
-                f"Patch verification failed for harness '{harness_name}': {e}",
-                exc_info=True,
+        except Exception:
+            self.logger.exception(
+                "Patch verification failed for harness '{}'",
+                harness_name,
             )
             return []
         finally:
@@ -1898,11 +1894,10 @@ class BenchmarkRunner:
 
         except PatchDiscoveryError:
             raise
-        except Exception as e:
-            self.logger.error(
-                f"Distributed patch verification failed for harness "
-                f"'{harness_name}': {e}",
-                exc_info=True,
+        except Exception:
+            self.logger.exception(
+                "Distributed patch verification failed for harness '{}'",
+                harness_name,
             )
             return []
 
@@ -2172,8 +2167,8 @@ class BenchmarkRunner:
             )
             return manager
 
-        except Exception as e:
-            self.logger.error(f"Failed to create coverage manager: {e}", exc_info=True)
+        except Exception:
+            self.logger.exception("Failed to create coverage manager")
             return None
 
     def _run_post_experiment_coverage(
@@ -2238,8 +2233,8 @@ class BenchmarkRunner:
 
             self.logger.info(f"Post-experiment coverage: {summary.format_lines()}")
 
-        except Exception as e:
-            self.logger.error(f"Post-experiment coverage failed: {e}", exc_info=True)
+        except Exception:
+            self.logger.exception("Post-experiment coverage failed")
 
     def _monitor_saturation(
         self,

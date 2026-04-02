@@ -315,9 +315,18 @@ class TestPackagingValidationIntegration:
         benchmark_path = (
             Path(__file__).parent.parent / "benchmarks" / "afc-curl-delta-01"
         )
+        required_paths = [
+            benchmark_path / "Dockerfile",
+            benchmark_path / "project.yaml",
+            benchmark_path / ".aixcc" / "meta.yaml",
+        ]
 
-        if not benchmark_path.exists():
-            pytest.skip("Benchmark afc-curl-delta-01 not available")
+        if not benchmark_path.exists() or not all(
+            path.exists() for path in required_paths
+        ):
+            pytest.skip(
+                "Benchmark afc-curl-delta-01 fixture is incomplete in this checkout"
+            )
 
         result = validate_benchmark(benchmark_path)
         assert result.valid, (

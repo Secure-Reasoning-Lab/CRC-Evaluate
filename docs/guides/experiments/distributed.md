@@ -100,6 +100,79 @@ trial jobs can start immediately. The evaluator is optional — without it,
 build/verify work queues harmlessly and can be processed later via
 `crsbench re-eval` or a later evaluator run.
 
+## Cloud Worker Fleets
+
+Managed cloud config uses a provider-neutral `cloud.*` layout. Today the only
+implemented managed backend is GCE, so declare provider-native details in
+`cloud.providers.gce`, then place workers with `cloud.workers.placements`
+instead of relying on host maps or ad hoc SSH setup scripts.
+
+```yaml
+cloud:
+  providers:
+    gce:
+      project: example-project
+      ssh_via_iap: true
+      profile_defaults:
+        machine_type: n2d-standard-16
+        boot_disk_size_gb: 200
+        image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+        service_account_email: crsbench-worker@example-project.iam.gserviceaccount.com
+        owner_label: team-crs
+        readiness_timeout_sec: 900
+        env:
+          CRSBENCH_LLM_UPSTREAM_BASE_URL: os.environ/LITELLM_BASE_URL
+      instance_profiles:
+        gce-worker-n2d: {}
+  orchestrator:
+    zone: us-east5-b
+    instance_profile: gce-worker-n2d
+  workers:
+    defaults:
+      instance_profile: gce-worker-n2d
+      count: 1
+    placements:
+      - zone: us-east5-b
+        count: 3
+        env:
+          CRSBENCH_LLM_MASTER_KEY: os.environ/LITELLM1_MASTER_KEY
+      - zone: us-east1-b
+        env:
+          CRSBENCH_LLM_MASTER_KEY: os.environ/LITELLM2_MASTER_KEY
+```
+
+Phase 1 contract notes:
+- the top-level cloud shape is provider-neutral; today that means `cloud.providers.gce` plus `cloud.workers.defaults` / `cloud.workers.placements`
+- Managed GCE placement supports both explicit zonal declarations and regional placement via `region` / `regions`.
+- When an effective `region` or ordered `regions` list is present, CRSBench uses GCE regional bulk insert with `ANY_SINGLE_ZONE`.
+- Optional `zones` act as an allowlist inside the effective region set rather than an ordered retry list.
+- `fallback: true` retries later declared regions or zones only for recognized capacity failures; `fallback: false` fails that logical placement and rolls back the launch.
+- Access is OS Login-compatible SSH only; keep host verification enabled.
+- Use a dedicated worker service account rather than default project
+  credentials.
+- `ssh_via_iap: true` is the preferred pattern when workers are not exposed on
+  public SSH.
+- Cloud worker readiness is an explicit control-plane concern and is distinct
+  from generic Redis worker visibility.
+- Bootstrapped cloud workers stay pinned to the declaring experiment instead
+  of joining the shared configless worker pool.
+- In pre-provisioned cloud mode, `crsbench run` waits for the declared fleet
+  to exist, then enqueues jobs even if some workers or evaluators are still
+  booting. Explicit readiness remains a health/reporting signal rather than a
+  hard enqueue gate.
+- A VM in GCE `RUNNING` state is still non-ready until CRSBench records
+  `ready`.
+- Bootstrap failures are surfaced through per-instance startup evidence, so
+  normal diagnosis should not require interactive SSH.
+- Failed cloud bring-up tears down the requested fleet before control returns
+  to the operator.
+- First-class `cloud.env` / profile `env` / placement `env` maps are the
+  supported way to shard upstream credentials or URLs across cloud worker
+  groups.
+- For the full managed-cloud lifecycle on the current GCE backend, including
+  read-only `cloud preflight`, `cloud launch`, `cloud monitor`, `cloud collect`,
+  and `cloud teardown`, use [GCE Cloud Orchestration](./gce-cloud-orchestration.md).
+
 ## Queue Behavior and Cleanup
 
 Use experiment-scoped queue cleanup (safe in flat shared-queue mode):
@@ -223,6 +296,31 @@ evaluator:
   # build_cores_per_job: 4
   # verify_jobs: 16
   # verify_cores_per_job: 1
+
+cloud:
+  providers:
+    gce:
+      project: example-project
+      ssh_via_iap: true
+      profile_defaults:
+        machine_type: n2d-standard-16
+        boot_disk_size_gb: 200
+        image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+        service_account_email: crsbench-worker@example-project.iam.gserviceaccount.com
+        owner_label: team-crs
+        readiness_timeout_sec: 900
+      instance_profiles:
+        gce-worker-n2d: {}
+  orchestrator:
+    zone: us-east5-b
+    instance_profile: gce-worker-n2d
+  workers:
+    defaults:
+      instance_profile: gce-worker-n2d
+      count: 1
+    placements:
+      - zone: us-east5-b
+        count: 4
 ```
 
 ### Config File Naming
@@ -388,6 +486,12 @@ uv run crsbench worker \
 | `--worker-name` | Worker name for identification | Hostname |
 
 ## Multi-Machine Setup
+
+The manual SSH/scp workflows below are the legacy operator-managed path. They
+remain useful for existing non-cloud deployments, but they are not the managed
+cloud worker contract. For GCE-backed fleets, declare workers in
+`cloud.providers.gce` plus `cloud.workers.placements` instead of encoding
+hostnames into scripts.
 
 ### Option A: Password Auth (recommended)
 

@@ -310,6 +310,27 @@ class TestWriteOrchestratorMarker:
         assert (trial_dir / ".success").exists()
         assert (trial_dir / "metadata.json").exists()
 
+    def test_removes_opposite_terminal_marker(self, tmp_path: Path):
+        config = _make_experiment_config(tmp_path)
+        failed = _make_trial_result(success=False)
+        succeeded = _make_trial_result(success=True)
+
+        _write_orchestrator_marker(failed, config)
+        _write_orchestrator_marker(succeeded, config)
+
+        trial_dir = _build_trial_output_path(
+            filestore=config.experiment_filestore.resolve(),
+            experiment_name=config.experiment,
+            crs=succeeded.crs,
+            benchmark=succeeded.benchmark,
+            harness=succeeded.harness,
+            mode=succeeded.mode,
+            sanitizer=succeeded.sanitizer,
+            trial_num=succeeded.trial_num,
+        )
+        assert (trial_dir / ".success").exists()
+        assert not (trial_dir / ".fail").exists()
+
 
 # ===================================================================
 # 3. Disk-based filtering via _check_existing_trial()
