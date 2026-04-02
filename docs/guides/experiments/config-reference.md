@@ -104,23 +104,38 @@ For GCE in v1:
 
 ## Discovery-Only Mode
 
-To run against OSS-Fuzz-format projects without ground truth CPVs,
-disable CPV-based harness filtering and verification:
+Run against OSS-Fuzz-format projects without ground truth CPVs.
+
+### Quick Start
+
+Point `benchmarks` at any OSS-Fuzz project directory (one with
+`project.yaml`, `Dockerfile`, `build.sh`). CRSBench auto-generates
+`.aixcc/meta.yaml` on first run by building the project and discovering
+fuzz targets:
 
 ```yaml
 experiment:
   name: my-discovery-run
   mode: full
+  benchmarks:
+    - libyang     # raw OSS-Fuzz project — meta.yaml auto-generated
   only_cpv_harnesses: false
 runtime:
   trials: 1
   max_total_time: 3600
   skip_verification: true
+  skip_litellm: true
 ```
 
-- `only_cpv_harnesses: false` includes harnesses regardless of CPV
+Auto-generation uses `oss_fuzz_path` (default: `third_party/oss-fuzz`)
+to build the project via `helper.py build_fuzzers`. The generated
+`meta.yaml` is persisted so subsequent runs skip the build.
+
+### Config Fields
+
+- `only_cpv_harnesses: false` — include harnesses regardless of CPV
   availability. Applies to both bug-finding and bug-fixing CRS types.
-- `skip_verification: true` skips POV/patch verification (no ground
+- `skip_verification: true` — skip POV/patch verification (no ground
   truth to verify against).
 
 CRS runs proceed normally, POVs and patches are collected as artifacts,
