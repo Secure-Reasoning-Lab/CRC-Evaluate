@@ -1,12 +1,12 @@
-# Cloud sanity config: 2 C + 2 JVM benchmarks with given_fuzzer on GCE.
+# Cloud config: 2 C + 2 JVM benchmarks with given_fuzzer on GCE.
 #
-# Fleet: 1 orchestrator (n2d-standard-16) + 1 worker (n2d-standard-16) + 1 evaluator (n2d-standard-16)
+# Fleet: 1 orchestrator (n2d-standard-16) + 2 workers (n2d-standard-32) + 1 evaluator (n2d-standard-32)
 # All VMs use pd-ssd boot disks.
 #
 # This config is designed as a quick cloud smoke test (~30 min) to verify:
 #   - VM provisioning and bootstrap
 #   - HF_TOKEN passthrough for benchmark download
-#   - Cpuset isolation (1 job x 8 cores)
+#   - Cpuset isolation (2 jobs x 16 cores per worker)
 #   - Seed and POV collection
 #   - Evaluator build and verify flow
 #
@@ -16,14 +16,14 @@
 #   3. export HF_TOKEN="hf_your_token"
 #
 # Usage:
-#   CONFIG=experiment-configs/sanity-bugfinding/cloud-given_fuzzer-default.yaml
+#   CONFIG=experiment-configs/cloud-testing/gce-4bench-1orch-2worker-1eval-given-fuzzer.yaml
 #   uv run crsbench cloud launch --config "$CONFIG"
 #   uv run crsbench cloud --config "$CONFIG" monitor
 #   uv run crsbench cloud --config "$CONFIG" collect --force
 #   uv run crsbench cloud --config "$CONFIG" teardown --force
 
 experiment:
-  name: cloud-sanity-given-fuzzer
+  name: cloud-4bench-16core-gf
   task: bugfinding
   benchmarks:
     # 2 C/C++ benchmarks (small, fast to build)
@@ -49,23 +49,23 @@ runtime:
   litellm:
     skip: true
 storage:
-  experiment_filestore: /data/crsbench/experiment-data/cloud-sanity-given-fuzzer
-  report_filestore: /data/crsbench/report-data/cloud-sanity-given-fuzzer
+  experiment_filestore: /data/crsbench/experiment-data/cloud-4bench-16core-gf
+  report_filestore: /data/crsbench/report-data/cloud-4bench-16core-gf
 resources:
-  cores_per_trial: 8
+  cores_per_trial: 16
 crs_compose:
   oss_crs_infra:
     shared: true
   atlantis-multilang-given_fuzzer:
-    num_cores: 8
+    num_cores: 16
 worker:
   jobs: 2
-  cores_per_job: 8
+  cores_per_job: 16
   storage:
     cleanup_after_trial: false  # keep all data for inspection
 evaluator:
-  jobs: 4
-  cores_per_job: 8
+  jobs: 2
+  cores_per_job: 16
 cloud:
   remote:
     experiment_root: /data/crsbench/experiment-data
@@ -99,8 +99,10 @@ cloud:
       instance_profiles:
         gce-orchestrator-n2d:
           machine_type: n2d-standard-16  # orchestrator only needs 16 vCPUs
-        gce-worker-n2d: {}      # n2d-standard-32: 2 jobs × 8 cores = 16 vCPUs used
-        gce-evaluator-n2d: {}   # n2d-standard-32: 2 jobs × 8 cores = 16 vCPUs used
+        gce-worker-n2d:
+          machine_type: n2d-standard-32  # 2 jobs × 16 cores = 32 vCPUs
+        gce-evaluator-n2d:
+          machine_type: n2d-standard-32  # 2 jobs × 16 cores = 32 vCPUs
   orchestrator:
     instance_profile: gce-orchestrator-n2d
   workers:
@@ -108,11 +110,11 @@ cloud:
       instance_profile: gce-worker-n2d
       count: 1
     placements:
-      - {} # worker 1: 2 concurrent jobs × 8 cores
-      - {} # worker 2: 2 concurrent jobs × 8 cores
+      - {} # worker 1: 2 jobs × 16 cores
+      - {} # worker 2: 2 jobs × 16 cores
   evaluators:
     defaults:
       instance_profile: gce-evaluator-n2d
       count: 1
     placements:
-      - {} # 1 evaluator VM: 2 concurrent build/verify jobs
+      - {} # 1 evaluator VM: 2 jobs × 16 cores
