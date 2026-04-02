@@ -7,7 +7,6 @@ discovery-only mode.
 """
 
 import subprocess
-import sys
 from pathlib import Path
 
 import yaml
@@ -108,79 +107,135 @@ def _resolve_base_commit(main_repo: str) -> str | None:
     return None
 
 
+def _build_project_image(
+    project_name: str,
+    project_path: Path,
+) -> str:
+    """Build the Docker image for an OSS-Fuzz project.
+
+    Equivalent to: docker build -t gcr.io/oss-fuzz/<project> <project_path>
+
+    Returns:
+        Docker image tag.
+    """
+    image_tag = f"gcr.io/oss-fuzz/{project_name}"
+
+    logger.info(f"Building Docker image: {image_tag}")
+    result = subprocess.run(
+        ["docker", "build", "-t", image_tag, str(project_path)],
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    if result.returncode != 0:
+        logger.error(f"Docker build stderr:\n{result.stderr[-2000:]}")
+        raise RuntimeError(
+            f"Failed to build Docker image for '{project_name}': "
+            f"exit code {result.returncode}"
+        )
+    return image_tag
+
+
 def build_oss_fuzz_project(
     benchmark_path: Path,
     oss_fuzz_path: Path,
     sanitizer: str = "address",
+    *,
+    cpuset_cpus: str | None = None,
 ) -> Path:
-    """Build an OSS-Fuzz project using helper.py build_fuzzers.
+    """Build an OSS-Fuzz project with optional CPU pinning.
+
+    Builds the project Docker image, then runs it to compile fuzz targets.
+    Equivalent to helper.py build_fuzzers but with --cpuset-cpus support.
 
     Args:
         benchmark_path: Path to the OSS-Fuzz project directory.
         oss_fuzz_path: Path to the oss-fuzz checkout.
         sanitizer: Sanitizer to build with (default: address).
+        cpuset_cpus: CPU cores to pin the build to (e.g., "0-3", "0,2,4").
 
     Returns:
         Path to the build output directory.
 
     Raises:
         RuntimeError: If the build fails.
-        FileNotFoundError: If oss-fuzz helper.py is not found.
     """
-    helper_py = oss_fuzz_path / "infra" / "helper.py"
-    if not helper_py.exists():
-        raise FileNotFoundError(
-            f"oss-fuzz helper.py not found at {helper_py}. "
-            f"Ensure oss_fuzz_path is set correctly (current: {oss_fuzz_path})"
-        )
-
     project_name = benchmark_path.name
 
-    # helper.py expects the project to be under oss-fuzz/projects/<name>/
-    # Symlink/copy if not already there
-    oss_fuzz_projects_dir = oss_fuzz_path / "projects" / project_name
-    created_symlink = False
-    if not oss_fuzz_projects_dir.exists():
-        oss_fuzz_projects_dir.symlink_to(benchmark_path.resolve())
-        created_symlink = True
-        logger.info(
-            f"Symlinked project: {oss_fuzz_projects_dir} -> {benchmark_path.resolve()}"
-        )
+    # Read project.yaml for language
+    project_yaml = benchmark_path / "project.yaml"
+    with project_yaml.open() as f:
+        project_config = yaml.safe_load(f)
 
-    try:
-        logger.info(
-            f"Building OSS-Fuzz project '{project_name}' (sanitizer={sanitizer})..."
-        )
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(helper_py),
-                "build_fuzzers",
-                "--sanitizer",
-                sanitizer,
-                project_name,
-            ],
-            cwd=str(oss_fuzz_path),
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
+    language = project_config.get("language", "c")
 
-        if result.returncode != 0:
-            logger.error(f"Build stdout:\n{result.stdout[-2000:]}")
-            logger.error(f"Build stderr:\n{result.stderr[-2000:]}")
-            raise RuntimeError(
-                f"Failed to build OSS-Fuzz project '{project_name}': "
-                f"exit code {result.returncode}"
-            )
-
-        logger.info(f"Build succeeded for '{project_name}'")
-    finally:
-        # Clean up symlink if we created it
-        if created_symlink and oss_fuzz_projects_dir.is_symlink():
-            oss_fuzz_projects_dir.unlink()
-
+    # Build output and work directories
     build_out_dir = oss_fuzz_path / "build" / "out" / project_name
+    build_work_dir = oss_fuzz_path / "build" / "work" / project_name
+    build_out_dir.mkdir(parents=True, exist_ok=True)
+    build_work_dir.mkdir(parents=True, exist_ok=True)
+
+    # Build the project Docker image
+    image_tag = _build_project_image(project_name, benchmark_path)
+
+    # Run the build container to compile fuzz targets
+    # Equivalent to what helper.py build_fuzzers_impl does
+    docker_cmd = [
+        "docker",
+        "run",
+        "--rm",
+        "--privileged",
+        "--shm-size=2g",
+    ]
+
+    if cpuset_cpus:
+        docker_cmd.extend(["--cpuset-cpus", cpuset_cpus])
+        logger.info(f"CPU pinning build to cores: {cpuset_cpus}")
+
+    # Environment variables (same as helper.py)
+    env_vars = {
+        "FUZZING_ENGINE": "libfuzzer",
+        "SANITIZER": sanitizer,
+        "ARCHITECTURE": "x86_64",
+        "PROJECT_NAME": project_name,
+        "FUZZING_LANGUAGE": language,
+        "HELPER": "True",
+    }
+    for key, val in env_vars.items():
+        docker_cmd.extend(["-e", f"{key}={val}"])
+
+    # Volume mounts
+    docker_cmd.extend(
+        [
+            "-v",
+            f"{build_out_dir}:/out",
+            "-v",
+            f"{build_work_dir}:/work",
+            image_tag,
+        ]
+    )
+
+    logger.info(
+        f"Building OSS-Fuzz project '{project_name}' "
+        f"(sanitizer={sanitizer}, cpuset={cpuset_cpus or 'none'})..."
+    )
+    result = subprocess.run(
+        docker_cmd,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+
+    if result.returncode != 0:
+        logger.error(f"Build stdout:\n{result.stdout[-2000:]}")
+        logger.error(f"Build stderr:\n{result.stderr[-2000:]}")
+        raise RuntimeError(
+            f"Failed to build OSS-Fuzz project '{project_name}': "
+            f"exit code {result.returncode}"
+        )
+
+    logger.info(f"Build succeeded for '{project_name}'")
+
     if not build_out_dir.is_dir():
         raise RuntimeError(f"Build output directory not found: {build_out_dir}")
 
@@ -191,6 +246,8 @@ def auto_generate_meta_yaml(
     benchmark_path: Path,
     oss_fuzz_path: Path,
     sanitizer: str = "address",
+    *,
+    cpuset_cpus: str | None = None,
 ) -> Path:
     """Auto-generate .aixcc/meta.yaml for an OSS-Fuzz project.
 
@@ -201,6 +258,7 @@ def auto_generate_meta_yaml(
         benchmark_path: Path to the OSS-Fuzz project directory.
         oss_fuzz_path: Path to the oss-fuzz checkout.
         sanitizer: Sanitizer to build with (default: address).
+        cpuset_cpus: CPU cores to pin the build to (e.g., "0-3").
 
     Returns:
         Path to the generated meta.yaml file.
@@ -216,7 +274,9 @@ def auto_generate_meta_yaml(
         )
 
     # Build the project
-    build_out_dir = build_oss_fuzz_project(benchmark_path, oss_fuzz_path, sanitizer)
+    build_out_dir = build_oss_fuzz_project(
+        benchmark_path, oss_fuzz_path, sanitizer, cpuset_cpus=cpuset_cpus
+    )
 
     # Discover fuzz targets
     targets = discover_fuzz_targets(build_out_dir)
