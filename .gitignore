@@ -239,6 +239,20 @@ migration_report.csv
 .crsbench-mcp
 .crsbench-coverage/
 
+# TLA+ model checker traces
+states/
+tla/*_TTrace_*.tla
+tla/*_TTrace_*.bin
+
+# Local agent planning/design notes
+docs/superpowers/
+
+.crsbench-keys/
+.crsbench-local-rehearsal/
+# Local cloud control-plane state and append-only instance ledger
+.crsbench-cloud/
+.crsbench-cloud/*.cache
+
 # local ci test results
 .ci-results
 ci_results*

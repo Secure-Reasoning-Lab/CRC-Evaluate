@@ -1,28 +1,36 @@
+# Local config: full AFC benchmark suite with given_fuzzer.
+#
+# 3 trials × all AFC benchmarks, 16 cores per trial.
+# Designed for a local 128-core machine with Redis.
+# Worker: 6 jobs × 16 cores = 96 cores (leaves headroom for evaluator + OS)
+# Evaluator: 2 jobs × 16 cores = 32 cores
+#
+# Usage:
+#   uv run crsbench run --config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml
+
 experiment:
   name: afc-bugfinding-given-fuzzer-run
   task: bugfinding
   benchmark_suite: afc-final
   sanitizers:
-  - address
-  - undefined
+    - address
+    - undefined
   mode: full
-#  only_cpv_harnesses: true
 runtime:
-  trials: 1
-  max_total_time: 46800
+  trials: 3
+  max_total_time: 57600
   build_timeout: 14400
-  run_timeout: 21600
+  run_timeout: 28800
   verify_timeout: 7200
   per_pov_verify_timeout: 300
-  redis_host: localhost
+  redis_host: redis-server:6379
   source_mode: pkgs
   pov_early_stop: true
   litellm:
-#    tracking_enabled: false
     skip: true
 storage:
-  experiment_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-afc-run/afc-bugfinding-given-fuzzer-run
-  report_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/report-data-afc-run/afc-bugfinding-given-fuzzer-run
+  experiment_filestore: /data/crsbench/experiment-data/afc-bugfinding-given-fuzzer-run
+  report_filestore: /data/crsbench/report-data/afc-bugfinding-given-fuzzer-run
 resources:
   cores_per_trial: 16
 crs_compose:
@@ -31,8 +39,10 @@ crs_compose:
   atlantis-multilang-given_fuzzer:
     num_cores: 16
 worker:
+  jobs: 6
+  cores_per_job: 16
   storage:
     cleanup_after_trial: true
-  cores_per_job: 16
 evaluator:
+  jobs: 2
   cores_per_job: 16

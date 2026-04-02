@@ -361,8 +361,8 @@ def _run_experiment_timeline(args: argparse.Namespace) -> int:
             ),
         )
         return 0
-    except Exception as e:
-        logger.error("Coverage timeline failed: {}", e, exc_info=True)
+    except Exception:
+        logger.exception("Coverage timeline failed")
         return 1
 
 
@@ -423,8 +423,8 @@ def _run_direct_seed_timeline(args: argparse.Namespace) -> int:
         logger.info(f"Wrote coverage timeline to {args.output_dir}")
         logger.info(f"Saved coverage results at {args.output_dir}")
         return 0
-    except Exception as e:
-        logger.error("Coverage timeline failed: {}", e, exc_info=True)
+    except Exception:
+        logger.exception("Coverage timeline failed")
         return 1
     finally:
         engine.cleanup()

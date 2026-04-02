@@ -113,9 +113,18 @@ Colors are automatically disabled when:
 ```python
 try:
     risky_operation()
-except Exception as e:
+except Exception:
     logger.exception("Operation failed")
     # This automatically includes traceback
+```
+
+For non-error levels where you still want traceback context:
+
+```python
+try:
+    refresh_cache()
+except Exception:
+    logger.opt(exception=True).warning("Cache refresh failed")
 ```
 
 ### Structured Logging
@@ -176,15 +185,21 @@ logger.info("x=1, y=2, z=3...")            # Use debug instead
 logger.error("Trial completed")             # Use info/success instead
 ```
 
-### 3. Use f-strings for Formatting
+### 3. Use Loguru Formatting
+
+With `get_logger()`, do not use stdlib logging placeholders like `%s` or flags
+like `exc_info=True`. CRSBench uses Loguru formatting and exception APIs.
 
 ```python
 # ✓ Good
+logger.info("Processing {} files", count)
 logger.info(f"Processing {count} files")
+logger.exception("Coverage collection failed")
+logger.opt(exception=True).warning("Cache refresh failed")
 
-# ✗ Bad (old style)
-logger.info("Processing %d files" % count)
-logger.info("Processing {} files".format(count))
+# ✗ Bad (stdlib logging patterns)
+logger.info("Processing %s files", count)
+logger.error("Coverage collection failed", exc_info=True)
 ```
 
 ### 4. Don't Log Sensitive Data

@@ -20,6 +20,18 @@ from pydantic import (
     model_validator,
 )
 
+from crsbench.cloud.env_validation import normalize_env_name
+from crsbench.cloud.gce.quota import zone_to_region
+from crsbench.cloud.secret_refs import (
+    CloudSecretReferenceError,
+    validate_secret_path_reference_format,
+    validate_secret_reference_format,
+)
+from crsbench.cloud.types import (
+    CloudProvider,
+    coerce_cloud_provider,
+    validate_single_cloud_provider,
+)
 from crsbench.validation.ground_truth_paths import validate_ground_truth_segment
 
 # =============================================================================
@@ -1155,6 +1167,1856 @@ class EvaluatorConfig(BaseModel):
     )
 
 
+class GceWorkerFleetConfig(BaseModel):
+    """GCE worker provisioning configuration for cloud-backed experiments."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project: str = Field(..., description="GCP project ID used for worker VMs.")
+    zone: Optional[str] = Field(
+        default=None,
+        description="GCE zone for direct worker VM creation.",
+    )
+    zones: list[str] = Field(
+        default_factory=list,
+        description="Ordered candidate GCE zones for direct worker VM creation.",
+    )
+    region: Optional[str] = Field(
+        default=None,
+        description="Optional regional placement selector when zone-level targeting is not used.",
+    )
+    regions: list[str] = Field(
+        default_factory=list,
+        description="Ordered candidate regions when regional placement fallback is enabled.",
+    )
+    fallback: bool = Field(
+        default=True,
+        description="Whether worker creation should try later candidate zones or regions after retryable capacity failures.",
+    )
+    worker_count: int = Field(
+        default=1,
+        ge=1,
+        description="Number of worker VMs to provision for the experiment.",
+    )
+    worker_name_start_index: int = Field(
+        default=1,
+        ge=1,
+        description="Starting 1-based suffix for generated worker instance names.",
+    )
+    machine_type: Optional[str] = Field(
+        default=None,
+        description="GCE machine type when creating VMs from an image.",
+    )
+    boot_disk_size_gb: Optional[int] = Field(
+        default=None,
+        ge=10,
+        description="Boot disk size in GiB when creating VMs from an image.",
+    )
+    boot_disk_type: Optional[str] = Field(
+        default=None,
+        description="GCE boot disk type (e.g. pd-ssd, pd-balanced, pd-standard).",
+    )
+    image: Optional[str] = Field(
+        default=None,
+        description="Image or image-family reference used for worker VM creation.",
+    )
+    instance_template: Optional[str] = Field(
+        default=None,
+        description="Existing GCE instance template to use instead of explicit image/machine settings.",
+    )
+    network: Optional[str] = Field(
+        default=None,
+        description="Optional VPC network name for worker instances.",
+    )
+    subnetwork: Optional[str] = Field(
+        default=None,
+        description="Optional subnetwork name for worker instances.",
+    )
+    service_account_email: str = Field(
+        ...,
+        description="Dedicated worker service account email.",
+    )
+    owner_label: Optional[str] = Field(
+        default=None,
+        description="Operator/team ownership label applied to provisioned workers.",
+    )
+    labels: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Additional user-supplied GCE labels for worker instances.",
+    )
+    metadata: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Additional user-supplied instance metadata for worker bootstrap.",
+    )
+    worker_name_prefix: Optional[str] = Field(
+        default=None,
+        description="Optional stable prefix for generated worker instance names.",
+    )
+    startup_script_uri: Optional[str] = Field(
+        default=None,
+        description="Optional URI for a maintained startup script payload.",
+    )
+    use_os_login: bool = Field(
+        default=True,
+        description="Must remain true; Phase 1 supports OS Login-compatible SSH only.",
+    )
+    ssh_via_iap: bool = Field(
+        default=False,
+        description="Whether operators are expected to connect through IAP-backed SSH.",
+    )
+    assign_external_ip: bool = Field(
+        default=True,
+        description=(
+            "Whether worker instances should receive an external NAT interface for "
+            "package installs and other outbound internet access."
+        ),
+    )
+    readiness_timeout_sec: int = Field(
+        default=900,
+        ge=1,
+        description="Maximum time to wait for a worker to report ready before bring-up fails.",
+    )
+    crsbench_install_spec: Optional[str] = Field(
+        default=None,
+        description=(
+            "How to install crsbench on worker VMs. "
+            "Use 'git+ssh://...' for private repo clone+uv-sync, "
+            "or a pip spec like 'crsbench==1.0' for PyPI install. "
+            "When None, the startup script expects crsbench pre-installed on the image."
+        ),
+    )
+    crsbench_git_ref: str = Field(
+        default="main",
+        description="Git branch, tag, or commit to checkout after cloning (only used with git+ssh:// install spec).",
+    )
+    github_deploy_key_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "SSH private key path for GitHub deploy key access. Supports a plain path "
+            "or 'os.environ/NAME' at launch time. "
+            "The resolved file contents are base64-encoded and injected as "
+            "crsbench-github-deploy-key instance metadata."
+        ),
+    )
+
+    @field_validator(
+        "project",
+        "machine_type",
+        "image",
+        "instance_template",
+        "boot_disk_type",
+        "network",
+        "subnetwork",
+        "service_account_email",
+        "owner_label",
+        "worker_name_prefix",
+        "startup_script_uri",
+        "zone",
+        "region",
+        "crsbench_install_spec",
+        "github_deploy_key_path",
+    )
+    @classmethod
+    def normalize_optional_strings(cls, value: Optional[str]) -> Optional[str]:
+        """Trim string values and collapse blanks to None."""
+        return _normalize_cloud_optional_string(value)
+
+    @field_validator("project", "service_account_email")
+    @classmethod
+    def validate_required_strings(cls, value: Optional[str]) -> str:
+        """Require non-empty strings for mandatory cloud identity fields."""
+        if value is None:
+            raise ValueError("Field is required")
+        return value
+
+    @field_validator("service_account_email")
+    @classmethod
+    def validate_service_account_email(cls, value: str) -> str:
+        """Require an email-like service account identifier."""
+        if "@" not in value:
+            raise ValueError(
+                "cloud.gce.service_account_email must be a service-account email"
+            )
+        return value
+
+    @field_validator("labels", "metadata")
+    @classmethod
+    def validate_string_maps(cls, value: Dict[str, str]) -> Dict[str, str]:
+        """Reject blank keys or values in user-supplied maps."""
+        normalized: dict[str, str] = {}
+        for key, item in value.items():
+            key_str = key.strip()
+            item_str = item.strip()
+            if not key_str or not item_str:
+                raise ValueError("cloud.gce labels/metadata must not contain blanks")
+            normalized[key_str] = item_str
+        return normalized
+
+    @field_validator("zones", mode="before")
+    @classmethod
+    def normalize_zones(
+        cls,
+        value: list[str] | tuple[str, ...] | None,
+    ) -> list[str]:
+        """Normalize ordered worker candidate zones."""
+        return _normalize_cloud_zone_list(value, field_path="cloud.gce.zones")
+
+    @field_validator("regions", mode="before")
+    @classmethod
+    def normalize_regions(
+        cls,
+        value: list[str] | tuple[str, ...] | None,
+    ) -> list[str]:
+        """Normalize ordered worker candidate regions."""
+        return _normalize_cloud_region_list(value, field_path="cloud.gce.regions")
+
+    @model_validator(mode="after")
+    def validate_gce_contract(self):
+        """Enforce the Phase 1 GCE fleet contract."""
+        effective_regions = _coalesce_cloud_regions(
+            region=self.region,
+            regions=self.regions,
+        )
+        if effective_regions:
+            self.regions = effective_regions
+            self.region = effective_regions[0]
+
+        effective_zones = list(self.zones)
+        if not effective_zones and self.zone is not None:
+            effective_zones = [self.zone]
+        if effective_zones:
+            self.zones = effective_zones
+            self.zone = None if self.region is not None else effective_zones[0]
+
+        has_zone = bool(effective_zones)
+        has_region = bool(effective_regions)
+        if not has_zone and not has_region:
+            raise ValueError(
+                "cloud.gce requires 'zone', 'zones', or 'region' for worker placement"
+            )
+        if has_region:
+            _validate_regions_zone_membership(
+                regions=effective_regions,
+                zones=effective_zones,
+                field_path="cloud.gce.zones",
+            )
+
+        has_image = self.image is not None
+        has_template = self.instance_template is not None
+        if has_image == has_template:
+            raise ValueError(
+                "cloud.gce requires exactly one of 'image' or 'instance_template'"
+            )
+
+        if not self.use_os_login:
+            raise ValueError(
+                "cloud.gce.use_os_login must remain true for the supported Phase 1 access model"
+            )
+
+        has_owner = self.owner_label is not None or "owner" in self.labels
+        if not has_owner:
+            raise ValueError(
+                "cloud.gce requires owner_label or labels.owner for fleet ownership"
+            )
+
+        if has_image:
+            if self.machine_type is None:
+                raise ValueError(
+                    "cloud.gce.machine_type is required when 'image' is used"
+                )
+            if self.boot_disk_size_gb is None:
+                raise ValueError(
+                    "cloud.gce.boot_disk_size_gb is required when 'image' is used"
+                )
+
+        if has_template and (
+            self.machine_type is not None
+            or self.boot_disk_size_gb is not None
+            or self.boot_disk_type is not None
+        ):
+            raise ValueError(
+                "cloud.gce.instance_template cannot be combined with explicit machine_type, boot_disk_size_gb, or boot_disk_type"
+            )
+
+        return self
+
+
+class GceOrchestratorConfig(BaseModel):
+    """GCE orchestrator VM configuration for cloud-backed experiments."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project: str = Field(..., description="GCP project ID used for orchestrator VM.")
+    zone: Optional[str] = Field(
+        default=None,
+        description="GCE zone for direct orchestrator VM creation.",
+    )
+    zones: list[str] = Field(
+        default_factory=list,
+        description="Ordered candidate GCE zones for direct orchestrator VM creation.",
+    )
+    region: Optional[str] = Field(
+        default=None,
+        description="Optional regional placement selector when zone-level targeting is not used.",
+    )
+    regions: list[str] = Field(
+        default_factory=list,
+        description="Ordered candidate regions when regional placement fallback is enabled.",
+    )
+    fallback: bool = Field(
+        default=True,
+        description="Whether orchestrator creation should try later candidate zones or regions after retryable capacity failures.",
+    )
+    machine_type: Optional[str] = Field(
+        default=None,
+        description="GCE machine type when creating the orchestrator VM from an image.",
+    )
+    boot_disk_size_gb: Optional[int] = Field(
+        default=None,
+        ge=10,
+        description="Boot disk size in GiB when creating the orchestrator VM from an image.",
+    )
+    boot_disk_type: Optional[str] = Field(
+        default=None,
+        description="GCE boot disk type (e.g. pd-ssd, pd-balanced, pd-standard).",
+    )
+    image: Optional[str] = Field(
+        default=None,
+        description="Image or image-family reference used for orchestrator VM creation.",
+    )
+    instance_template: Optional[str] = Field(
+        default=None,
+        description="Existing GCE instance template to use instead of explicit image/machine settings.",
+    )
+    network: Optional[str] = Field(
+        default=None,
+        description="Optional VPC network name for orchestrator instances.",
+    )
+    subnetwork: Optional[str] = Field(
+        default=None,
+        description="Optional subnetwork name for orchestrator instances.",
+    )
+    service_account_email: str = Field(
+        ...,
+        description="Dedicated orchestrator service account email.",
+    )
+    owner_label: Optional[str] = Field(
+        default=None,
+        description="Operator/team ownership label applied to the provisioned orchestrator.",
+    )
+    labels: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Additional user-supplied GCE labels for the orchestrator VM.",
+    )
+    metadata: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Additional user-supplied instance metadata for orchestrator bootstrap.",
+    )
+    instance_name_prefix: Optional[str] = Field(
+        default=None,
+        description="Optional stable prefix for the orchestrator instance name.",
+    )
+    startup_script_uri: Optional[str] = Field(
+        default=None,
+        description="Optional URI for a maintained startup script payload.",
+    )
+    use_os_login: bool = Field(
+        default=True,
+        description="Must remain true; Phase 1 supports OS Login-compatible SSH only.",
+    )
+    ssh_via_iap: bool = Field(
+        default=False,
+        description="Whether operators are expected to connect through IAP-backed SSH.",
+    )
+    assign_external_ip: bool = Field(
+        default=True,
+        description=(
+            "Whether the orchestrator instance should receive an external NAT "
+            "interface for package installs and other outbound internet access."
+        ),
+    )
+    crsbench_install_spec: Optional[str] = Field(
+        default=None,
+        description=(
+            "How to install crsbench on orchestrator VMs. "
+            "Use 'git+ssh://...' for private repo clone+uv-sync, "
+            "or a pip spec like 'crsbench==1.0' for PyPI install."
+        ),
+    )
+    crsbench_git_ref: str = Field(
+        default="main",
+        description="Git branch, tag, or commit to checkout after cloning (only used with git+ssh:// install spec).",
+    )
+    github_deploy_key_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "SSH private key path for GitHub deploy key access. Supports a plain path "
+            "or 'os.environ/NAME' at launch time. "
+            "The resolved file contents are base64-encoded and injected as "
+            "instance metadata."
+        ),
+    )
+
+    @field_validator(
+        "project",
+        "machine_type",
+        "image",
+        "instance_template",
+        "boot_disk_type",
+        "network",
+        "subnetwork",
+        "service_account_email",
+        "owner_label",
+        "instance_name_prefix",
+        "startup_script_uri",
+        "zone",
+        "region",
+        "crsbench_install_spec",
+        "github_deploy_key_path",
+    )
+    @classmethod
+    def normalize_optional_strings(cls, value: Optional[str]) -> Optional[str]:
+        """Trim string values and collapse blanks to None."""
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        return normalized
+
+    @field_validator("project", "service_account_email")
+    @classmethod
+    def validate_required_strings(cls, value: Optional[str]) -> str:
+        """Require non-empty strings for mandatory cloud identity fields."""
+        if value is None:
+            raise ValueError("Field is required")
+        return value
+
+    @field_validator("service_account_email")
+    @classmethod
+    def validate_service_account_email(cls, value: str) -> str:
+        """Require an email-like service account identifier."""
+        if "@" not in value:
+            raise ValueError(
+                "cloud.orchestrator.service_account_email must be a service-account email"
+            )
+        return value
+
+    @field_validator("labels", "metadata")
+    @classmethod
+    def validate_string_maps(cls, value: Dict[str, str]) -> Dict[str, str]:
+        """Reject blank keys or values in user-supplied maps."""
+        normalized: dict[str, str] = {}
+        for key, item in value.items():
+            key_str = key.strip()
+            item_str = item.strip()
+            if not key_str or not item_str:
+                raise ValueError(
+                    "cloud.orchestrator labels/metadata must not contain blanks"
+                )
+            normalized[key_str] = item_str
+        return normalized
+
+    @field_validator("zones", mode="before")
+    @classmethod
+    def normalize_zones(
+        cls,
+        value: list[str] | tuple[str, ...] | None,
+    ) -> list[str]:
+        """Normalize ordered orchestrator candidate zones."""
+        return _normalize_cloud_zone_list(
+            value,
+            field_path="cloud.orchestrator.zones",
+        )
+
+    @field_validator("regions", mode="before")
+    @classmethod
+    def normalize_regions(
+        cls,
+        value: list[str] | tuple[str, ...] | None,
+    ) -> list[str]:
+        """Normalize ordered orchestrator candidate regions."""
+        return _normalize_cloud_region_list(
+            value,
+            field_path="cloud.orchestrator.regions",
+        )
+
+    @model_validator(mode="after")
+    def validate_gce_contract(self):
+        """Enforce the supported GCE orchestrator contract."""
+        effective_regions = _coalesce_cloud_regions(
+            region=self.region,
+            regions=self.regions,
+        )
+        if effective_regions:
+            self.regions = effective_regions
+            self.region = effective_regions[0]
+
+        effective_zones = list(self.zones)
+        if not effective_zones and self.zone is not None:
+            effective_zones = [self.zone]
+        if effective_zones:
+            self.zones = effective_zones
+            self.zone = None if self.region is not None else effective_zones[0]
+
+        has_zone = bool(effective_zones)
+        has_region = bool(effective_regions)
+        if not has_zone and not has_region:
+            raise ValueError(
+                "cloud.orchestrator requires 'zone', 'zones', or 'region' for placement"
+            )
+        if has_region:
+            _validate_regions_zone_membership(
+                regions=effective_regions,
+                zones=effective_zones,
+                field_path="cloud.orchestrator.zones",
+            )
+
+        has_image = self.image is not None
+        has_template = self.instance_template is not None
+        if has_image == has_template:
+            raise ValueError(
+                "cloud.orchestrator requires exactly one of 'image' or 'instance_template'"
+            )
+
+        if not self.use_os_login:
+            raise ValueError(
+                "cloud.orchestrator.use_os_login must remain true for the supported Phase 1 access model"
+            )
+
+        has_owner = self.owner_label is not None or "owner" in self.labels
+        if not has_owner:
+            raise ValueError(
+                "cloud.orchestrator requires owner_label or labels.owner for ownership"
+            )
+
+        if has_image:
+            if self.machine_type is None:
+                raise ValueError(
+                    "cloud.orchestrator.machine_type is required when 'image' is used"
+                )
+            if self.boot_disk_size_gb is None:
+                raise ValueError(
+                    "cloud.orchestrator.boot_disk_size_gb is required when 'image' is used"
+                )
+
+        if has_template and (
+            self.machine_type is not None
+            or self.boot_disk_size_gb is not None
+            or self.boot_disk_type is not None
+        ):
+            raise ValueError(
+                "cloud.orchestrator.instance_template cannot be combined with explicit machine_type, boot_disk_size_gb, or boot_disk_type"
+            )
+
+        return self
+
+
+def _normalize_cloud_optional_string(value: Optional[str]) -> Optional[str]:
+    """Trim string values and collapse blanks to None."""
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    return normalized
+
+
+def _validate_cloud_service_account_email(value: Optional[str]) -> Optional[str]:
+    """Validate optional service-account identifiers when present."""
+    if value is None:
+        return None
+    if "@" not in value:
+        raise ValueError(
+            "cloud.providers.gce.instance_profiles service_account_email must be a service-account email"
+        )
+    return value
+
+
+def _validate_cloud_string_map(value: Dict[str, str]) -> Dict[str, str]:
+    """Reject blank keys or values in user-supplied maps."""
+    normalized: dict[str, str] = {}
+    for key, item in value.items():
+        key_str = key.strip()
+        item_str = item.strip()
+        if not key_str or not item_str:
+            raise ValueError(
+                "cloud.providers.gce.instance_profiles labels/metadata must not contain blanks"
+            )
+        normalized[key_str] = item_str
+    return normalized
+
+
+def _validate_cloud_env_map(
+    value: Dict[str, str], *, field_path: str
+) -> Dict[str, str]:
+    """Reject malformed env-map keys/values for cloud launch configuration."""
+    normalized: dict[str, str] = {}
+    for key, item in value.items():
+        key_str = normalize_env_name(str(key), field_path=field_path)
+        item_str = str(item).strip()
+        if not item_str:
+            raise ValueError(f"{field_path} must not contain blank environment values")
+        try:
+            normalized[key_str] = validate_secret_reference_format(
+                item_str,
+                field_path=f"{field_path}.{key_str}",
+            )
+        except CloudSecretReferenceError as exc:
+            raise ValueError(str(exc)) from exc
+    return normalized
+
+
+def _normalize_cloud_zone_list(
+    value: list[str] | tuple[str, ...] | None,
+    *,
+    field_path: str,
+) -> list[str]:
+    """Normalize ordered zone candidates while preserving user order."""
+    if value is None:
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_zone in value:
+        zone = str(raw_zone).strip()
+        if not zone:
+            raise ValueError(f"{field_path} must not contain blank zones")
+        if zone in seen:
+            continue
+        normalized.append(zone)
+        seen.add(zone)
+    return normalized
+
+
+def _normalize_cloud_region_list(
+    value: list[str] | tuple[str, ...] | None,
+    *,
+    field_path: str,
+) -> list[str]:
+    """Normalize ordered region candidates while preserving user order."""
+    if value is None:
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_region in value:
+        region = str(raw_region).strip()
+        if not region:
+            raise ValueError(f"{field_path} must not contain blank regions")
+        if region in seen:
+            continue
+        normalized.append(region)
+        seen.add(region)
+    return normalized
+
+
+def _coalesce_cloud_regions(
+    *,
+    region: Optional[str],
+    regions: list[str],
+) -> list[str]:
+    """Return the effective ordered region list from singular/plural fields."""
+    if regions:
+        return list(regions)
+    if region is not None:
+        return [region]
+    return []
+
+
+def _validate_region_zone_membership(
+    *,
+    region: str,
+    zones: list[str],
+    field_path: str,
+) -> None:
+    for zone in zones:
+        if zone_to_region(zone) != region:
+            raise ValueError(f"{field_path} must all belong to region '{region}'")
+
+
+def _validate_regions_zone_membership(
+    *,
+    regions: list[str],
+    zones: list[str],
+    field_path: str,
+) -> None:
+    if not regions:
+        return
+    if len(regions) == 1:
+        _validate_region_zone_membership(
+            region=regions[0],
+            zones=zones,
+            field_path=field_path,
+        )
+        return
+
+    allowed_regions = set(regions)
+    for zone in zones:
+        if zone_to_region(zone) not in allowed_regions:
+            raise ValueError(
+                f"{field_path} must all belong to one of regions {regions!r}"
+            )
+
+
+def _merge_cloud_maps(defaults: object, override: object) -> dict[str, str]:
+    """Merge optional string maps with override precedence."""
+    merged: dict[str, str] = {}
+    if isinstance(defaults, dict):
+        merged.update({str(k): str(v) for k, v in defaults.items()})
+    if isinstance(override, dict):
+        merged.update({str(k): str(v) for k, v in override.items()})
+    return merged
+
+
+def _merge_gce_profile_defaults(
+    defaults: dict[str, Any], override: dict[str, Any]
+) -> dict[str, Any]:
+    """Merge provider-level GCE profile defaults into one raw profile object."""
+    merged = {key: value for key, value in defaults.items() if value is not None}
+    merged.update({key: value for key, value in override.items() if value is not None})
+    for field_name in ("labels", "metadata", "env"):
+        merged_map = _merge_cloud_maps(
+            defaults.get(field_name),
+            override.get(field_name),
+        )
+        if merged_map:
+            merged[field_name] = merged_map
+        else:
+            merged.pop(field_name, None)
+    return merged
+
+
+def _merge_cloud_placement_defaults(
+    defaults: dict[str, Any], placement: dict[str, Any]
+) -> dict[str, Any]:
+    """Merge role-level placement defaults into one raw placement object."""
+    merged = {key: value for key, value in defaults.items() if value is not None}
+    if "zone" in placement or "zones" in placement:
+        merged.pop("zone", None)
+        merged.pop("zones", None)
+    if "region" in placement or "regions" in placement:
+        merged.pop("region", None)
+        merged.pop("regions", None)
+    merged.update({key: value for key, value in placement.items() if value is not None})
+    merged_env = _merge_cloud_maps(defaults.get("env"), placement.get("env"))
+    if merged_env:
+        merged["env"] = merged_env
+    else:
+        merged.pop("env", None)
+    return merged
+
+
+class CloudLaunchDefaultsConfig(BaseModel):
+    """Provider-agnostic launch/bootstrap defaults shared across cloud roles."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    readiness_timeout_sec: Optional[int] = Field(default=None, ge=1)
+    crsbench_install_spec: Optional[str] = Field(default=None)
+    crsbench_git_ref: Optional[str] = Field(default=None)
+    github_deploy_key_path: Optional[str] = Field(default=None)
+
+    @field_validator(
+        "crsbench_install_spec",
+        "crsbench_git_ref",
+        "github_deploy_key_path",
+    )
+    @classmethod
+    def normalize_optional_strings(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_cloud_optional_string(value)
+
+    @field_validator("github_deploy_key_path")
+    @classmethod
+    def validate_github_deploy_key_path(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        try:
+            return validate_secret_path_reference_format(
+                value,
+                field_path="github_deploy_key_path",
+            )
+        except CloudSecretReferenceError as exc:
+            raise ValueError(str(exc)) from exc
+
+
+class GceInstanceProfileDefaultsConfig(BaseModel):
+    """Partial reusable defaults merged into named GCE instance profiles."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    machine_type: Optional[str] = Field(default=None)
+    boot_disk_size_gb: Optional[int] = Field(default=None, ge=10)
+    boot_disk_type: Optional[str] = Field(default=None)
+    image: Optional[str] = Field(default=None)
+    instance_template: Optional[str] = Field(default=None)
+    network: Optional[str] = Field(default=None)
+    subnetwork: Optional[str] = Field(default=None)
+    service_account_email: Optional[str] = Field(default=None)
+    owner_label: Optional[str] = Field(default=None)
+    labels: Dict[str, str] = Field(default_factory=dict)
+    metadata: Dict[str, str] = Field(default_factory=dict)
+    env: Dict[str, str] = Field(default_factory=dict)
+    startup_script_uri: Optional[str] = Field(default=None)
+    use_os_login: Optional[bool] = Field(default=None)
+    ssh_via_iap: Optional[bool] = Field(default=None)
+    assign_external_ip: Optional[bool] = Field(default=None)
+
+    @field_validator(
+        "machine_type",
+        "boot_disk_type",
+        "image",
+        "instance_template",
+        "network",
+        "subnetwork",
+        "service_account_email",
+        "owner_label",
+        "startup_script_uri",
+    )
+    @classmethod
+    def normalize_optional_strings(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_cloud_optional_string(value)
+
+    @field_validator("service_account_email")
+    @classmethod
+    def validate_service_account_email(cls, value: Optional[str]) -> Optional[str]:
+        return _validate_cloud_service_account_email(value)
+
+    @field_validator("labels", "metadata")
+    @classmethod
+    def validate_string_maps(cls, value: Dict[str, str]) -> Dict[str, str]:
+        return _validate_cloud_string_map(value)
+
+    @field_validator("env")
+    @classmethod
+    def validate_env_map(cls, value: Dict[str, str]) -> Dict[str, str]:
+        return _validate_cloud_env_map(
+            value, field_path="cloud.providers.gce.profile_defaults.env"
+        )
+
+
+class GceInstanceProfileConfig(BaseModel):
+    """Reusable GCE instance profile referenced by provider-neutral cloud roles."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    machine_type: Optional[str] = Field(
+        default=None,
+        description="GCE machine type when creating instances from an image.",
+    )
+    boot_disk_size_gb: Optional[int] = Field(
+        default=None,
+        ge=10,
+        description="Boot disk size in GiB when creating instances from an image.",
+    )
+    boot_disk_type: Optional[str] = Field(
+        default=None,
+        description="GCE boot disk type (e.g. pd-ssd, pd-balanced, pd-standard).",
+    )
+    image: Optional[str] = Field(
+        default=None,
+        description="Image or image-family reference used for VM creation.",
+    )
+    instance_template: Optional[str] = Field(
+        default=None,
+        description="Existing GCE instance template to use instead of explicit image/machine settings.",
+    )
+    network: Optional[str] = Field(
+        default=None,
+        description="Optional VPC network name for instances using this profile.",
+    )
+    subnetwork: Optional[str] = Field(
+        default=None,
+        description="Optional subnetwork name for instances using this profile.",
+    )
+    service_account_email: str = Field(
+        ...,
+        description="Service account email used for instances with this profile.",
+    )
+    owner_label: Optional[str] = Field(
+        default=None,
+        description="Ownership label applied to instances using this profile.",
+    )
+    labels: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Additional GCE labels applied to instances using this profile.",
+    )
+    metadata: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Additional GCE metadata applied to instances using this profile.",
+    )
+    env: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Additional environment variables injected into instances using this profile.",
+    )
+    startup_script_uri: Optional[str] = Field(
+        default=None,
+        description="Optional URI for a maintained startup script payload.",
+    )
+    use_os_login: bool = Field(
+        default=True,
+        description="Must remain true; Phase 1 supports OS Login-compatible SSH only.",
+    )
+    ssh_via_iap: bool = Field(
+        default=False,
+        description="Whether operators are expected to connect through IAP-backed SSH.",
+    )
+    assign_external_ip: bool = Field(
+        default=True,
+        description=(
+            "Whether instances using this profile should receive an external NAT "
+            "interface for outbound internet access."
+        ),
+    )
+
+    @field_validator(
+        "machine_type",
+        "boot_disk_type",
+        "image",
+        "instance_template",
+        "network",
+        "subnetwork",
+        "service_account_email",
+        "owner_label",
+        "startup_script_uri",
+    )
+    @classmethod
+    def normalize_optional_strings(cls, value: Optional[str]) -> Optional[str]:
+        """Trim string values and collapse blanks to None."""
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        return normalized
+
+    @field_validator("service_account_email")
+    @classmethod
+    def validate_service_account_email(cls, value: Optional[str]) -> str:
+        """Require an email-like service account identifier."""
+        if value is None:
+            raise ValueError("Field is required")
+        validated = _validate_cloud_service_account_email(value)
+        if validated is None:
+            raise ValueError("Field is required")
+        return validated
+
+    @field_validator("labels", "metadata")
+    @classmethod
+    def validate_string_maps(cls, value: Dict[str, str]) -> Dict[str, str]:
+        """Reject blank keys or values in user-supplied maps."""
+        return _validate_cloud_string_map(value)
+
+    @field_validator("env")
+    @classmethod
+    def validate_env_map(cls, value: Dict[str, str]) -> Dict[str, str]:
+        return _validate_cloud_env_map(
+            value,
+            field_path="cloud.providers.gce.instance_profiles.env",
+        )
+
+    @model_validator(mode="after")
+    def validate_profile_contract(self):
+        """Enforce the supported GCE instance profile contract."""
+        has_image = self.image is not None
+        has_template = self.instance_template is not None
+        if has_image == has_template:
+            raise ValueError(
+                "cloud.providers.gce.instance_profiles require exactly one of 'image' or 'instance_template'"
+            )
+
+        if not self.use_os_login:
+            raise ValueError(
+                "cloud.providers.gce.instance_profiles.use_os_login must remain true for the supported Phase 1 access model"
+            )
+
+        has_owner = self.owner_label is not None or "owner" in self.labels
+        if not has_owner:
+            raise ValueError(
+                "cloud.providers.gce.instance_profiles require owner_label or labels.owner for ownership"
+            )
+
+        if has_image:
+            if self.machine_type is None:
+                raise ValueError(
+                    "cloud.providers.gce.instance_profiles.machine_type is required when 'image' is used"
+                )
+            if self.boot_disk_size_gb is None:
+                raise ValueError(
+                    "cloud.providers.gce.instance_profiles.boot_disk_size_gb is required when 'image' is used"
+                )
+
+        if has_template and (
+            self.machine_type is not None
+            or self.boot_disk_size_gb is not None
+            or self.boot_disk_type is not None
+        ):
+            raise ValueError(
+                "cloud.providers.gce.instance_profiles.instance_template cannot be combined with explicit machine_type, boot_disk_size_gb, or boot_disk_type"
+            )
+
+        return self
+
+
+class GceProviderConfig(BaseModel):
+    """Provider-native GCE configuration for provider-neutral cloud launches."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project: str = Field(..., description="GCP project ID used for GCE resources.")
+    network: Optional[str] = Field(
+        default=None,
+        description="Optional default VPC network name for GCE resources.",
+    )
+    subnetwork: Optional[str] = Field(
+        default=None,
+        description="Optional default VPC subnetwork for GCE resources.",
+    )
+    ssh_via_iap: bool = Field(
+        default=False,
+        description="Whether operators are expected to connect through IAP-backed SSH by default.",
+    )
+    assign_external_ip: bool = Field(
+        default=True,
+        description=(
+            "Whether instances using this provider should receive an external NAT "
+            "interface by default."
+        ),
+    )
+    region: Optional[str] = Field(
+        default=None,
+        description="Default region for GCE placements when zone-level targeting is not used.",
+    )
+    regions: list[str] = Field(
+        default_factory=list,
+        description="Default ordered candidate regions for GCE placements.",
+    )
+    zones: list[str] = Field(
+        default_factory=list,
+        description="Default ordered candidate zones for GCE placements.",
+    )
+    fallback: bool = Field(
+        default=True,
+        description="Whether GCE placements fall back to later candidate zones by default.",
+    )
+    defaults: CloudLaunchDefaultsConfig = Field(
+        default_factory=CloudLaunchDefaultsConfig,
+        description="Provider-specific overrides for shared cloud launch defaults.",
+    )
+    profile_defaults: Optional[GceInstanceProfileDefaultsConfig] = Field(
+        default=None,
+        description="Default GCE instance-profile fields merged into every named instance profile.",
+    )
+    instance_profiles: Dict[str, GceInstanceProfileConfig] = Field(
+        default_factory=dict,
+        description="Named GCE instance profiles referenced by orchestrator and worker placements.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def apply_profile_defaults(cls, value: object) -> object:
+        """Merge provider-level profile defaults into raw instance profile objects."""
+        if not isinstance(value, dict):
+            return value
+
+        normalized = dict(value)
+        raw_defaults = normalized.get("profile_defaults")
+        defaults_dict = raw_defaults if isinstance(raw_defaults, dict) else {}
+        raw_profiles = normalized.get("instance_profiles")
+        if not isinstance(raw_profiles, dict):
+            return normalized
+
+        normalized["instance_profiles"] = {
+            key: (
+                _merge_gce_profile_defaults(defaults_dict, raw_profile)
+                if isinstance(raw_profile, dict)
+                else raw_profile
+            )
+            for key, raw_profile in raw_profiles.items()
+        }
+        return normalized
+
+    @field_validator("project", "network", "subnetwork", "region")
+    @classmethod
+    def normalize_optional_strings(cls, value: Optional[str]) -> Optional[str]:
+        """Trim string values and collapse blanks to None."""
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        return normalized
+
+    @field_validator("project")
+    @classmethod
+    def validate_required_project(cls, value: Optional[str]) -> str:
+        """Require a non-empty GCP project id."""
+        if value is None:
+            raise ValueError("Field is required")
+        return value
+
+    @field_validator("regions")
+    @classmethod
+    def validate_regions(cls, value: list[str]) -> list[str]:
+        return _normalize_cloud_region_list(
+            value,
+            field_path="cloud.providers.gce.regions",
+        )
+
+    @field_validator("zones")
+    @classmethod
+    def validate_zones(cls, value: list[str]) -> list[str]:
+        return _normalize_cloud_zone_list(
+            value,
+            field_path="cloud.providers.gce.zones",
+        )
+
+    @field_validator("instance_profiles")
+    @classmethod
+    def validate_instance_profiles(
+        cls, value: Dict[str, GceInstanceProfileConfig]
+    ) -> Dict[str, GceInstanceProfileConfig]:
+        """Reject blank instance-profile names."""
+        normalized: dict[str, GceInstanceProfileConfig] = {}
+        for key, item in value.items():
+            key_str = key.strip()
+            if not key_str:
+                raise ValueError(
+                    "cloud.providers.gce.instance_profiles keys must not be blank"
+                )
+            normalized[key_str] = item
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_region_zone_contract(self):
+        effective_regions = _coalesce_cloud_regions(
+            region=self.region,
+            regions=self.regions,
+        )
+        if effective_regions:
+            self.regions = effective_regions
+            self.region = effective_regions[0]
+            _validate_regions_zone_membership(
+                regions=effective_regions,
+                zones=self.zones,
+                field_path="cloud.providers.gce.zones",
+            )
+        return self
+
+
+def _iter_provider_instance_profile_catalogs(
+    providers: BaseModel,
+) -> list[tuple[str, dict[str, Any]]]:
+    """Collect configured provider instance-profile catalogs from a provider model."""
+    catalogs: list[tuple[str, dict[str, Any]]] = []
+    for provider_name in type(providers).model_fields:
+        provider_config = getattr(providers, provider_name, None)
+        if provider_config is None:
+            continue
+
+        instance_profiles = getattr(provider_config, "instance_profiles", None)
+        if isinstance(instance_profiles, dict):
+            catalogs.append((provider_name, instance_profiles))
+    return catalogs
+
+
+class CloudProvidersConfig(BaseModel):
+    """Provider catalog for provider-neutral cloud configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    gce: Optional[GceProviderConfig] = Field(
+        default=None,
+        description="GCE provider-specific backing configuration.",
+    )
+
+    @model_validator(mode="after")
+    def validate_unique_instance_profile_names(self):
+        """Require instance-profile names to be globally unique across providers."""
+        owners_by_profile: dict[str, list[str]] = {}
+        for (
+            provider_name,
+            instance_profiles,
+        ) in _iter_provider_instance_profile_catalogs(self):
+            for profile_name in instance_profiles:
+                owners_by_profile.setdefault(profile_name, []).append(provider_name)
+
+        duplicates = {
+            profile_name: sorted(set(provider_names))
+            for profile_name, provider_names in owners_by_profile.items()
+            if len(set(provider_names)) > 1
+        }
+        if duplicates:
+            conflicts = "; ".join(
+                f"'{profile_name}' appears under {', '.join(provider_names)}"
+                for profile_name, provider_names in sorted(duplicates.items())
+            )
+            raise ValueError(
+                "cloud.providers.*.instance_profiles keys must be globally unique "
+                f"across providers; {conflicts}"
+            )
+        return self
+
+
+class CloudOrchestratorPlacementConfig(BaseModel):
+    """Provider-neutral orchestrator placement declaration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    zone: Optional[str] = Field(
+        default=None,
+        description="Explicit preferred zone for the orchestrator.",
+    )
+    zones: list[str] = Field(
+        default_factory=list,
+        description="Ordered candidate zones for the orchestrator.",
+    )
+    region: Optional[str] = Field(
+        default=None,
+        description="Optional region for the orchestrator placement.",
+    )
+    regions: list[str] = Field(
+        default_factory=list,
+        description="Ordered candidate regions for the orchestrator placement.",
+    )
+    fallback: Optional[bool] = Field(
+        default=None,
+        description="Optional override for orchestrator zone fallback behavior.",
+    )
+    instance_profile: str = Field(
+        ..., description="Named provider instance profile for the orchestrator."
+    )
+    env: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Environment variables injected only into the orchestrator VM.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_zone_fields(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        zone = _normalize_cloud_optional_string(normalized.get("zone"))
+        zones = _normalize_cloud_zone_list(
+            normalized.get("zones"),
+            field_path="cloud.orchestrator.zones",
+        )
+        if zone is not None and not zones:
+            zones = [zone]
+        normalized["zone"] = (
+            zone if zone is not None and not normalized.get("zones") else None
+        )
+        normalized["zones"] = zones
+        return normalized
+
+    @field_validator("region")
+    @classmethod
+    def normalize_region(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_cloud_optional_string(value)
+
+    @field_validator("regions")
+    @classmethod
+    def validate_regions(cls, value: list[str]) -> list[str]:
+        return _normalize_cloud_region_list(
+            value,
+            field_path="cloud.orchestrator.regions",
+        )
+
+    @field_validator("instance_profile")
+    @classmethod
+    def validate_required_strings(cls, value: str) -> str:
+        """Require non-empty strings for placement references."""
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Field is required")
+        return normalized
+
+    @field_validator("env")
+    @classmethod
+    def validate_env_map(cls, value: Dict[str, str]) -> Dict[str, str]:
+        return _validate_cloud_env_map(value, field_path="cloud.orchestrator.env")
+
+    @model_validator(mode="after")
+    def validate_region_zone_contract(self):
+        effective_regions = _coalesce_cloud_regions(
+            region=self.region,
+            regions=self.regions,
+        )
+        if effective_regions:
+            self.regions = effective_regions
+            self.region = effective_regions[0]
+            _validate_regions_zone_membership(
+                regions=effective_regions,
+                zones=self.zones,
+                field_path="cloud.orchestrator.zones",
+            )
+        return self
+
+
+class CloudPlacementDefaultsConfig(BaseModel):
+    """Role-level defaults merged into worker/evaluator placements."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    instance_profile: Optional[str] = Field(
+        default=None,
+        description="Default named provider instance profile for placements in this role.",
+    )
+    count: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Default number of instances to create per placement in this role.",
+    )
+    region: Optional[str] = Field(
+        default=None,
+        description="Default region for placements in this role.",
+    )
+    regions: list[str] = Field(
+        default_factory=list,
+        description="Default ordered candidate regions for placements in this role.",
+    )
+    zones: list[str] = Field(
+        default_factory=list,
+        description="Default ordered candidate zones for placements in this role.",
+    )
+    fallback: Optional[bool] = Field(
+        default=None,
+        description="Optional default zone fallback policy for placements in this role.",
+    )
+    env: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Default environment variables merged into each placement in this role.",
+    )
+
+    @field_validator("instance_profile")
+    @classmethod
+    def normalize_instance_profile(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        return normalized
+
+    @field_validator("region")
+    @classmethod
+    def normalize_region(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_cloud_optional_string(value)
+
+    @field_validator("regions")
+    @classmethod
+    def validate_regions(cls, value: list[str]) -> list[str]:
+        return _normalize_cloud_region_list(
+            value,
+            field_path="cloud.placements.defaults.regions",
+        )
+
+    @field_validator("zones")
+    @classmethod
+    def validate_zones(cls, value: list[str]) -> list[str]:
+        return _normalize_cloud_zone_list(
+            value,
+            field_path="cloud.placements.defaults.zones",
+        )
+
+    @field_validator("env")
+    @classmethod
+    def validate_env_map(cls, value: Dict[str, str]) -> Dict[str, str]:
+        return _validate_cloud_env_map(
+            value,
+            field_path="cloud.placements.defaults.env",
+        )
+
+    @model_validator(mode="after")
+    def validate_region_zone_contract(self):
+        effective_regions = _coalesce_cloud_regions(
+            region=self.region,
+            regions=self.regions,
+        )
+        if effective_regions:
+            self.regions = effective_regions
+            self.region = effective_regions[0]
+            _validate_regions_zone_membership(
+                regions=effective_regions,
+                zones=self.zones,
+                field_path="cloud.placements.defaults.zones",
+            )
+        return self
+
+
+class CloudPlacementConfig(BaseModel):
+    """Shared provider-neutral placement declaration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    zone: Optional[str] = Field(
+        default=None,
+        description="Explicit zone for this placement.",
+    )
+    zones: list[str] = Field(
+        default_factory=list,
+        description="Ordered candidate zones for this placement.",
+    )
+    region: Optional[str] = Field(
+        default=None,
+        description="Optional region for this placement.",
+    )
+    regions: list[str] = Field(
+        default_factory=list,
+        description="Ordered candidate regions for this placement.",
+    )
+    fallback: Optional[bool] = Field(
+        default=None,
+        description="Optional override for zone fallback behavior in this placement.",
+    )
+    count: int = Field(
+        default=1,
+        ge=1,
+        description="Number of instances to create in this placement.",
+    )
+    instance_profile: str = Field(
+        ..., description="Named provider instance profile for this placement."
+    )
+    env: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Environment variables injected into every VM in this placement.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_zone_fields(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        zone = _normalize_cloud_optional_string(normalized.get("zone"))
+        zones = _normalize_cloud_zone_list(
+            normalized.get("zones"),
+            field_path="cloud.placements.zones",
+        )
+        if zone is not None and not zones:
+            zones = [zone]
+        normalized["zone"] = (
+            zone if zone is not None and not normalized.get("zones") else None
+        )
+        normalized["zones"] = zones
+        return normalized
+
+    @field_validator("region")
+    @classmethod
+    def normalize_region(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_cloud_optional_string(value)
+
+    @field_validator("regions")
+    @classmethod
+    def validate_regions(cls, value: list[str]) -> list[str]:
+        return _normalize_cloud_region_list(
+            value,
+            field_path="cloud.placements.regions",
+        )
+
+    @field_validator("instance_profile")
+    @classmethod
+    def validate_required_strings(cls, value: str) -> str:
+        """Require non-empty strings for placement references."""
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Field is required")
+        return normalized
+
+    @field_validator("zone")
+    @classmethod
+    def normalize_zone(cls, value: Optional[str]) -> Optional[str]:
+        """Trim zone strings and collapse blanks to None."""
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        return normalized
+
+    @field_validator("env")
+    @classmethod
+    def validate_env_map(cls, value: Dict[str, str]) -> Dict[str, str]:
+        return _validate_cloud_env_map(value, field_path="cloud.placements.env")
+
+    @model_validator(mode="after")
+    def validate_region_zone_contract(self):
+        effective_regions = _coalesce_cloud_regions(
+            region=self.region,
+            regions=self.regions,
+        )
+        if effective_regions:
+            self.regions = effective_regions
+            self.region = effective_regions[0]
+            _validate_regions_zone_membership(
+                regions=effective_regions,
+                zones=self.zones,
+                field_path="cloud.placements.zones",
+            )
+        return self
+
+
+class CloudWorkerPlacementConfig(CloudPlacementConfig):
+    """Provider-neutral worker placement declaration."""
+
+
+class CloudWorkersConfig(BaseModel):
+    """Provider-neutral worker placement configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    defaults: CloudPlacementDefaultsConfig = Field(
+        default_factory=CloudPlacementDefaultsConfig,
+        description="Optional defaults merged into each worker placement.",
+    )
+    placements: List[CloudWorkerPlacementConfig] = Field(
+        default_factory=list,
+        description="Explicit worker placements for the experiment.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_workers_config(cls, value: object) -> object:
+        """Reject unsupported fields and merge worker placement defaults."""
+        if isinstance(value, dict):
+            for field_name in ("quota_validation", "mode"):
+                if field_name in value:
+                    raise ValueError(
+                        f"cloud.workers.{field_name} is not supported in v1"
+                    )
+            normalized = dict(value)
+            defaults = normalized.get("defaults")
+            defaults_dict = defaults if isinstance(defaults, dict) else {}
+            placements = normalized.get("placements")
+            if isinstance(placements, list):
+                normalized["placements"] = [
+                    _merge_cloud_placement_defaults(defaults_dict, placement)
+                    if isinstance(placement, dict)
+                    else placement
+                    for placement in placements
+                ]
+            return normalized
+        return value
+
+    @model_validator(mode="after")
+    def validate_worker_contract(self):
+        """Require at least one worker placement."""
+        if not self.placements:
+            raise ValueError("cloud.workers.placements must not be empty")
+        return self
+
+
+class CloudEvaluatorPlacementConfig(CloudPlacementConfig):
+    """Provider-neutral evaluator placement declaration."""
+
+
+class CloudEvaluatorsConfig(BaseModel):
+    """Provider-neutral evaluator placement configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    defaults: CloudPlacementDefaultsConfig = Field(
+        default_factory=CloudPlacementDefaultsConfig,
+        description="Optional defaults merged into each evaluator placement.",
+    )
+    placements: List[CloudEvaluatorPlacementConfig] = Field(
+        default_factory=list,
+        description="Explicit evaluator placements for the experiment.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_evaluators_config(cls, value: object) -> object:
+        """Merge evaluator placement defaults into raw placements."""
+        if isinstance(value, dict):
+            normalized = dict(value)
+            defaults = normalized.get("defaults")
+            defaults_dict = defaults if isinstance(defaults, dict) else {}
+            placements = normalized.get("placements")
+            if isinstance(placements, list):
+                normalized["placements"] = [
+                    _merge_cloud_placement_defaults(defaults_dict, placement)
+                    if isinstance(placement, dict)
+                    else placement
+                    for placement in placements
+                ]
+            return normalized
+        return value
+
+    @model_validator(mode="after")
+    def validate_evaluator_contract(self):
+        """Require at least one evaluator placement when evaluators are configured."""
+        if not self.placements:
+            raise ValueError("cloud.evaluators.placements must not be empty")
+        return self
+
+
+class CloudBootstrapConfig(BaseModel):
+    """Provider-neutral cloud VM bootstrap policy."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    prepare_mode: Literal["full", "skip_base_images"] = Field(
+        default="full",
+        description="How cloud VMs run `crsbench prepare` before joining runtime.",
+    )
+    download_benchmarks: Literal["auto", "always", "never"] = Field(
+        default="auto",
+        description="Whether cloud VMs download benchmarks before runtime startup.",
+    )
+    gitcache: bool = Field(
+        default=False,
+        description=(
+            "Whether cloud VMs activate gitcache as the managed git wrapper "
+            "after installing the gitcache binary."
+        ),
+    )
+
+
+class CloudRemoteConfig(BaseModel):
+    """Remote VM path defaults for cloud operations."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    experiment_root: Optional[str] = Field(
+        default=None,
+        description=(
+            "Remote VM root directory that contains per-experiment trees. "
+            "Defaults to storage.experiment_filestore when unset."
+        ),
+    )
+
+    @field_validator("experiment_root")
+    @classmethod
+    def normalize_optional_strings(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_cloud_optional_string(value)
+
+
+class CloudConfig(BaseModel):
+    """Top-level cloud provisioning configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    bootstrap: CloudBootstrapConfig = Field(
+        default_factory=CloudBootstrapConfig,
+        description="Provider-neutral bootstrap policy for cloud VMs.",
+    )
+    remote: CloudRemoteConfig = Field(
+        default_factory=CloudRemoteConfig,
+        description="Remote VM path defaults used by standalone cloud operations.",
+    )
+    defaults: CloudLaunchDefaultsConfig = Field(
+        default_factory=CloudLaunchDefaultsConfig,
+        description="Provider-agnostic launch/bootstrap defaults for all cloud roles.",
+    )
+    env: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Global environment variables merged into all launched cloud roles.",
+    )
+    providers: Optional[CloudProvidersConfig] = Field(
+        default=None,
+        description="Provider-specific backing configuration for cloud launches.",
+    )
+    orchestrator: Optional[CloudOrchestratorPlacementConfig] = Field(
+        default=None,
+        description="Provider-neutral orchestrator placement configuration.",
+    )
+    workers: Optional[CloudWorkersConfig] = Field(
+        default=None,
+        description="Provider-neutral worker placement configuration.",
+    )
+    evaluators: Optional[CloudEvaluatorsConfig] = Field(
+        default=None,
+        description="Provider-neutral evaluator placement configuration.",
+    )
+
+    @field_validator("env")
+    @classmethod
+    def validate_env_map(cls, value: Dict[str, str]) -> Dict[str, str]:
+        return _validate_cloud_env_map(value, field_path="cloud.env")
+
+    @model_validator(mode="after")
+    def validate_cloud_contract(self):
+        """Enforce the provider-neutral cloud launch contract."""
+        if self.providers is None:
+            raise ValueError(
+                "cloud.providers is required for provider-neutral cloud configuration"
+            )
+        if self.orchestrator is None:
+            raise ValueError(
+                "cloud.orchestrator is required for provider-neutral cloud configuration"
+            )
+        if self.workers is None:
+            raise ValueError(
+                "cloud.workers is required for provider-neutral cloud configuration"
+            )
+        if not isinstance(self.orchestrator, CloudOrchestratorPlacementConfig):
+            raise ValueError(
+                "cloud.orchestrator must use zone(s) and instance_profile in provider-neutral cloud config"
+            )
+        self._validate_provider_neutral_references()
+        self._validate_effective_zone_contract()
+        return self
+
+    def _validate_provider_neutral_references(self) -> None:
+        """Ensure placement provider and profile references resolve cleanly."""
+        if self.providers is None or self.workers is None:
+            return
+        if not isinstance(self.orchestrator, CloudOrchestratorPlacementConfig):
+            raise ValueError(
+                "cloud.orchestrator must use zone and instance_profile in provider-neutral cloud config"
+            )
+        orchestrator = self.orchestrator
+
+        provider_names = [
+            self._resolve_provider_for_profile(
+                orchestrator.instance_profile,
+                field_path="cloud.orchestrator.instance_profile",
+            ),
+            *(
+                self._resolve_provider_for_profile(
+                    placement.instance_profile,
+                    field_path="cloud.workers.placements instance_profile",
+                )
+                for placement in self.workers.placements
+            ),
+        ]
+        if self.evaluators is not None:
+            provider_names.extend(
+                self._resolve_provider_for_profile(
+                    placement.instance_profile,
+                    field_path="cloud.evaluators.placements instance_profile",
+                )
+                for placement in self.evaluators.placements
+            )
+        provider = validate_single_cloud_provider(provider_names)
+        if provider is not CloudProvider.GCE:
+            raise ValueError(f"cloud provider '{provider.value}' is not supported yet")
+        return
+
+    def _validate_effective_zone_contract(self) -> None:
+        if (
+            self.providers is None
+            or self.providers.gce is None
+            or self.orchestrator is None
+        ):
+            return
+
+        provider_region = self.providers.gce.region
+        provider_regions = self.providers.gce.regions
+        provider_zones = self.providers.gce.zones
+        orchestrator_regions: list[str] = (
+            self.orchestrator.regions
+            if self.orchestrator.regions
+            else ([self.orchestrator.region] if self.orchestrator.region else [])
+            or provider_regions
+            or ([provider_region] if provider_region else [])
+        )
+        orchestrator_region = orchestrator_regions[0] if orchestrator_regions else None
+        orchestrator_zones = (
+            self.orchestrator.zones if self.orchestrator.zones else provider_zones
+        )
+        if (
+            not self.orchestrator.zones
+            and not provider_zones
+            and orchestrator_region is None
+        ):
+            raise ValueError(
+                "cloud.orchestrator requires explicit zone, zones, or region"
+            )
+        if orchestrator_region is not None:
+            _validate_regions_zone_membership(
+                regions=orchestrator_regions,
+                zones=orchestrator_zones,
+                field_path="cloud.orchestrator.zones",
+            )
+
+        if self.workers is not None:
+            for index, placement in enumerate(self.workers.placements):
+                effective_regions: list[str] = (
+                    placement.regions
+                    if placement.regions
+                    else ([placement.region] if placement.region else [])
+                    or provider_regions
+                    or ([provider_region] if provider_region else [])
+                )
+                effective_region = effective_regions[0] if effective_regions else None
+                effective_zones = placement.zones if placement.zones else provider_zones
+                if (
+                    not placement.zones
+                    and not provider_zones
+                    and effective_region is None
+                ):
+                    raise ValueError(
+                        "cloud.workers.placements require explicit zone, zones, or region"
+                    )
+                if effective_region is not None:
+                    _validate_regions_zone_membership(
+                        regions=effective_regions,
+                        zones=effective_zones,
+                        field_path=f"cloud.workers.placements.{index}.zones",
+                    )
+
+        if self.evaluators is not None:
+            for index, placement in enumerate(self.evaluators.placements):
+                effective_regions: list[str] = (
+                    placement.regions
+                    if placement.regions
+                    else ([placement.region] if placement.region else [])
+                    or provider_regions
+                    or ([provider_region] if provider_region else [])
+                )
+                effective_region = effective_regions[0] if effective_regions else None
+                effective_zones = placement.zones if placement.zones else provider_zones
+                if (
+                    not placement.zones
+                    and not provider_zones
+                    and effective_region is None
+                ):
+                    raise ValueError(
+                        "cloud.evaluators.placements require explicit zone, zones, or region"
+                    )
+                if effective_region is not None:
+                    _validate_regions_zone_membership(
+                        regions=effective_regions,
+                        zones=effective_zones,
+                        field_path=f"cloud.evaluators.placements.{index}.zones",
+                    )
+
+    def _resolve_provider_for_profile(
+        self,
+        profile_name: str,
+        *,
+        field_path: str,
+    ) -> CloudProvider:
+        """Resolve the owning provider catalog for one referenced instance profile."""
+        if self.providers is None:
+            raise ValueError(
+                "cloud.providers is required for provider-neutral cloud config"
+            )
+
+        matches: list[CloudProvider] = []
+        catalogs = _iter_provider_instance_profile_catalogs(self.providers)
+        for provider_name, instance_profiles in catalogs:
+            if profile_name in instance_profiles:
+                matches.append(coerce_cloud_provider(provider_name))
+
+        if not matches:
+            if len(catalogs) == 1:
+                provider_name, _ = catalogs[0]
+                raise ValueError(
+                    f"{field_path} '{profile_name}' was not found under "
+                    f"cloud.providers.{provider_name}.instance_profiles"
+                )
+            raise ValueError(
+                f"{field_path} '{profile_name}' was not found under any "
+                "cloud.providers.*.instance_profiles catalog"
+            )
+
+        return validate_single_cloud_provider(matches)
+
+
 class ExperimentPovInputs(BaseModel):
     """POV input settings."""
 
@@ -1452,6 +3314,10 @@ class ExperimentConfig(BaseModel):
     )
     resources: Optional[ResourceConfig] = Field(
         default=None, description="Resource allocation configuration for trials"
+    )
+    cloud: Optional[CloudConfig] = Field(
+        default=None,
+        description="Optional cloud worker provisioning configuration.",
     )
     worker: Optional[WorkerConfig] = Field(
         default=None, description="Distributed worker configuration"

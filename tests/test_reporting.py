@@ -4,6 +4,7 @@ import json
 import tarfile
 import tempfile
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 from crsbench.reporting import (
@@ -23,6 +24,7 @@ from crsbench.reporting import (
     TrialMetrics,
     discover_trials,
 )
+from crsbench.reporting.orchestrator import ReportGenerator
 from crsbench.reporting.validator import ExperimentValidator
 
 
@@ -141,6 +143,96 @@ def sample_trial_metrics() -> TrialMetrics:
         ],
         snapshot_count=4,
     )
+
+
+def test_generate_experiment_report_skips_rich_progress_when_stdout_not_tty(
+    temp_dir: Path, sample_trial_info: TrialInfo, sample_trial_metrics: TrialMetrics
+) -> None:
+    generator = ReportGenerator(
+        output_dir=temp_dir / "reports",
+        benchmarks_root=temp_dir / "benchmarks",
+    )
+    experiment_metrics = MagicMock()
+
+    with (
+        patch(
+            "crsbench.reporting.orchestrator.discover_trials",
+            return_value=[sample_trial_info],
+        ),
+        patch.object(
+            generator.snapshot_loader,
+            "load_trial_snapshots",
+            return_value=[MagicMock()],
+        ),
+        patch.object(generator, "_get_cpv_info", return_value=(1, ["cpv_0"])),
+        patch.object(
+            generator.metrics_aggregator,
+            "aggregate_trial",
+            return_value=sample_trial_metrics,
+        ),
+        patch.object(
+            generator.metrics_aggregator,
+            "aggregate_experiment",
+            return_value=experiment_metrics,
+        ),
+        patch.object(
+            generator.json_generator,
+            "generate_trial_report",
+            return_value=temp_dir / "trial.json",
+        ),
+        patch.object(
+            generator.json_generator,
+            "generate_experiment_report",
+            return_value=temp_dir / "experiment.json",
+        ),
+        patch("sys.stdout.isatty", return_value=False),
+        patch("rich.progress.Progress") as progress,
+    ):
+        result = generator.generate_experiment_report(
+            temp_dir / "experiment", format="json"
+        )
+
+    assert result["json"] == temp_dir / "experiment.json"
+    progress.assert_not_called()
+
+
+def test_get_experiment_metrics_skips_rich_progress_when_stdout_not_tty(
+    temp_dir: Path, sample_trial_info: TrialInfo, sample_trial_metrics: TrialMetrics
+) -> None:
+    generator = ReportGenerator(
+        output_dir=temp_dir / "reports",
+        benchmarks_root=temp_dir / "benchmarks",
+    )
+    experiment_metrics = MagicMock()
+
+    with (
+        patch(
+            "crsbench.reporting.orchestrator.discover_trials",
+            return_value=[sample_trial_info],
+        ),
+        patch.object(
+            generator.snapshot_loader,
+            "load_trial_snapshots",
+            return_value=[MagicMock()],
+        ),
+        patch.object(generator, "_get_cpv_info", return_value=(1, ["cpv_0"])),
+        patch.object(
+            generator.metrics_aggregator,
+            "aggregate_trial",
+            return_value=sample_trial_metrics,
+        ),
+        patch.object(
+            generator.metrics_aggregator,
+            "aggregate_experiment",
+            return_value=experiment_metrics,
+        ),
+        patch("sys.stdout.isatty", return_value=False),
+        patch("rich.progress.Progress") as progress,
+    ):
+        result = generator.get_experiment_metrics(temp_dir / "experiment")
+
+    assert result is experiment_metrics
+    progress.assert_not_called()
 
 
 @pytest.fixture

@@ -30,7 +30,6 @@ import secrets
 import shutil
 import string
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import List
@@ -40,10 +39,21 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
+from crsbench.cloud.bootstrap import CloudVmBootstrapInputs
+from crsbench.cloud.readiness import CloudWorkerState
+from crsbench.distributed.job_lifecycle import JobLifecycleRecord, JobState
 from crsbench.distributed.jobs import (
     _build_trial_output_path,
     _check_existing_trial,
     get_crs_type,
+)
+from crsbench.distributed.queue import build_trial_key
+from crsbench.distributed.queue_monitor import (
+    QueueMonitorCallbacks,
+    monitor_queue,
+)
+from crsbench.distributed.queue_monitor import (
+    get_experiment_queue_stats as get_shared_queue_stats,
 )
 from crsbench.evaluation.cleanup import cleanup_trial_directory
 from crsbench.evaluation.results import TrialMetadata, TrialResult
@@ -53,12 +63,13 @@ from crsbench.evaluation.trial_paths import (
 from crsbench.evaluation.trial_paths import (
     resolve_benchmarks_root,
 )
-from crsbench.utils import log_progress, log_section, log_summary
+from crsbench.utils import log_section
 from crsbench.utils.benchmark_utils import (
     filter_benchmarks_by_mode,
     get_available_modes_for_benchmark,
 )
 from crsbench.utils.logger import configure_logger, get_logger
+from crsbench.utils.storage_warning import warn_for_persisted_storage_roots
 from crsbench.validation.ground_truth_paths import GroundTruthPaths
 from crsbench.validation.meta_adapter import MetaYamlAdapter
 from crsbench.validation.schemas import (
@@ -72,6 +83,15 @@ load_dotenv()
 
 # Get logger instance
 logger = get_logger(__name__)
+
+
+def _rich_console_available() -> bool:
+    """Return True when Rich is installed and stdout is interactive."""
+    return (
+        importlib.util.find_spec("rich") is not None
+        and hasattr(sys.stdout, "isatty")
+        and sys.stdout.isatty()
+    )
 
 
 def sanitize_trial_id(raw_id: str) -> str:
@@ -222,6 +242,11 @@ def build_trial_id(experiment_name: str, trial: Trial, trial_suffix: str) -> str
     return sanitize_trial_id(raw_trial_id)
 
 
+def build_trial_queue_job_id(experiment_name: str, trial: Trial) -> str:
+    """Build the deterministic RQ job id for one logical distributed trial."""
+    return build_trial_id(experiment_name, trial, "")
+
+
 def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     """Add arguments for the 'run' subcommand.
 
@@ -370,6 +395,11 @@ Examples:
 
     add_queue_subparser(subparsers)
 
+    # 'cloud' subcommand - cloud experiment lifecycle management
+    from crsbench.cloud.cli.cloud_command import add_cloud_subparser
+
+    add_cloud_subparser(subparsers)
+
     # 'verify' subcommand - POV verification
     from crsbench.evaluation.verification.cli.pov_verify_command import (
         add_verify_subparser,
@@ -462,6 +492,13 @@ def validate_filestore_permissions(config: ExperimentConfig) -> None:
     Raises:
         SystemExit: If directory creation fails or write permission is denied
     """
+    warn_for_persisted_storage_roots(
+        experiment_filestore=config.experiment_filestore,
+        report_filestore=config.report_filestore,
+        copy_results_after_trial=config.copy_results_after_trial,
+        results_filestore=config.results_filestore,
+    )
+
     directories_to_check = [
         ("experiment_filestore", config.experiment_filestore),
         ("report_filestore", config.report_filestore),
@@ -944,8 +981,7 @@ def display_trial_matrix(trials: List[Trial], start_index: int = 0) -> None:
         sys.stdout.write("No trials to display.\n")
         return
 
-    # Check if Rich is available
-    rich_available = importlib.util.find_spec("rich") is not None
+    rich_available = _rich_console_available()
 
     if rich_available:
         _display_trial_matrix_rich(trials, start_index)
@@ -1020,6 +1056,9 @@ def should_use_distributed_mode(
     from crsbench.distributed.queue import check_redis_available
 
     redis_host = normalize_redis_host(getattr(config, "redis_host", None))
+    cloud_config = getattr(config, "cloud", None)
+    cloud_gce = getattr(cloud_config, "gce", None)
+    cloud_workers = getattr(cloud_config, "workers", None)
 
     # Check for conflicting flags
     distributed = getattr(args, "distributed", False)
@@ -1051,6 +1090,21 @@ def should_use_distributed_mode(
     if args.local_only:
         logger.info("Local mode explicitly requested via --local-only flag")
         return False
+
+    if cloud_gce is not None or cloud_workers is not None:
+        if not redis_host:
+            raise RuntimeError(
+                "cloud worker provisioning requires Redis for distributed execution. "
+                "Set redis_host for local orchestration or ensure the remote "
+                "orchestrator bootstrap patches the experiment config."
+            )
+        if not check_redis_available(redis_host):
+            raise RuntimeError(
+                "cloud worker provisioning requires distributed execution, but Redis is not "
+                f"available at {redis_host}."
+            )
+        logger.info("Cloud worker config detected, using distributed mode")
+        return True
 
     # Only 1 job - use local mode by default
     if total_jobs == 1:
@@ -1201,6 +1255,9 @@ def _write_orchestrator_marker(
     # Write marker
     marker_name = ".success" if trial_result.success else ".fail"
     marker_path = trial_dir / marker_name
+    opposite_marker = trial_dir / (".fail" if trial_result.success else ".success")
+    if opposite_marker.exists():
+        opposite_marker.unlink()
     if not marker_path.exists():
         marker_path.touch()
 
@@ -1241,6 +1298,164 @@ def _write_orchestrator_marker(
     )
 
 
+def _seed_lifecycle_record(
+    session,
+    *,
+    experiment_name: str,
+    trial: Trial,
+    job_id: str | None,
+) -> None:
+    """Create an initial shadow lifecycle record for one enqueued trial job."""
+    if session.lifecycle_store is None or not job_id:
+        return
+
+    trial_key = build_trial_key(
+        crs=trial.crs,
+        benchmark=trial.benchmark_harness.name,
+        harness=trial.benchmark_harness.harness.name,
+        mode=trial.mode,
+        sanitizer=trial.sanitizer,
+        trial_num=trial.trial_num,
+        target_cpv_id=trial.target_cpv_id,
+    )
+    session.lifecycle_store.set(
+        experiment_name,
+        JobLifecycleRecord(
+            job_id=job_id,
+            trial_key=trial_key,
+            state=JobState.QUEUED,
+            claimed_by=None,
+        ),
+    )
+
+
+def _build_cloud_liveness_checker(readiness_store, experiment_name: str):
+    """Return a cloud worker liveness predicate keyed by instance name."""
+
+    def _is_alive(instance_name: str) -> bool:
+        for worker in readiness_store.list_workers(experiment_name):
+            if worker.instance_name != instance_name:
+                continue
+            return worker.state not in {
+                CloudWorkerState.BOOTSTRAP_FAILED,
+                CloudWorkerState.DELETED,
+            }
+        return False
+
+    return _is_alive
+
+
+def _build_artifact_checker(config: ExperimentConfig):
+    """Return a checker for published terminal markers on orchestrator storage."""
+
+    def _artifacts_exist(trial_key: str) -> JobState | None:
+        parts = trial_key.split(":", 6)
+        if len(parts) != 7:
+            return None
+        crs, benchmark, harness, mode, sanitizer, trial_num_str, target_cpv_id = parts
+        try:
+            trial_num = int(trial_num_str)
+        except ValueError:
+            return None
+        trial_dir = _build_trial_output_path(
+            filestore=config.experiment_filestore.resolve(),
+            experiment_name=config.experiment,
+            crs=crs,
+            benchmark=benchmark,
+            harness=harness,
+            mode=mode,
+            sanitizer=sanitizer,
+            trial_num=trial_num,
+            target_cpv_id=None if target_cpv_id == "-" else target_cpv_id,
+        )
+        if (trial_dir / ".success").exists():
+            return JobState.COMPLETED
+        if (trial_dir / ".fail").exists():
+            return JobState.FAILED
+        return None
+
+    return _artifacts_exist
+
+
+def _trial_result_key(result: TrialResult) -> str:
+    """Build the canonical logical trial key for a TrialResult."""
+    return build_trial_key(
+        crs=result.crs,
+        benchmark=result.benchmark,
+        harness=result.harness,
+        mode=result.mode,
+        sanitizer=result.sanitizer,
+        trial_num=result.trial_num,
+        target_cpv_id=result.target_cpv_id,
+    )
+
+
+def _canonical_result_state(
+    result: TrialResult, config: ExperimentConfig
+) -> JobState | None:
+    """Return the terminal marker state currently published for a trial result."""
+    if not result.mode or not result.sanitizer:
+        return None
+
+    trial_dir = _build_trial_output_path(
+        filestore=config.experiment_filestore.resolve(),
+        experiment_name=config.experiment,
+        crs=result.crs,
+        benchmark=result.benchmark,
+        harness=result.harness,
+        mode=result.mode,
+        sanitizer=result.sanitizer,
+        trial_num=result.trial_num,
+        target_cpv_id=result.target_cpv_id,
+    )
+    if (trial_dir / ".success").exists():
+        return JobState.COMPLETED
+    if (trial_dir / ".fail").exists():
+        return JobState.FAILED
+    return None
+
+
+def _dedupe_results_by_logical_trial(
+    results: List[TrialResult], config: ExperimentConfig
+) -> List[TrialResult]:
+    """Collapse duplicate physical attempts onto one logical trial outcome.
+
+    The orchestrator's canonical visible state is the per-trial marker directory,
+    not the number of physical RQ jobs that happened to produce results.
+    """
+    grouped: dict[str, list[TrialResult]] = {}
+    order: list[str] = []
+    for result in results:
+        trial_key = _trial_result_key(result)
+        if trial_key not in grouped:
+            grouped[trial_key] = []
+            order.append(trial_key)
+        grouped[trial_key].append(result)
+
+    deduped: list[TrialResult] = []
+    for trial_key in order:
+        group = grouped[trial_key]
+        if len(group) == 1:
+            deduped.append(group[0])
+            continue
+
+        canonical_state = _canonical_result_state(group[-1], config)
+        if canonical_state is JobState.COMPLETED:
+            selected = next((r for r in reversed(group) if r.success), group[-1])
+        elif canonical_state is JobState.FAILED:
+            selected = next((r for r in reversed(group) if not r.success), group[-1])
+        else:
+            selected = group[-1]
+
+        logger.warning(
+            f"Collapsing {len(group)} physical results for logical trial "
+            f"{trial_key} to one visible outcome"
+        )
+        deduped.append(selected)
+
+    return deduped
+
+
 def monitor_jobs(
     queue,
     job_list: List,
@@ -1249,6 +1464,8 @@ def monitor_jobs(
     *,
     disk_skipped: int = 0,
     registry=None,
+    lifecycle_store=None,
+    defer_failed_retry_to_lifecycle: bool = True,
 ) -> List[TrialResult]:
     """Monitor job progress and display status.
 
@@ -1263,9 +1480,7 @@ def monitor_jobs(
     Returns:
         List of TrialResult objects
     """
-    import importlib.util
-
-    rich_available = importlib.util.find_spec("rich") is not None
+    rich_available = _rich_console_available()
     if not rich_available:
         logger.warning("Rich library not available, using basic progress display")
 
@@ -1277,6 +1492,8 @@ def monitor_jobs(
             config,
             disk_skipped=disk_skipped,
             registry=registry,
+            lifecycle_store=lifecycle_store,
+            defer_failed_retry_to_lifecycle=defer_failed_retry_to_lifecycle,
         )
     return _monitor_jobs_basic(
         queue,
@@ -1285,6 +1502,8 @@ def monitor_jobs(
         config,
         disk_skipped=disk_skipped,
         registry=registry,
+        lifecycle_store=lifecycle_store,
+        defer_failed_retry_to_lifecycle=defer_failed_retry_to_lifecycle,
     )
 
 
@@ -1296,17 +1515,295 @@ def _get_experiment_queue_stats(queue, experiment_name: str) -> dict:
     finished/failed jobs only for the target experiment while still reporting
     the total number of connected workers for operator visibility.
     """
-    from crsbench.distributed.queue import get_existing_trials, get_queue_stats
+    return get_shared_queue_stats(queue, experiment_name)
 
-    global_stats = get_queue_stats(queue)
-    existing = get_existing_trials(queue, experiment_name=experiment_name)
-    return {
-        "queued": len(existing["queued"]),
-        "started": len(existing["started"]),
-        "finished": len(existing["finished"]),
-        "failed": len(existing["failed"]),
-        "workers": global_stats.get("workers", 0),
-    }
+
+def _build_synthetic_job_result(
+    job,
+    *,
+    success: bool,
+    error: str | None,
+    error_type: str | None,
+) -> TrialResult:
+    """Create a synthetic TrialResult from persisted RQ job metadata."""
+    kwargs = job.kwargs or {}
+    meta = job.meta or {}
+    return TrialResult(
+        crs=kwargs.get("crs", "unknown"),
+        benchmark=kwargs.get("benchmark", "unknown"),
+        harness=kwargs.get("harness_name", meta.get("harness", "unknown")),
+        trial_num=kwargs.get("trial_num", 0),
+        crs_type="bug-finding",
+        mode=kwargs.get("mode"),
+        sanitizer=kwargs.get("sanitizer"),
+        target_cpv_id=kwargs.get("target_cpv_id"),
+        success=success,
+        execution_time=0.0,
+        error=error,
+        error_type=error_type,
+        report={},
+        metadata=TrialMetadata(
+            timestamp_start=0.0,
+            timestamp_end=0.0,
+            worker_machine=meta.get("worker_name"),
+        ),
+    )
+
+
+def _build_failed_job_result(job) -> TrialResult:
+    """Create a synthetic failed TrialResult for RQ-level job failures."""
+    return _build_synthetic_job_result(
+        job,
+        success=False,
+        error=f"Job failed: {job.exc_info}",
+        error_type="RQJobFailure",
+    )
+
+
+def _job_failure_requires_lifecycle_recovery(job) -> bool:
+    """Return whether an RQ failure should defer to lifecycle/orphan recovery."""
+    exc_info = getattr(job, "exc_info", None)
+    if not isinstance(exc_info, str):
+        return False
+
+    lowered = exc_info.lower()
+    return (
+        "abandonedjoberror" in lowered
+        or "work horse terminated unexpectedly" in lowered
+        or "work-horse terminated unexpectedly" in lowered
+    )
+
+
+def _build_monitor_callbacks(
+    config: ExperimentConfig,
+    *,
+    experiment_name: str,
+    lifecycle_store=None,
+    defer_failed_retry_to_lifecycle: bool = True,
+) -> QueueMonitorCallbacks:
+    """Build marker-writing callbacks for the shared queue monitor."""
+    marked_jobs: set[str] = set()
+    initial_marker_state_by_trial_key: dict[str, JobState | None] = {}
+
+    def _result_worker_machine(result: TrialResult | object | None) -> str | None:
+        metadata = getattr(result, "metadata", None)
+        worker_name = getattr(metadata, "worker_machine", None)
+        return worker_name if isinstance(worker_name, str) and worker_name else None
+
+    def _job_expects_lifecycle_tracking(job) -> bool:
+        meta = getattr(job, "meta", {}) or {}
+        return meta.get("expects_lifecycle_tracking") is True
+
+    def _terminal_update_policy(
+        job,
+        *,
+        reported_worker_name: str | None = None,
+        callback_kind: str = "finished",
+    ) -> tuple[bool, bool]:
+        """Return (should_write_marker, should_mark_processed) for one callback."""
+        if lifecycle_store is None:
+            return True, True
+        job_id = getattr(job, "id", None)
+        if not isinstance(job_id, str):
+            return True, True
+        try:
+            record = lifecycle_store.get(experiment_name, job_id)
+        except Exception as exc:
+            logger.warning(
+                "Failed to read lifecycle ownership for {}: {}",
+                job_id[:8],
+                exc,
+            )
+            return False, False
+        if record is None:
+            if _job_expects_lifecycle_tracking(job):
+                logger.warning(
+                    "Missing lifecycle ownership for tracked distributed job {}; consuming callback without marker",
+                    job_id[:8],
+                )
+                return False, True
+            logger.warning(
+                "Missing lifecycle ownership for {}; treating terminal callback as legacy/untracked",
+                job_id[:8],
+            )
+            return True, True
+        active_states = {JobState.CLAIMED, JobState.RUNNING, JobState.SYNCING}
+        if record.state not in active_states:
+            if callback_kind == "finished" and record.state is JobState.COMPLETED:
+                return True, True
+            if callback_kind == "failed" and record.state is JobState.FAILED:
+                return True, True
+            logger.warning(
+                "Skipping stale terminal update for {} because lifecycle state is {}",
+                job_id[:8],
+                record.state.value,
+            )
+            return False, True
+        if callback_kind == "failed" and record.retry_count > 0:
+            if defer_failed_retry_to_lifecycle:
+                logger.warning(
+                    "Deferring failed terminal update for retried active job {} to lifecycle recovery",
+                    job_id[:8],
+                )
+                return False, False
+            logger.warning(
+                "Consuming retried failed callback for {} without marker because lifecycle recovery is unavailable",
+                job_id[:8],
+            )
+            return False, True
+        if callback_kind == "failed" and _job_failure_requires_lifecycle_recovery(job):
+            if defer_failed_retry_to_lifecycle:
+                logger.warning(
+                    "Deferring abandoned failed callback for active job {} to lifecycle recovery",
+                    job_id[:8],
+                )
+                return False, False
+            logger.warning(
+                "Consuming abandoned failed callback for {} without marker because lifecycle recovery is unavailable",
+                job_id[:8],
+            )
+            return False, True
+        if record.claimed_by is None:
+            logger.warning(
+                "Active lifecycle record for {} has no owner; leaving callback retryable",
+                job_id[:8],
+            )
+            return False, False
+        worker_name = reported_worker_name
+        if worker_name is None:
+            meta = getattr(job, "meta", {}) or {}
+            meta_worker_name = meta.get("worker_name")
+            if isinstance(meta_worker_name, str) and meta_worker_name:
+                worker_name = meta_worker_name
+        if callback_kind == "failed" and worker_name is None:
+            worker_name = record.claimed_by
+        if worker_name != record.claimed_by:
+            logger.warning(
+                "Skipping stale terminal update for {} from worker {!r}; current owner is {!r}",
+                job_id[:8],
+                worker_name,
+                record.claimed_by,
+            )
+            return False, False
+        return True, True
+
+    def _marker_write_policy(result: TrialResult) -> tuple[bool, bool]:
+        """Return (should_write_marker, should_mark_processed)."""
+        trial_key = _trial_result_key(result)
+        if trial_key not in initial_marker_state_by_trial_key:
+            initial_marker_state_by_trial_key[trial_key] = _canonical_result_state(
+                result, config
+            )
+        existing_state = initial_marker_state_by_trial_key[trial_key]
+        if existing_state is None:
+            return True, True
+
+        desired_state = JobState.COMPLETED if result.success else JobState.FAILED
+        if existing_state is not desired_state:
+            logger.warning(
+                f"Skipping conflicting terminal update for logical trial {trial_key}; "
+                f"canonical marker already reports {existing_state.value}"
+            )
+        return False, True
+
+    def on_job_finished(job) -> bool:
+        job_id = getattr(job, "id", None)
+        if not isinstance(job_id, str) or job_id in marked_jobs:
+            return True
+        try:
+            result = job.result
+            if result is None:
+                logger.warning(f"Job {job_id[:8]} finished but result is None")
+                result = _build_missing_job_result(
+                    job,
+                    config=config,
+                    experiment_name=experiment_name,
+                    lifecycle_store=lifecycle_store,
+                )
+            callback_kind = "finished" if result.success else "failed"
+            should_write_marker, should_mark_processed = _terminal_update_policy(
+                job,
+                reported_worker_name=_result_worker_machine(result),
+                callback_kind=callback_kind,
+            )
+            if not should_write_marker:
+                if should_mark_processed:
+                    marked_jobs.add(job_id)
+                return should_mark_processed
+            should_write_marker, should_mark_processed = _marker_write_policy(result)
+            if should_write_marker:
+                _write_orchestrator_marker(result, config)
+                initial_marker_state_by_trial_key[_trial_result_key(result)] = (
+                    JobState.COMPLETED if result.success else JobState.FAILED
+                )
+        except Exception as exc:
+            logger.warning(
+                f"Failed to write orchestrator marker for {job_id[:8]}: {exc}"
+            )
+            return False
+        if should_mark_processed:
+            marked_jobs.add(job_id)
+        return should_mark_processed
+
+    def on_job_failed(job) -> bool:
+        job_id = getattr(job, "id", None)
+        if not isinstance(job_id, str) or job_id in marked_jobs:
+            return True
+        try:
+            result = _build_failed_job_result(job)
+            should_write_marker, should_mark_processed = _terminal_update_policy(
+                job,
+                reported_worker_name=_result_worker_machine(result),
+                callback_kind="failed",
+            )
+            if not should_write_marker:
+                if should_mark_processed:
+                    marked_jobs.add(job_id)
+                return should_mark_processed
+            should_write_marker, should_mark_processed = _marker_write_policy(result)
+            if should_write_marker:
+                _write_orchestrator_marker(result, config)
+                initial_marker_state_by_trial_key[_trial_result_key(result)] = (
+                    JobState.COMPLETED if result.success else JobState.FAILED
+                )
+        except Exception as exc:
+            logger.warning(f"Failed to write orchestrator fail marker: {exc}")
+            return False
+        if should_mark_processed:
+            marked_jobs.add(job_id)
+        return should_mark_processed
+
+    return QueueMonitorCallbacks(
+        on_job_finished=on_job_finished,
+        on_job_failed=on_job_failed,
+    )
+
+
+def _collect_monitored_results(
+    job_list: List,
+    *,
+    config: ExperimentConfig | None = None,
+    experiment_name: str | None = None,
+    lifecycle_store=None,
+) -> List[TrialResult]:
+    """Collect trial results after the shared queue monitor exits."""
+    results: List[TrialResult] = []
+    for job in job_list:
+        job.refresh()
+        if job.result is not None:
+            results.append(job.result)
+        elif job.is_finished:
+            results.append(
+                _build_missing_job_result(
+                    job,
+                    config=config,
+                    experiment_name=experiment_name,
+                    lifecycle_store=lifecycle_store,
+                )
+            )
+        elif job.is_failed:
+            results.append(_build_failed_job_result(job))
+    return results
 
 
 def _monitor_jobs_basic(
@@ -1317,172 +1814,32 @@ def _monitor_jobs_basic(
     *,
     disk_skipped: int = 0,
     registry=None,
+    lifecycle_store=None,
+    defer_failed_retry_to_lifecycle: bool = True,
 ) -> List[TrialResult]:
     """Basic job monitoring without Rich UI."""
-    last_renew = time.monotonic()
     logger.info(f"\nMonitoring {len(job_list)} jobs for experiment: {experiment_name}")
-
-    # Track jobs that have already had markers written
-    marked_jobs: set[str] = set()
-
-    while True:
-        stats = _get_experiment_queue_stats(queue, experiment_name)
-
-        # Display stats
-        log_section(f"Experiment: {experiment_name}", width=60)
-        logger.info(f"Workers connected: {stats.get('workers', 0)}")
-        status_dict = {
-            "queued": stats["queued"],
-            "started": stats["started"],
-            "finished": stats["finished"],
-            "failed": stats["failed"],
-        }
-        if disk_skipped > 0:
-            status_dict["skipped (disk)"] = disk_skipped
-        status_dict["total"] = len(job_list) + disk_skipped
-        log_summary(
-            "Queue Status",
-            status_dict,
-            show_percentage=False,
-            level="debug",
-        )
-
-        # Display currently running jobs with metadata
-        running_jobs = []
-        for job in job_list:
-            job.refresh()
-            if job.get_status() == "started":
-                worker_name = job.meta.get("worker_name", "?")
-                crs = job.meta.get("crs", "?")
-                benchmark = job.meta.get("benchmark", "?")
-                harness = job.meta.get("harness", "?")
-                target_cpv_id = job.meta.get("target_cpv_id", "-")
-                mode = job.meta.get("mode", "?")
-                trial_num = job.meta.get("trial_num", "?")
-                phase = job.meta.get("phase", "queued")
-                phase_started_at = job.meta.get("phase_started_at")
-                elapsed = ""
-                if phase_started_at:
-                    elapsed_sec = int(time.time() - phase_started_at)
-                    mins, secs = divmod(elapsed_sec, 60)
-                    elapsed = f"{mins}m{secs}s"
-                running_jobs.append(
-                    f"  [{worker_name}] [{crs}] {benchmark}/{harness} cpv={target_cpv_id} mode={mode} trial={trial_num} phase={phase} ({elapsed})"
-                )
-
-        if running_jobs:
-            logger.info("Currently Running:")
-            for line in running_jobs:
-                logger.info(line)
-
-        # Check if all jobs completed and write markers incrementally
-        completed = 0
-        failed = 0
-        for job in job_list:
-            job.refresh()
-            if job.is_finished:
-                completed += 1
-                # Write orchestrator marker as soon as job finishes
-                if job.id not in marked_jobs:
-                    try:
-                        result = job.result
-                        if result is None:
-                            logger.warning(
-                                f"Job {job.id[:8]} finished but result is None"
-                            )
-                            _write_orchestrator_marker(
-                                _build_missing_job_result(job), config
-                            )
-                        else:
-                            _write_orchestrator_marker(result, config)
-                        marked_jobs.add(job.id)
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to write orchestrator marker for {job.id[:8]}: {e}"
-                        )
-                        marked_jobs.add(job.id)
-            elif job.is_failed:
-                failed += 1
-                # Write .fail marker for RQ-level failures
-                if job.id not in marked_jobs:
-                    kwargs = job.kwargs or {}
-                    meta = job.meta or {}
-                    fail_result = TrialResult(
-                        crs=kwargs.get("crs", "unknown"),
-                        benchmark=kwargs.get("benchmark", "unknown"),
-                        harness=kwargs.get("harness_name", "unknown"),
-                        trial_num=kwargs.get("trial_num", 0),
-                        crs_type="bug-finding",
-                        mode=kwargs.get("mode"),
-                        sanitizer=kwargs.get("sanitizer"),
-                        success=False,
-                        execution_time=0.0,
-                        error=f"Job failed: {job.exc_info}",
-                        error_type="RQJobFailure",
-                        report={},
-                        metadata=TrialMetadata(
-                            timestamp_start=0.0,
-                            timestamp_end=0.0,
-                            worker_machine=meta.get("worker_name"),
-                        ),
-                    )
-                    try:
-                        _write_orchestrator_marker(fail_result, config)
-                    except Exception as e:
-                        logger.warning(f"Failed to write orchestrator fail marker: {e}")
-                    marked_jobs.add(job.id)
-
-        log_progress(
-            completed + failed,
-            len(job_list),
-            f"Jobs complete ({completed} success, {failed} failed)",
-        )
-
-        if completed + failed >= len(job_list):
-            break
-
-        if registry and time.monotonic() - last_renew >= 60:
-            if not registry.renew(experiment_name):
-                logger.warning("Experiment lock lost — another run may have taken over")
-            last_renew = time.monotonic()
-
-        time.sleep(3)
-
-    # Collect results
-    results: List[TrialResult] = []
-    for job in job_list:
-        job.refresh()
-        if job.result is not None:
-            results.append(job.result)
-        elif job.is_finished:
-            results.append(_build_missing_job_result(job))
-        elif job.is_failed:
-            # Create TrialResult for failed jobs using job kwargs
-            kwargs = job.kwargs or {}
-            meta = job.meta or {}
-            results.append(
-                TrialResult(
-                    crs=kwargs.get("crs", "unknown"),
-                    benchmark=kwargs.get("benchmark", "unknown"),
-                    harness=kwargs.get("harness_name", "unknown"),
-                    trial_num=kwargs.get("trial_num", 0),
-                    crs_type="bug-finding",
-                    mode=kwargs.get("mode"),
-                    sanitizer=kwargs.get("sanitizer"),
-                    success=False,
-                    execution_time=0.0,
-                    error=f"Job failed: {job.exc_info}",
-                    error_type="RQJobFailure",
-                    report={},
-                    metadata=TrialMetadata(
-                        timestamp_start=0.0,
-                        timestamp_end=0.0,
-                        worker_machine=meta.get("worker_name"),
-                    ),
-                )
-            )
-
-    return results
+    monitor_queue(
+        queue,
+        experiment_name,
+        tracked_jobs=job_list,
+        total_jobs=len(job_list),
+        disk_skipped=disk_skipped,
+        registry=registry,
+        callbacks=_build_monitor_callbacks(
+            config,
+            experiment_name=experiment_name,
+            lifecycle_store=lifecycle_store,
+            defer_failed_retry_to_lifecycle=defer_failed_retry_to_lifecycle,
+        ),
+        use_rich=False,
+    )
+    return _collect_monitored_results(
+        job_list,
+        config=config,
+        experiment_name=experiment_name,
+        lifecycle_store=lifecycle_store,
+    )
 
 
 def _monitor_jobs_rich(
@@ -1493,221 +1850,262 @@ def _monitor_jobs_rich(
     *,
     disk_skipped: int = 0,
     registry=None,
+    lifecycle_store=None,
+    defer_failed_retry_to_lifecycle: bool = True,
 ) -> List[TrialResult]:
     """Monitor jobs with Rich UI."""
-    from rich.console import Console, Group
-    from rich.live import Live
-    from rich.table import Table
-
-    console = Console()
-
-    # Track jobs that have already had markers written
-    marked_jobs: set[str] = set()
-
-    def generate_status_table():
-        stats = _get_experiment_queue_stats(queue, experiment_name)
-
-        # Debug: log queue info
-        logger.debug(f"Experiment queue stats for {experiment_name}: {stats}")
-
-        # Queue status table
-        table = Table(title=f"Experiment: {experiment_name}")
-        table.add_column("Status", style="cyan")
-        table.add_column("Count", justify="right", style="magenta")
-
-        table.add_row("Queued", str(stats["queued"]))
-        table.add_row("Started", str(stats["started"]))
-        table.add_row("Finished", str(stats["finished"]), style="green")
-        table.add_row("Failed", str(stats["failed"]), style="red")
-        if disk_skipped > 0:
-            table.add_row("Skipped (disk)", str(disk_skipped), style="dim")
-        table.add_row("Total", str(len(job_list) + disk_skipped))
-
-        # Running jobs table
-        running_table = Table(title="Running Jobs")
-        running_table.add_column("Worker", style="green")
-        running_table.add_column("CRS", style="cyan")
-        running_table.add_column("Benchmark", style="yellow")
-        running_table.add_column("Harness", style="yellow")
-        running_table.add_column("CPV", style="magenta")
-        running_table.add_column("Mode", style="blue")
-        running_table.add_column("Trial", justify="right")
-        running_table.add_column("Phase", style="magenta")
-        running_table.add_column("Elapsed", justify="right", style="magenta")
-
-        for job in job_list:
-            job.refresh()
-            status = job.get_status()
-            logger.debug(
-                f"Job {job.id[:8]}: status={status}, is_queued={job.is_queued}, is_started={job.is_started}, is_finished={job.is_finished}"
-            )
-            if status == "started":
-                worker_name = job.meta.get("worker_name", "?")
-                crs = job.meta.get("crs", "?")
-                benchmark = job.meta.get("benchmark", "?")
-                harness = job.meta.get("harness", "?")
-                target_cpv_id = job.meta.get("target_cpv_id", "-")
-                mode = job.meta.get("mode", "?")
-                trial_num = str(job.meta.get("trial_num", "?"))
-                phase = job.meta.get("phase", "queued")
-                phase_started_at = job.meta.get("phase_started_at")
-                elapsed = "N/A"
-                if phase_started_at:
-                    elapsed_sec = int(time.time() - phase_started_at)
-                    mins, secs = divmod(elapsed_sec, 60)
-                    elapsed = f"{mins}m {secs}s"
-                running_table.add_row(
-                    worker_name,
-                    crs,
-                    benchmark,
-                    harness,
-                    target_cpv_id,
-                    mode,
-                    trial_num,
-                    phase,
-                    elapsed,
-                )
-
-        return Group(table, running_table)
-
-    last_renew = time.monotonic()
-    with Live(generate_status_table(), refresh_per_second=1, console=console) as live:
-        while True:
-            # Check if all jobs completed and write markers incrementally
-            completed = 0
-            failed = 0
-            for job in job_list:
-                job.refresh()
-                if job.is_finished:
-                    completed += 1
-                    if job.id not in marked_jobs:
-                        try:
-                            result = job.result
-                            if result is None:
-                                logger.warning(
-                                    f"Job {job.id[:8]} finished but result is None"
-                                )
-                                _write_orchestrator_marker(
-                                    _build_missing_job_result(job), config
-                                )
-                            else:
-                                _write_orchestrator_marker(result, config)
-                            marked_jobs.add(job.id)
-                        except Exception as e:
-                            logger.warning(
-                                f"Failed to write orchestrator marker for "
-                                f"{job.id[:8]}: {e}"
-                            )
-                            marked_jobs.add(job.id)
-                elif job.is_failed:
-                    failed += 1
-                    if job.id not in marked_jobs:
-                        kwargs = job.kwargs or {}
-                        meta = job.meta or {}
-                        fail_result = TrialResult(
-                            crs=kwargs.get("crs", "unknown"),
-                            benchmark=kwargs.get("benchmark", "unknown"),
-                            harness=kwargs.get("harness_name", "unknown"),
-                            trial_num=kwargs.get("trial_num", 0),
-                            crs_type="bug-finding",
-                            mode=kwargs.get("mode"),
-                            sanitizer=kwargs.get("sanitizer"),
-                            target_cpv_id=kwargs.get("target_cpv_id"),
-                            success=False,
-                            execution_time=0.0,
-                            error=f"Job failed: {job.exc_info}",
-                            error_type="RQJobFailure",
-                            report={},
-                            metadata=TrialMetadata(
-                                timestamp_start=0.0,
-                                timestamp_end=0.0,
-                                worker_machine=meta.get("worker_name"),
-                            ),
-                        )
-                        try:
-                            _write_orchestrator_marker(fail_result, config)
-                        except Exception as e:
-                            logger.warning(
-                                f"Failed to write orchestrator fail marker: {e}"
-                            )
-                        marked_jobs.add(job.id)
-
-            if completed + failed >= len(job_list):
-                break
-
-            if registry and time.monotonic() - last_renew >= 60:
-                if not registry.renew(experiment_name):
-                    logger.warning(
-                        "Experiment lock lost — another run may have taken over"
-                    )
-                last_renew = time.monotonic()
-
-            live.update(generate_status_table())
-            time.sleep(1)
-
-    # Collect results
-    results: List[TrialResult] = []
-    for job in job_list:
-        job.refresh()
-        if job.result is not None:
-            results.append(job.result)
-        elif job.is_finished:
-            results.append(_build_missing_job_result(job))
-        elif job.is_failed:
-            # Create TrialResult for failed jobs using job kwargs
-            kwargs = job.kwargs or {}
-            meta = job.meta or {}
-            results.append(
-                TrialResult(
-                    crs=kwargs.get("crs", "unknown"),
-                    benchmark=kwargs.get("benchmark", "unknown"),
-                    harness=kwargs.get("harness_name", "unknown"),
-                    trial_num=kwargs.get("trial_num", 0),
-                    crs_type="bug-finding",
-                    mode=kwargs.get("mode"),
-                    sanitizer=kwargs.get("sanitizer"),
-                    target_cpv_id=kwargs.get("target_cpv_id"),
-                    success=False,
-                    execution_time=0.0,
-                    error=f"Job failed: {job.exc_info}",
-                    error_type="RQJobFailure",
-                    report={},
-                    metadata=TrialMetadata(
-                        timestamp_start=0.0,
-                        timestamp_end=0.0,
-                        worker_machine=meta.get("worker_name"),
-                    ),
-                )
-            )
-
-    console.print("\n[green]✓[/green] All jobs completed!")
-    return results
+    monitor_queue(
+        queue,
+        experiment_name,
+        tracked_jobs=job_list,
+        total_jobs=len(job_list),
+        disk_skipped=disk_skipped,
+        registry=registry,
+        callbacks=_build_monitor_callbacks(
+            config,
+            experiment_name=experiment_name,
+            lifecycle_store=lifecycle_store,
+            defer_failed_retry_to_lifecycle=defer_failed_retry_to_lifecycle,
+        ),
+        use_rich=True,
+        poll_interval=1.0,
+    )
+    return _collect_monitored_results(
+        job_list,
+        config=config,
+        experiment_name=experiment_name,
+        lifecycle_store=lifecycle_store,
+    )
 
 
-def _build_missing_job_result(job) -> TrialResult:
-    """Create a synthetic failed TrialResult for finished jobs with no result."""
-    kwargs = job.kwargs or {}
-    meta = job.meta or {}
-    return TrialResult(
-        crs=kwargs.get("crs", meta.get("crs", "unknown")),
-        benchmark=kwargs.get("benchmark", meta.get("benchmark", "unknown")),
-        harness=kwargs.get("harness_name", meta.get("harness", "unknown")),
-        trial_num=kwargs.get("trial_num", meta.get("trial_num", 0)),
-        crs_type="bug-finding",
-        mode=kwargs.get("mode", meta.get("mode")),
-        sanitizer=kwargs.get("sanitizer"),
-        target_cpv_id=kwargs.get("target_cpv_id", meta.get("target_cpv_id")),
+def _build_missing_job_result(
+    job,
+    *,
+    config: ExperimentConfig | None = None,
+    experiment_name: str | None = None,
+    lifecycle_store=None,
+) -> TrialResult:
+    """Create a synthetic TrialResult for finished jobs with no result payload."""
+    result = _build_synthetic_job_result(
+        job,
         success=False,
-        execution_time=0.0,
         error="Job finished without TrialResult payload",
         error_type="MissingJobResult",
-        report={},
-        metadata=TrialMetadata(
-            timestamp_start=0.0,
-            timestamp_end=0.0,
-            worker_machine=meta.get("worker_name"),
-        ),
     )
+    job_id = getattr(job, "id", None)
+
+    if (
+        lifecycle_store is not None
+        and experiment_name is not None
+        and isinstance(job_id, str)
+    ):
+        try:
+            record = lifecycle_store.get(experiment_name, job_id)
+        except Exception:
+            record = None
+        if record is not None:
+            if record.state is JobState.COMPLETED:
+                return _build_synthetic_job_result(
+                    job,
+                    success=True,
+                    error=None,
+                    error_type=None,
+                )
+            if record.state is JobState.FAILED:
+                return result
+
+    if config is not None:
+        canonical_state = _canonical_result_state(result, config)
+        if canonical_state is JobState.COMPLETED:
+            return _build_synthetic_job_result(
+                job,
+                success=True,
+                error=None,
+                error_type=None,
+            )
+
+    return result
+
+
+def _dedupe_jobs_by_id(jobs: List) -> List:
+    """Preserve one job object per RQ job id while keeping first-seen order."""
+    seen: set[str] = set()
+    deduped: List = []
+    for job in jobs:
+        job_id = getattr(job, "id", None)
+        if not isinstance(job_id, str) or not job_id:
+            deduped.append(job)
+            continue
+        if job_id in seen:
+            continue
+        seen.add(job_id)
+        deduped.append(job)
+    return deduped
+
+
+def _flatten_existing_jobs(existing_by_status: dict[str, list]) -> List:
+    """Flatten physical jobs across queue statuses for continue-mode monitoring."""
+    flattened: List = []
+    for bucket_name in (
+        "queued",
+        "deferred",
+        "scheduled",
+        "started",
+        "finished",
+        "failed",
+    ):
+        flattened.extend(existing_by_status.get(bucket_name, []))
+    return _dedupe_jobs_by_id(flattened)
+
+
+def _active_existing_jobs(existing_by_status: dict[str, list]) -> List:
+    """Return existing non-terminal physical jobs that may still need execution."""
+    active: List = []
+    for bucket_name in ("queued", "deferred", "scheduled", "started"):
+        active.extend(existing_by_status.get(bucket_name, []))
+    return _dedupe_jobs_by_id(active)
+
+
+def _fetch_jobs_by_id(
+    queue, job_ids: List[str], *, strict_missing: bool = False
+) -> List:
+    """Fetch concrete RQ jobs by id, optionally failing if Redis entries are missing."""
+    if not job_ids:
+        return []
+
+    import rq.job
+
+    fetched: List = []
+    missing: List[str] = []
+    for job_id in job_ids:
+        try:
+            job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
+        except Exception as exc:
+            if strict_missing:
+                missing.append(job_id)
+                logger.warning(
+                    "Failed to fetch resume collection job {}: {}", job_id, exc
+                )
+                continue
+            logger.warning("Failed to fetch resume collection job {}: {}", job_id, exc)
+            continue
+        if job is None:
+            if strict_missing:
+                missing.append(job_id)
+            logger.warning("Resume collection job {} no longer exists in Redis", job_id)
+            continue
+        fetched.append(job)
+    if strict_missing and missing:
+        missing_list = ", ".join(sorted(missing))
+        raise RuntimeError(f"Resume collection jobs missing from Redis: {missing_list}")
+    return _dedupe_jobs_by_id(fetched)
+
+
+def _job_trial_key(job) -> str | None:
+    """Return the logical trial key for a concrete RQ job when derivable."""
+    try:
+        from crsbench.distributed.queue import get_trial_key
+
+        return get_trial_key(job)
+    except Exception as exc:
+        job_id = getattr(job, "id", "<unknown>")
+        logger.warning("Failed to derive logical trial key for {}: {}", job_id, exc)
+        return None
+
+
+def _filter_resume_collection_jobs(resume_jobs: List, active_jobs: List) -> List:
+    """Drop resume-only syncing jobs shadowed by an active attempt for the same trial."""
+    active_trial_keys = {
+        trial_key
+        for trial_key in (_job_trial_key(job) for job in active_jobs)
+        if trial_key is not None
+    }
+    if not active_trial_keys:
+        return _dedupe_jobs_by_id(resume_jobs)
+
+    filtered: List = []
+    for job in resume_jobs:
+        trial_key = _job_trial_key(job)
+        if trial_key is not None and trial_key in active_trial_keys:
+            logger.warning(
+                "Skipping resume collection job {} for logical trial {} because active work already exists",
+                getattr(job, "id", "<unknown>"),
+                trial_key,
+            )
+            continue
+        filtered.append(job)
+    return _dedupe_jobs_by_id(filtered)
+
+
+def _revive_failed_lifecycle_for_retry(session, experiment_name: str, job) -> bool:
+    """Move an explicitly retried failed lifecycle record back to QUEUED."""
+    lifecycle_store = getattr(session, "lifecycle_store", None)
+    job_id = getattr(job, "id", None)
+    if lifecycle_store is None or not isinstance(job_id, str):
+        return True
+
+    try:
+        record = lifecycle_store.get(experiment_name, job_id)
+    except Exception as exc:
+        logger.warning(
+            "Failed to read lifecycle record for explicit retry on {}: {}",
+            job_id[:8],
+            exc,
+        )
+        return False
+
+    if record is None or not isinstance(record, JobLifecycleRecord):
+        return True
+    if record.state is not JobState.FAILED:
+        logger.warning(
+            "Skipping explicit retry for {} because lifecycle state is {}, not failed",
+            job_id[:8],
+            record.state.value,
+        )
+        return False
+
+    try:
+        lifecycle_store.transition(
+            experiment_name,
+            job_id,
+            JobState.QUEUED,
+            claimed_by=None,
+            detail="retry requested by orchestrator",
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to revive lifecycle record for explicit retry on {}: {}",
+            job_id[:8],
+            exc,
+        )
+        return False
+
+    return True
+
+
+def _rollback_failed_lifecycle_retry(
+    session, experiment_name: str, job, reason: str
+) -> None:
+    """Restore a failed lifecycle state when explicit retry enqueue fails."""
+    lifecycle_store = getattr(session, "lifecycle_store", None)
+    job_id = getattr(job, "id", None)
+    if lifecycle_store is None or not isinstance(job_id, str):
+        return
+
+    try:
+        lifecycle_store.transition(
+            experiment_name,
+            job_id,
+            JobState.FAILED,
+            claimed_by=None,
+            detail=reason,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to roll back lifecycle record after explicit retry enqueue failure on {}: {}",
+            job_id[:8],
+            exc,
+        )
 
 
 def prompt_queue_mode(existing: dict[str, dict]) -> str:
@@ -1866,18 +2264,38 @@ def run_experiment_distributed(
     # Check for existing jobs in queue (queue sanity check)
     from crsbench.distributed.queue import (
         clear_experiment_jobs,
+        get_existing_trial_jobs,
         get_existing_trials,
         handle_orphaned_jobs,
+        has_potentially_live_started_jobs,
     )
 
     existing = get_existing_trials(queue, experiment_name=experiment_name)
-    has_existing = any(existing.values())
+    physical_existing = get_existing_trial_jobs(queue, experiment_name=experiment_name)
+    if any(existing.values()) and not any(physical_existing.values()):
+        physical_existing = {
+            bucket_name: list(jobs_by_key.values())
+            for bucket_name, jobs_by_key in existing.items()
+        }
+    has_existing = any(physical_existing.values())
+    existing_tracked_jobs: List = []
+    active_existing_jobs = _active_existing_jobs(physical_existing)
     from crsbench.distributed.registry import RuntimeRegistration
 
     registration = RuntimeRegistration.from_experiment_config(config)
+    bootstrap_inputs = (
+        CloudVmBootstrapInputs.from_experiment_config(config)
+        if isinstance(config, BaseModel)
+        else None
+    )
     lock_acquired = False
+    requeued_failed_jobs = 0
+    resume_collection_job_ids: List[str] = []
+    resume_jobs: List = []
 
     normalized_queue_mode = queue_mode.lower() if queue_mode else None
+    if normalized_queue_mode == "continue":
+        existing_tracked_jobs = _flatten_existing_jobs(physical_existing)
 
     try:
         if has_existing and normalized_queue_mode is None:
@@ -1914,46 +2332,116 @@ def run_experiment_distributed(
                         "Use a different experiment name or wait for the current run to finish."
                     )
                     return
-                total_existing = sum(len(v) for v in existing.values())
+                total_existing = sum(len(v) for v in physical_existing.values())
                 logger.warning(
                     f"Purging {total_existing} existing jobs from queue for experiment={experiment_name}"
                 )
                 clear_experiment_jobs(queue, experiment_name)
+                if session.lifecycle_store is not None:
+                    remaining_after_purge = get_existing_trial_jobs(
+                        queue, experiment_name=experiment_name
+                    )
+                    if not has_potentially_live_started_jobs(
+                        physical_existing.get("started", [])
+                    ) and not any(remaining_after_purge.values()):
+                        try:
+                            session.lifecycle_store.clear_experiment(experiment_name)
+                        except Exception as exc:
+                            logger.warning(
+                                "Failed to clear lifecycle state for experiment={}: {}",
+                                experiment_name,
+                                exc,
+                            )
         elif normalized_queue_mode == "continue":
-            if has_existing and not lock_acquired:
+            if not lock_acquired:
                 try:
                     session.register_or_raise(registration)
                     lock_acquired = True
                 except LockContentionError:
-                    logger.error(
-                        f"Experiment '{experiment_name}' is already running. "
-                        "Use a different experiment name or wait for the current run to finish."
+                    pass
+            try:
+                resume_collection_job_ids = session.resume_or_raise(
+                    artifact_checker=_build_artifact_checker(config),
+                    registration=registration,
+                )
+                if not lock_acquired:
+                    logger.info(
+                        "Resumed stale experiment lock for continue-mode recovery"
                     )
-                    return
+                lock_acquired = True
+            except LockContentionError:
+                logger.error(
+                    f"Experiment '{experiment_name}' is already running. "
+                    "Use a different experiment name or wait for the current run to finish."
+                )
+                return
+
+            queue_state_mutated = False
 
             # Handle orphaned started jobs (move to failed + retry)
-            if existing["started"]:
-                orphaned_count = handle_orphaned_jobs(queue, existing["started"])
+            if physical_existing["started"]:
+                orphaned_count = handle_orphaned_jobs(
+                    queue,
+                    physical_existing["started"],
+                    lifecycle_store=getattr(session, "lifecycle_store", None),
+                )
                 if orphaned_count > 0:
+                    queue_state_mutated = True
                     logger.info(f"Handled {orphaned_count} orphaned jobs")
 
             # Optional failed retries require explicit opt-in and clean trial dirs.
-            if retry_failed and existing["failed"]:
+            if retry_failed and physical_existing["failed"]:
                 retried = 0
-                for failed_job in existing["failed"].values():
+                for failed_job in physical_existing["failed"]:
                     if not _prepare_trial_dir_for_retry(config, failed_job):
                         continue
+                    if not _revive_failed_lifecycle_for_retry(
+                        session, experiment_name, failed_job
+                    ):
+                        continue
                     failed_job.meta["force_retry"] = True
-                    failed_job.save_meta()
+                    failed_job.meta.pop("worker_name", None)
+                    try:
+                        failed_job.save_meta()
+                    except Exception as e:
+                        _rollback_failed_lifecycle_retry(
+                            session,
+                            experiment_name,
+                            failed_job,
+                            f"retry metadata update failed: {e}",
+                        )
+                        logger.warning(
+                            f"Failed to update retry metadata for {failed_job.id[:8]}: {e}"
+                        )
+                        continue
                     try:
                         queue.enqueue_job(failed_job)
                         retried += 1
                     except Exception as e:
+                        _rollback_failed_lifecycle_retry(
+                            session,
+                            experiment_name,
+                            failed_job,
+                            f"retry enqueue failed: {e}",
+                        )
                         logger.warning(
                             f"Failed to requeue failed job {failed_job.id[:8]}: {e}"
                         )
                 if retried > 0:
+                    queue_state_mutated = True
+                    requeued_failed_jobs = retried
                     logger.info(f"Requeued {retried} failed jobs with clean retry dirs")
+
+            if queue_state_mutated:
+                existing = get_existing_trials(queue, experiment_name=experiment_name)
+                physical_existing = get_existing_trial_jobs(
+                    queue, experiment_name=experiment_name
+                )
+                if any(existing.values()) and not any(physical_existing.values()):
+                    physical_existing = {
+                        bucket_name: list(jobs_by_key.values())
+                        for bucket_name, jobs_by_key in existing.items()
+                    }
 
         # Filter trials if in continue mode
         if normalized_queue_mode == "continue" and has_existing:
@@ -1978,6 +2466,8 @@ def run_experiment_distributed(
                 logger.info(
                     f"Skipping {skipped_count} existing trials, enqueueing {len(trials)} new trials"
                 )
+            existing_tracked_jobs = _flatten_existing_jobs(physical_existing)
+            active_existing_jobs = _active_existing_jobs(physical_existing)
 
         # Disk-based filtering: skip trials with .success markers on orchestrator disk
         # This catches trials completed by remote workers in previous runs
@@ -2001,10 +2491,27 @@ def run_experiment_distributed(
         if disk_skipped > 0:
             logger.info(f"Skipping {disk_skipped} trials already complete on disk")
 
+        if resume_collection_job_ids:
+            resume_jobs = _filter_resume_collection_jobs(
+                _fetch_jobs_by_id(
+                    queue,
+                    resume_collection_job_ids,
+                    strict_missing=True,
+                ),
+                active_existing_jobs,
+            )
+
         # Dump trial matrix to JSON
         dump_trial_matrix(trials, config)
 
         logger.info(f"Total trials to enqueue: {len(trials)}")
+        if not trials and not existing_tracked_jobs and not resume_jobs:
+            if requeued_failed_jobs == 0:
+                logger.info(
+                    "No trial work remains after queue and disk filtering; "
+                    "skipping registration and cloud bring-up"
+                )
+                return
         logger.info("=" * 60)
 
         log_section("Enqueuing Trial Jobs", width=60)
@@ -2055,6 +2562,114 @@ def run_experiment_distributed(
             )
             return
 
+        cloud_config = getattr(config, "cloud", None)
+        uses_provider_neutral_cloud = (
+            isinstance(cloud_config, BaseModel)
+            and cloud_config.providers is not None
+            and cloud_config.workers is not None
+            and cloud_config.orchestrator is not None
+        )
+        if uses_provider_neutral_cloud and (trials or active_existing_jobs):
+            if session.cloud_readiness is None:
+                raise RuntimeError(
+                    "Distributed runtime session missing cloud readiness store"
+                )
+            if session.lifecycle_store is None:
+                raise RuntimeError(
+                    "Distributed runtime session missing lifecycle store"
+                )
+
+            from crsbench.cloud.status import CloudFleetStatusManager
+
+            fleet_status_manager = CloudFleetStatusManager(
+                readiness_store=session.cloud_readiness
+            )
+            assert cloud_config is not None
+            from crsbench.cloud.models import build_cloud_launch_plan
+            from crsbench.cloud.providers import (
+                prepare_launch_inputs,
+                provider_adapter_for_launch_plan,
+            )
+            from crsbench.cloud.quota import QuotaValidator
+
+            launch_plan = build_cloud_launch_plan(config)
+            adapter = provider_adapter_for_launch_plan(launch_plan)
+            has_evaluator_placements = bool(launch_plan.evaluator_placements)
+            if os.environ.get("CRSBENCH_CLOUD_PREPROVISIONED_WORKERS") == "1":
+                logger.info(
+                    "Waiting for pre-provisioned cloud instances because "
+                    "CRSBENCH_CLOUD_PREPROVISIONED_WORKERS=1"
+                )
+                if has_evaluator_placements:
+                    fleet_status = fleet_status_manager.observe_existing_instances(
+                        plan=launch_plan,
+                        adapter=adapter,
+                    )
+                else:
+                    fleet_status = fleet_status_manager.observe_existing_workers(
+                        plan=launch_plan,
+                        adapter=adapter,
+                    )
+                if fleet_status.ready_count != fleet_status.requested_count:
+                    logger.info(
+                        "Proceeding before full pre-provisioned readiness: "
+                        "{}/{} ready, {} pending, {} failed",
+                        fleet_status.ready_count,
+                        fleet_status.requested_count,
+                        len(fleet_status.pending_workers),
+                        len(fleet_status.failed_workers),
+                    )
+            else:
+                preflight = prepare_launch_inputs(
+                    plan=launch_plan,
+                    cwd=Path.cwd(),
+                )
+                QuotaValidator(adapters={"gce": adapter}).validate(
+                    launch_plan,
+                    include_orchestrator=False,
+                )
+                if has_evaluator_placements:
+                    evaluator_experiment_config = yaml.safe_dump(
+                        config.model_dump(mode="json", exclude_none=True),
+                        sort_keys=False,
+                    )
+                    fleet_status = fleet_status_manager.bring_up_instances(
+                        plan=preflight.resolved_plan,
+                        adapter=adapter,
+                        redis_host=redis_host,
+                        redis_password=os.environ.get("CRSBENCH_REDIS_PASSWORD"),
+                        registration=registration,
+                        bootstrap_inputs=bootstrap_inputs,
+                        worker_env_passthrough_by_placement=(
+                            preflight.worker_placement_envs
+                        ),
+                        evaluator_env_passthrough_by_placement=(
+                            preflight.evaluator_placement_envs
+                        ),
+                        evaluator_experiment_config=evaluator_experiment_config,
+                    )
+                else:
+                    fleet_status = fleet_status_manager.bring_up_workers(
+                        plan=preflight.resolved_plan,
+                        adapter=adapter,
+                        redis_host=redis_host,
+                        redis_password=os.environ.get("CRSBENCH_REDIS_PASSWORD"),
+                        registration=registration,
+                        bootstrap_inputs=bootstrap_inputs,
+                        env_passthrough_by_placement=(preflight.worker_placement_envs),
+                    )
+                logger.info(
+                    "Cloud instance placements ready: "
+                    f"{fleet_status.ready_count}/{fleet_status.requested_count}"
+                )
+
+            session.start_monitor(
+                cloud_liveness_checker=_build_cloud_liveness_checker(
+                    session.cloud_readiness, experiment_name
+                ),
+                artifact_checker=_build_artifact_checker(config),
+            )
+
         jobs = []
         for trial in trials:
             bh = trial.benchmark_harness
@@ -2092,7 +2707,15 @@ def run_experiment_distributed(
                     "memory_limit": memory_limit,  # Explicit CRS/runtime memory limit, or None
                     "cpu_tag": cpu_tag,
                     "experiment_name": experiment_name,
+                    "expects_lifecycle_tracking": session.lifecycle_store is not None,
                 },
+                job_id=build_trial_queue_job_id(experiment_name, trial),
+            )
+            _seed_lifecycle_record(
+                session,
+                experiment_name=experiment_name,
+                trial=trial,
+                job_id=job.id,
             )
             jobs.append(job)
             logger.debug(
@@ -2101,15 +2724,24 @@ def run_experiment_distributed(
 
         logger.info(f"✓ Enqueued {len(jobs)} jobs successfully")
 
+        if resume_jobs and jobs:
+            resume_jobs = _filter_resume_collection_jobs(resume_jobs, jobs)
+
+        tracked_jobs = _dedupe_jobs_by_id([*existing_tracked_jobs, *resume_jobs, *jobs])
+
         # Monitor progress
-        logger.info("\nMonitoring job progress...")
+        logger.info(
+            f"\nMonitoring job progress for {len(tracked_jobs)} tracked jobs..."
+        )
         results = monitor_jobs(
             queue,
-            jobs,
+            tracked_jobs,
             experiment_name,
             config,
             disk_skipped=disk_skipped,
             registry=session.registry,
+            lifecycle_store=session.lifecycle_store,
+            defer_failed_retry_to_lifecycle=session._monitor is not None,
         )
 
         # Generate final report
@@ -2174,9 +2806,11 @@ def generate_final_report(
     logger.info(f"\nFinal Report for Experiment: {experiment_name}")
     logger.info("=" * 60)
 
+    visible_results = _dedupe_results_by_logical_trial(results, config)
+
     # Count successes and failures
-    total_trials = len(results)
-    successful_trials = sum(1 for r in results if r.success)
+    total_trials = len(visible_results)
+    successful_trials = sum(1 for r in visible_results if r.success)
     failed_trials = total_trials - successful_trials
 
     logger.info(f"Total trials: {total_trials}")
@@ -2190,8 +2824,8 @@ def generate_final_report(
 
     # Aggregate POV statistics
     if successful_trials > 0:
-        total_povs_found = sum(r.povs_found for r in results if r.success)
-        total_povs_available = sum(r.total_povs for r in results if r.success)
+        total_povs_found = sum(r.povs_found for r in visible_results if r.success)
+        total_povs_available = sum(r.total_povs for r in visible_results if r.success)
 
         if total_povs_available > 0:
             overall_success_rate = total_povs_found / total_povs_available
@@ -2204,7 +2838,7 @@ def generate_final_report(
     # Report failures
     if failed_trials > 0:
         logger.warning(f"\nFailed trials ({failed_trials}):")
-        for idx, result in enumerate(results):
+        for idx, result in enumerate(visible_results):
             if not result.success:
                 error = result.error or "Unknown error"
                 logger.warning(
@@ -2322,6 +2956,11 @@ def main() -> None:
         from crsbench.distributed.cli.queue_command import run_queue
 
         sys.exit(run_queue(args))
+
+    if args.command == "cloud":
+        from crsbench.cloud.cli.cloud_command import run_cloud
+
+        sys.exit(run_cloud(args))
 
     if args.command == "report":
         # Handle report command

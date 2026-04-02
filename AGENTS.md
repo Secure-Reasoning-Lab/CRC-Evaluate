@@ -132,6 +132,8 @@ Then re-run the quality gate command above.
 - Normative benchmark spec: `docs/RFC.md`
 - Architecture: `docs/design/architecture.md`
 - Design doc policy: `docs/design/doc-authoring-guidelines.md`
+- Cloud orchestration: `docs/design/distributed/cloud-orchestration.md`
+- GCE cloud realization: `docs/design/distributed/gce-cloud-orchestration.md`
 - Distributed systems: `docs/design/distributed/distributed-evaluation.md`
 - Job queue/workers: `docs/design/distributed/distributed-job-queue.md`
 - Deployment/cloud: `docs/design/distributed/deployment-guide.md`

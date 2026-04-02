@@ -406,9 +406,9 @@ def _cleanup_patch_job_output_dir(payload: "PatchJobPayload") -> None:
                 continue
             break
         except Exception:
-            logger.debug(
-                f"Stopped pruning patch job parent dirs at {current} due to cleanup error",
-                exc_info=True,
+            logger.opt(exception=True).debug(
+                "Stopped pruning patch job parent dirs at {} due to cleanup error",
+                current,
             )
             break
 

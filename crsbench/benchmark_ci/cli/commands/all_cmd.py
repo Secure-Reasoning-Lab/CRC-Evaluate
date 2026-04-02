@@ -296,7 +296,7 @@ def _build_dag(
 
                 if not pov_0_path:
                     logger.warning(
-                        "Skipping CPV %s for %s: missing pov_0 blob",
+                        "Skipping CPV {} for {}: missing pov_0 blob",
                         cpv_identity,
                         benchmark_name,
                     )

@@ -15,6 +15,92 @@ and examples.
 - `crs_compose`: CRS services and per-CRS runtime resources
 - `worker` and `evaluator`: machine-local execution defaults
 - `resources`: fallback per-trial resource defaults
+- `cloud`: optional provider-neutral cloud placement contract
+
+The `cloud` section is intentionally provider-neutral so future managed backends
+can share one top-level shape. Today the only implemented managed backend is
+GCE, so current launchable configs use `cloud.providers.gce`.
+
+## Cloud Contract
+
+Managed cloud execution uses a provider-neutral top-level shape:
+
+- `cloud.providers.<provider>`: provider-native backing details such as GCE
+  project, reusable instance profiles, optional provider `defaults`, optional
+  `profile_defaults`, and optional default `region` / ordered `regions` plus
+  ordered `zones` / `fallback` placement policy
+- `cloud.defaults`: provider-agnostic launch/bootstrap defaults such as
+  `readiness_timeout_sec`, `crsbench_install_spec`, `crsbench_git_ref`, and
+  `github_deploy_key_path`
+- `cloud.remote.experiment_root`: remote-VM experiment root used by
+  `cloud collect` / `cloud teardown`; defaults to
+  `storage.experiment_filestore` when unset for backward compatibility
+- `cloud.env`: global environment variables merged into all launched cloud roles;
+  this is also the top-level place to set startup-script overrides such as
+  `CRSBENCH_TIMEZONE`
+- `cloud.orchestrator`: instance-profile reference for the remote orchestrator
+  VM, plus optional orchestrator-only `region`, `regions`, `zones`,
+  `fallback`, and `env`
+- `cloud.workers.defaults`: optional role-level worker placement defaults such
+  as `count`, `instance_profile`, `region`, `regions`, `zones`, `fallback`,
+  and `env`
+- `cloud.workers.placements[]`: explicit worker placements with optional
+  `region` / `regions` / `zones` / `fallback` overrides plus any inherited
+  defaults
+- `cloud.evaluators.defaults`: optional role-level evaluator placement defaults
+  such as `count`, `instance_profile`, `region`, `regions`, `zones`,
+  `fallback`, and `env`
+- `cloud.evaluators.placements[]`: optional evaluator placements with optional
+  `region` / `regions` / `zones` / `fallback` overrides plus any inherited
+  defaults
+For GCE in v1:
+
+- use `cloud.providers.gce`
+- launch/bootstrap defaults merge as
+  `cloud.defaults -> cloud.providers.gce.defaults`
+- provider-neutral configs do not repeat `provider` on orchestrator or
+  placements; CRSBench resolves the provider from the owning
+  `cloud.providers.<provider>.instance_profiles` catalog
+- instance-profile keys must be globally unique across provider catalogs
+- one launch cannot mix providers across orchestrator, workers, and evaluators
+- effective zone order resolves as placement/orchestrator `zones` override,
+  then role defaults, then `cloud.providers.gce.zones`
+- effective region order resolves as placement/orchestrator `regions`
+  override, then singular `region`, then role defaults, then
+  `cloud.providers.gce.regions`, then singular `cloud.providers.gce.region`
+- effective fallback resolves as placement/orchestrator `fallback` override,
+  then role defaults, then `cloud.providers.gce.fallback`, then `true`
+- when an effective region order is present, CRSBench uses GCE regional bulk
+  insert with `ANY_SINGLE_ZONE`; optional `zones` are treated as an allowlist
+  across those regions rather than an ordered retry list
+- config validation rejects any `zones` entry whose region does not match one
+  of the effective `regions`
+- runtime fallback uses declared `regions` order for recognized regional
+  capacity failures, or declared `zones` order for recognized zonal capacity
+  failures; `fallback: false` hard-fails that logical placement and rolls back
+  the launch
+- live quota validation is mandatory before launch
+- worker and evaluator placements can use different instance profiles
+- `ssh_via_iap` controls operator SSH transport; `assign_external_ip` controls
+  whether GCE attaches ephemeral external NAT for outbound internet access
+- cloud env merge order is:
+  `cloud.env -> profile_defaults.env -> instance_profile.env -> role/default placement env`
+- runtime-managed env such as Redis connection material is applied after those
+  user-configured layers and wins last
+- generated GCE instance names are deterministic and zone-independent:
+  `crsbench-<experiment>-orch`, `-work-001`, `-eval-001`
+- the checked-in examples are
+  `experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml`
+  and
+  `experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval-multilang-given-fuzzer.yaml`
+  and
+  `experiment-configs/cloud-testing/gce-usenix-r1-1orch-2worker-1eval-multilang-given-fuzzer.yaml`
+  and
+  `experiment-configs/cloud-testing/gce-hf-download-1orch-2worker-1eval.yaml`
+  and
+  `experiment-configs/cloud-testing/gce-sanity-zone-fallback-1orch-1worker-1eval.yaml`
+  and
+  `experiment-configs/cloud-testing/gce-sanity-zone-1orch-2worker-1eval.yaml`
 
 ## Input Contract
 
@@ -125,6 +211,13 @@ the orchestrator:
 - `worker.storage.experiment_filestore`
 - `worker.storage.report_filestore`
 - `worker.storage.results_filestore`
+
+Avoid using `/tmp` for persisted storage roots such as
+`storage.experiment_filestore`, `storage.report_filestore`,
+`storage.results_filestore`, `worker.storage.*`, or
+`cloud.remote.experiment_root`. On Linux these paths are often backed by
+`tmpfs`, so large experiments can consume RAM instead of disk. Use another
+location for large-scale runs.
 
 ## Related
 

@@ -147,6 +147,39 @@ storage:
   # Used only when copy_results_after_trial=true.
   # results_filestore: /data/crsbench/finished
 
+cloud:
+  remote:
+    experiment_root: /data/crsbench/experiments
+  defaults:
+    readiness_timeout_sec: 900
+    crsbench_install_spec: "git+https://github.com/sslab-gatech/CRSBench.git"
+    crsbench_git_ref: main
+  providers:
+    gce:
+      project: example-project
+      ssh_via_iap: true
+      profile_defaults:
+        machine_type: e2-standard-16
+        boot_disk_size_gb: 200
+        # boot_disk_type: pd-ssd  # GCE disk type (pd-ssd, pd-balanced, pd-standard)
+        image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+        service_account_email: crsbench@example-project.iam.gserviceaccount.com
+        owner_label: team-crs
+      instance_profiles:
+        gce-orch:
+          service_account_email: crsbench-orchestrator@example-project.iam.gserviceaccount.com
+        gce-work:
+          service_account_email: crsbench-worker@example-project.iam.gserviceaccount.com
+  orchestrator:
+    zone: us-central1-a
+    instance_profile: gce-orch
+  workers:
+    defaults:
+      instance_profile: gce-work
+      count: 4
+    placements:
+      - zone: us-central1-a
+
 # Optional top-level verification/reporting behavior.
 # pov_dedup_strategy: patch-based
 

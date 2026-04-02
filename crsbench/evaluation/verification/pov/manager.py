@@ -440,8 +440,8 @@ class POVVerificationManager:
                 self._adapter,
                 build_results=build_results,
             )
-        except Exception as e:
-            logger.error(f"POV verification failed for {pov_path}: {e}", exc_info=True)
+        except Exception:
+            logger.exception("POV verification failed for {}", pov_path)
             return None
 
     @staticmethod

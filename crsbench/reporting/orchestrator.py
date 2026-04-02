@@ -1,5 +1,6 @@
 """Report generation orchestrator - coordinates all reporting components."""
 
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,11 @@ from crsbench.reporting.validator import ExperimentValidator
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _rich_progress_available() -> bool:
+    """Return True when Rich progress bars can render interactively."""
+    return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
 
 
 class ReportGenerator:
@@ -205,7 +211,7 @@ class ReportGenerator:
                 TextColumn,
             )
 
-            use_rich = True
+            use_rich = _rich_progress_available()
         except ImportError:
             use_rich = False
 
@@ -536,7 +542,7 @@ class ReportGenerator:
                 TextColumn,
             )
 
-            use_rich = True
+            use_rich = _rich_progress_available()
         except ImportError:
             use_rich = False
 

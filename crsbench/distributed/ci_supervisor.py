@@ -616,8 +616,8 @@ def run_ci_supervisor(
         _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
         _cleanup_stale_rq_workers(redis_host, build_queue_name, verify_queue_name)
         return 0
-    except Exception as e:
-        logger.error(f"CI supervisor error: {e}", exc_info=True)
+    except Exception:
+        logger.exception("CI supervisor error")
         _terminate_all(build_active, cpu_pool)
         _terminate_all(verify_active, cpu_pool)
         _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
@@ -1211,8 +1211,8 @@ def run_multi_queue_supervisor(
         _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
         _cleanup_stale_rq_workers(redis_host, build_queue_names, verify_queue_names)
         return 0
-    except Exception as e:
-        logger.error(f"Multi-queue supervisor error: {e}", exc_info=True)
+    except Exception:
+        logger.exception("Multi-queue supervisor error")
         _terminate_all(build_active, cpu_pool)
         _terminate_all(verify_active, cpu_pool)
         _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
@@ -1240,7 +1240,7 @@ def _enqueue_dependents_for_job(redis_conn: Redis, job_id: str) -> None:
         queue = rq.Queue(job.origin, connection=redis_conn)
         queue.enqueue_dependents(job)
     except Exception:
-        logger.debug(f"Failed to enqueue dependents for {job_id}", exc_info=True)
+        logger.opt(exception=True).debug("Failed to enqueue dependents for {}", job_id)
 
 
 def _matches_cpu_tag(job: "rq.job.Job", worker_cpu_tag: Optional[str]) -> bool:

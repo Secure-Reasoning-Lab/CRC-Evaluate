@@ -244,7 +244,7 @@ class CRSRunJob(Job):
         except Exception as e:
             finished_at = datetime.now()
             elapsed = (finished_at - started_at).total_seconds()
-            logger.error(f"CRSRunJob failed: {e}", exc_info=True)
+            logger.exception("CRSRunJob failed")
 
             result = JobResult(
                 job_id=self.job_id,

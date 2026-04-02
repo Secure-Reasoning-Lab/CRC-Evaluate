@@ -811,7 +811,7 @@ def _drain_all_async_results(
         if time.monotonic() - start_time > timeout_seconds:
             timed_out = True
             logger.warning(
-                "Timed out draining async POV jobs (%d job(s) still pending)",
+                "Timed out draining async POV jobs ({} job(s) still pending)",
                 len(remaining),
             )
             break
@@ -874,7 +874,7 @@ def _drain_all_async_results(
                     pov_hash = _extract_valid_pov_hash(result.pov_id)
                     if not pov_hash:
                         logger.warning(
-                            "Skipping async POV store persistence for invalid pov_id: %s",
+                            "Skipping async POV store persistence for invalid pov_id: {}",
                             result.pov_id,
                         )
                         continue
@@ -982,7 +982,7 @@ def _drain_all_async_patch_results(
         if time.monotonic() - start_time > timeout_seconds:
             timed_out = True
             logger.warning(
-                "Timed out draining async patch jobs (%d job(s) still pending)",
+                "Timed out draining async patch jobs ({} job(s) still pending)",
                 len(remaining),
             )
             break
@@ -1364,7 +1364,7 @@ def run_reeval(args: argparse.Namespace) -> int:
                 total_results += e.processed_count
                 logger.exception(
                     "Timed out draining async POV verification results "
-                    "(partial results persisted: %d)",
+                    "(partial results persisted: {})",
                     e.processed_count,
                 )
                 errors += 1

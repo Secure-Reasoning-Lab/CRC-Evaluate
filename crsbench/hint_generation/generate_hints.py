@@ -137,8 +137,8 @@ def generate_hints_for_all_benchmarks(
         except FileNotFoundError as e:
             logger.warning(f"Skipping {vuln_yaml_path}: {e}")
             skipped_count += 1
-        except Exception as e:
-            logger.error(f"Failed to process {vuln_yaml_path}: {e}", exc_info=True)
+        except Exception:
+            logger.exception("Failed to process {}", vuln_yaml_path)
             failure_count += 1
 
     # Summary
@@ -267,8 +267,8 @@ def main() -> int:
             force_regenerate=args.force,
         )
         return 0
-    except Exception as e:
-        logger.error(f"Hint generation failed: {e}", exc_info=True)
+    except Exception:
+        logger.exception("Hint generation failed")
         return 1
 
 

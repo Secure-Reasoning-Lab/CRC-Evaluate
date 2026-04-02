@@ -16,12 +16,21 @@ Workers and evaluators support two modes:
 2. **Config mode** (`--experiment-config`): Focus on a specific experiment.
    Useful when you want a dedicated worker/evaluator for one experiment.
 
+Workers also support an experiment-pinned runtime mode via
+`crsbench worker --experiment-name <name>`, which focuses on one experiment
+without requiring a local config file. Managed cloud workers use this mode so
+they stay pinned to the experiment that provisioned them.
+
 ## Architecture
 
 Runtime registration and queue discovery work as follows:
 
 - the orchestrator registers experiment metadata in Redis before enqueueing jobs
+- when managed cloud workers are configured, the orchestrator also records per-instance
+  readiness state in Redis and uses it for cloud health tracking without
+  requiring the whole pre-provisioned fleet to be ready before enqueue
 - configless workers discover trial queues from the registry and may serve multiple experiments
+- experiment-pinned workers serve one experiment queue without loading a config file
 - configless evaluators discover build/verify queues from the registry and may serve multiple experiments
 - config-pinned workers and evaluators use one explicit experiment configuration and one queue set
 
@@ -31,6 +40,7 @@ Runtime registration and queue discovery work as follows:
 |-----|------|----------|
 | `crsbench:registry:experiments` | Hash | `experiment_name → RuntimeRegistration JSON` |
 | `crsbench:registry:events` | Pub/Sub | `{"event": "register"/"deregister", "experiment": "..."}` |
+| `crsbench:cloud:workers:{experiment}` | Hash | `instance_id → CloudWorkerStatus JSON` |
 
 ## Queue Model
 
@@ -58,6 +68,24 @@ evaluators, but startup behavior differs:
 
 So configless mode keeps build/verify queue separation, but it does not have
 the same normal startup build-first phase as config-pinned evaluator CLI mode.
+
+## Cloud Worker Readiness Contract
+
+When an experiment declares managed cloud workers, the configless runtime gains a
+separate cloud-worker readiness contract:
+
+- worker readiness records are keyed by cloud `instance_id`; instance name is
+  metadata only
+- allowed states are `provisioning`, `booting`, `registering`, `ready`,
+  `bootstrap_failed`, `deleting`, and `deleted`
+- VM `RUNNING` is not equivalent to schedulable readiness
+- for pre-provisioned cloud mode, the orchestrator waits for the declared
+  instances to exist and records their readiness state, but it does not block
+  job enqueue on full-fleet `ready`
+- startup failure evidence is carried in readiness records so operators can
+  inspect bootstrap failures without interactive SSH
+- failed bring-up transitions matching workers through `deleting`/`deleted`
+  and tears the fleet down before returning control to the orchestrator
 
 ## Resource and Routing Contracts
 
@@ -130,6 +158,9 @@ legacy CI queue compatibility is documented in:
 |--------|------|
 | `crsbench/distributed/registry.py` | `RuntimeRegistration` model + `RegistryClient` |
 | `crsbench/run_experiment.py` | Orchestrator-side registration lifecycle |
+| `crsbench/cloud/readiness.py` | Cloud worker readiness records and fleet snapshots |
+| `crsbench/cloud/runtime.py` | Cloud worker runtime/env bridge for readiness reporting |
+| `crsbench/cloud/status.py` | Cloud bring-up gating and failure reporting |
 | `crsbench/distributed/worker.py` | Worker registry discovery and config-pinned mode entrypoints |
 | `crsbench/distributed/evaluator.py` | Evaluator registry discovery and config-pinned mode entrypoints |
 | `crsbench/distributed/ci_supervisor.py` | Multi-queue supervisor coordination |

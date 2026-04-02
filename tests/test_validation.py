@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from crsbench.cloud.types import CloudProvider, validate_single_cloud_provider
 from crsbench.validation import (
     validate_benchmark_from_string,
     validate_benchmark_suite_from_string,
@@ -15,6 +16,7 @@ from crsbench.validation.schemas import (
     POV,
     BenchmarkEntry,
     BenchmarkSuiteConfig,
+    CloudProvidersConfig,
     EvaluationMode,
     ExperimentConfig,
     HarnessFile,
@@ -24,7 +26,14 @@ from crsbench.validation.schemas import (
     Vulnerability,
     WorkerConfig,
 )
-from pydantic import ValidationError as PydanticValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+)
+from pydantic import (
+    ValidationError as PydanticValidationError,
+)
 
 # ============================================================================
 # Schema Validation Tests
@@ -651,6 +660,69 @@ class TestExperimentConfigSchema:
             "crs_compose": {"test-crs": {"num_cores": 1}},
         }
 
+    @staticmethod
+    def _provider_neutral_cloud_kwargs() -> dict:
+        return {
+            "defaults": {
+                "readiness_timeout_sec": 1200,
+                "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
+                "crsbench_git_ref": "feat/gcp",
+            },
+            "providers": {
+                "gce": {
+                    "project": "test-project",
+                    "profile_defaults": {
+                        "machine_type": "n2d-standard-16",
+                        "boot_disk_size_gb": 50,
+                        "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                        "service_account_email": "crsbench@test-project.iam.gserviceaccount.com",
+                        "owner_label": "team-crs",
+                    },
+                    "instance_profiles": {
+                        "gce-orchestrator-n2d": {},
+                        "gce-worker-n2d": {},
+                        "gce-evaluator-c3": {
+                            "machine_type": "c3-standard-8",
+                        },
+                    },
+                }
+            },
+            "orchestrator": {
+                "zone": "us-east5-b",
+                "instance_profile": "gce-orchestrator-n2d",
+            },
+            "workers": {
+                "defaults": {
+                    "instance_profile": "gce-worker-n2d",
+                    "count": 150,
+                },
+                "placements": [
+                    {
+                        "zone": "us-east5-b",
+                    },
+                    {
+                        "zone": "us-east5-c",
+                        "count": 100,
+                    },
+                ],
+            },
+            "evaluators": {
+                "defaults": {
+                    "instance_profile": "gce-evaluator-c3",
+                    "count": 1,
+                },
+                "placements": [
+                    {
+                        "zone": "us-east5-b",
+                    },
+                    {
+                        "zone": "us-east1-b",
+                        "count": 2,
+                    },
+                ],
+            },
+        }
+
     def test_experiment_config_valid(self):
         config = ExperimentConfig(**self._base_kwargs())
         assert config.trials == 1
@@ -853,6 +925,737 @@ class TestExperimentConfigSchema:
             PydanticValidationError, match="Extra inputs are not permitted"
         ):
             ExperimentConfig(**data)
+
+    def test_cloud_rejects_legacy_gce_config(self):
+        data = self._base_kwargs()
+        data["cloud"] = {
+            "gce": {
+                "project": "test-project",
+                "zone": "us-central1-a",
+                "worker_count": 2,
+                "machine_type": "e2-standard-4",
+                "boot_disk_size_gb": 100,
+                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                "owner_label": "team-crs",
+            }
+        }
+
+        with pytest.raises(
+            PydanticValidationError,
+            match="cloud.gce",
+        ):
+            ExperimentConfig(**data)
+
+    @pytest.mark.parametrize("prepare_mode", ["full", "skip_base_images"])
+    def test_cloud_bootstrap_prepare_mode_valid(self, prepare_mode: str):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["bootstrap"] = {"prepare_mode": prepare_mode}
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.bootstrap.prepare_mode == prepare_mode
+        assert config.cloud.bootstrap.download_benchmarks == "auto"
+
+    @pytest.mark.parametrize("download_benchmarks", ["auto", "always", "never"])
+    def test_cloud_bootstrap_download_policy_valid(self, download_benchmarks: str):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["bootstrap"] = {"download_benchmarks": download_benchmarks}
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.bootstrap.prepare_mode == "full"
+        assert config.cloud.bootstrap.download_benchmarks == download_benchmarks
+
+    def test_cloud_bootstrap_gitcache_flag_valid(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["bootstrap"] = {"gitcache": True}
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.bootstrap.gitcache is True
+        assert config.cloud.bootstrap.prepare_mode == "full"
+        assert config.cloud.bootstrap.download_benchmarks == "auto"
+
+    def test_cloud_bootstrap_rejects_env_passthrough(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["bootstrap"] = {
+            "env_passthrough": {
+                "common": [
+                    "CRSBENCH_LLM_UPSTREAM_BASE_URL",
+                    "CRSBENCH_LLM_MASTER_KEY",
+                ],
+            }
+        }
+
+        with pytest.raises(PydanticValidationError, match="env_passthrough"):
+            ExperimentConfig(**data)
+
+    def test_cloud_gce_rejects_cloud_env_without_provider_neutral_config(self):
+        data = self._base_kwargs()
+        data["cloud"] = {
+            "gce": {
+                "project": "test-project",
+                "zone": "us-central1-a",
+                "worker_count": 2,
+                "machine_type": "e2-standard-4",
+                "boot_disk_size_gb": 100,
+                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                "owner_label": "team-crs",
+            }
+        }
+        data["cloud"]["env"] = {"CRSBENCH_LLM_MASTER_KEY": "value"}
+
+        with pytest.raises(
+            PydanticValidationError,
+            match="cloud.gce",
+        ):
+            ExperimentConfig(**data)
+
+    def test_cloud_rejects_legacy_orchestrator_config(self):
+        data = self._base_kwargs()
+        data["cloud"] = {
+            "defaults": {
+                "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
+            },
+            "providers": {
+                "gce": {
+                    "project": "test-project",
+                    "profile_defaults": {
+                        "machine_type": "n2d-standard-16",
+                        "boot_disk_size_gb": 50,
+                        "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                        "service_account_email": "crsbench@test-project.iam.gserviceaccount.com",
+                        "owner_label": "team-crs",
+                    },
+                    "instance_profiles": {
+                        "gce-worker-n2d": {},
+                    },
+                }
+            },
+            "orchestrator": {
+                "project": "test-project",
+                "zone": "us-central1-a",
+                "machine_type": "e2-standard-4",
+                "boot_disk_size_gb": 100,
+                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                "service_account_email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com",
+                "owner_label": "team-crs",
+                "ssh_via_iap": True,
+            },
+            "workers": {
+                "placements": [
+                    {
+                        "zone": "us-east5-b",
+                        "instance_profile": "gce-worker-n2d",
+                    }
+                ]
+            },
+        }
+
+        with pytest.raises(
+            PydanticValidationError,
+            match="cloud.orchestrator.instance_profile",
+        ):
+            ExperimentConfig(**data)
+
+    def test_cloud_bootstrap_custom_values_valid(self):
+        data = self._base_kwargs()
+        data["cloud"] = {
+            "bootstrap": {
+                "prepare_mode": "skip_base_images",
+                "download_benchmarks": "never",
+            },
+        }
+        data["cloud"].update(self._provider_neutral_cloud_kwargs())
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.bootstrap.prepare_mode == "skip_base_images"
+        assert config.cloud.bootstrap.download_benchmarks == "never"
+
+    def test_cloud_bootstrap_always_download_policy_valid(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["bootstrap"] = {"download_benchmarks": "always"}
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.bootstrap.download_benchmarks == "always"
+
+    def test_cloud_bootstrap_invalid_prepare_mode_rejected(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["bootstrap"] = {"prepare_mode": "partial"}
+
+        with pytest.raises(PydanticValidationError, match="prepare_mode"):
+            ExperimentConfig(**data)
+
+    def test_cloud_bootstrap_invalid_download_policy_rejected(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["bootstrap"] = {"download_benchmarks": "sometimes"}
+
+        with pytest.raises(PydanticValidationError, match="download_benchmarks"):
+            ExperimentConfig(**data)
+
+    def test_cloud_provider_contract_parses_defaults_driven_placements(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.defaults is not None
+        assert config.cloud.defaults.readiness_timeout_sec == 1200
+        assert (
+            config.cloud.defaults.crsbench_install_spec
+            == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+        )
+        assert config.cloud.defaults.crsbench_git_ref == "feat/gcp"
+        assert config.cloud.providers.gce is not None
+        assert config.cloud.providers.gce.project == "test-project"
+        assert config.cloud.providers.gce.profile_defaults is not None
+        assert config.cloud.orchestrator is not None
+        assert config.cloud.orchestrator.instance_profile == "gce-orchestrator-n2d"
+        assert [placement.zone for placement in config.cloud.workers.placements] == [
+            "us-east5-b",
+            "us-east5-c",
+        ]
+        assert [placement.count for placement in config.cloud.workers.placements] == [
+            150,
+            100,
+        ]
+        assert all(
+            placement.instance_profile == "gce-worker-n2d"
+            for placement in config.cloud.workers.placements
+        )
+
+    def test_cloud_provider_contract_accepts_provider_default_zones_and_fallback(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["providers"]["gce"]["zones"] = [
+            "us-east5-b",
+            "us-east1-b",
+        ]
+        data["cloud"]["providers"]["gce"]["fallback"] = False
+        data["cloud"]["orchestrator"] = {
+            "instance_profile": "gce-orchestrator-n2d",
+        }
+        data["cloud"]["workers"]["placements"] = [
+            {
+                "count": 1,
+            }
+        ]
+        data["cloud"]["evaluators"]["placements"] = [
+            {
+                "count": 1,
+                "zones": ["us-east5-b"],
+            }
+        ]
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.providers is not None
+        assert config.cloud.providers.gce is not None
+        assert config.cloud.providers.gce.zones == ["us-east5-b", "us-east1-b"]
+        assert config.cloud.providers.gce.fallback is False
+        assert config.cloud.orchestrator is not None
+        assert config.cloud.orchestrator.zones == []
+        assert config.cloud.orchestrator.fallback is None
+
+    def test_cloud_provider_contract_accepts_provider_default_region_and_zone_allowlist(
+        self,
+    ):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["providers"]["gce"]["region"] = "us-east5"
+        data["cloud"]["providers"]["gce"]["zones"] = [
+            "us-east5-b",
+            "us-east5-c",
+        ]
+        data["cloud"]["orchestrator"] = {
+            "instance_profile": "gce-orchestrator-n2d",
+        }
+        data["cloud"]["workers"]["placements"] = [
+            {
+                "count": 1,
+            }
+        ]
+        data["cloud"]["evaluators"]["placements"] = [
+            {
+                "count": 1,
+                "zones": ["us-east5-b"],
+            }
+        ]
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.providers is not None
+        assert config.cloud.providers.gce is not None
+        assert config.cloud.providers.gce.region == "us-east5"
+        assert config.cloud.providers.gce.zones == ["us-east5-b", "us-east5-c"]
+        assert config.cloud.orchestrator is not None
+        assert config.cloud.orchestrator.region is None
+        assert config.cloud.orchestrator.zones == []
+
+    def test_cloud_provider_contract_accepts_ordered_regions_and_zone_allowlist(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["providers"]["gce"]["regions"] = [
+            "us-east5",
+            "us-east1",
+        ]
+        data["cloud"]["providers"]["gce"]["zones"] = [
+            "us-east5-b",
+            "us-east1-b",
+        ]
+        data["cloud"]["orchestrator"] = {
+            "instance_profile": "gce-orchestrator-n2d",
+        }
+        data["cloud"]["workers"]["placements"] = [
+            {
+                "count": 1,
+                "regions": ["us-east5", "us-east1"],
+                "zones": ["us-east5-b", "us-east1-b"],
+                "fallback": False,
+            }
+        ]
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.providers is not None
+        assert config.cloud.providers.gce is not None
+        assert config.cloud.providers.gce.region == "us-east5"
+        assert config.cloud.providers.gce.regions == ["us-east5", "us-east1"]
+        assert config.cloud.providers.gce.zones == ["us-east5-b", "us-east1-b"]
+        assert config.cloud.workers.placements[0].region == "us-east5"
+        assert config.cloud.workers.placements[0].regions == ["us-east5", "us-east1"]
+        assert config.cloud.workers.placements[0].zones == [
+            "us-east5-b",
+            "us-east1-b",
+        ]
+        assert config.cloud.workers.placements[0].fallback is False
+
+    def test_cloud_worker_placement_accepts_zone_list_and_fallback_override(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["providers"]["gce"]["zones"] = [
+            "us-east5-b",
+            "us-east1-b",
+        ]
+        data["cloud"]["workers"]["placements"][0] = {
+            "zones": ["us-central1-a", "us-west1-b"],
+            "fallback": False,
+        }
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.workers.placements[0].zone is None
+        assert config.cloud.workers.placements[0].zones == [
+            "us-central1-a",
+            "us-west1-b",
+        ]
+        assert config.cloud.workers.placements[0].fallback is False
+        assert [
+            placement.count for placement in config.cloud.evaluators.placements
+        ] == [
+            1,
+            2,
+        ]
+        assert all(
+            placement.instance_profile == "gce-evaluator-c3"
+            for placement in config.cloud.evaluators.placements
+        )
+
+    def test_cloud_provider_contract_rejects_zone_allowlist_outside_region(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["providers"]["gce"]["region"] = "us-east5"
+        data["cloud"]["providers"]["gce"]["zones"] = [
+            "us-east5-b",
+            "us-east1-b",
+        ]
+
+        with pytest.raises(
+            PydanticValidationError,
+            match="cloud.providers.gce.zones must all belong to region 'us-east5'",
+        ):
+            ExperimentConfig(**data)
+
+    def test_cloud_provider_contract_rejects_zone_allowlist_outside_regions(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["providers"]["gce"]["regions"] = [
+            "us-east5",
+            "us-east1",
+        ]
+        data["cloud"]["providers"]["gce"]["zones"] = [
+            "us-east5-b",
+            "us-central1-a",
+        ]
+
+        with pytest.raises(
+            PydanticValidationError,
+            match=(
+                "cloud.providers.gce.zones must all belong to one of regions "
+                "\\['us-east5', 'us-east1'\\]"
+            ),
+        ):
+            ExperimentConfig(**data)
+
+    def test_cloud_provider_contract_parses_provider_launch_defaults_override(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["providers"]["gce"]["defaults"] = {
+            "readiness_timeout_sec": 1500,
+            "crsbench_git_ref": "provider-ref",
+        }
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.defaults is not None
+        assert config.cloud.defaults.readiness_timeout_sec == 1200
+        assert config.cloud.providers is not None
+        assert config.cloud.providers.gce is not None
+        assert config.cloud.providers.gce.defaults is not None
+        assert config.cloud.providers.gce.defaults.readiness_timeout_sec == 1500
+        assert config.cloud.providers.gce.defaults.crsbench_git_ref == "provider-ref"
+
+    def test_cloud_provider_contract_merges_layered_env_maps(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["env"] = {
+            "GLOBAL_ONLY": "global-value",
+            "SHARED_KEY": "global-value",
+        }
+        data["cloud"]["providers"]["gce"]["profile_defaults"]["env"] = {
+            "PROFILE_DEFAULT_ONLY": "profile-default-value",
+            "SHARED_KEY": "profile-default-value",
+        }
+        data["cloud"]["providers"]["gce"]["instance_profiles"]["gce-worker-n2d"] = {
+            "env": {
+                "PROFILE_ONLY": "profile-value",
+                "SHARED_KEY": "profile-value",
+            }
+        }
+        data["cloud"]["orchestrator"]["env"] = {
+            "ORCH_ONLY": "orchestrator-value",
+            "SHARED_KEY": "orchestrator-value",
+        }
+        data["cloud"]["workers"]["defaults"]["env"] = {
+            "ROLE_ONLY": "worker-role-value",
+            "SHARED_KEY": "worker-role-value",
+        }
+        data["cloud"]["workers"]["placements"][0]["env"] = {
+            "PLACEMENT_ONLY": "worker-placement-value",
+            "SHARED_KEY": "worker-placement-value",
+        }
+        data["cloud"]["evaluators"]["defaults"]["env"] = {
+            "ROLE_ONLY": "evaluator-role-value",
+            "SHARED_KEY": "evaluator-role-value",
+        }
+        data["cloud"]["evaluators"]["placements"][0]["env"] = {
+            "PLACEMENT_ONLY": "evaluator-placement-value",
+            "SHARED_KEY": "evaluator-placement-value",
+        }
+
+        config = ExperimentConfig(**data)
+
+        assert config.cloud is not None
+        assert config.cloud.env == {
+            "GLOBAL_ONLY": "global-value",
+            "SHARED_KEY": "global-value",
+        }
+        assert config.cloud.orchestrator is not None
+        assert config.cloud.orchestrator.env == {
+            "ORCH_ONLY": "orchestrator-value",
+            "SHARED_KEY": "orchestrator-value",
+        }
+        assert config.cloud.providers is not None
+        assert config.cloud.providers.gce is not None
+        assert config.cloud.providers.gce.instance_profiles["gce-worker-n2d"].env == {
+            "PROFILE_DEFAULT_ONLY": "profile-default-value",
+            "PROFILE_ONLY": "profile-value",
+            "SHARED_KEY": "profile-value",
+        }
+        assert config.cloud.workers.defaults.env == {
+            "ROLE_ONLY": "worker-role-value",
+            "SHARED_KEY": "worker-role-value",
+        }
+        assert config.cloud.workers.placements[0].env == {
+            "ROLE_ONLY": "worker-role-value",
+            "PLACEMENT_ONLY": "worker-placement-value",
+            "SHARED_KEY": "worker-placement-value",
+        }
+        assert config.cloud.evaluators.defaults.env == {
+            "ROLE_ONLY": "evaluator-role-value",
+            "SHARED_KEY": "evaluator-role-value",
+        }
+        assert config.cloud.evaluators.placements[0].env == {
+            "ROLE_ONLY": "evaluator-role-value",
+            "PLACEMENT_ONLY": "evaluator-placement-value",
+            "SHARED_KEY": "evaluator-placement-value",
+        }
+
+    @pytest.mark.parametrize(
+        "reserved_name",
+        [
+            "CRSBENCH_CLOUD_ROLE",
+            "CRSBENCH_READINESS_TIMEOUT_SEC",
+            "CRSBENCH_EVALUATOR_IDLE_TIMEOUT",
+            "CRSBENCH_EXPERIMENT_CONFIG_PATH",
+        ],
+    )
+    def test_cloud_provider_contract_rejects_runtime_managed_env_names(
+        self, reserved_name: str
+    ):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["env"] = {reserved_name: "override"}
+
+        with pytest.raises(
+            PydanticValidationError,
+            match=rf"runtime-managed environment variable {reserved_name}",
+        ):
+            ExperimentConfig(**data)
+
+    def test_cloud_provider_contract_requires_worker_placement_zone(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["workers"]["placements"] = [{"count": 150}]
+
+        with pytest.raises(
+            PydanticValidationError,
+            match="cloud.workers.placements require explicit zone, zones, or region",
+        ):
+            ExperimentConfig(**data)
+
+    @pytest.mark.parametrize(
+        ("field_name", "field_value"),
+        [
+            ("quota_validation", {"enabled": False}),
+            ("mode", "disabled"),
+        ],
+    )
+    def test_cloud_provider_contract_rejects_quota_validation_surface(
+        self, field_name: str, field_value: object
+    ):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["workers"][field_name] = field_value
+
+        with pytest.raises(
+            PydanticValidationError,
+            match="cloud.workers\\.(quota_validation|mode) is not supported in v1",
+        ):
+            ExperimentConfig(**data)
+
+    def test_cloud_provider_contract_rejects_missing_instance_profile(self):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["providers"]["gce"]["instance_profiles"] = {"gce-worker-n2d": {}}
+
+        with pytest.raises(
+            PydanticValidationError,
+            match="cloud.orchestrator.instance_profile 'gce-orchestrator-n2d' was not found under cloud.providers.gce.instance_profiles",
+        ):
+            ExperimentConfig(**data)
+
+    def test_cloud_provider_contract_rejects_duplicate_profile_names_across_catalogs(
+        self,
+    ):
+        class DummyProviderConfig(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+
+            instance_profiles: dict[str, dict[str, str]] = Field(default_factory=dict)
+
+        class MultiProviderCloudProvidersConfig(CloudProvidersConfig):
+            dummy: DummyProviderConfig | None = None
+
+        with pytest.raises(
+            PydanticValidationError,
+            match=(
+                "cloud.providers.\\*\\.instance_profiles keys must be globally "
+                "unique across providers; 'gce-worker-n2d' appears under dummy, gce"
+            ),
+        ):
+            MultiProviderCloudProvidersConfig(
+                gce=self._provider_neutral_cloud_kwargs()["providers"]["gce"],
+                dummy={"instance_profiles": {"gce-worker-n2d": {}}},
+            )
+
+    @pytest.mark.parametrize(
+        ("field_path", "field_value", "match"),
+        [
+            ("orchestrator.provider", "gce", "provider"),
+            (
+                "workers.placements.0.provider",
+                "gce",
+                "provider",
+            ),
+            (
+                "workers.placements.0.worker_count",
+                1,
+                "worker_count",
+            ),
+            (
+                "evaluators.placements.0.evaluator_count",
+                1,
+                "evaluator_count",
+            ),
+        ],
+    )
+    def test_cloud_provider_contract_rejects_removed_provider_neutral_fields(
+        self, field_path: str, field_value: object, match: str
+    ):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        target = data["cloud"]
+        path_parts = field_path.split(".")
+        for part in path_parts[:-1]:
+            if part.isdigit():
+                target = target[int(part)]
+            else:
+                target = target[part]
+        target[path_parts[-1]] = field_value
+
+        with pytest.raises(PydanticValidationError, match=match):
+            ExperimentConfig(**data)
+
+    @pytest.mark.parametrize(
+        ("field_path", "field_value", "match"),
+        [
+            (
+                "providers.gce.profile_defaults.readiness_timeout_sec",
+                1200,
+                "readiness_timeout_sec",
+            ),
+            (
+                "providers.gce.profile_defaults.crsbench_install_spec",
+                "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
+                "crsbench_install_spec",
+            ),
+            (
+                "providers.gce.profile_defaults.crsbench_git_ref",
+                "feat/gcp",
+                "crsbench_git_ref",
+            ),
+            (
+                "providers.gce.profile_defaults.github_deploy_key_path",
+                ".crsbench-keys/crsbench-deploy",
+                "github_deploy_key_path",
+            ),
+            (
+                "providers.gce.instance_profiles.gce-worker-n2d.readiness_timeout_sec",
+                1200,
+                "readiness_timeout_sec",
+            ),
+            (
+                "providers.gce.instance_profiles.gce-worker-n2d.crsbench_install_spec",
+                "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
+                "crsbench_install_spec",
+            ),
+            (
+                "providers.gce.instance_profiles.gce-worker-n2d.crsbench_git_ref",
+                "feat/gcp",
+                "crsbench_git_ref",
+            ),
+            (
+                "providers.gce.instance_profiles.gce-worker-n2d.github_deploy_key_path",
+                ".crsbench-keys/crsbench-deploy",
+                "github_deploy_key_path",
+            ),
+        ],
+    )
+    def test_cloud_provider_contract_rejects_launch_defaults_under_gce_profiles(
+        self,
+        field_path: str,
+        field_value: object,
+        match: str,
+    ) -> None:
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        target = data["cloud"]
+        path_parts = field_path.split(".")
+        for part in path_parts[:-1]:
+            target = target[int(part)] if part.isdigit() else target[part]
+        target[path_parts[-1]] = field_value
+
+        with pytest.raises(PydanticValidationError, match=match):
+            ExperimentConfig(**data)
+
+    def test_cloud_provider_contract_rejects_file_reference_for_github_deploy_key_path(
+        self,
+    ) -> None:
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        data["cloud"]["defaults"]["github_deploy_key_path"] = (
+            "file:.crsbench-keys/crsbench-deploy"
+        )
+
+        with pytest.raises(
+            PydanticValidationError,
+            match="github_deploy_key_path.*file: references are not supported for path fields",
+        ):
+            ExperimentConfig(**data)
+
+    @pytest.mark.parametrize(
+        ("field_path", "field_value", "match"),
+        [
+            ("env", {"": "value"}, "must not contain blank environment names"),
+            (
+                "env",
+                {"BROKEN_REF": "os.environ/not valid"},
+                "invalid os.environ reference",
+            ),
+            (
+                "workers.placements.0.env",
+                {"BROKEN_FILE": "file:"},
+                "invalid file reference",
+            ),
+        ],
+    )
+    def test_cloud_provider_contract_rejects_invalid_env_maps(
+        self, field_path: str, field_value: object, match: str
+    ):
+        data = self._base_kwargs()
+        data["cloud"] = self._provider_neutral_cloud_kwargs()
+        target = data["cloud"]
+        path_parts = field_path.split(".")
+        for part in path_parts[:-1]:
+            if part.isdigit():
+                target = target[int(part)]
+            else:
+                target = target[part]
+        target[path_parts[-1]] = field_value
+
+        with pytest.raises(PydanticValidationError, match=match):
+            ExperimentConfig(**data)
+
+    def test_validate_single_cloud_provider_rejects_cross_provider_launches(self):
+        with pytest.raises(
+            ValueError,
+            match="Cross-provider cloud launches are not supported yet",
+        ):
+            validate_single_cloud_provider(
+                [CloudProvider.GCE, CloudProvider.AWS, CloudProvider.GCE]
+            )
 
     def test_benchmarks_nested_harness_cpvs(self):
         data = self._base_kwargs()
@@ -1698,6 +2501,13 @@ class TestIntegrationAllConfigs:
         assert config.trials == 3
         assert config.max_total_time == 28800
         assert config.redis_host == "localhost:6379"
+        assert config.cloud is not None
+        assert config.cloud.providers is not None
+        assert config.cloud.providers.gce is not None
+        assert config.cloud.providers.gce.project == "example-project"
+        assert config.cloud.orchestrator is not None
+        assert config.cloud.orchestrator.zone == "us-central1-a"
+        assert config.cloud.orchestrator.instance_profile == "gce-orch"
 
     def test_validate_suite_example_format(self):
         """Test validation of benchmark suite with proper format (not placeholders)."""

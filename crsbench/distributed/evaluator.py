@@ -34,6 +34,27 @@ LEGACY_CI_BUILD_QUEUE = "crsbench_ci_build"
 LEGACY_CI_VERIFY_QUEUE = "crsbench_ci_verify"
 
 
+def _report_cloud_runtime_state(
+    redis_host: str,
+    *,
+    state: str,
+    detail: str | None = None,
+    startup_evidence: str | None = None,
+) -> None:
+    """Best-effort readiness update for cloud-managed evaluator runtimes."""
+    from crsbench.cloud.runtime import report_cloud_worker_state_from_env
+
+    try:
+        report_cloud_worker_state_from_env(
+            redis_host=redis_host,
+            state=state,
+            detail=detail,
+            startup_evidence=startup_evidence,
+        )
+    except Exception as exc:
+        logger.warning(f"Failed to update cloud evaluator readiness state: {exc}")
+
+
 def _is_duplicate_job_enqueue_error(exc: Exception) -> bool:
     """Best-effort duplicate enqueue detection across RQ versions."""
     msg = str(exc).lower()
@@ -200,10 +221,7 @@ def _enqueue_pre_builds(
                 if _is_duplicate_job_enqueue_error(e):
                     logger.debug(f"Pre-build job {job.job_id} already exists, skipping")
                     continue
-                logger.error(
-                    f"Failed to enqueue pre-build job {job.job_id}: {e}",
-                    exc_info=True,
-                )
+                logger.exception("Failed to enqueue pre-build job {}", job.job_id)
                 raise
 
     return enqueued
@@ -272,6 +290,11 @@ def run_evaluator_main(
     logger.info(f"CPU affinity: {'enabled' if use_cpuset else 'disabled'}")
     logger.info("Queues: build (priority) + verify")
     logger.info("=" * 60)
+    _report_cloud_runtime_state(
+        redis_host,
+        state="registering",
+        detail="Preparing evaluator runtime for build and verify queues",
+    )
 
     (
         resolved_policy,
@@ -327,6 +350,11 @@ def run_evaluator_main(
     from crsbench.distributed.ci_supervisor import run_ci_supervisor
 
     logger.info("Starting dual-queue supervisor (build + verify)...")
+    _report_cloud_runtime_state(
+        redis_host,
+        state="ready",
+        detail="Evaluator supervisor managing build and verify queues",
+    )
     return run_ci_supervisor(
         redis_host=redis_host,
         build_queue_name=build_queue_name,
@@ -517,11 +545,11 @@ def _run_single_job(
                 )
                 pipeline.execute()
 
-            logger.error(f"Job {job_id} failed: {e}", exc_info=True)
+            logger.exception("Job {} failed", job_id)
             raise
 
-    except Exception as e:
-        logger.error(f"Evaluator worker error: {e}", exc_info=True)
+    except Exception:
+        logger.exception("Evaluator worker error")
         raise
 
 
@@ -614,10 +642,7 @@ def _enqueue_pre_builds_from_registration(
                 if _is_duplicate_job_enqueue_error(e):
                     logger.debug(f"Pre-build job {job.job_id} already exists, skipping")
                     continue
-                logger.error(
-                    f"Failed to enqueue pre-build job {job.job_id}: {e}",
-                    exc_info=True,
-                )
+                logger.exception("Failed to enqueue pre-build job {}", job.job_id)
                 raise
 
     return enqueued
@@ -681,6 +706,11 @@ def run_evaluator_configless(
     logger.info("CRSBench Evaluator — Configless Mode")
     logger.info("=" * 60)
     logger.info(f"Redis host: {redis_host}")
+    _report_cloud_runtime_state(
+        redis_host,
+        state="registering",
+        detail="Preparing evaluator runtime for discovered build and verify queues",
+    )
 
     if legacy_ci_alias:
         logger.info(
@@ -965,6 +995,11 @@ def run_evaluator_configless(
     )
 
     logger.info("Starting multi-queue supervisor (build + verify)...")
+    _report_cloud_runtime_state(
+        redis_host,
+        state="ready",
+        detail="Evaluator supervisor managing build and verify queues",
+    )
 
     queue_refresher = None
     if not legacy_ci_alias:

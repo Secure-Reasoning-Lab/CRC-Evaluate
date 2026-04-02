@@ -45,6 +45,15 @@ The following 15 AFC competition projects have not been migrated to CRSBench:
 
 ## Suite Format
 
+## Smoke Suites
+
+| Suite | Description | Count |
+|-------|-------------|-------|
+| `smoke-test-bug-finding.yaml` | Bug-finding smoke suite | 7 |
+| `smoke-test-bug-finding-2.yaml` | Alternate bug-finding smoke suite | 7 |
+| `smoke-test-bug-finding-hf-download.yaml` | 3-benchmark cloud download rehearsal subset | 3 |
+| `smoke-test-bug-fixing.yaml` | Bug-fixing smoke suite | 6 |
+
 ```yaml
 Name: suite-name
 Description: A description of the benchmark suite.
