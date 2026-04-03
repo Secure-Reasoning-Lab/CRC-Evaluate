@@ -962,8 +962,9 @@ class TestOssCrsAdapterBugFindFull:
         """Separate adapter instances (simulating separate workers) both run prepare.
 
         Each adapter instance calls prepare independently.
-        build-target is deduplicated via file-based marker: the second adapter
-        skips the build because the first already wrote the done marker.
+        With separate work directories, each adapter builds independently
+        (build-done markers are scoped to work_dir to avoid stale markers
+        across experiments).
         """
         mock_run.return_value = subprocess.CompletedProcess(
             args=[], returncode=0, stdout="ok", stderr=""
@@ -991,11 +992,10 @@ class TestOssCrsAdapterBugFindFull:
         trial2.mkdir()
         adapter2.build(bench2, trial2)
 
-        # Both adapters call prepare (2 total).
-        # build-target called only once — second skipped via done marker.
-        assert mock_run.call_count == 3
+        # Both adapters call prepare + build-target independently (separate work dirs).
+        assert mock_run.call_count == 4
         cmds = [call[0][0][1] for call in mock_run.call_args_list]
-        assert cmds == ["prepare", "build-target", "prepare"]
+        assert cmds == ["prepare", "build-target", "prepare", "build-target"]
 
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
     def test_build_target_failure_does_not_affect_prepared_flag(
