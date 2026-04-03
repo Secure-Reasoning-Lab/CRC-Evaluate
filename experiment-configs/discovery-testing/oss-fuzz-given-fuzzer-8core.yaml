@@ -19,12 +19,13 @@ oss_fuzz_path: /home/dongkwan/multilang-test/oss-fuzz
 
 runtime:
   trials: 1
-  max_total_time: 900
-  build_timeout: 300
+  max_total_time: 4200
+  build_timeout: 3600
   run_timeout: 300
   verify_timeout: 60
   skip_verification: true
   skip_litellm: true
+  redis_host: localhost
 
 storage:
   experiment_filestore: /tmp/discovery-exp-8core-5min
