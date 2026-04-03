@@ -961,8 +961,10 @@ class TestOssCrsAdapterBugFindFull:
     ) -> None:
         """Separate adapter instances (simulating separate workers) both run prepare.
 
-        Cross-process deduplication relies on Docker cache, not sentinel files.
-        Each adapter instance should call prepare independently.
+        Each adapter instance calls prepare independently.
+        With separate work directories, each adapter builds independently
+        (build-done markers are scoped to work_dir to avoid stale markers
+        across experiments).
         """
         mock_run.return_value = subprocess.CompletedProcess(
             args=[], returncode=0, stdout="ok", stderr=""
@@ -990,8 +992,7 @@ class TestOssCrsAdapterBugFindFull:
         trial2.mkdir()
         adapter2.build(bench2, trial2)
 
-        # Both adapters call prepare + build-target = 4 total.
-        # Cross-process deduplication relies on Docker cache, not sentinel files.
+        # Both adapters call prepare + build-target independently (separate work dirs).
         assert mock_run.call_count == 4
         cmds = [call[0][0][1] for call in mock_run.call_args_list]
         assert cmds == ["prepare", "build-target", "prepare", "build-target"]

@@ -266,6 +266,27 @@ class OssCrsAdapter:
         crs = self._lock_token(self._crs_config_name)
         return self._lock_dir() / f"crsbench-oss-crs-prepare-{crs}.lock"
 
+    def _build_done_marker_path(self, project_name: str) -> Path:
+        """Return file-based marker path indicating build-target completed.
+
+        Used to skip redundant builds across worker processes sharing a host.
+        The marker is scoped to the oss-crs work directory so it doesn't
+        persist across experiments (which may have different Docker images).
+        """
+        if not self._work_dir:
+            # Fallback to lock dir if work_dir not yet set
+            crs = self._lock_token(self._crs_config_name)
+            project = self._lock_token(project_name)
+            sanitizer = self._lock_token(self._sanitizer)
+            return (
+                self._lock_dir()
+                / f"crsbench-oss-crs-build-done-{crs}-{project}-{sanitizer}"
+            )
+        crs = self._lock_token(self._crs_config_name)
+        project = self._lock_token(project_name)
+        sanitizer = self._lock_token(self._sanitizer)
+        return self._work_dir / f".build-done-{crs}-{project}-{sanitizer}"
+
     def _build_lock_file_path(self, project_name: str) -> Path:
         """Return host-local lock file path for build-target serialization.
 
@@ -1003,9 +1024,17 @@ class OssCrsAdapter:
 
         # Phase 2: build-target (compile the target project).
         # This is project-scoped, keep per-benchmark/sanitizer lock.
+        # Use file-based marker to skip redundant builds across worker processes.
+        build_done_marker = self._build_done_marker_path(project_name)
+
+        # Fast path: check marker before acquiring lock
+        if build_done_marker.exists() or project_name in self._built_projects:
+            logger.debug(f"Project {project_name} already built, skipping")
+            return
+
         with self._acquire_build_lock(project_name):
             # Re-check after lock in case another actor finished first.
-            if project_name in self._built_projects:
+            if build_done_marker.exists() or project_name in self._built_projects:
                 logger.debug(f"Project {project_name} already built, skipping")
                 return
 
@@ -1028,6 +1057,8 @@ class OssCrsAdapter:
                 if not build_succeeded:
                     docker_compose_down_cleanup(work_dir)
 
+            # Write file-based marker so other workers skip this build
+            build_done_marker.touch()
             self._built_projects.add(project_name)
             logger.info(f"Build complete for {project_name}")
 

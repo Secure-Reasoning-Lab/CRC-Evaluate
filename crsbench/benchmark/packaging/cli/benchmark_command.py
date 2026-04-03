@@ -494,6 +494,25 @@ Examples:
     )
     dedup_povs_parser.set_defaults(func=handle_dedup_povs)
 
+    # crsbench benchmark init
+    init_parser = benchmark_subparsers.add_parser(
+        "init",
+        help="Build OSS-Fuzz discovery targets and generate .aixcc/meta.yaml",
+    )
+    init_parser.add_argument(
+        "--experiment-config",
+        type=str,
+        required=True,
+        help="Path to experiment config YAML (reads benchmarks + benchmarks_root)",
+    )
+    init_parser.add_argument(
+        "--cpuset-cpus",
+        type=str,
+        default=None,
+        help="Pin build to specific CPU cores (e.g., '0-7'). Default: use all cores.",
+    )
+    init_parser.set_defaults(func=handle_init)
+
     # crsbench benchmark migrate (nested subparser group)
     from crsbench.migration.cli.converter_command import register_migrate_subcommands
 
@@ -510,6 +529,97 @@ Examples:
     register_ci_subcommands(benchmark_subparsers)
 
     benchmark_parser.set_defaults(command="benchmark", func=handle_benchmark_help)
+
+
+def handle_init(args: argparse.Namespace) -> int:
+    """Handle 'crsbench benchmark init' command.
+
+    Builds OSS-Fuzz discovery targets from an experiment config and
+    generates .aixcc/meta.yaml for each. Prints a summary of discovered
+    harnesses so the user can plan resource allocation before running.
+    """
+    from crsbench.benchmark.discovery import (
+        auto_generate_meta_yaml,
+        is_oss_fuzz_project,
+    )
+    from crsbench.evaluation.trial_paths import resolve_benchmarks_root
+    from crsbench.run_experiment import load_experiment_config
+    from crsbench.validation.ground_truth_paths import GroundTruthPaths
+
+    config_path = Path(args.experiment_config)
+    if not config_path.exists():
+        logger.error(f"Config file not found: {config_path}")
+        return 1
+
+    config = load_experiment_config(config_path)
+    benchmarks_root = resolve_benchmarks_root(config.benchmarks_root)
+    oss_fuzz_path = config.oss_fuzz_path
+    cpuset_cpus = args.cpuset_cpus
+
+    benchmark_names = config.get_benchmark_list()
+    if not benchmark_names:
+        logger.error("No benchmarks specified in config")
+        return 1
+
+    total_harnesses = 0
+    initialized = 0
+
+    for name in benchmark_names:
+        benchmark_path = benchmarks_root / name
+
+        if not benchmark_path.exists():
+            logger.warning(f"Benchmark directory not found: {benchmark_path}")
+            continue
+
+        # Skip benchmarks that already have meta.yaml
+        meta_yaml = GroundTruthPaths(benchmark_path).meta_yaml
+        if meta_yaml.exists():
+            logger.info(f"[{name}] meta.yaml already exists, skipping")
+            continue
+
+        if not is_oss_fuzz_project(benchmark_path):
+            logger.warning(
+                f"[{name}] Not a valid OSS-Fuzz project "
+                "(missing project.yaml/Dockerfile/build.sh), skipping"
+            )
+            continue
+
+        try:
+            result_path = auto_generate_meta_yaml(
+                benchmark_path,
+                oss_fuzz_path,
+                cpuset_cpus=cpuset_cpus,
+            )
+
+            # Count harnesses from generated meta.yaml
+            import yaml
+
+            with result_path.open() as f:
+                meta = yaml.safe_load(f)
+            harness_count = len(meta.get("harness_files", []))
+            total_harnesses += harness_count
+            initialized += 1
+
+            logger.info(f"[{name}] Initialized: {harness_count} harnesses")
+
+        except Exception:
+            logger.exception(f"[{name}] Failed to initialize")
+            continue
+
+    # Print summary
+    logger.info("=" * 60)
+    logger.info(
+        f"Initialized {initialized} benchmarks, {total_harnesses} total harnesses"
+    )
+    if config.trials and config.sanitizers:
+        trial_count = total_harnesses * config.trials * len(config.sanitizers)
+        logger.info(
+            f"Estimated trials: {total_harnesses} harnesses × "
+            f"{config.trials} trials × {len(config.sanitizers)} sanitizers = {trial_count}"
+        )
+    logger.info("=" * 60)
+
+    return 0
 
 
 def handle_benchmark_help(_args: argparse.Namespace) -> int:

@@ -536,11 +536,11 @@ def _discover_trial_patches(
     )
     if flat_patches:
         if not target_cpv_id:
-            raise ValueError(
-                "Found flat patch layout but target CPV could not be resolved "
-                f"for {patch_dir}"
-            )
-        cpv_id = target_cpv_id
+            # Discovery-only mode: no CPV to map flat patches to.
+            # Use "unknown" as a synthetic CPV ID so patches are still collected.
+            cpv_id = "unknown"
+        else:
+            cpv_id = target_cpv_id
         for patch_path in flat_patches:
             patch_key = (cpv_id, patch_path.stem)
             if patch_key in seen_patch_keys:
