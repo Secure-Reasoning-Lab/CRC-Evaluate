@@ -148,6 +148,10 @@ class TrialMetadata(BaseModel):
     build_mode: Optional[str] = None  # "delta" or "full" (evaluation mode)
     sanitizer: Optional[str] = None
     target_cpv_id: Optional[str] = None
+    cpvs_found: list[str] = Field(
+        default_factory=list,
+        description="CPV IDs found during evaluation (populated after trial completes)",
+    )
 
     # Experiment-level fields
     experiment_name: Optional[str] = None
