@@ -32,8 +32,9 @@ The rehearsal runs:
 
 ## Notification Rehearsal
 
-Use the cloud notification rehearsal to validate that `cloud.env` values are
-injected into the orchestrator runtime before a managed-style launch.
+Use the cloud notification rehearsal to validate that the checked-in
+`CRSBENCH_NOTIFY_APPRISE_URLS` `cloud.env` passthrough reaches the orchestrator
+runtime before a managed-style launch.
 
 ```bash
 export CRSBENCH_NOTIFY_APPRISE_URLS='discord://token/chat-id'
