@@ -31,6 +31,23 @@ def test_main_returns_error_when_notification_config_missing(capsys):
     assert "CRSBENCH_NOTIFY_APPRISE_URLS" in captured.out
 
 
+def test_main_loads_dotenv_with_override_enabled(monkeypatch):
+    module = _load_script_module()
+    dotenv_calls: list[tuple[Path, bool]] = []
+
+    monkeypatch.setattr(
+        module,
+        "load_dotenv",
+        lambda path, override=False: dotenv_calls.append((path, override)),
+    )
+    monkeypatch.setattr(module, "load_apprise_notification_config", lambda: None)
+
+    exit_code = module.main([])
+
+    assert exit_code == 1
+    assert dotenv_calls == [(module.PROJECT_ROOT / ".env", True)]
+
+
 def test_main_dry_run_prints_resolved_config_without_sending(monkeypatch, capsys):
     module = _load_script_module()
     send_calls: list[tuple[object, str, str | None]] = []
@@ -61,6 +78,28 @@ def test_main_dry_run_prints_resolved_config_without_sending(monkeypatch, capsys
     assert "Dry run only" in captured.out
     assert "Bench Alerts" in captured.out
     assert "targets=1" in captured.out
+
+
+def test_main_returns_error_when_notification_delivery_fails(monkeypatch, capsys):
+    module = _load_script_module()
+
+    monkeypatch.setattr(
+        module,
+        "load_apprise_notification_config",
+        lambda: module.AppriseNotificationConfig(
+            urls=("discord://token/channel",),
+            title="Bench Alerts",
+            tag=None,
+        ),
+    )
+    monkeypatch.setattr(module, "_load_project_env", lambda: None)
+    monkeypatch.setattr(module, "send_apprise_message", lambda *_args, **_kwargs: False)
+
+    exit_code = module.main(["--no-dotenv"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "Notification delivery failed" in captured.out
 
 
 def test_main_sends_notification_and_returns_success(monkeypatch, capsys):

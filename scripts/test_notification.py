@@ -20,7 +20,7 @@ DEFAULT_BODY = "CRSBench notification test"
 
 
 def _load_project_env() -> None:
-    load_dotenv(PROJECT_ROOT / ".env")
+    load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 
 def _build_parser() -> argparse.ArgumentParser:
