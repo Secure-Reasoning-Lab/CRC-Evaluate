@@ -90,19 +90,16 @@ def send_apprise_message(
             notifier.add(url)
         else:
             notifier.add(url, tag=config.tag)
-
-    payload = {
-        "body": body,
-        "title": _build_title(config, title_suffix),
-    }
-    if config.tag is not None:
-        payload["tag"] = config.tag
+    title = _build_title(config, title_suffix)
 
     try:
-        delivered = bool(notifier.notify(**payload))
+        if config.tag is None:
+            delivered = bool(notifier.notify(body=body, title=title))
+        else:
+            delivered = bool(notifier.notify(body=body, title=title, tag=config.tag))
         if not delivered:
             logger.warning(
-                f"Apprise notification failed: notify() returned falsey for {payload['title']}"
+                f"Apprise notification failed: notify() returned falsey for {title}"
             )
         return delivered
     except Exception as exc:  # best-effort notification helper

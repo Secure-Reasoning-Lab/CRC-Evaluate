@@ -1194,6 +1194,7 @@ def _send_distributed_completion_notification(
         notification_config, tracked_jobs=tracked_jobs
     ):
         return
+    assert notification_config is not None
 
     visible_results = _dedupe_results_by_logical_trial(results, config)
     total_trials = len(visible_results)
@@ -1227,6 +1228,7 @@ def _send_distributed_failure_notification(
         notification_config, tracked_jobs=tracked_jobs
     ):
         return
+    assert notification_config is not None
 
     body = "\n".join(
         [
@@ -2421,6 +2423,8 @@ def run_experiment_distributed(
                     existing_tracked_jobs = _flatten_existing_jobs(physical_existing)
                     logger.info("Aborted by user")
                     return
+                if normalized_queue_mode == "continue":
+                    existing_tracked_jobs = _flatten_existing_jobs(physical_existing)
             else:
                 normalized_queue_mode = "continue"
                 existing_tracked_jobs = _flatten_existing_jobs(physical_existing)

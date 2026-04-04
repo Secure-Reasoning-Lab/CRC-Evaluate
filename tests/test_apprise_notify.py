@@ -126,7 +126,7 @@ def test_send_apprise_message_includes_optional_title_suffix_and_tag():
                 config,
                 body="run finished",
                 title_suffix="completed",
-        )
+            )
             is True
         )
 
