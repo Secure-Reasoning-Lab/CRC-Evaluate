@@ -62,6 +62,13 @@ successful distributed cleanup, and on orchestrator or cleanup failures only
 when tracked jobs still exist. Delivery is best-effort: send failures are
 logged and do not fail the run.
 
+To verify the notification target before running an experiment:
+
+```bash
+uv run python scripts/test_notification.py --dry-run
+uv run python scripts/test_notification.py
+```
+
 5. Validate the local helper services you depend on:
 
 ```bash
