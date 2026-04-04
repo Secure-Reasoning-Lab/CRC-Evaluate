@@ -48,7 +48,7 @@ case "${1:-}" in
     mkdir -p "${state_dir}/metadata/orchestrator/attributes"
     mkdir -p "${state_dir}/state/orchestrator"
 
-    if [[ "${mode}" == "success" ]]; then
+    if [[ "${mode}" == "success" || "${mode}" == "down_fail" ]]; then
       python - "${state_dir}/metadata/orchestrator/attributes/crsbench-env-passthrough-b64" <<'PY'
 from __future__ import annotations
 
@@ -71,6 +71,9 @@ PY
     fi
     ;;
   down)
+    if [[ "${mode}" == "down_fail" ]]; then
+      exit 41
+    fi
     ;;
 esac
 """,
@@ -179,11 +182,19 @@ def test_smoke_command_controls_dry_run_flag(
     smoke_calls = [
         call
         for call in docker_calls
-        if call[:4] == ["compose", "-f", call[2], "exec"] and "bash" in call
+        if call[:6] == ["compose", "-f", call[2], "exec", "-T", "orchestrator"]
+        and call[6:8] == ["bash", "-lc"]
     ]
     assert smoke_calls, docker_calls
     smoke_command = smoke_calls[-1][-1]
     assert ("--dry-run" in smoke_command) is expects_dry_run
+    assert "cd /src/CRSBench" in smoke_command
+    assert "--no-dotenv" in smoke_command
+    wrapper_calls = (tmp_path / "wrapper.log").read_text(encoding="utf-8").splitlines()
+    assert wrapper_calls[-2:] == [
+        "down -v",
+        f"config={script_dir / 'local-experiment-notification.yaml'}",
+    ]
 
 
 def test_keep_up_skips_teardown(tmp_path: Path) -> None:
@@ -205,7 +216,7 @@ def test_keep_up_skips_teardown(tmp_path: Path) -> None:
     )
 
 
-def test_wrapper_uses_config_adjacent_to_script(tmp_path: Path) -> None:
+def test_wrapper_uses_notification_rehearsal_config(tmp_path: Path) -> None:
     script_dir, script_path = _copy_script_layout(tmp_path)
     _write_fake_wrapper(script_dir)
     _write_fake_docker(tmp_path / "bin")
@@ -255,3 +266,22 @@ def test_wrapper_failure_stops_before_smoke_exec(tmp_path: Path) -> None:
         f"config={script_dir / 'local-experiment-notification.yaml'}",
     ]
     assert _read_docker_calls(tmp_path / "docker.log") == []
+
+
+def test_teardown_failure_causes_nonzero_exit_after_success(tmp_path: Path) -> None:
+    script_dir, script_path = _copy_script_layout(tmp_path)
+    _write_fake_wrapper(script_dir)
+    _write_fake_docker(tmp_path / "bin")
+
+    result = _run_script(
+        script_path,
+        env=_base_env(tmp_path, wrapper_mode="down_fail"),
+    )
+
+    assert result.returncode == 41
+    assert "failed to tear down" in result.stderr
+    wrapper_calls = (tmp_path / "wrapper.log").read_text(encoding="utf-8").splitlines()
+    assert wrapper_calls[-2:] == [
+        "down -v",
+        f"config={script_dir / 'local-experiment-notification.yaml'}",
+    ]

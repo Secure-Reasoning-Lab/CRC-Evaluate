@@ -20,9 +20,16 @@ require_notification_urls() {
 
 wait_for_orchestrator() {
   local deadline=$((SECONDS + WAIT_TIMEOUT_SECONDS))
-  while ! docker compose -f "${COMPOSE_FILE}" exec -T orchestrator true >/dev/null 2>&1; do
+  local last_error=""
+  while true; do
+    if last_error="$(docker compose -f "${COMPOSE_FILE}" exec -T orchestrator true 2>&1 >/dev/null)"; then
+      return 0
+    fi
     if (( SECONDS >= deadline )); then
       echo "Error: timed out waiting for the orchestrator container to become ready." >&2
+      if [[ -n "${last_error}" ]]; then
+        echo "Last docker compose exec error: ${last_error}" >&2
+      fi
       exit 1
     fi
     sleep 1
@@ -85,9 +92,18 @@ run_smoke_test() {
 
 cleanup() {
   local exit_status=$?
+  local teardown_status=0
   trap - EXIT INT TERM
   if [[ "${KEEP_UP}" -eq 0 ]]; then
-    "${WRAPPER}" down -v >/dev/null 2>&1 || true
+    if "${WRAPPER}" down -v >/dev/null 2>&1; then
+      teardown_status=0
+    else
+      teardown_status=$?
+      echo "Error: failed to tear down the local notification rehearsal stack." >&2
+      if [[ "${exit_status}" -eq 0 ]]; then
+        exit_status=${teardown_status}
+      fi
+    fi
   fi
   exit "${exit_status}"
 }
