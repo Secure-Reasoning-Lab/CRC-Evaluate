@@ -48,7 +48,7 @@ case "${1:-}" in
     mkdir -p "${state_dir}/metadata/orchestrator/attributes"
     mkdir -p "${state_dir}/state/orchestrator"
 
-    if [[ "${mode}" == "success" || "${mode}" == "down_fail" ]]; then
+    if [[ "${mode}" == "success" || "${mode}" == "down_fail" || "${mode}" == "missing_runtime_env" ]]; then
       python - "${state_dir}/metadata/orchestrator/attributes/crsbench-env-passthrough-b64" <<'PY'
 from __future__ import annotations
 
@@ -68,6 +68,12 @@ path.write_text(
     encoding="utf-8",
 )
 PY
+    fi
+    if [[ "${mode}" == "success" || "${mode}" == "down_fail" ]]; then
+      cat > "${state_dir}/state/orchestrator/orchestrator.env" <<'EOF'
+PATH=/opt/crsbench/bin:/usr/bin:/bin
+CRSBENCH_NOTIFY_APPRISE_URLS=discord://token/channel
+EOF
     fi
     ;;
   down)
@@ -95,8 +101,26 @@ import sys
 from pathlib import Path
 
 log_file = Path(os.environ["FAKE_DOCKER_LOG"])
+args = sys.argv[1:]
 with log_file.open("a", encoding="utf-8") as handle:
-    handle.write(json.dumps(sys.argv[1:]) + "\\n")
+    handle.write(json.dumps(args) + "\\n")
+
+if not os.environ.get("CRSBENCH_LOCAL_REHEARSAL_REPO_ROOT"):
+    raise SystemExit(64)
+
+if (
+    os.environ.get("FAKE_WRAPPER_MODE") == "missing_runtime_env"
+    and len(args) >= 9
+    and args[0] == "compose"
+    and args[1] == "-f"
+    and args[3] == "exec"
+    and args[4] == "-T"
+    and args[5] == "orchestrator"
+    and args[6] == "test"
+    and args[7] == "-f"
+    and args[8] == "/var/lib/crsbench/orchestrator.env"
+):
+    raise SystemExit(1)
 """,
         encoding="utf-8",
     )
@@ -117,6 +141,7 @@ def _base_env(
         "FAKE_DOCKER_LOG": str(tmp_path / "docker.log"),
         "FAKE_WRAPPER_MODE": wrapper_mode,
         "CRSBENCH_LOCAL_REHEARSAL_STATE_DIR": str(tmp_path / "state"),
+        "CRSBENCH_NOTIFICATION_REHEARSAL_WAIT_TIMEOUT_SECONDS": "1",
         "CRSBENCH_NOTIFY_APPRISE_URLS": "",
     }
     if include_notification_urls:
@@ -188,7 +213,11 @@ def test_smoke_command_controls_dry_run_flag(
     assert smoke_calls, docker_calls
     smoke_command = smoke_calls[-1][-1]
     assert ("--dry-run" in smoke_command) is expects_dry_run
+    assert "set -a" in smoke_command
+    assert "source /var/lib/crsbench/orchestrator.env" in smoke_command
+    assert "set +a" in smoke_command
     assert "cd /src/CRSBench" in smoke_command
+    assert "python scripts/test_notification.py" in smoke_command
     assert "--no-dotenv" in smoke_command
     wrapper_calls = (tmp_path / "wrapper.log").read_text(encoding="utf-8").splitlines()
     assert wrapper_calls[-2:] == [
@@ -245,6 +274,36 @@ def test_missing_metadata_fails_before_smoke_exec(tmp_path: Path) -> None:
     docker_calls = _read_docker_calls(tmp_path / "docker.log")
     assert any(
         call[3:7] == ["exec", "-T", "orchestrator", "true"] for call in docker_calls
+    )
+    assert not any(
+        call[3:7] == ["exec", "-T", "orchestrator", "bash"] for call in docker_calls
+    )
+
+
+def test_missing_runtime_env_fails_before_smoke_exec(tmp_path: Path) -> None:
+    script_dir, script_path = _copy_script_layout(tmp_path)
+    _write_fake_wrapper(script_dir)
+    _write_fake_docker(tmp_path / "bin")
+
+    result = _run_script(
+        script_path,
+        env=_base_env(tmp_path, wrapper_mode="missing_runtime_env"),
+    )
+
+    assert result.returncode == 1
+    assert "orchestrator runtime env" in result.stderr
+    docker_calls = _read_docker_calls(tmp_path / "docker.log")
+    assert any(
+        call[3:9]
+        == [
+            "exec",
+            "-T",
+            "orchestrator",
+            "test",
+            "-f",
+            "/var/lib/crsbench/orchestrator.env",
+        ]
+        for call in docker_calls
     )
     assert not any(
         call[3:7] == ["exec", "-T", "orchestrator", "bash"] for call in docker_calls

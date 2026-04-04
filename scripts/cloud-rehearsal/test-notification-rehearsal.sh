@@ -7,7 +7,7 @@ WRAPPER="${SCRIPT_DIR}/run-local-rehearsal.sh"
 COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
 EXPERIMENT_CONFIG="${SCRIPT_DIR}/local-experiment-notification.yaml"
 STATE_DIR="${CRSBENCH_LOCAL_REHEARSAL_STATE_DIR:-${REPO_ROOT}/.crsbench-local-rehearsal}"
-WAIT_TIMEOUT_SECONDS=120
+WAIT_TIMEOUT_SECONDS="${CRSBENCH_NOTIFICATION_REHEARSAL_WAIT_TIMEOUT_SECONDS:-120}"
 DRY_RUN=1
 KEEP_UP=0
 
@@ -80,6 +80,26 @@ if "CRSBENCH_NOTIFY_APPRISE_URLS" not in env_map or not env_map["CRSBENCH_NOTIFY
 PY
 }
 
+wait_for_orchestrator_runtime_env() {
+  local deadline=$((SECONDS + WAIT_TIMEOUT_SECONDS))
+  local last_error=""
+  while true; do
+    if last_error="$(
+      docker compose -f "${COMPOSE_FILE}" exec -T orchestrator test -f /var/lib/crsbench/orchestrator.env 2>&1 >/dev/null
+    )"; then
+      return 0
+    fi
+    if (( SECONDS >= deadline )); then
+      echo "Error: timed out waiting for orchestrator runtime env at /var/lib/crsbench/orchestrator.env." >&2
+      if [[ -n "${last_error}" ]]; then
+        echo "Last docker compose exec error: ${last_error}" >&2
+      fi
+      exit 1
+    fi
+    sleep 1
+  done
+}
+
 run_smoke_test() {
   local dry_run_suffix=""
   if [[ "${DRY_RUN}" -eq 1 ]]; then
@@ -87,7 +107,7 @@ run_smoke_test() {
   fi
 
   docker compose -f "${COMPOSE_FILE}" exec -T orchestrator bash -lc \
-    "cd /src/CRSBench && uv run python scripts/test_notification.py --no-dotenv${dry_run_suffix}"
+    "set -a && source /var/lib/crsbench/orchestrator.env && set +a && cd /src/CRSBench && python scripts/test_notification.py --no-dotenv${dry_run_suffix}"
 }
 
 cleanup() {
@@ -128,6 +148,7 @@ main() {
   require_notification_urls
 
   export CRSBENCH_LOCAL_REHEARSAL_EXPERIMENT_CONFIG="${EXPERIMENT_CONFIG}"
+  export CRSBENCH_LOCAL_REHEARSAL_REPO_ROOT="${REPO_ROOT}"
   export CRSBENCH_LOCAL_REHEARSAL_STATE_DIR="${STATE_DIR}"
 
   trap cleanup EXIT INT TERM
@@ -135,6 +156,7 @@ main() {
   "${WRAPPER}" up -d
   wait_for_orchestrator
   require_rendered_metadata
+  wait_for_orchestrator_runtime_env
   run_smoke_test
 }
 

@@ -46,8 +46,9 @@ Notes:
 - default mode is dry-run
 - this checks cloud-env injection into the orchestrator container only; it does
   not imply workers or evaluators send notifications in this flow
-- `scripts/test_notification.py` on its own still validates only the local
-  shell or `.env` notification config
+- `scripts/test_notification.py` on its own validates a non-cloud operator
+  environment, whether inherited from the local shell or loaded from `.env`
+  unless `--no-dotenv` is used
 
 ## Quickstart
 

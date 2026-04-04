@@ -21,8 +21,11 @@ def _load_script_module():
     return module
 
 
-def test_main_returns_error_when_notification_config_missing(capsys):
+def test_main_returns_error_when_notification_config_missing(monkeypatch, capsys):
     module = _load_script_module()
+    monkeypatch.delenv("CRSBENCH_NOTIFY_APPRISE_URLS", raising=False)
+    monkeypatch.delenv("CRSBENCH_NOTIFY_APPRISE_TITLE", raising=False)
+    monkeypatch.delenv("CRSBENCH_NOTIFY_APPRISE_TAG", raising=False)
 
     exit_code = module.main(["--no-dotenv"])
 

@@ -143,10 +143,10 @@ The rehearsal defaults to dry-run and validates that `cloud.env` injection
 reaches the orchestrator runtime. It uses the local Docker-based cloud
 rehearsal harness described in
 [`local-cloud-rehearsal.md`](./local-cloud-rehearsal.md), so the same Docker
-prerequisites apply. This stock command does not validate arbitrary
-`cloud.orchestrator.env` or other custom env-layer setups; use a custom
-rehearsal config if you need to exercise those variants. It is a cloud launch
-rehearsal, not a worker or evaluator notification path.
+prerequisites apply. This stock command validates the checked-in
+`CRSBENCH_NOTIFY_APPRISE_URLS` passthrough path in
+[`scripts/cloud-rehearsal/local-experiment-notification.yaml`](../../../scripts/cloud-rehearsal/local-experiment-notification.yaml).
+It is a cloud launch rehearsal, not a worker or evaluator notification path.
 
 ## Configuration
 
