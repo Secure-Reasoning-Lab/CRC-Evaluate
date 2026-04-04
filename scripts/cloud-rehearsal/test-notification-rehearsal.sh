@@ -85,12 +85,14 @@ wait_for_orchestrator_runtime_env() {
   local last_error=""
   while true; do
     if last_error="$(
-      docker compose -f "${COMPOSE_FILE}" exec -T orchestrator test -f /var/lib/crsbench/orchestrator.env 2>&1 >/dev/null
+      docker compose -f "${COMPOSE_FILE}" exec -T orchestrator bash -lc \
+        'test -s /var/lib/crsbench/orchestrator.env && grep -q "^CRSBENCH_NOTIFY_APPRISE_URLS=" /var/lib/crsbench/orchestrator.env && grep -q "^PATH=" /var/lib/crsbench/orchestrator.env' \
+        2>&1 >/dev/null
     )"; then
       return 0
     fi
     if (( SECONDS >= deadline )); then
-      echo "Error: timed out waiting for orchestrator runtime env at /var/lib/crsbench/orchestrator.env." >&2
+      echo "Error: timed out waiting for orchestrator runtime env at /var/lib/crsbench/orchestrator.env with notification URLs and PATH populated." >&2
       if [[ -n "${last_error}" ]]; then
         echo "Last docker compose exec error: ${last_error}" >&2
       fi

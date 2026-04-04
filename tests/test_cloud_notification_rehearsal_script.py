@@ -48,7 +48,7 @@ case "${1:-}" in
     mkdir -p "${state_dir}/metadata/orchestrator/attributes"
     mkdir -p "${state_dir}/state/orchestrator"
 
-    if [[ "${mode}" == "success" || "${mode}" == "down_fail" || "${mode}" == "missing_runtime_env" ]]; then
+    if [[ "${mode}" == "success" || "${mode}" == "down_fail" || "${mode}" == "missing_runtime_env" || "${mode}" == "partial_runtime_env" ]]; then
       python - "${state_dir}/metadata/orchestrator/attributes/crsbench-env-passthrough-b64" <<'PY'
 from __future__ import annotations
 
@@ -72,6 +72,10 @@ PY
     if [[ "${mode}" == "success" || "${mode}" == "down_fail" ]]; then
       cat > "${state_dir}/state/orchestrator/orchestrator.env" <<'EOF'
 PATH=/opt/crsbench/bin:/usr/bin:/bin
+CRSBENCH_NOTIFY_APPRISE_URLS=discord://token/channel
+EOF
+    elif [[ "${mode}" == "partial_runtime_env" ]]; then
+      cat > "${state_dir}/state/orchestrator/orchestrator.env" <<'EOF'
 CRSBENCH_NOTIFY_APPRISE_URLS=discord://token/channel
 EOF
     fi
@@ -109,18 +113,29 @@ if not os.environ.get("CRSBENCH_LOCAL_REHEARSAL_REPO_ROOT"):
     raise SystemExit(64)
 
 if (
-    os.environ.get("FAKE_WRAPPER_MODE") == "missing_runtime_env"
-    and len(args) >= 9
+    len(args) >= 8
     and args[0] == "compose"
     and args[1] == "-f"
     and args[3] == "exec"
     and args[4] == "-T"
     and args[5] == "orchestrator"
-    and args[6] == "test"
-    and args[7] == "-f"
-    and args[8] == "/var/lib/crsbench/orchestrator.env"
+    and args[6] == "bash"
+    and args[7] == "-lc"
+    and "orchestrator.env" in args[8]
+    and "grep -q" in args[8]
 ):
-    raise SystemExit(1)
+    runtime_env = (
+        Path(os.environ["CRSBENCH_LOCAL_REHEARSAL_STATE_DIR"])
+        / "state"
+        / "orchestrator"
+        / "orchestrator.env"
+    )
+    if not runtime_env.is_file():
+        raise SystemExit(1)
+    contents = runtime_env.read_text(encoding="utf-8")
+    has_urls = "CRSBENCH_NOTIFY_APPRISE_URLS=" in contents
+    has_path = "PATH=" in contents
+    raise SystemExit(0 if has_urls and has_path else 1)
 """,
         encoding="utf-8",
     )
@@ -294,20 +309,46 @@ def test_missing_runtime_env_fails_before_smoke_exec(tmp_path: Path) -> None:
     assert "orchestrator runtime env" in result.stderr
     docker_calls = _read_docker_calls(tmp_path / "docker.log")
     assert any(
-        call[3:9]
-        == [
-            "exec",
-            "-T",
-            "orchestrator",
-            "test",
-            "-f",
-            "/var/lib/crsbench/orchestrator.env",
-        ]
+        call[3:8] == ["exec", "-T", "orchestrator", "bash", "-lc"]
+        and "CRSBENCH_NOTIFY_APPRISE_URLS" in call[8]
+        and "PATH=" in call[8]
         for call in docker_calls
     )
     assert not any(
-        call[3:7] == ["exec", "-T", "orchestrator", "bash"] for call in docker_calls
+        call[3:8] == ["exec", "-T", "orchestrator", "bash", "-lc"]
+        and "python scripts/test_notification.py" in call[8]
+        for call in docker_calls
     )
+
+
+def test_partial_runtime_env_fails_before_smoke_exec(tmp_path: Path) -> None:
+    script_dir, script_path = _copy_script_layout(tmp_path)
+    _write_fake_wrapper(script_dir)
+    _write_fake_docker(tmp_path / "bin")
+
+    result = _run_script(
+        script_path,
+        env=_base_env(tmp_path, wrapper_mode="partial_runtime_env"),
+    )
+
+    assert result.returncode == 1
+    assert "orchestrator runtime env" in result.stderr
+    docker_calls = _read_docker_calls(tmp_path / "docker.log")
+    readiness_calls = [
+        call
+        for call in docker_calls
+        if call[3:8] == ["exec", "-T", "orchestrator", "bash", "-lc"]
+        and "CRSBENCH_NOTIFY_APPRISE_URLS" in call[8]
+        and "PATH=" in call[8]
+    ]
+    assert readiness_calls
+    smoke_calls = [
+        call
+        for call in docker_calls
+        if call[3:8] == ["exec", "-T", "orchestrator", "bash", "-lc"]
+        and "python scripts/test_notification.py" in call[8]
+    ]
+    assert not smoke_calls
 
 
 def test_wrapper_failure_stops_before_smoke_exec(tmp_path: Path) -> None:
