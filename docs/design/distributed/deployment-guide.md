@@ -52,6 +52,8 @@ is the source of truth for fleet shape. The shared cloud contract is:
 - provisioned workers/evaluators carry experiment identity plus operator ownership labels
 - operator SSH/tunnel details are provider-specific, but host verification and explicit operator access remain mandatory
 - worker and evaluator service accounts or identities must be explicit and least-privileged
+- notification targets are an environment-driven deployment concern for queue-backed distributed runs with tracked jobs; when those vars come from the operator shell or local `.env`, operators can preflight them with the notification smoke-test script before launch
+- notification delivery remains best-effort and does not change deployment success or failure semantics
 - cloud readiness is a control-plane state distinct from raw provider VM status and from global Redis worker counts
 - bootstrapped workers and evaluators use experiment-pinned runtime paths rather than the shared configless worker/evaluator pool
 - readiness records are keyed by cloud `instance_id`, not by instance name alone

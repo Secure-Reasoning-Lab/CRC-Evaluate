@@ -102,6 +102,31 @@ flows, continue with the rest of this guide.
 6. **Redis/Valkey** reachable from worker VMs
 7. **rsync** installed on the operator machine (for artifact collection)
 
+## Notification Preflight
+
+If this deployment will use Apprise notifications, verify the environment-driven
+targets from the operator shell before `cloud launch` or `cloud monitor`.
+This validates notification settings that come from the operator shell or repo
+`.env` for queue-backed distributed runs with tracked jobs. If you inject
+notification vars through `cloud.env`, `cloud.orchestrator.env`, or other cloud
+env layers, validate those values separately in the experiment config.
+
+Dry-run the resolved notification config first:
+
+```bash
+uv run python scripts/test_notification.py --dry-run
+```
+
+If the dry run looks correct, send a real smoke test to confirm delivery:
+
+```bash
+uv run python scripts/test_notification.py
+```
+
+Keep this preflight in the same shell environment that will run the cloud
+commands so the notification targets match the launch environment when the
+notification vars come from local shell or `.env` state.
+
 ## Configuration
 
 Declare provider-native GCE details under `cloud.providers.gce`, then reference
