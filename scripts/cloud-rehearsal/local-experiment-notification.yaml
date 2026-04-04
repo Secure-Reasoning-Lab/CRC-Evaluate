@@ -37,8 +37,6 @@ crs_compose:
 cloud:
   remote:
     experiment_root: /tmp/crsbench/experiment-data
-  env:
-    CRSBENCH_NOTIFY_APPRISE_URLS: os.environ/CRSBENCH_NOTIFY_APPRISE_URLS
   bootstrap:
     prepare_mode: skip_base_images
     download_benchmarks: auto
@@ -58,6 +56,8 @@ cloud:
   orchestrator:
     zone: local-docker-a
     instance_profile: local-orchestrator-n2d
+    env:
+      CRSBENCH_NOTIFY_APPRISE_URLS: os.environ/CRSBENCH_NOTIFY_APPRISE_URLS
   workers:
     defaults:
       instance_profile: local-worker-n2d

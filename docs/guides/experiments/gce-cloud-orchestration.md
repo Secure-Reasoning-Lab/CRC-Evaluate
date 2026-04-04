@@ -123,14 +123,15 @@ uv run python scripts/test_notification.py
 ```
 
 This path validates notification settings that come from the operator shell or
-repo `.env`. It does not exercise `cloud.env` injection into the orchestrator
-runtime. If the values come from the operator shell, run the preflight in the
-same shell environment that will run `cloud launch` or `cloud monitor`.
+repo `.env`. It does not exercise cloud config env injection into the
+orchestrator runtime. If the values come from the operator shell, run the
+preflight in the same shell environment that will run `cloud launch` or
+`cloud monitor`.
 
 ### Cloud Env Rehearsal Preflight
 
 Use the stock rehearsal command when you want to rehearse the checked-in
-`cloud.env` notification path in
+`cloud.orchestrator.env` notification path in
 [`scripts/cloud-rehearsal/local-experiment-notification.yaml`](../../../scripts/cloud-rehearsal/local-experiment-notification.yaml):
 
 ```bash
@@ -139,12 +140,12 @@ scripts/cloud-rehearsal/test-notification-rehearsal.sh
 scripts/cloud-rehearsal/test-notification-rehearsal.sh --send
 ```
 
-The rehearsal defaults to dry-run and validates that `cloud.env` injection
-reaches the orchestrator runtime. It uses the local Docker-based cloud
+The rehearsal defaults to dry-run and validates that
+`cloud.orchestrator.env` injection reaches the orchestrator runtime. It uses the local Docker-based cloud
 rehearsal harness described in
 [`local-cloud-rehearsal.md`](./local-cloud-rehearsal.md), so the same Docker
 prerequisites apply. This stock command validates the checked-in
-`CRSBENCH_NOTIFY_APPRISE_URLS` passthrough path in
+`CRSBENCH_NOTIFY_APPRISE_URLS` orchestrator passthrough path in
 [`scripts/cloud-rehearsal/local-experiment-notification.yaml`](../../../scripts/cloud-rehearsal/local-experiment-notification.yaml).
 It is a cloud launch rehearsal, not a worker or evaluator notification path.
 

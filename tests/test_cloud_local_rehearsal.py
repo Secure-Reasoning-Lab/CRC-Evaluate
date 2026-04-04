@@ -198,11 +198,11 @@ def test_notification_rehearsal_config_is_valid() -> None:
     assert config.benchmark_suite == "sanity"
     assert config.cloud is not None
     assert (
-        config.cloud.env["CRSBENCH_NOTIFY_APPRISE_URLS"]
+        config.cloud.orchestrator.env["CRSBENCH_NOTIFY_APPRISE_URLS"]
         == "os.environ/CRSBENCH_NOTIFY_APPRISE_URLS"
     )
-    assert "CRSBENCH_NOTIFY_APPRISE_TITLE" not in config.cloud.env
-    assert "CRSBENCH_NOTIFY_APPRISE_TAG" not in config.cloud.env
+    assert "CRSBENCH_NOTIFY_APPRISE_TITLE" not in config.cloud.orchestrator.env
+    assert "CRSBENCH_NOTIFY_APPRISE_TAG" not in config.cloud.orchestrator.env
 
 
 def test_build_local_rehearsal_layout_resolves_cloud_env_passthrough(
@@ -307,27 +307,16 @@ def test_build_local_rehearsal_layout_resolves_notification_env_passthrough(
         orchestrator_env["CRSBENCH_NOTIFY_APPRISE_URLS"] == "discord://example/apprise"
     )
 
-    worker_env = json.loads(
-        base64.b64decode(
-            (
-                layout.worker_metadata_dirs[0]
-                / "attributes"
-                / "crsbench-env-passthrough-b64"
-            ).read_text(encoding="utf-8")
-        ).decode("utf-8")
+    worker_env_file = (
+        layout.worker_metadata_dirs[0] / "attributes" / "crsbench-env-passthrough-b64"
     )
-    assert worker_env["CRSBENCH_NOTIFY_APPRISE_URLS"] == "discord://example/apprise"
-
-    evaluator_env = json.loads(
-        base64.b64decode(
-            (
-                layout.evaluator_metadata_dirs[0]
-                / "attributes"
-                / "crsbench-env-passthrough-b64"
-            ).read_text(encoding="utf-8")
-        ).decode("utf-8")
+    evaluator_env_file = (
+        layout.evaluator_metadata_dirs[0]
+        / "attributes"
+        / "crsbench-env-passthrough-b64"
     )
-    assert evaluator_env["CRSBENCH_NOTIFY_APPRISE_URLS"] == "discord://example/apprise"
+    assert not worker_env_file.exists()
+    assert not evaluator_env_file.exists()
 
 
 def test_build_local_rehearsal_layout_preserves_sanity_always_download_policy(
