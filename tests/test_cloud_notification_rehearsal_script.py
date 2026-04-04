@@ -11,6 +11,10 @@ from pathlib import Path
 import pytest
 
 SCRIPT_SOURCE = Path("scripts/cloud-rehearsal/test-notification-rehearsal.sh")
+EXPECTED_EXPERIMENT_CONFIG = (
+    "/home/yufu/wt/CRSBench/feat-notification/scripts/cloud-rehearsal/"
+    "local-experiment-notification.yaml"
+)
 
 
 def _copy_script_layout(tmp_path: Path) -> tuple[Path, Path]:
@@ -193,7 +197,7 @@ def test_smoke_command_controls_dry_run_flag(
     wrapper_calls = (tmp_path / "wrapper.log").read_text(encoding="utf-8").splitlines()
     assert wrapper_calls[-2:] == [
         "down -v",
-        f"config={script_dir / 'local-experiment-notification.yaml'}",
+        f"config={EXPECTED_EXPERIMENT_CONFIG}",
     ]
 
 
@@ -208,7 +212,7 @@ def test_keep_up_skips_teardown(tmp_path: Path) -> None:
     wrapper_calls = (tmp_path / "wrapper.log").read_text(encoding="utf-8").splitlines()
     assert wrapper_calls == [
         "up -d",
-        f"config={script_dir / 'local-experiment-notification.yaml'}",
+        f"config={EXPECTED_EXPERIMENT_CONFIG}",
     ]
     assert not any(
         call[:4] == ["compose", "-f", call[2], "down"]
@@ -225,9 +229,7 @@ def test_wrapper_uses_notification_rehearsal_config(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     wrapper_calls = (tmp_path / "wrapper.log").read_text(encoding="utf-8").splitlines()
-    assert (
-        f"config={script_dir / 'local-experiment-notification.yaml'}" in wrapper_calls
-    )
+    assert f"config={EXPECTED_EXPERIMENT_CONFIG}" in wrapper_calls
 
 
 def test_missing_metadata_fails_before_smoke_exec(tmp_path: Path) -> None:
@@ -261,9 +263,9 @@ def test_wrapper_failure_stops_before_smoke_exec(tmp_path: Path) -> None:
     assert result.returncode == 23
     assert (tmp_path / "wrapper.log").read_text(encoding="utf-8").splitlines() == [
         "up -d",
-        f"config={script_dir / 'local-experiment-notification.yaml'}",
+        f"config={EXPECTED_EXPERIMENT_CONFIG}",
         "down -v",
-        f"config={script_dir / 'local-experiment-notification.yaml'}",
+        f"config={EXPECTED_EXPERIMENT_CONFIG}",
     ]
     assert _read_docker_calls(tmp_path / "docker.log") == []
 
@@ -283,5 +285,5 @@ def test_teardown_failure_causes_nonzero_exit_after_success(tmp_path: Path) -> N
     wrapper_calls = (tmp_path / "wrapper.log").read_text(encoding="utf-8").splitlines()
     assert wrapper_calls[-2:] == [
         "down -v",
-        f"config={script_dir / 'local-experiment-notification.yaml'}",
+        f"config={EXPECTED_EXPERIMENT_CONFIG}",
     ]
