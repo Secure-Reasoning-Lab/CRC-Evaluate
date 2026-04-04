@@ -104,14 +104,13 @@ flows, continue with the rest of this guide.
 
 ## Notification Preflight
 
-If this deployment will use Apprise notifications, verify the environment-driven
-targets from the operator shell before `cloud launch` or `cloud monitor`.
-This validates notification settings that come from the operator shell or repo
-`.env` for queue-backed distributed runs with tracked jobs. If you inject
-notification vars through `cloud.env`, `cloud.orchestrator.env`, or other cloud
-env layers, validate those values separately in the experiment config.
+If this deployment will use Apprise notifications, choose the preflight path
+that matches where the notification values are coming from.
 
-Dry-run the resolved notification config first:
+### Local Shell / `.env` Preflight
+
+Use the operator shell or repo `.env` to verify the notification config before
+`cloud launch` or `cloud monitor`:
 
 ```bash
 uv run python scripts/test_notification.py --dry-run
@@ -123,9 +122,24 @@ If the dry run looks correct, send a real smoke test to confirm delivery:
 uv run python scripts/test_notification.py
 ```
 
-Keep this preflight in the same shell environment that will run the cloud
-commands so the notification targets match the launch environment when the
-notification vars come from local shell or `.env` state.
+This path validates notification settings that come from the operator shell or
+repo `.env`. It does not exercise `cloud.env` injection into the orchestrator
+runtime.
+
+### Cloud Env Rehearsal Preflight
+
+If the notification vars are declared in `cloud.env` or another cloud env
+layer, rehearse the managed-style injection path instead:
+
+```bash
+export CRSBENCH_NOTIFY_APPRISE_URLS='discord://token/chat-id'
+scripts/cloud-rehearsal/test-notification-rehearsal.sh
+scripts/cloud-rehearsal/test-notification-rehearsal.sh --send
+```
+
+The rehearsal defaults to dry-run and validates that `cloud.env` injection
+reaches the orchestrator runtime. It is a cloud launch rehearsal, not a worker
+or evaluator notification path.
 
 ## Configuration
 
