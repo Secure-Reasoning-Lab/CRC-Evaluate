@@ -54,6 +54,14 @@ password-protected startup instead:
 uv run python scripts/valkey-helper.py --password start
 ```
 
+Optional queue-backed distributed notifications use Apprise environment
+variables. Build URLs with https://appriseit.com/tools/url-builder/. Then
+set `CRSBENCH_NOTIFY_APPRISE_URLS` and, if needed, `CRSBENCH_NOTIFY_APPRISE_TITLE`
+or `CRSBENCH_NOTIFY_APPRISE_TAG`. CRSBench sends the notification after
+successful distributed cleanup, and on orchestrator or cleanup failures only
+when tracked jobs still exist. Delivery is best-effort: send failures are
+logged and do not fail the run.
+
 5. Validate the local helper services you depend on:
 
 ```bash
