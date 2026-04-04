@@ -1,0 +1,73 @@
+experiment:
+  name: local-cloud-rehearsal-notification
+  task: bugfinding
+  benchmark_suite: sanity
+  mode: delta
+runtime:
+  trials: 1
+  max_total_time: 7200
+  build_timeout: 3600
+  run_timeout: 600
+  verify_timeout: 600
+  redis_host: ignored:6379
+  litellm:
+    skip: true
+  inputs:
+    pov:
+      max_variants_per_cpv: 1
+storage:
+  experiment_filestore: /tmp/crsbench/experiment-data
+  report_filestore: /tmp/crsbench/report-data
+resources:
+  cores_per_trial: 2
+  memory_per_trial: 4G
+worker:
+  jobs: 1
+  cores_per_job: 2
+  storage:
+    cleanup_after_trial: true
+evaluator:
+  jobs: 1
+  cores_per_job: 2
+crs_compose:
+  oss_crs_infra:
+    shared: true
+  crs-libfuzzer:
+    num_cores: 2
+cloud:
+  remote:
+    experiment_root: /tmp/crsbench/experiment-data
+  env:
+    CRSBENCH_NOTIFY_APPRISE_URLS: os.environ/CRSBENCH_NOTIFY_APPRISE_URLS
+  bootstrap:
+    prepare_mode: skip_base_images
+    download_benchmarks: auto
+  providers:
+    gce:
+      project: local-rehearsal
+      profile_defaults:
+        machine_type: n2d-standard-8
+        boot_disk_size_gb: 50
+        image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+        service_account_email: crsbench@local-rehearsal.invalid
+        owner_label: local-rehearsal
+      instance_profiles:
+        local-orchestrator-n2d: {}
+        local-worker-n2d: {}
+        local-evaluator-n2d: {}
+  orchestrator:
+    zone: local-docker-a
+    instance_profile: local-orchestrator-n2d
+  workers:
+    defaults:
+      instance_profile: local-worker-n2d
+      count: 1
+    placements:
+      - zone: local-docker-a
+      - zone: local-docker-a
+  evaluators:
+    defaults:
+      instance_profile: local-evaluator-n2d
+      count: 1
+    placements:
+      - zone: local-docker-a
