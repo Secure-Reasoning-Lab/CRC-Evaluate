@@ -15,9 +15,8 @@ from crsbench.cloud.cli._config_reconnect import (
     resolve_cloud_context,
     resolve_effective_experiment_name,
 )
-from crsbench.cloud.gce.launch_preflight import resolve_cloud_env_map
 from crsbench.cloud.orchestrator_tunnel import OrchestratorRedisTunnel
-from crsbench.cloud.secret_refs import CloudSecretReferenceError
+from crsbench.cloud.secret_refs import resolve_secret_text
 from crsbench.distributed.queue import (
     RedisConnectionProbe,
     initialize_queue,
@@ -44,6 +43,11 @@ logger = get_logger(__name__)
 _DEFAULT_MONITOR_REDIS_READY_TIMEOUT_SEC = 300
 _MONITOR_REDIS_POLL_INTERVAL_SEC = 5.0
 _MONITOR_REDIS_PROBE_TIMEOUT_SEC = 2
+_APPRISE_ENV_KEYS = (
+    "CRSBENCH_NOTIFY_APPRISE_URLS",
+    "CRSBENCH_NOTIFY_APPRISE_TITLE",
+    "CRSBENCH_NOTIFY_APPRISE_TAG",
+)
 
 
 @dataclass
@@ -178,8 +182,6 @@ def _resolve_monitor_redis_ready_timeout_sec(context: "ResolvedCloudContext") ->
 def _warn_if_duplicate_apprise_notifications(
     context: "ResolvedCloudContext",
     operator_notification_config: AppriseNotificationConfig | None,
-    *,
-    cwd: Path,
 ) -> None:
     """Warn when both monitor-side and orchestrator-side Apprise notifications are enabled."""
     if operator_notification_config is None:
@@ -191,19 +193,14 @@ def _warn_if_duplicate_apprise_notifications(
         return
 
     try:
-        resolved_orchestrator_env = resolve_cloud_env_map(
-            orchestrator_env,
-            field_prefix="cloud.orchestrator.env",
-            cwd=cwd,
-            env=os.environ,
-        )
+        resolved_orchestrator_env = _resolve_apprise_notification_env(orchestrator_env)
         orchestrator_notification_config = load_apprise_notification_config(
             env=resolved_orchestrator_env
         )
-    except CloudSecretReferenceError as exc:
+    except Exception as exc:
         logger.debug(
             "Cloud monitor skipped duplicate Apprise warning because the "
-            "resolved orchestrator env could not be resolved: {}",
+            "resolved orchestrator env could not be parsed: {}",
             exc,
         )
         return
@@ -214,9 +211,28 @@ def _warn_if_duplicate_apprise_notifications(
         "Cloud monitor may emit duplicate terminal notifications because local "
         "Apprise settings are enabled and the resolved orchestrator env also "
         "enables CRSBENCH_NOTIFY_APPRISE_URLS. Disable either the local "
-        "operator-side cloud monitor notification path or the orchestrator "
-        "cloud.orchestrator.env passthrough path to avoid duplicates."
+        "operator-side cloud monitor notification path or the cloud launch "
+        "env passthrough path to the orchestrator (for example via cloud.env "
+        "or cloud.orchestrator.env) to avoid duplicates."
     )
+
+
+def _resolve_apprise_notification_env(
+    orchestrator_env: Mapping[str, str],
+) -> dict[str, str]:
+    """Resolve the Apprise-specific subset of the orchestrator env."""
+    resolved_env: dict[str, str] = {}
+    for key in _APPRISE_ENV_KEYS:
+        if key not in orchestrator_env:
+            continue
+        value = resolve_secret_text(
+            orchestrator_env[key],
+            field_path=f"cloud.orchestrator.env.{key}",
+            env=os.environ,
+        )
+        if value is not None:
+            resolved_env[key] = value
+    return resolved_env
 
 
 def wait_for_remote_redis(
@@ -289,7 +305,6 @@ def run_monitor(args: argparse.Namespace) -> int:
             _warn_if_duplicate_apprise_notifications(
                 context,
                 operator_notification_config,
-                cwd=Path(args.config).resolve().parent,
             )
             notification_state = _CloudMonitorNotificationState(
                 queue=queue,

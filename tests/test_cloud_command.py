@@ -2907,7 +2907,7 @@ def test_run_monitor_warns_when_operator_and_orchestrator_apprise_notifications_
 
     config = _with_layered_env_overrides(_make_provider_neutral_experiment_config())
     assert config.cloud is not None
-    config.cloud.env["CRSBENCH_NOTIFY_APPRISE_URLS"] = "discord://global/apprise"
+    config.cloud.env["CRSBENCH_NOTIFY_APPRISE_URLS"] = "os.environ/ORCH_APPRISE_URLS"
     config.cloud.orchestrator.env["CRSBENCH_NOTIFY_APPRISE_TITLE"] = "Orchestrator"
     config.cloud.orchestrator.env["CRSBENCH_NOTIFY_APPRISE_TAG"] = "ops"
     launch_plan = build_cloud_launch_plan(config)
@@ -2923,6 +2923,7 @@ def test_run_monitor_warns_when_operator_and_orchestrator_apprise_notifications_
     mock_tunnel_cls.return_value.__enter__.return_value = mock_tunnel
     mock_probe_redis_connection.return_value = (RedisConnectionProbe.READY, None)
     mock_initialize_queue.return_value = MagicMock()
+    monkeypatch.setenv("ORCH_APPRISE_URLS", "discord://global/apprise")
     monkeypatch.setenv("CRSBENCH_NOTIFY_APPRISE_URLS", "discord://operator/apprise")
     monkeypatch.setenv("CRSBENCH_NOTIFY_APPRISE_TITLE", "Operator")
 
@@ -2943,7 +2944,7 @@ def test_run_monitor_warns_when_operator_and_orchestrator_apprise_notifications_
 @patch("crsbench.cloud.cli._monitor.OrchestratorRedisTunnel.from_launch_state")
 @patch("crsbench.cloud.cli._monitor.require_launch_state")
 @patch("crsbench.cloud.cli._monitor.resolve_effective_experiment_name")
-def test_run_monitor_does_not_warn_when_orchestrator_apprise_env_is_blank(
+def test_run_monitor_does_not_warn_when_orchestrator_apprise_env_ref_is_unset(
     mock_resolve_experiment_name,
     mock_require_state,
     mock_tunnel_cls,
@@ -2958,8 +2959,9 @@ def test_run_monitor_does_not_warn_when_orchestrator_apprise_env_is_blank(
 
     config = _with_layered_env_overrides(_make_provider_neutral_experiment_config())
     assert config.cloud is not None
-    config.cloud.env["CRSBENCH_NOTIFY_APPRISE_URLS"] = "discord://global/apprise"
-    config.cloud.orchestrator.env["CRSBENCH_NOTIFY_APPRISE_URLS"] = "   "
+    config.cloud.env["CRSBENCH_NOTIFY_APPRISE_URLS"] = (
+        "os.environ/MISSING_ORCH_APPRISE_URLS"
+    )
     config.cloud.orchestrator.env["CRSBENCH_NOTIFY_APPRISE_TITLE"] = "Orchestrator"
     launch_plan = build_cloud_launch_plan(config)
     context = _make_provider_neutral_operational_context(
@@ -2974,6 +2976,7 @@ def test_run_monitor_does_not_warn_when_orchestrator_apprise_env_is_blank(
     mock_tunnel_cls.return_value.__enter__.return_value = mock_tunnel
     mock_probe_redis_connection.return_value = (RedisConnectionProbe.READY, None)
     mock_initialize_queue.return_value = MagicMock()
+    monkeypatch.delenv("MISSING_ORCH_APPRISE_URLS", raising=False)
     monkeypatch.setenv("CRSBENCH_NOTIFY_APPRISE_URLS", "discord://operator/apprise")
 
     rc = run_monitor(_make_monitor_args())
