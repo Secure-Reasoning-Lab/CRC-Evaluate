@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -14,7 +15,9 @@ from crsbench.cloud.cli._config_reconnect import (
     resolve_cloud_context,
     resolve_effective_experiment_name,
 )
+from crsbench.cloud.gce.launch_preflight import resolve_cloud_env_map
 from crsbench.cloud.orchestrator_tunnel import OrchestratorRedisTunnel
+from crsbench.cloud.secret_refs import CloudSecretReferenceError
 from crsbench.distributed.queue import (
     RedisConnectionProbe,
     initialize_queue,
@@ -175,6 +178,8 @@ def _resolve_monitor_redis_ready_timeout_sec(context: "ResolvedCloudContext") ->
 def _warn_if_duplicate_apprise_notifications(
     context: "ResolvedCloudContext",
     operator_notification_config: AppriseNotificationConfig | None,
+    *,
+    cwd: Path,
 ) -> None:
     """Warn when both monitor-side and orchestrator-side Apprise notifications are enabled."""
     if operator_notification_config is None:
@@ -186,13 +191,19 @@ def _warn_if_duplicate_apprise_notifications(
         return
 
     try:
-        orchestrator_notification_config = load_apprise_notification_config(
-            env=orchestrator_env
+        resolved_orchestrator_env = resolve_cloud_env_map(
+            orchestrator_env,
+            field_prefix="cloud.orchestrator.env",
+            cwd=cwd,
+            env=os.environ,
         )
-    except (AttributeError, TypeError) as exc:
+        orchestrator_notification_config = load_apprise_notification_config(
+            env=resolved_orchestrator_env
+        )
+    except CloudSecretReferenceError as exc:
         logger.debug(
             "Cloud monitor skipped duplicate Apprise warning because the "
-            "resolved orchestrator env could not be parsed: {}",
+            "resolved orchestrator env could not be resolved: {}",
             exc,
         )
         return
@@ -278,6 +289,7 @@ def run_monitor(args: argparse.Namespace) -> int:
             _warn_if_duplicate_apprise_notifications(
                 context,
                 operator_notification_config,
+                cwd=Path(args.config).resolve().parent,
             )
             notification_state = _CloudMonitorNotificationState(
                 queue=queue,
