@@ -62,12 +62,32 @@ successful distributed cleanup, and on orchestrator or cleanup failures only
 when tracked jobs still exist. Delivery is best-effort: send failures are
 logged and do not fail the run.
 
+For managed cloud launches, keep the secret in the operator shell or local
+`.env` and pass it through the checked-in experiment config via
+`cloud.orchestrator.env`:
+
+```yaml
+cloud:
+  orchestrator:
+    env:
+      CRSBENCH_NOTIFY_APPRISE_URLS: os.environ/CRSBENCH_NOTIFY_APPRISE_URLS
+      # Optional:
+      # CRSBENCH_NOTIFY_APPRISE_TITLE: os.environ/CRSBENCH_NOTIFY_APPRISE_TITLE
+      # CRSBENCH_NOTIFY_APPRISE_TAG: os.environ/CRSBENCH_NOTIFY_APPRISE_TAG
+```
+
 To verify the notification target before running an experiment:
 
 ```bash
 uv run python scripts/test_notification.py --dry-run
 uv run python scripts/test_notification.py
 ```
+
+That helper validates the operator environment only. To rehearse the
+`cloud.orchestrator.env` path before a managed launch, use the cloud rehearsal
+flow in [Local Cloud Rehearsal](../guides/experiments/local-cloud-rehearsal.md)
+or the GCE-specific preflight notes in
+[GCE Cloud Orchestration Guide](../guides/experiments/gce-cloud-orchestration.md).
 
 5. Validate the local helper services you depend on:
 

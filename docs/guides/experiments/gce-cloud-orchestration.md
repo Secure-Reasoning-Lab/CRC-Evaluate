@@ -128,6 +128,19 @@ orchestrator runtime. If the values come from the operator shell, run the
 preflight in the same shell environment that will run `cloud launch` or
 `cloud monitor`.
 
+If a checked-in cloud config should inherit the notification target from the
+operator shell or `.env`, declare it explicitly under `cloud.orchestrator.env`:
+
+```yaml
+cloud:
+  orchestrator:
+    env:
+      CRSBENCH_NOTIFY_APPRISE_URLS: os.environ/CRSBENCH_NOTIFY_APPRISE_URLS
+      # Optional:
+      # CRSBENCH_NOTIFY_APPRISE_TITLE: os.environ/CRSBENCH_NOTIFY_APPRISE_TITLE
+      # CRSBENCH_NOTIFY_APPRISE_TAG: os.environ/CRSBENCH_NOTIFY_APPRISE_TAG
+```
+
 ### Cloud Env Rehearsal Preflight
 
 Use the stock rehearsal command when you want to rehearse the checked-in
