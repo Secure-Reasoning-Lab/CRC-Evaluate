@@ -20,7 +20,7 @@ Non-goals:
 ## Constraints
 
 - The TUI already uses a normalized grouped-config representation for previews, field editing, and schema validation.
-- The editable surface now includes collection-backed cloud structures such as GCE regions, named instance profiles, and ordered worker/evaluator placements.
+- The editable surface now includes collection-backed cloud structures such as GCE regions, named instance profiles, ordered worker/evaluator placements, and zone-aware placement fields that map onto the provider-neutral cloud schema.
 - The write path must remain correct for provider-neutral cloud configs and other configs that rely on empty placeholder mappings such as `{}`.
 - A user may load one file and save to a different path; the loaded file remains the authoritative preservation base.
 - New configs created without loading a file first do not have an existing YAML document to preserve.
@@ -57,6 +57,7 @@ The normalization path is correct for semantics but lossy for presentation. Rege
 - Unknown blocks and preserved extras that are outside the TUI’s editable surface must remain in the output unless they are semantically removed by the grouped-config model.
 - Meaningful empty mappings used for inheritance or defaults, such as empty cloud placement entries and empty instance profile mappings, must survive round-trip writes.
 - Ordered cloud collections edited through the TUI, including provider region lists and placement lists, must preserve their user-selected order in the written YAML.
+- Scalar and comma-delimited cloud fields edited through the TUI, including bootstrap gitcache policy, provider network/subnetwork/external-IP defaults, provider zone lists, orchestrator region/zones, profile network flags, and placement regions/zones, must serialize back into the provider-neutral schema shape expected by validation.
 
 ### Destination Semantics
 
@@ -107,6 +108,7 @@ Validation required:
 - Regression tests for new-from-scratch saves continuing to emit valid normalized YAML.
 - Regression tests for inherited empty cloud placeholders surviving round-trip writes.
 - Regression tests for collection-backed cloud edits preserving ordered regions, named instance profiles, and ordered worker/evaluator placements.
+- Regression tests for new-format cloud field bridging covering bootstrap gitcache, provider zone/network defaults, orchestrator placement fields, and zone-aware profile or placement edits.
 
 ## Implementation Pointers
 

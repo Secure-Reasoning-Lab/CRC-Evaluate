@@ -6,7 +6,15 @@ from crsbench.genconfig_tui.app import ConfigBuilderApp
 from crsbench.genconfig_tui.core import build_grouped_config, dump_yaml
 from rich.markup import escape
 from textual.binding import Binding
-from textual.widgets import Button, Input, OptionList, Select, SelectionList, TextArea
+from textual.widgets import (
+    Button,
+    Input,
+    OptionList,
+    Select,
+    SelectionList,
+    Switch,
+    TextArea,
+)
 from textual.widgets._footer import FooterKey
 
 
@@ -302,6 +310,157 @@ async def test_cloud_worker_placement_add_and_edit_updates_preview():
         assert "placements:" in final_preview
         assert "region: us-east1" in final_preview
         assert "count: 2" in final_preview
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_cloud_new_top_level_format_fields_update_preview():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.pause()
+
+        app.form_state["cloud"]["enabled"] = True
+        app.current_section = "cloud"
+        app._sync_widgets_from_state()
+        app._refresh_ui()
+        await pilot.pause()
+
+        provider_network = app.query_one("#field--cloud--provider_network", Input)
+        app.set_focus(provider_network)
+        await pilot.press(
+            "c",
+            "r",
+            "s",
+            "b",
+            "e",
+            "n",
+            "c",
+            "h",
+            "-",
+            "v",
+            "p",
+            "c",
+        )
+
+        provider_zones = app.query_one("#field--cloud--provider_zones", Input)
+        app.set_focus(provider_zones)
+        await pilot.press(
+            "u",
+            "s",
+            "-",
+            "e",
+            "a",
+            "s",
+            "t",
+            "5",
+            "-",
+            "b",
+            ",",
+            " ",
+            "u",
+            "s",
+            "-",
+            "e",
+            "a",
+            "s",
+            "t",
+            "1",
+            "-",
+            "b",
+        )
+
+        gitcache = app.query_one("#field--cloud--bootstrap_gitcache", Switch)
+        app.set_focus(gitcache)
+        await pilot.press("space")
+
+        orchestrator_region = app.query_one("#field--cloud--orchestrator_region", Input)
+        app.set_focus(orchestrator_region)
+        await pilot.press("u", "s", "-", "e", "a", "s", "t", "5")
+
+        final_preview = app.query_one("#final-preview", TextArea).text
+        assert "network: crsbench-vpc" in final_preview
+        assert "zones:" in final_preview
+        assert "- us-east5-b" in final_preview
+        assert "- us-east1-b" in final_preview
+        assert "gitcache: true" in final_preview
+        assert "orchestrator:" in final_preview
+        assert "region: us-east5" in final_preview
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_cloud_new_profile_and_placement_fields_update_preview():
+    app = ConfigBuilderApp()
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.pause()
+
+        app.form_state["cloud"]["enabled"] = True
+        app.current_section = "cloud"
+        app._sync_widgets_from_state()
+        app._refresh_ui()
+        await pilot.pause()
+
+        app.query_one("#cloud-add--instance_profiles", Button).press()
+        await pilot.pause()
+
+        network_input = app.query_one(
+            "#cloud-detail--instance_profiles--network", Input
+        )
+        app.set_focus(network_input)
+        await pilot.press("o", "r", "c", "h", "-", "v", "p", "c")
+
+        assign_external_ip = app.query_one(
+            "#cloud-detail--instance_profiles--assign_external_ip", Switch
+        )
+        app.set_focus(assign_external_ip)
+        await pilot.press("space")
+
+        app.query_one("#cloud-add--worker_placements", Button).press()
+        await pilot.pause()
+
+        zones_input = app.query_one("#cloud-detail--worker_placements--zones", Input)
+        app.set_focus(zones_input)
+        await pilot.press(
+            "u",
+            "s",
+            "-",
+            "e",
+            "a",
+            "s",
+            "t",
+            "5",
+            "-",
+            "b",
+            ",",
+            " ",
+            "u",
+            "s",
+            "-",
+            "e",
+            "a",
+            "s",
+            "t",
+            "1",
+            "-",
+            "b",
+        )
+
+        assert app.form_state["cloud"]["instance_profiles"] == [
+            {
+                "name": "new-profile-1",
+                "network": "orch-vpc",
+                "assign_external_ip": True,
+            }
+        ]
+        assert app.form_state["cloud"]["worker_placements"] == [
+            {"zones": "us-east5-b, us-east1-b"}
+        ]
+        final_preview = app.query_one("#final-preview", TextArea).text
+        assert "assign_external_ip: true" in final_preview
+        assert "network: orch-vpc" in final_preview
+        assert "zones:" in final_preview
+        assert "- us-east5-b" in final_preview
+        assert "- us-east1-b" in final_preview
 
 
 @pytest.mark.anyio

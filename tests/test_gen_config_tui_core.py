@@ -236,6 +236,104 @@ def test_load_state_from_grouped_config_maps_cloud_fields_and_preserves_unknowns
     assert extras == {"cloud": {"custom_block": {"keep": "me"}}}
 
 
+def test_load_state_from_grouped_config_maps_new_cloud_format_fields():
+    grouped = {
+        "experiment": {
+            "name": "loaded-exp",
+            "task": "bugfinding",
+            "benchmark_suite": "sanity",
+            "mode": "delta",
+        },
+        "runtime": {
+            "trials": 2,
+            "max_total_time": 7201,
+            "build_timeout": 3600,
+            "run_timeout": 600,
+            "verify_timeout": 600,
+        },
+        "storage": {
+            "experiment_filestore": "/tmp/exp",
+            "report_filestore": "/tmp/report",
+        },
+        "crs_compose": {
+            "oss_crs_infra": {"shared": True},
+            "crs-libfuzzer": {"num_cores": 2},
+        },
+        "cloud": {
+            "bootstrap": {
+                "prepare_mode": "full",
+                "download_benchmarks": "auto",
+                "gitcache": True,
+            },
+            "providers": {
+                "gce": {
+                    "project": "demo-project",
+                    "network": "crsbench-vpc",
+                    "subnetwork": "crsbench-subnet",
+                    "assign_external_ip": False,
+                    "zones": ["us-east5-b", "us-east1-b"],
+                    "ssh_via_iap": True,
+                    "profile_defaults": {
+                        "machine_type": "n2d-standard-16",
+                        "boot_disk_size_gb": 100,
+                        "image": "ubuntu-image",
+                        "service_account_email": "svc@example.com",
+                        "owner_label": "owner",
+                    },
+                    "instance_profiles": {
+                        "gce-worker-n2d": {
+                            "network": "worker-vpc",
+                            "subnetwork": "worker-subnet",
+                            "ssh_via_iap": True,
+                            "assign_external_ip": False,
+                        }
+                    },
+                }
+            },
+            "orchestrator": {
+                "region": "us-east5",
+                "zones": ["us-east5-b"],
+                "instance_profile": "gce-worker-n2d",
+            },
+            "workers": {
+                "defaults": {"count": 2, "instance_profile": "gce-worker-n2d"},
+                "placements": [
+                    {
+                        "regions": ["us-east5", "us-east1"],
+                        "zones": ["us-east5-b", "us-east1-b"],
+                    }
+                ],
+            },
+        },
+    }
+
+    state, extras = load_state_from_grouped_config(grouped)
+
+    assert state["cloud"]["bootstrap_gitcache"] is True
+    assert state["cloud"]["provider_network"] == "crsbench-vpc"
+    assert state["cloud"]["provider_subnetwork"] == "crsbench-subnet"
+    assert state["cloud"]["provider_assign_external_ip"] is False
+    assert state["cloud"]["provider_zones"] == "us-east5-b, us-east1-b"
+    assert state["cloud"]["orchestrator_region"] == "us-east5"
+    assert state["cloud"]["orchestrator_zones"] == "us-east5-b"
+    assert state["cloud"]["instance_profiles"] == [
+        {
+            "name": "gce-worker-n2d",
+            "network": "worker-vpc",
+            "subnetwork": "worker-subnet",
+            "ssh_via_iap": True,
+            "assign_external_ip": False,
+        }
+    ]
+    assert state["cloud"]["worker_placements"] == [
+        {
+            "regions": "us-east5, us-east1",
+            "zones": "us-east5-b, us-east1-b",
+        }
+    ]
+    assert extras == {}
+
+
 def test_load_state_from_grouped_config_does_not_enable_cloud_for_unknown_only_block():
     grouped = {
         "experiment": {
@@ -361,6 +459,104 @@ def test_build_grouped_config_keeps_generated_cloud_instance_profiles():
         "gce-worker-n2d": {},
         "gce-evaluator-n2d": {},
     }
+    validate_grouped_config(grouped)
+
+
+def test_build_grouped_config_supports_new_cloud_format_fields():
+    grouped = build_grouped_config(
+        {
+            "experiment": {
+                "name": "demo-exp",
+                "task": "bugfixing",
+                "benchmark_suite": "sanity",
+                "mode": "delta",
+            },
+            "runtime": {
+                "trials": 1,
+                "max_total_time": 4001,
+                "build_timeout": 1200,
+                "run_timeout": 600,
+                "verify_timeout": 600,
+                "skip_litellm": True,
+                "pov_enabled": True,
+                "pov_max_variants_per_cpv": 1,
+            },
+            "storage": {
+                "experiment_filestore": "/tmp/exp",
+                "report_filestore": "/tmp/report",
+            },
+            "crs_compose": {
+                "service_name": "crs-libfuzzer",
+                "service_num_cores": 2,
+                "infra_shared": True,
+            },
+            "cloud": {
+                "enabled": True,
+                "bootstrap_gitcache": True,
+                "provider_project": "aixcc-426805",
+                "provider_network": "crsbench-vpc",
+                "provider_subnetwork": "crsbench-subnet",
+                "provider_assign_external_ip": False,
+                "provider_zones": "us-east5-b, us-east1-b",
+                "provider_ssh_via_iap": True,
+                "profile_machine_type": "n2d-standard-16",
+                "profile_boot_disk_size_gb": 100,
+                "profile_image": "ubuntu-image",
+                "profile_service_account_email": "svc@example.com",
+                "profile_owner_label": "owner",
+                "orchestrator_profile": "gce-orchestrator-n2d",
+                "orchestrator_region": "us-east5",
+                "orchestrator_zones": "us-east5-b",
+                "worker_count": 1,
+                "evaluator_count": 1,
+                "instance_profiles": [
+                    {
+                        "name": "gce-orchestrator-n2d",
+                        "network": "orch-vpc",
+                        "subnetwork": "orch-subnet",
+                        "ssh_via_iap": True,
+                        "assign_external_ip": False,
+                    },
+                    {
+                        "name": "gce-worker-n2d",
+                    },
+                    {
+                        "name": "gce-evaluator-n2d",
+                    },
+                ],
+                "worker_placements": [
+                    {
+                        "regions": "us-east5, us-east1",
+                        "zones": "us-east5-b, us-east1-b",
+                    }
+                ],
+                "evaluator_placements": [{"zones": "us-east1-b"}],
+            },
+        }
+    )
+
+    assert grouped["cloud"]["bootstrap"]["gitcache"] is True
+    assert grouped["cloud"]["providers"]["gce"]["network"] == "crsbench-vpc"
+    assert grouped["cloud"]["providers"]["gce"]["subnetwork"] == "crsbench-subnet"
+    assert grouped["cloud"]["providers"]["gce"]["assign_external_ip"] is False
+    assert grouped["cloud"]["providers"]["gce"]["zones"] == [
+        "us-east5-b",
+        "us-east1-b",
+    ]
+    assert grouped["cloud"]["providers"]["gce"]["instance_profiles"][
+        "gce-orchestrator-n2d"
+    ] == {
+        "network": "orch-vpc",
+        "subnetwork": "orch-subnet",
+        "ssh_via_iap": True,
+        "assign_external_ip": False,
+    }
+    assert grouped["cloud"]["orchestrator"]["region"] == "us-east5"
+    assert grouped["cloud"]["orchestrator"]["zones"] == ["us-east5-b"]
+    assert grouped["cloud"]["workers"]["placements"] == [
+        {"regions": ["us-east5", "us-east1"], "zones": ["us-east5-b", "us-east1-b"]}
+    ]
+    assert grouped["cloud"]["evaluators"]["placements"] == [{"zones": ["us-east1-b"]}]
     validate_grouped_config(grouped)
 
 

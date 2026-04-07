@@ -73,13 +73,19 @@ CLOUD_PROFILE_DETAIL_FIELDS = (
     ("boot_disk_size_gb", "Boot disk size (GiB)", "int"),
     ("boot_disk_type", "Boot disk type", "text"),
     ("image", "Base image", "text"),
+    ("network", "Network", "text"),
+    ("subnetwork", "Subnetwork", "text"),
     ("service_account_email", "Service account email", "text"),
     ("owner_label", "Owner label", "text"),
+    ("ssh_via_iap", "SSH via IAP", "bool"),
+    ("assign_external_ip", "Assign external IP", "bool"),
 )
 
 CLOUD_PLACEMENT_DETAIL_FIELDS = (
     ("region", "Region", "text"),
+    ("regions", "Regions", "text"),
     ("zone", "Zone", "text"),
+    ("zones", "Zones", "text"),
     ("instance_profile", "Instance profile", "text"),
     ("count", "Count", "int"),
     ("fallback", "Fallback", "bool"),
@@ -851,13 +857,19 @@ class ConfigBuilderApp(App[None]):
             if isinstance(item, Mapping):
                 parts = []
                 region = str(item.get("region", "")).strip()
+                regions = str(item.get("regions", "")).strip()
                 zone = str(item.get("zone", "")).strip()
+                zones = str(item.get("zones", "")).strip()
                 instance_profile = str(item.get("instance_profile", "")).strip()
                 count = item.get("count")
                 if region:
                     parts.append(region)
+                elif regions:
+                    parts.append(regions)
                 if zone:
                     parts.append(zone)
+                elif zones:
+                    parts.append(zones)
                 if instance_profile:
                     parts.append(instance_profile)
                 if count not in (None, ""):

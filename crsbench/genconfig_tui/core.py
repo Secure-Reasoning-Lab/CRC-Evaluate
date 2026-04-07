@@ -28,8 +28,12 @@ PROFILE_OVERRIDE_KEYS = (
     "boot_disk_size_gb",
     "boot_disk_type",
     "image",
+    "network",
+    "subnetwork",
     "service_account_email",
     "owner_label",
+    "ssh_via_iap",
+    "assign_external_ip",
 )
 
 PLACEMENT_KEYS = (
@@ -124,6 +128,22 @@ def _section(state: Mapping[str, Any], name: str) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         return {}
     return dict(value)
+
+
+def _normalize_string_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
+def _serialize_string_list(value: Any) -> str:
+    if isinstance(value, list):
+        return ", ".join(str(item).strip() for item in value if str(item).strip())
+    if isinstance(value, str):
+        return value.strip()
+    return ""
 
 
 def _is_blank_mapping_list(value: Any) -> bool:
@@ -272,7 +292,10 @@ def _build_cloud_section(
 
     provider_scope = {
         "project": state.get("provider_project"),
+        "network": state.get("provider_network"),
+        "subnetwork": state.get("provider_subnetwork"),
         "ssh_via_iap": state.get("provider_ssh_via_iap"),
+        "assign_external_ip": state.get("provider_assign_external_ip"),
         "profile_defaults": {
             "machine_type": state.get("profile_machine_type"),
             "boot_disk_size_gb": state.get("profile_boot_disk_size_gb"),
@@ -293,6 +316,9 @@ def _build_cloud_section(
         provider_scope["fallback"] = state.get("provider_fallback")
     else:
         provider_scope["region"] = state.get("provider_region")
+    provider_zones = _normalize_string_list(state.get("provider_zones"))
+    if provider_zones:
+        provider_scope["zones"] = provider_zones
 
     return _prune(
         {
@@ -310,9 +336,12 @@ def _build_cloud_section(
             "bootstrap": {
                 "prepare_mode": state.get("bootstrap_prepare_mode"),
                 "download_benchmarks": state.get("bootstrap_download_benchmarks"),
+                "gitcache": state.get("bootstrap_gitcache"),
             },
             "providers": {"gce": provider_scope},
             "orchestrator": {
+                "region": state.get("orchestrator_region"),
+                "zones": _normalize_string_list(state.get("orchestrator_zones")),
                 "instance_profile": orchestrator_profile,
             },
             "workers": {
@@ -376,7 +405,11 @@ def _cloud_state_placements(
         return [
             _prune(
                 {
-                    placement_key: deepcopy(item.get(placement_key))
+                    placement_key: (
+                        _normalize_string_list(item.get(placement_key))
+                        if placement_key in {"regions", "zones"}
+                        else deepcopy(item.get(placement_key))
+                    )
                     for placement_key in PLACEMENT_KEYS
                 }
             )
@@ -639,11 +672,16 @@ def load_state_from_grouped_config(
                 "bootstrap_download_benchmarks": bootstrap_cfg.get(
                     "download_benchmarks"
                 ),
+                "bootstrap_gitcache": bootstrap_cfg.get("gitcache"),
                 "provider_project": gce.get("project"),
+                "provider_network": gce.get("network"),
+                "provider_subnetwork": gce.get("subnetwork"),
                 "provider_region": gce.get("region"),
                 "provider_regions": deepcopy(gce.get("regions")),
+                "provider_zones": _serialize_string_list(gce.get("zones")),
                 "provider_fallback": gce.get("fallback"),
                 "provider_ssh_via_iap": gce.get("ssh_via_iap"),
+                "provider_assign_external_ip": gce.get("assign_external_ip"),
                 "profile_machine_type": profile_defaults.get("machine_type"),
                 "profile_boot_disk_size_gb": profile_defaults.get("boot_disk_size_gb"),
                 "profile_boot_disk_type": profile_defaults.get("boot_disk_type"),
@@ -652,6 +690,10 @@ def load_state_from_grouped_config(
                     "service_account_email"
                 ),
                 "profile_owner_label": profile_defaults.get("owner_label"),
+                "orchestrator_region": orchestrator_cfg.get("region"),
+                "orchestrator_zones": _serialize_string_list(
+                    orchestrator_cfg.get("zones")
+                ),
                 "orchestrator_profile": orchestrator_cfg.get("instance_profile"),
                 "worker_profile": worker_defaults.get("instance_profile"),
                 "evaluator_profile": evaluator_defaults.get("instance_profile"),
@@ -703,9 +745,17 @@ def _load_cloud_placements(placements: list[Any]) -> list[dict[str, Any]]:
     loaded_placements: list[dict[str, Any]] = []
     for item in placements:
         if isinstance(item, Mapping):
-            loaded_placements.append(
-                _prune({key: deepcopy(item.get(key)) for key in PLACEMENT_KEYS}) or {}
-            )
+            loaded_item = {}
+            for key in PLACEMENT_KEYS:
+                raw_value = deepcopy(item.get(key))
+                if key in {"regions", "zones"}:
+                    serialized_value = _serialize_string_list(raw_value)
+                    if serialized_value:
+                        loaded_item[key] = serialized_value
+                    continue
+                if raw_value is not None and raw_value != "":
+                    loaded_item[key] = raw_value
+            loaded_placements.append(_prune(loaded_item) or {})
     return loaded_placements
 
 
