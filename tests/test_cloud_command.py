@@ -2735,6 +2735,8 @@ def test_apply_runtime_added_worker_placement_stops_on_quota_shortage(
 
 
 @patch("crsbench.cloud.cli._monitor.initialize_queue")
+@patch("crsbench.cloud.cli._monitor.load_apprise_notification_config")
+@patch("crsbench.cloud.cli._monitor.send_apprise_message")
 @patch("crsbench.cloud.cli._monitor.resolve_effective_experiment_name")
 @patch(
     "crsbench.cloud.cli._monitor.require_launch_state",
@@ -2744,6 +2746,8 @@ def test_run_monitor_requires_launch_state(
     mock_require_state,
     mock_resolve_experiment_name,
     mock_initialize_queue,
+    mock_load_notification_config,
+    mock_send_apprise_message,
 ):
     from crsbench.cloud.cli._monitor import run_monitor
 
@@ -2754,6 +2758,8 @@ def test_run_monitor_requires_launch_state(
     mock_resolve_experiment_name.assert_called_once_with("/tmp/config.yaml", "test-exp")
     mock_require_state.assert_called_once_with("/tmp/config.yaml", "test-exp")
     mock_initialize_queue.assert_not_called()
+    mock_load_notification_config.assert_not_called()
+    mock_send_apprise_message.assert_not_called()
 
 
 @patch("crsbench.cloud.cli._monitor.monitor_queue")
@@ -2875,6 +2881,41 @@ def test_run_monitor_retries_until_redis_is_ready(
     mock_monitor_queue.assert_called_once()
 
 
+@patch("crsbench.cloud.cli._monitor.send_apprise_message")
+@patch("crsbench.cloud.cli._monitor.load_apprise_notification_config")
+@patch("crsbench.cloud.cli._monitor.initialize_queue")
+@patch("crsbench.cloud.cli._monitor.probe_redis_connection")
+@patch("crsbench.cloud.cli._monitor.OrchestratorRedisTunnel.from_launch_state")
+@patch("crsbench.cloud.cli._monitor.require_launch_state")
+def test_run_monitor_does_not_notify_on_pre_monitor_redis_wait_failure(
+    mock_require_state,
+    mock_tunnel_cls,
+    mock_probe_redis_connection,
+    mock_initialize_queue,
+    mock_load_notification_config,
+    mock_send_apprise_message,
+):
+    from crsbench.cloud.cli._monitor import run_monitor
+
+    context = _make_provider_neutral_operational_context(include_launch_state=True)
+    assert context.launch_state is not None
+    mock_require_state.return_value = context
+    mock_tunnel = MagicMock()
+    mock_tunnel.redis_host = "127.0.0.1:16379"
+    mock_tunnel_cls.return_value.__enter__.return_value = mock_tunnel
+    mock_probe_redis_connection.side_effect = [
+        (RedisConnectionProbe.RETRYABLE, "connection refused"),
+        (RedisConnectionProbe.FATAL, "auth failed"),
+    ]
+
+    rc = run_monitor(_make_monitor_args())
+
+    assert rc == 1
+    mock_initialize_queue.assert_not_called()
+    mock_load_notification_config.assert_not_called()
+    mock_send_apprise_message.assert_not_called()
+
+
 @patch("crsbench.cloud.cli._monitor.monitor_queue", side_effect=KeyboardInterrupt)
 @patch("crsbench.cloud.cli._monitor.initialize_queue")
 @patch("crsbench.cloud.cli._monitor.probe_redis_connection")
@@ -2969,8 +3010,9 @@ def test_run_monitor_sends_completion_notification_on_first_active_to_idle_snaps
     mock_load_notification_config.assert_called_once_with()
     mock_send_apprise_message.assert_called_once()
     body = mock_send_apprise_message.call_args.kwargs["body"]
-    assert "cloud monitor queue drained" in body
+    assert "Cloud monitor run completed" in body
     assert "Experiment: test-exp" in body
+    assert "Result: queue drained" in body
     assert "Queued: 0" in body
     assert "Started: 0" in body
     assert "Finished: 1" in body
@@ -3110,7 +3152,8 @@ def test_run_monitor_sends_completion_notification_after_initial_idle_then_activ
     mock_load_notification_config.assert_called_once_with()
     mock_send_apprise_message.assert_called_once()
     body = mock_send_apprise_message.call_args.kwargs["body"]
-    assert "cloud monitor queue drained" in body
+    assert "Cloud monitor run completed" in body
+    assert "Result: queue drained" in body
     assert "Queued: 0" in body
     assert "Started: 0" in body
     assert "Finished: 1" in body
@@ -3179,7 +3222,8 @@ def test_run_monitor_reports_failed_terminal_drain_in_completion_notification(
     assert rc == 0
     mock_send_apprise_message.assert_called_once()
     body = mock_send_apprise_message.call_args.kwargs["body"]
-    assert "cloud monitor queue drained with failures" in body
+    assert "Cloud monitor run failed: queue drained with failed jobs" in body
+    assert "Result: queue drained with failures" in body
     assert "Finished: 3" in body
     assert "Failed: 2" in body
     assert "completed" not in body
@@ -3351,7 +3395,7 @@ def test_run_monitor_sends_failure_notification_after_session_start(
     mock_load_notification_config.assert_called_once_with()
     mock_send_apprise_message.assert_called_once()
     body = mock_send_apprise_message.call_args.kwargs["body"]
-    assert "cloud monitor failed" in body
+    assert "Cloud monitor run failed: monitor loop exploded" in body
     assert "monitor loop exploded" in body
 
 
@@ -3393,7 +3437,7 @@ def test_run_monitor_sends_failure_notification_when_monitor_fails_before_snapsh
     mock_load_notification_config.assert_called_once_with()
     mock_send_apprise_message.assert_called_once()
     body = mock_send_apprise_message.call_args.kwargs["body"]
-    assert "cloud monitor failed" in body
+    assert "Cloud monitor run failed: poller crashed before snapshot" in body
     assert "poller crashed before snapshot" in body
 
 

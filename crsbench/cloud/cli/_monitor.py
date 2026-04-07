@@ -23,6 +23,8 @@ from crsbench.distributed.queue import (
 from crsbench.distributed.queue_monitor import QueueMonitorCallbacks, monitor_queue
 from crsbench.utils.apprise_notify import (
     AppriseNotificationConfig,
+    format_completion_message,
+    format_failure_message,
     load_apprise_notification_config,
     send_apprise_message,
 )
@@ -107,12 +109,17 @@ class _CloudMonitorNotificationState:
         started = int(stats.get("started", 0) or 0)
         finished = int(stats.get("finished", 0) or 0)
         failed = int(stats.get("failed", 0) or 0)
+        status_line = (
+            format_failure_message("Cloud monitor", "queue drained with failed jobs")
+            if failed > 0
+            else format_completion_message("Cloud monitor")
+        )
         body = "\n".join(
             [
-                "cloud monitor queue drained"
-                + (" with failures" if failed > 0 else ""),
+                status_line,
                 f"Experiment: {self.experiment_name}",
                 "Source: cloud monitor",
+                "Result: queue drained" + (" with failures" if failed > 0 else ""),
                 f"Queued: {queued}",
                 f"Started: {started}",
                 f"Finished: {finished}",
@@ -126,7 +133,7 @@ class _CloudMonitorNotificationState:
             return
         body = "\n".join(
             [
-                f"cloud monitor failed: {exc}",
+                format_failure_message("Cloud monitor", str(exc)),
                 f"Experiment: {self.experiment_name}",
                 "Source: cloud monitor",
             ]
