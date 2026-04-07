@@ -185,9 +185,12 @@ def _warn_if_duplicate_apprise_notifications(
     if not isinstance(orchestrator_env, Mapping):
         return
 
-    orchestrator_notification_config = load_apprise_notification_config(
-        env=orchestrator_env
-    )
+    try:
+        orchestrator_notification_config = load_apprise_notification_config(
+            env=orchestrator_env
+        )
+    except Exception:
+        return
     if orchestrator_notification_config is None:
         return
 
