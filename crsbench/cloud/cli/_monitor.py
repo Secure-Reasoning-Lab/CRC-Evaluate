@@ -189,7 +189,12 @@ def _warn_if_duplicate_apprise_notifications(
         orchestrator_notification_config = load_apprise_notification_config(
             env=orchestrator_env
         )
-    except Exception:
+    except (AttributeError, TypeError) as exc:
+        logger.debug(
+            "Cloud monitor skipped duplicate Apprise warning because the "
+            "resolved orchestrator env could not be parsed: {}",
+            exc,
+        )
         return
     if orchestrator_notification_config is None:
         return
