@@ -76,6 +76,53 @@ def test_load_smoke_env_file_preserves_existing_env(tmp_path: Path) -> None:
     assert result.stdout == "existing-value"
 
 
+def test_run_checks_scopes_blank_apprise_env_to_pytest_command() -> None:
+    result = _run_bash(
+        f"""
+        export CRSBENCH_RUN_LOCAL_SOURCE_ONLY=1
+        export CRSBENCH_NOTIFY_APPRISE_URLS=discord://token/channel
+        export CRSBENCH_NOTIFY_APPRISE_TITLE="Bench Alerts"
+        export CRSBENCH_NOTIFY_APPRISE_TAG=ops
+        source "{SCRIPT_PATH}"
+        just() {{ return 0; }}
+        uv() {{
+            if [ "$1" = "run" ] && [ "$2" = "pytest" ]; then
+                printf 'pytest_urls=<%s>;pytest_title=<%s>;pytest_tag=<%s>;args=<%s>\\n' "$CRSBENCH_NOTIFY_APPRISE_URLS" "$CRSBENCH_NOTIFY_APPRISE_TITLE" "$CRSBENCH_NOTIFY_APPRISE_TAG" "$*"
+            fi
+            return 0
+        }}
+        run_stage() {{ :; }}
+        success() {{ :; }}
+        fail() {{ printf 'fail:<%s>\\n' "$1"; return 1; }}
+        run_checks
+        printf 'shell_urls=<%s>;shell_title=<%s>;shell_tag=<%s>' "$CRSBENCH_NOTIFY_APPRISE_URLS" "$CRSBENCH_NOTIFY_APPRISE_TITLE" "$CRSBENCH_NOTIFY_APPRISE_TAG"
+        """
+    )
+
+    assert result.returncode == 0
+    assert (
+        "pytest_urls=<>;pytest_title=<>;pytest_tag=<>;args=<run pytest tests/ -v -n auto -m not integration and not notification>"
+        in result.stdout
+    )
+    assert (
+        "shell_urls=<discord://token/channel>;shell_title=<Bench Alerts>;shell_tag=<ops>"
+        in result.stdout
+    )
+
+
+def test_run_checks_excludes_notification_marker() -> None:
+    result = _run_bash(
+        f"""
+        export CRSBENCH_RUN_LOCAL_SOURCE_ONLY=1
+        source "{SCRIPT_PATH}"
+        declare -f run_checks
+        """
+    )
+
+    assert result.returncode == 0
+    assert '-m "not integration and not notification"' in result.stdout
+
+
 def test_run_smoke_logged_command_can_be_quiet(tmp_path: Path) -> None:
     log_path = tmp_path / "smoke.log"
 

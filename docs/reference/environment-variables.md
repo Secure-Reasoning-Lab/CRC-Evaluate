@@ -13,6 +13,9 @@ This page is the canonical index for CRSBench environment variables.
 | `CRSBENCH_LLM_UPSTREAM_BASE_URL` | Upstream/forwarding LiteLLM endpoint. |
 | `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` | Upstream LiteLLM key-management/tracking credential (`external` mode preferred). |
 | `CRSBENCH_LLM_UPSTREAM_API_KEY` | Upstream LiteLLM runtime API key (`external` mode preferred). |
+| `CRSBENCH_NOTIFY_APPRISE_URLS` | Apprise notification URLs for queue-backed distributed runs with tracked jobs only. Build URLs with https://appriseit.com/tools/url-builder/. CRSBench sends completion notifications after successful distributed cleanup, and failure notifications when orchestrator or cleanup work fails while tracked jobs exist. Delivery is best-effort: send failures are logged and do not fail the run. For managed cloud launches, pass this through `cloud.orchestrator.env` and reference `os.environ/CRSBENCH_NOTIFY_APPRISE_URLS` from the checked-in config so only the orchestrator VM receives it. |
+| `CRSBENCH_NOTIFY_APPRISE_TITLE` | Optional Apprise notification title prefix. Defaults to `CRSBench`. |
+| `CRSBENCH_NOTIFY_APPRISE_TAG` | Optional Apprise tag applied to all configured notification URLs. |
 | `PROJECT_REPOS_DIR` | Optional cache directory for cloned upstream project repositories used by migration/source-preparation flows (default: `.crsbench-repos/`). |
 
 ## Cloud Startup Overrides (Advanced)

@@ -186,6 +186,25 @@ def test_hf_download_rehearsal_config_is_valid() -> None:
     assert config.cloud.env["HF_TOKEN"] == "os.environ/HF_TOKEN"
 
 
+def test_notification_rehearsal_config_is_valid() -> None:
+    """The notification rehearsal config should validate cleanly."""
+    from crsbench.run_experiment import load_experiment_config
+
+    config = load_experiment_config(
+        Path("scripts/cloud-rehearsal/local-experiment-notification.yaml")
+    )
+
+    assert config.experiment == "local-cloud-rehearsal-notification"
+    assert config.benchmark_suite == "sanity"
+    assert config.cloud is not None
+    assert (
+        config.cloud.orchestrator.env["CRSBENCH_NOTIFY_APPRISE_URLS"]
+        == "os.environ/CRSBENCH_NOTIFY_APPRISE_URLS"
+    )
+    assert "CRSBENCH_NOTIFY_APPRISE_TITLE" not in config.cloud.orchestrator.env
+    assert "CRSBENCH_NOTIFY_APPRISE_TAG" not in config.cloud.orchestrator.env
+
+
 def test_build_local_rehearsal_layout_resolves_cloud_env_passthrough(
     monkeypatch,
     tmp_path,
@@ -250,6 +269,54 @@ def test_build_local_rehearsal_layout_resolves_cloud_env_passthrough(
     )
     assert worker_payload["benchmark_suite"] == "smoke-test-bug-finding-hf-download"
     assert worker_payload["download_benchmarks"] == "auto"
+
+
+def test_build_local_rehearsal_layout_resolves_notification_env_passthrough(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Local rehearsal should resolve notification env passthrough metadata."""
+    from crsbench.cloud.local_rehearsal import build_local_rehearsal_layout
+
+    monkeypatch.setenv(
+        "CRSBENCH_NOTIFY_APPRISE_URLS",
+        "discord://example/apprise",
+    )
+
+    layout = build_local_rehearsal_layout(
+        output_dir=tmp_path / "rehearsal",
+        experiment_config_path=Path(
+            "scripts/cloud-rehearsal/local-experiment-notification.yaml"
+        ),
+        repo_mount_path="/src/CRSBench",
+        worker_count=2,
+        evaluator_count=1,
+        git_ref="test-ref",
+    )
+
+    orchestrator_env = json.loads(
+        base64.b64decode(
+            (
+                layout.orchestrator_metadata_dir
+                / "attributes"
+                / "crsbench-env-passthrough-b64"
+            ).read_text(encoding="utf-8")
+        ).decode("utf-8")
+    )
+    assert (
+        orchestrator_env["CRSBENCH_NOTIFY_APPRISE_URLS"] == "discord://example/apprise"
+    )
+
+    worker_env_file = (
+        layout.worker_metadata_dirs[0] / "attributes" / "crsbench-env-passthrough-b64"
+    )
+    evaluator_env_file = (
+        layout.evaluator_metadata_dirs[0]
+        / "attributes"
+        / "crsbench-env-passthrough-b64"
+    )
+    assert not worker_env_file.exists()
+    assert not evaluator_env_file.exists()
 
 
 def test_build_local_rehearsal_layout_preserves_sanity_always_download_policy(

@@ -64,6 +64,13 @@ from crsbench.evaluation.trial_paths import (
     resolve_benchmarks_root,
 )
 from crsbench.utils import log_section
+from crsbench.utils.apprise_notify import (
+    AppriseNotificationConfig,
+    format_completion_message,
+    format_failure_message,
+    load_apprise_notification_config,
+    send_apprise_message,
+)
 from crsbench.utils.benchmark_utils import (
     filter_benchmarks_by_mode,
     get_available_modes_for_benchmark,
@@ -1157,6 +1164,81 @@ def should_use_distributed_mode(
         f"Multiple jobs detected ({total_jobs} jobs total), using distributed mode"
     )
     return True
+
+
+def _distributed_notifications_enabled(
+    notification_config: AppriseNotificationConfig | None,
+    *,
+    tracked_jobs: list[object],
+) -> bool:
+    return notification_config is not None and bool(tracked_jobs)
+
+
+def _resolve_distributed_tracked_jobs(
+    existing_tracked_jobs: list[object],
+    resume_jobs: list[object],
+    jobs: list[object],
+) -> list[object]:
+    return _dedupe_jobs_by_id([*existing_tracked_jobs, *resume_jobs, *jobs])
+
+
+def _send_distributed_completion_notification(
+    notification_config: AppriseNotificationConfig | None,
+    *,
+    experiment_name: str,
+    config: ExperimentConfig,
+    tracked_jobs: list[object],
+    results: list[TrialResult],
+) -> None:
+    if not _distributed_notifications_enabled(
+        notification_config, tracked_jobs=tracked_jobs
+    ):
+        return
+    assert notification_config is not None
+
+    visible_results = _dedupe_results_by_logical_trial(results, config)
+    total_trials = len(visible_results)
+    successful_trials = sum(1 for result in visible_results if result.success)
+    failed_trials = total_trials - successful_trials
+    report_path = Path(config.report_filestore) / experiment_name
+
+    body = "\n".join(
+        [
+            format_completion_message(f"Distributed {experiment_name}"),
+            f"Experiment: {experiment_name}",
+            "Mode: distributed",
+            f"Tracked jobs: {len(tracked_jobs)}",
+            f"Logical trials: {total_trials}",
+            f"Successful: {successful_trials}",
+            f"Failed: {failed_trials}",
+            f"Report path: {report_path}",
+        ]
+    )
+    send_apprise_message(notification_config, body=body)
+
+
+def _send_distributed_failure_notification(
+    notification_config: AppriseNotificationConfig | None,
+    *,
+    experiment_name: str,
+    tracked_jobs: list[object],
+    exc: Exception,
+) -> None:
+    if not _distributed_notifications_enabled(
+        notification_config, tracked_jobs=tracked_jobs
+    ):
+        return
+    assert notification_config is not None
+
+    body = "\n".join(
+        [
+            format_failure_message(f"Distributed {experiment_name}", str(exc)),
+            f"Experiment: {experiment_name}",
+            "Mode: distributed",
+            f"Tracked jobs: {len(tracked_jobs)}",
+        ]
+    )
+    send_apprise_message(notification_config, body=body)
 
 
 def run_experiment_local(
@@ -2317,13 +2399,20 @@ def run_experiment_distributed(
         if isinstance(config, BaseModel)
         else None
     )
+    notification_config = load_apprise_notification_config()
     lock_acquired = False
     requeued_failed_jobs = 0
     resume_collection_job_ids: List[str] = []
     resume_jobs: List = []
+    jobs: List = []
+    tracked_jobs: list[object] = []
+    cleanup_exc: Exception | None = None
+    main_exc: Exception | None = None
+    should_send_completion = False
+    should_run_artifact_cleanup = False
 
     normalized_queue_mode = queue_mode.lower() if queue_mode else None
-    if normalized_queue_mode == "continue":
+    if normalized_queue_mode == "continue" and has_existing:
         existing_tracked_jobs = _flatten_existing_jobs(physical_existing)
 
     try:
@@ -2331,16 +2420,21 @@ def run_experiment_distributed(
             if sys.stdin.isatty():
                 normalized_queue_mode = prompt_queue_mode(existing)
                 if normalized_queue_mode == "quit":
+                    existing_tracked_jobs = _flatten_existing_jobs(physical_existing)
                     logger.info("Aborted by user")
                     return
+                if normalized_queue_mode == "continue":
+                    existing_tracked_jobs = _flatten_existing_jobs(physical_existing)
             else:
                 normalized_queue_mode = "continue"
+                existing_tracked_jobs = _flatten_existing_jobs(physical_existing)
                 logger.info(
                     "Non-interactive mode detected with existing queue jobs; "
                     "using scoped queue mode: continue"
                 )
 
         if has_existing and normalized_queue_mode == "quit":
+            existing_tracked_jobs = _flatten_existing_jobs(physical_existing)
             logger.info("Aborted by queue-mode=quit")
             return
 
@@ -2756,7 +2850,9 @@ def run_experiment_distributed(
         if resume_jobs and jobs:
             resume_jobs = _filter_resume_collection_jobs(resume_jobs, jobs)
 
-        tracked_jobs = _dedupe_jobs_by_id([*existing_tracked_jobs, *resume_jobs, *jobs])
+        tracked_jobs = _resolve_distributed_tracked_jobs(
+            existing_tracked_jobs, resume_jobs, jobs
+        )
 
         # Monitor progress
         logger.info(
@@ -2777,13 +2873,44 @@ def run_experiment_distributed(
         log_section("Experiment Complete - Generating Report", width=60)
 
         generate_final_report(results, experiment_name, config)
+        should_send_completion = True
+        should_run_artifact_cleanup = True
+    except Exception as exc:
+        main_exc = exc
     finally:
-        session.cleanup()
-
-    # Post-experiment operations
-    # Cleanup bulky artifacts
-    if config.keep_only_results:
-        _cleanup_experiment_artifacts(experiment_name, config)
+        try:
+            session.cleanup()
+            if should_run_artifact_cleanup and config.keep_only_results:
+                _cleanup_experiment_artifacts(experiment_name, config)
+        except Exception as exc:
+            cleanup_exc = exc
+        tracked_jobs = _resolve_distributed_tracked_jobs(
+            existing_tracked_jobs, resume_jobs, jobs
+        )
+        if main_exc is not None:
+            _send_distributed_failure_notification(
+                notification_config,
+                experiment_name=experiment_name,
+                tracked_jobs=tracked_jobs,
+                exc=main_exc,
+            )
+            raise main_exc
+        if cleanup_exc is not None:
+            _send_distributed_failure_notification(
+                notification_config,
+                experiment_name=experiment_name,
+                tracked_jobs=tracked_jobs,
+                exc=cleanup_exc,
+            )
+            raise cleanup_exc
+        if should_send_completion:
+            _send_distributed_completion_notification(
+                notification_config,
+                experiment_name=experiment_name,
+                config=config,
+                tracked_jobs=tracked_jobs,
+                results=results,
+            )
 
 
 def _cleanup_experiment_artifacts(experiment_name: str, config) -> None:

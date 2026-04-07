@@ -102,6 +102,66 @@ flows, continue with the rest of this guide.
 6. **Redis/Valkey** reachable from worker VMs
 7. **rsync** installed on the operator machine (for artifact collection)
 
+## Notification Preflight
+
+If this deployment will use Apprise notifications, choose the preflight path
+that matches where the notification values are coming from.
+
+### Local Shell / `.env` Preflight
+
+Use the operator shell or repo `.env` to verify the notification config before
+`cloud launch` or `cloud monitor`:
+
+```bash
+uv run python scripts/test_notification.py --dry-run
+```
+
+If the dry run looks correct, send a real smoke test to confirm delivery:
+
+```bash
+uv run python scripts/test_notification.py
+```
+
+This path validates notification settings that come from the operator shell or
+repo `.env`. It does not exercise cloud config env injection into the
+orchestrator runtime. If the values come from the operator shell, run the
+preflight in the same shell environment that will run `cloud launch` or
+`cloud monitor`.
+
+If a checked-in cloud config should inherit the notification target from the
+operator shell or `.env`, declare it explicitly under `cloud.orchestrator.env`:
+
+```yaml
+cloud:
+  orchestrator:
+    env:
+      CRSBENCH_NOTIFY_APPRISE_URLS: os.environ/CRSBENCH_NOTIFY_APPRISE_URLS
+      # Optional:
+      # CRSBENCH_NOTIFY_APPRISE_TITLE: os.environ/CRSBENCH_NOTIFY_APPRISE_TITLE
+      # CRSBENCH_NOTIFY_APPRISE_TAG: os.environ/CRSBENCH_NOTIFY_APPRISE_TAG
+```
+
+### Cloud Env Rehearsal Preflight
+
+Use the stock rehearsal command when you want to rehearse the checked-in
+`cloud.orchestrator.env` notification path in
+[`scripts/cloud-rehearsal/local-experiment-notification.yaml`](../../../scripts/cloud-rehearsal/local-experiment-notification.yaml):
+
+```bash
+export CRSBENCH_NOTIFY_APPRISE_URLS='discord://token/chat-id'
+scripts/cloud-rehearsal/test-notification-rehearsal.sh
+scripts/cloud-rehearsal/test-notification-rehearsal.sh --send
+```
+
+The rehearsal defaults to dry-run and validates that
+`cloud.orchestrator.env` injection reaches the orchestrator runtime. It uses the local Docker-based cloud
+rehearsal harness described in
+[`local-cloud-rehearsal.md`](./local-cloud-rehearsal.md), so the same Docker
+prerequisites apply. This stock command validates the checked-in
+`CRSBENCH_NOTIFY_APPRISE_URLS` orchestrator passthrough path in
+[`scripts/cloud-rehearsal/local-experiment-notification.yaml`](../../../scripts/cloud-rehearsal/local-experiment-notification.yaml).
+It is a cloud launch rehearsal, not a worker or evaluator notification path.
+
 ## Configuration
 
 Declare provider-native GCE details under `cloud.providers.gce`, then reference
