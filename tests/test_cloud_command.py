@@ -2909,7 +2909,8 @@ def test_run_monitor_treats_keyboard_interrupt_as_normal_exit(
 
 @patch("crsbench.cloud.cli._monitor.send_apprise_message")
 @patch("crsbench.cloud.cli._monitor.load_apprise_notification_config")
-@patch("crsbench.cloud.cli._monitor.list_queue_job_entries")
+@patch("crsbench.cloud.cli._monitor.rq.job.Job.fetch")
+@patch("crsbench.cloud.cli._monitor.is_job_for_experiment")
 @patch("crsbench.cloud.cli._monitor.monitor_queue")
 @patch("crsbench.cloud.cli._monitor.initialize_queue")
 @patch("crsbench.cloud.cli._monitor.probe_redis_connection")
@@ -2923,7 +2924,8 @@ def test_run_monitor_sends_completion_notification_on_first_active_to_idle_snaps
     mock_probe_redis_connection,
     mock_initialize_queue,
     mock_monitor_queue,
-    mock_list_queue_job_entries,
+    mock_is_job_for_experiment,
+    mock_job_fetch,
     mock_load_notification_config,
     mock_send_apprise_message,
 ):
@@ -2942,7 +2944,8 @@ def test_run_monitor_sends_completion_notification_on_first_active_to_idle_snaps
     mock_queue.scheduled_job_registry.get_job_ids.return_value = []
     mock_initialize_queue.return_value = mock_queue
     mock_load_notification_config.return_value = MagicMock()
-    mock_list_queue_job_entries.return_value = []
+    mock_is_job_for_experiment.return_value = False
+    mock_job_fetch.return_value = None
 
     def _monitor_side_effect(*args, **kwargs):
         del args
@@ -2972,14 +2975,14 @@ def test_run_monitor_sends_completion_notification_on_first_active_to_idle_snaps
     assert "Started: 0" in body
     assert "Finished: 1" in body
     assert "Failed: 0" in body
-    assert mock_list_queue_job_entries.call_count == 1
     mock_monitor_queue.assert_called_once()
     assert mock_monitor_queue.call_args.kwargs["exit_when_idle"] is False
 
 
 @patch("crsbench.cloud.cli._monitor.send_apprise_message")
 @patch("crsbench.cloud.cli._monitor.load_apprise_notification_config")
-@patch("crsbench.cloud.cli._monitor.list_queue_job_entries")
+@patch("crsbench.cloud.cli._monitor.rq.job.Job.fetch")
+@patch("crsbench.cloud.cli._monitor.is_job_for_experiment")
 @patch("crsbench.cloud.cli._monitor.monitor_queue")
 @patch("crsbench.cloud.cli._monitor.initialize_queue")
 @patch("crsbench.cloud.cli._monitor.probe_redis_connection")
@@ -2993,7 +2996,8 @@ def test_run_monitor_does_not_notify_completion_while_deferred_or_scheduled_work
     mock_probe_redis_connection,
     mock_initialize_queue,
     mock_monitor_queue,
-    mock_list_queue_job_entries,
+    mock_is_job_for_experiment,
+    mock_job_fetch,
     mock_load_notification_config,
     mock_send_apprise_message,
 ):
@@ -3007,12 +3011,13 @@ def test_run_monitor_does_not_notify_completion_while_deferred_or_scheduled_work
     mock_tunnel.redis_host = "127.0.0.1:16379"
     mock_tunnel_cls.return_value.__enter__.return_value = mock_tunnel
     mock_probe_redis_connection.return_value = (RedisConnectionProbe.READY, None)
-    mock_initialize_queue.return_value = MagicMock()
+    mock_queue = MagicMock()
+    mock_queue.deferred_job_registry.get_job_ids.return_value = ["deferred-1"]
+    mock_queue.scheduled_job_registry.get_job_ids.return_value = ["scheduled-1"]
+    mock_initialize_queue.return_value = mock_queue
     mock_load_notification_config.return_value = MagicMock()
-    mock_list_queue_job_entries.return_value = [
-        SimpleNamespace(state="deferred"),
-        SimpleNamespace(state="scheduled"),
-    ]
+    mock_job_fetch.return_value = MagicMock()
+    mock_is_job_for_experiment.return_value = True
 
     def _monitor_side_effect(*args, **kwargs):
         del args
@@ -3040,7 +3045,8 @@ def test_run_monitor_does_not_notify_completion_while_deferred_or_scheduled_work
 
 @patch("crsbench.cloud.cli._monitor.send_apprise_message")
 @patch("crsbench.cloud.cli._monitor.load_apprise_notification_config")
-@patch("crsbench.cloud.cli._monitor.list_queue_job_entries")
+@patch("crsbench.cloud.cli._monitor.rq.job.Job.fetch")
+@patch("crsbench.cloud.cli._monitor.is_job_for_experiment")
 @patch("crsbench.cloud.cli._monitor.monitor_queue")
 @patch("crsbench.cloud.cli._monitor.initialize_queue")
 @patch("crsbench.cloud.cli._monitor.probe_redis_connection")
@@ -3054,7 +3060,8 @@ def test_run_monitor_sends_completion_notification_after_initial_idle_then_activ
     mock_probe_redis_connection,
     mock_initialize_queue,
     mock_monitor_queue,
-    mock_list_queue_job_entries,
+    mock_is_job_for_experiment,
+    mock_job_fetch,
     mock_load_notification_config,
     mock_send_apprise_message,
 ):
@@ -3073,7 +3080,8 @@ def test_run_monitor_sends_completion_notification_after_initial_idle_then_activ
     mock_queue.scheduled_job_registry.get_job_ids.return_value = []
     mock_initialize_queue.return_value = mock_queue
     mock_load_notification_config.return_value = MagicMock()
-    mock_list_queue_job_entries.return_value = []
+    mock_is_job_for_experiment.return_value = False
+    mock_job_fetch.return_value = None
 
     def _monitor_side_effect(*args, **kwargs):
         del args
@@ -3112,7 +3120,8 @@ def test_run_monitor_sends_completion_notification_after_initial_idle_then_activ
 
 @patch("crsbench.cloud.cli._monitor.send_apprise_message")
 @patch("crsbench.cloud.cli._monitor.load_apprise_notification_config")
-@patch("crsbench.cloud.cli._monitor.list_queue_job_entries")
+@patch("crsbench.cloud.cli._monitor.rq.job.Job.fetch")
+@patch("crsbench.cloud.cli._monitor.is_job_for_experiment")
 @patch("crsbench.cloud.cli._monitor.monitor_queue")
 @patch("crsbench.cloud.cli._monitor.initialize_queue")
 @patch("crsbench.cloud.cli._monitor.probe_redis_connection")
@@ -3126,7 +3135,8 @@ def test_run_monitor_reports_failed_terminal_drain_in_completion_notification(
     mock_probe_redis_connection,
     mock_initialize_queue,
     mock_monitor_queue,
-    mock_list_queue_job_entries,
+    mock_is_job_for_experiment,
+    mock_job_fetch,
     mock_load_notification_config,
     mock_send_apprise_message,
 ):
@@ -3145,7 +3155,8 @@ def test_run_monitor_reports_failed_terminal_drain_in_completion_notification(
     mock_queue.scheduled_job_registry.get_job_ids.return_value = []
     mock_initialize_queue.return_value = mock_queue
     mock_load_notification_config.return_value = MagicMock()
-    mock_list_queue_job_entries.return_value = []
+    mock_is_job_for_experiment.return_value = False
+    mock_job_fetch.return_value = None
 
     def _monitor_side_effect(*args, **kwargs):
         del args
@@ -3176,7 +3187,6 @@ def test_run_monitor_reports_failed_terminal_drain_in_completion_notification(
 
 @patch("crsbench.cloud.cli._monitor.send_apprise_message")
 @patch("crsbench.cloud.cli._monitor.load_apprise_notification_config")
-@patch("crsbench.cloud.cli._monitor.list_queue_job_entries")
 @patch("crsbench.cloud.cli._monitor.monitor_queue")
 @patch("crsbench.cloud.cli._monitor.initialize_queue")
 @patch("crsbench.cloud.cli._monitor.probe_redis_connection")
@@ -3190,7 +3200,6 @@ def test_run_monitor_does_not_notify_completion_when_pending_lookup_fails(
     mock_probe_redis_connection,
     mock_initialize_queue,
     mock_monitor_queue,
-    mock_list_queue_job_entries,
     mock_load_notification_config,
     mock_send_apprise_message,
 ):
@@ -3204,9 +3213,13 @@ def test_run_monitor_does_not_notify_completion_when_pending_lookup_fails(
     mock_tunnel.redis_host = "127.0.0.1:16379"
     mock_tunnel_cls.return_value.__enter__.return_value = mock_tunnel
     mock_probe_redis_connection.return_value = (RedisConnectionProbe.READY, None)
-    mock_initialize_queue.return_value = MagicMock()
+    mock_queue = MagicMock()
+    mock_queue.deferred_job_registry.get_job_ids.side_effect = RuntimeError(
+        "redis probe failed"
+    )
+    mock_queue.scheduled_job_registry.get_job_ids.return_value = []
+    mock_initialize_queue.return_value = mock_queue
     mock_load_notification_config.return_value = MagicMock()
-    mock_list_queue_job_entries.side_effect = RuntimeError("redis probe failed")
 
     def _monitor_side_effect(*args, **kwargs):
         del args
@@ -3228,12 +3241,10 @@ def test_run_monitor_does_not_notify_completion_when_pending_lookup_fails(
 
     assert rc == 0
     mock_send_apprise_message.assert_not_called()
-    mock_list_queue_job_entries.assert_called_once()
 
 
 @patch("crsbench.cloud.cli._monitor.send_apprise_message")
 @patch("crsbench.cloud.cli._monitor.load_apprise_notification_config")
-@patch("crsbench.cloud.cli._monitor.list_queue_job_entries")
 @patch("crsbench.cloud.cli._monitor.monitor_queue")
 @patch("crsbench.cloud.cli._monitor.initialize_queue")
 @patch("crsbench.cloud.cli._monitor.probe_redis_connection")
@@ -3247,7 +3258,6 @@ def test_run_monitor_does_not_notify_completion_after_initial_idle_lookup_failur
     mock_probe_redis_connection,
     mock_initialize_queue,
     mock_monitor_queue,
-    mock_list_queue_job_entries,
     mock_load_notification_config,
     mock_send_apprise_message,
 ):
@@ -3261,12 +3271,14 @@ def test_run_monitor_does_not_notify_completion_after_initial_idle_lookup_failur
     mock_tunnel.redis_host = "127.0.0.1:16379"
     mock_tunnel_cls.return_value.__enter__.return_value = mock_tunnel
     mock_probe_redis_connection.return_value = (RedisConnectionProbe.READY, None)
-    mock_initialize_queue.return_value = MagicMock()
-    mock_load_notification_config.return_value = MagicMock()
-    mock_list_queue_job_entries.side_effect = [
+    mock_queue = MagicMock()
+    mock_queue.deferred_job_registry.get_job_ids.side_effect = [
         RuntimeError("redis probe failed"),
         [],
     ]
+    mock_queue.scheduled_job_registry.get_job_ids.return_value = []
+    mock_initialize_queue.return_value = mock_queue
+    mock_load_notification_config.return_value = MagicMock()
 
     def _monitor_side_effect(*args, **kwargs):
         del args
@@ -3288,7 +3300,6 @@ def test_run_monitor_does_not_notify_completion_after_initial_idle_lookup_failur
 
     assert rc == 0
     mock_send_apprise_message.assert_not_called()
-    assert mock_list_queue_job_entries.call_count == 2
 
 
 @patch("crsbench.cloud.cli._monitor.send_apprise_message")

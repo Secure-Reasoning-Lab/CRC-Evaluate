@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import rq.job
+
 from crsbench.cloud.cli._config_reconnect import (
     resolve_cloud_context,
     resolve_effective_experiment_name,
@@ -15,13 +17,10 @@ from crsbench.cloud.orchestrator_tunnel import OrchestratorRedisTunnel
 from crsbench.distributed.queue import (
     RedisConnectionProbe,
     initialize_queue,
+    is_job_for_experiment,
     probe_redis_connection,
 )
-from crsbench.distributed.queue_monitor import (
-    QueueMonitorCallbacks,
-    list_queue_job_entries,
-    monitor_queue,
-)
+from crsbench.distributed.queue_monitor import QueueMonitorCallbacks, monitor_queue
 from crsbench.utils.apprise_notify import (
     AppriseNotificationConfig,
     load_apprise_notification_config,
@@ -77,18 +76,28 @@ class _CloudMonitorNotificationState:
         started = int(stats.get("started", 0) or 0)
         if queued + started > 0:
             return True
+        return self._pending_deferred_or_scheduled_work()
+
+    def _pending_deferred_or_scheduled_work(self) -> bool | None:
         try:
-            entries = list_queue_job_entries(self.queue, self.experiment_name)
+            for registry_name in ("deferred_job_registry", "scheduled_job_registry"):
+                registry = getattr(self.queue, registry_name, None)
+                get_job_ids = getattr(registry, "get_job_ids", None)
+                if not callable(get_job_ids):
+                    continue
+                for job_id in get_job_ids():
+                    job = rq.job.Job.fetch(job_id, connection=self.queue.connection)
+                    if job is not None and is_job_for_experiment(
+                        job, self.experiment_name
+                    ):
+                        return True
         except Exception as exc:
             logger.warning(
                 "Cloud monitor could not confirm pending deferred/scheduled work: {}",
                 exc,
             )
             return None
-        return any(
-            entry.state in {"queued", "deferred", "scheduled", "running"}
-            for entry in entries
-        )
+        return False
 
     def _send_completion_notification(self, snapshot) -> None:
         if self.notification_config is None:
