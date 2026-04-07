@@ -1,0 +1,39 @@
+experiment:
+  name: builder-sidecar-full-test
+  task: bugfixing
+  benchmark_suite: crsbench-all-c
+  mode: auto
+  sanitizers:
+    - address
+
+runtime:
+  trials: 1
+  max_total_time: 7200
+  build_timeout: 1800
+  run_timeout: 3600
+  verify_timeout: 600
+  per_pov_verify_timeout: 120
+  redis_host: localhost
+  skip_verification: true
+  inputs:
+    pov:
+      max_variants_per_cpv: 1
+    ground_truth_patch: {}
+
+storage:
+  experiment_filestore: /tmp/crsbench/sidecar-test/experiment-data
+  report_filestore: /tmp/crsbench/sidecar-test/report-data
+
+crs_compose:
+  builder-sidecar-full:
+    num_cores: 4
+
+worker:
+  jobs: 8
+  cores_per_job: 4
+  storage:
+    cleanup_after_trial: false
+
+evaluator:
+  jobs: 2
+  cores_per_job: 4
