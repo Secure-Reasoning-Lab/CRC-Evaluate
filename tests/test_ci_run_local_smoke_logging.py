@@ -76,6 +76,23 @@ def test_load_smoke_env_file_preserves_existing_env(tmp_path: Path) -> None:
     assert result.stdout == "existing-value"
 
 
+def test_disable_check_notifications_blanks_apprise_env() -> None:
+    result = _run_bash(
+        f"""
+        export CRSBENCH_RUN_LOCAL_SOURCE_ONLY=1
+        export CRSBENCH_NOTIFY_APPRISE_URLS=discord://token/channel
+        export CRSBENCH_NOTIFY_APPRISE_TITLE=Bench Alerts
+        export CRSBENCH_NOTIFY_APPRISE_TAG=ops
+        source "{SCRIPT_PATH}"
+        disable_check_notifications
+        printf 'urls=<%s>;title=<%s>;tag=<%s>' "$CRSBENCH_NOTIFY_APPRISE_URLS" "$CRSBENCH_NOTIFY_APPRISE_TITLE" "$CRSBENCH_NOTIFY_APPRISE_TAG"
+        """
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "urls=<>;title=<>;tag=<>"
+
+
 def test_run_smoke_logged_command_can_be_quiet(tmp_path: Path) -> None:
     log_path = tmp_path / "smoke.log"
 
