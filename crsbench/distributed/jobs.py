@@ -86,6 +86,7 @@ class EffectiveInputSettings:
     seed_corpus_enabled: bool
     seed_corpus_max_time: Optional[int]
     diff_enabled: bool
+    ground_truth_patch_enabled: bool
     patch_verify_variants: bool
     source: str
 
@@ -105,6 +106,7 @@ class EffectiveInputSettings:
                 "max_time": self.seed_corpus_max_time,
             },
             "diff": {"enabled": self.diff_enabled},
+            "ground_truth_patch": {"enabled": self.ground_truth_patch_enabled},
             "patch_verify_variants": self.patch_verify_variants,
         }
 
@@ -134,10 +136,12 @@ def _resolve_effective_input_settings(
     seed_corpus_enabled = bool(inputs.seed.enabled)
     seed_corpus_max_time = inputs.seed.max_time
     diff_enabled = bool(inputs.diff.enabled)
+    ground_truth_patch_enabled = bool(inputs.ground_truth_patch.enabled)
     hint_corpus_level = None
 
-    # Delta mode requires the reference diff by definition.
-    if trial_mode == "delta" and not diff_enabled:
+    # Delta mode requires the reference diff by definition (unless ground_truth_patch
+    # is explicitly enabled, in which case it provides the diff input instead).
+    if trial_mode == "delta" and not diff_enabled and not ground_truth_patch_enabled:
         diff_enabled = True
         logger.info(
             "Auto-enabling diff input for delta-mode trial "
@@ -153,6 +157,7 @@ def _resolve_effective_input_settings(
         seed_corpus_enabled=seed_corpus_enabled,
         seed_corpus_max_time=seed_corpus_max_time if seed_corpus_enabled else None,
         diff_enabled=diff_enabled,
+        ground_truth_patch_enabled=ground_truth_patch_enabled,
         patch_verify_variants=config.patch_verify_variants,
         source="inputs",
     )
@@ -1520,6 +1525,7 @@ def run_crs_trial(
             seed_corpus_enabled=effective_inputs.seed_corpus_enabled,
             seed_corpus_max_time=effective_inputs.seed_corpus_max_time,
             diff_input_enabled=effective_inputs.diff_enabled,
+            ground_truth_patch_enabled=effective_inputs.ground_truth_patch_enabled,
             redis_host=_resolve_redis_host(config),
             experiment_name=config.experiment,
             pov_dedup_strategy=config.pov_dedup_strategy,

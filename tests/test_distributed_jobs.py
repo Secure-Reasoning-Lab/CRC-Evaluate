@@ -529,6 +529,7 @@ def test_run_crs_trial_publishes_fail_marker_before_failed_lifecycle_transition(
         seed_corpus_enabled = False
         seed_corpus_max_time = 0
         diff_enabled = False
+        ground_truth_patch_enabled = False
         pov_enabled = True
         max_pov_variants_per_cpv = 1
         patch_verify_variants = 0
@@ -671,6 +672,7 @@ def test_run_crs_trial_finalizes_failed_lifecycle_when_fail_publication_raises(
         seed_corpus_enabled = False
         seed_corpus_max_time = 0
         diff_enabled = False
+        ground_truth_patch_enabled = False
         pov_enabled = True
         max_pov_variants_per_cpv = 1
         patch_verify_variants = 0

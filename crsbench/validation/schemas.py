@@ -3079,6 +3079,25 @@ class ExperimentDiffInputs(BaseModel):
     )
 
 
+class ExperimentGroundTruthPatchInputs(BaseModel):
+    """Ground-truth patch input settings for CI/testing CRS.
+
+    When enabled, CRSBench stages the CPV-level ground-truth patch
+    (``<benchmark>/.aixcc/<harness>/<cpv>/patches/patch_0.diff``) as the
+    runtime diff input instead of the benchmark-level ``ref.diff``.  Use this
+    for CI/testing CRS (e.g. builder-sidecar-full) that need the actual fix
+    patch to apply and verify.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: Optional[bool] = Field(
+        default=False,
+        description="Whether to stage the CPV ground-truth patch as runtime diff input. "
+        "Mutually exclusive with inputs.diff; ground_truth_patch takes precedence.",
+    )
+
+
 class ExperimentInputsConfig(BaseModel):
     """Structured explicit CRS runtime inputs."""
 
@@ -3088,6 +3107,9 @@ class ExperimentInputsConfig(BaseModel):
     sarif: ExperimentSarifInputs = Field(default_factory=ExperimentSarifInputs)
     seed: ExperimentSeedInputs = Field(default_factory=ExperimentSeedInputs)
     diff: ExperimentDiffInputs = Field(default_factory=ExperimentDiffInputs)
+    ground_truth_patch: ExperimentGroundTruthPatchInputs = Field(
+        default_factory=ExperimentGroundTruthPatchInputs
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -3096,7 +3118,7 @@ class ExperimentInputsConfig(BaseModel):
         if not isinstance(data, dict):
             return data
         normalized = dict(data)
-        for key in ("pov", "sarif", "seed", "diff"):
+        for key in ("pov", "sarif", "seed", "diff", "ground_truth_patch"):
             if key not in normalized:
                 continue
             value = normalized.get(key)

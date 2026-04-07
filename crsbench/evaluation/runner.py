@@ -39,6 +39,7 @@ from crsbench.evaluation.verification.pov import (
 )
 from crsbench.utils.logger import get_logger
 from crsbench.validation import ValidationResult, validate_benchmark
+from crsbench.validation.ground_truth_paths import GroundTruthPaths
 from crsbench.validation.schemas import BenchmarkConfig, BenchmarkHarness, HarnessFile
 
 # Set up logging
@@ -123,6 +124,7 @@ class BenchmarkRunner:
         seed_corpus_enabled: bool = False,
         seed_corpus_max_time: Optional[int] = None,
         diff_input_enabled: bool = False,
+        ground_truth_patch_enabled: bool = False,
         redis_host: Optional[str] = None,
         experiment_name: Optional[str] = None,
         pov_dedup_strategy: str = "patch-based",
@@ -165,6 +167,9 @@ class BenchmarkRunner:
             seed_corpus_enabled: Whether to stage/provide seed corpus input.
             seed_corpus_max_time: Optional max relative time for staged seed corpus files.
             diff_input_enabled: Whether to stage/provide ``.aixcc/ref.diff`` as runtime diff input.
+            ground_truth_patch_enabled: Whether to stage the CPV-level ground-truth patch
+                (``patches/patch_0.diff``) as runtime diff input instead of ref.diff.
+                Takes precedence over diff_input_enabled when True.
             redis_host: Redis server hostname for async POV verification
             experiment_name: Experiment name for async verify queue naming
             pov_dedup_strategy: POV deduplication strategy name
@@ -198,6 +203,7 @@ class BenchmarkRunner:
         self.seed_corpus_enabled = seed_corpus_enabled
         self.seed_corpus_max_time = seed_corpus_max_time
         self.diff_input_enabled = diff_input_enabled
+        self.ground_truth_patch_enabled = ground_truth_patch_enabled
         self.redis_host = redis_host
         self.experiment_name = experiment_name
         self.pov_dedup_strategy = pov_dedup_strategy
@@ -857,10 +863,18 @@ class BenchmarkRunner:
             trial_output_dir=trial_output_dir,
             target_cpv_id=target_cpv_id,
         )
-        self._prepare_ref_diff_input(
-            benchmark_path=benchmark_path,
-            trial_output_dir=trial_output_dir,
-        )
+        if self.ground_truth_patch_enabled:
+            self._prepare_ground_truth_patch_input(
+                benchmark_path=benchmark_path,
+                harness_name=harness_name,
+                cpv_id=target_cpv_id,
+                trial_output_dir=trial_output_dir,
+            )
+        else:
+            self._prepare_ref_diff_input(
+                benchmark_path=benchmark_path,
+                trial_output_dir=trial_output_dir,
+            )
 
     def _prepare_bug_candidate_inputs(
         self,
@@ -1084,6 +1098,64 @@ class BenchmarkRunner:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
         self.logger.info(f"Prepared diff input at: {target}")
+
+    def _prepare_ground_truth_patch_input(
+        self,
+        benchmark_path: Path,
+        harness_name: str,
+        cpv_id: str | None,
+        trial_output_dir: Path,
+    ) -> None:
+        """Stage CPV ground-truth patch into ``trial/ref.diff`` when enabled.
+
+        Copies the first ``patch_*.diff`` found under
+        ``<benchmark>/.aixcc/<harness>/<cpv>/patches/`` to ``trial/ref.diff``
+        so the existing adapter pipeline delivers it to FETCH_DIR/diffs/.
+        """
+        target = trial_output_dir / "ref.diff"
+        if not self.ground_truth_patch_enabled:
+            if target.exists():
+                target.unlink()
+            return
+
+        self.logger.warning("=" * 70)
+        self.logger.warning("WARNING: ground_truth_patch input is ENABLED.")
+        self.logger.warning(
+            "This option exposes the ground-truth fix patch to the CRS."
+        )
+        self.logger.warning(
+            "FOR CI/TESTING CRS ONLY — DO NOT USE IN REAL EVALUATION EXPERIMENTS."
+        )
+        self.logger.warning(
+            "Results from runs with this option enabled are NOT valid benchmarks."
+        )
+        self.logger.warning("=" * 70)
+
+        if not cpv_id:
+            raise EvaluationError(
+                "ground_truth_patch enabled but target_cpv_id is not set; "
+                "cannot locate CPV-level patches directory"
+            )
+
+        gt = GroundTruthPaths(benchmark_path)
+        patches_dir = gt.cpv_patches_dir(harness_name, cpv_id)
+        if not patches_dir.exists():
+            raise EvaluationError(
+                f"ground_truth_patch enabled but patches directory not found: {patches_dir}"
+            )
+
+        patch_files = sorted(patches_dir.glob("patch_*.diff"))
+        if not patch_files:
+            raise EvaluationError(
+                f"ground_truth_patch enabled but no patch_*.diff files found in: {patches_dir}"
+            )
+
+        source = patch_files[0]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        self.logger.info(
+            f"Prepared ground-truth patch input at: {target} (source: {source.name})"
+        )
 
     def _start_coverage_manager(
         self,
