@@ -58,9 +58,12 @@ You can omit `"$EXPERIMENT"` here because `cloud monitor` infers it from the
 config.
 
 When Apprise URLs are set in the operator environment, `cloud monitor` sends
-one operator-side notification after it first sees the queue transition from
-non-empty to empty during that attached session. If you attach after the queue
-is already idle, it stays quiet.
+one operator-side terminal notification after it first sees the queue
+transition from non-empty to empty during that attached session. When failed
+jobs remain at that drain point, the terminal message reports a failure instead
+of a completion. Attaching while the queue is already idle does not emit a
+notification for that initial idle state, but a later active-to-idle
+transition in the same session still can.
 
 5. After the run finishes, collect artifacts and VM diagnostics back to the
 local machine:
@@ -133,10 +136,10 @@ orchestrator runtime. If the values come from the operator shell, run the
 preflight in the same shell environment that will run `cloud launch` or
 `cloud monitor`.
 
-If the same `CRSBENCH_NOTIFY_APPRISE_URLS` value is also injected through
-`cloud.orchestrator.env`, the local `cloud monitor` notification and the
-orchestrator-side terminal notification can both fire, which duplicates the
-terminal alert.
+If operator-side `cloud monitor` Apprise is enabled and the cloud launch env
+also enables orchestrator-side Apprise, the local `cloud monitor` notification
+and the orchestrator-side terminal notification can both fire, which
+duplicates the terminal alert.
 
 If a checked-in cloud config should inherit the notification target from the
 operator shell or `.env`, declare it explicitly under `cloud.orchestrator.env`:
@@ -172,9 +175,9 @@ prerequisites apply. This stock command validates the checked-in
 [`scripts/cloud-rehearsal/local-experiment-notification.yaml`](../../../scripts/cloud-rehearsal/local-experiment-notification.yaml).
 It is a cloud launch rehearsal, not a worker or evaluator notification path.
 
-If you also leave `CRSBENCH_NOTIFY_APPRISE_URLS` set in the operator shell
-used for `cloud monitor`, expect a duplicate terminal notification when the
-queue drains.
+If operator-side `cloud monitor` Apprise is enabled and the cloud launch env
+also enables orchestrator-side Apprise, expect a duplicate terminal
+notification when the queue drains.
 
 ## Configuration
 
