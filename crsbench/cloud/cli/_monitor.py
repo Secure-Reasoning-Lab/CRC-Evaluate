@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -16,7 +17,12 @@ from crsbench.distributed.queue import (
     initialize_queue,
     probe_redis_connection,
 )
-from crsbench.distributed.queue_monitor import monitor_queue
+from crsbench.distributed.queue_monitor import QueueMonitorCallbacks, monitor_queue
+from crsbench.utils.apprise_notify import (
+    AppriseNotificationConfig,
+    load_apprise_notification_config,
+    send_apprise_message,
+)
 from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -29,6 +35,63 @@ logger = get_logger(__name__)
 _DEFAULT_MONITOR_REDIS_READY_TIMEOUT_SEC = 300
 _MONITOR_REDIS_POLL_INTERVAL_SEC = 5.0
 _MONITOR_REDIS_PROBE_TIMEOUT_SEC = 2
+
+
+@dataclass
+class _CloudMonitorNotificationState:
+    """Track one cloud monitor session's notification state."""
+
+    experiment_name: str
+    notification_config: AppriseNotificationConfig | None
+    completion_sent: bool = False
+    failure_sent: bool = False
+    last_snapshot_active: bool | None = None
+
+    def on_snapshot(self, snapshot) -> None:
+        """Send one completion notification on the first active-to-idle transition."""
+        stats = getattr(snapshot, "stats", {}) or {}
+        queued = int(stats.get("queued", 0) or 0)
+        started = int(stats.get("started", 0) or 0)
+        is_active = queued + started > 0
+
+        if self.last_snapshot_active is None:
+            self.last_snapshot_active = is_active
+            return
+
+        if self.completion_sent:
+            self.last_snapshot_active = is_active
+            return
+
+        if self.last_snapshot_active and not is_active:
+            self._send_completion_notification()
+            self.completion_sent = True
+
+        self.last_snapshot_active = is_active
+
+    def _send_completion_notification(self) -> None:
+        if self.notification_config is None:
+            return
+        body = "\n".join(
+            [
+                "cloud monitor completed",
+                f"Experiment: {self.experiment_name}",
+                "Source: cloud monitor",
+            ]
+        )
+        send_apprise_message(self.notification_config, body=body)
+
+    def send_failure_notification(self, exc: Exception) -> None:
+        if self.notification_config is None or self.failure_sent:
+            return
+        body = "\n".join(
+            [
+                f"cloud monitor failed: {exc}",
+                f"Experiment: {self.experiment_name}",
+                "Source: cloud monitor",
+            ]
+        )
+        self.failure_sent = True
+        send_apprise_message(self.notification_config, body=body)
 
 
 def require_launch_state(
@@ -122,13 +185,29 @@ def run_monitor(args: argparse.Namespace) -> int:
                 raise RuntimeError(
                     f"Failed to initialize trial queue for experiment {experiment_name}"
                 )
-            monitor_queue(
-                queue,
-                experiment_name,
-                tracked_job_ids=None,
-                tracked_jobs=None,
-                exit_when_idle=False,
+            notification_state = _CloudMonitorNotificationState(
+                experiment_name=experiment_name,
+                notification_config=load_apprise_notification_config(),
             )
+            monitor_started = False
+            try:
+                monitor_started = True
+                monitor_queue(
+                    queue,
+                    experiment_name,
+                    tracked_job_ids=None,
+                    tracked_jobs=None,
+                    callbacks=QueueMonitorCallbacks(
+                        on_snapshot=notification_state.on_snapshot,
+                    ),
+                    exit_when_idle=False,
+                )
+            except KeyboardInterrupt:
+                return 130
+            except Exception as exc:
+                if monitor_started:
+                    notification_state.send_failure_notification(exc)
+                raise
     except KeyboardInterrupt:
         return 130
     except SystemExit as exc:

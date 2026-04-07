@@ -2907,6 +2907,258 @@ def test_run_monitor_treats_keyboard_interrupt_as_normal_exit(
     assert rc == 130
 
 
+@patch("crsbench.cloud.cli._monitor.send_apprise_message")
+@patch("crsbench.cloud.cli._monitor.load_apprise_notification_config")
+@patch("crsbench.cloud.cli._monitor.monitor_queue")
+@patch("crsbench.cloud.cli._monitor.initialize_queue")
+@patch("crsbench.cloud.cli._monitor.probe_redis_connection")
+@patch("crsbench.cloud.cli._monitor.OrchestratorRedisTunnel.from_launch_state")
+@patch("crsbench.cloud.cli._monitor.require_launch_state")
+@patch("crsbench.cloud.cli._monitor.resolve_effective_experiment_name")
+def test_run_monitor_sends_completion_notification_on_first_active_to_idle_snapshot(
+    mock_resolve_experiment_name,
+    mock_require_state,
+    mock_tunnel_cls,
+    mock_probe_redis_connection,
+    mock_initialize_queue,
+    mock_monitor_queue,
+    mock_load_notification_config,
+    mock_send_apprise_message,
+):
+    from crsbench.cloud.cli._monitor import run_monitor
+
+    context = _make_provider_neutral_operational_context(include_launch_state=True)
+    assert context.launch_state is not None
+    mock_resolve_experiment_name.return_value = "test-exp"
+    mock_require_state.return_value = context
+    mock_tunnel = MagicMock()
+    mock_tunnel.redis_host = "127.0.0.1:16379"
+    mock_tunnel_cls.return_value.__enter__.return_value = mock_tunnel
+    mock_probe_redis_connection.return_value = (RedisConnectionProbe.READY, None)
+    mock_initialize_queue.return_value = MagicMock()
+    mock_load_notification_config.return_value = MagicMock()
+
+    def _monitor_side_effect(*args, **kwargs):
+        del args
+        callbacks = kwargs["callbacks"]
+        callbacks.on_snapshot(
+            SimpleNamespace(
+                stats={"queued": 1, "started": 0, "finished": 0, "failed": 0}
+            )
+        )
+        callbacks.on_snapshot(
+            SimpleNamespace(
+                stats={"queued": 0, "started": 0, "finished": 1, "failed": 0}
+            )
+        )
+
+    mock_monitor_queue.side_effect = _monitor_side_effect
+
+    rc = run_monitor(_make_monitor_args())
+
+    assert rc == 0
+    mock_load_notification_config.assert_called_once_with()
+    mock_send_apprise_message.assert_called_once()
+    body = mock_send_apprise_message.call_args.kwargs["body"]
+    assert "cloud monitor" in body
+    assert "Experiment: test-exp" in body
+    mock_monitor_queue.assert_called_once()
+    assert mock_monitor_queue.call_args.kwargs["exit_when_idle"] is False
+
+
+@patch("crsbench.cloud.cli._monitor.send_apprise_message")
+@patch("crsbench.cloud.cli._monitor.load_apprise_notification_config")
+@patch("crsbench.cloud.cli._monitor.monitor_queue")
+@patch("crsbench.cloud.cli._monitor.initialize_queue")
+@patch("crsbench.cloud.cli._monitor.probe_redis_connection")
+@patch("crsbench.cloud.cli._monitor.OrchestratorRedisTunnel.from_launch_state")
+@patch("crsbench.cloud.cli._monitor.require_launch_state")
+@patch("crsbench.cloud.cli._monitor.resolve_effective_experiment_name")
+def test_run_monitor_sends_completion_notification_after_initial_idle_snapshot(
+    mock_resolve_experiment_name,
+    mock_require_state,
+    mock_tunnel_cls,
+    mock_probe_redis_connection,
+    mock_initialize_queue,
+    mock_monitor_queue,
+    mock_load_notification_config,
+    mock_send_apprise_message,
+):
+    from crsbench.cloud.cli._monitor import run_monitor
+
+    context = _make_provider_neutral_operational_context(include_launch_state=True)
+    assert context.launch_state is not None
+    mock_resolve_experiment_name.return_value = "test-exp"
+    mock_require_state.return_value = context
+    mock_tunnel = MagicMock()
+    mock_tunnel.redis_host = "127.0.0.1:16379"
+    mock_tunnel_cls.return_value.__enter__.return_value = mock_tunnel
+    mock_probe_redis_connection.return_value = (RedisConnectionProbe.READY, None)
+    mock_initialize_queue.return_value = MagicMock()
+    mock_load_notification_config.return_value = MagicMock()
+
+    def _monitor_side_effect(*args, **kwargs):
+        del args
+        callbacks = kwargs["callbacks"]
+        callbacks.on_snapshot(
+            SimpleNamespace(
+                stats={"queued": 0, "started": 0, "finished": 0, "failed": 0}
+            )
+        )
+        callbacks.on_snapshot(
+            SimpleNamespace(
+                stats={"queued": 1, "started": 0, "finished": 0, "failed": 0}
+            )
+        )
+        callbacks.on_snapshot(
+            SimpleNamespace(
+                stats={"queued": 0, "started": 0, "finished": 1, "failed": 0}
+            )
+        )
+
+    mock_monitor_queue.side_effect = _monitor_side_effect
+
+    rc = run_monitor(_make_monitor_args())
+
+    assert rc == 0
+    mock_load_notification_config.assert_called_once_with()
+    mock_send_apprise_message.assert_called_once()
+    body = mock_send_apprise_message.call_args.kwargs["body"]
+    assert "cloud monitor completed" in body
+    assert "Source: cloud monitor" in body
+
+
+@patch("crsbench.cloud.cli._monitor.send_apprise_message")
+@patch("crsbench.cloud.cli._monitor.load_apprise_notification_config")
+@patch("crsbench.cloud.cli._monitor.monitor_queue")
+@patch("crsbench.cloud.cli._monitor.initialize_queue")
+@patch("crsbench.cloud.cli._monitor.probe_redis_connection")
+@patch("crsbench.cloud.cli._monitor.OrchestratorRedisTunnel.from_launch_state")
+@patch("crsbench.cloud.cli._monitor.require_launch_state")
+@patch("crsbench.cloud.cli._monitor.resolve_effective_experiment_name")
+def test_run_monitor_sends_failure_notification_after_session_start(
+    mock_resolve_experiment_name,
+    mock_require_state,
+    mock_tunnel_cls,
+    mock_probe_redis_connection,
+    mock_initialize_queue,
+    mock_monitor_queue,
+    mock_load_notification_config,
+    mock_send_apprise_message,
+):
+    from crsbench.cloud.cli._monitor import run_monitor
+
+    context = _make_provider_neutral_operational_context(include_launch_state=True)
+    assert context.launch_state is not None
+    mock_resolve_experiment_name.return_value = "test-exp"
+    mock_require_state.return_value = context
+    mock_tunnel = MagicMock()
+    mock_tunnel.redis_host = "127.0.0.1:16379"
+    mock_tunnel_cls.return_value.__enter__.return_value = mock_tunnel
+    mock_probe_redis_connection.return_value = (RedisConnectionProbe.READY, None)
+    mock_initialize_queue.return_value = MagicMock()
+    mock_load_notification_config.return_value = MagicMock()
+
+    def _monitor_side_effect(*args, **kwargs):
+        del args
+        callbacks = kwargs["callbacks"]
+        callbacks.on_snapshot(
+            SimpleNamespace(
+                stats={"queued": 1, "started": 0, "finished": 0, "failed": 0}
+            )
+        )
+        raise RuntimeError("monitor loop exploded")
+
+    mock_monitor_queue.side_effect = _monitor_side_effect
+
+    rc = run_monitor(_make_monitor_args())
+
+    assert rc == 1
+    mock_load_notification_config.assert_called_once_with()
+    mock_send_apprise_message.assert_called_once()
+    body = mock_send_apprise_message.call_args.kwargs["body"]
+    assert "cloud monitor" in body
+    assert "monitor loop exploded" in body
+
+
+@patch("crsbench.cloud.cli._monitor.send_apprise_message")
+@patch("crsbench.cloud.cli._monitor.load_apprise_notification_config")
+@patch("crsbench.cloud.cli._monitor.monitor_queue")
+@patch("crsbench.cloud.cli._monitor.initialize_queue")
+@patch("crsbench.cloud.cli._monitor.probe_redis_connection")
+@patch("crsbench.cloud.cli._monitor.OrchestratorRedisTunnel.from_launch_state")
+@patch("crsbench.cloud.cli._monitor.require_launch_state")
+@patch("crsbench.cloud.cli._monitor.resolve_effective_experiment_name")
+def test_run_monitor_sends_failure_notification_when_monitor_fails_before_snapshot(
+    mock_resolve_experiment_name,
+    mock_require_state,
+    mock_tunnel_cls,
+    mock_probe_redis_connection,
+    mock_initialize_queue,
+    mock_monitor_queue,
+    mock_load_notification_config,
+    mock_send_apprise_message,
+):
+    from crsbench.cloud.cli._monitor import run_monitor
+
+    context = _make_provider_neutral_operational_context(include_launch_state=True)
+    assert context.launch_state is not None
+    mock_resolve_experiment_name.return_value = "test-exp"
+    mock_require_state.return_value = context
+    mock_tunnel = MagicMock()
+    mock_tunnel.redis_host = "127.0.0.1:16379"
+    mock_tunnel_cls.return_value.__enter__.return_value = mock_tunnel
+    mock_probe_redis_connection.return_value = (RedisConnectionProbe.READY, None)
+    mock_initialize_queue.return_value = MagicMock()
+    mock_load_notification_config.return_value = MagicMock()
+    mock_monitor_queue.side_effect = RuntimeError("poller crashed before snapshot")
+
+    rc = run_monitor(_make_monitor_args())
+
+    assert rc == 1
+    mock_load_notification_config.assert_called_once_with()
+    mock_send_apprise_message.assert_called_once()
+    body = mock_send_apprise_message.call_args.kwargs["body"]
+    assert "cloud monitor failed" in body
+    assert "poller crashed before snapshot" in body
+
+
+@patch("crsbench.cloud.cli._monitor.send_apprise_message")
+@patch("crsbench.cloud.cli._monitor.load_apprise_notification_config")
+@patch("crsbench.cloud.cli._monitor.initialize_queue", return_value=None)
+@patch("crsbench.cloud.cli._monitor.probe_redis_connection")
+@patch("crsbench.cloud.cli._monitor.OrchestratorRedisTunnel.from_launch_state")
+@patch("crsbench.cloud.cli._monitor.require_launch_state")
+@patch("crsbench.cloud.cli._monitor.resolve_effective_experiment_name")
+def test_run_monitor_does_not_notify_on_pre_monitor_queue_initialization_failure(
+    mock_resolve_experiment_name,
+    mock_require_state,
+    mock_tunnel_cls,
+    mock_probe_redis_connection,
+    mock_initialize_queue,
+    mock_load_notification_config,
+    mock_send_apprise_message,
+):
+    from crsbench.cloud.cli._monitor import run_monitor
+
+    del mock_initialize_queue
+
+    context = _make_provider_neutral_operational_context(include_launch_state=True)
+    assert context.launch_state is not None
+    mock_resolve_experiment_name.return_value = "test-exp"
+    mock_require_state.return_value = context
+    mock_tunnel = MagicMock()
+    mock_tunnel.redis_host = "127.0.0.1:16379"
+    mock_tunnel_cls.return_value.__enter__.return_value = mock_tunnel
+    mock_probe_redis_connection.return_value = (RedisConnectionProbe.READY, None)
+
+    rc = run_monitor(_make_monitor_args())
+
+    assert rc == 1
+    mock_load_notification_config.assert_not_called()
+    mock_send_apprise_message.assert_not_called()
+
+
 def test_find_launch_target_conflicts_reports_saved_state_and_live_instances():
     from crsbench.cloud.launch_checks import find_launch_target_conflicts
 
@@ -3388,8 +3640,8 @@ class TestLaunch:
             )
         )
         mock_validator = mock_validator_cls.return_value
-        mock_validator.validate.side_effect = lambda plan: (
-            call_order.append(f"validate:{plan.experiment_name}")
+        mock_validator.validate.side_effect = lambda plan: call_order.append(
+            f"validate:{plan.experiment_name}"
         )
 
         mock_adapter = mock_adapter_cls.return_value
