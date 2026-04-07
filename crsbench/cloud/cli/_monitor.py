@@ -17,7 +17,11 @@ from crsbench.distributed.queue import (
     initialize_queue,
     probe_redis_connection,
 )
-from crsbench.distributed.queue_monitor import QueueMonitorCallbacks, monitor_queue
+from crsbench.distributed.queue_monitor import (
+    QueueMonitorCallbacks,
+    list_queue_job_entries,
+    monitor_queue,
+)
 from crsbench.utils.apprise_notify import (
     AppriseNotificationConfig,
     load_apprise_notification_config,
@@ -41,6 +45,7 @@ _MONITOR_REDIS_PROBE_TIMEOUT_SEC = 2
 class _CloudMonitorNotificationState:
     """Track one cloud monitor session's notification state."""
 
+    queue: object
     experiment_name: str
     notification_config: AppriseNotificationConfig | None
     completion_sent: bool = False
@@ -49,33 +54,80 @@ class _CloudMonitorNotificationState:
 
     def on_snapshot(self, snapshot) -> None:
         """Send one completion notification on the first active-to-idle transition."""
-        stats = getattr(snapshot, "stats", {}) or {}
-        queued = int(stats.get("queued", 0) or 0)
-        started = int(stats.get("started", 0) or 0)
-        is_active = queued + started > 0
+        if self.completion_sent:
+            return
+
+        is_active = self._snapshot_has_pending_work(snapshot)
+        if is_active is None:
+            return
 
         if self.last_snapshot_active is None:
             self.last_snapshot_active = is_active
             return
 
-        if self.completion_sent:
-            self.last_snapshot_active = is_active
-            return
-
         if self.last_snapshot_active and not is_active:
-            self._send_completion_notification()
+            self._send_completion_notification(snapshot)
             self.completion_sent = True
 
         self.last_snapshot_active = is_active
 
-    def _send_completion_notification(self) -> None:
+    def _snapshot_has_pending_work(self, snapshot) -> bool | None:
+        stats = getattr(snapshot, "stats", {}) or {}
+        queued = int(stats.get("queued", 0) or 0)
+        started = int(stats.get("started", 0) or 0)
+        if queued + started > 0:
+            return True
+        registry_pending = self._pending_registry_has_jobs()
+        if registry_pending is None:
+            return None
+        if registry_pending:
+            return registry_pending
+        try:
+            entries = list_queue_job_entries(self.queue, self.experiment_name)
+        except Exception as exc:
+            logger.warning(
+                "Cloud monitor could not confirm pending deferred/scheduled work: {}",
+                exc,
+            )
+            return None
+        return any(
+            entry.state in {"queued", "deferred", "scheduled", "running"}
+            for entry in entries
+        )
+
+    def _pending_registry_has_jobs(self) -> bool | None:
+        try:
+            for registry_name in ("deferred_job_registry", "scheduled_job_registry"):
+                registry = getattr(self.queue, registry_name, None)
+                get_job_ids = getattr(registry, "get_job_ids", None)
+                if callable(get_job_ids) and get_job_ids():
+                    return True
+        except Exception as exc:
+            logger.warning(
+                "Cloud monitor could not confirm deferred/scheduled registries: {}",
+                exc,
+            )
+            return None
+        return False
+
+    def _send_completion_notification(self, snapshot) -> None:
         if self.notification_config is None:
             return
+        stats = getattr(snapshot, "stats", {}) or {}
+        queued = int(stats.get("queued", 0) or 0)
+        started = int(stats.get("started", 0) or 0)
+        finished = int(stats.get("finished", 0) or 0)
+        failed = int(stats.get("failed", 0) or 0)
         body = "\n".join(
             [
-                "cloud monitor completed",
+                "cloud monitor queue drained"
+                + (" with failures" if failed > 0 else ""),
                 f"Experiment: {self.experiment_name}",
                 "Source: cloud monitor",
+                f"Queued: {queued}",
+                f"Started: {started}",
+                f"Finished: {finished}",
+                f"Failed: {failed}",
             ]
         )
         send_apprise_message(self.notification_config, body=body)
@@ -186,6 +238,7 @@ def run_monitor(args: argparse.Namespace) -> int:
                     f"Failed to initialize trial queue for experiment {experiment_name}"
                 )
             notification_state = _CloudMonitorNotificationState(
+                queue=queue,
                 experiment_name=experiment_name,
                 notification_config=load_apprise_notification_config(),
             )
