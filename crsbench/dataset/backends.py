@@ -9,10 +9,38 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
+import tenacity
+
 from crsbench.dataset.registry import DatasetConfig
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _is_hf_rate_limit_or_server_error(exc: BaseException) -> bool:
+    """Return True for HuggingFace errors worth retrying (429, 5xx)."""
+    try:
+        from huggingface_hub.errors import HfHubHTTPError
+    except ImportError:
+        from huggingface_hub.utils import HfHubHTTPError
+
+    if not isinstance(exc, HfHubHTTPError):
+        return False
+    response = getattr(exc, "response", None)
+    if response is None:
+        return False
+    return response.status_code == 429 or response.status_code >= 500
+
+
+def _log_hf_retry(retry_state: tenacity.RetryCallState) -> None:
+    """Log each retry attempt for HuggingFace downloads."""
+    wait = retry_state.next_action.sleep if retry_state.next_action else 0  # type: ignore[union-attr]
+    logger.warning(
+        "HuggingFace download failed (attempt {}), retrying in {:.0f}s: {}",
+        retry_state.attempt_number,
+        wait,
+        retry_state.outcome.exception() if retry_state.outcome else "unknown",
+    )
 
 
 def check_hf_token() -> tuple[bool, str]:
@@ -35,6 +63,13 @@ def check_hf_token() -> tuple[bool, str]:
         return False, (f"HuggingFace token invalid: {e}. Re-login with: hf auth login")
 
 
+@tenacity.retry(
+    retry=tenacity.retry_if_exception(_is_hf_rate_limit_or_server_error),
+    wait=tenacity.wait_exponential(multiplier=1, min=30, max=300),
+    stop=tenacity.stop_after_attempt(8),
+    before_sleep=_log_hf_retry,
+    reraise=True,
+)
 def _download_huggingface(
     config: DatasetConfig,
     output_dir: Path,

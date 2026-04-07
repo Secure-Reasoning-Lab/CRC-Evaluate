@@ -148,6 +148,10 @@ class TrialMetadata(BaseModel):
     build_mode: Optional[str] = None  # "delta" or "full" (evaluation mode)
     sanitizer: Optional[str] = None
     target_cpv_id: Optional[str] = None
+    cpvs_found: list[str] = Field(
+        default_factory=list,
+        description="CPV IDs found during evaluation (populated after trial completes)",
+    )
 
     # Experiment-level fields
     experiment_name: Optional[str] = None
@@ -3331,8 +3335,9 @@ class ExperimentConfig(BaseModel):
     )
     only_cpv_harnesses: bool = Field(
         default=True,
-        description="Skip harnesses without CPVs for bug-finding CRS (default: True). "
-        "Bug-fixing CRS always skips harnesses without CPVs regardless of this setting.",
+        description="Skip harnesses without CPVs (default: True). "
+        "Applies to all CRS types (bug-finding and bug-fixing). "
+        "Set to false for discovery-only runs on projects without ground truth.",
     )
     resources: Optional[ResourceConfig] = Field(
         default=None, description="Resource allocation configuration for trials"

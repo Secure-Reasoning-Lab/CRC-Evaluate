@@ -679,8 +679,8 @@ class TestOnlyCpvHarnesses:
         harness_names = {t.benchmark_harness.harness.name for t in trials}
         assert harness_names == {"harness1", "harness2"}
 
-    def test_bug_fixing_crs_always_skips_harness_without_cpvs(self):
-        """Test that bug-fixing CRS always skips harnesses without CPVs regardless of setting."""
+    def test_bug_fixing_crs_includes_no_cpv_harnesses_when_flag_disabled(self):
+        """Test that bug-fixing CRS includes harnesses without CPVs when only_cpv_harnesses=False."""
         from unittest.mock import MagicMock
 
         # Create config with only_cpv_harnesses=False (should still skip for bug-fixing)
@@ -747,9 +747,10 @@ class TestOnlyCpvHarnesses:
                 registry_dir=Path("/tmp/registry"),
             )
 
-        # Bug-fixing CRS should skip harnesses without CPVs regardless of only_cpv_harnesses
-        assert len(trials) == 1
-        assert trials[0].benchmark_harness.harness.name == "harness_with_cpv"
+        # Bug-fixing CRS should include harnesses without CPVs when only_cpv_harnesses=False
+        assert len(trials) == 2
+        harness_names = {t.benchmark_harness.harness.name for t in trials}
+        assert harness_names == {"harness_with_cpv", "harness_without_cpv"}
 
 
 # ============================================================================

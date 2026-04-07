@@ -200,7 +200,10 @@ class CSVReportGenerator:
                 continue
 
             status = self._resolve_trial_status(trial_dir)
-            cpv_id = metadata.get("target_cpv_id")
+            cpv_id = metadata.get("target_cpv_id") or ""
+            cpvs_found = metadata.get("cpvs_found", [])
+            if not cpv_id and cpvs_found:
+                cpv_id = ";".join(cpvs_found)
             run_mode = metadata.get("build_mode")
             sanitizer = metadata.get("sanitizer")
 
@@ -491,6 +494,10 @@ class CSVReportGenerator:
             "early_stop_cost": trial_metrics.get("early_stop_cost", ""),
             "time_saved": trial_metrics.get("time_saved", ""),
             "cost_saved": trial_metrics.get("cost_saved", ""),
+            # Raw detail fields
+            "trial_dir": trial_metrics.get("trial_dir", ""),
+            "pov_names": ";".join(trial_metrics.get("unique_pov_names", [])),
+            "patch_names": ";".join(trial_metrics.get("unique_patch_names", [])),
         }
 
     def _format_crs_row(

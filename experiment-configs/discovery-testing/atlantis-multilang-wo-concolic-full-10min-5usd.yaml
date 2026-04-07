@@ -1,0 +1,47 @@
+# Discovery-only: wo-concolic CRS on OSS-Fuzz projects, 16 cores, 10 min run, $5 LLM budget.
+#
+# Usage:
+#   crsbench benchmark init --experiment-config experiment-configs/discovery-testing/atlantis-multilang-wo-concolic-full-10min-5usd.yaml
+#   crsbench worker --experiment-config ... --jobs 12 --cores-per-job 16
+#   crsbench run --experiment-config ...
+
+experiment:
+  name: discovery-wo-concolic-10min
+  task: bugfinding
+  benchmarks:
+    - libyang
+    - pcre2
+  only_cpv_harnesses: false
+  sanitizers:
+    - address
+  mode: full
+
+benchmarks_root: /home/dongkwan/multilang-test/oss-fuzz/projects
+oss_fuzz_path: /home/dongkwan/multilang-test/oss-fuzz
+
+runtime:
+  trials: 1
+  max_total_time: 46800
+  build_timeout: 14400
+  run_timeout: 600
+  verify_timeout: 7200
+  per_pov_verify_timeout: 300
+  snapshot_period: 120
+  redis_host: localhost
+  skip_verification: true
+  pov_early_stop: false
+  litellm:
+    cost_budget: 5.0
+
+storage:
+  experiment_filestore: /tmp/discovery-wo-concolic-10min-exp
+  report_filestore: /tmp/discovery-wo-concolic-10min-report
+
+resources:
+  cores_per_trial: 16
+
+crs_compose:
+  oss_crs_infra:
+    shared: true
+  atlantis-multilang-wo-concolic:
+    num_cores: 16
