@@ -3007,12 +3007,12 @@ def test_run_monitor_does_not_notify_completion_while_deferred_or_scheduled_work
     mock_tunnel.redis_host = "127.0.0.1:16379"
     mock_tunnel_cls.return_value.__enter__.return_value = mock_tunnel
     mock_probe_redis_connection.return_value = (RedisConnectionProbe.READY, None)
-    mock_queue = MagicMock()
-    mock_queue.deferred_job_registry.get_job_ids.return_value = ["deferred-1"]
-    mock_queue.scheduled_job_registry.get_job_ids.return_value = ["scheduled-1"]
-    mock_initialize_queue.return_value = mock_queue
+    mock_initialize_queue.return_value = MagicMock()
     mock_load_notification_config.return_value = MagicMock()
-    mock_list_queue_job_entries.return_value = []
+    mock_list_queue_job_entries.return_value = [
+        SimpleNamespace(state="deferred"),
+        SimpleNamespace(state="scheduled"),
+    ]
 
     def _monitor_side_effect(*args, **kwargs):
         del args
@@ -3035,7 +3035,6 @@ def test_run_monitor_does_not_notify_completion_while_deferred_or_scheduled_work
     assert rc == 0
     mock_load_notification_config.assert_called_once_with()
     mock_send_apprise_message.assert_not_called()
-    mock_list_queue_job_entries.assert_not_called()
     mock_monitor_queue.assert_called_once()
 
 
@@ -3048,7 +3047,7 @@ def test_run_monitor_does_not_notify_completion_while_deferred_or_scheduled_work
 @patch("crsbench.cloud.cli._monitor.OrchestratorRedisTunnel.from_launch_state")
 @patch("crsbench.cloud.cli._monitor.require_launch_state")
 @patch("crsbench.cloud.cli._monitor.resolve_effective_experiment_name")
-def test_run_monitor_sends_completion_notification_after_initial_idle_snapshot(
+def test_run_monitor_sends_completion_notification_after_initial_idle_then_active_to_idle(
     mock_resolve_experiment_name,
     mock_require_state,
     mock_tunnel_cls,
@@ -3109,7 +3108,6 @@ def test_run_monitor_sends_completion_notification_after_initial_idle_snapshot(
     assert "Finished: 1" in body
     assert "Failed: 0" in body
     assert "Source: cloud monitor" in body
-    assert mock_list_queue_job_entries.call_count == 2
 
 
 @patch("crsbench.cloud.cli._monitor.send_apprise_message")
@@ -3174,7 +3172,6 @@ def test_run_monitor_reports_failed_terminal_drain_in_completion_notification(
     assert "Finished: 3" in body
     assert "Failed: 2" in body
     assert "completed" not in body
-    assert mock_list_queue_job_entries.call_count == 1
 
 
 @patch("crsbench.cloud.cli._monitor.send_apprise_message")
@@ -3207,14 +3204,9 @@ def test_run_monitor_does_not_notify_completion_when_pending_lookup_fails(
     mock_tunnel.redis_host = "127.0.0.1:16379"
     mock_tunnel_cls.return_value.__enter__.return_value = mock_tunnel
     mock_probe_redis_connection.return_value = (RedisConnectionProbe.READY, None)
-    mock_queue = MagicMock()
-    mock_queue.deferred_job_registry.get_job_ids.side_effect = RuntimeError(
-        "redis probe failed"
-    )
-    mock_queue.scheduled_job_registry.get_job_ids.return_value = []
-    mock_initialize_queue.return_value = mock_queue
+    mock_initialize_queue.return_value = MagicMock()
     mock_load_notification_config.return_value = MagicMock()
-    mock_list_queue_job_entries.return_value = []
+    mock_list_queue_job_entries.side_effect = RuntimeError("redis probe failed")
 
     def _monitor_side_effect(*args, **kwargs):
         del args
@@ -3236,7 +3228,7 @@ def test_run_monitor_does_not_notify_completion_when_pending_lookup_fails(
 
     assert rc == 0
     mock_send_apprise_message.assert_not_called()
-    mock_list_queue_job_entries.assert_not_called()
+    mock_list_queue_job_entries.assert_called_once()
 
 
 @patch("crsbench.cloud.cli._monitor.send_apprise_message")
@@ -3269,15 +3261,12 @@ def test_run_monitor_does_not_notify_completion_after_initial_idle_lookup_failur
     mock_tunnel.redis_host = "127.0.0.1:16379"
     mock_tunnel_cls.return_value.__enter__.return_value = mock_tunnel
     mock_probe_redis_connection.return_value = (RedisConnectionProbe.READY, None)
-    mock_queue = MagicMock()
-    mock_queue.deferred_job_registry.get_job_ids.side_effect = [
+    mock_initialize_queue.return_value = MagicMock()
+    mock_load_notification_config.return_value = MagicMock()
+    mock_list_queue_job_entries.side_effect = [
         RuntimeError("redis probe failed"),
         [],
     ]
-    mock_queue.scheduled_job_registry.get_job_ids.return_value = []
-    mock_initialize_queue.return_value = mock_queue
-    mock_load_notification_config.return_value = MagicMock()
-    mock_list_queue_job_entries.return_value = []
 
     def _monitor_side_effect(*args, **kwargs):
         del args
@@ -3299,7 +3288,7 @@ def test_run_monitor_does_not_notify_completion_after_initial_idle_lookup_failur
 
     assert rc == 0
     mock_send_apprise_message.assert_not_called()
-    assert mock_list_queue_job_entries.call_count == 1
+    assert mock_list_queue_job_entries.call_count == 2
 
 
 @patch("crsbench.cloud.cli._monitor.send_apprise_message")

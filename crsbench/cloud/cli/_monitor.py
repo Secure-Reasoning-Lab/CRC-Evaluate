@@ -77,11 +77,6 @@ class _CloudMonitorNotificationState:
         started = int(stats.get("started", 0) or 0)
         if queued + started > 0:
             return True
-        registry_pending = self._pending_registry_has_jobs()
-        if registry_pending is None:
-            return None
-        if registry_pending:
-            return registry_pending
         try:
             entries = list_queue_job_entries(self.queue, self.experiment_name)
         except Exception as exc:
@@ -94,21 +89,6 @@ class _CloudMonitorNotificationState:
             entry.state in {"queued", "deferred", "scheduled", "running"}
             for entry in entries
         )
-
-    def _pending_registry_has_jobs(self) -> bool | None:
-        try:
-            for registry_name in ("deferred_job_registry", "scheduled_job_registry"):
-                registry = getattr(self.queue, registry_name, None)
-                get_job_ids = getattr(registry, "get_job_ids", None)
-                if callable(get_job_ids) and get_job_ids():
-                    return True
-        except Exception as exc:
-            logger.warning(
-                "Cloud monitor could not confirm deferred/scheduled registries: {}",
-                exc,
-            )
-            return None
-        return False
 
     def _send_completion_notification(self, snapshot) -> None:
         if self.notification_config is None:
