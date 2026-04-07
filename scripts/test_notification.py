@@ -24,18 +24,11 @@ def _load_project_env() -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Preview or send a CRSBench test notification"
-    )
+    parser = argparse.ArgumentParser(description="Send a CRSBench test notification")
     parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the resolved notification config and message without sending",
-    )
-    parser.add_argument(
-        "--send",
-        action="store_true",
-        help="Actually send the notification instead of previewing it",
     )
     parser.add_argument(
         "--body",
@@ -65,10 +58,6 @@ def _print_config(config: AppriseNotificationConfig, *, body: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
-    if args.dry_run and args.send:
-        print("Choose either --dry-run or --send, not both.", file=sys.stdout)
-        return 2
-
     if not args.no_dotenv:
         _load_project_env()
 
@@ -82,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
 
     _print_config(config, body=args.body)
 
-    if args.dry_run or not args.send:
+    if args.dry_run:
         print("Dry run only. Notification not sent.")
         return 0
 
