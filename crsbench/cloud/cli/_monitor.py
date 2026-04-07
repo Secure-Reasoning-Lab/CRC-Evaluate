@@ -46,7 +46,7 @@ _MONITOR_REDIS_PROBE_TIMEOUT_SEC = 2
 class _CloudMonitorNotificationState:
     """Track one cloud monitor session's notification state."""
 
-    queue: object
+    queue: "rq.Queue"
     experiment_name: str
     notification_config: AppriseNotificationConfig | None
     completion_sent: bool = False
@@ -129,7 +129,11 @@ class _CloudMonitorNotificationState:
         send_apprise_message(self.notification_config, body=body)
 
     def send_failure_notification(self, exc: Exception) -> None:
-        if self.notification_config is None or self.failure_sent:
+        if (
+            self.notification_config is None
+            or self.failure_sent
+            or self.completion_sent
+        ):
             return
         body = "\n".join(
             [
