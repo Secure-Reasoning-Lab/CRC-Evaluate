@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 SCRIPT_SOURCE = Path("scripts/cloud-rehearsal/test-notification-rehearsal.sh")
+pytestmark = pytest.mark.notification
 
 
 def _copy_script_layout(tmp_path: Path) -> tuple[Path, Path]:

@@ -66,6 +66,7 @@ oss-crs = { path = "oss-crs", editable = true }
 markers = [
     "integration: Tests requiring Docker, external repos, or external services",
     "mcp: Tests requiring MCP server connection",
+    "notification: Tests that exercise notification delivery or notification rehearsal flows",
     "real_checkout: Tests that exercise _ensure_checkout with mocked subprocess",
 ]
 testpaths = ["tests"]

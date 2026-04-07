@@ -5,9 +5,12 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 SCRIPT_PATH = (
     Path(__file__).resolve().parent.parent / "scripts" / "test_notification.py"
 )
+pytestmark = pytest.mark.notification
 
 
 def _load_script_module():

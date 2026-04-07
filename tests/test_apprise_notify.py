@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from crsbench.utils.apprise_notify import (
     AppriseNotificationConfig,
     format_completion_message,
@@ -9,6 +10,8 @@ from crsbench.utils.apprise_notify import (
     load_apprise_notification_config,
     send_apprise_message,
 )
+
+pytestmark = pytest.mark.notification
 
 
 def test_load_config_returns_none_when_urls_missing():

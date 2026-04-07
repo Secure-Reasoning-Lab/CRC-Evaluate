@@ -138,6 +138,7 @@ def _record_notify(*_args, **_kwargs) -> None:
     call_order.append("notify")
 
 
+@pytest.mark.notification
 def test_distributed_run_sends_completion_notification_after_final_report(
     tmp_path: Path,
 ) -> None:
@@ -201,6 +202,7 @@ def test_distributed_run_sends_completion_notification_after_final_report(
     assert f"Report path: {config.report_filestore / config.experiment}" in body
 
 
+@pytest.mark.notification
 def test_distributed_run_sends_failure_notification_when_post_run_cleanup_fails(
     tmp_path: Path,
 ) -> None:
@@ -256,6 +258,7 @@ def test_distributed_run_sends_failure_notification_when_post_run_cleanup_fails(
     assert format_completion_message("Distributed exp-test") not in body
 
 
+@pytest.mark.notification
 def test_distributed_run_sends_failure_notification_on_orchestrator_exception(
     tmp_path: Path,
 ) -> None:
@@ -305,6 +308,7 @@ def test_distributed_run_sends_failure_notification_on_orchestrator_exception(
     assert "Tracked jobs: 1" in body
 
 
+@pytest.mark.notification
 def test_distributed_run_sends_failure_notification_when_enqueue_fails(
     tmp_path: Path,
 ) -> None:
@@ -373,6 +377,7 @@ def test_distributed_run_sends_failure_notification_when_enqueue_fails(
     assert "Tracked jobs: 1" in body
 
 
+@pytest.mark.notification
 def test_distributed_run_sends_failure_notification_on_auto_continue_exception(
     tmp_path: Path,
 ) -> None:
@@ -438,6 +443,7 @@ def test_distributed_run_sends_failure_notification_on_auto_continue_exception(
     assert "Tracked jobs: 1" in body
 
 
+@pytest.mark.notification
 def test_distributed_run_skips_notification_when_no_tracked_jobs_exist(
     tmp_path: Path,
 ) -> None:
@@ -1328,6 +1334,7 @@ def test_queue_mode_quit_exits_without_registration(tmp_path: Path) -> None:
     session.cleanup.assert_called_once()
 
 
+@pytest.mark.notification
 def test_queue_mode_quit_cleanup_failure_notifies_and_raises(
     tmp_path: Path,
 ) -> None:
@@ -1389,6 +1396,7 @@ def test_queue_mode_quit_cleanup_failure_notifies_and_raises(
     assert "Tracked jobs: 1" in body
 
 
+@pytest.mark.notification
 def test_interactive_queue_mode_quit_cleanup_failure_notifies_and_raises(
     tmp_path: Path,
 ) -> None:
@@ -1517,6 +1525,7 @@ def test_continue_mode_lock_contention_skips_queue_mutations(tmp_path: Path) -> 
     assert session.resume_or_raise.call_args.kwargs["registration"] is registration
 
 
+@pytest.mark.notification
 def test_continue_mode_lock_contention_cleanup_failure_notifies(
     tmp_path: Path,
 ) -> None:
@@ -1591,6 +1600,7 @@ def test_continue_mode_lock_contention_cleanup_failure_notifies(
     assert "Tracked jobs: 1" in body
 
 
+@pytest.mark.notification
 def test_interactive_continue_lock_contention_cleanup_failure_notifies(
     tmp_path: Path,
 ) -> None:
