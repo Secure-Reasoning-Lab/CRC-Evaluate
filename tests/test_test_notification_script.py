@@ -83,6 +83,47 @@ def test_main_dry_run_prints_resolved_config_without_sending(monkeypatch, capsys
     assert "targets=1" in captured.out
 
 
+def test_main_defaults_to_preview_without_sending(monkeypatch, capsys):
+    module = _load_script_module()
+    send_calls: list[tuple[object, str, str | None]] = []
+
+    monkeypatch.setattr(
+        module,
+        "load_apprise_notification_config",
+        lambda: module.AppriseNotificationConfig(
+            urls=("discord://token/channel",),
+            title="Bench Alerts",
+            tag="ops",
+        ),
+    )
+    monkeypatch.setattr(module, "_load_project_env", lambda: None)
+    monkeypatch.setattr(
+        module,
+        "send_apprise_message",
+        lambda config, *, body, title_suffix=None: send_calls.append(
+            (config, body, title_suffix)
+        ),
+    )
+
+    exit_code = module.main(["--no-dotenv"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert send_calls == []
+    assert "Dry run only" in captured.out
+
+
+def test_main_rejects_conflicting_send_and_dry_run_flags(monkeypatch, capsys):
+    module = _load_script_module()
+    monkeypatch.setattr(module, "_load_project_env", lambda: None)
+
+    exit_code = module.main(["--no-dotenv", "--dry-run", "--send"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "Choose either --dry-run or --send" in captured.out
+
+
 def test_main_returns_error_when_notification_delivery_fails(monkeypatch, capsys):
     module = _load_script_module()
 
@@ -98,7 +139,7 @@ def test_main_returns_error_when_notification_delivery_fails(monkeypatch, capsys
     monkeypatch.setattr(module, "_load_project_env", lambda: None)
     monkeypatch.setattr(module, "send_apprise_message", lambda *_args, **_kwargs: False)
 
-    exit_code = module.main(["--no-dotenv"])
+    exit_code = module.main(["--no-dotenv", "--send"])
 
     captured = capsys.readouterr()
     assert exit_code == 1
@@ -126,7 +167,7 @@ def test_main_sends_notification_and_returns_success(monkeypatch, capsys):
 
     monkeypatch.setattr(module, "send_apprise_message", _send)
 
-    exit_code = module.main(["--no-dotenv", "--title-suffix", "smoke"])
+    exit_code = module.main(["--no-dotenv", "--send", "--title-suffix", "smoke"])
 
     captured = capsys.readouterr()
     assert exit_code == 0

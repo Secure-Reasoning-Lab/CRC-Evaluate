@@ -113,13 +113,14 @@ Use the operator shell or repo `.env` to verify the notification config before
 `cloud launch` or `cloud monitor`:
 
 ```bash
-uv run python scripts/test_notification.py --dry-run
+uv run python scripts/test_notification.py
 ```
 
-If the dry run looks correct, send a real smoke test to confirm delivery:
+That preview mode is the default. If it looks correct, send a real smoke test to
+confirm delivery:
 
 ```bash
-uv run python scripts/test_notification.py
+uv run python scripts/test_notification.py --send
 ```
 
 This path validates notification settings that come from the operator shell or

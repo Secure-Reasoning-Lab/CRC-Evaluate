@@ -79,9 +79,12 @@ cloud:
 To verify the notification target before running an experiment:
 
 ```bash
-uv run python scripts/test_notification.py --dry-run
 uv run python scripts/test_notification.py
+uv run python scripts/test_notification.py --send
 ```
+
+The helper previews the resolved config by default. Use `--send` only when you
+want to deliver a real test notification.
 
 That helper validates the operator environment only. To rehearse the
 `cloud.orchestrator.env` path before a managed launch, use the cloud rehearsal
