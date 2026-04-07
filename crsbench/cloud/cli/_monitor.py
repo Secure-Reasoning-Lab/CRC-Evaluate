@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -171,6 +172,34 @@ def _resolve_monitor_redis_ready_timeout_sec(context: "ResolvedCloudContext") ->
     return _DEFAULT_MONITOR_REDIS_READY_TIMEOUT_SEC
 
 
+def _warn_if_duplicate_apprise_notifications(
+    context: "ResolvedCloudContext",
+    operator_notification_config: AppriseNotificationConfig | None,
+) -> None:
+    """Warn when both monitor-side and orchestrator-side Apprise notifications are enabled."""
+    if operator_notification_config is None:
+        return
+
+    launch_plan = context.launch_plan
+    orchestrator_env = getattr(getattr(launch_plan, "orchestrator", None), "env", None)
+    if not isinstance(orchestrator_env, Mapping):
+        return
+
+    orchestrator_notification_config = load_apprise_notification_config(
+        env=orchestrator_env
+    )
+    if orchestrator_notification_config is None:
+        return
+
+    logger.warning(
+        "Cloud monitor may emit duplicate terminal notifications because local "
+        "Apprise settings are enabled and the resolved orchestrator env also "
+        "enables CRSBENCH_NOTIFY_APPRISE_URLS. Disable either the local "
+        "operator-side cloud monitor notification path or the orchestrator "
+        "cloud.orchestrator.env passthrough path to avoid duplicates."
+    )
+
+
 def wait_for_remote_redis(
     redis_host: str,
     *,
@@ -237,10 +266,15 @@ def run_monitor(args: argparse.Namespace) -> int:
                 raise RuntimeError(
                     f"Failed to initialize trial queue for experiment {experiment_name}"
                 )
+            operator_notification_config = load_apprise_notification_config()
+            _warn_if_duplicate_apprise_notifications(
+                context,
+                operator_notification_config,
+            )
             notification_state = _CloudMonitorNotificationState(
                 queue=queue,
                 experiment_name=experiment_name,
-                notification_config=load_apprise_notification_config(),
+                notification_config=operator_notification_config,
             )
             monitor_started = False
             try:

@@ -298,7 +298,11 @@ def _make_provider_neutral_launch_state():
     )
 
 
-def _make_provider_neutral_operational_context(*, include_launch_state: bool):
+def _make_provider_neutral_operational_context(
+    *,
+    include_launch_state: bool,
+    launch_plan: object | None = None,
+):
     from crsbench.cloud.cli._config_reconnect import ResolvedCloudContext
 
     launch_state = (
@@ -312,7 +316,7 @@ def _make_provider_neutral_operational_context(*, include_launch_state: bool):
         remote_experiment_root=Path("/tmp/remote-root"),
         redis_host="10.0.0.50:6379",
         redis_password="shared-secret",
-        launch_plan=MagicMock(experiment_name="test-exp"),
+        launch_plan=launch_plan if launch_plan is not None else MagicMock(),
     )
 
 
@@ -2878,6 +2882,104 @@ def test_run_monitor_retries_until_redis_is_ready(
         "test-exp",
         redis_password="shared-secret",
     )
+    mock_monitor_queue.assert_called_once()
+
+
+@patch("crsbench.cloud.cli._monitor.logger.warning")
+@patch("crsbench.cloud.cli._monitor.monitor_queue")
+@patch("crsbench.cloud.cli._monitor.initialize_queue")
+@patch("crsbench.cloud.cli._monitor.probe_redis_connection")
+@patch("crsbench.cloud.cli._monitor.OrchestratorRedisTunnel.from_launch_state")
+@patch("crsbench.cloud.cli._monitor.require_launch_state")
+@patch("crsbench.cloud.cli._monitor.resolve_effective_experiment_name")
+def test_run_monitor_warns_when_operator_and_orchestrator_apprise_notifications_are_enabled(
+    mock_resolve_experiment_name,
+    mock_require_state,
+    mock_tunnel_cls,
+    mock_probe_redis_connection,
+    mock_initialize_queue,
+    mock_monitor_queue,
+    mock_logger_warning,
+    monkeypatch,
+):
+    from crsbench.cloud.cli._monitor import run_monitor
+    from crsbench.cloud.models import build_cloud_launch_plan
+
+    config = _with_layered_env_overrides(_make_provider_neutral_experiment_config())
+    assert config.cloud is not None
+    config.cloud.env["CRSBENCH_NOTIFY_APPRISE_URLS"] = "discord://global/apprise"
+    config.cloud.orchestrator.env["CRSBENCH_NOTIFY_APPRISE_TITLE"] = "Orchestrator"
+    config.cloud.orchestrator.env["CRSBENCH_NOTIFY_APPRISE_TAG"] = "ops"
+    launch_plan = build_cloud_launch_plan(config)
+    context = _make_provider_neutral_operational_context(
+        include_launch_state=True,
+        launch_plan=launch_plan,
+    )
+    assert context.launch_state is not None
+    mock_resolve_experiment_name.return_value = "test-exp"
+    mock_require_state.return_value = context
+    mock_tunnel = MagicMock()
+    mock_tunnel.redis_host = "127.0.0.1:16379"
+    mock_tunnel_cls.return_value.__enter__.return_value = mock_tunnel
+    mock_probe_redis_connection.return_value = (RedisConnectionProbe.READY, None)
+    mock_initialize_queue.return_value = MagicMock()
+    monkeypatch.setenv("CRSBENCH_NOTIFY_APPRISE_URLS", "discord://operator/apprise")
+    monkeypatch.setenv("CRSBENCH_NOTIFY_APPRISE_TITLE", "Operator")
+
+    rc = run_monitor(_make_monitor_args())
+
+    assert rc == 0
+    mock_logger_warning.assert_called_once()
+    warning_text = str(mock_logger_warning.call_args.args[0])
+    assert "duplicate terminal notifications" in warning_text
+    assert "CRSBENCH_NOTIFY_APPRISE_URLS" in warning_text
+    mock_monitor_queue.assert_called_once()
+
+
+@patch("crsbench.cloud.cli._monitor.logger.warning")
+@patch("crsbench.cloud.cli._monitor.monitor_queue")
+@patch("crsbench.cloud.cli._monitor.initialize_queue")
+@patch("crsbench.cloud.cli._monitor.probe_redis_connection")
+@patch("crsbench.cloud.cli._monitor.OrchestratorRedisTunnel.from_launch_state")
+@patch("crsbench.cloud.cli._monitor.require_launch_state")
+@patch("crsbench.cloud.cli._monitor.resolve_effective_experiment_name")
+def test_run_monitor_does_not_warn_when_orchestrator_apprise_env_is_blank(
+    mock_resolve_experiment_name,
+    mock_require_state,
+    mock_tunnel_cls,
+    mock_probe_redis_connection,
+    mock_initialize_queue,
+    mock_monitor_queue,
+    mock_logger_warning,
+    monkeypatch,
+):
+    from crsbench.cloud.cli._monitor import run_monitor
+    from crsbench.cloud.models import build_cloud_launch_plan
+
+    config = _with_layered_env_overrides(_make_provider_neutral_experiment_config())
+    assert config.cloud is not None
+    config.cloud.env["CRSBENCH_NOTIFY_APPRISE_URLS"] = "discord://global/apprise"
+    config.cloud.orchestrator.env["CRSBENCH_NOTIFY_APPRISE_URLS"] = "   "
+    config.cloud.orchestrator.env["CRSBENCH_NOTIFY_APPRISE_TITLE"] = "Orchestrator"
+    launch_plan = build_cloud_launch_plan(config)
+    context = _make_provider_neutral_operational_context(
+        include_launch_state=True,
+        launch_plan=launch_plan,
+    )
+    assert context.launch_state is not None
+    mock_resolve_experiment_name.return_value = "test-exp"
+    mock_require_state.return_value = context
+    mock_tunnel = MagicMock()
+    mock_tunnel.redis_host = "127.0.0.1:16379"
+    mock_tunnel_cls.return_value.__enter__.return_value = mock_tunnel
+    mock_probe_redis_connection.return_value = (RedisConnectionProbe.READY, None)
+    mock_initialize_queue.return_value = MagicMock()
+    monkeypatch.setenv("CRSBENCH_NOTIFY_APPRISE_URLS", "discord://operator/apprise")
+
+    rc = run_monitor(_make_monitor_args())
+
+    assert rc == 0
+    mock_logger_warning.assert_not_called()
     mock_monitor_queue.assert_called_once()
 
 
