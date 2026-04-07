@@ -143,7 +143,11 @@ The shared cloud control plane includes:
 - `cloud preflight`: resolve the launch plan, duplicate-launch guard, provider launch-input preflight, and quota checks without provisioning or mutating launch state
 - `cloud status`: return a one-shot fleet, job, and recovery snapshot
 - `cloud events`: return recovery-event history from the active experiment control plane
-- `cloud monitor`: attach to the launched experiment's live queue view
+- `cloud monitor`: attach to the launched experiment's live queue view; when
+  Apprise URLs are configured in the operator environment, it may emit one
+  operator-side notification after the first observed non-empty -> empty queue
+  transition during that attach session, and it stays silent if the queue is
+  already idle on attach
 - `cloud list`: show the resolved live inventory for the experiment
 - `cloud ssh`, `cloud shell`, `cloud exec`, `cloud log`: operator access to one live cloud instance
 - `cloud collect`: retrieve worker artifacts plus role diagnostics
@@ -153,6 +157,10 @@ Shared reconnect semantics:
 
 - `status`, `events`, and `monitor` are control-plane reconnect commands and may
   require runtime/backend reachability in addition to launch state
+- `monitor` uses the operator session as the notification boundary; if the same
+  Apprise URLs are also injected into `cloud.orchestrator.env`, terminal
+  notifications can duplicate because the operator-side monitor and the
+  orchestrator-side cleanup path are independent emitters
 - `add-workers` and `add-evaluators` require saved launch state plus backend
   reachability because they must gate the new placement on shared readiness
 - `preflight` is read-only and must not write or refresh persisted launch state

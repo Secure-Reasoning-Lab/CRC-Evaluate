@@ -16,6 +16,13 @@ Today that managed-cloud path is implemented for GCE launches.
 - `crsbench cloud --config <config.yaml> monitor <experiment>` attaches to a
   launched remote orchestrator and keeps refreshing the live trial-queue view.
 
+When Apprise URLs are configured in the operator environment, `cloud monitor`
+sends one operator-side notification after it first observes the queue
+transition from non-empty to empty during that attached session. If you attach
+after the queue is already idle, `cloud monitor` does not emit a terminal
+notification. If the same URLs are also passed through
+`cloud.orchestrator.env`, terminal notifications can duplicate.
+
 ## Cleaning an Experiment Queue
 
 ```bash

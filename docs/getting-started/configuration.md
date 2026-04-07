@@ -55,12 +55,15 @@ uv run python scripts/valkey-helper.py --password start
 ```
 
 Optional queue-backed distributed notifications use Apprise environment
-variables. Build URLs with https://appriseit.com/tools/url-builder/. Then
-set `CRSBENCH_NOTIFY_APPRISE_URLS` and, if needed, `CRSBENCH_NOTIFY_APPRISE_TITLE`
-or `CRSBENCH_NOTIFY_APPRISE_TAG`. CRSBench sends the notification after
-successful distributed cleanup, and on orchestrator or cleanup failures only
-when tracked jobs still exist. Delivery is best-effort: send failures are
-logged and do not fail the run.
+variables. Build URLs with https://appriseit.com/tools/url-builder/. Then set
+`CRSBENCH_NOTIFY_APPRISE_URLS` and, if needed,
+`CRSBENCH_NOTIFY_APPRISE_TITLE` or `CRSBENCH_NOTIFY_APPRISE_TAG`. CRSBench
+uses those URLs for operator-side `cloud monitor` notifications and for
+distributed cleanup/failure notifications. In a monitored session,
+`cloud monitor` sends one operator-side notification after it first observes
+the live queue transition from non-empty to empty; if you attach after the
+queue is already idle, it stays quiet. Delivery is best-effort: send failures
+are logged and do not fail the run.
 
 For managed cloud launches, keep the secret in the operator shell or local
 `.env` and pass it through the checked-in experiment config via
@@ -75,6 +78,10 @@ cloud:
       # CRSBENCH_NOTIFY_APPRISE_TITLE: os.environ/CRSBENCH_NOTIFY_APPRISE_TITLE
       # CRSBENCH_NOTIFY_APPRISE_TAG: os.environ/CRSBENCH_NOTIFY_APPRISE_TAG
 ```
+
+If you also leave `CRSBENCH_NOTIFY_APPRISE_URLS` set in the operator shell
+that runs `cloud monitor`, the same terminal event can be reported twice: once
+by the local monitor session and once by the orchestrator passthrough path.
 
 To verify the notification target before running an experiment:
 
