@@ -19,6 +19,7 @@ belongs in `docs/modules/`.
 - [Distributed Evaluator and Worker Execution](./distributed/distributed-evaluation.md)
 - [Evaluation Contract](./evaluation/evaluation.md)
 - [Validation Contract](./validation/validation.md)
+- [Gen-Config TUI YAML Round-Trip Editing](./validation/gen-config-tui-yaml-roundtrip.md)
 - [Dataset Contract](./dataset/dataset.md)
 - [Reporting Contract](./reporting/report-generation.md)
 - [Benchmark CI Contract](./benchmark-ci/benchmark-ci.md)
@@ -53,6 +54,7 @@ should be applied to the dedicated canonical docs below.
 | Configless runtime discovery/registration | `distributed/configless-runtime.md` |
 | Evaluation contract and verdict semantics | `evaluation/evaluation.md` |
 | Validation schema/normalization contracts | `validation/validation.md` |
+| Gen-config TUI YAML round-trip write preservation | `validation/gen-config-tui-yaml-roundtrip.md` |
 | Dataset import/export and packaging contracts | `dataset/dataset.md` |
 | Reporting and result schema contracts | `reporting/report-generation.md` |
 | Benchmark CI DAG/result aggregation contracts | `benchmark-ci/benchmark-ci.md` |
