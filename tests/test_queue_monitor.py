@@ -2,125 +2,17 @@
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-import types
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
-
-
-def _load_queue_monitor_module() -> types.ModuleType:
-    module_name = "crsbench.distributed.queue_monitor"
-    if module_name in sys.modules:
-        return sys.modules[module_name]
-
-    project_root = Path(__file__).resolve().parents[1]
-
-    crsbench_pkg = types.ModuleType("crsbench")
-    crsbench_pkg.__path__ = [str(project_root / "crsbench")]
-
-    distributed_pkg = types.ModuleType("crsbench.distributed")
-    distributed_pkg.__path__ = [str(project_root / "crsbench" / "distributed")]
-
-    utils_pkg = types.ModuleType("crsbench.utils")
-    logger_pkg = types.ModuleType("crsbench.utils.logger")
-    queue_pkg = types.ModuleType("crsbench.distributed.queue")
-    rich_pkg = types.ModuleType("rich")
-    rich_console_pkg = types.ModuleType("rich.console")
-    rich_live_pkg = types.ModuleType("rich.live")
-    rich_table_pkg = types.ModuleType("rich.table")
-
-    class _DummyLogger:
-        def debug(self, *args, **kwargs):
-            return None
-
-        def info(self, *args, **kwargs):
-            return None
-
-        def warning(self, *args, **kwargs):
-            return None
-
-    def _get_logger(name: str | None = None):
-        del name
-        return _DummyLogger()
-
-    def _noop(*args, **kwargs):
-        return None
-
-    class _DummyTable:
-        def __init__(self, *args, **kwargs):
-            self.rows = []
-
-        def add_column(self, *args, **kwargs):
-            return None
-
-        def add_row(self, *args, **kwargs):
-            self.rows.append((args, kwargs))
-            return None
-
-    class _DummyConsole:
-        def __init__(self, *args, **kwargs):
-            return None
-
-    class _DummyLive:
-        def __init__(self, *args, **kwargs):
-            self.args = args
-            self.kwargs = kwargs
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def update(self, *args, **kwargs):
-            return None
-
-    logger_pkg.get_logger = _get_logger
-    utils_pkg.log_progress = _noop
-    utils_pkg.log_section = _noop
-    utils_pkg.log_summary = _noop
-    queue_pkg.get_existing_trial_jobs = _noop
-    queue_pkg.get_queue_stats = _noop
-    queue_pkg.get_trial_key = _noop
-    rich_console_pkg.Console = _DummyConsole
-    rich_console_pkg.Group = lambda *args: args
-    rich_live_pkg.Live = _DummyLive
-    rich_table_pkg.Table = _DummyTable
-
-    sys.modules["crsbench"] = crsbench_pkg
-    sys.modules["crsbench.distributed"] = distributed_pkg
-    sys.modules["crsbench.utils"] = utils_pkg
-    sys.modules["crsbench.utils.logger"] = logger_pkg
-    sys.modules["crsbench.distributed.queue"] = queue_pkg
-    sys.modules["rich"] = rich_pkg
-    sys.modules["rich.console"] = rich_console_pkg
-    sys.modules["rich.live"] = rich_live_pkg
-    sys.modules["rich.table"] = rich_table_pkg
-
-    spec = importlib.util.spec_from_file_location(
-        module_name,
-        project_root / "crsbench" / "distributed" / "queue_monitor.py",
-    )
-    if spec is None or spec.loader is None:
-        raise RuntimeError("Unable to load queue_monitor module for tests")
-
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-queue_monitor = _load_queue_monitor_module()
-
-QueueJobEntry = queue_monitor.QueueJobEntry
-QueueMonitorCallbacks = queue_monitor.QueueMonitorCallbacks
-QueueMonitorSnapshot = queue_monitor.QueueMonitorSnapshot
-build_monitor_snapshot = queue_monitor.build_monitor_snapshot
-list_queue_job_entries = queue_monitor.list_queue_job_entries
-monitor_queue = queue_monitor.monitor_queue
+from crsbench.distributed.queue_monitor import (
+    QueueJobEntry,
+    QueueMonitorCallbacks,
+    QueueMonitorSnapshot,
+    build_monitor_snapshot,
+    list_queue_job_entries,
+    monitor_queue,
+)
 
 
 def test_build_monitor_snapshot_uses_experiment_scoped_counts() -> None:
@@ -370,16 +262,20 @@ def test_monitor_queue_attach_mode_is_read_only() -> None:
 
 def test_monitor_queue_calls_snapshot_callback_in_basic_mode() -> None:
     queue = MagicMock()
-    snapshot = QueueMonitorSnapshot(
+    active = QueueMonitorSnapshot(
+        stats={"queued": 1, "started": 0, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[],
+    )
+    done = QueueMonitorSnapshot(
         stats={"queued": 0, "started": 0, "finished": 0, "failed": 0, "workers": 1},
         running_jobs=[],
     )
-    on_snapshot = MagicMock()
+    snapshots: list[QueueMonitorSnapshot] = []
 
     with (
         patch(
             "crsbench.distributed.queue_monitor.build_monitor_snapshot",
-            return_value=snapshot,
+            side_effect=[active, done],
         ),
         patch("crsbench.distributed.queue_monitor.time.sleep"),
     ):
@@ -387,21 +283,25 @@ def test_monitor_queue_calls_snapshot_callback_in_basic_mode() -> None:
             queue,
             "exp-1",
             tracked_job_ids=None,
-            callbacks=QueueMonitorCallbacks(on_snapshot=on_snapshot),
+            callbacks=QueueMonitorCallbacks(on_snapshot=snapshots.append),
             use_rich=False,
             poll_interval=0,
         )
 
-    on_snapshot.assert_called_once_with(snapshot)
+    assert snapshots == [active, done]
 
 
 def test_monitor_queue_calls_snapshot_callback_in_rich_mode() -> None:
     queue = MagicMock()
-    snapshot = QueueMonitorSnapshot(
+    active = QueueMonitorSnapshot(
+        stats={"queued": 1, "started": 0, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[],
+    )
+    done = QueueMonitorSnapshot(
         stats={"queued": 0, "started": 0, "finished": 0, "failed": 0, "workers": 1},
         running_jobs=[],
     )
-    on_snapshot = MagicMock()
+    snapshots: list[QueueMonitorSnapshot] = []
 
     class DummyLive:
         def __init__(self, *args, **kwargs):
@@ -419,7 +319,7 @@ def test_monitor_queue_calls_snapshot_callback_in_rich_mode() -> None:
     with (
         patch(
             "crsbench.distributed.queue_monitor.build_monitor_snapshot",
-            return_value=snapshot,
+            side_effect=[active, done],
         ),
         patch("rich.live.Live", DummyLive),
         patch("crsbench.distributed.queue_monitor.time.sleep"),
@@ -428,12 +328,12 @@ def test_monitor_queue_calls_snapshot_callback_in_rich_mode() -> None:
             queue,
             "exp-1",
             tracked_job_ids=None,
-            callbacks=QueueMonitorCallbacks(on_snapshot=on_snapshot),
+            callbacks=QueueMonitorCallbacks(on_snapshot=snapshots.append),
             use_rich=True,
             poll_interval=0,
         )
 
-    on_snapshot.assert_called_once_with(snapshot)
+    assert snapshots == [active, done]
 
 
 def test_monitor_queue_snapshot_callback_receives_current_snapshot() -> None:
@@ -446,30 +346,25 @@ def test_monitor_queue_snapshot_callback_receives_current_snapshot() -> None:
         stats={"queued": 0, "started": 0, "finished": 1, "failed": 0, "workers": 1},
         running_jobs=[],
     )
-    snapshots: list[QueueMonitorSnapshot] = []
+    on_snapshot = MagicMock()
 
     with (
         patch(
             "crsbench.distributed.queue_monitor.build_monitor_snapshot",
             side_effect=[active, done],
         ),
-        patch(
-            "crsbench.distributed.queue_monitor.time.sleep",
-            side_effect=RuntimeError("stop monitoring"),
-        ),
+        patch("crsbench.distributed.queue_monitor.time.sleep"),
     ):
-        with pytest.raises(RuntimeError, match="stop monitoring"):
-            monitor_queue(
-                queue,
-                "exp-1",
-                tracked_job_ids=None,
-                callbacks=QueueMonitorCallbacks(on_snapshot=snapshots.append),
-                use_rich=False,
-                poll_interval=0,
-                exit_when_idle=False,
-            )
+        monitor_queue(
+            queue,
+            "exp-1",
+            tracked_job_ids=None,
+            callbacks=QueueMonitorCallbacks(on_snapshot=on_snapshot),
+            use_rich=False,
+            poll_interval=0,
+        )
 
-    assert snapshots == [active]
+    assert on_snapshot.call_args_list == [call(active), call(done)]
 
 
 def test_monitor_queue_retries_finished_callback_until_processed() -> None:
