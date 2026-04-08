@@ -607,6 +607,178 @@ class CSVReportGenerator:
 
         return combined
 
+    def generate_ci_test_report(self, experiment_dir: Path) -> Path:
+        """Generate CI sidecar-test results CSV from patcher logs.
+
+        For each trial, parses the patcher stdout log to determine whether the
+        CI test fixture (builder-sidecar-full / builder-sidecar-lite) passed or
+        failed, and extracts the failure reason when it did not pass.
+
+        Columns:
+            crs, benchmark, harness, cpv, mode, sanitizer,
+            ci_status, failure_reason, failure_log,
+            elapsed_seconds, build_time, run_time, trial_dir
+        """
+        out_path = self.output_dir / "ci_test_results.csv"
+        rows: list[dict[str, Any]] = []
+
+        for trial_dir in sorted(experiment_dir.rglob("trial-*")):
+            if not trial_dir.is_dir():
+                continue
+            paths = TrialDir(trial_dir)
+
+            metadata_path = paths.metadata_path
+            if not metadata_path.exists():
+                continue
+
+            try:
+                metadata = json.loads(metadata_path.read_text())
+            except Exception:
+                continue
+
+            cpv_id = metadata.get("target_cpv_id") or ""
+
+            ci_status, failure_reason, failure_log = self._parse_ci_test_result(
+                trial_dir, paths.worker_log_path
+            )
+            elapsed_seconds = self._extract_elapsed_seconds(paths.worker_log_path)
+            build_time, run_time, _ = self._extract_phase_times(paths.worker_log_path)
+
+            rows.append(
+                {
+                    "crs": metadata.get("crs", ""),
+                    "benchmark": metadata.get("benchmark", ""),
+                    "harness": metadata.get("harness", ""),
+                    "cpv": cpv_id,
+                    "mode": metadata.get("build_mode", ""),
+                    "sanitizer": metadata.get("sanitizer", ""),
+                    "ci_status": ci_status,
+                    "failure_reason": failure_reason,
+                    "failure_log": failure_log,
+                    "elapsed_seconds": elapsed_seconds,
+                    "build_time": build_time,
+                    "run_time": run_time,
+                    "trial_dir": str(trial_dir),
+                }
+            )
+
+        fieldnames = [
+            "crs",
+            "benchmark",
+            "harness",
+            "cpv",
+            "mode",
+            "sanitizer",
+            "ci_status",
+            "failure_reason",
+            "failure_log",
+            "elapsed_seconds",
+            "build_time",
+            "run_time",
+            "trial_dir",
+        ]
+        self._write_csv_rows(out_path, rows, fieldnames)
+        logger.debug(f"Generated CI test results CSV: {out_path}")
+        return out_path
+
+    @staticmethod
+    def _find_patcher_log(trial_dir: Path) -> Path | None:
+        """Return first patcher stdout log found under output/logs/services/."""
+        services_dir = trial_dir / "output" / "logs" / "services"
+        candidates = sorted(services_dir.glob("*_patcher.stdout.log"))
+        if not candidates:
+            # Fallback for older layout
+            candidates = sorted(
+                (trial_dir / "output" / "logs" / "crs").glob("**/*_patcher.stdout.log")
+            )
+        return candidates[0] if candidates else None
+
+    @staticmethod
+    def _parse_ci_test_result(
+        trial_dir: Path, worker_log_path: Path
+    ) -> tuple[str, str, str]:
+        """Parse CI test result from worker and patcher logs.
+
+        Returns:
+            Tuple of (ci_status, failure_reason, failure_log).
+            ci_status is one of: PASS, FAIL, BUILD_FAILED, TIMEOUT, UNKNOWN.
+        """
+        worker_text = ""
+        if worker_log_path.exists():
+            try:
+                worker_text = worker_log_path.read_text(errors="ignore")
+            except Exception:
+                pass
+
+        # Determine trial-level outcome from worker log
+        if "timed out after" in worker_text and "build-target failed" in worker_text:
+            return "TIMEOUT", "build-target timed out", ""
+        if "build-target failed (rc=1)" in worker_text:
+            # Extract brief error from worker log
+            for line in worker_text.splitlines():
+                if "Failed with error:" in line:
+                    reason = line.split("Failed with error:")[-1].strip()
+                    return "BUILD_FAILED", reason, ""
+            return "BUILD_FAILED", "build-target failed (rc=1)", ""
+
+        # Trial ran — check patcher log for test result
+        patcher_log = CSVReportGenerator._find_patcher_log(trial_dir)
+        if patcher_log is None:
+            # No patcher log: infer from worker log
+            if "Trial" in worker_text and "Completed" in worker_text:
+                return "UNKNOWN", "no patcher log found", ""
+            return "UNKNOWN", "no patcher log found", ""
+
+        try:
+            patcher_text = patcher_log.read_text(errors="ignore")
+        except Exception:
+            return "UNKNOWN", "could not read patcher log", ""
+
+        # Strip docker-compose log prefix: "<service> | <timestamp>Z <message>"
+        clean_lines = []
+        for raw in patcher_text.splitlines():
+            # Remove "container-name  | 2026-...Z " prefix if present
+            stripped = re.sub(r"^\S.*?\|\s+\S+Z\s+", "", raw)
+            clean_lines.append(stripped)
+
+        patcher_clean = "\n".join(clean_lines)
+
+        if "ALL PASSED" in patcher_clean:
+            return "PASS", "", ""
+
+        # Collect FAIL lines
+        fail_lines = [line for line in clean_lines if re.search(r"\bFAIL\b", line)]
+        if fail_lines:
+            # First non-summary FAIL line as reason
+            reason_line = next(
+                (line for line in fail_lines if "one or more tests failed" not in line),
+                fail_lines[0],
+            )
+            failure_reason = reason_line.strip()
+            # Include up to 10 lines around the first FAIL for context
+            first_fail_idx = next(
+                (
+                    i
+                    for i, line in enumerate(clean_lines)
+                    if re.search(r"\bFAIL\b", line)
+                ),
+                0,
+            )
+            ctx_start = max(0, first_fail_idx - 3)
+            ctx_end = min(len(clean_lines), first_fail_idx + 7)
+            failure_log = " | ".join(clean_lines[ctx_start:ctx_end])
+            return "FAIL", failure_reason, failure_log
+
+        # Patcher exited without ALL PASSED or FAIL lines
+        if worker_text and "Trial" in worker_text and "Failed" in worker_text:
+            for line in worker_text.splitlines():
+                if "Failed with error:" in line:
+                    reason = line.split("Failed with error:")[-1].strip()
+                    return "FAIL", reason, ""
+            return "FAIL", "CRS run phase failed", ""
+
+        return "UNKNOWN", "", ""
+
     def _write_csv_rows(
         self, filepath: Path, rows: list[dict[str, Any]], fieldnames: list[str]
     ) -> None:

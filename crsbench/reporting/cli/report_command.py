@@ -132,6 +132,16 @@ Examples:
     )
 
     report_parser.add_argument(
+        "--ci-test",
+        action="store_true",
+        help=(
+            "Generate a CI sidecar-test results CSV (ci_test_results.csv). "
+            "Parses patcher logs to report PASS/FAIL per trial instead of patch metrics. "
+            "Use with builder-sidecar-full or builder-sidecar-lite experiments."
+        ),
+    )
+
+    report_parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable debug logging (logs all commands executed with their working directories)",
@@ -240,11 +250,13 @@ def _generate_experiment_report(
         return 0
 
     # Generate reports
+    ci_test = getattr(args, "ci_test", False)
     logger.info(f"Generating {args.format} reports...")
     result = generator.generate_experiment_report(
         experiment_dir=experiment_dir,
         format=args.format,
         skip_incomplete=skip_incomplete,
+        ci_test=ci_test,
     )
 
     # Display results
