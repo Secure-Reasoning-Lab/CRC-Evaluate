@@ -217,6 +217,44 @@ def _load_benchmark_language(benchmark_path: Path) -> str:
     return language
 
 
+def _load_benchmark_rts_env(
+    benchmark_path: Path, *, rts_enabled: bool = False
+) -> dict[str, str]:
+    """Load RTS env vars from project.yaml for oss-crs target env injection.
+
+    Returns a dict with RTS_ON and RTS_TOOL when rts_enabled is True and
+    the benchmark declares rts_mode (non-"none") and inc_build=true;
+    otherwise returns an empty dict.
+    """
+    if not rts_enabled:
+        return {}
+
+    project_yaml = benchmark_path / "project.yaml"
+    if not project_yaml.exists():
+        return {}
+
+    try:
+        with project_yaml.open() as f:
+            project = yaml.safe_load(f) or {}
+    except Exception as e:
+        logger.warning(
+            f"Failed to read {project_yaml} for RTS config: {e}; skipping RTS env injection"
+        )
+        return {}
+
+    rts_mode = project.get("rts_mode")
+    inc_build = project.get("inc_build", False)
+
+    if rts_mode and rts_mode != "none" and inc_build:
+        logger.debug(
+            f"Injecting RTS env for {benchmark_path.name}: "
+            f"RTS_ON=1, RTS_TOOL={rts_mode}"
+        )
+        return {"RTS_ON": "1", "RTS_TOOL": str(rts_mode)}
+
+    return {}
+
+
 def _generate_results_folder_name(
     experiment_name: str, timestamp: Optional[str] = None
 ) -> str:
@@ -1408,6 +1446,20 @@ def run_crs_trial(
             **compose_config,
         }
         adapter_config["fuzzing_language"] = benchmark_language
+        rts_env = _load_benchmark_rts_env(
+            benchmark_path, rts_enabled=config.rts_enabled
+        )
+        if rts_env:
+            existing_env = adapter_config.get("additional_env")
+            merged_env = dict(existing_env) if isinstance(existing_env, dict) else {}
+            merged_env.update(rts_env)
+            adapter_config["additional_env"] = merged_env
+        # Set OSS_CRS_RTS_ENABLED in process env so oss-crs subprocess inherits it.
+        # target.py checks this env var to gate RTS activation.
+        if config.rts_enabled:
+            os.environ["OSS_CRS_RTS_ENABLED"] = "1"
+        else:
+            os.environ.pop("OSS_CRS_RTS_ENABLED", None)
         adapter.configure(adapter_config)
 
         # Initialize benchmark runner with adapter and snapshot configuration

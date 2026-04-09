@@ -13,6 +13,7 @@ from crsbench.distributed.jobs import (
     _finish_job_lifecycle,
     _initialize_job_lifecycle_runtime,
     _lifecycle_runtime_is_current_owner,
+    _load_benchmark_rts_env,
     _publish_trial_terminal_artifacts,
     run_crs_trial,
 )
@@ -767,3 +768,84 @@ def test_run_crs_trial_finalizes_failed_lifecycle_when_fail_publication_raises(
     record = store.get("exp-1", "job-1")
     assert record is not None
     assert record.state is JobState.FAILED
+
+
+class TestLoadBenchmarkRtsEnv:
+    def test_returns_empty_when_no_project_yaml(self, tmp_path: Path) -> None:
+        bench = tmp_path / "my-bench"
+        bench.mkdir()
+        assert _load_benchmark_rts_env(bench, rts_enabled=True) == {}
+
+    def test_returns_empty_when_rts_mode_missing(self, tmp_path: Path) -> None:
+        bench = tmp_path / "my-bench"
+        bench.mkdir()
+        (bench / "project.yaml").write_text("language: c\ninc_build: true\n")
+        assert _load_benchmark_rts_env(bench, rts_enabled=True) == {}
+
+    def test_returns_empty_when_rts_mode_is_none_string(self, tmp_path: Path) -> None:
+        bench = tmp_path / "my-bench"
+        bench.mkdir()
+        (bench / "project.yaml").write_text(
+            "language: jvm\nrts_mode: none\ninc_build: true\n"
+        )
+        assert _load_benchmark_rts_env(bench, rts_enabled=True) == {}
+
+    def test_returns_empty_when_inc_build_is_false(self, tmp_path: Path) -> None:
+        bench = tmp_path / "my-bench"
+        bench.mkdir()
+        (bench / "project.yaml").write_text(
+            "language: jvm\nrts_mode: jcgeks\ninc_build: false\n"
+        )
+        assert _load_benchmark_rts_env(bench, rts_enabled=True) == {}
+
+    def test_returns_empty_when_inc_build_absent(self, tmp_path: Path) -> None:
+        bench = tmp_path / "my-bench"
+        bench.mkdir()
+        (bench / "project.yaml").write_text("language: jvm\nrts_mode: jcgeks\n")
+        assert _load_benchmark_rts_env(bench, rts_enabled=True) == {}
+
+    def test_injects_rts_on_and_rts_tool_when_conditions_met(
+        self, tmp_path: Path
+    ) -> None:
+        bench = tmp_path / "my-bench"
+        bench.mkdir()
+        (bench / "project.yaml").write_text(
+            "language: jvm\nrts_mode: jcgeks\ninc_build: true\n"
+        )
+        result = _load_benchmark_rts_env(bench, rts_enabled=True)
+        assert result == {"RTS_ON": "1", "RTS_TOOL": "jcgeks"}
+
+    def test_returns_correct_rts_tool_for_different_mode(self, tmp_path: Path) -> None:
+        bench = tmp_path / "my-bench"
+        bench.mkdir()
+        (bench / "project.yaml").write_text(
+            "language: jvm\nrts_mode: openclover\ninc_build: true\n"
+        )
+        result = _load_benchmark_rts_env(bench, rts_enabled=True)
+        assert result == {"RTS_ON": "1", "RTS_TOOL": "openclover"}
+
+    def test_returns_empty_on_invalid_yaml(self, tmp_path: Path) -> None:
+        bench = tmp_path / "my-bench"
+        bench.mkdir()
+        (bench / "project.yaml").write_text(": invalid: yaml: content\n")
+        # Invalid YAML should return empty (graceful degradation)
+        result = _load_benchmark_rts_env(bench, rts_enabled=True)
+        assert result == {}
+
+    def test_returns_empty_when_rts_enabled_false(self, tmp_path: Path) -> None:
+        """Even when project.yaml has rts_mode and inc_build, rts_enabled=False returns empty."""
+        bench = tmp_path / "my-bench"
+        bench.mkdir()
+        (bench / "project.yaml").write_text(
+            "language: jvm\nrts_mode: jcgeks\ninc_build: true\n"
+        )
+        assert _load_benchmark_rts_env(bench, rts_enabled=False) == {}
+
+    def test_returns_empty_when_rts_enabled_default(self, tmp_path: Path) -> None:
+        """Default rts_enabled=False returns empty even for eligible benchmarks."""
+        bench = tmp_path / "my-bench"
+        bench.mkdir()
+        (bench / "project.yaml").write_text(
+            "language: jvm\nrts_mode: jcgeks\ninc_build: true\n"
+        )
+        assert _load_benchmark_rts_env(bench) == {}
