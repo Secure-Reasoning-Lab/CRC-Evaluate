@@ -1404,7 +1404,7 @@ sudo -iu crsbench env \
 | Docker network pool exhaustion (`all predefined network addresses are exhausted`) | Too many concurrent Docker compose networks on one VM | CRSBench configures Docker with an expanded address pool (`172.16.0.0/12` with `/24` subnets, up to 4096 networks) automatically via the startup script |
 | HF download fails with 401 Unauthorized | Missing `HF_TOKEN` for gated HuggingFace datasets | Add `HF_TOKEN: os.environ/HF_TOKEN` to `cloud.env` and export `HF_TOKEN` locally before launching |
 | Quota exceeded on first region | All placements attempt the first region in the fallback list | Pin placements to specific regions using `region:` on each placement entry; CRSBench preflight now warns about greedy first-region overcommit |
-| Workers stuck at "registering" | Worker supervisor did not report ready state | Ensure `feat/gcp` branch includes the readiness fix (commit `16e4d584`); workers with `--cpuset` now report ready before entering the supervisor loop |
+| Workers stuck at "registering" | Worker supervisor did not report ready state | Ensure the deployed ref includes the readiness fix (commit `16e4d584`); `main` is the normal launch ref and workers with `--cpuset` now report ready before entering the supervisor loop |
 | Collect fails with Permission denied on `/data` | OS Login user cannot read crsbench-owned experiment data | CRSBench uses `--rsync-path="sudo rsync"` on the remote side; ensure the crsbench user has passwordless sudo |
 
 ## See Also

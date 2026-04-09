@@ -217,14 +217,14 @@ Expected result:
 The checked-in config currently uses:
 
 - `cloud.defaults.crsbench_install_spec: git+ssh://git@github.com/sslab-gatech/CRSBench.git`
-- `cloud.defaults.crsbench_git_ref: feat/gcp`
+- `cloud.defaults.crsbench_git_ref: main`
 - `cloud.defaults.github_deploy_key_path: .crsbench-keys/crsbench-deploy`
 
 That only works if:
 
 - `.crsbench-keys/crsbench-deploy` exists on this machine
 - the matching public key was added under GitHub `Settings -> Deploy keys`
-- `feat/gcp` exists in the repository the VMs will clone
+- the deployed ref includes the required bootstrap fix and exists in the repository the VMs will clone
 - if the main CRSBench repository is private, the deploy key can read that
   repository
 

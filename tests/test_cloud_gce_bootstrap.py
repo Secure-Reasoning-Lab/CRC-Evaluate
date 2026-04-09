@@ -521,7 +521,7 @@ def test_metadata_includes_git_ref():
 
     fleet = _make_fleet(
         crsbench_install_spec="git+ssh://git@github.com/org/Repo.git",
-        crsbench_git_ref="feat/gcp",
+        crsbench_git_ref="main",
     )
     metadata = build_instance_metadata(
         experiment_name="exp-ref",
@@ -532,7 +532,7 @@ def test_metadata_includes_git_ref():
         startup_script="#!/usr/bin/env bash\n",
     )
 
-    assert metadata[CRSBENCH_GIT_REF_KEY] == "feat/gcp"
+    assert metadata[CRSBENCH_GIT_REF_KEY] == "main"
 
 
 def test_metadata_git_ref_defaults_to_main():
