@@ -847,6 +847,10 @@ class OssCrsAdapter:
         leaking into Docker build context.  Uses ``copytree`` because
         Docker buildx does not follow symlinks in build context.
         A ``.dockerignore`` is written as defense-in-depth.
+
+        When RTS is enabled for the benchmark (rts_mode set and inc_build true),
+        the staged Dockerfile's FROM is swapped to the RTS base image so that
+        RTS helper scripts (rts_config_jvm.py, etc.) are available at runtime.
         """
         staged = trial_output_dir / "staged" / benchmark_path.name
         if staged.exists():
@@ -856,7 +860,52 @@ class OssCrsAdapter:
 
         # Defense-in-depth: prevent accidental COPY of ground truth
         (staged / ".dockerignore").write_text(".aixcc\n**/.aixcc\n.agent\n**/.agent\n")
+
+        # Swap Dockerfile FROM to RTS base image when RTS is active.
+        self._apply_rts_dockerfile_swap(staged)
+
         return staged
+
+    def _apply_rts_dockerfile_swap(self, staged: Path) -> None:
+        """Swap staged Dockerfile FROM to RTS base image if RTS is enabled."""
+        project_yaml = staged / "project.yaml"
+        if not project_yaml.exists():
+            return
+
+        try:
+            cfg = yaml.safe_load(project_yaml.read_text()) or {}
+        except Exception:
+            return
+
+        rts_mode = cfg.get("rts_mode")
+        inc_build = cfg.get("inc_build", False)
+        language = cfg.get("language", "")
+        if not rts_mode or rts_mode == "none" or not inc_build:
+            return
+
+        # Check if any CRS has RTS_ON in additional_env (injected by crsbench).
+        rts_on = any(
+            svc.get("additional_env", {}).get("RTS_ON")
+            for svc in self._crs_service_configs.values()
+        )
+        if not rts_on:
+            return
+
+        dockerfile = staged / "Dockerfile"
+        if not dockerfile.exists():
+            return
+
+        from crsbench.builder.rts.dockerfile_swap import swap_dockerfile_from
+
+        try:
+            original = dockerfile.read_text()
+            swapped = swap_dockerfile_from(original, language)
+            dockerfile.write_text(swapped)
+            logger.info(
+                f"Swapped Dockerfile FROM to RTS base image (language={language})"
+            )
+        except ValueError as exc:
+            logger.warning(f"RTS Dockerfile swap skipped: {exc}")
 
     def _generate_compose_yaml(self, trial_output_dir: Path) -> Path:
         """Generate crs-compose.yaml for this adapter's CRS.
