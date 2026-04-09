@@ -1,9 +1,19 @@
-FROM gcr.io/oss-fuzz/base-builder-jvm
+FROM ghcr.io/aixcc-finals/base-builder-jvm:v1.3.0
 
 # Project-independent RTS dependencies
 # Install JcgEks 1.0.0 and related Maven artifacts to local repo.
 # Artifacts are hosted at: https://github.com/acorn421/JcgEks/releases/tag/1.0.0
 # Installation order matters: parent POM -> core -> plugin (dependency chain).
+
+# Install a temporary Maven for RTS artifact installation only.
+# Each benchmark installs its own Maven via Dockerfile (ENV MVN=...),
+# so this is placed under /opt/rts-maven to avoid conflicts.
+RUN set -e \
+    && curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.5/binaries/apache-maven-3.9.5-bin.tar.gz \
+       | tar -xz -C /opt \
+    && ln -s /opt/apache-maven-3.9.5 /opt/rts-maven
+
+ENV PATH="/opt/rts-maven/bin:${PATH}"
 
 # Install JcgEks 1.0.0 artifacts (parent POM, core jar, maven plugin)
 RUN set -e \
@@ -39,6 +49,10 @@ RUN set -e \
 RUN mvn dependency:get \
     -Dartifact=org.openclover:clover-maven-plugin:4.5.2 \
     -Dtransitive=true
+
+# Remove temporary Maven from PATH so it doesn't shadow project-installed Maven.
+# The artifacts are already in ~/.m2 which the project's own Maven will pick up.
+ENV PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/out:/usr/lib/jvm/java-17-openjdk-amd64/bin"
 
 # Helper scripts (copied from crsbench/builder/rts/scripts/ into the Docker build context)
 COPY scripts/rts_init_project.py /rts_init_project.py
