@@ -644,6 +644,7 @@ class CSVReportGenerator:
             elapsed_seconds = self._extract_elapsed_seconds(paths.worker_log_path)
             build_time, run_time, _ = self._extract_phase_times(paths.worker_log_path)
             rts_stats = self._parse_rts_stats_from_sidecar_log(trial_dir)
+            patch_timing = self._parse_verify_patch_timing(trial_dir)
 
             rows.append(
                 {
@@ -659,6 +660,8 @@ class CSVReportGenerator:
                     "elapsed_seconds": elapsed_seconds,
                     "build_time": build_time,
                     "run_time": run_time,
+                    "patch_rebuild_time": patch_timing["patch_rebuild_time"],
+                    "patch_test_time": patch_timing["patch_test_time"],
                     "tests_run": rts_stats["tests_run"],
                     "failures": rts_stats["failures"],
                     "errors": rts_stats["errors"],
@@ -683,6 +686,8 @@ class CSVReportGenerator:
             "elapsed_seconds",
             "build_time",
             "run_time",
+            "patch_rebuild_time",
+            "patch_test_time",
             "tests_run",
             "failures",
             "errors",
@@ -695,6 +700,33 @@ class CSVReportGenerator:
         self._write_csv_rows(out_path, rows, fieldnames)
         logger.debug(f"Generated CI test results CSV: {out_path}")
         return out_path
+
+    @staticmethod
+    def _parse_verify_patch_timing(trial_dir: Path) -> dict[str, Any]:
+        """Parse verify_patch_timing.json from CRS log_dir.
+
+        Returns dict with ``patch_rebuild_time`` and ``patch_test_time``
+        (seconds), or empty strings if the file is not found.
+        """
+        result: dict[str, Any] = {
+            "patch_rebuild_time": "",
+            "patch_test_time": "",
+        }
+        # Path: trial_dir/output/logs/crs/<crs_name>/log_dir/verify_patch_timing.json
+        crs_log_dir = trial_dir / "output" / "logs" / "crs"
+        if not crs_log_dir.is_dir():
+            return result
+        for crs_dir in crs_log_dir.iterdir():
+            timing_file = crs_dir / "log_dir" / "verify_patch_timing.json"
+            if timing_file.exists():
+                try:
+                    data = json.loads(timing_file.read_text())
+                    result["patch_rebuild_time"] = round(data.get("rebuild", 0), 1)
+                    result["patch_test_time"] = round(data.get("test", 0), 1)
+                except Exception:
+                    pass
+                break
+        return result
 
     @staticmethod
     def _parse_rts_stats_from_sidecar_log(
