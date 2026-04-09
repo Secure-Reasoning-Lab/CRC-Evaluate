@@ -666,7 +666,7 @@ class TestExperimentConfigSchema:
             "defaults": {
                 "readiness_timeout_sec": 1200,
                 "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
-                "crsbench_git_ref": "feat/gcp",
+                "crsbench_git_ref": "main",
             },
             "providers": {
                 "gce": {
@@ -1122,7 +1122,7 @@ class TestExperimentConfigSchema:
             config.cloud.defaults.crsbench_install_spec
             == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
         )
-        assert config.cloud.defaults.crsbench_git_ref == "feat/gcp"
+        assert config.cloud.defaults.crsbench_git_ref == "main"
         assert config.cloud.providers.gce is not None
         assert config.cloud.providers.gce.project == "test-project"
         assert config.cloud.providers.gce.profile_defaults is not None
@@ -1553,7 +1553,7 @@ class TestExperimentConfigSchema:
             ),
             (
                 "providers.gce.profile_defaults.crsbench_git_ref",
-                "feat/gcp",
+                "main",
                 "crsbench_git_ref",
             ),
             (
@@ -1573,7 +1573,7 @@ class TestExperimentConfigSchema:
             ),
             (
                 "providers.gce.instance_profiles.gce-worker-n2d.crsbench_git_ref",
-                "feat/gcp",
+                "main",
                 "crsbench_git_ref",
             ),
             (

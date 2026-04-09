@@ -57,6 +57,14 @@ uv run crsbench cloud --config "$CONFIG" monitor "$EXPERIMENT"
 You can omit `"$EXPERIMENT"` here because `cloud monitor` infers it from the
 config.
 
+When Apprise URLs are set in the operator environment, `cloud monitor` sends
+one operator-side terminal notification after it first sees the queue
+transition from non-empty to empty during that attached session. When failed
+jobs remain at that drain point, the terminal message reports a failure instead
+of a completion. Attaching while the queue is already idle does not emit a
+notification for that initial idle state, but a later active-to-idle
+transition in the same session still can.
+
 5. After the run finishes, collect artifacts and VM diagnostics back to the
 local machine:
 
@@ -128,6 +136,11 @@ orchestrator runtime. If the values come from the operator shell, run the
 preflight in the same shell environment that will run `cloud launch` or
 `cloud monitor`.
 
+If operator-side `cloud monitor` Apprise is enabled and the cloud launch env
+also enables orchestrator-side Apprise, the local `cloud monitor` notification
+and the orchestrator-side terminal notification can both fire, which
+duplicates the terminal alert.
+
 If a checked-in cloud config should inherit the notification target from the
 operator shell or `.env`, declare it explicitly under `cloud.orchestrator.env`:
 
@@ -161,6 +174,10 @@ prerequisites apply. This stock command validates the checked-in
 `CRSBENCH_NOTIFY_APPRISE_URLS` orchestrator passthrough path in
 [`scripts/cloud-rehearsal/local-experiment-notification.yaml`](../../../scripts/cloud-rehearsal/local-experiment-notification.yaml).
 It is a cloud launch rehearsal, not a worker or evaluator notification path.
+
+If operator-side `cloud monitor` Apprise is enabled and the cloud launch env
+also enables orchestrator-side Apprise, expect a duplicate terminal
+notification when the queue drains.
 
 ## Configuration
 
@@ -1387,7 +1404,7 @@ sudo -iu crsbench env \
 | Docker network pool exhaustion (`all predefined network addresses are exhausted`) | Too many concurrent Docker compose networks on one VM | CRSBench configures Docker with an expanded address pool (`172.16.0.0/12` with `/24` subnets, up to 4096 networks) automatically via the startup script |
 | HF download fails with 401 Unauthorized | Missing `HF_TOKEN` for gated HuggingFace datasets | Add `HF_TOKEN: os.environ/HF_TOKEN` to `cloud.env` and export `HF_TOKEN` locally before launching |
 | Quota exceeded on first region | All placements attempt the first region in the fallback list | Pin placements to specific regions using `region:` on each placement entry; CRSBench preflight now warns about greedy first-region overcommit |
-| Workers stuck at "registering" | Worker supervisor did not report ready state | Ensure `feat/gcp` branch includes the readiness fix (commit `16e4d584`); workers with `--cpuset` now report ready before entering the supervisor loop |
+| Workers stuck at "registering" | Worker supervisor did not report ready state | Ensure the deployed ref includes the readiness fix (commit `16e4d584`); `main` is the normal launch ref and workers with `--cpuset` now report ready before entering the supervisor loop |
 | Collect fails with Permission denied on `/data` | OS Login user cannot read crsbench-owned experiment data | CRSBench uses `--rsync-path="sudo rsync"` on the remote side; ensure the crsbench user has passwordless sudo |
 
 ## See Also
