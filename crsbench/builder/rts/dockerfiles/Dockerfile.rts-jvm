@@ -1,0 +1,47 @@
+FROM gcr.io/oss-fuzz/base-builder-jvm
+
+# Project-independent RTS dependencies
+# Install JcgEks 1.0.0 and related Maven artifacts to local repo.
+# Artifacts are hosted at: https://github.com/acorn421/JcgEks/releases/tag/1.0.0
+# Installation order matters: parent POM -> core -> plugin (dependency chain).
+
+# Install JcgEks 1.0.0 artifacts (parent POM, core jar, maven plugin)
+RUN set -e \
+    && cd /tmp \
+    # 1. JcgEks parent POM (must be installed first, no jar)
+    && wget -q -O org.jcgeks.parent-1.0.0.pom \
+        "https://github.com/acorn421/JcgEks/releases/download/1.0.0/org.jcgeks.parent-1.0.0.pom" \
+    && mvn install:install-file \
+        -Dfile=org.jcgeks.parent-1.0.0.pom \
+        -DpomFile=org.jcgeks.parent-1.0.0.pom \
+        -Dpackaging=pom \
+    # 2. JcgEks core jar + POM
+    && wget -q -O org.jcgeks.core-1.0.0.jar \
+        "https://github.com/acorn421/JcgEks/releases/download/1.0.0/org.jcgeks.core-1.0.0.jar" \
+    && wget -q -O org.jcgeks.core-1.0.0.pom \
+        "https://github.com/acorn421/JcgEks/releases/download/1.0.0/org.jcgeks.core-1.0.0.pom" \
+    && mvn install:install-file \
+        -Dfile=org.jcgeks.core-1.0.0.jar \
+        -DpomFile=org.jcgeks.core-1.0.0.pom \
+        -DgeneratePom=true \
+    # 3. JcgEks maven plugin jar + POM
+    && wget -q -O jcgeks-maven-plugin-1.0.0.jar \
+        "https://github.com/acorn421/JcgEks/releases/download/1.0.0/jcgeks-maven-plugin-1.0.0.jar" \
+    && wget -q -O jcgeks-maven-plugin-1.0.0.pom \
+        "https://github.com/acorn421/JcgEks/releases/download/1.0.0/jcgeks-maven-plugin-1.0.0.pom" \
+    && mvn install:install-file \
+        -Dfile=jcgeks-maven-plugin-1.0.0.jar \
+        -DpomFile=jcgeks-maven-plugin-1.0.0.pom \
+        -DgeneratePom=true \
+    && rm -f org.jcgeks.*.pom org.jcgeks.*.jar jcgeks-maven-plugin-1.0.0.*
+
+# Pre-warm OpenClover 4.5.2 from Maven Central into the local repository
+RUN mvn dependency:get \
+    -Dartifact=org.openclover:clover-maven-plugin:4.5.2 \
+    -Dtransitive=true
+
+# Helper scripts (copied from crsbench/builder/rts/scripts/ into the Docker build context)
+COPY scripts/rts_init_project.py /rts_init_project.py
+COPY scripts/rts_config_jvm.py /rts_config_jvm.py
+COPY scripts/run_tests_rts_wrapper.sh /src/run_tests.sh
+RUN chmod +x /src/run_tests.sh
