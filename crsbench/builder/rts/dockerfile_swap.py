@@ -25,6 +25,8 @@ RTS_IMAGE_TAGS = {
 # Dockerfile paths relative to the rts/dockerfiles/ directory.
 _RTS_DOCKERFILES = {
     "jvm": "Dockerfile.rts-jvm",
+    "c": "Dockerfile.rts-c",
+    "c++": "Dockerfile.rts-c",
 }
 
 _FROM_RE = re.compile(r"^FROM\s+\S+", re.MULTILINE)

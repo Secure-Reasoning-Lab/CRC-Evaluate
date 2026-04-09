@@ -1,4 +1,4 @@
-FROM gcr.io/oss-fuzz/base-builder
+FROM ghcr.io/aixcc-finals/base-builder:v1.3.0
 
 # Project-independent RTS dependencies
 # Install: universal-ctags (from source), Intel Pin, BinaryRTS (with pintools-rts).
