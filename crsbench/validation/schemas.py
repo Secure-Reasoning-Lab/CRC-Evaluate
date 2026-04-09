@@ -3294,10 +3294,10 @@ class ExperimentConfig(BaseModel):
         description="Skip POV verification after CRS execution (default: False, verification enabled)",
     )
     rts_enabled: bool = Field(
-        default=False,
+        default=True,
         description="Enable RTS (Regression Test Selection) for benchmarks that declare "
         "rts_mode in project.yaml. When False, RTS is disabled even if benchmarks "
-        "support it. When True, RTS is activated for eligible benchmarks "
+        "support it. When True (default), RTS is activated for eligible benchmarks "
         "(those with rts_mode != 'none' and inc_build = true).",
     )
     oss_fuzz_path: Path = Field(
