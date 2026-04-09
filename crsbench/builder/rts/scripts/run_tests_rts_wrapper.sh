@@ -14,9 +14,14 @@ if [ -n "${RTS_ON:-}" ]; then
 fi
 
 # Resolve and execute the project test script.
+# test.sh may be at /src/test.sh (baked into image) or under $OSS_CRS_PROJ_PATH.
+if [ ! -f /src/test.sh ] && [ -n "${OSS_CRS_PROJ_PATH:-}" ] && [ -f "$OSS_CRS_PROJ_PATH/test.sh" ]; then
+    cp "$OSS_CRS_PROJ_PATH/test.sh" /src/test.sh
+fi
+
 if [ -f /src/test.sh ]; then
     exec bash /src/test.sh
 else
-    echo "[RTS wrapper] No /src/test.sh found."
+    echo "[RTS wrapper] No test.sh found."
     exit 0
 fi

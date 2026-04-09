@@ -61,8 +61,18 @@ SUREFIRE_VERSION = "2.22.2"
 # OpenClover generates inner classes that must be excluded from surefire.
 OPENCLOVER_EXCLUDE_PATTERN = "**/*$__CLR*"
 
-# Fixed path to test.sh for parsing INCLUDE_TESTS / EXCLUDE_TESTS.
-TEST_SH_PATH = "/src/test.sh"
+
+# Resolve test.sh path: /src/test.sh first, then $OSS_CRS_PROJ_PATH/test.sh fallback.
+def _resolve_test_sh_path() -> str:
+    if os.path.isfile("/src/test.sh"):
+        return "/src/test.sh"
+    proj_path = os.environ.get("OSS_CRS_PROJ_PATH", "")
+    if proj_path and os.path.isfile(os.path.join(proj_path, "test.sh")):
+        return os.path.join(proj_path, "test.sh")
+    return "/src/test.sh"  # default (will warn if missing)
+
+
+TEST_SH_PATH = _resolve_test_sh_path()
 
 # ---------------------------------------------------------------------------
 # Shared helpers
