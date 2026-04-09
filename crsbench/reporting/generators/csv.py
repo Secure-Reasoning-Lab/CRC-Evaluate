@@ -643,6 +643,7 @@ class CSVReportGenerator:
             )
             elapsed_seconds = self._extract_elapsed_seconds(paths.worker_log_path)
             build_time, run_time, _ = self._extract_phase_times(paths.worker_log_path)
+            rts_stats = self._parse_rts_stats_from_sidecar_log(trial_dir)
 
             rows.append(
                 {
@@ -658,6 +659,13 @@ class CSVReportGenerator:
                     "elapsed_seconds": elapsed_seconds,
                     "build_time": build_time,
                     "run_time": run_time,
+                    "tests_run": rts_stats["tests_run"],
+                    "failures": rts_stats["failures"],
+                    "errors": rts_stats["errors"],
+                    "skipped": rts_stats["skipped"],
+                    "test_classes_run": rts_stats["test_classes_run"],
+                    "total_time_s": rts_stats["total_time_s"],
+                    "test_time_s": rts_stats["test_time_s"],
                     "trial_dir": str(trial_dir),
                 }
             )
@@ -675,11 +683,124 @@ class CSVReportGenerator:
             "elapsed_seconds",
             "build_time",
             "run_time",
+            "tests_run",
+            "failures",
+            "errors",
+            "skipped",
+            "test_classes_run",
+            "total_time_s",
+            "test_time_s",
             "trial_dir",
         ]
         self._write_csv_rows(out_path, rows, fieldnames)
         logger.debug(f"Generated CI test results CSV: {out_path}")
         return out_path
+
+    @staticmethod
+    def _parse_rts_stats_from_sidecar_log(
+        trial_dir: Path,
+    ) -> dict[str, Any]:
+        """Parse RTS / test statistics from builder-sidecar stdout logs.
+
+        The builder-sidecar streams ephemeral container output with prefixes
+        like ``[test:N] ...``.  For JVM projects, Maven prints lines such as::
+
+            [test:1] Tests run: 42, Failures: 0, Errors: 0, Skipped: 3
+            [test:1] Running org.example.FooTest
+            [test:1] Total time:  12.345 s
+
+        Returns a dict with keys (all default to empty/0 when not found):
+            tests_run, failures, errors, skipped,
+            test_classes (list of class names),
+            total_time_s (Maven "Total time" in seconds),
+            test_time_s (wall-clock from patcher ``[test] XX.Xs``).
+        """
+        result: dict[str, Any] = {
+            "tests_run": 0,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "test_classes_run": 0,
+            "total_time_s": "",
+            "test_time_s": "",
+        }
+
+        # --- 1. Parse builder-sidecar logs for Maven test output ---
+        services_dir = trial_dir / "output" / "logs" / "services"
+        log_paths = sorted(services_dir.glob("*inc-builder-*.stdout.log"))
+        if not log_paths:
+            log_paths = sorted(
+                (trial_dir / "output" / "logs" / "crs").glob(
+                    "**/*inc-builder-*.stdout.log"
+                )
+            )
+
+        test_classes: list[str] = []
+        for log_path in log_paths:
+            try:
+                text = log_path.read_text(errors="ignore")
+            except Exception:
+                continue
+
+            for line in text.splitlines():
+                # Strip sidecar or docker-compose log prefixes
+                raw = line
+                m = re.match(r"^\[test:\d+\]\s+(.*)", line)
+                if m:
+                    raw = m.group(1)
+                else:
+                    # docker-compose prefix: "service | 2026-...Z [test:N] msg"
+                    m2 = re.match(r"^.*\|\s+\S+Z?\s+\[test:\d+\]\s+(.*)", line)
+                    if m2:
+                        raw = m2.group(1)
+
+                # Maven "Results :" or "Tests run:" summary
+                if "Tests run:" in raw and "Failures:" in raw:
+                    parts = raw.replace(" ", "").split(",")
+                    for part in parts:
+                        if part.startswith("Testsrun:"):
+                            result["tests_run"] += int(part.split(":")[1])
+                        elif part.startswith("Failures:"):
+                            result["failures"] += int(part.split(":")[1])
+                        elif part.startswith("Errors:"):
+                            result["errors"] += int(part.split(":")[1])
+                        elif part.startswith("Skipped:"):
+                            # Skipped may have trailing non-digits
+                            digits = "".join(
+                                c for c in part.split(":")[1] if c.isdigit()
+                            )
+                            if digits:
+                                result["skipped"] += int(digits)
+
+                # Maven "Running <class>"
+                elif "Running " in raw:
+                    cls = raw.split("Running ", 1)[1].strip()
+                    if cls and not cls.startswith("[") and "." in cls:
+                        test_classes.append(cls)
+
+                # Maven "Total time:"
+                elif "Total time:" in raw:
+                    t_str = raw.split("Total time:")[1].strip().rstrip("s").strip()
+                    try:
+                        result["total_time_s"] = round(float(t_str), 1)
+                    except ValueError:
+                        pass
+
+        result["test_classes_run"] = len(test_classes)
+
+        # --- 2. Parse patcher log for wall-clock test time ---
+        patcher_log = CSVReportGenerator._find_patcher_log(trial_dir)
+        if patcher_log and patcher_log.exists():
+            try:
+                for line in patcher_log.read_text(errors="ignore").splitlines():
+                    # verify_patch prints: "  [test] 12.3s"
+                    tm = re.search(r"\[test\]\s+([\d.]+)s", line)
+                    if tm:
+                        result["test_time_s"] = round(float(tm.group(1)), 1)
+            except Exception:
+                pass
+
+        return result
 
     @staticmethod
     def _find_patcher_log(trial_dir: Path) -> Path | None:
