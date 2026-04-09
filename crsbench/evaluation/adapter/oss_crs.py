@@ -269,23 +269,30 @@ class OssCrsAdapter:
     def _build_done_marker_path(self, project_name: str) -> Path:
         """Return file-based marker path indicating build-target completed.
 
-        Used to skip redundant builds across worker processes sharing a host.
-        The marker is scoped to the oss-crs work directory so it doesn't
-        persist across experiments (which may have different Docker images).
+        Uses a shared host-local path so that all CPV trials for the same
+        benchmark see the marker and skip redundant builds.
         """
-        if not self._work_dir:
-            # Fallback to lock dir if work_dir not yet set
-            crs = self._lock_token(self._crs_config_name)
-            project = self._lock_token(project_name)
-            sanitizer = self._lock_token(self._sanitizer)
-            return (
-                self._lock_dir()
-                / f"crsbench-oss-crs-build-done-{crs}-{project}-{sanitizer}"
-            )
         crs = self._lock_token(self._crs_config_name)
         project = self._lock_token(project_name)
         sanitizer = self._lock_token(self._sanitizer)
-        return self._work_dir / f".build-done-{crs}-{project}-{sanitizer}"
+        return (
+            self._lock_dir()
+            / f"crsbench-oss-crs-build-done-{crs}-{project}-{sanitizer}"
+        )
+
+    def _cleanup_build_done_markers(self) -> None:
+        """Remove stale build-done markers from shared lock dir.
+
+        Called when adapter config changes (new experiment) so that
+        markers from a previous experiment don't suppress required builds.
+        """
+        crs = self._lock_token(self._crs_config_name)
+        prefix = f"crsbench-oss-crs-build-done-{crs}-"
+        lock_dir = self._lock_dir()
+        if lock_dir.is_dir():
+            for marker in lock_dir.iterdir():
+                if marker.name.startswith(prefix):
+                    marker.unlink(missing_ok=True)
 
     def _build_lock_file_path(self, project_name: str) -> Path:
         """Return host-local lock file path for build-target serialization.
@@ -678,6 +685,7 @@ class OssCrsAdapter:
                 if "work_dir" not in config or config["work_dir"] is None:
                     self._work_dir = None
                 self._resolved_artifacts = None
+                self._cleanup_build_done_markers()
                 self._built_projects.clear()
                 self._prepared = False
         if "skip_litellm" in config:
@@ -1089,6 +1097,21 @@ class OssCrsAdapter:
 
             build_succeeded = False
             try:
+                # Enable incremental build when RTS is active or the
+                # benchmark declares inc_build in project.yaml.
+                rts_active = any(
+                    svc.get("additional_env", {}).get("RTS_ON")
+                    for svc in self._crs_service_configs.values()
+                )
+                project_yaml = staged_path / "project.yaml"
+                benchmark_inc_build = False
+                if project_yaml.exists():
+                    try:
+                        cfg = yaml.safe_load(project_yaml.read_text()) or {}
+                        benchmark_inc_build = bool(cfg.get("inc_build", False))
+                    except Exception:
+                        pass
+                inc_build = rts_active or benchmark_inc_build
                 logger.info(f"oss-crs build-target for {project_name}")
                 stdout, stderr, rc = run_oss_crs_build_target(
                     compose_file,
@@ -1096,6 +1119,7 @@ class OssCrsAdapter:
                     staged_path,
                     oss_crs_cmd=self._oss_crs_cmd,
                     timeout=self._build_timeout,
+                    incremental_build=inc_build,
                 )
                 if rc != 0:
                     detail = stderr or stdout
@@ -1208,6 +1232,21 @@ class OssCrsAdapter:
             self._run_id = self._configured_run_id or generate_run_id()
 
         try:
+            # Determine incremental build the same way as build phase.
+            rts_active = any(
+                svc.get("additional_env", {}).get("RTS_ON")
+                for svc in self._crs_service_configs.values()
+            )
+            project_yaml = staged_path / "project.yaml"
+            benchmark_inc_build = False
+            if project_yaml.exists():
+                try:
+                    cfg = yaml.safe_load(project_yaml.read_text()) or {}
+                    benchmark_inc_build = bool(cfg.get("inc_build", False))
+                except Exception:
+                    pass
+            inc_build = rts_active or benchmark_inc_build
+
             stdout, stderr, rc, timed_out = run_oss_crs_run(
                 compose_file,
                 work_dir,
@@ -1221,6 +1260,7 @@ class OssCrsAdapter:
                 diff=diff,
                 seed_dir=seed_dir,
                 bug_candidate_dir=bug_candidate_dir,
+                incremental_build=inc_build,
             )
         finally:
             docker_compose_down_cleanup(work_dir)
