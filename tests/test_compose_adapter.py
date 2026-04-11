@@ -20,6 +20,7 @@ import yaml
 from crsbench.evaluation.adapter import OssCrsAdapter
 from crsbench.evaluation.adapter.compose_common import (
     docker_compose_down_cleanup,
+    force_cleanup_work_dir_containers,
     generate_run_id,
     read_crs_source_from_registry,
     run_oss_crs_artifacts,
@@ -567,6 +568,115 @@ class TestComposeCommon:
         cmd = mock_rwgt.call_args[0][0]
         assert "--run-id" in cmd
         assert "run-42" in cmd
+
+
+class TestForceCleanupOnTimeout:
+    """Regression: GitHub issue #182 -- subprocess timeout must force-kill
+    Docker containers that survived the Python subprocess death."""
+
+    @patch(
+        "crsbench.evaluation.adapter.compose_common.force_cleanup_work_dir_containers"
+    )
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_prepare_timeout_triggers_force_cleanup(
+        self,
+        mock_run: MagicMock,
+        mock_force_cleanup: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="oss-crs", timeout=10)
+        compose_file = tmp_path / "crs-compose.yaml"
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+
+        stdout, stderr, rc = run_oss_crs_prepare(compose_file, work_dir, timeout=10)
+
+        assert rc == -1
+        assert "timed out" in stderr
+        mock_force_cleanup.assert_called_once_with(work_dir)
+
+    @patch(
+        "crsbench.evaluation.adapter.compose_common.force_cleanup_work_dir_containers"
+    )
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_build_target_timeout_triggers_force_cleanup(
+        self,
+        mock_run: MagicMock,
+        mock_force_cleanup: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="oss-crs", timeout=10)
+        compose_file = tmp_path / "crs-compose.yaml"
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        target = tmp_path / "benchmark"
+        target.mkdir()
+
+        stdout, stderr, rc = run_oss_crs_build_target(
+            compose_file, work_dir, target, timeout=10
+        )
+
+        assert rc == -1
+        assert "timed out" in stderr
+        mock_force_cleanup.assert_called_once_with(work_dir)
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_force_cleanup_kills_mount_matching_containers(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        resolved = str(work_dir.resolve())
+
+        # Plan the sequence of subprocess.run calls the helper makes:
+        # (1) docker_compose_down_cleanup -> rglob empty, no docker calls
+        # (2) docker ps -aq -> returns two container ids
+        # (3) docker inspect -> first container mounts work_dir, second doesn't
+        # (4) docker kill <matching>
+        # (5) docker rm -f <matching>
+        def _fake_run(*args, **_kwargs):
+            argv = args[0]
+            if argv[:2] == ["docker", "ps"]:
+                return subprocess.CompletedProcess(
+                    argv, returncode=0, stdout="cid-a\ncid-b\n", stderr=""
+                )
+            if argv[:2] == ["docker", "inspect"]:
+                return subprocess.CompletedProcess(
+                    argv,
+                    returncode=0,
+                    stdout=f"cid-a {resolved}/shared \ncid-b /other/path \n",
+                    stderr="",
+                )
+            if argv[:2] == ["docker", "kill"]:
+                return subprocess.CompletedProcess(
+                    argv, returncode=0, stdout="", stderr=""
+                )
+            if argv[:2] == ["docker", "rm"]:
+                return subprocess.CompletedProcess(
+                    argv, returncode=0, stdout="", stderr=""
+                )
+            # docker compose down path from docker_compose_down_cleanup
+            return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = _fake_run
+
+        force_cleanup_work_dir_containers(work_dir)
+
+        kill_calls = [
+            c
+            for c in mock_run.call_args_list
+            if c.args and c.args[0][:2] == ["docker", "kill"]
+        ]
+        rm_calls = [
+            c
+            for c in mock_run.call_args_list
+            if c.args and c.args[0][:2] == ["docker", "rm"]
+        ]
+        assert len(kill_calls) == 1
+        assert "cid-a" in kill_calls[0].args[0]
+        assert "cid-b" not in kill_calls[0].args[0]
+        assert len(rm_calls) == 1
+        assert "cid-a" in rm_calls[0].args[0]
 
 
 # ===========================================================================
