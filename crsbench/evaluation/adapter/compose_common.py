@@ -398,12 +398,19 @@ def force_cleanup_work_dir_containers(work_dir: Path) -> None:
         return
 
     to_kill: list[str] = []
+    work_dir_with_sep = work_dir_resolved.rstrip("/") + "/"
     for line in inspect.stdout.splitlines():
-        parts = line.strip().split(" ", 1)
+        parts = line.strip().split()
         if len(parts) < 2:
             continue
-        cid, mounts_blob = parts[0], parts[1]
-        if work_dir_resolved in mounts_blob:
+        cid, mount_sources = parts[0], parts[1:]
+        # Whole-path segment match: container mounts work_dir itself, or a
+        # descendant of it. Substring matching would cross-kill sibling
+        # trials (e.g. `/data/work/trial-1` into `/data/work/trial-10`).
+        if any(
+            src == work_dir_resolved or src.startswith(work_dir_with_sep)
+            for src in mount_sources
+        ):
             to_kill.append(cid)
 
     if not to_kill:
