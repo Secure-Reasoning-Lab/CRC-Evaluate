@@ -20,6 +20,7 @@ import yaml
 
 from crsbench.evaluation.adapter.compose_common import (
     docker_compose_down_cleanup,
+    force_cleanup_work_dir_containers,
     generate_run_id,
     read_crs_source_from_registry,
     run_oss_crs_artifacts,
@@ -1174,7 +1175,11 @@ class OssCrsAdapter:
                 bug_candidate_dir=bug_candidate_dir,
             )
         finally:
-            docker_compose_down_cleanup(work_dir)
+            if timed_out:
+                # GH #182: subprocess death does not kill Docker containers.
+                force_cleanup_work_dir_containers(work_dir)
+            else:
+                docker_compose_down_cleanup(work_dir)
 
         execution_time = time.time() - start_time
 
