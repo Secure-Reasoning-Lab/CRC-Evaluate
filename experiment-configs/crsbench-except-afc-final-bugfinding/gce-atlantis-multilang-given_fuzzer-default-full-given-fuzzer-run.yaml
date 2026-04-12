@@ -21,7 +21,7 @@
 #   uv run crsbench cloud --config "$CONFIG" teardown --force
 
 experiment:
-  name: non-afc-final-bf-given-fuzzer
+  name: non-afc-final-bf-given-fuzzer-v2
   task: bugfinding
   benchmark_suite: crsbench-except-afc-final
   sanitizers:
@@ -41,8 +41,8 @@ runtime:
   litellm:
     skip: true
 storage:
-  experiment_filestore: /data/crsbench/experiment-data/non-afc-final-bf-given-fuzzer
-  report_filestore: /data/crsbench/report-data/non-afc-final-bf-given-fuzzer
+  experiment_filestore: /data/crsbench/experiment-data/non-afc-final-bf-given-fuzzer-v2
+  report_filestore: /data/crsbench/report-data/non-afc-final-bf-given-fuzzer-v2
 resources:
   cores_per_trial: 16
 crs_compose:
@@ -54,7 +54,7 @@ worker:
   jobs: 14
   cores_per_job: 16
   storage:
-    cleanup_after_trial: true
+    cleanup_after_trial: false
 evaluator:
   jobs: 8
   cores_per_job: 16
