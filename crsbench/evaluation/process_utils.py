@@ -1,5 +1,7 @@
 """Process utilities for CRS execution with graceful timeout handling."""
 
+import os
+import signal
 import subprocess
 import threading
 import time
@@ -48,6 +50,11 @@ def run_with_graceful_timeout(
     # sequences so timeout handling can complete without crashing.
     popen_kwargs.setdefault("encoding", "utf-8")
     popen_kwargs.setdefault("errors", "replace")
+    # GH #182: put the child in its own process group so we can SIGTERM /
+    # SIGKILL the whole tree on timeout. Without this, grandchildren (e.g.
+    # `docker` CLI wrappers) keep stdout/stderr pipes open and
+    # process.communicate() in the grace-period wait can hang forever.
+    popen_kwargs.setdefault("start_new_session", True)
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -125,10 +132,46 @@ def run_with_graceful_timeout(
     return stdout, stderr, returncode, timed_out
 
 
+def _signal_process_group(process: subprocess.Popen, sig: int) -> None:
+    """Send a signal to the child's whole process group, falling back to
+    signalling the direct child if the process group is unavailable.
+
+    GH #182: the child is started with ``start_new_session=True`` so its
+    PGID equals its PID. Signalling the group ensures grandchildren (e.g.
+    ``docker`` CLI wrappers spawned by oss-crs) are reaped too, so they
+    do not keep stdout/stderr pipes open during ``communicate()``.
+    """
+    if process.pid is None or process.poll() is not None:
+        return
+    try:
+        pgid = os.getpgid(process.pid)
+    except (ProcessLookupError, PermissionError):
+        # Child already reaped or inaccessible; fall back to direct signal.
+        try:
+            if sig == signal.SIGTERM:
+                process.terminate()
+            else:
+                process.kill()
+        except (ProcessLookupError, PermissionError):
+            pass
+        return
+    try:
+        os.killpg(pgid, sig)
+    except (ProcessLookupError, PermissionError):
+        # Group already gone. Nothing left to do.
+        pass
+
+
 def _graceful_terminate(
     process: subprocess.Popen, grace_period: int
 ) -> Tuple[str, str, int]:
     """Gracefully terminate a process with SIGTERM, then SIGKILL if needed.
+
+    Signals the child's whole process group (see ``_signal_process_group``)
+    so that grandchildren — notably ``docker`` CLI wrappers spawned by
+    oss-crs — are reaped along with the direct child. Without group-level
+    signalling, orphan grandchildren hold the pipes open and the
+    subsequent ``communicate()`` call can block past the grace period.
 
     Args:
         process: The subprocess to terminate
@@ -137,20 +180,22 @@ def _graceful_terminate(
     Returns:
         Tuple of (stdout, stderr, returncode)
     """
-    # Graceful shutdown: send SIGTERM
-    process.terminate()
+    # Graceful shutdown: SIGTERM the whole process group.
+    _signal_process_group(process, signal.SIGTERM)
 
     try:
         # Wait for graceful exit
         stdout, stderr = process.communicate(timeout=grace_period)
         returncode = process.returncode
-        logger.info(f"Process exited gracefully with code {returncode}")
+        logger.info("Process exited gracefully with code {}", returncode)
     except subprocess.TimeoutExpired:
-        # Force kill after grace period
+        # Force kill after grace period — SIGKILL the whole group so any
+        # lingering grandchildren are reaped before the final wait.
         logger.warning(
-            f"Process did not exit after {grace_period}s grace period, sending SIGKILL..."
+            "Process did not exit after {}s grace period, sending SIGKILL...",
+            grace_period,
         )
-        process.kill()
+        _signal_process_group(process, signal.SIGKILL)
         stdout, stderr = process.communicate()
         returncode = -9  # SIGKILL
         logger.info("Process killed with SIGKILL")
