@@ -444,6 +444,80 @@ def force_cleanup_work_dir_containers(work_dir: Path) -> None:
     except (subprocess.SubprocessError, OSError) as exc:
         logger.warning("force_cleanup: docker rm -f failed: {}", exc)
 
+    _cleanup_orphaned_networks(work_dir_resolved)
+
+
+def _cleanup_orphaned_networks(work_dir_resolved: str) -> None:
+    """Remove Docker networks created by compose projects under *work_dir*.
+
+    Scoped by work_dir path segment so concurrent trials on the same host
+    are never affected.  Only removes networks with zero attached containers.
+    """
+    try:
+        ls = subprocess.run(
+            ["docker", "network", "ls", "--format", "{{.ID}} {{.Name}}"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        logger.warning("force_cleanup: docker network ls failed: {}", exc)
+        return
+
+    work_dir_slug = work_dir_resolved.rstrip("/").replace("/", "-").lstrip("-")
+
+    to_remove: list[str] = []
+    for line in ls.stdout.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2:
+            continue
+        net_id, net_name = parts
+        if net_name in ("bridge", "host", "none"):
+            continue
+        if work_dir_slug not in net_name:
+            continue
+        try:
+            info = subprocess.run(
+                [
+                    "docker",
+                    "network",
+                    "inspect",
+                    net_id,
+                    "--format",
+                    "{{len .Containers}}",
+                ],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=10,
+            )
+            if info.stdout.strip() == "0":
+                to_remove.append(net_id)
+        except (subprocess.SubprocessError, OSError):
+            continue
+
+    if not to_remove:
+        return
+
+    logger.warning(
+        "force_cleanup: removing {} orphaned network(s) for work_dir {}",
+        len(to_remove),
+        work_dir_resolved,
+    )
+    for net_id in to_remove:
+        try:
+            subprocess.run(
+                ["docker", "network", "rm", net_id],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=10,
+            )
+        except (subprocess.SubprocessError, OSError):
+            pass
+
 
 def generate_run_id() -> str:
     """Generate a unique run identifier for oss-crs.
