@@ -20,6 +20,7 @@ import yaml
 
 from crsbench.evaluation.adapter.compose_common import (
     docker_compose_down_cleanup,
+    force_cleanup_work_dir_containers,
     generate_run_id,
     read_crs_source_from_registry,
     run_oss_crs_artifacts,
@@ -1174,7 +1175,15 @@ class OssCrsAdapter:
                 bug_candidate_dir=bug_candidate_dir,
             )
         finally:
-            docker_compose_down_cleanup(work_dir)
+            # GH #182: run force_cleanup unconditionally so non-timeout
+            # failure paths (e.g., oss-crs exits non-zero with dangling
+            # containers) also get the mount-scoped docker kill sweep.
+            # force_cleanup_work_dir_containers already calls
+            # docker_compose_down_cleanup internally as its first pass,
+            # so this is a strict superset of the previous behaviour.
+            # The mount filter is scoped to this trial's work_dir, so
+            # concurrent trials on the same worker are unaffected.
+            force_cleanup_work_dir_containers(work_dir)
 
         execution_time = time.time() - start_time
 

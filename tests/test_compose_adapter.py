@@ -20,6 +20,7 @@ import yaml
 from crsbench.evaluation.adapter import OssCrsAdapter
 from crsbench.evaluation.adapter.compose_common import (
     docker_compose_down_cleanup,
+    force_cleanup_work_dir_containers,
     generate_run_id,
     read_crs_source_from_registry,
     run_oss_crs_artifacts,
@@ -567,6 +568,301 @@ class TestComposeCommon:
         cmd = mock_rwgt.call_args[0][0]
         assert "--run-id" in cmd
         assert "run-42" in cmd
+
+
+class TestForceCleanupOnTimeout:
+    """Regression: GitHub issue #182 -- subprocess timeout must force-kill
+    Docker containers that survived the Python subprocess death."""
+
+    @patch(
+        "crsbench.evaluation.adapter.compose_common.force_cleanup_work_dir_containers"
+    )
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_prepare_timeout_triggers_force_cleanup(
+        self,
+        mock_run: MagicMock,
+        mock_force_cleanup: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="oss-crs", timeout=10)
+        compose_file = tmp_path / "crs-compose.yaml"
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+
+        stdout, stderr, rc = run_oss_crs_prepare(compose_file, work_dir, timeout=10)
+
+        assert rc == -1
+        assert "timed out" in stderr
+        mock_force_cleanup.assert_called_once_with(work_dir)
+
+    @patch(
+        "crsbench.evaluation.adapter.compose_common.force_cleanup_work_dir_containers"
+    )
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_build_target_timeout_triggers_force_cleanup(
+        self,
+        mock_run: MagicMock,
+        mock_force_cleanup: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="oss-crs", timeout=10)
+        compose_file = tmp_path / "crs-compose.yaml"
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        target = tmp_path / "benchmark"
+        target.mkdir()
+
+        stdout, stderr, rc = run_oss_crs_build_target(
+            compose_file, work_dir, target, timeout=10
+        )
+
+        assert rc == -1
+        assert "timed out" in stderr
+        mock_force_cleanup.assert_called_once_with(work_dir)
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_force_cleanup_kills_mount_matching_containers(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        resolved = str(work_dir.resolve())
+
+        # Plan the sequence of subprocess.run calls the helper makes:
+        # (1) docker_compose_down_cleanup -> rglob empty, no docker calls
+        # (2) docker ps -aq -> returns two container ids
+        # (3) docker inspect -> first container mounts work_dir, second doesn't
+        # (4) docker kill <matching>
+        # (5) docker rm -f <matching>
+        def _fake_run(*args, **_kwargs):
+            argv = args[0]
+            if argv[:2] == ["docker", "ps"]:
+                return subprocess.CompletedProcess(
+                    argv, returncode=0, stdout="cid-a\ncid-b\n", stderr=""
+                )
+            if argv[:2] == ["docker", "inspect"]:
+                return subprocess.CompletedProcess(
+                    argv,
+                    returncode=0,
+                    stdout=f"cid-a {resolved}/shared \ncid-b /other/path \n",
+                    stderr="",
+                )
+            if argv[:2] == ["docker", "kill"]:
+                return subprocess.CompletedProcess(
+                    argv, returncode=0, stdout="", stderr=""
+                )
+            if argv[:2] == ["docker", "rm"]:
+                return subprocess.CompletedProcess(
+                    argv, returncode=0, stdout="", stderr=""
+                )
+            # docker compose down path from docker_compose_down_cleanup
+            return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = _fake_run
+
+        force_cleanup_work_dir_containers(work_dir)
+
+        kill_calls = [
+            c
+            for c in mock_run.call_args_list
+            if c.args and c.args[0][:2] == ["docker", "kill"]
+        ]
+        rm_calls = [
+            c
+            for c in mock_run.call_args_list
+            if c.args and c.args[0][:2] == ["docker", "rm"]
+        ]
+        assert len(kill_calls) == 1
+        assert "cid-a" in kill_calls[0].args[0]
+        assert "cid-b" not in kill_calls[0].args[0]
+        assert len(rm_calls) == 1
+        assert "cid-a" in rm_calls[0].args[0]
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_force_cleanup_uses_path_segment_match_not_substring(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """Regression test for the trial-1 / trial-10 substring bug.
+
+        A plain `work_dir_resolved in mounts_blob` check would incorrectly
+        match any sibling path that shares the same prefix. With 14
+        concurrent trials on a single worker, `/data/work/trial-1`'s
+        cleanup would kill containers belonging to `/data/work/trial-10`,
+        `/data/work/trial-100`, etc. The fix is a whole-path segment
+        match: the mount source must equal work_dir or start with
+        ``work_dir + "/"``.
+
+        This test pins the fix by enumerating every tricky case:
+        - exact-match mount (MUST kill)
+        - descendant mount (MUST kill)
+        - numeric-suffix sibling (MUST NOT kill) — the core bug
+        - lexical prefix sibling (MUST NOT kill)
+        - unrelated path (MUST NOT kill)
+        - multi-mount container where one mount matches (MUST kill)
+        - multi-mount container where no mount matches (MUST NOT kill)
+        """
+        # Pin work_dir to a stable absolute path independent of tmp_path
+        # so the assertions below can reason about exact string matches.
+        # We bypass the normal tmp_path fixture because we need a parent
+        # directory with multiple sibling numeric-suffixed subdirectories
+        # and the substring bug is about the suffix, not the test env.
+        work_root = tmp_path / "work"
+        work_root.mkdir()
+        work_dir = work_root / "trial-1"
+        work_dir.mkdir()
+        resolved = str(work_dir.resolve())
+
+        # Craft a fleet of fake containers, one per scenario.
+        # The inspect output format is "{id} {source1} {source2} ..." per
+        # line (space-separated mount sources), matching the adapter's
+        # docker inspect -f template.
+        containers = {
+            # === MUST kill ===
+            "cid-exact": [resolved],  # exact-match mount
+            "cid-descendant": [f"{resolved}/logs"],  # deeper descendant
+            "cid-deep": [f"{resolved}/oss-crs-workdir/runs/foo"],  # many levels
+            "cid-multi-match": [
+                "/unrelated/path",
+                f"{resolved}/shared",  # second mount matches
+            ],
+            # === MUST NOT kill ===
+            # THE CORE BUG: numeric-suffix sibling. Substring check would
+            # match because `trial-1` is a prefix of `trial-10`.
+            "cid-sibling-numeric": [f"{work_root}/trial-10/shared"],
+            "cid-sibling-numeric-100": [f"{work_root}/trial-100"],
+            # Lexical prefix sibling: work_dir name is a prefix of another
+            # directory name at the same parent level.
+            "cid-sibling-lex": [f"{work_root}/trial-1a/data"],
+            # Completely unrelated path.
+            "cid-unrelated": ["/var/run/docker.sock"],
+            # Multi-mount container with only near-misses.
+            "cid-multi-near-miss": [
+                f"{work_root}/trial-10",
+                f"{work_root}/trial-1a",
+            ],
+        }
+        must_kill = {"cid-exact", "cid-descendant", "cid-deep", "cid-multi-match"}
+        must_not_kill = set(containers) - must_kill
+
+        # Build the docker inspect stdout from the container map. One
+        # line per container, matching the real -f template output.
+        inspect_stdout = "\n".join(
+            f"{cid} {' '.join(sources)}" for cid, sources in containers.items()
+        )
+        ps_stdout = "\n".join(containers.keys())
+
+        def _fake_run(*args, **_kwargs):
+            argv = args[0]
+            if argv[:2] == ["docker", "ps"]:
+                return subprocess.CompletedProcess(
+                    argv, returncode=0, stdout=ps_stdout + "\n", stderr=""
+                )
+            if argv[:2] == ["docker", "inspect"]:
+                return subprocess.CompletedProcess(
+                    argv, returncode=0, stdout=inspect_stdout + "\n", stderr=""
+                )
+            if argv[:2] == ["docker", "kill"]:
+                return subprocess.CompletedProcess(
+                    argv, returncode=0, stdout="", stderr=""
+                )
+            if argv[:2] == ["docker", "rm"]:
+                return subprocess.CompletedProcess(
+                    argv, returncode=0, stdout="", stderr=""
+                )
+            # docker compose down path from docker_compose_down_cleanup
+            return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = _fake_run
+
+        force_cleanup_work_dir_containers(work_dir)
+
+        # Extract the exact set of container ids that were passed to
+        # `docker kill` and `docker rm -f`.
+        kill_calls = [
+            c
+            for c in mock_run.call_args_list
+            if c.args and c.args[0][:2] == ["docker", "kill"]
+        ]
+        rm_calls = [
+            c
+            for c in mock_run.call_args_list
+            if c.args and c.args[0][:2] == ["docker", "rm"]
+        ]
+
+        # Exactly one kill call and one rm call, both with the same
+        # container-id arguments (after "docker kill" / "docker rm -f").
+        assert len(kill_calls) == 1, (
+            f"Expected exactly 1 docker kill call; got {len(kill_calls)}. "
+            f"This usually means cleanup is running multiple passes or the "
+            f"test fake is matching the wrong subprocess invocation."
+        )
+        assert len(rm_calls) == 1
+
+        killed = set(kill_calls[0].args[0][2:])
+        removed = set(rm_calls[0].args[0][3:])  # skip "docker", "rm", "-f"
+        assert killed == removed, "kill and rm container sets diverged"
+
+        # Positive assertions: every must-kill container was killed.
+        missing = must_kill - killed
+        assert not missing, (
+            f"Containers that mount work_dir were NOT killed: {sorted(missing)}. "
+            f"Killed set: {sorted(killed)}"
+        )
+
+        # Negative assertions: no sibling/unrelated container was killed.
+        # This is the load-bearing check — substring matching would make
+        # this fail because "trial-1" is a substring of "trial-10".
+        spurious = must_not_kill & killed
+        assert not spurious, (
+            f"Containers that do NOT mount work_dir were killed due to a "
+            f"substring match bug. Spurious kills: {sorted(spurious)}. "
+            f"This likely means force_cleanup_work_dir_containers reverted "
+            f"to the pre-fix `work_dir_resolved in mounts_blob` check."
+        )
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_force_cleanup_trailing_slash_in_work_dir(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """A work_dir path whose resolved form has no trailing slash must
+        still match descendant mounts, and must not over-match when the
+        separator is normalized.
+        """
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        resolved = str(work_dir.resolve())
+        # Sanity: pathlib.Path.resolve() returns no trailing slash.
+        assert not resolved.endswith("/")
+
+        def _fake_run(*args, **_kwargs):
+            argv = args[0]
+            if argv[:2] == ["docker", "ps"]:
+                return subprocess.CompletedProcess(
+                    argv, returncode=0, stdout="cid-x\ncid-y\n", stderr=""
+                )
+            if argv[:2] == ["docker", "inspect"]:
+                return subprocess.CompletedProcess(
+                    argv,
+                    returncode=0,
+                    # cid-x mounts the work_dir exactly (no trailing slash)
+                    # cid-y mounts a descendant with a normal trailing sep
+                    stdout=f"cid-x {resolved}\ncid-y {resolved}/oss-crs-workdir\n",
+                    stderr="",
+                )
+            return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = _fake_run
+
+        force_cleanup_work_dir_containers(work_dir)
+
+        kill_calls = [
+            c
+            for c in mock_run.call_args_list
+            if c.args and c.args[0][:2] == ["docker", "kill"]
+        ]
+        assert len(kill_calls) == 1
+        killed = set(kill_calls[0].args[0][2:])
+        assert killed == {"cid-x", "cid-y"}
 
 
 # ===========================================================================
