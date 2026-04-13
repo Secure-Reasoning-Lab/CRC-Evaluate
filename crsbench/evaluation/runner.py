@@ -378,6 +378,67 @@ class BenchmarkRunner:
                 self.on_build_start()
             self.adapter.build(benchmark_path, trial_output_dir)
 
+    def _apply_ci_verify_result(
+        self,
+        harness_result: Optional[HarnessResult],
+        trial_output_dir: Optional[Path],
+    ) -> None:
+        """Populate CI verify status on ``harness_result`` from the CRS
+        ``verify_patch_timing.json`` file (if present).
+
+        Sidecar-based verifier CRSes (builder-sidecar-lite and similar)
+        emit a structured result file under each CRS ``log_dir``.  The
+        adapter copies those log_dir trees under
+        ``trial_output_dir/output/logs/crs/<crs_name>/log_dir/``, so we
+        scan that layout here.  Absence of the file is normal for
+        performance-measurement CRSes and is not an error.
+        """
+        if harness_result is None or trial_output_dir is None:
+            return
+
+        crs_log_root = trial_output_dir / "output" / "logs" / "crs"
+        if not crs_log_root.is_dir():
+            return
+
+        import json as _json
+
+        for crs_dir in sorted(crs_log_root.iterdir()):
+            result_file = crs_dir / "log_dir" / "verify_patch_timing.json"
+            if not result_file.exists():
+                continue
+            try:
+                data = _json.loads(result_file.read_text())
+            except Exception as exc:
+                self.logger.warning(
+                    "Failed to parse verify_patch_timing.json at {}: {}",
+                    result_file,
+                    exc,
+                )
+                continue
+
+            status = data.get("status")
+            # Legacy verify_patch_timing.json files only carried `rebuild`
+            # and `test` keys with no status field.  Treat them as opaque
+            # and leave ci_verify_status unset.
+            if not isinstance(status, str):
+                continue
+
+            harness_result.ci_verify_status = status
+            reason = data.get("reason")
+            if isinstance(reason, str):
+                harness_result.ci_verify_reason = reason
+            failed_step = data.get("failed_step")
+            if isinstance(failed_step, str):
+                harness_result.ci_verify_failed_step = failed_step
+
+            self.logger.info(
+                f"CI verify status for {harness_result.name} "
+                f"({crs_dir.name}): {status}"
+                + (f" (failed_step={failed_step})" if failed_step else "")
+            )
+            # First match wins; sidecar CRSes write exactly one result file.
+            return
+
     def _collect_crs_results(
         self,
         collector: ResultCollector,
@@ -792,6 +853,11 @@ class BenchmarkRunner:
                 self.logger.warning(
                     "Failed to collect adapter results: {}", collect_err
                 )
+
+            # If the CRS emitted a structured verify_patch result file
+            # (sidecar-based CI verifiers), populate the harness_result so
+            # downstream success evaluation can honor it.
+            self._apply_ci_verify_result(harness_result, trial_output_dir)
 
         except Exception as e:
             self.logger.error(f"Failed to evaluate harness '{harness.name}': {str(e)}")
