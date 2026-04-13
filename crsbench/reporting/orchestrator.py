@@ -379,7 +379,7 @@ class ReportGenerator:
             )
             result["html"] = html_path
 
-        if format in ("csv", "all"):
+        if format in ("csv", "all") or ci_test:
             csv_paths = self.csv_generator.generate_experiment_report(
                 experiment_metrics.model_dump()
             )

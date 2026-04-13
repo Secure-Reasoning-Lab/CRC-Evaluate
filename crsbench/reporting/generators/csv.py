@@ -611,8 +611,9 @@ class CSVReportGenerator:
         """Generate CI sidecar-test results CSV from patcher logs.
 
         For each trial, parses the patcher stdout log to determine whether the
-        CI test fixture (builder-sidecar-full / builder-sidecar-lite) passed or
-        failed, and extracts the failure reason when it did not pass.
+        CI test fixture (builder-sidecar-full / builder-sidecar-lite) passed,
+        failed, or skipped because no patch was produced, and extracts the
+        failure reason when it did not pass.
 
         Columns:
             crs, benchmark, harness, cpv, mode, sanitizer,
@@ -847,6 +848,28 @@ class CSVReportGenerator:
         return candidates[0] if candidates else None
 
     @staticmethod
+    def _parse_verify_patch_result(trial_dir: Path) -> dict[str, Any] | None:
+        """Load the structured verify_patch_timing.json if present.
+
+        Returns the parsed dict (possibly containing ``status``, ``reason``,
+        ``failed_step``, ``steps``, ``rebuild``, ``test``) or ``None`` when
+        no result file is found.  A file that is found but malformed
+        returns an empty dict.
+        """
+        crs_log_dir = trial_dir / "output" / "logs" / "crs"
+        if not crs_log_dir.is_dir():
+            return None
+        for crs_dir in sorted(crs_log_dir.iterdir()):
+            result_file = crs_dir / "log_dir" / "verify_patch_timing.json"
+            if not result_file.exists():
+                continue
+            try:
+                return json.loads(result_file.read_text())
+            except Exception:
+                return {}
+        return None
+
+    @staticmethod
     def _parse_ci_test_result(
         trial_dir: Path, worker_log_path: Path
     ) -> tuple[str, str, str]:
@@ -854,8 +877,37 @@ class CSVReportGenerator:
 
         Returns:
             Tuple of (ci_status, failure_reason, failure_log).
-            ci_status is one of: PASS, FAIL, BUILD_FAILED, TIMEOUT, UNKNOWN.
+            ci_status is one of: PASS, FAIL, BUILD_FAILED, TIMEOUT, SKIP, UNKNOWN.
         """
+        # Prefer the structured result file when the CRS emits one.  This
+        # is authoritative for sidecar-based verifier CRSes (e.g.
+        # builder-sidecar-lite) and avoids fragile text parsing.
+        verify_result = CSVReportGenerator._parse_verify_patch_result(trial_dir)
+        if verify_result is not None:
+            status = verify_result.get("status")
+            if status == "pass":
+                return "PASS", "", ""
+            if status in ("fail", "error"):
+                reason = verify_result.get("reason") or ""
+                failed_step = verify_result.get("failed_step") or ""
+                # Compose a concise failure log from the step details.
+                step_details = verify_result.get("steps") or {}
+                failed_detail = step_details.get(failed_step) or {}
+                failure_log_parts: list[str] = []
+                if failed_step:
+                    failure_log_parts.append(f"step={failed_step}")
+                if isinstance(failed_detail, dict):
+                    for key in ("exit_code", "reason", "stderr_tail"):
+                        if key in failed_detail:
+                            failure_log_parts.append(f"{key}={failed_detail[key]}")
+                failure_log = " | ".join(str(p) for p in failure_log_parts if p)
+                # Classify fail categories for the CSV report.
+                ci_status = "FAIL" if status == "fail" else "ERROR"
+                if failed_step == "apply_patch_build":
+                    ci_status = "BUILD_FAILED"
+                return ci_status, reason, failure_log
+            # Unknown status value — fall through to legacy parsing.
+
         worker_text = ""
         if worker_log_path.exists():
             try:
@@ -879,7 +931,13 @@ class CSVReportGenerator:
         if patcher_log is None:
             # No patcher log: infer from worker log
             if "Trial" in worker_text and "Completed" in worker_text:
-                return "UNKNOWN", "no patcher log found", ""
+                no_patch_markers = (
+                    "No patches found for distributed verification",
+                    "CRS produced no patches",
+                    "0 patches produced",
+                )
+                if any(marker in worker_text for marker in no_patch_markers):
+                    return "SKIP", "no patches produced", ""
             return "UNKNOWN", "no patcher log found", ""
 
         try:
@@ -895,9 +953,6 @@ class CSVReportGenerator:
             clean_lines.append(stripped)
 
         patcher_clean = "\n".join(clean_lines)
-
-        if "ALL PASSED" in patcher_clean:
-            return "PASS", "", ""
 
         # Collect FAIL lines
         fail_lines = [line for line in clean_lines if re.search(r"\bFAIL\b", line)]
@@ -921,6 +976,13 @@ class CSVReportGenerator:
             ctx_end = min(len(clean_lines), first_fail_idx + 7)
             failure_log = " | ".join(clean_lines[ctx_start:ctx_end])
             return "FAIL", failure_reason, failure_log
+
+        pass_markers = (
+            "ALL PASSED",
+            "SUCCESS: patch verified",
+        )
+        if any(marker in patcher_clean for marker in pass_markers):
+            return "PASS", "", ""
 
         # Patcher exited without ALL PASSED or FAIL lines
         if worker_text and "Trial" in worker_text and "Failed" in worker_text:

@@ -136,7 +136,7 @@ Examples:
         action="store_true",
         help=(
             "Generate a CI sidecar-test results CSV (ci_test_results.csv). "
-            "Parses patcher logs to report PASS/FAIL per trial instead of patch metrics. "
+            "Parses patcher logs to report PASS/FAIL/SKIP per trial instead of patch metrics. "
             "Use with builder-sidecar-full or builder-sidecar-lite experiments."
         ),
     )
