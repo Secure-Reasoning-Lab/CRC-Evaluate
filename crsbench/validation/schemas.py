@@ -3499,6 +3499,9 @@ class ExperimentConfig(BaseModel):
                 "coverage_enabled",
                 "coverage_saturation_time",
                 "coverage_early_stop",
+                "rts_enabled",
+                "inc_build_enabled",
+                "skip_verification",
             )
             for grouped_key in runtime_groupable_keys:
                 if grouped_key not in runtime:
