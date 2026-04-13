@@ -3300,6 +3300,13 @@ class ExperimentConfig(BaseModel):
         "support it. When True (default), RTS is activated for eligible benchmarks "
         "(those with rts_mode != 'none' and inc_build = true).",
     )
+    inc_build_enabled: bool = Field(
+        default=True,
+        description="Enable incremental build (--incremental-build flag for oss-crs "
+        "build-target and run). When False, every trial does a full rebuild from "
+        "scratch regardless of project.yaml inc_build setting. Useful for ablation "
+        "studies comparing incremental vs full build performance.",
+    )
     oss_fuzz_path: Path = Field(
         default=Path("third_party/oss-fuzz"),
         description="Path to oss-fuzz directory (default: third_party/oss-fuzz)",

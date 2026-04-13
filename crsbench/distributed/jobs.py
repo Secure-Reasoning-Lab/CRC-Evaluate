@@ -1446,6 +1446,7 @@ def run_crs_trial(
             **compose_config,
         }
         adapter_config["fuzzing_language"] = benchmark_language
+        adapter_config["inc_build_enabled"] = config.inc_build_enabled
         rts_env = _load_benchmark_rts_env(
             benchmark_path, rts_enabled=config.rts_enabled
         )

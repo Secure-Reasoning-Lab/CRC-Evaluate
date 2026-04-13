@@ -231,6 +231,7 @@ class OssCrsAdapter:
         }
         self._build_timeout: int = 3600
         self._run_timeout: int = 7200
+        self._inc_build_enabled: bool = True
         self._sanitizer: str = "address"
         self._skip_litellm: bool = False
         self._litellm_runtime_url: str = ""
@@ -762,6 +763,8 @@ class OssCrsAdapter:
             self._configured_run_id = _normalize_optional_text(config["run_id"])
             # Keep adapter run-id aligned with explicit trial-scoped config.
             self._run_id = self._configured_run_id
+        if "inc_build_enabled" in config:
+            self._inc_build_enabled = bool(config["inc_build_enabled"])
 
     def _collect_required_llm_aliases(
         self, crs_names: list[str]
@@ -1191,7 +1194,9 @@ class OssCrsAdapter:
                         benchmark_inc_build = bool(cfg.get("inc_build", False))
                     except Exception:
                         pass
-                inc_build = rts_active or benchmark_inc_build
+                inc_build = (
+                    rts_active or benchmark_inc_build
+                ) and self._inc_build_enabled
                 logger.info(f"oss-crs build-target for {project_name}")
                 stdout, stderr, rc = run_oss_crs_build_target(
                     compose_file,
@@ -1324,7 +1329,7 @@ class OssCrsAdapter:
                     benchmark_inc_build = bool(cfg.get("inc_build", False))
                 except Exception:
                     pass
-            inc_build = rts_active or benchmark_inc_build
+            inc_build = (rts_active or benchmark_inc_build) and self._inc_build_enabled
 
             stdout, stderr, rc, timed_out = run_oss_crs_run(
                 compose_file,
