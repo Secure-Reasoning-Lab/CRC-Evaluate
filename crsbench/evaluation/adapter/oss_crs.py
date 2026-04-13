@@ -8,6 +8,7 @@ from SUBMIT_DIR after execution.
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import os
 import re
 import shutil
@@ -240,6 +241,7 @@ class OssCrsAdapter:
         self._resolved_artifacts: Optional[dict[str, Any]] = None
         self._configured_run_id: Optional[str] = None
         self._run_id: Optional[str] = None
+        self._runtime_run_logs_base_dir: Optional[Path] = None
 
         # Track whether CRS images have been prepared (shared across benchmarks)
         self._prepared: bool = False
@@ -266,25 +268,25 @@ class OssCrsAdapter:
         crs = self._lock_token(self._crs_config_name)
         return self._lock_dir() / f"crsbench-oss-crs-prepare-{crs}.lock"
 
-    def _build_done_marker_path(self, project_name: str) -> Path:
-        """Return file-based marker path indicating build-target completed.
-
-        Uses a shared host-local path so that all CPV trials for the same
-        benchmark see the marker and skip redundant builds.
-        """
-        crs = self._lock_token(self._crs_config_name)
-        project = self._lock_token(project_name)
-        sanitizer = self._lock_token(self._sanitizer)
-        return (
-            self._lock_dir()
-            / f"crsbench-oss-crs-build-done-{crs}-{project}-{sanitizer}"
-        )
-
     def _cleanup_build_done_markers(self) -> None:
-        """Remove stale build-done markers from shared lock dir.
+        """Remove any leftover host-global build-done markers from prior
+        adapter revisions.
 
-        Called when adapter config changes (new experiment) so that
-        markers from a previous experiment don't suppress required builds.
+        Earlier revisions of this adapter wrote
+        ``/tmp/crsbench-oss-crs-build-done-*`` files to cache "build
+        already done" state across trials.  That cache was unsound for
+        oss-crs: build outputs live under each trial's per-trial
+        ``work_dir`` (the directory materialized from the Docker
+        snapshot) and are not transferable across fresh work_dirs — a
+        skipped ``build-target`` leaves ``oss-crs run`` with an empty
+        ``BUILD_OUT_DIR`` volume mount in the patcher container and
+        downstream steps fail with ``rsync: link_stat
+        "/OSS_CRS_BUILD_OUT_DIR/build" failed``.
+
+        The current code no longer reads or writes those markers, but
+        markers from older revisions can still be present on long-lived
+        machines.  This method clears them so the new build path always
+        runs freshly.  It is safe to call repeatedly and on fresh hosts.
         """
         crs = self._lock_token(self._crs_config_name)
         prefix = f"crsbench-oss-crs-build-done-{crs}-"
@@ -413,12 +415,68 @@ class OssCrsAdapter:
     def _get_run_logs_path(self, key: str) -> Optional[Path]:
         """Look up a path from the top-level ``run_logs`` in artifacts."""
         if self._resolved_artifacts is None:
-            return None
+            return self._get_runtime_run_logs_path(key)
         run_logs = self._resolved_artifacts.get("run_logs")
         if run_logs is None:
-            return None
+            return self._get_runtime_run_logs_path(key)
         value = run_logs.get(key)
-        return Path(value) if value else None
+        return Path(value) if value else self._get_runtime_run_logs_path(key)
+
+    def _get_runtime_run_logs_path(self, key: str) -> Optional[Path]:
+        """Return deterministic run-logs paths captured during ``run()``."""
+        if self._runtime_run_logs_base_dir is None:
+            return None
+        runtime_paths = {
+            "base": self._runtime_run_logs_base_dir,
+            "compose_stdout_log": self._runtime_run_logs_base_dir
+            / "docker-compose.stdout.log",
+            "compose_stderr_log": self._runtime_run_logs_base_dir
+            / "docker-compose.stderr.log",
+            "service_logs": self._runtime_run_logs_base_dir / "services",
+        }
+        return runtime_paths.get(key)
+
+    def _get_crs_run_logs_by_crs(self) -> dict[str, Path]:
+        """Return per-CRS run logs, falling back to runtime path for this CRS."""
+        crs_run_logs = self._get_all_crs_artifact_paths("run_logs")
+        runtime_base = self._get_runtime_run_logs_path("base")
+        if runtime_base is not None and self._crs_config_name not in crs_run_logs:
+            crs_run_logs[self._crs_config_name] = (
+                runtime_base / "crs" / self._crs_config_name
+            )
+        return crs_run_logs
+
+    @staticmethod
+    def _compute_staged_target_key(staged_path: Path) -> str:
+        """Mirror oss-crs target-key derivation for deterministic run logs."""
+        hasher = hashlib.sha256()
+        for name in ("Dockerfile", "build.sh", "test.sh"):
+            candidate = staged_path / name
+            if not candidate.exists():
+                continue
+            hasher.update(f"\n--- {name}\n".encode())
+            hasher.update(candidate.read_bytes())
+        return f"{staged_path.name}_{hasher.hexdigest()[:12]}"
+
+    def _set_runtime_run_logs_base_dir(
+        self,
+        staged_path: Path,
+        harness_name: str,
+    ) -> None:
+        """Capture deterministic run logs root independently of artifacts CLI."""
+        if self._work_dir is None or self._run_id is None:
+            self._runtime_run_logs_base_dir = None
+            return
+        target_key = self._compute_staged_target_key(staged_path)
+        self._runtime_run_logs_base_dir = (
+            self._work_dir
+            / self._sanitizer
+            / "runs"
+            / self._run_id
+            / "logs"
+            / target_key
+            / harness_name
+        )
 
     @property
     def exchange_base_dir(self) -> Optional[Path]:
@@ -481,7 +539,7 @@ class OssCrsAdapter:
         compose_stdout = self.compose_stdout_log
         compose_stderr = self.compose_stderr_log
         service_logs = self.service_logs_dir
-        crs_run_logs_by_crs = self._get_all_crs_artifact_paths("run_logs")
+        crs_run_logs_by_crs = self._get_crs_run_logs_by_crs()
         crs_log_dirs_by_crs = self._get_all_crs_artifact_paths("log_dir")
 
         if compose_stdout and compose_stdout.exists():
@@ -515,8 +573,10 @@ class OssCrsAdapter:
                 logger.info(f"Copied CRS log_dir artifacts from {crs_log_dir}")
 
         return {
-            "run_logs_base_dir": str(self.run_logs_base_dir)
-            if self.run_logs_base_dir
+            "run_logs_base_dir": str(
+                self.run_logs_base_dir or self._get_runtime_run_logs_path("base")
+            )
+            if (self.run_logs_base_dir or self._get_runtime_run_logs_path("base"))
             else None,
             "compose_stdout_log": str(compose_stdout) if compose_stdout else None,
             "compose_stderr_log": str(compose_stderr) if compose_stderr else None,
@@ -1035,6 +1095,7 @@ class OssCrsAdapter:
         # Reset lifecycle-scoped run state for each trial build invocation.
         self._run_id = self._configured_run_id
         self._resolved_artifacts = None
+        self._runtime_run_logs_base_dir = None
 
         project_name = benchmark_path.name
         if project_name in self._built_projects:
@@ -1080,19 +1141,38 @@ class OssCrsAdapter:
                     logger.info(f"CRS prepare complete for {self._crs_config_name}")
 
         # Phase 2: build-target (compile the target project).
-        # This is project-scoped, keep per-benchmark/sanitizer lock.
-        # Use file-based marker to skip redundant builds across worker processes.
-        build_done_marker = self._build_done_marker_path(project_name)
-
-        # Fast path: check marker before acquiring lock
-        if build_done_marker.exists() or project_name in self._built_projects:
-            logger.debug(f"Project {project_name} already built, skipping")
+        #
+        # The build-done marker is now **per-trial** instead of
+        # host-global.  Earlier revisions of this adapter used a shared
+        # ``/tmp/crsbench-oss-crs-build-done-*`` marker to skip
+        # build-target across trials, but that optimization is unsound
+        # for oss-crs: build outputs live under ``work_dir`` (the build
+        # directory materialized from the Docker snapshot) and are not
+        # transferable across trials that each own a fresh ``work_dir``.
+        # Skipping build-target based on a host-global marker left the
+        # subsequent ``oss-crs run`` with an empty ``BUILD_OUT_DIR``,
+        # causing the patcher container to fail with
+        # ``rsync: link_stat "/OSS_CRS_BUILD_OUT_DIR/build" failed``.
+        #
+        # We still keep the in-memory ``_built_projects`` short-circuit
+        # so that the same adapter instance handling multiple harnesses
+        # of the same benchmark inside a single trial does not re-invoke
+        # build-target.  That case shares the same ``work_dir`` and is
+        # safe.
+        if project_name in self._built_projects:
+            logger.debug(
+                f"Project {project_name} already built in this adapter "
+                f"instance, skipping"
+            )
             return
 
         with self._acquire_build_lock(project_name):
             # Re-check after lock in case another actor finished first.
-            if build_done_marker.exists() or project_name in self._built_projects:
-                logger.debug(f"Project {project_name} already built, skipping")
+            if project_name in self._built_projects:
+                logger.debug(
+                    f"Project {project_name} already built in this adapter "
+                    f"instance, skipping"
+                )
                 return
 
             build_succeeded = False
@@ -1130,8 +1210,6 @@ class OssCrsAdapter:
                 if not build_succeeded:
                     docker_compose_down_cleanup(work_dir)
 
-            # Write file-based marker so other workers skip this build
-            build_done_marker.touch()
             self._built_projects.add(project_name)
             logger.info(f"Build complete for {project_name}")
 
@@ -1230,6 +1308,7 @@ class OssCrsAdapter:
 
         if self._run_id is None:
             self._run_id = self._configured_run_id or generate_run_id()
+        self._set_runtime_run_logs_base_dir(staged_path, harness.name)
 
         try:
             # Determine incremental build the same way as build phase.

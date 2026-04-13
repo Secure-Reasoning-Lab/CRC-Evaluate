@@ -203,6 +203,7 @@ def run_oss_crs_run(
     bug_candidate: Optional[Path] = None,
     bug_candidate_dir: Optional[Path] = None,
     incremental_build: bool = False,
+    build_id: Optional[str] = None,
 ) -> tuple[str, str, int, bool]:
     """Run ``oss-crs run`` with timeout and graceful shutdown.
 
@@ -264,6 +265,8 @@ def run_oss_crs_run(
         cmd.extend(["--bug-candidate-dir", str(bug_candidate_dir)])
     if incremental_build:
         cmd.append("--incremental-build")
+    if build_id is not None:
+        cmd.extend(["--build-id", build_id])
 
     logger.debug(f"Running oss-crs run: {' '.join(cmd)}")
 
