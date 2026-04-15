@@ -16,6 +16,16 @@ Today that managed-cloud path is implemented for GCE launches.
 - `crsbench cloud --config <config.yaml> monitor <experiment>` attaches to a
   launched remote orchestrator and keeps refreshing the live trial-queue view.
 
+When Apprise URLs are configured in the operator environment, `cloud monitor`
+sends one operator-side terminal notification after it first observes the queue
+transition from non-empty to empty during that attached session. When failed
+jobs remain at that drain point, the terminal message reports a failure instead
+of a completion. Attaching while the queue is already idle does not emit a
+terminal notification for that initial idle state, but a later active-to-idle
+transition in the same session still can. If operator-side `cloud monitor`
+Apprise and orchestrator-side Apprise are both enabled, terminal notifications
+can duplicate.
+
 ## Cleaning an Experiment Queue
 
 ```bash

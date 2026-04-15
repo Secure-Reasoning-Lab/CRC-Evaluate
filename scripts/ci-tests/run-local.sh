@@ -382,7 +382,11 @@ run_checks() {
     success "Benchmark path policy check passed"
 
     echo "Running unit tests (excluding integration)..."
-    uv run pytest tests/ -v -n auto -m "not integration" || fail "Tests failed"
+    # Keep pytest from inheriting real Apprise targets from the operator's .env.
+    CRSBENCH_NOTIFY_APPRISE_URLS="" \
+    CRSBENCH_NOTIFY_APPRISE_TITLE="" \
+    CRSBENCH_NOTIFY_APPRISE_TAG="" \
+        uv run pytest tests/ -v -n auto -m "not integration and not notification" || fail "Tests failed"
     success "Unit tests passed"
 
     success "Stage 1 completed!"

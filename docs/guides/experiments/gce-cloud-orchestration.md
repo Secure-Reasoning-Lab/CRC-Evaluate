@@ -57,6 +57,14 @@ uv run crsbench cloud --config "$CONFIG" monitor "$EXPERIMENT"
 You can omit `"$EXPERIMENT"` here because `cloud monitor` infers it from the
 config.
 
+When Apprise URLs are set in the operator environment, `cloud monitor` sends
+one operator-side terminal notification after it first sees the queue
+transition from non-empty to empty during that attached session. When failed
+jobs remain at that drain point, the terminal message reports a failure instead
+of a completion. Attaching while the queue is already idle does not emit a
+notification for that initial idle state, but a later active-to-idle
+transition in the same session still can.
+
 5. After the run finishes, collect artifacts and VM diagnostics back to the
 local machine:
 
@@ -101,6 +109,75 @@ flows, continue with the rest of this guide.
    - operator IAM permissions to open IAP TCP tunnels and log in over SSH
 6. **Redis/Valkey** reachable from worker VMs
 7. **rsync** installed on the operator machine (for artifact collection)
+
+## Notification Preflight
+
+If this deployment will use Apprise notifications, choose the preflight path
+that matches where the notification values are coming from.
+
+### Local Shell / `.env` Preflight
+
+Use the operator shell or repo `.env` to verify the notification config before
+`cloud launch` or `cloud monitor`:
+
+```bash
+uv run python scripts/test_notification.py --dry-run
+```
+
+If the dry run looks correct, send a real smoke test to confirm delivery:
+
+```bash
+uv run python scripts/test_notification.py
+```
+
+This path validates notification settings that come from the operator shell or
+repo `.env`. It does not exercise cloud config env injection into the
+orchestrator runtime. If the values come from the operator shell, run the
+preflight in the same shell environment that will run `cloud launch` or
+`cloud monitor`.
+
+If operator-side `cloud monitor` Apprise is enabled and the cloud launch env
+also enables orchestrator-side Apprise, the local `cloud monitor` notification
+and the orchestrator-side terminal notification can both fire, which
+duplicates the terminal alert.
+
+If a checked-in cloud config should inherit the notification target from the
+operator shell or `.env`, declare it explicitly under `cloud.orchestrator.env`:
+
+```yaml
+cloud:
+  orchestrator:
+    env:
+      CRSBENCH_NOTIFY_APPRISE_URLS: os.environ/CRSBENCH_NOTIFY_APPRISE_URLS
+      # Optional:
+      # CRSBENCH_NOTIFY_APPRISE_TITLE: os.environ/CRSBENCH_NOTIFY_APPRISE_TITLE
+      # CRSBENCH_NOTIFY_APPRISE_TAG: os.environ/CRSBENCH_NOTIFY_APPRISE_TAG
+```
+
+### Cloud Env Rehearsal Preflight
+
+Use the stock rehearsal command when you want to rehearse the checked-in
+`cloud.orchestrator.env` notification path in
+[`scripts/cloud-rehearsal/local-experiment-notification.yaml`](../../../scripts/cloud-rehearsal/local-experiment-notification.yaml):
+
+```bash
+export CRSBENCH_NOTIFY_APPRISE_URLS='discord://token/chat-id'
+scripts/cloud-rehearsal/test-notification-rehearsal.sh
+scripts/cloud-rehearsal/test-notification-rehearsal.sh --send
+```
+
+The rehearsal defaults to dry-run and validates that
+`cloud.orchestrator.env` injection reaches the orchestrator runtime. It uses the local Docker-based cloud
+rehearsal harness described in
+[`local-cloud-rehearsal.md`](./local-cloud-rehearsal.md), so the same Docker
+prerequisites apply. This stock command validates the checked-in
+`CRSBENCH_NOTIFY_APPRISE_URLS` orchestrator passthrough path in
+[`scripts/cloud-rehearsal/local-experiment-notification.yaml`](../../../scripts/cloud-rehearsal/local-experiment-notification.yaml).
+It is a cloud launch rehearsal, not a worker or evaluator notification path.
+
+If operator-side `cloud monitor` Apprise is enabled and the cloud launch env
+also enables orchestrator-side Apprise, expect a duplicate terminal
+notification when the queue drains.
 
 ## Configuration
 
@@ -1327,7 +1404,7 @@ sudo -iu crsbench env \
 | Docker network pool exhaustion (`all predefined network addresses are exhausted`) | Too many concurrent Docker compose networks on one VM | CRSBench configures Docker with an expanded address pool (`172.16.0.0/12` with `/24` subnets, up to 4096 networks) automatically via the startup script |
 | HF download fails with 401 Unauthorized | Missing `HF_TOKEN` for gated HuggingFace datasets | Add `HF_TOKEN: os.environ/HF_TOKEN` to `cloud.env` and export `HF_TOKEN` locally before launching |
 | Quota exceeded on first region | All placements attempt the first region in the fallback list | Pin placements to specific regions using `region:` on each placement entry; CRSBench preflight now warns about greedy first-region overcommit |
-| Workers stuck at "registering" | Worker supervisor did not report ready state | Ensure `feat/gcp` branch includes the readiness fix (commit `16e4d584`); workers with `--cpuset` now report ready before entering the supervisor loop |
+| Workers stuck at "registering" | Worker supervisor did not report ready state | Ensure the deployed ref includes the readiness fix (commit `16e4d584`); `main` is the normal launch ref and workers with `--cpuset` now report ready before entering the supervisor loop |
 | Collect fails with Permission denied on `/data` | OS Login user cannot read crsbench-owned experiment data | CRSBench uses `--rsync-path="sudo rsync"` on the remote side; ensure the crsbench user has passwordless sudo |
 
 ## See Also

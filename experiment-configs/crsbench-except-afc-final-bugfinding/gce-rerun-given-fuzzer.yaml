@@ -1,12 +1,12 @@
-# Cloud config: crsbench-except-afc-final bug-finding with given_fuzzer on GCE.
+# Cloud config: re-run of 24 failed/stuck benchmarks with given_fuzzer on GCE.
 #
 # Fleet: 1 orchestrator (n2d-standard-16)
-#        5 workers (n2d-standard-224, 14 jobs × 16 cores each)
+#        3 workers (n2d-standard-224, 14 jobs × 16 cores each)
 #        1 evaluator (n2d-standard-128, 8 jobs × 16 cores)
 #
 # Regions: asia-south1 preferred, fallback to us-central1/us-south1/us-east5/us-east1
 #
-# 3 trials × 88 benchmarks = 264 jobs (crsbench-all minus afc-final), 16 cores per trial.
+# 3 trials × 24 benchmarks ≈ 150 jobs, 16 cores per trial.
 #
 # Prerequisites:
 #   1. gcloud auth login && gcloud auth application-default login
@@ -14,16 +14,16 @@
 #   3. HF_TOKEN in .env or environment
 #
 # Usage:
-#   CONFIG=experiment-configs/crsbench-except-afc-final-bugfinding/gce-atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml
+#   CONFIG=experiment-configs/crsbench-except-afc-final-bugfinding/gce-rerun-given-fuzzer.yaml
 #   uv run crsbench cloud launch --config "$CONFIG"
 #   uv run crsbench cloud --config "$CONFIG" monitor
 #   uv run crsbench cloud --config "$CONFIG" collect --force
 #   uv run crsbench cloud --config "$CONFIG" teardown --force
 
 experiment:
-  name: non-afc-final-bf-given-fuzzer-v2
+  name: non-afc-final-bf-rerun
   task: bugfinding
-  benchmark_suite: crsbench-except-afc-final
+  benchmark_suite: crsbench-except-afc-final-rerun
   sanitizers:
     - address
     - undefined
@@ -41,8 +41,8 @@ runtime:
   litellm:
     skip: true
 storage:
-  experiment_filestore: /data/crsbench/experiment-data/non-afc-final-bf-given-fuzzer-v2
-  report_filestore: /data/crsbench/report-data/non-afc-final-bf-given-fuzzer-v2
+  experiment_filestore: /data/crsbench/experiment-data/non-afc-final-bf-rerun
+  report_filestore: /data/crsbench/report-data/non-afc-final-bf-rerun
 resources:
   cores_per_trial: 16
 crs_compose:
@@ -54,7 +54,7 @@ worker:
   jobs: 14
   cores_per_job: 16
   storage:
-    cleanup_after_trial: false
+    cleanup_after_trial: true
 evaluator:
   jobs: 8
   cores_per_job: 16
@@ -106,8 +106,6 @@ cloud:
       - {} # worker 1
       - {} # worker 2
       - {} # worker 3
-      - {} # worker 4
-      - {} # worker 5
   evaluators:
     defaults:
       instance_profile: gce-evaluator-n2d

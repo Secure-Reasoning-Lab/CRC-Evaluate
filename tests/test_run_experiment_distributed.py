@@ -29,6 +29,11 @@ from crsbench.run_experiment import (
     monitor_jobs,
     run_experiment_distributed,
 )
+from crsbench.utils.apprise_notify import (
+    AppriseNotificationConfig,
+    format_completion_message,
+    format_failure_message,
+)
 from crsbench.validation.schemas import (
     BenchmarkHarness,
     CloudBootstrapConfig,
@@ -110,6 +115,369 @@ def _make_result(
             worker_machine=worker_machine,
         ),
     )
+
+
+def _make_distributed_test_config(tmp_path: Path) -> MagicMock:
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = False
+    config.experiment_filestore = tmp_path
+    config.report_filestore = tmp_path / "reports"
+    config.experiment = "exp-test"
+    return config
+
+
+def _record_report(*_args, **_kwargs) -> None:
+    call_order = _record_report.call_order
+    call_order.append("report")
+
+
+def _record_notify(*_args, **_kwargs) -> None:
+    call_order = _record_notify.call_order
+    call_order.append("notify")
+
+
+@pytest.mark.notification
+def test_distributed_run_sends_completion_notification_after_final_report(
+    tmp_path: Path,
+) -> None:
+    config = _make_distributed_test_config(tmp_path)
+    notification_config = AppriseNotificationConfig(urls=("mailto://example",))
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.register_or_raise.return_value = None
+
+    trial = _make_trial(None)
+    result = _make_result(success=True)
+    call_order: list[str] = []
+    _record_report.call_order = call_order
+    _record_notify.call_order = call_order
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={"queued": {}, "started": {}, "failed": {}, "finished": {}},
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            return_value={"queued": [], "started": [], "failed": [], "finished": []},
+        ),
+        patch("crsbench.distributed.queue.handle_orphaned_jobs", return_value=0),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch("crsbench.run_experiment.monitor_jobs", return_value=[result]),
+        patch(
+            "crsbench.run_experiment.generate_final_report",
+            side_effect=_record_report,
+        ),
+        patch(
+            "crsbench.run_experiment.load_apprise_notification_config",
+            return_value=notification_config,
+        ),
+        patch(
+            "crsbench.run_experiment.send_apprise_message",
+            side_effect=_record_notify,
+        ) as send_mock,
+    ):
+        run_experiment_distributed("exp-test", config, [trial], queue_mode="fresh")
+
+    assert call_order == ["report", "notify"]
+    send_mock.assert_called_once()
+    sent_config = send_mock.call_args.args[0]
+    assert sent_config == notification_config
+    body = send_mock.call_args.kwargs["body"]
+    assert format_completion_message("Distributed exp-test") in body
+    assert "Mode: distributed" in body
+    assert "Logical trials: 1" in body
+    assert "Successful: 1" in body
+    assert "Failed: 0" in body
+    assert f"Report path: {config.report_filestore / config.experiment}" in body
+
+
+@pytest.mark.notification
+def test_distributed_run_sends_failure_notification_when_post_run_cleanup_fails(
+    tmp_path: Path,
+) -> None:
+    config = _make_distributed_test_config(tmp_path)
+    config.keep_only_results = True
+    notification_config = AppriseNotificationConfig(urls=("mailto://example",))
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.register_or_raise.return_value = None
+    session.cleanup.return_value = None
+
+    trial = _make_trial(None)
+    result = _make_result(success=True)
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={"queued": {}, "started": {}, "failed": {}, "finished": {}},
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            return_value={"queued": [], "started": [], "failed": [], "finished": []},
+        ),
+        patch("crsbench.distributed.queue.handle_orphaned_jobs", return_value=0),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch("crsbench.run_experiment.monitor_jobs", return_value=[result]),
+        patch("crsbench.run_experiment.generate_final_report"),
+        patch(
+            "crsbench.run_experiment._cleanup_experiment_artifacts",
+            side_effect=RuntimeError("cleanup boom"),
+        ),
+        patch(
+            "crsbench.run_experiment.load_apprise_notification_config",
+            return_value=notification_config,
+        ),
+        patch("crsbench.run_experiment.send_apprise_message") as send_mock,
+    ):
+        with pytest.raises(RuntimeError, match="cleanup boom"):
+            run_experiment_distributed("exp-test", config, [trial], queue_mode="fresh")
+
+    send_mock.assert_called_once()
+    body = send_mock.call_args.kwargs["body"]
+    assert format_failure_message("Distributed exp-test", "cleanup boom") in body
+    assert "Tracked jobs: 1" in body
+    assert format_completion_message("Distributed exp-test") not in body
+
+
+@pytest.mark.notification
+def test_distributed_run_sends_failure_notification_on_orchestrator_exception(
+    tmp_path: Path,
+) -> None:
+    config = _make_distributed_test_config(tmp_path)
+    notification_config = AppriseNotificationConfig(urls=("mailto://example",))
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.register_or_raise.return_value = None
+
+    trial = _make_trial(None)
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={"queued": {}, "started": {}, "failed": {}, "finished": {}},
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            return_value={"queued": [], "started": [], "failed": [], "finished": []},
+        ),
+        patch("crsbench.distributed.queue.handle_orphaned_jobs", return_value=0),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch("crsbench.run_experiment.monitor_jobs", side_effect=RuntimeError("boom")),
+        patch(
+            "crsbench.run_experiment.load_apprise_notification_config",
+            return_value=notification_config,
+        ),
+        patch("crsbench.run_experiment.send_apprise_message") as send_mock,
+    ):
+        with pytest.raises(RuntimeError, match="boom"):
+            run_experiment_distributed("exp-test", config, [trial], queue_mode="fresh")
+
+    send_mock.assert_called_once()
+    sent_config = send_mock.call_args.args[0]
+    assert sent_config == notification_config
+    body = send_mock.call_args.kwargs["body"]
+    assert format_failure_message("Distributed exp-test", "boom") in body
+    assert "Mode: distributed" in body
+    assert "Tracked jobs: 1" in body
+
+
+@pytest.mark.notification
+def test_distributed_run_sends_failure_notification_when_enqueue_fails(
+    tmp_path: Path,
+) -> None:
+    config = _make_distributed_test_config(tmp_path)
+    config.max_total_time = 123
+    config.model_dump.return_value = {}
+    notification_config = AppriseNotificationConfig(urls=("mailto://example",))
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.register_or_raise.return_value = None
+    session.lifecycle_store = MagicMock()
+    session.registry = MagicMock()
+
+    trial_one = _make_trial(None)
+    trial_two = Trial(
+        crs=trial_one.crs,
+        benchmark_harness=trial_one.benchmark_harness,
+        trial_num=2,
+        mode=trial_one.mode,
+        sanitizer=trial_one.sanitizer,
+        target_cpv_id=None,
+    )
+
+    first_job = MagicMock()
+    first_job.id = "job-1"
+    queue.enqueue.side_effect = [first_job, RuntimeError("enqueue boom")]
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={"queued": {}, "started": {}, "failed": {}, "finished": {}},
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            return_value={"queued": [], "started": [], "failed": [], "finished": []},
+        ),
+        patch("crsbench.distributed.queue.handle_orphaned_jobs", return_value=0),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch("crsbench.run_experiment.get_crs_cpu_count", return_value=None),
+        patch("crsbench.run_experiment.get_crs_memory", return_value=None),
+        patch(
+            "crsbench.run_experiment.load_apprise_notification_config",
+            return_value=notification_config,
+        ),
+        patch("crsbench.run_experiment.send_apprise_message") as send_mock,
+    ):
+        with pytest.raises(RuntimeError, match="enqueue boom"):
+            run_experiment_distributed(
+                "exp-test",
+                config,
+                [trial_one, trial_two],
+                queue_mode="fresh",
+            )
+
+    send_mock.assert_called_once()
+    body = send_mock.call_args.kwargs["body"]
+    assert format_failure_message("Distributed exp-test", "enqueue boom") in body
+    assert "Tracked jobs: 1" in body
+
+
+@pytest.mark.notification
+def test_distributed_run_sends_failure_notification_on_auto_continue_exception(
+    tmp_path: Path,
+) -> None:
+    config = _make_distributed_test_config(tmp_path)
+    notification_config = AppriseNotificationConfig(urls=("mailto://example",))
+    session = MagicMock()
+    session.trial_queue = MagicMock()
+    session.register_or_raise.return_value = None
+    session.resume_or_raise.return_value = []
+
+    existing_job = MagicMock()
+    existing_job.id = "job-existing"
+    existing = {
+        "queued": {"existing": existing_job},
+        "started": {},
+        "failed": {},
+        "finished": {},
+    }
+    physical_existing = {
+        "queued": [existing_job],
+        "started": [],
+        "failed": [],
+        "finished": [],
+    }
+
+    with (
+        patch(
+            "sys.stdin.isatty",
+            return_value=False,
+        ),
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value=existing,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            return_value=physical_existing,
+        ),
+        patch("crsbench.distributed.queue.handle_orphaned_jobs", return_value=0),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+        patch(
+            "crsbench.run_experiment.dump_trial_matrix",
+            side_effect=RuntimeError("auto continue boom"),
+        ),
+        patch(
+            "crsbench.run_experiment.load_apprise_notification_config",
+            return_value=notification_config,
+        ),
+        patch("crsbench.run_experiment.send_apprise_message") as send_mock,
+    ):
+        with pytest.raises(RuntimeError, match="auto continue boom"):
+            run_experiment_distributed("exp-test", config, [], queue_mode=None)
+
+    send_mock.assert_called_once()
+    body = send_mock.call_args.kwargs["body"]
+    assert format_failure_message("Distributed exp-test", "auto continue boom") in body
+    assert "Tracked jobs: 1" in body
+
+
+@pytest.mark.notification
+def test_distributed_run_skips_notification_when_no_tracked_jobs_exist(
+    tmp_path: Path,
+) -> None:
+    config = _make_distributed_test_config(tmp_path)
+    notification_config = AppriseNotificationConfig(urls=("mailto://example",))
+    session = MagicMock()
+    session.trial_queue = MagicMock()
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={"queued": {}, "started": {}, "failed": {}, "finished": {}},
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            return_value={"queued": [], "started": [], "failed": [], "finished": []},
+        ),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch(
+            "crsbench.run_experiment.load_apprise_notification_config",
+            return_value=notification_config,
+        ),
+        patch("crsbench.run_experiment.send_apprise_message") as send_mock,
+    ):
+        run_experiment_distributed("exp-test", config, [], queue_mode="fresh")
+
+    send_mock.assert_not_called()
 
 
 def test_dedupe_results_by_logical_trial_prefers_canonical_marker(
@@ -966,6 +1334,135 @@ def test_queue_mode_quit_exits_without_registration(tmp_path: Path) -> None:
     session.cleanup.assert_called_once()
 
 
+@pytest.mark.notification
+def test_queue_mode_quit_cleanup_failure_notifies_and_raises(
+    tmp_path: Path,
+) -> None:
+    """Cleanup failures must still surface even when the run returns early."""
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = True
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+
+    session = MagicMock()
+    session.trial_queue = MagicMock()
+    session.cleanup.side_effect = RuntimeError("cleanup boom")
+    existing_job = MagicMock()
+    existing_job.id = "job-1"
+    physical_existing = {
+        "queued": [existing_job],
+        "started": [],
+        "failed": [],
+        "finished": [],
+    }
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={
+                "queued": {"k": existing_job},
+                "started": {},
+                "failed": {},
+                "finished": {},
+            },
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            return_value=physical_existing,
+        ),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+        patch("crsbench.run_experiment._cleanup_experiment_artifacts") as cleanup_mock,
+        patch(
+            "crsbench.run_experiment.load_apprise_notification_config",
+            return_value=AppriseNotificationConfig(urls=("mailto://example",)),
+        ),
+        patch("crsbench.run_experiment.send_apprise_message") as send_mock,
+    ):
+        with pytest.raises(RuntimeError, match="cleanup boom"):
+            run_experiment_distributed("exp-test", config, [], queue_mode="quit")
+
+    send_mock.assert_called_once()
+    cleanup_mock.assert_not_called()
+    body = send_mock.call_args.kwargs["body"]
+    assert format_failure_message("Distributed exp-test", "cleanup boom") in body
+    assert "Tracked jobs: 1" in body
+
+
+@pytest.mark.notification
+def test_interactive_queue_mode_quit_cleanup_failure_notifies_and_raises(
+    tmp_path: Path,
+) -> None:
+    """Interactive abort must still preserve existing tracked jobs for cleanup failures."""
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = True
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+
+    session = MagicMock()
+    session.trial_queue = MagicMock()
+    session.cleanup.side_effect = RuntimeError("cleanup boom")
+    existing_job = MagicMock()
+    existing_job.id = "job-1"
+    physical_existing = {
+        "queued": [existing_job],
+        "started": [],
+        "failed": [],
+        "finished": [],
+    }
+
+    with (
+        patch(
+            "sys.stdin.isatty",
+            return_value=True,
+        ),
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={
+                "queued": {"k": existing_job},
+                "started": {},
+                "failed": {},
+                "finished": {},
+            },
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            return_value=physical_existing,
+        ),
+        patch("crsbench.run_experiment.prompt_queue_mode", return_value="quit"),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+        patch("crsbench.run_experiment._cleanup_experiment_artifacts") as cleanup_mock,
+        patch(
+            "crsbench.run_experiment.load_apprise_notification_config",
+            return_value=AppriseNotificationConfig(urls=("mailto://example",)),
+        ),
+        patch("crsbench.run_experiment.send_apprise_message") as send_mock,
+    ):
+        with pytest.raises(RuntimeError, match="cleanup boom"):
+            run_experiment_distributed("exp-test", config, [], queue_mode=None)
+
+    send_mock.assert_called_once()
+    cleanup_mock.assert_not_called()
+    body = send_mock.call_args.kwargs["body"]
+    assert format_failure_message("Distributed exp-test", "cleanup boom") in body
+    assert "Tracked jobs: 1" in body
+
+
 def test_continue_mode_lock_contention_skips_queue_mutations(tmp_path: Path) -> None:
     """continue mode should not mutate queue state when lock contention occurs."""
     config = MagicMock()
@@ -1026,6 +1523,152 @@ def test_continue_mode_lock_contention_skips_queue_mutations(tmp_path: Path) -> 
     queue.enqueue_job.assert_not_called()
     session.resume_or_raise.assert_called_once()
     assert session.resume_or_raise.call_args.kwargs["registration"] is registration
+
+
+@pytest.mark.notification
+def test_continue_mode_lock_contention_cleanup_failure_notifies(
+    tmp_path: Path,
+) -> None:
+    """Explicit continue aborts must still preserve tracked jobs for cleanup failures."""
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = True
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+
+    session = MagicMock()
+    session.trial_queue = MagicMock()
+    session.register_or_raise.side_effect = LockContentionError("busy")
+    session.resume_or_raise.side_effect = LockContentionError("still busy")
+    session.cleanup.side_effect = RuntimeError("cleanup boom")
+
+    existing_job = MagicMock()
+    existing_job.id = "job-1"
+    physical_existing = {
+        "queued": [existing_job],
+        "started": [],
+        "failed": [],
+        "finished": [],
+    }
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={
+                "queued": {"k": existing_job},
+                "started": {},
+                "failed": {},
+                "finished": {},
+            },
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            return_value=physical_existing,
+        ),
+        patch(
+            "crsbench.distributed.queue.handle_orphaned_jobs", return_value=0
+        ) as handle_orphaned,
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+        patch("crsbench.run_experiment._cleanup_experiment_artifacts") as cleanup_mock,
+        patch(
+            "crsbench.run_experiment.load_apprise_notification_config",
+            return_value=AppriseNotificationConfig(urls=("mailto://example",)),
+        ),
+        patch("crsbench.run_experiment.send_apprise_message") as send_mock,
+    ):
+        with pytest.raises(RuntimeError, match="cleanup boom"):
+            run_experiment_distributed(
+                "exp-test",
+                config,
+                [],
+                queue_mode="continue",
+                retry_failed=True,
+            )
+
+    handle_orphaned.assert_not_called()
+    cleanup_mock.assert_not_called()
+    send_mock.assert_called_once()
+    body = send_mock.call_args.kwargs["body"]
+    assert format_failure_message("Distributed exp-test", "cleanup boom") in body
+    assert "Tracked jobs: 1" in body
+
+
+@pytest.mark.notification
+def test_interactive_continue_lock_contention_cleanup_failure_notifies(
+    tmp_path: Path,
+) -> None:
+    """Interactive continue must preserve tracked jobs for cleanup failures."""
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = True
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+
+    session = MagicMock()
+    session.trial_queue = MagicMock()
+    session.register_or_raise.side_effect = LockContentionError("busy")
+    session.resume_or_raise.side_effect = LockContentionError("still busy")
+    session.cleanup.side_effect = RuntimeError("cleanup boom")
+
+    existing_job = MagicMock()
+    existing_job.id = "job-1"
+    physical_existing = {
+        "queued": [existing_job],
+        "started": [],
+        "failed": [],
+        "finished": [],
+    }
+
+    with (
+        patch("sys.stdin.isatty", return_value=True),
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={
+                "queued": {"k": existing_job},
+                "started": {},
+                "failed": {},
+                "finished": {},
+            },
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            return_value=physical_existing,
+        ),
+        patch("crsbench.run_experiment.prompt_queue_mode", return_value="continue"),
+        patch(
+            "crsbench.distributed.queue.handle_orphaned_jobs", return_value=0
+        ) as handle_orphaned,
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+        patch("crsbench.run_experiment._cleanup_experiment_artifacts") as cleanup_mock,
+        patch(
+            "crsbench.run_experiment.load_apprise_notification_config",
+            return_value=AppriseNotificationConfig(urls=("mailto://example",)),
+        ),
+        patch("crsbench.run_experiment.send_apprise_message") as send_mock,
+    ):
+        with pytest.raises(RuntimeError, match="cleanup boom"):
+            run_experiment_distributed("exp-test", config, [], queue_mode=None)
+
+    handle_orphaned.assert_not_called()
+    cleanup_mock.assert_not_called()
+    send_mock.assert_called_once()
+    body = send_mock.call_args.kwargs["body"]
+    assert format_failure_message("Distributed exp-test", "cleanup boom") in body
+    assert "Tracked jobs: 1" in body
 
 
 def test_continue_mode_reclaims_stale_lock_and_continues_recovery(
@@ -1761,7 +2404,7 @@ def _make_provider_neutral_run_config(tmp_path: Path) -> ExperimentConfig:
                 "defaults": {
                     "readiness_timeout_sec": 1200,
                     "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
-                    "crsbench_git_ref": "feat/gcp",
+                    "crsbench_git_ref": "main",
                 },
                 "providers": {
                     "gce": {

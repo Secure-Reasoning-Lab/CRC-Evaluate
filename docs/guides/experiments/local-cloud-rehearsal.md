@@ -30,6 +30,27 @@ The rehearsal runs:
   workers/evaluators can still reach `orchestrator:6379` without exposing
   `0.0.0.0`
 
+## Notification Rehearsal
+
+Use the cloud notification rehearsal to validate that the checked-in
+`CRSBENCH_NOTIFY_APPRISE_URLS` `cloud.orchestrator.env` passthrough reaches the
+orchestrator runtime before a managed-style launch.
+
+```bash
+export CRSBENCH_NOTIFY_APPRISE_URLS='discord://token/chat-id'
+scripts/cloud-rehearsal/test-notification-rehearsal.sh
+scripts/cloud-rehearsal/test-notification-rehearsal.sh --send
+```
+
+Notes:
+
+- default mode is dry-run
+- this checks orchestrator-only cloud env injection; it does not imply workers
+  or evaluators receive notification config in this flow
+- `scripts/test_notification.py` on its own validates a non-cloud operator
+  environment, whether inherited from the local shell or loaded from `.env`
+  unless `--no-dotenv` is used
+
 ## Quickstart
 
 From the repo root:

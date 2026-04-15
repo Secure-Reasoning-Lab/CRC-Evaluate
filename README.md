@@ -74,6 +74,10 @@ are unavailable.
 If your virtual environment is not activated, prefix CLI commands with `uv run`
 (for example, `uv run crsbench download --all`).
 
+For experiment config authoring, CRSBench provides both
+`crsbench gen-config` for the prompt-driven wizard and
+`crsbench gen-config-tui` for the full-screen Textual editor.
+
 CRSBench supports queue-backed execution with Redis/RQ. In that model, the
 orchestrator (`run`) enqueues jobs, workers (`worker`) execute CRS trial jobs,
 and `evaluator` processes build/verify queues for real-time POV and patch

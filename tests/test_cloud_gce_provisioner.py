@@ -248,7 +248,7 @@ def _make_provider_neutral_experiment_config() -> ExperimentConfig:
                 "defaults": {
                     "readiness_timeout_sec": 1200,
                     "crsbench_install_spec": "git+ssh://git@github.com/sslab-gatech/CRSBench.git",
-                    "crsbench_git_ref": "feat/gcp",
+                    "crsbench_git_ref": "main",
                 },
                 "providers": {
                     "gce": {
@@ -603,7 +603,7 @@ def test_gce_provider_adapter_builds_worker_fleets_per_placement():
         == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
         for fleet in fleets
     )
-    assert all(fleet.crsbench_git_ref == "feat/gcp" for fleet in fleets)
+    assert all(fleet.crsbench_git_ref == "main" for fleet in fleets)
     assert [fleet.worker_name_prefix for fleet in fleets] == [
         "crsbench-exp-cloud-42-work",
         "crsbench-exp-cloud-42-work",

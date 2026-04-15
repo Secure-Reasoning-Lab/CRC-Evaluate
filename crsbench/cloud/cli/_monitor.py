@@ -2,21 +2,35 @@
 
 from __future__ import annotations
 
+import os
 import time
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+import rq.job
 
 from crsbench.cloud.cli._config_reconnect import (
     resolve_cloud_context,
     resolve_effective_experiment_name,
 )
 from crsbench.cloud.orchestrator_tunnel import OrchestratorRedisTunnel
+from crsbench.cloud.secret_refs import resolve_secret_text
 from crsbench.distributed.queue import (
     RedisConnectionProbe,
     initialize_queue,
+    is_job_for_experiment,
     probe_redis_connection,
 )
-from crsbench.distributed.queue_monitor import monitor_queue
+from crsbench.distributed.queue_monitor import QueueMonitorCallbacks, monitor_queue
+from crsbench.utils.apprise_notify import (
+    AppriseNotificationConfig,
+    format_completion_message,
+    format_failure_message,
+    load_apprise_notification_config,
+    send_apprise_message,
+)
 from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -29,6 +43,115 @@ logger = get_logger(__name__)
 _DEFAULT_MONITOR_REDIS_READY_TIMEOUT_SEC = 300
 _MONITOR_REDIS_POLL_INTERVAL_SEC = 5.0
 _MONITOR_REDIS_PROBE_TIMEOUT_SEC = 2
+_APPRISE_ENV_KEYS = (
+    "CRSBENCH_NOTIFY_APPRISE_URLS",
+    "CRSBENCH_NOTIFY_APPRISE_TITLE",
+    "CRSBENCH_NOTIFY_APPRISE_TAG",
+)
+
+
+@dataclass
+class _CloudMonitorNotificationState:
+    """Track one cloud monitor session's notification state."""
+
+    queue: "rq.Queue"
+    experiment_name: str
+    notification_config: AppriseNotificationConfig | None
+    completion_sent: bool = False
+    failure_sent: bool = False
+    last_snapshot_active: bool | None = None
+
+    def on_snapshot(self, snapshot) -> None:
+        """Send one completion notification on the first active-to-idle transition."""
+        if self.completion_sent:
+            return
+
+        is_active = self._snapshot_has_pending_work(snapshot)
+        if is_active is None:
+            return
+
+        if self.last_snapshot_active is None:
+            self.last_snapshot_active = is_active
+            return
+
+        if self.last_snapshot_active and not is_active:
+            self._send_completion_notification(snapshot)
+            self.completion_sent = True
+
+        self.last_snapshot_active = is_active
+
+    def _snapshot_has_pending_work(self, snapshot) -> bool | None:
+        stats = getattr(snapshot, "stats", {}) or {}
+        queued = int(stats.get("queued", 0) or 0)
+        started = int(stats.get("started", 0) or 0)
+        if queued + started > 0:
+            return True
+        return self._pending_deferred_or_scheduled_work()
+
+    def _pending_deferred_or_scheduled_work(self) -> bool | None:
+        try:
+            for registry_name in ("deferred_job_registry", "scheduled_job_registry"):
+                registry = getattr(self.queue, registry_name, None)
+                get_job_ids = getattr(registry, "get_job_ids", None)
+                if not callable(get_job_ids):
+                    continue
+                for job_id in get_job_ids():
+                    job = rq.job.Job.fetch(job_id, connection=self.queue.connection)
+                    if job is not None and is_job_for_experiment(
+                        job, self.experiment_name
+                    ):
+                        return True
+        except Exception as exc:
+            logger.warning(
+                "Cloud monitor could not confirm pending deferred/scheduled work: {}",
+                exc,
+            )
+            return None
+        return False
+
+    def _send_completion_notification(self, snapshot) -> None:
+        if self.notification_config is None:
+            return
+        stats = getattr(snapshot, "stats", {}) or {}
+        queued = int(stats.get("queued", 0) or 0)
+        started = int(stats.get("started", 0) or 0)
+        finished = int(stats.get("finished", 0) or 0)
+        failed = int(stats.get("failed", 0) or 0)
+        status_line = (
+            format_failure_message("Cloud monitor", "queue drained with failed jobs")
+            if failed > 0
+            else format_completion_message("Cloud monitor")
+        )
+        body = "\n".join(
+            [
+                status_line,
+                f"Experiment: {self.experiment_name}",
+                "Source: cloud monitor",
+                "Result: queue drained" + (" with failures" if failed > 0 else ""),
+                f"Queued: {queued}",
+                f"Started: {started}",
+                f"Finished: {finished}",
+                f"Failed: {failed}",
+            ]
+        )
+        send_apprise_message(self.notification_config, body=body)
+
+    def send_failure_notification(self, exc: Exception) -> None:
+        if (
+            self.notification_config is None
+            or self.failure_sent
+            or self.completion_sent
+        ):
+            return
+        body = "\n".join(
+            [
+                format_failure_message("Cloud monitor", str(exc)),
+                f"Experiment: {self.experiment_name}",
+                "Source: cloud monitor",
+            ]
+        )
+        self.failure_sent = True
+        send_apprise_message(self.notification_config, body=body)
 
 
 def require_launch_state(
@@ -54,6 +177,62 @@ def _resolve_monitor_redis_ready_timeout_sec(context: "ResolvedCloudContext") ->
     if isinstance(timeout, int) and timeout > 0:
         return timeout
     return _DEFAULT_MONITOR_REDIS_READY_TIMEOUT_SEC
+
+
+def _warn_if_duplicate_apprise_notifications(
+    context: "ResolvedCloudContext",
+    operator_notification_config: AppriseNotificationConfig | None,
+) -> None:
+    """Warn when both monitor-side and orchestrator-side Apprise notifications are enabled."""
+    if operator_notification_config is None:
+        return
+
+    launch_plan = context.launch_plan
+    orchestrator_env = getattr(getattr(launch_plan, "orchestrator", None), "env", None)
+    if not isinstance(orchestrator_env, Mapping):
+        return
+
+    try:
+        resolved_orchestrator_env = _resolve_apprise_notification_env(orchestrator_env)
+        orchestrator_notification_config = load_apprise_notification_config(
+            env=resolved_orchestrator_env
+        )
+    except Exception as exc:
+        logger.debug(
+            "Cloud monitor skipped duplicate Apprise warning because the "
+            "resolved orchestrator env could not be parsed: {}",
+            exc,
+        )
+        return
+    if orchestrator_notification_config is None:
+        return
+
+    logger.warning(
+        "Cloud monitor may emit duplicate terminal notifications because local "
+        "Apprise settings are enabled and the resolved orchestrator env also "
+        "enables CRSBENCH_NOTIFY_APPRISE_URLS. Disable either the local "
+        "operator-side cloud monitor notification path or the cloud launch "
+        "env passthrough path to the orchestrator (for example via cloud.env "
+        "or cloud.orchestrator.env) to avoid duplicates."
+    )
+
+
+def _resolve_apprise_notification_env(
+    orchestrator_env: Mapping[str, str],
+) -> dict[str, str]:
+    """Resolve the Apprise-specific subset of the orchestrator env."""
+    resolved_env: dict[str, str] = {}
+    for key in _APPRISE_ENV_KEYS:
+        if key not in orchestrator_env:
+            continue
+        value = resolve_secret_text(
+            orchestrator_env[key],
+            field_path=f"cloud.orchestrator.env.{key}",
+            env=os.environ,
+        )
+        if value is not None:
+            resolved_env[key] = value
+    return resolved_env
 
 
 def wait_for_remote_redis(
@@ -122,13 +301,35 @@ def run_monitor(args: argparse.Namespace) -> int:
                 raise RuntimeError(
                     f"Failed to initialize trial queue for experiment {experiment_name}"
                 )
-            monitor_queue(
-                queue,
-                experiment_name,
-                tracked_job_ids=None,
-                tracked_jobs=None,
-                exit_when_idle=False,
+            operator_notification_config = load_apprise_notification_config()
+            _warn_if_duplicate_apprise_notifications(
+                context,
+                operator_notification_config,
             )
+            notification_state = _CloudMonitorNotificationState(
+                queue=queue,
+                experiment_name=experiment_name,
+                notification_config=operator_notification_config,
+            )
+            monitor_started = False
+            try:
+                monitor_started = True
+                monitor_queue(
+                    queue,
+                    experiment_name,
+                    tracked_job_ids=None,
+                    tracked_jobs=None,
+                    callbacks=QueueMonitorCallbacks(
+                        on_snapshot=notification_state.on_snapshot,
+                    ),
+                    exit_when_idle=False,
+                )
+            except KeyboardInterrupt:
+                return 130
+            except Exception as exc:
+                if monitor_started:
+                    notification_state.send_failure_notification(exc)
+                raise
     except KeyboardInterrupt:
         return 130
     except SystemExit as exc:

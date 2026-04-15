@@ -69,6 +69,7 @@ class QueueMonitorSnapshot:
 class QueueMonitorCallbacks:
     """Optional side-effect hooks for tracked jobs in local-run mode."""
 
+    on_snapshot: Callable[[QueueMonitorSnapshot], None] | None = None
     on_job_finished: Callable[[object], bool | None] | None = None
     on_job_failed: Callable[[object], bool | None] | None = None
 
@@ -267,6 +268,14 @@ def _process_tracked_jobs(
     return len(seen_finished), len(seen_failed)
 
 
+def _notify_snapshot(
+    callbacks: QueueMonitorCallbacks,
+    snapshot: QueueMonitorSnapshot,
+) -> None:
+    if callbacks.on_snapshot is not None:
+        callbacks.on_snapshot(snapshot)
+
+
 def _renew_registry(
     registry: "RegistryClient | None",
     *,
@@ -338,6 +347,7 @@ def _monitor_queue_basic(
 
     while True:
         snapshot = build_monitor_snapshot(queue, experiment_name)
+        _notify_snapshot(callbacks, snapshot)
         display_total = _display_total(snapshot, total_jobs)
         _log_snapshot_basic(
             snapshot,
@@ -442,6 +452,7 @@ def _monitor_queue_rich(
     seen_failed: set[str] = set()
 
     snapshot = build_monitor_snapshot(queue, experiment_name)
+    _notify_snapshot(callbacks, snapshot)
     display_total = _display_total(snapshot, total_jobs)
     with Live(
         _build_rich_group(
@@ -476,6 +487,7 @@ def _monitor_queue_rich(
                 last_renew=last_renew,
             )
             snapshot = build_monitor_snapshot(queue, experiment_name)
+            _notify_snapshot(callbacks, snapshot)
             display_total = _display_total(snapshot, total_jobs)
             live.update(
                 _build_rich_group(

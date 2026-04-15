@@ -111,7 +111,8 @@ def run_oss_crs_prepare(
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        logger.warning(f"oss-crs prepare timed out after {timeout}s")
+        logger.warning("oss-crs prepare timed out after {}s", timeout)
+        force_cleanup_work_dir_containers(work_dir)
         return ("", f"oss-crs prepare timed out after {timeout}s", -1)
     except FileNotFoundError as exc:
         msg = (
@@ -173,7 +174,8 @@ def run_oss_crs_build_target(
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        logger.warning(f"oss-crs build-target timed out after {timeout}s")
+        logger.warning("oss-crs build-target timed out after {}s", timeout)
+        force_cleanup_work_dir_containers(work_dir)
         return ("", f"oss-crs build-target timed out after {timeout}s", -1)
     except FileNotFoundError as exc:
         msg = (
@@ -333,6 +335,198 @@ def docker_compose_down_cleanup(work_dir: Path) -> None:
         # creating/using compose networks on the same Docker host.
     except Exception:
         logger.warning(f"Failed during Docker cleanup for work_dir {work_dir}")
+
+
+def force_cleanup_work_dir_containers(work_dir: Path) -> None:
+    """Force-kill any Docker container whose mounts reference ``work_dir``.
+
+    Called on subprocess timeout of any oss-crs phase to ensure no
+    daemon-owned container survives the Python subprocess kill. Complements
+    ``docker_compose_down_cleanup`` which only enumerates compose files.
+
+    Never raises -- this is cleanup code. Logs at warning level on failure.
+
+    Root cause: GitHub issue #182 -- ``subprocess.run(timeout=...)`` only
+    kills the Python child; Docker containers launched by oss-crs survive
+    and leak file descriptors until the host EMFILEs out.
+    """
+    try:
+        work_dir_resolved = str(work_dir.resolve())
+    except OSError as exc:
+        logger.warning(
+            "force_cleanup: unable to resolve work_dir {}: {}", work_dir, exc
+        )
+        return
+
+    # First pass: tear down any compose projects rooted in work_dir.
+    # This reuses the existing belt-and-suspenders path. We cannot pass
+    # --timeout 0 through the helper without rewriting it, and the helper's
+    # own 30s compose-down timeout is acceptable here because it runs after
+    # the subprocess is already declared dead.
+    try:
+        docker_compose_down_cleanup(work_dir)
+    except Exception as exc:  # noqa: BLE001 -- cleanup code, never raises
+        logger.warning("force_cleanup: compose-down pass failed: {}", exc)
+
+    # Second pass: enumerate all containers (running + exited) and docker
+    # kill any whose mount set references the absolute work_dir path.
+    try:
+        ps = subprocess.run(
+            ["docker", "ps", "-aq"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        logger.warning("force_cleanup: docker ps failed: {}", exc)
+        return
+
+    container_ids = [cid for cid in ps.stdout.splitlines() if cid.strip()]
+    if not container_ids:
+        return
+
+    # docker inspect -f on a list of ids; filter locally by mount source.
+    try:
+        inspect = subprocess.run(
+            [
+                "docker",
+                "inspect",
+                "-f",
+                "{{.Id}} {{range .Mounts}}{{.Source}} {{end}}",
+                *container_ids,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        logger.warning("force_cleanup: docker inspect failed: {}", exc)
+        return
+
+    to_kill: list[str] = []
+    work_dir_with_sep = work_dir_resolved.rstrip("/") + "/"
+    for line in inspect.stdout.splitlines():
+        parts = line.strip().split()
+        if len(parts) < 2:
+            continue
+        cid, mount_sources = parts[0], parts[1:]
+        # Whole-path segment match: container mounts work_dir itself, or a
+        # descendant of it. Substring matching would cross-kill sibling
+        # trials (e.g. `/data/work/trial-1` into `/data/work/trial-10`).
+        if any(
+            src == work_dir_resolved or src.startswith(work_dir_with_sep)
+            for src in mount_sources
+        ):
+            to_kill.append(cid)
+
+    if not to_kill:
+        return
+
+    logger.warning(
+        "force_cleanup: killing {} container(s) referencing work_dir {}",
+        len(to_kill),
+        work_dir_resolved,
+    )
+    # docker kill first, then docker rm -f to drop anything exited.
+    try:
+        subprocess.run(
+            ["docker", "kill", *to_kill],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        logger.warning("force_cleanup: docker kill failed: {}", exc)
+
+    try:
+        subprocess.run(
+            ["docker", "rm", "-f", *to_kill],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        logger.warning("force_cleanup: docker rm -f failed: {}", exc)
+
+    _cleanup_orphaned_networks(work_dir_resolved)
+
+
+def _cleanup_orphaned_networks(work_dir_resolved: str) -> None:
+    """Remove Docker networks created by compose projects under *work_dir*.
+
+    Scoped by work_dir path segment so concurrent trials on the same host
+    are never affected.  Only removes networks with zero attached containers.
+    """
+    try:
+        ls = subprocess.run(
+            ["docker", "network", "ls", "--format", "{{.ID}} {{.Name}}"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        logger.warning("force_cleanup: docker network ls failed: {}", exc)
+        return
+
+    work_dir_slug = work_dir_resolved.rstrip("/").replace("/", "-").lstrip("-")
+
+    to_remove: list[str] = []
+    for line in ls.stdout.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2:
+            continue
+        net_id, net_name = parts
+        if net_name in ("bridge", "host", "none"):
+            continue
+        if work_dir_slug not in net_name:
+            continue
+        try:
+            info = subprocess.run(
+                [
+                    "docker",
+                    "network",
+                    "inspect",
+                    net_id,
+                    "--format",
+                    "{{len .Containers}}",
+                ],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=10,
+            )
+            if info.stdout.strip() == "0":
+                to_remove.append(net_id)
+        except (subprocess.SubprocessError, OSError):
+            continue
+
+    if not to_remove:
+        return
+
+    logger.warning(
+        "force_cleanup: removing {} orphaned network(s) for work_dir {}",
+        len(to_remove),
+        work_dir_resolved,
+    )
+    for net_id in to_remove:
+        try:
+            subprocess.run(
+                ["docker", "network", "rm", net_id],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=10,
+            )
+        except (subprocess.SubprocessError, OSError):
+            pass
 
 
 def generate_run_id() -> str:

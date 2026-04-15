@@ -356,6 +356,26 @@ PY
   fi
 }
 
+apply_crsbench_sysctls() {
+  # Raise kernel FD limits so Docker and oss-crs can survive high-concurrency
+  # trial loads. Tracks GitHub issue #182: "Too many open files in system"
+  # EMFILE on long-running GCE workers.
+  local conf_path="/etc/sysctl.d/99-crsbench.conf"
+  install -d -m 0755 "$(dirname "${conf_path}")"
+  cat > "${conf_path}" <<'SYSCTL'
+# Managed by CRSBench GCE worker bootstrap. See GitHub issue #182.
+fs.nr_open = 1048576
+fs.file-max = 2097152
+SYSCTL
+  # Apply live so the Docker daemon (started later in ensure_docker_ready)
+  # inherits the raised limits.
+  sysctl -w fs.nr_open=1048576 >/dev/null 2>&1 || true
+  sysctl -w fs.file-max=2097152 >/dev/null 2>&1 || true
+  # Reload persisted values; ignore failure to stay compatible with minimal
+  # init environments where /etc/sysctl.d is not auto-loaded at runtime.
+  sysctl -p "${conf_path}" >/dev/null 2>&1 || true
+}
+
 ensure_docker_ready() {
   if ! command -v docker >/dev/null 2>&1 || \
      ! docker compose version >/dev/null 2>&1 || \
@@ -883,6 +903,7 @@ ensure_system_packages
 ENV_PASSTHROUGH_B64="$(metadata_get_optional "crsbench-env-passthrough-b64")"
 export_passthrough_env "${ENV_PASSTHROUGH_B64}"
 ensure_timezone
+apply_crsbench_sysctls
 ensure_docker_ready
 ensure_crsbench_user
 BOOTSTRAP_ENV_FILE="${STATE_DIR}/bootstrap-env"
@@ -1273,6 +1294,8 @@ WorkingDirectory=${CLONE_DIR}
 ExecStart=/bin/bash ${LAUNCHER_PATH}
 Restart=always
 RestartSec=10
+LimitNOFILE=1048576
+LimitNPROC=1048576
 
 [Install]
 WantedBy=default.target

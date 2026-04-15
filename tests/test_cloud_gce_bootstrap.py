@@ -225,6 +225,35 @@ def test_load_startup_script_contains_managed_worker_service_bootstrap():
     assert "/etc/default/crsbench-worker" not in startup_script
 
 
+def test_load_startup_script_raises_fd_limits_for_issue_182():
+    """Regression: GitHub issue #182 -- worker startup must raise FD limits."""
+
+    from crsbench.cloud.gce.metadata import load_startup_script
+
+    startup_script = load_startup_script()
+
+    # Kernel-level sysctls (persisted and applied live before docker starts).
+    assert "fs.nr_open = 1048576" in startup_script
+    assert "fs.file-max = 2097152" in startup_script
+    assert "/etc/sysctl.d/99-crsbench.conf" in startup_script
+    assert "apply_crsbench_sysctls" in startup_script
+
+    # systemd service unit limits (shared between worker and evaluator roles).
+    assert "LimitNOFILE=1048576" in startup_script
+    assert "LimitNPROC=1048576" in startup_script
+
+    # Sysctls must be applied strictly before Docker is brought up, so the
+    # daemon inherits the raised limits.
+    sysctl_idx = startup_script.rfind("apply_crsbench_sysctls")
+    docker_idx = startup_script.rfind("ensure_docker_ready")
+    assert sysctl_idx != -1
+    assert docker_idx != -1
+    assert sysctl_idx < docker_idx, (
+        "apply_crsbench_sysctls must run before ensure_docker_ready so the "
+        "Docker daemon inherits raised fs.nr_open / fs.file-max limits"
+    )
+
+
 def test_build_evaluator_metadata_embeds_startup_script_and_config_payload(tmp_path):
     """Evaluator metadata should embed config payload and evaluator runtime settings."""
     from crsbench.cloud.gce.metadata import (
@@ -521,7 +550,7 @@ def test_metadata_includes_git_ref():
 
     fleet = _make_fleet(
         crsbench_install_spec="git+ssh://git@github.com/org/Repo.git",
-        crsbench_git_ref="feat/gcp",
+        crsbench_git_ref="main",
     )
     metadata = build_instance_metadata(
         experiment_name="exp-ref",
@@ -532,7 +561,7 @@ def test_metadata_includes_git_ref():
         startup_script="#!/usr/bin/env bash\n",
     )
 
-    assert metadata[CRSBENCH_GIT_REF_KEY] == "feat/gcp"
+    assert metadata[CRSBENCH_GIT_REF_KEY] == "main"
 
 
 def test_metadata_git_ref_defaults_to_main():

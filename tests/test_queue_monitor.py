@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 from crsbench.distributed.queue_monitor import (
@@ -258,6 +258,113 @@ def test_monitor_queue_attach_mode_is_read_only() -> None:
 
     callbacks.on_job_finished.assert_not_called()
     callbacks.on_job_failed.assert_not_called()
+
+
+def test_monitor_queue_calls_snapshot_callback_in_basic_mode() -> None:
+    queue = MagicMock()
+    active = QueueMonitorSnapshot(
+        stats={"queued": 1, "started": 0, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[],
+    )
+    done = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 0, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[],
+    )
+    snapshots: list[QueueMonitorSnapshot] = []
+
+    with (
+        patch(
+            "crsbench.distributed.queue_monitor.build_monitor_snapshot",
+            side_effect=[active, done],
+        ),
+        patch("crsbench.distributed.queue_monitor.time.sleep"),
+    ):
+        monitor_queue(
+            queue,
+            "exp-1",
+            tracked_job_ids=None,
+            callbacks=QueueMonitorCallbacks(on_snapshot=snapshots.append),
+            use_rich=False,
+            poll_interval=0,
+        )
+
+    assert snapshots == [active, done]
+
+
+def test_monitor_queue_calls_snapshot_callback_in_rich_mode() -> None:
+    queue = MagicMock()
+    active = QueueMonitorSnapshot(
+        stats={"queued": 1, "started": 0, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[],
+    )
+    done = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 0, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[],
+    )
+    snapshots: list[QueueMonitorSnapshot] = []
+
+    class DummyLive:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def update(self, *args, **kwargs):
+            return None
+
+    with (
+        patch(
+            "crsbench.distributed.queue_monitor.build_monitor_snapshot",
+            side_effect=[active, done],
+        ),
+        patch("rich.live.Live", DummyLive),
+        patch("crsbench.distributed.queue_monitor.time.sleep"),
+    ):
+        monitor_queue(
+            queue,
+            "exp-1",
+            tracked_job_ids=None,
+            callbacks=QueueMonitorCallbacks(on_snapshot=snapshots.append),
+            use_rich=True,
+            poll_interval=0,
+        )
+
+    assert snapshots == [active, done]
+
+
+def test_monitor_queue_snapshot_callback_receives_current_snapshot() -> None:
+    queue = MagicMock()
+    active = QueueMonitorSnapshot(
+        stats={"queued": 2, "started": 1, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[],
+    )
+    done = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 0, "finished": 1, "failed": 0, "workers": 1},
+        running_jobs=[],
+    )
+    on_snapshot = MagicMock()
+
+    with (
+        patch(
+            "crsbench.distributed.queue_monitor.build_monitor_snapshot",
+            side_effect=[active, done],
+        ),
+        patch("crsbench.distributed.queue_monitor.time.sleep"),
+    ):
+        monitor_queue(
+            queue,
+            "exp-1",
+            tracked_job_ids=None,
+            callbacks=QueueMonitorCallbacks(on_snapshot=on_snapshot),
+            use_rich=False,
+            poll_interval=0,
+        )
+
+    assert on_snapshot.call_args_list == [call(active), call(done)]
 
 
 def test_monitor_queue_retries_finished_callback_until_processed() -> None:
