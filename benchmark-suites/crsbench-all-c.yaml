@@ -1,7 +1,8 @@
-Name: crsbench-afc-c
-Description: A benchmark suite for evaluating C/C++ CRS with official AFC benchmarks.
-Release date: 10.13.2025
+Name: crsbench-all-c
+Description: All C/C++ benchmarks across AFC, ASC, and Atlanta suites.
+Release date: 04.07.2026
 benchmark_list:
+  # === AFC C/C++ benchmarks ===
   # curl
   - afc-curl-delta-01
   - afc-curl-delta-02
@@ -54,3 +55,32 @@ benchmark_list:
   - afc-wireshark-full-01
   # xz
   - afc-xz-full-01
+
+  # === ASC C/C++ benchmarks ===
+  - asc-nginx-delta-01
+
+  # === Atlanta C/C++ benchmarks ===
+  - atlanta-binutils-delta-01
+  - atlanta-curl-delta-01
+  - atlanta-faad2-delta-01
+  - atlanta-file-delta-01
+  - atlanta-freetype2-delta-01
+  - atlanta-gpac-delta-01
+  - atlanta-jq-delta-01
+  - atlanta-libavc-full-01
+  - atlanta-libcue-delta-01
+  - atlanta-libjpeg-full-01
+  - atlanta-libjpeg-full-02
+  - atlanta-libssh2-delta-01
+  - atlanta-libtiff-full-01
+  - atlanta-libxml2-delta-01
+  - atlanta-mongoose-delta-01
+  - atlanta-mosquitto-delta-01
+  - atlanta-nasm-delta-01
+  - atlanta-pcre2-full-01
+  - atlanta-php-delta-01
+  - atlanta-sleuthkit-delta-01
+  - atlanta-tkctf-rpn-calculator-delta-01
+  - atlanta-tmux-delta-01
+  - atlanta-user-nginx-full-01
+  - atlanta-wireshark-delta-01

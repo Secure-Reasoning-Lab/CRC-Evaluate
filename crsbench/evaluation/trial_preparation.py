@@ -44,6 +44,7 @@ def _effective_inputs_from_config(
     seed_cfg = explicit_inputs.get("seed") or {}
     pov_cfg = explicit_inputs.get("pov") or {}
     diff_cfg = explicit_inputs.get("diff") or {}
+    gtp_cfg = explicit_inputs.get("ground_truth_patch") or {}
 
     hints_enabled = bool(sarif_cfg.get("enabled", False))
     hint_sarif_level = sarif_cfg.get("level")
@@ -53,9 +54,11 @@ def _effective_inputs_from_config(
     pov_enabled = bool(pov_cfg.get("enabled", False))
     max_variants = pov_cfg.get("max_variants_per_cpv")
     diff_enabled = bool(diff_cfg.get("enabled", False))
+    ground_truth_patch_enabled = bool(gtp_cfg.get("enabled", False))
 
-    # Delta mode requires the reference diff by definition.
-    if trial_mode == "delta" and not diff_enabled:
+    # Delta mode requires the reference diff by definition (unless ground_truth_patch
+    # is explicitly enabled, in which case it provides the diff input instead).
+    if trial_mode == "delta" and not diff_enabled and not ground_truth_patch_enabled:
         diff_enabled = True
         logger.info(
             "Auto-enabling diff input for delta-mode trial "
@@ -72,6 +75,7 @@ def _effective_inputs_from_config(
         "pov_input_enabled": pov_enabled,
         "max_pov_variants_per_cpv": max_variants if pov_enabled else None,
         "diff_enabled": diff_enabled,
+        "ground_truth_patch_enabled": ground_truth_patch_enabled,
         "inputs": {
             "pov": {
                 "enabled": pov_enabled,
@@ -86,6 +90,7 @@ def _effective_inputs_from_config(
                 "max_time": seed_max_time if seed_enabled else None,
             },
             "diff": {"enabled": diff_enabled},
+            "ground_truth_patch": {"enabled": ground_truth_patch_enabled},
         },
     }
 

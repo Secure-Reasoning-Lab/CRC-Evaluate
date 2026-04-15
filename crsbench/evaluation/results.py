@@ -43,6 +43,14 @@ class HarnessResult:
     build_time: Optional[float] = None  # Time spent building CRS (seconds)
     run_time: Optional[float] = None  # Time spent running CRS (seconds)
 
+    # CI verification status, populated when the CRS emits a structured
+    # verify_patch result file (builder-sidecar-lite and similar sidecar
+    # verifiers). One of "pass", "fail", "error", or ``None`` if the CRS
+    # does not write such a file.
+    ci_verify_status: Optional[str] = None
+    ci_verify_reason: Optional[str] = None
+    ci_verify_failed_step: Optional[str] = None
+
 
 @dataclass
 class EvaluationReport:
@@ -95,15 +103,37 @@ class EvaluationReport:
 
     @property
     def success(self) -> bool:
-        """Return True if evaluation completed (harness results exist).
+        """Return True if evaluation completed successfully.
 
-        Note: ``HarnessResult.run_successful`` reflects the ``oss-crs run``
-        exit code, which is non-zero when Docker containers exit non-zero
-        (e.g. fuzzer killed by timeout).  This is normal — POVs/patches may
-        still be present.  Therefore ``success`` is based on whether the
-        evaluation produced results, not the raw exit code.
+        Two signals are consulted:
+
+        1. If any harness emitted a structured CI verify result
+           (``HarnessResult.ci_verify_status``), that value is authoritative:
+           the trial is successful only when *every* reporting harness is
+           ``"pass"``.  This path is used by sidecar-based verifier CRSes
+           (e.g. builder-sidecar-lite) that run a deterministic
+           build/verify/test pipeline and need strict pass/fail semantics
+           for CI purposes.
+
+        2. Otherwise fall back to the lenient check: success == "at least
+           one harness was executed".  ``HarnessResult.run_successful``
+           reflects the ``oss-crs run`` exit code, which is non-zero when
+           Docker containers exit non-zero (e.g. fuzzer killed by timeout).
+           This is normal for performance-measurement CRSes — POVs/patches
+           may still be present even on non-zero exit, so ``success`` is
+           based on whether the evaluation produced results, not the raw
+           exit code.
         """
-        return len(self.harness_results) > 0
+        if not self.harness_results:
+            return False
+
+        reported = [
+            hr for hr in self.harness_results if hr.ci_verify_status is not None
+        ]
+        if reported:
+            return all(hr.ci_verify_status == "pass" for hr in reported)
+
+        return True
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert report to dictionary."""

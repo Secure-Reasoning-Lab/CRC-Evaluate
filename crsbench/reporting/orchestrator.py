@@ -157,6 +157,7 @@ class ReportGenerator:
         *,
         format: str = "both",
         skip_incomplete: bool = True,
+        ci_test: bool = False,
     ) -> dict[str, Path | list[Path]]:
         """Generate report for an entire experiment.
 
@@ -378,7 +379,7 @@ class ReportGenerator:
             )
             result["html"] = html_path
 
-        if format in ("csv", "all"):
+        if format in ("csv", "all") or ci_test:
             csv_paths = self.csv_generator.generate_experiment_report(
                 experiment_metrics.model_dump()
             )
@@ -386,6 +387,9 @@ class ReportGenerator:
                 experiment_dir
             )
             csv_paths.append(patch_csv)
+            if ci_test:
+                ci_csv = self.csv_generator.generate_ci_test_report(experiment_dir)
+                csv_paths.append(ci_csv)
             result["csv"] = csv_paths
 
         logger.info(

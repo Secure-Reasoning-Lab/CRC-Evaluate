@@ -1294,6 +1294,51 @@ class TestOssCrsAdapterBugFindFull:
         assert cmds == ["prepare", "build-target", "prepare", "build-target"]
 
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_host_global_build_done_marker_is_ignored(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """A leftover host-global build-done marker must not skip
+        build-target.
+
+        Earlier revisions of this adapter cached "build already done"
+        state in ``/tmp/crsbench-oss-crs-build-done-*``.  That cache is
+        unsound because build outputs live under each trial's per-trial
+        ``work_dir`` and are not transferable across fresh work_dirs.
+        The current adapter no longer consults such markers; this test
+        guards that the old marker is ignored and build-target actually
+        runs on a fresh trial.
+        """
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        trial = tmp_path / "trial"
+        trial.mkdir()
+
+        # Manually write the legacy host-global marker to simulate a
+        # prior adapter revision.
+        crs_token = adapter._lock_token(adapter._crs_config_name)
+        project_token = adapter._lock_token("proj1")
+        sanitizer_token = adapter._lock_token(adapter._sanitizer)
+        lock_dir = adapter._lock_dir()
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        marker = (
+            lock_dir
+            / f"crsbench-oss-crs-build-done-{crs_token}-{project_token}-{sanitizer_token}"
+        )
+        marker.touch()
+
+        adapter.build(bench, trial)
+
+        cmds = [call[0][0][1] for call in mock_run.call_args_list]
+        assert "build-target" in cmds, (
+            "Legacy host-global marker must not suppress build-target"
+        )
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
     def test_build_target_failure_does_not_affect_prepared_flag(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
@@ -2330,6 +2375,91 @@ class TestOssCrsAdapterBugFindFull:
         output_dir = Path(metadata["output_dir"])
         assert metadata["exchange_pov_dir"] is None
         assert not (output_dir / "povs" / "crash-001").exists()
+
+    @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_build_resets_runtime_run_logs_between_trials_without_reuse(
+        self,
+        mock_subprocess: MagicMock,
+        mock_rwgt: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        mock_rwgt.return_value = ("output", "", 0, False)
+
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        harness = MagicMock()
+        harness.name = "harness1"
+
+        trial1 = tmp_path / "trial1"
+        trial1.mkdir()
+        adapter.build(bench, trial1)
+        adapter.run(bench, harness, trial1)
+        assert adapter._runtime_run_logs_base_dir is not None
+
+        trial2 = tmp_path / "trial2"
+        trial2.mkdir()
+        adapter.build(bench, trial2)
+
+        assert adapter._runtime_run_logs_base_dir is None
+
+    @patch("crsbench.evaluation.adapter.oss_crs.run_oss_crs_artifacts")
+    @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_collect_results_copies_runtime_run_logs_without_artifacts(
+        self,
+        mock_subprocess: MagicMock,
+        mock_rwgt: MagicMock,
+        mock_artifacts: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        mock_rwgt.return_value = ("output", "", 0, False)
+        mock_artifacts.side_effect = RuntimeError("artifacts unavailable")
+
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        trial = tmp_path / "trial"
+        trial.mkdir()
+
+        adapter.build(bench, trial)
+        harness = MagicMock()
+        harness.name = "harness1"
+        adapter.run(bench, harness, trial)
+
+        run_logs_base = adapter._runtime_run_logs_base_dir
+        assert run_logs_base is not None
+        services = run_logs_base / "services"
+        crs_logs = run_logs_base / "crs" / "test-crs"
+        services.mkdir(parents=True)
+        crs_logs.mkdir(parents=True)
+        (run_logs_base / "docker-compose.stdout.log").write_text("compose-out")
+        (run_logs_base / "docker-compose.stderr.log").write_text("compose-err")
+        (services / "service-a.stdout.log").write_text("service-out")
+        (crs_logs / "runner.stdout.log").write_text("runner-out")
+
+        metadata = adapter.collect_results(trial, "harness1")
+
+        logs_dir = Path(metadata["output_dir"]) / "logs"
+        assert (logs_dir / "docker-compose.stdout.log").read_text() == "compose-out"
+        assert (logs_dir / "docker-compose.stderr.log").read_text() == "compose-err"
+        assert (
+            logs_dir / "services" / "service-a.stdout.log"
+        ).read_text() == "service-out"
+        assert (
+            logs_dir / "crs" / "test-crs" / "runner.stdout.log"
+        ).read_text() == "runner-out"
+        assert metadata["run_logs_base_dir"] == str(run_logs_base)
+        assert metadata["service_logs_dir"] == str(services)
 
     def test_collect_results_copies_top_level_run_logs(self, tmp_path: Path) -> None:
         adapter = self._make_adapter(tmp_path)

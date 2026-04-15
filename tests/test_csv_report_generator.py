@@ -556,3 +556,262 @@ def test_patch_analysis_ignores_hidden_patch_diff_files(temp_output_dir):
 
     assert len(rows) == 1
     assert rows[0]["patch_generated_count"] == "1"
+
+
+def test_ci_test_report_marks_completed_no_patch_trials_as_skip(temp_output_dir):
+    """Completed trials without generated patches should not look like log loss."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "experiment-data" / "exp-1"
+        trial_dir = (
+            experiment_dir
+            / "builder-sidecar-lite"
+            / "afc-apache-commons-compress-delta-01"
+            / "CompressTarFuzzer"
+            / "cpv_0"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        trial_dir.mkdir(parents=True, exist_ok=True)
+        (trial_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "crs": "builder-sidecar-lite",
+                    "benchmark": "afc-apache-commons-compress-delta-01",
+                    "harness": "CompressTarFuzzer",
+                    "target_cpv_id": "cpv_0",
+                    "build_mode": "delta",
+                    "sanitizer": "address",
+                }
+            )
+        )
+        (trial_dir / "worker.log").write_text(
+            "\n".join(
+                [
+                    "No patches found for distributed verification",
+                    "No patches directory found (CRS produced no patches): output/patches",
+                    "[Trial 1] Completed builder-sidecar-lite on benchmark/harness: "
+                    "0 patches produced, 0 verified, 0 valid in 147.6s",
+                ]
+            )
+        )
+
+        out_path = generator.generate_ci_test_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert len(rows) == 1
+    assert rows[0]["ci_status"] == "SKIP"
+    assert rows[0]["failure_reason"] == "no patches produced"
+
+
+def test_ci_test_report_parses_verify_patch_success_as_pass(temp_output_dir):
+    """builder-sidecar verify-patch success logs should be reported as PASS."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "experiment-data" / "exp-1"
+        trial_dir = (
+            experiment_dir
+            / "builder-sidecar-lite"
+            / "afc-curl-delta-01"
+            / "curl_fuzzer_ws"
+            / "cpv_0"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        trial_dir.mkdir(parents=True, exist_ok=True)
+        (trial_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "crs": "builder-sidecar-lite",
+                    "benchmark": "afc-curl-delta-01",
+                    "harness": "curl_fuzzer_ws",
+                    "target_cpv_id": "cpv_0",
+                    "build_mode": "delta",
+                    "sanitizer": "address",
+                }
+            )
+        )
+        (trial_dir / "worker.log").write_text(
+            "[Trial 1] Completed builder-sidecar-lite on "
+            "afc-curl-delta-01/curl_fuzzer_ws: 0 patches produced\n"
+        )
+        crs_log_dir = trial_dir / "output" / "logs" / "crs" / "builder-sidecar-lite"
+        crs_log_dir.mkdir(parents=True, exist_ok=True)
+        timing_dir = crs_log_dir / "log_dir"
+        timing_dir.mkdir(parents=True, exist_ok=True)
+        (timing_dir / "verify_patch_timing.json").write_text(
+            json.dumps({"rebuild": 70.4, "test": 481.0})
+        )
+        (crs_log_dir / "builder-sidecar-lite_patcher.stdout.log").write_text(
+            "\n".join(
+                [
+                    "builder-sidecar-lite_patcher-1  | 2026-04-10T05:42:35Z "
+                    "[verify-patch] PASS: Functionality tests pass",
+                    "builder-sidecar-lite_patcher-1  | 2026-04-10T05:42:35Z "
+                    "[verify-patch]   [test] 481.0s",
+                    "builder-sidecar-lite_patcher-1  | 2026-04-10T05:42:35Z "
+                    "[verify-patch] SUCCESS: patch verified - crash fixed, tests pass",
+                ]
+            )
+        )
+
+        out_path = generator.generate_ci_test_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert len(rows) == 1
+    assert rows[0]["ci_status"] == "PASS"
+    assert rows[0]["failure_reason"] == ""
+    assert rows[0]["patch_test_time"] == "481.0"
+    assert rows[0]["test_time_s"] == "481.0"
+
+
+def test_ci_test_report_prefers_structured_verify_patch_status(temp_output_dir):
+    """Structured verify_patch_timing.json ``status`` field is authoritative.
+
+    When the file contains a ``status`` field (new sidecar schema), the
+    reporter should trust it and skip the legacy text parsing of patcher
+    logs — even if those logs would otherwise look like "PASS".
+    """
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "experiment-data" / "exp-1"
+        trial_dir = (
+            experiment_dir
+            / "builder-sidecar-lite"
+            / "atlanta-binutils-delta-01"
+            / "fuzz_as"
+            / "cpv_0"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        trial_dir.mkdir(parents=True, exist_ok=True)
+        (trial_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "crs": "builder-sidecar-lite",
+                    "benchmark": "atlanta-binutils-delta-01",
+                    "harness": "fuzz_as",
+                    "target_cpv_id": "cpv_0",
+                    "build_mode": "delta",
+                    "sanitizer": "address",
+                }
+            )
+        )
+        (trial_dir / "worker.log").write_text(
+            "[Trial 1] Completed builder-sidecar-lite on "
+            "atlanta-binutils-delta-01/fuzz_as: 0 patches produced\n"
+        )
+        crs_log_dir = trial_dir / "output" / "logs" / "crs" / "builder-sidecar-lite"
+        crs_log_dir.mkdir(parents=True, exist_ok=True)
+        timing_dir = crs_log_dir / "log_dir"
+        timing_dir.mkdir(parents=True, exist_ok=True)
+        (timing_dir / "verify_patch_timing.json").write_text(
+            json.dumps(
+                {
+                    "status": "fail",
+                    "reason": "Some POVs still crash after patch (1/1)",
+                    "failed_step": "run_povs_patched",
+                    "steps": {
+                        "run_povs_patched": {
+                            "status": "fail",
+                            "still_crash": [
+                                {
+                                    "pov": "cpv_0",
+                                    "exit": 1,
+                                    "stderr_tail": "500 Server Error",
+                                }
+                            ],
+                        }
+                    },
+                    "rebuild": 145.4,
+                    "test": 0.0,
+                }
+            )
+        )
+        # A misleading "SUCCESS" line in the patcher log must be ignored
+        # when the structured result is present.
+        (crs_log_dir / "builder-sidecar-lite_patcher.stdout.log").write_text(
+            "builder-sidecar-lite_patcher-1  | 2026-04-10T06:10:00Z "
+            "[verify-patch] SUCCESS: patch verified - crash fixed, tests pass"
+        )
+
+        out_path = generator.generate_ci_test_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert len(rows) == 1
+    assert rows[0]["ci_status"] == "FAIL"
+    assert rows[0]["failure_reason"] == "Some POVs still crash after patch (1/1)"
+    assert "run_povs_patched" in rows[0]["failure_log"]
+    # Legacy rebuild timing should still be parsed from the top-level keys.
+    assert rows[0]["patch_rebuild_time"] == "145.4"
+
+
+def test_ci_test_report_structured_build_failure_classified(temp_output_dir):
+    """A verify_patch_timing.json with failed_step=apply_patch_build yields BUILD_FAILED."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "experiment-data" / "exp-1"
+        trial_dir = (
+            experiment_dir
+            / "builder-sidecar-lite"
+            / "atlanta-htmlunit-delta-01"
+            / "HtmlunitOne"
+            / "cpv_0"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        trial_dir.mkdir(parents=True, exist_ok=True)
+        (trial_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "crs": "builder-sidecar-lite",
+                    "benchmark": "atlanta-htmlunit-delta-01",
+                    "harness": "HtmlunitOne",
+                    "target_cpv_id": "cpv_0",
+                    "build_mode": "delta",
+                    "sanitizer": "address",
+                }
+            )
+        )
+        (trial_dir / "worker.log").write_text(
+            "[Trial 1] Completed builder-sidecar-lite\n"
+        )
+        crs_log_dir = trial_dir / "output" / "logs" / "crs" / "builder-sidecar-lite"
+        crs_log_dir.mkdir(parents=True, exist_ok=True)
+        timing_dir = crs_log_dir / "log_dir"
+        timing_dir.mkdir(parents=True, exist_ok=True)
+        (timing_dir / "verify_patch_timing.json").write_text(
+            json.dumps(
+                {
+                    "status": "fail",
+                    "reason": "Patched build failed (exit=1)",
+                    "failed_step": "apply_patch_build",
+                    "steps": {
+                        "apply_patch_build": {
+                            "status": "fail",
+                            "exit_code": 1,
+                            "stderr_tail": "mv: cannot move 'org' ...",
+                        }
+                    },
+                }
+            )
+        )
+
+        out_path = generator.generate_ci_test_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert len(rows) == 1
+    assert rows[0]["ci_status"] == "BUILD_FAILED"
+    assert rows[0]["failure_reason"] == "Patched build failed (exit=1)"

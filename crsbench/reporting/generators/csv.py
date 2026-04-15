@@ -607,6 +607,393 @@ class CSVReportGenerator:
 
         return combined
 
+    def generate_ci_test_report(self, experiment_dir: Path) -> Path:
+        """Generate CI sidecar-test results CSV from patcher logs.
+
+        For each trial, parses the patcher stdout log to determine whether the
+        CI test fixture (builder-sidecar-full / builder-sidecar-lite) passed,
+        failed, or skipped because no patch was produced, and extracts the
+        failure reason when it did not pass.
+
+        Columns:
+            crs, benchmark, harness, cpv, mode, sanitizer,
+            ci_status, failure_reason, failure_log,
+            elapsed_seconds, build_time, run_time, trial_dir
+        """
+        out_path = self.output_dir / "ci_test_results.csv"
+        rows: list[dict[str, Any]] = []
+
+        for trial_dir in sorted(experiment_dir.rglob("trial-*")):
+            if not trial_dir.is_dir():
+                continue
+            paths = TrialDir(trial_dir)
+
+            metadata_path = paths.metadata_path
+            if not metadata_path.exists():
+                continue
+
+            try:
+                metadata = json.loads(metadata_path.read_text())
+            except Exception:
+                continue
+
+            cpv_id = metadata.get("target_cpv_id") or ""
+
+            ci_status, failure_reason, failure_log = self._parse_ci_test_result(
+                trial_dir, paths.worker_log_path
+            )
+            elapsed_seconds = self._extract_elapsed_seconds(paths.worker_log_path)
+            build_time, run_time, _ = self._extract_phase_times(paths.worker_log_path)
+            rts_stats = self._parse_rts_stats_from_sidecar_log(trial_dir)
+            patch_timing = self._parse_verify_patch_timing(trial_dir)
+
+            rows.append(
+                {
+                    "crs": metadata.get("crs", ""),
+                    "benchmark": metadata.get("benchmark", ""),
+                    "harness": metadata.get("harness", ""),
+                    "cpv": cpv_id,
+                    "mode": metadata.get("build_mode", ""),
+                    "sanitizer": metadata.get("sanitizer", ""),
+                    "ci_status": ci_status,
+                    "failure_reason": failure_reason,
+                    "failure_log": failure_log,
+                    "elapsed_seconds": elapsed_seconds,
+                    "build_time": build_time,
+                    "run_time": run_time,
+                    "patch_rebuild_time": patch_timing["patch_rebuild_time"],
+                    "patch_test_time": patch_timing["patch_test_time"],
+                    "tests_run": rts_stats["tests_run"],
+                    "failures": rts_stats["failures"],
+                    "errors": rts_stats["errors"],
+                    "skipped": rts_stats["skipped"],
+                    "test_classes_run": rts_stats["test_classes_run"],
+                    "total_time_s": rts_stats["total_time_s"],
+                    "test_time_s": rts_stats["test_time_s"],
+                    "trial_dir": str(trial_dir),
+                }
+            )
+
+        fieldnames = [
+            "crs",
+            "benchmark",
+            "harness",
+            "cpv",
+            "mode",
+            "sanitizer",
+            "ci_status",
+            "failure_reason",
+            "failure_log",
+            "elapsed_seconds",
+            "build_time",
+            "run_time",
+            "patch_rebuild_time",
+            "patch_test_time",
+            "tests_run",
+            "failures",
+            "errors",
+            "skipped",
+            "test_classes_run",
+            "total_time_s",
+            "test_time_s",
+            "trial_dir",
+        ]
+        self._write_csv_rows(out_path, rows, fieldnames)
+        logger.debug(f"Generated CI test results CSV: {out_path}")
+        return out_path
+
+    @staticmethod
+    def _parse_verify_patch_timing(trial_dir: Path) -> dict[str, Any]:
+        """Parse verify_patch_timing.json from CRS log_dir.
+
+        Returns dict with ``patch_rebuild_time`` and ``patch_test_time``
+        (seconds), or empty strings if the file is not found.
+        """
+        result: dict[str, Any] = {
+            "patch_rebuild_time": "",
+            "patch_test_time": "",
+        }
+        # Path: trial_dir/output/logs/crs/<crs_name>/log_dir/verify_patch_timing.json
+        crs_log_dir = trial_dir / "output" / "logs" / "crs"
+        if not crs_log_dir.is_dir():
+            return result
+        for crs_dir in crs_log_dir.iterdir():
+            timing_file = crs_dir / "log_dir" / "verify_patch_timing.json"
+            if timing_file.exists():
+                try:
+                    data = json.loads(timing_file.read_text())
+                    result["patch_rebuild_time"] = round(data.get("rebuild", 0), 1)
+                    result["patch_test_time"] = round(data.get("test", 0), 1)
+                except Exception:
+                    pass
+                break
+        return result
+
+    @staticmethod
+    def _parse_rts_stats_from_sidecar_log(
+        trial_dir: Path,
+    ) -> dict[str, Any]:
+        """Parse RTS / test statistics from builder-sidecar stdout logs.
+
+        The builder-sidecar streams ephemeral container output with prefixes
+        like ``[test:N] ...``.  For JVM projects, Maven prints lines such as::
+
+            [test:1] Tests run: 42, Failures: 0, Errors: 0, Skipped: 3
+            [test:1] Running org.example.FooTest
+            [test:1] Total time:  12.345 s
+
+        Returns a dict with keys (all default to empty/0 when not found):
+            tests_run, failures, errors, skipped,
+            test_classes (list of class names),
+            total_time_s (Maven "Total time" in seconds),
+            test_time_s (wall-clock from patcher ``[test] XX.Xs``).
+        """
+        result: dict[str, Any] = {
+            "tests_run": 0,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "test_classes_run": 0,
+            "total_time_s": "",
+            "test_time_s": "",
+        }
+
+        # --- 1. Parse builder-sidecar logs for Maven test output ---
+        services_dir = trial_dir / "output" / "logs" / "services"
+        log_paths = sorted(services_dir.glob("*inc-builder-*.stdout.log"))
+        if not log_paths:
+            log_paths = sorted(
+                (trial_dir / "output" / "logs" / "crs").glob(
+                    "**/*inc-builder-*.stdout.log"
+                )
+            )
+
+        test_classes: list[str] = []
+        for log_path in log_paths:
+            try:
+                text = log_path.read_text(errors="ignore")
+            except Exception:
+                continue
+
+            for line in text.splitlines():
+                # Strip sidecar or docker-compose log prefixes
+                raw = line
+                m = re.match(r"^\[test:\d+\]\s+(.*)", line)
+                if m:
+                    raw = m.group(1)
+                else:
+                    # docker-compose prefix: "service | 2026-...Z [test:N] msg"
+                    m2 = re.match(r"^.*\|\s+\S+Z?\s+\[test:\d+\]\s+(.*)", line)
+                    if m2:
+                        raw = m2.group(1)
+
+                # Maven "Results :" or "Tests run:" summary
+                if "Tests run:" in raw and "Failures:" in raw:
+                    parts = raw.replace(" ", "").split(",")
+                    for part in parts:
+                        if part.startswith("Testsrun:"):
+                            result["tests_run"] += int(part.split(":")[1])
+                        elif part.startswith("Failures:"):
+                            result["failures"] += int(part.split(":")[1])
+                        elif part.startswith("Errors:"):
+                            result["errors"] += int(part.split(":")[1])
+                        elif part.startswith("Skipped:"):
+                            # Skipped may have trailing non-digits
+                            digits = "".join(
+                                c for c in part.split(":")[1] if c.isdigit()
+                            )
+                            if digits:
+                                result["skipped"] += int(digits)
+
+                # Maven "Running <class>"
+                elif "Running " in raw:
+                    cls = raw.split("Running ", 1)[1].strip()
+                    if cls and not cls.startswith("[") and "." in cls:
+                        test_classes.append(cls)
+
+                # Maven "Total time:"
+                elif "Total time:" in raw:
+                    t_str = raw.split("Total time:")[1].strip().rstrip("s").strip()
+                    try:
+                        result["total_time_s"] = round(float(t_str), 1)
+                    except ValueError:
+                        pass
+
+        result["test_classes_run"] = len(test_classes)
+
+        # --- 2. Parse patcher log for wall-clock test time ---
+        patcher_log = CSVReportGenerator._find_patcher_log(trial_dir)
+        if patcher_log and patcher_log.exists():
+            try:
+                for line in patcher_log.read_text(errors="ignore").splitlines():
+                    # verify_patch prints: "  [test] 12.3s"
+                    tm = re.search(r"\[test\]\s+([\d.]+)s", line)
+                    if tm:
+                        result["test_time_s"] = round(float(tm.group(1)), 1)
+            except Exception:
+                pass
+
+        return result
+
+    @staticmethod
+    def _find_patcher_log(trial_dir: Path) -> Path | None:
+        """Return first patcher stdout log found under output/logs/services/."""
+        services_dir = trial_dir / "output" / "logs" / "services"
+        candidates = sorted(services_dir.glob("*_patcher.stdout.log"))
+        if not candidates:
+            # Fallback for older layout
+            candidates = sorted(
+                (trial_dir / "output" / "logs" / "crs").glob("**/*_patcher.stdout.log")
+            )
+        return candidates[0] if candidates else None
+
+    @staticmethod
+    def _parse_verify_patch_result(trial_dir: Path) -> dict[str, Any] | None:
+        """Load the structured verify_patch_timing.json if present.
+
+        Returns the parsed dict (possibly containing ``status``, ``reason``,
+        ``failed_step``, ``steps``, ``rebuild``, ``test``) or ``None`` when
+        no result file is found.  A file that is found but malformed
+        returns an empty dict.
+        """
+        crs_log_dir = trial_dir / "output" / "logs" / "crs"
+        if not crs_log_dir.is_dir():
+            return None
+        for crs_dir in sorted(crs_log_dir.iterdir()):
+            result_file = crs_dir / "log_dir" / "verify_patch_timing.json"
+            if not result_file.exists():
+                continue
+            try:
+                return json.loads(result_file.read_text())
+            except Exception:
+                return {}
+        return None
+
+    @staticmethod
+    def _parse_ci_test_result(
+        trial_dir: Path, worker_log_path: Path
+    ) -> tuple[str, str, str]:
+        """Parse CI test result from worker and patcher logs.
+
+        Returns:
+            Tuple of (ci_status, failure_reason, failure_log).
+            ci_status is one of: PASS, FAIL, BUILD_FAILED, TIMEOUT, SKIP, UNKNOWN.
+        """
+        # Prefer the structured result file when the CRS emits one.  This
+        # is authoritative for sidecar-based verifier CRSes (e.g.
+        # builder-sidecar-lite) and avoids fragile text parsing.
+        verify_result = CSVReportGenerator._parse_verify_patch_result(trial_dir)
+        if verify_result is not None:
+            status = verify_result.get("status")
+            if status == "pass":
+                return "PASS", "", ""
+            if status in ("fail", "error"):
+                reason = verify_result.get("reason") or ""
+                failed_step = verify_result.get("failed_step") or ""
+                # Compose a concise failure log from the step details.
+                step_details = verify_result.get("steps") or {}
+                failed_detail = step_details.get(failed_step) or {}
+                failure_log_parts: list[str] = []
+                if failed_step:
+                    failure_log_parts.append(f"step={failed_step}")
+                if isinstance(failed_detail, dict):
+                    for key in ("exit_code", "reason", "stderr_tail"):
+                        if key in failed_detail:
+                            failure_log_parts.append(f"{key}={failed_detail[key]}")
+                failure_log = " | ".join(str(p) for p in failure_log_parts if p)
+                # Classify fail categories for the CSV report.
+                ci_status = "FAIL" if status == "fail" else "ERROR"
+                if failed_step == "apply_patch_build":
+                    ci_status = "BUILD_FAILED"
+                return ci_status, reason, failure_log
+            # Unknown status value — fall through to legacy parsing.
+
+        worker_text = ""
+        if worker_log_path.exists():
+            try:
+                worker_text = worker_log_path.read_text(errors="ignore")
+            except Exception:
+                pass
+
+        # Determine trial-level outcome from worker log
+        if "timed out after" in worker_text and "build-target failed" in worker_text:
+            return "TIMEOUT", "build-target timed out", ""
+        if "build-target failed (rc=1)" in worker_text:
+            # Extract brief error from worker log
+            for line in worker_text.splitlines():
+                if "Failed with error:" in line:
+                    reason = line.split("Failed with error:")[-1].strip()
+                    return "BUILD_FAILED", reason, ""
+            return "BUILD_FAILED", "build-target failed (rc=1)", ""
+
+        # Trial ran — check patcher log for test result
+        patcher_log = CSVReportGenerator._find_patcher_log(trial_dir)
+        if patcher_log is None:
+            # No patcher log: infer from worker log
+            if "Trial" in worker_text and "Completed" in worker_text:
+                no_patch_markers = (
+                    "No patches found for distributed verification",
+                    "CRS produced no patches",
+                    "0 patches produced",
+                )
+                if any(marker in worker_text for marker in no_patch_markers):
+                    return "SKIP", "no patches produced", ""
+            return "UNKNOWN", "no patcher log found", ""
+
+        try:
+            patcher_text = patcher_log.read_text(errors="ignore")
+        except Exception:
+            return "UNKNOWN", "could not read patcher log", ""
+
+        # Strip docker-compose log prefix: "<service> | <timestamp>Z <message>"
+        clean_lines = []
+        for raw in patcher_text.splitlines():
+            # Remove "container-name  | 2026-...Z " prefix if present
+            stripped = re.sub(r"^\S.*?\|\s+\S+Z\s+", "", raw)
+            clean_lines.append(stripped)
+
+        patcher_clean = "\n".join(clean_lines)
+
+        # Collect FAIL lines
+        fail_lines = [line for line in clean_lines if re.search(r"\bFAIL\b", line)]
+        if fail_lines:
+            # First non-summary FAIL line as reason
+            reason_line = next(
+                (line for line in fail_lines if "one or more tests failed" not in line),
+                fail_lines[0],
+            )
+            failure_reason = reason_line.strip()
+            # Include up to 10 lines around the first FAIL for context
+            first_fail_idx = next(
+                (
+                    i
+                    for i, line in enumerate(clean_lines)
+                    if re.search(r"\bFAIL\b", line)
+                ),
+                0,
+            )
+            ctx_start = max(0, first_fail_idx - 3)
+            ctx_end = min(len(clean_lines), first_fail_idx + 7)
+            failure_log = " | ".join(clean_lines[ctx_start:ctx_end])
+            return "FAIL", failure_reason, failure_log
+
+        pass_markers = (
+            "ALL PASSED",
+            "SUCCESS: patch verified",
+        )
+        if any(marker in patcher_clean for marker in pass_markers):
+            return "PASS", "", ""
+
+        # Patcher exited without ALL PASSED or FAIL lines
+        if worker_text and "Trial" in worker_text and "Failed" in worker_text:
+            for line in worker_text.splitlines():
+                if "Failed with error:" in line:
+                    reason = line.split("Failed with error:")[-1].strip()
+                    return "FAIL", reason, ""
+            return "FAIL", "CRS run phase failed", ""
+
+        return "UNKNOWN", "", ""
+
     def _write_csv_rows(
         self, filepath: Path, rows: list[dict[str, Any]], fieldnames: list[str]
     ) -> None:

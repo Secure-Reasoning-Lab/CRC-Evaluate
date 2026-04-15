@@ -3083,6 +3083,25 @@ class ExperimentDiffInputs(BaseModel):
     )
 
 
+class ExperimentGroundTruthPatchInputs(BaseModel):
+    """Ground-truth patch input settings for CI/testing CRS.
+
+    When enabled, CRSBench stages the CPV-level ground-truth patch
+    (``<benchmark>/.aixcc/<harness>/<cpv>/patches/patch_0.diff``) as the
+    runtime diff input instead of the benchmark-level ``ref.diff``.  Use this
+    for CI/testing CRS (e.g. builder-sidecar-full) that need the actual fix
+    patch to apply and verify.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: Optional[bool] = Field(
+        default=False,
+        description="Whether to stage the CPV ground-truth patch as runtime diff input. "
+        "Mutually exclusive with inputs.diff; ground_truth_patch takes precedence.",
+    )
+
+
 class ExperimentInputsConfig(BaseModel):
     """Structured explicit CRS runtime inputs."""
 
@@ -3092,6 +3111,9 @@ class ExperimentInputsConfig(BaseModel):
     sarif: ExperimentSarifInputs = Field(default_factory=ExperimentSarifInputs)
     seed: ExperimentSeedInputs = Field(default_factory=ExperimentSeedInputs)
     diff: ExperimentDiffInputs = Field(default_factory=ExperimentDiffInputs)
+    ground_truth_patch: ExperimentGroundTruthPatchInputs = Field(
+        default_factory=ExperimentGroundTruthPatchInputs
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -3100,7 +3122,7 @@ class ExperimentInputsConfig(BaseModel):
         if not isinstance(data, dict):
             return data
         normalized = dict(data)
-        for key in ("pov", "sarif", "seed", "diff"):
+        for key in ("pov", "sarif", "seed", "diff", "ground_truth_patch"):
             if key not in normalized:
                 continue
             value = normalized.get(key)
@@ -3270,6 +3292,20 @@ class ExperimentConfig(BaseModel):
     skip_verification: bool = Field(
         default=False,
         description="Skip POV verification after CRS execution (default: False, verification enabled)",
+    )
+    rts_enabled: bool = Field(
+        default=True,
+        description="Enable RTS (Regression Test Selection) for benchmarks that declare "
+        "rts_mode in project.yaml. When False, RTS is disabled even if benchmarks "
+        "support it. When True (default), RTS is activated for eligible benchmarks "
+        "(those with rts_mode != 'none' and inc_build = true).",
+    )
+    inc_build_enabled: bool = Field(
+        default=True,
+        description="Enable incremental build (--incremental-build flag for oss-crs "
+        "build-target and run). When False, every trial does a full rebuild from "
+        "scratch regardless of project.yaml inc_build setting. Useful for ablation "
+        "studies comparing incremental vs full build performance.",
     )
     oss_fuzz_path: Path = Field(
         default=Path("third_party/oss-fuzz"),
@@ -3463,6 +3499,9 @@ class ExperimentConfig(BaseModel):
                 "coverage_enabled",
                 "coverage_saturation_time",
                 "coverage_early_stop",
+                "rts_enabled",
+                "inc_build_enabled",
+                "skip_verification",
             )
             for grouped_key in runtime_groupable_keys:
                 if grouped_key not in runtime:

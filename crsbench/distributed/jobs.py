@@ -86,6 +86,7 @@ class EffectiveInputSettings:
     seed_corpus_enabled: bool
     seed_corpus_max_time: Optional[int]
     diff_enabled: bool
+    ground_truth_patch_enabled: bool
     patch_verify_variants: bool
     source: str
 
@@ -105,6 +106,7 @@ class EffectiveInputSettings:
                 "max_time": self.seed_corpus_max_time,
             },
             "diff": {"enabled": self.diff_enabled},
+            "ground_truth_patch": {"enabled": self.ground_truth_patch_enabled},
             "patch_verify_variants": self.patch_verify_variants,
         }
 
@@ -134,10 +136,12 @@ def _resolve_effective_input_settings(
     seed_corpus_enabled = bool(inputs.seed.enabled)
     seed_corpus_max_time = inputs.seed.max_time
     diff_enabled = bool(inputs.diff.enabled)
+    ground_truth_patch_enabled = bool(inputs.ground_truth_patch.enabled)
     hint_corpus_level = None
 
-    # Delta mode requires the reference diff by definition.
-    if trial_mode == "delta" and not diff_enabled:
+    # Delta mode requires the reference diff by definition (unless ground_truth_patch
+    # is explicitly enabled, in which case it provides the diff input instead).
+    if trial_mode == "delta" and not diff_enabled and not ground_truth_patch_enabled:
         diff_enabled = True
         logger.info(
             "Auto-enabling diff input for delta-mode trial "
@@ -153,6 +157,7 @@ def _resolve_effective_input_settings(
         seed_corpus_enabled=seed_corpus_enabled,
         seed_corpus_max_time=seed_corpus_max_time if seed_corpus_enabled else None,
         diff_enabled=diff_enabled,
+        ground_truth_patch_enabled=ground_truth_patch_enabled,
         patch_verify_variants=config.patch_verify_variants,
         source="inputs",
     )
@@ -210,6 +215,44 @@ def _load_benchmark_language(benchmark_path: Path) -> str:
         )
         return "c"
     return language
+
+
+def _load_benchmark_rts_env(
+    benchmark_path: Path, *, rts_enabled: bool = False
+) -> dict[str, str]:
+    """Load RTS env vars from project.yaml for oss-crs target env injection.
+
+    Returns a dict with RTS_ON and RTS_TOOL when rts_enabled is True and
+    the benchmark declares rts_mode (non-"none") and inc_build=true;
+    otherwise returns an empty dict.
+    """
+    if not rts_enabled:
+        return {}
+
+    project_yaml = benchmark_path / "project.yaml"
+    if not project_yaml.exists():
+        return {}
+
+    try:
+        with project_yaml.open() as f:
+            project = yaml.safe_load(f) or {}
+    except Exception as e:
+        logger.warning(
+            f"Failed to read {project_yaml} for RTS config: {e}; skipping RTS env injection"
+        )
+        return {}
+
+    rts_mode = project.get("rts_mode")
+    inc_build = project.get("inc_build", False)
+
+    if rts_mode and rts_mode != "none" and inc_build:
+        logger.debug(
+            f"Injecting RTS env for {benchmark_path.name}: "
+            f"RTS_ON=1, RTS_TOOL={rts_mode}"
+        )
+        return {"RTS_ON": "1", "RTS_TOOL": str(rts_mode)}
+
+    return {}
 
 
 def _generate_results_folder_name(
@@ -1403,6 +1446,21 @@ def run_crs_trial(
             **compose_config,
         }
         adapter_config["fuzzing_language"] = benchmark_language
+        adapter_config["inc_build_enabled"] = config.inc_build_enabled
+        rts_env = _load_benchmark_rts_env(
+            benchmark_path, rts_enabled=config.rts_enabled
+        )
+        if rts_env:
+            existing_env = adapter_config.get("additional_env")
+            merged_env = dict(existing_env) if isinstance(existing_env, dict) else {}
+            merged_env.update(rts_env)
+            adapter_config["additional_env"] = merged_env
+        # Set OSS_CRS_RTS_ENABLED in process env so oss-crs subprocess inherits it.
+        # target.py checks this env var to gate RTS activation.
+        if config.rts_enabled:
+            os.environ["OSS_CRS_RTS_ENABLED"] = "1"
+        else:
+            os.environ.pop("OSS_CRS_RTS_ENABLED", None)
         adapter.configure(adapter_config)
 
         # Initialize benchmark runner with adapter and snapshot configuration
@@ -1501,6 +1559,7 @@ def run_crs_trial(
             seed_corpus_enabled=effective_inputs.seed_corpus_enabled,
             seed_corpus_max_time=effective_inputs.seed_corpus_max_time,
             diff_input_enabled=effective_inputs.diff_enabled,
+            ground_truth_patch_enabled=effective_inputs.ground_truth_patch_enabled,
             redis_host=_resolve_redis_host(config),
             experiment_name=config.experiment,
             pov_dedup_strategy=config.pov_dedup_strategy,

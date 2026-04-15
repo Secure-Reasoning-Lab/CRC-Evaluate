@@ -131,6 +131,7 @@ def run_oss_crs_build_target(
     *,
     oss_crs_cmd: str = "oss-crs",
     timeout: int = 3600,
+    incremental_build: bool = False,
 ) -> tuple[str, str, int]:
     """Run ``oss-crs build-target`` to compile the target.
 
@@ -140,6 +141,7 @@ def run_oss_crs_build_target(
         target_proj_path: Path to the benchmark project directory.
         oss_crs_cmd: Path to the oss-crs executable.
         timeout: Maximum time in seconds.
+        incremental_build: Enable incremental build snapshots for RTS.
 
     Returns:
         Tuple of (stdout, stderr, returncode).
@@ -157,6 +159,8 @@ def run_oss_crs_build_target(
         "--fuzz-proj-path",
         str(target_proj_path),
     ]
+    if incremental_build:
+        cmd.append("--incremental-build")
 
     logger.debug(f"Running oss-crs build-target: {' '.join(cmd)}")
 
@@ -200,6 +204,8 @@ def run_oss_crs_run(
     seed_dir: Optional[Path] = None,
     bug_candidate: Optional[Path] = None,
     bug_candidate_dir: Optional[Path] = None,
+    incremental_build: bool = False,
+    build_id: Optional[str] = None,
 ) -> tuple[str, str, int, bool]:
     """Run ``oss-crs run`` with timeout and graceful shutdown.
 
@@ -259,6 +265,10 @@ def run_oss_crs_run(
         cmd.extend(["--bug-candidate", str(bug_candidate)])
     if bug_candidate_dir is not None:
         cmd.extend(["--bug-candidate-dir", str(bug_candidate_dir)])
+    if incremental_build:
+        cmd.append("--incremental-build")
+    if build_id is not None:
+        cmd.extend(["--build-id", build_id])
 
     logger.debug(f"Running oss-crs run: {' '.join(cmd)}")
 

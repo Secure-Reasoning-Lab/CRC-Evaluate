@@ -170,6 +170,13 @@ ignore = [
 "crsbench/genconfig/generator.py" = [
     "T201",     # print is intentional for interactive CLI section headers
 ]
+# RTS scripts are standalone container CLIs ported from oss-crs-old, not CRSBench library code.
+"crsbench/builder/rts/scripts/**/*.py" = [
+    "T201",     # print is the intended output mechanism (container CLI)
+    "PTH100", "PTH103", "PTH107", "PTH110", "PTH111", "PTH112", "PTH113",
+    "PTH118", "PTH119", "PTH120", "PTH123",  # os.path usage OK in standalone scripts
+    "ARG001",   # unused args for interface consistency
+]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "logging".msg = "Use `from crsbench.utils.logger import get_logger` instead"

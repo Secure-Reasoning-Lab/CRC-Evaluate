@@ -1514,10 +1514,10 @@ class TestIntegrationWithSampleConfigs:
 
         benchmarks = suite_config["benchmark_list"]
 
-        # Verify suite has expected benchmarks
-        assert "curl-delta-02" in benchmarks
-        assert "libxml2-delta-03" in benchmarks
-        assert len(benchmarks) > 10  # AFC-C suite has 24 benchmarks
+        # Verify suite has expected benchmarks (names include afc- prefix)
+        assert "afc-curl-delta-02" in benchmarks
+        assert "afc-libxml2-delta-03" in benchmarks
+        assert len(benchmarks) > 10  # AFC-C suite has 39 benchmarks
 
 
 # ============================================================================

@@ -1,0 +1,59 @@
+FROM ghcr.io/aixcc-finals/base-builder:v1.3.0
+
+# Project-independent RTS dependencies
+# Install: universal-ctags (from source), Intel Pin, BinaryRTS (with pintools-rts).
+# Versions and build steps derived from rts_init_c.py.
+
+# Install system packages needed to build universal-ctags and BinaryRTS CLI
+RUN apt-get update && apt-get install -y \
+    autoconf \
+    automake \
+    pkg-config \
+    libjansson-dev \
+    libyaml-dev \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build universal-ctags from source (for macrodef field and JSON output support)
+RUN set -e \
+    && git clone --depth=1 https://github.com/universal-ctags/ctags.git /tmp/ctags \
+    && cd /tmp/ctags \
+    && ./autogen.sh \
+    && ./configure \
+    && make -j$(nproc) \
+    && make install \
+    && rm -rf /tmp/ctags
+
+# Download and extract Intel Pin 4.0-99633
+# Pin is required by pintools-rts (BinaryRTS coverage instrumentation)
+RUN set -e \
+    && curl -L -o /tmp/pin.tar.gz \
+        "https://software.intel.com/sites/landingpage/pintool/downloads/pin-external-4.0-99633-g5ca9893f2-gcc-linux.tar.gz" \
+    && mkdir -p /opt/pin \
+    && tar -xzf /tmp/pin.tar.gz -C /opt/pin --strip-components=1 \
+    && rm -f /tmp/pin.tar.gz
+
+# Install poetry (required by BinaryRTS CLI)
+RUN python3 -m pip install poetry
+
+# Clone BinaryRTS and install CLI dependencies
+RUN set -e \
+    && git clone --depth=1 https://github.com/Team-Atlanta/binary-rts.git /opt/binary-rts \
+    && cd /opt/binary-rts/binaryrts/cli \
+    && poetry install --no-interaction
+
+# Build pintools-rts Pin tool (functrace.so) and listener library (libpin_listener.a)
+# The listener library is built with clang++/libc++ to match oss-fuzz's stdlib.
+# The Pin tool itself uses pin-g++ (gcc-based) which runs in a separate process.
+RUN set -e \
+    && cd /opt/binary-rts/pintools-rts \
+    && PIN_ROOT=/opt/pin make -j$(nproc) \
+    && cd /opt/binary-rts/pintools-rts/pin_listener \
+    && clang -c -fPIC -O2 -o pin_annotations.o pin_annotations.c \
+    && clang++ -std=c++17 -stdlib=libc++ -c -fPIC -O2 -I. -o pin_test_listener.o pin_test_listener.cpp \
+    && ar rcs libpin_listener.a pin_annotations.o pin_test_listener.o
+
+# Helper scripts (copied from crsbench/builder/rts/scripts/ into the Docker build context)
+COPY scripts/rts_init_project.py /rts_init_project.py
+COPY scripts/run_tests_rts_wrapper.sh /src/run_tests.sh
+RUN chmod +x /src/run_tests.sh
