@@ -1,5 +1,15 @@
 import pytest
+from crsbench.builder.rts import dockerfile_swap as dockerfile_swap_mod
 from crsbench.builder.rts.dockerfile_swap import swap_dockerfile_from
+
+
+@pytest.fixture(autouse=True)
+def _stub_ensure_rts_image(monkeypatch):
+    monkeypatch.setattr(
+        dockerfile_swap_mod,
+        "_ensure_rts_image",
+        lambda language: dockerfile_swap_mod.RTS_IMAGE_TAGS[language],
+    )
 
 
 def test_swap_jvm_from():
@@ -9,7 +19,7 @@ def test_swap_jvm_from():
         "COPY build.sh $SRC\n"
     )
     result = swap_dockerfile_from(original, language="jvm")
-    assert result.startswith("FROM ghcr.io/team-atlanta/crsbench-rts-jvm:latest\n")
+    assert result.startswith("FROM crsbench-rts-jvm:latest\n")
     assert "RUN apt-get update" in result
     assert "COPY build.sh" in result
 
@@ -17,7 +27,7 @@ def test_swap_jvm_from():
 def test_swap_c_from():
     original = "FROM gcr.io/oss-fuzz/base-builder\nRUN apt-get update\n"
     result = swap_dockerfile_from(original, language="c")
-    assert result.startswith("FROM ghcr.io/team-atlanta/crsbench-rts-c:latest\n")
+    assert result.startswith("FROM crsbench-rts-c:latest\n")
 
 
 def test_swap_cpp_uses_c_image():
@@ -36,12 +46,16 @@ def test_swap_preserves_rest_of_dockerfile():
     )
     result = swap_dockerfile_from(original, language="jvm")
     lines = result.splitlines()
-    assert lines[0].startswith("FROM ghcr.io/team-atlanta/crsbench-rts-jvm")
+    assert lines[0].startswith("FROM crsbench-rts-jvm")
     assert lines[1] == "ARG DEBIAN_FRONTEND=noninteractive"
     assert len(lines) == 5
 
 
-def test_swap_unsupported_language_raises():
+def test_swap_unsupported_language_raises(monkeypatch):
+    def _raise(language):
+        raise ValueError(f"Unsupported RTS language: {language}")
+
+    monkeypatch.setattr(dockerfile_swap_mod, "_ensure_rts_image", _raise)
     with pytest.raises(ValueError, match="Unsupported RTS language"):
         swap_dockerfile_from("FROM ubuntu\n", language="rust")
 
@@ -55,4 +69,4 @@ def test_swap_nonstandard_base_still_works():
     """Any FROM gets replaced, not just known OSS-Fuzz bases."""
     original = "FROM ubuntu:22.04\nRUN echo hello\n"
     result = swap_dockerfile_from(original, language="jvm")
-    assert result.startswith("FROM ghcr.io/team-atlanta/crsbench-rts-jvm:latest\n")
+    assert result.startswith("FROM crsbench-rts-jvm:latest\n")
