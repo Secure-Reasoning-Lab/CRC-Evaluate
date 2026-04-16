@@ -23,7 +23,7 @@ experiment:
 # Per-CRS resource allocation. Adjust num_cores/mem_limit per CRS.
 # Additional options: mem_limit, additional_env
 crs_compose:
-  crs-bug-finding-claude-code:
+  crs-bug-finding-claude-code-glm-5-1:
     num_cores: 8
     additional_env:
       CRS_AGENT: claude_code
@@ -49,12 +49,13 @@ runtime:
   trials: 1
   max_total_time: 10800
   build_timeout: 4800
-  run_timeout: 3600
+  run_timeout: 1200
   verify_timeout: 600
   per_pov_verify_timeout: 120
   redis_host: localhost
   rts_enabled: true
   inc_build_enabled: true
+  pov_early_stop: true
   litellm:
     mode: external
 

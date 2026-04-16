@@ -23,26 +23,26 @@ experiment:
 # Per-CRS resource allocation. Adjust num_cores/mem_limit per CRS.
 # Additional options: mem_limit, additional_env
 crs_compose:
-  crs-bug-finding-claude-code:
+  crs-bug-finding-claude-code-old-cli:
     num_cores: 8
     additional_env:
       CRS_AGENT: claude_code
       ANTHROPIC_MODEL: claude-opus-4-6
       CLAUDE_CODE_CLI_VERSION: 2.0.17
-  crs-bug-finding-codex:
+  crs-bug-finding-codex-old-cli:
     num_cores: 8
     additional_env:
       CRS_AGENT: codex
       CODEX_MODEL: gpt-5.4
       CODEX_CLI_VERSION: 0.47.0
-  crs-bug-finding-copilot-cli:
+  crs-bug-finding-copilot-cli-old-cli:
     num_cores: 8
     additional_env:
       CRS_AGENT: copilot_cli
       COPILOT_MODEL: gpt-5.4
       COPILOT_CLI_VERSION: 0.0.341
       COPILOT_GITHUB_TOKEN: ${COPILOT_GITHUB_TOKEN}
-  crs-bug-finding-gemini-cli:
+  crs-bug-finding-gemini-cli-old-cli:
     num_cores: 8
     additional_env:
       CRS_AGENT: gemini_cli
@@ -56,12 +56,13 @@ runtime:
   trials: 1
   max_total_time: 10800
   build_timeout: 4800
-  run_timeout: 3600
+  run_timeout: 1200
   verify_timeout: 600
   per_pov_verify_timeout: 120
   redis_host: localhost
   rts_enabled: true
   inc_build_enabled: true
+  pov_early_stop: true
   litellm:
     mode: external
 
