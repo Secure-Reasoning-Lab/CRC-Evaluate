@@ -1,12 +1,9 @@
 Name: crsbench-v3-rerun
-Description: Trimmed v3 rerun — 8 benchmarks with ≥50% rerun efficiency from v2 incompletes. Excludes (a) benchmarks with only 1-2 failed trials where most are done (compress-full, curl, freerdp, tika-delta-02/04, tika-full, spring-framework, atlanta-tika-delta-01), (b) benchmarks not safe/fixable (jenkins FD leak, feign JVM NPE, kylin TLS expiry).
+Description: Narrowed v3 — only partial v2 benchmarks with 1 incomplete trial each (FD collateral, not FD leakers). Excludes atlanta-jenkins-delta-01 (confirmed jazzer FD leaker with async-drain-timeout evidence) and all "completely-incomplete" benchmarks (no recoverable v2 data, JVM FD-leak class).
 Release date: "04.16.2026"
 benchmark_list:
-  - afc-tika-delta-01
-  - afc-tika-delta-03
-  - atlanta-batik-delta-01
-  - atlanta-freetype2-delta-01
-  - atlanta-geonetwork-delta-01
-  - atlanta-rdf4j-full-01
-  - atlanta-sqlite-jdbc-delta-01
-  - atlanta-struts-delta-01
+  - afc-apache-commons-compress-full-01
+  - afc-tika-delta-02
+  - afc-tika-delta-04
+  - atlanta-spring-framework-full-01
+  - atlanta-tika-delta-01

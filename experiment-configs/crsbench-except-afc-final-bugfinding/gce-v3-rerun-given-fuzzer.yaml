@@ -1,21 +1,19 @@
-# Cloud config: v3 rerun of 16 benchmarks that didn't complete in v2.
+# Cloud config: v3-partial rerun of 5 partial JVM benchmarks.
 #
 # Fleet: 1 orchestrator (n2d-standard-16)
-#        3 workers (n2d-standard-224, 14 jobs × 16 cores each)
+#        2 workers (n2d-standard-224, 14 jobs × 16 cores each)
 #        1 evaluator (n2d-standard-128, 8 jobs × 16 cores)
 #
-# Scope: 16 benchmarks × ~25 CPV-harnesses × 3 trials × 2 sanitizers = ~150 trial-jobs.
-# Target wall-clock: ~36h (4 waves × 9h).
+# Scope: 5 benchmarks with incomplete trials in v2 (FD collateral or build timeout).
+#   apache-commons-compress-full-01: 4 harnesses × 3 trials = 12 jobs
+#   tika-delta-02, tika-delta-04, spring-framework, atlanta-tika-delta-01: 3 each = 12 jobs
+#   Total: 24 trial-jobs, 1 wave on 28-slot fleet, ~10-12h wall-clock.
 #
-# Excludes from v2 crsbench-except-afc-final suite:
-#   - atlanta-jenkins-delta-01 (real jazzer_driver FD leak, upstream unfixed)
-#   - atlanta-feign-full-01 (license-maven-plugin JVM NPE, benchmark patch needed)
-#   - atlanta-kylin-delta-01 (TLS cert expired on repository.kyligence.io)
-#
-# Pre-flight fixes required before launch:
-#   1. oss-crs bump that fixes SourceType.TARGET_SOURCE mount for freetype2
-#   2. oss-crs `docker compose down` cleanup timeout >120s for sqlite-jdbc
-#   3. build_timeout raised 14400 → 21600 (handled here)
+# Excludes (v3 failure showed FD-leak class):
+#   - atlanta-jenkins-delta-01 (confirmed jazzer FD leak)
+#   - atlanta-batik-delta-01, geonetwork, rdf4j, sqlite-jdbc, struts, tika-delta-03 (JVM FD class)
+#   - atlanta-feign-full-01 (license-plugin JVM NPE), atlanta-kylin-delta-01 (TLS expired)
+#   - atlanta-freetype2-delta-01 (pending separate Native rerun)
 #
 # Usage:
 #   CONFIG=experiment-configs/crsbench-except-afc-final-bugfinding/gce-v3-rerun-given-fuzzer.yaml
@@ -25,12 +23,11 @@
 #   uv run crsbench cloud --config "$CONFIG" teardown --force
 
 experiment:
-  name: non-afc-final-bf-given-fuzzer-v3
+  name: non-afc-final-bf-given-fuzzer-v3-partial
   task: bugfinding
   benchmark_suite: crsbench-v3-rerun
   sanitizers:
     - address
-    - undefined
   mode: full
 runtime:
   trials: 3
@@ -45,8 +42,8 @@ runtime:
   litellm:
     skip: true
 storage:
-  experiment_filestore: /data/crsbench/experiment-data/non-afc-final-bf-given-fuzzer-v3
-  report_filestore: /data/crsbench/report-data/non-afc-final-bf-given-fuzzer-v3
+  experiment_filestore: /data/crsbench/experiment-data/non-afc-final-bf-given-fuzzer-v3-partial
+  report_filestore: /data/crsbench/report-data/non-afc-final-bf-given-fuzzer-v3-partial
 resources:
   cores_per_trial: 16
 crs_compose:
@@ -109,7 +106,6 @@ cloud:
     placements:
       - {} # worker 1
       - {} # worker 2
-      - {} # worker 3
   evaluators:
     defaults:
       instance_profile: gce-evaluator-n2d
