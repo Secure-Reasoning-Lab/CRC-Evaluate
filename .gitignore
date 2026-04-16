@@ -296,3 +296,5 @@ benchmarks/
 ci-results*
 benchmark_stats_summary.csv
 benchmark_stats.csv
+
+.run
