@@ -213,7 +213,7 @@ def test_run_prepare_builds_base_images_when_requested(monkeypatch, tmp_path) ->
         lambda: str(oss_fuzz_root),
     )
 
-    calls: list[list[str]] = []
+    calls: list[object] = []
 
     def _run(cmd, **_kwargs):
         calls.append(cmd)
@@ -221,7 +221,25 @@ def test_run_prepare_builds_base_images_when_requested(monkeypatch, tmp_path) ->
 
     monkeypatch.setattr(subprocess, "run", _run)
 
+    def _ensure_all_rts_images():
+        calls.append("rts")
+        return {
+            "jvm": "crsbench-rts-jvm:latest",
+            "c": "crsbench-rts-c:latest",
+        }
+
+    monkeypatch.setattr(
+        "crsbench.builder.rts.dockerfile_swap.ensure_all_rts_images",
+        _ensure_all_rts_images,
+    )
+    monkeypatch.setattr(
+        "crsbench.prepare.cli.ensure_all_rts_images",
+        _ensure_all_rts_images,
+        raising=False,
+    )
+
     assert run_prepare(args) == 0
+    assert calls[-2] == "rts"
     assert calls[-1] == ["bash", str(build_script)]
 
 
