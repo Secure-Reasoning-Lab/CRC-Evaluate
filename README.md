@@ -67,9 +67,9 @@ Notes:
 
 Default `crsbench prepare` bootstraps the managed OSS-Fuzz checkout, pulls the
 standard OSS-Fuzz and AIxCC base images, and then attempts to prebuild the RTS
-base images used by RTS-enabled benchmarks. RTS prebuild is best-effort: on
-failure, CRSBench warns and continues, and RTS images can still be built lazily
-on first RTS benchmark use.
+base images used by RTS-enabled benchmarks. If RTS prebuild cannot complete,
+`crsbench prepare` fails so a successful run still means the RTS image set is
+ready in advance.
 
 `crsbench prepare --coverage` prepares the separate Atlantis/given_fuzzer
 coverage pipeline used by `crsbench coverage`. It reads the checkout from
