@@ -1,0 +1,20 @@
+Name: crsbench-v3-rerun
+Description: V2 incomplete trials requiring rerun. Excludes atlanta-jenkins-delta-01 (real jazzer FD leak, upstream unfixed), atlanta-feign-full-01 (license-maven-plugin JVM NPE), atlanta-kylin-delta-01 (TLS cert expired on repository.kyligence.io). All listed benchmarks are either innocent collateral kills or fixable infra/build issues.
+Release date: 2026-04-15
+benchmark_list:
+  - afc-apache-commons-compress-full-01
+  - afc-curl-delta-01
+  - afc-freerdp-full-01
+  - afc-tika-delta-01
+  - afc-tika-delta-02
+  - afc-tika-delta-03
+  - afc-tika-delta-04
+  - afc-tika-full-01
+  - atlanta-batik-delta-01
+  - atlanta-freetype2-delta-01
+  - atlanta-geonetwork-delta-01
+  - atlanta-rdf4j-full-01
+  - atlanta-spring-framework-full-01
+  - atlanta-sqlite-jdbc-delta-01
+  - atlanta-struts-delta-01
+  - atlanta-tika-delta-01
