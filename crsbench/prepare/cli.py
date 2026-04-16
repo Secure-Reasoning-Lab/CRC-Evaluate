@@ -31,7 +31,7 @@ def add_prepare_subparser(subparsers: argparse._SubParsersAction) -> None:
     """
     parser = subparsers.add_parser(
         "prepare",
-        help="Prepare local environment (third_party + OSS-Fuzz base images)",
+        help="Prepare local environment (third_party + OSS-Fuzz/RTS base images)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -156,9 +156,8 @@ def run_prepare(args: argparse.Namespace) -> int:
 
     try:
         ensure_all_rts_images()
-    except (FileNotFoundError, RuntimeError, ValueError) as e:
-        logger.error(f"Failed to prepare RTS base images: {e}")
-        return 1
+    except (FileNotFoundError, RuntimeError, ValueError, OSError) as e:
+        logger.warning(f"RTS base image prebuild skipped: {e}")
 
     if args.build_base_images:
         build_script = oss_fuzz_root / "infra" / "base-images" / "all.sh"

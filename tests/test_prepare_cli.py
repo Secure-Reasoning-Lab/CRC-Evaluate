@@ -304,7 +304,7 @@ def test_run_prepare_skip_base_images_skips_rts_prebuild(monkeypatch) -> None:
     assert called["rts"] == 0
 
 
-def test_run_prepare_rts_prebuild_failure_returns_nonzero(monkeypatch) -> None:
+def test_run_prepare_rts_prebuild_failure_is_best_effort(monkeypatch) -> None:
     args = argparse.Namespace(
         coverage=False,
         skip_base_images=False,
@@ -338,5 +338,5 @@ def test_run_prepare_rts_prebuild_failure_returns_nonzero(monkeypatch) -> None:
         raising=False,
     )
 
-    assert run_prepare(args) == 1
+    assert run_prepare(args) == 0
     assert calls[-1] == "rts"

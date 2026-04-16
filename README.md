@@ -62,7 +62,14 @@ Notes:
 `crsbench prepare` typical duration:
 - warm cache: ~10-60s
 - first run (image pulls): ~3-15m
-- with `--build-base-images`: 20m+ (can be significantly longer)
+- with RTS base image builds or `--build-base-images`: 20m+ (can be
+  significantly longer)
+
+Default `crsbench prepare` bootstraps the managed OSS-Fuzz checkout, pulls the
+standard OSS-Fuzz and AIxCC base images, and then attempts to prebuild the RTS
+base images used by RTS-enabled benchmarks. RTS prebuild is best-effort: on
+failure, CRSBench warns and continues, and RTS images can still be built lazily
+on first RTS benchmark use.
 
 `crsbench prepare --coverage` prepares the separate Atlantis/given_fuzzer
 coverage pipeline used by `crsbench coverage`. It reads the checkout from

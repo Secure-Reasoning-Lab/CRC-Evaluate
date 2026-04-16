@@ -33,6 +33,8 @@ _FROM_RE = re.compile(r"^FROM\s+\S+", re.MULTILINE)
 
 _DOCKERFILES_DIR = Path(__file__).resolve().parent / "dockerfiles"
 _SCRIPTS_DIR = Path(__file__).resolve().parent / "scripts"
+_DOCKER_INSPECT_TIMEOUT = 30
+_DOCKER_BUILD_TIMEOUT = 60 * 60
 
 
 def _build_rts_image(language: str, tag: str) -> str:
@@ -46,19 +48,30 @@ def _build_rts_image(language: str, tag: str) -> str:
         raise FileNotFoundError(f"RTS Dockerfile not found: {dockerfile}")
 
     logger.info(f"Building RTS base image {tag} from {dockerfile} ...")
-    result = subprocess.run(
-        [
-            "docker",
-            "build",
-            "-t",
-            tag,
-            "-f",
-            str(dockerfile),
-            str(_SCRIPTS_DIR.parent),  # context = rts/ dir (so COPY scripts/ works)
-        ],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [
+                "docker",
+                "build",
+                "-t",
+                tag,
+                "-f",
+                str(dockerfile),
+                str(_SCRIPTS_DIR.parent),  # context = rts/ dir (so COPY scripts/ works)
+            ],
+            capture_output=True,
+            text=True,
+            timeout=_DOCKER_BUILD_TIMEOUT,
+            stdin=subprocess.DEVNULL,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(
+            f"Timed out building RTS image {tag} (timeout={_DOCKER_BUILD_TIMEOUT}s)"
+        ) from e
+    except OSError as e:
+        raise RuntimeError(
+            f"Failed to execute docker build for RTS image {tag}: {e}"
+        ) from e
     if result.returncode != 0:
         logger.error(f"RTS image build failed:\n{result.stderr}")
         raise RuntimeError(f"Failed to build RTS image {tag}")
@@ -75,10 +88,22 @@ def _ensure_rts_image(language: str, *, force_rebuild: bool = False) -> str:
 
     # Check if image already exists locally.
     if not force_rebuild:
-        rc = subprocess.run(
-            ["docker", "image", "inspect", tag],
-            capture_output=True,
-        )
+        try:
+            rc = subprocess.run(
+                ["docker", "image", "inspect", tag],
+                capture_output=True,
+                timeout=_DOCKER_INSPECT_TIMEOUT,
+                stdin=subprocess.DEVNULL,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError(
+                "Timed out inspecting RTS image "
+                f"{tag} (timeout={_DOCKER_INSPECT_TIMEOUT}s)"
+            ) from e
+        except OSError as e:
+            raise RuntimeError(
+                f"Failed to inspect RTS image {tag} via docker: {e}"
+            ) from e
         if rc.returncode == 0:
             return tag
 
