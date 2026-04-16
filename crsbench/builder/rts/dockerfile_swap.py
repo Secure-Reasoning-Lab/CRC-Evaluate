@@ -35,20 +35,8 @@ _DOCKERFILES_DIR = Path(__file__).resolve().parent / "dockerfiles"
 _SCRIPTS_DIR = Path(__file__).resolve().parent / "scripts"
 
 
-def _ensure_rts_image(language: str) -> str:
-    """Build the RTS base image locally if it doesn't exist. Returns the image tag."""
-    tag = RTS_IMAGE_TAGS.get(language)
-    if tag is None:
-        raise ValueError(f"Unsupported RTS language: {language}")
-
-    # Check if image already exists locally.
-    rc = subprocess.run(
-        ["docker", "image", "inspect", tag],
-        capture_output=True,
-    )
-    if rc.returncode == 0:
-        return tag
-
+def _build_rts_image(language: str, tag: str) -> str:
+    """Build the RTS base image for a language and return its local tag."""
     dockerfile_name = _RTS_DOCKERFILES.get(language)
     if dockerfile_name is None:
         raise ValueError(f"No RTS Dockerfile for language: {language}")
@@ -77,6 +65,43 @@ def _ensure_rts_image(language: str) -> str:
 
     logger.info(f"RTS base image built: {tag}")
     return tag
+
+
+def _ensure_rts_image(language: str, *, force_rebuild: bool = False) -> str:
+    """Build the RTS base image locally if it doesn't exist. Returns the image tag."""
+    tag = RTS_IMAGE_TAGS.get(language)
+    if tag is None:
+        raise ValueError(f"Unsupported RTS language: {language}")
+
+    # Check if image already exists locally.
+    if not force_rebuild:
+        rc = subprocess.run(
+            ["docker", "image", "inspect", tag],
+            capture_output=True,
+        )
+        if rc.returncode == 0:
+            return tag
+
+    return _build_rts_image(language, tag)
+
+
+def ensure_all_rts_images(*, force_rebuild: bool = False) -> dict[str, str]:
+    """Ensure all unique RTS base images exist locally.
+
+    Returns a map keyed by canonical language family so callers can reason about
+    the image set without duplicating alias handling.
+    """
+    ensured: dict[str, str] = {}
+    built_tags: set[str] = set()
+
+    for language in RTS_IMAGE_TAGS:
+        tag = RTS_IMAGE_TAGS[language]
+        if tag in built_tags:
+            continue
+        ensured[language] = _ensure_rts_image(language, force_rebuild=force_rebuild)
+        built_tags.add(tag)
+
+    return ensured
 
 
 def swap_dockerfile_from(dockerfile_content: str, language: str) -> str:
