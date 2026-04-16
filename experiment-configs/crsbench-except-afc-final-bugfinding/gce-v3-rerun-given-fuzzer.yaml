@@ -34,7 +34,7 @@ experiment:
   mode: full
 runtime:
   trials: 3
-  max_total_time: 57600
+  max_total_time: 64800
   build_timeout: 21600   # bumped from 14400 for struts/tika-delta-01
   run_timeout: 28800
   verify_timeout: 7200
