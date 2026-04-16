@@ -6,6 +6,7 @@ import argparse
 import subprocess
 from pathlib import Path
 
+from crsbench.builder.rts.dockerfile_swap import ensure_all_rts_images
 from crsbench.prepare.uniafl_backend import prepare_uniafl_backend
 from crsbench.utils.logger import get_logger
 from crsbench.utils.run_helper import ensure_oss_fuzz_root
@@ -30,7 +31,7 @@ def add_prepare_subparser(subparsers: argparse._SubParsersAction) -> None:
     """
     parser = subparsers.add_parser(
         "prepare",
-        help="Prepare local environment (third_party + OSS-Fuzz base images)",
+        help="Prepare local environment (third_party + OSS-Fuzz/RTS base images)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -152,6 +153,12 @@ def run_prepare(args: argparse.Namespace) -> int:
             if aixcc_pull.stderr:
                 logger.error(aixcc_pull.stderr.strip())
             return aixcc_pull.returncode or 1
+
+    try:
+        ensure_all_rts_images()
+    except (FileNotFoundError, RuntimeError, ValueError, OSError) as e:
+        logger.error(f"Failed to prepare RTS base images: {e}")
+        return 1
 
     if args.build_base_images:
         build_script = oss_fuzz_root / "infra" / "base-images" / "all.sh"

@@ -70,3 +70,40 @@ def test_swap_nonstandard_base_still_works():
     original = "FROM ubuntu:22.04\nRUN echo hello\n"
     result = swap_dockerfile_from(original, language="jvm")
     assert result.startswith("FROM crsbench-rts-jvm:latest\n")
+
+
+def test_ensure_all_rts_images_builds_each_unique_tag_once(monkeypatch):
+    calls: list[str] = []
+
+    def _fake_ensure(language: str, *, force_rebuild: bool = False) -> str:
+        assert force_rebuild is False
+        calls.append(language)
+        return dockerfile_swap_mod.RTS_IMAGE_TAGS[language]
+
+    monkeypatch.setattr(dockerfile_swap_mod, "_ensure_rts_image", _fake_ensure)
+
+    result = dockerfile_swap_mod.ensure_all_rts_images()
+
+    assert result == {
+        "jvm": "crsbench-rts-jvm:latest",
+        "c": "crsbench-rts-c:latest",
+    }
+    assert calls == ["jvm", "c"]
+
+
+def test_ensure_all_rts_images_can_force_rebuild_alias_languages(monkeypatch):
+    calls: list[tuple[str, bool]] = []
+
+    def _fake_ensure(language: str, *, force_rebuild: bool = False) -> str:
+        calls.append((language, force_rebuild))
+        return dockerfile_swap_mod.RTS_IMAGE_TAGS[language]
+
+    monkeypatch.setattr(dockerfile_swap_mod, "_ensure_rts_image", _fake_ensure)
+
+    result = dockerfile_swap_mod.ensure_all_rts_images(force_rebuild=True)
+
+    assert result == {
+        "jvm": "crsbench-rts-jvm:latest",
+        "c": "crsbench-rts-c:latest",
+    }
+    assert calls == [("jvm", True), ("c", True)]

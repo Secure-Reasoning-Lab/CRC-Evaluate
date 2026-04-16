@@ -21,8 +21,11 @@ uv run crsbench prepare
 uv run crsbench prepare --coverage
 ```
 
-`crsbench prepare` initializes the managed `third_party/oss-fuzz` checkout and
-pulls the base images CRSBench relies on for benchmark evaluation.
+`crsbench prepare` initializes the managed `third_party/oss-fuzz` checkout,
+pulls the base images CRSBench relies on for benchmark evaluation, and then
+prebuilds the RTS base images used by RTS-enabled benchmarks. If that RTS
+prebuild step cannot complete, `crsbench prepare` fails so a successful prepare
+run means the RTS image set is already available.
 
 `scripts/setup-third-party.sh` clones the pinned Team Atlanta
 `atlantis-multilang-given_fuzzer` checkout into
