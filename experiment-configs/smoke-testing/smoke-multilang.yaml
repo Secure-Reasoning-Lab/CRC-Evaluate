@@ -39,10 +39,12 @@ runtime:
   verify_timeout: 600
   per_pov_verify_timeout: 120
   redis_host: localhost
+  rts_enabled: false
+  inc_build_enabled: false
   pov_early_stop: true
   litellm:
     mode: external
-    cost_budget: 5.0
+    cost_budget: 2.0
 
 # Storage paths. For distributed mode, consider shared mount points.
 # Additional options: keep_only_results, cleanup_after_trial,
