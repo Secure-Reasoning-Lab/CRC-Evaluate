@@ -2,6 +2,7 @@
 
 import base64
 import json
+import threading
 from unittest.mock import MagicMock
 
 import pytest
@@ -1478,6 +1479,63 @@ def test_delete_workers_ignores_missing_instance() -> None:
     )
 
     assert [worker.name for worker in deleted] == ["gce-worker-001"]
+
+
+def test_delete_workers_runs_instance_deletes_in_parallel() -> None:
+    """Fleet teardown should dispatch per-instance deletes concurrently."""
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+
+    client = _RecordingClient()
+    client.listed_instances = [
+        {
+            "id": "1001",
+            "name": "gce-worker-001",
+            "status": "RUNNING",
+            "zone": "zones/us-central1-a",
+            "labels": {
+                "crsbench-experiment": "exp-cloud-42",
+                "crsbench-role": "worker",
+                "env": "prod",
+                "owner": "team-crs",
+            },
+            "serviceAccounts": [
+                {"email": "crsbench-worker@test-project.iam.gserviceaccount.com"}
+            ],
+        },
+        {
+            "id": "1002",
+            "name": "gce-worker-002",
+            "status": "RUNNING",
+            "zone": "zones/us-central1-a",
+            "labels": {
+                "crsbench-experiment": "exp-cloud-42",
+                "crsbench-role": "worker",
+                "env": "prod",
+                "owner": "team-crs",
+            },
+            "serviceAccounts": [
+                {"email": "crsbench-worker@test-project.iam.gserviceaccount.com"}
+            ],
+        },
+    ]
+    provisioner = GceProvisioner(client=client)
+
+    barrier = threading.Barrier(2, timeout=1.0)
+
+    def _delete_instance_if_present(**_kwargs) -> None:
+        barrier.wait()
+
+    provisioner._delete_instance_if_present = _delete_instance_if_present  # type: ignore[method-assign]
+
+    deleted = provisioner.delete_workers(
+        experiment_name="Exp.Cloud 42",
+        fleet=_make_fleet(worker_count=2),
+    )
+
+    assert sorted(worker.name for worker in deleted) == [
+        "gce-worker-001",
+        "gce-worker-002",
+    ]
 
 
 def test_delete_orchestrators_ignores_missing_instance() -> None:

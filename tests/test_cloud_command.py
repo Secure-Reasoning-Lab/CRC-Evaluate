@@ -6,6 +6,7 @@ import argparse
 import dataclasses
 import json
 import os
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -6734,6 +6735,47 @@ class TestCollect:
 
         rc = run_collect(_make_collect_args())
         assert rc == 0
+        assert mock_coll.collect.call_count == 2
+
+    @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._collect.ArtifactCollector")
+    @patch("crsbench.cloud.cli._collect.provisioner_for_context")
+    @patch("crsbench.cloud.cli._collect.reconnect")
+    def test_collect_runs_live_instance_collection_in_parallel(
+        self,
+        mock_reconnect,
+        mock_prov_cls,
+        mock_coll_cls,
+        mock_resolve_context,
+    ):
+        """Two live workers should enter collection concurrently instead of serializing."""
+        workers = [_make_gce_worker("w-1"), _make_gce_worker("w-2")]
+        mock_prov = MagicMock()
+        mock_prov.list_workers.return_value = workers
+        mock_prov_cls.return_value = mock_prov
+        mock_resolve_context.return_value = _make_resolved_cloud_context()
+
+        barrier = threading.Barrier(2, timeout=1.0)
+        mock_coll = MagicMock()
+        mock_coll.collect_logs.side_effect = lambda **_kwargs: barrier.wait()
+        mock_coll_cls.return_value = mock_coll
+
+        readiness = MagicMock()
+        readiness.list_workers.return_value = []
+        mock_reconnect.return_value = (
+            MagicMock(),
+            MagicMock(),
+            readiness,
+            MagicMock(),
+            Path("/tmp/filestore"),
+        )
+
+        from crsbench.cloud.cli._collect import run_collect
+
+        rc = run_collect(_make_collect_args())
+
+        assert rc == 0
+        assert mock_coll.collect_logs.call_count == 2
         assert mock_coll.collect.call_count == 2
 
     def test_collect_existing_destination_requires_force_when_noninteractive(

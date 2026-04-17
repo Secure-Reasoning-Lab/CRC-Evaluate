@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, Protocol, cast
 
 from crsbench.cloud.errors import CloudProvisioningError
@@ -29,6 +30,9 @@ if TYPE_CHECKING:
 
 class GceProvisioningError(CloudProvisioningError):
     """Raised when the GCE control plane cannot satisfy a fleet request."""
+
+
+_MAX_PARALLEL_GCE_DELETE_OPERATIONS = 16
 
 
 class GceApiClient(Protocol):
@@ -1057,13 +1061,11 @@ class GceProvisioner:
             experiment_name=experiment_name,
             fleet=fleet,
         )
-        for worker in deleted_workers:
-            self._delete_instance_if_present(
-                project=fleet.project,
-                zone=worker.zone,
-                instance_name=worker.name,
-                role_label="worker",
-            )
+        self._delete_instances_in_parallel(
+            deleted_workers,
+            project=fleet.project,
+            role_label="worker",
+        )
         return deleted_workers
 
     def list_evaluators(
@@ -1132,14 +1134,46 @@ class GceProvisioner:
             experiment_name=experiment_name,
             fleet=fleet,
         )
-        for worker in deleted_workers:
-            self._delete_instance_if_present(
-                project=fleet.project,
-                zone=worker.zone,
-                instance_name=worker.name,
-                role_label="evaluator",
-            )
+        self._delete_instances_in_parallel(
+            deleted_workers,
+            project=fleet.project,
+            role_label="evaluator",
+        )
         return deleted_workers
+
+    def _delete_instances_in_parallel(
+        self,
+        instances: list[GceWorkerRecord],
+        *,
+        project: str,
+        role_label: str,
+    ) -> None:
+        """Delete multiple instances concurrently and raise after all attempts complete."""
+        if not instances:
+            return
+        max_workers = min(_MAX_PARALLEL_GCE_DELETE_OPERATIONS, len(instances))
+        errors: list[str] = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    self._delete_instance_if_present,
+                    project=project,
+                    zone=instance.zone,
+                    instance_name=instance.name,
+                    role_label=role_label,
+                ): instance
+                for instance in instances
+            }
+            for future in as_completed(futures):
+                instance = futures[future]
+                try:
+                    future.result()
+                except Exception as exc:
+                    errors.append(f"{instance.name}: {exc}")
+        if errors:
+            raise GceProvisioningError(
+                f"Failed to delete {role_label}(s): {'; '.join(errors)}"
+            )
 
     def _delete_instance_if_present(
         self,
