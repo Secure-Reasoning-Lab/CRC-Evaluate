@@ -790,6 +790,19 @@ class BenchmarkRunner:
             else:
                 combined_stop_event = None
 
+            # Per-CRS budget policy decides whether a trial shuts down when the
+            # LiteLLM trial budget is exhausted. 'continue' (default) keeps the
+            # adapter running after LiteLLM revokes the key; 'terminate' signals
+            # the existing trial stop event so the trial exits early.
+            get_budget_policy = getattr(self.adapter, "get_budget_policy", None)
+            budget_policy: str = "continue"
+            if callable(get_budget_policy):
+                resolved = get_budget_policy()
+                if isinstance(resolved, str) and resolved in ("continue", "terminate"):
+                    budget_policy = resolved
+            if budget_policy == "terminate" and combined_stop_event is None:
+                combined_stop_event = threading.Event()
+
             snapshot_manager, snapshot_thread = self._start_snapshot_manager(
                 harness_name=harness.name,
                 trial_output_dir=trial_output_dir,
@@ -797,6 +810,8 @@ class BenchmarkRunner:
                 coverage_manager=coverage_manager,
                 pov_verification_manager=pov_verification_manager,
                 patch_verification_manager=patch_verification_manager,
+                budget_policy=budget_policy,
+                budget_stop_event=combined_stop_event,
             )
 
             # Create callback for run start
@@ -1530,6 +1545,8 @@ class BenchmarkRunner:
         coverage_manager: Any,
         pov_verification_manager: Optional[POVVerificationManager] = None,
         patch_verification_manager: Optional[PatchVerificationManager] = None,
+        budget_policy: str = "continue",
+        budget_stop_event: Optional[threading.Event] = None,
     ) -> tuple[Optional[SnapshotManager], Optional[threading.Thread]]:
         """Start snapshot manager if enabled."""
         if not (self.snapshot_period and self.snapshot_period > 0):
@@ -1537,7 +1554,7 @@ class BenchmarkRunner:
 
         self.logger.info(
             f"Starting snapshot manager for harness '{harness_name}' "
-            f"(period={self.snapshot_period}s)"
+            f"(period={self.snapshot_period}s, budget_policy={budget_policy})"
         )
 
         snapshot_manager = SnapshotManager(
@@ -1550,6 +1567,8 @@ class BenchmarkRunner:
             llm_tracker=self.llm_tracker,
             llm_api_key=self.llm_api_key,
             llm_trial_id=self.llm_trial_id,
+            budget_policy=budget_policy,
+            budget_stop_event=budget_stop_event,
         )
         snapshot_thread = threading.Thread(target=snapshot_manager.run, daemon=True)
         snapshot_thread.start()

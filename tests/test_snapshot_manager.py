@@ -581,3 +581,164 @@ class TestLLMTrackingIntegration:
         # Should have captured LLM usage
         assert snapshot.has_llm_usage is True
         mock_tracker.write_llm_usage_file.assert_called_once()
+
+
+class TestBudgetPolicy:
+    """Test budget_policy enforcement in SnapshotManager."""
+
+    def _make_tracker(self, spend: float, max_budget: float) -> MagicMock:
+        tracker = MagicMock()
+        tracker.get_key_info.return_value = {
+            "info": {"spend": spend, "max_budget": max_budget}
+        }
+        return tracker
+
+    def test_init_rejects_invalid_policy(self, tmp_path):
+        with pytest.raises(ValueError, match="budget_policy must be"):
+            SnapshotManager(tmp_path, snapshot_period=60, budget_policy="abort")
+
+    def test_terminate_sets_stop_event_on_overshoot(self, tmp_path):
+        """Terminate policy signals stop_event and writes budget-exceeded.json."""
+        tracker = self._make_tracker(spend=12.5, max_budget=10.0)
+        stop_event = threading.Event()
+
+        manager = SnapshotManager(
+            trial_dir=tmp_path,
+            snapshot_period=60,
+            llm_tracker=tracker,
+            llm_api_key="sk-test",
+            llm_trial_id="trial-1",
+            budget_policy="terminate",
+            budget_stop_event=stop_event,
+        )
+
+        manager._check_budget(elapsed_time=42.0)
+
+        assert stop_event.is_set() is True
+        assert manager.budget_exceeded is True
+        record = json.loads((tmp_path / "budget-exceeded.json").read_text())
+        assert record["policy"] == "terminate"
+        assert record["spend_usd"] == 12.5
+        assert record["max_budget_usd"] == 10.0
+
+    def test_continue_does_not_set_stop_event(self, tmp_path):
+        """Continue policy logs overshoot but leaves stop_event untouched."""
+        tracker = self._make_tracker(spend=12.5, max_budget=10.0)
+        stop_event = threading.Event()
+
+        manager = SnapshotManager(
+            trial_dir=tmp_path,
+            snapshot_period=60,
+            llm_tracker=tracker,
+            llm_api_key="sk-test",
+            llm_trial_id="trial-1",
+            budget_policy="continue",
+            budget_stop_event=stop_event,
+        )
+
+        manager._check_budget(elapsed_time=42.0)
+
+        assert stop_event.is_set() is False
+        assert manager.budget_exceeded is True
+        record = json.loads((tmp_path / "budget-exceeded.json").read_text())
+        assert record["policy"] == "continue"
+
+    def test_under_budget_no_action(self, tmp_path):
+        """Below-cap spend must not record or signal termination."""
+        tracker = self._make_tracker(spend=3.0, max_budget=10.0)
+        stop_event = threading.Event()
+
+        manager = SnapshotManager(
+            trial_dir=tmp_path,
+            snapshot_period=60,
+            llm_tracker=tracker,
+            llm_api_key="sk-test",
+            llm_trial_id="trial-1",
+            budget_policy="terminate",
+            budget_stop_event=stop_event,
+        )
+
+        manager._check_budget(elapsed_time=10.0)
+
+        assert stop_event.is_set() is False
+        assert manager.budget_exceeded is False
+        assert not (tmp_path / "budget-exceeded.json").exists()
+
+    def test_idempotent_on_repeat_overshoot(self, tmp_path):
+        """Subsequent overshoots after the first are no-ops."""
+        tracker = self._make_tracker(spend=12.5, max_budget=10.0)
+        stop_event = threading.Event()
+
+        manager = SnapshotManager(
+            trial_dir=tmp_path,
+            snapshot_period=60,
+            llm_tracker=tracker,
+            llm_api_key="sk-test",
+            llm_trial_id="trial-1",
+            budget_policy="terminate",
+            budget_stop_event=stop_event,
+        )
+
+        manager._check_budget(elapsed_time=10.0)
+        manager._check_budget(elapsed_time=20.0)
+        manager._check_budget(elapsed_time=30.0)
+
+        # get_key_info is gated by budget_exceeded — only the first call queries.
+        assert tracker.get_key_info.call_count == 1
+
+    def test_get_key_info_failure_ignored(self, tmp_path):
+        """Tracker errors must not propagate or mark budget exceeded."""
+        tracker = MagicMock()
+        tracker.get_key_info.side_effect = RuntimeError("boom")
+        stop_event = threading.Event()
+
+        manager = SnapshotManager(
+            trial_dir=tmp_path,
+            snapshot_period=60,
+            llm_tracker=tracker,
+            llm_api_key="sk-test",
+            llm_trial_id="trial-1",
+            budget_policy="terminate",
+            budget_stop_event=stop_event,
+        )
+
+        manager._check_budget(elapsed_time=10.0)
+
+        assert stop_event.is_set() is False
+        assert manager.budget_exceeded is False
+
+    def test_no_tracker_short_circuits(self, tmp_path):
+        """Without a tracker/key configured, budget check is a no-op."""
+        stop_event = threading.Event()
+
+        manager = SnapshotManager(
+            trial_dir=tmp_path,
+            snapshot_period=60,
+            budget_policy="terminate",
+            budget_stop_event=stop_event,
+        )
+
+        manager._check_budget(elapsed_time=10.0)
+
+        assert stop_event.is_set() is False
+        assert manager.budget_exceeded is False
+
+    def test_zero_max_budget_treated_as_unlimited(self, tmp_path):
+        """A zero/None cap must not trigger the overshoot path."""
+        tracker = self._make_tracker(spend=100.0, max_budget=0.0)
+        stop_event = threading.Event()
+
+        manager = SnapshotManager(
+            trial_dir=tmp_path,
+            snapshot_period=60,
+            llm_tracker=tracker,
+            llm_api_key="sk-test",
+            llm_trial_id="trial-1",
+            budget_policy="terminate",
+            budget_stop_event=stop_event,
+        )
+
+        manager._check_budget(elapsed_time=10.0)
+
+        assert stop_event.is_set() is False
+        assert manager.budget_exceeded is False

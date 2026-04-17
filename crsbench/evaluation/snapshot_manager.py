@@ -57,6 +57,8 @@ class SnapshotManager:
         llm_tracker: Optional["LiteLLMTracker"] = None,
         llm_api_key: Optional[str] = None,
         llm_trial_id: Optional[str] = None,
+        budget_policy: str = "continue",
+        budget_stop_event: Optional[threading.Event] = None,
     ):
         """Initialize snapshot manager.
 
@@ -72,6 +74,13 @@ class SnapshotManager:
             llm_tracker: Optional LiteLLMTracker for querying LLM usage
             llm_api_key: Optional trial-specific API key for LLM tracking
             llm_trial_id: Optional trial identifier for LLM usage file
+            budget_policy: Behavior when the trial LLM budget is exceeded.
+                'continue' (default) logs the event once and keeps running; LiteLLM
+                revokes the key so no further cost is incurred. 'terminate' signals
+                budget_stop_event (if provided) so the trial shuts down early.
+            budget_stop_event: Optional event the snapshot loop sets when the
+                trial's LLM key has exceeded its ``max_budget``. Only consulted
+                when ``budget_policy == "terminate"``.
 
         Raises:
             ValueError: If snapshot_period <= 0 or trial_dir doesn't exist
@@ -94,6 +103,15 @@ class SnapshotManager:
         self.llm_tracker = llm_tracker
         self.llm_api_key = llm_api_key
         self.llm_trial_id = llm_trial_id
+
+        # Budget enforcement
+        if budget_policy not in ("continue", "terminate"):
+            raise ValueError(
+                f"budget_policy must be 'continue' or 'terminate', got {budget_policy!r}"
+            )
+        self.budget_policy = budget_policy
+        self.budget_stop_event = budget_stop_event
+        self.budget_exceeded: bool = False
 
         # State tracking
         self.cycle = 0
@@ -225,6 +243,7 @@ class SnapshotManager:
                 has_config = self._capture_config(temp_dir)
                 has_execution_metadata = self._capture_execution_metadata(temp_dir)
                 has_llm_usage = self._capture_llm_usage(temp_dir)
+                self._check_budget(elapsed_time)
                 has_crs_log = self._capture_crs_log(temp_dir)
 
                 has_povs = self._capture_povs(temp_dir)
@@ -407,6 +426,70 @@ class SnapshotManager:
                 logger.warning(f"Failed to capture llm-usage.json: {e}")
                 return False
         return False
+
+    def _check_budget(self, elapsed_time: float) -> None:
+        """Detect trial LLM budget exhaustion and apply the configured policy.
+
+        Piggybacks on the snapshot cadence: reads ``spend``/``max_budget`` from
+        LiteLLM's ``/key/info`` and, on the first observed overshoot, either
+        logs ("continue") or signals ``budget_stop_event`` ("terminate").
+
+        Polling failures are logged and ignored; budget enforcement must never
+        take the trial down on its own.
+        """
+        if self.budget_exceeded:
+            return
+        if not (self.llm_tracker and self.llm_api_key):
+            return
+
+        try:
+            key_info = self.llm_tracker.get_key_info(self.llm_api_key)
+        except Exception as e:
+            logger.debug(f"Budget check: get_key_info failed, skipping ({e})")
+            return
+
+        info = key_info.get("info", {}) if isinstance(key_info, dict) else {}
+        max_budget = info.get("max_budget")
+        spend = info.get("spend")
+        if max_budget is None or spend is None:
+            return
+        try:
+            max_budget_f = float(max_budget)
+            spend_f = float(spend)
+        except (TypeError, ValueError):
+            return
+        if max_budget_f <= 0 or spend_f < max_budget_f:
+            return
+
+        self.budget_exceeded = True
+        record = {
+            "event": "budget_exceeded",
+            "policy": self.budget_policy,
+            "spend_usd": spend_f,
+            "max_budget_usd": max_budget_f,
+            "elapsed_seconds": elapsed_time,
+            "timestamp": time.time(),
+        }
+        try:
+            (self.trial_dir / "budget-exceeded.json").write_text(
+                json.dumps(record, indent=2)
+            )
+        except Exception as e:
+            logger.warning(f"Failed to write budget-exceeded.json: {e}")
+
+        if self.budget_policy == "terminate":
+            logger.warning(
+                f"Trial LLM budget exceeded (spend=${spend_f:.4f} / "
+                f"cap=${max_budget_f:.4f}) — terminating per budget_policy=terminate"
+            )
+            if self.budget_stop_event is not None:
+                self.budget_stop_event.set()
+        else:
+            logger.warning(
+                f"Trial LLM budget exceeded (spend=${spend_f:.4f} / "
+                f"cap=${max_budget_f:.4f}) — continuing per budget_policy=continue; "
+                "LiteLLM has revoked the key so no further cost will accrue"
+            )
 
     def _update_llm_logs(self) -> None:
         """Update LLM logs file in trial directory.

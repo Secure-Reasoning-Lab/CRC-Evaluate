@@ -1632,6 +1632,40 @@ class TestOssCrsAdapterBugFindFull:
         data = yaml.safe_load(compose_path.read_text())
         assert "test-crs" in data
 
+    def test_get_budget_policy_defaults_to_continue(self, tmp_path: Path) -> None:
+        adapter = self._make_adapter(tmp_path)
+        assert adapter.get_budget_policy() == "continue"
+
+    def test_get_budget_policy_reads_configured_value(self, tmp_path: Path) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure(
+            {
+                "crs_services": {
+                    "test-crs": {
+                        "num_cores": 1,
+                        "mem_limit": "8G",
+                        "budget_policy": "terminate",
+                    }
+                }
+            }
+        )
+        assert adapter.get_budget_policy() == "terminate"
+
+    def test_get_budget_policy_rejects_invalid_value(self, tmp_path: Path) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure(
+            {
+                "crs_services": {
+                    "test-crs": {
+                        "num_cores": 1,
+                        "mem_limit": "8G",
+                        "budget_policy": "nuke-everything",
+                    }
+                }
+            }
+        )
+        assert adapter.get_budget_policy() == "continue"
+
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
     def test_generate_compose_yaml_sets_memory_when_unset(
         self, mock_run: MagicMock, tmp_path: Path

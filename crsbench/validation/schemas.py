@@ -1092,6 +1092,15 @@ class CrsComposeServiceConfig(BaseModel):
         default=None,
         description="Additional environment variables injected into the service container",
     )
+    budget_policy: Literal["continue", "terminate"] = Field(
+        default="continue",
+        description=(
+            "Per-CRS behavior when the trial LLM budget (runtime.litellm.cost_budget) "
+            "is exceeded. 'continue' (default) lets the CRS keep running even though "
+            "LiteLLM has revoked the key; 'terminate' stops the CRS early and writes "
+            "a structured budget-exceeded log entry."
+        ),
+    )
 
 
 class CrsComposeInfraConfig(BaseModel):
