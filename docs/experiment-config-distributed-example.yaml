@@ -55,6 +55,15 @@ crs_compose:
     # additional_env:
     #   OPENAI_DEFAULT_MODEL: gpt-5.4
     #   OPENAI_REASONING_EFFORT: high
+    # Optional per-CRS behavior when the trial LLM budget
+    # (runtime.litellm.cost_budget) is exceeded.
+    #   continue (default): keep the CRS running; LiteLLM has revoked the key
+    #     so no further cost accrues
+    #   terminate: stop the CRS early and persist a budget-exceeded.json record
+    # Detection piggybacks on runtime.snapshot_period, so termination may be
+    # delayed by up to one snapshot cycle. Requires runtime.litellm.cost_budget
+    # to be set; without it this knob is inert.
+    # budget_policy: continue
 
 runtime:
   trials: 3
