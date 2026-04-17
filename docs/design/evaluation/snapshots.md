@@ -57,6 +57,18 @@ The exact storage representation may evolve, but these semantics are stable.
 
 Snapshots may be produced alongside distributed trial execution. Consumers must not assume synchronized arrival of snapshots, queue results, and final aggregate artifacts.
 
+## Cadence-Coupled Side Effects
+
+Other trial-level controls that need a periodic observation point share the
+snapshot cadence rather than running their own timer:
+
+- POV early-stop evaluates CPV completion on each cycle
+- per-CRS trial budget policy polls LiteLLM key state on each cycle
+
+These controls are cooperative: they signal the trial's stop event and may
+lag by up to one snapshot cycle. Lowering `snapshot_period` tightens both
+reaction windows uniformly.
+
 ## Decisions and Tradeoffs
 
 - decision: snapshots are read-only progress captures

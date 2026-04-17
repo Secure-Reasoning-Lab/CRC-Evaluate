@@ -97,6 +97,22 @@ Must capture:
 - missing dependency/build context is an infrastructure failure
 - stale queue metadata or missing queued jobs is an infrastructure failure in distributed paths
 
+## Trial Budget Policy
+
+Per-CRS `budget_policy` governs how a trial reacts when the LiteLLM trial
+budget (`runtime.litellm.cost_budget`) is exceeded:
+
+- `continue` (default): the trial keeps running after LiteLLM revokes the
+  key; no further cost is incurred but in-progress work is preserved
+- `terminate`: the trial stops early via the same stop-event path used by
+  POV early-stop, and a `budget-exceeded.json` record is persisted in the
+  trial directory
+
+Detection piggybacks on the snapshot cadence, so termination is cooperative
+and may lag by up to one snapshot cycle. The policy is inert when no trial
+budget is configured. Budget enforcement must never fail a trial on
+polling errors; tracker-side failures are logged and ignored.
+
 ## Decisions and Tradeoffs
 
 - decision: keep evaluation centered on an adapter lifecycle

@@ -25,25 +25,21 @@ experiment:
 crs_compose:
   crs-bug-finding-claude-code:
     num_cores: 8
+    budget_policy: terminate
     additional_env:
       CRS_AGENT: claude_code
       ANTHROPIC_MODEL: claude-opus-4-6
       CLAUDE_CODE_CLI_VERSION: 2.1.92
   crs-bug-finding-codex:
     num_cores: 8
+    budget_policy: terminate
     additional_env:
       CRS_AGENT: codex
       CODEX_MODEL: gpt-5.4
       CODEX_CLI_VERSION: 0.121.0
-  crs-bug-finding-copilot-cli:
-    num_cores: 8
-    additional_env:
-      CRS_AGENT: copilot_cli
-      COPILOT_MODEL: gpt-5.4
-      COPILOT_CLI_VERSION: 1.0.28
-      COPILOT_GITHUB_TOKEN: ${COPILOT_GITHUB_TOKEN}
   crs-bug-finding-gemini-cli:
     num_cores: 8
+    budget_policy: terminate
     additional_env:
       CRS_AGENT: gemini_cli
       GEMINI_MODEL: gemini-3-pro-preview
@@ -65,6 +61,7 @@ runtime:
   pov_early_stop: true
   litellm:
     mode: external
+    cost_budget: 2.0
 
 # Storage paths. For distributed mode, consider shared mount points.
 # Additional options: keep_only_results, cleanup_after_trial,

@@ -27,6 +27,7 @@ crs_compose:
     shared: true
   atlantis-multilang-wo-concolic:
     num_cores: 8
+    budget_policy: continue
 
 # Runtime settings. For distributed mode, add redis_host.
 # Additional options: per_pov_verify_timeout, snapshot_period,

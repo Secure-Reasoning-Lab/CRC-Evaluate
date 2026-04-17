@@ -228,6 +228,7 @@ class OssCrsAdapter:
                 "num_cores": None,
                 "mem_limit": None,
                 "additional_env": {},
+                "budget_policy": "continue",
             }
         }
         self._build_timeout: int = 3600
@@ -358,6 +359,16 @@ class OssCrsAdapter:
     def built_projects(self) -> set[str]:
         """Track which projects have been built (stateful)."""
         return self._built_projects
+
+    def get_budget_policy(self) -> str:
+        """Return budget policy ('continue' or 'terminate') for the current CRS.
+
+        Defaults to 'continue' if not configured. Determines whether the trial
+        should be stopped when the LiteLLM trial budget is exceeded.
+        """
+        service = self._crs_service_configs.get(self._crs_config_name, {})
+        policy = service.get("budget_policy", "continue")
+        return policy if policy in ("continue", "terminate") else "continue"
 
     def _get_crs_artifact_path(self, key: str) -> Optional[Path]:
         """Look up a single path from resolved artifacts for the current CRS.
@@ -696,12 +707,19 @@ class OssCrsAdapter:
                     else {}
                 )
                 raw_num_cores = raw_service.get("num_cores")
+                raw_budget_policy = raw_service.get("budget_policy", "continue")
+                budget_policy = (
+                    str(raw_budget_policy)
+                    if raw_budget_policy in ("continue", "terminate")
+                    else "continue"
+                )
                 service_configs[str(name)] = {
                     "num_cores": int(raw_num_cores)
                     if raw_num_cores is not None
                     else None,
                     "mem_limit": _normalize_optional_text(raw_service.get("mem_limit")),
                     "additional_env": additional_env,
+                    "budget_policy": budget_policy,
                 }
             if service_configs:
                 if self._crs_config_name in service_configs:
@@ -717,6 +735,7 @@ class OssCrsAdapter:
                             "num_cores": None,
                             "mem_limit": None,
                             "additional_env": {},
+                            "budget_policy": "continue",
                         }
                     }
         if "additional_env" in config and isinstance(config["additional_env"], dict):
@@ -728,6 +747,7 @@ class OssCrsAdapter:
                     "num_cores": None,
                     "mem_limit": self._infra_mem_limit,
                     "additional_env": merged,
+                    "budget_policy": "continue",
                 }
             else:
                 service_env = dict(service.get("additional_env", {}))
