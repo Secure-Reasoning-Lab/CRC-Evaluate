@@ -158,6 +158,16 @@ def run_launch(args: argparse.Namespace) -> int:
         resolved_orchestrator_config = adapter.build_orchestrator_config(
             provisioning_plan
         )
+        worker_fleet_configs = _normalize_fleet_records(
+            adapter,
+            list(preflight.redacted_worker_fleets),
+            role="worker",
+        )
+        evaluator_fleet_configs = _normalize_fleet_records(
+            adapter,
+            list(preflight.redacted_evaluator_fleets or []),
+            role="evaluator",
+        )
         conflicts = find_launch_target_conflicts(
             config_path=config_path,
             experiment_name=config.experiment,
@@ -212,28 +222,6 @@ def run_launch(args: argparse.Namespace) -> int:
             bootstrap_inputs=bootstrap_inputs,
             env_passthrough_by_placement=preflight.worker_placement_envs,
         )
-        evaluators = adapter.create_evaluators(
-            plan=provisioning_plan,
-            redis_host=redis_host,
-            redis_password=redis_password,
-            registration=registration,
-            experiment_config_path=str(config_path),
-            bootstrap_inputs=bootstrap_inputs,
-            env_passthrough_by_placement=preflight.evaluator_placement_envs,
-        )
-
-        assert preflight.redacted_worker_fleets is not None
-        worker_fleet_configs = _normalize_fleet_records(
-            adapter,
-            list(preflight.redacted_worker_fleets),
-            role="worker",
-        )
-        evaluator_fleet_configs = _normalize_fleet_records(
-            adapter,
-            list(preflight.redacted_evaluator_fleets or []),
-            role="evaluator",
-        )
-        orchestrator_ssh_via_iap = resolved_orchestrator_config.ssh_via_iap
 
         if workers:
             worker_created_records = [
@@ -254,6 +242,17 @@ def run_launch(args: argparse.Namespace) -> int:
                 experiment_name=config.experiment,
                 records=worker_created_records,
             )
+
+        evaluators = adapter.create_evaluators(
+            plan=provisioning_plan,
+            redis_host=redis_host,
+            redis_password=redis_password,
+            registration=registration,
+            experiment_config_path=str(config_path),
+            bootstrap_inputs=bootstrap_inputs,
+            env_passthrough_by_placement=preflight.evaluator_placement_envs,
+        )
+        orchestrator_ssh_via_iap = resolved_orchestrator_config.ssh_via_iap
 
         if evaluators:
             evaluator_created_records = [
