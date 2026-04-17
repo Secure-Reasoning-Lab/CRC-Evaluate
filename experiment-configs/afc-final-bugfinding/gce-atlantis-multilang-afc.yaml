@@ -19,7 +19,7 @@ experiment:
   sanitizers:
     - address
     - undefined
-  mode: all
+  mode: auto
 runtime:
   trials: 3
   max_total_time: 64800
