@@ -135,7 +135,7 @@ runtime:
   inc_build_enabled: true
   inputs:
     pov:
-      max_variants_per_cpv: 1
+      max_variants_per_cpv: null
     ground_truth_patch: {}
 storage:
   experiment_filestore: /tmp/crsbench/ablation-full/inc-rts/experiment-data
