@@ -1098,7 +1098,9 @@ class CrsComposeServiceConfig(BaseModel):
             "Per-CRS behavior when the trial LLM budget (runtime.litellm.cost_budget) "
             "is exceeded. 'continue' (default) lets the CRS keep running even though "
             "LiteLLM has revoked the key; 'terminate' stops the CRS early and writes "
-            "a structured budget-exceeded log entry."
+            "a structured budget-exceeded log entry. Enforcement piggybacks on the "
+            "snapshot cadence, so 'terminate' requires runtime.snapshot_period > 0 "
+            "(config validation rejects the combination with snapshots disabled)."
         ),
     )
 
@@ -3760,6 +3762,34 @@ class ExperimentConfig(BaseModel):
             raise ValueError("crs_compose is required")
         if not self.crs_compose.services:
             raise ValueError("crs_compose must contain at least one CRS service entry")
+        return self
+
+    @model_validator(mode="after")
+    def check_budget_policy_requires_snapshots(self):
+        """Reject ``budget_policy: terminate`` when snapshots are disabled.
+
+        Budget overshoot detection piggybacks on the snapshot cadence; with
+        ``snapshot_period: 0`` the snapshot manager is never started, so a
+        ``terminate`` policy would silently never fire. Fail fast at config
+        load rather than run a trial that ignores its own budget policy.
+        """
+        if not self.crs_compose or not self.crs_compose.services:
+            return self
+        if self.snapshot_period and self.snapshot_period > 0:
+            return self
+
+        offenders = sorted(
+            name
+            for name, service in self.crs_compose.services.items()
+            if getattr(service, "budget_policy", "continue") == "terminate"
+        )
+        if offenders:
+            raise ValueError(
+                "crs_compose services with budget_policy='terminate' require "
+                "snapshot_period > 0 because budget enforcement runs on the "
+                f"snapshot cadence. Offenders: {', '.join(offenders)}. "
+                "Either enable snapshots or set budget_policy='continue'."
+            )
         return self
 
     @model_validator(mode="after")

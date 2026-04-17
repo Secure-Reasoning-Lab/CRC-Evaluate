@@ -2898,6 +2898,62 @@ class TestExperimentConfigComposeValidation:
         with pytest.raises(ValidationError, match="extra_forbidden|Extra inputs"):
             ExperimentConfig(**cfg)
 
+    def test_rejects_terminate_budget_policy_without_snapshots(self) -> None:
+        from crsbench.validation.schemas import ExperimentConfig
+        from pydantic import ValidationError
+
+        cfg = self._base_config()
+        cfg["snapshot_period"] = 0
+        cfg["crs_compose"] = {
+            "oss_crs_infra": {"num_cores": 1, "mem_limit": "8G"},
+            "crs1": {
+                "num_cores": 1,
+                "mem_limit": "8G",
+                "budget_policy": "terminate",
+            },
+        }
+
+        with pytest.raises(
+            ValidationError, match="budget_policy='terminate'.*snapshot_period"
+        ):
+            ExperimentConfig(**cfg)
+
+    def test_accepts_continue_budget_policy_without_snapshots(self) -> None:
+        from crsbench.validation.schemas import ExperimentConfig
+
+        cfg = self._base_config()
+        cfg["snapshot_period"] = 0
+        cfg["crs_compose"] = {
+            "oss_crs_infra": {"num_cores": 1, "mem_limit": "8G"},
+            "crs1": {
+                "num_cores": 1,
+                "mem_limit": "8G",
+                "budget_policy": "continue",
+            },
+        }
+
+        config = ExperimentConfig(**cfg)
+        assert config.snapshot_period == 0
+        assert config.crs_compose is not None
+
+    def test_accepts_terminate_budget_policy_with_snapshots(self) -> None:
+        from crsbench.validation.schemas import ExperimentConfig
+
+        cfg = self._base_config()
+        cfg["snapshot_period"] = 900
+        cfg["crs_compose"] = {
+            "oss_crs_infra": {"num_cores": 1, "mem_limit": "8G"},
+            "crs1": {
+                "num_cores": 1,
+                "mem_limit": "8G",
+                "budget_policy": "terminate",
+            },
+        }
+
+        config = ExperimentConfig(**cfg)
+        assert config.snapshot_period == 900
+        assert config.crs_compose is not None
+
 
 class TestCollectResultsWiring:
     """Tests for collect_results() wiring in BenchmarkRunner."""
