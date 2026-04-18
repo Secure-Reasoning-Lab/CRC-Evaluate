@@ -1,0 +1,55 @@
+description: 'Smoke test: Claude Code bug-finding original only'
+
+experiment:
+  name: smoke-cc-finding-original
+  task: bugfinding
+  mode: auto
+  benchmarks:
+  - afc-curl-delta-05: [curl_fuzzer_dict]
+  - afc-libexif-delta-03: [exif_from_data_fuzzer]
+  - afc-libxml2-delta-03: [html]
+  - afc-mongoose-delta-02: [fuzz]
+  - afc-apache-poi-full-01: [POIPOIFSDumpFuzzer]
+  - afc-log4j2-delta-01: [SimpleLoggerFuzzer]
+  - afc-pdfbox-delta-01: [PDFOCRFuzzer]
+  - afc-tika-delta-01: [HtmlParserFuzzer]
+
+crs_compose:
+  crs-bug-finding-claude-code:
+    num_cores: 8
+    budget_policy: terminate
+    additional_env:
+      CRS_AGENT: claude_code
+      ANTHROPIC_MODEL: claude-opus-4-6
+      CLAUDE_CODE_CLI_VERSION: 2.1.92
+
+runtime:
+  trials: 1
+  max_total_time: 10800
+  build_timeout: 4800
+  run_timeout: 1200
+  verify_timeout: 600
+  per_pov_verify_timeout: 120
+  redis_host: localhost
+  rts_enabled: true
+  inc_build_enabled: true
+  pov_early_stop: true
+  litellm:
+    mode: external
+    cost_budget: 5.0
+
+storage:
+  copy_results_after_trial: true
+  cleanup_after_trial: true
+  results_filestore: .run/smoke-testing/results/smoke-cc-finding-original
+  experiment_filestore: .run/smoke-testing/experiment-data/smoke-cc-finding-original
+  report_filestore: .run/smoke-testing/report-data/smoke-cc-finding-original
+
+worker:
+  jobs: 10
+  cores_per_job: 8
+evaluator:
+  jobs: 2
+  cores_per_job: 4
+resources:
+  memory_per_trial: 48g
