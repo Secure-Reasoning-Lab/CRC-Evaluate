@@ -392,6 +392,8 @@ def _build_rich_group(
     running_jobs: list[RunningJobInfo] | None = None,
     running_job_count: int | None = None,
     rotation_active: bool = False,
+    rotation_page_index: int = 0,
+    rotation_page_count: int = 1,
 ):
     from rich.console import Group
     from rich.table import Table
@@ -417,8 +419,8 @@ def _build_rich_group(
     running_table = Table(title="Running Jobs")
     if rotation_active and total_running_jobs > len(visible_running_jobs):
         running_table.caption = (
-            "Showing "
-            f"{len(visible_running_jobs)} of {total_running_jobs} running jobs; "
+            f"Page {rotation_page_index + 1}/{rotation_page_count}: "
+            f"showing {len(visible_running_jobs)} of {total_running_jobs} running jobs; "
             "rotating each refresh"
         )
     running_table.add_column("Worker", style="green")
@@ -462,11 +464,11 @@ def _select_running_jobs_window(
     total_jobs: int,
     disk_skipped: int,
     rotation_cursor: int,
-) -> tuple[list[RunningJobInfo], int, bool]:
+) -> tuple[list[RunningJobInfo], int, bool, int, int]:
     running_jobs = snapshot.running_jobs
     total_running_jobs = len(running_jobs)
     if total_running_jobs <= 1:
-        return running_jobs, 0, False
+        return running_jobs, 0, False, 0, 1
 
     full_group = _build_rich_group(
         snapshot,
@@ -475,17 +477,15 @@ def _select_running_jobs_window(
         disk_skipped=disk_skipped,
     )
     if _count_rendered_lines(console, full_group) <= console.size.height:
-        return running_jobs, 0, False
+        return running_jobs, 0, False, 0, 1
 
-    start = rotation_cursor % total_running_jobs
-    rotated_jobs = running_jobs[start:] + running_jobs[:start]
     low = 0
     high = total_running_jobs
     best = 0
 
     while low <= high:
         candidate_count = (low + high) // 2
-        candidate_jobs = rotated_jobs[:candidate_count]
+        candidate_jobs = running_jobs[:candidate_count]
         candidate_group = _build_rich_group(
             snapshot,
             experiment_name=experiment_name,
@@ -494,6 +494,8 @@ def _select_running_jobs_window(
             running_jobs=candidate_jobs,
             running_job_count=total_running_jobs,
             rotation_active=True,
+            rotation_page_index=0,
+            rotation_page_count=1,
         )
         if _count_rendered_lines(console, candidate_group) <= console.size.height:
             best = candidate_count
@@ -501,9 +503,16 @@ def _select_running_jobs_window(
         else:
             high = candidate_count - 1
 
-    visible_jobs = rotated_jobs[:best]
-    next_cursor = rotation_cursor if best == 0 else (start + best) % total_running_jobs
-    return visible_jobs, next_cursor, True
+    if best <= 0:
+        return [], 0, True, 0, 1
+
+    page_count = (total_running_jobs + best - 1) // best
+    page_index = rotation_cursor % page_count
+    start = page_index * best
+    end = min(start + best, total_running_jobs)
+    visible_jobs = running_jobs[start:end]
+    next_cursor = (page_index + 1) % page_count
+    return visible_jobs, next_cursor, True, page_index, page_count
 
 
 def _monitor_queue_rich(
@@ -530,15 +539,19 @@ def _monitor_queue_rich(
     snapshot = build_monitor_snapshot(queue, experiment_name)
     _notify_snapshot(callbacks, snapshot)
     display_total = _display_total(snapshot, total_jobs)
-    visible_running_jobs, rotation_cursor, rotation_active = (
-        _select_running_jobs_window(
-            console,
-            snapshot,
-            experiment_name=experiment_name,
-            total_jobs=display_total,
-            disk_skipped=disk_skipped,
-            rotation_cursor=rotation_cursor,
-        )
+    (
+        visible_running_jobs,
+        rotation_cursor,
+        rotation_active,
+        rotation_page_index,
+        rotation_page_count,
+    ) = _select_running_jobs_window(
+        console,
+        snapshot,
+        experiment_name=experiment_name,
+        total_jobs=display_total,
+        disk_skipped=disk_skipped,
+        rotation_cursor=rotation_cursor,
     )
     with Live(
         _build_rich_group(
@@ -549,6 +562,8 @@ def _monitor_queue_rich(
             running_jobs=visible_running_jobs,
             running_job_count=len(snapshot.running_jobs),
             rotation_active=rotation_active,
+            rotation_page_index=rotation_page_index,
+            rotation_page_count=rotation_page_count,
         ),
         refresh_per_second=1,
         console=console,
@@ -578,15 +593,19 @@ def _monitor_queue_rich(
             snapshot = build_monitor_snapshot(queue, experiment_name)
             _notify_snapshot(callbacks, snapshot)
             display_total = _display_total(snapshot, total_jobs)
-            visible_running_jobs, rotation_cursor, rotation_active = (
-                _select_running_jobs_window(
-                    console,
-                    snapshot,
-                    experiment_name=experiment_name,
-                    total_jobs=display_total,
-                    disk_skipped=disk_skipped,
-                    rotation_cursor=rotation_cursor,
-                )
+            (
+                visible_running_jobs,
+                rotation_cursor,
+                rotation_active,
+                rotation_page_index,
+                rotation_page_count,
+            ) = _select_running_jobs_window(
+                console,
+                snapshot,
+                experiment_name=experiment_name,
+                total_jobs=display_total,
+                disk_skipped=disk_skipped,
+                rotation_cursor=rotation_cursor,
             )
             live.update(
                 _build_rich_group(
@@ -597,6 +616,8 @@ def _monitor_queue_rich(
                     running_jobs=visible_running_jobs,
                     running_job_count=len(snapshot.running_jobs),
                     rotation_active=rotation_active,
+                    rotation_page_index=rotation_page_index,
+                    rotation_page_count=rotation_page_count,
                 )
             )
             time.sleep(poll_interval)
