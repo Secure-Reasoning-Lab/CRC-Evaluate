@@ -389,9 +389,19 @@ def _build_rich_group(
     experiment_name: str,
     total_jobs: int,
     disk_skipped: int,
+    running_jobs: list[RunningJobInfo] | None = None,
+    running_job_count: int | None = None,
+    rotation_active: bool = False,
 ):
     from rich.console import Group
     from rich.table import Table
+
+    visible_running_jobs = (
+        snapshot.running_jobs if running_jobs is None else running_jobs
+    )
+    total_running_jobs = (
+        len(snapshot.running_jobs) if running_job_count is None else running_job_count
+    )
 
     table = Table(title=f"Experiment: {experiment_name}")
     table.add_column("Status", style="cyan")
@@ -405,6 +415,12 @@ def _build_rich_group(
     table.add_row("Total", str(total_jobs + disk_skipped))
 
     running_table = Table(title="Running Jobs")
+    if rotation_active and total_running_jobs > len(visible_running_jobs):
+        running_table.caption = (
+            "Showing "
+            f"{len(visible_running_jobs)} of {total_running_jobs} running jobs; "
+            "rotating each refresh"
+        )
     running_table.add_column("Worker", style="green")
     running_table.add_column("CRS", style="cyan")
     running_table.add_column("Benchmark", style="yellow")
@@ -415,7 +431,7 @@ def _build_rich_group(
     running_table.add_column("Phase", style="magenta")
     running_table.add_column("Elapsed", justify="right", style="magenta")
 
-    for job in snapshot.running_jobs:
+    for job in visible_running_jobs:
         running_table.add_row(
             job.worker_name,
             job.crs,
@@ -429,6 +445,65 @@ def _build_rich_group(
         )
 
     return Group(table, running_table)
+
+
+def _count_rendered_lines(console, renderable) -> int:
+    options = console.options.copy()
+    options.height = None
+    options.max_height = 10_000
+    return len(console.render_lines(renderable, options=options, pad=False))
+
+
+def _select_running_jobs_window(
+    console,
+    snapshot: QueueMonitorSnapshot,
+    *,
+    experiment_name: str,
+    total_jobs: int,
+    disk_skipped: int,
+    rotation_cursor: int,
+) -> tuple[list[RunningJobInfo], int, bool]:
+    running_jobs = snapshot.running_jobs
+    total_running_jobs = len(running_jobs)
+    if total_running_jobs <= 1:
+        return running_jobs, 0, False
+
+    full_group = _build_rich_group(
+        snapshot,
+        experiment_name=experiment_name,
+        total_jobs=total_jobs,
+        disk_skipped=disk_skipped,
+    )
+    if _count_rendered_lines(console, full_group) <= console.size.height:
+        return running_jobs, 0, False
+
+    start = rotation_cursor % total_running_jobs
+    rotated_jobs = running_jobs[start:] + running_jobs[:start]
+    low = 0
+    high = total_running_jobs
+    best = 0
+
+    while low <= high:
+        candidate_count = (low + high) // 2
+        candidate_jobs = rotated_jobs[:candidate_count]
+        candidate_group = _build_rich_group(
+            snapshot,
+            experiment_name=experiment_name,
+            total_jobs=total_jobs,
+            disk_skipped=disk_skipped,
+            running_jobs=candidate_jobs,
+            running_job_count=total_running_jobs,
+            rotation_active=True,
+        )
+        if _count_rendered_lines(console, candidate_group) <= console.size.height:
+            best = candidate_count
+            low = candidate_count + 1
+        else:
+            high = candidate_count - 1
+
+    visible_jobs = rotated_jobs[:best]
+    next_cursor = rotation_cursor if best == 0 else (start + best) % total_running_jobs
+    return visible_jobs, next_cursor, True
 
 
 def _monitor_queue_rich(
@@ -450,16 +525,30 @@ def _monitor_queue_rich(
     last_renew = time.monotonic()
     seen_finished: set[str] = set()
     seen_failed: set[str] = set()
+    rotation_cursor = 0
 
     snapshot = build_monitor_snapshot(queue, experiment_name)
     _notify_snapshot(callbacks, snapshot)
     display_total = _display_total(snapshot, total_jobs)
+    visible_running_jobs, rotation_cursor, rotation_active = (
+        _select_running_jobs_window(
+            console,
+            snapshot,
+            experiment_name=experiment_name,
+            total_jobs=display_total,
+            disk_skipped=disk_skipped,
+            rotation_cursor=rotation_cursor,
+        )
+    )
     with Live(
         _build_rich_group(
             snapshot,
             experiment_name=experiment_name,
             total_jobs=display_total,
             disk_skipped=disk_skipped,
+            running_jobs=visible_running_jobs,
+            running_job_count=len(snapshot.running_jobs),
+            rotation_active=rotation_active,
         ),
         refresh_per_second=1,
         console=console,
@@ -489,12 +578,25 @@ def _monitor_queue_rich(
             snapshot = build_monitor_snapshot(queue, experiment_name)
             _notify_snapshot(callbacks, snapshot)
             display_total = _display_total(snapshot, total_jobs)
+            visible_running_jobs, rotation_cursor, rotation_active = (
+                _select_running_jobs_window(
+                    console,
+                    snapshot,
+                    experiment_name=experiment_name,
+                    total_jobs=display_total,
+                    disk_skipped=disk_skipped,
+                    rotation_cursor=rotation_cursor,
+                )
+            )
             live.update(
                 _build_rich_group(
                     snapshot,
                     experiment_name=experiment_name,
                     total_jobs=display_total,
                     disk_skipped=disk_skipped,
+                    running_jobs=visible_running_jobs,
+                    running_job_count=len(snapshot.running_jobs),
+                    rotation_active=rotation_active,
                 )
             )
             time.sleep(poll_interval)

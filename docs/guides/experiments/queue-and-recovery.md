@@ -15,6 +15,9 @@ Today that managed-cloud path is implemented for GCE launches.
   lifecycle rows have not been populated yet.
 - `crsbench cloud --config <config.yaml> monitor <experiment>` attaches to a
   launched remote orchestrator and keeps refreshing the live trial-queue view.
+  When the terminal is too short to show every running-job row, the Rich view
+  keeps the queue summary visible and rotates the visible running-job window on
+  each refresh instead of pinning the same top rows forever.
 
 When Apprise URLs are configured in the operator environment, `cloud monitor`
 sends one operator-side terminal notification after it first observes the queue

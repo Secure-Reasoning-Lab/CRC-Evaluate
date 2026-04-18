@@ -9,6 +9,8 @@ from crsbench.distributed.queue_monitor import (
     QueueJobEntry,
     QueueMonitorCallbacks,
     QueueMonitorSnapshot,
+    RunningJobInfo,
+    _select_running_jobs_window,
     build_monitor_snapshot,
     list_queue_job_entries,
     monitor_queue,
@@ -334,6 +336,91 @@ def test_monitor_queue_calls_snapshot_callback_in_rich_mode() -> None:
         )
 
     assert snapshots == [active, done]
+
+
+def test_select_running_jobs_window_rotates_when_terminal_height_is_limited() -> None:
+    rich_console = pytest.importorskip("rich.console")
+    console = rich_console.Console(width=120, height=20, force_terminal=True)
+    running_jobs = [
+        RunningJobInfo(
+            worker_name=f"worker-{idx}",
+            crs="crs-a",
+            benchmark="bench-a",
+            harness="harness-a",
+            target_cpv_id="cpv-1",
+            mode="delta",
+            trial_num=str(idx),
+            phase="running",
+            elapsed="1m0s",
+        )
+        for idx in range(6)
+    ]
+    snapshot = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=running_jobs,
+    )
+
+    visible_jobs, next_cursor, rotation_active = _select_running_jobs_window(
+        console,
+        snapshot,
+        experiment_name="exp-1",
+        total_jobs=6,
+        disk_skipped=0,
+        rotation_cursor=0,
+    )
+
+    assert rotation_active is True
+    assert [job.trial_num for job in visible_jobs] == ["0", "1", "2", "3"]
+    assert next_cursor == 4
+
+    rotated_jobs, wrapped_cursor, wrapped_rotation_active = _select_running_jobs_window(
+        console,
+        snapshot,
+        experiment_name="exp-1",
+        total_jobs=6,
+        disk_skipped=0,
+        rotation_cursor=next_cursor,
+    )
+
+    assert wrapped_rotation_active is True
+    assert [job.trial_num for job in rotated_jobs] == ["4", "5", "0", "1"]
+    assert wrapped_cursor == 2
+
+
+def test_select_running_jobs_window_shows_all_rows_when_terminal_can_fit_them() -> None:
+    rich_console = pytest.importorskip("rich.console")
+    console = rich_console.Console(width=120, height=21, force_terminal=True)
+    running_jobs = [
+        RunningJobInfo(
+            worker_name=f"worker-{idx}",
+            crs="crs-a",
+            benchmark="bench-a",
+            harness="harness-a",
+            target_cpv_id="cpv-1",
+            mode="delta",
+            trial_num=str(idx),
+            phase="running",
+            elapsed="1m0s",
+        )
+        for idx in range(6)
+    ]
+    snapshot = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=running_jobs,
+    )
+
+    visible_jobs, next_cursor, rotation_active = _select_running_jobs_window(
+        console,
+        snapshot,
+        experiment_name="exp-1",
+        total_jobs=6,
+        disk_skipped=0,
+        rotation_cursor=3,
+    )
+
+    assert rotation_active is False
+    assert [job.trial_num for job in visible_jobs] == ["0", "1", "2", "3", "4", "5"]
+    assert next_cursor == 0
 
 
 def test_monitor_queue_snapshot_callback_receives_current_snapshot() -> None:
