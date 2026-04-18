@@ -4,7 +4,7 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
-from crsbench.dataset.backends import download, upload
+from crsbench.dataset.backends import delete, download, upload
 from crsbench.dataset.bundle import (
     BENCHMARK_ARCHIVE,
     GROUND_TRUTH_ARCHIVE,
@@ -37,6 +37,7 @@ def upload_dataset(
     *,
     benchmarks: list[str] | None = None,
     dry_run: bool = False,
+    prune: bool = False,
 ) -> None:
     """Bundle and upload benchmark directories to the configured backend.
 
@@ -47,33 +48,52 @@ def upload_dataset(
         dataset: Dataset short name (e.g., "crsbench")
         benchmarks_dir: Path to the benchmarks/ directory
         benchmarks: Specific benchmark names to upload (None = all matching)
-        dry_run: If True, only list what would be uploaded
+        dry_run: If True, only list what would be uploaded/pruned
+        prune: If True, delete remote benchmark folders that are no longer
+            present locally (full set for the dataset prefixes). Incompatible
+            with ``benchmarks`` because a subset upload does not represent the
+            intended full state.
     """
     config = get_dataset(dataset)
 
-    # List matching directories for logging
-    matching = _find_matching_benchmarks(benchmarks_dir, config.prefixes)
+    # Full local set ignores the ``benchmarks`` filter and is the reference
+    # used for prune comparison against the remote manifest.
+    full_local = _find_matching_benchmarks(benchmarks_dir, config.prefixes)
 
-    # Filter to specific benchmarks if requested
+    if prune and benchmarks:
+        raise ValueError(
+            "prune=True is incompatible with a benchmarks filter: pruning "
+            "requires the full local benchmark set for the dataset"
+        )
+
     if benchmarks:
         names = set(benchmarks)
-        matching = [d for d in matching if d.name in names]
+        matching = [d for d in full_local if d.name in names]
+    else:
+        matching = list(full_local)
 
     logger.info(f"Dataset: {dataset} -> {config.location} ({config.backend})")
     logger.info(f"Matching benchmarks: {len(matching)}")
-
-    if not matching:
-        logger.warning("No matching benchmarks found — nothing to upload")
-        return
 
     remote_manifest = _load_remote_manifest(config)
     remote_files = _load_remote_files(config)
     manifest_updates, changed = _plan_upload(matching, remote_manifest, remote_files)
     changed_names = {p.name for p in changed}
 
+    stale_names: set[str] = set()
+    if prune:
+        full_local_names = {d.name for d in full_local}
+        stale_names = set(remote_manifest.keys()) - full_local_names
+
+    if not matching and not stale_names:
+        logger.warning("No matching benchmarks found and nothing to prune")
+        return
+
     logger.info(
         f"Upload plan: {len(changed)} changed, {len(matching) - len(changed)} unchanged"
     )
+    if prune:
+        logger.info(f"Prune plan: {len(stale_names)} stale remote benchmarks")
 
     if dry_run:
         for benchmark_dir in changed:
@@ -82,8 +102,19 @@ def upload_dataset(
             if benchmark_dir.name in changed_names:
                 continue
             logger.info(f"  [dry-run] unchanged, skip upload: {benchmark_dir.name}")
+        for name in sorted(stale_names):
+            logger.info(f"  [dry-run] would prune remote benchmark: {name}")
         _upload_card_files(config, dry_run=True)
         return
+
+    # Delete stale folders first: if a later step fails, the remote is still
+    # closer to the intended state than before.
+    if stale_names:
+        logger.info(
+            f"Pruning {len(stale_names)} stale benchmarks from {config.location}..."
+        )
+        delete(config, sorted(stale_names))
+        logger.info(f"Pruned {len(stale_names)} stale benchmarks")
 
     if changed:
         # Bundle changed benchmarks and upload with updated index.
@@ -96,8 +127,9 @@ def upload_dataset(
                 logger.info(f"Bundled {benchmark_dir.name}: {len(archives)} archives")
                 _update_archive_metadata(manifest_updates[benchmark_dir.name], output)
 
-            merged_manifest = dict(remote_manifest)
-            merged_manifest.update(manifest_updates)
+            merged_manifest = _compose_manifest(
+                remote_manifest, manifest_updates, stale_names
+            )
             write_remote_index(staging_dir / REMOTE_INDEX_PATH, merged_manifest)
             write_remote_index(staging_dir / REMOTE_INDEX_ALIAS_PATH, merged_manifest)
 
@@ -106,15 +138,15 @@ def upload_dataset(
             )
             upload(config, staging_dir)
             logger.info(f"Upload complete: {config.location}")
-    else:
-        logger.info("All selected benchmarks are unchanged; skipping benchmark upload")
-
-    # Update remote manifest only (if needed) when no benchmark changed.
-    if not changed and manifest_updates:
+    elif manifest_updates or stale_names:
+        # No changed bundles, but the remote manifest needs a refresh — either
+        # because unchanged entries are being re-synced or because prune
+        # dropped entries.
         with tempfile.TemporaryDirectory(prefix="crsbench-upload-index-") as tmpdir:
             staging_dir = Path(tmpdir)
-            merged_manifest = dict(remote_manifest)
-            merged_manifest.update(manifest_updates)
+            merged_manifest = _compose_manifest(
+                remote_manifest, manifest_updates, stale_names
+            )
             write_remote_index(staging_dir / REMOTE_INDEX_PATH, merged_manifest)
             write_remote_index(staging_dir / REMOTE_INDEX_ALIAS_PATH, merged_manifest)
             upload(
@@ -123,9 +155,24 @@ def upload_dataset(
                 allow_patterns=[REMOTE_INDEX_PATH, REMOTE_INDEX_ALIAS_PATH],
             )
             logger.info("Uploaded updated manifest index only")
+    else:
+        logger.info("All selected benchmarks are unchanged; skipping benchmark upload")
 
     # Upload dataset card files (README.md, LICENSE, etc.) from repo root.
     _upload_card_files(config)
+
+
+def _compose_manifest(
+    remote: dict[str, BenchmarkManifestEntry],
+    updates: dict[str, BenchmarkManifestEntry],
+    stale: set[str],
+) -> dict[str, BenchmarkManifestEntry]:
+    """Compose final manifest from remote + local updates, dropping pruned."""
+    merged = dict(remote)
+    merged.update(updates)
+    for name in stale:
+        merged.pop(name, None)
+    return merged
 
 
 def _find_matching_benchmarks(benchmarks_dir: Path, prefixes: list[str]) -> list[Path]:

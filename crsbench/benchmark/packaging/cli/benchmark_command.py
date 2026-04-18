@@ -392,6 +392,7 @@ Examples:
   %(prog)s --dataset crsbench --benchmarks afc-curl-delta-01 afc-curl-delta-02
   %(prog)s --dataset crsbench --dry-run
   %(prog)s --dataset crsbench --benchmarks-dir ./benchmarks
+  %(prog)s --dataset crsbench --prune  # also delete remote benchmarks absent locally
         """,
     )
     upload_parser.add_argument(
@@ -417,7 +418,17 @@ Examples:
     upload_parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Only list what would be uploaded, don't actually upload",
+        help="Only list what would be uploaded/pruned, don't actually upload",
+    )
+    upload_parser.add_argument(
+        "--prune",
+        action="store_true",
+        help=(
+            "Delete remote benchmark folders and manifest entries that are "
+            "absent from the local benchmarks directory. Incompatible with "
+            "--benchmarks because a subset upload does not represent the "
+            "intended full state."
+        ),
     )
     upload_parser.add_argument(
         "--verbose",
@@ -1334,6 +1345,7 @@ def handle_upload(args: argparse.Namespace) -> int:
             args.benchmarks_dir,
             benchmarks=args.benchmarks,
             dry_run=args.dry_run,
+            prune=args.prune,
         )
         return 0
     except Exception as e:

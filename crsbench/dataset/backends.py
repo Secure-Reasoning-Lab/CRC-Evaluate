@@ -106,6 +106,28 @@ def _upload_huggingface(
     )
 
 
+def _delete_huggingface(
+    config: DatasetConfig,
+    paths: list[str],
+    *,
+    commit_message: Optional[str] = None,
+) -> None:
+    """Delete folders from a HuggingFace repo.
+
+    Each path is treated as a folder inside the repo. One commit per path.
+    """
+    from huggingface_hub import HfApi
+
+    api = HfApi()
+    for path_in_repo in paths:
+        api.delete_folder(
+            path_in_repo=path_in_repo,
+            repo_id=config.location,
+            repo_type=config.repo_type,
+            commit_message=commit_message or f"Prune benchmark folder: {path_in_repo}",
+        )
+
+
 # -- S3 backend (placeholder) --
 
 
@@ -127,6 +149,16 @@ def _upload_s3(
 ) -> None:
     """Upload to S3."""
     raise NotImplementedError("S3 upload backend not yet implemented")
+
+
+def _delete_s3(
+    config: DatasetConfig,
+    paths: list[str],
+    *,
+    commit_message: Optional[str] = None,
+) -> None:
+    """Delete folders from S3."""
+    raise NotImplementedError("S3 delete backend not yet implemented")
 
 
 # -- Azure Blob Storage backend (placeholder) --
@@ -152,9 +184,20 @@ def _upload_azure(
     raise NotImplementedError("Azure Blob Storage upload backend not yet implemented")
 
 
+def _delete_azure(
+    config: DatasetConfig,
+    paths: list[str],
+    *,
+    commit_message: Optional[str] = None,
+) -> None:
+    """Delete folders from Azure Blob Storage."""
+    raise NotImplementedError("Azure Blob Storage delete backend not yet implemented")
+
+
 # Backend dispatch tables
 type DownloadFn = Callable[..., Path]
 type UploadFn = Callable[..., None]
+type DeleteFn = Callable[..., None]
 
 DOWNLOAD_BACKENDS: dict[str, DownloadFn] = {
     "huggingface": _download_huggingface,
@@ -166,6 +209,12 @@ UPLOAD_BACKENDS: dict[str, UploadFn] = {
     "huggingface": _upload_huggingface,
     "s3": _upload_s3,
     "azure": _upload_azure,
+}
+
+DELETE_BACKENDS: dict[str, DeleteFn] = {
+    "huggingface": _delete_huggingface,
+    "s3": _delete_s3,
+    "azure": _delete_azure,
 }
 
 
@@ -220,3 +269,30 @@ def upload(
             f"Unsupported upload backend: {config.backend!r}. Supported: {supported}"
         )
     backend_fn(config, folder_path, allow_patterns=allow_patterns)
+
+
+def delete(
+    config: DatasetConfig,
+    paths: list[str],
+    *,
+    commit_message: Optional[str] = None,
+) -> None:
+    """Delete folders from the configured backend.
+
+    Args:
+        config: Dataset configuration
+        paths: Folder paths (repo-relative) to delete
+        commit_message: Optional commit/audit message for backends that use one
+
+    Raises:
+        ValueError: If backend is not supported
+    """
+    if not paths:
+        return
+    backend_fn = DELETE_BACKENDS.get(config.backend)
+    if backend_fn is None:
+        supported = ", ".join(sorted(DELETE_BACKENDS.keys()))
+        raise ValueError(
+            f"Unsupported delete backend: {config.backend!r}. Supported: {supported}"
+        )
+    backend_fn(config, paths, commit_message=commit_message)

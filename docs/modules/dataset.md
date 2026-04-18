@@ -14,15 +14,19 @@ extensible support for S3 and Azure.
 - **Card auto-upload**: HF card files are uploaded from canonical repo-root files
   (`README_HF.md`, `LICENSE`, `LICENSE-THIRD-PARTY.md`)
 - **Incremental sync**: Shared remote/local manifests skip unchanged benchmarks
+- **Opt-in prune**: `crsbench benchmark upload --prune` deletes remote
+  benchmark folders and manifest entries that are absent from the local
+  benchmarks directory. Incompatible with `--benchmarks` because a subset
+  upload does not represent the intended full state.
 
 ## File Structure
 
 | File | Purpose |
 |------|---------|
 | `registry.py` | `DatasetConfig` dataclass and `DATASET_REGISTRY` |
-| `backends.py` | Backend dispatch (HuggingFace, S3, Azure) |
+| `backends.py` | Backend dispatch (HuggingFace, S3, Azure) for download/upload/delete |
 | `download.py` | `download_dataset`, `download_all`, `download_suite` |
-| `upload.py` | `upload_dataset` with dry-run and card file upload |
+| `upload.py` | `upload_dataset` with dry-run, card upload, and `--prune` support |
 | `manifest.py` | Shared fingerprint/index helpers for incremental upload/download |
 | `cli.py` | `crsbench download` CLI subparser (top-level command) |
 
