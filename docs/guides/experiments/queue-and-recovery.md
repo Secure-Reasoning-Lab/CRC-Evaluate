@@ -19,6 +19,9 @@ Today that managed-cloud path is implemented for GCE launches.
   keeps the queue summary visible, shows a page indicator in the running-job
   caption, and rotates the visible running-job page on each refresh instead of
   pinning the same top rows forever.
+  Cloud worker names in the monitor use the same short aliases as other cloud
+  commands, so prefixes like `crsbench-<experiment>-` are hidden and workers
+  appear as `work-001`, `work-002`, and so on.
 
 When Apprise URLs are configured in the operator environment, `cloud monitor`
 sends one operator-side terminal notification after it first observes the queue

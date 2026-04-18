@@ -218,6 +218,13 @@ def _display_total(snapshot: QueueMonitorSnapshot, total_jobs: int | None) -> in
     return total_jobs if total_jobs is not None else _default_total(snapshot)
 
 
+def _display_worker_name(experiment_name: str, worker_name: str) -> str:
+    prefix = f"crsbench-{experiment_name}-"
+    if worker_name.startswith(prefix):
+        return worker_name.removeprefix(prefix)
+    return worker_name
+
+
 def _process_tracked_jobs(
     tracked_jobs: list[object] | None,
     *,
@@ -323,7 +330,8 @@ def _log_snapshot_basic(
     for job in snapshot.running_jobs:
         logger.info(
             "  "
-            f"[{job.worker_name}] [{job.crs}] {job.benchmark}/{job.harness} "
+            f"[{_display_worker_name(experiment_name, job.worker_name)}] "
+            f"[{job.crs}] {job.benchmark}/{job.harness} "
             f"cpv={job.target_cpv_id} mode={job.mode} trial={job.trial_num} "
             f"phase={job.phase} ({job.elapsed})"
         )
@@ -435,7 +443,7 @@ def _build_rich_group(
 
     for job in visible_running_jobs:
         running_table.add_row(
-            job.worker_name,
+            _display_worker_name(experiment_name, job.worker_name),
             job.crs,
             job.benchmark,
             job.harness,

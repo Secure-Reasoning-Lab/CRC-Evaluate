@@ -11,6 +11,7 @@ from crsbench.distributed.queue_monitor import (
     QueueMonitorSnapshot,
     RunningJobInfo,
     _build_rich_group,
+    _display_worker_name,
     _select_running_jobs_window,
     build_monitor_snapshot,
     list_queue_job_entries,
@@ -481,6 +482,20 @@ def test_build_rich_group_caption_shows_page_indicator() -> None:
 
     output = console.export_text()
     assert "Page 2/2: showing 4 of 6 running jobs; rotating each refresh" in output
+
+
+def test_display_worker_name_trims_cloud_experiment_prefix() -> None:
+    assert (
+        _display_worker_name(
+            "afc-bugfinding-multilang",
+            "crsbench-afc-bugfinding-multilang-work-003-abc123",
+        )
+        == "work-003-abc123"
+    )
+
+
+def test_display_worker_name_preserves_non_cloud_worker_names() -> None:
+    assert _display_worker_name("exp-1", "worker-1") == "worker-1"
 
 
 def test_monitor_queue_snapshot_callback_receives_current_snapshot() -> None:
