@@ -46,6 +46,8 @@ class TestLiteLLMTracker:
             tracker = LiteLLMTracker()
             assert tracker.base_url == "http://litellm:4000"
             assert tracker.master_key == "sk-master-key-123"
+            assert tracker.timeout == 60
+            assert tracker.max_retries == 3
 
     def test_init_with_explicit_params(self):
         """Test initialization with explicit parameters."""
@@ -584,7 +586,7 @@ class TestLiteLLMTracker:
 
     @patch("crsbench.evaluation.litellm_tracker.requests.request")
     def test_generate_llm_usage_json(self, mock_request, tracker):
-        """Test LLM usage data generation without detailed logs."""
+        """Test LLM usage data generation from key info only."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -607,6 +609,10 @@ class TestLiteLLMTracker:
         assert usage.trial_id == "exp1-atlantis-curl-fuzz_http-trial1"
         assert usage.total_spend_usd == 2.50
         assert usage.key_alias == "crsbench-exp1-atlantis-curl-fuzz_http-trial1"
+        assert usage.detailed_usage is None
+        assert usage.key_info["spend_sources"]["key_info_spend_usd"] == 2.50
+        assert usage.key_info["spend_sources"]["selection_rule"] == "key/info"
+        assert usage.key_info["spend_sources"]["spend_log_tracking_suppressed"] is True
 
     @patch("crsbench.evaluation.litellm_tracker.requests.request")
     def test_get_spend_logs_success(self, mock_request, tracker):
@@ -754,8 +760,7 @@ class TestLiteLLMTracker:
 
     @patch("crsbench.evaluation.litellm_tracker.requests.request")
     def test_generate_llm_usage_json_with_detailed_logs(self, mock_request, tracker):
-        """Test LLM usage generation with detailed logs."""
-        # First call is for key/info, second is for spend/logs
+        """Test detailed-log requests are ignored in favor of key info."""
         mock_key_info_response = MagicMock()
         mock_key_info_response.status_code = 200
         mock_key_info_response.json.return_value = {
@@ -766,31 +771,7 @@ class TestLiteLLMTracker:
                 "metadata": {},
             }
         }
-
-        mock_spend_logs_response = MagicMock()
-        mock_spend_logs_response.status_code = 200
-        mock_spend_logs_response.json.return_value = [
-            {
-                "request_id": "req-1",
-                "model": "gpt-4",
-                "spend": 0.50,
-                "prompt_tokens": 100,
-                "completion_tokens": 50,
-                "total_tokens": 150,
-                "cache_hit": False,
-            },
-            {
-                "request_id": "req-2",
-                "model": "gpt-4",
-                "spend": 0.50,
-                "prompt_tokens": 100,
-                "completion_tokens": 50,
-                "total_tokens": 150,
-                "cache_hit": False,
-            },
-        ]
-
-        mock_request.side_effect = [mock_key_info_response, mock_spend_logs_response]
+        mock_request.return_value = mock_key_info_response
 
         usage = tracker.generate_llm_usage_json(
             api_key="sk-test-key",
@@ -798,194 +779,9 @@ class TestLiteLLMTracker:
             include_detailed_logs=True,
         )
 
-        assert usage.detailed_usage is not None
-        assert usage.detailed_usage.total_api_calls == 2
-        assert usage.detailed_usage.total_tokens == 300
-        # Total spend should be updated from detailed logs
+        assert usage.detailed_usage is None
         assert usage.total_spend_usd == 1.00
-
-    @patch("crsbench.evaluation.litellm_tracker.requests.request")
-    def test_generate_llm_usage_json_prefers_higher_key_info_spend(
-        self, mock_request, tracker
-    ):
-        """Test key/info spend is preserved when spend logs under-report usage."""
-        mock_key_info_response = MagicMock()
-        mock_key_info_response.status_code = 200
-        mock_key_info_response.json.return_value = {
-            "info": {
-                "key_alias": "test-alias",
-                "spend": 10.0435409,
-                "max_budget": 10.0,
-                "metadata": {},
-            }
-        }
-
-        # Simulate partial spend logs that lag key/accounting state
-        mock_spend_logs_response = MagicMock()
-        mock_spend_logs_response.status_code = 200
-        mock_spend_logs_response.json.return_value = [
-            {
-                "request_id": "req-1",
-                "model": "gpt-4",
-                "spend": 4.3,
-                "prompt_tokens": 100,
-                "completion_tokens": 50,
-                "total_tokens": 150,
-                "cache_hit": False,
-            },
-            {
-                "request_id": "req-2",
-                "model": "gpt-4",
-                "spend": 4.2,
-                "prompt_tokens": 100,
-                "completion_tokens": 50,
-                "total_tokens": 150,
-                "cache_hit": False,
-            },
-        ]
-
-        mock_request.side_effect = [mock_key_info_response, mock_spend_logs_response]
-
-        usage = tracker.generate_llm_usage_json(
-            api_key="sk-test-key",
-            trial_id="test-trial",
-            include_detailed_logs=True,
-        )
-
-        assert usage.total_spend_usd == 10.0435409
-        assert usage.key_info["spend_sources"]["key_info_spend_usd"] == 10.0435409
-        assert usage.key_info["spend_sources"]["spend_logs_spend_usd"] == 8.5
-        assert usage.key_info["spend_sources"]["selected_total_spend_usd"] == 10.0435409
-
-    @patch("crsbench.evaluation.litellm_tracker.requests.request")
-    def test_generate_llm_usage_json_suppresses_tiny_spend_mismatch_warning(
-        self, mock_request, tracker, caplog
-    ):
-        """Do not warn when key/info and spend/log totals differ only by float noise."""
-        mock_key_info_response = MagicMock()
-        mock_key_info_response.status_code = 200
-        mock_key_info_response.json.return_value = {
-            "info": {
-                "key_alias": "test-alias",
-                "spend": 4.1848874,
-                "max_budget": 10.0,
-                "metadata": {},
-            }
-        }
-
-        mock_spend_logs_response = MagicMock()
-        mock_spend_logs_response.status_code = 200
-        mock_spend_logs_response.json.return_value = [
-            {
-                "request_id": "req-1",
-                "model": "gpt-4",
-                "spend": 4.1848870,
-                "prompt_tokens": 100,
-                "completion_tokens": 50,
-                "total_tokens": 150,
-                "cache_hit": False,
-            }
-        ]
-
-        mock_request.side_effect = [mock_key_info_response, mock_spend_logs_response]
-
-        usage = tracker.generate_llm_usage_json(
-            api_key="sk-test-key",
-            trial_id="test-trial",
-            include_detailed_logs=True,
-        )
-
-        assert usage.total_spend_usd == 4.1848874
-        mismatch_warnings = [
-            record
-            for record in caplog.records
-            if "LiteLLM spend mismatch" in record.message
-        ]
-        assert mismatch_warnings == []
-
-    @patch("crsbench.evaluation.litellm_tracker.requests.request")
-    @patch("crsbench.evaluation.litellm_tracker.logger.warning")
-    def test_generate_llm_usage_json_warns_for_material_key_info_higher_spend(
-        self, mock_warn, mock_request, tracker
-    ):
-        mock_key_info_response = MagicMock()
-        mock_key_info_response.status_code = 200
-        mock_key_info_response.json.return_value = {
-            "info": {
-                "key_alias": "test-alias",
-                "spend": 2.0,
-                "max_budget": 10.0,
-                "metadata": {},
-            }
-        }
-        mock_spend_logs_response = MagicMock()
-        mock_spend_logs_response.status_code = 200
-        mock_spend_logs_response.json.return_value = [
-            {
-                "request_id": "req-1",
-                "model": "gpt-4",
-                "spend": 1.5,
-                "prompt_tokens": 100,
-                "completion_tokens": 50,
-                "total_tokens": 150,
-                "cache_hit": False,
-            }
-        ]
-        mock_request.side_effect = [mock_key_info_response, mock_spend_logs_response]
-
-        tracker.generate_llm_usage_json(
-            api_key="sk-test-key",
-            trial_id="test-trial",
-            include_detailed_logs=True,
-        )
-
-        assert mock_warn.call_count >= 1
-        assert any(
-            "larger=key/info" in str(call.args[0]) for call in mock_warn.call_args_list
-        )
-
-    @patch("crsbench.evaluation.litellm_tracker.requests.request")
-    @patch("crsbench.evaluation.litellm_tracker.logger.warning")
-    def test_generate_llm_usage_json_warns_for_material_spend_logs_higher_spend(
-        self, mock_warn, mock_request, tracker
-    ):
-        mock_key_info_response = MagicMock()
-        mock_key_info_response.status_code = 200
-        mock_key_info_response.json.return_value = {
-            "info": {
-                "key_alias": "test-alias",
-                "spend": 1.0,
-                "max_budget": 10.0,
-                "metadata": {},
-            }
-        }
-        mock_spend_logs_response = MagicMock()
-        mock_spend_logs_response.status_code = 200
-        mock_spend_logs_response.json.return_value = [
-            {
-                "request_id": "req-1",
-                "model": "gpt-4",
-                "spend": 1.5,
-                "prompt_tokens": 100,
-                "completion_tokens": 50,
-                "total_tokens": 150,
-                "cache_hit": False,
-            }
-        ]
-        mock_request.side_effect = [mock_key_info_response, mock_spend_logs_response]
-
-        usage = tracker.generate_llm_usage_json(
-            api_key="sk-test-key",
-            trial_id="test-trial",
-            include_detailed_logs=True,
-        )
-
-        assert usage.total_spend_usd == 1.5
-        assert mock_warn.call_count >= 1
-        assert any(
-            "larger=spend/logs" in str(call.args[0])
-            for call in mock_warn.call_args_list
-        )
+        assert mock_request.call_count == 1
 
     @patch("crsbench.evaluation.litellm_tracker.requests.request")
     def test_write_llm_usage_file(self, mock_request, tracker, tmp_path):
@@ -1018,29 +814,17 @@ class TestLiteLLMTracker:
 
     @patch("crsbench.evaluation.litellm_tracker.requests.request")
     def test_write_llm_logs_file(self, mock_request, tracker, tmp_path):
-        """Test writing detailed LLM logs to file."""
+        """Test writing the suppressed LLM logs placeholder file."""
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = [
-            {
-                "request_id": "req-1",
-                "model": "gpt-4",
-                "spend": 0.50,
-                "prompt_tokens": 100,
-                "completion_tokens": 50,
-                "messages": [{"role": "user", "content": "Hello"}],
-                "response": "Hi there!",
-            },
-            {
-                "request_id": "req-2",
-                "model": "gpt-4",
-                "spend": 0.30,
-                "prompt_tokens": 80,
-                "completion_tokens": 40,
-                "messages": [{"role": "user", "content": "Test"}],
-                "response": "Response",
-            },
-        ]
+        mock_response.json.return_value = {
+            "info": {
+                "key_alias": "test-alias",
+                "spend": 0.80,
+                "max_budget": None,
+                "metadata": {},
+            }
+        }
         mock_request.return_value = mock_response
 
         output_path = tmp_path / "llm-logs.json"
@@ -1055,40 +839,25 @@ class TestLiteLLMTracker:
 
         data = json.loads(output_path.read_text())
         assert data["trial_id"] == "test-trial"
-        assert data["total_requests"] == 2
-        assert len(data["logs"]) == 2
-        # Verify raw logs are preserved
-        assert data["logs"][0]["messages"] == [{"role": "user", "content": "Hello"}]
-        assert data["logs"][0]["response"] == "Hi there!"
+        assert data["tracking_mode"] == "key_info_only"
+        assert data["spend_log_tracking_suppressed"] is True
+        assert data["total_cost_usd_from_key"] == 0.80
+        assert data["total_requests"] == 0
+        assert data["logs"] == []
 
     @patch("crsbench.evaluation.litellm_tracker.requests.request")
     def test_write_llm_summary_file(self, mock_request, tracker, tmp_path):
-        """Test writing concise LLM summary to file."""
+        """Test writing the suppressed LLM summary placeholder file."""
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = [
-            {
-                "request_id": "req-1",
-                "model": "gpt-4",
-                "spend": 0.60,
-                "prompt_tokens": 100,
-                "completion_tokens": 20,
-                "status_code": 200,
-            },
-            {
-                "request_id": "req-2",
-                "model": "gpt-4",
-                "spend": 0.10,
-                "status_code": 429,
-                "error": {"message": "Rate limit exceeded"},
-            },
-            {
-                "request_id": "req-3",
-                "model": "claude-3-opus",
-                "spend": 0.00,
-                "exception": "BudgetExceededError: Current cost: 10.04, Max budget: 10.0",
-            },
-        ]
+        mock_response.json.return_value = {
+            "info": {
+                "key_alias": "test-alias",
+                "spend": 0.70,
+                "max_budget": None,
+                "metadata": {},
+            }
+        }
         mock_request.return_value = mock_response
 
         output_path = tmp_path / "llm-summary.json"
@@ -1103,13 +872,15 @@ class TestLiteLLMTracker:
 
         data = json.loads(output_path.read_text())
         assert data["trial_id"] == "test-trial"
-        assert data["total_requests"] == 3
-        assert data["success_count"] == 1
-        assert data["failure_count"] == 2
-        assert data["failure_categories"]["rate_limited"] == 1
-        assert data["failure_categories"]["budget_exceeded"] == 1
-        assert data["by_model"]["gpt-4"]["calls"] == 2
-        assert data["by_model"]["claude-3-opus"]["calls"] == 1
+        assert data["tracking_mode"] == "key_info_only"
+        assert data["spend_log_tracking_suppressed"] is True
+        assert data["total_requests"] == 0
+        assert data["success_count"] == 0
+        assert data["failure_count"] == 0
+        assert data["failure_categories"] == {}
+        assert data["total_cost_usd_from_logs"] == 0.0
+        assert data["total_cost_usd_from_key"] == 0.70
+        assert data["by_model"] == {}
 
 
 class TestModelUsageStats:
@@ -1211,11 +982,11 @@ class TestLLMUsageData:
         assert data["key_alias"] == "test-alias"
 
     def test_to_dict_with_detailed_usage(self):
-        """Test conversion includes detailed usage when present."""
+        """Test detailed usage does not overwrite top-level spend."""
         detailed = DetailedLLMUsage(
             total_api_calls=5,
             total_tokens=500,
-            total_cost_usd=0.25,
+            total_cost_usd=0.10,
         )
 
         usage = LLMUsageData(
@@ -1232,6 +1003,7 @@ class TestLLMUsageData:
 
         assert data["total_api_calls"] == 5
         assert data["total_tokens"] == 500
+        assert data["total_cost_usd"] == 0.25
         assert "by_model" in data
 
     def test_to_dict_without_detailed_usage(self):
@@ -1279,10 +1051,9 @@ class TestLLMTrackingContext:
         mock_delete_response.status_code = 200
         mock_delete_response.json.return_value = {"deleted_keys": ["sk-generated-key"]}
 
-        # generate_key, then __exit__: get_key_info, get_spend_logs (empty), delete_key
+        # generate_key, then __exit__: get_key_info, delete_key
         mock_request.side_effect = [
             mock_generate_response,
-            mock_info_response,
             mock_info_response,
             mock_delete_response,
         ]
@@ -1335,9 +1106,7 @@ class TestLLMTrackingContext:
         mock_request.side_effect = [
             mock_generate_response,
             mock_info_response,  # intermediate: get_key_info
-            mock_info_response,  # intermediate: get_spend_logs
             mock_info_response,  # exit: get_key_info
-            mock_info_response,  # exit: get_spend_logs
             mock_delete_response,
         ]
 

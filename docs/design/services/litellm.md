@@ -69,6 +69,25 @@ or accounting must be present before execution starts.
 - Tracking/accounting settings must not silently degrade into a less strict mode.
 - Trial execution must not depend on provider API keys being directly visible to
   CRS containers when the configured runtime model uses an upstream gateway.
+- Trial spend accounting must come from LiteLLM `GET /key/info` for the
+  trial-scoped virtual key.
+- CRSBench must not depend on LiteLLM `GET /spend/logs` to compute trial spend
+  or runtime snapshot data.
+
+## Accounting Semantics
+
+CRSBench treats LiteLLM key-level accounting as authoritative for runtime
+tracking:
+
+- `llm-usage.json` is derived from `GET /key/info` only.
+- CRSBench does not aggregate request-level spend from `GET /spend/logs` during
+  snapshots or trial cleanup.
+- `llm-logs.json` and `llm-summary.json` remain present for artifact
+  compatibility, but they are key-info-only placeholders when spend-log
+  tracking is suppressed.
+
+This avoids unbounded request-log scans for long-running trials while keeping
+budget enforcement and reported spend aligned with LiteLLM's own key state.
 
 ## Failure Semantics
 

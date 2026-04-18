@@ -7,7 +7,6 @@ accurate per-trial cost and token tracking.
 Reference:
     - LiteLLM Virtual Keys: https://docs.litellm.ai/docs/proxy/virtual_keys
     - LiteLLM Spend Tracking: https://docs.litellm.ai/docs/proxy/cost_tracking
-    - LiteLLM Spend Logs: https://docs.litellm.ai/docs/proxy/spend_logs
 """
 
 import json
@@ -110,7 +109,10 @@ class LLMUsageData:
 
         # Add detailed usage if available
         if self.detailed_usage:
-            result.update(self.detailed_usage.to_dict())
+            detailed_usage = self.detailed_usage.to_dict()
+            # Preserve key/accounting spend as the authoritative top-level value.
+            detailed_usage.pop("total_cost_usd", None)
+            result.update(detailed_usage)
         else:
             # Provide empty defaults for compatibility
             result.update(
@@ -147,15 +149,13 @@ class LiteLLMTracker:
         CRSBENCH_LLM_UPSTREAM_MASTER_KEY: Master key for key management APIs
     """
 
-    SPEND_MISMATCH_EPSILON_USD = 1e-6
-
     def __init__(
         self,
         base_url: Optional[str] = None,
         master_key: Optional[str] = None,
         *,
-        timeout: int = 10,
-        max_retries: int = 10,
+        timeout: int = 60,
+        max_retries: int = 3,
         max_backoff: float = 60.0,
     ):
         """Initialize LiteLLM tracker.
@@ -198,6 +198,7 @@ class LiteLLMTracker:
             "Authorization": f"Bearer {self.master_key}",
             "Content-Type": "application/json",
         }
+        self._key_info_cache: dict[ApiKey, tuple[float, dict]] = {}
 
     def _request_with_retry(
         self,
@@ -527,6 +528,39 @@ class LiteLLMTracker:
         except requests.RequestException as e:
             raise LiteLLMTrackerError(f"Failed to get key info: {e}") from e
 
+    def _get_key_info_cached(
+        self, api_key: ApiKey, *, max_age_seconds: float = 1.0
+    ) -> dict:
+        """Return cached key info when the previous read is still fresh."""
+        cached = self._key_info_cache.get(api_key)
+        now = time.monotonic()
+        if cached is not None:
+            cached_at, payload = cached
+            if now - cached_at <= max_age_seconds:
+                return payload
+
+        payload = self.get_key_info(api_key)
+        self._key_info_cache[api_key] = (now, payload)
+        return payload
+
+    def _build_key_usage_snapshot(self, key_info: dict) -> dict:
+        """Build the persisted key-level accounting snapshot."""
+        info = key_info.get("info", {}) if isinstance(key_info, dict) else {}
+        key_alias = info.get("key_alias", "unknown")
+        key_info_spend = float(info.get("spend", 0.0) or 0.0)
+        return {
+            "key_alias": key_alias,
+            "spend": key_info_spend,
+            "max_budget": info.get("max_budget"),
+            "metadata": info.get("metadata", {}),
+            "spend_sources": {
+                "key_info_spend_usd": key_info_spend,
+                "selected_total_spend_usd": key_info_spend,
+                "selection_rule": "key/info",
+                "spend_log_tracking_suppressed": True,
+            },
+        }
+
     def delete_key(self, api_key: ApiKey) -> bool:
         """Delete an API key.
 
@@ -712,7 +746,8 @@ class LiteLLMTracker:
         Args:
             api_key: The trial's API key
             trial_id: Trial identifier for the output
-            include_detailed_logs: Whether to fetch and include detailed spend logs
+            include_detailed_logs: Deprecated compatibility flag. CRSBench
+                now derives trial usage from ``/key/info`` only.
 
         Returns:
             LLMUsageData with usage information including detailed metrics
@@ -720,62 +755,26 @@ class LiteLLMTracker:
         Raises:
             LiteLLMTrackerError: If usage query fails
         """
-        key_info = self.get_key_info(api_key)
+        key_info = self._get_key_info_cached(api_key)
+        key_usage = self._build_key_usage_snapshot(key_info)
+        spend = float(key_usage["spend"] or 0.0)
+        key_alias = str(key_usage["key_alias"])
 
-        # Extract spend from key info.
-        # LiteLLM enforces budget against key-level/accounting state, so treat this
-        # as authoritative when it disagrees with spend-log aggregation.
-        info = key_info.get("info", {})
-        key_info_spend = float(info.get("spend", 0.0) or 0.0)
-        spend = key_info_spend
-        key_alias = info.get("key_alias", "unknown")
-
-        # Get detailed usage from spend logs
-        detailed_usage = None
-        spend_logs_cost: Optional[float] = None
         if include_detailed_logs:
-            logs = self.get_spend_logs(api_key)
-            if logs:
-                detailed_usage = self.aggregate_spend_logs(logs)
-                spend_logs_cost = float(detailed_usage.total_cost_usd or 0.0)
-                # Keep spend consistent with LiteLLM's budget enforcement semantics.
-                spend = max(key_info_spend, spend_logs_cost)
-                spend_delta = key_info_spend - spend_logs_cost
-                if abs(spend_delta) > self.SPEND_MISMATCH_EPSILON_USD:
-                    larger_source = "key/info" if spend_delta > 0 else "spend/logs"
-                    logger.warning(
-                        "LiteLLM spend mismatch: key/info spend "
-                        f"(${key_info_spend:.6f}) vs spend/logs aggregate "
-                        f"(${spend_logs_cost:.6f}), "
-                        f"delta=${spend_delta:.8f}, larger={larger_source}. "
-                        "Using max(source values)."
-                    )
-                logger.info(
-                    f"Aggregated {len(logs)} LLM requests: "
-                    f"{detailed_usage.total_api_calls} calls, "
-                    f"{detailed_usage.total_tokens} tokens, "
-                    f"${detailed_usage.total_cost_usd:.4f}"
-                )
+            logger.debug(
+                "Ignoring include_detailed_logs=True for "
+                f"{trial_id}; CRSBench uses LiteLLM /key/info only and "
+                "suppresses /spend/logs scans."
+            )
 
         return LLMUsageData(
             trial_id=trial_id,
             timestamp=datetime.now(timezone.utc).isoformat(),
             total_spend_usd=spend,
             key_alias=key_alias,
-            key_info={
-                "key_alias": key_alias,
-                "spend": spend,
-                "max_budget": info.get("max_budget"),
-                "metadata": info.get("metadata", {}),
-                "spend_sources": {
-                    "key_info_spend_usd": key_info_spend,
-                    "spend_logs_spend_usd": spend_logs_cost,
-                    "selected_total_spend_usd": spend,
-                    "selection_rule": "max(key_info_spend_usd, spend_logs_spend_usd)",
-                },
-            },
+            key_info=key_usage,
             raw_response=key_info,
-            detailed_usage=detailed_usage,
+            detailed_usage=None,
         )
 
     def write_llm_usage_file(
@@ -827,21 +826,32 @@ class LiteLLMTracker:
         Returns:
             Path to the written file
         """
-        # Get all spend logs for this API key
-        logs = self.get_spend_logs(api_key)
+        key_info = self._get_key_info_cached(api_key)
+        key_usage = self._build_key_usage_snapshot(key_info)
 
-        # Build output structure with metadata and raw logs
+        # Preserve the artifact while suppressing expensive /spend/logs scans.
         output_data = {
             "trial_id": trial_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "total_requests": len(logs),
-            "logs": logs,  # Store all raw log entries with full details
+            "tracking_mode": "key_info_only",
+            "spend_log_tracking_suppressed": True,
+            "suppressed_reason": (
+                "CRSBench does not query LiteLLM /spend/logs during runtime "
+                "tracking; usage comes from /key/info."
+            ),
+            "key_alias": key_usage["key_alias"],
+            "total_cost_usd_from_key": key_usage["spend"],
+            "total_requests": 0,
+            "logs": [],
         }
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(output_data, indent=2, default=str))
 
-        logger.info(f"Wrote LLM logs to {output_path}: {len(logs)} requests")
+        logger.info(
+            f"Wrote LLM logs placeholder to {output_path}: "
+            f"key-only spend=${float(key_usage['spend'] or 0.0):.4f}"
+        )
         return output_path
 
     def _categorize_failure(self, log: dict) -> str:
@@ -938,15 +948,29 @@ class LiteLLMTracker:
         output_path: Path,
     ) -> Path:
         """Write concise LLM request summary to a JSON file."""
-        logs = self.get_spend_logs(api_key)
-        summary = self.summarize_spend_logs(logs, trial_id)
+        key_info = self._get_key_info_cached(api_key)
+        key_usage = self._build_key_usage_snapshot(key_info)
+        summary = {
+            "trial_id": trial_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "tracking_mode": "key_info_only",
+            "spend_log_tracking_suppressed": True,
+            "key_alias": key_usage["key_alias"],
+            "total_requests": 0,
+            "success_count": 0,
+            "failure_count": 0,
+            "failure_categories": {},
+            "total_cost_usd_from_logs": 0.0,
+            "total_cost_usd_from_key": key_usage["spend"],
+            "by_model": {},
+        }
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(summary, indent=2, default=str))
 
         logger.info(
-            f"Wrote LLM summary to {output_path}: "
-            f"{summary['success_count']} success, {summary['failure_count']} failure"
+            f"Wrote LLM summary placeholder to {output_path}: "
+            f"key-only spend=${float(key_usage['spend'] or 0.0):.4f}"
         )
         return output_path
 
