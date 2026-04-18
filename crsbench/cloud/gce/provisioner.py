@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, Protocol, cast
 
 from crsbench.cloud.errors import CloudProvisioningError
@@ -29,6 +30,10 @@ if TYPE_CHECKING:
 
 class GceProvisioningError(CloudProvisioningError):
     """Raised when the GCE control plane cannot satisfy a fleet request."""
+
+
+_MAX_PARALLEL_GCE_CREATE_OPERATIONS = 16
+_MAX_PARALLEL_GCE_DELETE_OPERATIONS = 16
 
 
 class GceApiClient(Protocol):
@@ -1057,13 +1062,11 @@ class GceProvisioner:
             experiment_name=experiment_name,
             fleet=fleet,
         )
-        for worker in deleted_workers:
-            self._delete_instance_if_present(
-                project=fleet.project,
-                zone=worker.zone,
-                instance_name=worker.name,
-                role_label="worker",
-            )
+        self._delete_instances_in_parallel(
+            deleted_workers,
+            project=fleet.project,
+            role_label="worker",
+        )
         return deleted_workers
 
     def list_evaluators(
@@ -1132,14 +1135,46 @@ class GceProvisioner:
             experiment_name=experiment_name,
             fleet=fleet,
         )
-        for worker in deleted_workers:
-            self._delete_instance_if_present(
-                project=fleet.project,
-                zone=worker.zone,
-                instance_name=worker.name,
-                role_label="evaluator",
-            )
+        self._delete_instances_in_parallel(
+            deleted_workers,
+            project=fleet.project,
+            role_label="evaluator",
+        )
         return deleted_workers
+
+    def _delete_instances_in_parallel(
+        self,
+        instances: list[GceWorkerRecord],
+        *,
+        project: str,
+        role_label: str,
+    ) -> None:
+        """Delete multiple instances concurrently and raise after all attempts complete."""
+        if not instances:
+            return
+        max_workers = min(_MAX_PARALLEL_GCE_DELETE_OPERATIONS, len(instances))
+        errors: list[str] = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    self._delete_instance_if_present,
+                    project=project,
+                    zone=instance.zone,
+                    instance_name=instance.name,
+                    role_label=role_label,
+                ): instance
+                for instance in instances
+            }
+            for future in as_completed(futures):
+                instance = futures[future]
+                try:
+                    future.result()
+                except Exception as exc:
+                    errors.append(f"{instance.name}: {exc}")
+        if errors:
+            raise GceProvisioningError(
+                f"Failed to delete {role_label}(s): {'; '.join(errors)}"
+            )
 
     def _delete_instance_if_present(
         self,
@@ -1302,41 +1337,70 @@ class GceProvisioner:
         *,
         role_label: str,
     ) -> list[GceWorkerRecord]:
-        workers: list[GceWorkerRecord] = []
-        rollback_requests: list[GceInstanceRequest] = []
+        if not requests:
+            return []
+
+        max_workers = min(_MAX_PARALLEL_GCE_CREATE_OPERATIONS, len(requests))
+        workers_by_index: dict[int, GceWorkerRecord] = {}
+        exceptions: list[Exception] = []
         try:
-            for request in requests:
-                zone = _require_request_zone(request)
-                operation = self._client.insert_instance(
-                    project=request.project,
-                    zone=zone,
-                    instance_resource=request.to_instance_resource(),
-                    source_instance_template=request.instance_template,
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {
+                    executor.submit(
+                        self._create_request,
+                        request=request,
+                        role_label=role_label,
+                    ): index
+                    for index, request in enumerate(requests)
+                }
+                for future in as_completed(futures):
+                    index = futures[future]
+                    try:
+                        workers_by_index[index] = future.result()
+                    except Exception as exc:
+                        exceptions.append(exc)
+            if exceptions:
+                if len(exceptions) == 1:
+                    raise exceptions[0]
+                raise GceProvisioningError(
+                    f"Failed to create {role_label}(s): "
+                    + "; ".join(str(exc) for exc in exceptions)
                 )
-                rollback_requests.append(request)
-                result = self._client.wait_for_zone_operation(
-                    project=request.project,
-                    zone=zone,
-                    operation=_extract_operation_name(operation),
-                )
-                errors = _extract_operation_errors(result)
-                if errors:
-                    raise GceProvisioningError(
-                        f"Failed to create {role_label} {request.name}: {'; '.join(errors)}"
-                    )
-                workers.append(
-                    _normalize_instance(
-                        self._client.get_instance(
-                            project=request.project,
-                            zone=zone,
-                            instance=request.name,
-                        )
-                    )
-                )
-            return workers
+            return [workers_by_index[index] for index in range(len(requests))]
         except Exception:
-            self._rollback_requests(rollback_requests)
+            self._rollback_requests(list(requests))
             raise
+
+    def _create_request(
+        self,
+        *,
+        request: GceInstanceRequest,
+        role_label: str,
+    ) -> GceWorkerRecord:
+        zone = _require_request_zone(request)
+        operation = self._client.insert_instance(
+            project=request.project,
+            zone=zone,
+            instance_resource=request.to_instance_resource(),
+            source_instance_template=request.instance_template,
+        )
+        result = self._client.wait_for_zone_operation(
+            project=request.project,
+            zone=zone,
+            operation=_extract_operation_name(operation),
+        )
+        errors = _extract_operation_errors(result)
+        if errors:
+            raise GceProvisioningError(
+                f"Failed to create {role_label} {request.name}: {'; '.join(errors)}"
+            )
+        return _normalize_instance(
+            self._client.get_instance(
+                project=request.project,
+                zone=zone,
+                instance=request.name,
+            )
+        )
 
     def _candidate_zones_for_fleet(self, fleet: GceWorkerFleetConfig) -> list[str]:
         if fleet.zones:

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, cast
 
 from crsbench.cloud.cli._collect import (
     _build_collect_marker,
+    _collect_live_instances_parallel,
     _confirm_destination_overwrite,
     _fresh_timestamp_destination,
     _resolve_current_run_start_time,
@@ -48,6 +50,7 @@ if TYPE_CHECKING:
     from crsbench.cloud.records import CloudInstanceLike
 
 logger = get_logger(__name__)
+_MAX_PARALLEL_FLEET_DELETIONS = 8
 
 
 def _job_state_value(job) -> str:
@@ -184,7 +187,6 @@ def run_teardown(args: argparse.Namespace) -> int:
         args.remote_dir,
     )
     collection_failed = False
-    artifact_publish_succeeded = False
     start_time_observations: list[tuple[str | None, str]] = []
     destination = base_destination
     if any(_collects_experiment_artifacts(worker) for worker in live_instances):
@@ -206,48 +208,22 @@ def run_teardown(args: argparse.Namespace) -> int:
                 return 1
             destination = resolved_destination
 
-    for worker in live_instances:
-        try:
-            collector.collect_logs(
-                worker=worker,
-                fleet=_resolve_instance_fleet(context, worker),
-                experiment_name=experiment_name,
-                experiment_filestore=experiment_filestore,
-                remote_experiment_dir=remote_experiment_dir,
-            )
-            logger.info("Log collection succeeded: {}", worker.name)
-        except (ArtifactCollectionError, Exception) as exc:
-            logger.error(
-                "Log collection failed for {}: {} -- continuing with teardown",
-                worker.name,
-                exc,
-            )
-            collection_failed = True
-        if _collects_experiment_artifacts(worker):
-            try:
-                collector.collect(
-                    worker=worker,
-                    fleet=_resolve_instance_fleet(context, worker),
-                    experiment_name=experiment_name,
-                    experiment_filestore=experiment_filestore,
-                    remote_experiment_dir=remote_experiment_dir,
-                    start_time_observations=start_time_observations,
-                    destination=destination,
-                )
-                artifact_publish_succeeded = True
-                logger.info("Collection succeeded: {}", worker.name)
-            except (ArtifactCollectionError, Exception) as exc:
-                logger.error(
-                    "Collection failed for {}: {} -- continuing with teardown",
-                    worker.name,
-                    exc,
-                )
-                collection_failed = True
-        else:
-            logger.info(
-                "Skipping artifact collection for evaluator {}; logs only",
-                worker.name,
-            )
+    failed_collections = _collect_live_instances_parallel(
+        collector=collector,
+        context=context,
+        live_instances=live_instances,
+        experiment_name=experiment_name,
+        experiment_filestore=experiment_filestore,
+        remote_experiment_dir=remote_experiment_dir,
+        destination=destination,
+        start_time_observations=start_time_observations,
+        continue_on_error=True,
+    )
+    collection_failed = failed_collections > 0
+    artifact_publish_succeeded = (
+        any(_collects_experiment_artifacts(worker) for worker in live_instances)
+        and destination.exists()
+    )
 
     if launch_state is not None:
         orchestrator_worker = launch_state.as_orchestrator_record()
@@ -379,34 +355,68 @@ def _delete_live_instances(
 ) -> None:
     adapter = provider_adapter_for_context(context, provisioner=provisioner)
     if context.launch_state is not None:
-        for fleet in context.worker_fleet_configs:
-            provisioner.delete_workers(
-                experiment_name=experiment_name,
-                fleet=adapter.worker_fleet_from_cloud_placement_record(fleet),
-            )
-        for fleet in context.evaluator_fleet_configs:
-            provisioner.delete_evaluators(
-                experiment_name=experiment_name,
-                fleet=adapter.worker_fleet_from_cloud_placement_record(fleet),
-            )
+        _run_parallel_deletions(
+            [
+                lambda fleet=fleet: provisioner.delete_workers(
+                    experiment_name=experiment_name,
+                    fleet=adapter.worker_fleet_from_cloud_placement_record(fleet),
+                )
+                for fleet in context.worker_fleet_configs
+            ]
+            + [
+                lambda fleet=fleet: provisioner.delete_evaluators(
+                    experiment_name=experiment_name,
+                    fleet=adapter.worker_fleet_from_cloud_placement_record(fleet),
+                )
+                for fleet in context.evaluator_fleet_configs
+            ]
+        )
         return
 
     if context.launch_plan is not None:
-        adapter.delete_workers(plan=context.launch_plan)
-        if context.evaluator_fleet_configs:
-            adapter.delete_evaluators(plan=context.launch_plan)
+        _run_parallel_deletions(
+            [lambda: adapter.delete_workers(plan=context.launch_plan)]
+            + (
+                [lambda: adapter.delete_evaluators(plan=context.launch_plan)]
+                if context.evaluator_fleet_configs
+                else []
+            )
+        )
         return
 
-    for fleet in context.worker_fleet_configs:
-        provisioner.delete_workers(
-            experiment_name=experiment_name,
-            fleet=adapter.worker_fleet_from_cloud_placement_record(fleet),
-        )
-    for fleet in context.evaluator_fleet_configs:
-        provisioner.delete_workers(
-            experiment_name=experiment_name,
-            fleet=adapter.worker_fleet_from_cloud_placement_record(fleet),
-        )
+    _run_parallel_deletions(
+        [
+            lambda fleet=fleet: provisioner.delete_workers(
+                experiment_name=experiment_name,
+                fleet=adapter.worker_fleet_from_cloud_placement_record(fleet),
+            )
+            for fleet in context.worker_fleet_configs
+        ]
+        + [
+            lambda fleet=fleet: provisioner.delete_evaluators(
+                experiment_name=experiment_name,
+                fleet=adapter.worker_fleet_from_cloud_placement_record(fleet),
+            )
+            for fleet in context.evaluator_fleet_configs
+        ]
+    )
+
+
+def _run_parallel_deletions(tasks) -> None:
+    """Run fleet deletion callables in parallel and raise after all attempts complete."""
+    if not tasks:
+        return
+    max_workers = min(_MAX_PARALLEL_FLEET_DELETIONS, len(tasks))
+    errors: list[Exception] = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(task) for task in tasks]
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as exc:
+                errors.append(exc)
+    if errors:
+        raise errors[0]
 
 
 def _resolve_instance_fleet(

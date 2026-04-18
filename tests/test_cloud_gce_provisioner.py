@@ -2,6 +2,7 @@
 
 import base64
 import json
+import threading
 from unittest.mock import MagicMock
 
 import pytest
@@ -697,6 +698,61 @@ def test_gce_provider_adapter_applies_provider_launch_defaults_override():
     assert all(fleet.crsbench_git_ref == "provider-ref" for fleet in fleets)
 
 
+def test_gce_provider_adapter_creates_worker_fleets_in_parallel() -> None:
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+
+    plan = build_cloud_launch_plan(_make_provider_neutral_experiment_config())
+    provisioner = MagicMock()
+    adapter = GceProviderAdapter(provisioner=provisioner)
+    fleets = adapter.build_worker_fleets(plan)
+
+    assert len(fleets) == 2
+
+    barrier = threading.Barrier(len(fleets), timeout=1.0)
+    lock = threading.Lock()
+    active = 0
+    max_active = 0
+
+    def _create_workers(**kwargs):
+        nonlocal active, max_active
+        fleet = kwargs["fleet"]
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        try:
+            barrier.wait()
+            return [
+                GceWorkerRecord(
+                    name=f"{fleet.worker_name_prefix}-001",
+                    instance_id=f"id-{fleet.worker_name_prefix}",
+                    status="RUNNING",
+                    zone=fleet.zone or fleet.zones[0],
+                )
+            ]
+        finally:
+            with lock:
+                active -= 1
+
+    provisioner.create_workers.side_effect = _create_workers
+
+    workers = adapter.create_workers(
+        plan=plan,
+        redis_host="redis.internal:6380",
+        redis_password="shared-secret",
+        registration=_make_registration(),
+        env_passthrough_by_placement=[
+            {"OPENAI_API_KEY": "worker-east5"},
+            {"OPENAI_API_KEY": "worker-east1"},
+        ],
+    )
+
+    assert [worker.name for worker in workers] == [
+        f"{fleet.worker_name_prefix}-001" for fleet in fleets
+    ]
+    assert max_active == len(fleets)
+    assert provisioner.create_workers.call_count == len(fleets)
+
+
 def test_create_workers_waits_for_operations_and_normalizes_provider_instances():
     """Create should wait for each zonal operation and return worker records."""
     from crsbench.cloud.gce.provisioner import GceProvisioner
@@ -750,6 +806,76 @@ def test_create_workers_waits_for_operations_and_normalizes_provider_instances()
         ("test-project", "us-central1-a", "op-gce-worker-001"),
         ("test-project", "us-central1-a", "op-gce-worker-002"),
     ]
+
+
+def test_create_workers_runs_zonal_instance_creates_in_parallel() -> None:
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+
+    class _ParallelCreateClient(_RecordingClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self._barrier = threading.Barrier(2, timeout=1.0)
+            self._lock = threading.Lock()
+            self.active = 0
+            self.max_active = 0
+
+        def wait_for_zone_operation(
+            self,
+            *,
+            project: str,
+            zone: str,
+            operation: str,
+        ) -> dict[str, object]:
+            with self._lock:
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+            try:
+                self._barrier.wait()
+                return super().wait_for_zone_operation(
+                    project=project,
+                    zone=zone,
+                    operation=operation,
+                )
+            finally:
+                with self._lock:
+                    self.active -= 1
+
+    client = _ParallelCreateClient()
+    client.instances_by_name = {
+        "gce-worker-001": {
+            "id": "1001",
+            "name": "gce-worker-001",
+            "status": "RUNNING",
+            "zone": "zones/us-central1-a",
+            "networkInterfaces": [{"networkIP": "10.0.0.10"}],
+            "labels": {"crsbench-experiment": "exp-cloud-42", "owner": "team-crs"},
+            "serviceAccounts": [
+                {"email": "crsbench-worker@test-project.iam.gserviceaccount.com"}
+            ],
+        },
+        "gce-worker-002": {
+            "id": "1002",
+            "name": "gce-worker-002",
+            "status": "RUNNING",
+            "zone": "zones/us-central1-a",
+            "networkInterfaces": [{"networkIP": "10.0.0.11"}],
+            "labels": {"crsbench-experiment": "exp-cloud-42", "owner": "team-crs"},
+            "serviceAccounts": [
+                {"email": "crsbench-worker@test-project.iam.gserviceaccount.com"}
+            ],
+        },
+    }
+    provisioner = GceProvisioner(client=client)
+
+    workers = provisioner.create_workers(
+        experiment_name="Exp.Cloud 42",
+        fleet=_make_fleet(worker_count=2),
+        redis_host="redis.internal:6380",
+        registration=_make_registration(),
+    )
+
+    assert [worker.name for worker in workers] == ["gce-worker-001", "gce-worker-002"]
+    assert client.max_active == 2
 
 
 def test_create_workers_translates_operation_errors():
@@ -1478,6 +1604,63 @@ def test_delete_workers_ignores_missing_instance() -> None:
     )
 
     assert [worker.name for worker in deleted] == ["gce-worker-001"]
+
+
+def test_delete_workers_runs_instance_deletes_in_parallel() -> None:
+    """Fleet teardown should dispatch per-instance deletes concurrently."""
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+
+    client = _RecordingClient()
+    client.listed_instances = [
+        {
+            "id": "1001",
+            "name": "gce-worker-001",
+            "status": "RUNNING",
+            "zone": "zones/us-central1-a",
+            "labels": {
+                "crsbench-experiment": "exp-cloud-42",
+                "crsbench-role": "worker",
+                "env": "prod",
+                "owner": "team-crs",
+            },
+            "serviceAccounts": [
+                {"email": "crsbench-worker@test-project.iam.gserviceaccount.com"}
+            ],
+        },
+        {
+            "id": "1002",
+            "name": "gce-worker-002",
+            "status": "RUNNING",
+            "zone": "zones/us-central1-a",
+            "labels": {
+                "crsbench-experiment": "exp-cloud-42",
+                "crsbench-role": "worker",
+                "env": "prod",
+                "owner": "team-crs",
+            },
+            "serviceAccounts": [
+                {"email": "crsbench-worker@test-project.iam.gserviceaccount.com"}
+            ],
+        },
+    ]
+    provisioner = GceProvisioner(client=client)
+
+    barrier = threading.Barrier(2, timeout=1.0)
+
+    def _delete_instance_if_present(**_kwargs) -> None:
+        barrier.wait()
+
+    provisioner._delete_instance_if_present = _delete_instance_if_present  # type: ignore[method-assign]
+
+    deleted = provisioner.delete_workers(
+        experiment_name="Exp.Cloud 42",
+        fleet=_make_fleet(worker_count=2),
+    )
+
+    assert sorted(worker.name for worker in deleted) == [
+        "gce-worker-001",
+        "gce-worker-002",
+    ]
 
 
 def test_delete_orchestrators_ignores_missing_instance() -> None:

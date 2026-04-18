@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -41,6 +42,7 @@ if TYPE_CHECKING:
     from crsbench.cloud.records import CloudInstanceLike
 
 logger = get_logger(__name__)
+_MAX_PARALLEL_INSTANCE_COLLECTIONS = 8
 
 
 def run_collect(args: argparse.Namespace) -> int:
@@ -123,44 +125,22 @@ def run_collect(args: argparse.Namespace) -> int:
         experiment_name,
         args.remote_dir,
     )
-    failed = 0
     artifact_publish_succeeded = False
     start_time_observations: list[tuple[str | None, str]] = []
-
-    for worker in live_instances:
-        try:
-            collector.collect_logs(
-                worker=worker,
-                fleet=_resolve_instance_fleet(context, worker),
-                experiment_name=experiment_name,
-                experiment_filestore=experiment_filestore,
-                remote_experiment_dir=remote_experiment_dir,
-            )
-            logger.info("Log collection succeeded: {}", worker.name)
-        except (ArtifactCollectionError, Exception) as exc:
-            logger.error("Log collection failed for {}: {}", worker.name, exc)
-            failed += 1
-        if _collects_experiment_artifacts(worker):
-            try:
-                collector.collect(
-                    worker=worker,
-                    fleet=_resolve_instance_fleet(context, worker),
-                    experiment_name=experiment_name,
-                    experiment_filestore=experiment_filestore,
-                    remote_experiment_dir=remote_experiment_dir,
-                    start_time_observations=start_time_observations,
-                    destination=destination,
-                )
-                artifact_publish_succeeded = True
-                logger.info("Collection succeeded: {}", worker.name)
-            except (ArtifactCollectionError, Exception) as exc:
-                logger.error("Collection failed for {}: {}", worker.name, exc)
-                failed += 1
-        else:
-            logger.info(
-                "Skipping artifact collection for evaluator {}; logs only",
-                worker.name,
-            )
+    failed = _collect_live_instances_parallel(
+        collector=collector,
+        context=context,
+        live_instances=live_instances,
+        experiment_name=experiment_name,
+        experiment_filestore=experiment_filestore,
+        remote_experiment_dir=remote_experiment_dir,
+        destination=destination,
+        start_time_observations=start_time_observations,
+    )
+    artifact_publish_succeeded = (
+        any(_collects_experiment_artifacts(worker) for worker in live_instances)
+        and destination.exists()
+    )
 
     if launch_state is not None:
         orchestrator_worker = launch_state.as_orchestrator_record()
@@ -387,3 +367,94 @@ def _list_readiness_instances(readiness, experiment_name: str):
 def _collects_experiment_artifacts(worker: "CloudInstanceLike") -> bool:
     """Return whether this instance owns a worker-style experiment artifact tree."""
     return worker.labels.get("crsbench-role") != CloudInstanceRole.EVALUATOR.value
+
+
+def _collect_live_instances_parallel(
+    *,
+    collector: ArtifactCollector,
+    context: "ResolvedCloudContext",
+    live_instances: list["CloudInstanceLike"],
+    experiment_name: str,
+    experiment_filestore: Path,
+    remote_experiment_dir: str,
+    destination: Path,
+    start_time_observations: list[tuple[str | None, str]],
+    continue_on_error: bool = False,
+) -> int:
+    """Collect logs and artifacts from live instances with bounded parallelism."""
+    if not live_instances:
+        return 0
+
+    max_workers = min(_MAX_PARALLEL_INSTANCE_COLLECTIONS, len(live_instances))
+    suffix = " -- continuing with teardown" if continue_on_error else ""
+    futures = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for worker in live_instances:
+            futures[
+                executor.submit(
+                    _collect_single_live_instance,
+                    collector=collector,
+                    context=context,
+                    worker=worker,
+                    experiment_name=experiment_name,
+                    experiment_filestore=experiment_filestore,
+                    remote_experiment_dir=remote_experiment_dir,
+                    destination=destination,
+                    start_time_observations=start_time_observations,
+                    failure_suffix=suffix,
+                )
+            ] = worker.name
+        return sum(future.result() for future in as_completed(futures))
+
+
+def _collect_single_live_instance(
+    *,
+    collector: ArtifactCollector,
+    context: "ResolvedCloudContext",
+    worker: "CloudInstanceLike",
+    experiment_name: str,
+    experiment_filestore: Path,
+    remote_experiment_dir: str,
+    destination: Path,
+    start_time_observations: list[tuple[str | None, str]],
+    failure_suffix: str,
+) -> int:
+    """Collect logs and optional artifacts for one live instance."""
+    failed = 0
+    try:
+        collector.collect_logs(
+            worker=worker,
+            fleet=_resolve_instance_fleet(context, worker),
+            experiment_name=experiment_name,
+            experiment_filestore=experiment_filestore,
+            remote_experiment_dir=remote_experiment_dir,
+        )
+        logger.info("Log collection succeeded: {}", worker.name)
+    except (ArtifactCollectionError, Exception) as exc:
+        logger.error(
+            "Log collection failed for {}: {}{}", worker.name, exc, failure_suffix
+        )
+        failed += 1
+
+    if not _collects_experiment_artifacts(worker):
+        logger.info(
+            "Skipping artifact collection for evaluator {}; logs only",
+            worker.name,
+        )
+        return failed
+
+    try:
+        collector.collect(
+            worker=worker,
+            fleet=_resolve_instance_fleet(context, worker),
+            experiment_name=experiment_name,
+            experiment_filestore=experiment_filestore,
+            remote_experiment_dir=remote_experiment_dir,
+            start_time_observations=start_time_observations,
+            destination=destination,
+        )
+        logger.info("Collection succeeded: {}", worker.name)
+    except (ArtifactCollectionError, Exception) as exc:
+        logger.error("Collection failed for {}: {}{}", worker.name, exc, failure_suffix)
+        failed += 1
+    return failed

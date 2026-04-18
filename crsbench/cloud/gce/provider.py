@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 
 from crsbench.cloud.gce.provisioner import GceProvisioner
 from crsbench.cloud.gce.quota import (
@@ -55,6 +56,9 @@ class ResolvedGceInstanceProfile:
     assign_external_ip: bool
 
 
+_MAX_PARALLEL_GCE_FLEET_CREATE_OPERATIONS = 8
+
+
 class GceProviderAdapter:
     """Translate provider-neutral launch plans into GCE-specific operations."""
 
@@ -66,6 +70,65 @@ class GceProviderAdapter:
     ) -> None:
         self._provisioner = provisioner or GceProvisioner()
         self._quota_client = quota_client or GceRegionalQuotaClient()
+
+    def _create_fleets_in_parallel(
+        self,
+        *,
+        fleets: Sequence[GceWorkerFleetConfig],
+        create_fleet: "Callable[[int, GceWorkerFleetConfig], list[GceWorkerRecord]]",
+    ) -> list["GceWorkerRecord"]:
+        if not fleets:
+            return []
+        if len(fleets) == 1:
+            return create_fleet(0, fleets[0])
+
+        max_workers = min(_MAX_PARALLEL_GCE_FLEET_CREATE_OPERATIONS, len(fleets))
+        created_by_index: dict[int, list[GceWorkerRecord]] = {}
+        exceptions: list[Exception] = []
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(create_fleet, index, fleet): index
+                for index, fleet in enumerate(fleets)
+            }
+            for future in as_completed(futures):
+                index = futures[future]
+                try:
+                    created_by_index[index] = future.result()
+                except Exception as exc:
+                    exceptions.append(exc)
+
+        if exceptions:
+            self._rollback_created_fleets(
+                fleets=fleets,
+                created_by_index=created_by_index,
+            )
+            if len(exceptions) == 1:
+                raise exceptions[0]
+            raise exceptions[0]
+
+        created: list[GceWorkerRecord] = []
+        for index in range(len(fleets)):
+            created.extend(created_by_index.get(index, []))
+        return created
+
+    def _rollback_created_fleets(
+        self,
+        *,
+        fleets: Sequence[GceWorkerFleetConfig],
+        created_by_index: Mapping[int, Sequence["GceWorkerRecord"]],
+    ) -> None:
+        for index in sorted(created_by_index, reverse=True):
+            fleet = fleets[index]
+            for worker in reversed(list(created_by_index[index])):
+                try:
+                    self._provisioner.delete_instance(
+                        project=fleet.project,
+                        zone=worker.zone,
+                        instance_name=worker.name,
+                    )
+                except Exception:
+                    continue
 
     def resolve_instance_profile(
         self, instance_profile: ResolvedInstanceProfile
@@ -766,28 +829,26 @@ class GceProviderAdapter:
         env_passthrough_by_placement: Sequence[dict[str, str]] | None = None,
     ) -> list["GceWorkerRecord"]:
         """Create workers across all zonal placements in the launch plan."""
-        workers: list[GceWorkerRecord] = []
         fleets = self.build_worker_fleets(plan)
         _validate_env_passthrough_count(
             role="worker",
             fleets=fleets,
             env_passthrough_by_placement=env_passthrough_by_placement,
         )
-        for index, fleet in enumerate(fleets):
-            workers.extend(
-                self._provisioner.create_workers(
-                    experiment_name=plan.experiment_name,
-                    fleet=fleet,
-                    redis_host=redis_host,
-                    redis_password=redis_password,
-                    registration=registration,
-                    bootstrap_inputs=bootstrap_inputs,
-                    env_passthrough=_env_passthrough_for_placement(
-                        env_passthrough_by_placement, index
-                    ),
-                )
-            )
-        return workers
+        return self._create_fleets_in_parallel(
+            fleets=fleets,
+            create_fleet=lambda index, fleet: self._provisioner.create_workers(
+                experiment_name=plan.experiment_name,
+                fleet=fleet,
+                redis_host=redis_host,
+                redis_password=redis_password,
+                registration=registration,
+                bootstrap_inputs=bootstrap_inputs,
+                env_passthrough=_env_passthrough_for_placement(
+                    env_passthrough_by_placement, index
+                ),
+            ),
+        )
 
     def list_workers(self, *, plan: CloudLaunchPlan) -> list["GceWorkerRecord"]:
         """List workers across all placements in a provider-neutral launch plan."""
@@ -833,29 +894,27 @@ class GceProviderAdapter:
         env_passthrough_by_placement: Sequence[dict[str, str]] | None = None,
     ) -> list["GceWorkerRecord"]:
         """Create evaluators across all placements in a provider-neutral launch plan."""
-        evaluators: list[GceWorkerRecord] = []
         fleets = self.build_evaluator_fleets(plan)
         _validate_env_passthrough_count(
             role="evaluator",
             fleets=fleets,
             env_passthrough_by_placement=env_passthrough_by_placement,
         )
-        for index, fleet in enumerate(fleets):
-            evaluators.extend(
-                self._provisioner.create_evaluators(
-                    experiment_name=plan.experiment_name,
-                    fleet=fleet,
-                    redis_host=redis_host,
-                    redis_password=redis_password,
-                    registration=registration,
-                    experiment_config_path=experiment_config_path,
-                    bootstrap_inputs=bootstrap_inputs,
-                    env_passthrough=_env_passthrough_for_placement(
-                        env_passthrough_by_placement, index
-                    ),
-                )
-            )
-        return evaluators
+        return self._create_fleets_in_parallel(
+            fleets=fleets,
+            create_fleet=lambda index, fleet: self._provisioner.create_evaluators(
+                experiment_name=plan.experiment_name,
+                fleet=fleet,
+                redis_host=redis_host,
+                redis_password=redis_password,
+                registration=registration,
+                experiment_config_path=experiment_config_path,
+                bootstrap_inputs=bootstrap_inputs,
+                env_passthrough=_env_passthrough_for_placement(
+                    env_passthrough_by_placement, index
+                ),
+            ),
+        )
 
     def list_evaluators(self, *, plan: CloudLaunchPlan) -> list["GceWorkerRecord"]:
         """List evaluators across all placements in a provider-neutral launch plan."""

@@ -6,6 +6,7 @@ import argparse
 import dataclasses
 import json
 import os
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -4079,6 +4080,78 @@ class TestLaunch:
     @patch(
         "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
     )
+    @patch("crsbench.cloud.cli._launch.append_created_instance_records")
+    @patch("crsbench.cloud.cli._launch.prepare_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.provider_adapter_for_launch_plan")
+    @patch("crsbench.cloud.cli._launch.QuotaValidator")
+    @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
+    @patch("crsbench.cloud.cli._launch.logger")
+    @patch("crsbench.cloud.cli._launch.load_experiment_config")
+    def test_launch_records_workers_before_evaluator_provisioning_failure(
+        self,
+        mock_load,
+        mock_logger,
+        mock_build_plan,
+        mock_validator_cls,
+        mock_adapter_cls,
+        mock_preflight,
+        mock_append_instances,
+        mock_secret,
+    ):
+        del mock_secret
+        mock_load.return_value = (
+            _make_provider_neutral_experiment_config_with_evaluators()
+        )
+        resolved_plan = MagicMock(experiment_name="test-exp")
+        mock_build_plan.return_value = MagicMock(experiment_name="test-exp")
+        mock_validator_cls.return_value.validate.return_value = None
+        mock_adapter = mock_adapter_cls.return_value
+        expected_worker_fleets = (
+            _make_provider_neutral_launch_state().worker_fleet_configs
+        )
+        expected_evaluator_fleets = [
+            _make_stable_evaluator_fleet(
+                zone="us-east1-b",
+                prefix="evaluator-test-exp-us-east1-b",
+            )
+        ]
+        mock_preflight.return_value = MagicMock(
+            resolved_plan=resolved_plan,
+            redacted_worker_fleets=expected_worker_fleets,
+            redacted_evaluator_fleets=expected_evaluator_fleets,
+            orchestrator_env={},
+            worker_placement_envs=[],
+            evaluator_placement_envs=[],
+        )
+        mock_adapter.build_orchestrator_config.return_value.project = "test-project"
+        mock_adapter.build_orchestrator_config.return_value.ssh_via_iap = True
+        mock_adapter.create_orchestrator.return_value = _make_gce_worker(
+            "gce-orchestrator-test-exp", ip="10.0.0.50"
+        )
+        mock_adapter.create_workers.return_value = [_make_gce_worker("w-1")]
+        mock_adapter.create_evaluators.side_effect = RuntimeError("evaluator boom")
+
+        from crsbench.cloud.cli._launch import run_launch
+
+        rc = run_launch(_make_launch_args())
+
+        assert rc == 1
+        assert mock_append_instances.call_count == 2
+        assert [
+            record.instance_name
+            for record in mock_append_instances.call_args_list[0].kwargs["records"]
+        ] == ["gce-orchestrator-test-exp"]
+        assert [
+            record.instance_name
+            for record in mock_append_instances.call_args_list[1].kwargs["records"]
+        ] == ["w-1"]
+        mock_logger.error.assert_called_once_with(
+            "Cloud launch failed: {}", "evaluator boom"
+        )
+
+    @patch(
+        "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
+    )
     @patch("crsbench.cloud.cli._launch.save_launch_state")
     @patch("crsbench.cloud.cli._launch.prepare_launch_inputs")
     @patch("crsbench.cloud.cli._launch.provider_adapter_for_launch_plan")
@@ -6734,6 +6807,47 @@ class TestCollect:
 
         rc = run_collect(_make_collect_args())
         assert rc == 0
+        assert mock_coll.collect.call_count == 2
+
+    @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._collect.ArtifactCollector")
+    @patch("crsbench.cloud.cli._collect.provisioner_for_context")
+    @patch("crsbench.cloud.cli._collect.reconnect")
+    def test_collect_runs_live_instance_collection_in_parallel(
+        self,
+        mock_reconnect,
+        mock_prov_cls,
+        mock_coll_cls,
+        mock_resolve_context,
+    ):
+        """Two live workers should enter collection concurrently instead of serializing."""
+        workers = [_make_gce_worker("w-1"), _make_gce_worker("w-2")]
+        mock_prov = MagicMock()
+        mock_prov.list_workers.return_value = workers
+        mock_prov_cls.return_value = mock_prov
+        mock_resolve_context.return_value = _make_resolved_cloud_context()
+
+        barrier = threading.Barrier(2, timeout=1.0)
+        mock_coll = MagicMock()
+        mock_coll.collect_logs.side_effect = lambda **_kwargs: barrier.wait()
+        mock_coll_cls.return_value = mock_coll
+
+        readiness = MagicMock()
+        readiness.list_workers.return_value = []
+        mock_reconnect.return_value = (
+            MagicMock(),
+            MagicMock(),
+            readiness,
+            MagicMock(),
+            Path("/tmp/filestore"),
+        )
+
+        from crsbench.cloud.cli._collect import run_collect
+
+        rc = run_collect(_make_collect_args())
+
+        assert rc == 0
+        assert mock_coll.collect_logs.call_count == 2
         assert mock_coll.collect.call_count == 2
 
     def test_collect_existing_destination_requires_force_when_noninteractive(

@@ -17,6 +17,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path  # noqa: TC003
@@ -197,6 +198,9 @@ class ArtifactCollector:
         self._base_path = Path(base_path) if base_path is not None else None
         self._journal_lines = journal_lines
         self._ssh_users_by_project: dict[str, str] = {}
+        self._ssh_user_lock = threading.Lock()
+        self._iap_known_hosts_lock = threading.Lock()
+        self._publish_lock = threading.Lock()
         self._transport = transport or transport_for_provider("gce")
 
     def collect(
@@ -252,13 +256,13 @@ class ArtifactCollector:
 
         # Verify before publishing
         self._verify_staging(staging_dir)
-        if start_time_observations is not None:
-            start_time_observations.append(
-                discover_experiment_start_time_from_staging([staging_dir])
-            )
-
         final_dir = destination or (experiment_filestore / experiment_name)
-        self._publish(staging_dir, final_dir)
+        with self._publish_lock:
+            if start_time_observations is not None:
+                start_time_observations.append(
+                    discover_experiment_start_time_from_staging([staging_dir])
+                )
+            self._publish(staging_dir, final_dir)
 
         # Clean up the per-worker staging parent
         worker_staging = experiment_filestore / ".collect-staging" / worker.name
@@ -514,13 +518,28 @@ class ArtifactCollector:
             return remote_logs_dir(self._base_path, experiment_name)
         return self._state_dir(experiment_filestore) / "remote-logs" / experiment_name
 
-    def _known_hosts_path(self, experiment_filestore: Path) -> Path:
+    def _known_hosts_path(
+        self,
+        experiment_filestore: Path,
+        *,
+        worker_name: str | None = None,
+    ) -> Path:
         """Return the local known_hosts file used for direct-IP collection."""
-        return self._state_dir(experiment_filestore) / "known_hosts"
+        base_path = self._state_dir(experiment_filestore) / "known_hosts"
+        if worker_name:
+            return base_path / worker_name
+        return base_path
 
-    def _iap_known_hosts_path(self, experiment_filestore: Path) -> Path:
+    def _iap_known_hosts_path(
+        self,
+        experiment_filestore: Path,
+        *,
+        host_key_alias: str | None = None,
+    ) -> Path:
         """Return the localhost tunnel known_hosts file used for IAP rsync."""
-        return self._state_dir(experiment_filestore) / "known_hosts_iap"
+        base_path = self._state_dir(experiment_filestore) / "known_hosts_iap"
+        del host_key_alias
+        return base_path
 
     def _prepare_iap_known_hosts(
         self,
@@ -529,11 +548,16 @@ class ArtifactCollector:
         host_key_alias: str,
     ) -> Path:
         """Clear any stale stable-name host key before reconnecting over an IAP SSH tunnel."""
-        known_hosts_path = self._iap_known_hosts_path(experiment_filestore)
-        return self._transport.prepare_iap_known_hosts(
-            known_hosts_path=known_hosts_path,
+        known_hosts_path = self._iap_known_hosts_path(
+            experiment_filestore,
             host_key_alias=host_key_alias,
         )
+        known_hosts_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._iap_known_hosts_lock:
+            return self._transport.prepare_iap_known_hosts(
+                known_hosts_path=known_hosts_path,
+                host_key_alias=host_key_alias,
+            )
 
     def _remote_host(
         self,
@@ -556,7 +580,11 @@ class ArtifactCollector:
         if fleet.ssh_via_iap or self._base_path is None:
             return None
 
-        known_hosts_path = self._known_hosts_path(experiment_filestore)
+        known_hosts_path = self._known_hosts_path(
+            experiment_filestore,
+            worker_name=worker.name,
+        )
+        known_hosts_path.parent.mkdir(parents=True, exist_ok=True)
         remote_host = self._remote_host(worker, fleet)
         try:
             return self._transport.prepare_known_hosts(
@@ -793,16 +821,17 @@ class ArtifactCollector:
             return None
 
         project = fleet.project
-        cached = self._ssh_users_by_project.get(project)
-        if cached is not None:
-            return cached
+        with self._ssh_user_lock:
+            cached = self._ssh_users_by_project.get(project)
+            if cached is not None:
+                return cached
 
-        try:
-            username = self._transport.resolve_direct_ssh_user(project)
-        except RuntimeError as exc:
-            raise ArtifactCollectionError(str(exc)) from exc
-        self._ssh_users_by_project[project] = username
-        return username
+            try:
+                username = self._transport.resolve_direct_ssh_user(project)
+            except RuntimeError as exc:
+                raise ArtifactCollectionError(str(exc)) from exc
+            self._ssh_users_by_project[project] = username
+            return username
 
     def _service_name(self, worker: CloudInstanceLike) -> str:
         """Return the CRSBench user service name expected on the target VM."""
