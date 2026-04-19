@@ -22,10 +22,10 @@ experiment:
   mode: auto
 runtime:
   trials: 3
-  max_total_time: 64800
+  max_total_time: 76800
   build_timeout: 21600
   run_timeout: 28800
-  verify_timeout: 7200
+  verify_timeout: 14400
   per_pov_verify_timeout: 300
   redis_host: redis-server:6379
   source_mode: pkgs
