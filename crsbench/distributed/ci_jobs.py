@@ -77,6 +77,14 @@ class InfraMissingBuildContextError(RuntimeError):
         }
 
 
+@dataclass
+class BuildContextData:
+    """Hydrated verification build context reconstructed from evaluator disk."""
+
+    adapter: Any
+    build_results: dict[str, "BuildResult"]
+
+
 def serialize_ci_job(job: Any) -> dict[str, Any]:
     """Serialize a flat.py CI job for RQ enqueue.
 
@@ -469,24 +477,25 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
     raise ValueError(f"Unknown job class: {cls_name}")
 
 
-def _load_build_context_from_disk(
-    context: Any,
+def load_build_context_from_disk(
     build_job_ids: list[str],
     benchmark_path: Path,
     source_mode: str,
     use_inc_build: bool,
-) -> None:
-    """Load build results from disk into context.shared.
+) -> BuildContextData:
+    """Load build results from disk for verify jobs.
 
     On the evaluator, Docker images already exist from previous build queue
-    execution. This loads the BuildResult objects and adapter into
-    context.shared so verify jobs can access them.
+    execution. This reconstructs the BuildResult objects and adapter needed by
+    downstream verify logic without triggering new builds.
 
     Args:
-        context: JobContext whose shared dict will be populated
         build_job_ids: Build job IDs that verify jobs depend on
         benchmark_path: Path to benchmark directory
         source_mode: Source mode for VerificationEngine
+
+    Returns:
+        Hydrated build context containing adapter and build results
     """
     from crsbench.evaluation.verification.pov import VerificationEngine
     from crsbench.utils.run_helper import ensure_oss_fuzz_root
@@ -557,18 +566,11 @@ def _load_build_context_from_disk(
             use_inc_build=use_inc_build,
         )
 
-    # Populate context.shared for each build_job_id
-    # Build job IDs have format "build-single/{benchmark}/{variant_name}"
     missing_build_job_ids: list[str] = []
     for bid in build_job_ids:
         parts = bid.split("/")
         variant_name = parts[2] if len(parts) > 2 else None
-        if variant_name and variant_name in build_results:
-            context.shared[bid] = {
-                "build_result": build_results[variant_name],
-                "adapter": adapter,
-            }
-        else:
+        if not variant_name or variant_name not in build_results:
             missing_build_job_ids.append(bid)
 
     if missing_build_job_ids:
@@ -581,9 +583,40 @@ def _load_build_context_from_disk(
             use_inc_build=use_inc_build,
         )
 
-    logger.info(
-        f"Loaded {len(context.shared)} build context entries for {benchmark_path.name}"
+    return BuildContextData(adapter=adapter, build_results=build_results)
+
+
+def _load_build_context_from_disk(
+    context: Any,
+    build_job_ids: list[str],
+    benchmark_path: Path,
+    source_mode: str,
+    use_inc_build: bool,
+) -> None:
+    """Load build results from disk into context.shared."""
+    build_context = load_build_context_from_disk(
+        build_job_ids=build_job_ids,
+        benchmark_path=benchmark_path,
+        source_mode=source_mode,
+        use_inc_build=use_inc_build,
     )
+
+    loaded = 0
+    for bid in build_job_ids:
+        parts = bid.split("/")
+        variant_name = parts[2] if len(parts) > 2 else None
+        if not variant_name:
+            continue
+        build_result = build_context.build_results.get(variant_name)
+        if build_result is None:
+            continue
+        context.shared[bid] = {
+            "build_result": build_result,
+            "adapter": build_context.adapter,
+        }
+        loaded += 1
+
+    logger.info(f"Loaded {loaded} build context entries for {benchmark_path.name}")
 
 
 def _load_patch_build_context(

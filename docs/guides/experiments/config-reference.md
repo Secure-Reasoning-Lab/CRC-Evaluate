@@ -198,7 +198,11 @@ Evaluator mode note:
 - config-pinned evaluator CLI mode normally performs a startup pre-build
   enqueue phase
 - configless evaluator mode does not enqueue startup pre-builds; it consumes
-  build jobs lazily and verify work may trigger on-demand builds on cache miss
+  build jobs lazily and async POV verification enqueues benchmark-local build
+  jobs on first POV discovery, with verify jobs waiting on those dependencies
+- `runtime.verify_timeout` is the overall async verification drain budget after
+  a trial ends; it covers both queued build prerequisites and queued POV
+  verification jobs
 
 ## Legacy-to-Grouped Field Mapping
 

@@ -130,6 +130,7 @@ class BenchmarkRunner:
         redis_host: Optional[str] = None,
         experiment_name: Optional[str] = None,
         pov_dedup_strategy: str = "patch-based",
+        source_mode: str = "pkgs",
         inc_image_policy: Optional[str] = None,
         inc_image_registry: Optional[str] = None,
         inc_image_max_pull_bytes: Optional[int] = None,
@@ -209,6 +210,7 @@ class BenchmarkRunner:
         self.redis_host = redis_host
         self.experiment_name = experiment_name
         self.pov_dedup_strategy = pov_dedup_strategy
+        self.source_mode = source_mode
         self.inc_image_policy = inc_image_policy
         self.inc_image_registry = inc_image_registry
         self.inc_image_max_pull_bytes = inc_image_max_pull_bytes
@@ -1428,6 +1430,7 @@ class BenchmarkRunner:
                 oss_fuzz_path=self.oss_fuzz_path,
                 timeout=self.per_pov_verify_timeout,
                 dedup_strategy=get_dedup_strategy(self.pov_dedup_strategy),
+                source_mode=self.source_mode,
                 inc_image_policy=self.inc_image_policy,
                 inc_image_registry=self.inc_image_registry,
                 inc_image_max_pull_bytes=self.inc_image_max_pull_bytes,

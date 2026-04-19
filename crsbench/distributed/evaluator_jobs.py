@@ -238,6 +238,9 @@ class SinglePovPayload:
     pov: EmbeddedPov
     enqueued_at: float
     sanitizer: Optional[str] = None
+    build_job_ids: list[str] = field(default_factory=list)
+    source_mode: str = "pkgs"
+    use_inc_build: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -248,6 +251,9 @@ class SinglePovPayload:
             "pov": self.pov.to_dict(),
             "enqueued_at": self.enqueued_at,
             "sanitizer": self.sanitizer,
+            "build_job_ids": self.build_job_ids,
+            "source_mode": self.source_mode,
+            "use_inc_build": self.use_inc_build,
         }
 
     @classmethod
@@ -260,6 +266,9 @@ class SinglePovPayload:
             pov=EmbeddedPov.from_dict(d["pov"]),
             enqueued_at=d["enqueued_at"],
             sanitizer=d.get("sanitizer"),
+            build_job_ids=list(d.get("build_job_ids", [])),
+            source_mode=d.get("source_mode", "pkgs"),
+            use_inc_build=d.get("use_inc_build", True),
         )
 
 
@@ -333,9 +342,43 @@ def verify_single_pov(payload_dict: dict[str, Any]) -> dict[str, Any]:
         payload.experiment_name, payload.benchmark, payload.sanitizer
     )
     if cache_key not in _built_results:
-        _try_lazy_load_builds(
-            payload.experiment_name, payload.benchmark, payload.sanitizer
-        )
+        if payload.build_job_ids:
+            try:
+                from crsbench.distributed.ci_jobs import load_build_context_from_disk
+
+                benchmarks_root = get_evaluator_benchmarks_root()
+                benchmark_path = resolve_benchmark_path(
+                    benchmarks_root, payload.benchmark
+                )
+                build_context = load_build_context_from_disk(
+                    build_job_ids=payload.build_job_ids,
+                    benchmark_path=benchmark_path,
+                    source_mode=payload.source_mode,
+                    use_inc_build=payload.use_inc_build,
+                )
+                _built_results[cache_key] = build_context.build_results
+            except Exception as e:
+                error_msg = (
+                    f"Failed to load prebuilt variants for benchmark "
+                    f"'{payload.benchmark}': {e}"
+                )
+                logger.error(error_msg)
+                return SinglePovResult(
+                    trial_id=payload.trial_id,
+                    benchmark=payload.benchmark,
+                    harness=payload.harness,
+                    verdict=PovVerdict(
+                        pov_id=pov.pov_id,
+                        triggered_bug=False,
+                        status="error",
+                        error=error_msg,
+                    ),
+                    completed_at=time.time(),
+                ).to_dict()
+        else:
+            _try_lazy_load_builds(
+                payload.experiment_name, payload.benchmark, payload.sanitizer
+            )
 
     if cache_key not in _built_results:
         error_msg = (

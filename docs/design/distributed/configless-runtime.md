@@ -63,8 +63,10 @@ evaluators, but startup behavior differs:
 - config-pinned evaluator CLI mode normally enqueues startup pre-build jobs
   before entering steady-state supervision
 - configless evaluator mode does not enqueue startup pre-build jobs
-- configless evaluators still consume build queues lazily, and verify work may
-  trigger on-demand builds on cache miss
+- configless evaluators still consume build queues lazily; when async POV
+  verification discovers the first POV for a benchmark/sanitizer, it enqueues
+  the required build DAG to the build queue and verify jobs wait on those build
+  dependencies before running
 
 So configless mode keeps build/verify queue separation, but it does not have
 the same normal startup build-first phase as config-pinned evaluator CLI mode.

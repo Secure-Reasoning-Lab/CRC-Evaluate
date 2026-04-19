@@ -153,9 +153,13 @@ class POVVerificationManager:
         self._trial_id = trial_id
         self._sanitizer = sanitizer
         self._verify_queue: Optional[object] = None  # Lazy-initialized RQ Queue
+        self._build_queue: Optional[object] = None  # Lazy-initialized RQ Queue
         self._pending_job_ids: list[str] = []  # Job IDs awaiting results
         self._pov_hash_to_path: dict[str, Path] = {}  # hash → local file path
         self._job_to_pov_id: dict[str, str] = {}  # job_id → pov_id for timeout marking
+        self._async_build_job_ids: list[str] = []
+        self._async_build_dependencies: list[object] = []
+        self._async_build_sanitizer: Optional[str] = None
 
         # EXCHANGE_DIR scanning for real-time POV discovery during CRS execution
         self._exchange_pov_dir = exchange_pov_dir
@@ -223,6 +227,156 @@ class POVVerificationManager:
         )
         return self._verify_queue
 
+    def _get_build_queue(self) -> Optional[object]:
+        """Get or create the Redis build queue (lazy initialization)."""
+        if self._build_queue is not None:
+            return self._build_queue
+
+        if not self._redis_host or not self._experiment_name:
+            return None
+
+        from crsbench.distributed.verify_queue import initialize_build_queue
+
+        self._build_queue = initialize_build_queue(
+            self._redis_host, self._experiment_name
+        )
+        return self._build_queue
+
+    def _ensure_async_build_jobs(self) -> Optional[tuple[list[str], list[object]]]:
+        """Ensure async POV verification has an explicit build DAG."""
+        if self._async_build_job_ids and self._async_build_dependencies:
+            return self._async_build_job_ids, self._async_build_dependencies
+
+        if self._engine is None:
+            logger.warning("VerificationEngine not initialized, cannot enqueue builds")
+            return None
+        if self._adapter is None or self._adapter.benchmark_path is None:
+            logger.warning(
+                "MetaYamlAdapter missing benchmark path, cannot enqueue builds"
+            )
+            return None
+
+        build_queue = self._get_build_queue()
+        if build_queue is None:
+            logger.warning("Build queue not available, skipping async POV enqueue")
+            return None
+        assert build_queue is not None
+
+        try:
+            from crsbench.benchmark_ci.jobs.flat import (
+                BuildSingleVariantJob,
+                PrepareIncImageJob,
+            )
+            from crsbench.distributed.verify_queue import (
+                build_variant_rq_job_id,
+                enqueue_ci_job,
+            )
+
+            adapter = self._adapter
+            engine = self._engine
+            benchmark_path = adapter.benchmark_path
+            assert benchmark_path is not None
+            source_mode = engine.builder.source_mode
+            use_inc_build = bool(adapter.inc_build)
+            sanitizer = self._sanitizer
+            if sanitizer is None:
+                sanitizers = adapter.get_all_cpv_sanitizers()
+                sanitizer = sanitizers[0] if sanitizers else "address"
+
+            plan = engine.builder.create_build_plan(
+                benchmark_name=adapter.benchmark_name,
+                benchmark_path=benchmark_path,
+                main_repo=adapter.main_repo,
+                mode=adapter.get_mode(),
+                base_commit=adapter.get_base_commit(),
+                ref_commit=adapter.get_ref_commit(),
+                cpv_numbers=adapter.get_cpv_numbers(),
+                language=adapter.lang,
+                repo_name=adapter.repo_name,
+                include_coverage=False,
+                use_inc_build=use_inc_build,
+                sanitizer=sanitizer,
+            )
+
+            prepare_dependency: list[object] = []
+            if use_inc_build:
+                prepare_job = PrepareIncImageJob(
+                    benchmark_path=benchmark_path,
+                    benchmark_name=adapter.benchmark_name,
+                    sanitizer=sanitizer,
+                    use_inc_build=True,
+                    source_mode=source_mode,
+                    inc_image_policy=engine.builder.infra.inc_image_policy,
+                    inc_image_registry=engine.builder.infra.inc_image_registry,
+                    inc_image_max_pull_bytes=engine.builder.infra.inc_image_max_pull_bytes,
+                    inc_image_pull_timeout=engine.builder.infra.inc_image_pull_timeout,
+                    local_image_prefix=engine.builder.infra.local_image_prefix,
+                )
+                prepare_rq_job = enqueue_ci_job(
+                    build_queue, self._experiment_name or "", prepare_job
+                )
+                prepare_dependency = [prepare_rq_job]
+
+            build_job_ids: list[str] = []
+            build_dependencies: list[object] = []
+            for config in plan.configs:
+                build_job = BuildSingleVariantJob(
+                    benchmark_path=config.benchmark_path,
+                    benchmark_name=config.benchmark_name,
+                    variant_type=config.variant_type,
+                    commit=config.commit,
+                    main_repo=config.main_repo,
+                    mode=config.mode or adapter.get_mode(),
+                    language=config.language,
+                    cpv_num=config.cpv_num,
+                    patch_id=config.patch_id,
+                    pov_id=config.pov_id,
+                    patches=config.patches,
+                    use_inc_build=config.use_inc_build,
+                    source_mode=source_mode,
+                    sanitizer=config.sanitizer,
+                    repo_name=config.repo_name,
+                    prepare_inc_job_id=prepare_dependency[0].id
+                    if prepare_dependency
+                    else "",
+                    inc_image_policy=engine.builder.infra.inc_image_policy,
+                    inc_image_registry=engine.builder.infra.inc_image_registry,
+                    inc_image_max_pull_bytes=engine.builder.infra.inc_image_max_pull_bytes,
+                    inc_image_pull_timeout=engine.builder.infra.inc_image_pull_timeout,
+                    local_image_prefix=engine.builder.infra.local_image_prefix,
+                )
+                rq_job_id = build_variant_rq_job_id(
+                    benchmark=config.benchmark_name,
+                    variant_name=config.variant_name,
+                    source_mode=source_mode,
+                    use_inc_build=config.use_inc_build,
+                )
+                build_rq_job = enqueue_ci_job(
+                    build_queue,
+                    self._experiment_name or "",
+                    build_job,
+                    depends_on=prepare_dependency or None,
+                    job_id=rq_job_id,
+                )
+                build_job_ids.append(build_rq_job.id)
+                build_dependencies.append(build_rq_job)
+
+            self._async_build_job_ids = build_job_ids
+            self._async_build_dependencies = build_dependencies
+            self._async_build_sanitizer = sanitizer
+            logger.info(
+                "Prepared async POV build DAG for {}/{} ({} variant jobs, "
+                "sanitizer={})",
+                self.benchmark_id,
+                self.harness_name,
+                len(build_job_ids),
+                sanitizer,
+            )
+            return self._async_build_job_ids, self._async_build_dependencies
+        except Exception as e:
+            logger.warning(f"Failed to enqueue async POV build DAG: {e}")
+            return None
+
     def _enqueue_pov(self, pov_path: Path, pov_hash: str) -> Optional[str]:
         """Enqueue a single POV for async verification via Redis.
 
@@ -245,6 +399,11 @@ class POVVerificationManager:
             logger.warning("Verify queue not available, skipping async enqueue")
             return None
 
+        build_prereqs = self._ensure_async_build_jobs()
+        if build_prereqs is None:
+            return None
+        build_job_ids, build_dependencies = build_prereqs
+
         pov_data = pov_path.read_bytes()
         self._pov_hash_to_path[pov_hash] = pov_path
         pov_id = f"{pov_path.name}:{pov_hash}"
@@ -256,7 +415,11 @@ class POVVerificationManager:
             harness=self.harness_name,
             pov_id=pov_id,
             pov_data=pov_data,
-            sanitizer=self._sanitizer,
+            sanitizer=self._async_build_sanitizer or self._sanitizer,
+            build_job_ids=build_job_ids,
+            depends_on=build_dependencies,
+            source_mode=self._engine.builder.source_mode if self._engine else "pkgs",
+            use_inc_build=bool(self._adapter.inc_build) if self._adapter else True,
         )
 
     def _poll_pending_verdicts(self) -> None:
@@ -778,10 +941,9 @@ class POVVerificationManager:
         In async (Redis) mode, POV verification jobs may still be running.
         This method polls until all pending jobs are resolved or timeout expires.
 
-        The timeout is scaled based on the number of pending POVs: each could
-        take up to ``per_pov_timeout`` seconds for reproduce across all variants,
-        plus a 60s buffer for build overhead. The result is capped by
-        ``verify_timeout`` (the overall verification phase budget).
+        Async mode treats ``verify_timeout`` as the end-to-end verification
+        phase budget, including any queued build prerequisites declared for
+        pending POV jobs.
 
         In inline mode, this is a no-op since all verifications are synchronous.
 
@@ -794,11 +956,7 @@ class POVVerificationManager:
             return
 
         n_pending = len(self._pending_job_ids)
-        # Floor: a single POV may run against multiple variants (each up to
-        # per_pov_timeout) plus Docker build overhead, so allow at least 2x.
-        single_pov_max = float(per_pov_timeout) * 2 + 120.0
-        scaled = max(single_pov_max, n_pending * per_pov_timeout + 120.0)
-        timeout = min(scaled, float(verify_timeout))
+        timeout = float(verify_timeout)
 
         deadline = time.time() + timeout
         logger.info(
