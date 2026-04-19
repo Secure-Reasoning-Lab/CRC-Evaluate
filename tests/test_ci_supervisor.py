@@ -1339,6 +1339,36 @@ class TestHelperFunctions:
 
         assert _next_worker_num({1, 2, 3}, 3) == 4
 
+    def test_progress_milestones_crossed_reports_all_boundaries(self) -> None:
+        """Progress milestone helper should report each crossed multiple."""
+        from crsbench.distributed.ci_supervisor import _progress_milestones_crossed
+
+        assert _progress_milestones_crossed(0, 49, interval=50) == []
+        assert _progress_milestones_crossed(49, 50, interval=50) == [50]
+        assert _progress_milestones_crossed(49, 101, interval=50) == [50, 100]
+        assert _progress_milestones_crossed(100, 100, interval=50) == []
+
+    def test_log_handled_job_progress_logs_at_threshold(self) -> None:
+        """Handled-job progress log should fire when a milestone is crossed."""
+        from crsbench.distributed.ci_supervisor import _log_handled_job_progress
+
+        with patch("crsbench.distributed.ci_supervisor.logger.info") as mock_info:
+            _log_handled_job_progress(
+                previous_total=49,
+                build_handled=30,
+                verify_handled=20,
+                build_active=1,
+                verify_active=2,
+                build_queued=7,
+                verify_queued=9,
+                interval=50,
+            )
+
+        mock_info.assert_called_once()
+        assert "Handled 50 jobs so far" in mock_info.call_args.args[0]
+        assert "build=30" in mock_info.call_args.args[0]
+        assert "verify=20" in mock_info.call_args.args[0]
+
     def test_check_disk_space_in_ci_supervisor(self) -> None:
         """check_disk_space is importable from ci_supervisor."""
         from pathlib import Path

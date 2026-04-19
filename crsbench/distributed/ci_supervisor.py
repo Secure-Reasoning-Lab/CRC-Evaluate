@@ -118,6 +118,7 @@ def run_ci_supervisor(
     continuous: bool = True,
     idle_timeout: int = 0,
     cpu_tag: Optional[str] = None,
+    progress_log_every_jobs: int = 0,
 ) -> int:
     """Dual-queue supervisor for evaluator CI mode.
 
@@ -145,6 +146,9 @@ def run_ci_supervisor(
             before exiting. 0 means disabled (wait forever).
         cpu_tag: Optional worker capability tag. Jobs with mismatched
             ``job.meta['cpu_tag']`` are re-queued.
+        progress_log_every_jobs: Emit a handled-job progress log whenever
+            this many completed jobs have been reached. ``0`` disables the
+            progress log.
 
     Returns:
         Exit code (0 for success).
@@ -223,6 +227,8 @@ def run_ci_supervisor(
     mismatch_job_ids: set[str] = set()
     mismatch_queue_names: set[str] = set()
     cpu_tag_livelock_detected = False
+    handled_build_jobs = 0
+    handled_verify_jobs = 0
 
     # Disk space state
     minimum_disk_bytes = parse_size_to_bytes(minimum_disk_size)
@@ -247,20 +253,32 @@ def run_ci_supervisor(
 
         while True:
             # --- Cleanup finished workers ---
-            _reap_finished(
+            previous_total = handled_build_jobs + handled_verify_jobs
+            handled_build_jobs += _reap_finished(
                 build_active,
                 cpu_pool,
                 used_worker_nums,
                 deferred_cgroup_cleanup,
                 redis_conn=redis_conn,
             )
-            _reap_finished(
+            handled_verify_jobs += _reap_finished(
                 verify_active,
                 cpu_pool,
                 used_worker_nums,
                 deferred_cgroup_cleanup,
                 redis_conn=redis_conn,
             )
+            if handled_build_jobs + handled_verify_jobs != previous_total:
+                _log_handled_job_progress(
+                    previous_total=previous_total,
+                    build_handled=handled_build_jobs,
+                    verify_handled=handled_verify_jobs,
+                    build_active=len(build_active),
+                    verify_active=len(verify_active),
+                    build_queued=build_queue.count,
+                    verify_queued=verify_queue.count,
+                    interval=progress_log_every_jobs,
+                )
 
             # --- Sweep deferred cgroup removals (non-blocking) ---
             if deferred_cgroup_cleanup:
@@ -543,6 +561,21 @@ def run_ci_supervisor(
                             f"Child for job {job.id[:8]} exited immediately "
                             f"(status={early_status}); skipping requeue."
                         )
+                        previous_total = handled_build_jobs + handled_verify_jobs
+                        if is_build:
+                            handled_build_jobs += 1
+                        else:
+                            handled_verify_jobs += 1
+                        _log_handled_job_progress(
+                            previous_total=previous_total,
+                            build_handled=handled_build_jobs,
+                            verify_handled=handled_verify_jobs,
+                            build_active=len(build_active),
+                            verify_active=len(verify_active),
+                            build_queued=build_queue.count,
+                            verify_queued=verify_queue.count,
+                            interval=progress_log_every_jobs,
+                        )
                         continue
                     raise RuntimeError(
                         f"Child for job {job.id[:8]} exited before registration "
@@ -658,6 +691,7 @@ def run_multi_queue_supervisor(
     queue_refresher: Optional[QueueRefresher] = None,
     queue_refresh_interval: int = 5,
     cpu_tag: Optional[str] = None,
+    progress_log_every_jobs: int = 0,
 ) -> int:
     """Multi-queue supervisor for configless workers and evaluators.
 
@@ -689,6 +723,9 @@ def run_multi_queue_supervisor(
         queue_refresh_interval: Seconds between refresh attempts.
         cpu_tag: Optional worker capability tag. Jobs with mismatched
             ``job.meta['cpu_tag']`` are re-queued.
+        progress_log_every_jobs: Emit a handled-job progress log whenever
+            this many completed jobs have been reached. ``0`` disables the
+            progress log.
 
     Returns:
         Exit code (0 for success).
@@ -775,6 +812,8 @@ def run_multi_queue_supervisor(
     mismatch_job_ids: set[str] = set()
     mismatch_queue_names: set[str] = set()
     cpu_tag_livelock_detected = False
+    handled_build_jobs = 0
+    handled_verify_jobs = 0
 
     # Disk space state
     minimum_disk_bytes = parse_size_to_bytes(minimum_disk_size)
@@ -805,20 +844,32 @@ def run_multi_queue_supervisor(
 
         while True:
             # --- Cleanup finished workers ---
-            _reap_finished(
+            previous_total = handled_build_jobs + handled_verify_jobs
+            handled_build_jobs += _reap_finished(
                 build_active,
                 cpu_pool,
                 used_worker_nums,
                 deferred_cgroup_cleanup,
                 redis_conn=redis_conn,
             )
-            _reap_finished(
+            handled_verify_jobs += _reap_finished(
                 verify_active,
                 cpu_pool,
                 used_worker_nums,
                 deferred_cgroup_cleanup,
                 redis_conn=redis_conn,
             )
+            if handled_build_jobs + handled_verify_jobs != previous_total:
+                _log_handled_job_progress(
+                    previous_total=previous_total,
+                    build_handled=handled_build_jobs,
+                    verify_handled=handled_verify_jobs,
+                    build_active=len(build_active),
+                    verify_active=len(verify_active),
+                    build_queued=sum(bq.count for bq in build_queues),
+                    verify_queued=sum(vq.count for vq in verify_queues),
+                    interval=progress_log_every_jobs,
+                )
 
             # --- Sweep deferred cgroup removals ---
             if deferred_cgroup_cleanup:
@@ -1143,6 +1194,21 @@ def run_multi_queue_supervisor(
                             f"Child for job {job.id[:8]} exited immediately "
                             f"(status={early_status}); skipping requeue."
                         )
+                        previous_total = handled_build_jobs + handled_verify_jobs
+                        if is_build:
+                            handled_build_jobs += 1
+                        else:
+                            handled_verify_jobs += 1
+                        _log_handled_job_progress(
+                            previous_total=previous_total,
+                            build_handled=handled_build_jobs,
+                            verify_handled=handled_verify_jobs,
+                            build_active=len(build_active),
+                            verify_active=len(verify_active),
+                            build_queued=sum(bq.count for bq in build_queues),
+                            verify_queued=sum(vq.count for vq in verify_queues),
+                            interval=progress_log_every_jobs,
+                        )
                         continue
                     raise RuntimeError(
                         f"Child for job {job.id[:8]} exited before registration "
@@ -1297,13 +1363,54 @@ def _next_worker_num(used: set[int], max_total: int) -> int:
     return max_total + 1
 
 
+def _progress_milestones_crossed(
+    previous_total: int,
+    current_total: int,
+    *,
+    interval: int,
+) -> list[int]:
+    """Return handled-job milestones crossed between two totals."""
+    if interval <= 0 or current_total <= previous_total:
+        return []
+
+    previous_bucket = previous_total // interval
+    current_bucket = current_total // interval
+    return [
+        bucket * interval for bucket in range(previous_bucket + 1, current_bucket + 1)
+    ]
+
+
+def _log_handled_job_progress(
+    *,
+    previous_total: int,
+    build_handled: int,
+    verify_handled: int,
+    build_active: int,
+    verify_active: int,
+    build_queued: int,
+    verify_queued: int,
+    interval: int,
+) -> None:
+    """Emit handled-job milestone logs when a new progress bucket is crossed."""
+    total_handled = build_handled + verify_handled
+    for milestone in _progress_milestones_crossed(
+        previous_total, total_handled, interval=interval
+    ):
+        logger.info(
+            f"Handled {milestone} jobs so far "
+            f"(build={build_handled}, verify={verify_handled}, "
+            f"active: build={build_active}, verify={verify_active}, "
+            f"queued: build={build_queued}, verify={verify_queued})"
+        )
+
+
 def _reap_finished(
     active: dict[int, WorkerEntry],
     cpu_pool: Optional[object],
     used_worker_nums: set[int],
     deferred_cgroup_cleanup: list[Path],
     redis_conn: Optional[Redis] = None,
-) -> None:
+) -> int:
     """Clean up finished child processes and release their resources.
 
     After a child completes, enqueues any dependent jobs via RQ's
@@ -1314,6 +1421,7 @@ def _reap_finished(
     the supervisor loop.  If the cgroup is still busy (Docker shim
     processes haven't exited yet), the path is deferred for later sweep.
     """
+    handled = 0
     for pid in list(active.keys()):
         entry = active[pid]
         if not entry.process.is_alive():
@@ -1331,6 +1439,8 @@ def _reap_finished(
                     deferred_cgroup_cleanup.append(entry.cgroup_path)
             used_worker_nums.discard(entry.worker_num)
             del active[pid]
+            handled += 1
+    return handled
 
 
 def _sweep_deferred_cgroups(deferred: list[Path]) -> None:

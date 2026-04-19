@@ -92,6 +92,7 @@ class TestRunEvaluatorMain:
         kwargs = mock_supervisor.call_args.kwargs
         assert kwargs["build_cores_per_job"] is None
         assert kwargs["verify_cores_per_job"] is None
+        assert kwargs["progress_log_every_jobs"] == 50
 
     @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
     @patch("crsbench.distributed.evaluator._report_cloud_runtime_state")
@@ -296,6 +297,7 @@ class TestConfiglessEvaluator:
         call_kwargs = mock_supervisor.call_args[1]
         assert call_kwargs["build_queue_names"] == ["crsbench_exp-42_build"]
         assert call_kwargs["verify_queue_names"] == ["crsbench_exp-42_verify"]
+        assert call_kwargs["progress_log_every_jobs"] == 50
 
     @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
     def test_configless_resource_resolution_cli_overrides_metadata(self) -> None:
