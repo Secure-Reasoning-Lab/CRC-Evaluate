@@ -25,6 +25,41 @@ logger = get_logger(__name__)
 MAX_POV_SIZE_BYTES = 10 * 1024 * 1024
 
 
+def _is_duplicate_job_enqueue_error(exc: Exception) -> bool:
+    """Best-effort duplicate enqueue detection across RQ versions."""
+    msg = str(exc).lower()
+    return "already exists" in msg or "job id" in msg and "exists" in msg
+
+
+def _enqueue_with_existing_reuse(
+    queue: Any,
+    job_func: str,
+    payload: dict[str, Any],
+    *,
+    job_timeout: int,
+    meta: dict[str, str],
+    job_id: str,
+    depends_on: Optional[list[Any]] = None,
+) -> Any:
+    """Enqueue an RQ job by deterministic ID and reuse existing duplicates."""
+    try:
+        return queue.enqueue(
+            job_func,
+            payload,
+            job_timeout=job_timeout,
+            result_ttl=-1,
+            job_id=job_id,
+            depends_on=depends_on,
+            meta=meta,
+        )
+    except Exception as e:
+        if not _is_duplicate_job_enqueue_error(e):
+            raise
+        existing = rq.job.Job.fetch(job_id, connection=queue.connection)
+        logger.debug(f"Reusing existing POV RQ job {job_id}")
+        return existing
+
+
 def _error_result_from_rq_job(job: Any, *, default_error: str) -> dict[str, Any]:
     """Build a terminal error verdict preserving routing metadata."""
     raw_args = getattr(job, "args", None)
@@ -92,6 +127,74 @@ def initialize_verify_queue(
         return None
 
 
+def initialize_build_queue(
+    redis_host: str, experiment_name: str
+) -> Optional["rq.Queue"]:
+    """Initialize the build queue used by async POV verification."""
+    if not REDIS_AVAILABLE:
+        logger.debug("Redis/RQ packages not installed, build queue unavailable")
+        return None
+
+    from crsbench.distributed.queue import resolve_queue_names
+
+    _trial_queue, queue_name, _verify_queue = resolve_queue_names(experiment_name)
+    try:
+        from crsbench.distributed.queue import create_redis_connection
+
+        redis_conn = create_redis_connection(redis_host)
+        queue = rq.Queue(queue_name, connection=redis_conn)
+        logger.info(f"Build queue initialized: {queue_name}")
+        return queue
+    except Exception as e:
+        logger.warning(f"Failed to initialize build queue: {e}")
+        return None
+
+
+def build_variant_rq_job_id(
+    *,
+    benchmark: str,
+    variant_name: str,
+    source_mode: str,
+    use_inc_build: bool,
+) -> str:
+    """Build a deterministic RQ job ID for async POV build prerequisites."""
+    mode = "inc" if use_inc_build else "clean"
+    return f"build-single/{benchmark}/{variant_name}/{source_mode}/{mode}"
+
+
+def enqueue_ci_job(
+    queue: Any,
+    experiment_name: str,
+    job: Any,
+    *,
+    job_timeout: int = 3600,
+    cpu_tag: Optional[str] = None,
+    depends_on: Optional[list[Any]] = None,
+    job_id: Optional[str] = None,
+) -> Any:
+    """Enqueue a serialized CI job with deterministic reuse semantics."""
+    from crsbench.distributed.ci_jobs import serialize_ci_job
+
+    effective_cpu_tag = cpu_tag or os.environ.get("CRSBENCH_JOB_CPU_TAG")
+    job_meta = {"experiment_name": experiment_name}
+    if effective_cpu_tag:
+        job_meta["cpu_tag"] = effective_cpu_tag
+
+    resolved_job_id = job_id or getattr(job, "job_id", "")
+    if not resolved_job_id:
+        raise ValueError("enqueue_ci_job requires a deterministic job_id")
+
+    return _enqueue_with_existing_reuse(
+        queue,
+        "crsbench.distributed.ci_jobs.execute_ci_job",
+        serialize_ci_job(job),
+        job_timeout=job_timeout,
+        meta=job_meta,
+        job_id=resolved_job_id,
+        depends_on=depends_on,
+    )
+
+
 def enqueue_single_pov(
     verify_queue: "rq.Queue",
     experiment_name: str,
@@ -100,9 +203,14 @@ def enqueue_single_pov(
     harness: str,
     pov_id: str,
     pov_data: bytes,
+    *,
     sanitizer: Optional[str] = None,
     job_timeout: int = 3600,
     cpu_tag: Optional[str] = None,
+    build_job_ids: Optional[list[str]] = None,
+    depends_on: Optional[list[Any]] = None,
+    source_mode: str = "pkgs",
+    use_inc_build: bool = True,
 ) -> Optional[str]:
     """Enqueue a single POV for async verification.
 
@@ -144,6 +252,9 @@ def enqueue_single_pov(
         pov=embedded_pov,
         enqueued_at=time.time(),
         sanitizer=sanitizer,
+        build_job_ids=list(build_job_ids or []),
+        source_mode=source_mode,
+        use_inc_build=use_inc_build,
     )
 
     try:
@@ -157,6 +268,7 @@ def enqueue_single_pov(
             payload.to_dict(),
             job_timeout=job_timeout,
             result_ttl=-1,
+            depends_on=depends_on,
             meta=job_meta,
         )
         logger.debug(

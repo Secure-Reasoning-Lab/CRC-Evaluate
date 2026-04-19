@@ -6,6 +6,7 @@ Tests for crsbench/evaluation/verification/pov/manager.py.
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from crsbench.builder.types import BenchmarkMode, VariantType
 from crsbench.evaluation.verification.models import PovVerificationStatus
 from crsbench.evaluation.verification.pov.config import POVVerificationConfig
 from crsbench.evaluation.verification.pov.store import POVStore
@@ -771,6 +772,15 @@ class TestAsyncMode:
         mock_enqueue.return_value = "job-123"
 
         manager = self._make_manager(tmp_path, redis_host="redis.local")
+        build_dep = MagicMock()
+        build_dep.id = "build-job-1"
+        manager._ensure_async_build_jobs = MagicMock(
+            return_value=(["build-job-1"], [build_dep])
+        )
+        manager._engine = MagicMock()
+        manager._engine.builder.source_mode = "main_repo"
+        manager._adapter = MagicMock()
+        manager._adapter.inc_build = False
 
         pov_file = tmp_path / "trial-1" / "pov_output" / "test.blob"
         pov_file.write_bytes(b"pov_data_content")
@@ -783,6 +793,10 @@ class TestAsyncMode:
         # pov_id format: {filename}:{hash}
         assert call_kwargs[1]["pov_id"] == "test.blob:abc123hash"
         assert call_kwargs[1]["sanitizer"] == "address"
+        assert call_kwargs[1]["build_job_ids"] == ["build-job-1"]
+        assert call_kwargs[1]["depends_on"] == [build_dep]
+        assert call_kwargs[1]["source_mode"] == "main_repo"
+        assert call_kwargs[1]["use_inc_build"] is False
 
     @patch("crsbench.distributed.verify_queue.poll_single_pov_verdicts")
     def test_poll_pending_verdicts_processes_results(
@@ -828,12 +842,129 @@ class TestAsyncMode:
         mock_enqueue.return_value = "job-1"
 
         manager = self._make_manager(tmp_path, redis_host="redis.local")
+        manager._ensure_async_build_jobs = MagicMock(return_value=(["build-job-1"], []))
+        manager._engine = MagicMock()
+        manager._engine.builder.source_mode = "pkgs"
+        manager._adapter = MagicMock()
+        manager._adapter.inc_build = True
         pov_file = tmp_path / "trial-1" / "pov_output" / "pov.blob"
         pov_file.write_bytes(b"test_content")
 
         manager._enqueue_pov(pov_file, "hash123")
 
         assert manager._pov_hash_to_path["hash123"] == pov_file
+
+    @patch("crsbench.distributed.verify_queue.enqueue_ci_job")
+    @patch("crsbench.distributed.verify_queue.initialize_build_queue")
+    def test_ensure_async_build_jobs_enqueues_prepare_and_variants(
+        self, mock_init_build_queue, mock_enqueue_ci_job, tmp_path: Path
+    ) -> None:
+        """Async POV mode should build an explicit prepare/build DAG once."""
+        mock_build_queue = MagicMock()
+        mock_init_build_queue.return_value = mock_build_queue
+
+        prepare_rq_job = MagicMock()
+        prepare_rq_job.id = "prepare-rq"
+        build_rq_job_1 = MagicMock()
+        build_rq_job_1.id = "build-single/test-benchmark/variant-a/main_repo/inc"
+        build_rq_job_2 = MagicMock()
+        build_rq_job_2.id = "build-single/test-benchmark/variant-b/main_repo/inc"
+        mock_enqueue_ci_job.side_effect = [
+            prepare_rq_job,
+            build_rq_job_1,
+            build_rq_job_2,
+        ]
+
+        manager = self._make_manager(tmp_path, redis_host="redis.local")
+        manager._adapter = MagicMock()
+        manager._adapter.benchmark_path = Path("/benchmarks/test-benchmark")
+        manager._adapter.benchmark_name = "test-benchmark"
+        manager._adapter.main_repo = "https://example.com/repo.git"
+        manager._adapter.lang = "c"
+        manager._adapter.repo_name = "repo"
+        manager._adapter.inc_build = True
+        manager._adapter.get_all_cpv_sanitizers.return_value = ["address"]
+        manager._adapter.get_mode.return_value = BenchmarkMode.DELTA
+        manager._adapter.get_base_commit.return_value = "a" * 40
+        manager._adapter.get_ref_commit.return_value = "b" * 40
+        manager._adapter.get_cpv_numbers.return_value = [0]
+
+        config_a = MagicMock()
+        config_a.benchmark_path = Path("/benchmarks/test-benchmark")
+        config_a.benchmark_name = "test-benchmark"
+        config_a.variant_type = VariantType.DELTA_REF
+        config_a.commit = "b" * 40
+        config_a.main_repo = "https://example.com/repo.git"
+        config_a.mode = BenchmarkMode.DELTA
+        config_a.language = "c"
+        config_a.cpv_num = None
+        config_a.patch_id = None
+        config_a.pov_id = None
+        config_a.patches = []
+        config_a.use_inc_build = True
+        config_a.sanitizer = "address"
+        config_a.repo_name = "repo"
+        config_a.variant_name = "variant-a"
+
+        config_b = MagicMock()
+        config_b.benchmark_path = Path("/benchmarks/test-benchmark")
+        config_b.benchmark_name = "test-benchmark"
+        config_b.variant_type = VariantType.CPV
+        config_b.commit = "b" * 40
+        config_b.main_repo = "https://example.com/repo.git"
+        config_b.mode = BenchmarkMode.DELTA
+        config_b.language = "c"
+        config_b.cpv_num = 0
+        config_b.patch_id = None
+        config_b.pov_id = None
+        config_b.patches = []
+        config_b.use_inc_build = True
+        config_b.sanitizer = "address"
+        config_b.repo_name = "repo"
+        config_b.variant_name = "variant-b"
+
+        manager._engine = MagicMock()
+        manager._engine.builder.source_mode = "main_repo"
+        manager._engine.builder.infra.inc_image_policy = "auto"
+        manager._engine.builder.infra.inc_image_registry = "ghcr.io/example"
+        manager._engine.builder.infra.inc_image_max_pull_bytes = 123
+        manager._engine.builder.infra.inc_image_pull_timeout = 45
+        manager._engine.builder.infra.local_image_prefix = "crsbench"
+        manager._engine.builder.create_build_plan.return_value = MagicMock(
+            configs=[config_a, config_b]
+        )
+
+        build_job_ids, build_deps = manager._ensure_async_build_jobs()
+
+        assert build_job_ids == [build_rq_job_1.id, build_rq_job_2.id]
+        assert build_deps == [build_rq_job_1, build_rq_job_2]
+        assert manager._async_build_sanitizer == "address"
+        assert mock_enqueue_ci_job.call_count == 3
+        assert (
+            mock_enqueue_ci_job.call_args_list[1].kwargs["job_id"] == build_rq_job_1.id
+        )
+        assert (
+            mock_enqueue_ci_job.call_args_list[2].kwargs["job_id"] == build_rq_job_2.id
+        )
+
+    @patch("crsbench.evaluation.verification.pov.manager.time.sleep")
+    @patch("crsbench.evaluation.verification.pov.manager.time.time")
+    def test_drain_pending_uses_verify_timeout_budget(
+        self, mock_time, mock_sleep, tmp_path: Path
+    ) -> None:
+        """Async drain should wait up to verify_timeout, not a smaller heuristic cap."""
+        manager = self._make_manager(tmp_path, redis_host="redis.local")
+        manager._pending_job_ids = ["job-123"]
+        manager._poll_pending_verdicts = MagicMock()
+        manager._mark_pending_as_error = MagicMock()
+
+        mock_time.side_effect = [0.0, 150.0, 200.1]
+
+        manager.drain_pending(per_pov_timeout=1, verify_timeout=200, poll_interval=0.1)
+
+        manager._poll_pending_verdicts.assert_called_once()
+        manager._mark_pending_as_error.assert_called_once()
+        mock_sleep.assert_called_once_with(0.1)
 
     @patch("crsbench.distributed.verify_queue.poll_single_pov_verdicts")
     def test_poll_stores_blob_and_crash_logs_for_cpv(

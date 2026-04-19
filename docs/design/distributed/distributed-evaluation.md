@@ -38,7 +38,9 @@ Startup behavior differs between the first two modes:
 - config-pinned evaluator CLI mode normally performs a startup pre-build
   enqueue phase
 - configless mode skips startup pre-build enqueue and relies on lazy build-queue
-  consumption plus on-demand build on verify cache miss
+  consumption
+- async POV verification enqueues a benchmark-local build DAG on first POV
+  discovery and each verify job depends on those build jobs before execution
 
 ## Verification Payload Contract
 
@@ -53,6 +55,14 @@ Embedded or staged payload data must be sufficient for non-local verification.
 Distributed evaluation distinguishes trial queues from verify/build queues.
 Workers may enqueue verification work while trials continue, and evaluators may
 process those jobs independently.
+
+Async POV verification must preserve build/verify queue separation:
+
+- build prerequisites are enqueued to the build queue
+- verify jobs declare explicit queue dependencies on those build jobs
+- verify workers only hydrate prebuilt artifacts from evaluator disk for
+  dependency-backed POV jobs; they must not hide fresh variant builds inside the
+  verify worker
 
 Build jobs that rely on incremental benchmark images must carry the resolved
 inc-image runtime settings needed by the evaluator worker (`inc_image_policy`,
@@ -88,6 +98,8 @@ stored result contract must remain stable.
 - non-local verification must not assume shared filesystem state unless that
   state is explicitly part of the deployment contract
 - delayed polling/early-stop is acceptable; silent result loss is not
+- the async final drain budget is `runtime.verify_timeout`; it covers both
+  queued build prerequisites and queued POV verification work
 
 ## Distributed Constraints
 

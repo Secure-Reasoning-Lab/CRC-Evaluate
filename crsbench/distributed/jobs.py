@@ -1563,6 +1563,7 @@ def run_crs_trial(
             redis_host=_resolve_redis_host(config),
             experiment_name=config.experiment,
             pov_dedup_strategy=config.pov_dedup_strategy,
+            source_mode=config.source_mode,
             inc_image_policy=config.inc_image_policy,
             inc_image_registry=config.inc_image_registry,
             inc_image_max_pull_bytes=config.inc_image_max_pull_bytes,

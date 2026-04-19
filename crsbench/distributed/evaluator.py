@@ -150,7 +150,10 @@ def _enqueue_pre_builds(
     from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
     oss_fuzz_path = Path(ensure_oss_fuzz_root())
-    planner = VariantPlanner(oss_fuzz_path, source_mode="pkgs")
+    planner = VariantPlanner(
+        oss_fuzz_path,
+        source_mode=getattr(config, "source_mode", "pkgs"),
+    )
     (
         inc_image_policy,
         inc_image_registry,
@@ -319,6 +322,7 @@ def run_evaluator_main(
     engine = VerificationEngine(
         oss_fuzz_path=oss_fuzz_path,
         timeout=config.per_pov_verify_timeout,
+        source_mode=getattr(config, "source_mode", "pkgs"),
         inc_image_policy=resolved_policy,
         inc_image_registry=resolved_registry,
         inc_image_max_pull_bytes=resolved_max_pull_bytes,
@@ -827,6 +831,7 @@ def run_evaluator_configless(
     engine = VerificationEngine(
         oss_fuzz_path=oss_fuzz_path,
         timeout=per_pov_verify_timeout,
+        source_mode=first_reg.source_mode,
         inc_image_policy=resolved_policy,
         inc_image_registry=resolved_registry,
         inc_image_max_pull_bytes=resolved_max_pull_bytes,
@@ -841,6 +846,14 @@ def run_evaluator_configless(
 
     # Use stable experiment ordering so metadata precedence is deterministic.
     ordered_regs = [experiments[name] for name in sorted(experiments)]
+    source_modes = sorted({reg.source_mode for reg in ordered_regs})
+    if len(source_modes) > 1:
+        logger.error(
+            "Configless evaluator cannot merge experiments with different "
+            "source_mode values: {}",
+            ", ".join(source_modes),
+        )
+        return 1
 
     # Collect all build and verify queue names
     build_queue_names = sorted({reg.build_queue for reg in ordered_regs})

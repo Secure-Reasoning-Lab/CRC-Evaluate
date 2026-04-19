@@ -461,7 +461,13 @@ Mode note:
 - config-pinned evaluator CLI mode normally performs a startup pre-build
   enqueue phase
 - configless evaluator mode skips startup pre-build enqueue and consumes build
-  work lazily; verify work may also trigger on-demand builds on cache miss
+  work lazily; async POV verification enqueues benchmark-local build jobs on
+  first POV discovery and verify jobs wait on those build dependencies
+
+`runtime.verify_timeout` is the async verification drain budget. When POVs are
+still queued at trial shutdown, CRSBench waits up to that budget for the
+remaining build and verify work to finish before marking the outstanding POVs
+as verification errors.
 
 ## Worker
 

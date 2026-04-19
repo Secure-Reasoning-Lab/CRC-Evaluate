@@ -36,6 +36,9 @@ class TestSinglePovPayload:
         assert restored.pov.pov_id == "pov_0"
         assert restored.pov.to_bytes() == b"crash_input"
         assert restored.enqueued_at == 1000.0
+        assert restored.build_job_ids == []
+        assert restored.source_mode == "pkgs"
+        assert restored.use_inc_build is True
 
     def test_single_pov_not_list(self) -> None:
         """SinglePovPayload has a single pov, not a list."""
@@ -51,6 +54,28 @@ class TestSinglePovPayload:
         d = payload.to_dict()
         assert isinstance(d["pov"], dict)
         assert "pov_id" in d["pov"]
+
+    def test_roundtrip_with_explicit_build_dependencies(self) -> None:
+        """Explicit build dependency metadata survives payload roundtrip."""
+        pov = EmbeddedPov.from_bytes("pov_0", b"data")
+        payload = SinglePovPayload(
+            experiment_name="exp",
+            trial_id="t",
+            benchmark="b",
+            harness="h",
+            pov=pov,
+            enqueued_at=0.0,
+            sanitizer="undefined",
+            build_job_ids=["build-single/b/b-ubsan-delta-cpv0/pkgs/inc"],
+            source_mode="main_repo",
+            use_inc_build=False,
+        )
+
+        restored = SinglePovPayload.from_dict(payload.to_dict())
+        assert restored.sanitizer == "undefined"
+        assert restored.build_job_ids == ["build-single/b/b-ubsan-delta-cpv0/pkgs/inc"]
+        assert restored.source_mode == "main_repo"
+        assert restored.use_inc_build is False
 
 
 class TestPovVerdictStatus:
@@ -377,6 +402,58 @@ class TestVerifySinglePov:
         assert result.verdict.triggered_bug is False
         assert result.verdict.status == "error"
         assert "Docker timeout" in result.verdict.error
+
+    @patch("crsbench.distributed.evaluator_jobs._built_results", {})
+    def test_explicit_build_context_loads_prebuilt_artifacts(self) -> None:
+        """Explicit build dependencies hydrate results from disk without building."""
+        from crsbench.evaluation.verification.models import (
+            PovVerificationResult,
+            PovVerificationStatus,
+        )
+
+        mock_engine = MagicMock()
+        mock_adapter = MagicMock()
+        mock_engine.load_adapter.return_value = mock_adapter
+        mock_engine.verify_pov.return_value = PovVerificationResult(
+            status=PovVerificationStatus.CPV,
+            benchmark="test-bench",
+            cpv_matched=["cpv_0"],
+        )
+
+        payload = self._make_payload()
+        payload["build_job_ids"] = [
+            "build-single/test-bench/test-bench-asan-cpv0/pkgs/inc"
+        ]
+        payload["source_mode"] = "main_repo"
+        payload["use_inc_build"] = False
+
+        mock_benchmark_path = MagicMock()
+
+        with (
+            patch(
+                "crsbench.distributed.evaluator_jobs._verification_engine",
+                mock_engine,
+            ),
+            patch(
+                "crsbench.distributed.evaluator_jobs.resolve_benchmark_path",
+                return_value=mock_benchmark_path,
+            ),
+            patch(
+                "crsbench.distributed.ci_jobs.load_build_context_from_disk",
+                return_value=MagicMock(build_results={"v": MagicMock()}),
+            ) as mock_load_build_context,
+        ):
+            result_dict = verify_single_pov(payload)
+
+        result = SinglePovResult.from_dict(result_dict)
+        assert result.verdict.status == "cpv"
+        mock_load_build_context.assert_called_once_with(
+            build_job_ids=payload["build_job_ids"],
+            benchmark_path=mock_benchmark_path,
+            source_mode="main_repo",
+            use_inc_build=False,
+        )
+        mock_engine.get_or_build_results.assert_not_called()
 
 
 class TestLazyBuildCache:
