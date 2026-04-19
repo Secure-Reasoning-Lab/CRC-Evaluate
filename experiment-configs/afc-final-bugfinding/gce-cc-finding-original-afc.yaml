@@ -56,7 +56,7 @@ worker:
   storage:
     cleanup_after_trial: true
 evaluator:
-  jobs: 8
+  jobs: 14
   cores_per_job: 16
 cloud:
   remote:
@@ -98,7 +98,7 @@ cloud:
           machine_type: n2d-standard-224 # 224 vCPUs — 14 jobs × 16 cores
           boot_disk_size_gb: 2048        # 2 TB pd-ssd — 14 concurrent jobs need disk
         gce-evaluator-n2d:
-          machine_type: n2d-standard-128 # 128 vCPUs — 8 jobs × 16 cores
+          machine_type: n2d-standard-224 # 224 vCPUs — 14 jobs × 16 cores
           boot_disk_size_gb: 2048        # 2 TB pd-ssd — holds Docker build cache
   orchestrator:
     instance_profile: gce-orchestrator-n2d
