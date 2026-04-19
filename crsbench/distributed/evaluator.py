@@ -32,6 +32,7 @@ logger = get_logger(__name__)
 LEGACY_CI_ALIAS_EXPERIMENT = "__legacy_ci_alias__"
 LEGACY_CI_BUILD_QUEUE = "crsbench_ci_build"
 LEGACY_CI_VERIFY_QUEUE = "crsbench_ci_verify"
+EVALUATOR_PROGRESS_LOG_EVERY_JOBS = 50
 
 
 def _report_cloud_runtime_state(
@@ -375,6 +376,7 @@ def run_evaluator_main(
         skip_cpus=skip_cpus,
         cpu_tag=cpu_tag,
         idle_timeout=idle_timeout,
+        progress_log_every_jobs=EVALUATOR_PROGRESS_LOG_EVERY_JOBS,
     )
 
 
@@ -1200,6 +1202,7 @@ def run_evaluator_configless(
         idle_timeout=resolved_idle_timeout,
         queue_refresher=queue_refresher,
         cpu_tag=resolved_cpu_tag,
+        progress_log_every_jobs=EVALUATOR_PROGRESS_LOG_EVERY_JOBS,
     )
 
 
