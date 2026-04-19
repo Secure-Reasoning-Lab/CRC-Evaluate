@@ -20,6 +20,9 @@ Most models come as a triplet:
 - `ModelBuggy.cfg`: enables the historical or intentionally unsafe behavior
 - `ModelHealthy.cfg`: enables the intended behavior and should pass TLC
 
+Some boundaries have more than one materially distinct unsafe mode. Those
+models may carry multiple buggy configs so each counterexample stays focused.
+
 Two older models use a different naming pattern:
 
 - `DistributedTimeoutRecovery.cfg` / `DistributedTimeoutRecoveryHealthy.cfg`
@@ -111,6 +114,12 @@ config should complete with no TLC errors.
 | `DistributedRetryRefreshBringup` | continue-mode retry followed by cloud bring-up | controller decides bring-up from stale snapshot and misses newly requeued work | snapshot is refreshed before bring-up decisions |
 | `DistributedStartedJobRecovery` | continue-mode stale started-job recovery | unrelated live worker blocks stale started-job recovery | stale started jobs recover by their own timeout window |
 | `DistributedStartedDuplicateRecovery` | continue-mode recovery with stale started duplicates | stale duplicate is requeued even though another runnable peer already exists | stale duplicate is removed and only one active job remains |
+
+### Evaluator Build And Verify Coordination
+
+| Model | Runtime boundary | Buggy config catches | Healthy config guarantees |
+| --- | --- | --- | --- |
+| `DistributedAsyncPovVerifyDrain` | async POV verification build prerequisites and final drain budget | verify starts before its build DAG resolves, or drain times out on a shortened budget | verify consumes only explicit prebuilt variants and drain spends the full `verify_timeout` budget |
 
 ### Ownership, Callbacks, And Marker Writes
 
