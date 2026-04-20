@@ -82,6 +82,15 @@ class TestIsHfRateLimitOrServerError:
         exc.response = None
         assert _is_hf_rate_limit_or_server_error(exc) is False
 
+    def test_returns_true_for_wrapped_429(self) -> None:
+        from huggingface_hub.errors import LocalEntryNotFoundError
+
+        cause = _make_hf_http_error(429)
+        exc = LocalEntryNotFoundError("fallback failed")
+        exc.__cause__ = cause
+
+        assert _is_hf_rate_limit_or_server_error(exc) is True
+
 
 # ---------------------------------------------------------------------------
 # _download_huggingface retry behaviour

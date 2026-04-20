@@ -24,12 +24,20 @@ def _is_hf_rate_limit_or_server_error(exc: BaseException) -> bool:
     except ImportError:
         from huggingface_hub.utils import HfHubHTTPError
 
-    if not isinstance(exc, HfHubHTTPError):
-        return False
-    response = getattr(exc, "response", None)
-    if response is None:
-        return False
-    return response.status_code == 429 or response.status_code >= 500
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, HfHubHTTPError):
+            response = getattr(current, "response", None)
+            if response is not None and (
+                response.status_code == 429 or response.status_code >= 500
+            ):
+                return True
+        current = getattr(current, "__cause__", None) or getattr(
+            current, "__context__", None
+        )
+    return False
 
 
 def _log_hf_retry(retry_state: tenacity.RetryCallState) -> None:

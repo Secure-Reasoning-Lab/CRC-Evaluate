@@ -4,8 +4,15 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+import tenacity
+
 from crsbench.dataset.backends import download
-from crsbench.dataset.bundle import ALL_ARCHIVES, unbundle_all
+from crsbench.dataset.bundle import (
+    ALL_ARCHIVES,
+    BENCHMARK_ARCHIVE,
+    GROUND_TRUTH_ARCHIVE,
+    unbundle_all,
+)
 from crsbench.dataset.manifest import (
     REMOTE_INDEX_ALIAS_PATH,
     REMOTE_INDEX_PATH,
@@ -23,6 +30,10 @@ from crsbench.dataset.registry import (
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+class IncompleteDatasetDownloadError(RuntimeError):
+    """Raised when a download staging directory is missing requested bundles."""
 
 
 def _load_suite(suite_name: str, suites_root: Path) -> list[str]:
@@ -78,18 +89,15 @@ def _group_by_dataset(benchmarks: list[str]) -> dict[str, list[str]]:
     return grouped
 
 
-def _is_bundled_dataset(download_dir: Path) -> bool:
-    """Check if a downloaded dataset uses the bundled format.
-
-    A bundled dataset has per-benchmark directories containing
-    benchmark.tar.gz, pkgs.tar.gz, and/or ground-truth.tar.gz.
-    """
-    for subdir in download_dir.iterdir():
-        if not subdir.is_dir():
-            continue
-        if any((subdir / name).exists() for name in ALL_ARCHIVES):
-            return True
-    return False
+def _log_incomplete_download_retry(retry_state: tenacity.RetryCallState) -> None:
+    """Log retries triggered by incomplete download staging."""
+    wait = retry_state.next_action.sleep if retry_state.next_action else 0  # type: ignore[union-attr]
+    logger.warning(
+        "Dataset download incomplete (attempt {}), retrying in {:.0f}s: {}",
+        retry_state.attempt_number,
+        wait,
+        retry_state.outcome.exception() if retry_state.outcome else "unknown",
+    )
 
 
 def download_dataset(
@@ -116,7 +124,17 @@ def download_dataset(
     config = get_dataset(dataset)
     logger.info(f"Downloading dataset {dataset!r} from {config.location}")
 
-    remote_manifest = _load_remote_manifest(config)
+    try:
+        remote_manifest = _load_remote_manifest(config)
+    except Exception as exc:
+        if not benchmarks:
+            raise
+        logger.warning(
+            "Remote manifest unavailable for requested benchmark download, "
+            "continuing without incremental skip planning: {}",
+            exc,
+        )
+        remote_manifest = {}
     local_manifest = load_local_manifest(output_dir)
     planned = _plan_download(
         requested=benchmarks,
@@ -141,16 +159,27 @@ def download_dataset(
         planned.download if remote_manifest else benchmarks,
         no_ground_truth=no_ground_truth,
     )
+    expected_benchmarks = _expected_benchmark_names(
+        requested=benchmarks,
+        planned_download=planned.download,
+        remote_manifest=remote_manifest,
+    )
 
     # Download bundles to a temp directory, then extract
     with tempfile.TemporaryDirectory(prefix="crsbench-download-") as tmpdir:
         staging_dir = Path(tmpdir)
-        download(config, staging_dir, allow_patterns=allow_patterns)
+        bundle_names = _download_complete_staging(
+            config=config,
+            staging_dir=staging_dir,
+            allow_patterns=allow_patterns,
+            expected_benchmarks=expected_benchmarks,
+            remote_manifest=remote_manifest,
+            no_ground_truth=no_ground_truth,
+        )
 
-        if _is_bundled_dataset(staging_dir):
+        if bundle_names:
             logger.info("Extracting bundles...")
             output_dir.mkdir(parents=True, exist_ok=True)
-            bundle_names = _get_bundle_names(staging_dir)
             count = unbundle_all(staging_dir, output_dir)
             logger.info(f"Extracted {count} benchmarks to {output_dir}")
             _update_local_manifest(
@@ -158,6 +187,12 @@ def download_dataset(
                 local_manifest=local_manifest,
                 remote_manifest=remote_manifest,
                 extracted_names=bundle_names,
+            )
+        elif expected_benchmarks:
+            raise IncompleteDatasetDownloadError(
+                "Downloaded no benchmark bundles for requested selection: "
+                + ", ".join(expected_benchmarks[:10])
+                + (" ..." if len(expected_benchmarks) > 10 else "")
             )
         else:
             # Legacy flat format — move files directly
@@ -210,6 +245,105 @@ def _get_bundle_names(staging_dir: Path) -> list[str]:
         if any((bundle_dir / name).exists() for name in ALL_ARCHIVES):
             names.append(bundle_dir.name)
     return names
+
+
+def _expected_benchmark_names(
+    *,
+    requested: Optional[list[str]],
+    planned_download: list[str],
+    remote_manifest: dict[str, BenchmarkManifestEntry],
+) -> list[str]:
+    """Return the benchmark names that must be present in the staging dir."""
+    if remote_manifest:
+        return sorted(planned_download)
+    if requested:
+        return sorted(requested)
+    return []
+
+
+@tenacity.retry(
+    retry=tenacity.retry_if_exception_type(IncompleteDatasetDownloadError),
+    wait=tenacity.wait_exponential(multiplier=1, min=30, max=300),
+    stop=tenacity.stop_after_attempt(4),
+    before_sleep=_log_incomplete_download_retry,
+    reraise=True,
+)
+def _download_complete_staging(
+    *,
+    config: DatasetConfig,
+    staging_dir: Path,
+    allow_patterns: list[str],
+    expected_benchmarks: list[str],
+    remote_manifest: dict[str, BenchmarkManifestEntry],
+    no_ground_truth: bool,
+) -> list[str]:
+    """Download into staging and ensure all required benchmark bundles exist."""
+    download(config, staging_dir, allow_patterns=allow_patterns)
+    bundle_names = _get_bundle_names(staging_dir)
+    if bundle_names:
+        _validate_downloaded_bundles(
+            staging_dir=staging_dir,
+            expected_benchmarks=expected_benchmarks,
+            remote_manifest=remote_manifest,
+            no_ground_truth=no_ground_truth,
+        )
+        return bundle_names
+    if expected_benchmarks:
+        raise IncompleteDatasetDownloadError(
+            "Downloaded no benchmark bundles for requested selection: "
+            + ", ".join(expected_benchmarks[:10])
+            + (" ..." if len(expected_benchmarks) > 10 else "")
+        )
+    return []
+
+
+def _validate_downloaded_bundles(
+    *,
+    staging_dir: Path,
+    expected_benchmarks: list[str],
+    remote_manifest: dict[str, BenchmarkManifestEntry],
+    no_ground_truth: bool,
+) -> None:
+    """Ensure staging contains every requested benchmark bundle."""
+    if not expected_benchmarks:
+        return
+
+    actual_bundles = set(_get_bundle_names(staging_dir))
+    expected_set = set(expected_benchmarks)
+    missing_benchmarks = sorted(expected_set - actual_bundles)
+    missing_archives: list[str] = []
+    for benchmark in sorted(expected_set & actual_bundles):
+        bundle_dir = staging_dir / benchmark
+        if not (bundle_dir / BENCHMARK_ARCHIVE).is_file():
+            missing_archives.append(f"{benchmark}: missing {BENCHMARK_ARCHIVE}")
+            continue
+        if no_ground_truth:
+            continue
+        remote_entry = remote_manifest.get(benchmark)
+        if remote_entry is None or not remote_entry.ground_truth_source_sha256:
+            continue
+        if not (bundle_dir / GROUND_TRUTH_ARCHIVE).is_file():
+            missing_archives.append(f"{benchmark}: missing {GROUND_TRUTH_ARCHIVE}")
+
+    if not missing_benchmarks and not missing_archives:
+        return
+
+    details: list[str] = []
+    if missing_benchmarks:
+        details.append(
+            "missing benchmarks: "
+            + ", ".join(missing_benchmarks[:10])
+            + (" ..." if len(missing_benchmarks) > 10 else "")
+        )
+    if missing_archives:
+        details.append(
+            "incomplete bundles: "
+            + ", ".join(missing_archives[:10])
+            + (" ..." if len(missing_archives) > 10 else "")
+        )
+    raise IncompleteDatasetDownloadError(
+        "Incomplete dataset download staging: " + "; ".join(details)
+    )
 
 
 class _DownloadPlan:
@@ -296,13 +430,10 @@ def _load_remote_manifest(config: DatasetConfig) -> dict[str, BenchmarkManifestE
     ) as tmpdir:
         tmp_path = Path(tmpdir)
         for index_path in (REMOTE_INDEX_PATH, REMOTE_INDEX_ALIAS_PATH):
-            try:
-                download(config, tmp_path, allow_patterns=[index_path])
-                loaded = load_remote_index(tmp_path / index_path)
-                if loaded:
-                    return loaded
-            except Exception:
-                continue
+            download(config, tmp_path, allow_patterns=[index_path])
+            loaded = load_remote_index(tmp_path / index_path)
+            if loaded:
+                return loaded
         logger.info("Remote manifest unavailable, using legacy download flow")
         return {}
 

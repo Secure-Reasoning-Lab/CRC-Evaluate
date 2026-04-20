@@ -14,6 +14,9 @@ extensible support for S3 and Azure.
 - **Card auto-upload**: HF card files are uploaded from canonical repo-root files
   (`README_HF.md`, `LICENSE`, `LICENSE-THIRD-PARTY.md`)
 - **Incremental sync**: Shared remote/local manifests skip unchanged benchmarks
+- **Complete download gating**: benchmark downloads may reuse partial staging
+  across retries, but extraction only proceeds once every requested benchmark
+  bundle is present locally
 - **Opt-in prune**: `crsbench benchmark upload --prune` deletes remote
   benchmark folders and manifest entries that are absent from the local
   benchmarks directory. Incompatible with `--benchmarks` because a subset
