@@ -25,13 +25,14 @@ def _make_hf_config() -> DatasetConfig:
     )
 
 
-def _make_hf_http_error(status_code: int) -> Exception:
+def _make_hf_http_error(status_code: int, *, response_truthy: bool = True) -> Exception:
     """Build a fake HfHubHTTPError with the given status code."""
     from huggingface_hub.errors import HfHubHTTPError
 
     response = MagicMock()
     response.status_code = status_code
     response.headers = {}
+    response.__bool__.return_value = response_truthy
     exc = HfHubHTTPError(f"HTTP {status_code}", response=response)
     exc.response = response
     return exc
@@ -87,6 +88,15 @@ class TestIsHfRateLimitOrServerError:
         from huggingface_hub.errors import LocalEntryNotFoundError
 
         cause = _make_hf_http_error(429)
+        exc = LocalEntryNotFoundError("fallback failed")
+        exc.__cause__ = cause
+
+        assert _is_hf_rate_limit_or_server_error(exc) is True
+
+    def test_returns_true_for_wrapped_429_with_falsy_response(self) -> None:
+        from huggingface_hub.errors import LocalEntryNotFoundError
+
+        cause = _make_hf_http_error(429, response_truthy=False)
         exc = LocalEntryNotFoundError("fallback failed")
         exc.__cause__ = cause
 
@@ -172,6 +182,30 @@ class TestDownloadHuggingfaceRetry:
 
         assert result == tmp_path
         assert mock_download.call_count == 3
+
+    @patch("huggingface_hub.snapshot_download")
+    def test_retries_on_wrapped_429_with_falsy_response_then_succeeds(
+        self, mock_download: MagicMock, tmp_path: Path
+    ) -> None:
+        from huggingface_hub.errors import LocalEntryNotFoundError
+
+        wrapped_429 = LocalEntryNotFoundError("cached snapshot missing")
+        wrapped_429.__cause__ = _make_hf_http_error(429, response_truthy=False)
+        mock_download.side_effect = [
+            wrapped_429,
+            str(tmp_path),
+        ]
+        config = _make_hf_config()
+
+        with patch.object(
+            _download_huggingface.retry,
+            "wait",
+            return_value=0,  # type: ignore[attr-defined]
+        ):
+            result = _download_huggingface(config, tmp_path)
+
+        assert result == tmp_path
+        assert mock_download.call_count == 2
 
     @patch("huggingface_hub.snapshot_download")
     def test_does_not_retry_on_404(

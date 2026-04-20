@@ -38,7 +38,9 @@ def _find_hf_http_error(exc: BaseException | None) -> BaseException | None:
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        if isinstance(current, HfHubHTTPError) and getattr(current, "response", None):
+        if isinstance(current, HfHubHTTPError) and (
+            getattr(current, "response", None) is not None
+        ):
             return current
         current = getattr(current, "__cause__", None) or getattr(
             current, "__context__", None
