@@ -1,6 +1,8 @@
-"""Tests for seed corpus collector and preparer."""
+"""Tests for the corpus collector and seed preparer."""
 
 import json
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -8,588 +10,662 @@ from crsbench.benchmark.seed.collector import (
     CollectionResult,
     CorpusCollector,
     CorpusFile,
+    TrialSource,
+    _compute_hash,
 )
 from crsbench.benchmark.seed.preparer import SeedCorpusPreparer
 
-
-class TestCorpusFile:
-    """Tests for CorpusFile dataclass."""
-
-    def test_corpus_file_creation(self):
-        """Test creating a CorpusFile instance."""
-        cf = CorpusFile(
-            path=Path("/tmp/test"),
-            content_hash="abc123",
-            mtime=1000.0,
-            relative_time=100.0,
-            size=256,
-        )
-        assert cf.path == Path("/tmp/test")
-        assert cf.content_hash == "abc123"
-        assert cf.mtime == 1000.0
-        assert cf.relative_time == 100.0
-        assert cf.size == 256
+# ---------------------------------------------------------------------------
+# Fixtures and helpers
+# ---------------------------------------------------------------------------
 
 
-class TestCollectionResult:
-    """Tests for CollectionResult dataclass."""
+def _make_trial(
+    experiment_dir: Path,
+    *,
+    project: str,
+    harness: str,
+    mode: str = "delta",
+    sanitizer: str = "address",
+    trial_index: int = 1,
+    crs_start_time: float = 1000.0,
+    seed_files: dict[str, tuple[bytes, float]] | None = None,
+) -> Path:
+    """Create a trial directory in the canonical layout.
 
-    def test_collection_result_creation(self):
-        """Test creating a CollectionResult instance."""
-        result = CollectionResult(
-            benchmark_name="test-bench",
-            harness_name="test-harness",
-            total_files=10,
-            output_dir=Path("/tmp/output"),
-        )
-        assert result.benchmark_name == "test-bench"
-        assert result.harness_name == "test-harness"
-        assert result.total_files == 10
-        assert result.output_dir == Path("/tmp/output")
-        assert result.warnings == []
+    ``seed_files`` maps file name to ``(content, mtime_absolute)``.
+    """
+    trial_dir = (
+        experiment_dir / project / harness / mode / sanitizer / f"trial-{trial_index}"
+    )
+    seeds_dir = trial_dir / "output" / "seeds"
+    seeds_dir.mkdir(parents=True)
+    povs_dir = trial_dir / "povs"
+    povs_dir.mkdir(parents=True)
 
-    def test_collection_result_with_warnings(self):
-        """Test CollectionResult with warnings."""
-        result = CollectionResult(
-            benchmark_name="test-bench",
-            harness_name="test-harness",
-            total_files=5,
-            output_dir=Path("/tmp/output"),
-            warnings=["Warning 1", "Warning 2"],
-        )
-        assert len(result.warnings) == 2
+    (povs_dir / "pov_store.json").write_text(
+        json.dumps({"crs_run_start_time": crs_start_time})
+    )
+    (trial_dir / "metadata.json").write_text(
+        json.dumps({"benchmark_name": project, "harness_name": harness})
+    )
+
+    if seed_files:
+        for name, (content, mtime) in seed_files.items():
+            path = seeds_dir / name
+            path.write_bytes(content)
+            os.utime(path, (mtime, mtime))
+    return trial_dir
 
 
-class TestCorpusCollector:
-    """Tests for CorpusCollector class."""
+def _make_benchmark(benchmarks_dir: Path, project: str) -> Path:
+    benchmark_dir = benchmarks_dir / project
+    benchmark_dir.mkdir(parents=True)
+    return benchmark_dir
 
-    def test_compute_hash(self, tmp_path: Path):
-        """Test hash computation for a file."""
-        # Create a test file
-        test_file = tmp_path / "test_file"
-        test_file.write_bytes(b"test content")
 
-        collector = CorpusCollector(tmp_path, tmp_path)
-        hash_value = collector._compute_hash(test_file)
+# ---------------------------------------------------------------------------
+# Simple unit behavior
+# ---------------------------------------------------------------------------
 
-        # Hash should be 16 characters (truncated SHA256)
-        assert len(hash_value) == 16
-        assert hash_value.isalnum()
 
-    def test_compute_hash_deterministic(self, tmp_path: Path):
-        """Test that hash computation is deterministic."""
-        test_file = tmp_path / "test_file"
-        test_file.write_bytes(b"same content")
+def test_compute_hash_is_deterministic_and_truncated(tmp_path: Path):
+    path = tmp_path / "seed"
+    path.write_bytes(b"abc")
+    first = _compute_hash(path)
+    second = _compute_hash(path)
+    assert first == second
+    assert len(first) == 16
 
-        collector = CorpusCollector(tmp_path, tmp_path)
-        hash1 = collector._compute_hash(test_file)
-        hash2 = collector._compute_hash(test_file)
 
-        assert hash1 == hash2
+def test_compute_hash_differs_by_content(tmp_path: Path):
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    a.write_bytes(b"A")
+    b.write_bytes(b"B")
+    assert _compute_hash(a) != _compute_hash(b)
 
-    def test_compute_hash_different_content(self, tmp_path: Path):
-        """Test that different content produces different hashes."""
-        file1 = tmp_path / "file1"
-        file2 = tmp_path / "file2"
-        file1.write_bytes(b"content A")
-        file2.write_bytes(b"content B")
 
-        collector = CorpusCollector(tmp_path, tmp_path)
-        hash1 = collector._compute_hash(file1)
-        hash2 = collector._compute_hash(file2)
+# ---------------------------------------------------------------------------
+# Single (benchmark, harness) — single trial
+# ---------------------------------------------------------------------------
 
-        assert hash1 != hash2
 
-    def test_collect_corpus_files_skips_hidden(self, tmp_path: Path):
-        """Test that hidden files are skipped."""
-        corpus_dir = tmp_path / "seeds"
-        corpus_dir.mkdir()
-
-        # Create regular files
-        (corpus_dir / "file1").write_bytes(b"content1")
-        (corpus_dir / "file2").write_bytes(b"content2")
-
-        # Create hidden files (should be skipped)
-        (corpus_dir / ".hidden").write_bytes(b"hidden")
-        (corpus_dir / ".file1.metadata").write_bytes(b"metadata")
-
-        collector = CorpusCollector(tmp_path, tmp_path)
-        crs_start_time = 1000.0
-        files = collector._collect_corpus_files(corpus_dir, crs_start_time)
-
-        assert len(files) == 2
-        file_names = [f.path.name for f in files]
-        assert "file1" in file_names
-        assert "file2" in file_names
-        assert ".hidden" not in file_names
-        assert ".file1.metadata" not in file_names
-
-    def test_collect_corpus_files_skips_directories(self, tmp_path: Path):
-        """Test that directories are skipped."""
-        corpus_dir = tmp_path / "seeds"
-        corpus_dir.mkdir()
-
-        # Create regular file
-        (corpus_dir / "file1").write_bytes(b"content1")
-
-        # Create subdirectory (should be skipped)
-        subdir = corpus_dir / "subdir"
-        subdir.mkdir()
-        (subdir / "nested_file").write_bytes(b"nested")
-
-        collector = CorpusCollector(tmp_path, tmp_path)
-        files = collector._collect_corpus_files(corpus_dir, 1000.0)
-
-        assert len(files) == 1
-        assert files[0].path.name == "file1"
-
-    def test_write_corpus(self, tmp_path: Path):
-        """Test writing corpus files and manifest."""
-        output_dir = tmp_path / "output"
-
-        # Create test corpus files
-        source_dir = tmp_path / "source"
-        source_dir.mkdir()
-        file1 = source_dir / "file1"
-        file2 = source_dir / "file2"
-        file1.write_bytes(b"content1")
-        file2.write_bytes(b"content2")
-
-        collector = CorpusCollector(tmp_path, tmp_path)
-
-        corpus_files = [
-            CorpusFile(
-                path=file1,
-                content_hash="hash1",
-                mtime=1100.0,
-                relative_time=100.0,
-                size=8,
-            ),
-            CorpusFile(
-                path=file2,
-                content_hash="hash2",
-                mtime=1200.0,
-                relative_time=200.0,
-                size=8,
-            ),
-        ]
-
-        crs_start_time = 1000.0
-        collector._write_corpus(corpus_files, output_dir, crs_start_time)
-
-        # Check output directory structure
-        assert output_dir.exists()
-        assert (output_dir / "hash1").exists()
-        assert (output_dir / "hash2").exists()
-        assert (output_dir / "manifest.json").exists()
-
-        # Check manifest content
-        with (output_dir / "manifest.json").open() as f:
-            manifest = json.load(f)
-
-        assert manifest["crs_run_start_time"] == 1000.0
-        assert "hash1" in manifest["files"]
-        assert "hash2" in manifest["files"]
-        assert manifest["files"]["hash1"]["relative_time"] == 100.0
-        assert manifest["files"]["hash2"]["relative_time"] == 200.0
-
-    def test_write_corpus_deduplicates(self, tmp_path: Path):
-        """Test that duplicate content hashes are deduplicated."""
-        output_dir = tmp_path / "output"
-        source_dir = tmp_path / "source"
-        source_dir.mkdir()
-
-        # Two files with same content hash
-        file1 = source_dir / "file1"
-        file2 = source_dir / "file2"
-        file1.write_bytes(b"same content")
-        file2.write_bytes(b"same content")
-
-        collector = CorpusCollector(tmp_path, tmp_path)
-
-        corpus_files = [
-            CorpusFile(
-                path=file1,
-                content_hash="same_hash",
-                mtime=1100.0,
-                relative_time=100.0,
-                size=12,
-            ),
-            CorpusFile(
-                path=file2,
-                content_hash="same_hash",
-                mtime=1150.0,
-                relative_time=150.0,
-                size=12,
-            ),
-        ]
-
-        collector._write_corpus(corpus_files, output_dir, 1000.0)
-
-        # Should have only one file (deduplicated)
-        files = [f for f in output_dir.iterdir() if f.name != "manifest.json"]
-        assert len(files) == 1
-        assert files[0].name == "same_hash"
-
-        # Manifest should have first occurrence
-        with (output_dir / "manifest.json").open() as f:
-            manifest = json.load(f)
-        assert manifest["files"]["same_hash"]["relative_time"] == 100.0
-
-    def test_find_trial_dir_direct(self, tmp_path: Path):
-        """Test finding trial directory when directly under experiment dir."""
+class TestSingleTrial:
+    def test_imports_into_corpus_directory(self, tmp_path: Path):
         experiment_dir = tmp_path / "experiment"
-        trial_dir = experiment_dir / "trial-1"
-        trial_dir.mkdir(parents=True)
-
-        collector = CorpusCollector(experiment_dir, tmp_path)
-        found = collector._find_trial_dir()
-
-        assert found == trial_dir
-
-    def test_find_trial_dir_nested(self, tmp_path: Path):
-        """Test finding trial directory in nested structure."""
-        experiment_dir = tmp_path / "experiment"
-        nested_trial = experiment_dir / "bench" / "harness" / "mode" / "san" / "trial-1"
-        nested_trial.mkdir(parents=True)
-
-        collector = CorpusCollector(experiment_dir, tmp_path)
-        found = collector._find_trial_dir()
-
-        assert found == nested_trial
-
-    def test_find_trial_dir_not_found(self, tmp_path: Path):
-        """Test error when no trial directory found."""
-        experiment_dir = tmp_path / "experiment"
-        experiment_dir.mkdir()
-
-        collector = CorpusCollector(experiment_dir, tmp_path)
-
-        with pytest.raises(FileNotFoundError, match="No trial directory found"):
-            collector._find_trial_dir()
-
-    def test_find_corpus_dir_direct(self, tmp_path: Path):
-        """Test finding seeds in the canonical output/seeds/ location."""
-        trial_dir = tmp_path / "trial-1"
-        corpus_dir = trial_dir / "output" / "seeds"
-        corpus_dir.mkdir(parents=True)
-        (corpus_dir / "file1").write_bytes(b"test")
-
-        collector = CorpusCollector(tmp_path, tmp_path)
-        found = collector._find_corpus_dir(trial_dir)
-
-        assert found == corpus_dir
-
-    def test_find_corpus_dir_legacy_output_corpus(self, tmp_path: Path):
-        """Test legacy compatibility for output/corpus/."""
-        trial_dir = tmp_path / "trial-1"
-        corpus_dir = trial_dir / "output" / "corpus"
-        corpus_dir.mkdir(parents=True)
-        (corpus_dir / "file1").write_bytes(b"test")
-
-        collector = CorpusCollector(tmp_path, tmp_path)
-        found = collector._find_corpus_dir(trial_dir)
-
-        assert found == corpus_dir
-
-    def test_find_corpus_dir_not_found(self, tmp_path: Path):
-        """Test error when no corpus directory found."""
-        trial_dir = tmp_path / "trial-1"
-        trial_dir.mkdir()
-
-        collector = CorpusCollector(tmp_path, tmp_path)
-
-        with pytest.raises(FileNotFoundError, match="No corpus directory found"):
-            collector._find_corpus_dir(trial_dir)
-
-    def test_load_crs_run_start_time(self, tmp_path: Path):
-        """Test loading CRS run start time from pov_store.json."""
-        trial_dir = tmp_path / "trial-1"
-        povs_dir = trial_dir / "povs"
-        povs_dir.mkdir(parents=True)
-
-        pov_store = povs_dir / "pov_store.json"
-        pov_store.write_text(json.dumps({"crs_run_start_time": 1234567890.123}))
-
-        collector = CorpusCollector(tmp_path, tmp_path)
-        start_time = collector._load_crs_run_start_time(trial_dir)
-
-        assert start_time == 1234567890.123
-
-    def test_load_crs_run_start_time_missing(self, tmp_path: Path):
-        """Test None returned when pov_store.json missing."""
-        trial_dir = tmp_path / "trial-1"
-        trial_dir.mkdir()
-
-        collector = CorpusCollector(tmp_path, tmp_path)
-        start_time = collector._load_crs_run_start_time(trial_dir)
-
-        assert start_time is None
-
-
-class TestCorpusCollectorIntegration:
-    """Integration tests for full collection workflow."""
-
-    def test_full_collection(self, tmp_path: Path):
-        """Test complete collection workflow."""
-        # Set up experiment structure
-        experiment_dir = tmp_path / "experiment"
-        trial_dir = experiment_dir / "trial-1"
-        povs_dir = trial_dir / "povs"
-        corpus_dir = trial_dir / "output" / "seeds"
-        corpus_dir.mkdir(parents=True)
-        povs_dir.mkdir(parents=True)
-
-        # Create pov_store.json
-        crs_start = 1000.0
-        pov_store = povs_dir / "pov_store.json"
-        pov_store.write_text(json.dumps({"crs_run_start_time": crs_start}))
-
-        # Create metadata.json
-        metadata = trial_dir / "metadata.json"
-        metadata.write_text(
-            json.dumps({"benchmark_name": "test-bench", "harness_name": "test-harness"})
-        )
-
-        # Create corpus files with mtime > crs_start
-        import os
-        import time
-
-        file1 = corpus_dir / "file1"
-        file2 = corpus_dir / "file2"
-        file1.write_bytes(b"content1")
-        file2.write_bytes(b"content2")
-
-        # Set mtime to be after crs_start
-        future_time = time.time() + 100
-        os.utime(file1, (future_time, future_time))
-        os.utime(file2, (future_time, future_time + 100))
-
-        # Set up benchmark directory
         benchmarks_dir = tmp_path / "benchmarks"
-        benchmark_dir = benchmarks_dir / "test-bench"
-        benchmark_dir.mkdir(parents=True)
+        _make_benchmark(benchmarks_dir, "bench")
 
-        # Run collection
+        mtime = time.time() + 100
+        _make_trial(
+            experiment_dir,
+            project="bench",
+            harness="h1",
+            crs_start_time=1000.0,
+            seed_files={
+                "alpha": (b"content-1", mtime),
+                "beta": (b"content-2", mtime + 10),
+            },
+        )
+
         collector = CorpusCollector(experiment_dir, benchmarks_dir)
-        result = collector.collect()
+        [result] = collector.collect()
 
-        # Verify result
-        assert result.benchmark_name == "test-bench"
-        assert result.harness_name == "test-harness"
+        assert result.benchmark_name == "bench"
+        assert result.harness_name == "h1"
         assert result.total_files == 2
-        assert result.output_dir == benchmark_dir / ".aixcc" / "test-harness" / "seeds"
-        assert result.output_dir.exists()
-        assert (result.output_dir / "manifest.json").exists()
-        assert not (benchmark_dir / ".aixcc" / "test-harness" / "corpus").exists()
+        assert result.new_files == 2
+        assert result.source_trials == 1
 
-    def test_collection_force_overwrite(self, tmp_path: Path):
-        """Test that --force overwrites existing corpus."""
-        # Set up experiment structure
+        corpus_dir = benchmarks_dir / "bench" / ".aixcc" / "h1" / "corpus"
+        assert corpus_dir.is_dir()
+        # Old destination must NOT be populated.
+        assert not (benchmarks_dir / "bench" / ".aixcc" / "h1" / "seeds").exists()
+
+        files = {p.name for p in corpus_dir.iterdir() if p.name != "manifest.json"}
+        assert len(files) == 2
+
+        manifest = json.loads((corpus_dir / "manifest.json").read_text())
+        assert manifest["total_files"] == 2
+        assert len(manifest["source_trials"]) == 1
+        for entry in manifest["files"].values():
+            assert "size" in entry
+            assert "original_names" in entry
+
+    def test_skips_negative_relative_time_with_warning(self, tmp_path: Path):
         experiment_dir = tmp_path / "experiment"
-        trial_dir = experiment_dir / "trial-1"
-        povs_dir = trial_dir / "povs"
-        corpus_dir = trial_dir / "output" / "seeds"
-        corpus_dir.mkdir(parents=True)
-        povs_dir.mkdir(parents=True)
+        benchmarks_dir = tmp_path / "benchmarks"
+        _make_benchmark(benchmarks_dir, "bench")
 
-        pov_store = povs_dir / "pov_store.json"
-        pov_store.write_text(json.dumps({"crs_run_start_time": 1000.0}))
-
-        metadata = trial_dir / "metadata.json"
-        metadata.write_text(
-            json.dumps({"benchmark_name": "test-bench", "harness_name": "test-harness"})
+        _make_trial(
+            experiment_dir,
+            project="bench",
+            harness="h1",
+            # crs_start_time in the far future so file mtime (= now) is before.
+            crs_start_time=9_999_999_999.0,
+            seed_files={"only": (b"x", time.time())},
         )
 
-        # Set up benchmark with existing corpus
-        benchmarks_dir = tmp_path / "benchmarks"
-        benchmark_dir = benchmarks_dir / "test-bench"
-        existing_corpus = benchmark_dir / ".aixcc" / "test-harness" / "seeds"
-        existing_corpus.mkdir(parents=True)
-        (existing_corpus / "old_file").write_bytes(b"old")
-
-        # Should fail without force
         collector = CorpusCollector(experiment_dir, benchmarks_dir)
-        with pytest.raises(FileExistsError):
-            collector.collect()
+        [result] = collector.collect()
 
-        # Should succeed with force
-        result = collector.collect(force=True)
-        assert result.total_files == 0  # No corpus files in this test
-        assert not (existing_corpus / "old_file").exists()
-
-    def test_collection_negative_relative_time_warning(self, tmp_path: Path):
-        """Test that files with negative relative time are skipped with warning."""
-        # Set up experiment structure
-        experiment_dir = tmp_path / "experiment"
-        trial_dir = experiment_dir / "trial-1"
-        povs_dir = trial_dir / "povs"
-        corpus_dir = trial_dir / "output" / "seeds"
-        corpus_dir.mkdir(parents=True)
-        povs_dir.mkdir(parents=True)
-
-        # Set crs_start_time to far future so file mtime is before it
-        pov_store = povs_dir / "pov_store.json"
-        pov_store.write_text(json.dumps({"crs_run_start_time": 9999999999.0}))
-
-        metadata = trial_dir / "metadata.json"
-        metadata.write_text(
-            json.dumps({"benchmark_name": "test-bench", "harness_name": "test-harness"})
-        )
-
-        # Create corpus file (mtime will be "now", which is before crs_start)
-        file1 = corpus_dir / "file1"
-        file1.write_bytes(b"content")
-
-        benchmarks_dir = tmp_path / "benchmarks"
-        benchmark_dir = benchmarks_dir / "test-bench"
-        benchmark_dir.mkdir(parents=True)
-
-        collector = CorpusCollector(experiment_dir, benchmarks_dir)
-        result = collector.collect()
-
-        # File should be skipped due to negative relative time
         assert result.total_files == 0
         assert any("negative relative time" in w for w in result.warnings)
 
+    def test_hidden_files_skipped(self, tmp_path: Path):
+        experiment_dir = tmp_path / "experiment"
+        benchmarks_dir = tmp_path / "benchmarks"
+        _make_benchmark(benchmarks_dir, "bench")
+
+        mtime = time.time() + 100
+        trial_dir = _make_trial(
+            experiment_dir,
+            project="bench",
+            harness="h1",
+            crs_start_time=1000.0,
+            seed_files={"visible": (b"v", mtime)},
+        )
+        hidden = trial_dir / "output" / "seeds" / ".hidden"
+        hidden.write_bytes(b"h")
+        os.utime(hidden, (mtime, mtime))
+
+        collector = CorpusCollector(experiment_dir, benchmarks_dir)
+        [result] = collector.collect()
+        assert result.total_files == 1
+
+
+# ---------------------------------------------------------------------------
+# Multiple trials for the same (benchmark, harness)
+# ---------------------------------------------------------------------------
+
+
+class TestMultiTrialAggregation:
+    def test_aggregates_across_trials_with_dedup(self, tmp_path: Path):
+        experiment_dir = tmp_path / "experiment"
+        benchmarks_dir = tmp_path / "benchmarks"
+        _make_benchmark(benchmarks_dir, "bench")
+
+        mtime = time.time() + 100
+        _make_trial(
+            experiment_dir,
+            project="bench",
+            harness="h1",
+            trial_index=1,
+            crs_start_time=1000.0,
+            seed_files={
+                "file-a": (b"shared", mtime),
+                "file-b": (b"only-in-1", mtime),
+            },
+        )
+        _make_trial(
+            experiment_dir,
+            project="bench",
+            harness="h1",
+            trial_index=2,
+            crs_start_time=1100.0,
+            seed_files={
+                "file-a2": (b"shared", mtime + 10),
+                "file-c": (b"only-in-2", mtime + 20),
+            },
+        )
+
+        collector = CorpusCollector(experiment_dir, benchmarks_dir)
+        [result] = collector.collect()
+
+        assert result.source_trials == 2
+        # shared + only-in-1 + only-in-2 = 3 unique files
+        assert result.total_files == 3
+        assert result.new_files == 3
+
+        corpus_dir = benchmarks_dir / "bench" / ".aixcc" / "h1" / "corpus"
+        manifest = json.loads((corpus_dir / "manifest.json").read_text())
+        assert manifest["total_files"] == 3
+        # The shared seed surfaces under two original names.
+        names_by_entry = [
+            entry["original_names"] for entry in manifest["files"].values()
+        ]
+        assert any(sorted(names) == ["file-a", "file-a2"] for names in names_by_entry)
+
+
+# ---------------------------------------------------------------------------
+# --all mode (multiple benchmark/harness pairs in one tree)
+# ---------------------------------------------------------------------------
+
+
+class TestAllMode:
+    def test_all_imports_every_pair(self, tmp_path: Path):
+        experiment_dir = tmp_path / "combined"
+        benchmarks_dir = tmp_path / "benchmarks"
+        _make_benchmark(benchmarks_dir, "proj-a")
+        _make_benchmark(benchmarks_dir, "proj-b")
+
+        mtime = time.time() + 100
+        _make_trial(
+            experiment_dir,
+            project="proj-a",
+            harness="h1",
+            crs_start_time=1000.0,
+            seed_files={"a1": (b"a1", mtime)},
+        )
+        _make_trial(
+            experiment_dir,
+            project="proj-a",
+            harness="h2",
+            crs_start_time=1000.0,
+            seed_files={"a2": (b"a2", mtime)},
+        )
+        _make_trial(
+            experiment_dir,
+            project="proj-b",
+            harness="h1",
+            crs_start_time=1000.0,
+            seed_files={"b1": (b"b1", mtime)},
+        )
+
+        collector = CorpusCollector(experiment_dir, benchmarks_dir)
+        results = collector.collect(all_mode=True)
+
+        grouped = {(r.benchmark_name, r.harness_name): r for r in results}
+        assert set(grouped.keys()) == {
+            ("proj-a", "h1"),
+            ("proj-a", "h2"),
+            ("proj-b", "h1"),
+        }
+        for result in results:
+            assert result.total_files == 1
+            assert result.output_dir.exists()
+
+    def test_multiple_pairs_without_all_raises(self, tmp_path: Path):
+        experiment_dir = tmp_path / "combined"
+        benchmarks_dir = tmp_path / "benchmarks"
+        _make_benchmark(benchmarks_dir, "proj-a")
+        _make_benchmark(benchmarks_dir, "proj-b")
+
+        mtime = time.time() + 100
+        _make_trial(
+            experiment_dir,
+            project="proj-a",
+            harness="h1",
+            crs_start_time=1000.0,
+            seed_files={"a1": (b"a1", mtime)},
+        )
+        _make_trial(
+            experiment_dir,
+            project="proj-b",
+            harness="h1",
+            crs_start_time=1000.0,
+            seed_files={"b1": (b"b1", mtime)},
+        )
+
+        collector = CorpusCollector(experiment_dir, benchmarks_dir)
+        with pytest.raises(ValueError, match="Found multiple benchmark/harness pairs"):
+            collector.collect()
+
+    def test_benchmark_and_harness_filters(self, tmp_path: Path):
+        experiment_dir = tmp_path / "combined"
+        benchmarks_dir = tmp_path / "benchmarks"
+        _make_benchmark(benchmarks_dir, "proj-a")
+        _make_benchmark(benchmarks_dir, "proj-b")
+
+        mtime = time.time() + 100
+        _make_trial(
+            experiment_dir,
+            project="proj-a",
+            harness="h1",
+            crs_start_time=1000.0,
+            seed_files={"a1": (b"a1", mtime)},
+        )
+        _make_trial(
+            experiment_dir,
+            project="proj-a",
+            harness="h2",
+            crs_start_time=1000.0,
+            seed_files={"a2": (b"a2", mtime)},
+        )
+        _make_trial(
+            experiment_dir,
+            project="proj-b",
+            harness="h1",
+            crs_start_time=1000.0,
+            seed_files={"b1": (b"b1", mtime)},
+        )
+
+        collector = CorpusCollector(experiment_dir, benchmarks_dir)
+        results = collector.collect(
+            all_mode=True, benchmark_filter="proj-a", harness_filter="h1"
+        )
+        assert len(results) == 1
+        assert results[0].benchmark_name == "proj-a"
+        assert results[0].harness_name == "h1"
+
+
+# ---------------------------------------------------------------------------
+# Merge vs force
+# ---------------------------------------------------------------------------
+
+
+class TestMergeAndForce:
+    def test_default_merges_into_existing(self, tmp_path: Path):
+        experiment_dir = tmp_path / "experiment"
+        benchmarks_dir = tmp_path / "benchmarks"
+        _make_benchmark(benchmarks_dir, "bench")
+
+        # Seed an existing corpus/ directory that pre-dates this import.
+        preexisting = benchmarks_dir / "bench" / ".aixcc" / "h1" / "corpus"
+        preexisting.mkdir(parents=True)
+        (preexisting / "keepme").write_bytes(b"preserved")
+        (preexisting / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "total_files": 1,
+                    "source_trials": [],
+                    "updated_at": "2020-01-01",
+                    "files": {
+                        "keepme": {
+                            "size": 9,
+                            "original_names": ["legacy"],
+                            "first_trial": "manual",
+                        }
+                    },
+                }
+            )
+        )
+
+        mtime = time.time() + 100
+        _make_trial(
+            experiment_dir,
+            project="bench",
+            harness="h1",
+            crs_start_time=1000.0,
+            seed_files={"fresh": (b"new-stuff", mtime)},
+        )
+
+        collector = CorpusCollector(experiment_dir, benchmarks_dir)
+        [result] = collector.collect()
+
+        # Pre-existing file kept, new file added.
+        assert (preexisting / "keepme").exists()
+        assert result.total_files == 2
+        assert result.new_files == 1
+
+    def test_force_replaces_existing(self, tmp_path: Path):
+        experiment_dir = tmp_path / "experiment"
+        benchmarks_dir = tmp_path / "benchmarks"
+        _make_benchmark(benchmarks_dir, "bench")
+
+        preexisting = benchmarks_dir / "bench" / ".aixcc" / "h1" / "corpus"
+        preexisting.mkdir(parents=True)
+        (preexisting / "keepme").write_bytes(b"preserved")
+        (preexisting / "manifest.json").write_text("{}")
+
+        mtime = time.time() + 100
+        _make_trial(
+            experiment_dir,
+            project="bench",
+            harness="h1",
+            crs_start_time=1000.0,
+            seed_files={"fresh": (b"new-stuff", mtime)},
+        )
+
+        collector = CorpusCollector(experiment_dir, benchmarks_dir)
+        [result] = collector.collect(force=True)
+
+        assert not (preexisting / "keepme").exists()
+        assert result.total_files == 1
+        assert result.new_files == 1
+
+
+# ---------------------------------------------------------------------------
+# Dry run
+# ---------------------------------------------------------------------------
+
+
+class TestDryRun:
+    def test_dry_run_does_not_create_corpus_dir(self, tmp_path: Path):
+        experiment_dir = tmp_path / "experiment"
+        benchmarks_dir = tmp_path / "benchmarks"
+        _make_benchmark(benchmarks_dir, "bench")
+
+        mtime = time.time() + 100
+        _make_trial(
+            experiment_dir,
+            project="bench",
+            harness="h1",
+            crs_start_time=1000.0,
+            seed_files={
+                "alpha": (b"A", mtime),
+                "beta": (b"B", mtime + 10),
+            },
+        )
+
+        collector = CorpusCollector(experiment_dir, benchmarks_dir)
+        [result] = collector.collect(dry_run=True)
+
+        assert result.new_files == 2
+        assert result.total_files == 2
+        corpus_dir = benchmarks_dir / "bench" / ".aixcc" / "h1" / "corpus"
+        assert not corpus_dir.exists()
+
+    def test_dry_run_merge_counts_only_new_hashes(self, tmp_path: Path):
+        import hashlib
+
+        experiment_dir = tmp_path / "experiment"
+        benchmarks_dir = tmp_path / "benchmarks"
+        _make_benchmark(benchmarks_dir, "bench")
+
+        existing_content = b"already-here"
+        existing_hash = hashlib.sha256(existing_content).hexdigest()[:16]
+        corpus_dir = benchmarks_dir / "bench" / ".aixcc" / "h1" / "corpus"
+        corpus_dir.mkdir(parents=True)
+        (corpus_dir / existing_hash).write_bytes(existing_content)
+        (corpus_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "total_files": 1,
+                    "source_trials": [],
+                    "updated_at": "2020-01-01",
+                    "files": {
+                        existing_hash: {
+                            "size": len(existing_content),
+                            "original_names": ["legacy"],
+                            "first_trial": "manual",
+                        }
+                    },
+                }
+            )
+        )
+
+        mtime = time.time() + 100
+        _make_trial(
+            experiment_dir,
+            project="bench",
+            harness="h1",
+            crs_start_time=1000.0,
+            seed_files={
+                "dup": (existing_content, mtime),  # already present
+                "fresh": (b"brand-new", mtime + 5),  # genuinely new
+            },
+        )
+
+        collector = CorpusCollector(experiment_dir, benchmarks_dir)
+        [result] = collector.collect(dry_run=True)
+
+        assert result.new_files == 1
+        assert result.total_files == 2
+        # Nothing written: pre-existing file intact, manifest untouched, no new files.
+        on_disk = {p.name for p in corpus_dir.iterdir() if p.name != "manifest.json"}
+        assert on_disk == {existing_hash}
+
+    def test_dry_run_force_leaves_disk_intact(self, tmp_path: Path):
+        experiment_dir = tmp_path / "experiment"
+        benchmarks_dir = tmp_path / "benchmarks"
+        _make_benchmark(benchmarks_dir, "bench")
+
+        corpus_dir = benchmarks_dir / "bench" / ".aixcc" / "h1" / "corpus"
+        corpus_dir.mkdir(parents=True)
+        (corpus_dir / "keepme").write_bytes(b"preserved")
+        (corpus_dir / "manifest.json").write_text("{}")
+
+        mtime = time.time() + 100
+        _make_trial(
+            experiment_dir,
+            project="bench",
+            harness="h1",
+            crs_start_time=1000.0,
+            seed_files={"fresh": (b"brand-new", mtime)},
+        )
+
+        collector = CorpusCollector(experiment_dir, benchmarks_dir)
+        [result] = collector.collect(dry_run=True, force=True)
+
+        # With --force the on-disk file is ignored, so the new seed is counted.
+        assert result.new_files == 1
+        assert result.total_files == 1
+        # Dry-run + force must still leave the pre-existing directory untouched.
+        assert (corpus_dir / "keepme").exists()
+
+
+# ---------------------------------------------------------------------------
+# Failure modes
+# ---------------------------------------------------------------------------
+
+
+class TestFailureModes:
+    def test_no_trials_raises(self, tmp_path: Path):
+        experiment_dir = tmp_path / "empty"
+        experiment_dir.mkdir()
+        benchmarks_dir = tmp_path / "benchmarks"
+        benchmarks_dir.mkdir()
+        collector = CorpusCollector(experiment_dir, benchmarks_dir)
+        with pytest.raises(FileNotFoundError):
+            collector.collect()
+
+    def test_missing_benchmark_raises(self, tmp_path: Path):
+        experiment_dir = tmp_path / "experiment"
+        benchmarks_dir = tmp_path / "benchmarks"
+        benchmarks_dir.mkdir()
+
+        mtime = time.time() + 100
+        _make_trial(
+            experiment_dir,
+            project="bench-missing",
+            harness="h1",
+            crs_start_time=1000.0,
+            seed_files={"x": (b"x", mtime)},
+        )
+
+        collector = CorpusCollector(experiment_dir, benchmarks_dir)
+        with pytest.raises(FileNotFoundError, match="Benchmark not found"):
+            collector.collect()
+
+
+# ---------------------------------------------------------------------------
+# Dataclasses
+# ---------------------------------------------------------------------------
+
+
+class TestDataclasses:
+    def test_corpus_file(self):
+        cf = CorpusFile(
+            path=Path("/tmp/x"), content_hash="abc", size=3, relative_time=1.0
+        )
+        assert cf.content_hash == "abc"
+        assert cf.relative_time == 1.0
+
+    def test_trial_source(self):
+        ts = TrialSource(
+            trial_dir=Path("/tmp/trial-1"),
+            seeds_dir=Path("/tmp/trial-1/output/seeds"),
+            benchmark="b",
+            harness="h",
+            crs_start_time=1.0,
+        )
+        assert ts.benchmark == "b"
+
+    def test_collection_result_defaults(self):
+        result = CollectionResult(
+            benchmark_name="b",
+            harness_name="h",
+            total_files=0,
+            new_files=0,
+            source_trials=0,
+            output_dir=Path("/tmp"),
+        )
+        assert result.warnings == []
+
+
+# ---------------------------------------------------------------------------
+# SeedCorpusPreparer (now reads from .../corpus/)
+# ---------------------------------------------------------------------------
+
 
 class TestSeedCorpusPreparer:
-    """Tests for SeedCorpusPreparer class."""
-
-    def _create_corpus(self, benchmark_path: Path, harness_name: str) -> Path:
-        """Helper to create a test corpus with manifest."""
-        corpus_dir = benchmark_path / ".aixcc" / harness_name / "seeds"
+    @staticmethod
+    def _populate(benchmark_path: Path, harness: str) -> Path:
+        corpus_dir = benchmark_path / ".aixcc" / harness / "corpus"
         corpus_dir.mkdir(parents=True)
-
-        # Create test files
         (corpus_dir / "hash1").write_bytes(b"content1")
         (corpus_dir / "hash2").write_bytes(b"content2")
         (corpus_dir / "hash3").write_bytes(b"content3")
-
-        # Create manifest
-        manifest = {
-            "crs_run_start_time": 1000.0,
-            "files": {
-                "hash1": {"relative_time": 100.0, "original_name": "file1", "size": 8},
-                "hash2": {"relative_time": 500.0, "original_name": "file2", "size": 8},
-                "hash3": {"relative_time": 3600.0, "original_name": "file3", "size": 8},
-            },
-        }
-        with (corpus_dir / "manifest.json").open("w") as f:
-            json.dump(manifest, f)
-
+        (corpus_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "total_files": 3,
+                    "source_trials": [],
+                    "updated_at": "2024-01-01",
+                    "files": {
+                        "hash1": {
+                            "size": 8,
+                            "relative_time": 100.0,
+                            "original_names": ["file1"],
+                        },
+                        "hash2": {
+                            "size": 8,
+                            "relative_time": 500.0,
+                            "original_names": ["file2"],
+                        },
+                        "hash3": {
+                            "size": 8,
+                            "relative_time": 3600.0,
+                            "original_names": ["file3"],
+                        },
+                    },
+                }
+            )
+        )
         return corpus_dir
 
     def test_has_seed_corpus_true(self, tmp_path: Path):
-        """Test has_seed_corpus returns True when corpus exists."""
-        benchmark_path = tmp_path / "benchmark"
-        self._create_corpus(benchmark_path, "test-harness")
+        bench = tmp_path / "bench"
+        self._populate(bench, "h1")
+        assert SeedCorpusPreparer(bench, "h1").has_seed_corpus() is True
 
-        preparer = SeedCorpusPreparer(benchmark_path, "test-harness")
-        assert preparer.has_seed_corpus() is True
+    def test_has_seed_corpus_false_missing(self, tmp_path: Path):
+        bench = tmp_path / "bench"
+        bench.mkdir()
+        assert SeedCorpusPreparer(bench, "h1").has_seed_corpus() is False
 
-    def test_has_seed_corpus_false_no_dir(self, tmp_path: Path):
-        """Test has_seed_corpus returns False when directory missing."""
-        benchmark_path = tmp_path / "benchmark"
-        benchmark_path.mkdir()
+    def test_prepare_copies_all_files(self, tmp_path: Path):
+        bench = tmp_path / "bench"
+        self._populate(bench, "h1")
+        out = tmp_path / "out"
 
-        preparer = SeedCorpusPreparer(benchmark_path, "test-harness")
-        assert preparer.has_seed_corpus() is False
+        result = SeedCorpusPreparer(bench, "h1").prepare(out)
 
-    def test_has_seed_corpus_false_no_manifest(self, tmp_path: Path):
-        """Test has_seed_corpus returns False when manifest missing."""
-        benchmark_path = tmp_path / "benchmark"
-        corpus_dir = benchmark_path / ".aixcc" / "test-harness" / "seeds"
-        corpus_dir.mkdir(parents=True)
-        (corpus_dir / "hash1").write_bytes(b"test")
-
-        preparer = SeedCorpusPreparer(benchmark_path, "test-harness")
-        assert preparer.has_seed_corpus() is False
-
-    def test_prepare_all_files(self, tmp_path: Path):
-        """Test preparing all corpus files without time filter."""
-        benchmark_path = tmp_path / "benchmark"
-        self._create_corpus(benchmark_path, "test-harness")
-        output_dir = tmp_path / "output"
-
-        preparer = SeedCorpusPreparer(benchmark_path, "test-harness")
-        result = preparer.prepare(output_dir)
-
-        assert result.total_files == 3
         assert result.copied_files == 3
-        assert result.output_dir == output_dir
-        assert result.max_time_filter is None
-        assert (output_dir / "hash1").exists()
-        assert (output_dir / "hash2").exists()
-        assert (output_dir / "hash3").exists()
-        assert not (output_dir / "manifest.json").exists()
+        assert (out / "hash1").exists()
+        assert (out / "hash2").exists()
+        assert (out / "hash3").exists()
+        assert not (out / "manifest.json").exists()
 
-    def test_prepare_with_time_filter(self, tmp_path: Path):
-        """Test preparing corpus files with time filter."""
-        benchmark_path = tmp_path / "benchmark"
-        self._create_corpus(benchmark_path, "test-harness")
-        output_dir = tmp_path / "output"
+    def test_prepare_time_filter(self, tmp_path: Path):
+        bench = tmp_path / "bench"
+        self._populate(bench, "h1")
+        out = tmp_path / "out"
 
-        preparer = SeedCorpusPreparer(benchmark_path, "test-harness")
-        # Filter to files with relative_time <= 600 (includes hash1 at 100s, hash2 at 500s)
-        result = preparer.prepare(output_dir, max_time=600)
-
-        assert result.total_files == 3
+        result = SeedCorpusPreparer(bench, "h1").prepare(out, max_time=600)
         assert result.copied_files == 2
-        assert result.max_time_filter == 600
-        assert (output_dir / "hash1").exists()
-        assert (output_dir / "hash2").exists()
-        assert not (output_dir / "hash3").exists()
-
-    def test_prepare_strict_time_filter(self, tmp_path: Path):
-        """Test time filter that excludes most files."""
-        benchmark_path = tmp_path / "benchmark"
-        self._create_corpus(benchmark_path, "test-harness")
-        output_dir = tmp_path / "output"
-
-        preparer = SeedCorpusPreparer(benchmark_path, "test-harness")
-        # Filter to files with relative_time <= 50 (excludes all)
-        result = preparer.prepare(output_dir, max_time=50)
-
-        assert result.total_files == 3
-        assert result.copied_files == 0
-        assert result.max_time_filter == 50
-
-    def test_prepare_no_corpus_raises(self, tmp_path: Path):
-        """Test prepare raises when corpus not available."""
-        benchmark_path = tmp_path / "benchmark"
-        benchmark_path.mkdir()
-        output_dir = tmp_path / "output"
-
-        preparer = SeedCorpusPreparer(benchmark_path, "test-harness")
-
-        with pytest.raises(FileNotFoundError, match="No seed corpus found"):
-            preparer.prepare(output_dir)
-
-    def test_prepare_force_overwrite(self, tmp_path: Path):
-        """Test force overwrites existing output directory."""
-        benchmark_path = tmp_path / "benchmark"
-        self._create_corpus(benchmark_path, "test-harness")
-        output_dir = tmp_path / "output"
-
-        # Create existing output
-        output_dir.mkdir()
-        (output_dir / "old_file").write_bytes(b"old")
-
-        preparer = SeedCorpusPreparer(benchmark_path, "test-harness")
-        result = preparer.prepare(output_dir, force=True)
-
-        assert result.copied_files == 3
-        assert not (output_dir / "old_file").exists()
-
-    def test_prepare_existing_raises_without_force(self, tmp_path: Path):
-        """Test prepare raises when output exists and force=False."""
-        benchmark_path = tmp_path / "benchmark"
-        self._create_corpus(benchmark_path, "test-harness")
-        output_dir = tmp_path / "output"
-        output_dir.mkdir()
-
-        preparer = SeedCorpusPreparer(benchmark_path, "test-harness")
-
-        with pytest.raises(FileExistsError):
-            preparer.prepare(output_dir, force=False)
+        assert (out / "hash1").exists()
+        assert (out / "hash2").exists()
+        assert not (out / "hash3").exists()

@@ -1,182 +1,192 @@
 # Seed Corpus Collection and Reuse
 
-This document describes how to collect corpus files from CRS experiment output and reuse them as seeds in subsequent experiments.
+This document describes how to collect seed corpus files from CRS experiment
+output and reuse them as initial inputs in later experiments.
 
 ## Overview
 
-During CRS execution, fuzzers discover new inputs that trigger new code coverage. These corpus files can be collected and reused to accelerate future experiments by starting with known-good inputs.
+During CRS execution, fuzzers discover inputs that trigger new coverage. These
+files can be collected into a benchmark's ground truth so future experiments
+start with known-good inputs.
 
 ## Workflow
 
 ```
-1. Run initial experiment
-   └─> CRS discovers corpus files during fuzzing
+1. Run one or more experiments
+   └─> CRS writes corpus to trial-N/output/seeds/
 
-2. Collect corpus files
-   └─> crsbench benchmark seed-import <experiment-dir>
+2. Import seed corpus
+   └─> crsbench benchmark seed-import <experiment-dir> [--all]
 
 3. Reuse in future experiments
    └─> Enable `runtime.inputs.seed` in config
 ```
 
-## Collecting Seeds
-
-After an experiment completes, collect corpus files using:
+## Importing Seeds
 
 ```bash
-crsbench benchmark seed-import <experiment-dir> [--benchmarks <path>] [--force]
+crsbench benchmark seed-import <experiment-dir> \
+  [--benchmarks <path>] [--all] \
+  [--benchmark <name>] [--harness <name>] [--force]
 ```
 
 ### Arguments
 
 | Argument | Description |
 |----------|-------------|
-| `experiment-dir` | Path to experiment output directory (e.g., `./experiment-data/trial-1/`) |
-| `--benchmarks` | Directory containing benchmarks (default: `./benchmarks`) |
-| `--force` | Overwrite existing seeds directory |
+| `experiment-dir` | Path to an experiment output directory or combined tree. |
+| `--benchmarks` | Directory containing benchmarks (default: `./benchmarks`). |
+| `--all` | Import every `(benchmark, harness)` group found under `experiment-dir`. |
+| `--benchmark` | Only import trials whose benchmark matches this name. |
+| `--harness` | Only import trials whose harness matches this name. |
+| `--force` | Replace the existing corpus directory instead of merging. |
+| `--dry-run` | Report what would be imported without writing anything to disk. |
 
-### Example
+By default the importer **merges** new files into any existing
+`.aixcc/{harness}/corpus/` directory. Pass `--force` to wipe and rewrite.
+
+### Input Layouts
+
+`seed-import` discovers trials recursively. Each discovered trial must contain
+either `trial-N/output/seeds/` (current contract) or `trial-N/output/corpus/`
+(legacy).
+
+A trial's `(benchmark, harness)` is determined in order:
+
+1. `trial-N/metadata.json` (`benchmark_name`/`harness_name` fields)
+2. `trial-N/config.yaml`
+3. Path inference: `<...>/<project>/<harness>/<mode>/<sanitizer>/trial-N`
+
+### Examples
 
 ```bash
-# Collect from experiment output
-crsbench benchmark seed-import ./experiment-data/e2e-bugfind/afc-curl-delta-02/curl_fuzzer/delta/address/
+# A single experiment with one benchmark/harness pair
+crsbench benchmark seed-import \
+  ./experiment-data/e2e-bugfind/afc-curl-delta-02/curl_fuzzer/delta/address/
 
-# With custom benchmarks path
-crsbench benchmark seed-import ./experiment-data/... --benchmarks /path/to/benchmarks
+# A combined tree containing many projects at once
+crsbench benchmark seed-import \
+  /data/final-combined/atlantis-multilang-given_fuzzer --all
+
+# Restrict to one pair when scanning a combined tree
+crsbench benchmark seed-import \
+  /data/final-combined/atlantis-multilang-given_fuzzer --all \
+  --benchmark afc-curl-delta-02 --harness curl_fuzzer_ws
+
+# Replace existing corpus rather than merging
+crsbench benchmark seed-import ./experiment-data/... --force
+
+# Preview what would be imported (no files copied, no manifest written)
+crsbench benchmark seed-import \
+  /data/final-combined/atlantis-multilang-given_fuzzer --all --dry-run
 ```
 
 ### Output Structure
 
-Seeds are stored in the benchmark's `.aixcc/{harness}/seeds/` directory:
+Imported files land under the benchmark's per-harness corpus directory:
 
 ```
-benchmarks/afc-curl-delta-02/.aixcc/curl_fuzzer_ws/seeds/
-├── manifest.json       # Metadata for all files
-├── 00c3d860b1a0b8da    # Seed file (named by content hash)
+benchmarks/<project>/.aixcc/<harness>/corpus/
+├── manifest.json
+├── 00c3d860b1a0b8da     # Seed file (named by SHA256-16 content hash)
 ├── 00d6dca7560f6081
 └── ...
 ```
 
 ### Manifest Format
 
-The `manifest.json` contains metadata for each file:
-
 ```json
 {
-  "crs_run_start_time": 1769748907.0,
+  "total_files": 2,
+  "updated_at": "2026-04-20T12:00:00+00:00",
+  "source_trials": [
+    {
+      "path": "afc-curl-delta-02/curl_fuzzer_ws/delta/address/trial-1",
+      "crs_run_start_time": 1769748907.0,
+      "file_count": 2
+    }
+  ],
   "files": {
     "00c3d860b1a0b8da": {
+      "size": 26,
+      "original_names": ["2a0ac780c371363b"],
       "relative_time": 283.3,
-      "original_name": "2a0ac780c371363b",
-      "size": 26
+      "first_trial": "afc-curl-delta-02/curl_fuzzer_ws/delta/address/trial-1"
     }
   }
 }
 ```
 
-- `crs_run_start_time`: Unix timestamp when CRS run started
-- `relative_time`: Seconds after CRS start when this file was discovered
-- `original_name`: Original filename from fuzzer
-- `size`: File size in bytes
+- `total_files`: unique file count across all merged trials.
+- `source_trials`: one entry per trial contributing to the merged corpus.
+- `relative_time`: seconds after the trial's `crs_run_start_time` when the
+  file first appeared. Recorded only when a trial exposes `pov_store.json`.
+- `first_trial`: the trial in which this hash was first seen.
 
-### Timestamp Derivation
+### Distribution via HuggingFace
 
-`seed-import` does not require the experiment output to store per-seed timestamp
-metadata explicitly.
+Each benchmark's corpus is uploaded as its own archive:
 
-- current direct trial output (`trial-N/output/seeds/`) does not include a
-  separate manifest
-- legacy `trial-N/output/corpus/` sidecars do not carry `relative_time`
+- `benchmark.tar.gz` — project files (excluding `.aixcc/`)
+- `ground-truth.tar.gz` — `.aixcc/` metadata, **excluding** `*/corpus/`
+- `corpus.tar.gz` — every `.aixcc/<harness>/corpus/` directory
 
-Instead, CRSBench derives `relative_time` during import from:
-
-- the seed file's filesystem `mtime`
-- minus `crs_run_start_time` from the trial metadata
-
-That derived value is then normalized into
-`.aixcc/{harness}/seeds/manifest.json`.
+Downloaders can opt out with `--no-corpus` (corpus archive only) or
+`--no-ground-truth` (both GT and corpus).
 
 ## Using Seeds in Experiments
 
-Enable seed corpus in your experiment config:
-
-Canonical config shape reference: `docs/experiment-config-distributed-example.yaml`
+Enable the seed corpus at runtime:
 
 ```yaml
 runtime:
   inputs:
     seed:
-      # Optional: only use seeds discovered within first hour.
+      # Optional: only use seeds discovered within the first hour.
       max_time: 3600
 ```
+
+Canonical config shape reference: `docs/experiment-config-distributed-example.yaml`
 
 ### Configuration Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `runtime.inputs.seed` | object | disabled when absent | Enables seed corpus input when present |
-| `runtime.inputs.seed.max_time` | int | `null` | Max relative time (seconds) for filtering seeds |
+| `runtime.inputs.seed` | object | disabled when absent | Enables seed corpus input when present. |
+| `runtime.inputs.seed.max_time` | int | `null` | Max relative time (seconds) for filtering seeds. |
 
 ### Time-based Filtering
 
-The `runtime.inputs.seed.max_time` option filters seeds based on when they were discovered:
-
-```yaml
-# Use all collected seeds
-runtime:
-  inputs:
-    seed: {}
-
-# Use only seeds from first hour
-runtime:
-  inputs:
-    seed:
-      max_time: 3600
-
-# Use only seeds from first 5 minutes
-runtime:
-  inputs:
-    seed:
-      max_time: 300
-```
-
-This is useful for:
-- Replicating early-stage findings without full corpus
-- Testing how quickly CRS finds bugs with vs without seed assistance
-- Reducing experiment startup time with smaller seed sets
+`runtime.inputs.seed.max_time` filters by `relative_time` from the manifest.
+Seeds missing `relative_time` are kept only when no filter is set.
 
 ## How It Works
 
-At runtime, when `runtime.inputs.seed` is enabled:
+When `runtime.inputs.seed` is enabled:
 
-1. `SeedCorpusPreparer` reads `manifest.json` from `.aixcc/{harness}/seeds/`
-2. Filters files by `relative_time <= runtime.inputs.seed.max_time` (if configured)
-3. Copies the seed files that passed the optional time filter to `trial_dir/seeds/`
-4. Passes directory to CRS via `oss-crs run --seed-dir <path>`
+1. `SeedCorpusPreparer` reads `manifest.json` from `.aixcc/{harness}/corpus/`.
+2. Filters files by `relative_time <= runtime.inputs.seed.max_time` (if set).
+3. Copies the filtered seed files to `trial_dir/seeds/` with preserved mtimes.
+4. Passes the directory to CRS via `oss-crs run --seed-dir <path>`.
 
-Notes:
-- `manifest.json` is not copied into `trial_dir/seeds/`
-- file copies use metadata-preserving copy semantics, so imported seed mtimes
-  remain stable in the staged runtime directory
+The manifest itself is not copied into the staged runtime directory.
 
-The CRS then uses these files as initial fuzzing seeds, potentially finding bugs faster.
-
-Legacy keys (`seed_corpus_enabled`, `seed_corpus_max_time`) remain compatibility-only.
+Legacy keys (`seed_corpus_enabled`, `seed_corpus_max_time`) remain
+compatibility-only.
 
 ## Experiment Output Contract
 
-`seed-import` reads corpus files from the trial output directory using:
+`seed-import` reads files from:
 
-- current contract: `trial-N/output/seeds/`
-- legacy compatibility: `trial-N/output/corpus/`
+- current: `trial-N/output/seeds/`
+- legacy:  `trial-N/output/corpus/`
 
-It does not scan nested `crs-build/run/...` directories. CRSBench's current
-`oss-crs` integration copies CRS-produced seeds into `trial/output/seeds/`
-before import.
+It does not scan nested `crs-build/run/...` directories.
 
 ## Best Practices
 
-1. **Collect from successful runs**: Seeds from runs that found vulnerabilities are most valuable
-2. **Use time filtering**: Start with shorter time windows (1h) and expand if needed
-3. **Per-harness collection**: Seeds are collected per-harness, so each harness gets relevant seeds
-4. **Deduplication**: Files are stored by content hash, avoiding duplicates across collections
+1. **Collect from successful runs**: seeds from runs that found vulnerabilities
+   are the most valuable reuse material.
+2. **Use time filtering**: start with shorter windows (e.g. 1h) and expand.
+3. **Per-harness collection**: seeds are stored per harness.
+4. **Dedup by content hash**: duplicates across trials collapse to one entry.
