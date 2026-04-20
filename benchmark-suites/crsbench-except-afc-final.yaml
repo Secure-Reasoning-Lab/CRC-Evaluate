@@ -5,7 +5,7 @@ benchmark_list:
   # === AFC benchmarks NOT in afc-final (25) ===
   # C/C++ benchmarks
   # curl
-  - afc-curl-delta-01
+  # - afc-curl-delta-01  # disabled because given_fuzzer run failed
   - afc-curl-full-01
   # freerdp
   - afc-freerdp-delta-01
@@ -29,12 +29,12 @@ benchmark_list:
   - afc-apache-commons-compress-delta-03
   - afc-apache-commons-compress-full-01
   # tika
-  # - afc-tika-delta-01
-  # - afc-tika-delta-02
-  # - afc-tika-delta-03
-  # - afc-tika-delta-04
-  # - afc-tika-delta-05
-  # - afc-tika-full-01
+  - afc-tika-delta-01
+  - afc-tika-delta-02
+  - afc-tika-delta-03
+  - afc-tika-delta-04
+  - afc-tika-delta-05
+  - afc-tika-full-01
   # zookeeper
   - afc-zookeeper-delta-01
   - afc-zookeeper-delta-02
@@ -49,7 +49,7 @@ benchmark_list:
   - atlanta-curl-delta-01
   - atlanta-faad2-delta-01
   - atlanta-file-delta-01
-  - atlanta-freetype2-delta-01
+  # - atlanta-freetype2-delta-01  # disabled because given_fuzzer run failed
   - atlanta-gpac-delta-01
   - atlanta-jq-delta-01
   - atlanta-libavc-full-01
@@ -58,7 +58,7 @@ benchmark_list:
   - atlanta-libjpeg-full-02
   - atlanta-libssh2-delta-01
   - atlanta-libtiff-full-01
-  - atlanta-libxml2-delta-01
+  # - atlanta-libxml2-delta-01  # disabled because given_fuzzer run failed
   - atlanta-mongoose-delta-01
   - atlanta-mosquitto-delta-01
   - atlanta-nasm-delta-01
@@ -79,7 +79,7 @@ benchmark_list:
   - atlanta-beanutils-full-01
   - atlanta-cron-utils-delta-01
   - atlanta-cxf-full-01
-  - atlanta-feign-full-01
+  # - atlanta-feign-full-01  # disabled because given_fuzzer run failed
   - atlanta-fuzzy-delta-01
   # - atlanta-geonetwork-delta-01
   - atlanta-htmlunit-delta-01
@@ -91,7 +91,7 @@ benchmark_list:
   - atlanta-json-java-full-01
   - atlanta-jsoup-full-01
   - atlanta-keycloak-delta-01
-  - atlanta-kylin-delta-01
+  # - atlanta-kylin-delta-01  # disabled because given_fuzzer run failed
   - atlanta-netty-delta-01
   - atlanta-olingo-delta-01
   - atlanta-oripa-delta-01
