@@ -28,7 +28,7 @@ class PrepareResult:
 class SeedCorpusPreparer:
     """Prepares seed corpus for CRS execution.
 
-    Reads collected seed corpus from benchmark's .aixcc/{harness}/seeds/,
+    Reads collected seed corpus from benchmark's .aixcc/{harness}/corpus/,
     filters by relative time if configured, and copies to trial directory.
     """
 
@@ -41,7 +41,7 @@ class SeedCorpusPreparer:
         """
         self.benchmark_path = benchmark_path
         self.harness_name = harness_name
-        self.corpus_dir = benchmark_path / ".aixcc" / harness_name / "seeds"
+        self.corpus_dir = benchmark_path / ".aixcc" / harness_name / "corpus"
 
     def has_seed_corpus(self) -> bool:
         """Check if seed corpus is available for this harness.

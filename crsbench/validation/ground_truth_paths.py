@@ -68,9 +68,6 @@ class GroundTruthPaths:
     def cpv_patches_dir(self, harness: str, cpv_id: str) -> Path:
         return self.cpv_dir(harness, cpv_id) / "patches"
 
-    def harness_seeds_dir(self, harness: str) -> Path:
-        return self.harness_dir(harness) / "seeds"
-
     def harness_corpus_dir(self, harness: str) -> Path:
         return self.harness_dir(harness) / "corpus"
 
