@@ -173,9 +173,10 @@ class TestUploadDatasetPruneExecution:
         # path takes the manifest-only branch.
         from crsbench.dataset.manifest import compute_source_fingerprints
 
-        bench_hash, gt_hash = compute_source_fingerprints(benchmarks_dir / "afc-kept")
-        kept_entry.benchmark_source_sha256 = bench_hash
-        kept_entry.ground_truth_source_sha256 = gt_hash
+        fingerprints = compute_source_fingerprints(benchmarks_dir / "afc-kept")
+        kept_entry.benchmark_source_sha256 = fingerprints.benchmark
+        kept_entry.ground_truth_source_sha256 = fingerprints.ground_truth
+        kept_entry.corpus_source_sha256 = fingerprints.corpus
 
         remote_manifest = {
             "afc-kept": kept_entry,

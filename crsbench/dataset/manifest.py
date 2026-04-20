@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, NamedTuple, Protocol
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -14,10 +14,19 @@ MANIFEST_FILE = ".crsbench-manifest.json"
 REMOTE_INDEX_PATH = "index/benchmarks.jsonl"
 REMOTE_INDEX_ALIAS_PATH = "benchmarks-metadata.jsonl"
 GROUND_TRUTH_DIR = ".aixcc"
+CORPUS_SUBDIR = "corpus"
 
 
 class _Digest(Protocol):
     def update(self, data: bytes, /) -> object: ...
+
+
+class SourceFingerprints(NamedTuple):
+    """Deterministic content hashes for the three source trees of a benchmark."""
+
+    benchmark: str
+    ground_truth: str
+    corpus: str
 
 
 @dataclass
@@ -27,13 +36,17 @@ class BenchmarkManifestEntry:
     benchmark: str
     benchmark_source_sha256: str
     ground_truth_source_sha256: str
+    corpus_source_sha256: str = ""
     benchmark_archive_sha256: str = ""
     ground_truth_archive_sha256: str = ""
+    corpus_archive_sha256: str = ""
     benchmark_archive_size: int = 0
     ground_truth_archive_size: int = 0
+    corpus_archive_size: int = 0
     source_commit: str = ""
     updated_at: str = ""
     has_ground_truth: bool = False
+    has_corpus: bool = False
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> "BenchmarkManifestEntry":
@@ -44,15 +57,19 @@ class BenchmarkManifestEntry:
             ground_truth_source_sha256=_to_str(
                 data.get("ground_truth_source_sha256", "")
             ),
+            corpus_source_sha256=_to_str(data.get("corpus_source_sha256", "")),
             benchmark_archive_sha256=_to_str(data.get("benchmark_archive_sha256", "")),
             ground_truth_archive_sha256=_to_str(
                 data.get("ground_truth_archive_sha256", "")
             ),
+            corpus_archive_sha256=_to_str(data.get("corpus_archive_sha256", "")),
             benchmark_archive_size=_to_int(data.get("benchmark_archive_size", 0)),
             ground_truth_archive_size=_to_int(data.get("ground_truth_archive_size", 0)),
+            corpus_archive_size=_to_int(data.get("corpus_archive_size", 0)),
             source_commit=_to_str(data.get("source_commit", "")),
             updated_at=_to_str(data.get("updated_at", "")),
             has_ground_truth=_to_bool(data.get("has_ground_truth", False)),
+            has_corpus=_to_bool(data.get("has_corpus", False)),
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -60,19 +77,45 @@ class BenchmarkManifestEntry:
         return asdict(self)
 
 
-def compute_source_fingerprints(benchmark_dir: Path) -> tuple[str, str]:
-    """Compute deterministic source hashes for benchmark and ground truth trees."""
+def compute_source_fingerprints(benchmark_dir: Path) -> SourceFingerprints:
+    """Compute deterministic source hashes for benchmark, ground truth, and corpus.
+
+    A file's path is classified as:
+
+    - ``corpus`` if it lives under ``.aixcc/<harness>/corpus/``
+    - ``ground_truth`` if it lives elsewhere under ``.aixcc/``
+    - ``benchmark`` otherwise
+    """
     benchmark_hash = hashlib.sha256()
     ground_truth_hash = hashlib.sha256()
+    corpus_hash = hashlib.sha256()
 
     for path in _iter_files(benchmark_dir):
         rel = path.relative_to(benchmark_dir)
-        if rel.parts and rel.parts[0] == GROUND_TRUTH_DIR:
+        classification = _classify(rel)
+        if classification == "corpus":
+            _update_hash(corpus_hash, rel, path)
+        elif classification == "ground_truth":
             _update_hash(ground_truth_hash, rel, path)
         else:
             _update_hash(benchmark_hash, rel, path)
 
-    return benchmark_hash.hexdigest(), ground_truth_hash.hexdigest()
+    return SourceFingerprints(
+        benchmark=benchmark_hash.hexdigest(),
+        ground_truth=ground_truth_hash.hexdigest(),
+        corpus=corpus_hash.hexdigest(),
+    )
+
+
+def _classify(rel: "Path") -> str:
+    """Classify a benchmark-relative path into one of the three source buckets."""
+    parts = rel.parts
+    if not parts or parts[0] != GROUND_TRUTH_DIR:
+        return "benchmark"
+    # Path shape: .aixcc/<harness>/corpus/...
+    if len(parts) >= 3 and parts[2] == CORPUS_SUBDIR:
+        return "corpus"
+    return "ground_truth"
 
 
 def compute_file_sha256(path: Path) -> str:
