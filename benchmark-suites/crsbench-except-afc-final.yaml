@@ -74,14 +74,14 @@ benchmark_list:
   - atlanta-apache-commons-validator-delta-01
   - atlanta-apache-commons-validator-full-01
   - atlanta-apache-poi-full-01
-  - atlanta-batik-delta-01
+  # - atlanta-batik-delta-01
   - atlanta-bcel-delta-01
   - atlanta-beanutils-full-01
   - atlanta-cron-utils-delta-01
   - atlanta-cxf-full-01
   - atlanta-feign-full-01
   - atlanta-fuzzy-delta-01
-  - atlanta-geonetwork-delta-01
+  # - atlanta-geonetwork-delta-01
   - atlanta-htmlunit-delta-01
   - atlanta-imaging-delta-01
   - atlanta-jackson-databind-delta-01
