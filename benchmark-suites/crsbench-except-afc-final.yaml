@@ -29,12 +29,12 @@ benchmark_list:
   - afc-apache-commons-compress-delta-03
   - afc-apache-commons-compress-full-01
   # tika
-  - afc-tika-delta-01
-  - afc-tika-delta-02
-  - afc-tika-delta-03
-  - afc-tika-delta-04
-  - afc-tika-delta-05
-  - afc-tika-full-01
+  # - afc-tika-delta-01
+  # - afc-tika-delta-02
+  # - afc-tika-delta-03
+  # - afc-tika-delta-04
+  # - afc-tika-delta-05
+  # - afc-tika-full-01
   # zookeeper
   - afc-zookeeper-delta-01
   - afc-zookeeper-delta-02
