@@ -205,14 +205,41 @@ def resolve_inventory_selector(
     rows: list[CloudInstanceInventoryRow],
     selector: str,
 ) -> CloudInstanceInventoryRow | None:
-    """Resolve an inventory selector against alias or full instance name."""
-    exact_alias_matches = [row for row in rows if row.alias == selector]
-    if len(exact_alias_matches) == 1:
-        return exact_alias_matches[0]
-    exact_name_matches = [row for row in rows if row.name == selector]
-    if len(exact_name_matches) == 1:
-        return exact_name_matches[0]
+    """Resolve one selector when it identifies exactly one live instance."""
+    matches = list_inventory_selector_matches(rows, selector)
+    if len(matches) == 1:
+        return matches[0]
     return None
+
+
+def list_inventory_selector_matches(
+    rows: list[CloudInstanceInventoryRow],
+    selector: str,
+) -> list[CloudInstanceInventoryRow]:
+    """Return rows matching one selector using exact-first then filtered rules."""
+    normalized = selector.strip().casefold()
+    if not normalized:
+        return []
+
+    exact_alias_matches = [row for row in rows if row.alias.casefold() == normalized]
+    if exact_alias_matches:
+        return exact_alias_matches
+
+    exact_name_matches = [row for row in rows if row.name.casefold() == normalized]
+    if exact_name_matches:
+        return exact_name_matches
+
+    exact_role_matches = [
+        row for row in rows if normalized in _role_selector_tokens(row.role)
+    ]
+    if exact_role_matches:
+        return exact_role_matches
+
+    return [
+        row
+        for row in rows
+        if normalized in row.alias.casefold() or normalized in row.name.casefold()
+    ]
 
 
 def _instance_alias(experiment_name: str, instance_name: str, role: str) -> str:
@@ -222,6 +249,17 @@ def _instance_alias(experiment_name: str, instance_name: str, role: str) -> str:
     if role == "orchestrator":
         return "orch"
     return instance_name
+
+
+def _role_selector_tokens(role: str) -> set[str]:
+    normalized = role.casefold()
+    if normalized == "orchestrator":
+        return {"orch", "orchestrator"}
+    if normalized == "worker":
+        return {"work", "worker"}
+    if normalized == "evaluator":
+        return {"eval", "evaluator"}
+    return {normalized}
 
 
 def _inventory_sort_key(row: CloudInstanceInventoryRow) -> tuple[int, str]:

@@ -14,6 +14,7 @@ from unittest import mock
 from unittest.mock import MagicMock, patch
 
 import pytest
+from crsbench.cloud.cli._instance_inventory import CloudInstanceInventoryRow
 from crsbench.cloud.collection import collect_marker_path, read_collect_marker
 from crsbench.cloud.records import CloudFleetPlacementRecord
 from crsbench.cloud.types import CloudProvider
@@ -113,6 +114,30 @@ def _make_job_record(
         "updated_at": "2026-03-13T00:00:00+00:00",
         "detail": None,
     }
+
+
+def _make_inventory_row(
+    *,
+    alias: str,
+    name: str,
+    role: str,
+    zone: str = "us-central1-a",
+) -> CloudInstanceInventoryRow:
+    """Return a live inventory row for cloud remote-access selector tests."""
+    return CloudInstanceInventoryRow(
+        alias=alias,
+        name=name,
+        role=role,
+        placement_source="config",
+        provider="gce",
+        project="test-project",
+        zone=zone,
+        region="us-central1",
+        status="RUNNING",
+        internal_ip="10.0.0.10",
+        external_ip=None,
+        ssh_via_iap=True,
+    )
 
 
 def _make_recovery_event(
@@ -6373,6 +6398,69 @@ class TestSsh:
 class TestRemoteAccess:
     """Tests for provider-neutral remote access helpers."""
 
+    def test_resolve_inventory_selector_accepts_unique_short_form_suffix(self):
+        from crsbench.cloud.cli._instance_inventory import resolve_inventory_selector
+
+        rows = [
+            _make_inventory_row(
+                alias="work-west-001",
+                name="crsbench-test-exp-work-west-001",
+                role="worker",
+            ),
+            _make_inventory_row(
+                alias="eval-central-eval-001",
+                name="crsbench-test-exp-eval-central-eval-001",
+                role="evaluator",
+            ),
+        ]
+
+        selected = resolve_inventory_selector(rows, "eval-001")
+
+        assert selected == rows[1]
+
+    def test_resolve_inventory_selector_accepts_unique_role_alias(self):
+        from crsbench.cloud.cli._instance_inventory import resolve_inventory_selector
+
+        rows = [
+            _make_inventory_row(
+                alias="orch",
+                name="crsbench-test-exp-orch",
+                role="orchestrator",
+            ),
+            _make_inventory_row(
+                alias="work-001",
+                name="crsbench-test-exp-work-001",
+                role="worker",
+            ),
+            _make_inventory_row(
+                alias="eval-long-name-001",
+                name="crsbench-test-exp-eval-long-name-001",
+                role="evaluator",
+            ),
+        ]
+
+        selected = resolve_inventory_selector(rows, "eval")
+
+        assert selected == rows[2]
+
+    def test_resolve_inventory_selector_rejects_ambiguous_filtered_match(self):
+        from crsbench.cloud.cli._instance_inventory import resolve_inventory_selector
+
+        rows = [
+            _make_inventory_row(
+                alias="eval-east-001",
+                name="crsbench-test-exp-eval-east-001",
+                role="evaluator",
+            ),
+            _make_inventory_row(
+                alias="eval-west-002",
+                name="crsbench-test-exp-eval-west-002",
+                role="evaluator",
+            ),
+        ]
+
+        assert resolve_inventory_selector(rows, "eval") is None
+
     @patch("crsbench.cloud.cli._remote_access.transport_for_provider")
     def test_build_ssh_command_delegates_to_provider_transport(
         self,
@@ -6412,6 +6500,45 @@ class TestRemoteAccess:
 
 class TestExec:
     """Tests for run_exec() sub-action."""
+
+    def test_resolve_exec_request_uses_short_form_selector(self):
+        from crsbench.cloud.cli._exec import _resolve_exec_request
+
+        rows = [
+            _make_inventory_row(
+                alias="eval-central-eval-001",
+                name="crsbench-test-exp-eval-central-eval-001",
+                role="evaluator",
+            )
+        ]
+        args = SimpleNamespace(exec_args=["eval-001", "--", "hostname"])
+
+        selector, exec_command = _resolve_exec_request(args, rows)
+
+        assert selector == "eval-001"
+        assert exec_command == ["hostname"]
+
+    def test_resolve_exec_request_keeps_ambiguous_selector_as_selector(self):
+        from crsbench.cloud.cli._exec import _resolve_exec_request
+
+        rows = [
+            _make_inventory_row(
+                alias="eval-east-001",
+                name="crsbench-test-exp-eval-east-001",
+                role="evaluator",
+            ),
+            _make_inventory_row(
+                alias="eval-west-002",
+                name="crsbench-test-exp-eval-west-002",
+                role="evaluator",
+            ),
+        ]
+        args = SimpleNamespace(exec_args=["eval", "--", "hostname"])
+
+        selector, exec_command = _resolve_exec_request(args, rows)
+
+        assert selector == "eval"
+        assert exec_command == ["hostname"]
 
     @patch("crsbench.cloud.cli._exec.subprocess.run")
     @patch("crsbench.cloud.cli._exec.build_ssh_command")

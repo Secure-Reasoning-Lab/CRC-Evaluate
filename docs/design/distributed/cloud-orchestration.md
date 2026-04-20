@@ -150,7 +150,10 @@ The shared cloud control plane includes:
   the terminal message into a failure report; an initial idle state does not
   notify, but a later active -> idle transition in the same session still can
 - `cloud list`: show the resolved live inventory for the experiment
-- `cloud ssh`, `cloud shell`, `cloud exec`, `cloud log`: operator access to one live cloud instance
+- `cloud ssh`, `cloud shell`, `cloud exec`, `cloud log`: operator access to one
+  live cloud instance; selectors may use the full name, resolved alias, or any
+  other unambiguous filtered short form such as `eval-001`, and role shorthands
+  like `eval` resolve when they match exactly one live instance
 - `cloud collect`: retrieve worker artifacts plus role diagnostics
 - `cloud teardown`: collect first, then reclaim the fleet
 

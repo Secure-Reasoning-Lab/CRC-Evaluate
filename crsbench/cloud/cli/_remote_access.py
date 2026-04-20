@@ -6,6 +6,7 @@ import sys
 
 from crsbench.cloud.cli._instance_inventory import (
     CloudInstanceInventoryRow,
+    list_inventory_selector_matches,
     resolve_inventory_selector,
 )
 from crsbench.cloud.transport import transport_for_provider
@@ -20,10 +21,17 @@ def select_target(
 ) -> CloudInstanceInventoryRow | None:
     """Resolve one target row from a live inventory list."""
     if selector:
+        matches = list_inventory_selector_matches(rows, selector)
         selected = resolve_inventory_selector(rows, selector)
         if selected is None:
-            logger.error("No live cloud instance matched selector {}", selector)
-            print_selection_rows(rows)
+            if matches:
+                logger.error(
+                    "Selector {} matched multiple live cloud instances", selector
+                )
+                print_selection_rows(matches)
+            else:
+                logger.error("No live cloud instance matched selector {}", selector)
+                print_selection_rows(rows)
             return None
         return selected
 

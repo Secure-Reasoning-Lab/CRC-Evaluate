@@ -9,7 +9,10 @@ from crsbench.cloud.cli._config_reconnect import (
     resolve_cloud_context,
     resolve_effective_experiment_name,
 )
-from crsbench.cloud.cli._instance_inventory import list_cloud_instances
+from crsbench.cloud.cli._instance_inventory import (
+    list_cloud_instances,
+    list_inventory_selector_matches,
+)
 from crsbench.cloud.cli._remote_access import build_ssh_command, select_target
 from crsbench.cloud.providers import provisioner_for_context
 from crsbench.utils.logger import get_logger
@@ -80,7 +83,7 @@ def _resolve_exec_request(
     exec_command = raw_args
     if len(raw_args) > 1:
         candidate = raw_args[0]
-        if any(row.alias == candidate or row.name == candidate for row in rows):
+        if list_inventory_selector_matches(rows, candidate):
             selector = candidate
             exec_command = raw_args[1:]
             if exec_command and exec_command[0] == "--":

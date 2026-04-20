@@ -1187,6 +1187,10 @@ That means `cloud ssh` / `cloud shell` now attach with the same generated
 runtime environment that the managed CRSBench service uses, not just the
 `crsbench` Unix user and checkout directory.
 
+Selectors accept the full VM name, the resolved alias, or any other
+unambiguous filtered short form. For example, `eval-001` can match a longer
+evaluator alias, and `eval` works when exactly one evaluator is live.
+
 ## Remote Command Execution
 
 Run a one-off remote command without opening an interactive shell:
@@ -1206,6 +1210,10 @@ uv run crsbench cloud --config config.yaml exec -- docker ps
 live zone chosen at launch time. Unlike `cloud ssh`, it runs as the operator SSH
 login user by default, so one-off root or operator diagnostics remain
 available.
+
+The same selector rules apply to `cloud exec`, including unambiguous short
+forms such as `eval-001` and role shorthands like `eval` when only one
+evaluator is live.
 
 ## Log Following
 
@@ -1227,6 +1235,8 @@ you choose interactively:
 ```bash
 uv run crsbench cloud --config config.yaml log
 ```
+
+`cloud log` uses the same selector rules as `cloud ssh` and `cloud exec`.
 
 ## Teardown
 
