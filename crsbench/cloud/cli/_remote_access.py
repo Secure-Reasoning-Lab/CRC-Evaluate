@@ -25,22 +25,42 @@ def select_target(
         selected = resolve_inventory_selector(rows, selector)
         if selected is None:
             if matches:
-                logger.error(
-                    "Selector {} matched multiple live cloud instances", selector
-                )
                 print_selection_rows(matches)
-            else:
-                logger.error("No live cloud instance matched selector {}", selector)
-                print_selection_rows(rows)
+                if not sys.stdin.isatty():
+                    logger.error(
+                        "Selector {} matched multiple live cloud instances; "
+                        "choose a more specific selector when stdin is not interactive",
+                        selector,
+                    )
+                    return None
+                logger.warning(
+                    "Selector {} matched multiple live cloud instances; choose one",
+                    selector,
+                )
+                return _prompt_for_target(
+                    matches,
+                    prompt=f"Select {selector} instance number: ",
+                )
+            logger.error("No live cloud instance matched selector {}", selector)
+            print_selection_rows(rows)
             return None
         return selected
 
     print_selection_rows(rows)
+    return _prompt_for_target(rows)
+
+
+def _prompt_for_target(
+    rows: list[CloudInstanceInventoryRow],
+    *,
+    prompt: str = "Select instance number: ",
+) -> CloudInstanceInventoryRow | None:
+    """Prompt the operator to choose one row from a printed inventory list."""
     if not sys.stdin.isatty():
         logger.error("Specify an instance name when stdin is not interactive")
         return None
 
-    raw_value = input("Select instance number: ").strip()
+    raw_value = input(prompt).strip()
     if not raw_value.isdigit():
         logger.error("Invalid selection {}", raw_value or "<empty>")
         return None

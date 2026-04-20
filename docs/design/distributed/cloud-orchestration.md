@@ -153,7 +153,9 @@ The shared cloud control plane includes:
 - `cloud ssh`, `cloud shell`, `cloud exec`, `cloud log`: operator access to one
   live cloud instance; selectors may use the full name, resolved alias, or any
   other unambiguous filtered short form such as `eval-001`, and role shorthands
-  like `eval` resolve when they match exactly one live instance
+  like `eval` resolve when they match exactly one live instance; when a
+  selector still matches multiple live instances, interactive sessions must
+  prompt from the narrowed match set while non-interactive sessions fail
 - `cloud collect`: retrieve worker artifacts plus role diagnostics
 - `cloud teardown`: collect first, then reclaim the fleet
 

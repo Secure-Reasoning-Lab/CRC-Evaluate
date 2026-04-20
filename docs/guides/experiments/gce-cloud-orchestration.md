@@ -1189,7 +1189,9 @@ runtime environment that the managed CRSBench service uses, not just the
 
 Selectors accept the full VM name, the resolved alias, or any other
 unambiguous filtered short form. For example, `eval-001` can match a longer
-evaluator alias, and `eval` works when exactly one evaluator is live.
+evaluator alias, and `eval` works when exactly one evaluator is live. If a
+selector still matches multiple live instances, CRSBench shows only the
+matching rows and prompts you to choose in interactive sessions.
 
 ## Remote Command Execution
 
@@ -1213,7 +1215,8 @@ available.
 
 The same selector rules apply to `cloud exec`, including unambiguous short
 forms such as `eval-001` and role shorthands like `eval` when only one
-evaluator is live.
+evaluator is live. Ambiguous interactive selectors prompt from the narrowed
+match list instead of exiting immediately.
 
 ## Log Following
 
@@ -1236,7 +1239,8 @@ you choose interactively:
 uv run crsbench cloud --config config.yaml log
 ```
 
-`cloud log` uses the same selector rules as `cloud ssh` and `cloud exec`.
+`cloud log` uses the same selector rules as `cloud ssh` and `cloud exec`,
+including narrowed interactive prompting for ambiguous selectors.
 
 ## Teardown
 

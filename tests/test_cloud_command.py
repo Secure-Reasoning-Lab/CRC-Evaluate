@@ -6461,6 +6461,59 @@ class TestRemoteAccess:
 
         assert resolve_inventory_selector(rows, "eval") is None
 
+    def test_select_target_prompts_when_selector_is_ambiguous_and_interactive(
+        self,
+        monkeypatch,
+    ):
+        from crsbench.cloud.cli._remote_access import select_target
+
+        rows = [
+            _make_inventory_row(
+                alias="work-001",
+                name="crsbench-test-exp-work-001",
+                role="worker",
+            ),
+            _make_inventory_row(
+                alias="work-002",
+                name="crsbench-test-exp-work-002",
+                role="worker",
+            ),
+        ]
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr("builtins.input", lambda _: "2")
+
+        selected = select_target(rows, "work")
+
+        assert selected == rows[1]
+
+    def test_select_target_rejects_ambiguous_selector_when_not_interactive(
+        self,
+        monkeypatch,
+        capsys,
+    ):
+        from crsbench.cloud.cli._remote_access import select_target
+
+        rows = [
+            _make_inventory_row(
+                alias="work-001",
+                name="crsbench-test-exp-work-001",
+                role="worker",
+            ),
+            _make_inventory_row(
+                alias="work-002",
+                name="crsbench-test-exp-work-002",
+                role="worker",
+            ),
+        ]
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+        selected = select_target(rows, "work")
+
+        assert selected is None
+        out = capsys.readouterr().out
+        assert "crsbench-test-exp-work-001" in out
+        assert "crsbench-test-exp-work-002" in out
+
     @patch("crsbench.cloud.cli._remote_access.transport_for_provider")
     def test_build_ssh_command_delegates_to_provider_transport(
         self,
