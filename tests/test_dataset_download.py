@@ -7,6 +7,7 @@ import crsbench.dataset.download as dataset_download
 import pytest
 from crsbench.dataset.download import (
     IncompleteDatasetDownloadError,
+    _incomplete_download_wait_seconds,
     _load_remote_manifest,
     _validate_downloaded_bundles,
     download_dataset,
@@ -121,6 +122,11 @@ def test_validate_downloaded_bundles_requires_ground_truth_when_manifest_says_so
             },
             no_ground_truth=False,
         )
+
+
+def test_incomplete_download_wait_uses_five_minutes_plus_jitter() -> None:
+    with patch("crsbench.dataset.download.random.uniform", return_value=23.0):
+        assert _incomplete_download_wait_seconds() == 323.0
 
 
 def test_download_dataset_continues_without_manifest_for_explicit_benchmarks(

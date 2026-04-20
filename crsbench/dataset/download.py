@@ -1,5 +1,6 @@
 """Download CRSBench benchmarks from HuggingFace."""
 
+import random
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -30,6 +31,9 @@ from crsbench.dataset.registry import (
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+_INCOMPLETE_DOWNLOAD_BASE_WAIT_SECONDS = 300.0
+_INCOMPLETE_DOWNLOAD_JITTER_MAX_SECONDS = 60.0
 
 
 class IncompleteDatasetDownloadError(RuntimeError):
@@ -98,6 +102,18 @@ def _log_incomplete_download_retry(retry_state: tenacity.RetryCallState) -> None
         wait,
         retry_state.outcome.exception() if retry_state.outcome else "unknown",
     )
+
+
+def _incomplete_download_wait_seconds() -> float:
+    """Return the wait between incomplete-staging retries."""
+    return _INCOMPLETE_DOWNLOAD_BASE_WAIT_SECONDS + random.uniform(
+        0.0, _INCOMPLETE_DOWNLOAD_JITTER_MAX_SECONDS
+    )
+
+
+def _incomplete_download_wait(_: tenacity.RetryCallState) -> float:
+    """Backoff strategy for incomplete download staging retries."""
+    return _incomplete_download_wait_seconds()
 
 
 def download_dataset(
@@ -263,7 +279,7 @@ def _expected_benchmark_names(
 
 @tenacity.retry(
     retry=tenacity.retry_if_exception_type(IncompleteDatasetDownloadError),
-    wait=tenacity.wait_exponential(multiplier=1, min=30, max=300),
+    wait=_incomplete_download_wait,
     stop=tenacity.stop_after_attempt(4),
     before_sleep=_log_incomplete_download_retry,
     reraise=True,

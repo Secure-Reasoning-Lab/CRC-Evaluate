@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from crsbench.dataset.backends import (
     _download_huggingface,
+    _hf_retry_wait_seconds,
     _is_hf_rate_limit_or_server_error,
 )
 from crsbench.dataset.registry import DatasetConfig
@@ -90,6 +91,24 @@ class TestIsHfRateLimitOrServerError:
         exc.__cause__ = cause
 
         assert _is_hf_rate_limit_or_server_error(exc) is True
+
+    def test_hf_retry_wait_uses_five_minute_floor_for_429(self) -> None:
+        exc = _make_hf_http_error(429)
+
+        with patch("crsbench.dataset.backends.random.uniform", return_value=17.0):
+            assert _hf_retry_wait_seconds(exc) == 317.0
+
+    def test_hf_retry_wait_honors_longer_retry_after(self) -> None:
+        exc = _make_hf_http_error(429)
+        exc.response.headers = {"Retry-After": "600"}
+
+        with patch("crsbench.dataset.backends.random.uniform", return_value=11.0):
+            assert _hf_retry_wait_seconds(exc) == 611.0
+
+    def test_hf_retry_wait_ignores_non_429_errors(self) -> None:
+        exc = _make_hf_http_error(500)
+
+        assert _hf_retry_wait_seconds(exc) is None
 
 
 # ---------------------------------------------------------------------------

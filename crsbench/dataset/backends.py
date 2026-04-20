@@ -5,7 +5,10 @@ New backends can be added by implementing the download/upload functions
 and registering them in BACKENDS.
 """
 
+import random
 from collections.abc import Callable
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Optional
 
@@ -16,9 +19,16 @@ from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_HF_RATE_LIMIT_WINDOW_SECONDS = 300.0
+_HF_RETRY_JITTER_MAX_SECONDS = 60.0
+_HF_RETRY_FALLBACK_WAIT = tenacity.wait_exponential(multiplier=1, min=30, max=300)
 
-def _is_hf_rate_limit_or_server_error(exc: BaseException) -> bool:
-    """Return True for HuggingFace errors worth retrying (429, 5xx)."""
+
+def _find_hf_http_error(exc: BaseException | None) -> BaseException | None:
+    """Return the first HuggingFace HTTP error with a response in an exception chain."""
+    if exc is None:
+        return None
+
     try:
         from huggingface_hub.errors import HfHubHTTPError
     except ImportError:
@@ -28,16 +38,82 @@ def _is_hf_rate_limit_or_server_error(exc: BaseException) -> bool:
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        if isinstance(current, HfHubHTTPError):
-            response = getattr(current, "response", None)
-            if response is not None and (
-                response.status_code == 429 or response.status_code >= 500
-            ):
-                return True
+        if isinstance(current, HfHubHTTPError) and getattr(current, "response", None):
+            return current
         current = getattr(current, "__cause__", None) or getattr(
             current, "__context__", None
         )
-    return False
+    return None
+
+
+def _parse_retry_after_seconds(value: object) -> float | None:
+    """Best-effort parse of HTTP Retry-After into seconds."""
+    if value is None:
+        return None
+
+    if isinstance(value, (int, float)):
+        return max(0.0, float(value))
+
+    if not isinstance(value, str):
+        return None
+
+    stripped = value.strip()
+    if not stripped:
+        return None
+
+    try:
+        return max(0.0, float(stripped))
+    except ValueError:
+        pass
+
+    try:
+        retry_at = parsedate_to_datetime(stripped)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=timezone.utc)
+    return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+
+
+def _retry_jitter_seconds() -> float:
+    """Return small random jitter to avoid synchronized retries across VMs."""
+    return random.uniform(0.0, _HF_RETRY_JITTER_MAX_SECONDS)
+
+
+def _hf_retry_wait_seconds(exc: BaseException | None) -> float | None:
+    """Return a 429-specific wait duration, or None for fallback behavior."""
+    hf_exc = _find_hf_http_error(exc)
+    if hf_exc is None:
+        return None
+
+    response = getattr(hf_exc, "response", None)
+    if response is None or response.status_code != 429:
+        return None
+
+    headers = getattr(response, "headers", {}) or {}
+    retry_after = _parse_retry_after_seconds(headers.get("Retry-After"))
+    base_wait = max(_HF_RATE_LIMIT_WINDOW_SECONDS, retry_after or 0.0)
+    return base_wait + _retry_jitter_seconds()
+
+
+def _hf_retry_wait(retry_state: tenacity.RetryCallState) -> float:
+    """Backoff strategy for HuggingFace download retries."""
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    rate_limit_wait = _hf_retry_wait_seconds(exc)
+    if rate_limit_wait is not None:
+        return rate_limit_wait
+    return _HF_RETRY_FALLBACK_WAIT(retry_state)
+
+
+def _is_hf_rate_limit_or_server_error(exc: BaseException) -> bool:
+    """Return True for HuggingFace errors worth retrying (429, 5xx)."""
+    hf_exc = _find_hf_http_error(exc)
+    if hf_exc is None:
+        return False
+    response = getattr(hf_exc, "response", None)
+    return response is not None and (
+        response.status_code == 429 or response.status_code >= 500
+    )
 
 
 def _log_hf_retry(retry_state: tenacity.RetryCallState) -> None:
@@ -73,7 +149,7 @@ def check_hf_token() -> tuple[bool, str]:
 
 @tenacity.retry(
     retry=tenacity.retry_if_exception(_is_hf_rate_limit_or_server_error),
-    wait=tenacity.wait_exponential(multiplier=1, min=30, max=300),
+    wait=_hf_retry_wait,
     stop=tenacity.stop_after_attempt(8),
     before_sleep=_log_hf_retry,
     reraise=True,

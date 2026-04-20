@@ -17,6 +17,9 @@ extensible support for S3 and Azure.
 - **Complete download gating**: benchmark downloads may reuse partial staging
   across retries, but extraction only proceeds once every requested benchmark
   bundle is present locally
+- **Rate-limit backoff**: HuggingFace `429` retries wait at least 5 minutes
+  plus jitter, and incomplete partial-staging retries also wait 5 minutes plus
+  jitter to avoid VM thundering herds
 - **Opt-in prune**: `crsbench benchmark upload --prune` deletes remote
   benchmark folders and manifest entries that are absent from the local
   benchmarks directory. Incompatible with `--benchmarks` because a subset
