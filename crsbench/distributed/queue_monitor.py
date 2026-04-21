@@ -84,12 +84,26 @@ class _RichMonitorInput:
         self._saved_termios_attrs: Any = None
         self._pending_commands: deque[str] = deque()
         self.manual_navigation_available = False
+        self.manual_navigation_status = (
+            "n/p unavailable: stdin not interactive; auto-rotates each refresh"
+        )
+
+    def _set_manual_navigation_unavailable(self, reason: str) -> "_RichMonitorInput":
+        self.manual_navigation_available = False
+        self.manual_navigation_status = (
+            f"n/p unavailable: {reason}; auto-rotates each refresh"
+        )
+        return self
 
     def __enter__(self) -> "_RichMonitorInput":
         isatty = getattr(self._stream, "isatty", None)
         fileno = getattr(self._stream, "fileno", None)
-        if not callable(isatty) or not isatty() or not callable(fileno):
-            return self
+        if not callable(isatty):
+            return self._set_manual_navigation_unavailable("TTY state unknown")
+        if not isatty():
+            return self._set_manual_navigation_unavailable("stdin not TTY")
+        if not callable(fileno):
+            return self._set_manual_navigation_unavailable("no file descriptor")
 
         try:
             import termios
@@ -98,12 +112,15 @@ class _RichMonitorInput:
             fd = fileno()
             saved_termios_attrs = cast("Any", termios.tcgetattr(fd))
             tty.setcbreak(fd)
-        except (ImportError, OSError, ValueError, AttributeError):
-            return self
+        except ImportError:
+            return self._set_manual_navigation_unavailable("raw mode unsupported")
+        except (OSError, ValueError, AttributeError):
+            return self._set_manual_navigation_unavailable("cbreak setup failed")
 
         self._fd = fd
         self._saved_termios_attrs = saved_termios_attrs
         self.manual_navigation_available = True
+        self.manual_navigation_status = "n/p active; auto-rotates when idle"
         return self
 
     def __exit__(self, exc_type, exc, tb) -> bool:
@@ -488,7 +505,7 @@ def _build_rich_group(
     paging_active: bool = False,
     page_index: int = 0,
     page_count: int = 1,
-    manual_navigation_available: bool = False,
+    paging_status_text: str | None = None,
 ):
     from rich.console import Group
     from rich.table import Table
@@ -513,11 +530,7 @@ def _build_rich_group(
 
     running_table = Table(title="Running Jobs")
     if paging_active and total_running_jobs > len(visible_running_jobs):
-        helper_text = (
-            "n/p: switch pages; auto-rotates when idle"
-            if manual_navigation_available
-            else "auto-rotates each refresh"
-        )
+        helper_text = paging_status_text or "auto-rotates each refresh"
         running_table.caption = (
             f"Page {page_index + 1}/{page_count}: "
             f"showing {len(visible_running_jobs)} of {total_running_jobs} running jobs; "
@@ -564,7 +577,7 @@ def _select_running_jobs_window(
     total_jobs: int,
     disk_skipped: int,
     page_index: int,
-    manual_navigation_available: bool = False,
+    paging_status_text: str | None = None,
 ) -> tuple[list[RunningJobInfo], bool, int, int]:
     running_jobs = snapshot.running_jobs
     total_running_jobs = len(running_jobs)
@@ -597,7 +610,7 @@ def _select_running_jobs_window(
             paging_active=True,
             page_index=0,
             page_count=1,
-            manual_navigation_available=manual_navigation_available,
+            paging_status_text=paging_status_text,
         )
         if _count_rendered_lines(console, candidate_group) <= console.size.height:
             best = candidate_count
@@ -659,7 +672,7 @@ def _build_rich_renderable(
     total_jobs: int,
     disk_skipped: int,
     page_index: int,
-    manual_navigation_available: bool,
+    paging_status_text: str,
 ):
     visible_running_jobs, paging_active, selected_page_index, page_count = (
         _select_running_jobs_window(
@@ -669,7 +682,7 @@ def _build_rich_renderable(
             total_jobs=total_jobs,
             disk_skipped=disk_skipped,
             page_index=page_index,
-            manual_navigation_available=manual_navigation_available,
+            paging_status_text=paging_status_text,
         )
     )
     renderable = _build_rich_group(
@@ -682,7 +695,7 @@ def _build_rich_renderable(
         paging_active=paging_active,
         page_index=selected_page_index,
         page_count=page_count,
-        manual_navigation_available=manual_navigation_available,
+        paging_status_text=paging_status_text,
     )
     return renderable, selected_page_index, page_count, paging_active
 
@@ -725,7 +738,7 @@ def _monitor_queue_rich(
             total_jobs=display_total,
             disk_skipped=disk_skipped,
             page_index=page_index,
-            manual_navigation_available=monitor_input.manual_navigation_available,
+            paging_status_text=monitor_input.manual_navigation_status,
         )
         with Live(
             renderable,
@@ -777,9 +790,7 @@ def _monitor_queue_rich(
                         total_jobs=display_total,
                         disk_skipped=disk_skipped,
                         page_index=page_index,
-                        manual_navigation_available=(
-                            monitor_input.manual_navigation_available
-                        ),
+                        paging_status_text=monitor_input.manual_navigation_status,
                     )
                     live.update(renderable)
 
@@ -810,8 +821,6 @@ def _monitor_queue_rich(
                     total_jobs=display_total,
                     disk_skipped=disk_skipped,
                     page_index=page_index,
-                    manual_navigation_available=(
-                        monitor_input.manual_navigation_available
-                    ),
+                    paging_status_text=monitor_input.manual_navigation_status,
                 )
                 live.update(renderable)

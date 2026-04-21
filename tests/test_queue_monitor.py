@@ -14,6 +14,7 @@ from crsbench.distributed.queue_monitor import (
     _build_rich_group,
     _display_worker_name,
     _page_navigation_idle_timeout_sec,
+    _RichMonitorInput,
     _select_running_jobs_window,
     _should_auto_rotate_pages,
     build_monitor_snapshot,
@@ -373,7 +374,7 @@ def test_select_running_jobs_window_pages_when_terminal_height_is_limited() -> N
             total_jobs=6,
             disk_skipped=0,
             page_index=0,
-            manual_navigation_available=True,
+            paging_status_text="n/p active; auto-rotates when idle",
         )
     )
 
@@ -389,7 +390,7 @@ def test_select_running_jobs_window_pages_when_terminal_height_is_limited() -> N
             total_jobs=6,
             disk_skipped=0,
             page_index=1,
-            manual_navigation_available=True,
+            paging_status_text="n/p active; auto-rotates when idle",
         )
     )
 
@@ -428,7 +429,7 @@ def test_select_running_jobs_window_clamps_page_index_when_count_shrinks() -> No
             total_jobs=6,
             disk_skipped=0,
             page_index=5,
-            manual_navigation_available=True,
+            paging_status_text="n/p active; auto-rotates when idle",
         )
     )
 
@@ -492,7 +493,7 @@ def test_select_running_jobs_window_shows_all_rows_when_terminal_can_fit_them() 
         total_jobs=6,
         disk_skipped=0,
         page_index=3,
-        manual_navigation_available=True,
+        paging_status_text="n/p active; auto-rotates when idle",
     )
 
     assert paging_active is False
@@ -530,19 +531,17 @@ def test_build_rich_group_caption_shows_page_indicator_and_key_help() -> None:
         paging_active=True,
         page_index=1,
         page_count=2,
-        manual_navigation_available=True,
+        paging_status_text="n/p active; auto-rotates when idle",
     )
     console = rich_console.Console(width=120, force_terminal=True, record=True)
     console.print(renderable)
 
     output = console.export_text()
-    assert (
-        "Page 2/2: showing 4 of 6 running jobs; "
-        "n/p: switch pages; auto-rotates when idle" in output
-    )
+    assert "Page 2/2: showing 4 of 6 running jobs;" in output
+    assert "n/p active; auto-rotates when idle" in output
 
 
-def test_build_rich_group_caption_falls_back_to_auto_rotate_only() -> None:
+def test_build_rich_group_caption_reports_hotkeys_unavailable_reason() -> None:
     rich_console = pytest.importorskip("rich.console")
     snapshot = QueueMonitorSnapshot(
         stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
@@ -572,13 +571,27 @@ def test_build_rich_group_caption_falls_back_to_auto_rotate_only() -> None:
         paging_active=True,
         page_index=0,
         page_count=2,
-        manual_navigation_available=False,
+        paging_status_text="n/p unavailable: stdin not TTY; auto-rotates each refresh",
     )
     console = rich_console.Console(width=120, force_terminal=True, record=True)
     console.print(renderable)
 
     output = console.export_text()
-    assert "Page 1/2: showing 4 of 6 running jobs; auto-rotates each refresh" in output
+    assert "Page 1/2: showing 4 of 6 running jobs;" in output
+    assert "n/p unavailable: stdin not TTY;" in output
+    assert "auto-rotates each" in output
+    assert "refresh" in output
+
+
+def test_rich_monitor_input_reports_non_tty_unavailability_reason() -> None:
+    stream = MagicMock()
+    stream.isatty.return_value = False
+
+    with _RichMonitorInput(stream) as monitor_input:
+        assert monitor_input.manual_navigation_available is False
+        assert monitor_input.manual_navigation_status == (
+            "n/p unavailable: stdin not TTY; auto-rotates each refresh"
+        )
 
 
 def test_monitor_queue_rich_applies_manual_page_navigation_immediately() -> None:
@@ -626,6 +639,7 @@ def test_monitor_queue_rich_applies_manual_page_navigation_immediately() -> None
         def __init__(self, *args, **kwargs):
             del args, kwargs
             self.manual_navigation_available = True
+            self.manual_navigation_status = "n/p active; auto-rotates when idle"
             self._commands = iter(["n", None])
 
         def __enter__(self):
@@ -669,10 +683,8 @@ def test_monitor_queue_rich_applies_manual_page_navigation_immediately() -> None
     )
     second_render_console.print(rendered_updates[1])
     output = second_render_console.export_text()
-    assert (
-        "Page 2/2: showing 2 of 6 running jobs; "
-        "n/p: switch pages; auto-rotates when idle" in output
-    )
+    assert "Page 2/2: showing 2 of 6 running jobs;" in output
+    assert "n/p active; auto-rotates when idle" in output
     assert "worker-4" in output
     assert "worker-5" in output
 
