@@ -1240,7 +1240,10 @@ uv run crsbench cloud --config config.yaml log
 ```
 
 `cloud log` uses the same selector rules as `cloud ssh` and `cloud exec`,
-including narrowed interactive prompting for ambiguous selectors.
+including narrowed interactive prompting for ambiguous selectors when you are
+following a single target. In explicit multi-target fan-in mode, ambiguous
+`--instance` selectors are rejected instead of prompting; choose a more
+specific selector or use `--role`/`--all`.
 
 For explicit multi-target fan-in, use `--all`, `--role`, or repeated
 `--instance` selectors:

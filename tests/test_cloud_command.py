@@ -8,7 +8,6 @@ import io
 import json
 import os
 import threading
-import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -6782,6 +6781,44 @@ class TestLog:
 
         assert targets == [rows[1], rows[2], rows[0], rows[3]]
 
+    def test_resolve_log_targets_deduplicates_all_role_and_explicit_selectors(self):
+        from crsbench.cloud.cli._log import _resolve_log_targets
+
+        rows = [
+            _make_inventory_row(
+                alias="orch",
+                name="crsbench-test-exp-orch",
+                role="orchestrator",
+            ),
+            _make_inventory_row(
+                alias="work-001",
+                name="crsbench-test-exp-work-001",
+                role="worker",
+            ),
+            _make_inventory_row(
+                alias="work-002",
+                name="crsbench-test-exp-work-002",
+                role="worker",
+            ),
+            _make_inventory_row(
+                alias="eval-001",
+                name="crsbench-test-exp-eval-001",
+                role="evaluator",
+            ),
+        ]
+
+        targets = _resolve_log_targets(
+            rows,
+            _make_log_args(
+                instance="orch",
+                instances=["work-001"],
+                role="worker",
+                all_instances=True,
+            ),
+        )
+
+        assert targets == rows
+
     def test_resolve_log_targets_rejects_ambiguous_explicit_selector(
         self,
         capsys,
@@ -7010,6 +7047,90 @@ class TestLog:
         monkeypatch,
         capsys,
     ):
+        from crsbench.cloud.cli import _log as log_module
+
+        targets = [
+            _make_inventory_row(
+                alias="orch",
+                name="crsbench-test-exp-orch",
+                role="orchestrator",
+            ),
+            _make_inventory_row(
+                alias="work-001",
+                name="crsbench-test-exp-work-001",
+                role="worker",
+            ),
+        ]
+        worker_done = threading.Event()
+
+        def _fake_stream_target_logs(
+            target,
+            event_queue,
+            stop_event,
+            active_processes,
+            active_processes_lock,
+        ):
+            del stop_event, active_processes, active_processes_lock
+            if target.alias == "work-001":
+                event_queue.put(
+                    log_module._LogStreamEvent(kind="stream_started", target=target)
+                )
+                event_queue.put(
+                    log_module._LogStreamEvent(
+                        kind="journal_record",
+                        target=target,
+                        message="worker second",
+                        timestamp=1.0,
+                    )
+                )
+                event_queue.put(
+                    log_module._LogStreamEvent(
+                        kind="target_done",
+                        target=target,
+                        state="detached",
+                    )
+                )
+                worker_done.set()
+                return
+
+            assert worker_done.wait(timeout=1.0)
+            event_queue.put(
+                log_module._LogStreamEvent(kind="stream_started", target=target)
+            )
+            event_queue.put(
+                log_module._LogStreamEvent(
+                    kind="journal_record",
+                    target=target,
+                    message="orch first",
+                    timestamp=0.5,
+                )
+            )
+            event_queue.put(
+                log_module._LogStreamEvent(
+                    kind="target_done",
+                    target=target,
+                    state="detached",
+                )
+            )
+
+        monkeypatch.setattr(
+            log_module,
+            "_stream_target_logs",
+            _fake_stream_target_logs,
+        )
+
+        rc = log_module._run_multi_target_log_session(targets, merge_by="timestamp")
+
+        assert rc == 0
+        lines = [line for line in capsys.readouterr().out.splitlines() if line]
+        assert lines[0] == "orch | orchestrator | journal | orch first"
+        assert lines[1] == "work-001 | worker | journal | worker second"
+
+    def test_multi_target_log_session_retries_failed_target_without_stalling_others(
+        self,
+        monkeypatch,
+        capsys,
+    ):
         from crsbench.cloud.cli._log import _run_multi_target_log_session
 
         targets = [
@@ -7028,7 +7149,7 @@ class TestLog:
         class _FakePopen:
             def __init__(
                 self,
-                stdout_text: str,
+                stdout_text: str = "",
                 stderr_text: str = "",
                 returncode: int = 0,
             ):
@@ -7048,25 +7169,24 @@ class TestLog:
             def kill(self):
                 self._returncode = -9
 
+        attempts = {"orch": 0, "work-001": 0}
+
         def _fake_build_ssh_command(target, *, remote_command=None, tty=False):
             assert tty is False
             assert remote_command is not None
             return [target.alias]
 
-        base_timestamp_us = int(time.time() * 1_000_000)
-
         def _fake_popen(cmd, **_kwargs):
             alias = cmd[0]
+            attempts[alias] += 1
+            if alias == "orch" and attempts[alias] == 1:
+                return _FakePopen(stderr_text="transport boom\n", returncode=255)
             if alias == "orch":
                 return _FakePopen(
-                    '{"__REALTIME_TIMESTAMP":"'
-                    + str(base_timestamp_us)
-                    + '","MESSAGE":"orch first"}\n'
+                    '{"__REALTIME_TIMESTAMP":"1000000","MESSAGE":"orch recovered"}\n'
                 )
             return _FakePopen(
-                '{"__REALTIME_TIMESTAMP":"'
-                + str(base_timestamp_us + 100_000)
-                + '","MESSAGE":"worker second"}\n'
+                '{"__REALTIME_TIMESTAMP":"2000000","MESSAGE":"worker steady"}\n'
             )
 
         monkeypatch.setattr(
@@ -7074,13 +7194,21 @@ class TestLog:
             _fake_build_ssh_command,
         )
         monkeypatch.setattr("crsbench.cloud.cli._log.subprocess.Popen", _fake_popen)
+        monkeypatch.setattr("crsbench.cloud.cli._log._FAN_IN_RETRY_DELAY_SEC", 0.0)
+        monkeypatch.setattr("crsbench.cloud.cli._log._FAN_IN_MAX_RETRIES", 1)
 
-        rc = _run_multi_target_log_session(targets, merge_by="timestamp")
+        rc = _run_multi_target_log_session(targets, merge_by="arrival")
 
         assert rc == 0
-        lines = [line for line in capsys.readouterr().out.splitlines() if line]
-        assert lines[0] == "orch | orchestrator | journal | orch first"
-        assert lines[1] == "work-001 | worker | journal | worker second"
+        out = capsys.readouterr().out
+        assert "orch | orchestrator | transport | transport boom" in out
+        assert (
+            "orch | orchestrator | control | log stream exited with code 255; "
+            "retrying in 0.0s (1/1)" in out
+        )
+        assert "work-001 | worker | journal | worker steady" in out
+        assert "orch | orchestrator | journal | orch recovered" in out
+        assert attempts == {"orch": 2, "work-001": 1}
 
     def test_multi_target_log_session_returns_error_when_no_stream_starts(
         self,

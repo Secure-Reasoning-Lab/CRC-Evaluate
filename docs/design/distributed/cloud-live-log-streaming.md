@@ -128,6 +128,8 @@ Timestamp-mode invariants:
 
 - timestamp-aware merge must use journal/transport timestamps rather than parsing the application message body
 - the implementation may delay rendering within a bounded window to reduce obvious cross-stream inversions
+- the reorder watermark must advance from the newest observed source timestamp rather than from the operator wall clock
+- if no newer timestamps arrive, buffered records must still drain after a bounded local idle interval so quiet or skewed sources cannot stall rendering indefinitely
 - the output remains best-effort rather than globally total-ordered because host clocks and network paths may diverge
 - rendered records must still include their source identity so operators can reason about skew or delayed delivery
 
@@ -189,7 +191,7 @@ Exit semantics:
 1. each target emits records independently
 2. `arrival` mode renders immediately on receipt
 3. `timestamp` mode places records into a bounded reorder buffer keyed by source-carried timestamp
-4. records older than the watermark render in timestamp order, with best-effort behavior under skew
+4. records older than the observed-source watermark render in timestamp order, and any remaining buffered records drain after the same bounded idle window if no fresher timestamps arrive
 
 ## Deployment and Distributed Behavior
 

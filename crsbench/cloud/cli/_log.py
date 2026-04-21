@@ -62,6 +62,14 @@ class _BufferedJournalRecord:
     rendered_lines: tuple[str, ...] = field(compare=False)
 
 
+@dataclass
+class _TimestampMergeState:
+    """Observed timestamp frontier for bounded best-effort merge ordering."""
+
+    max_seen_timestamp: float | None = None
+    latest_buffer_arrival_monotonic: float | None = None
+
+
 def run_log(args: argparse.Namespace) -> int:
     """Follow role-appropriate CRSBench user journals on live cloud VMs."""
     experiment_name = resolve_effective_experiment_name(args.config, None)
@@ -227,6 +235,7 @@ def _run_multi_target_log_session(
     completed_targets = 0
     final_states: dict[tuple[str, str, str, str], str] = {}
     buffered_records: list[_BufferedJournalRecord] = []
+    merge_state = _TimestampMergeState()
     next_sequence = 0
 
     try:
@@ -237,15 +246,10 @@ def _run_multi_target_log_session(
                 if merge_by == _LOG_MERGE_BY_TIMESTAMP:
                     _flush_ready_buffered_records(
                         buffered_records,
-                        time.time() - _TIMESTAMP_REORDER_WINDOW_SEC,
+                        merge_state,
+                        time.monotonic(),
                     )
                 continue
-
-            if merge_by == _LOG_MERGE_BY_TIMESTAMP:
-                _flush_ready_buffered_records(
-                    buffered_records,
-                    time.time() - _TIMESTAMP_REORDER_WINDOW_SEC,
-                )
 
             if event.kind == "stream_started":
                 any_stream_started = True
@@ -258,18 +262,39 @@ def _run_multi_target_log_session(
                     event.message,
                 )
                 if merge_by == _LOG_MERGE_BY_TIMESTAMP:
+                    arrival_monotonic = time.monotonic()
+                    journal_timestamp = (
+                        event.timestamp if event.timestamp is not None else time.time()
+                    )
                     heapq.heappush(
                         buffered_records,
                         _BufferedJournalRecord(
-                            timestamp=event.timestamp or time.time(),
+                            timestamp=journal_timestamp,
                             sequence=next_sequence,
                             rendered_lines=rendered_lines,
                         ),
                     )
+                    _note_buffered_timestamp_record(
+                        merge_state,
+                        journal_timestamp,
+                        arrival_monotonic,
+                    )
                     next_sequence += 1
+                    _flush_ready_buffered_records(
+                        buffered_records,
+                        merge_state,
+                        arrival_monotonic,
+                    )
                 else:
                     _emit_rendered_lines(rendered_lines)
                 continue
+
+            if merge_by == _LOG_MERGE_BY_TIMESTAMP:
+                _flush_ready_buffered_records(
+                    buffered_records,
+                    merge_state,
+                    time.monotonic(),
+                )
 
             if event.kind == "transport_record":
                 _emit_rendered_lines(
@@ -568,14 +593,44 @@ def _emit_rendered_lines(lines: tuple[str, ...]) -> None:
     sys.stdout.flush()
 
 
+def _note_buffered_timestamp_record(
+    merge_state: _TimestampMergeState,
+    record_timestamp: float,
+    arrival_monotonic: float,
+) -> None:
+    """Advance the observed source timestamp frontier for timestamp merge."""
+    if (
+        merge_state.max_seen_timestamp is None
+        or record_timestamp > merge_state.max_seen_timestamp
+    ):
+        merge_state.max_seen_timestamp = record_timestamp
+    merge_state.latest_buffer_arrival_monotonic = arrival_monotonic
+
+
 def _flush_ready_buffered_records(
     buffered_records: list[_BufferedJournalRecord],
-    watermark: float,
+    merge_state: _TimestampMergeState,
+    now_monotonic: float,
 ) -> None:
     """Flush buffered timestamp-ordered records that are ready to render."""
-    while buffered_records and buffered_records[0].timestamp <= watermark:
-        record = heapq.heappop(buffered_records)
-        _emit_rendered_lines(record.rendered_lines)
+    if merge_state.max_seen_timestamp is not None:
+        remote_watermark = (
+            merge_state.max_seen_timestamp - _TIMESTAMP_REORDER_WINDOW_SEC
+        )
+        while buffered_records and buffered_records[0].timestamp <= remote_watermark:
+            record = heapq.heappop(buffered_records)
+            _emit_rendered_lines(record.rendered_lines)
+
+    if (
+        buffered_records
+        and merge_state.latest_buffer_arrival_monotonic is not None
+        and now_monotonic - merge_state.latest_buffer_arrival_monotonic
+        >= _TIMESTAMP_REORDER_WINDOW_SEC
+    ):
+        _flush_all_buffered_records(buffered_records)
+
+    if not buffered_records:
+        merge_state.latest_buffer_arrival_monotonic = None
 
 
 def _flush_all_buffered_records(
