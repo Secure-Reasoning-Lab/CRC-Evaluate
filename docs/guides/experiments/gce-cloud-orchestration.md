@@ -933,7 +933,10 @@ Use `cloud status` when you want a one-shot fleet and job snapshot. For
 remote-orchestrator launches it now waits for the tunneled Redis endpoint
 during bootstrap, then reports lifecycle records when present or falls back to
 the live RQ queue/registry view when lifecycle tracking is still empty. Use
-`cloud monitor` when you want the continuously updating queue view.
+`cloud monitor` when you want the continuously updating queue view. When the
+Rich monitor needs to paginate running jobs, the caption shows `n`/`p` helper
+text so you can switch pages manually; if you leave it idle, page rotation
+resumes automatically.
 `cloud status --json` and `cloud list --json` include `placement_source` so you
 can tell config-declared placements from `runtime_added` ones.
 

@@ -10,9 +10,12 @@ from crsbench.distributed.queue_monitor import (
     QueueMonitorCallbacks,
     QueueMonitorSnapshot,
     RunningJobInfo,
+    _apply_page_navigation_command,
     _build_rich_group,
     _display_worker_name,
+    _page_navigation_idle_timeout_sec,
     _select_running_jobs_window,
+    _should_auto_rotate_pages,
     build_monitor_snapshot,
     list_queue_job_entries,
     monitor_queue,
@@ -340,7 +343,7 @@ def test_monitor_queue_calls_snapshot_callback_in_rich_mode() -> None:
     assert snapshots == [active, done]
 
 
-def test_select_running_jobs_window_rotates_when_terminal_height_is_limited() -> None:
+def test_select_running_jobs_window_pages_when_terminal_height_is_limited() -> None:
     rich_console = pytest.importorskip("rich.console")
     console = rich_console.Console(width=120, height=20, force_terminal=True)
     running_jobs = [
@@ -362,45 +365,102 @@ def test_select_running_jobs_window_rotates_when_terminal_height_is_limited() ->
         running_jobs=running_jobs,
     )
 
-    (
-        visible_jobs,
-        next_cursor,
-        rotation_active,
-        page_index,
-        page_count,
-    ) = _select_running_jobs_window(
-        console,
-        snapshot,
-        experiment_name="exp-1",
-        total_jobs=6,
-        disk_skipped=0,
-        rotation_cursor=0,
+    visible_jobs, paging_active, selected_page_index, page_count = (
+        _select_running_jobs_window(
+            console,
+            snapshot,
+            experiment_name="exp-1",
+            total_jobs=6,
+            disk_skipped=0,
+            page_index=0,
+            manual_navigation_available=True,
+        )
     )
 
-    assert rotation_active is True
+    assert paging_active is True
     assert [job.trial_num for job in visible_jobs] == ["0", "1", "2", "3"]
-    assert next_cursor == 1
-    assert (page_index, page_count) == (0, 2)
+    assert (selected_page_index, page_count) == (0, 2)
 
-    (
-        rotated_jobs,
-        wrapped_cursor,
-        wrapped_rotation_active,
-        wrapped_page_index,
-        wrapped_page_count,
-    ) = _select_running_jobs_window(
-        console,
-        snapshot,
-        experiment_name="exp-1",
-        total_jobs=6,
-        disk_skipped=0,
-        rotation_cursor=next_cursor,
+    wrapped_jobs, wrapped_paging_active, wrapped_page_index, wrapped_page_count = (
+        _select_running_jobs_window(
+            console,
+            snapshot,
+            experiment_name="exp-1",
+            total_jobs=6,
+            disk_skipped=0,
+            page_index=1,
+            manual_navigation_available=True,
+        )
     )
 
-    assert wrapped_rotation_active is True
-    assert [job.trial_num for job in rotated_jobs] == ["4", "5"]
-    assert wrapped_cursor == 0
+    assert wrapped_paging_active is True
+    assert [job.trial_num for job in wrapped_jobs] == ["4", "5"]
     assert (wrapped_page_index, wrapped_page_count) == (1, 2)
+
+
+def test_select_running_jobs_window_clamps_page_index_when_count_shrinks() -> None:
+    rich_console = pytest.importorskip("rich.console")
+    console = rich_console.Console(width=120, height=20, force_terminal=True)
+    running_jobs = [
+        RunningJobInfo(
+            worker_name=f"worker-{idx}",
+            crs="crs-a",
+            benchmark="bench-a",
+            harness="harness-a",
+            target_cpv_id="cpv-1",
+            mode="delta",
+            trial_num=str(idx),
+            phase="running",
+            elapsed="1m0s",
+        )
+        for idx in range(6)
+    ]
+    snapshot = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=running_jobs,
+    )
+
+    visible_jobs, paging_active, selected_page_index, page_count = (
+        _select_running_jobs_window(
+            console,
+            snapshot,
+            experiment_name="exp-1",
+            total_jobs=6,
+            disk_skipped=0,
+            page_index=5,
+            manual_navigation_available=True,
+        )
+    )
+
+    assert paging_active is True
+    assert [job.trial_num for job in visible_jobs] == ["4", "5"]
+    assert (selected_page_index, page_count) == (1, 2)
+
+
+def test_apply_page_navigation_command_wraps_both_directions() -> None:
+    assert _apply_page_navigation_command(command="n", page_index=1, page_count=2) == 0
+    assert _apply_page_navigation_command(command="p", page_index=0, page_count=2) == 1
+    assert _apply_page_navigation_command(command="x", page_index=0, page_count=2) == 0
+
+
+def test_should_auto_rotate_pages_respects_idle_timeout() -> None:
+    idle_timeout_sec = _page_navigation_idle_timeout_sec(3.0)
+
+    assert _should_auto_rotate_pages(
+        last_manual_page_change_at=None,
+        now=10.0,
+        poll_interval=3.0,
+    )
+    assert not _should_auto_rotate_pages(
+        last_manual_page_change_at=10.0,
+        now=10.0 + idle_timeout_sec - 0.1,
+        poll_interval=3.0,
+    )
+    assert _should_auto_rotate_pages(
+        last_manual_page_change_at=10.0,
+        now=10.0 + idle_timeout_sec,
+        poll_interval=3.0,
+    )
 
 
 def test_select_running_jobs_window_shows_all_rows_when_terminal_can_fit_them() -> None:
@@ -425,28 +485,22 @@ def test_select_running_jobs_window_shows_all_rows_when_terminal_can_fit_them() 
         running_jobs=running_jobs,
     )
 
-    (
-        visible_jobs,
-        next_cursor,
-        rotation_active,
-        page_index,
-        page_count,
-    ) = _select_running_jobs_window(
+    visible_jobs, paging_active, page_index, page_count = _select_running_jobs_window(
         console,
         snapshot,
         experiment_name="exp-1",
         total_jobs=6,
         disk_skipped=0,
-        rotation_cursor=3,
+        page_index=3,
+        manual_navigation_available=True,
     )
 
-    assert rotation_active is False
+    assert paging_active is False
     assert [job.trial_num for job in visible_jobs] == ["0", "1", "2", "3", "4", "5"]
-    assert next_cursor == 0
     assert (page_index, page_count) == (0, 1)
 
 
-def test_build_rich_group_caption_shows_page_indicator() -> None:
+def test_build_rich_group_caption_shows_page_indicator_and_key_help() -> None:
     rich_console = pytest.importorskip("rich.console")
     snapshot = QueueMonitorSnapshot(
         stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
@@ -473,15 +527,154 @@ def test_build_rich_group_caption_shows_page_indicator() -> None:
         disk_skipped=0,
         running_jobs=snapshot.running_jobs[:4],
         running_job_count=6,
-        rotation_active=True,
-        rotation_page_index=1,
-        rotation_page_count=2,
+        paging_active=True,
+        page_index=1,
+        page_count=2,
+        manual_navigation_available=True,
     )
     console = rich_console.Console(width=120, force_terminal=True, record=True)
     console.print(renderable)
 
     output = console.export_text()
-    assert "Page 2/2: showing 4 of 6 running jobs; rotating each refresh" in output
+    assert (
+        "Page 2/2: showing 4 of 6 running jobs; "
+        "n/p: switch pages; auto-rotates when idle" in output
+    )
+
+
+def test_build_rich_group_caption_falls_back_to_auto_rotate_only() -> None:
+    rich_console = pytest.importorskip("rich.console")
+    snapshot = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[
+            RunningJobInfo(
+                worker_name=f"worker-{idx}",
+                crs="crs-a",
+                benchmark="bench-a",
+                harness="harness-a",
+                target_cpv_id="cpv-1",
+                mode="delta",
+                trial_num=str(idx),
+                phase="running",
+                elapsed="1m0s",
+            )
+            for idx in range(6)
+        ],
+    )
+
+    renderable = _build_rich_group(
+        snapshot,
+        experiment_name="exp-1",
+        total_jobs=6,
+        disk_skipped=0,
+        running_jobs=snapshot.running_jobs[:4],
+        running_job_count=6,
+        paging_active=True,
+        page_index=0,
+        page_count=2,
+        manual_navigation_available=False,
+    )
+    console = rich_console.Console(width=120, force_terminal=True, record=True)
+    console.print(renderable)
+
+    output = console.export_text()
+    assert "Page 1/2: showing 4 of 6 running jobs; auto-rotates each refresh" in output
+
+
+def test_monitor_queue_rich_applies_manual_page_navigation_immediately() -> None:
+    rich_console = pytest.importorskip("rich.console")
+    queue = MagicMock()
+    active = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[
+            RunningJobInfo(
+                worker_name=f"worker-{idx}",
+                crs="crs-a",
+                benchmark="bench-a",
+                harness="harness-a",
+                target_cpv_id="cpv-1",
+                mode="delta",
+                trial_num=str(idx),
+                phase="running",
+                elapsed="1m0s",
+            )
+            for idx in range(6)
+        ],
+    )
+    done = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 0, "finished": 6, "failed": 0, "workers": 1},
+        running_jobs=[],
+    )
+    rendered_updates = []
+
+    class DummyLive:
+        def __init__(self, renderable, *args, **kwargs):
+            del args, kwargs
+            rendered_updates.append(renderable)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def update(self, renderable, *args, **kwargs):
+            del args, kwargs
+            rendered_updates.append(renderable)
+
+    class DummyInput:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+            self.manual_navigation_available = True
+            self._commands = iter(["n", None])
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read_command(self, timeout_sec: float) -> str | None:
+            del timeout_sec
+            return next(self._commands, None)
+
+    console = rich_console.Console(
+        width=120,
+        height=20,
+        force_terminal=True,
+        record=True,
+    )
+
+    with (
+        patch(
+            "crsbench.distributed.queue_monitor.build_monitor_snapshot",
+            side_effect=[active, done],
+        ),
+        patch("crsbench.distributed.queue_monitor._RichMonitorInput", DummyInput),
+        patch("rich.console.Console", return_value=console),
+        patch("rich.live.Live", DummyLive),
+    ):
+        monitor_queue(
+            queue,
+            "exp-1",
+            tracked_job_ids=None,
+            callbacks=QueueMonitorCallbacks(),
+            use_rich=True,
+            poll_interval=1.0,
+        )
+
+    assert len(rendered_updates) >= 2
+    second_render_console = rich_console.Console(
+        width=120, force_terminal=True, record=True
+    )
+    second_render_console.print(rendered_updates[1])
+    output = second_render_console.export_text()
+    assert (
+        "Page 2/2: showing 2 of 6 running jobs; "
+        "n/p: switch pages; auto-rotates when idle" in output
+    )
+    assert "worker-4" in output
+    assert "worker-5" in output
 
 
 def test_display_worker_name_trims_cloud_experiment_prefix() -> None:

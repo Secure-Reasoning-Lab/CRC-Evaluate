@@ -5,8 +5,9 @@ from __future__ import annotations
 import importlib.util
 import sys
 import time
+from collections import deque
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 from crsbench.distributed.queue import (
     get_existing_trial_jobs,
@@ -72,6 +73,91 @@ class QueueMonitorCallbacks:
     on_snapshot: Callable[[QueueMonitorSnapshot], None] | None = None
     on_job_finished: Callable[[object], bool | None] | None = None
     on_job_failed: Callable[[object], bool | None] | None = None
+
+
+class _RichMonitorInput:
+    """Best-effort non-blocking key reader for Rich monitor pagination."""
+
+    def __init__(self, stream=None) -> None:
+        self._stream = sys.stdin if stream is None else stream
+        self._fd: int | None = None
+        self._saved_termios_attrs: Any = None
+        self._pending_commands: deque[str] = deque()
+        self.manual_navigation_available = False
+
+    def __enter__(self) -> "_RichMonitorInput":
+        isatty = getattr(self._stream, "isatty", None)
+        fileno = getattr(self._stream, "fileno", None)
+        if not callable(isatty) or not isatty() or not callable(fileno):
+            return self
+
+        try:
+            import termios
+            import tty
+
+            fd = fileno()
+            saved_termios_attrs = cast("Any", termios.tcgetattr(fd))
+            tty.setcbreak(fd)
+        except (ImportError, OSError, ValueError, AttributeError):
+            return self
+
+        self._fd = fd
+        self._saved_termios_attrs = saved_termios_attrs
+        self.manual_navigation_available = True
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        if self._fd is None or self._saved_termios_attrs is None:
+            return False
+
+        try:
+            import termios
+
+            termios.tcsetattr(
+                self._fd,
+                termios.TCSADRAIN,
+                self._saved_termios_attrs,
+            )
+        except (ImportError, OSError, ValueError, AttributeError):
+            pass
+        return False
+
+    def read_command(self, timeout_sec: float) -> str | None:
+        if self._pending_commands:
+            return self._pending_commands.popleft()
+
+        if not self.manual_navigation_available or self._fd is None:
+            if timeout_sec > 0:
+                time.sleep(timeout_sec)
+            return None
+
+        deadline = time.monotonic() + max(timeout_sec, 0.0)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+
+            try:
+                import os
+                import select
+
+                ready, _, _ = select.select([self._fd], [], [], remaining)
+                if not ready:
+                    return None
+                data = os.read(self._fd, 64)
+            except OSError:
+                return None
+
+            if not data:
+                return None
+
+            for char in data.decode(errors="ignore"):
+                command = char.lower()
+                if command in {"n", "p"}:
+                    self._pending_commands.append(command)
+
+            if self._pending_commands:
+                return self._pending_commands.popleft()
 
 
 def get_experiment_queue_stats(queue, experiment_name: str) -> dict[str, int]:
@@ -399,9 +485,10 @@ def _build_rich_group(
     disk_skipped: int,
     running_jobs: list[RunningJobInfo] | None = None,
     running_job_count: int | None = None,
-    rotation_active: bool = False,
-    rotation_page_index: int = 0,
-    rotation_page_count: int = 1,
+    paging_active: bool = False,
+    page_index: int = 0,
+    page_count: int = 1,
+    manual_navigation_available: bool = False,
 ):
     from rich.console import Group
     from rich.table import Table
@@ -425,11 +512,16 @@ def _build_rich_group(
     table.add_row("Total", str(total_jobs + disk_skipped))
 
     running_table = Table(title="Running Jobs")
-    if rotation_active and total_running_jobs > len(visible_running_jobs):
+    if paging_active and total_running_jobs > len(visible_running_jobs):
+        helper_text = (
+            "n/p: switch pages; auto-rotates when idle"
+            if manual_navigation_available
+            else "auto-rotates each refresh"
+        )
         running_table.caption = (
-            f"Page {rotation_page_index + 1}/{rotation_page_count}: "
+            f"Page {page_index + 1}/{page_count}: "
             f"showing {len(visible_running_jobs)} of {total_running_jobs} running jobs; "
-            "rotating each refresh"
+            f"{helper_text}"
         )
     running_table.add_column("Worker", style="green")
     running_table.add_column("CRS", style="cyan")
@@ -471,12 +563,13 @@ def _select_running_jobs_window(
     experiment_name: str,
     total_jobs: int,
     disk_skipped: int,
-    rotation_cursor: int,
-) -> tuple[list[RunningJobInfo], int, bool, int, int]:
+    page_index: int,
+    manual_navigation_available: bool = False,
+) -> tuple[list[RunningJobInfo], bool, int, int]:
     running_jobs = snapshot.running_jobs
     total_running_jobs = len(running_jobs)
     if total_running_jobs <= 1:
-        return running_jobs, 0, False, 0, 1
+        return running_jobs, False, 0, 1
 
     full_group = _build_rich_group(
         snapshot,
@@ -485,7 +578,7 @@ def _select_running_jobs_window(
         disk_skipped=disk_skipped,
     )
     if _count_rendered_lines(console, full_group) <= console.size.height:
-        return running_jobs, 0, False, 0, 1
+        return running_jobs, False, 0, 1
 
     low = 0
     high = total_running_jobs
@@ -501,9 +594,10 @@ def _select_running_jobs_window(
             disk_skipped=disk_skipped,
             running_jobs=candidate_jobs,
             running_job_count=total_running_jobs,
-            rotation_active=True,
-            rotation_page_index=0,
-            rotation_page_count=1,
+            paging_active=True,
+            page_index=0,
+            page_count=1,
+            manual_navigation_available=manual_navigation_available,
         )
         if _count_rendered_lines(console, candidate_group) <= console.size.height:
             best = candidate_count
@@ -512,15 +606,85 @@ def _select_running_jobs_window(
             high = candidate_count - 1
 
     if best <= 0:
-        return [], 0, True, 0, 1
+        return [], True, 0, 1
 
     page_count = (total_running_jobs + best - 1) // best
-    page_index = rotation_cursor % page_count
-    start = page_index * best
+    selected_page_index = min(max(page_index, 0), page_count - 1)
+    start = selected_page_index * best
     end = min(start + best, total_running_jobs)
     visible_jobs = running_jobs[start:end]
-    next_cursor = (page_index + 1) % page_count
-    return visible_jobs, next_cursor, True, page_index, page_count
+    return visible_jobs, True, selected_page_index, page_count
+
+
+def _page_navigation_idle_timeout_sec(poll_interval: float) -> float:
+    """Keep manual page selection visible briefly before auto-rotation resumes."""
+    return max(5.0, poll_interval * 2)
+
+
+def _should_auto_rotate_pages(
+    *,
+    last_manual_page_change_at: float | None,
+    now: float,
+    poll_interval: float,
+) -> bool:
+    """Return True when the Rich monitor should resume automatic page rotation."""
+    if last_manual_page_change_at is None:
+        return True
+    return now - last_manual_page_change_at >= _page_navigation_idle_timeout_sec(
+        poll_interval
+    )
+
+
+def _apply_page_navigation_command(
+    *,
+    command: str,
+    page_index: int,
+    page_count: int,
+) -> int:
+    """Move one running-jobs page forward or backward."""
+    if page_count <= 1:
+        return 0
+    if command == "n":
+        return (page_index + 1) % page_count
+    if command == "p":
+        return (page_index - 1) % page_count
+    return page_index
+
+
+def _build_rich_renderable(
+    console,
+    snapshot: QueueMonitorSnapshot,
+    *,
+    experiment_name: str,
+    total_jobs: int,
+    disk_skipped: int,
+    page_index: int,
+    manual_navigation_available: bool,
+):
+    visible_running_jobs, paging_active, selected_page_index, page_count = (
+        _select_running_jobs_window(
+            console,
+            snapshot,
+            experiment_name=experiment_name,
+            total_jobs=total_jobs,
+            disk_skipped=disk_skipped,
+            page_index=page_index,
+            manual_navigation_available=manual_navigation_available,
+        )
+    )
+    renderable = _build_rich_group(
+        snapshot,
+        experiment_name=experiment_name,
+        total_jobs=total_jobs,
+        disk_skipped=disk_skipped,
+        running_jobs=visible_running_jobs,
+        running_job_count=len(snapshot.running_jobs),
+        paging_active=paging_active,
+        page_index=selected_page_index,
+        page_count=page_count,
+        manual_navigation_available=manual_navigation_available,
+    )
+    return renderable, selected_page_index, page_count, paging_active
 
 
 def _monitor_queue_rich(
@@ -542,90 +706,112 @@ def _monitor_queue_rich(
     last_renew = time.monotonic()
     seen_finished: set[str] = set()
     seen_failed: set[str] = set()
-    rotation_cursor = 0
+    page_index = 0
+    last_manual_page_change_at: float | None = None
 
     snapshot = build_monitor_snapshot(queue, experiment_name)
     _notify_snapshot(callbacks, snapshot)
     display_total = _display_total(snapshot, total_jobs)
-    (
-        visible_running_jobs,
-        rotation_cursor,
-        rotation_active,
-        rotation_page_index,
-        rotation_page_count,
-    ) = _select_running_jobs_window(
-        console,
-        snapshot,
-        experiment_name=experiment_name,
-        total_jobs=display_total,
-        disk_skipped=disk_skipped,
-        rotation_cursor=rotation_cursor,
-    )
-    with Live(
-        _build_rich_group(
+    with _RichMonitorInput() as monitor_input:
+        (
+            renderable,
+            page_index,
+            page_count,
+            paging_active,
+        ) = _build_rich_renderable(
+            console,
             snapshot,
             experiment_name=experiment_name,
             total_jobs=display_total,
             disk_skipped=disk_skipped,
-            running_jobs=visible_running_jobs,
-            running_job_count=len(snapshot.running_jobs),
-            rotation_active=rotation_active,
-            rotation_page_index=rotation_page_index,
-            rotation_page_count=rotation_page_count,
-        ),
-        refresh_per_second=1,
-        console=console,
-    ) as live:
-        while True:
-            completed, failed = _process_tracked_jobs(
-                tracked_jobs,
-                callbacks=callbacks,
-                seen_finished=seen_finished,
-                seen_failed=seen_failed,
-            )
+            page_index=page_index,
+            manual_navigation_available=monitor_input.manual_navigation_available,
+        )
+        with Live(
+            renderable,
+            refresh_per_second=1,
+            console=console,
+        ) as live:
+            while True:
+                completed, failed = _process_tracked_jobs(
+                    tracked_jobs,
+                    callbacks=callbacks,
+                    seen_finished=seen_finished,
+                    seen_failed=seen_failed,
+                )
 
-            if tracked_jobs and completed + failed >= len(tracked_jobs):
-                break
-            if (
-                exit_when_idle
-                and not tracked_jobs
-                and snapshot.stats["queued"] + snapshot.stats["started"] == 0
-            ):
-                break
+                if tracked_jobs and completed + failed >= len(tracked_jobs):
+                    break
+                if (
+                    exit_when_idle
+                    and not tracked_jobs
+                    and snapshot.stats["queued"] + snapshot.stats["started"] == 0
+                ):
+                    break
 
-            last_renew = _renew_registry(
-                registry,
-                experiment_name=experiment_name,
-                last_renew=last_renew,
-            )
-            snapshot = build_monitor_snapshot(queue, experiment_name)
-            _notify_snapshot(callbacks, snapshot)
-            display_total = _display_total(snapshot, total_jobs)
-            (
-                visible_running_jobs,
-                rotation_cursor,
-                rotation_active,
-                rotation_page_index,
-                rotation_page_count,
-            ) = _select_running_jobs_window(
-                console,
-                snapshot,
-                experiment_name=experiment_name,
-                total_jobs=display_total,
-                disk_skipped=disk_skipped,
-                rotation_cursor=rotation_cursor,
-            )
-            live.update(
-                _build_rich_group(
+                refresh_deadline = time.monotonic() + poll_interval
+                while True:
+                    remaining = refresh_deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    command = monitor_input.read_command(remaining)
+                    if command is None:
+                        break
+                    if not paging_active:
+                        continue
+                    page_index = _apply_page_navigation_command(
+                        command=command,
+                        page_index=page_index,
+                        page_count=page_count,
+                    )
+                    last_manual_page_change_at = time.monotonic()
+                    (
+                        renderable,
+                        page_index,
+                        page_count,
+                        paging_active,
+                    ) = _build_rich_renderable(
+                        console,
+                        snapshot,
+                        experiment_name=experiment_name,
+                        total_jobs=display_total,
+                        disk_skipped=disk_skipped,
+                        page_index=page_index,
+                        manual_navigation_available=(
+                            monitor_input.manual_navigation_available
+                        ),
+                    )
+                    live.update(renderable)
+
+                if paging_active and _should_auto_rotate_pages(
+                    last_manual_page_change_at=last_manual_page_change_at,
+                    now=time.monotonic(),
+                    poll_interval=poll_interval,
+                ):
+                    page_index = (page_index + 1) % page_count
+
+                last_renew = _renew_registry(
+                    registry,
+                    experiment_name=experiment_name,
+                    last_renew=last_renew,
+                )
+                snapshot = build_monitor_snapshot(queue, experiment_name)
+                _notify_snapshot(callbacks, snapshot)
+                display_total = _display_total(snapshot, total_jobs)
+                (
+                    renderable,
+                    page_index,
+                    page_count,
+                    paging_active,
+                ) = _build_rich_renderable(
+                    console,
                     snapshot,
                     experiment_name=experiment_name,
                     total_jobs=display_total,
                     disk_skipped=disk_skipped,
-                    running_jobs=visible_running_jobs,
-                    running_job_count=len(snapshot.running_jobs),
-                    rotation_active=rotation_active,
-                    rotation_page_index=rotation_page_index,
-                    rotation_page_count=rotation_page_count,
+                    page_index=page_index,
+                    manual_navigation_available=(
+                        monitor_input.manual_navigation_available
+                    ),
                 )
-            )
-            time.sleep(poll_interval)
+                live.update(renderable)
