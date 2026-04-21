@@ -44,6 +44,7 @@ def add_cloud_subparser(subparsers) -> None:
 Examples:
   %(prog)s --config config.yaml launch
   %(prog)s --config config.yaml list
+  %(prog)s --config config.yaml serial orch
   %(prog)s --config config.yaml log
   %(prog)s --config config.yaml exec work-001 -- docker ps
   %(prog)s status my-experiment --config config.yaml
@@ -138,6 +139,21 @@ Examples:
     )
     ssh_p.add_argument("instance", nargs="?", help="Instance name or alias")
     _add_config_argument(ssh_p, suppress_default=True)
+
+    # serial
+    serial_p = cloud_subparsers.add_parser(
+        "serial",
+        help="Open a serial-console session to a live cloud instance",
+    )
+    serial_p.add_argument("instance", nargs="?", help="Instance name or alias")
+    _add_config_argument(serial_p, suppress_default=True)
+    serial_p.add_argument(
+        "--port",
+        type=int,
+        choices=range(1, 5),
+        default=1,
+        help="GCE serial port number to connect to (default: 1)",
+    )
 
     # exec
     exec_p = cloud_subparsers.add_parser(
@@ -341,6 +357,11 @@ def run_cloud(args: argparse.Namespace) -> int:
         from crsbench.cloud.cli._ssh import run_ssh
 
         return run_ssh(args)
+
+    if cmd == "serial":
+        from crsbench.cloud.cli._serial import run_serial
+
+        return run_serial(args)
 
     if cmd == "exec":
         from crsbench.cloud.cli._exec import run_exec

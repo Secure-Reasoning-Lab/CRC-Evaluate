@@ -90,3 +90,16 @@ def build_ssh_command(
         remote_command=remote_command,
         tty=tty,
     )
+
+
+def build_serial_command(
+    target: CloudInstanceInventoryRow,
+    *,
+    port: int = 1,
+) -> list[str]:
+    """Build a provider-specific operator serial-console command."""
+    transport = transport_for_provider(target.provider)
+    return transport.build_serial_command(
+        target,
+        port=port,
+    )

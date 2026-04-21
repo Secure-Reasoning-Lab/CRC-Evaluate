@@ -18,6 +18,22 @@ logger = get_logger(__name__)
 class GceCloudTransport:
     """Build GCE-specific SSH and IAP operator commands."""
 
+    def build_serial_command(
+        self,
+        target: CloudSshTarget,
+        *,
+        port: int = 1,
+    ) -> list[str]:
+        return [
+            "gcloud",
+            "compute",
+            "connect-to-serial-port",
+            target.name,
+            f"--project={target.project}",
+            f"--zone={target.zone}",
+            f"--port={port}",
+        ]
+
     def build_ssh_command(
         self,
         target: CloudSshTarget,

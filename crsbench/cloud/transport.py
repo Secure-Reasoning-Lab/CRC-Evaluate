@@ -1,4 +1,4 @@
-"""Provider-neutral transport resolver for operator SSH/tunnel access."""
+"""Provider-neutral transport resolver for operator remote access."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 
 class CloudSshTarget(Protocol):
-    """Minimal live-instance shape needed for interactive SSH access."""
+    """Minimal live-instance shape needed for interactive remote access."""
 
     name: str
     project: str
@@ -21,6 +21,13 @@ class CloudSshTarget(Protocol):
 
 class CloudTransport(Protocol):
     """Provider-owned operator transport operations."""
+
+    def build_serial_command(
+        self,
+        target: CloudSshTarget,
+        *,
+        port: int = 1,
+    ) -> list[str]: ...
 
     def build_ssh_command(
         self,

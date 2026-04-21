@@ -1193,6 +1193,27 @@ evaluator alias, and `eval` works when exactly one evaluator is live. If a
 selector still matches multiple live instances, CRSBench shows only the
 matching rows and prompts you to choose in interactive sessions.
 
+Open a serial-console session to the same live VM inventory without manually
+looking up the realized zone:
+
+```bash
+uv run crsbench cloud --config config.yaml serial orch
+uv run crsbench cloud --config config.yaml serial work-001 --port 2
+```
+
+`cloud serial` reuses the same live selector resolution as `cloud ssh`, but it
+attaches through `gcloud compute connect-to-serial-port` instead of OS
+Login-backed SSH. CRSBench bootstraps a local guest login for serial access:
+
+- username: `crsbench`
+- password: `crsbench`
+
+The startup scripts keep SSH password authentication disabled, so this
+credential is for guest console login rather than network SSH. Root does not get
+a CRSBench-managed password; log in as `crsbench` and use `sudo -i` when you
+need a root shell. Override the default serial-console password by setting
+`CRSBENCH_LOCAL_CONSOLE_PASSWORD` through the cloud env layers before launch.
+
 ## Remote Command Execution
 
 Run a one-off remote command without opening an interactive shell:
@@ -1430,7 +1451,7 @@ sudo -iu crsbench env \
 | Symptom | Cause | Fix |
 |---|---|---|
 | Bring-up timeout | Workers cannot reach Redis | Check firewall rules; verify `redis_host` / `runtime.redis.host` is reachable from the VPC |
-| `bootstrap_failed` in status | Startup script error | Check the evidence field in `cloud status --json` output; inspect VM serial console via GCP Console |
+| `bootstrap_failed` in status | Startup script error | Check the evidence field in `cloud status --json` output; attach with `cloud serial <instance>` or inspect the VM serial console in GCP Console |
 | Collect fails with rsync error | SSH connectivity issue | Verify OS Login is enabled; check IAP firewall rule if using `ssh_via_iap` |
 | Stale Redis entries warning | VMs were manually deleted | Safe to ignore; Redis records from deleted VMs don't affect new runs |
 | Teardown returns non-zero | Collection or deletion failed for at least one VM | Check the logged worker/orchestrator errors, then rerun `cloud collect` or `cloud teardown` as needed |

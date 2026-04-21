@@ -207,6 +207,17 @@ def test_load_startup_script_contains_managed_worker_service_bootstrap():
     assert "bootstrap_failed" in startup_script
     assert "loginctl enable-linger" in startup_script
     assert "NOPASSWD:ALL" in startup_script
+    assert (
+        'CRSBENCH_LOCAL_CONSOLE_PASSWORD="${CRSBENCH_LOCAL_CONSOLE_PASSWORD:-crsbench}"'
+        in startup_script
+    )
+    assert (
+        "printf '%s:%s\\n' \"${CRSBENCH_USER}\" "
+        '"${CRSBENCH_LOCAL_CONSOLE_PASSWORD}" | chpasswd' in startup_script
+    )
+    assert "PasswordAuthentication no" in startup_script
+    assert "PermitRootLogin no" in startup_script
+    assert "serial-getty@ttyS0.service" in startup_script
     assert "dbus-user-session" in startup_script
     assert 'instance_metadata_get "name"' in startup_script
     assert 'systemctl restart "user@${CRSBENCH_USER_UID}.service"' in startup_script
@@ -1068,6 +1079,17 @@ def test_orchestrator_startup_script_consumes_config_payload_and_preprovisioned_
     script = load_orchestrator_startup_script()
 
     assert 'CRSBENCH_USER="${CRSBENCH_USER:-crsbench}"' in script
+    assert (
+        'CRSBENCH_LOCAL_CONSOLE_PASSWORD="${CRSBENCH_LOCAL_CONSOLE_PASSWORD:-crsbench}"'
+        in script
+    )
+    assert (
+        "printf '%s:%s\\n' \"${CRSBENCH_USER}\" "
+        '"${CRSBENCH_LOCAL_CONSOLE_PASSWORD}" | chpasswd' in script
+    )
+    assert "PasswordAuthentication no" in script
+    assert "PermitRootLogin no" in script
+    assert "serial-getty@ttyS0.service" in script
     assert "crsbench-experiment-config-b64" in script
     assert "crsbench-env-passthrough-b64" in script
     assert "CRSBENCH_CLOUD_PREPROVISIONED_WORKERS" in script

@@ -1991,6 +1991,26 @@ class TestArgParsing:
         assert args.instance == "work-001"
         assert args.config == "c.yaml"
 
+    def test_parse_serial_with_instance_and_port(self):
+        parser = self._build_parser()
+        args = parser.parse_args(
+            ["cloud", "serial", "work-001", "--config", "c.yaml", "--port", "2"]
+        )
+        assert args.command == "cloud"
+        assert args.cloud_command == "serial"
+        assert args.instance == "work-001"
+        assert args.port == 2
+        assert args.config == "c.yaml"
+
+    def test_parse_serial_without_instance(self):
+        parser = self._build_parser()
+        args = parser.parse_args(["cloud", "serial", "--config", "c.yaml"])
+        assert args.command == "cloud"
+        assert args.cloud_command == "serial"
+        assert args.instance is None
+        assert args.port == 1
+        assert args.config == "c.yaml"
+
     def test_parse_exec_with_instance_and_command(self):
         parser = self._build_parser()
         args = parser.parse_args(
@@ -2153,6 +2173,20 @@ def _make_exec_args(
     )
 
 
+def _make_serial_args(
+    instance: str | None = "work-001",
+    config: str = "/tmp/config.yaml",
+    *,
+    port: int = 1,
+):
+    return argparse.Namespace(
+        instance=instance,
+        config=config,
+        port=port,
+        cloud_command="serial",
+    )
+
+
 def _make_log_args(
     instance: str | None = "work-001",
     config: str = "/tmp/config.yaml",
@@ -2219,6 +2253,16 @@ def test_run_cloud_dispatches_shell(mock_run_ssh):
 
     assert rc == 0
     mock_run_ssh.assert_called_once()
+
+
+@patch("crsbench.cloud.cli._serial.run_serial", return_value=0)
+def test_run_cloud_dispatches_serial(mock_run_serial):
+    from crsbench.cloud.cli.cloud_command import run_cloud
+
+    rc = run_cloud(_make_serial_args())
+
+    assert rc == 0
+    mock_run_serial.assert_called_once()
 
 
 @patch("crsbench.cloud.cli._exec.run_exec", return_value=0)
@@ -6442,6 +6486,91 @@ class TestSsh:
         assert rc == 130
 
 
+class TestSerial:
+    """Tests for run_serial() sub-action."""
+
+    @patch("crsbench.cloud.cli._serial.subprocess.run")
+    @patch("crsbench.cloud.cli._serial.build_serial_command")
+    @patch("crsbench.cloud.cli._serial.resolve_effective_experiment_name")
+    @patch("crsbench.cloud.cli._serial.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._serial.provisioner_for_context")
+    def test_serial_runs_selected_instance_console(
+        self,
+        mock_provisioner_cls,
+        mock_resolve_context,
+        mock_resolve_experiment_name,
+        mock_build_serial_command,
+        mock_run,
+    ):
+        mock_resolve_experiment_name.return_value = "test-exp"
+        context = _make_resolved_cloud_context(_make_launch_state())
+        mock_resolve_context.return_value = context
+        provisioner = mock_provisioner_cls.return_value
+        provisioner.list_workers.return_value = [
+            _make_gce_worker("crsbench-test-exp-work-001", zone="us-central1-a")
+        ]
+        provisioner.list_evaluators.return_value = []
+        provisioner.get_instance_record.return_value = _make_gce_worker(
+            "crsbench-test-exp-orch",
+            zone="us-east5-b",
+            ip="10.0.0.50",
+        )
+        provisioner.get_instance_record.return_value.labels["crsbench-role"] = (
+            "orchestrator"
+        )
+        mock_build_serial_command.return_value = [
+            "gcloud",
+            "compute",
+            "connect-to-serial-port",
+            "crsbench-test-exp-work-001",
+            "--port=2",
+        ]
+        mock_run.return_value = _make_completed_process(0)
+
+        from crsbench.cloud.cli._serial import run_serial
+
+        rc = run_serial(_make_serial_args(instance="work-001", port=2))
+
+        assert rc == 0
+        mock_build_serial_command.assert_called_once_with(mock.ANY, port=2)
+        assert mock_run.call_args.args[0] == mock_build_serial_command.return_value
+
+    @patch("crsbench.cloud.cli._serial.select_target", side_effect=KeyboardInterrupt)
+    @patch("crsbench.cloud.cli._serial.resolve_effective_experiment_name")
+    @patch("crsbench.cloud.cli._serial.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._serial.provisioner_for_context")
+    def test_serial_treats_keyboard_interrupt_as_normal_exit(
+        self,
+        mock_provisioner_cls,
+        mock_resolve_context,
+        mock_resolve_experiment_name,
+        mock_select_target,
+    ):
+        mock_resolve_experiment_name.return_value = "test-exp"
+        assert mock_select_target is not None
+        context = _make_resolved_cloud_context(_make_launch_state())
+        mock_resolve_context.return_value = context
+        provisioner = mock_provisioner_cls.return_value
+        provisioner.list_workers.return_value = [
+            _make_gce_worker("crsbench-test-exp-work-001", zone="us-central1-a")
+        ]
+        provisioner.list_evaluators.return_value = []
+        provisioner.get_instance_record.return_value = _make_gce_worker(
+            "crsbench-test-exp-orch",
+            zone="us-east5-b",
+            ip="10.0.0.50",
+        )
+        provisioner.get_instance_record.return_value.labels["crsbench-role"] = (
+            "orchestrator"
+        )
+
+        from crsbench.cloud.cli._serial import run_serial
+
+        rc = run_serial(_make_serial_args(instance=None))
+
+        assert rc == 130
+
+
 class TestRemoteAccess:
     """Tests for provider-neutral remote access helpers."""
 
@@ -6596,6 +6725,63 @@ class TestRemoteAccess:
             remote_command=["echo", "hi"],
             tty=True,
         )
+
+    @patch("crsbench.cloud.cli._remote_access.transport_for_provider")
+    def test_build_serial_command_delegates_to_provider_transport(
+        self,
+        mock_transport_for_provider,
+    ):
+        from crsbench.cloud.cli._instance_inventory import CloudInstanceInventoryRow
+        from crsbench.cloud.cli._remote_access import build_serial_command
+
+        target = CloudInstanceInventoryRow(
+            alias="work-001",
+            name="crsbench-test-exp-work-001",
+            role="worker",
+            placement_source="config",
+            provider="gce",
+            project="test-project",
+            zone="us-east5-b",
+            region="us-east5",
+            status="RUNNING",
+            internal_ip="10.0.0.11",
+            external_ip=None,
+            ssh_via_iap=True,
+        )
+        transport = MagicMock()
+        transport.build_serial_command.return_value = ["provider-serial", "target"]
+        mock_transport_for_provider.return_value = transport
+
+        cmd = build_serial_command(target, port=2)
+
+        assert cmd == ["provider-serial", "target"]
+        mock_transport_for_provider.assert_called_once_with("gce")
+        transport.build_serial_command.assert_called_once_with(
+            target,
+            port=2,
+        )
+
+    def test_gce_transport_build_serial_command_uses_gcloud_serial_console(self):
+        from crsbench.cloud.gce.transport import GceCloudTransport
+
+        target = _make_inventory_row(
+            alias="work-001",
+            name="crsbench-test-exp-work-001",
+            role="worker",
+            zone="us-east5-b",
+        )
+
+        cmd = GceCloudTransport().build_serial_command(target, port=2)
+
+        assert cmd == [
+            "gcloud",
+            "compute",
+            "connect-to-serial-port",
+            "crsbench-test-exp-work-001",
+            "--project=test-project",
+            "--zone=us-east5-b",
+            "--port=2",
+        ]
 
 
 class TestExec:

@@ -10,6 +10,7 @@ CRSBENCH_SERVICE_MANAGER="${CRSBENCH_SERVICE_MANAGER:-auto}"
 CRSBENCH_TIMEZONE="${CRSBENCH_TIMEZONE:-America/New_York}"
 CRSBENCH_GIT_SSH_HOST="${CRSBENCH_GIT_SSH_HOST:-github.com}"
 CRSBENCH_USER="${CRSBENCH_USER:-crsbench}"
+CRSBENCH_LOCAL_CONSOLE_PASSWORD="${CRSBENCH_LOCAL_CONSOLE_PASSWORD:-crsbench}"
 CRSBENCH_USER_HOME="${CRSBENCH_USER_HOME:-/home/${CRSBENCH_USER}}"
 CRSBENCH_MANAGED_BIN_DIR="${CRSBENCH_MANAGED_BIN_DIR:-/opt/crsbench-managed/bin}"
 CRSBENCH_GITCACHE_ENABLED="${CRSBENCH_GITCACHE_ENABLED:-0}"
@@ -490,6 +491,31 @@ ensure_passwordless_sudo() {
   chmod 0440 "/etc/sudoers.d/90-${CRSBENCH_USER}"
 }
 
+configure_local_console_access() {
+  require_cmd chpasswd
+  printf '%s:%s\n' "${CRSBENCH_USER}" "${CRSBENCH_LOCAL_CONSOLE_PASSWORD}" | chpasswd
+
+  install -d -m 0755 /etc/ssh/sshd_config.d
+  cat > /etc/ssh/sshd_config.d/90-crsbench-local-console.conf <<'EOF'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+ChallengeResponseAuthentication no
+PermitRootLogin no
+EOF
+  chmod 0644 /etc/ssh/sshd_config.d/90-crsbench-local-console.conf
+
+  passwd -l root >/dev/null 2>&1 || usermod -L root >/dev/null 2>&1 || true
+
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl enable --now serial-getty@ttyS0.service >/dev/null 2>&1 || true
+    systemctl reload ssh >/dev/null 2>&1 \
+      || systemctl reload sshd >/dev/null 2>&1 \
+      || systemctl restart ssh >/dev/null 2>&1 \
+      || systemctl restart sshd >/dev/null 2>&1 \
+      || true
+  fi
+}
+
 ensure_docker_group_membership() {
   if ! grep -q '^docker:' /etc/group 2>/dev/null; then
     if command -v groupadd >/dev/null 2>&1; then
@@ -910,6 +936,7 @@ BOOTSTRAP_ENV_FILE="${STATE_DIR}/bootstrap-env"
 write_passthrough_env_file "${ENV_PASSTHROUGH_B64}" "${BOOTSTRAP_ENV_FILE}"
 chown "${CRSBENCH_USER}:${CRSBENCH_USER}" "${BOOTSTRAP_ENV_FILE}"
 ensure_passwordless_sudo
+configure_local_console_access
 ensure_docker_group_membership
 ensure_docker_buildx_builder
 ensure_user_systemd_support_packages

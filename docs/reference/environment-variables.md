@@ -41,6 +41,7 @@ editing the VM manually after launch.
 | `CRSBENCH_STARTUP_MODE` | Shared startup-script role override: `worker` (default) or `evaluator`; mainly used by local rehearsal and custom startup-script bring-up. |
 | `CRSBENCH_GIT_SSH_HOST` | SSH host used for startup-time known-host bootstrapping for `git+ssh` CRSBench clones (default `github.com`). For managed GCE launches, set it through the cloud env layers when cloning from GitHub Enterprise or another SSH git host. |
 | `CRSBENCH_USER` | Non-root account created by the startup scripts for checkout/install/runtime handoff (default `crsbench`). |
+| `CRSBENCH_LOCAL_CONSOLE_PASSWORD` | Local guest password set for the `CRSBENCH_USER` account so serial-console logins work (default `crsbench`). CRSBench keeps SSH password auth disabled, so this affects console login rather than network SSH auth. |
 | `CRSBENCH_TIMEZONE` | Host timezone enforced during startup (default `America/New_York`). For managed GCE launches, set it through the cloud env layers, for example `cloud.env.CRSBENCH_TIMEZONE: America/Los_Angeles`. |
 | `CRSBENCH_VALKEY_IMAGE` | Valkey container image used by the managed orchestrator bootstrap (default `valkey/valkey:8.0-alpine`). For managed GCE launches, prefer setting it through `cloud.orchestrator.env`. |
 | `CRSBENCH_STATE_DIR` | Override the startup-script state directory (default `/var/lib/crsbench`). |

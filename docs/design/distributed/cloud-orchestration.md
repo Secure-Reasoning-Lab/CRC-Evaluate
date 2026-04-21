@@ -157,6 +157,9 @@ The shared cloud control plane includes:
   `eval` resolve when they match exactly one live instance; when a selector
   still matches multiple live instances, interactive sessions must prompt from
   the narrowed match set while non-interactive sessions fail
+- `cloud serial`: operator access to one live cloud instance's guest serial
+  console using the same selector rules; serial-console login uses guest-local
+  credentials and remains distinct from OS Login-backed SSH access
 - `cloud log`: operator access to one live cloud instance by default, and to
   multiple live cloud instances when explicit multi-target intent is provided
   with `--all`, `--role`, or repeated `--instance`; ambiguous selectors must
