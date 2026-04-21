@@ -24,9 +24,6 @@ def test_ground_truth_paths_layout() -> None:
     assert gt.cpv_hints_dir("curl_fuzzer", "cpv_0") == Path(
         "/benchmarks/afc-curl-delta-01/.aixcc/curl_fuzzer/cpv_0/hints"
     )
-    assert gt.harness_seeds_dir("curl_fuzzer") == Path(
-        "/benchmarks/afc-curl-delta-01/.aixcc/curl_fuzzer/seeds"
-    )
     assert gt.harness_corpus_dir("curl_fuzzer") == Path(
         "/benchmarks/afc-curl-delta-01/.aixcc/curl_fuzzer/corpus"
     )

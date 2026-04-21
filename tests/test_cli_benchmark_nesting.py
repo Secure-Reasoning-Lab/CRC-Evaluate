@@ -114,8 +114,37 @@ class TestBenchmarkSeedImportNesting:
         assert args.experiment_dir == "./experiment-output"
         assert args.benchmarks == "./benchmarks"
         assert args.force is False
+        assert args.all_mode is False
+        assert args.benchmark is None
+        assert args.harness is None
+        assert args.dry_run is False
 
-    def test_benchmark_seed_import_help_documents_seeds_directory(self):
+    def test_benchmark_seed_import_dry_run_flag(self):
+        parser = _make_parser()
+        args = parser.parse_args(
+            ["benchmark", "seed-import", "./experiment-output", "--dry-run"]
+        )
+        assert args.dry_run is True
+
+    def test_benchmark_seed_import_all_mode_parses(self):
+        parser = _make_parser()
+        args = parser.parse_args(
+            [
+                "benchmark",
+                "seed-import",
+                "./experiment-output",
+                "--all",
+                "--benchmark",
+                "afc-curl-delta-02",
+                "--harness",
+                "curl_fuzzer_ws",
+            ]
+        )
+        assert args.all_mode is True
+        assert args.benchmark == "afc-curl-delta-02"
+        assert args.harness == "curl_fuzzer_ws"
+
+    def test_benchmark_seed_import_help_documents_corpus_directory(self):
         parser = _make_parser()
         seed_import_parser = None
         for action in parser._actions:
@@ -129,8 +158,8 @@ class TestBenchmarkSeedImportNesting:
         assert seed_import_parser is not None
         help_text = seed_import_parser.format_help()
         assert "seed-import" in help_text
-        assert ".aixcc/{harness}/seeds/" in help_text
-        assert ".aixcc/{harness}/corpus/" not in help_text
+        assert ".aixcc/<harness>/corpus/" in help_text
+        assert "--all" in help_text
 
 
 class TestBenchmarkMigrateNesting:

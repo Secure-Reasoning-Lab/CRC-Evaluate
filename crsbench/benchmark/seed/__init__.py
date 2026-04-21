@@ -5,12 +5,19 @@ Provides functionality to:
 2. Prepare seed corpus for CRS runtime execution
 """
 
-from crsbench.benchmark.seed.collector import CollectionResult, CorpusCollector
+from crsbench.benchmark.seed.collector import (
+    CollectionResult,
+    CorpusCollector,
+    CorpusFile,
+    TrialSource,
+)
 from crsbench.benchmark.seed.preparer import PrepareResult, SeedCorpusPreparer
 
 __all__ = [
-    "CorpusCollector",
     "CollectionResult",
-    "SeedCorpusPreparer",
+    "CorpusCollector",
+    "CorpusFile",
     "PrepareResult",
+    "SeedCorpusPreparer",
+    "TrialSource",
 ]

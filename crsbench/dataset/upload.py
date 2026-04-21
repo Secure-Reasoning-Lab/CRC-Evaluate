@@ -7,6 +7,7 @@ from pathlib import Path
 from crsbench.dataset.backends import delete, download, upload
 from crsbench.dataset.bundle import (
     BENCHMARK_ARCHIVE,
+    CORPUS_ARCHIVE,
     GROUND_TRUTH_ARCHIVE,
     bundle_benchmark,
 )
@@ -242,15 +243,18 @@ def _plan_upload(
     updated_at = datetime.now(UTC).isoformat()
 
     for benchmark_dir in matching:
-        benchmark_hash, ground_truth_hash = compute_source_fingerprints(benchmark_dir)
+        fingerprints = compute_source_fingerprints(benchmark_dir)
         has_ground_truth = (benchmark_dir / ".aixcc").is_dir()
+        has_corpus = _benchmark_has_corpus(benchmark_dir)
         entry = BenchmarkManifestEntry(
             benchmark=benchmark_dir.name,
-            benchmark_source_sha256=benchmark_hash,
-            ground_truth_source_sha256=ground_truth_hash,
+            benchmark_source_sha256=fingerprints.benchmark,
+            ground_truth_source_sha256=fingerprints.ground_truth,
+            corpus_source_sha256=fingerprints.corpus,
             source_commit=source_commit,
             updated_at=updated_at,
             has_ground_truth=has_ground_truth,
+            has_corpus=has_corpus,
         )
         updates[benchmark_dir.name] = entry
         existing = remote_manifest.get(benchmark_dir.name)
@@ -258,13 +262,14 @@ def _plan_upload(
             changed.append(benchmark_dir)
             continue
         if (
-            existing.benchmark_source_sha256 != benchmark_hash
-            or existing.ground_truth_source_sha256 != ground_truth_hash
+            existing.benchmark_source_sha256 != fingerprints.benchmark
+            or existing.ground_truth_source_sha256 != fingerprints.ground_truth
+            or existing.corpus_source_sha256 != fingerprints.corpus
         ):
             changed.append(benchmark_dir)
             continue
         if not _remote_archives_exist(
-            benchmark_dir.name, has_ground_truth, remote_files
+            benchmark_dir.name, has_ground_truth, has_corpus, remote_files
         ):
             changed.append(benchmark_dir)
             continue
@@ -275,9 +280,23 @@ def _plan_upload(
     return updates, changed
 
 
+def _benchmark_has_corpus(benchmark_dir: Path) -> bool:
+    """Return True when any .aixcc/<harness>/corpus/ directory is present."""
+    aixcc = benchmark_dir / ".aixcc"
+    if not aixcc.is_dir():
+        return False
+    for harness_dir in aixcc.iterdir():
+        if not harness_dir.is_dir():
+            continue
+        if (harness_dir / "corpus").is_dir():
+            return True
+    return False
+
+
 def _remote_archives_exist(
     benchmark_name: str,
     has_ground_truth: bool,
+    has_corpus: bool,
     remote_files: set[str],
 ) -> bool:
     """Return True when expected remote archives are present for benchmark."""
@@ -287,6 +306,10 @@ def _remote_archives_exist(
 
     ground_truth_archive = f"{benchmark_name}/{GROUND_TRUTH_ARCHIVE}"
     if has_ground_truth and ground_truth_archive not in remote_files:
+        return False
+
+    corpus_archive = f"{benchmark_name}/{CORPUS_ARCHIVE}"
+    if has_corpus and corpus_archive not in remote_files:
         return False
 
     return True
@@ -303,6 +326,11 @@ def _update_archive_metadata(entry: BenchmarkManifestEntry, bundle_dir: Path) ->
     if ground_truth_archive.is_file():
         entry.ground_truth_archive_sha256 = compute_file_sha256(ground_truth_archive)
         entry.ground_truth_archive_size = ground_truth_archive.stat().st_size
+
+    corpus_archive = bundle_dir / CORPUS_ARCHIVE
+    if corpus_archive.is_file():
+        entry.corpus_archive_sha256 = compute_file_sha256(corpus_archive)
+        entry.corpus_archive_size = corpus_archive.stat().st_size
 
 
 def _get_git_commit() -> str:

@@ -518,8 +518,8 @@ class MetaYamlAdapter:
         """Get the corpus directory for this benchmark.
 
         Checks known seed corpus locations under .aixcc/:
-        - .aixcc/{harness}/seeds/ (per-harness seed corpus)
-        - .aixcc/seeds/ (shared seed corpus)
+        - .aixcc/{harness}/corpus/ (per-harness seed corpus)
+        - .aixcc/corpus/ (shared seed corpus)
 
         Args:
             harness_name: Optional harness name for per-harness seed corpus.
@@ -534,8 +534,8 @@ class MetaYamlAdapter:
         candidates: list[Path] = []
 
         if harness_name:
-            candidates.append(aixcc_dir / harness_name / "seeds")
-        candidates.append(aixcc_dir / "seeds")
+            candidates.append(aixcc_dir / harness_name / "corpus")
+        candidates.append(aixcc_dir / "corpus")
 
         for candidate in candidates:
             if candidate.exists() and any(candidate.iterdir()):

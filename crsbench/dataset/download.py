@@ -122,6 +122,7 @@ def download_dataset(
     *,
     benchmarks: Optional[list[str]] = None,
     no_ground_truth: bool = False,
+    no_corpus: bool = False,
 ) -> Path:
     """Download a benchmark dataset and extract bundles.
 
@@ -133,6 +134,7 @@ def download_dataset(
         output_dir: Directory to place extracted benchmarks
         benchmarks: Optional list of specific benchmark names to download
         no_ground_truth: If True, skip downloading ground-truth.tar.gz
+        no_corpus: If True, skip downloading corpus.tar.gz
 
     Returns:
         Path to the output directory
@@ -158,6 +160,7 @@ def download_dataset(
         local_manifest=local_manifest,
         output_dir=output_dir,
         no_ground_truth=no_ground_truth,
+        no_corpus=no_corpus,
     )
     if benchmarks:
         logger.info(f"Requested {len(benchmarks)} benchmarks")
@@ -174,6 +177,7 @@ def download_dataset(
     allow_patterns = _build_allow_patterns(
         planned.download if remote_manifest else benchmarks,
         no_ground_truth=no_ground_truth,
+        no_corpus=no_corpus,
     )
     expected_benchmarks = _expected_benchmark_names(
         requested=benchmarks,
@@ -222,6 +226,7 @@ def _build_allow_patterns(
     benchmarks: Optional[list[str]],
     *,
     no_ground_truth: bool = False,
+    no_corpus: bool = False,
 ) -> list[str]:
     """Build HuggingFace allow_patterns for selective download."""
     patterns = []
@@ -235,6 +240,8 @@ def _build_allow_patterns(
         patterns.append(f"{prefix}/benchmark.tar.gz")
         if not no_ground_truth:
             patterns.append(f"{prefix}/ground-truth.tar.gz")
+        if not no_corpus:
+            patterns.append(f"{prefix}/corpus.tar.gz")
 
     return patterns
 
@@ -377,6 +384,7 @@ def _plan_download(
     local_manifest: dict[str, BenchmarkManifestEntry],
     output_dir: Path,
     no_ground_truth: bool,
+    no_corpus: bool,
 ) -> _DownloadPlan:
     """Determine which benchmarks need download based on local/remote manifests."""
     if not remote_manifest:
@@ -399,6 +407,7 @@ def _plan_download(
             local_entry=local_entry,
             benchmark_dir=benchmark_dir,
             no_ground_truth=no_ground_truth,
+            no_corpus=no_corpus,
         ):
             to_download.append(name)
             continue
@@ -413,6 +422,7 @@ def _is_local_entry_up_to_date(
     local_entry: Optional[BenchmarkManifestEntry],
     benchmark_dir: Path,
     no_ground_truth: bool,
+    no_corpus: bool,
 ) -> bool:
     """Check whether local benchmark install satisfies remote manifest entry."""
     if local_entry is None or not benchmark_dir.is_dir():
@@ -421,20 +431,21 @@ def _is_local_entry_up_to_date(
     if local_entry.benchmark_source_sha256 != remote_entry.benchmark_source_sha256:
         return False
 
-    if no_ground_truth:
-        return True
+    if not no_ground_truth:
+        if (
+            local_entry.ground_truth_source_sha256
+            != remote_entry.ground_truth_source_sha256
+        ):
+            return False
+        if (
+            remote_entry.ground_truth_source_sha256
+            and not (benchmark_dir / ".aixcc").is_dir()
+        ):
+            return False
 
-    if (
-        local_entry.ground_truth_source_sha256
-        != remote_entry.ground_truth_source_sha256
-    ):
-        return False
-
-    if (
-        remote_entry.ground_truth_source_sha256
-        and not (benchmark_dir / ".aixcc").is_dir()
-    ):
-        return False
+    if not no_corpus and remote_entry.has_corpus:
+        if local_entry.corpus_source_sha256 != remote_entry.corpus_source_sha256:
+            return False
 
     return True
 
@@ -454,6 +465,19 @@ def _load_remote_manifest(config: DatasetConfig) -> dict[str, BenchmarkManifestE
         return {}
 
 
+def _benchmark_has_corpus_on_disk(benchmark_dir: Path) -> bool:
+    """Return True when any ``.aixcc/<harness>/corpus/`` exists on disk."""
+    aixcc = benchmark_dir / ".aixcc"
+    if not aixcc.is_dir():
+        return False
+    for harness_dir in aixcc.iterdir():
+        if not harness_dir.is_dir():
+            continue
+        if (harness_dir / "corpus").is_dir():
+            return True
+    return False
+
+
 def _update_local_manifest(
     *,
     output_dir: Path,
@@ -471,6 +495,7 @@ def _update_local_manifest(
             continue
         updated = BenchmarkManifestEntry.from_dict(remote_entry.to_dict())
         updated.has_ground_truth = (output_dir / name / ".aixcc").is_dir()
+        updated.has_corpus = _benchmark_has_corpus_on_disk(output_dir / name)
         local_manifest[name] = updated
 
     write_local_manifest(output_dir, local_manifest)
@@ -480,19 +505,26 @@ def download_all(
     output_dir: Path,
     *,
     no_ground_truth: bool = False,
+    no_corpus: bool = False,
 ) -> list[Path]:
     """Download all benchmark datasets.
 
     Args:
         output_dir: Directory to download benchmarks into
         no_ground_truth: If True, skip downloading ground-truth.tar.gz
+        no_corpus: If True, skip downloading corpus.tar.gz
 
     Returns:
         List of paths to downloaded dataset directories
     """
     results = []
     for name in get_dataset_names():
-        path = download_dataset(name, output_dir, no_ground_truth=no_ground_truth)
+        path = download_dataset(
+            name,
+            output_dir,
+            no_ground_truth=no_ground_truth,
+            no_corpus=no_corpus,
+        )
         results.append(path)
     return results
 
@@ -503,6 +535,7 @@ def download_suite(
     suites_root: Path,
     *,
     no_ground_truth: bool = False,
+    no_corpus: bool = False,
 ) -> list[Path]:
     """Download benchmarks specified in a benchmark suite.
 
@@ -511,6 +544,7 @@ def download_suite(
         output_dir: Directory to download benchmarks into
         suites_root: Root directory containing suite YAML files
         no_ground_truth: If True, skip downloading ground-truth.tar.gz
+        no_corpus: If True, skip downloading corpus.tar.gz
 
     Returns:
         List of paths to downloaded dataset directories
@@ -528,6 +562,7 @@ def download_suite(
             output_dir,
             benchmarks=names,
             no_ground_truth=no_ground_truth,
+            no_corpus=no_corpus,
         )
         results.append(path)
     return results

@@ -3243,7 +3243,7 @@ class TestBugFixInputStaging:
 
     def test_prepare_runtime_inputs_stages_seed_and_diff(self, tmp_path: Path) -> None:
         benchmark = self._make_benchmark_with_variants(tmp_path)
-        seed_dir = benchmark / ".aixcc" / "fuzz_target" / "seeds"
+        seed_dir = benchmark / ".aixcc" / "fuzz_target" / "corpus"
         seed_dir.mkdir(parents=True, exist_ok=True)
         (seed_dir / "seed_a").write_bytes(b"a")
         (seed_dir / "seed_b").write_bytes(b"b")

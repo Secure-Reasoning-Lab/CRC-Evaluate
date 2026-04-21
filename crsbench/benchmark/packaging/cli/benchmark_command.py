@@ -223,39 +223,44 @@ Registry stored at: ./canary-registry.json (repo root)
     # crsbench benchmark seed-import
     seed_import_parser = benchmark_subparsers.add_parser(
         "seed-import",
-        help="Import seed corpus from experiment output for a benchmark harness",
+        help="Import seed corpus from experiment output into benchmark directories",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Collects seed corpus files from CRS experiment output and stores them
-with metadata in the benchmark's .aixcc/{harness}/seeds/ directory.
+Imports seed corpus files from one or more trial directories and stores them
+deduplicated (by content hash) in each benchmark's
+.aixcc/{harness}/corpus/ directory alongside a manifest.json.
 
-Files are named by content hash (deduplication). A manifest.json
-contains metadata including relative_time (seconds since CRS start).
+Discovery walks every trial-*/output/seeds/ (or legacy trial-*/output/corpus/)
+under the experiment directory. The benchmark/harness for each trial is taken
+from metadata.json, config.yaml, or inferred from the path layout
+<project>/<harness>/<mode>/<sanitizer>/trial-N.
+
+Default behavior merges new files into any existing corpus directory.
+Pass --force to replace the directory instead.
 
 Output structure:
-  .aixcc/{harness}/seeds/
-  ├── manifest.json  # Metadata: crs_run_start_time, files info
-  ├── {hash1}        # Seed files (named by content hash)
+  benchmarks/<project>/.aixcc/<harness>/corpus/
+  ├── manifest.json     # {total_files, source_trials, files}
+  ├── {hash1}           # Seed file (named by SHA256 content hash)
   ├── {hash2}
   └── ...
 
-Manifest format:
-  {
-    "crs_run_start_time": 1234567890.0,
-    "files": {
-      "abc123...": {"relative_time": 500.0, "original_name": "...", "size": 1234}
-    }
-  }
-
 Examples:
-  # Import corpus from experiment output
+  # Single experiment (one benchmark/harness pair)
   %(prog)s ./experiment-output/
 
-  # Specify custom benchmarks directory
-  %(prog)s ./experiment-output/ --benchmarks ./my-benchmarks/
+  # Import every (benchmark, harness) pair under a combined tree
+  %(prog)s /data/final-combined/atlantis-multilang-given_fuzzer --all
 
-  # Force overwrite existing corpus
+  # Restrict to one benchmark + harness
+  %(prog)s ./experiment-output/ --all \\
+    --benchmark afc-curl-delta-02 --harness curl_fuzzer_ws
+
+  # Replace existing corpus instead of merging
   %(prog)s ./experiment-output/ --force
+
+  # Preview what would be imported without touching the filesystem
+  %(prog)s /data/final-combined/... --all --dry-run
         """,
     )
     seed_import_parser.add_argument(
@@ -270,9 +275,33 @@ Examples:
         help="Directory containing benchmarks (default: ./benchmarks)",
     )
     seed_import_parser.add_argument(
+        "--all",
+        action="store_true",
+        dest="all_mode",
+        help="Import every (benchmark, harness) group found under experiment_dir",
+    )
+    seed_import_parser.add_argument(
+        "--benchmark",
+        type=str,
+        default=None,
+        help="Only import trials whose benchmark matches this name",
+    )
+    seed_import_parser.add_argument(
+        "--harness",
+        type=str,
+        default=None,
+        help="Only import trials whose harness matches this name",
+    )
+    seed_import_parser.add_argument(
         "--force",
         action="store_true",
-        help="Overwrite existing corpus directory",
+        help="Replace existing corpus directory instead of merging",
+    )
+    seed_import_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help="Report what would be imported without writing anything to disk",
     )
     seed_import_parser.set_defaults(func=handle_seed_import)
 
@@ -971,10 +1000,10 @@ def handle_list_canaries(args: argparse.Namespace) -> int:
 def handle_seed_import(args: argparse.Namespace) -> int:
     """Handle 'crsbench benchmark seed-import' command.
 
-    Collects seed corpus files from experiment output and stores them
-    in the benchmark's .aixcc/{harness}/seeds/ directory with a manifest.
+    Imports seed corpus files from experiment output and stores them
+    deduplicated in each benchmark's .aixcc/{harness}/corpus/ directory.
     """
-    from crsbench.benchmark.seed import CollectionResult, CorpusCollector
+    from crsbench.benchmark.seed import CorpusCollector
 
     experiment_dir = Path(args.experiment_dir)
     benchmarks_dir = Path(args.benchmarks)
@@ -989,33 +1018,41 @@ def handle_seed_import(args: argparse.Namespace) -> int:
 
     try:
         collector = CorpusCollector(experiment_dir, benchmarks_dir)
-        result: CollectionResult = collector.collect(force=args.force)
-
-        # Display warnings
-        for warning in result.warnings:
-            logger.warning(warning)
-
-        # Summary
-        logger.info("=" * 50)
-        logger.info("SEED CORPUS IMPORT SUMMARY")
-        logger.info("=" * 50)
-        logger.info(f"Benchmark: {result.benchmark_name}")
-        logger.info(f"Harness: {result.harness_name}")
-        logger.info(f"Output: {result.output_dir}")
-        logger.info(f"Total files: {result.total_files}")
-
-        return 0
-
-    except FileExistsError as e:
-        logger.error(f"Corpus already exists: {e}")
-        logger.info("Use --force to overwrite existing corpus")
-        return 1
+        results = collector.collect(
+            force=args.force,
+            all_mode=args.all_mode,
+            benchmark_filter=args.benchmark,
+            harness_filter=args.harness,
+            dry_run=args.dry_run,
+        )
     except ValueError as e:
+        logger.error(f"Import error: {e}")
+        return 1
+    except FileNotFoundError as e:
         logger.error(f"Import error: {e}")
         return 1
     except Exception as e:
         logger.error(f"Seed import failed: {e}")
         return 1
+
+    prefix = "[dry-run] " if args.dry_run else ""
+    verb = "would import" if args.dry_run else "imported"
+    logger.info("=" * 50)
+    logger.info(f"{prefix}SEED CORPUS IMPORT SUMMARY")
+    logger.info("=" * 50)
+    for result in results:
+        for warning in result.warnings:
+            logger.warning(warning)
+        logger.info(
+            f"{prefix}{result.benchmark_name}/{result.harness_name}: "
+            f"{result.total_files} files total "
+            f"(+{result.new_files} new, from {result.source_trials} trial(s)) "
+            f"-> {result.output_dir}"
+        )
+    logger.info(f"{prefix}{verb} {len(results)} benchmark/harness group(s)")
+    if args.dry_run:
+        logger.info("[dry-run] no changes written to disk")
+    return 0
 
 
 def _discover_inc_build_benchmarks(
