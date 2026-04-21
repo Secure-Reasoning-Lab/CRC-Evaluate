@@ -1,8 +1,9 @@
 """Coverage validation subcommand.
 
-Uses _build_dag() from all_cmd to create jobs, then executes via Redis:
-Phase 1 — Build jobs (including coverage variant) via Redis build queue
-Phase 2 — FlatCollectCoverageJob via Redis verify queue
+Uses _build_dag() from all_cmd to create jobs. In distributed mode, build
+and coverage jobs are enqueued together in a single batch with per-job queue
+routing; RQ honors the depends_on graph so coverage jobs start as soon as
+their build dependencies finish (build/coverage pipelining).
 """
 
 from __future__ import annotations
@@ -34,6 +35,8 @@ from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
     import argparse
+
+    from crsbench.benchmark_ci.jobs.base import Job
 
 logger = get_logger(__name__)
 
@@ -89,15 +92,17 @@ def run_coverage(args: argparse.Namespace) -> int:
     )
 
     # Filter to build + coverage jobs only
-    build_jobs = [
-        j
-        for j in all_jobs
-        if isinstance(j, (BuildSingleVariantJob, PrepareIncImageJob))
-    ]
-    coverage_jobs = [j for j in all_jobs if isinstance(j, FlatCollectCoverageJob)]
+    relevant_job_types = (
+        BuildSingleVariantJob,
+        PrepareIncImageJob,
+        FlatCollectCoverageJob,
+    )
+    relevant_jobs = [j for j in all_jobs if isinstance(j, relevant_job_types)]
+    n_build = sum(1 for j in relevant_jobs if j.job_type == "build")
+    n_coverage = len(relevant_jobs) - n_build
 
     logger.info(
-        f"Jobs: {len(build_jobs)} build, {len(coverage_jobs)} coverage "
+        f"Jobs: {n_build} build, {n_coverage} coverage "
         f"(filtered from {len(all_jobs)} total)"
     )
 
@@ -106,36 +111,26 @@ def run_coverage(args: argparse.Namespace) -> int:
     start_dt = datetime.now()
 
     if distributed:
-        from crsbench.benchmark_ci.cli.commands.build_cmd import (
-            _run_distributed_build,
-        )
-
-        build_results = _run_distributed_build(
-            build_jobs, redis_host, output_dir=output_dir
-        )
-
         from crsbench.distributed.ci_jobs import (
             ci_results_to_executor_results,
             enqueue_and_poll_ci_jobs,
         )
 
-        if coverage_jobs:
-            verify_queue_name = "crsbench_ci_verify"
-            raw_coverage_results = enqueue_and_poll_ci_jobs(
-                coverage_jobs,
-                redis_host,
-                queue_name=verify_queue_name,
-                output_dir=output_dir,
+        def route_job(job: Job) -> str:
+            return (
+                "crsbench_ci_build" if job.job_type == "build" else "crsbench_ci_verify"
             )
-            coverage_results = ci_results_to_executor_results(raw_coverage_results)
-        else:
-            coverage_results = {}
 
-        dag_results = {**build_results, **coverage_results}
+        raw_results = enqueue_and_poll_ci_jobs(
+            relevant_jobs,
+            redis_host,
+            queue_name=route_job,
+            output_dir=output_dir,
+        )
+        dag_results = ci_results_to_executor_results(raw_results)
     else:
         from crsbench.benchmark_ci.executor import execute_jobs_locally
 
-        relevant_jobs = build_jobs + coverage_jobs
         dag_results = execute_jobs_locally(
             relevant_jobs,
             output_dir=Path(output_dir) if output_dir else None,
