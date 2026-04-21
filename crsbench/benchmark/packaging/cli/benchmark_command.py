@@ -9,6 +9,7 @@ Provides:
 - crsbench benchmark list-canaries - List registered canary UUIDs
 - crsbench benchmark image build|push|prepare|check - Manage inc-build images
 - crsbench benchmark dedup-povs <path> - Deduplicate POVs by crash signature
+- crsbench benchmark import-povs <path> --source-dir <dir> - Import discovered POVs as variants
 """
 
 import argparse
@@ -467,12 +468,31 @@ Examples:
 
   # Write JSON report
   %(prog)s benchmarks/afc-libexif-delta-03 --output report.json
+
+  # Run across every benchmark under the benchmarks root (dry-run)
+  %(prog)s --all
+
+  # Run across a subset via glob filter and actually delete
+  %(prog)s --all --filter 'afc-*' --no-dry-run
         """,
     )
     dedup_povs_parser.add_argument(
         "benchmark_path",
         type=str,
-        help="Path to benchmark directory",
+        nargs="?",
+        default=None,
+        help="Path to a single benchmark directory (omit when using --all)",
+    )
+    dedup_povs_parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Process every benchmark with .aixcc/ under the benchmarks root",
+    )
+    dedup_povs_parser.add_argument(
+        "--filter",
+        type=str,
+        default=None,
+        help="Glob pattern to filter benchmark names (with --all)",
     )
     dedup_povs_parser.add_argument(
         "--harness",
@@ -504,6 +524,100 @@ Examples:
         help="Write JSON report to file",
     )
     dedup_povs_parser.set_defaults(func=handle_dedup_povs)
+
+    # crsbench benchmark import-povs
+    import_povs_parser = benchmark_subparsers.add_parser(
+        "import-povs",
+        help="Import POVs found by a bug-finding CRS as new pov_N.blob variants",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Reads bug-finding output laid out as:
+
+  <source-dir>/<benchmark>/<harness>/<build_mode>/<sanitizer>/trial-*/povs/cpvs/<cpv_id>/blobs/*.blob
+
+For each (harness, cpv) of each selected benchmark, the discovered blobs
+are deduplicated by SHA-256 against existing pov_*.blob files in
+.aixcc/<harness>/<cpv_id>/blobs/ and added as new pov_N.blob (next free
+index). Existing POVs (including pov_0) are never modified.
+
+Examples:
+  # Dry-run: see what would be imported into one benchmark
+  %(prog)s benchmarks/atlanta-libcue-delta-01 \\
+      --source-dir /data/.../atlantis-multilang-given_fuzzer
+
+  # Apply changes; cap to 5 new variants per CPV
+  %(prog)s benchmarks/atlanta-libcue-delta-01 \\
+      --source-dir /data/.../atlantis-multilang-given_fuzzer \\
+      --max-povs-per-cpv 5 --apply
+
+  # Import for every benchmark in the source root
+  %(prog)s --all \\
+      --source-dir /data/.../atlantis-multilang-given_fuzzer \\
+      --max-povs-per-cpv 10 --apply
+        """,
+    )
+    import_povs_parser.add_argument(
+        "benchmark_path",
+        type=str,
+        nargs="?",
+        default=None,
+        help="Path to a single benchmark directory (omit when using --all)",
+    )
+    import_povs_parser.add_argument(
+        "--source-dir",
+        type=str,
+        required=True,
+        dest="source_dir",
+        help="Bug-finding result root containing <benchmark>/<harness>/... subdirs",
+    )
+    import_povs_parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Process every benchmark present under --source-dir",
+    )
+    import_povs_parser.add_argument(
+        "--filter",
+        type=str,
+        default=None,
+        help="Glob pattern to filter benchmarks under --source-dir (with --all)",
+    )
+    import_povs_parser.add_argument(
+        "--harness",
+        type=str,
+        default=None,
+        help="Only import for this harness name",
+    )
+    import_povs_parser.add_argument(
+        "--cpv",
+        type=str,
+        default=None,
+        help="Only import for this CPV id (e.g., cpv_0)",
+    )
+    import_povs_parser.add_argument(
+        "--max-povs-per-cpv",
+        type=_positive_int,
+        default=None,
+        dest="max_povs_per_cpv",
+        help="Maximum NEW POV variants to add per CPV (default: unlimited)",
+    )
+    import_povs_parser.add_argument(
+        "--no-logs",
+        action="store_true",
+        dest="no_logs",
+        help="Do not copy crash logs alongside as logs/pov_N.log",
+    )
+    import_povs_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually copy files (default: dry-run / report only)",
+    )
+    import_povs_parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Write JSON report to this path",
+    )
+    import_povs_parser.set_defaults(func=handle_import_povs)
 
     # crsbench benchmark init
     init_parser = benchmark_subparsers.add_parser(
@@ -832,50 +946,213 @@ def handle_prepare_delta(args: argparse.Namespace) -> int:
 
 def handle_dedup_povs(args: argparse.Namespace) -> int:
     """Handle 'crsbench benchmark dedup-povs' command."""
+    import fnmatch as _fn
+    import json as _json
+
     from crsbench.benchmark.packaging.dedup_povs import dedup_benchmark_povs
 
-    benchmark_path = Path(args.benchmark_path)
+    if args.all:
+        if args.benchmark_path:
+            benchmarks_root = Path(args.benchmark_path)
+        else:
+            benchmarks_root = _benchmarks_root_from_cwd()
+        if not benchmarks_root.is_dir():
+            logger.error(f"Benchmarks root not found: {benchmarks_root}")
+            return 1
 
-    if not benchmark_path.is_dir():
-        logger.error(f"Benchmark not found: {benchmark_path}")
-        return 1
+        candidates = sorted(p for p in benchmarks_root.iterdir() if p.is_dir())
+        if args.filter:
+            candidates = [p for p in candidates if _fn.fnmatch(p.name, args.filter)]
+        benchmark_paths = [p for p in candidates if (p / ".aixcc").is_dir()]
+        if not benchmark_paths:
+            logger.error(f"No benchmarks with .aixcc/ found under {benchmarks_root}")
+            return 1
+    else:
+        if not args.benchmark_path:
+            logger.error("Provide a benchmark path or pass --all")
+            return 1
+        if args.filter:
+            logger.error("--filter only applies with --all")
+            return 1
+        bp = Path(args.benchmark_path)
+        if not bp.is_dir():
+            logger.error(f"Benchmark not found: {bp}")
+            return 1
+        benchmark_paths = [bp]
 
     dry_run = not args.no_dry_run
     mode = "DRY RUN" if dry_run else "LIVE"
-    logger.info(f"Deduplicating POVs in {benchmark_path.name} [{mode}]")
+    logger.info(f"Deduplicating POVs in {len(benchmark_paths)} benchmark(s) [{mode}]")
 
-    try:
-        summary = dedup_benchmark_povs(
-            benchmark_path,
-            harness_filter=args.harness,
-            cpv_filter=args.cpv,
-            top_n=args.top_n,
-            dry_run=dry_run,
-        )
-    except ValueError as e:
-        logger.error(str(e))
-        return 1
+    summaries = []
+    failures: list[tuple[str, str]] = []
+    for bp in benchmark_paths:
+        try:
+            summary = dedup_benchmark_povs(
+                bp,
+                harness_filter=args.harness,
+                cpv_filter=args.cpv,
+                top_n=args.top_n,
+                dry_run=dry_run,
+            )
+        except ValueError as e:
+            logger.error(f"[{bp.name}] {e}")
+            failures.append((bp.name, str(e)))
+            continue
+        summaries.append(summary)
 
-    # Print summary
+    # Per-benchmark lines (only when running in --all mode)
+    if args.all:
+        action = "would remove" if dry_run else "removed"
+        for s in summaries:
+            logger.info(
+                f"[{s.benchmark}] {s.total_povs} POVs, "
+                f"{s.total_kept} kept, {s.total_removed} {action}"
+            )
+
+    # Aggregate summary
+    total_povs = sum(s.total_povs for s in summaries)
+    total_kept = sum(s.total_kept for s in summaries)
+    total_removed = sum(s.total_removed for s in summaries)
+
     logger.info("\n" + "=" * 50)
     logger.info("DEDUP SUMMARY")
     logger.info("=" * 50)
-    logger.info(f"Benchmark: {summary.benchmark}")
-    logger.info(f"Total POVs: {summary.total_povs}")
-    logger.info(f"Kept: {summary.total_kept}")
-
     action = "Would remove" if dry_run else "Removed"
-    logger.info(f"{action}: {summary.total_removed}")
+    logger.info(f"{'Benchmarks processed:':<22}{len(summaries)}")
+    if failures:
+        logger.info(f"{'Benchmarks failed:':<22}{len(failures)}")
+    logger.info(f"{'Total POVs:':<22}{total_povs}")
+    logger.info(f"{'Kept:':<22}{total_kept}")
+    logger.info(f"{action + ':':<22}{total_removed}")
 
-    if dry_run and summary.total_removed > 0:
+    if dry_run and total_removed > 0:
         logger.info("\nRun with --no-dry-run to actually delete files.")
 
     # Write JSON report if requested
     if args.output:
-        args.output.write_text(summary.to_json())
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        if args.all:
+            payload = {
+                "benchmarks": [s.to_dict() for s in summaries],
+                "totals": {
+                    "benchmarks_processed": len(summaries),
+                    "benchmarks_failed": len(failures),
+                    "total_povs": total_povs,
+                    "total_kept": total_kept,
+                    "total_removed": total_removed,
+                },
+            }
+            args.output.write_text(_json.dumps(payload, indent=2))
+        else:
+            args.output.write_text(summaries[0].to_json())
+        logger.info(f"\nReport written to: {args.output}")
+
+    return 1 if failures else 0
+
+
+def handle_import_povs(args: argparse.Namespace) -> int:
+    """Handle 'crsbench benchmark import-povs' command."""
+    from crsbench.benchmark.packaging.import_povs import (
+        import_many,
+        summaries_to_json,
+    )
+
+    source_root = Path(args.source_dir)
+    if not source_root.is_dir():
+        logger.error(f"Source dir not found: {source_root}")
+        return 1
+
+    if args.all:
+        if args.benchmark_path:
+            logger.error("Pass either a benchmark path or --all, not both")
+            return 1
+        import fnmatch as _fn
+
+        candidates = sorted(p for p in source_root.iterdir() if p.is_dir())
+        if args.filter:
+            candidates = [p for p in candidates if _fn.fnmatch(p.name, args.filter)]
+        # Map source-dir benchmark names to actual benchmark paths
+        # under benchmarks/ (skip ones that don't exist locally).
+        benchmarks_root = _benchmarks_root_from_cwd()
+        benchmark_paths: list[Path] = []
+        for cand in candidates:
+            bp = benchmarks_root / cand.name
+            if bp.is_dir() and (bp / ".aixcc").is_dir():
+                benchmark_paths.append(bp)
+            else:
+                logger.warning(f"Skipping {cand.name}: no matching benchmark at {bp}")
+        if not benchmark_paths:
+            logger.error("No matching benchmarks found")
+            return 1
+    else:
+        if not args.benchmark_path:
+            logger.error("Provide a benchmark path or pass --all")
+            return 1
+        bp = Path(args.benchmark_path)
+        if not bp.is_dir():
+            logger.error(f"Benchmark not found: {bp}")
+            return 1
+        benchmark_paths = [bp]
+
+    dry_run = not args.apply
+    mode = "DRY RUN" if dry_run else "APPLY"
+    logger.info(
+        f"Importing POVs from {source_root} into "
+        f"{len(benchmark_paths)} benchmark(s) [{mode}]"
+    )
+
+    summaries = import_many(
+        benchmark_paths,
+        source_root,
+        max_new_povs_per_cpv=args.max_povs_per_cpv,
+        harness_filter=args.harness,
+        cpv_filter=args.cpv,
+        copy_logs=not args.no_logs,
+        dry_run=dry_run,
+    )
+
+    total_imported = sum(s.total_imported for s in summaries)
+    total_dups = sum(s.total_duplicates for s in summaries)
+    total_capped = sum(s.total_capacity_skipped for s in summaries)
+    total_candidates = sum(s.total_candidates for s in summaries)
+
+    logger.info("\n" + "=" * 50)
+    logger.info("IMPORT SUMMARY")
+    logger.info("=" * 50)
+    logger.info(f"Benchmarks processed:  {len(summaries)}")
+    logger.info(f"Candidates discovered: {total_candidates}")
+    logger.info(
+        f"{'Would import' if dry_run else 'Imported'}:           {total_imported}"
+    )
+    logger.info(f"Skipped (duplicate):   {total_dups}")
+    logger.info(f"Skipped (max-cap):     {total_capped}")
+    if dry_run and total_imported > 0:
+        logger.info("\nRun with --apply to actually copy files.")
+
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(summaries_to_json(summaries))
         logger.info(f"\nReport written to: {args.output}")
 
     return 0
+
+
+def _benchmarks_root_from_cwd() -> Path:
+    """Resolve benchmarks/ root by walking up from the working directory.
+
+    Falls back to ``./benchmarks`` if the lookup fails.
+    """
+    import os
+
+    if "BENCHMARKS_ROOT" in os.environ:
+        return Path(os.environ["BENCHMARKS_ROOT"])
+    cwd = Path.cwd()
+    for parent in [cwd, *cwd.parents]:
+        candidate = parent / "benchmarks"
+        if candidate.is_dir():
+            return candidate
+    return cwd / "benchmarks"
 
 
 def handle_inject_canary(args: argparse.Namespace) -> int:
