@@ -619,6 +619,7 @@ def test_monitor_queue_rich_applies_manual_page_navigation_immediately() -> None
         running_jobs=[],
     )
     rendered_updates = []
+    refresh_flags = []
 
     class DummyLive:
         def __init__(self, renderable, *args, **kwargs):
@@ -632,8 +633,8 @@ def test_monitor_queue_rich_applies_manual_page_navigation_immediately() -> None
             return False
 
         def update(self, renderable, *args, **kwargs):
-            del args, kwargs
             rendered_updates.append(renderable)
+            refresh_flags.append(kwargs.get("refresh"))
 
     class DummyInput:
         def __init__(self, *args, **kwargs):
@@ -678,6 +679,8 @@ def test_monitor_queue_rich_applies_manual_page_navigation_immediately() -> None
         )
 
     assert len(rendered_updates) >= 2
+    assert refresh_flags
+    assert refresh_flags[0] is True
     second_render_console = rich_console.Console(
         width=120, force_terminal=True, record=True
     )

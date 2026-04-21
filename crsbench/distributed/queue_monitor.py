@@ -792,7 +792,7 @@ def _monitor_queue_rich(
                         page_index=page_index,
                         paging_status_text=monitor_input.manual_navigation_status,
                     )
-                    live.update(renderable)
+                    live.update(renderable, refresh=True)
 
                 if paging_active and _should_auto_rotate_pages(
                     last_manual_page_change_at=last_manual_page_change_at,
@@ -823,4 +823,4 @@ def _monitor_queue_rich(
                     page_index=page_index,
                     paging_status_text=monitor_input.manual_navigation_status,
                 )
-                live.update(renderable)
+                live.update(renderable, refresh=True)
