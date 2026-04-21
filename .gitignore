@@ -298,3 +298,5 @@ benchmark_stats_summary.csv
 benchmark_stats.csv
 
 .run
+
+ci-output
