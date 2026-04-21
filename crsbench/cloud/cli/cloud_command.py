@@ -152,10 +152,34 @@ Examples:
 
     # log
     log_p = cloud_subparsers.add_parser(
-        "log", help="Follow the primary CRSBench journal on a live cloud instance"
+        "log",
+        help="Follow the primary CRSBench journal on one or more live cloud instances",
     )
     log_p.add_argument("instance", nargs="?", help="Instance name or alias")
     _add_config_argument(log_p, suppress_default=True)
+    log_p.add_argument(
+        "--instance",
+        dest="instances",
+        action="append",
+        default=[],
+        help="Additional instance selector (repeatable for multi-target log fan-in)",
+    )
+    log_p.add_argument(
+        "--role",
+        help="Attach to every live instance for one role (orch, work, or eval)",
+    )
+    log_p.add_argument(
+        "--all",
+        dest="all_instances",
+        action="store_true",
+        help="Attach to every live instance for the experiment",
+    )
+    log_p.add_argument(
+        "--merge-by",
+        choices=("arrival", "timestamp"),
+        default="arrival",
+        help="Merge strategy for multi-stream output (default: arrival)",
+    )
 
     # launch
     launch_p = cloud_subparsers.add_parser(

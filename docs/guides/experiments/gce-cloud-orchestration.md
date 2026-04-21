@@ -1242,6 +1242,24 @@ uv run crsbench cloud --config config.yaml log
 `cloud log` uses the same selector rules as `cloud ssh` and `cloud exec`,
 including narrowed interactive prompting for ambiguous selectors.
 
+For explicit multi-target fan-in, use `--all`, `--role`, or repeated
+`--instance` selectors:
+
+```bash
+uv run crsbench cloud --config config.yaml log --role worker
+uv run crsbench cloud --config config.yaml log --instance orch --instance work-001
+uv run crsbench cloud --config config.yaml log --all
+```
+
+Multi-target sessions prefix each rendered line with the instance alias, role,
+and source kind so interleaved output remains attributable. By default logs are
+merged by local arrival time for the lowest latency. Use `--merge-by timestamp`
+when you want best-effort journal-timestamp ordering instead:
+
+```bash
+uv run crsbench cloud --config config.yaml log --role worker --merge-by timestamp
+```
+
 ## Teardown
 
 Remove the worker/evaluator fleet after collecting results:

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import io
 import json
 import os
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -2014,6 +2016,10 @@ class TestArgParsing:
         assert args.command == "cloud"
         assert args.cloud_command == "log"
         assert args.instance == "work-001"
+        assert args.instances == []
+        assert args.role is None
+        assert args.all_instances is False
+        assert args.merge_by == "arrival"
         assert args.config == "c.yaml"
 
     def test_parse_log_without_instance(self):
@@ -2022,6 +2028,39 @@ class TestArgParsing:
         assert args.command == "cloud"
         assert args.cloud_command == "log"
         assert args.instance is None
+        assert args.instances == []
+        assert args.role is None
+        assert args.all_instances is False
+        assert args.merge_by == "arrival"
+        assert args.config == "c.yaml"
+
+    def test_parse_log_multi_target_flags(self):
+        parser = self._build_parser()
+        args = parser.parse_args(
+            [
+                "cloud",
+                "log",
+                "orch",
+                "--config",
+                "c.yaml",
+                "--instance",
+                "work-001",
+                "--instance",
+                "eval-001",
+                "--role",
+                "worker",
+                "--all",
+                "--merge-by",
+                "timestamp",
+            ]
+        )
+        assert args.command == "cloud"
+        assert args.cloud_command == "log"
+        assert args.instance == "orch"
+        assert args.instances == ["work-001", "eval-001"]
+        assert args.role == "worker"
+        assert args.all_instances is True
+        assert args.merge_by == "timestamp"
         assert args.config == "c.yaml"
 
 
@@ -2118,9 +2157,18 @@ def _make_exec_args(
 def _make_log_args(
     instance: str | None = "work-001",
     config: str = "/tmp/config.yaml",
+    *,
+    instances: list[str] | None = None,
+    role: str | None = None,
+    all_instances: bool = False,
+    merge_by: str = "arrival",
 ):
     return argparse.Namespace(
         instance=instance,
+        instances=[] if instances is None else instances,
+        role=role,
+        all_instances=all_instances,
+        merge_by=merge_by,
         config=config,
         cloud_command="log",
     )
@@ -6697,6 +6745,72 @@ class TestExec:
 class TestLog:
     """Tests for run_log() sub-action."""
 
+    def test_resolve_log_targets_supports_role_and_explicit_selector_union(self):
+        from crsbench.cloud.cli._log import _resolve_log_targets
+
+        rows = [
+            _make_inventory_row(
+                alias="orch",
+                name="crsbench-test-exp-orch",
+                role="orchestrator",
+            ),
+            _make_inventory_row(
+                alias="work-001",
+                name="crsbench-test-exp-work-001",
+                role="worker",
+            ),
+            _make_inventory_row(
+                alias="work-002",
+                name="crsbench-test-exp-work-002",
+                role="worker",
+            ),
+            _make_inventory_row(
+                alias="eval-001",
+                name="crsbench-test-exp-eval-001",
+                role="evaluator",
+            ),
+        ]
+
+        targets = _resolve_log_targets(
+            rows,
+            _make_log_args(
+                instance="orch",
+                instances=["eval-001"],
+                role="worker",
+            ),
+        )
+
+        assert targets == [rows[1], rows[2], rows[0], rows[3]]
+
+    def test_resolve_log_targets_rejects_ambiguous_explicit_selector(
+        self,
+        capsys,
+    ):
+        from crsbench.cloud.cli._log import _resolve_log_targets
+
+        rows = [
+            _make_inventory_row(
+                alias="work-001",
+                name="crsbench-test-exp-work-001",
+                role="worker",
+            ),
+            _make_inventory_row(
+                alias="work-002",
+                name="crsbench-test-exp-work-002",
+                role="worker",
+            ),
+        ]
+
+        targets = _resolve_log_targets(
+            rows,
+            _make_log_args(instance=None, instances=["work"]),
+        )
+
+        assert targets is None
+        out = capsys.readouterr().out
+        assert "crsbench-test-exp-work-001" in out
+        assert "crsbench-test-exp-work-002" in out
+
     @patch("crsbench.cloud.cli._log.subprocess.run")
     @patch("crsbench.cloud.cli._log.build_ssh_command")
     @patch("crsbench.cloud.cli._log.resolve_effective_experiment_name")
@@ -6772,6 +6886,262 @@ class TestLog:
         assert rc == 0
         remote_command = mock_build_ssh_command.call_args.kwargs["remote_command"]
         assert "crsbench-orchestrator.service" in " ".join(remote_command)
+
+    @patch("crsbench.cloud.cli._log._run_multi_target_log_session", return_value=0)
+    @patch("crsbench.cloud.cli._log.resolve_effective_experiment_name")
+    @patch("crsbench.cloud.cli._log.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._log.provisioner_for_context")
+    def test_log_dispatches_explicit_multi_target_mode(
+        self,
+        mock_provisioner_cls,
+        mock_resolve_context,
+        mock_resolve_experiment_name,
+        mock_run_multi_target,
+    ):
+        from crsbench.cloud.cli._log import run_log
+
+        mock_resolve_experiment_name.return_value = "test-exp"
+        context = _make_resolved_cloud_context(_make_launch_state())
+        mock_resolve_context.return_value = context
+        provisioner = mock_provisioner_cls.return_value
+        provisioner.list_workers.return_value = [
+            _make_gce_worker("crsbench-test-exp-work-001", zone="us-central1-a"),
+            _make_gce_worker("crsbench-test-exp-work-002", zone="us-central1-b"),
+        ]
+        provisioner.list_evaluators.return_value = []
+        provisioner.get_instance_record.return_value = _make_gce_worker(
+            "crsbench-test-exp-orch",
+            zone="us-east5-b",
+            ip="10.0.0.50",
+        )
+        provisioner.get_instance_record.return_value.labels["crsbench-role"] = (
+            "orchestrator"
+        )
+
+        rc = run_log(
+            _make_log_args(
+                instance="orch",
+                role="worker",
+                merge_by="timestamp",
+            )
+        )
+
+        assert rc == 0
+        mock_run_multi_target.assert_called_once()
+        targets = mock_run_multi_target.call_args.args[0]
+        assert [target.alias for target in targets] == ["work-001", "work-002", "orch"]
+        assert mock_run_multi_target.call_args.kwargs["merge_by"] == "timestamp"
+
+    def test_multi_target_log_session_renders_prefixed_output(
+        self, monkeypatch, capsys
+    ):
+        from crsbench.cloud.cli._log import _run_multi_target_log_session
+
+        targets = [
+            _make_inventory_row(
+                alias="orch",
+                name="crsbench-test-exp-orch",
+                role="orchestrator",
+            ),
+            _make_inventory_row(
+                alias="work-001",
+                name="crsbench-test-exp-work-001",
+                role="worker",
+            ),
+        ]
+
+        commands: list[list[str]] = []
+
+        class _FakePopen:
+            def __init__(
+                self,
+                stdout_text: str,
+                stderr_text: str = "",
+                returncode: int = 0,
+            ):
+                self.stdout = io.StringIO(stdout_text)
+                self.stderr = io.StringIO(stderr_text)
+                self._returncode = returncode
+
+            def wait(self):
+                return self._returncode
+
+            def poll(self):
+                return self._returncode
+
+            def terminate(self):
+                self._returncode = 0
+
+            def kill(self):
+                self._returncode = -9
+
+        def _fake_build_ssh_command(target, *, remote_command=None, tty=False):
+            assert tty is False
+            commands.append(remote_command or [])
+            return [target.alias]
+
+        def _fake_popen(cmd, **_kwargs):
+            alias = cmd[0]
+            if alias == "orch":
+                return _FakePopen(
+                    '{"__REALTIME_TIMESTAMP":"1000000","MESSAGE":"orch line"}\n'
+                )
+            return _FakePopen(
+                '{"__REALTIME_TIMESTAMP":"2000000","MESSAGE":"worker line\\ntrace"}\n'
+            )
+
+        monkeypatch.setattr(
+            "crsbench.cloud.cli._log.build_ssh_command",
+            _fake_build_ssh_command,
+        )
+        monkeypatch.setattr("crsbench.cloud.cli._log.subprocess.Popen", _fake_popen)
+
+        rc = _run_multi_target_log_session(targets, merge_by="arrival")
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "orch | orchestrator | journal | orch line" in out
+        assert "work-001 | worker | journal | worker line" in out
+        assert "work-001 | worker | journal | trace" in out
+        assert all(" -o json" in " ".join(command) for command in commands)
+
+    def test_multi_target_log_session_orders_timestamp_merge(
+        self,
+        monkeypatch,
+        capsys,
+    ):
+        from crsbench.cloud.cli._log import _run_multi_target_log_session
+
+        targets = [
+            _make_inventory_row(
+                alias="orch",
+                name="crsbench-test-exp-orch",
+                role="orchestrator",
+            ),
+            _make_inventory_row(
+                alias="work-001",
+                name="crsbench-test-exp-work-001",
+                role="worker",
+            ),
+        ]
+
+        class _FakePopen:
+            def __init__(
+                self,
+                stdout_text: str,
+                stderr_text: str = "",
+                returncode: int = 0,
+            ):
+                self.stdout = io.StringIO(stdout_text)
+                self.stderr = io.StringIO(stderr_text)
+                self._returncode = returncode
+
+            def wait(self):
+                return self._returncode
+
+            def poll(self):
+                return self._returncode
+
+            def terminate(self):
+                self._returncode = 0
+
+            def kill(self):
+                self._returncode = -9
+
+        def _fake_build_ssh_command(target, *, remote_command=None, tty=False):
+            assert tty is False
+            assert remote_command is not None
+            return [target.alias]
+
+        base_timestamp_us = int(time.time() * 1_000_000)
+
+        def _fake_popen(cmd, **_kwargs):
+            alias = cmd[0]
+            if alias == "orch":
+                return _FakePopen(
+                    '{"__REALTIME_TIMESTAMP":"'
+                    + str(base_timestamp_us)
+                    + '","MESSAGE":"orch first"}\n'
+                )
+            return _FakePopen(
+                '{"__REALTIME_TIMESTAMP":"'
+                + str(base_timestamp_us + 100_000)
+                + '","MESSAGE":"worker second"}\n'
+            )
+
+        monkeypatch.setattr(
+            "crsbench.cloud.cli._log.build_ssh_command",
+            _fake_build_ssh_command,
+        )
+        monkeypatch.setattr("crsbench.cloud.cli._log.subprocess.Popen", _fake_popen)
+
+        rc = _run_multi_target_log_session(targets, merge_by="timestamp")
+
+        assert rc == 0
+        lines = [line for line in capsys.readouterr().out.splitlines() if line]
+        assert lines[0] == "orch | orchestrator | journal | orch first"
+        assert lines[1] == "work-001 | worker | journal | worker second"
+
+    def test_multi_target_log_session_returns_error_when_no_stream_starts(
+        self,
+        monkeypatch,
+        capsys,
+    ):
+        from crsbench.cloud.cli._log import _run_multi_target_log_session
+
+        targets = [
+            _make_inventory_row(
+                alias="work-001",
+                name="crsbench-test-exp-work-001",
+                role="worker",
+            )
+        ]
+
+        class _FakePopen:
+            def __init__(
+                self,
+                stdout_text: str = "",
+                stderr_text: str = "",
+                returncode: int = 255,
+            ):
+                self.stdout = io.StringIO(stdout_text)
+                self.stderr = io.StringIO(stderr_text)
+                self._returncode = returncode
+
+            def wait(self):
+                return self._returncode
+
+            def poll(self):
+                return self._returncode
+
+            def terminate(self):
+                self._returncode = 0
+
+            def kill(self):
+                self._returncode = -9
+
+        def _fake_build_ssh_command(target, *, remote_command=None, tty=False):
+            assert tty is False
+            assert remote_command is not None
+            return [target.alias]
+
+        def _fake_popen(_cmd, **_kwargs):
+            return _FakePopen(stderr_text="transport boom\n")
+
+        monkeypatch.setattr(
+            "crsbench.cloud.cli._log.build_ssh_command",
+            _fake_build_ssh_command,
+        )
+        monkeypatch.setattr(
+            "crsbench.cloud.cli._log.subprocess.Popen",
+            _fake_popen,
+        )
+
+        rc = _run_multi_target_log_session(targets, merge_by="arrival")
+
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert "work-001 | worker | transport | transport boom" in out
 
     @patch("crsbench.cloud.cli._log.subprocess.run")
     @patch("crsbench.cloud.cli._log.build_ssh_command")

@@ -17,6 +17,7 @@ belongs in `docs/modules/`.
 
 - [Distributed Queue Semantics](./distributed/distributed-job-queue.md)
 - [Distributed Evaluator and Worker Execution](./distributed/distributed-evaluation.md)
+- [Cloud Live Log Streaming](./distributed/cloud-live-log-streaming.md)
 - [Evaluation Contract](./evaluation/evaluation.md)
 - [Validation Contract](./validation/validation.md)
 - [Gen-Config TUI YAML Round-Trip Editing](./validation/gen-config-tui-yaml-roundtrip.md)
@@ -52,6 +53,7 @@ should be applied to the dedicated canonical docs below.
 | Distributed queue semantics | `distributed/distributed-job-queue.md` |
 | Distributed evaluator/worker execution | `distributed/distributed-evaluation.md` |
 | Configless runtime discovery/registration | `distributed/configless-runtime.md` |
+| Cloud live log streaming target contract | `distributed/cloud-live-log-streaming.md` |
 | Evaluation contract and verdict semantics | `evaluation/evaluation.md` |
 | Validation schema/normalization contracts | `validation/validation.md` |
 | Gen-config TUI YAML round-trip write preservation | `validation/gen-config-tui-yaml-roundtrip.md` |

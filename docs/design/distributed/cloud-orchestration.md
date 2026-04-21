@@ -4,6 +4,7 @@
 - Scope: provider-neutral cloud orchestration contracts shared across launch, monitoring, collection, and teardown
 - Related:
   - [Deployment Guide](./deployment-guide.md)
+  - [Cloud Live Log Streaming](./cloud-live-log-streaming.md)
   - [Configless Runtime](./configless-runtime.md)
   - [Distributed Evaluation](./distributed-evaluation.md)
   - [GCE Cloud Orchestration](./gce-cloud-orchestration.md)
@@ -150,12 +151,16 @@ The shared cloud control plane includes:
   the terminal message into a failure report; an initial idle state does not
   notify, but a later active -> idle transition in the same session still can
 - `cloud list`: show the resolved live inventory for the experiment
-- `cloud ssh`, `cloud shell`, `cloud exec`, `cloud log`: operator access to one
-  live cloud instance; selectors may use the full name, resolved alias, or any
-  other unambiguous filtered short form such as `eval-001`, and role shorthands
-  like `eval` resolve when they match exactly one live instance; when a
-  selector still matches multiple live instances, interactive sessions must
-  prompt from the narrowed match set while non-interactive sessions fail
+- `cloud ssh`, `cloud shell`, and `cloud exec`: operator access to one live
+  cloud instance; selectors may use the full name, resolved alias, or any other
+  unambiguous filtered short form such as `eval-001`, and role shorthands like
+  `eval` resolve when they match exactly one live instance; when a selector
+  still matches multiple live instances, interactive sessions must prompt from
+  the narrowed match set while non-interactive sessions fail
+- `cloud log`: operator access to one live cloud instance by default, and to
+  multiple live cloud instances when explicit multi-target intent is provided
+  with `--all`, `--role`, or repeated `--instance`; ambiguous selectors must
+  not implicitly widen to multiple streams
 - `cloud collect`: retrieve worker artifacts plus role diagnostics
 - `cloud teardown`: collect first, then reclaim the fleet
 
