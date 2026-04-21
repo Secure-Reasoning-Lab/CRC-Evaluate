@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -592,6 +593,61 @@ def test_rich_monitor_input_reports_non_tty_unavailability_reason() -> None:
         assert monitor_input.manual_navigation_status == (
             "n/p unavailable: stdin not TTY; auto-rotates each refresh"
         )
+
+
+def test_rich_monitor_input_prefers_controlling_terminal_when_available() -> None:
+    stream = MagicMock()
+    stream.isatty.return_value = True
+    stream.fileno.return_value = 7
+
+    with (
+        patch("crsbench.distributed.queue_monitor.sys.stdin", stream),
+        patch("os.open", return_value=11) as mock_open,
+        patch("os.close") as mock_close,
+        patch("termios.tcgetattr", return_value=["saved-attrs"]) as mock_tcgetattr,
+        patch("termios.tcsetattr") as mock_tcsetattr,
+        patch("tty.setcbreak") as mock_setcbreak,
+        _RichMonitorInput() as monitor_input,
+    ):
+        assert monitor_input.manual_navigation_available is True
+        assert (
+            monitor_input.manual_navigation_status
+            == "n/p active; auto-rotates when idle"
+        )
+        assert monitor_input._fd == 11
+        stream.fileno.assert_not_called()
+        mock_open.assert_called_once_with("/dev/tty", os.O_RDONLY)
+        mock_tcgetattr.assert_called_once_with(11)
+        mock_setcbreak.assert_called_once_with(11)
+
+    mock_tcsetattr.assert_called_once()
+    mock_close.assert_called_once_with(11)
+
+
+def test_rich_monitor_input_falls_back_to_stdin_when_tty_open_fails() -> None:
+    stream = MagicMock()
+    stream.isatty.return_value = True
+    stream.fileno.return_value = 7
+
+    with (
+        patch("crsbench.distributed.queue_monitor.sys.stdin", stream),
+        patch("os.open", side_effect=OSError("no controlling terminal")),
+        patch("termios.tcgetattr", return_value=["saved-attrs"]) as mock_tcgetattr,
+        patch("termios.tcsetattr") as mock_tcsetattr,
+        patch("tty.setcbreak") as mock_setcbreak,
+        _RichMonitorInput() as monitor_input,
+    ):
+        assert monitor_input.manual_navigation_available is True
+        assert (
+            monitor_input.manual_navigation_status
+            == "n/p active; auto-rotates when idle"
+        )
+        assert monitor_input._fd == 7
+        stream.fileno.assert_called_once_with()
+        mock_tcgetattr.assert_called_once_with(7)
+        mock_setcbreak.assert_called_once_with(7)
+
+    mock_tcsetattr.assert_called_once()
 
 
 def test_monitor_queue_rich_applies_manual_page_navigation_immediately() -> None:

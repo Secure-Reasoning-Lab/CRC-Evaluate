@@ -80,8 +80,10 @@ class _RichMonitorInput:
 
     def __init__(self, stream=None) -> None:
         self._stream = sys.stdin if stream is None else stream
+        self._prefer_controlling_terminal = stream is None
         self._fd: int | None = None
         self._saved_termios_attrs: Any = None
+        self._owns_fd = False
         self._pending_commands: deque[str] = deque()
         self.manual_navigation_available = False
         self.manual_navigation_status = (
@@ -95,15 +97,21 @@ class _RichMonitorInput:
         )
         return self
 
-    def __enter__(self) -> "_RichMonitorInput":
-        isatty = getattr(self._stream, "isatty", None)
-        fileno = getattr(self._stream, "fileno", None)
+    def _activate_manual_navigation(self, fd: int, saved_termios_attrs: Any) -> None:
+        self._fd = fd
+        self._saved_termios_attrs = saved_termios_attrs
+        self.manual_navigation_available = True
+        self.manual_navigation_status = "n/p active; auto-rotates when idle"
+
+    def _attach_stream(self, stream) -> str | None:
+        isatty = getattr(stream, "isatty", None)
+        fileno = getattr(stream, "fileno", None)
         if not callable(isatty):
-            return self._set_manual_navigation_unavailable("TTY state unknown")
+            return "TTY state unknown"
         if not isatty():
-            return self._set_manual_navigation_unavailable("stdin not TTY")
+            return "stdin not TTY"
         if not callable(fileno):
-            return self._set_manual_navigation_unavailable("no file descriptor")
+            return "no file descriptor"
 
         try:
             import termios
@@ -113,15 +121,51 @@ class _RichMonitorInput:
             saved_termios_attrs = cast("Any", termios.tcgetattr(fd))
             tty.setcbreak(fd)
         except ImportError:
-            return self._set_manual_navigation_unavailable("raw mode unsupported")
+            return "raw mode unsupported"
         except (OSError, ValueError, AttributeError):
-            return self._set_manual_navigation_unavailable("cbreak setup failed")
+            return "cbreak setup failed"
 
-        self._fd = fd
-        self._saved_termios_attrs = saved_termios_attrs
-        self.manual_navigation_available = True
-        self.manual_navigation_status = "n/p active; auto-rotates when idle"
-        return self
+        self._owns_fd = False
+        self._activate_manual_navigation(fd, saved_termios_attrs)
+        return None
+
+    def _attach_controlling_terminal(self) -> str | None:
+        try:
+            import os
+            import termios
+            import tty
+
+            fd = os.open("/dev/tty", os.O_RDONLY)
+        except ImportError:
+            return "raw mode unsupported"
+        except OSError:
+            return "controlling terminal unavailable"
+
+        try:
+            saved_termios_attrs = cast("Any", termios.tcgetattr(fd))
+            tty.setcbreak(fd)
+        except (OSError, ValueError, AttributeError):
+            os.close(fd)
+            return "controlling terminal setup failed"
+
+        self._owns_fd = True
+        self._activate_manual_navigation(fd, saved_termios_attrs)
+        return None
+
+    def __enter__(self) -> "_RichMonitorInput":
+        reasons: list[str] = []
+        if self._prefer_controlling_terminal:
+            controlling_terminal_reason = self._attach_controlling_terminal()
+            if controlling_terminal_reason is None:
+                return self
+            reasons.append(controlling_terminal_reason)
+
+        stream_reason = self._attach_stream(self._stream)
+        if stream_reason is None:
+            return self
+        reasons.append(stream_reason)
+
+        return self._set_manual_navigation_unavailable(" and ".join(reasons))
 
     def __exit__(self, exc_type, exc, tb) -> bool:
         if self._fd is None or self._saved_termios_attrs is None:
@@ -137,6 +181,13 @@ class _RichMonitorInput:
             )
         except (ImportError, OSError, ValueError, AttributeError):
             pass
+        if self._owns_fd:
+            try:
+                import os
+
+                os.close(self._fd)
+            except OSError:
+                pass
         return False
 
     def read_command(self, timeout_sec: float) -> str | None:
