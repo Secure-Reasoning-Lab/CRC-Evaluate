@@ -22,6 +22,8 @@ runtime:
 storage:
   experiment_filestore: /tmp/crsbench/sanity/experiment-data/sanity-test
   report_filestore: /tmp/crsbench/sanity/report-data/sanity-test
+resources:
+  memory_per_trial: "64G"
 worker:
   jobs: 3
   cores_per_job: 8

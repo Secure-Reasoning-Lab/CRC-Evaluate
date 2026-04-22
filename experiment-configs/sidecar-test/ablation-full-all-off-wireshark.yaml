@@ -39,7 +39,7 @@ crs_compose:
   builder-sidecar-lite:
     num_cores: 4
 resources:
-  memory_per_trial: 48g
+  memory_per_trial: "64G"
 worker:
   jobs: 10
   cores_per_job: 8

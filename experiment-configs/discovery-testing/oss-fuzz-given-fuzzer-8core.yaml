@@ -37,3 +37,4 @@ crs_compose:
 
 resources:
   cores_per_trial: 8
+  memory_per_trial: "64G"

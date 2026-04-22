@@ -40,6 +40,7 @@ storage:
   report_filestore: /data/crsbench/report-data/atlantis-multilang-except-afc-final
 resources:
   cores_per_trial: 16
+  memory_per_trial: "64G"
 crs_compose:
   oss_crs_infra:
     shared: true

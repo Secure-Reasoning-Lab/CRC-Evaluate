@@ -53,6 +53,7 @@ storage:
   report_filestore: /data/crsbench/report-data/cloud-4bench-16core-gf
 resources:
   cores_per_trial: 16
+  memory_per_trial: "64G"
 crs_compose:
   oss_crs_infra:
     shared: true

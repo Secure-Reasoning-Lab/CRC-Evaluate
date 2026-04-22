@@ -46,6 +46,7 @@ storage:
   report_filestore: /data/crsbench/report-data/non-afc-final-bf-given-fuzzer-v3-partial
 resources:
   cores_per_trial: 16
+  memory_per_trial: "64G"
 crs_compose:
   oss_crs_infra:
     shared: true

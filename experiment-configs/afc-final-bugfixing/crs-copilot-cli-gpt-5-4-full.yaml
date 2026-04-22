@@ -27,6 +27,7 @@ storage:
   report_filestore: /home/dongkwan/crsbench_eval_patch/report-data/afc-all-crs-copilot-cli-gpt-5-4-full
 resources:
   cores_per_trial: 8
+  memory_per_trial: "64G"
 crs_compose:
   crs-copilot-cli:
     num_cores: 8

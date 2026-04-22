@@ -27,6 +27,7 @@ storage:
   report_filestore: /home/dongkwan/crsbench_eval_patch/report-data/afc-all-crs-claude-code-claude-sonnet-4-20250514-full
 resources:
   cores_per_trial: 8
+  memory_per_trial: "64G"
 crs_compose:
   crs-claude-code:
     num_cores: 8

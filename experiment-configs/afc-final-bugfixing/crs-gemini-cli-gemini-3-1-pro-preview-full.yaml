@@ -27,6 +27,7 @@ storage:
   report_filestore: /home/dongkwan/crsbench_eval_patch/report-data/afc-all-crs-gemini-cli-gemini-3.1-pro-preview-full
 resources:
   cores_per_trial: 8
+  memory_per_trial: "64G"
 crs_compose:
   crs-gemini-cli:
     num_cores: 8

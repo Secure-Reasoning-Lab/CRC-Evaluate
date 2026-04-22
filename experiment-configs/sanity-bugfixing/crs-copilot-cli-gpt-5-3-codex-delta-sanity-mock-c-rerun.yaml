@@ -28,6 +28,8 @@ runtime:
 storage:
   experiment_filestore: /tmp/crsbench/sanity-copilot/experiment-data/sanity-mock-c-crs-copilot-cli-gpt-5-3-codex-delta-rerun
   report_filestore: /tmp/crsbench/sanity-copilot/report-data/sanity-mock-c-crs-copilot-cli-gpt-5-3-codex-delta-rerun
+resources:
+  memory_per_trial: "64G"
 crs_compose:
   crs-copilot-cli:
     num_cores: 8

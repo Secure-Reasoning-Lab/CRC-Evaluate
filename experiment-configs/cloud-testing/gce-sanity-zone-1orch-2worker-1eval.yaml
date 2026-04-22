@@ -20,7 +20,7 @@ storage:
   report_filestore: /tmp/crsbench/report-data
 resources:
   cores_per_trial: 2
-  memory_per_trial: 4G
+  memory_per_trial: "64G"
 worker:
   jobs: 1
   storage:

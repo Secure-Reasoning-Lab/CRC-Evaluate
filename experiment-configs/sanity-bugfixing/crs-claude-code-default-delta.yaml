@@ -25,6 +25,8 @@ runtime:
 storage:
   experiment_filestore: /home/dongkwan/crsbench_eval_patch/experiment-data/sanity-test-crs-claude-code-8c-2h
   report_filestore: /home/dongkwan/crsbench_eval_patch/report-data/sanity-test-crs-claude-code-8c-2h
+resources:
+  memory_per_trial: "64G"
 crs_compose:
   crs-claude-code:
     num_cores: 8

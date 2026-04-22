@@ -86,4 +86,4 @@ evaluator:
   cores_per_job: 4
 
 resources:
-  memory_per_trial: 48g
+  memory_per_trial: "64G"
