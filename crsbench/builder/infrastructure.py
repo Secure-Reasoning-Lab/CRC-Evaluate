@@ -401,7 +401,7 @@ class OSSFuzzInfrastructure:
             else (
                 int(snapshot_commit_timeout_env)
                 if snapshot_commit_timeout_env
-                else 1800
+                else 3600
             )
         )
         retry_interval_env = os.getenv("CRSBENCH_INC_IMAGE_RETRY_INTERVAL_SEC")
