@@ -45,6 +45,7 @@ crs_compose:
     shared: true
   atlantis-multilang-wo-concolic:
     num_cores: 16
+    mem_limit: "64G"
 worker:
   jobs: 14
   cores_per_job: 16
