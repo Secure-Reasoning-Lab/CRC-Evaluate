@@ -35,6 +35,7 @@ if REDIS_AVAILABLE:
     import rq
     import rq.job
     from rq.exceptions import NoSuchJobError
+    from rq.job import JobStatus
 
 if TYPE_CHECKING:
     from redis import Redis
@@ -65,8 +66,18 @@ class WorkerEntry(NamedTuple):
     cgroup_path: Optional[Path]
 
 
-_CLAIM_FAIR_JOB_LUA = """
+_MOVE_JOB_ID_LUA = """
 local removed = redis.call('LREM', KEYS[1], 1, ARGV[1])
+if removed == 1 then
+    redis.call('LPUSH', KEYS[2], ARGV[1])
+end
+redis.call('DEL', KEYS[3])
+return removed
+"""
+
+_REMOVE_JOB_ID_LUA = """
+local removed = redis.call('LREM', KEYS[1], 1, ARGV[1])
+redis.call('DEL', KEYS[2])
 return removed
 """
 
@@ -100,6 +111,98 @@ def _scheduler_owner_key_for_job(job: "rq.job.Job", *, queue_name: str) -> str:
     )
 
 
+def _intermediate_first_seen_key(queue: "rq.Queue", job_id: str) -> str:
+    return queue.intermediate_queue.get_first_seen_key(job_id)
+
+
+def _move_job_id(
+    redis_conn: "Redis",
+    *,
+    source_key: str,
+    dest_key: str,
+    cleanup_key: str,
+    job_id: str,
+) -> bool:
+    moved = redis_conn.eval(
+        _MOVE_JOB_ID_LUA,
+        3,
+        source_key,
+        dest_key,
+        cleanup_key,
+        job_id,
+    )
+    return moved == 1
+
+
+def _remove_job_id(
+    redis_conn: "Redis",
+    *,
+    list_key: str,
+    cleanup_key: str,
+    job_id: str,
+) -> bool:
+    removed = redis_conn.eval(
+        _REMOVE_JOB_ID_LUA,
+        2,
+        list_key,
+        cleanup_key,
+        job_id,
+    )
+    return removed == 1
+
+
+def _remove_stale_queue_job_id(queue: "rq.Queue", job_id: str) -> None:
+    removed = queue.connection.lrem(queue.key, 1, job_id)
+    if removed:
+        logger.warning(
+            f"Removed stale queue entry {job_id} from {queue.name}; backing RQ job "
+            "record was missing."
+        )
+
+
+def _restore_claimed_job(
+    redis_conn: "Redis",
+    *,
+    queue: "rq.Queue",
+    job_id: str,
+) -> bool:
+    try:
+        return _move_job_id(
+            redis_conn,
+            source_key=queue.intermediate_queue.key,
+            dest_key=queue.key,
+            cleanup_key=_intermediate_first_seen_key(queue, job_id),
+            job_id=job_id,
+        )
+    except Exception as exc:
+        logger.warning(
+            f"Failed to restore claimed job {job_id} from intermediate queue "
+            f"{queue.name}: {exc}"
+        )
+        return False
+
+
+def _discard_claimed_job(
+    redis_conn: "Redis",
+    *,
+    queue: "rq.Queue",
+    job_id: str,
+) -> bool:
+    try:
+        return _remove_job_id(
+            redis_conn,
+            list_key=queue.intermediate_queue.key,
+            cleanup_key=_intermediate_first_seen_key(queue, job_id),
+            job_id=job_id,
+        )
+    except Exception as exc:
+        logger.warning(
+            f"Failed to discard claimed job {job_id} from intermediate queue "
+            f"{queue.name}: {exc}"
+        )
+        return False
+
+
 def _queue_candidates(
     queues: list["rq.Queue"],
     *,
@@ -123,6 +226,7 @@ def _queue_candidates(
         for job_id in job_ids:
             job = jobs_by_id.get(job_id)
             if job is None:
+                _remove_stale_queue_job_id(queue, job_id)
                 continue
             if not _matches_cpu_tag(job, worker_cpu_tag):
                 continue
@@ -143,22 +247,46 @@ def _claim_fair_candidate(
     queue_lookup: dict[str, "rq.Queue"],
     candidate: QueuedCandidate,
 ) -> tuple["rq.job.Job", "rq.Queue"] | None:
-    """Atomically remove and fetch a selected fair candidate from its queue."""
+    """Atomically move and fetch a selected fair candidate via RQ intermediate state."""
     queue = queue_lookup[candidate.queue_name]
-    removed = redis_conn.eval(_CLAIM_FAIR_JOB_LUA, 1, queue.key, candidate.job_id)
-    if removed != 1:
+    claimed = _move_job_id(
+        redis_conn,
+        source_key=queue.key,
+        dest_key=queue.intermediate_queue.key,
+        cleanup_key=_intermediate_first_seen_key(queue, candidate.job_id),
+        job_id=candidate.job_id,
+    )
+    if not claimed:
         return None
+    try:
+        queue.intermediate_queue.set_first_seen(candidate.job_id)
+    except Exception as exc:
+        logger.warning(
+            f"Failed to record fair-claim timestamp for {candidate.job_id} in "
+            f"{queue.name}: {exc}"
+        )
     try:
         job = rq.job.Job.fetch(candidate.job_id, connection=redis_conn)
     except NoSuchJobError:
+        _discard_claimed_job(redis_conn, queue=queue, job_id=candidate.job_id)
         logger.debug(f"Fair claim fetched missing job {candidate.job_id}")
         return None
     except Exception:
-        redis_conn.lpush(queue.key, candidate.job_id)
-        logger.warning(
-            f"Fair claim fetch failed after removing {candidate.job_id}; "
-            "restored job id to queue front."
+        restored = _restore_claimed_job(
+            redis_conn,
+            queue=queue,
+            job_id=candidate.job_id,
         )
+        if restored:
+            logger.warning(
+                f"Fair claim fetch failed after moving {candidate.job_id}; "
+                "restored job id to queue front."
+            )
+        else:
+            logger.warning(
+                f"Fair claim fetch failed after moving {candidate.job_id}; "
+                "job remains recoverable in the intermediate queue."
+            )
         return None
     return job, queue
 
@@ -520,7 +648,10 @@ def run_ci_supervisor(
                 no_active_workers = not build_active and not verify_active
                 if no_active_workers:
                     no_queued = build_queue.count == 0 and verify_queue.count == 0
-                    if no_queued:
+                    no_intermediate = (
+                        _intermediate_job_count([build_queue, verify_queue]) == 0
+                    )
+                    if no_queued and no_intermediate:
                         no_deferred = (
                             build_queue.deferred_job_registry.count == 0
                             and verify_queue.deferred_job_registry.count == 0
@@ -536,6 +667,8 @@ def run_ci_supervisor(
             # (e.g. from a peer evaluator killed on shared Valkey) are
             # retried instead of crashing this supervisor.
             try:
+                _recover_stuck_fair_claims([build_queue, verify_queue])
+
                 now = time.time()
                 build_eligible = (
                     len(build_active) < build_jobs
@@ -563,6 +696,33 @@ def run_ci_supervisor(
                 )
 
                 if not result:
+                    if (
+                        not continuous
+                        and not build_active
+                        and not verify_active
+                        and _queues_blocked_only_by_cpu_tag(
+                            [build_queue, verify_queue],
+                            worker_cpu_tag=cpu_tag,
+                        )
+                    ):
+                        mismatch_job_ids.clear()
+                        mismatch_queue_names.clear()
+                        consecutive_cpu_mismatch_requeues += 1
+                        if (
+                            consecutive_cpu_mismatch_requeues
+                            >= NON_CONTINUOUS_CPU_MISMATCH_LIMIT
+                        ):
+                            logger.warning(
+                                "Exiting non-continuous supervisor because only "
+                                "cpu_tag-mismatched queued jobs remain for "
+                                "compatible workers."
+                            )
+                            cpu_tag_livelock_detected = True
+                            break
+                    else:
+                        consecutive_cpu_mismatch_requeues = 0
+                        mismatch_job_ids.clear()
+                        mismatch_queue_names.clear()
                     time.sleep(0.5)
                     consecutive_dequeue_errors = 0
                     continue
@@ -589,6 +749,7 @@ def run_ci_supervisor(
             job_status = job.get_status()
             if job_status in ("finished", "failed"):
                 restore_fair_scheduler_state(fair_state, selection_snapshot)
+                _discard_claimed_job(redis_conn, queue=queue_obj, job_id=job.id)
                 logger.debug(f"Skipping stale job {job.id[:30]} (status={job_status})")
                 consecutive_cpu_mismatch_requeues = 0
                 mismatch_job_ids.clear()
@@ -599,7 +760,7 @@ def run_ci_supervisor(
                 consecutive_cpu_mismatch_requeues += 1
                 mismatch_job_ids.add(job.id)
                 mismatch_queue_names.add(queue_obj.name)
-                queue_obj.enqueue_job(job, at_front=True)
+                _restore_claimed_job(redis_conn, queue=queue_obj, job_id=job.id)
                 if build_eligible and verify_eligible:
                     queue_cooldown_until[queue_obj.name] = time.time() + 0.1
                 logger.debug(
@@ -650,7 +811,7 @@ def run_ci_supervisor(
 
             if cpu_pool is not None and cpus is None:
                 restore_fair_scheduler_state(fair_state, selection_snapshot)
-                queue_obj.enqueue_job(job, at_front=True)
+                _restore_claimed_job(redis_conn, queue=queue_obj, job_id=job.id)
                 logger.debug(
                     f"Job {job.id[:8]} needs {cpu_count} CPUs, "
                     f"only {cpu_pool.available_count()} available. Re-enqueued."
@@ -785,7 +946,7 @@ def run_ci_supervisor(
                         )
                 if cpu_pool and cpus:
                     cpu_pool.release(cpus)
-                queue_obj.enqueue_job(job, at_front=True)
+                _restore_claimed_job(redis_conn, queue=queue_obj, job_id=job.id)
                 time.sleep(0.5)
                 continue
             except Exception as spawn_err:
@@ -809,7 +970,7 @@ def run_ci_supervisor(
                 if cpu_pool and cpus:
                     cpu_pool.release(cpus)
                 used_worker_nums.discard(worker_num)
-                queue_obj.enqueue_job(job, at_front=True)
+                _restore_claimed_job(redis_conn, queue=queue_obj, job_id=job.id)
                 time.sleep(0.5)
                 continue
 
@@ -1161,7 +1322,10 @@ def run_multi_queue_supervisor(
                     all_queued_empty = all(
                         bq.count == 0 for bq in build_queues
                     ) and all(vq.count == 0 for vq in verify_queues)
-                    if all_queued_empty:
+                    no_intermediate = (
+                        _intermediate_job_count([*build_queues, *verify_queues]) == 0
+                    )
+                    if all_queued_empty and no_intermediate:
                         all_deferred_empty = all(
                             bq.deferred_job_registry.count == 0 for bq in build_queues
                         ) and all(
@@ -1175,6 +1339,8 @@ def run_multi_queue_supervisor(
 
             # --- Determine which queues have capacity ---
             try:
+                _recover_stuck_fair_claims([*build_queues, *verify_queues])
+
                 now = time.time()
                 eligible_build_queues = [
                     bq
@@ -1206,6 +1372,33 @@ def run_multi_queue_supervisor(
                 )
 
                 if not result:
+                    if (
+                        not continuous
+                        and not build_active
+                        and not verify_active
+                        and _queues_blocked_only_by_cpu_tag(
+                            [*build_queues, *verify_queues],
+                            worker_cpu_tag=cpu_tag,
+                        )
+                    ):
+                        mismatch_job_ids.clear()
+                        mismatch_queue_names.clear()
+                        consecutive_cpu_mismatch_requeues += 1
+                        if (
+                            consecutive_cpu_mismatch_requeues
+                            >= NON_CONTINUOUS_CPU_MISMATCH_LIMIT
+                        ):
+                            logger.warning(
+                                "Exiting non-continuous multi-queue supervisor "
+                                "because only cpu_tag-mismatched queued jobs "
+                                "remain for compatible workers."
+                            )
+                            cpu_tag_livelock_detected = True
+                            break
+                    else:
+                        consecutive_cpu_mismatch_requeues = 0
+                        mismatch_job_ids.clear()
+                        mismatch_queue_names.clear()
                     time.sleep(0.5)
                     consecutive_dequeue_errors = 0
                     continue
@@ -1232,6 +1425,7 @@ def run_multi_queue_supervisor(
             job_status = job.get_status()
             if job_status in ("finished", "failed"):
                 restore_fair_scheduler_state(fair_state, selection_snapshot)
+                _discard_claimed_job(redis_conn, queue=queue_obj, job_id=job.id)
                 logger.debug(f"Skipping stale job {job.id[:30]} (status={job_status})")
                 consecutive_cpu_mismatch_requeues = 0
                 mismatch_job_ids.clear()
@@ -1242,7 +1436,7 @@ def run_multi_queue_supervisor(
                 consecutive_cpu_mismatch_requeues += 1
                 mismatch_job_ids.add(job.id)
                 mismatch_queue_names.add(queue_obj.name)
-                queue_obj.enqueue_job(job, at_front=True)
+                _restore_claimed_job(redis_conn, queue=queue_obj, job_id=job.id)
                 if eligible_build_queues and eligible_verify_queues:
                     queue_cooldown_until[queue_obj.name] = time.time() + 0.1
                 logger.debug(
@@ -1293,7 +1487,7 @@ def run_multi_queue_supervisor(
 
             if cpu_pool is not None and cpus is None:
                 restore_fair_scheduler_state(fair_state, selection_snapshot)
-                queue_obj.enqueue_job(job, at_front=True)
+                _restore_claimed_job(redis_conn, queue=queue_obj, job_id=job.id)
                 logger.debug(
                     f"Job {job.id[:8]} needs {cpu_count} CPUs, "
                     f"only {cpu_pool.available_count()} available. Re-enqueued."
@@ -1421,7 +1615,7 @@ def run_multi_queue_supervisor(
                         )
                 if cpu_pool and cpus:
                     cpu_pool.release(cpus)
-                queue_obj.enqueue_job(job, at_front=True)
+                _restore_claimed_job(redis_conn, queue=queue_obj, job_id=job.id)
                 time.sleep(0.5)
                 continue
             except Exception as spawn_err:
@@ -1445,7 +1639,7 @@ def run_multi_queue_supervisor(
                 if cpu_pool and cpus:
                     cpu_pool.release(cpus)
                 used_worker_nums.discard(worker_num)
-                queue_obj.enqueue_job(job, at_front=True)
+                _restore_claimed_job(redis_conn, queue=queue_obj, job_id=job.id)
                 time.sleep(0.5)
                 continue
 
@@ -1502,6 +1696,80 @@ def _matches_cpu_tag(job: "rq.job.Job", worker_cpu_tag: Optional[str]) -> bool:
     if normalized_job_tag is None:
         return True
     return normalized_job_tag == normalized_worker_tag
+
+
+def _intermediate_job_count(queues: list["rq.Queue"]) -> int:
+    return sum(len(list(queue.intermediate_queue.get_job_ids())) for queue in queues)
+
+
+def _queues_blocked_only_by_cpu_tag(
+    queues: list["rq.Queue"],
+    *,
+    worker_cpu_tag: Optional[str],
+) -> bool:
+    """Return whether queued jobs exist but none are locally runnable by cpu_tag."""
+    if not queues or not normalize_cpu_tag(worker_cpu_tag):
+        return False
+
+    queue_job_ids = [list(queue.get_job_ids()) for queue in queues]
+    all_job_ids = [job_id for job_ids in queue_job_ids for job_id in job_ids]
+    if not all_job_ids:
+        return False
+
+    jobs = rq.job.Job.fetch_many(all_job_ids, connection=queues[0].connection)
+    jobs_by_id = {job.id: job for job in jobs if job is not None}
+
+    saw_mismatch = False
+    saw_runnable = False
+    for queue, job_ids in zip(queues, queue_job_ids, strict=False):
+        for job_id in job_ids:
+            job = jobs_by_id.get(job_id)
+            if job is None:
+                _remove_stale_queue_job_id(queue, job_id)
+                continue
+            if _matches_cpu_tag(job, worker_cpu_tag):
+                saw_runnable = True
+            else:
+                saw_mismatch = True
+
+    return saw_mismatch and not saw_runnable
+
+
+def _recover_stuck_fair_claims(queues: list["rq.Queue"]) -> None:
+    """Requeue abandoned fair-claimed jobs that never reached execution start."""
+    for queue in queues:
+        intermediate = queue.intermediate_queue
+        for job_id in list(intermediate.get_job_ids()):
+            if job_id in queue.started_job_registry:
+                continue
+
+            job = queue.fetch_job(job_id)
+            if job is None:
+                _discard_claimed_job(queue.connection, queue=queue, job_id=job_id)
+                continue
+
+            job_status = job.get_status()
+            if job_status in ("finished", "failed", "stopped", "canceled"):
+                _discard_claimed_job(queue.connection, queue=queue, job_id=job_id)
+                continue
+
+            if intermediate.set_first_seen(job_id):
+                continue
+            if not intermediate.should_be_cleaned_up(job_id):
+                continue
+
+            restored = _restore_claimed_job(
+                queue.connection, queue=queue, job_id=job_id
+            )
+            if not restored:
+                continue
+
+            if job_status != "queued":
+                job.set_status(JobStatus.QUEUED)
+            logger.warning(
+                f"Recovered abandoned fair-claimed job {job_id} from "
+                f"{queue.name} intermediate queue."
+            )
 
 
 def _try_remove_cgroup(cgroup_path: Path) -> bool:

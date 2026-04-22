@@ -20,10 +20,25 @@ def _make_mock_queue(name: str, count: int = 0, deferred: int = 0):
     """Create a mock RQ queue with configurable counts."""
     q = MagicMock()
     q.name = name
+    q.key = f"rq:queue:{name}"
+    q.connection = MagicMock()
     q.count = count
     q.deferred_job_registry = MagicMock()
     q.deferred_job_registry.count = deferred
     return q
+
+
+def _configure_intermediate_queue(queue) -> None:
+    """Attach RQ intermediate-queue-like helpers to a mock queue."""
+    queue.intermediate_queue = MagicMock()
+    queue.intermediate_queue.key = f"{queue.key}:intermediate"
+    queue.intermediate_queue.get_first_seen_key.side_effect = (
+        lambda job_id: f"{queue.intermediate_queue.key}:first_seen:{job_id}"
+    )
+    queue.intermediate_queue.get_job_ids.return_value = []
+    queue.started_job_registry = MagicMock()
+    queue.started_job_registry.__contains__.return_value = False
+    queue.fetch_job = MagicMock()
 
 
 def _patch_supervisor():
@@ -419,8 +434,9 @@ class TestCiSupervisorQueues:
 
         queue = _make_mock_queue("crsbench_ci_build", count=1)
         queue.key = "rq:queue:crsbench_ci_build"
+        _configure_intermediate_queue(queue)
         redis_conn = MagicMock()
-        redis_conn.eval.return_value = 1
+        redis_conn.eval.side_effect = [1, 1]
         candidate = QueuedCandidate(
             queue_name="crsbench_ci_build",
             job_id="build-1",
@@ -437,7 +453,66 @@ class TestCiSupervisorQueues:
             )
 
         assert result is None
-        redis_conn.lpush.assert_called_once_with(queue.key, "build-1")
+        assert redis_conn.eval.call_count == 2
+        queue.intermediate_queue.set_first_seen.assert_called_once_with("build-1")
+        assert redis_conn.eval.call_args_list[0].args[1:] == (
+            3,
+            queue.key,
+            queue.intermediate_queue.key,
+            queue.intermediate_queue.get_first_seen_key("build-1"),
+            "build-1",
+        )
+        assert redis_conn.eval.call_args_list[1].args[1:] == (
+            3,
+            queue.intermediate_queue.key,
+            queue.key,
+            queue.intermediate_queue.get_first_seen_key("build-1"),
+            "build-1",
+        )
+
+    def test_queue_candidates_prunes_missing_queue_job_ids(self) -> None:
+        """Candidate projection should remove queue ids whose job payload is missing."""
+        from crsbench.distributed.ci_supervisor import _queue_candidates
+
+        queue = _make_mock_queue("crsbench_ci_build", count=1)
+        queue.get_job_ids.return_value = ["missing-job"]
+
+        with patch("crsbench.distributed.ci_supervisor.rq") as mock_rq:
+            mock_rq.job.Job.fetch_many.return_value = [None]
+
+            candidates = _queue_candidates([queue])
+
+        assert candidates == [[]]
+        queue.connection.lrem.assert_called_once_with(queue.key, 1, "missing-job")
+
+    def test_recover_stuck_fair_claims_restores_abandoned_intermediate_job(
+        self,
+    ) -> None:
+        """Stale intermediate claims should be returned to the queue front."""
+        from crsbench.distributed.ci_supervisor import _recover_stuck_fair_claims
+
+        queue = _make_mock_queue("crsbench_ci_build", count=0)
+        _configure_intermediate_queue(queue)
+        queue.intermediate_queue.get_job_ids.return_value = ["build-1"]
+        queue.intermediate_queue.set_first_seen.return_value = False
+        queue.intermediate_queue.should_be_cleaned_up.return_value = True
+        queue.connection.eval.return_value = 1
+
+        job = MagicMock()
+        job.id = "build-1"
+        job.get_status.return_value = "queued"
+        queue.fetch_job.return_value = job
+
+        _recover_stuck_fair_claims([queue])
+
+        assert queue.connection.eval.call_args.args[1:] == (
+            3,
+            queue.intermediate_queue.key,
+            queue.key,
+            queue.intermediate_queue.get_first_seen_key("build-1"),
+            "build-1",
+        )
+        job.set_status.assert_not_called()
 
     def test_cpu_tag_mismatch_applies_short_backoff(self) -> None:
         """Mismatch path should back off briefly to avoid hot-loop churn."""
@@ -516,6 +591,10 @@ class TestCiSupervisorQueues:
                 "crsbench.distributed.ci_supervisor._select_fair_job",
                 return_value=(mock_job, mock_build_queue),
             ) as mock_select,
+            patch(
+                "crsbench.distributed.ci_supervisor._restore_claimed_job",
+                return_value=True,
+            ) as mock_restore,
             patch("crsbench.distributed.ci_supervisor.time.sleep"),
         ):
             mock_rq.Queue.side_effect = queue_factory
@@ -534,9 +613,55 @@ class TestCiSupervisorQueues:
 
         assert result == CPU_TAG_MISMATCH_EXIT_CODE
         assert mock_select.call_count == NON_CONTINUOUS_CPU_MISMATCH_LIMIT
-        assert (
-            mock_build_queue.enqueue_job.call_count == NON_CONTINUOUS_CPU_MISMATCH_LIMIT
+        assert mock_restore.call_count == NON_CONTINUOUS_CPU_MISMATCH_LIMIT
+
+    def test_non_continuous_prefiltered_cpu_tag_mismatch_exits_without_livelock(
+        self,
+    ) -> None:
+        """Non-continuous mode should also exit when prefiltering hides all local work."""
+        from crsbench.distributed.ci_supervisor import (
+            CPU_TAG_MISMATCH_EXIT_CODE,
+            NON_CONTINUOUS_CPU_MISMATCH_LIMIT,
+            run_ci_supervisor,
         )
+
+        mock_build_queue = _make_mock_queue("crsbench_ci_build", count=1)
+        mock_verify_queue = _make_mock_queue("crsbench_ci_verify", count=0)
+
+        def queue_factory(name, **_kwargs):
+            if "build" in name:
+                return mock_build_queue
+            return mock_verify_queue
+
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor._select_fair_job",
+                return_value=None,
+            ) as mock_select,
+            patch(
+                "crsbench.distributed.ci_supervisor._queues_blocked_only_by_cpu_tag",
+                return_value=True,
+            ),
+            patch("crsbench.distributed.ci_supervisor.time.sleep"),
+        ):
+            mock_rq.Queue.side_effect = queue_factory
+            result = run_ci_supervisor(
+                redis_host="localhost",
+                build_queue_name="crsbench_ci_build",
+                verify_queue_name="crsbench_ci_verify",
+                worker_name="test-worker",
+                build_jobs=1,
+                build_cores_per_job=1,
+                verify_jobs=0,
+                job_runner=lambda _h, _n, _j: None,
+                cpu_tag="x86-avx2",
+                continuous=False,
+            )
+
+        assert result == CPU_TAG_MISMATCH_EXIT_CODE
+        assert mock_select.call_count == NON_CONTINUOUS_CPU_MISMATCH_LIMIT
 
 
 class TestWorkerTrialAdapter:
@@ -577,6 +702,52 @@ class TestEvaluatorCiAdapter:
         sig = inspect.signature(_evaluator_job_runner)
         params = list(sig.parameters.keys())
         assert params == ["redis_host", "child_name", "job_id"]
+
+    def test_evaluator_job_runner_removes_intermediate_queue_entry_on_start(
+        self,
+    ) -> None:
+        """Evaluator runner should clear the RQ intermediate entry when claiming starts."""
+        from crsbench.distributed.evaluator import _evaluator_job_runner
+
+        redis_conn = MagicMock()
+        prepare_pipeline = MagicMock()
+        finish_pipeline = MagicMock()
+        prepare_ctx = MagicMock()
+        prepare_ctx.__enter__.return_value = prepare_pipeline
+        prepare_ctx.__exit__.return_value = False
+        finish_ctx = MagicMock()
+        finish_ctx.__enter__.return_value = finish_pipeline
+        finish_ctx.__exit__.return_value = False
+        redis_conn.pipeline.side_effect = [prepare_ctx, finish_ctx]
+
+        job = MagicMock()
+        job.id = "build-1"
+        job.key = "rq:job:build-1"
+        job.origin = "crsbench_ci_build"
+        job.meta = {}
+        job.perform.return_value = {"success": True}
+
+        queue = MagicMock()
+        queue.intermediate_queue.key = "rq:queue:crsbench_ci_build:intermediate"
+        execution = MagicMock()
+
+        with (
+            patch(
+                "crsbench.distributed.queue.create_redis_connection",
+                return_value=redis_conn,
+            ),
+            patch("rq.job.Job.fetch", return_value=job),
+            patch("rq.Queue", return_value=queue),
+            patch("rq.executions.Execution.create", return_value=execution),
+            patch("rq.registry.FinishedJobRegistry"),
+            patch("rq.registry.FailedJobRegistry"),
+            patch("rq.results.Result.create"),
+        ):
+            _evaluator_job_runner("localhost", "eval-worker-1", "build-1")
+
+        prepare_pipeline.lrem.assert_called_once_with(
+            queue.intermediate_queue.key, 1, "build-1"
+        )
 
 
 class TestCiCliFlags:
@@ -1155,6 +1326,10 @@ class TestSupervisorExitCondition:
                 side_effect=[(mock_job, mock_build_queue), KeyboardInterrupt],
             ),
             patch(
+                "crsbench.distributed.ci_supervisor._restore_claimed_job",
+                return_value=True,
+            ) as mock_restore,
+            patch(
                 "crsbench.distributed.ci_supervisor._mp_ctx.Process"
             ) as mock_proc_cls,
         ):
@@ -1172,7 +1347,11 @@ class TestSupervisorExitCondition:
             )
 
         assert result == 0
-        mock_build_queue.enqueue_job.assert_called_once_with(mock_job, at_front=True)
+        assert mock_restore.call_count == 1
+        assert mock_restore.call_args.kwargs == {
+            "queue": mock_build_queue,
+            "job_id": mock_job.id,
+        }
 
 
 class TestMultiQueueSupervisor:
@@ -1334,6 +1513,10 @@ class TestMultiQueueSupervisor:
                 "crsbench.distributed.ci_supervisor._select_fair_job",
                 return_value=(mock_job, build_q),
             ) as mock_select,
+            patch(
+                "crsbench.distributed.ci_supervisor._restore_claimed_job",
+                return_value=True,
+            ) as mock_restore,
             patch("crsbench.distributed.ci_supervisor.time.sleep"),
         ):
             mock_rq.Queue.side_effect = queue_factory
@@ -1352,7 +1535,53 @@ class TestMultiQueueSupervisor:
 
         assert result == CPU_TAG_MISMATCH_EXIT_CODE
         assert mock_select.call_count == NON_CONTINUOUS_CPU_MISMATCH_LIMIT
-        assert build_q.enqueue_job.call_count == NON_CONTINUOUS_CPU_MISMATCH_LIMIT
+        assert mock_restore.call_count == NON_CONTINUOUS_CPU_MISMATCH_LIMIT
+
+    def test_non_continuous_prefiltered_cpu_tag_mismatch_exits_without_livelock(
+        self,
+    ) -> None:
+        """Multi-queue mode should exit when only filtered cpu-tag mismatches remain."""
+        from crsbench.distributed.ci_supervisor import (
+            CPU_TAG_MISMATCH_EXIT_CODE,
+            NON_CONTINUOUS_CPU_MISMATCH_LIMIT,
+            run_multi_queue_supervisor,
+        )
+
+        build_q = _make_mock_queue("crsbench_exp1_build", count=1)
+        verify_q = _make_mock_queue("crsbench_exp1_verify", count=0)
+
+        def queue_factory(name, **_kwargs):
+            return build_q if "build" in name else verify_q
+
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor._select_fair_job",
+                return_value=None,
+            ) as mock_select,
+            patch(
+                "crsbench.distributed.ci_supervisor._queues_blocked_only_by_cpu_tag",
+                return_value=True,
+            ),
+            patch("crsbench.distributed.ci_supervisor.time.sleep"),
+        ):
+            mock_rq.Queue.side_effect = queue_factory
+            result = run_multi_queue_supervisor(
+                redis_host="localhost",
+                build_queue_names=["crsbench_exp1_build"],
+                verify_queue_names=["crsbench_exp1_verify"],
+                worker_name="test-worker",
+                build_jobs=1,
+                build_cores_per_job=1,
+                verify_jobs=0,
+                job_runner=lambda _h, _n, _j: None,
+                cpu_tag="x86-avx2",
+                continuous=False,
+            )
+
+        assert result == CPU_TAG_MISMATCH_EXIT_CODE
+        assert mock_select.call_count == NON_CONTINUOUS_CPU_MISMATCH_LIMIT
 
     def test_accepts_empty_verify_list(self) -> None:
         """Multi-queue supervisor works with empty verify queue list (worker mode)."""
@@ -1655,6 +1884,26 @@ class TestHelperFunctions:
         assert _matches_cpu_tag(untagged_job, "x86-avx2") is True
         assert _matches_cpu_tag(matching_job, "x86-avx2") is True
         assert _matches_cpu_tag(mismatching_job, "x86-avx2") is False
+
+    def test_queues_blocked_only_by_cpu_tag_detects_prefiltered_livelock(self) -> None:
+        """Helper should report when only cpu-tag-mismatched work remains queued."""
+        from crsbench.distributed.ci_supervisor import _queues_blocked_only_by_cpu_tag
+
+        queue = _make_mock_queue("crsbench_ci_build", count=1)
+        queue.get_job_ids.return_value = ["build-1"]
+
+        mismatching_job = MagicMock()
+        mismatching_job.id = "build-1"
+        mismatching_job.meta = {"cpu_tag": "arm-neon"}
+
+        with patch("crsbench.distributed.ci_supervisor.rq") as mock_rq:
+            mock_rq.job.Job.fetch_many.return_value = [mismatching_job]
+
+            blocked = _queues_blocked_only_by_cpu_tag(
+                [queue], worker_cpu_tag="x86-avx2"
+            )
+
+        assert blocked is True
 
     def test_force_cleanup_deferred_cgroups_clears_successes(self) -> None:
         """Force cleanup should remove successful paths and keep failures only."""

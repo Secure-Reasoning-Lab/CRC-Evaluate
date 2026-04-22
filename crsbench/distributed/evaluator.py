@@ -459,6 +459,7 @@ def _run_single_job(
         os.environ["CRSBENCH_WORKER_DISPLAY_NAME"] = execution_owner
         with redis_conn.pipeline() as pipeline:
             job.prepare_for_execution(execution_owner, pipeline=pipeline)
+            pipeline.lrem(queue.intermediate_queue.key, 1, job.id)
             execution = Execution.create(job, ttl=-1, pipeline=pipeline)
             pipeline.execute()
 
