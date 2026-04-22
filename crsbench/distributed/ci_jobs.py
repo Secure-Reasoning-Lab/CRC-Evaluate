@@ -15,6 +15,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, cast
 
+from crsbench.distributed.evaluator_scheduler import (
+    SCHEDULER_OWNER_KEY_META,
+    build_scheduler_owner_key_for_ci_job,
+)
 from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -1093,6 +1097,12 @@ def enqueue_and_poll_ci_jobs(
             params["output_dir"] = output_dir
 
         job_queue = _get_queue(job)
+        job_meta = {
+            SCHEDULER_OWNER_KEY_META: build_scheduler_owner_key_for_ci_job(
+                job,
+                experiment_name=job_queue.name,
+            )
+        }
         existing_job = existing_jobs.get(job.job_id)
 
         if existing_job is not None:
@@ -1193,6 +1203,7 @@ def enqueue_and_poll_ci_jobs(
                 result_ttl=-1,
                 job_id=job.job_id,
                 depends_on=depends_on_rq,
+                meta=job_meta,
             )
             rq_jobs[job.job_id] = rq_job
             logger.info(f"Enqueued CI job {job.job_id} -> {job_queue.name}")
@@ -1214,6 +1225,7 @@ def enqueue_and_poll_ci_jobs(
                         result_ttl=-1,
                         job_id=job.job_id,
                         depends_on=depends_on_rq,
+                        meta=job_meta,
                     )
                     rq_jobs[job.job_id] = rq_job
                     continue
@@ -1230,6 +1242,7 @@ def enqueue_and_poll_ci_jobs(
                         result_ttl=-1,
                         job_id=job.job_id,
                         depends_on=depends_on_rq,
+                        meta=job_meta,
                     )
                     rq_jobs[job.job_id] = rq_job
                 elif policy == "quit":
@@ -1255,6 +1268,7 @@ def enqueue_and_poll_ci_jobs(
                     result_ttl=-1,
                     job_id=job.job_id,
                     depends_on=depends_on_rq,
+                    meta=job_meta,
                 )
                 rq_jobs[job.job_id] = rq_job
             else:
@@ -1277,6 +1291,7 @@ def enqueue_and_poll_ci_jobs(
                         result_ttl=-1,
                         job_id=job.job_id,
                         depends_on=depends_on_rq,
+                        meta=job_meta,
                     )
                     rq_jobs[job.job_id] = rq_job
                 else:

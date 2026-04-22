@@ -391,6 +391,10 @@ class TestEnqueuePatchJobs:
             use_inc_build=True,
             patch_content_hash=patch_hash,
         )
+        assert (
+            build_call_args[1]["meta"]["scheduler_owner_key"]
+            == "trial::test-exp::trial-1"
+        )
 
         # Verify verify queue called with execute_patch_verify and depends_on
         assert verify_queue.enqueue.call_count == 1
@@ -419,6 +423,10 @@ class TestEnqueuePatchJobs:
             use_inc_build=True,
             sanitizer="undefined",
             patch_content_hash=patch_hash,
+        )
+        assert (
+            verify_call_args[1]["meta"]["scheduler_owner_key"]
+            == "trial::test-exp::trial-1"
         )
 
         # Returns list with one verify job ID

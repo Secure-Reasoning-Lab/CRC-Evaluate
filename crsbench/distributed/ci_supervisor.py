@@ -16,6 +16,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, NamedTuple, Optional, Union
 
 from crsbench.distributed.common import normalize_cpu_tag
+from crsbench.distributed.evaluator_scheduler import (
+    SCHEDULER_OWNER_KEY_META,
+    FairSchedulerState,
+    QueuedCandidate,
+    build_scheduler_owner_key_from_payload,
+    choose_next_fair_candidate,
+    choose_next_queue_class,
+)
 from crsbench.distributed.queue import REDIS_AVAILABLE
 from crsbench.utils.cpu_pool import auto_cores_per_job, visible_cpu_count
 from crsbench.utils.logger import get_logger
@@ -52,6 +60,131 @@ class WorkerEntry(NamedTuple):
     job_id: str
     worker_num: int
     cgroup_path: Optional[Path]
+
+
+_CLAIM_FAIR_JOB_LUA = """
+local removed = redis.call('LREM', KEYS[1], 1, ARGV[1])
+return removed
+"""
+
+
+def _extract_job_payload(job: "rq.job.Job") -> dict[str, object]:
+    """Best-effort extraction of the serialized payload carried by an RQ job."""
+    raw_args = getattr(job, "args", None)
+    raw_kwargs = getattr(job, "kwargs", None)
+    if isinstance(raw_args, dict):
+        return raw_args
+    if (
+        isinstance(raw_args, (list, tuple))
+        and raw_args
+        and isinstance(raw_args[0], dict)
+    ):
+        return raw_args[0]
+    if isinstance(raw_kwargs, dict):
+        return raw_kwargs
+    return {}
+
+
+def _scheduler_owner_key_for_job(job: "rq.job.Job", *, queue_name: str) -> str:
+    """Return the scheduler owner key for a queued evaluator job."""
+    meta_owner = job.meta.get(SCHEDULER_OWNER_KEY_META)
+    if isinstance(meta_owner, str) and meta_owner:
+        return meta_owner
+    return build_scheduler_owner_key_from_payload(
+        _extract_job_payload(job),
+        fallback_job_id=job.id,
+        queue_name=queue_name,
+    )
+
+
+def _queue_candidates(queues: list["rq.Queue"]) -> list[list[QueuedCandidate]]:
+    """Project queued RQ jobs into fair-selection candidates per queue."""
+    if not queues:
+        return []
+
+    queue_job_ids = [list(queue.get_job_ids()) for queue in queues]
+    all_job_ids = [job_id for job_ids in queue_job_ids for job_id in job_ids]
+    if not all_job_ids:
+        return [[] for _ in queues]
+
+    jobs = rq.job.Job.fetch_many(all_job_ids, connection=queues[0].connection)
+    jobs_by_id = {job.id: job for job in jobs if job is not None}
+
+    queue_candidates: list[list[QueuedCandidate]] = []
+    for queue, job_ids in zip(queues, queue_job_ids, strict=False):
+        candidates: list[QueuedCandidate] = []
+        for job_id in job_ids:
+            job = jobs_by_id.get(job_id)
+            if job is None:
+                continue
+            candidates.append(
+                QueuedCandidate(
+                    queue_name=queue.name,
+                    job_id=job_id,
+                    owner_key=_scheduler_owner_key_for_job(job, queue_name=queue.name),
+                )
+            )
+        queue_candidates.append(candidates)
+    return queue_candidates
+
+
+def _claim_fair_candidate(
+    redis_conn: "Redis",
+    *,
+    queue_lookup: dict[str, "rq.Queue"],
+    candidate: QueuedCandidate,
+) -> tuple["rq.job.Job", "rq.Queue"] | None:
+    """Atomically remove and fetch a selected fair candidate from its queue."""
+    queue = queue_lookup[candidate.queue_name]
+    removed = redis_conn.eval(_CLAIM_FAIR_JOB_LUA, 1, queue.key, candidate.job_id)
+    if removed != 1:
+        return None
+    try:
+        job = rq.job.Job.fetch(candidate.job_id, connection=redis_conn)
+    except Exception:
+        logger.debug(f"Fair claim fetched missing job {candidate.job_id}")
+        return None
+    return job, queue
+
+
+def _select_fair_job(
+    *,
+    redis_conn: "Redis",
+    build_queues: list["rq.Queue"],
+    verify_queues: list["rq.Queue"],
+    build_has_capacity: bool,
+    verify_has_capacity: bool,
+    state: FairSchedulerState,
+) -> tuple["rq.job.Job", "rq.Queue"] | None:
+    """Choose and claim the next fair runnable evaluator job."""
+    build_candidates = _queue_candidates(build_queues) if build_has_capacity else []
+    verify_candidates = _queue_candidates(verify_queues) if verify_has_capacity else []
+
+    queue_class = choose_next_queue_class(
+        build_has_capacity=build_has_capacity,
+        verify_has_capacity=verify_has_capacity,
+        build_has_work=any(build_candidates),
+        verify_has_work=any(verify_candidates),
+        state=state,
+    )
+    if queue_class is None:
+        return None
+
+    candidates = build_candidates if queue_class == "build" else verify_candidates
+    candidate = choose_next_fair_candidate(
+        candidates,
+        queue_class=queue_class,
+        state=state,
+    )
+    if candidate is None:
+        return None
+
+    queue_lookup = {queue.name: queue for queue in (*build_queues, *verify_queues)}
+    return _claim_fair_candidate(
+        redis_conn,
+        queue_lookup=queue_lookup,
+        candidate=candidate,
+    )
 
 
 def _safe_cwd() -> Path:
@@ -122,8 +255,9 @@ def run_ci_supervisor(
 ) -> int:
     """Dual-queue supervisor for evaluator CI mode.
 
-    Dequeues from *build_queue_name* (priority) and *verify_queue_name*,
-    enforcing separate concurrency limits and CPU-per-job allocations.
+    Selects runnable work from *build_queue_name* and *verify_queue_name*
+    using the evaluator fair scheduler while enforcing separate concurrency
+    limits and CPU-per-job allocations.
 
     Args:
         redis_host: Redis server hostname.
@@ -229,6 +363,7 @@ def run_ci_supervisor(
     cpu_tag_livelock_detected = False
     handled_build_jobs = 0
     handled_verify_jobs = 0
+    fair_state = FairSchedulerState()
 
     # Disk space state
     minimum_disk_bytes = parse_size_to_bytes(minimum_disk_size)
@@ -371,29 +506,27 @@ def run_ci_supervisor(
             # retried instead of crashing this supervisor.
             try:
                 now = time.time()
-                queues_with_capacity: list[rq.Queue] = []
-                if (
+                build_eligible = (
                     len(build_active) < build_jobs
-                    and build_queue.count > 0
                     and queue_cooldown_until.get(build_queue.name, 0.0) <= now
-                ):
-                    queues_with_capacity.append(build_queue)
-                if (
+                )
+                verify_eligible = (
                     len(verify_active) < verify_jobs
-                    and verify_queue.count > 0
                     and queue_cooldown_until.get(verify_queue.name, 0.0) <= now
-                ):
-                    queues_with_capacity.append(verify_queue)
+                )
 
-                if not queues_with_capacity:
+                if not build_eligible and not verify_eligible:
                     time.sleep(0.5)
                     consecutive_dequeue_errors = 0
                     continue
 
-                result = rq.Queue.dequeue_any(
-                    queues_with_capacity,
-                    timeout=DEQUEUE_POLL_TIMEOUT_SECONDS,
-                    connection=redis_conn,
+                result = _select_fair_job(
+                    redis_conn=redis_conn,
+                    build_queues=[build_queue],
+                    verify_queues=[verify_queue],
+                    build_has_capacity=build_eligible,
+                    verify_has_capacity=verify_eligible,
+                    state=fair_state,
                 )
 
                 if not result:
@@ -432,7 +565,7 @@ def run_ci_supervisor(
                 mismatch_job_ids.add(job.id)
                 mismatch_queue_names.add(queue_obj.name)
                 queue_obj.enqueue_job(job)
-                if len(queues_with_capacity) > 1:
+                if build_eligible and verify_eligible:
                     queue_cooldown_until[queue_obj.name] = time.time() + 0.1
                 logger.debug(
                     f"Re-queued job {job.id[:8]} due to cpu_tag mismatch: "
@@ -698,7 +831,7 @@ def run_multi_queue_supervisor(
     Similar to ``run_ci_supervisor`` but accepts *lists* of queue names,
     enabling a single supervisor to serve multiple experiments concurrently.
 
-    Build queues are checked with priority over verify queues.
+    Runnable work is selected fairly across build and verify queue classes.
     Build phase is considered complete when ALL build queues are empty.
 
     Args:
@@ -814,6 +947,7 @@ def run_multi_queue_supervisor(
     cpu_tag_livelock_detected = False
     handled_build_jobs = 0
     handled_verify_jobs = 0
+    fair_state = FairSchedulerState()
 
     # Disk space state
     minimum_disk_bytes = parse_size_to_bytes(minimum_disk_size)
@@ -902,6 +1036,8 @@ def run_multi_queue_supervisor(
                             rq.Queue(name, connection=redis_conn)
                             for name in verify_queue_names
                         ]
+                        fair_state.next_queue_index_by_class["build"] = 0
+                        fair_state.next_queue_index_by_class["verify"] = 0
                         # New build queues may appear after backlog was drained.
                         build_phase_complete = False
                         idle_since = time.time()
@@ -1002,33 +1138,31 @@ def run_multi_queue_supervisor(
             # --- Determine which queues have capacity ---
             try:
                 now = time.time()
-                queues_with_capacity: list[rq.Queue] = []
-                # Build queues first (priority)
-                if len(build_active) < build_jobs:
-                    for bq in build_queues:
-                        if (
-                            bq.count > 0
-                            and queue_cooldown_until.get(bq.name, 0.0) <= now
-                        ):
-                            queues_with_capacity.append(bq)
-                # Then verify queues
-                if len(verify_active) < verify_jobs:
-                    for vq in verify_queues:
-                        if (
-                            vq.count > 0
-                            and queue_cooldown_until.get(vq.name, 0.0) <= now
-                        ):
-                            queues_with_capacity.append(vq)
+                eligible_build_queues = [
+                    bq
+                    for bq in build_queues
+                    if len(build_active) < build_jobs
+                    and queue_cooldown_until.get(bq.name, 0.0) <= now
+                ]
+                eligible_verify_queues = [
+                    vq
+                    for vq in verify_queues
+                    if len(verify_active) < verify_jobs
+                    and queue_cooldown_until.get(vq.name, 0.0) <= now
+                ]
 
-                if not queues_with_capacity:
+                if not eligible_build_queues and not eligible_verify_queues:
                     time.sleep(0.5)
                     consecutive_dequeue_errors = 0
                     continue
 
-                result = rq.Queue.dequeue_any(
-                    queues_with_capacity,
-                    timeout=DEQUEUE_POLL_TIMEOUT_SECONDS,
-                    connection=redis_conn,
+                result = _select_fair_job(
+                    redis_conn=redis_conn,
+                    build_queues=eligible_build_queues,
+                    verify_queues=eligible_verify_queues,
+                    build_has_capacity=bool(eligible_build_queues),
+                    verify_has_capacity=bool(eligible_verify_queues),
+                    state=fair_state,
                 )
 
                 if not result:
@@ -1067,7 +1201,7 @@ def run_multi_queue_supervisor(
                 mismatch_job_ids.add(job.id)
                 mismatch_queue_names.add(queue_obj.name)
                 queue_obj.enqueue_job(job)
-                if len(queues_with_capacity) > 1:
+                if eligible_build_queues and eligible_verify_queues:
                     queue_cooldown_until[queue_obj.name] = time.time() + 0.1
                 logger.debug(
                     f"Re-queued job {job.id[:8]} due to cpu_tag mismatch: "

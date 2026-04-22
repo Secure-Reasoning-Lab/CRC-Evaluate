@@ -351,8 +351,9 @@ def test_build_inc_build_image_bakes_snapshot_when_benchmark_path_provided(
     assert "/user.slice/user-1003.slice/crsbench/build-1" in run_cmd
     assert "--network" in run_cmd
     assert "none" in run_cmd
-    # Snapshot docker commit uses extended timeout by default.
-    assert mock_run.call_args_list[2].kwargs["timeout"] == 1800
+    # Snapshot docker commit uses the configured extended timeout by default.
+    assert infra.snapshot_commit_timeout == 3600
+    assert mock_run.call_args_list[2].kwargs["timeout"] == infra.snapshot_commit_timeout
 
 
 def test_build_inc_build_image_without_benchmark_path_skips_snapshot_bake(

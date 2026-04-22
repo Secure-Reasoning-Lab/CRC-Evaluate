@@ -12,6 +12,12 @@ import os
 import time
 from typing import Any, Optional
 
+from crsbench.distributed.evaluator_scheduler import (
+    SCHEDULER_OWNER_KEY_META,
+    adopt_scheduler_owner_if_needed,
+    build_scheduler_owner_key_for_ci_job,
+    build_scheduler_owner_key_from_payload,
+)
 from crsbench.distributed.queue import REDIS_AVAILABLE
 from crsbench.utils.logger import get_logger
 
@@ -56,6 +62,10 @@ def _enqueue_with_existing_reuse(
         if not _is_duplicate_job_enqueue_error(e):
             raise
         existing = rq.job.Job.fetch(job_id, connection=queue.connection)
+        adopt_scheduler_owner_if_needed(
+            existing,
+            new_owner=meta.get(SCHEDULER_OWNER_KEY_META),
+        )
         logger.debug(f"Reusing existing POV RQ job {job_id}")
         return existing
 
@@ -179,6 +189,10 @@ def enqueue_ci_job(
     job_meta = {"experiment_name": experiment_name}
     if effective_cpu_tag:
         job_meta["cpu_tag"] = effective_cpu_tag
+    job_meta[SCHEDULER_OWNER_KEY_META] = build_scheduler_owner_key_for_ci_job(
+        job,
+        experiment_name=experiment_name,
+    )
 
     resolved_job_id = job_id or getattr(job, "job_id", "")
     if not resolved_job_id:
@@ -262,6 +276,11 @@ def enqueue_single_pov(
         job_meta = {"experiment_name": experiment_name}
         if effective_cpu_tag:
             job_meta["cpu_tag"] = effective_cpu_tag
+        job_meta[SCHEDULER_OWNER_KEY_META] = build_scheduler_owner_key_from_payload(
+            payload.to_dict(),
+            fallback_job_id=f"{benchmark}/{harness}/{pov_id}",
+            queue_name=getattr(verify_queue, "name", "verify"),
+        )
 
         job = verify_queue.enqueue(
             "crsbench.distributed.evaluator_jobs.verify_single_pov",

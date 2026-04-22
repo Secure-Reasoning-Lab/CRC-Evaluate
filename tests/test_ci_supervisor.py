@@ -2,12 +2,13 @@
 
 Tests that:
 1. run_ci_supervisor creates both build and verify queues
-2. Build queue has priority over verify queue
+2. Runnable jobs are selected through the fair scheduler
 3. Per-queue concurrency limits are enforced
 4. Worker and evaluator adapters exist and are callable
 5. Continuous vs non-continuous exit behavior
 """
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -75,12 +76,9 @@ class TestCiSupervisorQueues:
         assert "crsbench_ci_verify" in queues_created
         assert result == 0
 
-    def test_build_queue_priority(self) -> None:
-        """Build queue is listed first for dequeue priority."""
-        from crsbench.distributed.ci_supervisor import (
-            DEQUEUE_POLL_TIMEOUT_SECONDS,
-            run_ci_supervisor,
-        )
+    def test_no_longer_uses_ordered_dequeue_priority(self) -> None:
+        """Supervisor should not call legacy ordered `dequeue_any()` anymore."""
+        from crsbench.distributed.ci_supervisor import run_ci_supervisor
 
         mock_build_queue = _make_mock_queue("crsbench_ci_build", count=1)
         mock_verify_queue = _make_mock_queue("crsbench_ci_verify", count=1)
@@ -90,20 +88,18 @@ class TestCiSupervisorQueues:
                 return mock_build_queue
             return mock_verify_queue
 
-        dequeue_calls = []
-        dequeue_timeouts = []
-
-        def track_dequeue_any(queues, **_kwargs):
-            dequeue_calls.append([q.name for q in queues])
-            dequeue_timeouts.append(_kwargs.get("timeout"))
-            raise KeyboardInterrupt
-
         with (
             _patch_supervisor(),
             patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor.time.sleep",
+                side_effect=KeyboardInterrupt,
+            ),
         ):
             mock_rq.Queue.side_effect = queue_factory
-            mock_rq.Queue.dequeue_any = track_dequeue_any
+            mock_rq.Queue.dequeue_any.side_effect = AssertionError(
+                "ordered dequeue_any should not be used"
+            )
             run_ci_supervisor(
                 redis_host="localhost",
                 build_queue_name="crsbench_ci_build",
@@ -115,13 +111,10 @@ class TestCiSupervisorQueues:
                 job_runner=lambda _h, _n, _j: None,
             )
 
-        assert len(dequeue_calls) > 0
-        assert dequeue_calls[0][0] == "crsbench_ci_build"
-        assert dequeue_calls[0][1] == "crsbench_ci_verify"
-        assert dequeue_timeouts[0] == DEQUEUE_POLL_TIMEOUT_SECONDS
+        assert mock_rq.Queue.dequeue_any.call_count == 0
 
     def test_respects_per_queue_capacity(self) -> None:
-        """Only queues with remaining capacity are included in dequeue."""
+        """Once a build slot fills, only verify capacity remains eligible."""
         from crsbench.distributed.ci_supervisor import run_ci_supervisor
 
         mock_build_queue = _make_mock_queue("crsbench_ci_build", count=1)
@@ -132,8 +125,7 @@ class TestCiSupervisorQueues:
                 return mock_build_queue
             return mock_verify_queue
 
-        dequeue_iteration = [0]
-        dequeue_calls = []
+        selector_calls = []
 
         mock_job = MagicMock()
         mock_job.id = "test-job-12345678"
@@ -143,10 +135,11 @@ class TestCiSupervisorQueues:
         mock_process.pid = 12345
         mock_process.is_alive.return_value = True
 
-        def track_dequeue_any(queues, **_kwargs):
-            dequeue_calls.append([q.name for q in queues])
-            dequeue_iteration[0] += 1
-            if dequeue_iteration[0] >= 2:
+        def select_fair_job(**kwargs):
+            selector_calls.append(
+                (kwargs["build_has_capacity"], kwargs["verify_has_capacity"])
+            )
+            if len(selector_calls) >= 2:
                 raise KeyboardInterrupt
             return (mock_job, mock_build_queue)
 
@@ -154,11 +147,14 @@ class TestCiSupervisorQueues:
             _patch_supervisor(),
             patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
             patch(
+                "crsbench.distributed.ci_supervisor._select_fair_job",
+                side_effect=select_fair_job,
+            ),
+            patch(
                 "crsbench.distributed.ci_supervisor._mp_ctx.Process"
             ) as mock_proc_cls,
         ):
             mock_rq.Queue.side_effect = queue_factory
-            mock_rq.Queue.dequeue_any = track_dequeue_any
             mock_proc_cls.return_value = mock_process
             run_ci_supervisor(
                 redis_host="localhost",
@@ -171,10 +167,139 @@ class TestCiSupervisorQueues:
                 job_runner=lambda _h, _n, _j: None,
             )
 
-        assert len(dequeue_calls) >= 2
-        assert "crsbench_ci_build" in dequeue_calls[0]
-        assert "crsbench_ci_build" not in dequeue_calls[1]
-        assert "crsbench_ci_verify" in dequeue_calls[1]
+        assert selector_calls[0] == (True, True)
+        assert selector_calls[1] == (False, True)
+
+    def test_select_fair_job_rotates_between_trial_owners(self) -> None:
+        """Fair helper should rotate build claims across distinct trial owners."""
+        from crsbench.distributed.ci_supervisor import _select_fair_job
+        from crsbench.distributed.evaluator_scheduler import (
+            SCHEDULER_OWNER_KEY_META,
+            FairSchedulerState,
+        )
+
+        build_q1 = _make_mock_queue("crsbench_ci_build_a", count=2)
+        build_q1.key = "rq:queue:crsbench_ci_build_a"
+        build_q1.get_job_ids.side_effect = [["job-a1", "job-a2"], ["job-a2"]]
+        build_q2 = _make_mock_queue("crsbench_ci_build_b", count=1)
+        build_q2.key = "rq:queue:crsbench_ci_build_b"
+        build_q2.get_job_ids.side_effect = [["job-b1"], ["job-b1"]]
+
+        jobs = {
+            "job-a1": SimpleNamespace(
+                id="job-a1",
+                meta={SCHEDULER_OWNER_KEY_META: "trial::exp::trial-a"},
+            ),
+            "job-a2": SimpleNamespace(
+                id="job-a2",
+                meta={SCHEDULER_OWNER_KEY_META: "trial::exp::trial-a"},
+            ),
+            "job-b1": SimpleNamespace(
+                id="job-b1",
+                meta={SCHEDULER_OWNER_KEY_META: "trial::exp::trial-b"},
+            ),
+        }
+
+        redis_conn = MagicMock()
+        redis_conn.eval.return_value = 1
+        state = FairSchedulerState(next_queue_class="build")
+
+        with patch("crsbench.distributed.ci_supervisor.rq") as mock_rq:
+            mock_rq.job.Job.fetch_many.side_effect = lambda ids, **_kwargs: [
+                jobs[job_id] for job_id in ids
+            ]
+            mock_rq.job.Job.fetch.side_effect = lambda job_id, **_kwargs: jobs[job_id]
+
+            first = _select_fair_job(
+                redis_conn=redis_conn,
+                build_queues=[build_q1, build_q2],
+                verify_queues=[],
+                build_has_capacity=True,
+                verify_has_capacity=False,
+                state=state,
+            )
+            second = _select_fair_job(
+                redis_conn=redis_conn,
+                build_queues=[build_q1, build_q2],
+                verify_queues=[],
+                build_has_capacity=True,
+                verify_has_capacity=False,
+                state=state,
+            )
+
+        assert first is not None
+        assert second is not None
+        assert first[0].id == "job-a1"
+        assert second[0].id == "job-b1"
+
+    def test_select_fair_job_alternates_build_and_verify_classes(self) -> None:
+        """Fair helper should alternate class claims when both remain runnable."""
+        from crsbench.distributed.ci_supervisor import _select_fair_job
+        from crsbench.distributed.evaluator_scheduler import (
+            SCHEDULER_OWNER_KEY_META,
+            FairSchedulerState,
+        )
+
+        build_queue = _make_mock_queue("crsbench_ci_build", count=2)
+        build_queue.key = "rq:queue:crsbench_ci_build"
+        build_queue.get_job_ids.side_effect = [["build-1", "build-2"], ["build-2"]]
+        verify_queue = _make_mock_queue("crsbench_ci_verify", count=2)
+        verify_queue.key = "rq:queue:crsbench_ci_verify"
+        verify_queue.get_job_ids.side_effect = [
+            ["verify-1", "verify-2"],
+            ["verify-1", "verify-2"],
+        ]
+
+        jobs = {
+            "build-1": SimpleNamespace(
+                id="build-1",
+                meta={SCHEDULER_OWNER_KEY_META: "trial::exp::trial-a"},
+            ),
+            "build-2": SimpleNamespace(
+                id="build-2",
+                meta={SCHEDULER_OWNER_KEY_META: "trial::exp::trial-a"},
+            ),
+            "verify-1": SimpleNamespace(
+                id="verify-1",
+                meta={SCHEDULER_OWNER_KEY_META: "trial::exp::trial-b"},
+            ),
+            "verify-2": SimpleNamespace(
+                id="verify-2",
+                meta={SCHEDULER_OWNER_KEY_META: "trial::exp::trial-b"},
+            ),
+        }
+
+        redis_conn = MagicMock()
+        redis_conn.eval.return_value = 1
+        state = FairSchedulerState(next_queue_class="build")
+
+        with patch("crsbench.distributed.ci_supervisor.rq") as mock_rq:
+            mock_rq.job.Job.fetch_many.side_effect = lambda ids, **_kwargs: [
+                jobs[job_id] for job_id in ids
+            ]
+            mock_rq.job.Job.fetch.side_effect = lambda job_id, **_kwargs: jobs[job_id]
+
+            first = _select_fair_job(
+                redis_conn=redis_conn,
+                build_queues=[build_queue],
+                verify_queues=[verify_queue],
+                build_has_capacity=True,
+                verify_has_capacity=True,
+                state=state,
+            )
+            second = _select_fair_job(
+                redis_conn=redis_conn,
+                build_queues=[build_queue],
+                verify_queues=[verify_queue],
+                build_has_capacity=True,
+                verify_has_capacity=True,
+                state=state,
+            )
+
+        assert first is not None
+        assert second is not None
+        assert first[1].name == "crsbench_ci_build"
+        assert second[1].name == "crsbench_ci_verify"
 
     def test_cpu_tag_mismatch_applies_short_backoff(self) -> None:
         """Mismatch path should back off briefly to avoid hot-loop churn."""
@@ -193,14 +318,6 @@ class TestCiSupervisorQueues:
         mock_job.meta = {"cpu_tag": "arm-neon"}
         mock_job.get_status.return_value = "queued"
 
-        dequeue_count = [0]
-
-        def dequeue_any(_queues, **_kwargs):
-            dequeue_count[0] += 1
-            if dequeue_count[0] == 1:
-                return (mock_job, mock_build_queue)
-            raise KeyboardInterrupt
-
         sleep_calls: list[float] = []
 
         def record_sleep(seconds: float):
@@ -210,12 +327,15 @@ class TestCiSupervisorQueues:
             _patch_supervisor(),
             patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
             patch(
+                "crsbench.distributed.ci_supervisor._select_fair_job",
+                side_effect=[(mock_job, mock_build_queue), KeyboardInterrupt],
+            ),
+            patch(
                 "crsbench.distributed.ci_supervisor.time.sleep",
                 side_effect=record_sleep,
             ),
         ):
             mock_rq.Queue.side_effect = queue_factory
-            mock_rq.Queue.dequeue_any = dequeue_any
             run_ci_supervisor(
                 redis_host="localhost",
                 build_queue_name="crsbench_ci_build",
@@ -251,19 +371,16 @@ class TestCiSupervisorQueues:
         mock_job.meta = {"cpu_tag": "arm-neon"}
         mock_job.get_status.return_value = "queued"
 
-        dequeue_count = [0]
-
-        def dequeue_any(_queues, **_kwargs):
-            dequeue_count[0] += 1
-            return (mock_job, mock_build_queue)
-
         with (
             _patch_supervisor(),
             patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor._select_fair_job",
+                return_value=(mock_job, mock_build_queue),
+            ) as mock_select,
             patch("crsbench.distributed.ci_supervisor.time.sleep"),
         ):
             mock_rq.Queue.side_effect = queue_factory
-            mock_rq.Queue.dequeue_any = dequeue_any
             result = run_ci_supervisor(
                 redis_host="localhost",
                 build_queue_name="crsbench_ci_build",
@@ -278,7 +395,7 @@ class TestCiSupervisorQueues:
             )
 
         assert result == CPU_TAG_MISMATCH_EXIT_CODE
-        assert dequeue_count[0] == NON_CONTINUOUS_CPU_MISMATCH_LIMIT
+        assert mock_select.call_count == NON_CONTINUOUS_CPU_MISMATCH_LIMIT
         assert (
             mock_build_queue.enqueue_job.call_count == NON_CONTINUOUS_CPU_MISMATCH_LIMIT
         )
@@ -660,10 +777,6 @@ class TestSupervisorExitCondition:
             if iterations[0] >= 5:
                 raise KeyboardInterrupt
 
-        def dequeue_noop(_queues, **_kwargs):
-            # Simulate no job ready yet — returns None
-            return None
-
         with (
             _patch_supervisor(),
             patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
@@ -673,7 +786,8 @@ class TestSupervisorExitCondition:
             ),
         ):
             mock_rq.Queue.side_effect = queue_factory
-            mock_rq.Queue.dequeue_any = dequeue_noop
+            mock_build_queue.get_job_ids.return_value = []
+            mock_verify_queue.get_job_ids.return_value = []
             result = run_ci_supervisor(
                 redis_host="localhost",
                 build_queue_name="crsbench_ci_build",
@@ -738,7 +852,8 @@ class TestSupervisorExitCondition:
             ),
         ):
             mock_rq.Queue.side_effect = queue_factory
-            mock_rq.Queue.dequeue_any = lambda _queues, **_kwargs: None
+            build_q.get_job_ids.return_value = []
+            verify_q.get_job_ids.return_value = []
             result = run_ci_supervisor(
                 redis_host="localhost",
                 build_queue_name="crsbench_ci_build",
@@ -771,11 +886,14 @@ class TestSupervisorExitCondition:
             _patch_supervisor(),
             patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
             patch(
+                "crsbench.distributed.ci_supervisor._select_fair_job",
+                side_effect=RuntimeError("boom"),
+            ),
+            patch(
                 "crsbench.distributed.ci_supervisor._terminate_all"
             ) as mock_terminate,
         ):
             mock_rq.Queue.side_effect = queue_factory
-            mock_rq.Queue.dequeue_any.side_effect = RuntimeError("boom")
             result = run_ci_supervisor(
                 redis_host="localhost",
                 build_queue_name="crsbench_ci_build",
@@ -814,14 +932,6 @@ class TestSupervisorExitCondition:
         # reap check, start-race check, terminate loop check, force-kill check
         mock_process.is_alive.side_effect = [True, True, True, True]
 
-        dequeue_calls = {"n": 0}
-
-        def dequeue_any(_queues, **_kwargs):
-            dequeue_calls["n"] += 1
-            if dequeue_calls["n"] == 1:
-                return (mock_job, mock_build_queue)
-            raise RuntimeError("boom")
-
         mock_pool = MagicMock()
         mock_pool.allocate.return_value = [0]
         mock_pool.total_cpus = 1
@@ -829,6 +939,10 @@ class TestSupervisorExitCondition:
         with (
             _patch_supervisor(),
             patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor._select_fair_job",
+                side_effect=[(mock_job, mock_build_queue), RuntimeError("boom")],
+            ),
             patch(
                 "crsbench.distributed.ci_supervisor._mp_ctx.Process"
             ) as mock_proc_cls,
@@ -854,7 +968,6 @@ class TestSupervisorExitCondition:
             patch("crsbench.distributed.ci_supervisor._cleanup_stale_rq_workers"),
         ):
             mock_rq.Queue.side_effect = queue_factory
-            mock_rq.Queue.dequeue_any.side_effect = dequeue_any
             mock_proc_cls.return_value = mock_process
             result = run_ci_supervisor(
                 redis_host="localhost",
@@ -892,14 +1005,6 @@ class TestSupervisorExitCondition:
         # Child exits before touching RQ state: still queued -> requeue is required.
         mock_job.get_status.return_value = "queued"
 
-        dequeue_calls = {"n": 0}
-
-        def dequeue_any(_queues, **_kwargs):
-            dequeue_calls["n"] += 1
-            if dequeue_calls["n"] == 1:
-                return (mock_job, mock_build_queue)
-            raise KeyboardInterrupt
-
         mock_process = MagicMock()
         mock_process.pid = 12345
         mock_process.is_alive.return_value = False
@@ -908,11 +1013,14 @@ class TestSupervisorExitCondition:
             _patch_supervisor(),
             patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
             patch(
+                "crsbench.distributed.ci_supervisor._select_fair_job",
+                side_effect=[(mock_job, mock_build_queue), KeyboardInterrupt],
+            ),
+            patch(
                 "crsbench.distributed.ci_supervisor._mp_ctx.Process"
             ) as mock_proc_cls,
         ):
             mock_rq.Queue.side_effect = queue_factory
-            mock_rq.Queue.dequeue_any.side_effect = dequeue_any
             mock_proc_cls.return_value = mock_process
             result = run_ci_supervisor(
                 redis_host="localhost",
@@ -974,12 +1082,9 @@ class TestMultiQueueSupervisor:
         assert "crsbench_exp2_verify" in queues_created
         assert result == 0
 
-    def test_build_priority_across_experiments(self) -> None:
-        """Build queues from all experiments are prioritized over verify queues."""
-        from crsbench.distributed.ci_supervisor import (
-            DEQUEUE_POLL_TIMEOUT_SECONDS,
-            run_multi_queue_supervisor,
-        )
+    def test_multi_queue_no_longer_uses_ordered_dequeue_priority(self) -> None:
+        """Multi-queue supervisor should not call legacy ordered dequeue."""
+        from crsbench.distributed.ci_supervisor import run_multi_queue_supervisor
 
         build_q1 = _make_mock_queue("crsbench_exp1_build", count=1)
         build_q2 = _make_mock_queue("crsbench_exp2_build", count=1)
@@ -996,20 +1101,18 @@ class TestMultiQueueSupervisor:
         def queue_factory(name, **_kwargs):
             return queue_map[name]
 
-        dequeue_calls = []
-        dequeue_timeouts = []
-
-        def track_dequeue_any(queues, **_kwargs):
-            dequeue_calls.append([q.name for q in queues])
-            dequeue_timeouts.append(_kwargs.get("timeout"))
-            raise KeyboardInterrupt
-
         with (
             _patch_supervisor(),
             patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor.time.sleep",
+                side_effect=KeyboardInterrupt,
+            ),
         ):
             mock_rq.Queue.side_effect = queue_factory
-            mock_rq.Queue.dequeue_any = track_dequeue_any
+            mock_rq.Queue.dequeue_any.side_effect = AssertionError(
+                "ordered dequeue_any should not be used"
+            )
             run_multi_queue_supervisor(
                 redis_host="localhost",
                 build_queue_names=["crsbench_exp1_build", "crsbench_exp2_build"],
@@ -1021,14 +1124,7 @@ class TestMultiQueueSupervisor:
                 job_runner=lambda _h, _n, _j: None,
             )
 
-        assert len(dequeue_calls) > 0
-        # Build queues should appear before verify queues
-        first_call = dequeue_calls[0]
-        build_positions = [i for i, name in enumerate(first_call) if "build" in name]
-        verify_positions = [i for i, name in enumerate(first_call) if "verify" in name]
-        if build_positions and verify_positions:
-            assert max(build_positions) < min(verify_positions)
-        assert dequeue_timeouts[0] == DEQUEUE_POLL_TIMEOUT_SECONDS
+        assert mock_rq.Queue.dequeue_any.call_count == 0
 
     def test_non_continuous_exits_when_all_empty(self) -> None:
         """Non-continuous mode exits when all queues across experiments are empty."""
@@ -1093,19 +1189,16 @@ class TestMultiQueueSupervisor:
         mock_job.meta = {"cpu_tag": "arm-neon"}
         mock_job.get_status.return_value = "queued"
 
-        dequeue_count = [0]
-
-        def dequeue_any(_queues, **_kwargs):
-            dequeue_count[0] += 1
-            return (mock_job, build_q)
-
         with (
             _patch_supervisor(),
             patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor._select_fair_job",
+                return_value=(mock_job, build_q),
+            ) as mock_select,
             patch("crsbench.distributed.ci_supervisor.time.sleep"),
         ):
             mock_rq.Queue.side_effect = queue_factory
-            mock_rq.Queue.dequeue_any = dequeue_any
             result = run_multi_queue_supervisor(
                 redis_host="localhost",
                 build_queue_names=["crsbench_exp1_build"],
@@ -1120,7 +1213,7 @@ class TestMultiQueueSupervisor:
             )
 
         assert result == CPU_TAG_MISMATCH_EXIT_CODE
-        assert dequeue_count[0] == NON_CONTINUOUS_CPU_MISMATCH_LIMIT
+        assert mock_select.call_count == NON_CONTINUOUS_CPU_MISMATCH_LIMIT
         assert build_q.enqueue_job.call_count == NON_CONTINUOUS_CPU_MISMATCH_LIMIT
 
     def test_accepts_empty_verify_list(self) -> None:
@@ -1188,7 +1281,8 @@ class TestMultiQueueSupervisor:
             ),
         ):
             mock_rq.Queue.side_effect = queue_factory
-            mock_rq.Queue.dequeue_any = lambda _queues, **_kwargs: None
+            build_q.get_job_ids.return_value = []
+            verify_q.get_job_ids.return_value = []
             result = run_multi_queue_supervisor(
                 redis_host="localhost",
                 build_queue_names=["crsbench_exp_build"],
@@ -1219,11 +1313,14 @@ class TestMultiQueueSupervisor:
             _patch_supervisor(),
             patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
             patch(
+                "crsbench.distributed.ci_supervisor._select_fair_job",
+                side_effect=RuntimeError("boom"),
+            ),
+            patch(
                 "crsbench.distributed.ci_supervisor._terminate_all"
             ) as mock_terminate,
         ):
             mock_rq.Queue.side_effect = queue_factory
-            mock_rq.Queue.dequeue_any.side_effect = RuntimeError("boom")
             result = run_multi_queue_supervisor(
                 redis_host="localhost",
                 build_queue_names=["crsbench_exp_build"],
@@ -1260,14 +1357,6 @@ class TestMultiQueueSupervisor:
         # reap check, start-race check, terminate loop check, force-kill check
         mock_process.is_alive.side_effect = [True, True, True, True]
 
-        dequeue_calls = {"n": 0}
-
-        def dequeue_any(_queues, **_kwargs):
-            dequeue_calls["n"] += 1
-            if dequeue_calls["n"] == 1:
-                return (mock_job, build_q)
-            raise RuntimeError("boom")
-
         mock_pool = MagicMock()
         mock_pool.allocate.return_value = [0]
         mock_pool.total_cpus = 1
@@ -1275,6 +1364,10 @@ class TestMultiQueueSupervisor:
         with (
             _patch_supervisor(),
             patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor._select_fair_job",
+                side_effect=[(mock_job, build_q), RuntimeError("boom")],
+            ),
             patch(
                 "crsbench.distributed.ci_supervisor._mp_ctx.Process"
             ) as mock_proc_cls,
@@ -1300,7 +1393,6 @@ class TestMultiQueueSupervisor:
             patch("crsbench.distributed.ci_supervisor._cleanup_stale_rq_workers"),
         ):
             mock_rq.Queue.side_effect = queue_factory
-            mock_rq.Queue.dequeue_any.side_effect = dequeue_any
             mock_proc_cls.return_value = mock_process
             result = run_multi_queue_supervisor(
                 redis_host="localhost",
