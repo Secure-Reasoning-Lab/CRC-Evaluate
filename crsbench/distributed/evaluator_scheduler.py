@@ -31,6 +31,17 @@ def _build_non_trial_owner(
     return f"unit::{_normalize_component(experiment_name)}::{suffix}"
 
 
+def build_scheduler_experiment_name_from_queue_name(queue_name: object) -> str:
+    """Derive a stable experiment namespace from a routed queue name."""
+    normalized = _normalize_component(queue_name) or "unknown-experiment"
+    for suffix in ("_build", "_verify", "-build", "-verify"):
+        if normalized.endswith(suffix):
+            stripped = normalized[: -len(suffix)]
+            if stripped:
+                return stripped
+    return normalized
+
+
 def build_scheduler_owner_key_from_payload(
     payload: dict[str, object],
     *,
@@ -38,8 +49,10 @@ def build_scheduler_owner_key_from_payload(
     queue_name: str,
 ) -> str:
     """Return the scheduler owner key for a serialized evaluator payload."""
-    experiment_name = _normalize_component(
-        payload.get("experiment_name") or queue_name or "unknown-experiment"
+    payload_experiment_name = _normalize_component(payload.get("experiment_name"))
+    experiment_name = (
+        payload_experiment_name
+        or build_scheduler_experiment_name_from_queue_name(queue_name)
     )
     trial_id = payload.get("trial_id")
     if isinstance(trial_id, str) and trial_id.strip():
@@ -127,6 +140,25 @@ class FairSchedulerState:
     next_queue_index_by_class: dict[str, int] = field(
         default_factory=lambda: {"build": 0, "verify": 0}
     )
+
+
+def clone_fair_scheduler_state(state: FairSchedulerState) -> FairSchedulerState:
+    """Return a detached copy of mutable fair-scheduler state."""
+    return FairSchedulerState(
+        next_queue_class=state.next_queue_class,
+        last_owner_by_class=dict(state.last_owner_by_class),
+        next_queue_index_by_class=dict(state.next_queue_index_by_class),
+    )
+
+
+def restore_fair_scheduler_state(
+    state: FairSchedulerState,
+    snapshot: FairSchedulerState,
+) -> None:
+    """Restore mutable fair-scheduler state from a prior snapshot."""
+    state.next_queue_class = snapshot.next_queue_class
+    state.last_owner_by_class = dict(snapshot.last_owner_by_class)
+    state.next_queue_index_by_class = dict(snapshot.next_queue_index_by_class)
 
 
 def _interleave_candidates(

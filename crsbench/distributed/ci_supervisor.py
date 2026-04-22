@@ -23,6 +23,8 @@ from crsbench.distributed.evaluator_scheduler import (
     build_scheduler_owner_key_from_payload,
     choose_next_fair_candidate,
     choose_next_queue_class,
+    clone_fair_scheduler_state,
+    restore_fair_scheduler_state,
 )
 from crsbench.distributed.queue import REDIS_AVAILABLE
 from crsbench.utils.cpu_pool import auto_cores_per_job, visible_cpu_count
@@ -32,6 +34,7 @@ if REDIS_AVAILABLE:
     import redis.exceptions
     import rq
     import rq.job
+    from rq.exceptions import NoSuchJobError
 
 if TYPE_CHECKING:
     from redis import Redis
@@ -97,7 +100,11 @@ def _scheduler_owner_key_for_job(job: "rq.job.Job", *, queue_name: str) -> str:
     )
 
 
-def _queue_candidates(queues: list["rq.Queue"]) -> list[list[QueuedCandidate]]:
+def _queue_candidates(
+    queues: list["rq.Queue"],
+    *,
+    worker_cpu_tag: Optional[str] = None,
+) -> list[list[QueuedCandidate]]:
     """Project queued RQ jobs into fair-selection candidates per queue."""
     if not queues:
         return []
@@ -116,6 +123,8 @@ def _queue_candidates(queues: list["rq.Queue"]) -> list[list[QueuedCandidate]]:
         for job_id in job_ids:
             job = jobs_by_id.get(job_id)
             if job is None:
+                continue
+            if not _matches_cpu_tag(job, worker_cpu_tag):
                 continue
             candidates.append(
                 QueuedCandidate(
@@ -141,8 +150,15 @@ def _claim_fair_candidate(
         return None
     try:
         job = rq.job.Job.fetch(candidate.job_id, connection=redis_conn)
-    except Exception:
+    except NoSuchJobError:
         logger.debug(f"Fair claim fetched missing job {candidate.job_id}")
+        return None
+    except Exception:
+        redis_conn.lpush(queue.key, candidate.job_id)
+        logger.warning(
+            f"Fair claim fetch failed after removing {candidate.job_id}; "
+            "restored job id to queue front."
+        )
         return None
     return job, queue
 
@@ -155,10 +171,20 @@ def _select_fair_job(
     build_has_capacity: bool,
     verify_has_capacity: bool,
     state: FairSchedulerState,
+    worker_cpu_tag: Optional[str] = None,
 ) -> tuple["rq.job.Job", "rq.Queue"] | None:
     """Choose and claim the next fair runnable evaluator job."""
-    build_candidates = _queue_candidates(build_queues) if build_has_capacity else []
-    verify_candidates = _queue_candidates(verify_queues) if verify_has_capacity else []
+    state_snapshot = clone_fair_scheduler_state(state)
+    build_candidates = (
+        _queue_candidates(build_queues, worker_cpu_tag=worker_cpu_tag)
+        if build_has_capacity
+        else []
+    )
+    verify_candidates = (
+        _queue_candidates(verify_queues, worker_cpu_tag=worker_cpu_tag)
+        if verify_has_capacity
+        else []
+    )
 
     queue_class = choose_next_queue_class(
         build_has_capacity=build_has_capacity,
@@ -168,6 +194,7 @@ def _select_fair_job(
         state=state,
     )
     if queue_class is None:
+        restore_fair_scheduler_state(state, state_snapshot)
         return None
 
     candidates = build_candidates if queue_class == "build" else verify_candidates
@@ -177,14 +204,18 @@ def _select_fair_job(
         state=state,
     )
     if candidate is None:
+        restore_fair_scheduler_state(state, state_snapshot)
         return None
 
     queue_lookup = {queue.name: queue for queue in (*build_queues, *verify_queues)}
-    return _claim_fair_candidate(
+    result = _claim_fair_candidate(
         redis_conn,
         queue_lookup=queue_lookup,
         candidate=candidate,
     )
+    if result is None:
+        restore_fair_scheduler_state(state, state_snapshot)
+    return result
 
 
 def _safe_cwd() -> Path:
@@ -520,6 +551,7 @@ def run_ci_supervisor(
                     consecutive_dequeue_errors = 0
                     continue
 
+                selection_snapshot = clone_fair_scheduler_state(fair_state)
                 result = _select_fair_job(
                     redis_conn=redis_conn,
                     build_queues=[build_queue],
@@ -527,6 +559,7 @@ def run_ci_supervisor(
                     build_has_capacity=build_eligible,
                     verify_has_capacity=verify_eligible,
                     state=fair_state,
+                    worker_cpu_tag=cpu_tag,
                 )
 
                 if not result:
@@ -555,16 +588,18 @@ def run_ci_supervisor(
             # Skip jobs that are already finished or failed (stale queue entries)
             job_status = job.get_status()
             if job_status in ("finished", "failed"):
+                restore_fair_scheduler_state(fair_state, selection_snapshot)
                 logger.debug(f"Skipping stale job {job.id[:30]} (status={job_status})")
                 consecutive_cpu_mismatch_requeues = 0
                 mismatch_job_ids.clear()
                 mismatch_queue_names.clear()
                 continue
             if not _matches_cpu_tag(job, cpu_tag):
+                restore_fair_scheduler_state(fair_state, selection_snapshot)
                 consecutive_cpu_mismatch_requeues += 1
                 mismatch_job_ids.add(job.id)
                 mismatch_queue_names.add(queue_obj.name)
-                queue_obj.enqueue_job(job)
+                queue_obj.enqueue_job(job, at_front=True)
                 if build_eligible and verify_eligible:
                     queue_cooldown_until[queue_obj.name] = time.time() + 0.1
                 logger.debug(
@@ -614,6 +649,7 @@ def run_ci_supervisor(
             cpus = cpu_pool.allocate(cpu_count) if cpu_pool else None
 
             if cpu_pool is not None and cpus is None:
+                restore_fair_scheduler_state(fair_state, selection_snapshot)
                 queue_obj.enqueue_job(job, at_front=True)
                 logger.debug(
                     f"Job {job.id[:8]} needs {cpu_count} CPUs, "
@@ -726,6 +762,7 @@ def run_ci_supervisor(
                     + (f" with {len(cpus)} CPUs: {cpuset_str}" if cpus else "")
                 )
             except OSError as spawn_err:
+                restore_fair_scheduler_state(fair_state, selection_snapshot)
                 # Cgroup permission error (e.g. stale root-owned cgroup from
                 # a previous Docker run). Release resources and re-enqueue.
                 logger.warning(
@@ -752,6 +789,7 @@ def run_ci_supervisor(
                 time.sleep(0.5)
                 continue
             except Exception as spawn_err:
+                restore_fair_scheduler_state(fair_state, selection_snapshot)
                 logger.warning(
                     f"Child startup failed for worker {worker_num}: {spawn_err}. "
                     "Re-enqueuing job."
@@ -1156,6 +1194,7 @@ def run_multi_queue_supervisor(
                     consecutive_dequeue_errors = 0
                     continue
 
+                selection_snapshot = clone_fair_scheduler_state(fair_state)
                 result = _select_fair_job(
                     redis_conn=redis_conn,
                     build_queues=eligible_build_queues,
@@ -1163,6 +1202,7 @@ def run_multi_queue_supervisor(
                     build_has_capacity=bool(eligible_build_queues),
                     verify_has_capacity=bool(eligible_verify_queues),
                     state=fair_state,
+                    worker_cpu_tag=cpu_tag,
                 )
 
                 if not result:
@@ -1191,16 +1231,18 @@ def run_multi_queue_supervisor(
             # Skip stale jobs
             job_status = job.get_status()
             if job_status in ("finished", "failed"):
+                restore_fair_scheduler_state(fair_state, selection_snapshot)
                 logger.debug(f"Skipping stale job {job.id[:30]} (status={job_status})")
                 consecutive_cpu_mismatch_requeues = 0
                 mismatch_job_ids.clear()
                 mismatch_queue_names.clear()
                 continue
             if not _matches_cpu_tag(job, cpu_tag):
+                restore_fair_scheduler_state(fair_state, selection_snapshot)
                 consecutive_cpu_mismatch_requeues += 1
                 mismatch_job_ids.add(job.id)
                 mismatch_queue_names.add(queue_obj.name)
-                queue_obj.enqueue_job(job)
+                queue_obj.enqueue_job(job, at_front=True)
                 if eligible_build_queues and eligible_verify_queues:
                     queue_cooldown_until[queue_obj.name] = time.time() + 0.1
                 logger.debug(
@@ -1250,6 +1292,7 @@ def run_multi_queue_supervisor(
             cpus = cpu_pool.allocate(cpu_count) if cpu_pool else None
 
             if cpu_pool is not None and cpus is None:
+                restore_fair_scheduler_state(fair_state, selection_snapshot)
                 queue_obj.enqueue_job(job, at_front=True)
                 logger.debug(
                     f"Job {job.id[:8]} needs {cpu_count} CPUs, "
@@ -1360,6 +1403,7 @@ def run_multi_queue_supervisor(
                     + (f" with {len(cpus)} CPUs: {cpuset_str}" if cpus else "")
                 )
             except OSError as spawn_err:
+                restore_fair_scheduler_state(fair_state, selection_snapshot)
                 logger.warning(
                     f"Failed to spawn worker {worker_num}: {spawn_err}. "
                     "Re-enqueuing job."
@@ -1381,6 +1425,7 @@ def run_multi_queue_supervisor(
                 time.sleep(0.5)
                 continue
             except Exception as spawn_err:
+                restore_fair_scheduler_state(fair_state, selection_snapshot)
                 logger.warning(
                     f"Child startup failed for worker {worker_num}: {spawn_err}. "
                     "Re-enqueuing job."

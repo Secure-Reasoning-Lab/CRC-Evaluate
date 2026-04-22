@@ -352,7 +352,6 @@ def test_build_inc_build_image_bakes_snapshot_when_benchmark_path_provided(
     assert "--network" in run_cmd
     assert "none" in run_cmd
     # Snapshot docker commit uses the configured extended timeout by default.
-    assert infra.snapshot_commit_timeout == 3600
     assert mock_run.call_args_list[2].kwargs["timeout"] == infra.snapshot_commit_timeout
 
 

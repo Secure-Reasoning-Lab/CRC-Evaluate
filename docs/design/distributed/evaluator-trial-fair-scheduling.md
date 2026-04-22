@@ -64,10 +64,12 @@ worker-side contracts.
 
 ### Shared build ownership
 
-- a build job that is shared by multiple blocked trials must be charged to the
-  oldest waiting blocked owner key
-- later blocked trials may add themselves to the waiting set for that build, but
-  they must not displace an older waiting owner while the build remains queued
+- a queued shared build carries exactly one scheduler owner key in job metadata
+- if duplicate reuse encounters a queued shared build whose owner key is still a
+  generic compatibility identity, the first trial-scoped reuse may adopt that
+  queued job and replace the generic owner key
+- once a queued shared build already carries a trial owner key, later reuses do
+  not displace that owner in this revision
 - once the shared build starts executing, ownership changes are irrelevant for
   that physical attempt
 
@@ -75,9 +77,14 @@ worker-side contracts.
 
 - fairness must be explicit and scheduler-owned rather than inferred from raw RQ
   FIFO position
-- queued evaluator jobs must be admitted into a scheduler-ready structure keyed
-  by owner key and queue class (`build` or `verify`)
-- within a single owner key and queue class, jobs execute in FIFO admission order
+- on each selection attempt, the evaluator derives a scheduler-ready view from
+  currently queued RQ jobs, keyed by owner key and queue class (`build` or
+  `verify`)
+- this revision does not persist a separate ready ledger beyond queued RQ jobs,
+  queue membership, and job metadata
+- within a single owner key and queue class, jobs execute in FIFO order as
+  observed from the current queued RQ list, except explicit scheduler-side
+  requeues that restore a job to the queue front for retry
 - across owner keys within the same queue class, the scheduler serves queued
   work in round-robin order so one owner cannot monopolize build or verify
   capacity just by enqueueing earlier or more often
@@ -103,31 +110,36 @@ worker-side contracts.
 
 ### Retry and requeue behavior
 
-- a pre-start requeue caused by spawn failure, CPU mismatch, or similar
-  scheduler-side rejection must preserve the job's owner key and restore it to
-  the front of that owner key's class-local ready order
-- scheduler-side rejection must not let a retried job jump ahead of older work
-  from other owner keys
+- a failed claim or pre-start rejection must preserve the job's owner key and
+  must not silently lose runnable work
+- retries caused by spawn failure, CPU allocation failure, or similar local
+  retry paths restore the queued job to the queue front so the same attempt can
+  be retried without reserialization
+- worker capability filtering such as `cpu_tag` matching is applied before fair
+  selection when possible; any post-claim fallback requeue still preserves the
+  job metadata and returns the job to queued state
 - if a job is explicitly refreshed or re-enqueued as a new physical attempt, the
   new attempt is admitted as new ready work under the same owner key unless the
   owning flow explicitly changes that identity
 
 ### Restart and reconciliation behavior
 
-- the scheduler-ready state must be reconstructable from authoritative queued RQ
-  jobs and dependency state
-- evaluator startup and configless queue refresh must reconcile queued jobs into
-  the ready structure idempotently so fairness does not depend on a clean prior
-  shutdown
+- the scheduler-ready view must be reconstructable from authoritative queued RQ
+  jobs, queue membership, and dependency state
+- evaluator startup and configless queue refresh recompute that derived ready
+  view idempotently so fairness does not depend on a clean prior shutdown
 - stale scheduler metadata must not suppress queued jobs from being dispatched
 
 ## Deployment and Distributed Behavior
 
 - fairness semantics must remain correct when submitter, worker, and evaluator
   run on different machines
-- when multiple evaluators serve the same queue set, claim and ready-state
-  transitions must be atomic at the shared Redis layer so two evaluators cannot
-  consume the same fairness turn or the same queued job
+- when multiple evaluators serve the same queue set, job-claim transitions must
+  be atomic at the shared Redis layer so two evaluators cannot consume the same
+  queued job
+- each evaluator applies the same local fair-selection algorithm over the shared
+  queued state; this revision does not add a separate distributed turn ledger
+  for globally serialized owner rotation across evaluators
 - flat and per-experiment queue models must preserve the same fairness contract;
   changing queue naming may change routing topology but must not reintroduce
   queue-order bias
@@ -136,29 +148,31 @@ worker-side contracts.
 
 - use dependency gating for build-before-verify correctness rather than a hidden
   scheduler bias; this keeps correctness and fairness as separate concerns
-- use scheduler-owned ready state because raw FIFO queues cannot express trial
-  fairness once multiple owners share the same physical queue
+- use a scheduler-owned ready view derived from queued jobs because raw FIFO
+  queues cannot express trial fairness once multiple owners share the same
+  physical queue
 - preserve separate build and verify capacity knobs so operators can tune
   throughput without changing fairness identity
-- treat shared builds as oldest-waiter work because build reuse should help
-  multiple trials without letting the first enqueuer permanently dominate
+- prefer explicit queued owner metadata over queue-name ordering; build reuse
+  can upgrade a generic shared build to a trial owner without needing a separate
+  waiting-set data structure
 
 ## Risks and Validation
 
 - regression risk: verify work could accidentally bypass missing build context
   if dependency admission and scheduler admission diverge
-- regression risk: requeue paths could lose owner-key ordering and let one trial
-  skip the fairness ring after retries
-- distributed risk: restart reconciliation could double-admit or miss queued
-  jobs if scheduler-ready state is not rebuilt idempotently
+- regression risk: claim/requeue paths could silently drop a queued job or skew
+  local fair-turn state after transient failures
+- distributed risk: restart reconciliation could miss queued jobs if the
+  derived ready view is not rebuilt idempotently
 
 Validation should cover:
 - verify jobs never run before required build prerequisites complete
 - fair round-robin across trial owners within build-ready work
 - fair round-robin across trial owners within verify-ready work
-- shared build ownership stays with the oldest blocked owner
+- duplicate reuse can upgrade a generic shared build owner to a trial owner
 - configless multi-queue operation does not regress into queue-name priority
-- restart and requeue paths rebuild ready state without losing runnable jobs
+- restart and requeue paths rebuild the ready view without losing runnable jobs
 
 ## Implementation Pointers
 

@@ -232,6 +232,68 @@ class TestCiSupervisorQueues:
         assert first[0].id == "job-a1"
         assert second[0].id == "job-b1"
 
+    def test_select_fair_job_rotates_between_verify_trial_owners(self) -> None:
+        """Fair helper should rotate verify claims across distinct trial owners."""
+        from crsbench.distributed.ci_supervisor import _select_fair_job
+        from crsbench.distributed.evaluator_scheduler import (
+            SCHEDULER_OWNER_KEY_META,
+            FairSchedulerState,
+        )
+
+        verify_q1 = _make_mock_queue("crsbench_ci_verify_a", count=2)
+        verify_q1.key = "rq:queue:crsbench_ci_verify_a"
+        verify_q1.get_job_ids.side_effect = [["job-a1", "job-a2"], ["job-a2"]]
+        verify_q2 = _make_mock_queue("crsbench_ci_verify_b", count=1)
+        verify_q2.key = "rq:queue:crsbench_ci_verify_b"
+        verify_q2.get_job_ids.side_effect = [["job-b1"], ["job-b1"]]
+
+        jobs = {
+            "job-a1": SimpleNamespace(
+                id="job-a1",
+                meta={SCHEDULER_OWNER_KEY_META: "trial::exp::trial-a"},
+            ),
+            "job-a2": SimpleNamespace(
+                id="job-a2",
+                meta={SCHEDULER_OWNER_KEY_META: "trial::exp::trial-a"},
+            ),
+            "job-b1": SimpleNamespace(
+                id="job-b1",
+                meta={SCHEDULER_OWNER_KEY_META: "trial::exp::trial-b"},
+            ),
+        }
+
+        redis_conn = MagicMock()
+        redis_conn.eval.return_value = 1
+        state = FairSchedulerState(next_queue_class="verify")
+
+        with patch("crsbench.distributed.ci_supervisor.rq") as mock_rq:
+            mock_rq.job.Job.fetch_many.side_effect = lambda ids, **_kwargs: [
+                jobs[job_id] for job_id in ids
+            ]
+            mock_rq.job.Job.fetch.side_effect = lambda job_id, **_kwargs: jobs[job_id]
+
+            first = _select_fair_job(
+                redis_conn=redis_conn,
+                build_queues=[],
+                verify_queues=[verify_q1, verify_q2],
+                build_has_capacity=False,
+                verify_has_capacity=True,
+                state=state,
+            )
+            second = _select_fair_job(
+                redis_conn=redis_conn,
+                build_queues=[],
+                verify_queues=[verify_q1, verify_q2],
+                build_has_capacity=False,
+                verify_has_capacity=True,
+                state=state,
+            )
+
+        assert first is not None
+        assert second is not None
+        assert first[0].id == "job-a1"
+        assert second[0].id == "job-b1"
+
     def test_select_fair_job_alternates_build_and_verify_classes(self) -> None:
         """Fair helper should alternate class claims when both remain runnable."""
         from crsbench.distributed.ci_supervisor import _select_fair_job
@@ -300,6 +362,82 @@ class TestCiSupervisorQueues:
         assert second is not None
         assert first[1].name == "crsbench_ci_build"
         assert second[1].name == "crsbench_ci_verify"
+
+    def test_select_fair_job_does_not_advance_state_when_claim_fails(self) -> None:
+        """Failed claim should leave fair-turn state unchanged."""
+        from crsbench.distributed.ci_supervisor import _select_fair_job
+        from crsbench.distributed.evaluator_scheduler import (
+            SCHEDULER_OWNER_KEY_META,
+            FairSchedulerState,
+        )
+
+        build_queue = _make_mock_queue("crsbench_ci_build", count=1)
+        build_queue.key = "rq:queue:crsbench_ci_build"
+        build_queue.get_job_ids.return_value = ["build-1"]
+        verify_queue = _make_mock_queue("crsbench_ci_verify", count=1)
+        verify_queue.key = "rq:queue:crsbench_ci_verify"
+        verify_queue.get_job_ids.return_value = ["verify-1"]
+
+        jobs = {
+            "build-1": SimpleNamespace(
+                id="build-1",
+                meta={SCHEDULER_OWNER_KEY_META: "trial::exp::trial-a"},
+            ),
+            "verify-1": SimpleNamespace(
+                id="verify-1",
+                meta={SCHEDULER_OWNER_KEY_META: "trial::exp::trial-b"},
+            ),
+        }
+
+        redis_conn = MagicMock()
+        redis_conn.eval.return_value = 0
+        state = FairSchedulerState(next_queue_class="build")
+
+        with patch("crsbench.distributed.ci_supervisor.rq") as mock_rq:
+            mock_rq.job.Job.fetch_many.side_effect = lambda ids, **_kwargs: [
+                jobs[job_id] for job_id in ids
+            ]
+
+            result = _select_fair_job(
+                redis_conn=redis_conn,
+                build_queues=[build_queue],
+                verify_queues=[verify_queue],
+                build_has_capacity=True,
+                verify_has_capacity=True,
+                state=state,
+            )
+
+        assert result is None
+        assert state.next_queue_class == "build"
+        assert state.last_owner_by_class["build"] is None
+        assert state.next_queue_index_by_class["build"] == 0
+
+    def test_claim_fair_candidate_restores_queue_entry_when_fetch_errors(self) -> None:
+        """Transient fetch failure after claim should restore the removed queue id."""
+        from crsbench.distributed.ci_supervisor import _claim_fair_candidate
+        from crsbench.distributed.evaluator_scheduler import QueuedCandidate
+
+        queue = _make_mock_queue("crsbench_ci_build", count=1)
+        queue.key = "rq:queue:crsbench_ci_build"
+        redis_conn = MagicMock()
+        redis_conn.eval.return_value = 1
+        candidate = QueuedCandidate(
+            queue_name="crsbench_ci_build",
+            job_id="build-1",
+            owner_key="trial::exp::trial-a",
+        )
+
+        with patch("crsbench.distributed.ci_supervisor.rq") as mock_rq:
+            mock_rq.job.Job.fetch.side_effect = RuntimeError("redis blip")
+
+            result = _claim_fair_candidate(
+                redis_conn,
+                queue_lookup={"crsbench_ci_build": queue},
+                candidate=candidate,
+            )
+
+        assert result is None
+        redis_conn.lpush.assert_called_once_with(queue.key, "build-1")
 
     def test_cpu_tag_mismatch_applies_short_backoff(self) -> None:
         """Mismatch path should back off briefly to avoid hot-loop churn."""

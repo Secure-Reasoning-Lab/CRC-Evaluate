@@ -36,6 +36,16 @@ def test_owner_key_prefers_trial_identity_when_present() -> None:
     assert owner == "trial::exp-42::trial-007"
 
 
+def test_owner_key_strips_queue_class_suffix_from_queue_name_fallback() -> None:
+    owner = build_scheduler_owner_key_from_payload(
+        {"trial_id": "trial-007"},
+        fallback_job_id="verify-job-1",
+        queue_name="crsbench_ci_build",
+    )
+
+    assert owner == "trial::crsbench_ci::trial-007"
+
+
 def test_owner_key_falls_back_to_smallest_non_trial_work_unit() -> None:
     owner = build_scheduler_owner_key_for_ci_job(
         SimpleNamespace(

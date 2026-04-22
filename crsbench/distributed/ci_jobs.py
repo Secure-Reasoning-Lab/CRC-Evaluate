@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Optional, cast
 
 from crsbench.distributed.evaluator_scheduler import (
     SCHEDULER_OWNER_KEY_META,
+    build_scheduler_experiment_name_from_queue_name,
     build_scheduler_owner_key_for_ci_job,
 )
 from crsbench.utils.logger import get_logger
@@ -1100,7 +1101,9 @@ def enqueue_and_poll_ci_jobs(
         job_meta = {
             SCHEDULER_OWNER_KEY_META: build_scheduler_owner_key_for_ci_job(
                 job,
-                experiment_name=job_queue.name,
+                experiment_name=build_scheduler_experiment_name_from_queue_name(
+                    job_queue.name
+                ),
             )
         }
         existing_job = existing_jobs.get(job.job_id)
