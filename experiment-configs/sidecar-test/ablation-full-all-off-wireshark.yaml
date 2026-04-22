@@ -5,6 +5,7 @@ experiment:
   mode: auto
   sanitizers:
   - address
+  - undefined
   benchmarks:
   - afc-wireshark-delta-01
   - afc-wireshark-delta-02
