@@ -26,6 +26,7 @@ def _make_runtime_expansion_config() -> ExperimentConfig:
                     "gce": {
                         "project": "test-project",
                         "regions": ["us-east5", "us-east1"],
+                        "zones": ["us-east5-b", "us-east1-b"],
                         "fallback": True,
                         "profile_defaults": {
                             "machine_type": "n2d-standard-16",
@@ -203,15 +204,128 @@ def test_build_dynamic_placement_request_normalizes_regions_and_zones() -> None:
     assert request.provider is CloudProvider.GCE
 
 
-def test_build_dynamic_placement_request_rejects_missing_locations() -> None:
+def test_build_dynamic_placement_request_defaults_worker_count_to_one_without_using_role_default_count() -> (
+    None
+):
     from crsbench.cloud.expansion import build_dynamic_placement_request
 
-    with pytest.raises(ValueError, match="requires --regions and/or --zones"):
+    config = _make_runtime_expansion_config().model_copy(deep=True)
+    assert config.cloud is not None
+    assert config.cloud.workers is not None
+    config.cloud.workers.defaults.count = 7
+    config.cloud.workers.defaults.regions = ["us-east5"]
+    config.cloud.workers.defaults.zones = ["us-east5-b"]
+
+    request = build_dynamic_placement_request(
+        role="worker",
+        config=config,
+        instance_profile=None,
+        count=None,
+        regions=None,
+        zones=None,
+    )
+
+    assert request.instance_profile == "gce-worker-n2d"
+    assert request.count == 1
+    assert request.regions == ("us-east5",)
+    assert request.zones == ("us-east5-b",)
+
+
+def test_build_dynamic_placement_request_defaults_evaluator_profile_and_location() -> (
+    None
+):
+    from crsbench.cloud.expansion import build_dynamic_placement_request
+
+    config_payload = _make_runtime_expansion_config().model_dump(
+        mode="json", exclude_none=True
+    )
+    config_payload["cloud"]["providers"]["gce"]["instance_profiles"][
+        "gce-evaluator-c3"
+    ] = {
+        "machine_type": "c3-standard-8",
+        "service_account_email": "crsbench-evaluator@test-project.iam.gserviceaccount.com",
+    }
+    config_payload["cloud"]["evaluators"] = {
+        "defaults": {
+            "instance_profile": "gce-evaluator-c3",
+            "regions": ["us-east1"],
+            "zones": ["us-east1-b"],
+            "fallback": False,
+        },
+        "placements": [
+            {
+                "zone": "us-east1-b",
+            }
+        ],
+    }
+    config = ExperimentConfig.model_validate(config_payload)
+
+    request = build_dynamic_placement_request(
+        role="evaluator",
+        config=config,
+        instance_profile=None,
+        count=None,
+        regions=None,
+        zones=None,
+    )
+
+    assert request.instance_profile == "gce-evaluator-c3"
+    assert request.count == 1
+    assert request.fallback is False
+    assert request.regions == ("us-east1",)
+    assert request.zones == ("us-east1-b",)
+
+
+def test_build_dynamic_placement_request_rejects_missing_locations_after_defaults() -> (
+    None
+):
+    from crsbench.cloud.expansion import build_dynamic_placement_request
+
+    config = _make_runtime_expansion_config().model_copy(deep=True)
+    assert config.cloud is not None
+    assert config.cloud.providers is not None
+    assert config.cloud.providers.gce is not None
+    assert config.cloud.workers is not None
+    config.cloud.providers.gce.region = None
+    config.cloud.providers.gce.regions = []
+    config.cloud.providers.gce.zones = []
+    config.cloud.workers.defaults.regions = []
+    config.cloud.workers.defaults.zones = []
+
+    with pytest.raises(
+        ValueError,
+        match="requires --regions and/or --zones, or matching role/provider cloud defaults",
+    ):
         build_dynamic_placement_request(
             role="worker",
-            config=_make_runtime_expansion_config(),
+            config=config,
             instance_profile="gce-worker-n2d",
             count=2,
+            regions=None,
+            zones=None,
+        )
+
+
+def test_build_dynamic_placement_request_rejects_missing_instance_profile_after_defaults() -> (
+    None
+):
+    from crsbench.cloud.expansion import build_dynamic_placement_request
+
+    config = _make_runtime_expansion_config().model_copy(deep=True)
+    assert config.cloud is not None
+    assert config.cloud.workers is not None
+    config.cloud.workers.defaults.instance_profile = None
+    config.cloud.workers.defaults.regions = ["us-east5"]
+
+    with pytest.raises(
+        ValueError,
+        match="runtime-added placement instance profile must be provided via --instance-profile or cloud.workers.defaults.instance_profile",
+    ):
+        build_dynamic_placement_request(
+            role="worker",
+            config=config,
+            instance_profile=None,
+            count=None,
             regions=None,
             zones=None,
         )

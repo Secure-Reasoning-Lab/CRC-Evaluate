@@ -137,9 +137,17 @@ Rollback:
 - `cloud add-workers` and `cloud add-evaluators` require saved remote launch
   state from a prior `cloud launch`.
 - Each command adds exactly one new worker or evaluator placement.
-- Runtime overrides are limited to a named instance profile, `count`, and
-  `regions` / `zones`; GCE fallback policy, launch defaults, deploy-key path,
-  and inherited env layers continue to come from config-owned defaults.
+- Omitting `--count` adds exactly one new instance; runtime expansion does not
+  inherit `cloud.<role>.defaults.count`.
+- Omitting `--instance-profile` inherits the matching
+  `cloud.workers.defaults.instance_profile` or
+  `cloud.evaluators.defaults.instance_profile`.
+- Omitting `--regions` / `--zones` inherits the matching role defaults first,
+  then provider defaults.
+- When provided, CLI `instance_profile`, `count`, `regions`, and `zones`
+  override the inherited values for the new placement; GCE fallback policy,
+  launch defaults, deploy-key path, and inherited env layers continue to come
+  from config-owned defaults.
 - Delta quota validation happens before any new VM create call.
 - `regions` plus `zones` keeps the same GCE semantics as launch-time config:
   regional bulk insert first, with `zones` restricted to the current region on

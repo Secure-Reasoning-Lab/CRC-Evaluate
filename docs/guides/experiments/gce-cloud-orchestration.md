@@ -873,8 +873,6 @@ Worker example:
 
 ```bash
 uv run crsbench cloud add-workers --config config.yaml \
-  --instance-profile gce-worker-n2d \
-  --count 2 \
   --regions us-east5,us-east1 \
   --zones us-east5-b,us-east1-b
 ```
@@ -883,18 +881,24 @@ Evaluator example:
 
 ```bash
 uv run crsbench cloud add-evaluators --config config.yaml \
-  --instance-profile gce-evaluator-c3 \
-  --count 1 \
   --zones us-central1-a
 ```
 
 Key behavior:
 
 - Each command adds exactly one new placement.
-- The placement must use an existing named `cloud.providers.gce.instance_profiles.*`
-  entry.
-- Runtime overrides are limited to `instance_profile`, `count`, and
-  `regions`/`zones`.
+- Omitting `--count` adds exactly one worker or evaluator. Runtime expansion
+  does not inherit `cloud.<role>.defaults.count`.
+- Omitting `--instance-profile` inherits
+  `cloud.workers.defaults.instance_profile` or
+  `cloud.evaluators.defaults.instance_profile`.
+- Omitting `--regions` / `--zones` inherits the matching role defaults first,
+  then falls back to provider defaults.
+- When provided, CLI `instance_profile`, `count`, `regions`, and `zones`
+  override the inherited values for the new placement.
+- The effective placement must still resolve to an existing named
+  `cloud.providers.gce.instance_profiles.*` entry and at least one region or
+  zone.
 - `regions` plus `zones` uses the same semantics as launch-time config:
   regional mode first, with `zones` acting as a per-region allowlist.
 - Fallback, bootstrap defaults, deploy-key path, and inherited env layers still

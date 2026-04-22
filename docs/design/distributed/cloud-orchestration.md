@@ -188,8 +188,15 @@ Shared runtime-expansion semantics:
 
 - runtime expansion is operator-driven, not automatic scaling
 - each add-capacity command appends exactly one new worker or evaluator placement
-- runtime changes are limited to named instance profile, count, and location
-  selectors; all other behavior remains inherited from config defaults
+- omitting `--count` adds exactly one new instance instead of inheriting
+  `cloud.<role>.defaults.count`
+- omitting `--instance-profile` inherits the matching role default instance
+  profile
+- omitting location selectors inherits matching role defaults first, then
+  provider defaults
+- explicit CLI `instance_profile`, `count`, and location selectors override the
+  inherited values for the new placement; all other behavior remains inherited
+  from config defaults
 - quota validation applies to the delta placement before any provider create call
 - failures during provisioning or readiness roll back only the new placement and
   leave the existing fleet untouched

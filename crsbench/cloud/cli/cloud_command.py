@@ -212,23 +212,21 @@ Examples:
     _add_config_argument(add_workers_p, suppress_default=True)
     add_workers_p.add_argument(
         "--instance-profile",
-        required=True,
         dest="instance_profile",
-        help="Existing instance profile name to use for the new worker placement",
+        help="Existing instance profile name to use for the new worker placement (defaults to cloud.workers.defaults.instance_profile)",
     )
     add_workers_p.add_argument(
         "--count",
-        required=True,
         type=int,
-        help="Number of workers to add in this placement",
+        help="Number of workers to add in this placement (default: 1)",
     )
     add_workers_p.add_argument(
         "--regions",
-        help="Comma-separated candidate regions for the new worker placement",
+        help="Comma-separated candidate regions for the new worker placement (defaults to worker-role settings, then provider defaults)",
     )
     add_workers_p.add_argument(
         "--zones",
-        help="Comma-separated zones for the new worker placement",
+        help="Comma-separated zones for the new worker placement (defaults to worker-role settings, then provider defaults)",
     )
     add_workers_p.add_argument(
         "--force",
@@ -244,23 +242,21 @@ Examples:
     _add_config_argument(add_evaluators_p, suppress_default=True)
     add_evaluators_p.add_argument(
         "--instance-profile",
-        required=True,
         dest="instance_profile",
-        help="Existing instance profile name to use for the new evaluator placement",
+        help="Existing instance profile name to use for the new evaluator placement (defaults to cloud.evaluators.defaults.instance_profile)",
     )
     add_evaluators_p.add_argument(
         "--count",
-        required=True,
         type=int,
-        help="Number of evaluators to add in this placement",
+        help="Number of evaluators to add in this placement (default: 1)",
     )
     add_evaluators_p.add_argument(
         "--regions",
-        help="Comma-separated candidate regions for the new evaluator placement",
+        help="Comma-separated candidate regions for the new evaluator placement (defaults to evaluator-role settings, then provider defaults)",
     )
     add_evaluators_p.add_argument(
         "--zones",
-        help="Comma-separated zones for the new evaluator placement",
+        help="Comma-separated zones for the new evaluator placement (defaults to evaluator-role settings, then provider defaults)",
     )
     add_evaluators_p.add_argument(
         "--force",

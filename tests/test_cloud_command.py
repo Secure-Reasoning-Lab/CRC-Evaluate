@@ -1894,6 +1894,19 @@ class TestArgParsing:
         assert args.zones == "us-east5-b,us-east1-b"
         assert args.force is False
 
+    def test_parse_add_workers_allows_runtime_defaults(self):
+        parser = self._build_parser()
+        args = parser.parse_args(["cloud", "add-workers", "--config", "c.yaml"])
+
+        assert args.command == "cloud"
+        assert args.cloud_command == "add-workers"
+        assert args.config == "c.yaml"
+        assert args.instance_profile is None
+        assert args.count is None
+        assert args.regions is None
+        assert args.zones is None
+        assert args.force is False
+
     def test_parse_add_evaluators(self):
         parser = self._build_parser()
         args = parser.parse_args(
@@ -1919,6 +1932,19 @@ class TestArgParsing:
         assert args.regions is None
         assert args.zones == "us-central1-a"
         assert args.force is True
+
+    def test_parse_add_evaluators_allows_runtime_defaults(self):
+        parser = self._build_parser()
+        args = parser.parse_args(["cloud", "add-evaluators", "--config", "c.yaml"])
+
+        assert args.command == "cloud"
+        assert args.cloud_command == "add-evaluators"
+        assert args.config == "c.yaml"
+        assert args.instance_profile is None
+        assert args.count is None
+        assert args.regions is None
+        assert args.zones is None
+        assert args.force is False
 
     def test_parse_monitor(self):
         parser = self._build_parser()
