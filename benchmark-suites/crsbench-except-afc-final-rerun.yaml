@@ -26,6 +26,5 @@ benchmark_list:
   - atlanta-widoco-delta-01
   - atlanta-wireshark-delta-01
   - atlanta-xstream-full-01
-  # === Benchmarks with no results (stuck/queued) (2) ===
+  # === Benchmarks with no results (stuck/queued) (1) ===
   - atlanta-libjpeg-full-02
-  - atlanta-libxml2-delta-01

@@ -8,7 +8,6 @@
 #   afc-curl-delta-01        — Native (C), FD collateral in v2
 #   afc-tika-full-01         — JVM, FD collateral in v2
 #   atlanta-freetype2-delta-01 — Native (C), oss-crs TARGET_SOURCE mount bug (fixed in 930a309 PR#133)
-#   atlanta-libxml2-delta-01 — Native (C), never attempted in v2
 #   atlanta-sqlite-jdbc-delta-01 — JVM, oss-crs docker-down 120s timeout (fixed in 930a309 PR#173)
 #   atlanta-struts-delta-01  — JVM, exceeded 14400s build_timeout (bumped to 21600 here)
 #

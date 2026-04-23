@@ -82,7 +82,6 @@ experiment:
   - atlanta-libjpeg-full-02
   - atlanta-libssh2-delta-01
   - atlanta-libtiff-full-01
-  - atlanta-libxml2-delta-01
   - atlanta-mongoose-delta-01
   - atlanta-mosquitto-delta-01
   - atlanta-nasm-delta-01

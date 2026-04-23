@@ -1,10 +1,9 @@
 Name: crsbench-v4-rerun
-Description: V4 rerun of 6 benchmarks not fully tested in v2/v3-partial. All have root-cause fixes in oss-crs 930a309 or are innocent missed/FD-collateral cases. Excludes atlanta-feign-full-01 (license-maven-plugin benchmark bug), atlanta-kylin-delta-01 (TLS cert expired, external dep broken).
+Description: V4 rerun of 5 benchmarks not fully tested in v2/v3-partial. All have root-cause fixes in oss-crs 930a309 or are innocent missed/FD-collateral cases. Excludes atlanta-feign-full-01 (license-maven-plugin benchmark bug), atlanta-kylin-delta-01 (TLS cert expired, external dep broken).
 Release date: "04.17.2026"
 benchmark_list:
   - afc-curl-delta-01
   - afc-tika-full-01
   - atlanta-freetype2-delta-01
-  - atlanta-libxml2-delta-01
   - atlanta-sqlite-jdbc-delta-01
   - atlanta-struts-delta-01
