@@ -72,9 +72,9 @@ _CLAIM_FAIR_JOB_LUA = """
 local removed = redis.call('LREM', KEYS[1], 1, ARGV[1])
 if removed == 1 then
     redis.call('LPUSH', KEYS[2], ARGV[1])
+    -- Do not delete the lease on a failed claim attempt: another evaluator
+    -- may have won the race and already owns the live handoff lease.
     redis.call('SET', KEYS[3], ARGV[2], 'EX', tonumber(ARGV[3]))
-else
-    redis.call('DEL', KEYS[3])
 end
 return removed
 """
@@ -715,6 +715,7 @@ def run_ci_supervisor(
                         not continuous
                         and not build_active
                         and not verify_active
+                        and _intermediate_job_count([build_queue, verify_queue]) == 0
                         and _queues_blocked_only_by_cpu_tag(
                             [build_queue, verify_queue],
                             worker_cpu_tag=cpu_tag,
@@ -1400,6 +1401,8 @@ def run_multi_queue_supervisor(
                         not continuous
                         and not build_active
                         and not verify_active
+                        and _intermediate_job_count([*build_queues, *verify_queues])
+                        == 0
                         and _queues_blocked_only_by_cpu_tag(
                             [*build_queues, *verify_queues],
                             worker_cpu_tag=cpu_tag,

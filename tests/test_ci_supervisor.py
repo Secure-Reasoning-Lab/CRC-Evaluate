@@ -509,6 +509,12 @@ class TestCiSupervisorQueues:
             "build-1",
         )
 
+    def test_claim_fair_lua_does_not_delete_lease_on_failed_claim(self) -> None:
+        """A losing claim attempt must not clear another evaluator's live lease."""
+        from crsbench.distributed.ci_supervisor import _CLAIM_FAIR_JOB_LUA
+
+        assert "redis.call('DEL', KEYS[3])" not in _CLAIM_FAIR_JOB_LUA
+
     def test_queue_candidates_prunes_missing_queue_job_ids(self) -> None:
         """Candidate projection should remove queue ids whose job payload is missing."""
         from crsbench.distributed.ci_supervisor import _queue_candidates
@@ -699,6 +705,10 @@ class TestCiSupervisorQueues:
                 "crsbench.distributed.ci_supervisor._queues_blocked_only_by_cpu_tag",
                 return_value=True,
             ),
+            patch(
+                "crsbench.distributed.ci_supervisor._intermediate_job_count",
+                return_value=0,
+            ),
             patch("crsbench.distributed.ci_supervisor.time.sleep"),
         ):
             mock_rq.Queue.side_effect = queue_factory
@@ -717,6 +727,65 @@ class TestCiSupervisorQueues:
 
         assert result == CPU_TAG_MISMATCH_EXIT_CODE
         assert mock_select.call_count == NON_CONTINUOUS_CPU_MISMATCH_LIMIT
+
+    def test_non_continuous_prefiltered_cpu_tag_mismatch_waits_for_intermediate_claims(
+        self,
+    ) -> None:
+        """Prefiltered cpu-tag exit should stay disabled while claims are still in-flight."""
+        from crsbench.distributed.ci_supervisor import run_ci_supervisor
+
+        mock_build_queue = _make_mock_queue("crsbench_ci_build", count=1)
+        mock_verify_queue = _make_mock_queue("crsbench_ci_verify", count=0)
+
+        def queue_factory(name, **_kwargs):
+            if "build" in name:
+                return mock_build_queue
+            return mock_verify_queue
+
+        sleep_calls = 0
+
+        def interrupt_after_three_sleeps(_seconds: float) -> None:
+            nonlocal sleep_calls
+            sleep_calls += 1
+            if sleep_calls >= 3:
+                raise KeyboardInterrupt
+
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor._select_fair_job",
+                return_value=None,
+            ) as mock_select,
+            patch(
+                "crsbench.distributed.ci_supervisor._queues_blocked_only_by_cpu_tag",
+                return_value=True,
+            ),
+            patch(
+                "crsbench.distributed.ci_supervisor._intermediate_job_count",
+                return_value=1,
+            ),
+            patch(
+                "crsbench.distributed.ci_supervisor.time.sleep",
+                side_effect=interrupt_after_three_sleeps,
+            ),
+        ):
+            mock_rq.Queue.side_effect = queue_factory
+            result = run_ci_supervisor(
+                redis_host="localhost",
+                build_queue_name="crsbench_ci_build",
+                verify_queue_name="crsbench_ci_verify",
+                worker_name="test-worker",
+                build_jobs=1,
+                build_cores_per_job=1,
+                verify_jobs=0,
+                job_runner=lambda _h, _n, _j: None,
+                cpu_tag="x86-avx2",
+                continuous=False,
+            )
+
+        assert result == 0
+        assert mock_select.call_count == 3
 
 
 class TestWorkerTrialAdapter:
@@ -1622,6 +1691,10 @@ class TestMultiQueueSupervisor:
                 "crsbench.distributed.ci_supervisor._queues_blocked_only_by_cpu_tag",
                 return_value=True,
             ),
+            patch(
+                "crsbench.distributed.ci_supervisor._intermediate_job_count",
+                return_value=0,
+            ),
             patch("crsbench.distributed.ci_supervisor.time.sleep"),
         ):
             mock_rq.Queue.side_effect = queue_factory
@@ -1640,6 +1713,63 @@ class TestMultiQueueSupervisor:
 
         assert result == CPU_TAG_MISMATCH_EXIT_CODE
         assert mock_select.call_count == NON_CONTINUOUS_CPU_MISMATCH_LIMIT
+
+    def test_non_continuous_prefiltered_cpu_tag_mismatch_waits_for_intermediate_claims(
+        self,
+    ) -> None:
+        """Multi-queue mode should not cpu-tag-exit while intermediate claims remain."""
+        from crsbench.distributed.ci_supervisor import run_multi_queue_supervisor
+
+        build_q = _make_mock_queue("crsbench_exp1_build", count=1)
+        verify_q = _make_mock_queue("crsbench_exp1_verify", count=0)
+
+        def queue_factory(name, **_kwargs):
+            return build_q if "build" in name else verify_q
+
+        sleep_calls = 0
+
+        def interrupt_after_three_sleeps(_seconds: float) -> None:
+            nonlocal sleep_calls
+            sleep_calls += 1
+            if sleep_calls >= 3:
+                raise KeyboardInterrupt
+
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor._select_fair_job",
+                return_value=None,
+            ) as mock_select,
+            patch(
+                "crsbench.distributed.ci_supervisor._queues_blocked_only_by_cpu_tag",
+                return_value=True,
+            ),
+            patch(
+                "crsbench.distributed.ci_supervisor._intermediate_job_count",
+                return_value=1,
+            ),
+            patch(
+                "crsbench.distributed.ci_supervisor.time.sleep",
+                side_effect=interrupt_after_three_sleeps,
+            ),
+        ):
+            mock_rq.Queue.side_effect = queue_factory
+            result = run_multi_queue_supervisor(
+                redis_host="localhost",
+                build_queue_names=["crsbench_exp1_build"],
+                verify_queue_names=["crsbench_exp1_verify"],
+                worker_name="test-worker",
+                build_jobs=1,
+                build_cores_per_job=1,
+                verify_jobs=0,
+                job_runner=lambda _h, _n, _j: None,
+                cpu_tag="x86-avx2",
+                continuous=False,
+            )
+
+        assert result == 0
+        assert mock_select.call_count == 3
 
     def test_accepts_empty_verify_list(self) -> None:
         """Multi-queue supervisor works with empty verify queue list (worker mode)."""
