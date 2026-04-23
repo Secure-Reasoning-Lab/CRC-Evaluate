@@ -63,6 +63,11 @@ from crsbench.evaluation.trial_paths import (
 from crsbench.evaluation.trial_paths import (
     resolve_benchmarks_root,
 )
+from crsbench.experiment.trial_selection import (
+    TRIAL_KEY_ALLOWLIST_ENV_VAR,
+    decode_trial_key_allowlist,
+    filter_trials_by_allowlist,
+)
 from crsbench.utils import log_section
 from crsbench.utils.apprise_notify import (
     AppriseNotificationConfig,
@@ -224,6 +229,28 @@ class Trial(BaseModel):
     mode: str
     sanitizer: str
     target_cpv_id: str | None = None
+
+
+def _filter_trial_matrix_from_env(trials: List[Trial]) -> List[Trial]:
+    """Filter trial matrix using optional logical trial-key allowlist from env."""
+    allowlist_payload = os.environ.get(TRIAL_KEY_ALLOWLIST_ENV_VAR)
+    if allowlist_payload is None:
+        return trials
+
+    allowed_keys = decode_trial_key_allowlist(allowlist_payload)
+    filtered_trials, unknown_keys = filter_trials_by_allowlist(trials, allowed_keys)
+    if unknown_keys:
+        unknown_text = ", ".join(unknown_keys)
+        raise ValueError(
+            "Unknown trial keys requested via "
+            f"{TRIAL_KEY_ALLOWLIST_ENV_VAR}: {unknown_text}"
+        )
+
+    logger.info(
+        f"Trial-key allowlist active: selected {len(filtered_trials)}"
+        f" of {len(trials)} trial(s)"
+    )
+    return filtered_trials
 
 
 def build_trial_id(experiment_name: str, trial: Trial, trial_suffix: str) -> str:
@@ -3238,6 +3265,7 @@ def main() -> None:
     trial_matrix = generate_trial_matrix(
         benchmark_harnesses, oss_crs_registry, config, registry_dir
     )
+    trial_matrix = _filter_trial_matrix_from_env(trial_matrix)
 
     total_jobs = len(trial_matrix)
     logger.info(f"Total jobs to execute: {total_jobs}")
