@@ -57,8 +57,10 @@ crsbench queue clean --experiment <experiment-name> --queues trial,verify --yes
   `cloud derive-unfinished-trial-keys` plus `cloud launch --only-unfinished-from`
   or `cloud launch --only-trial-keys-file` starts a new launch constrained by
   explicit logical trial selectors (selector files are newline-delimited logical
-  trial keys). By contrast, `crsbench run --retry-failed` retries failed jobs in
-  the current queue state.
+  trial keys). If collection used `--dest` or `--timestamp`, point derivation at
+  that exact collected root (`--from` / `--only-unfinished-from`). Stale or
+  mismatched selector keys fail instead of being silently ignored. By contrast,
+  `crsbench run --retry-failed` retries failed jobs in the current queue state.
 
 ```bash
 crsbench run --experiment-config config.yaml --queue-mode continue --retry-failed

@@ -1161,6 +1161,9 @@ uv run crsbench cloud --config config.yaml launch \
     --only-unfinished-from /path/to/collected/<experiment-name>
 ```
 
+`--only-trial-keys-file` and `--only-unfinished-from` are mutually exclusive;
+choose one selector source per launch.
+
 `--rerun-failed-trials` behavior:
 
 - `derive-unfinished-trial-keys --rerun-failed-trials`: include failed trials
@@ -1171,6 +1174,16 @@ uv run crsbench cloud --config config.yaml launch \
 
 Explicit selector files passed to `--only-trial-keys-file` must be
 newline-delimited logical trial keys.
+
+Selector keys must match the current config's trial matrix. Unknown or stale
+keys are not silently ignored; CRSBench fails with an unknown-trial-key error.
+
+When `cloud collect` used a non-default destination (`--dest` or
+`--timestamp`), pass that exact collected root to `--from` (for
+`derive-unfinished-trial-keys`) or `--only-unfinished-from` (for launch-time
+derivation). Otherwise, the default
+`<storage.experiment_filestore>/<experiment.name>` source can miss collected
+markers and select the full trial matrix as unfinished.
 
 Selector flags (`--only-trial-keys-file` / `--only-unfinished-from`) constrain
 which trial-matrix keys are enqueued and run remotely; they do not change fleet
