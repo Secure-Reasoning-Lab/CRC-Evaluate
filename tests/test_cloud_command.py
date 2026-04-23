@@ -20,6 +20,10 @@ from crsbench.cloud.collection import collect_marker_path, read_collect_marker
 from crsbench.cloud.records import CloudFleetPlacementRecord
 from crsbench.cloud.types import CloudProvider
 from crsbench.distributed.queue import RedisConnectionProbe
+from crsbench.experiment.trial_selection import (
+    TRIAL_KEY_ALLOWLIST_ENV_VAR,
+    encode_trial_key_allowlist,
+)
 from crsbench.validation.schemas import (
     CloudBootstrapConfig,
     ExperimentConfig,
@@ -1839,6 +1843,9 @@ class TestArgParsing:
         assert args.command == "cloud"
         assert args.cloud_command == "launch"
         assert args.config == "c.yaml"
+        assert args.only_trial_keys_file is None
+        assert args.only_unfinished_from is None
+        assert args.rerun_failed_trials is False
 
     def test_parse_launch_with_global_config(self):
         parser = self._build_parser()
@@ -1846,6 +1853,61 @@ class TestArgParsing:
         assert args.command == "cloud"
         assert args.cloud_command == "launch"
         assert args.config == "c.yaml"
+
+    def test_parse_launch_with_only_trial_keys_file(self):
+        parser = self._build_parser()
+        args = parser.parse_args(
+            [
+                "cloud",
+                "launch",
+                "--config",
+                "c.yaml",
+                "--only-trial-keys-file",
+                "/tmp/only-trial-keys.txt",
+            ]
+        )
+        assert args.command == "cloud"
+        assert args.cloud_command == "launch"
+        assert args.config == "c.yaml"
+        assert args.only_trial_keys_file == "/tmp/only-trial-keys.txt"
+        assert args.only_unfinished_from is None
+        assert args.rerun_failed_trials is False
+
+    def test_parse_launch_with_unfinished_selector_and_rerun_flag(self):
+        parser = self._build_parser()
+        args = parser.parse_args(
+            [
+                "cloud",
+                "launch",
+                "--config",
+                "c.yaml",
+                "--only-unfinished-from",
+                "/tmp/collected",
+                "--rerun-failed-trials",
+            ]
+        )
+        assert args.command == "cloud"
+        assert args.cloud_command == "launch"
+        assert args.config == "c.yaml"
+        assert args.only_trial_keys_file is None
+        assert args.only_unfinished_from == "/tmp/collected"
+        assert args.rerun_failed_trials is True
+
+    def test_parse_launch_rejects_conflicting_selector_sources(self):
+        parser = self._build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(
+                [
+                    "cloud",
+                    "launch",
+                    "--config",
+                    "c.yaml",
+                    "--only-trial-keys-file",
+                    "/tmp/only-trial-keys.txt",
+                    "--only-unfinished-from",
+                    "/tmp/collected",
+                ]
+            )
 
     def test_parse_preflight(self):
         parser = self._build_parser()
@@ -2170,9 +2232,18 @@ class TestArgParsing:
             parser.parse_args(["cloud", "derive-unfinished-trial-keys"])
 
 
-def _make_launch_args(config: str = "/tmp/config.yaml"):
+def _make_launch_args(
+    config: str = "/tmp/config.yaml",
+    *,
+    only_trial_keys_file: str | None = None,
+    only_unfinished_from: str | None = None,
+    rerun_failed_trials: bool = False,
+):
     return argparse.Namespace(
         config=config,
+        only_trial_keys_file=only_trial_keys_file,
+        only_unfinished_from=only_unfinished_from,
+        rerun_failed_trials=rerun_failed_trials,
         cloud_command="launch",
     )
 
@@ -4901,6 +4972,147 @@ class TestLaunch:
         mock_save_state.assert_called_once()
         saved_state = mock_save_state.call_args.args[1]
         assert saved_state.worker_fleet_configs == expected_worker_fleets
+
+    @patch(
+        "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
+    )
+    @patch("crsbench.cloud.cli._launch.save_launch_state")
+    @patch(
+        "crsbench.cloud.cli._launch.load_trial_key_file",
+        return_value=["trial-key-2", "trial-key-1"],
+    )
+    @patch("crsbench.cloud.cli._launch.prepare_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.provider_adapter_for_launch_plan")
+    @patch("crsbench.cloud.cli._launch.QuotaValidator")
+    @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
+    @patch("crsbench.cloud.cli._launch.load_experiment_config")
+    def test_provider_neutral_launch_passes_selector_file_allowlist_env(
+        self,
+        mock_load,
+        mock_build_plan,
+        mock_validator_cls,
+        mock_adapter_cls,
+        mock_preflight,
+        mock_load_trial_key_file,
+        mock_save_state,
+        mock_secret,
+    ):
+        del mock_save_state, mock_secret
+        config = _make_provider_neutral_experiment_config()
+        mock_load.return_value = config
+
+        launch_plan = MagicMock(experiment_name="test-exp")
+        resolved_plan = MagicMock(experiment_name="test-exp")
+        expected_worker_fleets = (
+            _make_provider_neutral_launch_state().worker_fleet_configs
+        )
+        mock_build_plan.return_value = launch_plan
+        mock_preflight.return_value = MagicMock(
+            resolved_plan=resolved_plan,
+            redacted_worker_fleets=expected_worker_fleets,
+            redacted_evaluator_fleets=[],
+            orchestrator_env={
+                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+            },
+            worker_placement_envs=[],
+            evaluator_placement_envs=[],
+        )
+        mock_validator_cls.return_value.validate.return_value = None
+        mock_adapter = mock_adapter_cls.return_value
+        mock_adapter.build_orchestrator_config.return_value.project = "test-project"
+        mock_adapter.build_orchestrator_config.return_value.ssh_via_iap = True
+        mock_adapter.create_orchestrator.return_value = _make_gce_worker(
+            "gce-orchestrator-test-exp", zone="us-east5-b", ip="10.0.0.50"
+        )
+        mock_adapter.create_workers.return_value = [_make_gce_worker("worker-east5")]
+        mock_adapter.create_evaluators.return_value = []
+
+        from crsbench.cloud.cli._launch import run_launch
+
+        rc = run_launch(_make_launch_args(only_trial_keys_file="/tmp/trial-keys.txt"))
+
+        assert rc == 0
+        mock_load_trial_key_file.assert_called_once_with("/tmp/trial-keys.txt")
+        assert mock_adapter.create_orchestrator.call_args.kwargs["env_passthrough"] == {
+            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+            TRIAL_KEY_ALLOWLIST_ENV_VAR: encode_trial_key_allowlist(
+                ["trial-key-2", "trial-key-1"]
+            ),
+        }
+
+    @patch(
+        "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
+    )
+    @patch("crsbench.cloud.cli._launch.save_launch_state")
+    @patch(
+        "crsbench.cloud.cli._launch.derive_unfinished_trial_keys_from_config",
+        return_value=SimpleNamespace(selected_keys=["trial-key-3", "trial-key-4"]),
+    )
+    @patch("crsbench.cloud.cli._launch.prepare_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.provider_adapter_for_launch_plan")
+    @patch("crsbench.cloud.cli._launch.QuotaValidator")
+    @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
+    @patch("crsbench.cloud.cli._launch.load_experiment_config")
+    def test_provider_neutral_launch_passes_derived_selector_allowlist_env(
+        self,
+        mock_load,
+        mock_build_plan,
+        mock_validator_cls,
+        mock_adapter_cls,
+        mock_preflight,
+        mock_derive_trial_keys,
+        mock_save_state,
+        mock_secret,
+    ):
+        del mock_save_state, mock_secret
+        config = _make_provider_neutral_experiment_config()
+        mock_load.return_value = config
+
+        launch_plan = MagicMock(experiment_name="test-exp")
+        resolved_plan = MagicMock(experiment_name="test-exp")
+        expected_worker_fleets = (
+            _make_provider_neutral_launch_state().worker_fleet_configs
+        )
+        mock_build_plan.return_value = launch_plan
+        mock_preflight.return_value = MagicMock(
+            resolved_plan=resolved_plan,
+            redacted_worker_fleets=expected_worker_fleets,
+            redacted_evaluator_fleets=[],
+            orchestrator_env={"CRSBENCH_LLM_MASTER_KEY": "master-key"},
+            worker_placement_envs=[],
+            evaluator_placement_envs=[],
+        )
+        mock_validator_cls.return_value.validate.return_value = None
+        mock_adapter = mock_adapter_cls.return_value
+        mock_adapter.build_orchestrator_config.return_value.project = "test-project"
+        mock_adapter.build_orchestrator_config.return_value.ssh_via_iap = True
+        mock_adapter.create_orchestrator.return_value = _make_gce_worker(
+            "gce-orchestrator-test-exp", zone="us-east5-b", ip="10.0.0.50"
+        )
+        mock_adapter.create_workers.return_value = [_make_gce_worker("worker-east5")]
+        mock_adapter.create_evaluators.return_value = []
+
+        from crsbench.cloud.cli._launch import run_launch
+
+        rc = run_launch(
+            _make_launch_args(
+                only_unfinished_from="/tmp/collected",
+                rerun_failed_trials=True,
+            )
+        )
+
+        assert rc == 0
+        mock_derive_trial_keys.assert_called_once_with(
+            config,
+            collected_root="/tmp/collected",
+            rerun_failed_trials=True,
+        )
+        assert mock_adapter.create_orchestrator.call_args.kwargs["env_passthrough"] == {
+            "CRSBENCH_LLM_MASTER_KEY": "master-key",
+            TRIAL_KEY_ALLOWLIST_ENV_VAR: encode_trial_key_allowlist(
+                ["trial-key-3", "trial-key-4"]
+            ),
+        }
 
     @patch(
         "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"

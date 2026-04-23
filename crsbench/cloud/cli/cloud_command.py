@@ -221,6 +221,25 @@ Examples:
         help="Launch an orchestrator VM plus worker fleet from this machine",
     )
     _add_config_argument(launch_p, suppress_default=True)
+    launch_selector_group = launch_p.add_mutually_exclusive_group()
+    launch_selector_group.add_argument(
+        "--only-trial-keys-file",
+        dest="only_trial_keys_file",
+        default=None,
+        help="Newline-delimited logical trial keys file to restrict launched work",
+    )
+    launch_selector_group.add_argument(
+        "--only-unfinished-from",
+        dest="only_unfinished_from",
+        default=None,
+        help="Collected experiment root used to derive unfinished trial keys",
+    )
+    launch_p.add_argument(
+        "--rerun-failed-trials",
+        action="store_true",
+        default=False,
+        help="Include failed trials when deriving unfinished keys from collected results",
+    )
 
     # add-workers
     add_workers_p = cloud_subparsers.add_parser(
