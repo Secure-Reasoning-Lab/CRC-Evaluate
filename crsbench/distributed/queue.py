@@ -34,6 +34,10 @@ QUEUE_MODEL_ENV = "CRSBENCH_QUEUE_MODEL"
 QUEUE_MODEL_FLAT = "flat"
 QUEUE_MODEL_PER_EXPERIMENT = "per-experiment"
 
+EVALUATOR_ROUTING_MODEL_ENV = "CRSBENCH_EVALUATOR_ROUTING_MODEL"
+ROUTING_MODEL_SHARED = "shared"
+ROUTING_MODEL_DISPATCHER = "dispatcher"
+
 FLAT_TRIAL_QUEUE = "crsbench_trial"
 FLAT_BUILD_QUEUE = "crsbench_build"
 FLAT_VERIFY_QUEUE = "crsbench_verify"
@@ -122,6 +126,24 @@ def get_queue_model() -> str:
     return model
 
 
+def get_evaluator_routing_model() -> str:
+    """Return evaluator routing model for distributed runtime.
+
+    Supported values:
+    - ``shared`` (default): evaluators pull from shared verify/build queues
+    - ``dispatcher``: evaluators consume dispatcher-routed local queues
+    """
+    model = os.environ.get(EVALUATOR_ROUTING_MODEL_ENV, ROUTING_MODEL_SHARED)
+    model = model.strip().lower()
+    if model not in {ROUTING_MODEL_SHARED, ROUTING_MODEL_DISPATCHER}:
+        logger.warning(
+            f"Invalid {EVALUATOR_ROUTING_MODEL_ENV}={model!r}; "
+            f"falling back to {ROUTING_MODEL_SHARED!r}"
+        )
+        return ROUTING_MODEL_SHARED
+    return model
+
+
 def resolve_queue_names(experiment_name: str) -> tuple[str, str, str]:
     """Resolve trial/build/verify queue names for the configured queue model."""
     if get_queue_model() == QUEUE_MODEL_FLAT:
@@ -132,6 +154,18 @@ def resolve_queue_names(experiment_name: str) -> tuple[str, str, str]:
         f"crsbench_{experiment_name}",
         f"crsbench_{experiment_name}_build",
         f"crsbench_{experiment_name}_verify",
+    )
+
+
+def resolve_evaluator_local_queue_names(
+    experiment_name: str, evaluator_id: str
+) -> tuple[str, str]:
+    """Resolve evaluator-local build/verify queue names."""
+    validate_queue_name_component(experiment_name)
+    validate_queue_name_component(evaluator_id)
+    return (
+        f"crsbench_{experiment_name}_{evaluator_id}_build",
+        f"crsbench_{experiment_name}_{evaluator_id}_verify",
     )
 
 
