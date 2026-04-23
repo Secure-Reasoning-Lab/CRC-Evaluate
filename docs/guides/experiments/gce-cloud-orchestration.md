@@ -1136,6 +1136,46 @@ Destination behavior:
   `<local-destination>/.crsbench-collect.json` with the last successful collect
   time and best-effort experiment start time
 
+### Partial Reruns After `cloud collect`
+
+After collecting artifacts, you can relaunch only unfinished logical trial
+keys.
+
+Derive a selector locally, then launch from that selector file:
+
+```bash
+uv run crsbench cloud --config config.yaml derive-unfinished-trial-keys
+uv run crsbench cloud --config config.yaml launch \
+    --only-trial-keys-file ./<experiment-name>-unfinished-trial-keys.txt
+```
+
+`derive-unfinished-trial-keys` defaults:
+
+- input (`--from`): `<storage.experiment_filestore>/<experiment.name>`
+- output (`--output`): `./<experiment-name>-unfinished-trial-keys.txt`
+
+You can also skip the intermediate selector file and derive during launch:
+
+```bash
+uv run crsbench cloud --config config.yaml launch \
+    --only-unfinished-from /path/to/collected/<experiment-name>
+```
+
+`--rerun-failed-trials` behavior:
+
+- `derive-unfinished-trial-keys --rerun-failed-trials`: include failed trials
+  in the unfinished selector (successful trials remain excluded).
+- `cloud launch --only-unfinished-from ... --rerun-failed-trials`: same
+  behavior, but derivation happens inside launch. This flag requires
+  `--only-unfinished-from`.
+
+Explicit selector files passed to `--only-trial-keys-file` must be
+newline-delimited logical trial keys.
+
+Selector flags (`--only-trial-keys-file` / `--only-unfinished-from`) constrain
+which trial-matrix keys are enqueued and run remotely; they do not change fleet
+sizing or placement from the `cloud launch` configuration.
+
 Diagnostics collected under `.crsbench-cloud/remote-logs/<experiment>/`:
 
 - `google-startup-scripts.service` and `google-guest-agent.service` journals
