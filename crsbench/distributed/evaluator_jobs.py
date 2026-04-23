@@ -174,8 +174,8 @@ def _try_lazy_load_builds(
 ) -> None:
     """Attempt to lazily load build results for a benchmark.
 
-    When builds execute on the same evaluator machine before verify jobs
-    (build queue has priority), Docker images are already on disk.
+    When builds execute on the same evaluator machine before dependent verify
+    jobs become runnable, Docker images are already on disk.
     ``engine.get_or_build_results()`` finds them without rebuilding.
 
     Args:

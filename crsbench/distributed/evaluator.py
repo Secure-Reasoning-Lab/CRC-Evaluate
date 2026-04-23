@@ -2,7 +2,7 @@
 
 This module implements the evaluator process that:
 1. Pre-builds benchmark variants at startup via _enqueue_pre_builds()
-2. Listens on both build and verify Redis queues (build has priority)
+2. Listens on both build and verify Redis queues with fair runnable-job scheduling
 3. Runs build jobs to create variant Docker images
 4. Runs POV verification against built variants
 5. Stores results as RQ job results
@@ -19,6 +19,10 @@ from crsbench.distributed.common import (
     normalize_cpu_tag,
     normalize_redis_host,
     validate_optional_int_override,
+)
+from crsbench.distributed.evaluator_scheduler import (
+    SCHEDULER_OWNER_KEY_META,
+    build_scheduler_owner_key_for_ci_job,
 )
 from crsbench.distributed.queue import REDIS_AVAILABLE
 from crsbench.distributed.registry import RuntimeRegistration
@@ -187,9 +191,9 @@ def _enqueue_pre_builds(
     )
     build_queue = rq.Queue(build_queue_name, connection=redis_conn)
     cpu_tag = config.resources.cpu_tag if config.resources else None
-    job_meta = {"experiment_name": experiment_name}
+    base_job_meta = {"experiment_name": experiment_name}
     if cpu_tag:
-        job_meta["cpu_tag"] = cpu_tag
+        base_job_meta["cpu_tag"] = cpu_tag
 
     enqueued = 0
     for name in benchmark_names:
@@ -211,6 +215,11 @@ def _enqueue_pre_builds(
 
         for job in jobs:
             params = serialize_ci_job(job)
+            job_meta = dict(base_job_meta)
+            job_meta[SCHEDULER_OWNER_KEY_META] = build_scheduler_owner_key_for_ci_job(
+                job,
+                experiment_name=experiment_name,
+            )
             try:
                 build_queue.enqueue(
                     "crsbench.distributed.build_jobs.execute_ci_build",
@@ -249,7 +258,8 @@ def run_evaluator_main(
     """Main entry point for the evaluator process.
 
     Starts the dual-queue supervisor that processes both build and verify
-    jobs. Build queue has priority over verify queue.
+    jobs. Runnable work is selected fairly across trial owners while
+    build-before-verify ordering remains dependency-driven.
 
     Args:
         config: ExperimentConfig instance
@@ -292,7 +302,7 @@ def run_evaluator_main(
     logger.info(f"Redis host: {redis_host}")
     logger.info(f"Build jobs: {build_jobs or 1}")
     logger.info(f"CPU affinity: {'enabled' if use_cpuset else 'disabled'}")
-    logger.info("Queues: build (priority) + verify")
+    logger.info("Queues: build + verify (fair runnable-job scheduling)")
     logger.info("=" * 60)
     _report_cloud_runtime_state(
         redis_host,
@@ -446,9 +456,12 @@ def _run_single_job(
         # Create execution and mark as STARTED
         execution = None
         execution_owner = child_name or execution_role
+        claim_lease_key = f"{queue.intermediate_queue.key}:fair-claim:{job.id}"
         os.environ["CRSBENCH_WORKER_DISPLAY_NAME"] = execution_owner
         with redis_conn.pipeline() as pipeline:
             job.prepare_for_execution(execution_owner, pipeline=pipeline)
+            pipeline.lrem(queue.intermediate_queue.key, 1, job.id)
+            pipeline.delete(claim_lease_key)
             execution = Execution.create(job, ttl=-1, pipeline=pipeline)
             pipeline.execute()
 
@@ -610,9 +623,9 @@ def _enqueue_pre_builds_from_registration(
 
     redis_conn = create_redis_connection(redis_host)
     build_queue = rq.Queue(registration.build_queue, connection=redis_conn)
-    job_meta = {"experiment_name": registration.experiment}
+    base_job_meta = {"experiment_name": registration.experiment}
     if registration.cpu_tag:
-        job_meta["cpu_tag"] = registration.cpu_tag
+        base_job_meta["cpu_tag"] = registration.cpu_tag
 
     enqueued = 0
     for name in benchmark_names:
@@ -634,6 +647,11 @@ def _enqueue_pre_builds_from_registration(
 
         for job in jobs:
             params = serialize_ci_job(job)
+            job_meta = dict(base_job_meta)
+            job_meta[SCHEDULER_OWNER_KEY_META] = build_scheduler_owner_key_for_ci_job(
+                job,
+                experiment_name=registration.experiment,
+            )
             try:
                 build_queue.enqueue(
                     "crsbench.distributed.build_jobs.execute_ci_build",

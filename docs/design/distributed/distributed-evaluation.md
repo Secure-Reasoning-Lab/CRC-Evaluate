@@ -1,7 +1,7 @@
 # Design: Distributed Evaluation
 - Audience: maintainers working on queue-backed CRS execution and evaluator behavior
 - Scope: distributed evaluation topology, evaluator contracts, verification payload semantics, and result handling
-- Related: [Distributed Job Queue](./distributed-job-queue.md), [Unified Build & Verify](./unified-build-verify.md)
+- Related: [Distributed Job Queue](./distributed-job-queue.md), [Unified Build & Verify](./unified-build-verify.md), [Trial-Fair Evaluator Scheduling](./evaluator-trial-fair-scheduling.md)
 
 ## Goals and Non-goals
 
@@ -63,6 +63,9 @@ Async POV verification must preserve build/verify queue separation:
 - verify workers only hydrate prebuilt artifacts from evaluator disk for
   dependency-backed POV jobs; they must not hide fresh variant builds inside the
   verify worker
+- scheduler fairness applies only to runnable queued work; build-before-verify
+  correctness remains a dependency contract rather than a blanket build-priority
+  rule
 
 Build jobs that rely on incremental benchmark images must carry the resolved
 inc-image runtime settings needed by the evaluator worker (`inc_image_policy`,

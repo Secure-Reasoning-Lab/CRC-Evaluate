@@ -15,6 +15,11 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
+from crsbench.distributed.evaluator_scheduler import (
+    SCHEDULER_OWNER_KEY_META,
+    adopt_scheduler_owner_if_needed,
+    build_scheduler_owner_key_from_payload,
+)
 from crsbench.distributed.queue import REDIS_AVAILABLE
 from crsbench.utils.logger import get_logger
 
@@ -156,6 +161,10 @@ def _enqueue_with_existing_reuse(
             raise
         try:
             existing = rq.job.Job.fetch(job_id, connection=queue.connection)
+            adopt_scheduler_owner_if_needed(
+                existing,
+                new_owner=meta.get(SCHEDULER_OWNER_KEY_META),
+            )
             logger.debug(f"Reusing existing patch RQ job {job_id}")
             return existing
         except Exception:
@@ -314,6 +323,11 @@ def enqueue_patch_jobs(
             job_meta = {"experiment_name": experiment_name}
             if effective_cpu_tag:
                 job_meta["cpu_tag"] = effective_cpu_tag
+            job_meta[SCHEDULER_OWNER_KEY_META] = build_scheduler_owner_key_from_payload(
+                payload.to_dict(),
+                fallback_job_id=f"{benchmark}/{harness}/{cpv_id}/{patch_id}",
+                queue_name=getattr(build_queue, "name", "build"),
+            )
 
             build_job_id = _make_patch_build_rq_job_id(
                 experiment_name=experiment_name,

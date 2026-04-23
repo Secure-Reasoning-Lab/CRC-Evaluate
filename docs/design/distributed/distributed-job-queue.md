@@ -1,7 +1,7 @@
 # Design: Distributed Job Queue
 - Audience: maintainers working on distributed orchestration and queue-backed execution
 - Scope: queue semantics for `crsbench run`, `worker`, and related job execution paths
-- Related: [Distributed Evaluation](./distributed-evaluation.md), [Deployment Guide](./deployment-guide.md), [Configless Runtime](./configless-runtime.md)
+- Related: [Distributed Evaluation](./distributed-evaluation.md), [Trial-Fair Evaluator Scheduling](./evaluator-trial-fair-scheduling.md), [Deployment Guide](./deployment-guide.md), [Configless Runtime](./configless-runtime.md)
 
 ## Goals and Non-goals
 
@@ -182,7 +182,7 @@ The queue layer treats the following as terminal outcomes:
 ### Happy path
 1. orchestrator expands experiment work into concrete jobs
 2. jobs are enqueued with deterministic identities
-3. workers/evaluators dequeue jobs according to role-specific capacity
+3. workers/evaluators dequeue jobs according to role-specific capacity; evaluator fairness policy is an explicit scheduler contract, not raw queue-order implication
 4. results are persisted back through queue/job state
 5. orchestrator or downstream consumers aggregate terminal outcomes
 

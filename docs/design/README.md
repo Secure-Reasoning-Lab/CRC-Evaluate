@@ -17,6 +17,8 @@ belongs in `docs/modules/`.
 
 - [Distributed Queue Semantics](./distributed/distributed-job-queue.md)
 - [Distributed Evaluator and Worker Execution](./distributed/distributed-evaluation.md)
+- [Trial-Fair Evaluator Scheduling](./distributed/evaluator-trial-fair-scheduling.md)
+- [Trial-Fair Scheduling TLA+ Model](../../tla/EvaluatorTrialFairScheduling.tla)
 - [Cloud Live Log Streaming](./distributed/cloud-live-log-streaming.md)
 - [Evaluation Contract](./evaluation/evaluation.md)
 - [Validation Contract](./validation/validation.md)
@@ -52,6 +54,7 @@ should be applied to the dedicated canonical docs below.
 | Experiment orchestration and mode selection | `orchestration.md` |
 | Distributed queue semantics | `distributed/distributed-job-queue.md` |
 | Distributed evaluator/worker execution | `distributed/distributed-evaluation.md` |
+| Evaluator trial-fair scheduling | `distributed/evaluator-trial-fair-scheduling.md` |
 | Configless runtime discovery/registration | `distributed/configless-runtime.md` |
 | Cloud live log streaming target contract | `distributed/cloud-live-log-streaming.md` |
 | Evaluation contract and verdict semantics | `evaluation/evaluation.md` |

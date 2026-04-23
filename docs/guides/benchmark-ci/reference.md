@@ -245,8 +245,8 @@ When configuring CRSBench, set `CRSBENCH_REDIS_HOST` as `host` or `host:port`
 
 #### 2. Start Evaluator
 
-For CI, evaluator runs a dual-queue supervisor that processes build jobs
-(priority) and verify/test jobs concurrently.
+For CI, evaluator runs a dual-queue supervisor that processes build and
+verify/test jobs concurrently, with fair scheduling across runnable work.
 
 ```bash
 # Recommended default: single evaluator machine for CI.

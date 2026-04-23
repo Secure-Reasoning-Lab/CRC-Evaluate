@@ -3,7 +3,7 @@
 Tests that:
 1. run_evaluator_main() can skip startup pre-build when pre-build is disabled
 2. Supervisor creates both build and verify queues
-3. Build queue has priority over verify queue
+3. Evaluator passes distinct build and verify queue names to the supervisor
 """
 
 import argparse
@@ -185,12 +185,12 @@ class TestEvaluatorSupervisorQueues:
     @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
     @patch("crsbench.distributed.ci_supervisor.run_ci_supervisor")
     @patch("crsbench.distributed.evaluator_jobs.set_engine")
-    def test_build_queue_priority(
+    def test_passes_queue_names_by_role(
         self,
         mock_set_engine: MagicMock,
         mock_supervisor: MagicMock,
     ) -> None:
-        """Build queue name is passed before verify queue name."""
+        """Evaluator passes build and verify queue names by explicit role."""
         from crsbench.distributed.evaluator import run_evaluator_main
 
         mock_supervisor.return_value = 0
