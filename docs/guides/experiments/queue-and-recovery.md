@@ -53,6 +53,14 @@ crsbench queue clean --experiment <experiment-name> --queues trial,verify --yes
 - non-TTY: defaults to `continue`
 - `continue`: skips completed work and handles orphaned started jobs
 - failed jobs requeue only with explicit opt-in
+- Collected-artifact partial reruns are separate from queue recovery:
+  `cloud derive-unfinished-trial-keys` plus `cloud launch --only-unfinished-from`
+  or `cloud launch --only-trial-keys-file` starts a new launch constrained by
+  explicit logical trial selectors (selector files are newline-delimited logical
+  trial keys). If collection used `--dest` or `--timestamp`, point derivation at
+  that exact collected root (`--from` / `--only-unfinished-from`). Stale or
+  mismatched selector keys fail instead of being silently ignored. By contrast,
+  `crsbench run --retry-failed` retries failed jobs in the current queue state.
 
 ```bash
 crsbench run --experiment-config config.yaml --queue-mode continue --retry-failed

@@ -1420,6 +1420,7 @@ class TestExperimentConfigSchema:
             "CRSBENCH_READINESS_TIMEOUT_SEC",
             "CRSBENCH_EVALUATOR_IDLE_TIMEOUT",
             "CRSBENCH_EXPERIMENT_CONFIG_PATH",
+            "CRSBENCH_ONLY_TRIAL_KEYS_B64",
         ],
     )
     def test_cloud_provider_contract_rejects_runtime_managed_env_names(

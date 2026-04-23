@@ -27,6 +27,12 @@ from crsbench.cloud.quota import CloudQuotaValidationError, QuotaValidator
 from crsbench.cloud.records import CloudFleetPlacementRecord
 from crsbench.cloud.types import CloudProvider
 from crsbench.distributed.registry import RuntimeRegistration
+from crsbench.experiment.trial_selection import (
+    TRIAL_KEY_ALLOWLIST_ENV_VAR,
+    derive_unfinished_trial_keys_from_config,
+    encode_trial_key_allowlist,
+    load_trial_key_file,
+)
 from crsbench.run_experiment import load_experiment_config
 from crsbench.utils.logger import get_logger
 
@@ -36,6 +42,38 @@ if TYPE_CHECKING:
     from crsbench.cloud.preflight import CloudLaunchPreflight
 
 logger = get_logger(__name__)
+
+
+def _resolve_trial_selector_env(args: argparse.Namespace, config) -> dict[str, str]:
+    if args.rerun_failed_trials and args.only_unfinished_from is None:
+        raise CloudProvisioningError(
+            "--rerun-failed-trials requires --only-unfinished-from"
+        )
+
+    selected_keys: list[str] | None = None
+    if args.only_trial_keys_file is not None:
+        selected_keys = load_trial_key_file(args.only_trial_keys_file)
+    elif args.only_unfinished_from is not None:
+        collected_root = Path(args.only_unfinished_from)
+        if not collected_root.exists():
+            raise CloudProvisioningError(
+                f"Collected root does not exist: {collected_root}"
+            )
+        if not collected_root.is_dir():
+            raise CloudProvisioningError(
+                f"Collected root is not a directory: {collected_root}"
+            )
+        selected_keys = derive_unfinished_trial_keys_from_config(
+            config,
+            collected_root=args.only_unfinished_from,
+            rerun_failed_trials=args.rerun_failed_trials,
+        ).selected_keys
+    if selected_keys is None:
+        return {}
+
+    return {
+        TRIAL_KEY_ALLOWLIST_ENV_VAR: encode_trial_key_allowlist(selected_keys),
+    }
 
 
 def _normalize_fleet_records(
@@ -141,7 +179,9 @@ def run_launch(args: argparse.Namespace) -> int:
     orchestrator_created_records: list[CreatedCloudInstanceRecord] = []
     worker_created_records: list[CreatedCloudInstanceRecord] = []
     evaluator_created_records: list[CreatedCloudInstanceRecord] = []
+    selector_env: dict[str, str] = {}
     try:
+        selector_env = _resolve_trial_selector_env(args, config)
         if registration is None:
             raise CloudProvisioningError(
                 "Runtime registration is required for cloud launch"
@@ -181,11 +221,13 @@ def run_launch(args: argparse.Namespace) -> int:
             )
         validator = QuotaValidator(adapters={"gce": adapter})
         validator.validate(launch_plan)
+        orchestrator_env = dict(preflight.orchestrator_env or {})
+        orchestrator_env.update(selector_env)
 
         orchestrator_record = adapter.create_orchestrator(
             plan=provisioning_plan,
             experiment_config_path=str(config_path),
-            env_passthrough=preflight.orchestrator_env,
+            env_passthrough=orchestrator_env,
             redis_password=redis_password,
         )
 

@@ -9,6 +9,20 @@ from crsbench.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+class _CloudCommandSubparsersAction(argparse._SubParsersAction):
+    """Subparser action with derive-command config validation."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        super().__call__(parser, namespace, values, option_string)
+        if getattr(
+            namespace, "cloud_command", None
+        ) == "derive-unfinished-trial-keys" and not getattr(namespace, "config", None):
+            parser.error(
+                "cloud derive-unfinished-trial-keys requires "
+                "--config/--experiment-config"
+            )
+
+
 def _add_config_argument(
     parser: argparse.ArgumentParser,
     *,
@@ -54,7 +68,11 @@ Examples:
         """,
     )
     _add_config_argument(parser)
-    cloud_subparsers = parser.add_subparsers(dest="cloud_command", required=True)
+    cloud_subparsers = parser.add_subparsers(
+        dest="cloud_command",
+        required=True,
+        action=_CloudCommandSubparsersAction,
+    )
 
     # status
     status_p = cloud_subparsers.add_parser(
@@ -203,6 +221,25 @@ Examples:
         help="Launch an orchestrator VM plus worker fleet from this machine",
     )
     _add_config_argument(launch_p, suppress_default=True)
+    launch_selector_group = launch_p.add_mutually_exclusive_group()
+    launch_selector_group.add_argument(
+        "--only-trial-keys-file",
+        dest="only_trial_keys_file",
+        default=None,
+        help="Newline-delimited logical trial keys file to restrict launched work",
+    )
+    launch_selector_group.add_argument(
+        "--only-unfinished-from",
+        dest="only_unfinished_from",
+        default=None,
+        help="Collected experiment root used to derive unfinished trial keys",
+    )
+    launch_p.add_argument(
+        "--rerun-failed-trials",
+        action="store_true",
+        default=False,
+        help="Include failed trials when deriving unfinished keys from collected results",
+    )
 
     # add-workers
     add_workers_p = cloud_subparsers.add_parser(
@@ -277,6 +314,31 @@ Examples:
         "--strict",
         action="store_true",
         help="Treat warnings as a non-zero result",
+    )
+
+    # derive-unfinished-trial-keys
+    derive_p = cloud_subparsers.add_parser(
+        "derive-unfinished-trial-keys",
+        help="Derive unfinished trial keys from collected experiment artifacts",
+    )
+    _add_config_argument(derive_p, suppress_default=True)
+    derive_p.add_argument(
+        "--from",
+        dest="from_path",
+        default=None,
+        help="Collected experiment root (defaults to experiment_filestore/experiment)",
+    )
+    derive_p.add_argument(
+        "--output",
+        dest="output",
+        default=None,
+        help="Output path for newline-delimited unfinished trial keys",
+    )
+    derive_p.add_argument(
+        "--rerun-failed-trials",
+        action="store_true",
+        default=False,
+        help="Include failed trials in the unfinished selection",
     )
 
     # keygen
@@ -393,6 +455,13 @@ def run_cloud(args: argparse.Namespace) -> int:
         from crsbench.cloud.cli._preflight import run_preflight
 
         return run_preflight(args)
+
+    if cmd == "derive-unfinished-trial-keys":
+        from crsbench.cloud.cli._derive_unfinished_trial_keys import (
+            run_derive_unfinished_trial_keys,
+        )
+
+        return run_derive_unfinished_trial_keys(args)
 
     if cmd == "teardown":
         from crsbench.cloud.cli._teardown import run_teardown
