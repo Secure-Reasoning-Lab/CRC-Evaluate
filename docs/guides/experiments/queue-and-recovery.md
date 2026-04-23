@@ -57,8 +57,10 @@ crsbench queue clean --experiment <experiment-name> --queues trial,verify --yes
   `cloud derive-unfinished-trial-keys` plus `cloud launch --only-unfinished-from`
   or `cloud launch --only-trial-keys-file` starts a new launch constrained by
   explicit logical trial selectors (selector files are newline-delimited logical
-  trial keys). If collection used `--dest` or `--timestamp`, point derivation at
-  that exact collected root (`--from` / `--only-unfinished-from`). Stale or
+  trial keys). The default derive path now follows the normal collect/teardown
+  publish layout automatically, including nested wrapper directories named after
+  the experiment. If collection used `--dest` or `--timestamp`, point derivation
+  at that exact collected root (`--from` / `--only-unfinished-from`). Stale or
   mismatched selector keys fail instead of being silently ignored. By contrast,
   `crsbench run --retry-failed` retries failed jobs in the current queue state.
 

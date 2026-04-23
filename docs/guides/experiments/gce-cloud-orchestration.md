@@ -1154,6 +1154,12 @@ uv run crsbench cloud --config config.yaml launch \
 - input (`--from`): `<storage.experiment_filestore>/<experiment.name>`
 - output (`--output`): `./<experiment-name>-unfinished-trial-keys.txt`
 
+For the standard `cloud collect` / `cloud teardown` workflow, CRSBench also
+normalizes the collected root when the published destination contains one or
+more wrapper directories named after the experiment. That means the default
+input path works without `--from` for the common collect layout even when the
+trial tree lives under nested `<experiment.name>/` wrappers.
+
 You can also skip the intermediate selector file and derive during launch:
 
 ```bash
@@ -1181,9 +1187,9 @@ keys are not silently ignored; CRSBench fails with an unknown-trial-key error.
 When `cloud collect` used a non-default destination (`--dest` or
 `--timestamp`), pass that exact collected root to `--from` (for
 `derive-unfinished-trial-keys`) or `--only-unfinished-from` (for launch-time
-derivation). Otherwise, the default
-`<storage.experiment_filestore>/<experiment.name>` source can miss collected
-markers and select the full trial matrix as unfinished.
+derivation). The built-in normalization only applies to the default
+collect/teardown publish layout; CRSBench cannot infer arbitrary custom
+destinations from the config alone.
 
 Selector flags (`--only-trial-keys-file` / `--only-unfinished-from`) constrain
 which trial-matrix keys are enqueued and run remotely; they do not change fleet

@@ -17,6 +17,35 @@ def default_collected_experiment_path(config) -> Path:
     return Path(config.experiment_filestore) / config.experiment
 
 
+def _resolve_wrapped_collected_root(
+    collected_root: Path, experiment_name: str | None
+) -> Path:
+    """Follow collect-published experiment-name wrapper directories when present."""
+    if (
+        not experiment_name
+        or not collected_root.exists()
+        or not collected_root.is_dir()
+    ):
+        return collected_root
+
+    resolved = collected_root
+    while True:
+        nested = resolved / experiment_name
+        if not nested.is_dir():
+            return resolved
+        try:
+            visible_entries = [
+                entry.name
+                for entry in resolved.iterdir()
+                if not entry.name.startswith(".")
+            ]
+        except OSError:
+            return resolved
+        if visible_entries != [experiment_name]:
+            return resolved
+        resolved = nested
+
+
 def default_selector_output_path(
     experiment_name: str, cwd: str | Path | None = None
 ) -> Path:
@@ -204,7 +233,10 @@ def derive_unfinished_trial_keys_from_config(
     matrix_keys_ordered = [trial_key_for_trial(trial) for trial in trial_matrix]
     matrix_key_set = set(matrix_keys_ordered)
 
-    root = Path(collected_root)
+    root = _resolve_wrapped_collected_root(
+        Path(collected_root),
+        getattr(config, "experiment", None),
+    )
     finished_success, finished_fail = _collect_finished_trial_keys(
         root,
         rerun_failed_trials=rerun_failed_trials,

@@ -213,6 +213,32 @@ def test_derive_unfinished_trial_keys_rerun_failed_trials(
     assert derived.finished_fail_keys == []
 
 
+def test_derive_unfinished_trial_keys_follows_collect_wrapped_experiment_dirs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from crsbench.experiment import trial_selection as mod
+
+    t1 = _mk_trial(crs="crs-1", benchmark="b1", harness="h1", trial_num=1)
+    t2 = _mk_trial(crs="crs-2", benchmark="b2", harness="h2", trial_num=2)
+    trial_matrix = [t1, t2]
+    monkeypatch.setattr(mod, "_build_trial_matrix_from_config", lambda _: trial_matrix)
+
+    collect_destination = tmp_path / "exp-collect" / "exp-collect"
+    actual_trial_root = collect_destination / "exp-collect"
+    collect_destination.mkdir(parents=True, exist_ok=True)
+
+    (_mk_trial_dir(actual_trial_root, t1) / ".success").touch()
+
+    derived = derive_unfinished_trial_keys_from_config(
+        config=SimpleNamespace(experiment="exp-collect"),
+        collected_root=collect_destination,
+    )
+
+    assert derived.selected_keys == [trial_key_for_trial(t2)]
+    assert derived.finished_success_keys == [trial_key_for_trial(t1)]
+    assert derived.finished_fail_keys == []
+
+
 def test_derive_unfinished_trial_keys_raises_for_unknown_finished_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
