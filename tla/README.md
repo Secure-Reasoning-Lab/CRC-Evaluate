@@ -23,10 +23,11 @@ Most models come as a triplet:
 Some boundaries have more than one materially distinct unsafe mode. Those
 models may carry multiple buggy configs so each counterexample stays focused.
 
-Two older models use a different naming pattern:
+A small number of models use a different naming pattern:
 
 - `DistributedTimeoutRecovery.cfg` / `DistributedTimeoutRecoveryHealthy.cfg`
 - `DistributedTrialKeySnapshotDuplicate.cfg` / `DistributedTrialKeySnapshotUnique.cfg`
+- `EvaluatorTrialFairScheduling.cfg`
 
 ## Running TLC
 
