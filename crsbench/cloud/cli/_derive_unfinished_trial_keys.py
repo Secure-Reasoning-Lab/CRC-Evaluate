@@ -40,17 +40,27 @@ def run_derive_unfinished_trial_keys(args: argparse.Namespace) -> int:
         else default_selector_output_path(config.experiment)
     )
 
-    derived = derive_unfinished_trial_keys_from_config(
-        config,
-        collected_root=collected_root,
-        rerun_failed_trials=args.rerun_failed_trials,
-    )
+    try:
+        derived = derive_unfinished_trial_keys_from_config(
+            config,
+            collected_root=collected_root,
+            rerun_failed_trials=args.rerun_failed_trials,
+        )
+    except ValueError as exc:
+        logger.error("Failed to derive unfinished trial keys: {}", exc)
+        return 2
 
     selected_keys_text = "\n".join(derived.selected_keys)
     if selected_keys_text:
         selected_keys_text += "\n"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(selected_keys_text, encoding="utf-8")
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(selected_keys_text, encoding="utf-8")
+    except OSError as exc:
+        logger.error(
+            "Failed to write unfinished trial keys to {}: {}", output_path, exc
+        )
+        return 2
 
     logger.info(
         "Derived unfinished trial keys: selected={}, finished_success={}, finished_fail={}",

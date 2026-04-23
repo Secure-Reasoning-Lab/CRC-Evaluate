@@ -2645,6 +2645,106 @@ class TestDeriveUnfinishedTrialKeys:
         assert output_path.parent.exists()
         assert output_path.read_text(encoding="utf-8") == "trial-a\n"
 
+    def test_derive_logs_and_returns_2_when_derivation_raises_value_error(
+        self, tmp_path: Path
+    ):
+        from crsbench.cloud.cli._derive_unfinished_trial_keys import (
+            run_derive_unfinished_trial_keys,
+        )
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("experiment: ignored\n", encoding="utf-8")
+        config = SimpleNamespace(experiment="exp-derive-error")
+        default_collected = tmp_path / "collected-root"
+        default_collected.mkdir(parents=True)
+        output_path = tmp_path / "unfinished-keys.txt"
+
+        with (
+            patch(
+                "crsbench.cloud.cli._derive_unfinished_trial_keys.load_experiment_config",
+                return_value=config,
+            ),
+            patch(
+                "crsbench.cloud.cli._derive_unfinished_trial_keys.default_collected_experiment_path",
+                return_value=default_collected,
+            ),
+            patch(
+                "crsbench.cloud.cli._derive_unfinished_trial_keys.default_selector_output_path",
+                return_value=output_path,
+            ),
+            patch(
+                "crsbench.cloud.cli._derive_unfinished_trial_keys.derive_unfinished_trial_keys_from_config",
+                side_effect=ValueError("unknown finished trial key"),
+            ),
+            patch(
+                "crsbench.cloud.cli._derive_unfinished_trial_keys.logger"
+            ) as mock_logger,
+        ):
+            rc = run_derive_unfinished_trial_keys(
+                _make_derive_args(config=str(config_path))
+            )
+
+        assert rc == 2
+        assert mock_logger.error.call_args.args[0] == (
+            "Failed to derive unfinished trial keys: {}"
+        )
+        assert "unknown finished trial key" in str(mock_logger.error.call_args.args[1])
+
+    def test_derive_logs_and_returns_2_when_output_write_raises_os_error(
+        self, tmp_path: Path
+    ):
+        from crsbench.cloud.cli._derive_unfinished_trial_keys import (
+            run_derive_unfinished_trial_keys,
+        )
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("experiment: ignored\n", encoding="utf-8")
+        config = SimpleNamespace(experiment="exp-write-error")
+        default_collected = tmp_path / "collected-root"
+        default_collected.mkdir(parents=True)
+        output_path = tmp_path / "nested" / "unfinished-keys.txt"
+        derived = SimpleNamespace(
+            selected_keys=["trial-a"],
+            finished_success_keys=[],
+            finished_fail_keys=[],
+        )
+
+        with (
+            patch(
+                "crsbench.cloud.cli._derive_unfinished_trial_keys.load_experiment_config",
+                return_value=config,
+            ),
+            patch(
+                "crsbench.cloud.cli._derive_unfinished_trial_keys.default_collected_experiment_path",
+                return_value=default_collected,
+            ),
+            patch(
+                "crsbench.cloud.cli._derive_unfinished_trial_keys.default_selector_output_path",
+                return_value=output_path,
+            ),
+            patch(
+                "crsbench.cloud.cli._derive_unfinished_trial_keys.derive_unfinished_trial_keys_from_config",
+                return_value=derived,
+            ),
+            patch(
+                "crsbench.cloud.cli._derive_unfinished_trial_keys.Path.write_text",
+                side_effect=OSError("disk full"),
+            ),
+            patch(
+                "crsbench.cloud.cli._derive_unfinished_trial_keys.logger"
+            ) as mock_logger,
+        ):
+            rc = run_derive_unfinished_trial_keys(
+                _make_derive_args(config=str(config_path))
+            )
+
+        assert rc == 2
+        assert mock_logger.error.call_args.args[0] == (
+            "Failed to write unfinished trial keys to {}: {}"
+        )
+        assert mock_logger.error.call_args.args[1] == output_path
+        assert "disk full" in str(mock_logger.error.call_args.args[2])
+
 
 @patch("crsbench.cloud.cli._add_capacity.run_add_capacity", return_value=0)
 def test_run_cloud_dispatches_add_evaluators(mock_run_add_capacity):
