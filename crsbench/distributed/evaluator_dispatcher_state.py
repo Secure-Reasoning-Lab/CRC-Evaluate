@@ -153,6 +153,11 @@ class DispatcherStateStore:
             key,
             *request_ids,
         )
+        if len(raw_results) != len(request_ids):
+            raise ValueError(
+                "dispatcher verify poll returned "
+                f"{len(raw_results)} results for {len(request_ids)} request ids"
+            )
         for request_id, raw in zip(request_ids, raw_results, strict=False):
             if raw is None:
                 remaining.append(request_id)

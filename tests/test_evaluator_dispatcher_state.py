@@ -146,3 +146,19 @@ def test_publish_verify_result_rejects_mismatched_request_id() -> None:
 def test_dispatcher_state_store_rejects_invalid_experiment_name() -> None:
     with pytest.raises(ValueError, match="Invalid name for queue component"):
         DispatcherStateStore(_FakeRedis(), experiment_name="exp 1")
+
+
+def test_poll_verify_results_rejects_eval_length_mismatch() -> None:
+    redis_conn = _FakeRedis()
+    store = DispatcherStateStore(redis_conn, experiment_name="exp-1")
+
+    redis_conn.eval_calls.clear()
+
+    def _short_eval(script: str, numkeys: int, *keys_and_args: str) -> list[str | None]:
+        redis_conn.eval_calls.append((script, numkeys, keys_and_args))
+        return [None]
+
+    redis_conn.eval = _short_eval  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError, match="dispatcher verify poll returned 1 results"):
+        store.poll_verify_results(["req-1", "req-2"])
