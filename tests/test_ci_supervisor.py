@@ -32,9 +32,6 @@ def _configure_intermediate_queue(queue) -> None:
     """Attach RQ intermediate-queue-like helpers to a mock queue."""
     queue.intermediate_queue = MagicMock()
     queue.intermediate_queue.key = f"{queue.key}:intermediate"
-    queue.intermediate_queue.get_first_seen_key.side_effect = (
-        lambda job_id: f"{queue.intermediate_queue.key}:first_seen:{job_id}"
-    )
     queue.intermediate_queue.get_job_ids.return_value = []
     queue.started_job_registry = MagicMock()
     queue.started_job_registry.__contains__.return_value = False
@@ -427,6 +424,47 @@ class TestCiSupervisorQueues:
         assert state.last_owner_by_class["build"] is None
         assert state.next_queue_index_by_class["build"] == 0
 
+    def test_select_fair_job_restores_state_when_claim_errors(self) -> None:
+        """Fair-turn state should roll back when the claim path raises."""
+        from crsbench.distributed.ci_supervisor import _select_fair_job
+        from crsbench.distributed.evaluator_scheduler import (
+            FairSchedulerState,
+            QueuedCandidate,
+        )
+
+        build_queue = _make_mock_queue("crsbench_ci_build", count=1)
+        verify_queue = _make_mock_queue("crsbench_ci_verify", count=0)
+        state = FairSchedulerState(next_queue_class="build")
+        candidate = QueuedCandidate(
+            queue_name="crsbench_ci_build",
+            job_id="build-1",
+            owner_key="trial::exp::trial-a",
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.ci_supervisor._queue_candidates",
+                return_value=[[candidate]],
+            ),
+            patch(
+                "crsbench.distributed.ci_supervisor._claim_fair_candidate",
+                side_effect=RuntimeError("claim exploded"),
+            ),
+        ):
+            with pytest.raises(RuntimeError, match="claim exploded"):
+                _select_fair_job(
+                    redis_conn=MagicMock(),
+                    build_queues=[build_queue],
+                    verify_queues=[verify_queue],
+                    build_has_capacity=True,
+                    verify_has_capacity=False,
+                    state=state,
+                )
+
+        assert state.next_queue_class == "build"
+        assert state.last_owner_by_class["build"] is None
+        assert state.next_queue_index_by_class["build"] == 0
+
     def test_claim_fair_candidate_restores_queue_entry_when_fetch_errors(self) -> None:
         """Transient fetch failure after claim should restore the removed queue id."""
         from crsbench.distributed.ci_supervisor import _claim_fair_candidate
@@ -454,19 +492,20 @@ class TestCiSupervisorQueues:
 
         assert result is None
         assert redis_conn.eval.call_count == 2
-        queue.intermediate_queue.set_first_seen.assert_called_once_with("build-1")
         assert redis_conn.eval.call_args_list[0].args[1:] == (
             3,
             queue.key,
             queue.intermediate_queue.key,
-            queue.intermediate_queue.get_first_seen_key("build-1"),
+            f"{queue.intermediate_queue.key}:fair-claim:build-1",
             "build-1",
+            "claimed",
+            "120",
         )
         assert redis_conn.eval.call_args_list[1].args[1:] == (
             3,
             queue.intermediate_queue.key,
             queue.key,
-            queue.intermediate_queue.get_first_seen_key("build-1"),
+            f"{queue.intermediate_queue.key}:fair-claim:build-1",
             "build-1",
         )
 
@@ -494,8 +533,7 @@ class TestCiSupervisorQueues:
         queue = _make_mock_queue("crsbench_ci_build", count=0)
         _configure_intermediate_queue(queue)
         queue.intermediate_queue.get_job_ids.return_value = ["build-1"]
-        queue.intermediate_queue.set_first_seen.return_value = False
-        queue.intermediate_queue.should_be_cleaned_up.return_value = True
+        queue.connection.exists.return_value = False
         queue.connection.eval.return_value = 1
 
         job = MagicMock()
@@ -509,10 +547,27 @@ class TestCiSupervisorQueues:
             3,
             queue.intermediate_queue.key,
             queue.key,
-            queue.intermediate_queue.get_first_seen_key("build-1"),
+            f"{queue.intermediate_queue.key}:fair-claim:build-1",
             "build-1",
         )
         job.set_status.assert_not_called()
+
+    def test_recover_stuck_fair_claims_skips_live_claim_lease(self) -> None:
+        """Intermediate claims with a live lease should not be requeued."""
+        from crsbench.distributed.ci_supervisor import _recover_stuck_fair_claims
+
+        queue = _make_mock_queue("crsbench_ci_build", count=0)
+        _configure_intermediate_queue(queue)
+        queue.intermediate_queue.get_job_ids.return_value = ["build-1"]
+        queue.connection.exists.return_value = True
+
+        _recover_stuck_fair_claims([queue])
+
+        queue.connection.exists.assert_called_once_with(
+            f"{queue.intermediate_queue.key}:fair-claim:build-1"
+        )
+        queue.fetch_job.assert_not_called()
+        queue.connection.eval.assert_not_called()
 
     def test_cpu_tag_mismatch_applies_short_backoff(self) -> None:
         """Mismatch path should back off briefly to avoid hot-loop churn."""
@@ -747,6 +802,9 @@ class TestEvaluatorCiAdapter:
 
         prepare_pipeline.lrem.assert_called_once_with(
             queue.intermediate_queue.key, 1, "build-1"
+        )
+        prepare_pipeline.delete.assert_called_once_with(
+            f"{queue.intermediate_queue.key}:fair-claim:build-1"
         )
 
 
@@ -1886,7 +1944,7 @@ class TestHelperFunctions:
         assert _matches_cpu_tag(mismatching_job, "x86-avx2") is False
 
     def test_queues_blocked_only_by_cpu_tag_detects_prefiltered_livelock(self) -> None:
-        """Helper should report when only cpu-tag-mismatched work remains queued."""
+        """Helper should report cpu-tag-only backlogs for tagged and untagged workers."""
         from crsbench.distributed.ci_supervisor import _queues_blocked_only_by_cpu_tag
 
         queue = _make_mock_queue("crsbench_ci_build", count=1)
@@ -1899,11 +1957,15 @@ class TestHelperFunctions:
         with patch("crsbench.distributed.ci_supervisor.rq") as mock_rq:
             mock_rq.job.Job.fetch_many.return_value = [mismatching_job]
 
-            blocked = _queues_blocked_only_by_cpu_tag(
+            blocked_tagged = _queues_blocked_only_by_cpu_tag(
                 [queue], worker_cpu_tag="x86-avx2"
             )
+            blocked_untagged = _queues_blocked_only_by_cpu_tag(
+                [queue], worker_cpu_tag=None
+            )
 
-        assert blocked is True
+        assert blocked_tagged is True
+        assert blocked_untagged is True
 
     def test_force_cleanup_deferred_cgroups_clears_successes(self) -> None:
         """Force cleanup should remove successful paths and keep failures only."""

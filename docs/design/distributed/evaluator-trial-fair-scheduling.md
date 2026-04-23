@@ -40,13 +40,16 @@ worker-side contracts.
 - `EvaluatorTrialFairScheduling.tla` and
   `EvaluatorTrialFairScheduling.cfg` provide a bounded TLA+ model for this
   fairness revision
-- the model checks partition safety so claim failures and local pre-start retry
-  paths do not silently lose queued jobs
+- the model checks abstract partition safety so claim failures and local
+  pre-start retry paths do not silently lose queued jobs
 - the model checks build-before-verify gating for verify work
 - the model checks owner no-starvation for a canonical two-owner scenario with
   bounded transient claim failures
 - the model abstracts the intermediate claim handoff into recoverable pre-start
   failure and restore transitions rather than modeling Redis list internals
+- the model does not represent `cpu_tag` filtering, non-continuous
+  cpu-tag-livelock exit behavior, or Redis lease TTL/refresh timing for
+  in-flight claims; those remain runtime behaviors validated by Python tests
 - the model deliberately does not specify a distributed global owner-turn
   ledger, because this revision only implements local fair selection over
   shared queued state plus atomic Redis job claims
@@ -130,6 +133,9 @@ worker-side contracts.
   silently lose runnable work; before execution start is committed, the job must
   remain either in its runnable queue or in a recoverable intermediate claim
   state
+- the runtime currently uses a Redis-backed fair-claim lease to distinguish an
+  in-progress pre-start handoff from an abandoned claim; lease refresh and
+  expiry are implementation details, not part of the TLA+ abstraction
 - retries caused by spawn failure, CPU allocation failure, or similar local
   retry paths restore the queued job to the queue front so the same attempt can
   be retried without reserialization
@@ -194,8 +200,10 @@ Validation should cover:
 - duplicate reuse can upgrade a generic shared build owner to a trial owner
 - configless multi-queue operation does not regress into queue-name priority
 - restart and requeue paths rebuild the ready view without losing runnable jobs
-- the bounded TLA+ model preserves no-silent-loss safety and owner no-starvation
-  under transient claim failures
+- runtime tests cover cpu-tag filtering, livelock exit, and fair-claim lease
+  recovery edges
+- the bounded TLA+ model preserves abstract no-silent-loss safety and owner
+  no-starvation under transient claim failures
 
 ## Implementation Pointers
 

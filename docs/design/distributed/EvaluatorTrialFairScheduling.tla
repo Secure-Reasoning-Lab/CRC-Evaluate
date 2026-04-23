@@ -9,6 +9,8 @@ EXTENDS Naturals, Sequences, FiniteSets, TLC
 \* - owner no-starvation in a small canonical scenario
 \* Non-goal:
 \* - a distributed global turn ledger across multiple evaluators
+\* - cpu_tag filtering or non-continuous cpu-tag-livelock exit behavior
+\* - Redis lease TTL / refresh timing for pre-start claim handoff
 
 QueueClasses == {"build", "verify"}
 NoOwner == "<<no-owner>>"

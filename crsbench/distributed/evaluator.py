@@ -456,10 +456,12 @@ def _run_single_job(
         # Create execution and mark as STARTED
         execution = None
         execution_owner = child_name or execution_role
+        claim_lease_key = f"{queue.intermediate_queue.key}:fair-claim:{job.id}"
         os.environ["CRSBENCH_WORKER_DISPLAY_NAME"] = execution_owner
         with redis_conn.pipeline() as pipeline:
             job.prepare_for_execution(execution_owner, pipeline=pipeline)
             pipeline.lrem(queue.intermediate_queue.key, 1, job.id)
+            pipeline.delete(claim_lease_key)
             execution = Execution.create(job, ttl=-1, pipeline=pipeline)
             pipeline.execute()
 

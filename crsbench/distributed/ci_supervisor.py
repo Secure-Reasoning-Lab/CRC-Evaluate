@@ -44,6 +44,7 @@ logger = get_logger(__name__)
 DEQUEUE_POLL_TIMEOUT_SECONDS = 1
 NON_CONTINUOUS_CPU_MISMATCH_LIMIT = 3
 MAX_CONSECUTIVE_DEQUEUE_ERRORS = 10
+FAIR_CLAIM_LEASE_TTL_SECONDS = 120
 
 # Use 'fork' context so child processes inherit module-level state
 # (e.g. _verification_engine, _benchmarks_root) from the parent.
@@ -64,7 +65,19 @@ class WorkerEntry(NamedTuple):
     job_id: str
     worker_num: int
     cgroup_path: Optional[Path]
+    claim_lease_key: Optional[str]
 
+
+_CLAIM_FAIR_JOB_LUA = """
+local removed = redis.call('LREM', KEYS[1], 1, ARGV[1])
+if removed == 1 then
+    redis.call('LPUSH', KEYS[2], ARGV[1])
+    redis.call('SET', KEYS[3], ARGV[2], 'EX', tonumber(ARGV[3]))
+else
+    redis.call('DEL', KEYS[3])
+end
+return removed
+"""
 
 _MOVE_JOB_ID_LUA = """
 local removed = redis.call('LREM', KEYS[1], 1, ARGV[1])
@@ -111,8 +124,8 @@ def _scheduler_owner_key_for_job(job: "rq.job.Job", *, queue_name: str) -> str:
     )
 
 
-def _intermediate_first_seen_key(queue: "rq.Queue", job_id: str) -> str:
-    return queue.intermediate_queue.get_first_seen_key(job_id)
+def _claim_lease_key(queue: "rq.Queue", job_id: str) -> str:
+    return f"{queue.intermediate_queue.key}:fair-claim:{job_id}"
 
 
 def _move_job_id(
@@ -120,7 +133,7 @@ def _move_job_id(
     *,
     source_key: str,
     dest_key: str,
-    cleanup_key: str,
+    lease_key: str,
     job_id: str,
 ) -> bool:
     moved = redis_conn.eval(
@@ -128,7 +141,7 @@ def _move_job_id(
         3,
         source_key,
         dest_key,
-        cleanup_key,
+        lease_key,
         job_id,
     )
     return moved == 1
@@ -138,14 +151,14 @@ def _remove_job_id(
     redis_conn: "Redis",
     *,
     list_key: str,
-    cleanup_key: str,
+    lease_key: str,
     job_id: str,
 ) -> bool:
     removed = redis_conn.eval(
         _REMOVE_JOB_ID_LUA,
         2,
         list_key,
-        cleanup_key,
+        lease_key,
         job_id,
     )
     return removed == 1
@@ -171,7 +184,7 @@ def _restore_claimed_job(
             redis_conn,
             source_key=queue.intermediate_queue.key,
             dest_key=queue.key,
-            cleanup_key=_intermediate_first_seen_key(queue, job_id),
+            lease_key=_claim_lease_key(queue, job_id),
             job_id=job_id,
         )
     except Exception as exc:
@@ -192,7 +205,7 @@ def _discard_claimed_job(
         return _remove_job_id(
             redis_conn,
             list_key=queue.intermediate_queue.key,
-            cleanup_key=_intermediate_first_seen_key(queue, job_id),
+            lease_key=_claim_lease_key(queue, job_id),
             job_id=job_id,
         )
     except Exception as exc:
@@ -249,22 +262,18 @@ def _claim_fair_candidate(
 ) -> tuple["rq.job.Job", "rq.Queue"] | None:
     """Atomically move and fetch a selected fair candidate via RQ intermediate state."""
     queue = queue_lookup[candidate.queue_name]
-    claimed = _move_job_id(
-        redis_conn,
-        source_key=queue.key,
-        dest_key=queue.intermediate_queue.key,
-        cleanup_key=_intermediate_first_seen_key(queue, candidate.job_id),
-        job_id=candidate.job_id,
+    claimed = redis_conn.eval(
+        _CLAIM_FAIR_JOB_LUA,
+        3,
+        queue.key,
+        queue.intermediate_queue.key,
+        _claim_lease_key(queue, candidate.job_id),
+        candidate.job_id,
+        "claimed",
+        str(FAIR_CLAIM_LEASE_TTL_SECONDS),
     )
     if not claimed:
         return None
-    try:
-        queue.intermediate_queue.set_first_seen(candidate.job_id)
-    except Exception as exc:
-        logger.warning(
-            f"Failed to record fair-claim timestamp for {candidate.job_id} in "
-            f"{queue.name}: {exc}"
-        )
     try:
         job = rq.job.Job.fetch(candidate.job_id, connection=redis_conn)
     except NoSuchJobError:
@@ -303,47 +312,51 @@ def _select_fair_job(
 ) -> tuple["rq.job.Job", "rq.Queue"] | None:
     """Choose and claim the next fair runnable evaluator job."""
     state_snapshot = clone_fair_scheduler_state(state)
-    build_candidates = (
-        _queue_candidates(build_queues, worker_cpu_tag=worker_cpu_tag)
-        if build_has_capacity
-        else []
-    )
-    verify_candidates = (
-        _queue_candidates(verify_queues, worker_cpu_tag=worker_cpu_tag)
-        if verify_has_capacity
-        else []
-    )
+    try:
+        build_candidates = (
+            _queue_candidates(build_queues, worker_cpu_tag=worker_cpu_tag)
+            if build_has_capacity
+            else []
+        )
+        verify_candidates = (
+            _queue_candidates(verify_queues, worker_cpu_tag=worker_cpu_tag)
+            if verify_has_capacity
+            else []
+        )
 
-    queue_class = choose_next_queue_class(
-        build_has_capacity=build_has_capacity,
-        verify_has_capacity=verify_has_capacity,
-        build_has_work=any(build_candidates),
-        verify_has_work=any(verify_candidates),
-        state=state,
-    )
-    if queue_class is None:
-        restore_fair_scheduler_state(state, state_snapshot)
-        return None
+        queue_class = choose_next_queue_class(
+            build_has_capacity=build_has_capacity,
+            verify_has_capacity=verify_has_capacity,
+            build_has_work=any(build_candidates),
+            verify_has_work=any(verify_candidates),
+            state=state,
+        )
+        if queue_class is None:
+            restore_fair_scheduler_state(state, state_snapshot)
+            return None
 
-    candidates = build_candidates if queue_class == "build" else verify_candidates
-    candidate = choose_next_fair_candidate(
-        candidates,
-        queue_class=queue_class,
-        state=state,
-    )
-    if candidate is None:
-        restore_fair_scheduler_state(state, state_snapshot)
-        return None
+        candidates = build_candidates if queue_class == "build" else verify_candidates
+        candidate = choose_next_fair_candidate(
+            candidates,
+            queue_class=queue_class,
+            state=state,
+        )
+        if candidate is None:
+            restore_fair_scheduler_state(state, state_snapshot)
+            return None
 
-    queue_lookup = {queue.name: queue for queue in (*build_queues, *verify_queues)}
-    result = _claim_fair_candidate(
-        redis_conn,
-        queue_lookup=queue_lookup,
-        candidate=candidate,
-    )
-    if result is None:
+        queue_lookup = {queue.name: queue for queue in (*build_queues, *verify_queues)}
+        result = _claim_fair_candidate(
+            redis_conn,
+            queue_lookup=queue_lookup,
+            candidate=candidate,
+        )
+        if result is None:
+            restore_fair_scheduler_state(state, state_snapshot)
+        return result
+    except Exception:
         restore_fair_scheduler_state(state, state_snapshot)
-    return result
+        raise
 
 
 def _safe_cwd() -> Path:
@@ -667,6 +680,8 @@ def run_ci_supervisor(
             # (e.g. from a peer evaluator killed on shared Valkey) are
             # retried instead of crashing this supervisor.
             try:
+                _refresh_active_claim_leases(redis_conn, build_active)
+                _refresh_active_claim_leases(redis_conn, verify_active)
                 _recover_stuck_fair_claims([build_queue, verify_queue])
 
                 now = time.time()
@@ -912,7 +927,14 @@ def run_ci_supervisor(
                         f"(status={early_status}); re-enqueuing."
                     )
 
-                entry = WorkerEntry(p, cpus or [], job.id, worker_num, cgroup_path)
+                entry = WorkerEntry(
+                    p,
+                    cpus or [],
+                    job.id,
+                    worker_num,
+                    cgroup_path,
+                    _claim_lease_key(queue_obj, job.id),
+                )
                 if is_build:
                     build_active[p.pid] = entry
                 else:
@@ -1339,6 +1361,8 @@ def run_multi_queue_supervisor(
 
             # --- Determine which queues have capacity ---
             try:
+                _refresh_active_claim_leases(redis_conn, build_active)
+                _refresh_active_claim_leases(redis_conn, verify_active)
                 _recover_stuck_fair_claims([*build_queues, *verify_queues])
 
                 now = time.time()
@@ -1586,7 +1610,14 @@ def run_multi_queue_supervisor(
                         f"(status={early_status}); re-enqueuing."
                     )
 
-                entry = WorkerEntry(p, cpus or [], job.id, worker_num, cgroup_path)
+                entry = WorkerEntry(
+                    p,
+                    cpus or [],
+                    job.id,
+                    worker_num,
+                    cgroup_path,
+                    _claim_lease_key(queue_obj, job.id),
+                )
                 if is_build:
                     build_active[p.pid] = entry
                 else:
@@ -1708,7 +1739,7 @@ def _queues_blocked_only_by_cpu_tag(
     worker_cpu_tag: Optional[str],
 ) -> bool:
     """Return whether queued jobs exist but none are locally runnable by cpu_tag."""
-    if not queues or not normalize_cpu_tag(worker_cpu_tag):
+    if not queues:
         return False
 
     queue_job_ids = [list(queue.get_job_ids()) for queue in queues]
@@ -1735,12 +1766,23 @@ def _queues_blocked_only_by_cpu_tag(
     return saw_mismatch and not saw_runnable
 
 
+def _refresh_active_claim_leases(
+    redis_conn: "Redis",
+    active: dict[int, WorkerEntry],
+) -> None:
+    for entry in active.values():
+        if entry.claim_lease_key:
+            redis_conn.expire(entry.claim_lease_key, FAIR_CLAIM_LEASE_TTL_SECONDS)
+
+
 def _recover_stuck_fair_claims(queues: list["rq.Queue"]) -> None:
     """Requeue abandoned fair-claimed jobs that never reached execution start."""
     for queue in queues:
         intermediate = queue.intermediate_queue
         for job_id in list(intermediate.get_job_ids()):
             if job_id in queue.started_job_registry:
+                continue
+            if queue.connection.exists(_claim_lease_key(queue, job_id)):
                 continue
 
             job = queue.fetch_job(job_id)
@@ -1751,11 +1793,6 @@ def _recover_stuck_fair_claims(queues: list["rq.Queue"]) -> None:
             job_status = job.get_status()
             if job_status in ("finished", "failed", "stopped", "canceled"):
                 _discard_claimed_job(queue.connection, queue=queue, job_id=job_id)
-                continue
-
-            if intermediate.set_first_seen(job_id):
-                continue
-            if not intermediate.should_be_cleaned_up(job_id):
                 continue
 
             restored = _restore_claimed_job(
