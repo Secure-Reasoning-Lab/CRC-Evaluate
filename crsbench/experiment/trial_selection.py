@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -39,7 +40,7 @@ def normalize_trial_key_lines(text: str) -> list[str]:
 
 def load_trial_key_file(path: str | Path) -> list[str]:
     """Load and normalize newline-delimited logical trial keys from a file."""
-    return normalize_trial_key_lines(Path(path).read_text())
+    return normalize_trial_key_lines(Path(path).read_text(encoding="utf-8"))
 
 
 def _normalize_trial_key_iterable(keys: Iterable[str]) -> list[str]:
@@ -90,9 +91,10 @@ def filter_trials_by_allowlist(
         return [], []
 
     allowed_key_set = set(normalized_allowed_keys)
-    matrix_keys = {trial_key_for_trial(trial) for trial in trials}
+    trial_with_keys = [(trial, trial_key_for_trial(trial)) for trial in trials]
+    matrix_keys = {trial_key for _, trial_key in trial_with_keys}
     filtered_trials = [
-        trial for trial in trials if trial_key_for_trial(trial) in allowed_key_set
+        trial for trial, trial_key in trial_with_keys if trial_key in allowed_key_set
     ]
     unknown_keys = sorted(allowed_key_set - matrix_keys)
     return filtered_trials, unknown_keys
@@ -173,18 +175,19 @@ def _collect_finished_trial_keys(
     success_keys: set[str] = set()
     fail_keys: set[str] = set()
 
-    for marker in collected_root.rglob("*"):
-        if not marker.is_file():
+    for dirpath, _, filenames in os.walk(collected_root):
+        has_success = ".success" in filenames
+        has_fail = not rerun_failed_trials and ".fail" in filenames
+        if not has_success and not has_fail:
             continue
-        if marker.name not in {".success", ".fail"}:
-            continue
-        key = _trial_key_from_collected_trial_dir(marker.parent, collected_root)
+
+        key = _trial_key_from_collected_trial_dir(Path(dirpath), collected_root)
         if key is None:
             continue
-        if marker.name == ".success":
+
+        if has_success:
             success_keys.add(key)
-            continue
-        if not rerun_failed_trials:
+        if has_fail:
             fail_keys.add(key)
 
     return success_keys, fail_keys

@@ -255,25 +255,23 @@ def test_derive_unfinished_trial_keys_scans_tree_once_and_preserves_selected_ord
     (_mk_trial_dir(tmp_path, t1) / ".success").touch()
     (_mk_trial_dir(tmp_path, t4) / ".fail").touch()
 
-    from pathlib import Path as RuntimePath
+    original_walk = mod.os.walk
+    walk_calls = 0
 
-    original_rglob = RuntimePath.rglob
-    rglob_calls = 0
+    def _counting_walk(top, *args, **kwargs):
+        nonlocal walk_calls
+        if str(top) == str(tmp_path):
+            walk_calls += 1
+        return original_walk(top, *args, **kwargs)
 
-    def _counting_rglob(self: RuntimePath, pattern: str):
-        nonlocal rglob_calls
-        if self == tmp_path:
-            rglob_calls += 1
-        return original_rglob(self, pattern)
-
-    monkeypatch.setattr(RuntimePath, "rglob", _counting_rglob)
+    monkeypatch.setattr(mod.os, "walk", _counting_walk)
 
     derived = derive_unfinished_trial_keys_from_config(
         config=SimpleNamespace(),
         collected_root=tmp_path,
     )
 
-    assert rglob_calls == 1
+    assert walk_calls == 1
     assert derived.selected_keys == [
         trial_key_for_trial(t2),
         trial_key_for_trial(t3),
