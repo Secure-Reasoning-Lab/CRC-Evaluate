@@ -23,11 +23,17 @@ def run_derive_unfinished_trial_keys(args: argparse.Namespace) -> int:
     """Derive unfinished trial keys and write them to a newline-delimited file."""
     config = load_experiment_config(Path(args.config))
 
-    collected_root = (
-        Path(args.from_path)
-        if args.from_path is not None
-        else default_collected_experiment_path(config)
-    )
+    if args.from_path is not None:
+        collected_root = Path(args.from_path)
+        if not collected_root.exists():
+            logger.error("Collected root does not exist: {}", collected_root)
+            return 2
+        if not collected_root.is_dir():
+            logger.error("Collected root is not a directory: {}", collected_root)
+            return 2
+    else:
+        collected_root = default_collected_experiment_path(config)
+
     output_path = (
         Path(args.output)
         if args.output is not None
@@ -43,6 +49,7 @@ def run_derive_unfinished_trial_keys(args: argparse.Namespace) -> int:
     selected_keys_text = "\n".join(derived.selected_keys)
     if selected_keys_text:
         selected_keys_text += "\n"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(selected_keys_text, encoding="utf-8")
 
     logger.info(

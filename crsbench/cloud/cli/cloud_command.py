@@ -9,6 +9,20 @@ from crsbench.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+class _CloudCommandSubparsersAction(argparse._SubParsersAction):
+    """Subparser action with derive-command config validation."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        super().__call__(parser, namespace, values, option_string)
+        if getattr(
+            namespace, "cloud_command", None
+        ) == "derive-unfinished-trial-keys" and not getattr(namespace, "config", None):
+            parser.error(
+                "cloud derive-unfinished-trial-keys requires "
+                "--config/--experiment-config"
+            )
+
+
 def _add_config_argument(
     parser: argparse.ArgumentParser,
     *,
@@ -54,7 +68,11 @@ Examples:
         """,
     )
     _add_config_argument(parser)
-    cloud_subparsers = parser.add_subparsers(dest="cloud_command", required=True)
+    cloud_subparsers = parser.add_subparsers(
+        dest="cloud_command",
+        required=True,
+        action=_CloudCommandSubparsersAction,
+    )
 
     # status
     status_p = cloud_subparsers.add_parser(
@@ -284,7 +302,7 @@ Examples:
         "derive-unfinished-trial-keys",
         help="Derive unfinished trial keys from collected experiment artifacts",
     )
-    _add_config_argument(derive_p, required=True, suppress_default=True)
+    _add_config_argument(derive_p, suppress_default=True)
     derive_p.add_argument(
         "--from",
         dest="from_path",
