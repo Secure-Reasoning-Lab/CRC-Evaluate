@@ -3265,7 +3265,15 @@ def main() -> None:
     trial_matrix = generate_trial_matrix(
         benchmark_harnesses, oss_crs_registry, config, registry_dir
     )
-    trial_matrix = _filter_trial_matrix_from_env(trial_matrix)
+    try:
+        trial_matrix = _filter_trial_matrix_from_env(trial_matrix)
+    except ValueError as e:
+        logger.error(
+            "Invalid trial-key allowlist in "
+            f"{TRIAL_KEY_ALLOWLIST_ENV_VAR}: {e}. "
+            "Set a valid payload or unset the environment variable."
+        )
+        sys.exit(1)
 
     total_jobs = len(trial_matrix)
     logger.info(f"Total jobs to execute: {total_jobs}")

@@ -159,3 +159,58 @@ def test_main_dispatches_filtered_trial_matrix(
 
     run_local.assert_called_once_with(config.experiment, config, [t2])
     run_distributed.assert_not_called()
+
+
+def test_main_exits_cleanly_for_malformed_trial_allowlist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("experiment: exp-test\n", encoding="utf-8")
+
+    args = Namespace(
+        command="run",
+        verbose=False,
+        experiment_config=str(config_path),
+        local_only=True,
+        distributed=False,
+        dry_run=False,
+        queue_mode=None,
+        retry_failed=False,
+    )
+    config = _mk_config(tmp_path)
+    trial = _mk_trial(crs="crs-1", trial_num=1)
+
+    monkeypatch.setenv(TRIAL_KEY_ALLOWLIST_ENV_VAR, "!!!!")
+
+    monkeypatch.setattr(run_experiment, "parse_arguments", lambda: args)
+    monkeypatch.setattr(run_experiment, "validate_arguments", lambda _args: None)
+    monkeypatch.setattr(
+        run_experiment, "load_experiment_config", lambda _config_path: config
+    )
+    monkeypatch.setattr(
+        run_experiment, "validate_filestore_permissions", lambda _config: None
+    )
+    monkeypatch.setattr(
+        run_experiment,
+        "resolve_benchmarks_root",
+        lambda _benchmarks_root: tmp_path / "benchmarks",
+    )
+    monkeypatch.setattr(
+        run_experiment,
+        "resolve_benchmark_harnesses",
+        lambda _entries, _benchmarks_root: [SimpleNamespace(name="bench-a")],
+    )
+    monkeypatch.setattr(
+        run_experiment,
+        "generate_trial_matrix",
+        lambda *_args, **_kwargs: [trial],
+    )
+
+    with patch.object(run_experiment, "logger") as logger_mock:
+        with pytest.raises(SystemExit) as exc_info:
+            run_experiment.main()
+
+    assert exc_info.value.code == 1
+    logger_mock.error.assert_called_once()
+    assert "Invalid trial-key allowlist" in logger_mock.error.call_args.args[0]
+    assert TRIAL_KEY_ALLOWLIST_ENV_VAR in logger_mock.error.call_args.args[0]
