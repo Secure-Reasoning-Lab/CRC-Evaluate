@@ -100,6 +100,11 @@ def test_encode_decode_trial_key_allowlist_roundtrip_and_empty() -> None:
     assert decode_trial_key_allowlist("") == []
 
 
+def test_decode_trial_key_allowlist_rejects_malformed_base64() -> None:
+    with pytest.raises(ValueError, match="Invalid base64"):
+        decode_trial_key_allowlist("!!!!")
+
+
 def test_trial_key_for_trial_uses_canonical_build_trial_key() -> None:
     trial = _mk_trial(target_cpv_id="cpv-1")
     assert trial_key_for_trial(trial) == build_trial_key(
@@ -231,3 +236,46 @@ def test_derive_unfinished_trial_keys_raises_for_unknown_finished_key(
             config=SimpleNamespace(),
             collected_root=tmp_path,
         )
+
+
+def test_derive_unfinished_trial_keys_scans_tree_once_and_preserves_selected_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    t1 = _mk_trial(crs="crs-1", trial_num=1)
+    t2 = _mk_trial(crs="crs-2", trial_num=2)
+    t3 = _mk_trial(crs="crs-3", trial_num=3)
+    t4 = _mk_trial(crs="crs-4", trial_num=4)
+    t5 = _mk_trial(crs="crs-5", trial_num=5)
+    trial_matrix = [t1, t2, t3, t4, t5]
+
+    from crsbench.experiment import trial_selection as mod
+
+    monkeypatch.setattr(mod, "_build_trial_matrix_from_config", lambda _: trial_matrix)
+
+    (_mk_trial_dir(tmp_path, t1) / ".success").touch()
+    (_mk_trial_dir(tmp_path, t4) / ".fail").touch()
+
+    from pathlib import Path as RuntimePath
+
+    original_rglob = RuntimePath.rglob
+    rglob_calls = 0
+
+    def _counting_rglob(self: RuntimePath, pattern: str):
+        nonlocal rglob_calls
+        if self == tmp_path:
+            rglob_calls += 1
+        return original_rglob(self, pattern)
+
+    monkeypatch.setattr(RuntimePath, "rglob", _counting_rglob)
+
+    derived = derive_unfinished_trial_keys_from_config(
+        config=SimpleNamespace(),
+        collected_root=tmp_path,
+    )
+
+    assert rglob_calls == 1
+    assert derived.selected_keys == [
+        trial_key_for_trial(t2),
+        trial_key_for_trial(t3),
+        trial_key_for_trial(t5),
+    ]

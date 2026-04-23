@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -56,7 +57,11 @@ def decode_trial_key_allowlist(value: str) -> list[str]:
     """Decode base64 newline-delimited trial key allowlist."""
     if not value:
         return []
-    decoded = base64.b64decode(value.encode("ascii")).decode("utf-8")
+    try:
+        decoded_bytes = base64.b64decode(value.encode("ascii"), validate=True)
+        decoded = decoded_bytes.decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError, binascii.Error) as exc:
+        raise ValueError("Invalid base64 trial key allowlist payload") from exc
     return normalize_trial_key_lines(decoded)
 
 
@@ -159,19 +164,30 @@ def _trial_key_from_collected_trial_dir(
     )
 
 
-def _collect_finished_trial_keys(collected_root: Path, marker_name: str) -> set[str]:
+def _collect_finished_trial_keys(
+    collected_root: Path, *, rerun_failed_trials: bool
+) -> tuple[set[str], set[str]]:
     if not collected_root.exists():
-        return set()
+        return set(), set()
 
-    keys: set[str] = set()
-    for marker in collected_root.rglob(marker_name):
+    success_keys: set[str] = set()
+    fail_keys: set[str] = set()
+
+    for marker in collected_root.rglob("*"):
         if not marker.is_file():
+            continue
+        if marker.name not in {".success", ".fail"}:
             continue
         key = _trial_key_from_collected_trial_dir(marker.parent, collected_root)
         if key is None:
             continue
-        keys.add(key)
-    return keys
+        if marker.name == ".success":
+            success_keys.add(key)
+            continue
+        if not rerun_failed_trials:
+            fail_keys.add(key)
+
+    return success_keys, fail_keys
 
 
 def derive_unfinished_trial_keys_from_config(
@@ -186,9 +202,9 @@ def derive_unfinished_trial_keys_from_config(
     matrix_key_set = set(matrix_keys_ordered)
 
     root = Path(collected_root)
-    finished_success = _collect_finished_trial_keys(root, ".success")
-    finished_fail = (
-        set() if rerun_failed_trials else _collect_finished_trial_keys(root, ".fail")
+    finished_success, finished_fail = _collect_finished_trial_keys(
+        root,
+        rerun_failed_trials=rerun_failed_trials,
     )
 
     unknown_finished = (finished_success | finished_fail) - matrix_key_set
