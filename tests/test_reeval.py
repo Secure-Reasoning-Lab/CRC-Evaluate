@@ -11,6 +11,7 @@ from crsbench.evaluation.reeval.cli import (
     _discover_trial_patches,
     _drain_all_async_patch_results,
     _drain_all_async_results,
+    _enqueue_trial_povs,
     _load_experiment_config,
     _load_target_cpv_id_from_trial_metadata,
     _reeval_bug_finding,
@@ -1146,6 +1147,41 @@ class TestAsyncPatchDrainTimeout:
         mock_save.assert_called_once()
 
 
+def test_enqueue_trial_povs_passes_redis_host_to_dispatcher_enqueue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from crsbench.distributed.queue import (
+        EVALUATOR_ROUTING_MODEL_ENV,
+        ROUTING_MODEL_DISPATCHER,
+    )
+
+    monkeypatch.setenv(EVALUATOR_ROUTING_MODEL_ENV, ROUTING_MODEL_DISPATCHER)
+
+    trial_dir = tmp_path / "trial-1"
+    pov_dir = trial_dir / "output" / "povs"
+    pov_dir.mkdir(parents=True)
+    (pov_dir / "a.blob").write_bytes(b"blob")
+
+    with patch(
+        "crsbench.distributed.verify_queue.enqueue_single_pov",
+        return_value="verify:trial-1:bench:h:a.blob:deadbeef",
+    ) as mock_enqueue:
+        state = _enqueue_trial_povs(
+            trial_dir=trial_dir,
+            benchmark_name="bench",
+            harness="h",
+            dest_dir=tmp_path / "out",
+            verify_queue=MagicMock(),
+            experiment_name="exp1",
+            redis_host="redis.local",
+            sanitizer="address",
+        )
+
+    assert state is not None
+    assert state.job_ids == ["verify:trial-1:bench:h:a.blob:deadbeef"]
+    assert mock_enqueue.call_args.kwargs["redis_host"] == "redis.local"
+
+
 class TestAsyncPovDrain:
     """Tests for async POV drain behavior."""
 
@@ -1162,6 +1198,7 @@ class TestAsyncPovDrain:
             job_ids=["job-1", "job-2"],
             pov_hash_to_path={pov_hash: pov_src},
             benchmark_name="bench",
+            experiment_name="bench",
         )
         verdict1 = {
             "trial_id": state.trial_id,
@@ -1235,6 +1272,7 @@ class TestAsyncPovDrain:
             job_ids=["job-1"],
             pov_hash_to_path={},  # missing mapping on purpose
             benchmark_name="bench",
+            experiment_name="bench",
         )
         verdict = {
             "trial_id": state.trial_id,
@@ -1293,6 +1331,7 @@ class TestAsyncPovDrain:
             job_ids=["job-1", "job-2"],
             pov_hash_to_path={pov_hash: pov_src},
             benchmark_name="bench",
+            experiment_name="bench",
         )
         verdict1 = {
             "trial_id": state.trial_id,
@@ -1363,6 +1402,7 @@ class TestAsyncPovDrain:
             job_ids=["job-1"],
             pov_hash_to_path={},
             benchmark_name="bench",
+            experiment_name="bench",
         )
 
         with (
@@ -1393,6 +1433,7 @@ class TestAsyncPovDrain:
             job_ids=["job-1", "job-2"],
             pov_hash_to_path={pov_hash: pov_src},
             benchmark_name="bench",
+            experiment_name="bench",
         )
         verdict = {
             "trial_id": state.trial_id,

@@ -8,9 +8,11 @@ All verification uses per-POV granularity (verify_single_pov) for
 fine-grained parallelism and individual retry.
 """
 
+from __future__ import annotations
+
 import os
 import time
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from crsbench.distributed.evaluator_scheduler import (
     SCHEDULER_OWNER_KEY_META,
@@ -18,17 +20,120 @@ from crsbench.distributed.evaluator_scheduler import (
     build_scheduler_owner_key_for_ci_job,
     build_scheduler_owner_key_from_payload,
 )
-from crsbench.distributed.queue import REDIS_AVAILABLE
+from crsbench.distributed.queue import (
+    REDIS_AVAILABLE,
+    ROUTING_MODEL_DISPATCHER,
+    get_evaluator_routing_model,
+)
 from crsbench.utils.logger import get_logger
 
 if REDIS_AVAILABLE:
     import rq
     import rq.job
 
+if TYPE_CHECKING:
+    from crsbench.distributed.evaluator_dispatcher_state import (
+        DispatcherStateRedisProtocol,
+        DispatcherStateStore,
+    )
+
 logger = get_logger(__name__)
 
 # Maximum POV size to enqueue (10MB). Larger POVs are skipped with a warning.
 MAX_POV_SIZE_BYTES = 10 * 1024 * 1024
+
+
+def _build_verify_request_id(
+    *, trial_id: str, benchmark: str, harness: str, pov_id: str
+) -> str:
+    return f"verify:{trial_id}:{benchmark}:{harness}:{pov_id}"
+
+
+def _build_build_request_id(*, trial_id: str, benchmark: str, index: int) -> str:
+    return f"build:{trial_id}:{benchmark}:{index}"
+
+
+def _build_lineage_id(
+    benchmark: str,
+    sanitizer: Optional[str],
+    source_mode: str,
+    use_inc_build: bool,
+) -> str:
+    sanitizer_value = sanitizer or "auto"
+    inc_build_label = "inc" if use_inc_build else "clean"
+    return f"{benchmark}::{sanitizer_value}::{source_mode}::{inc_build_label}"
+
+
+def _get_dispatcher_store(
+    *,
+    redis_host: Optional[str],
+    experiment_name: str,
+    redis_conn: Optional[object] = None,
+) -> "DispatcherStateStore":
+    from crsbench.distributed.evaluator_dispatcher_state import DispatcherStateStore
+
+    if redis_conn is None:
+        if redis_host is None:
+            raise ValueError("redis_host is required when redis_conn is not provided")
+        from crsbench.distributed.queue import create_redis_connection
+
+        redis_conn = create_redis_connection(redis_host)
+    return DispatcherStateStore(
+        cast("DispatcherStateRedisProtocol", redis_conn),
+        experiment_name=experiment_name,
+    )
+
+
+def submit_async_build_requests(
+    *,
+    redis_host: Optional[str],
+    experiment_name: str,
+    trial_id: str,
+    benchmark: str,
+    build_payloads: list[dict[str, Any]],
+    sanitizer: Optional[str],
+    source_mode: str,
+    use_inc_build: bool,
+    redis_conn: Optional[object] = None,
+) -> list[str]:
+    """Submit logical build requests for async POV verification."""
+    if not build_payloads:
+        return []
+    if not experiment_name:
+        raise ValueError("experiment_name is required for dispatcher build requests")
+    if not trial_id:
+        raise ValueError("trial_id is required for dispatcher build requests")
+
+    store = _get_dispatcher_store(
+        redis_host=redis_host,
+        experiment_name=experiment_name,
+        redis_conn=redis_conn,
+    )
+    owner_key = f"trial::{experiment_name}::{trial_id}"
+    lineage_id = _build_lineage_id(benchmark, sanitizer, source_mode, use_inc_build)
+
+    from crsbench.distributed.evaluator_dispatcher_state import BuildRequestRecord
+
+    request_ids: list[str] = []
+    for index, payload in enumerate(build_payloads):
+        request_id = _build_build_request_id(
+            trial_id=trial_id,
+            benchmark=benchmark,
+            index=index,
+        )
+        record = BuildRequestRecord(
+            request_id=request_id,
+            trial_id=trial_id,
+            benchmark=benchmark,
+            owner_key=owner_key,
+            lineage_id=lineage_id,
+            generation=1,
+            state="ready",
+            payload=payload,
+        )
+        store.submit_build_request(record)
+        request_ids.append(request_id)
+    return request_ids
 
 
 def _is_duplicate_job_enqueue_error(exc: Exception) -> bool:
@@ -210,7 +315,7 @@ def enqueue_ci_job(
 
 
 def enqueue_single_pov(
-    verify_queue: "rq.Queue",
+    verify_queue: Optional["rq.Queue"],
     experiment_name: str,
     trial_id: str,
     benchmark: str,
@@ -225,6 +330,8 @@ def enqueue_single_pov(
     depends_on: Optional[list[Any]] = None,
     source_mode: str = "pkgs",
     use_inc_build: bool = True,
+    redis_host: Optional[str] = None,
+    redis_conn: Optional[object] = None,
 ) -> Optional[str]:
     """Enqueue a single POV for async verification.
 
@@ -245,17 +352,17 @@ def enqueue_single_pov(
     Returns:
         Job ID if enqueued, None on error
     """
-    from crsbench.distributed.evaluator_jobs import (
-        EmbeddedPov,
-        SinglePovPayload,
-    )
-
     if len(pov_data) > MAX_POV_SIZE_BYTES:
         logger.warning(
             f"Skipping POV {pov_id}: {len(pov_data)} bytes exceeds "
             f"{MAX_POV_SIZE_BYTES} byte limit"
         )
         return None
+
+    from crsbench.distributed.evaluator_jobs import (
+        EmbeddedPov,
+        SinglePovPayload,
+    )
 
     embedded_pov = EmbeddedPov.from_bytes(pov_id, pov_data)
     payload = SinglePovPayload(
@@ -271,6 +378,57 @@ def enqueue_single_pov(
         use_inc_build=use_inc_build,
     )
 
+    if get_evaluator_routing_model() == ROUTING_MODEL_DISPATCHER:
+        if not experiment_name:
+            logger.warning("Skipping dispatcher POV enqueue: missing experiment_name")
+            return None
+        if not trial_id:
+            logger.warning("Skipping dispatcher POV enqueue: missing trial_id")
+            return None
+
+        owner_key = f"trial::{experiment_name}::{trial_id}"
+        lineage_id = _build_lineage_id(benchmark, sanitizer, source_mode, use_inc_build)
+        request_id = _build_verify_request_id(
+            trial_id=trial_id,
+            benchmark=benchmark,
+            harness=harness,
+            pov_id=pov_id,
+        )
+
+        from crsbench.distributed.evaluator_dispatcher_state import VerifyRequestRecord
+
+        try:
+            store = _get_dispatcher_store(
+                redis_host=redis_host,
+                experiment_name=experiment_name,
+                redis_conn=redis_conn,
+            )
+        except ValueError as e:
+            logger.warning(f"Skipping dispatcher POV enqueue: {e}")
+            return None
+        record = VerifyRequestRecord(
+            request_id=request_id,
+            trial_id=trial_id,
+            benchmark=benchmark,
+            harness=harness,
+            pov_id=pov_id,
+            owner_key=owner_key,
+            lineage_id=lineage_id,
+            generation=1,
+            state="blocked_on_build",
+            build_request_ids=list(build_job_ids or []),
+            payload=payload.to_dict(),
+        )
+        store.submit_verify_request(record)
+        logger.debug(
+            "Submitted dispatcher POV verify request {} for {}/{} pov={}",
+            request_id,
+            benchmark,
+            harness,
+            pov_id,
+        )
+        return request_id
+
     try:
         effective_cpu_tag = cpu_tag or os.environ.get("CRSBENCH_JOB_CPU_TAG")
         job_meta = {"experiment_name": experiment_name}
@@ -281,6 +439,9 @@ def enqueue_single_pov(
             fallback_job_id=f"{benchmark}/{harness}/{pov_id}",
             queue_name=getattr(verify_queue, "name", "verify"),
         )
+
+        if verify_queue is None:
+            raise ValueError("verify_queue is required for shared routing")
 
         job = verify_queue.enqueue(
             "crsbench.distributed.evaluator_jobs.verify_single_pov",
@@ -303,6 +464,9 @@ def enqueue_single_pov(
 def poll_single_pov_verdicts(
     redis_host: str,
     job_ids: list[str],
+    *,
+    experiment_name: Optional[str] = None,
+    redis_conn: Optional[object] = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Poll for completed single-POV verification verdicts.
 
@@ -316,7 +480,26 @@ def poll_single_pov_verdicts(
     Returns:
         Tuple of (completed_results, remaining_job_ids)
     """
-    if not REDIS_AVAILABLE or not job_ids:
+    if not job_ids:
+        return [], list(job_ids)
+
+    if (
+        get_evaluator_routing_model() == ROUTING_MODEL_DISPATCHER
+        and experiment_name
+        and all(job_id.startswith("verify:") for job_id in job_ids)
+    ):
+        try:
+            store = _get_dispatcher_store(
+                redis_host=redis_host,
+                experiment_name=experiment_name,
+                redis_conn=redis_conn,
+            )
+            return store.poll_verify_results(job_ids)
+        except Exception as e:
+            logger.warning(f"Failed to poll dispatcher POV verdicts: {e}")
+            return [], list(job_ids)
+
+    if not REDIS_AVAILABLE:
         return [], list(job_ids)
 
     completed: list[dict[str, Any]] = []

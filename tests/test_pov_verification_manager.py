@@ -826,6 +826,11 @@ class TestAsyncMode:
 
         manager._poll_pending_verdicts()
 
+        mock_poll.assert_called_once_with(
+            "redis.local",
+            ["job-123"],
+            experiment_name="exp1",
+        )
         # Pending should be cleared
         assert manager._pending_job_ids == []
         # CPV should be found
@@ -946,6 +951,121 @@ class TestAsyncMode:
         assert (
             mock_enqueue_ci_job.call_args_list[2].kwargs["job_id"] == build_rq_job_2.id
         )
+
+    @patch("crsbench.distributed.verify_queue.submit_async_build_requests")
+    def test_ensure_async_build_jobs_dispatcher_submits_logical_builds(
+        self, mock_submit_builds, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Dispatcher routing submits logical build requests (no RQ deps)."""
+        from crsbench.distributed.queue import (
+            EVALUATOR_ROUTING_MODEL_ENV,
+            ROUTING_MODEL_DISPATCHER,
+        )
+
+        monkeypatch.setenv(EVALUATOR_ROUTING_MODEL_ENV, ROUTING_MODEL_DISPATCHER)
+
+        manager = self._make_manager(tmp_path, redis_host="redis.local")
+        manager._adapter = MagicMock()
+        manager._adapter.benchmark_path = Path("/benchmarks/test-benchmark")
+        manager._adapter.benchmark_name = "test-benchmark"
+        manager._adapter.main_repo = "https://example.com/repo.git"
+        manager._adapter.lang = "c"
+        manager._adapter.repo_name = "repo"
+        manager._adapter.inc_build = True
+        manager._adapter.get_all_cpv_sanitizers.return_value = ["address"]
+        manager._adapter.get_mode.return_value = BenchmarkMode.DELTA
+        manager._adapter.get_base_commit.return_value = "a" * 40
+        manager._adapter.get_ref_commit.return_value = "b" * 40
+        manager._adapter.get_cpv_numbers.return_value = [0]
+
+        config_a = MagicMock()
+        config_a.benchmark_path = Path("/benchmarks/test-benchmark")
+        config_a.benchmark_name = "test-benchmark"
+        config_a.variant_type = VariantType.DELTA_REF
+        config_a.commit = "b" * 40
+        config_a.main_repo = "https://example.com/repo.git"
+        config_a.mode = BenchmarkMode.DELTA
+        config_a.language = "c"
+        config_a.cpv_num = None
+        config_a.patch_id = None
+        config_a.pov_id = None
+        config_a.patches = []
+        config_a.use_inc_build = True
+        config_a.sanitizer = "address"
+        config_a.repo_name = "repo"
+        config_a.variant_name = "variant-a"
+
+        config_b = MagicMock()
+        config_b.benchmark_path = Path("/benchmarks/test-benchmark")
+        config_b.benchmark_name = "test-benchmark"
+        config_b.variant_type = VariantType.CPV
+        config_b.commit = "b" * 40
+        config_b.main_repo = "https://example.com/repo.git"
+        config_b.mode = BenchmarkMode.DELTA
+        config_b.language = "c"
+        config_b.cpv_num = 0
+        config_b.patch_id = None
+        config_b.pov_id = None
+        config_b.patches = []
+        config_b.use_inc_build = True
+        config_b.sanitizer = "address"
+        config_b.repo_name = "repo"
+        config_b.variant_name = "variant-b"
+
+        manager._engine = MagicMock()
+        manager._engine.builder.source_mode = "main_repo"
+        manager._engine.builder.infra.inc_image_policy = "auto"
+        manager._engine.builder.infra.inc_image_registry = "ghcr.io/example"
+        manager._engine.builder.infra.inc_image_max_pull_bytes = 123
+        manager._engine.builder.infra.inc_image_pull_timeout = 45
+        manager._engine.builder.infra.local_image_prefix = "crsbench"
+        manager._engine.builder.create_build_plan.return_value = MagicMock(
+            configs=[config_a, config_b]
+        )
+
+        mock_submit_builds.return_value = [
+            "build:trial-1:test-benchmark:0",
+            "build:trial-1:test-benchmark:1",
+            "build:trial-1:test-benchmark:2",
+        ]
+
+        build_job_ids, build_deps = manager._ensure_async_build_jobs()
+        build_job_ids_repeat, build_deps_repeat = manager._ensure_async_build_jobs()
+
+        assert build_job_ids == mock_submit_builds.return_value[1:]
+        assert build_job_ids_repeat == build_job_ids
+        assert build_deps == []
+        assert build_deps_repeat == build_deps
+        assert manager._async_build_sanitizer == "address"
+        mock_submit_builds.assert_called_once()
+
+    @patch("crsbench.distributed.verify_queue.enqueue_single_pov")
+    def test_enqueue_pov_dispatcher_uses_logical_queue(
+        self, mock_enqueue, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Dispatcher routing enqueues logical verify requests (no RQ queue)."""
+        from crsbench.distributed.queue import (
+            EVALUATOR_ROUTING_MODEL_ENV,
+            ROUTING_MODEL_DISPATCHER,
+        )
+
+        monkeypatch.setenv(EVALUATOR_ROUTING_MODEL_ENV, ROUTING_MODEL_DISPATCHER)
+
+        manager = self._make_manager(tmp_path, redis_host="redis.local")
+        manager._ensure_async_build_jobs = MagicMock(return_value=(["build-1"], []))
+        manager._engine = MagicMock()
+        manager._engine.builder.source_mode = "main_repo"
+        manager._adapter = MagicMock()
+        manager._adapter.inc_build = False
+
+        pov_file = tmp_path / "trial-1" / "pov_output" / "test.blob"
+        pov_file.write_bytes(b"pov_data_content")
+
+        manager._enqueue_pov(pov_file, "abc123hash")
+
+        call_kwargs = mock_enqueue.call_args.kwargs
+        assert call_kwargs["verify_queue"] is None
+        assert call_kwargs["redis_host"] == "redis.local"
 
     @patch("crsbench.evaluation.verification.pov.manager.time.sleep")
     @patch("crsbench.evaluation.verification.pov.manager.time.time")

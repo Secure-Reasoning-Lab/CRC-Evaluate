@@ -615,6 +615,7 @@ def _enqueue_trial_povs(
     dest_dir: Path,
     verify_queue: rq.Queue,
     experiment_name: str,
+    redis_host: Optional[str] = None,
     sanitizer: Optional[str] = None,
 ) -> Optional[_AsyncTrialState]:
     """Enqueue all POVs for a single trial without polling.
@@ -678,6 +679,7 @@ def _enqueue_trial_povs(
             harness=harness,
             pov_id=pov_id,
             pov_data=pov_data,
+            redis_host=redis_host,
             sanitizer=sanitizer,
         )
         if job_id:
@@ -807,6 +809,8 @@ def _drain_all_async_results(
     start_time = time.monotonic()
     timed_out = False
 
+    experiment_name = trials[0].experiment_name if trials else ""
+
     while remaining:
         if time.monotonic() - start_time > timeout_seconds:
             timed_out = True
@@ -816,7 +820,11 @@ def _drain_all_async_results(
             )
             break
 
-        completed, remaining = poll_single_pov_verdicts(redis_host, remaining)
+        completed, remaining = poll_single_pov_verdicts(
+            redis_host,
+            remaining,
+            experiment_name=experiment_name,
+        )
 
         for result_dict in completed:
             try:
@@ -1289,6 +1297,7 @@ def run_reeval(args: argparse.Namespace) -> int:
                             dest_dir=dest_dir,
                             verify_queue=verify_queue,
                             experiment_name=experiment_name,
+                            redis_host=redis_host,
                             sanitizer=trial_sanitizer,
                         )
                         if state:
