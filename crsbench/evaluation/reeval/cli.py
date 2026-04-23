@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -316,6 +317,11 @@ def _reeval_bug_finding(
     sanitizer: Optional[str] = None,
     force_rebuild: bool,
     use_inc_build: bool,
+    inc_image_policy: Optional[str] = None,
+    inc_image_registry: Optional[str] = None,
+    inc_image_max_pull_bytes: Optional[int] = None,
+    inc_image_pull_timeout: Optional[int] = None,
+    local_image_prefix: Optional[str] = None,
 ) -> int:
     """Re-evaluate a bug_finding trial.
 
@@ -350,6 +356,11 @@ def _reeval_bug_finding(
         jobs=jobs,
         cores_per_job=cores_per_job,
         source_mode=source_mode,
+        inc_image_policy=inc_image_policy,
+        inc_image_registry=inc_image_registry,
+        inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+        inc_image_pull_timeout=inc_image_pull_timeout,
+        local_image_prefix=local_image_prefix,
     )
 
     output = engine.verify_benchmark(
@@ -418,6 +429,7 @@ class _AsyncTrialState:
     dest_dir: Path
     job_ids: list[str] = field(default_factory=list)
     pov_hash_to_path: dict[str, Path] = field(default_factory=dict)
+    job_to_pov_id: dict[str, str] = field(default_factory=dict)
 
     @property
     def trial_id(self) -> str:
@@ -526,43 +538,87 @@ def _discover_trial_patches(
     patch_dir: Path,
     *,
     target_cpv_id: Optional[str],
+    pov_dir: Optional[Path] = None,
 ) -> list[tuple[str, str, Path]]:
     """Discover trial patches from output/patches in structured or flat layout."""
     if not patch_dir.exists():
         return []
 
     discovered: list[tuple[str, str, Path]] = []
-    seen_patch_keys: set[tuple[str, str]] = set()
-    # Structured layout: output/patches/<cpv_id>/*.diff
     for cpv_dir in sorted(p for p in patch_dir.iterdir() if p.is_dir()):
         for patch_path in sorted(
             p for p in cpv_dir.iterdir() if p.is_file() and p.suffix == ".diff"
         ):
-            patch_key = (cpv_dir.name, patch_path.stem)
-            if patch_key in seen_patch_keys:
-                continue
-            seen_patch_keys.add(patch_key)
-            discovered.append((cpv_dir.name, patch_path.stem, patch_path))
+            patch_id = _build_trial_patch_id(
+                layout="structured",
+                cpv_id=cpv_dir.name,
+                patch_path=patch_path,
+                patch_dir=patch_dir,
+            )
+            discovered.append((cpv_dir.name, patch_id, patch_path))
 
-    # Flat layout: output/patches/*.diff (map to target CPV)
     flat_patches = sorted(
         p for p in patch_dir.iterdir() if p.is_file() and p.suffix == ".diff"
     )
     if flat_patches:
-        if not target_cpv_id:
-            # Discovery-only mode: no CPV to map flat patches to.
-            # Use "unknown" as a synthetic CPV ID so patches are still collected.
-            cpv_id = "unknown"
-        else:
-            cpv_id = target_cpv_id
+        resolved_target = (
+            target_cpv_id or _infer_single_trial_pov_id(pov_dir) or "unknown"
+        )
         for patch_path in flat_patches:
-            patch_key = (cpv_id, patch_path.stem)
-            if patch_key in seen_patch_keys:
-                continue
-            seen_patch_keys.add(patch_key)
-            discovered.append((cpv_id, patch_path.stem, patch_path))
+            patch_id = _build_trial_patch_id(
+                layout="flat",
+                cpv_id=resolved_target,
+                patch_path=patch_path,
+                patch_dir=patch_dir,
+            )
+            discovered.append((resolved_target, patch_id, patch_path))
 
-    return discovered
+    deduped: list[tuple[str, str, Path]] = []
+    seen_patch_keys: set[tuple[str, str]] = set()
+    for cpv_id, patch_id, patch_path in discovered:
+        patch_key = (cpv_id, patch_id)
+        if patch_key in seen_patch_keys:
+            continue
+        seen_patch_keys.add(patch_key)
+        deduped.append((cpv_id, patch_id, patch_path))
+
+    return deduped
+
+
+def _infer_single_trial_pov_id(pov_dir: Optional[Path]) -> Optional[str]:
+    """Infer a single staged POV/CPV id from crs-input/povs when unambiguous."""
+    if pov_dir is None or not pov_dir.exists():
+        return None
+
+    candidates = sorted(
+        p.name
+        for p in pov_dir.iterdir()
+        if not p.name.startswith(".") and (p.is_file() or p.is_dir())
+    )
+    if len(candidates) != 1:
+        return None
+
+    only_name = candidates[0]
+    suffix = Path(only_name).suffix
+    if suffix in {".blob", ".pov", ".bin"}:
+        return Path(only_name).stem
+    return only_name
+
+
+def _build_trial_patch_id(
+    *,
+    layout: str,
+    cpv_id: str,
+    patch_path: Path,
+    patch_dir: Path,
+) -> str:
+    """Build runner-compatible stable patch IDs within a trial."""
+    rel_path = patch_path.relative_to(patch_dir).as_posix()
+    name_part = re.sub(r"[^a-zA-Z0-9_-]+", "_", patch_path.stem).strip("_")
+    if not name_part:
+        name_part = "patch"
+    digest = hashlib.sha1(f"{layout}:{cpv_id}:{rel_path}".encode()).hexdigest()[:10]
+    return f"{layout}_{name_part}_{digest}"
 
 
 def _find_trial_pov_for_cpv(pov_dir: Path, cpv_id: str) -> Optional[Path]:
@@ -649,8 +705,11 @@ def _enqueue_trial_povs(
     dest_dir: Path,
     verify_queue: rq.Queue,
     experiment_name: str,
+    *,
     redis_host: Optional[str] = None,
     sanitizer: Optional[str] = None,
+    source_mode: str = "pkgs",
+    use_inc_build: bool = True,
 ) -> Optional[_AsyncTrialState]:
     """Enqueue all POVs for a single trial without polling.
 
@@ -715,9 +774,12 @@ def _enqueue_trial_povs(
             pov_data=pov_data,
             redis_host=redis_host,
             sanitizer=sanitizer,
+            source_mode=source_mode,
+            use_inc_build=use_inc_build,
         )
         if job_id:
             state.job_ids.append(job_id)
+            state.job_to_pov_id[job_id] = pov_id
             logger.debug(f"Enqueued POV {pov_id} as job {job_id}")
         else:
             logger.warning(f"Failed to enqueue POV {pov_file.name}")
@@ -759,14 +821,18 @@ def _enqueue_trial_patches(
     target_cpv_id = _infer_target_cpv_id_from_trial_path(
         trial_dir
     ) or _load_target_cpv_id_from_trial_metadata(trial_dir)
-    patches = _discover_trial_patches(patch_dir, target_cpv_id=target_cpv_id)
-    if not patches:
-        logger.warning(f"No patches found in {patch_dir}")
-        return None
-
     pov_dir = TrialDir(trial_dir).input_povs
     if not pov_dir.exists():
         logger.warning(f"No POVs directory found: {pov_dir}")
+        return None
+
+    patches = _discover_trial_patches(
+        patch_dir,
+        target_cpv_id=target_cpv_id,
+        pov_dir=pov_dir,
+    )
+    if not patches:
+        logger.warning(f"No patches found in {patch_dir}")
         return None
 
     state = _AsyncPatchTrialState(
@@ -902,6 +968,30 @@ def _drain_all_async_results(
         if remaining:
             time.sleep(2)
 
+    if timed_out and remaining:
+        remaining_set = set(remaining)
+        for state in trials:
+            trial_results_for_state = trial_results[state.trial_id]
+            job_to_pov_id = getattr(state, "job_to_pov_id", {})
+            for job_id in state.job_ids:
+                if job_id not in remaining_set:
+                    continue
+                pov_id = job_to_pov_id.get(job_id)
+                if not pov_id:
+                    logger.warning(
+                        "Async POV job {} timed out but has no mapped pov_id",
+                        job_id,
+                    )
+                    continue
+                trial_results_for_state.append(
+                    PovVerificationResult(
+                        status=PovVerificationStatus.ERROR,
+                        benchmark=state.benchmark_name,
+                        cpv_matched=[],
+                        pov_id=pov_id,
+                    )
+                )
+
     # Save per-trial results (raw queue verdicts), matching distributed
     # execution semantics.
     total = 0
@@ -1004,7 +1094,7 @@ def _drain_all_async_patch_results(
     timeout_seconds: float = 7200.0,
 ) -> int:
     """Poll all enqueued patch jobs and persist per-trial results."""
-    from crsbench.distributed.patch_queue import poll_patch_verdicts
+    from crsbench.distributed.patch_queue import drain_patch_verdicts
 
     trial_id_map: dict[str, _AsyncPatchTrialState] = {
         state.trial_id: state for state in trials
@@ -1022,42 +1112,29 @@ def _drain_all_async_patch_results(
     logger.info(
         f"Draining {len(all_job_ids)} async patch jobs across {len(trials)} trials"
     )
-    remaining = all_job_ids
-    start_time = time.monotonic()
-    timed_out = False
+    raw_results = drain_patch_verdicts(redis_host, all_job_ids, timeout=timeout_seconds)
+    timed_out = len(raw_results) < len(all_job_ids)
+    if timed_out:
+        logger.warning(
+            "Timed out draining async patch jobs ({} job(s) still pending)",
+            len(all_job_ids) - len(raw_results),
+        )
 
-    while remaining:
-        if time.monotonic() - start_time > timeout_seconds:
-            timed_out = True
-            logger.warning(
-                "Timed out draining async patch jobs ({} job(s) still pending)",
-                len(remaining),
-            )
-            break
-        completed, remaining = poll_patch_verdicts(redis_host, remaining)
-        for result_dict in completed:
+    for result_dict in raw_results:
+        try:
+            tid = result_dict.get("trial_id")
+            if not tid or tid not in trial_id_map:
+                logger.warning(
+                    f"Cannot route patch result for trial_id={tid}, skipping"
+                )
+                continue
+            trial_results[tid].append(_patch_result_from_dict(result_dict))
             try:
-                tid = result_dict.get("trial_id")
-                if not tid or tid not in trial_id_map:
-                    logger.warning(
-                        f"Cannot route patch result for trial_id={tid}, skipping"
-                    )
-                    continue
-                trial_results[tid].append(_patch_result_from_dict(result_dict))
-                try:
-                    _write_async_patch_logs(trial_id_map[tid].dest_dir, result_dict)
-                except Exception as e:
-                    logger.warning(f"Failed to persist async patch logs: {e}")
+                _write_async_patch_logs(trial_id_map[tid].dest_dir, result_dict)
             except Exception as e:
-                logger.warning(f"Failed to process async patch verdict: {e}")
-
-        if completed:
-            logger.info(
-                f"Processed {len(completed)} async patch verdicts, "
-                f"{len(remaining)} pending"
-            )
-        if remaining:
-            time.sleep(2)
+                logger.warning(f"Failed to persist async patch logs: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to process async patch verdict: {e}")
 
     total = 0
     for state in trials:
@@ -1070,7 +1147,7 @@ def _drain_all_async_patch_results(
     if timed_out:
         raise TimeoutError(
             "Timed out draining async patch jobs "
-            f"({len(remaining)} job(s) still pending)"
+            f"({len(all_job_ids) - len(raw_results)} job(s) still pending)"
         )
     return total
 
@@ -1134,13 +1211,19 @@ def _reeval_patch_generation(
     target_cpv_id = _infer_target_cpv_id_from_trial_path(
         trial_dir
     ) or _load_target_cpv_id_from_trial_metadata(trial_dir)
-    patches = _discover_trial_patches(patch_dir, target_cpv_id=target_cpv_id)
+    patches = _discover_trial_patches(
+        patch_dir,
+        target_cpv_id=target_cpv_id,
+        pov_dir=pov_dir,
+    )
     if not patches:
         logger.warning(f"No patches found in {patch_dir}")
         return 0
 
     work_dir = TrialDir(dest_dir).patch_verify_dir
     work_dir.mkdir(parents=True, exist_ok=True)
+    # Match BenchmarkRunner._verify_patches_local(): always rebuild fresh.
+    effective_force_rebuild = force_rebuild or True
 
     engine = PatchVerificationEngine(
         oss_fuzz_path=oss_fuzz_path,
@@ -1149,7 +1232,7 @@ def _reeval_patch_generation(
         build_timeout=1200,
         test_timeout=1800,
         log_dir=work_dir,
-        force_rebuild=force_rebuild,
+        force_rebuild=effective_force_rebuild,
         use_inc_build=use_inc_build,
         jobs=jobs,
         cores_per_job=cores_per_job,
@@ -1247,6 +1330,11 @@ def run_reeval(args: argparse.Namespace) -> int:
     source_mode = args.source or config.get("source_mode") or "pkgs"
     bug_finding_use_inc_build = bool(config.get("inc_build_enabled", True))
     patch_use_inc_build = args.mode == "snapshot"
+    inc_image_policy = config.get("inc_image_policy")
+    inc_image_registry = config.get("inc_image_registry")
+    inc_image_max_pull_bytes = config.get("inc_image_max_pull_bytes")
+    inc_image_pull_timeout = config.get("inc_image_pull_timeout_sec")
+    local_image_prefix = config.get("project_image_prefix")
 
     # Resolve per-POV verify timeout: CLI flag > config > default 180s
     per_pov_verify_timeout = (
@@ -1296,6 +1384,16 @@ def run_reeval(args: argparse.Namespace) -> int:
                 verify_queue=verify_queue_name,
                 benchmarks_root=str(benchmarks_root or Path("benchmarks")),
                 source_mode=source_mode,
+                inc_image_policy=inc_image_policy or "auto",
+                inc_image_registry=inc_image_registry
+                or "ghcr.io/team-atlanta/crsbench",
+                inc_image_max_pull_bytes=inc_image_max_pull_bytes
+                if inc_image_max_pull_bytes is not None
+                else 10 * 1024 * 1024 * 1024,
+                inc_image_pull_timeout_sec=inc_image_pull_timeout or 300,
+                local_image_prefix=local_image_prefix or "crsbench",
+                max_total_time=config.get("max_total_time") or 7200,
+                build_timeout=config.get("build_timeout") or 3600,
                 per_pov_verify_timeout=per_pov_verify_timeout,
             )
             try:
@@ -1385,6 +1483,8 @@ def run_reeval(args: argparse.Namespace) -> int:
                             experiment_name=experiment_name,
                             redis_host=redis_host,
                             sanitizer=trial_sanitizer,
+                            source_mode=source_mode,
+                            use_inc_build=bug_finding_use_inc_build,
                         )
                         if state:
                             async_trials.append(state)
@@ -1402,6 +1502,11 @@ def run_reeval(args: argparse.Namespace) -> int:
                         sanitizer=trial_sanitizer,
                         force_rebuild=args.force_rebuild,
                         use_inc_build=bug_finding_use_inc_build,
+                        inc_image_policy=inc_image_policy,
+                        inc_image_registry=inc_image_registry,
+                        inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+                        inc_image_pull_timeout=inc_image_pull_timeout,
+                        local_image_prefix=local_image_prefix,
                     )
                     total_results += count
 
@@ -1438,11 +1543,11 @@ def run_reeval(args: argparse.Namespace) -> int:
                         patch_verify_variants=patch_verify_variants,
                         force_rebuild=args.force_rebuild,
                         use_inc_build=patch_use_inc_build,
-                        inc_image_policy=config.get("inc_image_policy"),
-                        inc_image_registry=config.get("inc_image_registry"),
-                        inc_image_max_pull_bytes=config.get("inc_image_max_pull_bytes"),
-                        inc_image_pull_timeout=config.get("inc_image_pull_timeout_sec"),
-                        local_image_prefix=config.get("project_image_prefix"),
+                        inc_image_policy=inc_image_policy,
+                        inc_image_registry=inc_image_registry,
+                        inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+                        inc_image_pull_timeout=inc_image_pull_timeout,
+                        local_image_prefix=local_image_prefix,
                     )
                     total_results += count
 
