@@ -1366,10 +1366,12 @@ The teardown safety flow:
 3. Prompts for confirmation (interactive TTY required)
 4. Collects artifacts from worker VMs first and log-only diagnostics from evaluator VMs
 5. Collects logs from the remote orchestrator VM and all worker/evaluator VMs into `.crsbench-cloud/remote-logs/<experiment>/`
-6. Deletes VMs even if some collections fail, to avoid leaking cloud resources
+6. Aborts before deletion if any collection failed, to preserve diagnostic data; pass `--force` to delete VMs anyway
 7. Returns a non-zero exit code if any collection or deletion step failed
 
-Use `--force` to skip the confirmation prompt (e.g., in scripts):
+Use `--force` to skip the confirmation prompt and proceed with deletion even
+when artifact collection fails (e.g., in scripts, or when you accept the data
+loss to free cloud resources):
 
 ```bash
 uv run crsbench cloud --config config.yaml teardown --force

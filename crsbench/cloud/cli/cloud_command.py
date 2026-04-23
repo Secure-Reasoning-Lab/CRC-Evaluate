@@ -99,7 +99,12 @@ Examples:
     teardown_p.add_argument("experiment", nargs="?", help="Experiment name")
     _add_config_argument(teardown_p, suppress_default=True)
     teardown_p.add_argument(
-        "--force", action="store_true", help="Skip confirmation prompt"
+        "--force",
+        action="store_true",
+        help=(
+            "Skip confirmation prompt and proceed with deletion even if "
+            "artifact collection fails"
+        ),
     )
     teardown_p.add_argument(
         "--remote-dir",

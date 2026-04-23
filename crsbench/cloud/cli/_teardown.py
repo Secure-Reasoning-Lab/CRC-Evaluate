@@ -99,8 +99,9 @@ def run_teardown(args: argparse.Namespace) -> int:
     1. Validate GCE instances exist
     2. Cross-reference Redis for stale entries
     3. Prompt for confirmation (unless --force)
-    4. Collect artifacts from each live worker -- abort on ANY failure
-    5. Delete workers only after all collections succeed
+    4. Collect artifacts from each live worker
+    5. Abort before deletion if any collection failed, unless --force is set
+    6. Delete workers
 
     Returns 0 on success, 1 on failure/abort.
     """
@@ -180,7 +181,7 @@ def run_teardown(args: argparse.Namespace) -> int:
             logger.info("Cancelled.")
             return 0
 
-    # Collect phase -- best effort, but teardown still proceeds to avoid leaked VMs.
+    # Collect phase -- abort before deletion on any failure unless --force is set.
     remote_experiment_dir = resolve_remote_experiment_dir(
         context.remote_experiment_root,
         experiment_name,
@@ -261,6 +262,15 @@ def run_teardown(args: argparse.Namespace) -> int:
                 exc,
             )
             collection_failed = True
+
+    if collection_failed and not args.force:
+        logger.error(
+            "Artifact collection failed for experiment {}; aborting teardown to "
+            "preserve data. Re-run with --force to delete instances despite "
+            "collection failures.",
+            experiment_name,
+        )
+        return 1
 
     deletion_failed = False
     try:

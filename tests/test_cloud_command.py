@@ -9865,6 +9865,35 @@ class TestTeardown:
     @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
     @patch("crsbench.cloud.cli._teardown.provisioner_for_context")
     @patch("crsbench.cloud.cli._teardown.reconnect")
+    def test_teardown_aborts_before_deletion_on_collect_failure_without_force(
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
+    ):
+        """Without --force, collect failures must abort teardown before deletion."""
+        from crsbench.cloud.collection import ArtifactCollectionError
+
+        mock_resolve_context.return_value = _make_resolved_cloud_context()
+        mock_prov, mock_coll, _, _ = _setup_teardown_mocks(
+            mock_reconnect, mock_prov_cls, mock_coll_cls
+        )
+        mock_coll.collect.side_effect = ArtifactCollectionError("rsync failed")
+
+        from crsbench.cloud.cli._teardown import run_teardown
+
+        with (
+            patch("builtins.input", return_value="yes"),
+            patch("sys.stdin") as mock_stdin,
+        ):
+            mock_stdin.isatty.return_value = True
+            rc = run_teardown(_make_teardown_args(force=False))
+
+        assert rc == 1
+        mock_prov.delete_workers.assert_not_called()
+        mock_prov.delete_instance.assert_not_called()
+
+    @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
+    @patch("crsbench.cloud.cli._teardown.provisioner_for_context")
+    @patch("crsbench.cloud.cli._teardown.reconnect")
     def test_teardown_force_flag(
         self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
     ):
