@@ -54,6 +54,15 @@ def _resolve_trial_selector_env(args: argparse.Namespace, config) -> dict[str, s
     if args.only_trial_keys_file is not None:
         selected_keys = load_trial_key_file(args.only_trial_keys_file)
     elif args.only_unfinished_from is not None:
+        collected_root = Path(args.only_unfinished_from)
+        if not collected_root.exists():
+            raise CloudProvisioningError(
+                f"Collected root does not exist: {collected_root}"
+            )
+        if not collected_root.is_dir():
+            raise CloudProvisioningError(
+                f"Collected root is not a directory: {collected_root}"
+            )
         selected_keys = derive_unfinished_trial_keys_from_config(
             config,
             collected_root=args.only_unfinished_from,
@@ -170,7 +179,9 @@ def run_launch(args: argparse.Namespace) -> int:
     orchestrator_created_records: list[CreatedCloudInstanceRecord] = []
     worker_created_records: list[CreatedCloudInstanceRecord] = []
     evaluator_created_records: list[CreatedCloudInstanceRecord] = []
+    selector_env: dict[str, str] = {}
     try:
+        selector_env = _resolve_trial_selector_env(args, config)
         if registration is None:
             raise CloudProvisioningError(
                 "Runtime registration is required for cloud launch"
@@ -211,7 +222,7 @@ def run_launch(args: argparse.Namespace) -> int:
         validator = QuotaValidator(adapters={"gce": adapter})
         validator.validate(launch_plan)
         orchestrator_env = dict(preflight.orchestrator_env or {})
-        orchestrator_env.update(_resolve_trial_selector_env(args, config))
+        orchestrator_env.update(selector_env)
 
         orchestrator_record = adapter.create_orchestrator(
             plan=provisioning_plan,

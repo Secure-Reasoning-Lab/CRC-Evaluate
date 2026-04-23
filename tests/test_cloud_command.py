@@ -1309,7 +1309,12 @@ def test_run_launch_fails_on_quota_shortage_before_creating_instances(tmp_path: 
 
     config_path = tmp_path / "config.yaml"
     config_path.write_text("experiment: ignored\n", encoding="utf-8")
-    args = argparse.Namespace(config=str(config_path))
+    args = argparse.Namespace(
+        config=str(config_path),
+        only_trial_keys_file=None,
+        only_unfinished_from=None,
+        rerun_failed_trials=False,
+    )
 
     with (
         patch(
@@ -5063,6 +5068,174 @@ class TestLaunch:
         mock_derive_trial_keys,
         mock_save_state,
         mock_secret,
+        tmp_path: Path,
+    ):
+        del mock_save_state, mock_secret
+        config = _make_provider_neutral_experiment_config()
+        mock_load.return_value = config
+        collected_root = tmp_path / "collected"
+        collected_root.mkdir(parents=True)
+
+        launch_plan = MagicMock(experiment_name="test-exp")
+        resolved_plan = MagicMock(experiment_name="test-exp")
+        expected_worker_fleets = (
+            _make_provider_neutral_launch_state().worker_fleet_configs
+        )
+        mock_build_plan.return_value = launch_plan
+        mock_preflight.return_value = MagicMock(
+            resolved_plan=resolved_plan,
+            redacted_worker_fleets=expected_worker_fleets,
+            redacted_evaluator_fleets=[],
+            orchestrator_env={"CRSBENCH_LLM_MASTER_KEY": "master-key"},
+            worker_placement_envs=[],
+            evaluator_placement_envs=[],
+        )
+        mock_validator_cls.return_value.validate.return_value = None
+        mock_adapter = mock_adapter_cls.return_value
+        mock_adapter.build_orchestrator_config.return_value.project = "test-project"
+        mock_adapter.build_orchestrator_config.return_value.ssh_via_iap = True
+        mock_adapter.create_orchestrator.return_value = _make_gce_worker(
+            "gce-orchestrator-test-exp", zone="us-east5-b", ip="10.0.0.50"
+        )
+        mock_adapter.create_workers.return_value = [_make_gce_worker("worker-east5")]
+        mock_adapter.create_evaluators.return_value = []
+
+        from crsbench.cloud.cli._launch import run_launch
+
+        rc = run_launch(
+            _make_launch_args(
+                only_unfinished_from=str(collected_root),
+                rerun_failed_trials=True,
+            )
+        )
+
+        assert rc == 0
+        mock_derive_trial_keys.assert_called_once_with(
+            config,
+            collected_root=str(collected_root),
+            rerun_failed_trials=True,
+        )
+        assert mock_adapter.create_orchestrator.call_args.kwargs["env_passthrough"] == {
+            "CRSBENCH_LLM_MASTER_KEY": "master-key",
+            TRIAL_KEY_ALLOWLIST_ENV_VAR: encode_trial_key_allowlist(
+                ["trial-key-3", "trial-key-4"]
+            ),
+        }
+
+    @patch("crsbench.cloud.cli._launch.QuotaValidator")
+    @patch("crsbench.cloud.cli._launch.prepare_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
+    @patch("crsbench.cloud.cli._launch.logger")
+    @patch("crsbench.cloud.cli._launch.load_experiment_config")
+    def test_launch_fails_fast_for_rerun_failed_trials_without_unfinished_source(
+        self,
+        mock_load,
+        mock_logger,
+        mock_build_plan,
+        mock_preflight,
+        mock_validator_cls,
+    ):
+        mock_load.return_value = _make_provider_neutral_experiment_config()
+
+        from crsbench.cloud.cli._launch import run_launch
+
+        rc = run_launch(_make_launch_args(rerun_failed_trials=True))
+
+        assert rc == 1
+        mock_build_plan.assert_not_called()
+        mock_preflight.assert_not_called()
+        mock_validator_cls.assert_not_called()
+        mock_logger.error.assert_called_once_with(
+            "Cloud launch failed: {}",
+            "--rerun-failed-trials requires --only-unfinished-from",
+        )
+
+    @patch("crsbench.cloud.cli._launch.QuotaValidator")
+    @patch("crsbench.cloud.cli._launch.prepare_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
+    @patch("crsbench.cloud.cli._launch.logger")
+    @patch("crsbench.cloud.cli._launch.derive_unfinished_trial_keys_from_config")
+    @patch("crsbench.cloud.cli._launch.load_experiment_config")
+    def test_launch_fails_fast_for_missing_unfinished_source_path(
+        self,
+        mock_load,
+        mock_derive_trial_keys,
+        mock_logger,
+        mock_build_plan,
+        mock_preflight,
+        mock_validator_cls,
+    ):
+        del mock_validator_cls
+        mock_load.return_value = _make_provider_neutral_experiment_config()
+        missing_path = "/tmp/does-not-exist-collected-root"
+
+        from crsbench.cloud.cli._launch import run_launch
+
+        rc = run_launch(_make_launch_args(only_unfinished_from=missing_path))
+
+        assert rc == 1
+        mock_derive_trial_keys.assert_not_called()
+        mock_build_plan.assert_not_called()
+        mock_preflight.assert_not_called()
+        mock_logger.error.assert_called_once_with(
+            "Cloud launch failed: {}",
+            f"Collected root does not exist: {Path(missing_path)}",
+        )
+
+    @patch("crsbench.cloud.cli._launch.QuotaValidator")
+    @patch("crsbench.cloud.cli._launch.prepare_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
+    @patch("crsbench.cloud.cli._launch.logger")
+    @patch("crsbench.cloud.cli._launch.derive_unfinished_trial_keys_from_config")
+    @patch("crsbench.cloud.cli._launch.load_experiment_config")
+    def test_launch_fails_fast_for_unfinished_source_file_path(
+        self,
+        mock_load,
+        mock_derive_trial_keys,
+        mock_logger,
+        mock_build_plan,
+        mock_preflight,
+        mock_validator_cls,
+        tmp_path: Path,
+    ):
+        del mock_validator_cls
+        mock_load.return_value = _make_provider_neutral_experiment_config()
+        file_path = tmp_path / "collected-root.txt"
+        file_path.write_text("not a directory", encoding="utf-8")
+
+        from crsbench.cloud.cli._launch import run_launch
+
+        rc = run_launch(_make_launch_args(only_unfinished_from=str(file_path)))
+
+        assert rc == 1
+        mock_derive_trial_keys.assert_not_called()
+        mock_build_plan.assert_not_called()
+        mock_preflight.assert_not_called()
+        mock_logger.error.assert_called_once_with(
+            "Cloud launch failed: {}",
+            f"Collected root is not a directory: {file_path}",
+        )
+
+    @patch(
+        "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
+    )
+    @patch("crsbench.cloud.cli._launch.save_launch_state")
+    @patch("crsbench.cloud.cli._launch.load_trial_key_file", return_value=[])
+    @patch("crsbench.cloud.cli._launch.prepare_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.provider_adapter_for_launch_plan")
+    @patch("crsbench.cloud.cli._launch.QuotaValidator")
+    @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
+    @patch("crsbench.cloud.cli._launch.load_experiment_config")
+    def test_provider_neutral_launch_transports_empty_selector_allowlist_env(
+        self,
+        mock_load,
+        mock_build_plan,
+        mock_validator_cls,
+        mock_adapter_cls,
+        mock_preflight,
+        mock_load_trial_key_file,
+        mock_save_state,
+        mock_secret,
     ):
         del mock_save_state, mock_secret
         config = _make_provider_neutral_experiment_config()
@@ -5094,24 +5267,13 @@ class TestLaunch:
 
         from crsbench.cloud.cli._launch import run_launch
 
-        rc = run_launch(
-            _make_launch_args(
-                only_unfinished_from="/tmp/collected",
-                rerun_failed_trials=True,
-            )
-        )
+        rc = run_launch(_make_launch_args(only_trial_keys_file="/tmp/trial-keys.txt"))
 
         assert rc == 0
-        mock_derive_trial_keys.assert_called_once_with(
-            config,
-            collected_root="/tmp/collected",
-            rerun_failed_trials=True,
-        )
+        mock_load_trial_key_file.assert_called_once_with("/tmp/trial-keys.txt")
         assert mock_adapter.create_orchestrator.call_args.kwargs["env_passthrough"] == {
             "CRSBENCH_LLM_MASTER_KEY": "master-key",
-            TRIAL_KEY_ALLOWLIST_ENV_VAR: encode_trial_key_allowlist(
-                ["trial-key-3", "trial-key-4"]
-            ),
+            TRIAL_KEY_ALLOWLIST_ENV_VAR: encode_trial_key_allowlist([]),
         }
 
     @patch(
