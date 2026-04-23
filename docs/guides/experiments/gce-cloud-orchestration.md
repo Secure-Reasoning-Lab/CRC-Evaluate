@@ -850,6 +850,13 @@ This path:
 4. Provisions workers across all `cloud.workers.placements` and evaluators across all `cloud.evaluators.placements`, passing the orchestrator Redis host/password
 5. Lets the remote orchestrator VM clone CRSBench, run `crsbench prepare`, optionally download benchmarks, start Valkey, rewrite the experiment config to use local Redis, wait for the pre-provisioned workers/evaluators to exist in GCE inventory, and run `crsbench run` while late workers/evaluators continue booting in the background
 
+When `cloud.bootstrap.download_benchmarks` resolves to enabled, CRSBench
+automatically staggers benchmark downloads across the fleet to reduce upstream
+bursting. The launch order is deterministic: orchestrator, worker 1,
+evaluator 1, remaining workers, then remaining evaluators. At most 3 VMs start
+their benchmark download in each 300-second window, spaced 10 seconds apart
+inside that window.
+
 `cloud launch` persists local launch state next to the config file under
 `.crsbench-cloud/<experiment>.json`. Later `cloud status`, `cloud collect`, and
 `cloud teardown` commands reuse that state automatically. `cloud status` and
@@ -959,6 +966,9 @@ Bootstrap behavior:
   `crsbench worker` / `crsbench evaluator` services.
 - Transport-level Redis connection failures retry until the readiness timeout;
   fatal auth or config errors fail immediately with bootstrap evidence.
+- If benchmark download is enabled, startup sleeps only before the benchmark
+  download step using the GCE metadata-provided stagger; package install,
+  checkout, Docker setup, and other bootstrap work still start immediately.
 - The same startup scripts support local rehearsal via file-backed metadata and
   a foreground mode for non-`systemd` containers.
 - `CRSBENCH_TIMEZONE` and `CRSBENCH_GIT_SSH_HOST` can be set through

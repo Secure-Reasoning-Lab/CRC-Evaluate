@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
+import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +25,10 @@ BenchmarkSelectorList = list[BenchmarkSelectorInput]
 
 DEFAULT_BENCHMARKS_ROOT = Path("benchmarks")
 DEFAULT_BENCHMARK_SUITES_ROOT = Path("benchmark-suites")
+CRSBENCH_DOWNLOAD_DELAY_SEC_ENV = "CRSBENCH_DOWNLOAD_DELAY_SEC"
+_DOWNLOAD_DELAY_WINDOW_SEC = 300
+_DOWNLOAD_DELAY_SPACING_SEC = 10
+_DOWNLOAD_DELAY_WAVE_SIZE = 3
 
 
 @dataclass(frozen=True)
@@ -232,6 +238,48 @@ def run_benchmark_download(
     raise ValueError("Cloud VM bootstrap requires a benchmark selector")
 
 
+def build_download_delay_schedule(
+    *,
+    orchestrator_name: str,
+    worker_names: list[str],
+    evaluator_names: list[str],
+) -> dict[str, int]:
+    """Build a conservative benchmark-download stagger schedule for one launch."""
+    ordered_names = [orchestrator_name]
+    if worker_names:
+        ordered_names.append(worker_names[0])
+    if evaluator_names:
+        ordered_names.append(evaluator_names[0])
+    ordered_names.extend(worker_names[1:])
+    ordered_names.extend(evaluator_names[1:])
+
+    if len(set(ordered_names)) != len(ordered_names):
+        raise ValueError("Cloud download delay schedule requires unique instance names")
+
+    return {
+        instance_name: (index // _DOWNLOAD_DELAY_WAVE_SIZE) * _DOWNLOAD_DELAY_WINDOW_SEC
+        + (index % _DOWNLOAD_DELAY_WAVE_SIZE) * _DOWNLOAD_DELAY_SPACING_SEC
+        for index, instance_name in enumerate(ordered_names)
+    }
+
+
+def run_benchmark_download_with_delay(
+    selector: CloudBenchmarkSelector,
+    *,
+    download_delay_sec: int,
+    download_fn: Callable[[CloudBenchmarkSelector], list[Path]] | None = None,
+) -> list[Path]:
+    """Sleep for the scheduled delay, then download the selected benchmarks."""
+    if download_delay_sec < 0:
+        raise ValueError(
+            f"{CRSBENCH_DOWNLOAD_DELAY_SEC_ENV} must be non-negative, got {download_delay_sec}"
+        )
+    if download_delay_sec > 0:
+        time.sleep(download_delay_sec)
+    selected_download = run_benchmark_download if download_fn is None else download_fn
+    return selected_download(selector)
+
+
 def run_cloud_vm_bootstrap(
     inputs: CloudVmBootstrapInputs,
     *,
@@ -239,15 +287,20 @@ def run_cloud_vm_bootstrap(
     runner: Callable[..., object] | None = None,
     download_suite_fn: Callable[..., list[Path]] | None = None,
     download_dataset_fn: Callable[..., Path] | None = None,
+    download_delay_sec: int | None = None,
 ) -> list[Path]:
     """Run the shared prepare/download bootstrap sequence for a cloud VM."""
     run_prepare(inputs.prepare_mode, cwd=cwd, runner=runner)
     if not should_download_benchmarks(inputs):
         return []
-    return run_benchmark_download(
+    return run_benchmark_download_with_delay(
         inputs.selector,
-        download_suite_fn=download_suite_fn,
-        download_dataset_fn=download_dataset_fn,
+        download_delay_sec=_resolve_download_delay_sec(download_delay_sec),
+        download_fn=lambda selector: run_benchmark_download(
+            selector,
+            download_suite_fn=download_suite_fn,
+            download_dataset_fn=download_dataset_fn,
+        ),
     )
 
 
@@ -259,6 +312,26 @@ def _group_benchmarks_by_dataset(benchmarks: list[str]) -> OrderedDict[str, list
             raise ValueError(f"Unknown benchmark selector: {benchmark}")
         grouped.setdefault(dataset, []).append(benchmark)
     return grouped
+
+
+def _resolve_download_delay_sec(download_delay_sec: int | None) -> int:
+    if download_delay_sec is not None:
+        return download_delay_sec
+
+    raw_value = os.environ.get(CRSBENCH_DOWNLOAD_DELAY_SEC_ENV, "")
+    if raw_value == "":
+        return 0
+    try:
+        parsed = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(
+            f"{CRSBENCH_DOWNLOAD_DELAY_SEC_ENV} must be an integer number of seconds, got {raw_value!r}"
+        ) from exc
+    if parsed < 0:
+        raise ValueError(
+            f"{CRSBENCH_DOWNLOAD_DELAY_SEC_ENV} must be non-negative, got {parsed}"
+        )
+    return parsed
 
 
 def _normalize_optional_string(value: str | None) -> str | None:

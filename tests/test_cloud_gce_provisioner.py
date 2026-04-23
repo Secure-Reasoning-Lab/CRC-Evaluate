@@ -362,7 +362,10 @@ def _make_provider_neutral_experiment_config_with_regional_workers() -> (
 
 def test_build_requests_include_experiment_identity_labels_and_bootstrap_metadata():
     """Rendered instance requests should carry stable names, labels, and payloads."""
-    from crsbench.cloud.gce.metadata import CRSBENCH_BOOTSTRAP_PAYLOAD_KEY
+    from crsbench.cloud.gce.metadata import (
+        CRSBENCH_BOOTSTRAP_PAYLOAD_KEY,
+        CRSBENCH_DOWNLOAD_DELAY_SEC_KEY,
+    )
     from crsbench.cloud.gce.provisioner import GceProvisioner
 
     provisioner = GceProvisioner(client=_RecordingClient())
@@ -372,6 +375,10 @@ def test_build_requests_include_experiment_identity_labels_and_bootstrap_metadat
         fleet=_make_fleet(),
         redis_host="redis.internal:6380",
         registration=_make_registration(),
+        download_delay_by_name={
+            "gce-worker-001": 10,
+            "gce-worker-002": 300,
+        },
     )
 
     assert [request.name for request in requests] == [
@@ -385,6 +392,8 @@ def test_build_requests_include_experiment_identity_labels_and_bootstrap_metadat
     assert first.labels["env"] == "prod"
     assert first.metadata["enable-oslogin"] == "TRUE"
     assert first.metadata["serial-port-enable"] == "TRUE"
+    assert first.metadata[CRSBENCH_DOWNLOAD_DELAY_SEC_KEY] == "10"
+    assert requests[1].metadata[CRSBENCH_DOWNLOAD_DELAY_SEC_KEY] == "300"
 
     payload = _decode_payload(first.metadata[CRSBENCH_BOOTSTRAP_PAYLOAD_KEY])
     assert payload["experiment"] == "Exp.Cloud 42"
@@ -397,7 +406,10 @@ def test_build_requests_include_experiment_identity_labels_and_bootstrap_metadat
 
 def test_build_evaluator_requests_include_role_labels_and_config_metadata(tmp_path):
     """Evaluator requests should carry evaluator role labels and serialized config metadata."""
-    from crsbench.cloud.gce.metadata import CRSBENCH_EXPERIMENT_CONFIG_B64_KEY
+    from crsbench.cloud.gce.metadata import (
+        CRSBENCH_DOWNLOAD_DELAY_SEC_KEY,
+        CRSBENCH_EXPERIMENT_CONFIG_B64_KEY,
+    )
     from crsbench.cloud.gce.provisioner import GceProvisioner
 
     config_path = tmp_path / "config.yaml"
@@ -413,6 +425,9 @@ def test_build_evaluator_requests_include_role_labels_and_config_metadata(tmp_pa
         redis_host="redis.internal:6380",
         registration=_make_registration(),
         experiment_config_path=config_path,
+        download_delay_by_name={
+            "evaluator-exp-cloud-42-us-east5-b-001": 20,
+        },
     )
 
     assert [request.name for request in requests] == [
@@ -421,6 +436,27 @@ def test_build_evaluator_requests_include_role_labels_and_config_metadata(tmp_pa
     first = requests[0]
     assert first.labels["crsbench-role"] == "evaluator"
     assert CRSBENCH_EXPERIMENT_CONFIG_B64_KEY in first.metadata
+    assert first.metadata[CRSBENCH_DOWNLOAD_DELAY_SEC_KEY] == "20"
+
+
+def test_build_orchestrator_request_includes_download_delay_metadata(tmp_path):
+    """Orchestrator request metadata should include its scheduled download delay."""
+    from crsbench.cloud.gce.metadata import CRSBENCH_DOWNLOAD_DELAY_SEC_KEY
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("experiment: exp-cloud-42\n", encoding="utf-8")
+    provisioner = GceProvisioner(client=_RecordingClient())
+
+    request = provisioner.build_orchestrator_request(
+        experiment_name="Exp.Cloud 42",
+        orchestrator=_make_orchestrator(instance_name_prefix=None),
+        experiment_config_path=config_path,
+        redis_password="shared-secret",
+        download_delay_sec=0,
+    )
+
+    assert request.metadata[CRSBENCH_DOWNLOAD_DELAY_SEC_KEY] == "0"
 
 
 def test_build_worker_names_rejects_invalid_gce_name_length():
@@ -751,6 +787,68 @@ def test_gce_provider_adapter_creates_worker_fleets_in_parallel() -> None:
     ]
     assert max_active == len(fleets)
     assert provisioner.create_workers.call_count == len(fleets)
+
+
+def test_gce_provider_adapter_passes_conservative_download_delay_schedule_to_provisioner() -> (
+    None
+):
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+
+    plan = build_cloud_launch_plan(
+        _make_provider_neutral_experiment_config_with_evaluators()
+    )
+    provisioner = GceProvisioner(client=_RecordingClient())
+    provisioner.create_workers = MagicMock(return_value=[])
+    provisioner.create_evaluators = MagicMock(return_value=[])
+    provisioner.create_orchestrator = MagicMock(
+        return_value=GceWorkerRecord(
+            name="crsbench-exp-cloud-42-orch",
+            instance_id="orch-001",
+            status="RUNNING",
+            zone="us-east5-b",
+        )
+    )
+    adapter = GceProviderAdapter(provisioner=provisioner)
+
+    adapter.create_workers(
+        plan=plan,
+        redis_host="redis.internal:6380",
+        redis_password="shared-secret",
+        registration=_make_registration(),
+    )
+    adapter.create_evaluators(
+        plan=plan,
+        redis_host="redis.internal:6380",
+        redis_password="shared-secret",
+        registration=_make_registration(),
+        experiment_config_path="config.yaml",
+    )
+    adapter.create_orchestrator(
+        plan=plan,
+        experiment_config_path="config.yaml",
+        redis_password="shared-secret",
+    )
+
+    expected_schedule = {
+        "crsbench-exp-cloud-42-orch": 0,
+        "crsbench-exp-cloud-42-work-001": 10,
+        "crsbench-exp-cloud-42-eval-001": 20,
+        "crsbench-exp-cloud-42-work-002": 300,
+        "crsbench-exp-cloud-42-work-003": 310,
+        "crsbench-exp-cloud-42-eval-002": 320,
+        "crsbench-exp-cloud-42-eval-003": 600,
+    }
+
+    assert provisioner.create_workers.call_count == 2
+    for call in provisioner.create_workers.call_args_list:
+        assert call.kwargs["download_delay_by_name"] == expected_schedule
+
+    assert provisioner.create_evaluators.call_count == 2
+    for call in provisioner.create_evaluators.call_args_list:
+        assert call.kwargs["download_delay_by_name"] == expected_schedule
+
+    assert provisioner.create_orchestrator.call_args.kwargs["download_delay_sec"] == 0
 
 
 def test_create_workers_waits_for_operations_and_normalizes_provider_instances():

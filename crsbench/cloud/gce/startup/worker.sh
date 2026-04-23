@@ -1017,6 +1017,8 @@ REDIS_PASSWORD="$(metadata_get_optional "crsbench-redis-password")"
 INSTANCE_ID="$(instance_metadata_get "id")"
 ZONE_PATH="$(instance_metadata_get "zone")"
 ZONE="${ZONE_PATH##*/}"
+CRSBENCH_DOWNLOAD_DELAY_SEC="$(metadata_get_optional "crsbench-download-delay-sec")"
+export CRSBENCH_DOWNLOAD_DELAY_SEC="${CRSBENCH_DOWNLOAD_DELAY_SEC:-0}"
 if [[ "${CRSBENCH_STARTUP_MODE}" == "evaluator" ]]; then
   metadata_get_optional "crsbench-experiment-config-b64" | base64 --decode > "${EXPERIMENT_CONFIG_PATH}"
 fi
@@ -1101,6 +1103,7 @@ write_env_var "CRSBENCH_CLOUD_EXPERIMENT" "${EXPERIMENT_NAME}"
 write_env_var "CRSBENCH_CLOUD_INSTANCE_ID" "${INSTANCE_ID}"
 write_env_var "CRSBENCH_CLOUD_ROLE" "${CRSBENCH_STARTUP_MODE}"
 write_env_var "CRSBENCH_CLOUD_ZONE" "${ZONE}"
+write_env_var "CRSBENCH_DOWNLOAD_DELAY_SEC" "${CRSBENCH_DOWNLOAD_DELAY_SEC}"
 write_env_var "CRSBENCH_LOG_LEVEL" "INFO"
 if [[ "${CRSBENCH_STARTUP_MODE}" == "evaluator" ]]; then
   write_env_var "CRSBENCH_EVALUATOR_NAME" "${EVALUATOR_NAME}"

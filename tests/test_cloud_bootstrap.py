@@ -10,8 +10,11 @@ from crsbench.cloud.bootstrap import (
     CloudBenchmarkSelector,
     CloudVmBootstrapInputs,
     bootstrap_inputs_from_payload,
+    build_download_delay_schedule,
     prepare_command_args,
     run_benchmark_download,
+    run_benchmark_download_with_delay,
+    run_cloud_vm_bootstrap,
     run_prepare,
     should_download_benchmarks,
 )
@@ -124,6 +127,111 @@ def test_bootstrap_inputs_from_payload_restores_defaults_and_explicit_fields():
     assert inputs.benchmarks is None
     assert inputs.benchmarks_root == Path("benchmarks")
     assert inputs.benchmark_suites_root == Path("benchmark-suites-custom")
+
+
+def test_build_download_delay_schedule_uses_conservative_priority_waves() -> None:
+    assert build_download_delay_schedule(
+        orchestrator_name="crsbench-exp-orch",
+        worker_names=[
+            "crsbench-exp-work-001",
+            "crsbench-exp-work-002",
+            "crsbench-exp-work-003",
+            "crsbench-exp-work-004",
+            "crsbench-exp-work-005",
+        ],
+        evaluator_names=[
+            "crsbench-exp-eval-001",
+            "crsbench-exp-eval-002",
+            "crsbench-exp-eval-003",
+        ],
+    ) == {
+        "crsbench-exp-orch": 0,
+        "crsbench-exp-work-001": 10,
+        "crsbench-exp-eval-001": 20,
+        "crsbench-exp-work-002": 300,
+        "crsbench-exp-work-003": 310,
+        "crsbench-exp-work-004": 320,
+        "crsbench-exp-work-005": 600,
+        "crsbench-exp-eval-002": 610,
+        "crsbench-exp-eval-003": 620,
+    }
+
+
+def test_run_benchmark_download_with_delay_sleeps_before_download(monkeypatch) -> None:
+    sleep_calls: list[int] = []
+    download_calls: list[str] = []
+
+    def fake_sleep(seconds: int) -> None:
+        sleep_calls.append(seconds)
+
+    def fake_download(selector: CloudBenchmarkSelector) -> list[Path]:
+        download_calls.append(selector.benchmark_suite or "benchmarks")
+        return [Path("/tmp/benchmarks")]
+
+    monkeypatch.setattr(bootstrap_module.time, "sleep", fake_sleep)
+
+    selector = CloudBenchmarkSelector.from_inputs(
+        CloudVmBootstrapInputs(benchmark_suite="afc-final")
+    )
+
+    result = run_benchmark_download_with_delay(
+        selector,
+        download_delay_sec=310,
+        download_fn=fake_download,
+    )
+
+    assert sleep_calls == [310]
+    assert download_calls == ["afc-final"]
+    assert result == [Path("/tmp/benchmarks")]
+
+
+def test_run_cloud_vm_bootstrap_reads_download_delay_from_env(
+    monkeypatch, tmp_path: Path
+) -> None:
+    prepare_calls: list[tuple[str, Path]] = []
+    download_calls: list[tuple[str | None, int, bool]] = []
+
+    def fake_run_prepare(
+        prepare_mode: str,
+        *,
+        cwd: Path | None = None,
+        runner=None,
+    ) -> None:
+        del runner
+        assert cwd is not None
+        prepare_calls.append((prepare_mode, cwd))
+
+    def fake_run_benchmark_download_with_delay(
+        selector: CloudBenchmarkSelector,
+        *,
+        download_delay_sec: int,
+        download_fn,
+    ) -> list[Path]:
+        download_calls.append(
+            (
+                selector.benchmark_suite,
+                download_delay_sec,
+                download_fn is not None,
+            )
+        )
+        return [Path("/tmp/benchmarks")]
+
+    monkeypatch.setenv("CRSBENCH_DOWNLOAD_DELAY_SEC", "20")
+    monkeypatch.setattr(bootstrap_module, "run_prepare", fake_run_prepare)
+    monkeypatch.setattr(
+        bootstrap_module,
+        "run_benchmark_download_with_delay",
+        fake_run_benchmark_download_with_delay,
+    )
+
+    result = run_cloud_vm_bootstrap(
+        CloudVmBootstrapInputs(benchmark_suite="afc-final"),
+        cwd=tmp_path,
+    )
+
+    assert prepare_calls == [("full", tmp_path)]
+    assert download_calls == [("afc-final", 20, True)]
+    assert result == [Path("/tmp/benchmarks")]
 
 
 @pytest.mark.parametrize(

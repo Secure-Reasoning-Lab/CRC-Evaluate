@@ -25,6 +25,7 @@ CRSBENCH_GITHUB_DEPLOY_KEY = "crsbench-github-deploy-key"
 CRSBENCH_ENV_PASSTHROUGH_B64_KEY = "crsbench-env-passthrough-b64"
 CRSBENCH_REDIS_PASSWORD_KEY = "crsbench-redis-password"
 CRSBENCH_EXPERIMENT_CONFIG_B64_KEY = "crsbench-experiment-config-b64"
+CRSBENCH_DOWNLOAD_DELAY_SEC_KEY = "crsbench-download-delay-sec"
 CRSBENCH_EXPERIMENT_METADATA_KEY = "crsbench-experiment"
 CRSBENCH_WORKER_NAME_METADATA_KEY = "crsbench-worker-name"
 CRSBENCH_READINESS_TIMEOUT_METADATA_KEY = "crsbench-readiness-timeout-sec"
@@ -342,6 +343,7 @@ def build_instance_metadata(
     registration: RuntimeRegistration,
     bootstrap_inputs: CloudVmBootstrapInputs | None = None,
     env_passthrough: dict[str, str] | None = None,
+    download_delay_sec: int | None = None,
     worker_name: str | None,
     startup_script: str,
 ) -> dict[str, str]:
@@ -361,6 +363,8 @@ def build_instance_metadata(
     if worker_name is not None:
         metadata[CRSBENCH_WORKER_NAME_METADATA_KEY] = worker_name
     metadata[CRSBENCH_READINESS_TIMEOUT_METADATA_KEY] = str(fleet.readiness_timeout_sec)
+    if download_delay_sec is not None:
+        metadata[CRSBENCH_DOWNLOAD_DELAY_SEC_KEY] = str(download_delay_sec)
     if redis_password:
         metadata[CRSBENCH_REDIS_PASSWORD_KEY] = redis_password
 
@@ -389,6 +393,7 @@ def build_evaluator_metadata(
     redis_password: str | None = None,
     bootstrap_inputs: CloudVmBootstrapInputs | None = None,
     env_passthrough: dict[str, str] | None = None,
+    download_delay_sec: int | None = None,
     startup_script: str,
 ) -> dict[str, str]:
     """Render metadata consumed by the GCE evaluator bootstrap."""
@@ -407,6 +412,8 @@ def build_evaluator_metadata(
     if evaluator_name is not None:
         metadata[CRSBENCH_WORKER_NAME_METADATA_KEY] = evaluator_name
     metadata[CRSBENCH_READINESS_TIMEOUT_METADATA_KEY] = str(fleet.readiness_timeout_sec)
+    if download_delay_sec is not None:
+        metadata[CRSBENCH_DOWNLOAD_DELAY_SEC_KEY] = str(download_delay_sec)
     metadata[CRSBENCH_EXPERIMENT_CONFIG_B64_KEY] = base64.b64encode(
         _read_experiment_config_bytes(experiment_config_path)
     ).decode("ascii")
@@ -433,6 +440,7 @@ def build_orchestrator_metadata(
     orchestrator: GceOrchestratorConfig,
     experiment_config_path: str | Path,
     env_passthrough: dict[str, str] | None = None,
+    download_delay_sec: int | None = None,
     redis_password: str,
     startup_script: str,
 ) -> dict[str, str]:
@@ -440,6 +448,8 @@ def build_orchestrator_metadata(
     metadata = dict(orchestrator.metadata)
     metadata[CRSBENCH_EXPERIMENT_METADATA_KEY] = experiment_name
     metadata[CRSBENCH_REDIS_PASSWORD_KEY] = redis_password
+    if download_delay_sec is not None:
+        metadata[CRSBENCH_DOWNLOAD_DELAY_SEC_KEY] = str(download_delay_sec)
     metadata[CRSBENCH_EXPERIMENT_CONFIG_B64_KEY] = base64.b64encode(
         _read_experiment_config_bytes(experiment_config_path)
     ).decode("ascii")

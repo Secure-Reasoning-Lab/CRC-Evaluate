@@ -116,6 +116,7 @@ def test_build_instance_metadata_includes_vm_bootstrap_policy_and_selector():
     """Worker payload should include prepare/download policy and benchmark selectors."""
     from crsbench.cloud.gce.metadata import (
         CRSBENCH_BOOTSTRAP_PAYLOAD_KEY,
+        CRSBENCH_DOWNLOAD_DELAY_SEC_KEY,
         build_instance_metadata,
     )
 
@@ -132,12 +133,14 @@ def test_build_instance_metadata_includes_vm_bootstrap_policy_and_selector():
             benchmarks_root=Path("/srv/benchmarks"),
             benchmark_suites_root=Path("/srv/benchmark-suites"),
         ),
+        download_delay_sec=10,
         worker_name="gce-worker-001",
         startup_script="#!/usr/bin/env bash\necho boot\n",
     )
 
     payload = _decode_payload(metadata[CRSBENCH_BOOTSTRAP_PAYLOAD_KEY])
 
+    assert metadata[CRSBENCH_DOWNLOAD_DELAY_SEC_KEY] == "10"
     assert payload["prepare_mode"] == "skip_base_images"
     assert payload["download_benchmarks"] == "always"
     assert payload["gitcache"] is True
@@ -269,6 +272,7 @@ def test_build_evaluator_metadata_embeds_startup_script_and_config_payload(tmp_p
     """Evaluator metadata should embed config payload and evaluator runtime settings."""
     from crsbench.cloud.gce.metadata import (
         CRSBENCH_BOOTSTRAP_PAYLOAD_KEY,
+        CRSBENCH_DOWNLOAD_DELAY_SEC_KEY,
         build_evaluator_metadata,
     )
 
@@ -284,6 +288,7 @@ def test_build_evaluator_metadata_embeds_startup_script_and_config_payload(tmp_p
             benchmark_suite="sanity",
             gitcache=True,
         ),
+        download_delay_sec=20,
         evaluator_name="gce-evaluator-001",
         experiment_config_path=config_path,
         startup_script="#!/usr/bin/env bash\necho boot\n",
@@ -299,6 +304,7 @@ def test_build_evaluator_metadata_embeds_startup_script_and_config_payload(tmp_p
     assert payload["evaluator_verify_cores_per_job"] == 4
     assert payload["evaluator_idle_timeout"] == 600
     assert payload["evaluator_cpu_tag"] == "c3d"
+    assert metadata[CRSBENCH_DOWNLOAD_DELAY_SEC_KEY] == "20"
     assert payload["gitcache"] is True
 
 
@@ -373,6 +379,24 @@ def test_load_startup_script_writes_passthrough_env_before_runtime_managed_env()
     )
 
     assert passthrough_index < managed_index
+
+
+def test_load_startup_script_exports_download_delay_before_vm_bootstrap():
+    """Worker bootstrap should export per-instance download delay before shared prepare/download."""
+    from crsbench.cloud.gce.metadata import load_startup_script
+
+    startup_script = load_startup_script()
+
+    read_index = startup_script.index(
+        'CRSBENCH_DOWNLOAD_DELAY_SEC="$(metadata_get_optional "crsbench-download-delay-sec")"'
+    )
+    bootstrap_index = startup_script.index("run_cloud_vm_bootstrap(")
+    write_index = startup_script.index(
+        'write_env_var "CRSBENCH_DOWNLOAD_DELAY_SEC" "${CRSBENCH_DOWNLOAD_DELAY_SEC}"'
+    )
+
+    assert read_index < bootstrap_index
+    assert write_index > bootstrap_index
 
 
 def test_build_instance_metadata_includes_install_spec_from_fleet_config():
@@ -991,6 +1015,7 @@ def test_worker_gitcache_install_failure_fails_when_wrapper_enabled(tmp_path):
 def test_build_orchestrator_metadata_embeds_config_payload_and_redis_password(tmp_path):
     """Orchestrator metadata should carry config payload and shared Redis auth."""
     from crsbench.cloud.gce.metadata import (
+        CRSBENCH_DOWNLOAD_DELAY_SEC_KEY,
         CRSBENCH_ENV_PASSTHROUGH_B64_KEY,
         CRSBENCH_EXPERIMENT_CONFIG_B64_KEY,
         CRSBENCH_REDIS_PASSWORD_KEY,
@@ -1008,11 +1033,13 @@ def test_build_orchestrator_metadata_embeds_config_payload_and_redis_password(tm
             "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
             "OPENAI_API_KEY": "openai-key",
         },
+        download_delay_sec=0,
         redis_password="shared-secret",
         startup_script="#!/usr/bin/env bash\necho boot\n",
     )
 
     assert metadata[CRSBENCH_REDIS_PASSWORD_KEY] == "shared-secret"
+    assert metadata[CRSBENCH_DOWNLOAD_DELAY_SEC_KEY] == "0"
     assert (
         base64.b64decode(metadata[CRSBENCH_EXPERIMENT_CONFIG_B64_KEY]).decode("utf-8")
         == config_path.read_text()
@@ -1174,6 +1201,24 @@ def test_orchestrator_startup_script_runs_shared_vm_bootstrap_from_repo_checkout
     assert 'git config --global --add safe.directory "${repo_path}"' in script
     assert 'git config --global --add safe.directory "${repo_path}/.git"' in script
     assert 'cd "${CLONE_DIR}"' in script
+
+
+def test_orchestrator_startup_script_exports_download_delay_before_vm_bootstrap():
+    """Orchestrator bootstrap should export its download delay before the shared bootstrap."""
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+
+    read_index = script.index(
+        'CRSBENCH_DOWNLOAD_DELAY_SEC="$(metadata_get_optional "crsbench-download-delay-sec")"'
+    )
+    bootstrap_index = script.index("run_cloud_vm_bootstrap(")
+    write_index = script.index(
+        'write_env_var "CRSBENCH_DOWNLOAD_DELAY_SEC" "${CRSBENCH_DOWNLOAD_DELAY_SEC}"'
+    )
+
+    assert read_index < bootstrap_index
+    assert write_index > bootstrap_index
 
 
 def test_orchestrator_startup_script_supports_file_backed_metadata_sources():

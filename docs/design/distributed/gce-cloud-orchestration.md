@@ -118,6 +118,11 @@ into the shared readiness records.
 - OS Login enabled via metadata (`enable-oslogin=TRUE`, `block-project-ssh-keys=TRUE`)
 - Labels always include `owner` and `crsbench-experiment`; role-specific labels distinguish orchestrator and workers
 - Bootstrap payload delivered as base64-encoded JSON in instance metadata
+- When benchmark download is enabled, launch also injects per-instance `crsbench-download-delay-sec` metadata
+  so startup sleeps only before the benchmark download step, not before the whole VM bootstrap
+- The download-delay schedule is deterministic and conservative: orchestrator first, then worker 1, then
+  evaluator 1, then remaining workers, then remaining evaluators; at most 3 VMs begin benchmark download in
+  each 300-second window with 10-second spacing inside that window
 - Operator-selected remote env vars are delivered separately as base64-encoded JSON metadata after operator-side validation; they are not persisted in launch-state files
 - Live quota validation is required before launch begins
 - Regional placement uses GCE regional bulk insert with `ANY_SINGLE_ZONE`; optional `zones` are validated as an allowlist inside the resolved region set
@@ -186,6 +191,8 @@ The startup script (`cloud/gce/startup/worker.sh`) runs on the VM:
 4. Normalizes the host timezone, configures Docker to use the `cgroupfs` driver expected by `oss-crs`, and grants passwordless `sudo` for the disposable-host bootstrap
 5. On `systemd` hosts, enables linger and delegated controllers for `crsbench`, then runs `oss-crs setup --yes` from the checkout so the user-service cgroup hierarchy is ready
 6. Runs `crsbench prepare` from that checkout and optionally downloads benchmarks according to `cloud.bootstrap`
+   - if benchmark download is enabled, startup first honors the metadata-provided `crsbench-download-delay-sec`
+     sleep so download throttling does not delay package install, Docker setup, or Redis readiness
 7. Imports resolved first-class cloud env vars plus runtime-managed vars and writes them to a state-scoped env file under `/var/lib/crsbench`
 8. Creates and enables the role-appropriate `systemd --user` unit with `WorkingDirectory=/opt/crsbench` (`Restart=always`) when `systemd` is available
    - local rehearsal and other non-`systemd` hosts may set

@@ -585,6 +585,7 @@ class GceProvisioner:
         registration: RuntimeRegistration,
         bootstrap_inputs: CloudVmBootstrapInputs | None = None,
         env_passthrough: dict[str, str] | None = None,
+        download_delay_by_name: Mapping[str, int] | None = None,
     ) -> list[GceInstanceRequest]:
         """Render instance requests from validated config and runtime metadata."""
         if zone is None and not region_based:
@@ -605,6 +606,11 @@ class GceProvisioner:
                 registration=registration,
                 bootstrap_inputs=bootstrap_inputs,
                 env_passthrough=env_passthrough,
+                download_delay_sec=(
+                    None
+                    if download_delay_by_name is None
+                    else download_delay_by_name.get(worker_name)
+                ),
                 worker_name=None if region_based else worker_name,
                 startup_script=startup_script,
             )
@@ -642,6 +648,7 @@ class GceProvisioner:
         redis_password: str | None = None,
         bootstrap_inputs: CloudVmBootstrapInputs | None = None,
         env_passthrough: dict[str, str] | None = None,
+        download_delay_by_name: Mapping[str, int] | None = None,
     ) -> list[GceInstanceRequest]:
         """Render evaluator instance requests from validated config and runtime metadata."""
         if zone is None and not region_based:
@@ -662,6 +669,11 @@ class GceProvisioner:
                 registration=registration,
                 bootstrap_inputs=bootstrap_inputs,
                 env_passthrough=env_passthrough,
+                download_delay_sec=(
+                    None
+                    if download_delay_by_name is None
+                    else download_delay_by_name.get(evaluator_name)
+                ),
                 evaluator_name=None if region_based else evaluator_name,
                 experiment_config_path=experiment_config_path,
                 startup_script=startup_script,
@@ -703,6 +715,18 @@ class GceProvisioner:
             for index in range(start_index, start_index + fleet.worker_count)
         ]
 
+    def build_orchestrator_name(
+        self,
+        *,
+        experiment_name: str,
+        orchestrator: GceOrchestratorConfig,
+    ) -> str:
+        """Return the deterministic orchestrator instance name for one request."""
+        return self._build_orchestrator_name(
+            experiment_name=experiment_name,
+            orchestrator=orchestrator,
+        )
+
     def create_workers(
         self,
         *,
@@ -713,6 +737,7 @@ class GceProvisioner:
         registration: RuntimeRegistration,
         bootstrap_inputs: CloudVmBootstrapInputs | None = None,
         env_passthrough: dict[str, str] | None = None,
+        download_delay_by_name: Mapping[str, int] | None = None,
     ) -> list[GceWorkerRecord]:
         """Create a worker fleet and return normalized provider records."""
         candidate_regions = self._candidate_regions_for_fleet(fleet)
@@ -730,6 +755,7 @@ class GceProvisioner:
                     registration=registration,
                     bootstrap_inputs=bootstrap_inputs,
                     env_passthrough=env_passthrough,
+                    download_delay_by_name=download_delay_by_name,
                 ),
                 role_label="worker",
                 label_selector=build_worker_labels(
@@ -749,6 +775,7 @@ class GceProvisioner:
                 registration=registration,
                 bootstrap_inputs=bootstrap_inputs,
                 env_passthrough=env_passthrough,
+                download_delay_by_name=download_delay_by_name,
             ),
             role_label="worker",
         )
@@ -764,6 +791,7 @@ class GceProvisioner:
         redis_password: str | None = None,
         bootstrap_inputs: CloudVmBootstrapInputs | None = None,
         env_passthrough: dict[str, str] | None = None,
+        download_delay_by_name: Mapping[str, int] | None = None,
     ) -> list[GceWorkerRecord]:
         """Create an evaluator fleet and return normalized provider records."""
         candidate_regions = self._candidate_regions_for_fleet(fleet)
@@ -782,6 +810,7 @@ class GceProvisioner:
                     experiment_config_path=experiment_config_path,
                     bootstrap_inputs=bootstrap_inputs,
                     env_passthrough=env_passthrough,
+                    download_delay_by_name=download_delay_by_name,
                 ),
                 role_label="evaluator",
                 label_selector=build_evaluator_labels(
@@ -802,6 +831,7 @@ class GceProvisioner:
                 experiment_config_path=experiment_config_path,
                 bootstrap_inputs=bootstrap_inputs,
                 env_passthrough=env_passthrough,
+                download_delay_by_name=download_delay_by_name,
             ),
             role_label="evaluator",
         )
@@ -814,6 +844,7 @@ class GceProvisioner:
         zone: str | None = None,
         experiment_config_path: str,
         env_passthrough: dict[str, str] | None = None,
+        download_delay_sec: int | None = None,
         redis_password: str,
     ) -> GceInstanceRequest:
         """Render an instance request for the remote orchestrator VM."""
@@ -833,6 +864,7 @@ class GceProvisioner:
             orchestrator=orchestrator,
             experiment_config_path=experiment_config_path,
             env_passthrough=env_passthrough,
+            download_delay_sec=download_delay_sec,
             redis_password=redis_password,
             startup_script=startup_script,
         )
@@ -861,6 +893,7 @@ class GceProvisioner:
         orchestrator: GceOrchestratorConfig,
         experiment_config_path: str,
         env_passthrough: dict[str, str] | None = None,
+        download_delay_sec: int | None = None,
         redis_password: str,
     ) -> GceWorkerRecord:
         """Create the remote orchestrator VM and return its normalized record."""
@@ -876,6 +909,7 @@ class GceProvisioner:
                         orchestrator=orchestrator,
                         experiment_config_path=experiment_config_path,
                         env_passthrough=env_passthrough,
+                        download_delay_sec=download_delay_sec,
                         redis_password=redis_password,
                     )
                 ],
@@ -896,6 +930,7 @@ class GceProvisioner:
                     zone=zone,
                     experiment_config_path=experiment_config_path,
                     env_passthrough=env_passthrough,
+                    download_delay_sec=download_delay_sec,
                     redis_password=redis_password,
                 )
             ],

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 
+from crsbench.cloud.bootstrap import build_download_delay_schedule
 from crsbench.cloud.gce.provisioner import GceProvisioner
 from crsbench.cloud.gce.quota import (
     GceRegionalQuotaClient,
@@ -477,6 +478,13 @@ class GceProviderAdapter:
             )
         return names
 
+    def expected_orchestrator_name(self, *, plan: CloudLaunchPlan) -> str:
+        """Return the deterministic orchestrator instance name for one launch plan."""
+        return self._provisioner.build_orchestrator_name(
+            experiment_name=plan.experiment_name,
+            orchestrator=self.build_orchestrator_config(plan),
+        )
+
     def expected_evaluator_names(self, *, plan: CloudLaunchPlan) -> list[str]:
         """Return the deterministic evaluator instance names for one launch plan."""
         names: list[str] = []
@@ -488,6 +496,14 @@ class GceProviderAdapter:
                 )
             )
         return names
+
+    def download_delay_schedule(self, *, plan: CloudLaunchPlan) -> dict[str, int]:
+        """Return the per-instance benchmark-download stagger for one launch plan."""
+        return build_download_delay_schedule(
+            orchestrator_name=self.expected_orchestrator_name(plan=plan),
+            worker_names=self.expected_worker_names(plan=plan),
+            evaluator_names=self.expected_evaluator_names(plan=plan),
+        )
 
     def max_worker_readiness_timeout(self, *, plan: CloudLaunchPlan) -> int:
         """Return the maximum worker readiness timeout across placements."""
@@ -810,11 +826,14 @@ class GceProviderAdapter:
         redis_password: str,
     ) -> "GceWorkerRecord":
         """Create the remote orchestrator VM for a provider-neutral launch plan."""
+        download_delay_schedule = self.download_delay_schedule(plan=plan)
+        orchestrator_name = self.expected_orchestrator_name(plan=plan)
         return self._provisioner.create_orchestrator(
             experiment_name=plan.experiment_name,
             orchestrator=self.build_orchestrator_config(plan),
             experiment_config_path=experiment_config_path,
             env_passthrough=env_passthrough,
+            download_delay_sec=download_delay_schedule[orchestrator_name],
             redis_password=redis_password,
         )
 
@@ -830,6 +849,7 @@ class GceProviderAdapter:
     ) -> list["GceWorkerRecord"]:
         """Create workers across all zonal placements in the launch plan."""
         fleets = self.build_worker_fleets(plan)
+        download_delay_schedule = self.download_delay_schedule(plan=plan)
         _validate_env_passthrough_count(
             role="worker",
             fleets=fleets,
@@ -847,6 +867,7 @@ class GceProviderAdapter:
                 env_passthrough=_env_passthrough_for_placement(
                     env_passthrough_by_placement, index
                 ),
+                download_delay_by_name=download_delay_schedule,
             ),
         )
 
@@ -895,6 +916,7 @@ class GceProviderAdapter:
     ) -> list["GceWorkerRecord"]:
         """Create evaluators across all placements in a provider-neutral launch plan."""
         fleets = self.build_evaluator_fleets(plan)
+        download_delay_schedule = self.download_delay_schedule(plan=plan)
         _validate_env_passthrough_count(
             role="evaluator",
             fleets=fleets,
@@ -913,6 +935,7 @@ class GceProviderAdapter:
                 env_passthrough=_env_passthrough_for_placement(
                     env_passthrough_by_placement, index
                 ),
+                download_delay_by_name=download_delay_schedule,
             ),
         )
 
