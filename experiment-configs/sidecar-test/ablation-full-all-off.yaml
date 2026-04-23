@@ -5,6 +5,7 @@ experiment:
   mode: auto
   sanitizers:
   - address
+  - undefined
   benchmarks:
   - afc-curl-delta-01
   - afc-curl-delta-02
@@ -36,6 +37,13 @@ experiment:
   - afc-sqlite3-delta-03
   - afc-sqlite3-full-01
   - afc-systemd-full-01
+  - afc-wireshark-delta-01
+  - afc-wireshark-delta-02
+  - afc-wireshark-delta-03
+  - afc-wireshark-delta-04
+  - afc-wireshark-delta-05
+  - afc-wireshark-delta-07
+  - afc-wireshark-full-01
   - afc-xz-full-01
   - afc-apache-commons-compress-delta-01
   - afc-apache-commons-compress-delta-02
@@ -83,6 +91,7 @@ experiment:
   - atlanta-sleuthkit-delta-01
   - atlanta-tmux-delta-01
   - atlanta-user-nginx-full-01
+  - atlanta-wireshark-delta-01
   - atlanta-activemq-delta-01
   - atlanta-activemq-var-delta-01
   - atlanta-apache-commons-validator-delta-01
@@ -141,16 +150,16 @@ storage:
   experiment_filestore: /tmp/crsbench/ablation-full/all-off/experiment-data
   report_filestore: /tmp/crsbench/ablation-full/all-off/report-data
   copy_results_after_trial: true
-  results_filestore: /mnt/crsbench_nfs/crsbench/ramjet/ablation-all-off
+  results_filestore: /mnt/crsbench_nfs/crsbench/cyclonus/ablation-all-off
   cleanup_after_trial: true
 crs_compose:
   builder-sidecar-lite:
-    num_cores: 4
+    num_cores: 16
 resources:
   memory_per_trial: "64G"
 worker:
-  jobs: 10
-  cores_per_job: 8
+  jobs: 6
+  cores_per_job: 16
 evaluator:
-  jobs: 2
-  cores_per_job: 4
+  jobs: 8
+  cores_per_job: 16
