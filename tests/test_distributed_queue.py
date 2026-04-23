@@ -205,6 +205,18 @@ def test_default_evaluator_routing_model_is_shared(
     )
 
 
+def test_explicit_evaluator_routing_model_dispatcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dispatcher routing model should be accepted explicitly."""
+    monkeypatch.setenv(queue_module.EVALUATOR_ROUTING_MODEL_ENV, "dispatcher")
+
+    assert (
+        queue_module.get_evaluator_routing_model()
+        == queue_module.ROUTING_MODEL_DISPATCHER
+    )
+
+
 def test_invalid_evaluator_routing_model_falls_back_to_shared(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

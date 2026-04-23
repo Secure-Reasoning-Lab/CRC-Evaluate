@@ -16,6 +16,7 @@ class _FakeRedis:
 
     def __init__(self) -> None:
         self._hashes: dict[str, dict[str, str]] = {}
+        self.eval_calls: list[tuple[str, int, tuple[str, ...]]] = []
 
     def hset(self, key: str, field: str, value: str) -> None:
         self._hashes.setdefault(key, {})[field] = value
@@ -32,10 +33,20 @@ class _FakeRedis:
             self._hashes.pop(key, None)
         return 1
 
-    def hgetdel(self, key: str, field: str) -> str | None:
-        value = self.hget(key, field)
-        self.hdel(key, field)
-        return value
+    def eval(self, script: str, numkeys: int, *keys_and_args: str) -> list[str | None]:
+        self.eval_calls.append((script, numkeys, keys_and_args))
+        assert numkeys == 1
+        assert keys_and_args
+
+        key = keys_and_args[0]
+        fields = keys_and_args[1:]
+        results: list[str | None] = []
+        for field in fields:
+            value = self.hget(key, field)
+            if value is not None:
+                self.hdel(key, field)
+            results.append(value)
+        return results
 
 
 def test_submit_and_load_verify_request() -> None:
@@ -85,7 +96,8 @@ def test_submit_and_load_build_request() -> None:
 
 
 def test_publish_and_poll_verify_results() -> None:
-    store = DispatcherStateStore(_FakeRedis(), experiment_name="exp-1")
+    redis_conn = _FakeRedis()
+    store = DispatcherStateStore(redis_conn, experiment_name="exp-1")
 
     store.publish_verify_result(
         "req-1",
@@ -96,10 +108,20 @@ def test_publish_and_poll_verify_results() -> None:
             terminal_state="completed",
         ),
     )
+    store.publish_verify_result(
+        "req-2",
+        VerifyResultRecord(
+            request_id="req-2",
+            attempt_id="attempt-2",
+            verdict={"status": "error"},
+            terminal_state="failed",
+        ),
+    )
 
-    results, remaining = store.poll_verify_results(["req-1"])
-    assert results == [{"status": "ok"}]
-    assert remaining == []
+    results, remaining = store.poll_verify_results(["req-1", "req-2", "req-3"])
+    assert results == [{"status": "ok"}, {"status": "error"}]
+    assert remaining == ["req-3"]
+    assert len(redis_conn.eval_calls) == 1
 
     results, remaining = store.poll_verify_results(["req-1"])
     assert results == []
@@ -119,3 +141,8 @@ def test_publish_verify_result_rejects_mismatched_request_id() -> None:
                 terminal_state="completed",
             ),
         )
+
+
+def test_dispatcher_state_store_rejects_invalid_experiment_name() -> None:
+    with pytest.raises(ValueError, match="Invalid name for queue component"):
+        DispatcherStateStore(_FakeRedis(), experiment_name="exp 1")

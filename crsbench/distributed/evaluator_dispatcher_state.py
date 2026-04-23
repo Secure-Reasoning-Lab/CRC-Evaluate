@@ -6,6 +6,21 @@ import json
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol
 
+from crsbench.distributed.queue import validate_queue_name_component
+
+_POLL_VERIFY_RESULTS_SCRIPT = """
+local key = KEYS[1]
+local results = {}
+for i, field in ipairs(ARGV) do
+    local value = redis.call('HGET', key, field)
+    results[i] = value
+    if value then
+        redis.call('HDEL', key, field)
+    end
+end
+return results
+"""
+
 
 def _decode(value: str | bytes) -> str:
     if isinstance(value, bytes):
@@ -55,7 +70,9 @@ class DispatcherStateRedisProtocol(Protocol):
 
     def hget(self, key: str, field: str) -> str | bytes | None: ...
 
-    def hgetdel(self, key: str, field: str) -> str | bytes | None: ...
+    def eval(
+        self, script: str, numkeys: int, *keys_and_args: str
+    ) -> list[str | bytes | None]: ...
 
 
 class DispatcherStateStore:
@@ -64,6 +81,7 @@ class DispatcherStateStore:
     def __init__(
         self, redis_conn: DispatcherStateRedisProtocol, *, experiment_name: str
     ) -> None:
+        validate_queue_name_component(experiment_name)
         self.redis = redis_conn
         self.experiment_name = experiment_name
 
@@ -129,8 +147,13 @@ class DispatcherStateStore:
         completed: list[dict[str, Any]] = []
         remaining: list[str] = []
         key = self._verify_results_key()
-        for request_id in request_ids:
-            raw = self.redis.hgetdel(key, request_id)
+        raw_results = self.redis.eval(
+            _POLL_VERIFY_RESULTS_SCRIPT,
+            1,
+            key,
+            *request_ids,
+        )
+        for request_id, raw in zip(request_ids, raw_results, strict=False):
             if raw is None:
                 remaining.append(request_id)
                 continue
