@@ -2108,6 +2108,45 @@ class TestArgParsing:
         assert args.merge_by == "timestamp"
         assert args.config == "c.yaml"
 
+    def test_parse_derive_unfinished_trial_keys(self):
+        parser = self._build_parser()
+        args = parser.parse_args(
+            [
+                "cloud",
+                "derive-unfinished-trial-keys",
+                "--config",
+                "c.yaml",
+            ]
+        )
+        assert args.command == "cloud"
+        assert args.cloud_command == "derive-unfinished-trial-keys"
+        assert args.config == "c.yaml"
+        assert args.from_path is None
+        assert args.output is None
+        assert args.rerun_failed_trials is False
+
+    def test_parse_derive_unfinished_trial_keys_with_overrides(self):
+        parser = self._build_parser()
+        args = parser.parse_args(
+            [
+                "cloud",
+                "--config",
+                "c.yaml",
+                "derive-unfinished-trial-keys",
+                "--from",
+                "/tmp/collected",
+                "--output",
+                "/tmp/unfinished-keys.txt",
+                "--rerun-failed-trials",
+            ]
+        )
+        assert args.command == "cloud"
+        assert args.cloud_command == "derive-unfinished-trial-keys"
+        assert args.config == "c.yaml"
+        assert args.from_path == "/tmp/collected"
+        assert args.output == "/tmp/unfinished-keys.txt"
+        assert args.rerun_failed_trials is True
+
 
 def _make_launch_args(config: str = "/tmp/config.yaml"):
     return argparse.Namespace(
@@ -2233,6 +2272,22 @@ def _make_log_args(
     )
 
 
+def _make_derive_args(
+    config: str = "/tmp/config.yaml",
+    *,
+    from_path: str | None = None,
+    output: str | None = None,
+    rerun_failed_trials: bool = False,
+):
+    return argparse.Namespace(
+        config=config,
+        from_path=from_path,
+        output=output,
+        rerun_failed_trials=rerun_failed_trials,
+        cloud_command="derive-unfinished-trial-keys",
+    )
+
+
 @patch("crsbench.cloud.cli._monitor.run_monitor", return_value=0)
 def test_run_cloud_dispatches_monitor(mock_run_monitor):
     from crsbench.cloud.cli.cloud_command import run_cloud
@@ -2311,6 +2366,20 @@ def test_run_cloud_dispatches_log(mock_run_log):
     mock_run_log.assert_called_once()
 
 
+@patch(
+    "crsbench.cloud.cli._derive_unfinished_trial_keys.run_derive_unfinished_trial_keys",
+    return_value=0,
+)
+def test_run_cloud_dispatches_derive_unfinished_trial_keys(mock_run_derive):
+    from crsbench.cloud.cli.cloud_command import run_cloud
+
+    args = _make_derive_args()
+    rc = run_cloud(args)
+
+    assert rc == 0
+    mock_run_derive.assert_called_once_with(args)
+
+
 @patch("crsbench.cloud.cli._add_capacity.run_add_capacity", return_value=0)
 def test_run_cloud_dispatches_add_workers(mock_run_add_capacity):
     from crsbench.cloud.cli.cloud_command import run_cloud
@@ -2319,6 +2388,121 @@ def test_run_cloud_dispatches_add_workers(mock_run_add_capacity):
 
     assert rc == 0
     mock_run_add_capacity.assert_called_once()
+
+
+class TestDeriveUnfinishedTrialKeys:
+    def test_derive_uses_config_defaults_for_collected_root_and_output(
+        self, tmp_path: Path
+    ):
+        from crsbench.cloud.cli._derive_unfinished_trial_keys import (
+            run_derive_unfinished_trial_keys,
+        )
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("experiment: ignored\n", encoding="utf-8")
+        config = SimpleNamespace(experiment="exp-defaults")
+        default_collected = Path("/tmp/filestore/exp-defaults")
+        default_output = tmp_path / "exp-defaults-unfinished-trial-keys.txt"
+        derived = SimpleNamespace(
+            selected_keys=["trial-a", "trial-b"],
+            finished_success_keys=["trial-done"],
+            finished_fail_keys=["trial-failed"],
+        )
+
+        with (
+            patch(
+                "crsbench.cloud.cli._derive_unfinished_trial_keys.load_experiment_config",
+                return_value=config,
+            ) as mock_load_config,
+            patch(
+                "crsbench.cloud.cli._derive_unfinished_trial_keys.default_collected_experiment_path",
+                return_value=default_collected,
+            ) as mock_default_collected,
+            patch(
+                "crsbench.cloud.cli._derive_unfinished_trial_keys.default_selector_output_path",
+                return_value=default_output,
+            ) as mock_default_output,
+            patch(
+                "crsbench.cloud.cli._derive_unfinished_trial_keys.derive_unfinished_trial_keys_from_config",
+                return_value=derived,
+            ) as mock_derive,
+            patch(
+                "crsbench.cloud.cli._derive_unfinished_trial_keys.logger"
+            ) as mock_logger,
+        ):
+            rc = run_derive_unfinished_trial_keys(
+                _make_derive_args(config=str(config_path))
+            )
+
+        assert rc == 0
+        mock_load_config.assert_called_once_with(config_path)
+        mock_default_collected.assert_called_once_with(config)
+        mock_default_output.assert_called_once_with("exp-defaults")
+        mock_derive.assert_called_once_with(
+            config,
+            collected_root=default_collected,
+            rerun_failed_trials=False,
+        )
+        assert default_output.read_text(encoding="utf-8") == "trial-a\ntrial-b\n"
+        assert mock_logger.info.call_args.args[1:] == (2, 1, 1)
+
+    def test_derive_respects_overrides_and_rerun_failed_trials_flag(
+        self, tmp_path: Path
+    ):
+        from crsbench.cloud.cli._derive_unfinished_trial_keys import (
+            run_derive_unfinished_trial_keys,
+        )
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("experiment: ignored\n", encoding="utf-8")
+        from_path = tmp_path / "custom-collected"
+        output_path = tmp_path / "custom-output.txt"
+        config = SimpleNamespace(experiment="exp-overrides")
+        derived = SimpleNamespace(
+            selected_keys=["trial-x"],
+            finished_success_keys=[],
+            finished_fail_keys=["trial-y"],
+        )
+
+        with (
+            patch(
+                "crsbench.cloud.cli._derive_unfinished_trial_keys.load_experiment_config",
+                return_value=config,
+            ) as mock_load_config,
+            patch(
+                "crsbench.cloud.cli._derive_unfinished_trial_keys.default_collected_experiment_path"
+            ) as mock_default_collected,
+            patch(
+                "crsbench.cloud.cli._derive_unfinished_trial_keys.default_selector_output_path"
+            ) as mock_default_output,
+            patch(
+                "crsbench.cloud.cli._derive_unfinished_trial_keys.derive_unfinished_trial_keys_from_config",
+                return_value=derived,
+            ) as mock_derive,
+            patch(
+                "crsbench.cloud.cli._derive_unfinished_trial_keys.logger"
+            ) as mock_logger,
+        ):
+            rc = run_derive_unfinished_trial_keys(
+                _make_derive_args(
+                    config=str(config_path),
+                    from_path=str(from_path),
+                    output=str(output_path),
+                    rerun_failed_trials=True,
+                )
+            )
+
+        assert rc == 0
+        mock_load_config.assert_called_once_with(config_path)
+        mock_default_collected.assert_not_called()
+        mock_default_output.assert_not_called()
+        mock_derive.assert_called_once_with(
+            config,
+            collected_root=from_path,
+            rerun_failed_trials=True,
+        )
+        assert output_path.read_text(encoding="utf-8") == "trial-x\n"
+        assert mock_logger.info.call_args.args[1:] == (1, 0, 1)
 
 
 @patch("crsbench.cloud.cli._add_capacity.run_add_capacity", return_value=0)

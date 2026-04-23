@@ -279,6 +279,31 @@ Examples:
         help="Treat warnings as a non-zero result",
     )
 
+    # derive-unfinished-trial-keys
+    derive_p = cloud_subparsers.add_parser(
+        "derive-unfinished-trial-keys",
+        help="Derive unfinished trial keys from collected experiment artifacts",
+    )
+    _add_config_argument(derive_p, suppress_default=True)
+    derive_p.add_argument(
+        "--from",
+        dest="from_path",
+        default=None,
+        help="Collected experiment root (defaults to experiment_filestore/experiment)",
+    )
+    derive_p.add_argument(
+        "--output",
+        dest="output",
+        default=None,
+        help="Output path for newline-delimited unfinished trial keys",
+    )
+    derive_p.add_argument(
+        "--rerun-failed-trials",
+        action="store_true",
+        default=False,
+        help="Include failed trials in the unfinished selection",
+    )
+
     # keygen
     keygen_p = cloud_subparsers.add_parser(
         "keygen", help="Generate an SSH ed25519 deploy key pair"
@@ -393,6 +418,13 @@ def run_cloud(args: argparse.Namespace) -> int:
         from crsbench.cloud.cli._preflight import run_preflight
 
         return run_preflight(args)
+
+    if cmd == "derive-unfinished-trial-keys":
+        from crsbench.cloud.cli._derive_unfinished_trial_keys import (
+            run_derive_unfinished_trial_keys,
+        )
+
+        return run_derive_unfinished_trial_keys(args)
 
     if cmd == "teardown":
         from crsbench.cloud.cli._teardown import run_teardown
