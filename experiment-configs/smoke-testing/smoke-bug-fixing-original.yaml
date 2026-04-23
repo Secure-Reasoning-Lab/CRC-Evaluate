@@ -52,6 +52,12 @@ crs_compose:
       CRS_AGENT: gemini_cli
       GEMINI_MODEL: gemini-3-pro-preview
       GEMINI_CLI_VERSION: 0.38.1
+  crs-opencode:
+    num_cores: 8
+    budget_policy: terminate
+    additional_env:
+      CRS_AGENT: opencode
+      OPENCODE_MODEL: zai-org/GLM-5.1
 
 # Runtime settings. For distributed mode, add redis_host.
 # Additional options: per_pov_verify_timeout, snapshot_period,
