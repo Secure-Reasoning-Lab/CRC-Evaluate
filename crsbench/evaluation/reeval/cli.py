@@ -539,6 +539,7 @@ def _discover_trial_patches(
     *,
     target_cpv_id: Optional[str],
     pov_dir: Optional[Path] = None,
+    infer_single_pov_target: bool = False,
 ) -> list[tuple[str, str, Path]]:
     """Discover trial patches from output/patches in structured or flat layout."""
     if not patch_dir.exists():
@@ -561,9 +562,10 @@ def _discover_trial_patches(
         p for p in patch_dir.iterdir() if p.is_file() and p.suffix == ".diff"
     )
     if flat_patches:
-        resolved_target = (
-            target_cpv_id or _infer_single_trial_pov_id(pov_dir) or "unknown"
+        inferred_target = (
+            _infer_single_trial_pov_id(pov_dir) if infer_single_pov_target else None
         )
+        resolved_target = target_cpv_id or inferred_target or "unknown"
         for patch_path in flat_patches:
             patch_id = _build_trial_patch_id(
                 layout="flat",
@@ -1215,6 +1217,7 @@ def _reeval_patch_generation(
         patch_dir,
         target_cpv_id=target_cpv_id,
         pov_dir=pov_dir,
+        infer_single_pov_target=True,
     )
     if not patches:
         logger.warning(f"No patches found in {patch_dir}")
@@ -1371,33 +1374,32 @@ def run_reeval(args: argparse.Namespace) -> int:
         patch_build_queue = runtime_session.build_queue
         patch_verify_queue = runtime_session.verify_queue
 
+        trial_queue, build_queue, verify_queue_name = resolve_queue_names(
+            experiment_name
+        )
+        desired_registration = RuntimeRegistration(
+            experiment=experiment_name,
+            trial_queue=trial_queue,
+            build_queue=build_queue,
+            verify_queue=verify_queue_name,
+            benchmarks_root=str(benchmarks_root or Path("benchmarks")),
+            source_mode=source_mode,
+            inc_image_policy=inc_image_policy or "auto",
+            inc_image_registry=inc_image_registry or "ghcr.io/team-atlanta/crsbench",
+            inc_image_max_pull_bytes=inc_image_max_pull_bytes
+            if inc_image_max_pull_bytes is not None
+            else 10 * 1024 * 1024 * 1024,
+            inc_image_pull_timeout_sec=inc_image_pull_timeout or 300,
+            local_image_prefix=local_image_prefix or "crsbench",
+            max_total_time=config.get("max_total_time") or 7200,
+            build_timeout=config.get("build_timeout") or 3600,
+            per_pov_verify_timeout=per_pov_verify_timeout,
+        )
         # Configless evaluators discover queues via Redis registry.
         existing = runtime_session.registry.get_experiment(experiment_name)
         if existing is None:
-            trial_queue, build_queue, verify_queue_name = resolve_queue_names(
-                experiment_name
-            )
-            registration = RuntimeRegistration(
-                experiment=experiment_name,
-                trial_queue=trial_queue,
-                build_queue=build_queue,
-                verify_queue=verify_queue_name,
-                benchmarks_root=str(benchmarks_root or Path("benchmarks")),
-                source_mode=source_mode,
-                inc_image_policy=inc_image_policy or "auto",
-                inc_image_registry=inc_image_registry
-                or "ghcr.io/team-atlanta/crsbench",
-                inc_image_max_pull_bytes=inc_image_max_pull_bytes
-                if inc_image_max_pull_bytes is not None
-                else 10 * 1024 * 1024 * 1024,
-                inc_image_pull_timeout_sec=inc_image_pull_timeout or 300,
-                local_image_prefix=local_image_prefix or "crsbench",
-                max_total_time=config.get("max_total_time") or 7200,
-                build_timeout=config.get("build_timeout") or 3600,
-                per_pov_verify_timeout=per_pov_verify_timeout,
-            )
             try:
-                runtime_session.register_or_raise(registration)
+                runtime_session.register_or_raise(desired_registration)
             except LockContentionError:
                 logger.error(
                     f"Experiment '{experiment_name}' is already locked. "
@@ -1414,6 +1416,44 @@ def run_reeval(args: argparse.Namespace) -> int:
                 f"Registered re-eval experiment in Redis registry: {experiment_name}"
             )
         else:
+            comparable_fields = (
+                "trial_queue",
+                "build_queue",
+                "verify_queue",
+                "benchmarks_root",
+                "source_mode",
+                "inc_image_policy",
+                "inc_image_registry",
+                "inc_image_max_pull_bytes",
+                "inc_image_pull_timeout_sec",
+                "local_image_prefix",
+                "max_total_time",
+                "build_timeout",
+                "per_pov_verify_timeout",
+            )
+            mismatches = [
+                (
+                    field_name,
+                    getattr(existing, field_name),
+                    getattr(desired_registration, field_name),
+                )
+                for field_name in comparable_fields
+                if getattr(existing, field_name)
+                != getattr(desired_registration, field_name)
+            ]
+            if mismatches:
+                mismatch_text = ", ".join(
+                    f"{field_name}={current!r} (registry) != {desired!r} (config)"
+                    for field_name, current, desired in mismatches
+                )
+                runtime_session.cleanup()
+                logger.error(
+                    "Existing Redis registration for experiment '{}' conflicts with "
+                    "the requested re-eval runtime: {}",
+                    experiment_name,
+                    mismatch_text,
+                )
+                return 1
             logger.info(
                 f"Experiment already registered in Redis registry: {experiment_name}"
             )

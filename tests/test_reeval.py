@@ -1419,6 +1419,59 @@ class TestRunReeval:
         assert registration.inc_image_pull_timeout_sec == 78
         assert registration.local_image_prefix == "custom-prefix"
 
+    def test_async_registration_rejects_conflicting_existing_runtime(
+        self, tmp_path: Path
+    ) -> None:
+        """re-eval should fail fast when Redis already has conflicting runtime settings."""
+        from crsbench.distributed.registry import RuntimeRegistration
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "experiment: my-exp\n"
+            f"experiment_filestore: {tmp_path}\n"
+            f"benchmarks_root: {tmp_path / 'benchmarks'}\n"
+            "redis_host: localhost\n"
+            "source_mode: main_repo\n"
+        )
+        experiment_dir = tmp_path / "my-exp"
+        experiment_dir.mkdir(parents=True)
+        (tmp_path / "benchmarks").mkdir()
+        oss_fuzz = tmp_path / "oss-fuzz"
+        oss_fuzz.mkdir()
+        args = self._make_args(config_path, oss_fuzz)
+        args.source = None
+
+        existing = RuntimeRegistration(
+            experiment="my-exp",
+            trial_queue="crsbench_trial",
+            build_queue="crsbench_build",
+            verify_queue="crsbench_verify",
+            benchmarks_root=str(tmp_path / "benchmarks"),
+            source_mode="pkgs",
+        )
+
+        with (
+            patch(
+                "crsbench.reporting.snapshot_loader.discover_trials",
+                return_value=[],
+            ),
+            patch(
+                "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_reeval"
+            ) as mock_for_reeval,
+        ):
+            mock_session = MagicMock()
+            mock_session.trial_queue = MagicMock()
+            mock_session.build_queue = MagicMock()
+            mock_session.verify_queue = MagicMock()
+            mock_session.registry.get_experiment.return_value = existing
+            mock_for_reeval.return_value = mock_session
+
+            result = run_reeval(args)
+
+        assert result == 1
+        mock_session.register_or_raise.assert_not_called()
+        mock_session.cleanup.assert_called_once()
+
 
 class TestAsyncPatchDrain:
     """Tests for async patch result draining."""
@@ -1528,6 +1581,26 @@ class TestPatchDiscovery:
         assert target == "cpv_7"
         assert len(discovered) == 1
         assert discovered[0][0] == "cpv_7"
+
+    def test_discover_trial_patches_single_pov_inference_is_opt_in(
+        self, tmp_path: Path
+    ) -> None:
+        """Single staged POV fallback should not affect async/default discovery."""
+        patch_dir = tmp_path / "output" / "patches"
+        pov_dir = tmp_path / "crs-input" / "povs"
+        patch_dir.mkdir(parents=True)
+        pov_dir.mkdir(parents=True)
+        (patch_dir / "patch_0.diff").write_text("diff")
+        (pov_dir / "pov_0.blob").write_bytes(b"blob")
+
+        discovered = _discover_trial_patches(
+            patch_dir,
+            target_cpv_id=None,
+            pov_dir=pov_dir,
+        )
+
+        assert len(discovered) == 1
+        assert discovered[0][0] == "unknown"
 
     def test_discover_trial_patches_deduplicates_mixed_layout(
         self, tmp_path: Path
