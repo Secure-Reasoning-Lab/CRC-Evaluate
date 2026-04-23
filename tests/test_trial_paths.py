@@ -44,6 +44,17 @@ def test_experiment_dir_mirror_trial_path(tmp_path: Path) -> None:
     assert mirrored == tmp_path / "out" / "crs" / "bench" / "trial-1"
 
 
+def test_experiment_dir_from_grouped_config_dict() -> None:
+    config = {
+        "experiment": {"name": "grouped-exp"},
+        "storage": {"experiment_filestore": "/tmp/grouped-store"},
+    }
+
+    assert ExperimentDir.from_config_dict(config).path == Path(
+        "/tmp/grouped-store/grouped-exp"
+    )
+
+
 def test_resolve_benchmarks_root_defaults_and_custom() -> None:
     assert resolve_benchmarks_root(None) == DEFAULT_BENCHMARKS_ROOT
     assert resolve_benchmarks_root("") == DEFAULT_BENCHMARKS_ROOT

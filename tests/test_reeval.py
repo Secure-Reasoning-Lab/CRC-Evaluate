@@ -4,10 +4,13 @@ import argparse
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 from crsbench.evaluation.reeval.cli import (
+    _AsyncPatchTrialState,
+    _AsyncTrialState,
     _discover_trial_patches,
     _drain_all_async_patch_results,
     _drain_all_async_results,
@@ -15,6 +18,7 @@ from crsbench.evaluation.reeval.cli import (
     _load_experiment_config,
     _load_target_cpv_id_from_trial_metadata,
     _reeval_bug_finding,
+    _reeval_patch_generation,
     _resolve_benchmark_path,
     _resolve_experiment_dir,
     _resolve_output_dir,
@@ -29,6 +33,14 @@ from crsbench.evaluation.verification.models import (
     PatchVerificationResult,
     PatchVerificationStatus,
 )
+
+
+def _as_async_trial_states(*states: object) -> list[_AsyncTrialState]:
+    return cast("list[_AsyncTrialState]", list(states))
+
+
+def _as_async_patch_trial_states(*states: object) -> list[_AsyncPatchTrialState]:
+    return cast("list[_AsyncPatchTrialState]", list(states))
 
 
 class TestAddReevalSubparser:
@@ -52,7 +64,7 @@ class TestAddReevalSubparser:
 
         args = parser.parse_args(["re-eval", "-c", "/tmp/config.yaml"])
         assert args.oss_fuzz_path is None
-        assert args.source == "pkgs"
+        assert args.source is None
         assert args.mode == "snapshot"
         assert args.jobs is None
         assert args.cores_per_job is None
@@ -109,6 +121,31 @@ class TestLoadExperimentConfig:
         config = _load_experiment_config(config_path)
         assert config["experiment"] == "test-exp"
         assert config["experiment_filestore"] == "/tmp/store"
+
+    def test_loads_grouped_yaml_and_normalizes_compat_keys(
+        self, tmp_path: Path
+    ) -> None:
+        """Should flatten grouped experiment/runtime/storage fields for re-eval."""
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "experiment:\n"
+            "  name: test-exp\n"
+            "runtime:\n"
+            "  per_pov_verify_timeout: 91\n"
+            "  patch_verify_variants: true\n"
+            "  redis:\n"
+            "    host: localhost\n"
+            "storage:\n"
+            "  experiment_filestore: /tmp/store\n"
+        )
+
+        config = _load_experiment_config(config_path)
+
+        assert config["experiment"] == "test-exp"
+        assert config["experiment_filestore"] == "/tmp/store"
+        assert config["per_pov_verify_timeout"] == 91
+        assert config["patch_verify_variants"] is True
+        assert config["redis_host"] == "localhost"
 
     def test_missing_file_exits(self, tmp_path: Path) -> None:
         """Should exit if config file not found."""
@@ -233,6 +270,76 @@ class TestSavePatchResults:
         path = _save_patch_results([result], 1, tmp_path)
         data = json.loads(path.read_text())
         assert data["summary"]["patch_ids"] == ["patch_abc"]
+
+
+class TestReevalPatchGeneration:
+    """Tests for local patch-generation re-eval parity with live evaluator."""
+
+    def test_flat_trial_patches_use_trial_target_cpv_mapping(
+        self, tmp_path: Path
+    ) -> None:
+        """Local re-eval should use the trial-aware per-patch verification path."""
+        trial_dir = tmp_path / "trial-0"
+        patch_dir = trial_dir / "output" / "patches"
+        pov_dir = trial_dir / "crs-input" / "povs"
+        patch_dir.mkdir(parents=True)
+        pov_dir.mkdir(parents=True)
+
+        (trial_dir / "metadata.json").write_text(json.dumps({"target_cpv_id": "cpv_7"}))
+        patch_path = patch_dir / "patch.diff"
+        patch_path.write_text("--- a/a.c\n+++ b/a.c\n")
+        (pov_dir / "cpv_1.blob").write_bytes(b"other")
+        target_pov = pov_dir / "cpv_7.blob"
+        target_pov.write_bytes(b"target")
+
+        benchmark_path = tmp_path / "bench"
+        benchmark_path.mkdir()
+        oss_fuzz_path = tmp_path / "oss-fuzz"
+        oss_fuzz_path.mkdir()
+        dest_dir = tmp_path / "dest"
+
+        expected = PatchVerificationResult(
+            status=PatchVerificationStatus.VALID,
+            patch_id="patch_0",
+            pov_id="cpv_7",
+            benchmark="bench",
+            patch_path=patch_path,
+            harness="harness-a",
+        )
+
+        with patch(
+            "crsbench.evaluation.verification.patch.engine.PatchVerificationEngine"
+        ) as mock_engine_cls:
+            mock_engine = MagicMock()
+            mock_engine.verify_patches.side_effect = AssertionError(
+                "local re-eval should use per-patch verification"
+            )
+            mock_engine.verify_patch.return_value = expected
+            mock_engine_cls.return_value = mock_engine
+
+            count = _reeval_patch_generation(
+                trial_dir=trial_dir,
+                benchmark_path=benchmark_path,
+                oss_fuzz_path=oss_fuzz_path,
+                harness="harness-a",
+                dest_dir=dest_dir,
+                source_mode="pkgs",
+                sanitizer="address",
+                jobs=None,
+                cores_per_job=None,
+                per_pov_verify_timeout=91,
+                patch_verify_variants=False,
+                force_rebuild=False,
+                use_inc_build=True,
+            )
+
+        assert count == 1
+        mock_engine.verify_patch.assert_called_once()
+        call_kwargs = mock_engine.verify_patch.call_args.kwargs
+        assert call_kwargs["benchmark_path"] == benchmark_path
+        assert call_kwargs["harness"] == "harness-a"
+        assert call_kwargs["pov_path"] == target_pov
+        assert call_kwargs["patch"].pov_id == "cpv_7"
 
 
 class TestAsyncPatchLogPersistence:
@@ -399,6 +506,82 @@ class TestRunReeval:
             assert call_kwargs.kwargs["sanitizer"] == "address"
             assert result == 0
 
+    def test_bug_finding_uses_config_source_mode_when_cli_omits_override(
+        self, tmp_path: Path
+    ) -> None:
+        """Should default bug-finding re-eval source mode from experiment config."""
+        experiment_dir = tmp_path / "my-exp"
+        trial_dir = (
+            experiment_dir / "crs" / "bench" / "harness" / "bug_finding" / "trial-0"
+        )
+        trial_dir.mkdir(parents=True)
+
+        metadata = self._make_trial_metadata(0)
+        (trial_dir / "metadata.json").write_text(json.dumps(metadata))
+        self._create_minimal_reeval_outputs(trial_dir, mode="bug_finding")
+
+        bench_dir = tmp_path / "benchmarks" / "test-bench"
+        bench_dir.mkdir(parents=True)
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "experiment: my-exp\n"
+            f"experiment_filestore: {tmp_path}\n"
+            f"benchmarks_root: {tmp_path / 'benchmarks'}\n"
+            "source_mode: main_repo\n"
+        )
+        oss_fuzz = tmp_path / "oss-fuzz"
+        oss_fuzz.mkdir()
+
+        args = self._make_args(config_path, oss_fuzz)
+        args.source = None
+
+        with patch("crsbench.evaluation.reeval.cli._reeval_bug_finding") as mock_bf:
+            mock_bf.return_value = 1
+            result = run_reeval(args)
+
+            mock_bf.assert_called_once()
+            assert mock_bf.call_args.kwargs["benchmark_path"] == bench_dir
+            assert mock_bf.call_args.kwargs["source_mode"] == "main_repo"
+            assert result == 0
+
+    def test_bug_finding_uses_config_inc_build_setting(self, tmp_path: Path) -> None:
+        """Bug-finding re-eval should honor experiment inc_build_enabled."""
+        experiment_dir = tmp_path / "my-exp"
+        trial_dir = (
+            experiment_dir / "crs" / "bench" / "harness" / "bug_finding" / "trial-0"
+        )
+        trial_dir.mkdir(parents=True)
+
+        metadata = self._make_trial_metadata(0)
+        (trial_dir / "metadata.json").write_text(json.dumps(metadata))
+        self._create_minimal_reeval_outputs(trial_dir, mode="bug_finding")
+
+        bench_dir = tmp_path / "benchmarks" / "test-bench"
+        bench_dir.mkdir(parents=True)
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "experiment: my-exp\n"
+            f"experiment_filestore: {tmp_path}\n"
+            f"benchmarks_root: {tmp_path / 'benchmarks'}\n"
+            "inc_build_enabled: false\n"
+        )
+        oss_fuzz = tmp_path / "oss-fuzz"
+        oss_fuzz.mkdir()
+
+        args = self._make_args(config_path, oss_fuzz)
+        args.source = None
+
+        with patch("crsbench.evaluation.reeval.cli._reeval_bug_finding") as mock_bf:
+            mock_bf.return_value = 1
+            result = run_reeval(args)
+
+            mock_bf.assert_called_once()
+            assert mock_bf.call_args.kwargs["benchmark_path"] == bench_dir
+            assert mock_bf.call_args.kwargs["use_inc_build"] is False
+            assert result == 0
+
     def test_dispatches_patch_generation(self, tmp_path: Path) -> None:
         """Should dispatch to _reeval_patch_generation for patch_generation trials."""
         experiment_dir = tmp_path / "my-exp"
@@ -442,6 +625,57 @@ class TestRunReeval:
             assert call_kwargs.kwargs["benchmark_path"] == bench_dir
             assert call_kwargs.kwargs["harness"] == "test-harness"
             assert call_kwargs.kwargs["patch_verify_variants"] is True
+            assert result == 0
+
+    def test_dispatches_patch_generation_with_grouped_config(
+        self, tmp_path: Path
+    ) -> None:
+        """Should read grouped storage/runtime keys for patch re-eval."""
+        experiment_dir = tmp_path / "my-exp"
+        trial_dir = (
+            experiment_dir
+            / "crs"
+            / "bench"
+            / "harness"
+            / "patch_generation"
+            / "trial-0"
+        )
+        trial_dir.mkdir(parents=True)
+
+        metadata = self._make_trial_metadata(0, mode="patch_generation")
+        (trial_dir / "metadata.json").write_text(json.dumps(metadata))
+        self._create_minimal_reeval_outputs(trial_dir, mode="patch_generation")
+
+        bench_dir = tmp_path / "benchmarks" / "test-bench"
+        bench_dir.mkdir(parents=True)
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "experiment:\n"
+            "  name: my-exp\n"
+            "runtime:\n"
+            "  per_pov_verify_timeout: 91\n"
+            "  patch_verify_variants: true\n"
+            "storage:\n"
+            f"  experiment_filestore: {tmp_path}\n"
+            f"benchmarks_root: {tmp_path / 'benchmarks'}\n"
+        )
+        oss_fuzz = tmp_path / "oss-fuzz"
+        oss_fuzz.mkdir()
+
+        args = self._make_args(config_path, oss_fuzz)
+
+        with patch(
+            "crsbench.evaluation.reeval.cli._reeval_patch_generation"
+        ) as mock_pg:
+            mock_pg.return_value = 2
+            result = run_reeval(args)
+
+            mock_pg.assert_called_once()
+            call_kwargs = mock_pg.call_args
+            assert call_kwargs.kwargs["benchmark_path"] == bench_dir
+            assert call_kwargs.kwargs["patch_verify_variants"] is True
+            assert call_kwargs.kwargs["per_pov_verify_timeout"] == 91
             assert result == 0
 
     def test_skips_missing_benchmark(self, tmp_path: Path) -> None:
@@ -979,7 +1213,10 @@ class TestAsyncPatchDrain:
             ),
             patch("crsbench.evaluation.reeval.cli._save_patch_results") as mock_save,
         ):
-            count = _drain_all_async_patch_results([trial_state], "localhost")
+            count = _drain_all_async_patch_results(
+                _as_async_patch_trial_states(trial_state),
+                "localhost",
+            )
 
         assert count == 1
         mock_save.assert_called_once()
@@ -1108,7 +1345,9 @@ class TestAsyncPatchDrainTimeout:
         )
         with pytest.raises(TimeoutError, match="Timed out draining async patch jobs"):
             _drain_all_async_patch_results(
-                [trial_state], "localhost", timeout_seconds=0.0
+                _as_async_patch_trial_states(trial_state),
+                "localhost",
+                timeout_seconds=0.0,
             )
 
     def test_drain_timeout_persists_partial_results(self, tmp_path: Path) -> None:
@@ -1141,7 +1380,9 @@ class TestAsyncPatchDrainTimeout:
             pytest.raises(TimeoutError, match="Timed out draining async patch jobs"),
         ):
             _drain_all_async_patch_results(
-                [trial_state], "localhost", timeout_seconds=0.1
+                _as_async_patch_trial_states(trial_state),
+                "localhost",
+                timeout_seconds=0.1,
             )
 
         mock_save.assert_called_once()
@@ -1249,7 +1490,10 @@ class TestAsyncPovDrain:
                 ":", 1
             )[1]
 
-            count = _drain_all_async_results([state], "localhost")
+            count = _drain_all_async_results(
+                _as_async_trial_states(state),
+                "localhost",
+            )
 
         assert count == 2
         assert mock_poll.call_args_list[0].kwargs["experiment_name"] == "bench"
@@ -1279,7 +1523,10 @@ class TestAsyncPovDrain:
         )
 
         with pytest.raises(ValueError, match="same experiment_name"):
-            _drain_all_async_results([state_a, state_b], "localhost")
+            _drain_all_async_results(
+                _as_async_trial_states(state_a, state_b),
+                "localhost",
+            )
 
     def test_async_drain_preserves_crash_logs_when_pov_file_missing(
         self, tmp_path: Path
@@ -1330,7 +1577,10 @@ class TestAsyncPovDrain:
                 ":", 1
             )[1]
 
-            count = _drain_all_async_results([state], "localhost")
+            count = _drain_all_async_results(
+                _as_async_trial_states(state),
+                "localhost",
+            )
 
         assert count == 1
         mock_store.store_crash_log.assert_called_once()
@@ -1405,7 +1655,10 @@ class TestAsyncPovDrain:
                 ":", 1
             )[1]
 
-            count = _drain_all_async_results([state], "localhost")
+            count = _drain_all_async_results(
+                _as_async_trial_states(state),
+                "localhost",
+            )
 
         assert count == 2
         # Drain should complete and still write collected verdict results.
@@ -1439,7 +1692,11 @@ class TestAsyncPovDrain:
             patch("crsbench.evaluation.reeval.cli._save_pov_results") as mock_save,
             pytest.raises(TimeoutError, match="Timed out draining async POV jobs"),
         ):
-            _drain_all_async_results([state], "localhost", timeout_seconds=0.1)
+            _drain_all_async_results(
+                _as_async_trial_states(state),
+                "localhost",
+                timeout_seconds=0.1,
+            )
 
         mock_save.assert_not_called()
 
@@ -1492,7 +1749,11 @@ class TestAsyncPovDrain:
             mock_store.get_stats.return_value = {}
             mock_store_cls.return_value = mock_store
             with pytest.raises(TimeoutError, match="Timed out draining async POV jobs"):
-                _drain_all_async_results([state], "localhost", timeout_seconds=0.1)
+                _drain_all_async_results(
+                    _as_async_trial_states(state),
+                    "localhost",
+                    timeout_seconds=0.1,
+                )
 
         mock_save.assert_called_once()
 

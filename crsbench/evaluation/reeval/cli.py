@@ -27,9 +27,11 @@ from crsbench.evaluation.trial_identity import build_trial_uid
 from crsbench.evaluation.trial_paths import (
     ExperimentDir,
     TrialDir,
+    normalize_experiment_config_dict,
     resolve_benchmark_path,
 )
 from crsbench.evaluation.verification.models import (
+    PatchInfo,
     PatchVerificationOutput,
     PatchVerificationResult,
     PatchVerificationStatus,
@@ -108,8 +110,8 @@ Examples:
     parser.add_argument(
         "--source",
         choices=["pkgs", "main_repo"],
-        default="pkgs",
-        help="Source mode for builds (default: pkgs)",
+        default=None,
+        help="Source mode for builds (default: experiment config, otherwise pkgs)",
     )
     parser.add_argument(
         "--jobs",
@@ -162,13 +164,13 @@ Examples:
 
 
 def _load_experiment_config(config_path: Path) -> dict:
-    """Load and return raw experiment config dict from YAML.
+    """Load and normalize experiment config from YAML.
 
     Args:
         config_path: Path to experiment config YAML
 
     Returns:
-        Parsed YAML dict
+        Parsed config mapping with grouped keys flattened for compatibility
 
     Raises:
         SystemExit: If file not found or YAML invalid
@@ -178,7 +180,19 @@ def _load_experiment_config(config_path: Path) -> dict:
         sys.exit(1)
 
     with config_path.open() as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+
+    if not isinstance(config, dict):
+        logger.error(
+            f"Invalid experiment config format in {config_path}: expected a YAML mapping"
+        )
+        sys.exit(1)
+
+    try:
+        return normalize_experiment_config_dict(config)
+    except ValueError as exc:
+        logger.error(f"Invalid experiment config in {config_path}: {exc}")
+        sys.exit(1)
 
 
 def _resolve_experiment_dir(config: dict) -> Path:
@@ -549,6 +563,26 @@ def _discover_trial_patches(
             discovered.append((cpv_id, patch_path.stem, patch_path))
 
     return discovered
+
+
+def _find_trial_pov_for_cpv(pov_dir: Path, cpv_id: str) -> Optional[Path]:
+    """Find the staged trial POV path for one CPV."""
+    direct = pov_dir / cpv_id
+    if direct.exists() and direct.is_file():
+        return direct
+
+    for ext in [".blob", ".pov", ".bin"]:
+        candidate = pov_dir / f"{cpv_id}{ext}"
+        if candidate.exists() and candidate.is_file():
+            return candidate
+
+    cpv_subdir = pov_dir / cpv_id
+    if cpv_subdir.is_dir():
+        for child in sorted(cpv_subdir.iterdir()):
+            if child.is_file():
+                return child
+
+    return None
 
 
 def _patch_result_from_dict(result: dict) -> PatchVerificationResult:
@@ -1056,6 +1090,11 @@ def _reeval_patch_generation(
     patch_verify_variants: bool = False,
     force_rebuild: bool,
     use_inc_build: bool,
+    inc_image_policy: Optional[str] = None,
+    inc_image_registry: Optional[str] = None,
+    inc_image_max_pull_bytes: Optional[int] = None,
+    inc_image_pull_timeout: Optional[int] = None,
+    local_image_prefix: Optional[str] = None,
 ) -> int:
     """Re-evaluate a patch_generation trial.
 
@@ -1092,6 +1131,14 @@ def _reeval_patch_generation(
         logger.warning(f"No POVs directory found: {pov_dir}")
         return 0
 
+    target_cpv_id = _infer_target_cpv_id_from_trial_path(
+        trial_dir
+    ) or _load_target_cpv_id_from_trial_metadata(trial_dir)
+    patches = _discover_trial_patches(patch_dir, target_cpv_id=target_cpv_id)
+    if not patches:
+        logger.warning(f"No patches found in {patch_dir}")
+        return 0
+
     work_dir = TrialDir(dest_dir).patch_verify_dir
     work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1099,6 +1146,8 @@ def _reeval_patch_generation(
         oss_fuzz_path=oss_fuzz_path,
         sanitizer=sanitizer or "address",
         timeout=per_pov_verify_timeout,
+        build_timeout=1200,
+        test_timeout=1800,
         log_dir=work_dir,
         force_rebuild=force_rebuild,
         use_inc_build=use_inc_build,
@@ -1106,15 +1155,44 @@ def _reeval_patch_generation(
         cores_per_job=cores_per_job,
         verify_variants=patch_verify_variants,
         source_mode=source_mode,
+        inc_image_policy=inc_image_policy,
+        inc_image_registry=inc_image_registry,
+        inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+        inc_image_pull_timeout=inc_image_pull_timeout,
+        local_image_prefix=local_image_prefix,
     )
 
     try:
-        results = engine.verify_patches(
-            benchmark_path=benchmark_path,
-            patch_dir=patch_dir,
-            harness=harness,
-            pov_dir=pov_dir,
-        )
+        results: list[PatchVerificationResult] = []
+        for cpv_id, patch_id, patch_path in patches:
+            pov_path = _find_trial_pov_for_cpv(pov_dir, cpv_id)
+            if pov_path is None:
+                results.append(
+                    PatchVerificationResult(
+                        status=PatchVerificationStatus.ERROR,
+                        patch_id=patch_id,
+                        pov_id=cpv_id,
+                        benchmark=str(benchmark_path.name),
+                        patch_path=patch_path,
+                        harness=harness,
+                        details=f"POV not found for {cpv_id}",
+                    )
+                )
+                continue
+
+            patch = PatchInfo(
+                patch_id=patch_id,
+                pov_id=cpv_id,
+                patch_path=patch_path,
+            )
+            results.append(
+                engine.verify_patch(
+                    benchmark_path=benchmark_path,
+                    patch=patch,
+                    harness=harness,
+                    pov_path=pov_path,
+                )
+            )
     finally:
         engine.cleanup()
 
@@ -1166,13 +1244,15 @@ def run_reeval(args: argparse.Namespace) -> int:
     if benchmarks_root:
         benchmarks_root = Path(benchmarks_root)
 
-    source_mode = args.source
-    use_snapshot = args.mode == "snapshot"
+    source_mode = args.source or config.get("source_mode") or "pkgs"
+    bug_finding_use_inc_build = bool(config.get("inc_build_enabled", True))
+    patch_use_inc_build = args.mode == "snapshot"
 
     # Resolve per-POV verify timeout: CLI flag > config > default 180s
     per_pov_verify_timeout = (
         args.per_pov_verify_timeout or config.get("per_pov_verify_timeout") or 180
     )
+    verify_timeout = config.get("verify_timeout") or 7200
     logger.info(f"Per-POV verify timeout: {per_pov_verify_timeout}s")
     patch_verify_variants = bool(config.get("patch_verify_variants", False))
     logger.info(f"Patch verify variants: {patch_verify_variants}")
@@ -1321,7 +1401,7 @@ def run_reeval(args: argparse.Namespace) -> int:
                         per_pov_verify_timeout=per_pov_verify_timeout,
                         sanitizer=trial_sanitizer,
                         force_rebuild=args.force_rebuild,
-                        use_inc_build=use_snapshot,
+                        use_inc_build=bug_finding_use_inc_build,
                     )
                     total_results += count
 
@@ -1339,7 +1419,7 @@ def run_reeval(args: argparse.Namespace) -> int:
                             source_mode=source_mode,
                             sanitizer=trial_sanitizer,
                             patch_verify_variants=patch_verify_variants,
-                            use_inc_build=use_snapshot,
+                            use_inc_build=patch_use_inc_build,
                         )
                         if state:
                             async_patch_trials.append(state)
@@ -1357,7 +1437,12 @@ def run_reeval(args: argparse.Namespace) -> int:
                         per_pov_verify_timeout=per_pov_verify_timeout,
                         patch_verify_variants=patch_verify_variants,
                         force_rebuild=args.force_rebuild,
-                        use_inc_build=use_snapshot,
+                        use_inc_build=patch_use_inc_build,
+                        inc_image_policy=config.get("inc_image_policy"),
+                        inc_image_registry=config.get("inc_image_registry"),
+                        inc_image_max_pull_bytes=config.get("inc_image_max_pull_bytes"),
+                        inc_image_pull_timeout=config.get("inc_image_pull_timeout_sec"),
+                        local_image_prefix=config.get("project_image_prefix"),
                     )
                     total_results += count
 
@@ -1374,7 +1459,11 @@ def run_reeval(args: argparse.Namespace) -> int:
         # async_trials is non-empty only in async mode.
         if async_trials and redis_host:
             try:
-                total_results += _drain_all_async_results(async_trials, redis_host)
+                total_results += _drain_all_async_results(
+                    async_trials,
+                    redis_host,
+                    timeout_seconds=verify_timeout,
+                )
             except AsyncPovDrainError as e:
                 total_results += e.processed_count
                 logger.exception(
@@ -1391,7 +1480,9 @@ def run_reeval(args: argparse.Namespace) -> int:
         if async_patch_trials and redis_host:
             try:
                 total_results += _drain_all_async_patch_results(
-                    async_patch_trials, redis_host
+                    async_patch_trials,
+                    redis_host,
+                    timeout_seconds=verify_timeout,
                 )
             except Exception:
                 logger.exception("Error draining async patch verification results")
