@@ -2130,9 +2130,9 @@ class TestArgParsing:
         args = parser.parse_args(
             [
                 "cloud",
+                "derive-unfinished-trial-keys",
                 "--config",
                 "c.yaml",
-                "derive-unfinished-trial-keys",
                 "--from",
                 "/tmp/collected",
                 "--output",
@@ -2146,6 +2146,11 @@ class TestArgParsing:
         assert args.from_path == "/tmp/collected"
         assert args.output == "/tmp/unfinished-keys.txt"
         assert args.rerun_failed_trials is True
+
+    def test_parse_derive_unfinished_trial_keys_requires_config(self):
+        parser = self._build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["cloud", "derive-unfinished-trial-keys"])
 
 
 def _make_launch_args(config: str = "/tmp/config.yaml"):

@@ -284,7 +284,7 @@ Examples:
         "derive-unfinished-trial-keys",
         help="Derive unfinished trial keys from collected experiment artifacts",
     )
-    _add_config_argument(derive_p, suppress_default=True)
+    _add_config_argument(derive_p, required=True, suppress_default=True)
     derive_p.add_argument(
         "--from",
         dest="from_path",
