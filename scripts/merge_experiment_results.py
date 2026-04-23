@@ -43,14 +43,16 @@ class TrialInfo:
     mode: str
     sanitizer: str
     trial_num: int
+    cpv: str | None = None  # e.g. "cpv_0"; None for layouts without a cpv level
 
     @property
-    def identity(self) -> tuple[str, str, str, str, str, int]:
+    def identity(self) -> tuple[str, str, str, str | None, str, str, int]:
         """Return unique identity tuple for conflict detection."""
         return (
             self.crs,
             self.benchmark,
             self.harness,
+            self.cpv,
             self.mode,
             self.sanitizer,
             self.trial_num,
@@ -61,7 +63,7 @@ class TrialInfo:
 class Conflict:
     """Represents a trial conflict (multiple successful trials with same identity)."""
 
-    identity: tuple[str, str, str, str, str, int]
+    identity: tuple[str, str, str, str | None, str, str, int]
     trials: list[TrialInfo]
 
 
@@ -103,61 +105,82 @@ def get_trial_status(trial_dir: Path) -> str:
     return "unknown"
 
 
-def parse_trial_path(relative_path: Path) -> tuple[str, str, str, str, str, int]:
+def parse_trial_path(
+    relative_path: Path,
+) -> tuple[str, str, str, str | None, str, str, int]:
     """Parse trial path to extract components.
 
-    Expected format: {crs}/{benchmark}/{harness}/{mode}/{sanitizer}/trial-{N}
+    Supports two layouts:
+      - Legacy (6 levels): {crs}/{benchmark}/{harness}/{mode}/{sanitizer}/trial-{N}
+      - With CPV (7 levels): {crs}/{benchmark}/{harness}/{cpv}/{mode}/{sanitizer}/trial-{N}
 
-    Returns: (crs, benchmark, harness, mode, sanitizer, trial_num)
+    Returns: (crs, benchmark, harness, cpv, mode, sanitizer, trial_num)
+    where cpv is None for the legacy layout.
     """
     parts = relative_path.parts
-    if len(parts) != 6:
-        raise ValueError(f"Invalid trial path format: {relative_path}")
 
-    trial_dirname = parts[-1]
+    trial_dirname = parts[-1] if parts else ""
     if not trial_dirname.startswith("trial-"):
         raise ValueError(f"Invalid trial directory name: {trial_dirname}")
 
-    trial_num = int(trial_dirname.split("-")[1])
+    try:
+        trial_num = int(trial_dirname.split("-")[1])
+    except (IndexError, ValueError) as e:
+        raise ValueError(f"Invalid trial directory name: {trial_dirname}") from e
 
-    return (parts[0], parts[1], parts[2], parts[3], parts[4], trial_num)
+    if len(parts) == 7:
+        crs, benchmark, harness, cpv, mode, sanitizer = parts[:6]
+        return (crs, benchmark, harness, cpv, mode, sanitizer, trial_num)
+    if len(parts) == 6:
+        crs, benchmark, harness, mode, sanitizer = parts[:5]
+        return (crs, benchmark, harness, None, mode, sanitizer, trial_num)
+    raise ValueError(
+        f"Invalid trial path format: expected 6 or 7 path components, "
+        f"got {len(parts)}: {relative_path}"
+    )
 
 
 def enumerate_trials(exp_data_dir: Path) -> list[TrialInfo]:
-    """List all trial directories with their relative paths and status."""
+    """List all trial directories with their relative paths and status.
+
+    Matches both the legacy 6-level layout and the 7-level layout with a CPV level.
+    """
     trials = []
 
-    # Find all trial-* directories
-    # Pattern: {crs}/{benchmark}/{harness}/{mode}/{sanitizer}/trial-*
-    for trial_path in exp_data_dir.glob("*/*/*/*/*/trial-*"):
-        if not trial_path.is_dir():
-            continue
+    # Match trial-* directories at either 6 or 7 component depths.
+    patterns = ("*/*/*/*/*/trial-*", "*/*/*/*/*/*/trial-*")
+    seen: set[Path] = set()
+    for pattern in patterns:
+        for trial_path in exp_data_dir.glob(pattern):
+            if trial_path in seen or not trial_path.is_dir():
+                continue
+            seen.add(trial_path)
 
-        # Get relative path from experiment-data/
-        relative_path = trial_path.relative_to(exp_data_dir)
+            relative_path = trial_path.relative_to(exp_data_dir)
 
-        # Parse path components
-        try:
-            crs, benchmark, harness, mode, sanitizer, trial_num = parse_trial_path(relative_path)
-        except ValueError as e:
-            logger.warning(f"Skipping invalid trial path {relative_path}: {e}")
-            continue
+            try:
+                crs, benchmark, harness, cpv, mode, sanitizer, trial_num = (
+                    parse_trial_path(relative_path)
+                )
+            except ValueError as e:
+                logger.warning(f"Skipping invalid trial path {relative_path}: {e}")
+                continue
 
-        # Get trial status
-        status = get_trial_status(trial_path)
+            status = get_trial_status(trial_path)
 
-        trial_info = TrialInfo(
-            path=trial_path,
-            relative_path=relative_path,
-            status=status,
-            crs=crs,
-            benchmark=benchmark,
-            harness=harness,
-            mode=mode,
-            sanitizer=sanitizer,
-            trial_num=trial_num,
-        )
-        trials.append(trial_info)
+            trial_info = TrialInfo(
+                path=trial_path,
+                relative_path=relative_path,
+                status=status,
+                crs=crs,
+                benchmark=benchmark,
+                harness=harness,
+                cpv=cpv,
+                mode=mode,
+                sanitizer=sanitizer,
+                trial_num=trial_num,
+            )
+            trials.append(trial_info)
 
     return trials
 
@@ -187,14 +210,20 @@ def detect_conflicts(trials: list[TrialInfo]) -> list[Conflict]:
 def print_conflict_report(conflicts: list[Conflict]) -> None:
     """Print detailed conflict report."""
     logger.error("=" * 80)
-    logger.error(f"CONFLICT DETECTED: {len(conflicts)} trial(s) have multiple successful runs")
+    logger.error(
+        f"CONFLICT DETECTED: {len(conflicts)} trial(s) have multiple successful runs"
+    )
     logger.error("=" * 80)
 
     for i, conflict in enumerate(conflicts, 1):
-        crs, benchmark, harness, mode, sanitizer, trial_num = conflict.identity
+        crs, benchmark, harness, cpv, mode, sanitizer, trial_num = conflict.identity
 
+        identity_parts = [crs, benchmark, harness]
+        if cpv is not None:
+            identity_parts.append(cpv)
+        identity_parts.extend([mode, sanitizer, f"trial-{trial_num}"])
         logger.error(f"\nConflict #{i}:")
-        logger.error(f"  Identity: {crs}/{benchmark}/{harness}/{mode}/{sanitizer}/trial-{trial_num}")
+        logger.error(f"  Identity: {'/'.join(identity_parts)}")
         logger.error(f"  Found {len(conflict.trials)} successful trials:")
 
         for trial in conflict.trials:
@@ -204,7 +233,9 @@ def print_conflict_report(conflicts: list[Conflict]) -> None:
             metadata_file = trial.path / "metadata.json"
             if metadata_file.exists():
                 try:
-                    metadata = TrialMetadata.model_validate_json(metadata_file.read_text())
+                    metadata = TrialMetadata.model_validate_json(
+                        metadata_file.read_text()
+                    )
                     logger.error(f"      Timestamp: {metadata.timestamp}")
                 except Exception as e:
                     logger.error(f"      (Could not read metadata: {e})")
