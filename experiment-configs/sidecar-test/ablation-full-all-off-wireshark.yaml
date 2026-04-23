@@ -31,19 +31,19 @@ runtime:
       max_variants_per_cpv: 1
     ground_truth_patch: {}
 storage:
-  experiment_filestore: /tmp/crsbench/ablation-full/all-off-wireshark/experiment-data
-  report_filestore: /tmp/crsbench/ablation-full/all-off-wireshark/report-data
+  experiment_filestore: .run/crsbench/ablation-full/all-off-wireshark/experiment-data
+  report_filestore: .run/crsbench/ablation-full/all-off-wireshark/report-data
   copy_results_after_trial: true
-  results_filestore: /mnt/crsbench_nfs/crsbench/ramjet/ablation-all-off-wireshark
+  results_filestore: /mnt/crsbench_nfs/crsbench/cyclonus/ablation-all-off-wireshark
   cleanup_after_trial: true
 crs_compose:
   builder-sidecar-lite:
-    num_cores: 4
+    num_cores: 16
 resources:
   memory_per_trial: "64G"
 worker:
-  jobs: 10
-  cores_per_job: 8
+  jobs: 6
+  cores_per_job: 16
 evaluator:
-  jobs: 2
-  cores_per_job: 4
+  jobs: 8
+  cores_per_job: 16

@@ -1,0 +1,129 @@
+# Smoke test on GCE: crs-codex (gpt-5.4), 1 trial × smoke-test-bug-fixing suite.
+#
+# Timeouts match afc-final cc-bugfinding for build/verify; run is 2h.
+#
+# Prerequisites:
+#   1. gcloud auth login && gcloud auth application-default login
+#   2. uv run crsbench cloud keygen (add public key to GitHub deploy keys)
+#   3. HF_TOKEN in .env or environment
+#
+# Usage:
+#   CONFIG=experiment-configs/smoke-testing/gce-smoke-crs-codex-gpt-5-4.yaml
+#   uv run crsbench cloud launch --config "$CONFIG"
+#   uv run crsbench cloud --config "$CONFIG" monitor
+#   uv run crsbench cloud --config "$CONFIG" collect --force
+#   uv run crsbench cloud --config "$CONFIG" teardown --force
+
+experiment:
+  name: gce-smoke-crs-codex-gpt-5-4
+  task: bugfixing
+  benchmarks:
+    - afc-curl-delta-05:
+        curl_fuzzer_dict: [cpv_0]
+    - afc-libexif-delta-03:
+        exif_from_data_fuzzer: [cpv_0]
+    - afc-libxml2-delta-03:
+        html: [cpv_0]
+    - afc-mongoose-delta-02:
+        fuzz: [cpv_0]
+    - afc-apache-poi-full-01:
+        POIPOIFSDumpFuzzer: [cpv_2]
+    - afc-log4j2-delta-01:
+        SimpleLoggerFuzzer: [cpv_0]
+    - afc-pdfbox-delta-01:
+        PDFOCRFuzzer: [cpv_0]
+    - afc-tika-delta-01:
+        HtmlParserFuzzer: [cpv_0]
+  sanitizers:
+    - address
+    - undefined
+  mode: auto
+runtime:
+  trials: 1
+  max_total_time: 55200        # build 6h + run 2h + verify 4h + ~3.3h buffer
+  build_timeout: 21600         # 6h — same as afc-final cc-bugfinding
+  run_timeout: 7200            # 2h
+  verify_timeout: 14400        # 4h — same as afc-final cc-bugfinding
+  per_pov_verify_timeout: 300
+  redis_host: redis-server:6379
+  patch_verify_variants: true
+  litellm:
+    mode: external
+    cost_budget: 30.0
+storage:
+  experiment_filestore: /data/crsbench/experiment-data/gce-smoke-crs-codex-gpt-5-4
+  report_filestore: /data/crsbench/report-data/gce-smoke-crs-codex-gpt-5-4
+resources:
+  cores_per_trial: 8
+crs_compose:
+  oss_crs_infra:
+    shared: true
+  crs-codex:
+    num_cores: 8
+    budget_policy: terminate
+    additional_env:
+      CRS_AGENT: codex
+      CODEX_MODEL: gpt-5.4
+      CODEX_CLI_VERSION: 0.121.0
+worker:
+  jobs: 8
+  cores_per_job: 8
+  storage:
+    cleanup_after_trial: true
+evaluator:
+  jobs: 4
+  cores_per_job: 4
+cloud:
+  remote:
+    experiment_root: /data/crsbench/experiment-data
+  defaults:
+    readiness_timeout_sec: 1200
+    crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+    crsbench_git_ref: main
+    github_deploy_key_path: .crsbench-keys/crsbench-deploy
+  env:
+    HF_TOKEN: os.environ/HF_TOKEN
+    CRSBENCH_LLM_UPSTREAM_BASE_URL: os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL
+    CRSBENCH_LLM_UPSTREAM_MASTER_KEY: os.environ/CRSBENCH_LLM_UPSTREAM_MASTER_KEY
+    CRSBENCH_NOTIFY_APPRISE_URLS: os.environ/CRSBENCH_NOTIFY_APPRISE_URLS
+  bootstrap:
+    prepare_mode: full
+    download_benchmarks: auto
+  providers:
+    gce:
+      project: aixcc-426805
+      ssh_via_iap: true
+      regions:
+        # - asia-south1   # skip for smoke
+        - us-central1
+        - us-south1
+        - us-east5
+        - us-east1
+      fallback: true
+      profile_defaults:
+        machine_type: n2d-standard-16
+        boot_disk_size_gb: 512
+        boot_disk_type: pd-ssd
+        image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+        service_account_email: 153298433405-compute@developer.gserviceaccount.com
+        owner_label: crsbench
+      instance_profiles:
+        gce-orchestrator-n2d: {}           # n2d-standard-16, 512 GB pd-ssd
+        gce-worker-n2d:
+          machine_type: n2d-standard-64    # 64 vCPUs — 8 jobs × 8 cores
+          boot_disk_size_gb: 1024          # 1 TB pd-ssd
+        gce-evaluator-n2d:
+          machine_type: n2d-standard-16    # 16 vCPUs — 4 jobs × 4 cores
+          boot_disk_size_gb: 512           # 512 GB pd-ssd — Docker build cache
+  orchestrator:
+    instance_profile: gce-orchestrator-n2d
+  workers:
+    defaults:
+      instance_profile: gce-worker-n2d
+    placements:
+      - {} # 1 worker × 64 cores (8 benchmarks in parallel)
+  evaluators:
+    defaults:
+      instance_profile: gce-evaluator-n2d
+    placements:
+      - {} # 1 evaluator
