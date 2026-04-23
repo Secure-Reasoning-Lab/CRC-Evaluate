@@ -303,6 +303,10 @@ class POVVerificationManager:
                 trial_id = self._trial_id or ""
                 prepare_request_id = ""
                 if use_inc_build:
+                    from crsbench.distributed.verify_queue import (
+                        build_dispatcher_build_request_id,
+                    )
+
                     prepare_job = PrepareIncImageJob(
                         benchmark_path=benchmark_path,
                         benchmark_name=adapter.benchmark_name,
@@ -316,7 +320,11 @@ class POVVerificationManager:
                         local_image_prefix=engine.builder.infra.local_image_prefix,
                     )
                     build_payloads.append(serialize_ci_job(prepare_job))
-                    prepare_request_id = f"build:{trial_id}:{adapter.benchmark_name}:0"
+                    prepare_request_id = build_dispatcher_build_request_id(
+                        trial_id=trial_id,
+                        benchmark=adapter.benchmark_name,
+                        index=0,
+                    )
 
                 for config in plan.configs:
                     build_job = BuildSingleVariantJob(
@@ -344,16 +352,20 @@ class POVVerificationManager:
                     )
                     build_payloads.append(serialize_ci_job(build_job))
 
-                request_ids = submit_async_build_requests(
-                    redis_host=self._redis_host,
-                    experiment_name=self._experiment_name or "",
-                    trial_id=trial_id,
-                    benchmark=adapter.benchmark_name,
-                    build_payloads=build_payloads,
-                    sanitizer=sanitizer,
-                    source_mode=source_mode,
-                    use_inc_build=use_inc_build,
-                )
+                try:
+                    request_ids = submit_async_build_requests(
+                        redis_host=self._redis_host,
+                        experiment_name=self._experiment_name or "",
+                        trial_id=trial_id,
+                        benchmark=adapter.benchmark_name,
+                        build_payloads=build_payloads,
+                        sanitizer=sanitizer,
+                        source_mode=source_mode,
+                        use_inc_build=use_inc_build,
+                    )
+                except ValueError as e:
+                    logger.warning(f"Skipping dispatcher async POV build enqueue: {e}")
+                    return None
                 build_job_ids = request_ids[1:] if use_inc_build else request_ids
 
                 self._async_build_job_ids = build_job_ids

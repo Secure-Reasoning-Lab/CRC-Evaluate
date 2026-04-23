@@ -1235,7 +1235,7 @@ class TestAsyncPovDrain:
             patch(
                 "crsbench.distributed.verify_queue.poll_single_pov_verdicts",
                 side_effect=[([verdict1, verdict2], []), ([], [])],
-            ),
+            ) as mock_poll,
             patch("crsbench.evaluation.reeval.cli._save_pov_results") as mock_save,
             patch("crsbench.evaluation.reeval.cli._load_crs_run_start_time"),
             patch(
@@ -1252,12 +1252,34 @@ class TestAsyncPovDrain:
             count = _drain_all_async_results([state], "localhost")
 
         assert count == 2
+        assert mock_poll.call_args_list[0].kwargs["experiment_name"] == "bench"
         # Persisted output should keep raw queue verdict count.
         saved_results = mock_save.call_args.args[0]
         assert len(saved_results) == 2
         # Store population follows raw result set.
         assert mock_store.add_pov.call_count == 2
         mock_store.save.assert_called_once()
+
+    def test_async_drain_rejects_mixed_experiment_names(self, tmp_path: Path) -> None:
+        state_a = SimpleNamespace(
+            trial_id="exp-a__bench__h__trial-1",
+            dest_dir=tmp_path / "trial-1",
+            job_ids=["job-1"],
+            pov_hash_to_path={},
+            benchmark_name="bench",
+            experiment_name="exp-a",
+        )
+        state_b = SimpleNamespace(
+            trial_id="exp-b__bench__h__trial-2",
+            dest_dir=tmp_path / "trial-2",
+            job_ids=["job-2"],
+            pov_hash_to_path={},
+            benchmark_name="bench",
+            experiment_name="exp-b",
+        )
+
+        with pytest.raises(ValueError, match="same experiment_name"):
+            _drain_all_async_results([state_a, state_b], "localhost")
 
     def test_async_drain_preserves_crash_logs_when_pov_file_missing(
         self, tmp_path: Path

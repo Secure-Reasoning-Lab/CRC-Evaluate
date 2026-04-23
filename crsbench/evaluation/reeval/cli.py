@@ -809,7 +809,13 @@ def _drain_all_async_results(
     start_time = time.monotonic()
     timed_out = False
 
-    experiment_name = trials[0].experiment_name if trials else ""
+    experiment_names = {state.experiment_name for state in trials}
+    if len(experiment_names) > 1:
+        raise ValueError(
+            "_drain_all_async_results requires all trials to share the same "
+            "experiment_name"
+        )
+    experiment_name = next(iter(experiment_names), "")
 
     while remaining:
         if time.monotonic() - start_time > timeout_seconds:

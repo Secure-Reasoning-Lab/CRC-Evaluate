@@ -75,9 +75,7 @@ def test_submit_async_build_requests_dispatcher(monkeypatch) -> None:
 
     assert record is not None
     assert record.owner_key == "trial::exp1::trial-1"
-    assert record.lineage_id == verify_queue._build_lineage_id(
-        "bench", "address", "pkgs", use_inc_build=True
-    )
+    assert record.lineage_id == "bench::address::pkgs::inc"
     assert record.generation == 1
     assert record.state == "ready"
     assert record.payload == build_payloads[0]
@@ -125,14 +123,36 @@ def test_enqueue_single_pov_dispatcher_submits_verify_request(monkeypatch) -> No
 
     assert record is not None
     assert record.owner_key == "trial::exp1::trial-1"
-    assert record.lineage_id == verify_queue._build_lineage_id(
-        "bench", "address", "pkgs", use_inc_build=False
-    )
+    assert record.lineage_id == "bench::address::pkgs::clean"
     assert record.generation == 1
     assert record.state == "blocked_on_build"
     assert record.build_request_ids == ["build-1"]
     assert record.payload["trial_id"] == "trial-1"
     assert record.payload["pov"]["pov_id"] == "pov-1"
+
+
+def test_enqueue_single_pov_dispatcher_without_builds_is_ready(monkeypatch) -> None:
+    monkeypatch.setenv(EVALUATOR_ROUTING_MODEL_ENV, ROUTING_MODEL_DISPATCHER)
+    redis_conn = _FakeRedis()
+
+    job_id = verify_queue.enqueue_single_pov(
+        verify_queue=None,
+        experiment_name="exp1",
+        trial_id="trial-1",
+        benchmark="bench",
+        harness="h",
+        pov_id="pov-1",
+        pov_data=b"pov-data",
+        redis_conn=redis_conn,
+    )
+
+    assert job_id == "verify:trial-1:bench:h:pov-1"
+    store = DispatcherStateStore(redis_conn, experiment_name="exp1")
+    record = store.load_verify_request(job_id)
+
+    assert record is not None
+    assert record.state == "ready"
+    assert record.build_request_ids == []
 
 
 def test_enqueue_single_pov_dispatcher_requires_trial_id(monkeypatch) -> None:
@@ -163,19 +183,44 @@ def test_poll_single_pov_verdicts_dispatcher(monkeypatch) -> None:
         VerifyResultRecord(
             request_id=request_id,
             attempt_id="attempt-1",
-            verdict={"status": "ok"},
+            verdict={
+                "pov_id": "pov-1",
+                "triggered_bug": True,
+                "status": "cpv",
+                "cpv_matches": ["cpv_0"],
+                "variant_results": {},
+                "crash_logs": {},
+                "error": None,
+            },
             terminal_state="completed",
         ),
     )
 
-    completed, remaining = verify_queue.poll_single_pov_verdicts(
-        "redis.local",
-        [request_id],
-        experiment_name="exp1",
-        redis_conn=redis_conn,
-    )
+    with patch("crsbench.distributed.verify_queue.time.time", return_value=123.0):
+        completed, remaining = verify_queue.poll_single_pov_verdicts(
+            "redis.local",
+            [request_id],
+            experiment_name="exp1",
+            redis_conn=redis_conn,
+        )
 
-    assert completed == [{"status": "ok"}]
+    assert completed == [
+        {
+            "trial_id": "trial-1",
+            "benchmark": "bench",
+            "harness": "h",
+            "verdict": {
+                "pov_id": "pov-1",
+                "triggered_bug": True,
+                "status": "cpv",
+                "cpv_matches": ["cpv_0"],
+                "variant_results": {},
+                "crash_logs": {},
+                "error": None,
+            },
+            "completed_at": 123.0,
+        }
+    ]
     assert remaining == []
 
 

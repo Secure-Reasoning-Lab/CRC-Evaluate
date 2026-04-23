@@ -49,7 +49,9 @@ def _build_verify_request_id(
     return f"verify:{trial_id}:{benchmark}:{harness}:{pov_id}"
 
 
-def _build_build_request_id(*, trial_id: str, benchmark: str, index: int) -> str:
+def build_dispatcher_build_request_id(
+    *, trial_id: str, benchmark: str, index: int
+) -> str:
     return f"build:{trial_id}:{benchmark}:{index}"
 
 
@@ -116,7 +118,7 @@ def submit_async_build_requests(
 
     request_ids: list[str] = []
     for index, payload in enumerate(build_payloads):
-        request_id = _build_build_request_id(
+        request_id = build_dispatcher_build_request_id(
             trial_id=trial_id,
             benchmark=benchmark,
             index=index,
@@ -208,6 +210,47 @@ def _error_result_from_rq_job(job: Any, *, default_error: str) -> dict[str, Any]
             "error": default_error[:500],
         },
         "completed_at": time.time(),
+    }
+
+
+def _normalize_dispatcher_result(
+    request_id: str, result_dict: dict[str, Any]
+) -> dict[str, Any]:
+    """Normalize dispatcher results to the shared SinglePovResult dict shape."""
+    if {
+        "trial_id",
+        "benchmark",
+        "harness",
+        "verdict",
+        "completed_at",
+    } <= result_dict.keys():
+        return result_dict
+
+    prefix, trial_id, benchmark, harness, pov_id = request_id.split(":", 4)
+    if prefix != "verify":
+        raise ValueError(f"invalid dispatcher verify request id: {request_id}")
+
+    verdict = dict(result_dict)
+    verdict.setdefault("pov_id", pov_id)
+    verdict.setdefault("triggered_bug", False)
+    verdict.setdefault("cpv_matches", [])
+    verdict.setdefault("variant_results", {})
+    verdict.setdefault("crash_logs", {})
+    if not verdict.get("status"):
+        verdict["status"] = "error"
+        verdict["error"] = (
+            verdict.get("error")
+            or f"Dispatcher result for {request_id} is missing verdict status"
+        )
+    else:
+        verdict.setdefault("error", None)
+
+    return {
+        "trial_id": trial_id,
+        "benchmark": benchmark,
+        "harness": harness,
+        "verdict": verdict,
+        "completed_at": result_dict.get("completed_at", time.time()),
     }
 
 
@@ -406,6 +449,7 @@ def enqueue_single_pov(
         except ValueError as e:
             logger.warning(f"Skipping dispatcher POV enqueue: {e}")
             return None
+        build_request_ids = list(build_job_ids or [])
         record = VerifyRequestRecord(
             request_id=request_id,
             trial_id=trial_id,
@@ -415,8 +459,8 @@ def enqueue_single_pov(
             owner_key=owner_key,
             lineage_id=lineage_id,
             generation=1,
-            state="blocked_on_build",
-            build_request_ids=list(build_job_ids or []),
+            state="blocked_on_build" if build_request_ids else "ready",
+            build_request_ids=build_request_ids,
             payload=payload.to_dict(),
         )
         store.submit_verify_request(record)
@@ -494,7 +538,20 @@ def poll_single_pov_verdicts(
                 experiment_name=experiment_name,
                 redis_conn=redis_conn,
             )
-            return store.poll_verify_results(job_ids)
+            completed, remaining = store.poll_verify_results(job_ids)
+            remaining_ids = set(remaining)
+            completed_ids = [
+                job_id for job_id in job_ids if job_id not in remaining_ids
+            ]
+            return (
+                [
+                    _normalize_dispatcher_result(job_id, result_dict)
+                    for job_id, result_dict in zip(
+                        completed_ids, completed, strict=False
+                    )
+                ],
+                remaining,
+            )
         except Exception as e:
             logger.warning(f"Failed to poll dispatcher POV verdicts: {e}")
             return [], list(job_ids)
