@@ -1,0 +1,77 @@
+# Local repro: codex CRS × 4 wireshark delta benchmarks.
+# Purpose: reproduce the `git add -A` 60s timeout and measure the real
+# elapsed time for git-add so we can decide the correct timeout bump.
+#
+# Based on experiment-configs/afc-final-bugfixing/gce-crs-all-agents-full-afc.yaml
+# with the `cloud:` block removed and resources sized for a single local host
+# (128 cores, 755 GiB RAM). worker.cores_per_job / memory_per_trial match GCE.
+#
+# Usage:
+#   CONFIG=experiment-configs/afc-final-bugfixing/local-codex-wireshark-4-repro.yaml
+#   uv run crsbench run --config "$CONFIG"
+
+description: "Local repro: codex × wireshark 4 (inc-build + RTS)"
+
+experiment:
+  name: local-codex-wireshark-4-repro
+  task: bugfixing
+  mode: auto
+  sanitizers:
+    - address
+  benchmarks:
+    - afc-wireshark-delta-01:
+        handler_ber: [cpv_0]
+    - afc-wireshark-delta-02:
+        handler_icmp: [cpv_0]
+    - afc-wireshark-delta-03:
+        handler_irc: [cpv_0]
+    - afc-wireshark-delta-04:
+        handler_json: [cpv_0]
+
+runtime:
+  trials: 1
+  max_total_time: 43200          # build 6h + run 2h + verify 3h + buffer
+  build_timeout: 21600           # 6h — same as GCE
+  run_timeout: 7200              # 2h
+  verify_timeout: 10800          # 3h
+  per_pov_verify_timeout: 300    # 5min
+  redis_host: localhost:6379
+  source_mode: pkgs
+  rts_enabled: true
+  inc_build_enabled: true
+  patch_verify_variants: true
+  inputs:
+    pov:
+      max_variants_per_cpv: 1
+  litellm:
+    mode: external
+    cost_budget: 30.0
+
+storage:
+  experiment_filestore: .run/local-codex-wireshark-4-repro/experiment-data
+  report_filestore: .run/local-codex-wireshark-4-repro/report-data
+
+resources:
+  cores_per_trial: 16
+  memory_per_trial: "64G"
+
+crs_compose:
+  oss_crs_infra:
+    shared: true
+  crs-codex:
+    num_cores: 16
+    budget_policy: terminate
+    additional_env:
+      CRS_AGENT: codex
+      CODEX_MODEL: gpt-5.4
+
+# Local host (128 cores) can run 4 × 16 = 64 cores concurrently with headroom.
+worker:
+  jobs: 4
+  cores_per_job: 16
+  storage:
+    cleanup_after_trial: true
+
+evaluator:
+  jobs: 4
+  cores_per_job: 16

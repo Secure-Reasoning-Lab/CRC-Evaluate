@@ -1,0 +1,150 @@
+# Wireshark-only re-run of the afc-crs-all-agents-full experiment.
+# All 108 wireshark trials failed in the previous run (git-add timeout +
+# worker disk pressure). This config is the original gce-crs-all-agents-full-afc.yaml
+# with only two differences:
+#   1. benchmarks restricted to the 7 wireshark targets
+#   2. worker boot_disk_size_gb: 2048 → 4096 and workers.placements: 3 → 1
+# All other settings (CRS set, trials, timeouts, jobs, machine types, etc.)
+# are identical to the original.
+#
+# Prerequisites:
+#   1. gcloud auth login && gcloud auth application-default login
+#   2. uv run crsbench cloud keygen (add public key to GitHub deploy keys)
+#   3. HF_TOKEN in .env or environment
+#
+# Usage:
+#   CONFIG=experiment-configs/afc-final-bugfixing/gce-crs-all-agents-wireshark-rerun.yaml
+#   uv run crsbench cloud launch --config "$CONFIG"
+#   uv run crsbench cloud --config "$CONFIG" monitor
+#   uv run crsbench cloud --config "$CONFIG" collect --force
+#   uv run crsbench cloud --config "$CONFIG" teardown --force
+
+experiment:
+  name: afc-crs-all-agents-wireshark-rerun
+  task: bugfixing
+  mode: auto
+  sanitizers:
+    - address
+    - undefined
+  benchmarks:
+    - afc-wireshark-delta-01:
+        handler_ber: [cpv_0]
+    - afc-wireshark-delta-02:
+        handler_icmp: [cpv_0]
+    - afc-wireshark-delta-03:
+        handler_irc: [cpv_0]
+    - afc-wireshark-delta-04:
+        handler_json: [cpv_0]
+    - afc-wireshark-delta-05:
+        handler_netbios: [cpv_0]
+    - afc-wireshark-delta-07:
+        handler_gvcp: [cpv_0]
+    - afc-wireshark-full-01:
+        handler_aim: [cpv_0]
+        handler_bat.vis: [cpv_0]
+        handler_netbios: [cpv_0]
+        handler_openvpn.udp: [cpv_0]
+        handler_telnet: [cpv_0]
+        handler_zbee_zdp: [cpv_0]
+runtime:
+  trials: 3
+  max_total_time: 43200          # build 6h + run 2h + verify 3h + 1h buffer
+  build_timeout: 21600           # 6h — same as multilang bugfinding
+  run_timeout: 7200
+  verify_timeout: 10800          # 3h (extended for bug-fixing patch variant sweep)
+  per_pov_verify_timeout: 300    # 5min — same as multilang bugfinding
+  redis_host: redis-server:6379
+  source_mode: pkgs
+  rts_enabled: true
+  inc_build_enabled: true
+  patch_verify_variants: true
+  litellm:
+    mode: external
+    cost_budget: 30.0
+storage:
+  experiment_filestore: /data/crsbench/experiment-data/afc-crs-all-agents-wireshark-rerun
+  report_filestore: /data/crsbench/report-data/afc-crs-all-agents-wireshark-rerun
+resources:
+  cores_per_trial: 16
+  memory_per_trial: "64G"
+crs_compose:
+  oss_crs_infra:
+    shared: true
+  crs-claude-code:
+    num_cores: 16
+    budget_policy: terminate
+    additional_env:
+      CRS_AGENT: claude_code
+      ANTHROPIC_MODEL: claude-opus-4-6
+  crs-codex:
+    num_cores: 16
+    budget_policy: terminate
+    additional_env:
+      CODEX_MODEL: gpt-5.4
+  crs-gemini-cli:
+    num_cores: 16
+    budget_policy: terminate
+    additional_env:
+      GEMINI_MODEL: gemini-3.1-pro-preview
+worker:
+  jobs: 14
+  cores_per_job: 16
+  storage:
+    cleanup_after_trial: true
+evaluator:
+  jobs: 14
+  cores_per_job: 16
+cloud:
+  remote:
+    experiment_root: /data/crsbench/experiment-data
+  defaults:
+    readiness_timeout_sec: 1200
+    crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+    crsbench_git_ref: main
+    github_deploy_key_path: .crsbench-keys/crsbench-deploy
+  env:
+    HF_TOKEN: os.environ/HF_TOKEN
+    CRSBENCH_LLM_UPSTREAM_BASE_URL: os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL
+    CRSBENCH_LLM_UPSTREAM_MASTER_KEY: os.environ/CRSBENCH_LLM_UPSTREAM_MASTER_KEY
+    CRSBENCH_NOTIFY_APPRISE_URLS: os.environ/CRSBENCH_NOTIFY_APPRISE_URLS
+  bootstrap:
+    prepare_mode: full
+    download_benchmarks: auto
+  providers:
+    gce:
+      project: aixcc-426805
+      ssh_via_iap: true
+      regions:
+        # - asia-south1
+        - us-central1
+        - us-south1
+        - us-east5
+        - us-east1
+      fallback: true
+      profile_defaults:
+        machine_type: n2d-standard-16
+        boot_disk_size_gb: 1024
+        boot_disk_type: pd-ssd
+        image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+        service_account_email: 153298433405-compute@developer.gserviceaccount.com
+        owner_label: crsbench
+      instance_profiles:
+        gce-orchestrator-n2d: {} # n2d-standard-16, 1 TB pd-ssd
+        gce-worker-n2d:
+          machine_type: n2d-standard-224 # 224 vCPUs — 14 jobs × 16 cores
+          boot_disk_size_gb: 4096        # 4 TB pd-ssd — bumped from 2 TB to absorb wireshark build outputs
+        gce-evaluator-n2d:
+          machine_type: n2d-standard-224 # 224 vCPUs — 14 jobs × 16 cores
+          boot_disk_size_gb: 2048        # 2 TB pd-ssd — holds Docker build cache
+  orchestrator:
+    instance_profile: gce-orchestrator-n2d
+  workers:
+    defaults:
+      instance_profile: gce-worker-n2d
+    placements:
+      - {} # 1 worker x 224
+  evaluators:
+    defaults:
+      instance_profile: gce-evaluator-n2d
+    placements:
+      - {} # evaluator 1
