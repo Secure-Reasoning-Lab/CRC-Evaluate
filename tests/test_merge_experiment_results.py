@@ -19,11 +19,29 @@ class TestParsing:
     def test_parse_trial_path_valid(self):
         """Test parsing valid trial path."""
         path = Path("crs1/bench1/harness1/bugfinding/address/trial-0")
-        crs, benchmark, harness, mode, sanitizer, trial_num = parse_trial_path(path)
+        crs, benchmark, harness, cpv, mode, sanitizer, trial_num = parse_trial_path(
+            path
+        )
 
         assert crs == "crs1"
         assert benchmark == "bench1"
         assert harness == "harness1"
+        assert cpv is None
+        assert mode == "bugfinding"
+        assert sanitizer == "address"
+        assert trial_num == 0
+
+    def test_parse_trial_path_valid_with_cpv(self):
+        """Test parsing valid trial path with CPV directory."""
+        path = Path("crs1/bench1/harness1/cpv_0/bugfinding/address/trial-0")
+        crs, benchmark, harness, cpv, mode, sanitizer, trial_num = parse_trial_path(
+            path
+        )
+
+        assert crs == "crs1"
+        assert benchmark == "bench1"
+        assert harness == "harness1"
+        assert cpv == "cpv_0"
         assert mode == "bugfinding"
         assert sanitizer == "address"
         assert trial_num == 0
@@ -162,6 +180,7 @@ class TestConflictDetection:
             "crs1",
             "bench1",
             "harness1",
+            None,
             "bugfinding",
             "address",
             0,
