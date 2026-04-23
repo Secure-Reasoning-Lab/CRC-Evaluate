@@ -5,16 +5,18 @@ id: cpv_1
 
 name: Heap buffer overflow in parse_buffer_section via unchecked index offset
 
+author: unknown
+
 origin: synthetic
 
-release_date: 02/01/2026
+release_date: 04/29/2026
 
 cwes:
-- CWE-122
-- CWE-787
-- CWE-129
+  - CWE-122
+  - CWE-787
+  - CWE-129
 
-description: |
+description: |-
   A heap buffer overflow vulnerability exists in the parse_buffer_section function
   in mock.c. The function allocates a heap buffer of size buf_size but then writes
   buf_size bytes starting at offset buf[idx] without validating that idx + buf_size
@@ -24,10 +26,10 @@ description: |
   code execution or denial of service.
 
 locations:
-- type: crash_site
-  path_from_root: mock.c
-  function_name: parse_buffer_section
-  startLine: 22
-  startColumn: 3
-  endLine: 22
-  endColumn: 46
+  - type: crash_site
+    path_from_root: mock.c
+    function_name: parse_buffer_section
+    startLine: 22
+    startColumn: 3
+    endLine: 22
+    endColumn: 41

@@ -5,16 +5,18 @@ id: cpv_0
 
 name: Stack Buffer Overflow in process_input_header
 
+author: unknown
+
 origin: synthetic
 
-release_date: 02/01/2026
+release_date: 04/29/2026
 
 cwes:
-- CWE-121
-- CWE-787
-- CWE-120
+  - CWE-121
+  - CWE-787
+  - CWE-120
 
-description: |
+description: |-
   A stack-based buffer overflow vulnerability exists in the process_input_header
   function in mock.c. The function copies user-controlled data into a fixed-size
   64-byte stack buffer without validating that the input size does not exceed
@@ -23,17 +25,17 @@ description: |
   code execution through return address overwrite or denial of service.
 
 locations:
-- type: crash_site
-  path_from_root: mock.c
-  function_name: process_input_header
-  startLine: 11
-  startColumn: 7
-  endLine: 11
-  endColumn: 7
-- type: root_cause
-  path_from_root: mock.c
-  function_name: process_input_header
-  startLine: 10
-  startColumn: 1
-  endLine: 10
-  endColumn: 1
+  - type: crash_site
+    path_from_root: mock.c
+    function_name: process_input_header
+    startLine: 11
+    startColumn: 7
+    endLine: 11
+    endColumn: 7
+  - type: root_cause
+    path_from_root: mock.c
+    function_name: process_input_header
+    startLine: 10
+    startColumn: 1
+    endLine: 10
+    endColumn: 1
