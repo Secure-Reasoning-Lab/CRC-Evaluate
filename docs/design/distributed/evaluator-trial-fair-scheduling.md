@@ -1,7 +1,7 @@
 # Design: Trial-Fair Evaluator Scheduling
 - Audience: maintainers working on evaluator dispatch, build/verify queues, and distributed queue semantics
 - Scope: scheduler fairness contracts for evaluator-served build and verify work across config-pinned, configless, and CI-compatibility modes
-- Related: [Distributed Evaluation](./distributed-evaluation.md), [Distributed Job Queue](./distributed-job-queue.md), [Unified Build & Verify](./unified-build-verify.md), [Configless Runtime](./configless-runtime.md), [TLA+ Fairness Model](./EvaluatorTrialFairScheduling.tla)
+- Related: [Distributed Evaluation](./distributed-evaluation.md), [Distributed Job Queue](./distributed-job-queue.md), [Unified Build & Verify](./unified-build-verify.md), [Configless Runtime](./configless-runtime.md), [TLA+ Fairness Model](../../../tla/EvaluatorTrialFairScheduling.tla)
 
 ## Goals and Non-goals
 
@@ -37,8 +37,8 @@ worker-side contracts.
 
 ## Formal Model
 
-- `EvaluatorTrialFairScheduling.tla` and
-  `EvaluatorTrialFairScheduling.cfg` provide a bounded TLA+ model for this
+- `tla/EvaluatorTrialFairScheduling.tla` and
+  `tla/EvaluatorTrialFairScheduling.cfg` provide a bounded TLA+ model for this
   fairness revision
 - the model checks abstract partition safety so claim failures and local
   pre-start retry paths do not silently lose queued jobs

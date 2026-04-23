@@ -120,6 +120,7 @@ config should complete with no TLC errors.
 | Model | Runtime boundary | Buggy config catches | Healthy config guarantees |
 | --- | --- | --- | --- |
 | `DistributedAsyncPovVerifyDrain` | async POV verification build prerequisites and final drain budget | verify starts before its build DAG resolves, or drain times out on a shortened budget | verify consumes only explicit prebuilt variants and drain spends the full `verify_timeout` budget |
+| `EvaluatorTrialFairScheduling` | evaluator trial-fair build/verify dispatch | transient claim failures or queue-order bias silently break fairness or lose pre-start work | owner-aware fair selection preserves build-gated verify ordering and no-silent-loss pre-start recovery |
 
 ### Ownership, Callbacks, And Marker Writes
 

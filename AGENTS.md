@@ -137,7 +137,7 @@ Then re-run the quality gate command above.
 - GCE cloud realization: `docs/design/distributed/gce-cloud-orchestration.md`
 - Distributed systems: `docs/design/distributed/distributed-evaluation.md`
 - Job queue/workers: `docs/design/distributed/distributed-job-queue.md`
-- Fair scheduling TLA+ model: `docs/design/distributed/EvaluatorTrialFairScheduling.tla`
+- Fair scheduling TLA+ model: `tla/EvaluatorTrialFairScheduling.tla`
 - Deployment/cloud: `docs/design/distributed/deployment-guide.md`
 - Configless runtime: `docs/design/distributed/configless-runtime.md`
 - Evaluation flow: `docs/design/evaluation/evaluation.md`

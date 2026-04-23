@@ -18,7 +18,7 @@ belongs in `docs/modules/`.
 - [Distributed Queue Semantics](./distributed/distributed-job-queue.md)
 - [Distributed Evaluator and Worker Execution](./distributed/distributed-evaluation.md)
 - [Trial-Fair Evaluator Scheduling](./distributed/evaluator-trial-fair-scheduling.md)
-- [Trial-Fair Scheduling TLA+ Model](./distributed/EvaluatorTrialFairScheduling.tla)
+- [Trial-Fair Scheduling TLA+ Model](../../tla/EvaluatorTrialFairScheduling.tla)
 - [Cloud Live Log Streaming](./distributed/cloud-live-log-streaming.md)
 - [Evaluation Contract](./evaluation/evaluation.md)
 - [Validation Contract](./validation/validation.md)
