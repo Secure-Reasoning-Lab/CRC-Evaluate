@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import math
+import posixpath
 import shlex
 import shutil
 import subprocess
@@ -47,6 +48,7 @@ logger = get_logger(__name__)
 _IAP_TUNNEL_PORT = 22
 _IAP_TUNNEL_STARTUP_TIMEOUT_SEC = 30.0
 _COLLECT_MARKER_FILENAME = ".crsbench-collect.json"
+_ARTIFACT_RSYNC_EXCLUDES: tuple[str, ...] = ("oss-crs-workdir/",)
 
 
 def collect_marker_path(destination: Path) -> Path:
@@ -93,6 +95,11 @@ def write_collect_marker(destination: Path, payload: dict[str, object]) -> None:
         if temp_path is not None:
             temp_path.unlink(missing_ok=True)
         raise
+
+
+def _artifact_rsync_excluded_names() -> set[str]:
+    """Return basename-only artifact rsync exclusions without trailing slashes."""
+    return {pattern.rstrip("/") for pattern in _ARTIFACT_RSYNC_EXCLUDES}
 
 
 def discover_experiment_start_time_from_staging(
@@ -253,6 +260,18 @@ class ArtifactCollector:
             known_hosts_path=known_hosts_path,
             ssh_user=ssh_user,
         )
+        symlink_relpaths = self._find_excluded_symlink_entries(staging_dir)
+        if symlink_relpaths:
+            self._rehydrate_excluded_symlink_entries(
+                worker=worker,
+                fleet=fleet,
+                remote_experiment_dir=remote_experiment_dir,
+                staging_dir=staging_dir,
+                experiment_filestore=experiment_filestore,
+                known_hosts_path=known_hosts_path,
+                ssh_user=ssh_user,
+                symlink_relpaths=symlink_relpaths,
+            )
 
         # Verify before publishing
         self._verify_staging(staging_dir)
@@ -376,6 +395,7 @@ class ArtifactCollector:
         - ``--partial-dir=.rsync-partial``: job-local partial dir (no cross-job collisions)
         - ``--delay-updates``: stage all files before renaming into place
         - ``--delete-delay``: remove remote-deleted files after transfer completes
+        - ``--exclude=oss-crs-workdir/``: skip trial-local oss-crs scratch state
         """
         if (
             known_hosts_path is None
@@ -394,13 +414,59 @@ class ArtifactCollector:
         source = f"{resolved_remote_host}:{remote_experiment_dir}/"
         dest = str(staging_dir) + "/"
 
-        return [
+        cmd = [
             "rsync",
             "-a",
             "--mkpath",
             "--partial-dir=.rsync-partial",
             "--delay-updates",
             "--delete-delay",
+        ]
+        cmd.extend(f"--exclude={pattern}" for pattern in _ARTIFACT_RSYNC_EXCLUDES)
+        cmd.extend(
+            [
+                "--rsync-path=sudo rsync",
+                "-e",
+                ssh_cmd,
+                source,
+                dest,
+            ]
+        )
+        return cmd
+
+    def _build_copy_link_rsync_cmd(
+        self,
+        worker: CloudInstanceLike,
+        fleet: SshTransportConfig,
+        remote_source_path: str,
+        destination_parent: Path,
+        known_hosts_path: Path | None = None,
+        ssh_user: str | None = None,
+        ssh_command: str | None = None,
+        remote_host: str | None = None,
+    ) -> list[str]:
+        """Return an rsync command that dereferences one remote symlink entry."""
+        if (
+            known_hosts_path is None
+            and not fleet.ssh_via_iap
+            and self._base_path is not None
+        ):
+            known_hosts_path = cloud_state_dir(self._base_path) / "known_hosts"
+        ssh_cmd = ssh_command or self._build_ssh_command(
+            worker, fleet, known_hosts_path
+        )
+        resolved_remote_host = remote_host or self._remote_host(worker, fleet)
+        if ssh_user is not None and remote_host is None and not fleet.ssh_via_iap:
+            resolved_remote_host = f"{ssh_user}@{resolved_remote_host}"
+
+        source = f"{resolved_remote_host}:{remote_source_path}"
+        dest = str(destination_parent) + "/"
+
+        return [
+            "rsync",
+            "-a",
+            "--mkpath",
+            "--copy-links",
             "--rsync-path=sudo rsync",
             "-e",
             ssh_cmd,
@@ -738,6 +804,124 @@ class ArtifactCollector:
             ssh_user=ssh_user,
         )
         self._run_rsync_with_retry(cmd)
+
+    def _find_excluded_symlink_entries(self, staging_dir: Path) -> list[Path]:
+        """Return top-level trial symlink entries that point into excluded dirs."""
+        excluded_names = _artifact_rsync_excluded_names()
+        relpaths: list[Path] = []
+
+        for trial_dir in sorted(staging_dir.rglob("trial-*")):
+            if not trial_dir.is_dir():
+                continue
+            for item in sorted(trial_dir.iterdir()):
+                if not item.is_symlink():
+                    continue
+                try:
+                    target = item.resolve(strict=False)
+                    target_rel = target.relative_to(trial_dir)
+                except (OSError, ValueError):
+                    continue
+                if any(part in excluded_names for part in target_rel.parts):
+                    relpaths.append(item.relative_to(staging_dir))
+
+        return relpaths
+
+    @staticmethod
+    def _remove_staged_path(path: Path) -> None:
+        """Remove one staged file, dir, or symlink prior to rehydration."""
+        if path.is_symlink() or path.is_file():
+            path.unlink(missing_ok=True)
+            return
+        if path.is_dir():
+            shutil.rmtree(path)
+
+    def _rehydrate_excluded_symlink_entries(
+        self,
+        *,
+        worker: CloudInstanceLike,
+        fleet: SshTransportConfig,
+        remote_experiment_dir: str,
+        staging_dir: Path,
+        experiment_filestore: Path,
+        known_hosts_path: Path | None,
+        ssh_user: str | None,
+        symlink_relpaths: list[Path],
+    ) -> None:
+        """Replace staged symlinks into excluded dirs with copied remote referents."""
+        logger.info(
+            "Rehydrating {} staged symlinked artifact paths excluded from main rsync",
+            len(symlink_relpaths),
+        )
+
+        if fleet.ssh_via_iap:
+            if not ssh_user:
+                raise ArtifactCollectionError(
+                    f"Unable to resolve SSH user for IAP collection from {worker.name}"
+                )
+            iap_known_hosts_path = self._prepare_iap_known_hosts(
+                experiment_filestore=experiment_filestore,
+                host_key_alias=worker.name,
+            )
+            with self._open_iap_tunnel(worker=worker, fleet=fleet) as local_port:
+                ssh_command = self._build_iap_ssh_command(
+                    local_port=local_port,
+                    ssh_user=ssh_user,
+                    known_hosts_path=iap_known_hosts_path,
+                    host_key_alias=worker.name,
+                )
+                self._rehydrate_excluded_symlink_entries_via_rsync(
+                    worker=worker,
+                    fleet=fleet,
+                    remote_experiment_dir=remote_experiment_dir,
+                    staging_dir=staging_dir,
+                    symlink_relpaths=symlink_relpaths,
+                    ssh_command=ssh_command,
+                    remote_host="127.0.0.1",
+                )
+            return
+
+        self._rehydrate_excluded_symlink_entries_via_rsync(
+            worker=worker,
+            fleet=fleet,
+            remote_experiment_dir=remote_experiment_dir,
+            staging_dir=staging_dir,
+            symlink_relpaths=symlink_relpaths,
+            known_hosts_path=known_hosts_path,
+            ssh_user=ssh_user,
+        )
+
+    def _rehydrate_excluded_symlink_entries_via_rsync(
+        self,
+        *,
+        worker: CloudInstanceLike,
+        fleet: SshTransportConfig,
+        remote_experiment_dir: str,
+        staging_dir: Path,
+        symlink_relpaths: list[Path],
+        known_hosts_path: Path | None = None,
+        ssh_user: str | None = None,
+        ssh_command: str | None = None,
+        remote_host: str | None = None,
+    ) -> None:
+        """Run targeted rsync --copy-links transfers for staged excluded-dir symlinks."""
+        remote_root = remote_experiment_dir.rstrip("/") or "/"
+        for relpath in symlink_relpaths:
+            local_path = staging_dir / relpath
+            logger.debug("Rehydrating excluded symlink path: {}", local_path)
+            self._remove_staged_path(local_path)
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            remote_source_path = posixpath.join(remote_root, relpath.as_posix())
+            cmd = self._build_copy_link_rsync_cmd(
+                worker=worker,
+                fleet=fleet,
+                remote_source_path=remote_source_path,
+                destination_parent=local_path.parent,
+                known_hosts_path=known_hosts_path,
+                ssh_user=ssh_user,
+                ssh_command=ssh_command,
+                remote_host=remote_host,
+            )
+            self._run_rsync_with_retry(cmd)
 
     def _run_remote_command(
         self,
