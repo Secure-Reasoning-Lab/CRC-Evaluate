@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from crsbench.distributed.queue import validate_queue_name_component
 
@@ -63,6 +63,15 @@ class VerifyResultRecord:
     terminal_state: str
 
 
+@dataclass(frozen=True)
+class BuildResultRecord:
+    request_id: str
+    attempt_id: str
+    generation: int
+    evaluator_id: str
+    terminal_state: str
+
+
 class DispatcherStateRedisProtocol(Protocol):
     """Synchronous Redis operations used by the dispatcher state store."""
 
@@ -94,6 +103,9 @@ class DispatcherStateStore:
     def _verify_results_key(self) -> str:
         return f"crsbench:dispatcher:{self.experiment_name}:verify_results"
 
+    def _build_results_key(self) -> str:
+        return f"crsbench:dispatcher:{self.experiment_name}:build_results"
+
     def submit_build_request(self, record: BuildRequestRecord) -> str:
         payload = asdict(record)
         self.redis.hset(
@@ -109,6 +121,57 @@ class DispatcherStateStore:
             return None
         payload = json.loads(_decode(raw))
         return BuildRequestRecord(**payload)
+
+    def assign_build_attempt(
+        self,
+        *,
+        request_id: str,
+        evaluator_id: str,
+        attempt_id: str,
+        generation: int,
+    ) -> None:
+        record = self.load_build_request(request_id)
+        if record is None:
+            raise ValueError(f"unknown build request: {request_id}")
+        payload = dict(record.payload)
+        payload["attempt_id"] = attempt_id
+        payload["evaluator_id"] = evaluator_id
+        self.submit_build_request(
+            BuildRequestRecord(
+                request_id=record.request_id,
+                trial_id=record.trial_id,
+                benchmark=record.benchmark,
+                owner_key=record.owner_key,
+                lineage_id=record.lineage_id,
+                generation=generation,
+                state="running",
+                payload=payload,
+            )
+        )
+
+    def build_attempt_is_current(self, request_id: str, attempt_id: str) -> bool:
+        record = self.load_build_request(request_id)
+        if record is None:
+            return False
+        return record.payload.get("attempt_id") == attempt_id
+
+    def load_build_result(self, request_id: str) -> BuildResultRecord | None:
+        raw = self.redis.hget(self._build_results_key(), request_id)
+        if raw is None:
+            return None
+        payload = json.loads(_decode(raw))
+        return BuildResultRecord(**payload)
+
+    def publish_build_result(self, request_id: str, result: BuildResultRecord) -> None:
+        if request_id != result.request_id:
+            raise ValueError(
+                "publish_build_result request_id does not match result.request_id"
+            )
+        self.redis.hset(
+            self._build_results_key(),
+            request_id,
+            json.dumps(asdict(result), sort_keys=True),
+        )
 
     def submit_verify_request(self, record: VerifyRequestRecord) -> str:
         payload = asdict(record)
@@ -126,6 +189,46 @@ class DispatcherStateStore:
         payload = json.loads(_decode(raw))
         return VerifyRequestRecord(**payload)
 
+    def list_verify_requests(self) -> list[VerifyRequestRecord]:
+        values = cast("Any", self.redis).hgetall(self._verify_requests_key()).values()
+        return [VerifyRequestRecord(**json.loads(_decode(raw))) for raw in values]
+
+    def assign_verify_attempt(
+        self,
+        *,
+        request_id: str,
+        evaluator_id: str,
+        attempt_id: str,
+        generation: int,
+    ) -> None:
+        record = self.load_verify_request(request_id)
+        if record is None:
+            raise ValueError(f"unknown verify request: {request_id}")
+        payload = dict(record.payload)
+        payload["attempt_id"] = attempt_id
+        payload["evaluator_id"] = evaluator_id
+        self.submit_verify_request(
+            VerifyRequestRecord(
+                request_id=record.request_id,
+                trial_id=record.trial_id,
+                benchmark=record.benchmark,
+                harness=record.harness,
+                pov_id=record.pov_id,
+                owner_key=record.owner_key,
+                lineage_id=record.lineage_id,
+                generation=generation,
+                state="running",
+                build_request_ids=list(record.build_request_ids),
+                payload=payload,
+            )
+        )
+
+    def verify_attempt_is_current(self, request_id: str, attempt_id: str) -> bool:
+        record = self.load_verify_request(request_id)
+        if record is None:
+            return False
+        return record.payload.get("attempt_id") == attempt_id
+
     def publish_verify_result(
         self, request_id: str, result: VerifyResultRecord
     ) -> None:
@@ -138,6 +241,45 @@ class DispatcherStateStore:
             request_id,
             json.dumps(asdict(result), sort_keys=True),
         )
+
+    def _all_builds_succeeded(self, request_ids: list[str], generation: int) -> bool:
+        for request_id in request_ids:
+            result = self.load_build_result(request_id)
+            if result is None:
+                return False
+            if result.generation != generation:
+                return False
+            if result.terminal_state != "succeeded":
+                return False
+        return True
+
+    def promote_ready_verify_requests(
+        self, *, lineage_id: str, generation: int
+    ) -> None:
+        for request in self.list_verify_requests():
+            if request.lineage_id != lineage_id:
+                continue
+            if request.generation != generation:
+                continue
+            if request.state != "blocked_on_build":
+                continue
+            if not self._all_builds_succeeded(request.build_request_ids, generation):
+                continue
+            self.submit_verify_request(
+                VerifyRequestRecord(
+                    request_id=request.request_id,
+                    trial_id=request.trial_id,
+                    benchmark=request.benchmark,
+                    harness=request.harness,
+                    pov_id=request.pov_id,
+                    owner_key=request.owner_key,
+                    lineage_id=request.lineage_id,
+                    generation=request.generation,
+                    state="ready",
+                    build_request_ids=list(request.build_request_ids),
+                    payload=dict(request.payload),
+                )
+            )
 
     def poll_verify_results(
         self, request_ids: list[str]
