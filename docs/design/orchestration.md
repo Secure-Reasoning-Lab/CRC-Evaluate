@@ -48,6 +48,19 @@ A concrete trial is defined by:
 
 Expansion must be deterministic for the same config and benchmark set.
 
+Within each CRS, expansion is wavefront-ordered across concrete variant streams
+keyed by:
+- benchmark
+- harness
+- mode
+- sanitizer
+- optional CPV target
+
+Each stream remains FIFO by `trial_num`, but the final matrix emits `trial 1`
+across all discovered streams before `trial 2`. Stream discovery order remains
+deterministic and is preserved; only the emission order changes from
+stream-at-a-time to wavefront-by-trial.
+
 ## Mode Selection Contract
 
 ### Local execution
@@ -67,6 +80,7 @@ Conflicting explicit mode flags must be rejected.
 
 ### Local path
 - run expanded trials in-process
+- consume the expanded trial matrix in order without additional reordering
 - aggregate results directly
 - produce final summary/report artifacts without queue mediation
 
@@ -74,6 +88,7 @@ Conflicting explicit mode flags must be rejected.
 - register runtime metadata
 - resolve queue and retry policy
 - enqueue deterministic trial jobs
+- consume the expanded trial matrix in order without additional reordering
 - monitor terminal outcomes
 - aggregate results after queue-backed execution completes
 
