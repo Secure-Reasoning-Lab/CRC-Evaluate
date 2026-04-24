@@ -7,6 +7,9 @@ Tests that:
 """
 
 import argparse
+import builtins
+import importlib
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -15,6 +18,47 @@ import pytest
 
 class TestRunEvaluatorMain:
     """run_evaluator_main() tests."""
+
+    def test_importing_evaluator_does_not_eagerly_import_dispatcher_warmup(
+        self,
+    ) -> None:
+        """Shared/configless imports must not pull dispatcher-only warmup code."""
+        sys.modules.pop("crsbench.distributed.evaluator", None)
+        sys.modules.pop("crsbench.distributed.evaluator_warmup", None)
+
+        importlib.import_module("crsbench.distributed.evaluator")
+
+        assert "crsbench.distributed.evaluator_warmup" not in sys.modules
+
+    def test_importing_evaluator_without_rq_keeps_import_safe(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Optional dispatcher deps must not break shared-mode evaluator import."""
+        original_import = builtins.__import__
+
+        def _guarded_import(
+            name: str,
+            globals: dict[str, object] | None = None,
+            locals: dict[str, object] | None = None,
+            fromlist: tuple[str, ...] = (),
+            level: int = 0,
+        ) -> object:
+            if name == "rq" or name.startswith("rq."):
+                raise ImportError("rq unavailable for test")
+            return original_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.setattr(builtins, "__import__", _guarded_import)
+        sys.modules.pop("crsbench.distributed.evaluator", None)
+        sys.modules.pop("crsbench.distributed.evaluator_warmup", None)
+        sys.modules.pop("crsbench.distributed.queue", None)
+        sys.modules.pop("rq", None)
+        sys.modules.pop("rq.job", None)
+
+        evaluator = importlib.import_module("crsbench.distributed.evaluator")
+
+        assert evaluator.REDIS_AVAILABLE is False
+        assert "crsbench.distributed.evaluator_warmup" not in sys.modules
 
     @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=False)
     def test_returns_error_without_redis(self) -> None:

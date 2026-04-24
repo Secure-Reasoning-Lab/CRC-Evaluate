@@ -5,9 +5,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, cast
-
-import rq
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from crsbench.distributed.evaluator_dispatcher_state import (
     DispatcherStateRedisProtocol,
@@ -26,6 +24,9 @@ logger = get_logger(__name__)
 DISPATCHER_WARMUP_POLL_INTERVAL_SECONDS = 1.0
 WARMUP_BUILD_JOB_TIMEOUT_SECONDS = 3600
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Iterator
+
 
 class _ModeProtocol(Protocol):
     value: str
@@ -36,6 +37,28 @@ class WarmupConfigProtocol(Protocol):
     mode: _ModeProtocol
 
     def get_benchmark_list(self) -> list[str]: ...
+
+
+class _JobIdRegistryProtocol(Protocol):
+    def get_job_ids(self) -> list[str]: ...
+
+
+class BuildQueueProtocol(Protocol):
+    intermediate_queue: _JobIdRegistryProtocol
+    started_job_registry: _JobIdRegistryProtocol
+
+    def get_job_ids(self) -> list[str]: ...
+
+    def enqueue(
+        self,
+        func_name: str,
+        payload: dict[str, Any],
+        *,
+        job_timeout: int,
+        result_ttl: int,
+        job_id: str,
+        meta: dict[str, Any],
+    ) -> object: ...
 
 
 @dataclass(frozen=True)
@@ -56,40 +79,35 @@ class DispatcherWarmupFeeder:
     def __init__(
         self,
         *,
-        build_queue: "rq.Queue",
+        build_queue: BuildQueueProtocol,
         state_store: DispatcherStateStore,
-        warmup_specs: list[WarmupBuildSpec],
+        warmup_specs: Iterable[WarmupBuildSpec],
         build_capacity: int,
     ) -> None:
         self.build_queue = build_queue
         self.state_store = state_store
-        self.warmup_specs = list(warmup_specs)
+        self._warmup_specs = iter(warmup_specs)
         self.build_capacity = max(1, int(build_capacity))
-        self._next_spec_index = 0
 
     def _current_backlog(self) -> int:
-        queued = len(list(self.build_queue.get_job_ids()))
-        intermediate = len(list(self.build_queue.intermediate_queue.get_job_ids()))
-        started = len(list(self.build_queue.started_job_registry.get_job_ids()))
+        queued = len(self.build_queue.get_job_ids())
+        intermediate = len(self.build_queue.intermediate_queue.get_job_ids())
+        started = len(self.build_queue.started_job_registry.get_job_ids())
         return queued + intermediate + started
 
     def tick(self) -> int:
         """Queue at most spare-capacity warmup jobs when no required demand exists."""
-        if self._next_spec_index >= len(self.warmup_specs):
-            return 0
-        if self.state_store.has_pending_required_builds():
-            return 0
-
         spare_capacity = self.build_capacity - self._current_backlog()
         if spare_capacity <= 0:
             return 0
 
         enqueued = 0
-        while enqueued < spare_capacity and self._next_spec_index < len(
-            self.warmup_specs
-        ):
-            spec = self.warmup_specs[self._next_spec_index]
-            self._next_spec_index += 1
+        while enqueued < spare_capacity:
+            if self.state_store.has_pending_required_builds():
+                break
+            spec = next(self._warmup_specs, None)
+            if spec is None:
+                break
             try:
                 self.build_queue.enqueue(
                     "crsbench.distributed.build_jobs.execute_ci_build",
@@ -121,8 +139,8 @@ def build_dispatcher_warmup_specs(
     inc_image_max_pull_bytes: int | None,
     inc_image_pull_timeout: int,
     local_image_prefix: str,
-) -> list[WarmupBuildSpec]:
-    """Build optional warmup build specs for all experiment benchmarks."""
+) -> "Iterator[WarmupBuildSpec]":
+    """Lazily yield warmup build specs as spare local capacity becomes available."""
     from crsbench.distributed.ci_jobs import serialize_ci_job
     from crsbench.executor.variant_planner import VariantPlanner
 
@@ -140,7 +158,6 @@ def build_dispatcher_warmup_specs(
         source_mode=getattr(config, "source_mode", "pkgs"),
     )
 
-    specs: list[WarmupBuildSpec] = []
     for name in benchmark_names:
         benchmark_path = benchmarks_root / name
         if not benchmark_path.exists():
@@ -157,21 +174,18 @@ def build_dispatcher_warmup_specs(
             local_image_prefix=local_image_prefix,
         )
         for job in jobs:
-            specs.append(
-                WarmupBuildSpec(
-                    job_id=job.job_id,
-                    payload=serialize_ci_job(job),
-                    meta={
-                        "experiment_name": experiment_name,
-                        "warmup": "true",
-                        SCHEDULER_OWNER_KEY_META: build_scheduler_owner_key_for_ci_job(
-                            job,
-                            experiment_name=experiment_name,
-                        ),
-                    },
-                )
+            yield WarmupBuildSpec(
+                job_id=job.job_id,
+                payload=serialize_ci_job(job),
+                meta={
+                    "experiment_name": experiment_name,
+                    "warmup": "true",
+                    SCHEDULER_OWNER_KEY_META: build_scheduler_owner_key_for_ci_job(
+                        job,
+                        experiment_name=experiment_name,
+                    ),
+                },
             )
-    return specs
 
 
 def start_dispatcher_warmup_thread(
@@ -191,6 +205,8 @@ def start_dispatcher_warmup_thread(
     poll_interval_seconds: float = DISPATCHER_WARMUP_POLL_INTERVAL_SECONDS,
 ) -> tuple[threading.Event, threading.Thread]:
     """Start a daemon loop that opportunistically feeds warmup builds."""
+    import rq
+
     warmup_specs = build_dispatcher_warmup_specs(
         config,
         experiment_name=experiment_name,
@@ -201,11 +217,14 @@ def start_dispatcher_warmup_thread(
         inc_image_pull_timeout=inc_image_pull_timeout,
         local_image_prefix=local_image_prefix,
     )
-    logger.info(f"Dispatcher warmup: planned {len(warmup_specs)} local build jobs")
+    logger.info("Dispatcher warmup: initialized local build warmup planner")
 
     redis_conn = create_redis_connection(redis_host)
     feeder = DispatcherWarmupFeeder(
-        build_queue=rq.Queue(build_queue_name, connection=redis_conn),
+        build_queue=cast(
+            "BuildQueueProtocol",
+            rq.Queue(build_queue_name, connection=redis_conn),
+        ),
         state_store=DispatcherStateStore(
             cast("DispatcherStateRedisProtocol", redis_conn),
             experiment_name=experiment_name,

@@ -11,7 +11,7 @@ This module implements the evaluator process that:
 import os
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from crsbench.distributed.common import (
     collect_validated_int_metadata,
@@ -20,17 +20,10 @@ from crsbench.distributed.common import (
     normalize_redis_host,
     validate_optional_int_override,
 )
-from crsbench.distributed.evaluator_dispatcher import (
-    EvaluatorDispatcher,
-    build_evaluator_id,
-    start_dispatcher_thread,
-    start_presence_thread,
-)
 from crsbench.distributed.evaluator_scheduler import (
     SCHEDULER_OWNER_KEY_META,
     build_scheduler_owner_key_for_ci_job,
 )
-from crsbench.distributed.evaluator_warmup import start_dispatcher_warmup_thread
 from crsbench.distributed.queue import (
     REDIS_AVAILABLE,
     ROUTING_MODEL_DISPATCHER,
@@ -53,6 +46,58 @@ LEGACY_CI_ALIAS_EXPERIMENT = "__legacy_ci_alias__"
 LEGACY_CI_BUILD_QUEUE = "crsbench_ci_build"
 LEGACY_CI_VERIFY_QUEUE = "crsbench_ci_verify"
 EVALUATOR_PROGRESS_LOG_EVERY_JOBS = 50
+
+
+def build_evaluator_id(worker_name: str | None) -> str:
+    """Lazily import dispatcher-only evaluator ID logic."""
+    from crsbench.distributed.evaluator_dispatcher import (
+        build_evaluator_id as _build_evaluator_id,
+    )
+
+    return _build_evaluator_id(worker_name)
+
+
+def start_presence_thread(
+    *,
+    redis_host: str,
+    experiment_name: str,
+    evaluator_id: str,
+    worker_name: str,
+) -> tuple["threading.Event", "threading.Thread"]:
+    """Lazily import dispatcher presence helpers for dispatcher mode only."""
+    from crsbench.distributed.evaluator_dispatcher import (
+        start_presence_thread as _start_presence_thread,
+    )
+
+    return _start_presence_thread(
+        redis_host=redis_host,
+        experiment_name=experiment_name,
+        evaluator_id=evaluator_id,
+        worker_name=worker_name,
+    )
+
+
+def start_dispatcher_thread(
+    dispatcher: Any,
+) -> tuple["threading.Event", "threading.Thread"]:
+    """Lazily import dispatcher lease loop startup."""
+    from crsbench.distributed.evaluator_dispatcher import (
+        start_dispatcher_thread as _start_dispatcher_thread,
+    )
+
+    return _start_dispatcher_thread(dispatcher)
+
+
+def start_dispatcher_warmup_thread(
+    *args: Any,
+    **kwargs: Any,
+) -> tuple["threading.Event", "threading.Thread"]:
+    """Lazily import dispatcher warmup startup only when dispatcher mode runs."""
+    from crsbench.distributed.evaluator_warmup import (
+        start_dispatcher_warmup_thread as _start_dispatcher_warmup_thread,
+    )
+
+    return _start_dispatcher_warmup_thread(*args, **kwargs)
 
 
 def _report_cloud_runtime_state(
@@ -397,6 +442,8 @@ def run_evaluator_main(
     dispatcher_loop: tuple[threading.Event, threading.Thread] | None = None
     warmup_loop: tuple[threading.Event, threading.Thread] | None = None
     if routing_model == ROUTING_MODEL_DISPATCHER and evaluator_id is not None:
+        from crsbench.distributed.evaluator_dispatcher import EvaluatorDispatcher
+
         presence_loop = start_presence_thread(
             redis_host=redis_host,
             experiment_name=experiment_name,
