@@ -36,8 +36,11 @@ execution plumbing under the shared-queue and dispatcher-routed models.
 
 Startup behavior differs between the first two modes:
 
-- config-pinned evaluator CLI mode in shared routing normally performs a startup
-  pre-build enqueue phase
+- focused worker/evaluator CLI modes default to dispatcher routing when
+  `CRSBENCH_EVALUATOR_ROUTING_MODEL` is unset
+- shared routing remains available as an explicit override via
+  `CRSBENCH_EVALUATOR_ROUTING_MODEL=shared`; in that mode, config-pinned
+  evaluator CLI startup performs the legacy shared pre-build enqueue phase
 - configless mode skips startup pre-build enqueue and relies on lazy build-queue
   consumption
 - dispatcher routing (`CRSBENCH_EVALUATOR_ROUTING_MODEL=dispatcher`) is

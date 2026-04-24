@@ -214,6 +214,7 @@ def run_evaluator(args: argparse.Namespace) -> int:
 
     from crsbench.distributed.queue import (
         ROUTING_MODEL_DISPATCHER,
+        evaluator_routing_model_default_scope,
         get_evaluator_routing_model,
     )
 
@@ -435,21 +436,22 @@ def run_evaluator(args: argparse.Namespace) -> int:
         )
         resolved_cpu_tag = cli_cpu_tag or evaluator_cpu_tag or resources_cpu_tag
 
-        return run_evaluator_main(
-            config=config,
-            experiment_name=experiment_name,
-            redis_host=redis_host,
-            use_cpuset=use_cpuset,
-            cores=resolved_cores,
-            skip_cpus=resolved_skip_cpus,
-            cpu_tag=resolved_cpu_tag,
-            build_jobs=resolved_build_jobs,
-            build_cores_per_job=resolved_build_cores_per_job,
-            verify_cores_per_job=resolved_verify_cores_per_job,
-            verify_jobs=resolved_verify_jobs,
-            idle_timeout=resolved_idle_timeout,
-            worker_name=args.worker_name,
-        )
+        with evaluator_routing_model_default_scope(ROUTING_MODEL_DISPATCHER):
+            return run_evaluator_main(
+                config=config,
+                experiment_name=experiment_name,
+                redis_host=redis_host,
+                use_cpuset=use_cpuset,
+                cores=resolved_cores,
+                skip_cpus=resolved_skip_cpus,
+                cpu_tag=resolved_cpu_tag,
+                build_jobs=resolved_build_jobs,
+                build_cores_per_job=resolved_build_cores_per_job,
+                verify_cores_per_job=resolved_verify_cores_per_job,
+                verify_jobs=resolved_verify_jobs,
+                idle_timeout=resolved_idle_timeout,
+                worker_name=args.worker_name,
+            )
     except KeyboardInterrupt:
         logger.info("Evaluator interrupted by user")
         return 0

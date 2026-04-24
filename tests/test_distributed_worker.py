@@ -464,6 +464,7 @@ class TestConfiglessWorker:
         result = run_worker_configless(redis_host="none")
         assert result == 1
 
+    @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
     def test_configless_discovers_from_registry(self):
         """Configless worker discovers queues from registry."""
         from crsbench.distributed.registry import RuntimeRegistration
@@ -857,6 +858,127 @@ class TestConfiglessWorker:
         mock_continuous.assert_called_once()
         assert mock_continuous.call_args.kwargs["experiment_name"] == "exp-cloud-42"
 
+    def test_worker_cli_experiment_name_mode_defaults_dispatcher_when_env_unset(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Focused experiment-name workers should default to dispatcher routing."""
+        from crsbench.distributed.cli.worker_command import run_worker
+        from crsbench.distributed.queue import (
+            EVALUATOR_ROUTING_MODEL_ENV,
+            ROUTING_MODEL_DISPATCHER,
+        )
+
+        monkeypatch.delenv(EVALUATOR_ROUTING_MODEL_ENV, raising=False)
+        args = argparse.Namespace(
+            experiment_config=None,
+            experiment_name="exp-cloud-42",
+            verbose=False,
+            continuous=None,
+            worker_name="gce-worker-001",
+            no_cpuset=True,
+            cores=None,
+            skip_cpus=None,
+            cpu_tag="c3",
+            jobs=3,
+            cores_per_job=6,
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.worker.run_worker_continuous",
+                side_effect=lambda *_args, **_kwargs: (
+                    None
+                    if os.environ.get(EVALUATOR_ROUTING_MODEL_ENV)
+                    == ROUTING_MODEL_DISPATCHER
+                    else (_ for _ in ()).throw(
+                        AssertionError("dispatcher default missing")
+                    )
+                ),
+            ) as mock_continuous,
+            patch.dict(
+                "os.environ",
+                {"CRSBENCH_REDIS_HOST": "redis.internal:6380"},
+                clear=False,
+            ),
+        ):
+            result = run_worker(args)
+
+        assert result == 0
+        assert os.environ.get(EVALUATOR_ROUTING_MODEL_ENV) is None
+        mock_continuous.assert_called_once()
+
+    def test_worker_cli_config_mode_defaults_dispatcher_when_env_unset(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Focused config-file workers should default to dispatcher routing."""
+        from crsbench.distributed.cli.worker_command import run_worker
+        from crsbench.distributed.queue import (
+            EVALUATOR_ROUTING_MODEL_ENV,
+            ROUTING_MODEL_DISPATCHER,
+        )
+
+        monkeypatch.delenv(EVALUATOR_ROUTING_MODEL_ENV, raising=False)
+        args = argparse.Namespace(
+            experiment_config="test.yaml",
+            experiment_name=None,
+            verbose=False,
+            continuous=False,
+            worker_name=None,
+            no_cpuset=True,
+            cores=None,
+            skip_cpus=None,
+            cpu_tag=None,
+            jobs=None,
+            cores_per_job=None,
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.worker.main",
+                side_effect=lambda *_args, **_kwargs: (
+                    0
+                    if os.environ.get(EVALUATOR_ROUTING_MODEL_ENV)
+                    == ROUTING_MODEL_DISPATCHER
+                    else 1
+                ),
+            ) as mock_main,
+            patch("crsbench.run_experiment.load_experiment_config") as mock_load,
+            patch(
+                "crsbench.distributed.common.normalize_redis_host",
+                side_effect=lambda value: str(value).strip() or None,
+            ),
+        ):
+            mock_worker = MagicMock()
+            mock_worker.cpu_tag = None
+            mock_worker.worker_name = None
+            mock_worker.jobs = 1
+            mock_worker.cores_per_job = None
+            mock_worker.continuous = False
+            mock_worker.minimum_disk_size = "10GB"
+            mock_worker.disk_check_interval = 60
+            mock_worker.cpuset = None
+            mock_worker.skip_cpuset = None
+            mock_worker.redis_host = None
+
+            mock_resources = MagicMock()
+            mock_resources.cpu_tag = None
+
+            mock_config = MagicMock()
+            mock_config.worker = mock_worker
+            mock_config.benchmarks = None
+            mock_config.experiment = "default"
+            mock_config.redis_host = "localhost"
+            mock_config.resources = mock_resources
+            mock_load.return_value = mock_config
+
+            result = run_worker(args)
+
+        assert result == 0
+        assert os.environ.get(EVALUATOR_ROUTING_MODEL_ENV) is None
+        mock_main.assert_called_once()
+
     def test_worker_parser_accepts_experiment_name_mode(self):
         """Worker CLI should expose an experiment-name mode for cloud bootstrap."""
         parser = argparse.ArgumentParser()
@@ -900,6 +1022,7 @@ class TestConfiglessWorker:
         assert result == 0
         assert mock_supervisor.call_args.kwargs["cpu_tag"] == "x86-avx2"
 
+    @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
     def test_configless_cpuset_uses_cli_then_metadata_profile(self):
         """Configless cpuset worker resolves jobs/cores_per_job from CLI>metadata."""
         from crsbench.distributed.registry import RuntimeRegistration
@@ -960,6 +1083,7 @@ class TestConfiglessWorker:
         assert kwargs["build_jobs"] == 2
         assert kwargs["build_cores_per_job"] == 4
 
+    @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
     def test_configless_cpuset_leaves_cores_per_job_unset_without_metadata(self):
         """Configless cpuset worker should not inject a default cores_per_job."""
         from crsbench.distributed.registry import RuntimeRegistration
@@ -993,6 +1117,7 @@ class TestConfiglessWorker:
         assert kwargs["build_jobs"] == 1
         assert kwargs["build_cores_per_job"] is None
 
+    @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
     def test_configless_cpuset_uses_cli_cpu_pinning_only(self):
         """Configless worker uses CLI cpuset/skip-cpuset (no metadata pinning)."""
         from crsbench.distributed.registry import RuntimeRegistration

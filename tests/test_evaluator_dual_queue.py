@@ -9,6 +9,7 @@ Tests that:
 import argparse
 import builtins
 import importlib
+import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -2030,6 +2031,66 @@ class TestEvaluatorCliValidation:
 
         assert result == 1
         mock_configless.assert_not_called()
+
+    def test_cli_config_mode_defaults_dispatcher_when_env_unset(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Focused evaluator mode should default to dispatcher routing."""
+        from crsbench.distributed.cli.evaluator_command import run_evaluator
+        from crsbench.distributed.queue import (
+            EVALUATOR_ROUTING_MODEL_ENV,
+            ROUTING_MODEL_DISPATCHER,
+        )
+
+        monkeypatch.delenv(EVALUATOR_ROUTING_MODEL_ENV, raising=False)
+        args = argparse.Namespace(
+            experiment_config="test.yaml",
+            ci=False,
+            verbose=False,
+            cpuset=None,
+            skip_cpuset=None,
+            cpu_tag=None,
+            jobs=None,
+            cores_per_job=None,
+            build_jobs=None,
+            build_cores_per_job=None,
+            verify_cores_per_job=None,
+            verify_jobs=None,
+            worker_name=None,
+            idle_timeout=None,
+            benchmarks_root=None,
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.common.normalize_redis_host",
+                side_effect=lambda value: str(value).strip() or None,
+            ),
+            patch(
+                "crsbench.run_experiment.load_experiment_config",
+                return_value=MagicMock(
+                    experiment="exp-test",
+                    redis_host="localhost",
+                    evaluator=None,
+                ),
+            ),
+            patch(
+                "crsbench.distributed.evaluator.run_evaluator_main",
+                side_effect=lambda *_args, **_kwargs: (
+                    0
+                    if os.environ.get(EVALUATOR_ROUTING_MODEL_ENV)
+                    == ROUTING_MODEL_DISPATCHER
+                    else 1
+                ),
+            ) as mock_run,
+            patch.dict("os.environ", {"CRSBENCH_REDIS_HOST": "localhost"}, clear=False),
+        ):
+            result = run_evaluator(args)
+
+        assert result == 0
+        assert os.environ.get(EVALUATOR_ROUTING_MODEL_ENV) is None
+        mock_run.assert_called_once()
 
     def test_cores_per_job_rejects_zero(self) -> None:
         """--cores-per-job must be >= 1."""

@@ -7,6 +7,8 @@ for distributed CRS trial execution.
 import os
 import re
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from enum import StrEnum
 from typing import List, Literal, Optional
@@ -142,6 +144,20 @@ def get_evaluator_routing_model() -> str:
         )
         return ROUTING_MODEL_SHARED
     return model
+
+
+@contextmanager
+def evaluator_routing_model_default_scope(model: str) -> Iterator[None]:
+    """Temporarily apply a routing-model default only when the env is unset."""
+    if EVALUATOR_ROUTING_MODEL_ENV in os.environ:
+        yield
+        return
+
+    os.environ[EVALUATOR_ROUTING_MODEL_ENV] = model
+    try:
+        yield
+    finally:
+        os.environ.pop(EVALUATOR_ROUTING_MODEL_ENV, None)
 
 
 def resolve_queue_names(experiment_name: str) -> tuple[str, str, str]:

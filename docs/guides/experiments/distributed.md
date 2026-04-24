@@ -458,8 +458,12 @@ The evaluator is optional. Without it:
 - Use `crsbench re-eval` to verify POVs after the fact
 
 Mode note:
-- config-pinned evaluator CLI mode normally performs a startup pre-build
-  enqueue phase
+- focused worker/evaluator CLI modes default to dispatcher routing when
+  `CRSBENCH_EVALUATOR_ROUTING_MODEL` is unset; async POV verification then uses
+  logical build/verify requests plus evaluator-local warmup instead of the
+  legacy shared startup pre-build fanout
+- shared routing remains available as an explicit override via
+  `CRSBENCH_EVALUATOR_ROUTING_MODEL=shared`
 - configless evaluator mode skips startup pre-build enqueue and consumes build
   work lazily; async POV verification enqueues benchmark-local build jobs on
   first POV discovery and verify jobs wait on those build dependencies

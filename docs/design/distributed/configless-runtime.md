@@ -60,8 +60,12 @@ Runtime registration and queue discovery work as follows:
 Configless evaluators use the same build and verify queues as config-pinned
 evaluators, but startup behavior differs:
 
-- config-pinned evaluator CLI mode normally enqueues startup pre-build jobs
-  before entering steady-state supervision
+- focused worker/evaluator CLI modes default to dispatcher routing when
+  `CRSBENCH_EVALUATOR_ROUTING_MODEL` is unset; async POV verification then uses
+  logical build/verify requests plus evaluator-local warmup instead of the
+  legacy shared startup pre-build fanout
+- shared routing remains available as an explicit override via
+  `CRSBENCH_EVALUATOR_ROUTING_MODEL=shared`
 - configless evaluator mode does not enqueue startup pre-build jobs
 - dispatcher routing (`CRSBENCH_EVALUATOR_ROUTING_MODEL=dispatcher`) is not
   supported in configless evaluator mode in this revision; configless startup
@@ -71,8 +75,9 @@ evaluators, but startup behavior differs:
   the required build DAG to the build queue and verify jobs wait on those build
   dependencies before running
 
-So configless mode keeps build/verify queue separation, but it does not have
-the same normal startup build-first phase as config-pinned evaluator CLI mode.
+So configless mode keeps build/verify queue separation, but it does not adopt
+the focused-runtime dispatcher default and continues to reject dispatcher
+routing in this revision.
 
 ## Cloud Worker Readiness Contract
 
