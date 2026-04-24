@@ -10,7 +10,10 @@ import pytest
 from crsbench.builder.types import BenchmarkMode, VariantType
 from crsbench.distributed.evaluator_dispatcher_state import (
     DispatcherStateStore,
-    VerifyResultRecord,
+)
+from crsbench.distributed.evaluator_verify_claims import (
+    EvaluatorVerifyClaimStore,
+    VerifyRequestRecord,
 )
 from crsbench.distributed.queue import (
     EVALUATOR_ROUTING_MODEL_ENV,
@@ -84,7 +87,7 @@ def test_submit_async_build_requests_dispatcher(monkeypatch) -> None:
     assert record.payload == build_payloads[0]
 
 
-def test_submit_async_build_requests_dispatcher_returns_logical_and_artifact_ids(
+def test_prepare_async_pov_build_prereqs_dispatcher_uses_local_build_ids(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv(EVALUATOR_ROUTING_MODEL_ENV, ROUTING_MODEL_DISPATCHER)
@@ -149,29 +152,21 @@ def test_submit_async_build_requests_dispatcher_returns_logical_and_artifact_ids
     adapter.repo_name = "repo"
     adapter.get_all_cpv_sanitizers.return_value = ["address"]
 
-    with patch(
-        "crsbench.distributed.verify_queue.submit_async_build_requests",
-        return_value=[
-            "build:trial-1:test-benchmark:0",
-            "build:trial-1:test-benchmark:1",
-            "build:trial-1:test-benchmark:2",
-        ],
-    ):
-        build_prereqs = verify_queue.prepare_async_pov_build_prereqs(
-            redis_host=None,
-            experiment_name="exp1",
-            trial_id="trial-1",
-            engine=engine,
-            adapter=adapter,
-            build_queue=None,
-            sanitizer=None,
-            use_inc_build=True,
-        )
+    build_prereqs = verify_queue.prepare_async_pov_build_prereqs(
+        redis_host=None,
+        experiment_name="exp1",
+        trial_id="trial-1",
+        engine=engine,
+        adapter=adapter,
+        build_queue=None,
+        sanitizer=None,
+        use_inc_build=True,
+    )
 
     assert isinstance(build_prereqs, AsyncPovBuildPrereqs)
     assert build_prereqs.logical_build_request_ids == [
-        "build:trial-1:test-benchmark:1",
-        "build:trial-1:test-benchmark:2",
+        "build-single/test-benchmark/test-benchmark-asan-deltaref",
+        "build-single/test-benchmark/test-benchmark-asan-delta-cpv0",
     ]
     assert build_prereqs.artifact_build_ids == [
         "build-single/test-benchmark/test-benchmark-asan-deltaref",
@@ -218,16 +213,16 @@ def test_enqueue_single_pov_dispatcher_submits_verify_request(monkeypatch) -> No
     )
 
     assert job_id == "verify:trial-1:bench:h:pov-1"
-    store = DispatcherStateStore(redis_conn, experiment_name="exp1")
-    record = store.load_verify_request(job_id)
+    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
+    record = store.load_request(job_id)
 
     assert record is not None
     assert record.owner_key == "trial::exp1::trial-1"
-    assert record.lineage_id == "bench::address::pkgs::clean"
-    assert record.generation == 1
-    assert record.state == "blocked_on_build"
-    assert record.build_request_ids == ["build-1"]
+    assert record.request_kind == "pov"
+    assert record.claim is None
+    assert record.terminal_result is None
     assert record.payload["trial_id"] == "trial-1"
+    assert record.payload["build_job_ids"] == ["build-1"]
     assert record.payload["pov"]["pov_id"] == "pov-1"
 
 
@@ -247,12 +242,12 @@ def test_enqueue_single_pov_dispatcher_without_builds_is_ready(monkeypatch) -> N
     )
 
     assert job_id == "verify:trial-1:bench:h:pov-1"
-    store = DispatcherStateStore(redis_conn, experiment_name="exp1")
-    record = store.load_verify_request(job_id)
+    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
+    record = store.load_request(job_id)
 
     assert record is not None
-    assert record.state == "ready"
-    assert record.build_request_ids == []
+    assert record.request_kind == "pov"
+    assert record.payload["build_job_ids"] == []
 
 
 def test_enqueue_single_pov_dispatcher_requires_trial_id(monkeypatch) -> None:
@@ -275,15 +270,29 @@ def test_enqueue_single_pov_dispatcher_requires_trial_id(monkeypatch) -> None:
 def test_poll_single_pov_verdicts_dispatcher(monkeypatch) -> None:
     monkeypatch.setenv(EVALUATOR_ROUTING_MODEL_ENV, ROUTING_MODEL_DISPATCHER)
     redis_conn = _FakeRedis()
-    store = DispatcherStateStore(redis_conn, experiment_name="exp1")
+    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
 
     request_id = "verify:trial-1:bench:h:pov-1"
-    store.publish_verify_result(
-        request_id,
-        VerifyResultRecord(
+    store.submit_request(
+        VerifyRequestRecord(
             request_id=request_id,
-            attempt_id="attempt-1",
-            verdict={
+            owner_key="trial::exp1::trial-1",
+            request_kind="pov",
+            payload={
+                "trial_id": "trial-1",
+                "benchmark": "bench",
+                "harness": "h",
+                "pov": {"pov_id": "pov-1"},
+            },
+        )
+    )
+    store.publish_result(
+        request_id=request_id,
+        result={
+            "trial_id": "trial-1",
+            "benchmark": "bench",
+            "harness": "h",
+            "verdict": {
                 "pov_id": "pov-1",
                 "triggered_bug": True,
                 "status": "cpv",
@@ -292,17 +301,16 @@ def test_poll_single_pov_verdicts_dispatcher(monkeypatch) -> None:
                 "crash_logs": {},
                 "error": None,
             },
-            terminal_state="completed",
-        ),
+            "completed_at": 123.0,
+        },
     )
 
-    with patch("crsbench.distributed.verify_queue.time.time", return_value=123.0):
-        completed, remaining = verify_queue.poll_single_pov_verdicts(
-            "redis.local",
-            [request_id],
-            experiment_name="exp1",
-            redis_conn=redis_conn,
-        )
+    completed, remaining = verify_queue.poll_single_pov_verdicts(
+        "redis.local",
+        [request_id],
+        experiment_name="exp1",
+        redis_conn=redis_conn,
+    )
 
     assert completed == [
         {
@@ -364,4 +372,68 @@ def test_poll_single_pov_verdicts_dispatcher_non_logical_ids_use_shared_path(
     )
 
     assert completed == [{"status": "ok"}]
+    assert remaining == []
+
+
+@patch("crsbench.distributed.queue.create_redis_connection")
+@patch("crsbench.distributed.verify_queue.rq")
+def test_poll_single_pov_verdicts_treats_stopped_jobs_as_terminal_errors(
+    mock_rq,
+    mock_create_redis_connection,
+) -> None:
+    redis_conn = object()
+    mock_create_redis_connection.return_value = redis_conn
+    job = mock_rq.job.Job.fetch.return_value
+    job.get_status.return_value = "stopped"
+    job.result = None
+    job.exc_info = "worker exited"
+    job.args = (
+        {
+            "trial_id": "trial-1",
+            "benchmark": "bench",
+            "harness": "h1",
+            "pov": {"pov_id": "pov-1"},
+        },
+    )
+    job.kwargs = {}
+
+    completed, remaining = verify_queue.poll_single_pov_verdicts(
+        "redis.local",
+        ["rq-job-1"],
+    )
+
+    assert completed[0]["verdict"]["status"] == "error"
+    assert "non-success job status: stopped" in completed[0]["verdict"]["error"]
+    assert remaining == []
+
+
+@patch("crsbench.distributed.queue.create_redis_connection")
+@patch("crsbench.distributed.verify_queue.rq")
+def test_poll_single_pov_verdicts_treats_finished_none_result_as_error(
+    mock_rq,
+    mock_create_redis_connection,
+) -> None:
+    redis_conn = object()
+    mock_create_redis_connection.return_value = redis_conn
+    job = mock_rq.job.Job.fetch.return_value
+    job.get_status.return_value = "finished"
+    job.result = None
+    job.exc_info = None
+    job.args = (
+        {
+            "trial_id": "trial-1",
+            "benchmark": "bench",
+            "harness": "h1",
+            "pov": {"pov_id": "pov-1"},
+        },
+    )
+    job.kwargs = {}
+
+    completed, remaining = verify_queue.poll_single_pov_verdicts(
+        "redis.local",
+        ["rq-job-1"],
+    )
+
+    assert completed[0]["verdict"]["status"] == "error"
+    assert "finished without a result payload" in completed[0]["verdict"]["error"]
     assert remaining == []

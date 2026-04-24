@@ -95,6 +95,28 @@ def _get_dispatcher_store(
     )
 
 
+def _get_verify_claim_store(
+    *,
+    redis_host: Optional[str],
+    experiment_name: str,
+    redis_conn: Optional[object] = None,
+):
+    from crsbench.distributed.evaluator_verify_claims import (
+        EvaluatorVerifyClaimStore,
+    )
+
+    if redis_conn is None:
+        if redis_host is None:
+            raise ValueError("redis_host is required when redis_conn is not provided")
+        from crsbench.distributed.queue import create_redis_connection
+
+        redis_conn = create_redis_connection(redis_host)
+    return EvaluatorVerifyClaimStore(
+        cast("Any", redis_conn),
+        experiment_name=experiment_name,
+    )
+
+
 def submit_async_build_requests(
     *,
     redis_host: Optional[str],
@@ -160,11 +182,11 @@ def prepare_async_pov_build_prereqs(
 ) -> AsyncPovBuildPrereqs | None:
     """Prepare explicit build prerequisites for async POV verification."""
     try:
+        _ = (redis_host, trial_id)
         from crsbench.benchmark_ci.jobs.flat import (
             BuildSingleVariantJob,
             PrepareIncImageJob,
         )
-        from crsbench.distributed.ci_jobs import serialize_ci_job
 
         benchmark_path = getattr(adapter, "benchmark_path", None)
         if benchmark_path is None:
@@ -195,7 +217,6 @@ def prepare_async_pov_build_prereqs(
         )
 
         if get_evaluator_routing_model() == ROUTING_MODEL_DISPATCHER:
-            build_payloads: list[dict[str, object]] = []
             artifact_build_ids: list[str] = []
             prepare_request_id = ""
             if use_inc_build:
@@ -211,12 +232,7 @@ def prepare_async_pov_build_prereqs(
                     inc_image_pull_timeout=engine.builder.infra.inc_image_pull_timeout,
                     local_image_prefix=engine.builder.infra.local_image_prefix,
                 )
-                build_payloads.append(serialize_ci_job(prepare_job))
-                prepare_request_id = build_dispatcher_build_request_id(
-                    trial_id=trial_id,
-                    benchmark=adapter.benchmark_name,
-                    index=0,
-                )
+                prepare_request_id = prepare_job.job_id
 
             for config in plan.configs:
                 build_job = BuildSingleVariantJob(
@@ -243,24 +259,9 @@ def prepare_async_pov_build_prereqs(
                     local_image_prefix=engine.builder.infra.local_image_prefix,
                 )
                 artifact_build_ids.append(build_job.job_id)
-                build_payloads.append(serialize_ci_job(build_job))
-
-            request_ids = submit_async_build_requests(
-                redis_host=redis_host,
-                experiment_name=experiment_name,
-                trial_id=trial_id,
-                benchmark=adapter.benchmark_name,
-                build_payloads=build_payloads,
-                sanitizer=resolved_sanitizer,
-                source_mode=source_mode,
-                use_inc_build=use_inc_build,
-            )
-            logical_build_request_ids = (
-                request_ids[1:] if use_inc_build else request_ids
-            )
             return AsyncPovBuildPrereqs(
-                logical_build_request_ids=logical_build_request_ids,
-                artifact_build_ids=artifact_build_ids,
+                logical_build_request_ids=list(artifact_build_ids),
+                artifact_build_ids=list(artifact_build_ids),
                 rq_dependencies=[],
                 sanitizer=resolved_sanitizer,
             )
@@ -639,7 +640,6 @@ def enqueue_single_pov(
             return None
 
         owner_key = f"trial::{experiment_name}::{trial_id}"
-        lineage_id = _build_lineage_id(benchmark, sanitizer, source_mode, use_inc_build)
         request_id = _build_verify_request_id(
             trial_id=trial_id,
             benchmark=benchmark,
@@ -647,10 +647,10 @@ def enqueue_single_pov(
             pov_id=pov_id,
         )
 
-        from crsbench.distributed.evaluator_dispatcher_state import VerifyRequestRecord
+        from crsbench.distributed.evaluator_verify_claims import VerifyRequestRecord
 
         try:
-            store = _get_dispatcher_store(
+            store = _get_verify_claim_store(
                 redis_host=redis_host,
                 experiment_name=experiment_name,
                 redis_conn=redis_conn,
@@ -658,23 +658,15 @@ def enqueue_single_pov(
         except ValueError as e:
             logger.warning(f"Skipping dispatcher POV enqueue: {e}")
             return None
-        build_request_ids = list(build_job_ids or [])
         record = VerifyRequestRecord(
             request_id=request_id,
-            trial_id=trial_id,
-            benchmark=benchmark,
-            harness=harness,
-            pov_id=pov_id,
             owner_key=owner_key,
-            lineage_id=lineage_id,
-            generation=1,
-            state="blocked_on_build" if build_request_ids else "ready",
-            build_request_ids=build_request_ids,
+            request_kind="pov",
             payload=payload.to_dict(),
         )
-        store.submit_verify_request(record)
+        store.submit_request(record)
         logger.debug(
-            "Submitted dispatcher POV verify request {} for {}/{} pov={}",
+            "Submitted logical POV verify request {} for {}/{} pov={}",
             request_id,
             benchmark,
             harness,
@@ -742,12 +734,12 @@ def poll_single_pov_verdicts(
         and all(job_id.startswith("verify:") for job_id in job_ids)
     ):
         try:
-            store = _get_dispatcher_store(
+            store = _get_verify_claim_store(
                 redis_host=redis_host,
                 experiment_name=experiment_name,
                 redis_conn=redis_conn,
             )
-            completed, remaining = store.poll_verify_results(job_ids)
+            completed, remaining = store.poll_results(job_ids)
             remaining_ids = set(remaining)
             completed_ids = [
                 job_id for job_id in job_ids if job_id not in remaining_ids
@@ -782,10 +774,29 @@ def poll_single_pov_verdicts(
                 status = job.get_status()
                 if status == "finished" and job.result is not None:
                     completed.append(job.result)
+                elif status == "finished":
+                    completed.append(
+                        _error_result_from_rq_job(
+                            job,
+                            default_error=(
+                                "Verification finished without a result payload"
+                            ),
+                        )
+                    )
                 elif status == "failed":
                     exc_info = job.exc_info or "Unknown error"
                     completed.append(
                         _error_result_from_rq_job(job, default_error=str(exc_info))
+                    )
+                elif status in {"stopped", "canceled", "cancelled"}:
+                    completed.append(
+                        _error_result_from_rq_job(
+                            job,
+                            default_error=(
+                                "Verification terminated with non-success "
+                                f"job status: {status}"
+                            ),
+                        )
                     )
                 else:
                     remaining.append(job_id)

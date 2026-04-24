@@ -974,11 +974,10 @@ class TestAsyncMode:
             mock_enqueue_ci_job.call_args_list[2].kwargs["job_id"] == build_rq_job_2.id
         )
 
-    @patch("crsbench.distributed.verify_queue.submit_async_build_requests")
-    def test_ensure_async_build_jobs_dispatcher_submits_logical_builds(
-        self, mock_submit_builds, tmp_path: Path, monkeypatch
+    def test_ensure_async_build_jobs_dispatcher_uses_local_build_ids(
+        self, tmp_path: Path, monkeypatch
     ) -> None:
-        """Dispatcher routing submits logical build requests (no RQ deps)."""
+        """Dispatcher routing keeps deterministic local build IDs (no RQ deps)."""
         from crsbench.distributed.queue import (
             EVALUATOR_ROUTING_MODEL_ENV,
             ROUTING_MODEL_DISPATCHER,
@@ -1045,19 +1044,13 @@ class TestAsyncMode:
             configs=[config_a, config_b]
         )
 
-        mock_submit_builds.return_value = [
-            "build:trial-1:test-benchmark:0",
-            "build:trial-1:test-benchmark:1",
-            "build:trial-1:test-benchmark:2",
-        ]
-
         build_prereqs = manager._ensure_async_build_jobs()
         build_prereqs_repeat = manager._ensure_async_build_jobs()
 
-        assert (
-            build_prereqs.logical_build_request_ids
-            == mock_submit_builds.return_value[1:]
-        )
+        assert build_prereqs.logical_build_request_ids == [
+            "build-single/test-benchmark/test-benchmark-asan-deltaref",
+            "build-single/test-benchmark/test-benchmark-asan-delta-cpv0",
+        ]
         assert (
             build_prereqs_repeat.logical_build_request_ids
             == build_prereqs.logical_build_request_ids
@@ -1072,7 +1065,6 @@ class TestAsyncMode:
             build_prereqs_repeat.artifact_build_ids == build_prereqs.artifact_build_ids
         )
         assert manager._async_build_sanitizer == "address"
-        mock_submit_builds.assert_called_once()
 
     @patch("crsbench.distributed.verify_queue.enqueue_single_pov")
     def test_enqueue_pov_dispatcher_uses_logical_queue(

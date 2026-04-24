@@ -109,6 +109,7 @@ class TestRunEvaluatorMain:
 
     @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
     @patch("crsbench.distributed.ci_supervisor.run_ci_supervisor")
+    @patch("crsbench.distributed.evaluator.start_claim_thread")
     @patch("crsbench.distributed.evaluator.start_dispatcher_warmup_thread")
     @patch("crsbench.distributed.evaluator.start_dispatcher_thread")
     @patch("crsbench.distributed.evaluator.create_redis_connection")
@@ -121,6 +122,7 @@ class TestRunEvaluatorMain:
         mock_create_redis_connection: MagicMock,
         mock_start_dispatcher_thread: MagicMock,
         mock_start_dispatcher_warmup_thread: MagicMock,
+        mock_start_claim_thread: MagicMock,
         mock_supervisor: MagicMock,
         monkeypatch,
     ) -> None:
@@ -128,15 +130,11 @@ class TestRunEvaluatorMain:
         from crsbench.distributed.evaluator import run_evaluator_main
 
         mock_supervisor.return_value = 0
-        presence_stop = MagicMock()
-        presence_thread = MagicMock()
-        dispatcher_stop = MagicMock()
-        dispatcher_thread = MagicMock()
+        claim_stop = MagicMock()
+        claim_thread = MagicMock()
         warmup_stop = MagicMock()
         warmup_thread = MagicMock()
-        mock_start_presence_thread.return_value = (presence_stop, presence_thread)
-        mock_create_redis_connection.return_value = MagicMock()
-        mock_start_dispatcher_thread.return_value = (dispatcher_stop, dispatcher_thread)
+        mock_start_claim_thread.return_value = (claim_stop, claim_thread)
         mock_start_dispatcher_warmup_thread.return_value = (warmup_stop, warmup_thread)
         monkeypatch.setenv("CRSBENCH_EVALUATOR_ROUTING_MODEL", "dispatcher")
         config = MagicMock()
@@ -151,40 +149,42 @@ class TestRunEvaluatorMain:
         assert kwargs["build_queue_name"] == "crsbench_exp-test_eval-1_build"
         assert kwargs["verify_queue_name"] == "crsbench_exp-test_eval-1_verify"
         assert kwargs["worker_name"] == "eval-1"
-        mock_start_presence_thread.assert_called_once_with(
-            redis_host="localhost",
-            experiment_name="exp-test",
-            evaluator_id="eval-1",
-            worker_name="eval-1",
-        )
+        mock_start_claim_thread.assert_called_once()
+        claim_worker = mock_start_claim_thread.call_args.args[0]
+        assert claim_worker.experiment_name == "exp-test"
+        assert claim_worker.evaluator_id == "eval-1"
+        assert claim_worker.build_queue.name == "crsbench_exp-test_eval-1_build"
+        assert claim_worker.verify_queue.name == "crsbench_exp-test_eval-1_verify"
+        mock_start_presence_thread.assert_not_called()
         mock_create_redis_connection.assert_called_once_with("localhost")
-        mock_start_dispatcher_thread.assert_called_once()
+        mock_start_dispatcher_thread.assert_not_called()
         mock_start_dispatcher_warmup_thread.assert_called_once()
         warmup_kwargs = mock_start_dispatcher_warmup_thread.call_args.kwargs
         assert warmup_kwargs["build_jobs"] == 1
         assert warmup_kwargs["build_queue_name"] == "crsbench_exp-test_eval-1_build"
-        presence_stop.set.assert_called_once()
-        presence_thread.join.assert_called_once_with(timeout=1)
-        dispatcher_stop.set.assert_called_once()
-        dispatcher_thread.join.assert_called_once_with(timeout=1)
+        assert warmup_kwargs["required_build_tracker"] is claim_worker
+        claim_stop.set.assert_called_once()
+        claim_thread.join.assert_called_once_with(timeout=1)
         warmup_stop.set.assert_called_once()
         warmup_thread.join.assert_called_once_with(timeout=1)
 
     @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
     @patch("crsbench.distributed.evaluator._enqueue_pre_builds")
     @patch("crsbench.distributed.ci_supervisor.run_ci_supervisor")
+    @patch("crsbench.distributed.evaluator.start_claim_thread")
     @patch("crsbench.distributed.evaluator.start_dispatcher_warmup_thread")
     @patch("crsbench.distributed.evaluator.start_dispatcher_thread")
     @patch("crsbench.distributed.evaluator.create_redis_connection")
     @patch("crsbench.distributed.evaluator.start_presence_thread")
     @patch("crsbench.distributed.evaluator_jobs.set_engine")
-    def test_dispatcher_mode_uses_warmup_thread_instead_of_legacy_prebuilds(
+    def test_dispatcher_mode_uses_claim_loop_instead_of_legacy_prebuilds(
         self,
         mock_set_engine: MagicMock,
         mock_start_presence_thread: MagicMock,
         mock_create_redis_connection: MagicMock,
         mock_start_dispatcher_thread: MagicMock,
         mock_start_dispatcher_warmup_thread: MagicMock,
+        mock_start_claim_thread: MagicMock,
         mock_supervisor: MagicMock,
         mock_enqueue_pre_builds: MagicMock,
         monkeypatch,
@@ -192,9 +192,8 @@ class TestRunEvaluatorMain:
         from crsbench.distributed.evaluator import run_evaluator_main
 
         mock_supervisor.return_value = 0
-        mock_start_presence_thread.return_value = (MagicMock(), MagicMock())
         mock_create_redis_connection.return_value = MagicMock()
-        mock_start_dispatcher_thread.return_value = (MagicMock(), MagicMock())
+        mock_start_claim_thread.return_value = (MagicMock(), MagicMock())
         mock_start_dispatcher_warmup_thread.return_value = (MagicMock(), MagicMock())
         monkeypatch.setenv("CRSBENCH_EVALUATOR_ROUTING_MODEL", "dispatcher")
         config = MagicMock()
@@ -210,6 +209,9 @@ class TestRunEvaluatorMain:
             )
 
         assert result == 0
+        mock_start_claim_thread.assert_called_once()
+        mock_start_presence_thread.assert_not_called()
+        mock_start_dispatcher_thread.assert_not_called()
         mock_start_dispatcher_warmup_thread.assert_called_once()
         assert mock_start_dispatcher_warmup_thread.call_args.kwargs["build_jobs"] == 2
         mock_enqueue_pre_builds.assert_not_called()
