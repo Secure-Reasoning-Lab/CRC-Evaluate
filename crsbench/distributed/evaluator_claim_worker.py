@@ -141,6 +141,16 @@ class EvaluatorClaimWorker:
                 continue
             local_verify_job = self.verify_queue.fetch_job(active.local_verify_job_id)
             if _is_job_terminal(local_verify_job):
+                released = self.store.release_claim_if_current(
+                    request_id=request_id,
+                    evaluator_id=self.evaluator_id,
+                )
+                if released:
+                    logger.warning(
+                        "Released logical verify claim after local verify job {} ended without publishing request={}",
+                        active.local_verify_job_id,
+                        request_id,
+                    )
                 completed.append(request_id)
                 continue
             renewed = self.store.renew_claim(

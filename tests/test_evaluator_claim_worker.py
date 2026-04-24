@@ -436,3 +436,55 @@ def test_claim_worker_releases_claim_when_materialization_fails() -> None:
     assert reclaimed is not None
     assert reclaimed.claim is not None
     assert reclaimed.claim.evaluator_id == "eval-2"
+
+
+def test_refresh_active_claims_releases_claim_after_local_verify_failure() -> None:
+    from crsbench.distributed.evaluator_claim_worker import (
+        EvaluatorClaimWorker,
+        _ActiveClaim,
+    )
+
+    redis_conn = _FakeRedis()
+    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
+    request_id = "verify:trial-1:test-benchmark:h1:pov-1"
+    store.submit_request(
+        VerifyRequestRecord(
+            request_id=request_id,
+            owner_key="trial::exp1::trial-1",
+            request_kind="pov",
+            payload={"benchmark": "test-benchmark"},
+        )
+    )
+    claimed = store.claim_next_request(
+        evaluator_id="eval-1",
+        now=100.0,
+        lease_seconds=30,
+    )
+    assert claimed is not None
+
+    build_queue = _FakeQueue("build-q")
+    verify_queue = _FakeQueue("verify-q")
+    failed_verify_job = _FakeJob("claim-verify/eval-1/test", status="failed")
+    verify_queue.jobs[failed_verify_job.id] = failed_verify_job
+
+    worker = EvaluatorClaimWorker(
+        redis_conn=redis_conn,
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=build_queue,
+        verify_queue=verify_queue,
+        verification_engine=MagicMock(),
+        benchmarks_root=Path("/benchmarks"),
+    )
+    worker._active_claims[request_id] = _ActiveClaim(
+        local_verify_job_id=failed_verify_job.id,
+        required_build_job_ids=(),
+    )
+
+    worker.refresh_active_claims(now=105.0)
+
+    assert request_id not in worker._active_claims
+    record = store.load_request(request_id)
+    assert record is not None
+    assert record.claim is None
+    assert record.terminal_result is None
