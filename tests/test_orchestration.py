@@ -14,6 +14,7 @@ Run with:
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -24,6 +25,7 @@ from crsbench.run_experiment import (
     generate_trial_matrix,
     load_experiment_config,
     resolve_benchmark_harnesses,
+    run_experiment_local,
     should_use_distributed_mode,
     validate_filestore_permissions,
 )
@@ -408,7 +410,7 @@ class TestTrialMatrixGeneration:
         assert all(1 <= t.trial_num <= config.trials for t in trials)
 
     def test_generate_trial_matrix_ordering(self):
-        """Test trial matrix ordering (CRS → Benchmark/Harness → Trial number)."""
+        """Test trial matrix ordering wavefronts trial numbers within each CRS."""
         config = ExperimentConfig(
             experiment="test",
             trials=2,
@@ -443,15 +445,15 @@ class TestTrialMatrixGeneration:
             registry_dir=Path("/tmp/registry"),
         )
 
-        # Verify ordering: CRS outer loop, BenchmarkHarness middle, trial inner
+        # Verify ordering: CRS outer loop, then wavefront by trial number across streams.
         expected = [
             ("crs1", "bench1", "harness1", 1),
-            ("crs1", "bench1", "harness1", 2),
             ("crs1", "bench2", "harness2", 1),
+            ("crs1", "bench1", "harness1", 2),
             ("crs1", "bench2", "harness2", 2),
             ("crs2", "bench1", "harness1", 1),
-            ("crs2", "bench1", "harness1", 2),
             ("crs2", "bench2", "harness2", 1),
+            ("crs2", "bench1", "harness1", 2),
             ("crs2", "bench2", "harness2", 2),
         ]
 
@@ -465,6 +467,147 @@ class TestTrialMatrixGeneration:
             for t in trials
         ]
         assert actual == expected
+
+    def test_generate_trial_matrix_bug_fixing_cpv_ordering_wavefronts_trials(self):
+        """Bug-fixing ordering should wavefront trial numbers across CPV streams."""
+        from unittest.mock import MagicMock
+
+        config = ExperimentConfig(
+            experiment="test",
+            trials=2,
+            mode="delta",
+            max_total_time=20000,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crs_compose={"crs1": {"num_cores": 1}},
+            benchmarks=["bench1"],
+            only_cpv_harnesses=False,
+        )
+        benchmark_harnesses = [
+            BenchmarkHarness(
+                name="bench1",
+                path=Path("/tmp/bench1"),
+                harness=HarnessFile(name="harness1", path="/src/harness1.c"),
+            )
+        ]
+
+        mock_adapter = MagicMock()
+        mock_harness = MagicMock()
+        mock_harness.vulns = [
+            Vulnerability(
+                vuln_keyword="cpv_0",
+                povs=[POV(id="pov_0", sanitizer="address")],
+            ),
+            Vulnerability(
+                vuln_keyword="cpv_1",
+                povs=[POV(id="pov_1", sanitizer="address")],
+            ),
+        ]
+        mock_adapter.get_harness.return_value = mock_harness
+
+        with (
+            patch("crsbench.run_experiment.get_crs_type", return_value="bug-fixing"),
+            patch(
+                "crsbench.run_experiment.MetaYamlAdapter.from_meta_yaml",
+                return_value=mock_adapter,
+            ),
+        ):
+            trials = generate_trial_matrix(
+                benchmark_harnesses,
+                ["crs1"],
+                config,
+                registry_dir=Path("/tmp/registry"),
+            )
+
+        assert [(trial.target_cpv_id, trial.trial_num) for trial in trials] == [
+            ("cpv_0", 1),
+            ("cpv_1", 1),
+            ("cpv_0", 2),
+            ("cpv_1", 2),
+        ]
+
+    def test_run_experiment_local_preserves_generated_trial_order(self, tmp_path):
+        """Local execution should consume the shared trial list without reordering."""
+        config = ExperimentConfig(
+            experiment="test",
+            trials=2,
+            mode="delta",
+            max_total_time=20000,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
+            experiment_filestore=str(tmp_path / "exp"),
+            report_filestore=str(tmp_path / "rep"),
+            crs_compose={"crs1": {"num_cores": 1}},
+            benchmarks=["bench1", "bench2"],
+            only_cpv_harnesses=False,
+        )
+        bench1 = BenchmarkHarness(
+            name="bench1",
+            path=Path("/tmp/bench1"),
+            harness=HarnessFile(name="harness1", path="/src/harness1.c"),
+        )
+        bench2 = BenchmarkHarness(
+            name="bench2",
+            path=Path("/tmp/bench2"),
+            harness=HarnessFile(name="harness2", path="/src/harness2.c"),
+        )
+        trials = [
+            Trial(
+                crs="crs1",
+                benchmark_harness=bench1,
+                trial_num=1,
+                mode="delta",
+                sanitizer="address",
+            ),
+            Trial(
+                crs="crs1",
+                benchmark_harness=bench2,
+                trial_num=1,
+                mode="delta",
+                sanitizer="address",
+            ),
+            Trial(
+                crs="crs1",
+                benchmark_harness=bench1,
+                trial_num=2,
+                mode="delta",
+                sanitizer="address",
+            ),
+            Trial(
+                crs="crs1",
+                benchmark_harness=bench2,
+                trial_num=2,
+                mode="delta",
+                sanitizer="address",
+            ),
+        ]
+        execution_order: list[tuple[str, int]] = []
+
+        def _run_trial(**kwargs):
+            execution_order.append((kwargs["benchmark"], kwargs["trial_num"]))
+            return SimpleNamespace(
+                success=True,
+                crs_type="bug-finding",
+                povs_found=0,
+                total_povs=0,
+            )
+
+        with (
+            patch("crsbench.run_experiment.dump_trial_matrix"),
+            patch("crsbench.run_experiment.generate_final_report"),
+            patch(
+                "crsbench.distributed.jobs.run_crs_trial",
+                side_effect=_run_trial,
+            ),
+        ):
+            run_experiment_local("exp-test", config, trials)
+
+        assert execution_order == [
+            ("bench1", 1),
+            ("bench2", 1),
+            ("bench1", 2),
+            ("bench2", 2),
+        ]
 
     def test_generate_trial_matrix_single_trial(self):
         """Test matrix with single trial (no replication)."""
