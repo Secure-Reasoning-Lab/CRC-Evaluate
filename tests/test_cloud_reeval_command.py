@@ -196,4 +196,4 @@ def test_remote_publish_and_launch_command_passes_clone_dir_and_redis_password()
     )
 
     assert 'CLONE_DIR="${CLONE_DIR}"' in command
-    assert 'CRSBENCH_REDIS_PASSWORD="${CRSBENCH_REDIS_PASSWORD}"' in command
+    assert 'CRSBENCH_REDIS_PASSWORD="${CRSBENCH_REDIS_PASSWORD:-}"' in command

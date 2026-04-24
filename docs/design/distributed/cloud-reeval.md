@@ -173,7 +173,6 @@ Required top-level entries:
 - bundle identifier
 - source experiment name
 - remote experiment name
-- source experiment root provenance
 - creation timestamp
 - a normalized source-config digest
 - source runtime provenance when discoverable, such as the local CRSBench revision
@@ -215,9 +214,10 @@ collect results unambiguously:
 - sanitizer when known
 - target CPV identifier when known
 
-The bundle must not rely on absolute local paths. Any source-local path from the
-original experiment config is advisory provenance only and must be rewritten by
-the remote materialization step before execution.
+The bundle must not rely on absolute local paths. Source-local experiment roots
+from the operator machine are not serialized into the remote bundle; remote
+materialization derives its workspace layout solely from relative trial paths
+and the derived remote experiment name.
 
 Source-side `skip_verification` is provenance only. The remote `crsbench re-eval`
 invocation still performs verification and may repopulate in-trial verification
