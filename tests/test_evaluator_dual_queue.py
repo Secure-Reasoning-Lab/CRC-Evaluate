@@ -64,12 +64,16 @@ class TestRunEvaluatorMain:
 
     @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
     @patch("crsbench.distributed.ci_supervisor.run_ci_supervisor")
+    @patch("crsbench.distributed.evaluator.start_dispatcher_thread")
+    @patch("crsbench.distributed.evaluator.create_redis_connection")
     @patch("crsbench.distributed.evaluator.start_presence_thread")
     @patch("crsbench.distributed.evaluator_jobs.set_engine")
     def test_uses_local_queues_in_dispatcher_mode(
         self,
         mock_set_engine: MagicMock,
         mock_start_presence_thread: MagicMock,
+        mock_create_redis_connection: MagicMock,
+        mock_start_dispatcher_thread: MagicMock,
         mock_supervisor: MagicMock,
         monkeypatch,
     ) -> None:
@@ -78,6 +82,8 @@ class TestRunEvaluatorMain:
 
         mock_supervisor.return_value = 0
         mock_start_presence_thread.return_value = (MagicMock(), MagicMock())
+        mock_create_redis_connection.return_value = MagicMock()
+        mock_start_dispatcher_thread.return_value = (MagicMock(), MagicMock())
         monkeypatch.setenv("CRSBENCH_EVALUATOR_ROUTING_MODEL", "dispatcher")
         config = MagicMock()
         config.oss_fuzz_path = "/tmp/oss-fuzz"
@@ -97,6 +103,8 @@ class TestRunEvaluatorMain:
             evaluator_id="eval-1",
             worker_name="eval-1",
         )
+        mock_create_redis_connection.assert_called_once_with("localhost")
+        mock_start_dispatcher_thread.assert_called_once()
 
     def test_no_build_workers_parameter(self) -> None:
         """run_evaluator_main no longer has build_workers parameter."""

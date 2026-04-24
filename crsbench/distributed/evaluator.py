@@ -21,7 +21,9 @@ from crsbench.distributed.common import (
     validate_optional_int_override,
 )
 from crsbench.distributed.evaluator_dispatcher import (
+    EvaluatorDispatcher,
     build_evaluator_id,
+    start_dispatcher_thread,
     start_presence_thread,
 )
 from crsbench.distributed.evaluator_scheduler import (
@@ -31,6 +33,7 @@ from crsbench.distributed.evaluator_scheduler import (
 from crsbench.distributed.queue import (
     REDIS_AVAILABLE,
     ROUTING_MODEL_DISPATCHER,
+    create_redis_connection,
     get_evaluator_routing_model,
     resolve_evaluator_local_queue_names,
 )
@@ -395,6 +398,7 @@ def run_evaluator_main(
 
     logger.info("Starting dual-queue supervisor (build + verify)...")
     presence_loop: tuple[threading.Event, threading.Thread] | None = None
+    dispatcher_loop: tuple[threading.Event, threading.Thread] | None = None
     if routing_model == ROUTING_MODEL_DISPATCHER and evaluator_id is not None:
         presence_loop = start_presence_thread(
             redis_host=redis_host,
@@ -402,6 +406,12 @@ def run_evaluator_main(
             evaluator_id=evaluator_id,
             worker_name=resolved_worker_name,
         )
+        dispatcher = EvaluatorDispatcher(
+            redis_conn=create_redis_connection(redis_host),
+            experiment_name=experiment_name,
+            evaluator_id=evaluator_id,
+        )
+        dispatcher_loop = start_dispatcher_thread(dispatcher)
     try:
         _report_cloud_runtime_state(
             redis_host,
@@ -427,6 +437,10 @@ def run_evaluator_main(
             progress_log_every_jobs=EVALUATOR_PROGRESS_LOG_EVERY_JOBS,
         )
     finally:
+        if dispatcher_loop is not None:
+            stop_event, thread = dispatcher_loop
+            stop_event.set()
+            thread.join(timeout=1)
         if presence_loop is not None:
             stop_event, thread = presence_loop
             stop_event.set()

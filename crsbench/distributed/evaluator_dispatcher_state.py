@@ -134,6 +134,12 @@ class DispatcherStateStore:
     def _evaluators_key(self) -> str:
         return f"crsbench:dispatcher:{self.experiment_name}:evaluators"
 
+    def _lineages_key(self) -> str:
+        return f"crsbench:dispatcher:{self.experiment_name}:lineages"
+
+    def _lease_key(self) -> str:
+        return f"crsbench:dispatcher:{self.experiment_name}:lease"
+
     def submit_build_request(self, record: BuildRequestRecord) -> str:
         existing = self.load_build_request(record.request_id)
         if existing is not None and (
@@ -159,6 +165,26 @@ class DispatcherStateStore:
             return None
         payload = json.loads(_decode(raw))
         return BuildRequestRecord(**payload)
+
+    def list_build_requests(self) -> list[BuildRequestRecord]:
+        values = self.redis.hgetall(self._build_requests_key()).values()
+        records = [BuildRequestRecord(**json.loads(_decode(raw))) for raw in values]
+        return sorted(records, key=lambda record: record.request_id)
+
+    def list_ready_build_requests(self) -> list[BuildRequestRecord]:
+        return [
+            record for record in self.list_build_requests() if record.state == "ready"
+        ]
+
+    def list_running_build_requests(
+        self, *, evaluator_id: str
+    ) -> list[BuildRequestRecord]:
+        return [
+            record
+            for record in self.list_build_requests()
+            if record.state == "running"
+            and record.payload.get("evaluator_id") == evaluator_id
+        ]
 
     def assign_build_attempt(
         self,
@@ -265,6 +291,69 @@ class DispatcherStateStore:
             live.append(_decode(evaluator_id))
         return sorted(live)
 
+    def remove_evaluator(self, evaluator_id: str) -> None:
+        self.redis.hdel(self._evaluators_key(), evaluator_id)
+
+    def try_acquire_dispatcher_lease(
+        self,
+        evaluator_id: str,
+        *,
+        now: float,
+        ttl_seconds: int = 15,
+    ) -> bool:
+        current_holder = self.redis.hget(self._lease_key(), "holder")
+        current_expires = self.redis.hget(self._lease_key(), "expires_at")
+        if current_holder is not None and current_expires is not None:
+            holder = _decode(current_holder)
+            expires_at = float(_decode(current_expires))
+            if expires_at > now and holder != evaluator_id:
+                return False
+        self.redis.hset(self._lease_key(), "holder", evaluator_id)
+        self.redis.hset(self._lease_key(), "expires_at", str(now + ttl_seconds))
+        return True
+
+    def set_lineage_owner(
+        self,
+        *,
+        lineage_id: str,
+        evaluator_id: str,
+        generation: int,
+    ) -> None:
+        self.redis.hset(
+            self._lineages_key(),
+            lineage_id,
+            json.dumps(
+                {
+                    "lineage_id": lineage_id,
+                    "evaluator_id": evaluator_id,
+                    "generation": generation,
+                },
+                sort_keys=True,
+            ),
+        )
+
+    def clear_lineage_owner(self, lineage_id: str) -> None:
+        self.redis.hdel(self._lineages_key(), lineage_id)
+
+    def lineage_owner(self, lineage_id: str) -> str | None:
+        raw = self.redis.hget(self._lineages_key(), lineage_id)
+        if raw is None:
+            return None
+        payload = json.loads(_decode(raw))
+        evaluator_id = payload.get("evaluator_id")
+        if not isinstance(evaluator_id, str) or not evaluator_id:
+            return None
+        return evaluator_id
+
+    def list_dead_evaluators(self, *, now: float) -> list[str]:
+        dead: list[str] = []
+        for evaluator_id, raw in self.redis.hgetall(self._evaluators_key()).items():
+            payload = json.loads(_decode(raw))
+            if float(payload.get("expires_at", 0.0)) >= now:
+                continue
+            dead.append(_decode(evaluator_id))
+        return sorted(dead)
+
     def submit_verify_request(self, record: VerifyRequestRecord) -> str:
         existing = self.load_verify_request(record.request_id)
         if existing is not None and (
@@ -295,7 +384,23 @@ class DispatcherStateStore:
 
     def list_verify_requests(self) -> list[VerifyRequestRecord]:
         values = self.redis.hgetall(self._verify_requests_key()).values()
-        return [VerifyRequestRecord(**json.loads(_decode(raw))) for raw in values]
+        records = [VerifyRequestRecord(**json.loads(_decode(raw))) for raw in values]
+        return sorted(records, key=lambda record: record.request_id)
+
+    def list_ready_verify_requests(self) -> list[VerifyRequestRecord]:
+        return [
+            record for record in self.list_verify_requests() if record.state == "ready"
+        ]
+
+    def list_running_verify_requests(
+        self, *, evaluator_id: str
+    ) -> list[VerifyRequestRecord]:
+        return [
+            record
+            for record in self.list_verify_requests()
+            if record.state == "running"
+            and record.payload.get("evaluator_id") == evaluator_id
+        ]
 
     def assign_verify_attempt(
         self,
@@ -436,3 +541,66 @@ class DispatcherStateStore:
             record = VerifyResultRecord(**payload)
             completed.append(record.verdict)
         return completed, remaining
+
+    def requeue_inflight_work_from_dead_evaluator(self, evaluator_id: str) -> None:
+        affected_lineage_generations: dict[str, int] = {}
+        for request in self.list_running_build_requests(evaluator_id=evaluator_id):
+            payload = dict(request.payload)
+            payload.pop("attempt_id", None)
+            payload.pop("evaluator_id", None)
+            self.redis.hdel(self._build_attempts_key(), request.request_id)
+            new_generation = request.generation + 1
+            self.submit_build_request(
+                BuildRequestRecord(
+                    request_id=request.request_id,
+                    trial_id=request.trial_id,
+                    benchmark=request.benchmark,
+                    owner_key=request.owner_key,
+                    lineage_id=request.lineage_id,
+                    generation=new_generation,
+                    state="ready",
+                    payload=payload,
+                )
+            )
+            affected_lineage_generations[request.lineage_id] = max(
+                affected_lineage_generations.get(request.lineage_id, 0),
+                new_generation,
+            )
+            self.clear_lineage_owner(request.lineage_id)
+
+        for request in self.list_verify_requests():
+            if request.state in {"failed", "succeeded"}:
+                continue
+            was_running_here = (
+                request.state == "running"
+                and request.payload.get("evaluator_id") == evaluator_id
+            )
+            affected_generation = affected_lineage_generations.get(request.lineage_id)
+            if not was_running_here and affected_generation is None:
+                continue
+            payload = dict(request.payload)
+            payload.pop("attempt_id", None)
+            payload.pop("evaluator_id", None)
+            self.redis.hdel(self._verify_attempts_key(), request.request_id)
+            new_generation = max(
+                request.generation + (1 if was_running_here else 0),
+                affected_generation or 0,
+            )
+            desired_state = "blocked_on_build" if request.build_request_ids else "ready"
+            self.submit_verify_request(
+                VerifyRequestRecord(
+                    request_id=request.request_id,
+                    trial_id=request.trial_id,
+                    benchmark=request.benchmark,
+                    harness=request.harness,
+                    pov_id=request.pov_id,
+                    owner_key=request.owner_key,
+                    lineage_id=request.lineage_id,
+                    generation=new_generation,
+                    state=desired_state,
+                    build_request_ids=list(request.build_request_ids),
+                    payload=payload,
+                )
+            )
+
+        self.remove_evaluator(evaluator_id)
