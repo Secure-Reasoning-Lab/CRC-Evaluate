@@ -104,8 +104,20 @@ install_packages() {
 
 ensure_system_packages() {
   local have_fd_find=1
+  # The extra diagnostics bundle is only installed on the existing apt bootstrap path.
+  local apt_diagnostics_ready=0
   if command -v fdfind >/dev/null 2>&1 || command -v fd >/dev/null 2>&1; then
     have_fd_find=0
+  fi
+  if command -v apt-get >/dev/null 2>&1; then
+    if command -v ncdu >/dev/null 2>&1 \
+      && command -v gdu >/dev/null 2>&1 \
+      && command -v duf >/dev/null 2>&1 \
+      && command -v btop >/dev/null 2>&1; then
+      apt_diagnostics_ready=1
+    fi
+  else
+    apt_diagnostics_ready=1
   fi
   if command -v git >/dev/null 2>&1 \
     && command -v python3 >/dev/null 2>&1 \
@@ -114,6 +126,7 @@ ensure_system_packages() {
     && command -v iftop >/dev/null 2>&1 \
     && command -v rg >/dev/null 2>&1 \
     && [[ "${have_fd_find}" -eq 0 ]] \
+    && [[ "${apt_diagnostics_ready}" -eq 1 ]] \
     && command -v ssh-keyscan >/dev/null 2>&1 \
     && command -v sudo >/dev/null 2>&1 \
     && [[ -e /usr/share/zoneinfo/UTC ]]; then
@@ -122,7 +135,7 @@ ensure_system_packages() {
 
   echo "Installing system packages..."
   if command -v apt-get >/dev/null 2>&1; then
-    install_packages git python3 python3-pip python3-venv rsync tar bash coreutils openssh-client tzdata sudo iftop ripgrep fd-find
+    install_packages git python3 python3-pip python3-venv rsync tar bash coreutils openssh-client tzdata sudo iftop ncdu gdu duf btop ripgrep fd-find
     return 0
   fi
   if command -v apk >/dev/null 2>&1; then
