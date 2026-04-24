@@ -2032,6 +2032,54 @@ class TestEvaluatorCliValidation:
         assert result == 1
         mock_configless.assert_not_called()
 
+    def test_cli_configless_mode_keeps_routing_env_unset(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Configless evaluator CLI should not inject the focused dispatcher default."""
+        from crsbench.distributed.cli.evaluator_command import run_evaluator
+        from crsbench.distributed.queue import EVALUATOR_ROUTING_MODEL_ENV
+
+        monkeypatch.delenv(EVALUATOR_ROUTING_MODEL_ENV, raising=False)
+        args = argparse.Namespace(
+            experiment_config=None,
+            ci=False,
+            verbose=False,
+            cpuset=None,
+            skip_cpuset=None,
+            cpu_tag=None,
+            jobs=None,
+            cores_per_job=None,
+            build_jobs=None,
+            build_cores_per_job=None,
+            verify_cores_per_job=None,
+            verify_jobs=None,
+            worker_name=None,
+            idle_timeout=None,
+            benchmarks_root=None,
+        )
+
+        def _assert_configless(*_args, **_kwargs) -> int:
+            assert os.environ.get(EVALUATOR_ROUTING_MODEL_ENV) is None
+            return 0
+
+        with (
+            patch(
+                "crsbench.distributed.common.normalize_redis_host",
+                side_effect=lambda value: str(value).strip() or None,
+            ),
+            patch(
+                "crsbench.distributed.evaluator.run_evaluator_configless",
+                side_effect=_assert_configless,
+            ) as mock_configless,
+            patch.dict("os.environ", {"CRSBENCH_REDIS_HOST": "localhost"}, clear=False),
+        ):
+            result = run_evaluator(args)
+
+        assert result == 0
+        assert os.environ.get(EVALUATOR_ROUTING_MODEL_ENV) is None
+        mock_configless.assert_called_once()
+
     def test_cli_config_mode_defaults_dispatcher_when_env_unset(
         self,
         monkeypatch: pytest.MonkeyPatch,

@@ -818,6 +818,54 @@ class TestConfiglessWorker:
         assert result == 1
         mock_configless.assert_not_called()
 
+    def test_worker_cli_configless_mode_keeps_routing_env_unset(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Configless worker CLI should not inject the focused dispatcher default."""
+        from crsbench.distributed.cli.worker_command import run_worker
+        from crsbench.distributed.queue import EVALUATOR_ROUTING_MODEL_ENV
+
+        monkeypatch.delenv(EVALUATOR_ROUTING_MODEL_ENV, raising=False)
+        args = argparse.Namespace(
+            experiment_config=None,
+            experiment_name=None,
+            verbose=False,
+            continuous=False,
+            worker_name=None,
+            no_cpuset=True,
+            cores=None,
+            skip_cpus=None,
+            cpu_tag=None,
+            jobs=None,
+            cores_per_job=None,
+        )
+
+        def _assert_configless(*_args, **_kwargs) -> int:
+            assert os.environ.get(EVALUATOR_ROUTING_MODEL_ENV) is None
+            return 0
+
+        with (
+            patch(
+                "crsbench.distributed.cli.worker_command._check_existing_workers",
+                return_value=True,
+            ),
+            patch(
+                "crsbench.distributed.worker.run_worker_configless",
+                side_effect=_assert_configless,
+            ) as mock_configless,
+            patch.dict(
+                "os.environ",
+                {"CRSBENCH_REDIS_HOST": "redis.internal:6380"},
+                clear=False,
+            ),
+        ):
+            result = run_worker(args)
+
+        assert result == 0
+        assert os.environ.get(EVALUATOR_ROUTING_MODEL_ENV) is None
+        mock_configless.assert_called_once()
+
     def test_worker_cli_experiment_name_mode_pins_worker_to_one_queue(self):
         """Cloud workers should target one experiment instead of configless discovery."""
         from crsbench.distributed.cli.worker_command import run_worker

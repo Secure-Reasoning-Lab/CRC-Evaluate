@@ -228,6 +228,45 @@ def test_invalid_evaluator_routing_model_falls_back_to_shared(
     )
 
 
+def test_evaluator_routing_model_default_scope_sets_default_when_env_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scoped defaults should apply dispatcher only while the env is otherwise unset."""
+    monkeypatch.delenv(queue_module.EVALUATOR_ROUTING_MODEL_ENV, raising=False)
+
+    with queue_module.evaluator_routing_model_default_scope(
+        queue_module.ROUTING_MODEL_DISPATCHER
+    ):
+        assert (
+            queue_module.get_evaluator_routing_model()
+            == queue_module.ROUTING_MODEL_DISPATCHER
+        )
+
+    assert queue_module.EVALUATOR_ROUTING_MODEL_ENV not in queue_module.os.environ
+
+
+def test_evaluator_routing_model_default_scope_preserves_explicit_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scoped defaults must not override an explicit routing-model override."""
+    monkeypatch.setenv(
+        queue_module.EVALUATOR_ROUTING_MODEL_ENV,
+        queue_module.ROUTING_MODEL_SHARED,
+    )
+
+    with queue_module.evaluator_routing_model_default_scope(
+        queue_module.ROUTING_MODEL_DISPATCHER
+    ):
+        assert (
+            queue_module.get_evaluator_routing_model()
+            == queue_module.ROUTING_MODEL_SHARED
+        )
+
+    assert (
+        queue_module.get_evaluator_routing_model() == queue_module.ROUTING_MODEL_SHARED
+    )
+
+
 def test_resolve_evaluator_local_queue_names() -> None:
     """Evaluator-local queue names should include experiment and evaluator ids."""
     build_queue, verify_queue = queue_module.resolve_evaluator_local_queue_names(
