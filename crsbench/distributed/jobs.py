@@ -80,6 +80,7 @@ class EffectiveInputSettings:
 
     pov_enabled: bool
     max_pov_variants_per_cpv: Optional[int]
+    pov_from_experiment: Optional[Path]
     hints_enabled: bool
     hint_sarif_level: Optional[int]
     hint_corpus_level: Optional[int]
@@ -96,6 +97,11 @@ class EffectiveInputSettings:
             "pov": {
                 "enabled": self.pov_enabled,
                 "max_variants_per_cpv": self.max_pov_variants_per_cpv,
+                "from_experiment": (
+                    str(self.pov_from_experiment)
+                    if self.pov_from_experiment is not None
+                    else None
+                ),
             },
             "sarif": {
                 "enabled": self.hints_enabled,
@@ -151,6 +157,7 @@ def _resolve_effective_input_settings(
     return EffectiveInputSettings(
         pov_enabled=pov_enabled,
         max_pov_variants_per_cpv=max_pov_variants if pov_enabled else None,
+        pov_from_experiment=inputs.pov.from_experiment,
         hints_enabled=hints_enabled,
         hint_sarif_level=hint_sarif_level if hints_enabled else None,
         hint_corpus_level=hint_corpus_level if hints_enabled else None,
@@ -1554,6 +1561,7 @@ def run_crs_trial(
             max_pov_variants_per_cpv=effective_inputs.max_pov_variants_per_cpv,
             patch_verify_variants=effective_inputs.patch_verify_variants,
             pov_input_enabled=effective_inputs.pov_enabled,
+            pov_from_experiment=effective_inputs.pov_from_experiment,
             sarif_input_enabled=effective_inputs.hints_enabled,
             sarif_level=effective_inputs.hint_sarif_level,
             seed_corpus_enabled=effective_inputs.seed_corpus_enabled,

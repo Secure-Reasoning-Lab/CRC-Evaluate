@@ -53,6 +53,7 @@ def _effective_inputs_from_config(
     seed_max_time = seed_cfg.get("max_time")
     pov_enabled = bool(pov_cfg.get("enabled", False))
     max_variants = pov_cfg.get("max_variants_per_cpv")
+    pov_from_experiment = pov_cfg.get("from_experiment")
     diff_enabled = bool(diff_cfg.get("enabled", False))
     ground_truth_patch_enabled = bool(gtp_cfg.get("enabled", False))
 
@@ -74,12 +75,14 @@ def _effective_inputs_from_config(
         "seed_corpus_max_time": seed_max_time if seed_enabled else None,
         "pov_input_enabled": pov_enabled,
         "max_pov_variants_per_cpv": max_variants if pov_enabled else None,
+        "pov_from_experiment": pov_from_experiment,
         "diff_enabled": diff_enabled,
         "ground_truth_patch_enabled": ground_truth_patch_enabled,
         "inputs": {
             "pov": {
                 "enabled": pov_enabled,
                 "max_variants_per_cpv": max_variants if pov_enabled else None,
+                "from_experiment": pov_from_experiment,
             },
             "sarif": {
                 "enabled": hints_enabled,

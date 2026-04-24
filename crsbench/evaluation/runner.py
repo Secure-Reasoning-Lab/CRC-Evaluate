@@ -121,6 +121,7 @@ class BenchmarkRunner:
         max_pov_variants_per_cpv: Optional[int] = 1,
         patch_verify_variants: bool = False,
         pov_input_enabled: bool = False,
+        pov_from_experiment: Optional[Path] = None,
         sarif_input_enabled: bool = False,
         sarif_level: Optional[int] = None,
         seed_corpus_enabled: bool = False,
@@ -165,6 +166,10 @@ class BenchmarkRunner:
                 patches against all benchmark POV variants per CPV. When False
                 (default), verify against a single POV (pov_0-like behavior).
             pov_input_enabled: Whether to stage/provide explicit bug-fixing POV inputs.
+            pov_from_experiment: Optional path to a prior bug-finding experiment
+                directory; when set, bug-fixing POV staging reads from that
+                experiment's discovered POVs instead of the benchmark's ground
+                truth blobs. Only honored when CRS type is bug-fixing.
             sarif_input_enabled: Whether to stage/provide bug-candidate SARIF inputs.
             sarif_level: SARIF hint level to stage when sarif_input_enabled is true.
             seed_corpus_enabled: Whether to stage/provide seed corpus input.
@@ -201,6 +206,9 @@ class BenchmarkRunner:
         self.max_pov_variants_per_cpv = max_pov_variants_per_cpv
         self.patch_verify_variants = patch_verify_variants
         self.pov_input_enabled = pov_input_enabled
+        self.pov_from_experiment = (
+            Path(pov_from_experiment) if pov_from_experiment is not None else None
+        )
         self.sarif_input_enabled = sarif_input_enabled
         self.sarif_level = sarif_level
         self.seed_corpus_enabled = seed_corpus_enabled
@@ -749,6 +757,7 @@ class BenchmarkRunner:
                 harness_name=harness.name,
                 trial_output_dir=trial_output_dir,
                 target_cpv_id=target_cpv_id,
+                sanitizer=sanitizer,
             )
 
             # Start managers
@@ -925,12 +934,21 @@ class BenchmarkRunner:
         harness_name: str,
         trial_output_dir: Path,
         target_cpv_id: str | None = None,
+        sanitizer: str = "address",
     ) -> None:
         """Stage configured runtime inputs based on effective input settings."""
         # CPV-targeted POV staging is meaningful only for bug-fixing runs.
         pov_target_cpv_id = target_cpv_id if self._crs_type == "bug-fixing" else None
 
-        if self.pov_input_enabled and self._crs_type != "bug-finding":
+        if self.pov_from_experiment is not None and self._crs_type == "bug-fixing":
+            self._prepare_bugfix_inputs_from_experiment(
+                benchmark_path=benchmark_path,
+                harness_name=harness_name,
+                trial_output_dir=trial_output_dir,
+                target_cpv_id=pov_target_cpv_id,
+                sanitizer=sanitizer,
+            )
+        elif self.pov_input_enabled and self._crs_type != "bug-finding":
             self._prepare_bugfix_inputs(
                 benchmark_path=benchmark_path,
                 harness_name=harness_name,
@@ -1140,6 +1158,76 @@ class BenchmarkRunner:
             f"harness={harness_name}, cpvs={staged_cpvs}, pov_files={staged_povs}, "
             "max_pov_variants_per_cpv="
             f"{self.max_pov_variants_per_cpv if self.max_pov_variants_per_cpv is not None else 'all'}"
+        )
+
+    def _prepare_bugfix_inputs_from_experiment(
+        self,
+        benchmark_path: Path,
+        harness_name: str,
+        trial_output_dir: Path,
+        target_cpv_id: str | None,
+        sanitizer: str,
+    ) -> None:
+        """Stage bug-fixing POVs from a prior bug-finding experiment store.
+
+        Mirrors the output layout of :meth:`_prepare_bugfix_inputs` but sources
+        blobs from ``self.pov_from_experiment`` (a prior experiment-data dir)
+        instead of the benchmark's ``.aixcc/<harness>/<cpv>/blobs`` ground
+        truth. POVs are deduplicated by crash signature (earliest discovery
+        wins) via :class:`ExternalPovSource`.
+        """
+        if self.pov_from_experiment is None:
+            raise EvaluationError(
+                "pov_from_experiment must be set to stage external POVs"
+            )
+        if target_cpv_id is None:
+            raise EvaluationError(
+                "pov_from_experiment requires a target_cpv_id; bug-fixing "
+                "trials must be scheduled per CPV"
+            )
+
+        from crsbench.evaluation.external_pov_source import ExternalPovSource
+
+        source = ExternalPovSource(self.pov_from_experiment)
+        records = source.get_pov_blobs(
+            benchmark=benchmark_path.name,
+            harness=harness_name,
+            sanitizer=sanitizer,
+            cpv_id=target_cpv_id,
+        )
+        if not records:
+            raise EvaluationError(
+                f"No POVs found in source experiment for "
+                f"{benchmark_path.name}/{harness_name}/{sanitizer}/{target_cpv_id}: "
+                f"{self.pov_from_experiment}"
+            )
+
+        cpvs_dir = trial_output_dir / "crs-input" / "cpvs"
+        input_povs_dir = trial_output_dir / "crs-input" / "povs"
+        adapter_povs_dir = trial_output_dir / "povs"
+        for stale_dir in (cpvs_dir, input_povs_dir, adapter_povs_dir):
+            if stale_dir.exists():
+                shutil.rmtree(stale_dir)
+        cpvs_dir.mkdir(parents=True, exist_ok=True)
+        input_povs_dir.mkdir(parents=True, exist_ok=True)
+        adapter_povs_dir.mkdir(parents=True, exist_ok=True)
+        (cpvs_dir / target_cpv_id).mkdir(parents=True, exist_ok=True)
+
+        selected = (
+            records
+            if self.max_pov_variants_per_cpv is None
+            else records[: self.max_pov_variants_per_cpv]
+        )
+        for i, rec in enumerate(selected):
+            name = target_cpv_id if i == 0 else f"{target_cpv_id}__{rec.content_hash}"
+            shutil.copy2(rec.blob_path, input_povs_dir / name)
+            shutil.copy2(rec.blob_path, adapter_povs_dir / name)
+
+        self.logger.info(
+            "Prepared bug-fixing trial inputs from experiment: "
+            f"harness={harness_name}, cpv={target_cpv_id}, "
+            f"pov_files={len(selected)}/{len(records)} deduped, "
+            f"source={self.pov_from_experiment}"
         )
 
     def _prepare_seed_corpus_inputs(
