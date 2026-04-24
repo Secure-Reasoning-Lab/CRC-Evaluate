@@ -8731,6 +8731,15 @@ class TestCollect:
             mock_coll.collect.call_args.kwargs["remote_experiment_dir"]
             == f"{launch_state.remote_experiment_root}/{launch_state.experiment_name}"
         )
+        mock_coll.collect_reeval_submission_artifacts.assert_called_once_with(
+            worker=mock.ANY,
+            fleet=launch_state.as_transport_config(),
+            experiment_name=launch_state.effective_remote_experiment_name(),
+            experiment_filestore=Path("/tmp/filestore"),
+            remote_submission_dir=launch_state.remote_submission_dir,
+            destination=Path("/tmp/filestore")
+            / launch_state.effective_remote_experiment_name(),
+        )
 
     @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
@@ -10371,6 +10380,15 @@ class TestTeardown:
         assert rc == 0
         assert mock_coll.collect.call_count == 1
         assert mock_coll.collect_logs.call_count == 1
+        mock_coll.collect_reeval_submission_artifacts.assert_called_once_with(
+            worker=mock.ANY,
+            fleet=launch_state.as_transport_config(),
+            experiment_name=launch_state.effective_remote_experiment_name(),
+            experiment_filestore=Path("/tmp/filestore"),
+            remote_submission_dir=launch_state.remote_submission_dir,
+            destination=Path("/tmp/filestore")
+            / launch_state.effective_remote_experiment_name(),
+        )
         mock_prov.delete_workers.assert_not_called()
         mock_prov.delete_instance.assert_called_once()
         mock_delete_state.assert_called_once_with(

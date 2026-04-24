@@ -11,6 +11,10 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from crsbench.cloud.reeval_compat import (
+    build_compatibility_record,
+    discover_git_revision,
+)
 from crsbench.evaluation.trial_paths import TrialDir, normalize_experiment_config_dict
 from crsbench.reporting.snapshot_loader import discover_trials
 from crsbench.validation.schemas import TrialMode
@@ -59,6 +63,9 @@ def build_reeval_bundle(
     if not selected_trials:
         raise ValueError("No re-eval-ready trials found")
 
+    source_runtime_revision = discover_git_revision()
+    benchmark_names = {trial.benchmark for trial in selected_trials}
+
     (bundle_root / "config").mkdir(parents=True, exist_ok=False)
     (bundle_root / "trials").mkdir(parents=True, exist_ok=False)
     shutil.copy2(config_path, bundle_root / "config" / "source-config.yaml")
@@ -97,6 +104,11 @@ def build_reeval_bundle(
         "source_experiment_name": source_experiment_name,
         "remote_experiment_name": remote_experiment_name,
         "source_config_digest": _config_digest(normalized_config),
+        "compatibility": build_compatibility_record(
+            normalized_config=normalized_config,
+            benchmark_names=benchmark_names,
+            source_runtime_revision=source_runtime_revision,
+        ),
         "selected_trial_count": len(selected_records),
         "skipped_trial_count": len(skipped_trials),
         "selected_trials": selected_records,

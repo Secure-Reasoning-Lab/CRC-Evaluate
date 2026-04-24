@@ -223,6 +223,27 @@ def run_teardown(args: argparse.Namespace) -> int:
                 return 1
             destination = resolved_destination
 
+    reeval_submission_artifacts_ready = True
+    if orchestrator_collects_artifacts and launch_state is not None:
+        orchestrator_worker = launch_state.as_orchestrator_record()
+        try:
+            collector.collect_reeval_submission_artifacts(
+                worker=cast("CloudInstanceLike", orchestrator_worker),
+                fleet=launch_state.as_transport_config(),
+                experiment_name=experiment_name,
+                experiment_filestore=experiment_filestore,
+                remote_submission_dir=launch_state.effective_remote_submission_dir(),
+                destination=destination,
+            )
+        except (ArtifactCollectionError, Exception) as exc:
+            logger.error(
+                "Cloud re-eval submission artifact collection failed for {}: {}",
+                orchestrator_worker.name,
+                exc,
+            )
+            collection_failed = True
+            reeval_submission_artifacts_ready = False
+
     failed_collections = _collect_live_instances_parallel(
         collector=collector,
         context=context,
@@ -240,7 +261,11 @@ def run_teardown(args: argparse.Namespace) -> int:
         and destination.exists()
     )
 
-    if orchestrator_collects_artifacts and launch_state is not None:
+    if (
+        orchestrator_collects_artifacts
+        and launch_state is not None
+        and reeval_submission_artifacts_ready
+    ):
         orchestrator_worker = launch_state.as_orchestrator_record()
         try:
             collector.collect(

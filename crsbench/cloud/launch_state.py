@@ -114,6 +114,14 @@ class CloudLaunchState(BaseModel):
         """Return the live remote experiment namespace for this launch."""
         return self.remote_experiment_name or self.experiment_name
 
+    def effective_remote_submission_dir(self) -> str:
+        """Return the remote submission directory for cloud re-eval launches."""
+        if self.remote_submission_dir:
+            return self.remote_submission_dir
+        if self.remote_experiment_root:
+            return str(Path(self.remote_experiment_root).parent)
+        raise ValueError("Cloud launch state missing remote submission directory")
+
 
 def _normalize_fleet_records(
     value,

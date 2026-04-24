@@ -59,6 +59,13 @@ _REPORT_LOG_RSYNC_INCLUDES: tuple[str, ...] = (
     "output/logs/crs/**/*_patcher.stdout.log",
     "output/logs/crs/**/*inc-builder-*.stdout.log",
 )
+_REEVAL_SUBMISSION_ARTIFACT_DIRNAME = ".cloud-reeval"
+_REEVAL_TERMINAL_STATES = frozenset({"succeeded", "failed"})
+_REEVAL_REMOTE_TEXT_ARTIFACTS: tuple[tuple[str, str], ...] = (
+    ("summary.json", "summary.json"),
+    ("runner.log", "runner.log"),
+    ("bundle/manifest.json", "manifest.json"),
+)
 
 
 def collect_marker_path(destination: Path) -> Path:
@@ -381,6 +388,76 @@ class ArtifactCollector:
             instance_logs_dir,
         )
         return logs_root
+
+    def collect_reeval_submission_artifacts(
+        self,
+        *,
+        worker: CloudInstanceLike,
+        fleet: SshTransportConfig,
+        experiment_name: str,
+        experiment_filestore: Path,
+        remote_submission_dir: str,
+        destination: Path,
+    ) -> Path:
+        """Collect authoritative cloud re-eval wrapper artifacts from the orchestrator."""
+        known_hosts_path = self._prepare_ssh_access(
+            worker=worker,
+            fleet=fleet,
+            experiment_filestore=experiment_filestore,
+        )
+        ssh_user = self._direct_ssh_user(fleet)
+
+        submission_state = self._read_remote_text_file(
+            worker=worker,
+            fleet=fleet,
+            known_hosts_path=known_hosts_path,
+            ssh_user=ssh_user,
+            remote_path=posixpath.join(remote_submission_dir, "submission.json"),
+            experiment_filestore=experiment_filestore,
+        )
+        try:
+            submission_payload = json.loads(submission_state)
+        except json.JSONDecodeError as exc:
+            raise ArtifactCollectionError(
+                "Remote cloud re-eval submission state is not valid JSON"
+            ) from exc
+        if not isinstance(submission_payload, dict):
+            raise ArtifactCollectionError(
+                "Remote cloud re-eval submission state is not a JSON object"
+            )
+
+        remote_state = submission_payload.get("state")
+        if remote_state not in _REEVAL_TERMINAL_STATES:
+            raise ArtifactCollectionError(
+                f"Remote cloud re-eval submission for {experiment_name} is in "
+                f"non-terminal state {remote_state!r}"
+            )
+
+        submission_dir = destination / _REEVAL_SUBMISSION_ARTIFACT_DIRNAME
+        submission_dir.mkdir(parents=True, exist_ok=True)
+        (submission_dir / "submission.json").write_text(
+            submission_state,
+            encoding="utf-8",
+        )
+        for remote_name, local_name in _REEVAL_REMOTE_TEXT_ARTIFACTS:
+            payload = self._read_remote_text_file(
+                worker=worker,
+                fleet=fleet,
+                known_hosts_path=known_hosts_path,
+                ssh_user=ssh_user,
+                remote_path=posixpath.join(remote_submission_dir, remote_name),
+                experiment_filestore=experiment_filestore,
+            )
+            (submission_dir / local_name).write_text(payload, encoding="utf-8")
+
+        logger.info(
+            "Cloud re-eval submission artifact collection complete: "
+            "worker={} experiment={} submission_dir={}",
+            worker.name,
+            experiment_name,
+            submission_dir,
+        )
+        return submission_dir
 
     def _run_rsync_with_retry(self, cmd: list[str]) -> None:
         """Run the rsync command with exponential-backoff retry."""
@@ -1113,6 +1190,33 @@ class ArtifactCollector:
             capture_output=True,
             text=True,
         )
+
+    def _read_remote_text_file(
+        self,
+        *,
+        worker: CloudInstanceLike,
+        fleet: SshTransportConfig,
+        known_hosts_path: Path | None,
+        ssh_user: str | None,
+        remote_path: str,
+        experiment_filestore: Path,
+    ) -> str:
+        """Read one remote text file and return its contents."""
+        result = self._run_remote_command(
+            worker=worker,
+            fleet=fleet,
+            known_hosts_path=known_hosts_path,
+            ssh_user=ssh_user,
+            command=f"sudo cat {shlex.quote(remote_path)}",
+            experiment_filestore=experiment_filestore,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or "").strip() or (result.stdout or "").strip()
+            raise ArtifactCollectionError(
+                f"Failed to read remote file {remote_path}: "
+                f"{detail or f'exit {result.returncode}'}"
+            )
+        return result.stdout
 
     def _remote_path_exists(
         self,

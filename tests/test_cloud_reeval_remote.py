@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _write_submission_bundle(
@@ -15,7 +18,13 @@ def _write_submission_bundle(
     *,
     source_experiment: str = "source-exp",
     remote_experiment: str = "source-exp-reeval-20260424",
+    source_runtime_revision: str | None = None,
 ) -> None:
+    from crsbench.cloud.reeval_compat import discover_git_revision
+
+    if source_runtime_revision is None:
+        source_runtime_revision = discover_git_revision()
+
     bundle_dir = submission_dir / "bundle"
     (bundle_dir / "config").mkdir(parents=True)
     (
@@ -67,6 +76,11 @@ def _write_submission_bundle(
                 "remote_experiment_name": remote_experiment,
                 "selected_trial_count": 1,
                 "skipped_trial_count": 0,
+                "compatibility": {
+                    "benchmark_names": ["bugbench"],
+                    "source_mode": "pkgs",
+                    "source_runtime_revision": source_runtime_revision,
+                },
                 "selected_trials": [
                     {
                         "relative_path": "bugbench__ensemble/trial-1",
@@ -115,7 +129,7 @@ def test_launch_remote_submission_marks_published_and_starts_runner(
 
     submission_dir = tmp_path / "submission"
     _write_submission_state(submission_dir)
-    _write_submission_bundle(submission_dir)
+    _write_submission_bundle(submission_dir, source_runtime_revision="source-rev")
 
     process = MagicMock()
     process.pid = 43210
@@ -130,6 +144,35 @@ def test_launch_remote_submission_marks_published_and_starts_runner(
     assert state["runner_pid"] == 43210
     assert mock_popen.call_args.args[0][0] == sys.executable
     assert "--submission-dir" in mock_popen.call_args.args[0]
+
+
+def test_launch_remote_submission_persists_published_state_before_spawning_runner(
+    tmp_path: Path,
+) -> None:
+    from crsbench.cloud.reeval_remote import launch_remote_submission
+
+    submission_dir = tmp_path / "submission"
+    _write_submission_state(submission_dir)
+    _write_submission_bundle(submission_dir)
+
+    observed_state: dict[str, str | None] = {"state": None}
+    process = MagicMock()
+    process.pid = 43210
+
+    def _spawn_side_effect(*_args, **_kwargs):
+        payload = json.loads(
+            (submission_dir / "submission.json").read_text(encoding="utf-8")
+        )
+        observed_state["state"] = payload.get("state")
+        return process
+
+    with patch(
+        "crsbench.cloud.reeval_remote.subprocess.Popen",
+        side_effect=_spawn_side_effect,
+    ):
+        launch_remote_submission(submission_dir)
+
+    assert observed_state["state"] == "published"
 
 
 def test_launch_remote_submission_marks_failed_when_runner_spawn_fails(
@@ -161,6 +204,7 @@ def test_launch_remote_submission_marks_failed_when_runner_spawn_fails(
 def test_execute_remote_submission_materializes_workspace_and_updates_state(
     tmp_path: Path,
 ) -> None:
+    from crsbench.cloud.reeval_compat import discover_git_revision
     from crsbench.cloud.reeval_remote import (
         execute_remote_submission,
         read_submission_state,
@@ -179,15 +223,23 @@ def test_execute_remote_submission_materializes_workspace_and_updates_state(
     )
     stale_file.parent.mkdir(parents=True, exist_ok=True)
     stale_file.write_text("stale", encoding="utf-8")
+    benchmarks_root = tmp_path / "benchmarks"
+    (benchmarks_root / "bugbench").mkdir(parents=True)
 
-    with patch(
-        "crsbench.cloud.reeval_remote.subprocess.run",
-        return_value=subprocess.CompletedProcess(args=["crsbench"], returncode=0),
-    ) as mock_run:
+    with (
+        patch(
+            "crsbench.cloud.reeval_remote._discover_git_revision",
+            return_value=discover_git_revision(),
+        ),
+        patch(
+            "crsbench.cloud.reeval_remote.subprocess.run",
+            return_value=subprocess.CompletedProcess(args=["crsbench"], returncode=0),
+        ) as mock_run,
+    ):
         rc = execute_remote_submission(
             submission_dir,
             redis_host="localhost:6379",
-            benchmarks_root=Path("/opt/crsbench/benchmarks"),
+            benchmarks_root=benchmarks_root,
         )
 
     assert rc == 0
@@ -201,7 +253,7 @@ def test_execute_remote_submission_materializes_workspace_and_updates_state(
     assert derived_config["experiment"] == "source-exp-reeval-20260424"
     assert derived_config["redis_host"] == "localhost:6379"
     assert derived_config["runtime"]["redis"]["host"] == "localhost:6379"
-    assert derived_config["benchmarks_root"] == "/opt/crsbench/benchmarks"
+    assert derived_config["benchmarks_root"] == str(benchmarks_root)
     assert (
         submission_dir
         / "workspace"
@@ -224,7 +276,7 @@ def test_execute_remote_submission_materializes_workspace_and_updates_state(
     ]
 
 
-def test_execute_remote_submission_marks_failed_on_runner_exception(
+def test_execute_remote_submission_fails_on_runtime_revision_mismatch(
     tmp_path: Path,
 ) -> None:
     from crsbench.cloud.reeval_remote import (
@@ -235,12 +287,59 @@ def test_execute_remote_submission_marks_failed_on_runner_exception(
     submission_dir = tmp_path / "submission"
     _write_submission_state(submission_dir)
     _write_submission_bundle(submission_dir)
+    benchmarks_root = tmp_path / "benchmarks"
+    (benchmarks_root / "bugbench").mkdir(parents=True)
 
-    with patch(
-        "crsbench.cloud.reeval_remote.subprocess.run",
-        side_effect=RuntimeError("reeval boom"),
+    with (
+        patch(
+            "crsbench.cloud.reeval_remote._discover_git_revision",
+            return_value="remote-rev",
+        ),
+        patch("crsbench.cloud.reeval_remote.subprocess.run") as mock_run,
     ):
-        rc = execute_remote_submission(submission_dir)
+        rc = execute_remote_submission(
+            submission_dir,
+            redis_host="localhost:6379",
+            benchmarks_root=benchmarks_root,
+        )
+
+    assert rc == 1
+    mock_run.assert_not_called()
+    state = read_submission_state(submission_dir / "submission.json")
+    assert state["state"] == "failed"
+    summary = json.loads((submission_dir / "summary.json").read_text(encoding="utf-8"))
+    assert "runtime revision" in summary["error"]
+
+
+def test_execute_remote_submission_marks_failed_on_runner_exception(
+    tmp_path: Path,
+) -> None:
+    from crsbench.cloud.reeval_compat import discover_git_revision
+    from crsbench.cloud.reeval_remote import (
+        execute_remote_submission,
+        read_submission_state,
+    )
+
+    submission_dir = tmp_path / "submission"
+    _write_submission_state(submission_dir)
+    _write_submission_bundle(submission_dir)
+    benchmarks_root = tmp_path / "benchmarks"
+    (benchmarks_root / "bugbench").mkdir(parents=True)
+
+    with (
+        patch(
+            "crsbench.cloud.reeval_remote._discover_git_revision",
+            return_value=discover_git_revision(),
+        ),
+        patch(
+            "crsbench.cloud.reeval_remote.subprocess.run",
+            side_effect=RuntimeError("reeval boom"),
+        ),
+    ):
+        rc = execute_remote_submission(
+            submission_dir,
+            benchmarks_root=benchmarks_root,
+        )
 
     assert rc == 1
     state = read_submission_state(submission_dir / "submission.json")

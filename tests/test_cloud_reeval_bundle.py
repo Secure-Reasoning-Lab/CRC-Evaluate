@@ -195,6 +195,11 @@ def test_build_reeval_bundle_selects_only_valid_ready_trials(tmp_path: Path) -> 
     assert manifest["remote_experiment_name"] == "source-exp-reeval-20260424"
     assert manifest["selected_trial_count"] == 2
     assert manifest["skipped_trial_count"] == 1
+    assert manifest["compatibility"]["benchmark_names"] == [
+        "bugbench",
+        "patchbench",
+    ]
+    assert manifest["compatibility"]["source_mode"] == "pkgs"
     assert "source_experiment_root" not in manifest
     assert manifest["skipped_trials"][0]["reason"] == "missing crs-input/povs directory"
 

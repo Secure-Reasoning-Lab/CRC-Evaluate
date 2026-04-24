@@ -20,6 +20,7 @@ belongs in `docs/modules/`.
 - [Trial-Fair Evaluator Scheduling](./distributed/evaluator-trial-fair-scheduling.md)
 - [Trial-Fair Scheduling TLA+ Model](../../tla/EvaluatorTrialFairScheduling.tla)
 - [Cloud Live Log Streaming](./distributed/cloud-live-log-streaming.md)
+- [Cloud Distributed Re-Evaluation](./distributed/cloud-reeval.md)
 - [Evaluation Contract](./evaluation/evaluation.md)
 - [Validation Contract](./validation/validation.md)
 - [Gen-Config TUI YAML Round-Trip Editing](./validation/gen-config-tui-yaml-roundtrip.md)
@@ -57,6 +58,7 @@ should be applied to the dedicated canonical docs below.
 | Evaluator trial-fair scheduling | `distributed/evaluator-trial-fair-scheduling.md` |
 | Configless runtime discovery/registration | `distributed/configless-runtime.md` |
 | Cloud live log streaming target contract | `distributed/cloud-live-log-streaming.md` |
+| Cloud distributed re-evaluation lifecycle | `distributed/cloud-reeval.md` |
 | Evaluation contract and verdict semantics | `evaluation/evaluation.md` |
 | Validation schema/normalization contracts | `validation/validation.md` |
 | Gen-config TUI YAML round-trip write preservation | `validation/gen-config-tui-yaml-roundtrip.md` |

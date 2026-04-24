@@ -251,6 +251,11 @@ that provenance. At minimum, compatibility must hold for:
 - per-POV timeout, patch verification mode, and incremental-image settings
 - any reserved env-driven runtime knobs that change evaluator or re-eval behavior
 
+In v1, that remote compatibility gate must reject at least:
+
+- any selected benchmark missing from the resolved remote `benchmarks_root`
+- any mismatch between source runtime revision provenance and the active remote CRSBench revision when both are discoverable
+
 In v1, incompatibility is a blocking submission failure. Authoritative remote
 results must not be produced from a bundle whose remote runtime compatibility
 cannot be established.
@@ -343,6 +348,7 @@ must be collected:
 
 - `cloud collect` and `cloud teardown` for a cloud re-eval deployment must collect the orchestrator-hosted re-eval workspace and remote logs
 - default local publish destination is a fresh local experiment tree keyed by the remote experiment name
+- the collected local tree must also retain the remote wrapper's authoritative submission artifacts in a dedicated hidden sidecar directory, including submission state, manifest, summary, and runner log
 - collection must not silently overwrite the original source experiment tree
 - collection is valid only after the remote submission reaches a terminal state unless the operator explicitly requests log-only inspection
 - local publication must use the same stage-verify-publish discipline documented for cloud artifact collection so partially collected trees do not become visible results
