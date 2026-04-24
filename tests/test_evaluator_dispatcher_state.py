@@ -24,6 +24,9 @@ class _FakeRedis:
     def hget(self, key: str, field: str) -> str | None:
         return self._hashes.get(key, {}).get(field)
 
+    def hgetall(self, key: str) -> dict[str, str]:
+        return self._hashes.get(key, {}).copy()
+
     def hdel(self, key: str, field: str) -> int:
         bucket = self._hashes.get(key)
         if not bucket or field not in bucket:

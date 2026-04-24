@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
-from typing import Any, Protocol, cast
+from typing import Any, Protocol
 
 from crsbench.distributed.queue import validate_queue_name_component
 
@@ -19,6 +19,22 @@ for i, field in ipairs(ARGV) do
     end
 end
 return results
+"""
+
+_PUBLISH_RESULT_IF_CURRENT_SCRIPT = """
+local attempts_key = KEYS[1]
+local results_key = KEYS[2]
+local request_id = ARGV[1]
+local expected_attempt_id = ARGV[2]
+local result_payload = ARGV[3]
+
+local current_attempt_id = redis.call('HGET', attempts_key, request_id)
+if current_attempt_id ~= expected_attempt_id then
+    return 0
+end
+
+redis.call('HSET', results_key, request_id, result_payload)
+return 1
 """
 
 
@@ -79,9 +95,11 @@ class DispatcherStateRedisProtocol(Protocol):
 
     def hget(self, key: str, field: str) -> str | bytes | None: ...
 
-    def eval(
-        self, script: str, numkeys: int, *keys_and_args: str
-    ) -> list[str | bytes | None]: ...
+    def hdel(self, key: str, field: str) -> int: ...
+
+    def hgetall(self, key: str) -> dict[str, str | bytes]: ...
+
+    def eval(self, script: str, numkeys: int, *keys_and_args: str) -> Any: ...
 
 
 class DispatcherStateStore:
@@ -106,7 +124,23 @@ class DispatcherStateStore:
     def _build_results_key(self) -> str:
         return f"crsbench:dispatcher:{self.experiment_name}:build_results"
 
+    def _build_attempts_key(self) -> str:
+        return f"crsbench:dispatcher:{self.experiment_name}:build_attempts"
+
+    def _verify_attempts_key(self) -> str:
+        return f"crsbench:dispatcher:{self.experiment_name}:verify_attempts"
+
     def submit_build_request(self, record: BuildRequestRecord) -> str:
+        existing = self.load_build_request(record.request_id)
+        if existing is not None and (
+            existing.trial_id != record.trial_id
+            or existing.benchmark != record.benchmark
+            or existing.owner_key != record.owner_key
+            or existing.lineage_id != record.lineage_id
+        ):
+            raise ValueError(
+                f"conflicting build request identity for {record.request_id}"
+            )
         payload = asdict(record)
         self.redis.hset(
             self._build_requests_key(),
@@ -136,6 +170,7 @@ class DispatcherStateStore:
         payload = dict(record.payload)
         payload["attempt_id"] = attempt_id
         payload["evaluator_id"] = evaluator_id
+        self.redis.hset(self._build_attempts_key(), request_id, attempt_id)
         self.submit_build_request(
             BuildRequestRecord(
                 request_id=record.request_id,
@@ -150,10 +185,8 @@ class DispatcherStateStore:
         )
 
     def build_attempt_is_current(self, request_id: str, attempt_id: str) -> bool:
-        record = self.load_build_request(request_id)
-        if record is None:
-            return False
-        return record.payload.get("attempt_id") == attempt_id
+        current_attempt_id = self.redis.hget(self._build_attempts_key(), request_id)
+        return current_attempt_id == attempt_id
 
     def load_build_result(self, request_id: str) -> BuildResultRecord | None:
         raw = self.redis.hget(self._build_results_key(), request_id)
@@ -173,7 +206,42 @@ class DispatcherStateStore:
             json.dumps(asdict(result), sort_keys=True),
         )
 
+    def publish_build_result_if_current(
+        self,
+        *,
+        request_id: str,
+        attempt_id: str,
+        result: BuildResultRecord,
+    ) -> bool:
+        if request_id != result.request_id:
+            raise ValueError(
+                "publish_build_result_if_current request_id does not match "
+                "result.request_id"
+            )
+        published = self.redis.eval(
+            _PUBLISH_RESULT_IF_CURRENT_SCRIPT,
+            2,
+            self._build_attempts_key(),
+            self._build_results_key(),
+            request_id,
+            attempt_id,
+            json.dumps(asdict(result), sort_keys=True),
+        )
+        return bool(published)
+
     def submit_verify_request(self, record: VerifyRequestRecord) -> str:
+        existing = self.load_verify_request(record.request_id)
+        if existing is not None and (
+            existing.trial_id != record.trial_id
+            or existing.benchmark != record.benchmark
+            or existing.harness != record.harness
+            or existing.pov_id != record.pov_id
+            or existing.owner_key != record.owner_key
+            or existing.lineage_id != record.lineage_id
+        ):
+            raise ValueError(
+                f"conflicting verify request identity for {record.request_id}"
+            )
         payload = asdict(record)
         self.redis.hset(
             self._verify_requests_key(),
@@ -190,7 +258,7 @@ class DispatcherStateStore:
         return VerifyRequestRecord(**payload)
 
     def list_verify_requests(self) -> list[VerifyRequestRecord]:
-        values = cast("Any", self.redis).hgetall(self._verify_requests_key()).values()
+        values = self.redis.hgetall(self._verify_requests_key()).values()
         return [VerifyRequestRecord(**json.loads(_decode(raw))) for raw in values]
 
     def assign_verify_attempt(
@@ -207,6 +275,7 @@ class DispatcherStateStore:
         payload = dict(record.payload)
         payload["attempt_id"] = attempt_id
         payload["evaluator_id"] = evaluator_id
+        self.redis.hset(self._verify_attempts_key(), request_id, attempt_id)
         self.submit_verify_request(
             VerifyRequestRecord(
                 request_id=record.request_id,
@@ -224,10 +293,8 @@ class DispatcherStateStore:
         )
 
     def verify_attempt_is_current(self, request_id: str, attempt_id: str) -> bool:
-        record = self.load_verify_request(request_id)
-        if record is None:
-            return False
-        return record.payload.get("attempt_id") == attempt_id
+        current_attempt_id = self.redis.hget(self._verify_attempts_key(), request_id)
+        return current_attempt_id == attempt_id
 
     def publish_verify_result(
         self, request_id: str, result: VerifyResultRecord
@@ -241,6 +308,29 @@ class DispatcherStateStore:
             request_id,
             json.dumps(asdict(result), sort_keys=True),
         )
+
+    def publish_verify_result_if_current(
+        self,
+        *,
+        request_id: str,
+        attempt_id: str,
+        result: VerifyResultRecord,
+    ) -> bool:
+        if request_id != result.request_id:
+            raise ValueError(
+                "publish_verify_result_if_current request_id does not match "
+                "result.request_id"
+            )
+        published = self.redis.eval(
+            _PUBLISH_RESULT_IF_CURRENT_SCRIPT,
+            2,
+            self._verify_attempts_key(),
+            self._verify_results_key(),
+            request_id,
+            attempt_id,
+            json.dumps(asdict(result), sort_keys=True),
+        )
+        return bool(published)
 
     def _all_builds_succeeded(self, request_ids: list[str], generation: int) -> bool:
         for request_id in request_ids:
