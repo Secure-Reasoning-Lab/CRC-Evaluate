@@ -90,6 +90,9 @@ Examples:
   # Re-evaluate with custom output directory
   crsbench re-eval -c experiment-config.yaml --output /tmp/reeval-results
 
+  # Force local mode even if the experiment config enables Redis/distributed queues
+  crsbench re-eval -c experiment-config.yaml --local
+
   # Re-evaluate with verbose logging
   crsbench re-eval -c experiment-config.yaml -v
         """,
@@ -130,6 +133,11 @@ Examples:
         "--force-rebuild",
         action="store_true",
         help="Force rebuild of variants",
+    )
+    parser.add_argument(
+        "--local",
+        action="store_true",
+        help="Force local re-eval and ignore any configured redis_host",
     )
     parser.add_argument(
         "--mode",
@@ -1350,6 +1358,14 @@ def run_reeval(args: argparse.Namespace) -> int:
 
     # Async mode: initialize Redis queues when redis_host is configured
     redis_host = normalize_redis_host(config.get("redis_host"))
+    if getattr(args, "local", False):
+        if redis_host:
+            logger.info(
+                f"Local mode forced by CLI; ignoring configured redis_host={redis_host}"
+            )
+        else:
+            logger.info("Local mode forced by CLI")
+        redis_host = None
     experiment_name = config.get("experiment", "default")
     verify_queue = None
     patch_build_queue = None

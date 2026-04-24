@@ -582,6 +582,9 @@ Patch verification test execution context:
 # Basic re-evaluation with verbose output
 uv run crsbench re-eval -c config.yaml -v
 
+# Force local re-eval and ignore any configured Redis runtime
+uv run crsbench re-eval -c config.yaml --local
+
 # With custom timeout and forced rebuild
 uv run crsbench re-eval -c config.yaml --force-rebuild --per-pov-verify-timeout 300
 
@@ -603,6 +606,7 @@ Bug-finding re-eval duplicate handling:
 |------|-------------|
 | `-c`, `--experiment-config` | Path to experiment config YAML (required) |
 | `--force-rebuild` | Force rebuild of variant images |
+| `--local` | Force local re-eval and ignore configured `redis_host` |
 | `--per-pov-verify-timeout` | Timeout per POV verification (seconds) |
 | `--output`, `-o` | Output directory (default: write to trial dirs) |
 | `--jobs` | Number of parallel verification jobs |

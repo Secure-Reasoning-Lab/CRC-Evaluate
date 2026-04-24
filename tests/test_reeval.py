@@ -70,6 +70,7 @@ class TestAddReevalSubparser:
         assert args.jobs is None
         assert args.cores_per_job is None
         assert args.force_rebuild is False
+        assert args.local is False
         assert args.output is None
         assert args.verbose is False
 
@@ -95,6 +96,7 @@ class TestAddReevalSubparser:
                 "--force-rebuild",
                 "--mode",
                 "full",
+                "--local",
                 "--output",
                 "/tmp/out",
                 "-v",
@@ -106,6 +108,7 @@ class TestAddReevalSubparser:
         assert args.cores_per_job == 8
         assert args.force_rebuild is True
         assert args.mode == "full"
+        assert args.local is True
         assert args.output == Path("/tmp/out")
         assert args.verbose is True
 
@@ -992,6 +995,69 @@ class TestRunReeval:
         oss_fuzz = tmp_path / "oss-fuzz"
         oss_fuzz.mkdir()
         args = self._make_args(config_path, oss_fuzz)
+
+        mock_trial = SimpleNamespace(
+            status="valid",
+            reeval_ready=True,
+            reeval_reason="ready",
+            trial_dir=trial_dir,
+            benchmark="test-bench",
+            harness="test-harness",
+            mode=TrialMode.patch_generation,
+            trial_num=0,
+        )
+        with (
+            patch(
+                "crsbench.reporting.snapshot_loader.discover_trials",
+                return_value=[mock_trial],
+            ),
+            patch(
+                "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_reeval"
+            ) as mock_for_reeval,
+            patch(
+                "crsbench.evaluation.reeval.cli._reeval_patch_generation",
+                return_value=1,
+            ) as mock_local_pg,
+            patch(
+                "crsbench.evaluation.reeval.cli._enqueue_trial_patches"
+            ) as mock_enqueue,
+        ):
+            result = run_reeval(args)
+
+        assert result == 0
+        mock_for_reeval.assert_not_called()
+        mock_local_pg.assert_called_once()
+        mock_enqueue.assert_not_called()
+
+    def test_patch_generation_local_flag_overrides_redis_config(
+        self, tmp_path: Path
+    ) -> None:
+        """CLI local mode should bypass Redis even when config sets redis_host."""
+        from crsbench.validation.schemas import TrialMode
+
+        experiment_dir = tmp_path / "my-exp"
+        trial_dir = (
+            experiment_dir
+            / "crs"
+            / "bench"
+            / "harness"
+            / "patch_generation"
+            / "trial-0"
+        )
+        trial_dir.mkdir(parents=True)
+        bench_dir = tmp_path / "benchmarks" / "test-bench"
+        bench_dir.mkdir(parents=True)
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "experiment: my-exp\n"
+            f"experiment_filestore: {tmp_path}\n"
+            f"benchmarks_root: {tmp_path / 'benchmarks'}\n"
+            "redis_host: localhost\n"
+        )
+        oss_fuzz = tmp_path / "oss-fuzz"
+        oss_fuzz.mkdir()
+        args = self._make_args(config_path, oss_fuzz)
+        args.local = True
 
         mock_trial = SimpleNamespace(
             status="valid",
