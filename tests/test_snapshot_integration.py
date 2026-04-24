@@ -1,5 +1,6 @@
 """Integration tests for snapshot system with BenchmarkRunner."""
 
+import tarfile
 import threading
 import time
 from pathlib import Path
@@ -145,6 +146,46 @@ full_mode:
         # No snapshots should be created
         snapshots = list_snapshots(trial_dir)
         assert len(snapshots) == 0
+
+    def test_skip_verification_omits_live_pov_snapshot_data(
+        self, sample_benchmark, tmp_path
+    ):
+        """skip_verification should suppress live POV snapshot verification output."""
+        (sample_benchmark / "project.yaml").write_text("""
+main_repo: test-project
+repo_name: test-project
+language: c
+""")
+        oss_fuzz = tmp_path / "oss-fuzz"
+        oss_fuzz.mkdir()
+
+        adapter = _make_stub_adapter()
+        runner = BenchmarkRunner(adapter, snapshot_period=60, oss_fuzz_path=oss_fuzz)
+
+        trial_dir = tmp_path / "trial"
+        trial_dir.mkdir()
+        (trial_dir / "output").mkdir()
+
+        harness = HarnessFile(name="test_harness", path="/src/test/harness.c")
+        benchmark_harness = BenchmarkHarness(
+            name="test-benchmark", path=sample_benchmark, harness=harness
+        )
+
+        result = runner.run_benchmark(
+            benchmark_harness=benchmark_harness,
+            mode="full",
+            trial_output_dir=trial_dir,
+            skip_verification=True,
+        )
+
+        assert result.cpvs_found == []
+
+        archive_path = trial_dir / "snapshot-0001.tar.gz"
+        assert archive_path.exists()
+        with tarfile.open(archive_path, "r:gz") as tar:
+            assert not any(
+                member.endswith("pov_verification.json") for member in tar.getnames()
+            )
 
     def test_snapshot_without_trial_dir_fails(self, sample_benchmark):
         """Test that enabling snapshots without trial_dir raises error."""
