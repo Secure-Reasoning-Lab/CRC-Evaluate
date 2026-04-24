@@ -38,6 +38,27 @@ redis.call('HSET', results_key, request_id, result_payload)
 return 1
 """
 
+_TRY_ACQUIRE_LEASE_SCRIPT = """
+local lease_key = KEYS[1]
+local evaluator_id = ARGV[1]
+local now = tonumber(ARGV[2])
+local ttl_seconds = tonumber(ARGV[3])
+
+local current_holder = redis.call('HGET', lease_key, 'holder')
+local current_expires = redis.call('HGET', lease_key, 'expires_at')
+
+if current_holder and current_expires then
+    local expires_at = tonumber(current_expires)
+    if expires_at and expires_at > now and current_holder ~= evaluator_id then
+        return 0
+    end
+end
+
+redis.call('HSET', lease_key, 'holder', evaluator_id)
+redis.call('HSET', lease_key, 'expires_at', tostring(now + ttl_seconds))
+return 1
+"""
+
 
 def _decode(value: str | bytes) -> str:
     if isinstance(value, bytes):
@@ -301,16 +322,15 @@ class DispatcherStateStore:
         now: float,
         ttl_seconds: int = 15,
     ) -> bool:
-        current_holder = self.redis.hget(self._lease_key(), "holder")
-        current_expires = self.redis.hget(self._lease_key(), "expires_at")
-        if current_holder is not None and current_expires is not None:
-            holder = _decode(current_holder)
-            expires_at = float(_decode(current_expires))
-            if expires_at > now and holder != evaluator_id:
-                return False
-        self.redis.hset(self._lease_key(), "holder", evaluator_id)
-        self.redis.hset(self._lease_key(), "expires_at", str(now + ttl_seconds))
-        return True
+        acquired = self.redis.eval(
+            _TRY_ACQUIRE_LEASE_SCRIPT,
+            1,
+            self._lease_key(),
+            evaluator_id,
+            str(now),
+            str(ttl_seconds),
+        )
+        return bool(acquired)
 
     def set_lineage_owner(
         self,

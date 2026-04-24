@@ -36,6 +36,46 @@ class _FakeRedis:
             self._hashes.pop(key, None)
         return 1
 
+    def eval(self, script: str, numkeys: int, *keys_and_args: str) -> int:
+        assert numkeys == 1
+        lease_key = keys_and_args[0]
+        evaluator_id = keys_and_args[1]
+        now = float(keys_and_args[2])
+        ttl_seconds = float(keys_and_args[3])
+        current_holder = self.hget(lease_key, "holder")
+        current_expires = self.hget(lease_key, "expires_at")
+        if current_holder is not None and current_expires is not None:
+            if float(current_expires) > now and current_holder != evaluator_id:
+                return 0
+        self.hset(lease_key, "holder", evaluator_id)
+        self.hset(lease_key, "expires_at", str(now + ttl_seconds))
+        return 1
+
+
+class _LeaseRaceRedis(_FakeRedis):
+    """Fake Redis that simulates another evaluator winning the lease mid-race."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._injected = False
+
+    def _inject_competing_holder(self, lease_key: str) -> None:
+        if self._injected:
+            return
+        self.hset(lease_key, "holder", "eval-2")
+        self.hset(lease_key, "expires_at", "60.0")
+        self._injected = True
+
+    def hget(self, key: str, field: str) -> str | None:
+        if key.endswith(":lease") and field == "expires_at":
+            self._inject_competing_holder(key)
+        return super().hget(key, field)
+
+    def eval(self, script: str, numkeys: int, *keys_and_args: str) -> int:
+        if numkeys == 1:
+            self._inject_competing_holder(keys_and_args[0])
+        return super().eval(script, numkeys, *keys_and_args)
+
 
 def test_heartbeat_upserts_evaluator_presence() -> None:
     from crsbench.distributed.evaluator_dispatcher import heartbeat_evaluator
@@ -101,6 +141,20 @@ def test_dispatcher_round_robins_ready_verify_requests_across_owners() -> None:
     assert first is not None
     assert second is not None
     assert first.owner_key != second.owner_key
+
+
+def test_dispatcher_leader_lease_rejects_racing_winner() -> None:
+    from crsbench.distributed.evaluator_dispatcher import EvaluatorDispatcher
+
+    redis_conn = _LeaseRaceRedis()
+    dispatcher = EvaluatorDispatcher(
+        redis_conn=redis_conn,
+        experiment_name="exp-test",
+        evaluator_id="eval-1",
+    )
+
+    assert not dispatcher.try_acquire_leader_lease(now=0.0)
+    assert redis_conn.hget("crsbench:dispatcher:exp-test:lease", "holder") == "eval-2"
 
 
 def test_dispatcher_dispatches_build_requests_to_local_build_queue() -> None:
