@@ -356,6 +356,7 @@ def _make_provider_neutral_operational_context(
     )
     worker_fleet_configs = _make_provider_neutral_launch_state().worker_fleet_configs
     return ResolvedCloudContext(
+        experiment_name="test-exp",
         worker_fleet_configs=worker_fleet_configs,
         launch_state=launch_state,
         experiment_filestore=Path("/tmp/filestore"),
@@ -459,6 +460,7 @@ def _make_resolved_cloud_context(launch_state=None):
             }
         )
         return ResolvedCloudContext(
+            experiment_name="test-exp",
             worker_fleet_configs=[fleet],
             launch_state=None,
             experiment_filestore=Path("/tmp/filestore"),
@@ -468,6 +470,7 @@ def _make_resolved_cloud_context(launch_state=None):
         )
 
     return ResolvedCloudContext(
+        experiment_name=launch_state.effective_remote_experiment_name(),
         worker_fleet_configs=launch_state.resolved_worker_fleets(),
         launch_state=launch_state,
         experiment_filestore=Path(launch_state.experiment_filestore),
@@ -486,6 +489,7 @@ def _make_collect_context(
     """Build a resolved cloud context for collect tests with explicit paths."""
     context = _make_resolved_cloud_context(launch_state)
     return context.__class__(
+        experiment_name=context.experiment_name,
         worker_fleet_configs=context.worker_fleet_configs,
         launch_state=context.launch_state,
         experiment_filestore=experiment_filestore,
@@ -1517,6 +1521,29 @@ class TestReconnect:
             "test-exp",
         )
 
+    @patch(
+        "crsbench.cloud.cli._config_reconnect.find_launch_state_for_source_experiment",
+        side_effect=ValueError("multiple matches"),
+    )
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_resolve_effective_experiment_name_reports_multiple_reeval_matches(
+        self,
+        mock_load,
+        mock_find_launch_state,
+        tmp_path,
+    ):
+        del mock_find_launch_state
+        mock_load.return_value = _make_provider_neutral_experiment_config()
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("experiment: test-exp\n", encoding="utf-8")
+
+        from crsbench.cloud.cli._config_reconnect import (
+            resolve_effective_experiment_name,
+        )
+
+        with pytest.raises(SystemExit, match="multiple matches"):
+            resolve_effective_experiment_name(str(config_path), None)
+
     @patch("crsbench.cloud.cli._config_reconnect.load_launch_state")
     @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
     def test_resolve_cloud_context_allows_workerless_reeval_launch_state(
@@ -1536,10 +1563,61 @@ class TestReconnect:
 
         assert context.launch_state is not None
         assert context.launch_state.launch_mode == "reeval"
+        assert context.experiment_name == "test-exp-reeval-20260424-010203"
         assert context.worker_fleet_configs == []
         assert context.remote_experiment_root == Path(
             "/tmp/remote-root/.crsbench-cloud/reeval/test-exp-reeval-20260424-010203/workspace"
         )
+
+    @patch(
+        "crsbench.cloud.cli._config_reconnect.find_launch_state_for_source_experiment"
+    )
+    @patch("crsbench.cloud.cli._config_reconnect.load_launch_state", return_value=None)
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_resolve_cloud_context_aliases_source_experiment_to_remote_reeval_state(
+        self,
+        mock_load,
+        mock_load_state,
+        mock_find_launch_state,
+        tmp_path,
+    ):
+        del mock_load_state
+        mock_load.return_value = _make_provider_neutral_experiment_config()
+        mock_find_launch_state.return_value = _make_reeval_launch_state()
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("experiment: test-exp\n", encoding="utf-8")
+
+        from crsbench.cloud.cli._config_reconnect import resolve_cloud_context
+
+        context = resolve_cloud_context(str(config_path), "test-exp")
+
+        assert context.experiment_name == "test-exp-reeval-20260424-010203"
+        assert context.launch_state is not None
+        mock_find_launch_state.assert_called_once_with(
+            config_path,
+            "test-exp",
+        )
+
+    @patch(
+        "crsbench.cloud.cli._config_reconnect.find_launch_state_for_source_experiment"
+    )
+    @patch("crsbench.cloud.cli._config_reconnect.load_launch_state", return_value=None)
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_resolve_cloud_context_does_not_alias_unrelated_experiment_names(
+        self,
+        mock_load,
+        mock_load_state,
+        mock_find_launch_state,
+    ):
+        del mock_load_state
+        mock_load.return_value = _make_provider_neutral_experiment_config()
+
+        from crsbench.cloud.cli._config_reconnect import resolve_cloud_context
+
+        context = resolve_cloud_context("/tmp/config.yaml", "other-exp")
+
+        assert context.experiment_name == "other-exp"
+        mock_find_launch_state.assert_not_called()
 
     @patch("crsbench.cloud.cli._config_reconnect.load_launch_state")
     @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
@@ -8637,7 +8715,7 @@ class TestCollect:
 
         rc = run_collect(
             _make_collect_args(
-                experiment=launch_state.experiment_name,
+                experiment="test-exp",
                 remote_dir=None,
             )
         )
@@ -8653,6 +8731,45 @@ class TestCollect:
             mock_coll.collect.call_args.kwargs["remote_experiment_dir"]
             == f"{launch_state.remote_experiment_root}/{launch_state.experiment_name}"
         )
+
+    @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._collect.ArtifactCollector")
+    @patch("crsbench.cloud.cli._collect.provisioner_for_context")
+    @patch("crsbench.cloud.cli._collect.reconnect")
+    def test_collect_reeval_mode_skips_stale_missing_orchestrator(
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
+    ):
+        launch_state = _make_reeval_launch_state()
+        mock_resolve_context.return_value = _make_collect_context(
+            experiment_filestore=Path("/tmp/filestore"),
+            remote_experiment_root=Path(launch_state.remote_experiment_root),
+            launch_state=launch_state,
+        )
+        mock_prov = MagicMock()
+        mock_prov.list_workers.return_value = []
+        mock_prov.get_instance_record.side_effect = RuntimeError("instance not found")
+        mock_prov_cls.return_value = mock_prov
+
+        mock_coll = MagicMock()
+        mock_coll_cls.return_value = mock_coll
+
+        readiness = MagicMock()
+        readiness.list_workers.return_value = []
+        mock_reconnect.return_value = (
+            MagicMock(),
+            MagicMock(),
+            readiness,
+            MagicMock(),
+            Path("/tmp/filestore"),
+        )
+
+        from crsbench.cloud.cli._collect import run_collect
+
+        rc = run_collect(_make_collect_args(experiment="test-exp", remote_dir=None))
+
+        assert rc == 0
+        mock_coll.collect.assert_not_called()
+        mock_coll.collect_logs.assert_not_called()
 
     @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
@@ -9683,6 +9800,7 @@ class TestCollect:
         del mock_adapter_cls
         launch_state = _make_provider_neutral_launch_state()
         context = MagicMock()
+        context.experiment_name = "test-exp"
         context.launch_plan = MagicMock(experiment_name="test-exp")
         context.launch_state = launch_state
         context.experiment_filestore = Path("/tmp/filestore")
@@ -10245,7 +10363,7 @@ class TestTeardown:
 
         rc = run_teardown(
             _make_teardown_args(
-                experiment=launch_state.experiment_name,
+                experiment="test-exp",
                 force=True,
             )
         )
@@ -10257,7 +10375,7 @@ class TestTeardown:
         mock_prov.delete_instance.assert_called_once()
         mock_delete_state.assert_called_once_with(
             "/tmp/config.yaml",
-            launch_state.experiment_name,
+            launch_state.effective_remote_experiment_name(),
         )
 
     @patch("crsbench.cloud.cli._teardown.delete_launch_state")
@@ -10467,6 +10585,7 @@ class TestTeardown:
         """Provider-neutral teardown should collect and delete persisted evaluator fleets too."""
         launch_state = _make_provider_neutral_launch_state()
         context = MagicMock()
+        context.experiment_name = "test-exp"
         context.launch_plan = MagicMock(experiment_name="test-exp")
         context.launch_state = launch_state
         context.experiment_filestore = Path("/tmp/filestore")

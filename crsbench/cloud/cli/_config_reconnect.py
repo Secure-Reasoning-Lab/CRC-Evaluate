@@ -39,6 +39,7 @@ if TYPE_CHECKING:
 class ResolvedCloudContext:
     """Resolved cloud runtime context for standalone operational commands."""
 
+    experiment_name: str
     worker_fleet_configs: list[CloudFleetPlacementRecord]
     launch_state: CloudLaunchState | None
     experiment_filestore: Path
@@ -64,14 +65,17 @@ def resolve_effective_experiment_name(
         return experiment_name
     resolved_config_path = Path(config_path)
     config = load_experiment_config(resolved_config_path)
-    launch_state = (
-        find_launch_state_for_source_experiment(
-            resolved_config_path,
-            config.experiment,
+    try:
+        launch_state = (
+            find_launch_state_for_source_experiment(
+                resolved_config_path,
+                config.experiment,
+            )
+            if resolved_config_path.exists()
+            else None
         )
-        if resolved_config_path.exists()
-        else None
-    )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     if launch_state is not None:
         return launch_state.effective_remote_experiment_name()
     return config.experiment
@@ -146,14 +150,21 @@ def resolve_cloud_context(
     ]
 
     launch_state = load_launch_state(Path(config_path), experiment_name)
-    if launch_state is None and Path(config_path).exists():
+    effective_experiment_name = experiment_name
+    if (
+        launch_state is None
+        and Path(config_path).exists()
+        and experiment_name == config.experiment
+    ):
         try:
             launch_state = find_launch_state_for_source_experiment(
                 Path(config_path),
-                experiment_name,
+                config.experiment,
             )
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
+    if launch_state is not None:
+        effective_experiment_name = launch_state.effective_remote_experiment_name()
     launch_state_changed = False
     if launch_state is not None:
         launch_state_updates: dict[str, object] = {}
@@ -203,6 +214,7 @@ def resolve_cloud_context(
                 "Remote orchestrator launch state missing worker fleet config"
             )
         context = ResolvedCloudContext(
+            experiment_name=effective_experiment_name,
             worker_fleet_configs=launch_state.resolved_worker_fleets(),
             evaluator_fleet_configs=launch_state.resolved_evaluator_fleets(),
             launch_state=launch_state,
@@ -219,6 +231,7 @@ def resolve_cloud_context(
         raise SystemExit("Experiment config has no supported cloud worker config.")
 
     context = ResolvedCloudContext(
+        experiment_name=effective_experiment_name,
         worker_fleet_configs=derived_worker_fleets,
         evaluator_fleet_configs=derived_evaluator_fleets,
         launch_state=launch_state,

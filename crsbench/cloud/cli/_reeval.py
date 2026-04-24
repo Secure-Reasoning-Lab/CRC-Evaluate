@@ -582,7 +582,11 @@ sudo mv {shlex.quote(str(remote_upload_dir))} {shlex.quote(str(remote_submission
 sudo chown -R "${{CRSBENCH_USER}}:${{CRSBENCH_USER}}" {
         shlex.quote(str(remote_submission_dir))
     }
-sudo -H -u "${{CRSBENCH_USER}}" env PATH="${{PATH}}" /bin/bash -lc {
+sudo -H -u "${{CRSBENCH_USER}}" env \
+        PATH="${{PATH}}" \
+        CLONE_DIR="${{CLONE_DIR}}" \
+        CRSBENCH_REDIS_PASSWORD="${{CRSBENCH_REDIS_PASSWORD}}" \
+        /bin/bash -lc {
         shlex.quote(
             'cd "$CLONE_DIR" && '
             "python -m crsbench.cloud.reeval_remote launch "

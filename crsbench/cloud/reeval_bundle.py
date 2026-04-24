@@ -96,7 +96,6 @@ def build_reeval_bundle(
         "created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "source_experiment_name": source_experiment_name,
         "remote_experiment_name": remote_experiment_name,
-        "source_experiment_root": str(source_experiment_root),
         "source_config_digest": _config_digest(normalized_config),
         "selected_trial_count": len(selected_records),
         "skipped_trial_count": len(skipped_trials),

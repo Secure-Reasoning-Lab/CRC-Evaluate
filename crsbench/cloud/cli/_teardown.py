@@ -109,8 +109,12 @@ def run_teardown(args: argparse.Namespace) -> int:
 
     Returns 0 on success, 1 on failure/abort.
     """
-    experiment_name = resolve_effective_experiment_name(args.config, args.experiment)
-    context = resolve_cloud_context(args.config, experiment_name)
+    requested_experiment_name = resolve_effective_experiment_name(
+        args.config,
+        args.experiment,
+    )
+    context = resolve_cloud_context(args.config, requested_experiment_name)
+    experiment_name = context.experiment_name
     launch_state = context.launch_state
     experiment_filestore = context.experiment_filestore
     base_destination = experiment_filestore / experiment_name
@@ -121,6 +125,7 @@ def run_teardown(args: argparse.Namespace) -> int:
         _context, redis_conn, readiness, lifecycle, experiment_filestore = reconnect(
             args.config, experiment_name
         )
+        base_destination = experiment_filestore / experiment_name
     except Exception as exc:
         logger.warning(
             "Redis reconnect unavailable for experiment {}; "
@@ -247,7 +252,7 @@ def run_teardown(args: argparse.Namespace) -> int:
                 start_time_observations=start_time_observations,
                 destination=destination,
             )
-            artifact_publish_succeeded = destination.exists()
+            artifact_publish_succeeded = True
         except (ArtifactCollectionError, Exception) as exc:
             logger.error(
                 "Artifact collection failed for {}: {} -- continuing with teardown",

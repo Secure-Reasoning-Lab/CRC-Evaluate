@@ -183,3 +183,17 @@ def test_run_cloud_reeval_builds_bundle_and_publishes_submission(
         remote_experiment_name="test-exp-reeval-20260424-123456",
         config_path=config_path,
     )
+
+
+def test_remote_publish_and_launch_command_passes_clone_dir_and_redis_password() -> (
+    None
+):
+    from crsbench.cloud.cli._reeval import _remote_publish_and_launch_command
+
+    command = _remote_publish_and_launch_command(
+        remote_submission_dir=Path("/remote/submission"),
+        remote_upload_dir=Path("/remote/submission.uploading"),
+    )
+
+    assert 'CLONE_DIR="${CLONE_DIR}"' in command
+    assert 'CRSBENCH_REDIS_PASSWORD="${CRSBENCH_REDIS_PASSWORD}"' in command

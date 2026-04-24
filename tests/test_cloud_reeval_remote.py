@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 import yaml
 
 
@@ -125,8 +127,35 @@ def test_launch_remote_submission_marks_published_and_starts_runner(
     assert pid == 43210
     state = read_submission_state(submission_dir / "submission.json")
     assert state["state"] == "published"
-    assert "python" in " ".join(mock_popen.call_args.args[0])
+    assert state["runner_pid"] == 43210
+    assert mock_popen.call_args.args[0][0] == sys.executable
     assert "--submission-dir" in mock_popen.call_args.args[0]
+
+
+def test_launch_remote_submission_marks_failed_when_runner_spawn_fails(
+    tmp_path: Path,
+) -> None:
+    from crsbench.cloud.reeval_remote import (
+        launch_remote_submission,
+        read_submission_state,
+    )
+
+    submission_dir = tmp_path / "submission"
+    _write_submission_state(submission_dir)
+    _write_submission_bundle(submission_dir)
+
+    with patch(
+        "crsbench.cloud.reeval_remote.subprocess.Popen",
+        side_effect=OSError("spawn failed"),
+    ):
+        with pytest.raises(OSError, match="spawn failed"):
+            launch_remote_submission(submission_dir)
+
+    state = read_submission_state(submission_dir / "submission.json")
+    assert state["state"] == "failed"
+    summary = json.loads((submission_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["state"] == "failed"
+    assert summary["error"] == "spawn failed"
 
 
 def test_execute_remote_submission_materializes_workspace_and_updates_state(
@@ -140,6 +169,16 @@ def test_execute_remote_submission_materializes_workspace_and_updates_state(
     submission_dir = tmp_path / "submission"
     _write_submission_state(submission_dir)
     _write_submission_bundle(submission_dir)
+    stale_file = (
+        submission_dir
+        / "workspace"
+        / "source-exp-reeval-20260424"
+        / "bugbench__ensemble"
+        / "trial-1"
+        / "stale.txt"
+    )
+    stale_file.parent.mkdir(parents=True, exist_ok=True)
+    stale_file.write_text("stale", encoding="utf-8")
 
     with patch(
         "crsbench.cloud.reeval_remote.subprocess.run",
@@ -176,4 +215,36 @@ def test_execute_remote_submission_materializes_workspace_and_updates_state(
     summary = json.loads((submission_dir / "summary.json").read_text(encoding="utf-8"))
     assert summary["bundle_id"] == "bundle-123"
     assert summary["reeval_exit_code"] == 0
+    assert not stale_file.exists()
     mock_run.assert_called_once()
+    assert mock_run.call_args.args[0][:3] == [
+        sys.executable,
+        "-m",
+        "crsbench.run_experiment",
+    ]
+
+
+def test_execute_remote_submission_marks_failed_on_runner_exception(
+    tmp_path: Path,
+) -> None:
+    from crsbench.cloud.reeval_remote import (
+        execute_remote_submission,
+        read_submission_state,
+    )
+
+    submission_dir = tmp_path / "submission"
+    _write_submission_state(submission_dir)
+    _write_submission_bundle(submission_dir)
+
+    with patch(
+        "crsbench.cloud.reeval_remote.subprocess.run",
+        side_effect=RuntimeError("reeval boom"),
+    ):
+        rc = execute_remote_submission(submission_dir)
+
+    assert rc == 1
+    state = read_submission_state(submission_dir / "submission.json")
+    assert state["state"] == "failed"
+    summary = json.loads((submission_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["state"] == "failed"
+    assert summary["error"] == "reeval boom"
