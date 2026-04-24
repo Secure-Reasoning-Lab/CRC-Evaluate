@@ -52,6 +52,13 @@ _ARTIFACT_RSYNC_EXCLUDES: tuple[str, ...] = (
     "oss-crs-workdir/",
     "output/logs/",
 )
+_REPORT_LOG_RSYNC_INCLUDES: tuple[str, ...] = (
+    "output/logs/services/*_patcher.stdout.log",
+    "output/logs/services/*inc-builder-*.stdout.log",
+    "output/logs/crs/*/log_dir/verify_patch_timing.json",
+    "output/logs/crs/**/*_patcher.stdout.log",
+    "output/logs/crs/**/*inc-builder-*.stdout.log",
+)
 
 
 def collect_marker_path(destination: Path) -> Path:
@@ -275,6 +282,16 @@ class ArtifactCollector:
                 ssh_user=ssh_user,
                 symlink_relpaths=symlink_relpaths,
             )
+        self._prune_staged_output_logs(staging_dir)
+        self._run_report_log_rsync(
+            worker=worker,
+            fleet=fleet,
+            remote_experiment_dir=remote_experiment_dir,
+            staging_dir=staging_dir,
+            experiment_filestore=experiment_filestore,
+            known_hosts_path=known_hosts_path,
+            ssh_user=ssh_user,
+        )
 
         # Verify before publishing
         self._verify_staging(staging_dir)
@@ -531,6 +548,55 @@ class ArtifactCollector:
             source,
             dest,
         ]
+
+    def _build_report_log_rsync_cmd(
+        self,
+        worker: CloudInstanceLike,
+        fleet: SshTransportConfig,
+        remote_experiment_dir: str,
+        staging_dir: Path,
+        known_hosts_path: Path | None = None,
+        ssh_user: str | None = None,
+        ssh_command: str | None = None,
+        remote_host: str | None = None,
+    ) -> list[str]:
+        """Return an rsync command that keeps only report-critical trial logs."""
+        if (
+            known_hosts_path is None
+            and not fleet.ssh_via_iap
+            and self._base_path is not None
+        ):
+            known_hosts_path = cloud_state_dir(self._base_path) / "known_hosts"
+        ssh_cmd = ssh_command or self._build_ssh_command(
+            worker, fleet, known_hosts_path
+        )
+        resolved_remote_host = remote_host or self._remote_host(worker, fleet)
+        if ssh_user is not None and remote_host is None and not fleet.ssh_via_iap:
+            resolved_remote_host = f"{ssh_user}@{resolved_remote_host}"
+
+        source = f"{resolved_remote_host}:{remote_experiment_dir}/"
+        dest = str(staging_dir) + "/"
+
+        cmd = [
+            "rsync",
+            "-a",
+            "--mkpath",
+            "--copy-links",
+            "--prune-empty-dirs",
+            "--include=*/",
+        ]
+        cmd.extend(f"--include={pattern}" for pattern in _REPORT_LOG_RSYNC_INCLUDES)
+        cmd.extend(
+            [
+                "--exclude=*",
+                "--rsync-path=sudo rsync",
+                "-e",
+                ssh_cmd,
+                source,
+                dest,
+            ]
+        )
+        return cmd
 
     def _build_ssh_command(
         self,
@@ -816,6 +882,54 @@ class ArtifactCollector:
         )
         self._run_rsync_with_retry(cmd)
 
+    def _run_report_log_rsync(
+        self,
+        *,
+        worker: CloudInstanceLike,
+        fleet: SshTransportConfig,
+        remote_experiment_dir: str,
+        staging_dir: Path,
+        experiment_filestore: Path,
+        known_hosts_path: Path | None,
+        ssh_user: str | None,
+    ) -> None:
+        """Sync the minimal trial log subset needed by report generation."""
+        if fleet.ssh_via_iap:
+            if not ssh_user:
+                raise ArtifactCollectionError(
+                    f"Unable to resolve SSH user for IAP report-log collection from {worker.name}"
+                )
+            iap_known_hosts_path = self._prepare_iap_known_hosts(
+                experiment_filestore=experiment_filestore,
+                host_key_alias=worker.name,
+            )
+            with self._open_iap_tunnel(worker=worker, fleet=fleet) as local_port:
+                cmd = self._build_report_log_rsync_cmd(
+                    worker=worker,
+                    fleet=fleet,
+                    remote_experiment_dir=remote_experiment_dir,
+                    staging_dir=staging_dir,
+                    ssh_command=self._build_iap_ssh_command(
+                        local_port=local_port,
+                        ssh_user=ssh_user,
+                        known_hosts_path=iap_known_hosts_path,
+                        host_key_alias=worker.name,
+                    ),
+                    remote_host="127.0.0.1",
+                )
+                self._run_rsync_with_retry(cmd)
+            return
+
+        cmd = self._build_report_log_rsync_cmd(
+            worker=worker,
+            fleet=fleet,
+            remote_experiment_dir=remote_experiment_dir,
+            staging_dir=staging_dir,
+            known_hosts_path=known_hosts_path,
+            ssh_user=ssh_user,
+        )
+        self._run_rsync_with_retry(cmd)
+
     def _find_excluded_symlink_entries(self, staging_dir: Path) -> list[Path]:
         """Return top-level trial symlink entries that point into excluded dirs."""
         excluded_names = _artifact_rsync_excluded_names()
@@ -845,6 +959,15 @@ class ArtifactCollector:
             return
         if path.is_dir():
             shutil.rmtree(path)
+
+    def _prune_staged_output_logs(self, staging_dir: Path) -> None:
+        """Drop any staged trial output/logs tree before restoring the keep-set."""
+        for trial_dir in sorted(staging_dir.rglob("trial-*")):
+            if not trial_dir.is_dir():
+                continue
+            logs_path = trial_dir / "output" / "logs"
+            if logs_path.exists() or logs_path.is_symlink():
+                self._remove_staged_path(logs_path)
 
     def _rehydrate_excluded_symlink_entries(
         self,
