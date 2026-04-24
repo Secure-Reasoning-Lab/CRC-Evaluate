@@ -27,10 +27,12 @@ class TestRunEvaluatorMain:
 
     @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
     @patch("crsbench.distributed.ci_supervisor.run_ci_supervisor")
+    @patch("crsbench.distributed.evaluator.start_presence_thread")
     @patch("crsbench.distributed.evaluator_jobs.set_engine")
     def test_skips_phase1_builds(
         self,
         mock_set_engine: MagicMock,
+        mock_start_presence_thread: MagicMock,
         mock_supervisor: MagicMock,
     ) -> None:
         """Evaluator skips startup pre-build by default and goes directly to supervisor."""
@@ -57,7 +59,44 @@ class TestRunEvaluatorMain:
 
         # Should call supervisor directly (now via ci_supervisor)
         mock_supervisor.assert_called_once()
+        mock_start_presence_thread.assert_not_called()
         assert result == 0
+
+    @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
+    @patch("crsbench.distributed.ci_supervisor.run_ci_supervisor")
+    @patch("crsbench.distributed.evaluator.start_presence_thread")
+    @patch("crsbench.distributed.evaluator_jobs.set_engine")
+    def test_uses_local_queues_in_dispatcher_mode(
+        self,
+        mock_set_engine: MagicMock,
+        mock_start_presence_thread: MagicMock,
+        mock_supervisor: MagicMock,
+        monkeypatch,
+    ) -> None:
+        """Dispatcher mode should route evaluator runtime to local queues."""
+        from crsbench.distributed.evaluator import run_evaluator_main
+
+        mock_supervisor.return_value = 0
+        mock_start_presence_thread.return_value = (MagicMock(), MagicMock())
+        monkeypatch.setenv("CRSBENCH_EVALUATOR_ROUTING_MODEL", "dispatcher")
+        config = MagicMock()
+        config.oss_fuzz_path = "/tmp/oss-fuzz"
+        config.per_pov_verify_timeout = 180
+
+        with patch("crsbench.evaluation.verification.pov.engine.VerificationEngine"):
+            result = run_evaluator_main(config, "exp-test", worker_name="eval-1")
+
+        assert result == 0
+        kwargs = mock_supervisor.call_args.kwargs
+        assert kwargs["build_queue_name"] == "crsbench_exp-test_eval-1_build"
+        assert kwargs["verify_queue_name"] == "crsbench_exp-test_eval-1_verify"
+        assert kwargs["worker_name"] == "eval-1"
+        mock_start_presence_thread.assert_called_once_with(
+            redis_host="localhost",
+            experiment_name="exp-test",
+            evaluator_id="eval-1",
+            worker_name="eval-1",
+        )
 
     def test_no_build_workers_parameter(self) -> None:
         """run_evaluator_main no longer has build_workers parameter."""
@@ -255,6 +294,21 @@ class TestConfiglessEvaluator:
             patch("crsbench.distributed.evaluator_jobs.set_benchmarks_root"),
         ):
             result = run_evaluator_configless(redis_host="localhost")
+
+        assert result == 1
+
+    @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
+    def test_configless_rejects_dispatcher_mode(self, monkeypatch) -> None:
+        """Dispatcher routing is not supported in configless evaluator mode."""
+        from crsbench.distributed.evaluator import run_evaluator_configless
+
+        monkeypatch.setenv("CRSBENCH_EVALUATOR_ROUTING_MODEL", "dispatcher")
+
+        with patch(
+            "crsbench.distributed.evaluator.discover_registered_experiments",
+            side_effect=AssertionError("configless discovery should be rejected"),
+        ):
+            result = run_evaluator_configless(redis_host="redis")
 
         assert result == 1
 
@@ -1829,6 +1883,38 @@ class TestEvaluatorCliValidation:
         add_evaluator_subparser(subparsers)
         with pytest.raises(SystemExit):
             parser.parse_args(["evaluator", "--jobs", "0"])
+
+    def test_cli_configless_rejects_dispatcher_mode(self, monkeypatch) -> None:
+        """Dispatcher routing should require --experiment-config at the CLI."""
+        from crsbench.distributed.cli.evaluator_command import run_evaluator
+
+        monkeypatch.setenv("CRSBENCH_EVALUATOR_ROUTING_MODEL", "dispatcher")
+        args = argparse.Namespace(
+            experiment_config=None,
+            ci=False,
+            verbose=False,
+            cpuset=None,
+            skip_cpuset=None,
+            cpu_tag=None,
+            jobs=None,
+            cores_per_job=None,
+            build_jobs=None,
+            build_cores_per_job=None,
+            verify_cores_per_job=None,
+            verify_jobs=None,
+            worker_name=None,
+            idle_timeout=None,
+            benchmarks_root=None,
+        )
+
+        with patch(
+            "crsbench.distributed.evaluator.run_evaluator_configless",
+            side_effect=AssertionError("dispatcher configless should be rejected"),
+        ) as mock_configless:
+            result = run_evaluator(args)
+
+        assert result == 1
+        mock_configless.assert_not_called()
 
     def test_cores_per_job_rejects_zero(self) -> None:
         """--cores-per-job must be >= 1."""

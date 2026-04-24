@@ -11,7 +11,7 @@ This module implements the evaluator process that:
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from crsbench.distributed.common import (
     collect_validated_int_metadata,
@@ -20,11 +20,20 @@ from crsbench.distributed.common import (
     normalize_redis_host,
     validate_optional_int_override,
 )
+from crsbench.distributed.evaluator_dispatcher import (
+    build_evaluator_id,
+    start_presence_thread,
+)
 from crsbench.distributed.evaluator_scheduler import (
     SCHEDULER_OWNER_KEY_META,
     build_scheduler_owner_key_for_ci_job,
 )
-from crsbench.distributed.queue import REDIS_AVAILABLE
+from crsbench.distributed.queue import (
+    REDIS_AVAILABLE,
+    ROUTING_MODEL_DISPATCHER,
+    get_evaluator_routing_model,
+    resolve_evaluator_local_queue_names,
+)
 from crsbench.distributed.registry import RuntimeRegistration
 from crsbench.evaluation.results import TrialResult
 from crsbench.utils.benchmark_utils import filter_benchmarks_by_mode
@@ -32,6 +41,9 @@ from crsbench.utils.cpu_pool import auto_cores_per_job, visible_cpu_count
 from crsbench.utils.logger import configure_logger, get_logger
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    import threading
 
 LEGACY_CI_ALIAS_EXPERIMENT = "__legacy_ci_alias__"
 LEGACY_CI_BUILD_QUEUE = "crsbench_ci_build"
@@ -254,6 +266,7 @@ def run_evaluator_main(
     verify_cores_per_job: Optional[int] = None,
     verify_jobs: Optional[int] = None,
     idle_timeout: int = 0,
+    worker_name: Optional[str] = None,
 ) -> int:
     """Main entry point for the evaluator process.
 
@@ -291,14 +304,25 @@ def run_evaluator_main(
 
     from crsbench.distributed.queue import resolve_queue_names
 
-    _trial_queue, build_queue_name, verify_queue_name = resolve_queue_names(
-        experiment_name
-    )
+    routing_model = get_evaluator_routing_model()
+    resolved_worker_name = worker_name or f"evaluator-{experiment_name}"
+    evaluator_id: str | None = None
+    if routing_model == ROUTING_MODEL_DISPATCHER:
+        evaluator_id = build_evaluator_id(resolved_worker_name)
+        build_queue_name, verify_queue_name = resolve_evaluator_local_queue_names(
+            experiment_name,
+            evaluator_id,
+        )
+    else:
+        _trial_queue, build_queue_name, verify_queue_name = resolve_queue_names(
+            experiment_name
+        )
 
     logger.info("=" * 60)
     logger.info("CRSBench Distributed Evaluator")
     logger.info("=" * 60)
     logger.info(f"Experiment: {experiment_name}")
+    logger.info(f"Worker name: {resolved_worker_name}")
     logger.info(f"Redis host: {redis_host}")
     logger.info(f"Build jobs: {build_jobs or 1}")
     logger.info(f"CPU affinity: {'enabled' if use_cpuset else 'disabled'}")
@@ -349,45 +373,64 @@ def run_evaluator_main(
 
     # Pre-build: enqueue variant builds for all experiment benchmarks
     if build_jobs is not None:
-        enqueued = _enqueue_pre_builds(
-            config,
-            experiment_name,
-            redis_host,
-            inc_image_policy=resolved_policy,
-            inc_image_registry=resolved_registry,
-            inc_image_max_pull_bytes=resolved_max_pull_bytes,
-            inc_image_pull_timeout=resolved_pull_timeout,
-            local_image_prefix=resolved_local_prefix,
-        )
-        logger.info(f"Pre-build: enqueued {enqueued} build jobs")
+        if routing_model == ROUTING_MODEL_DISPATCHER:
+            logger.info(
+                "Dispatcher routing enabled; skipping legacy shared pre-build enqueue"
+            )
+        else:
+            enqueued = _enqueue_pre_builds(
+                config,
+                experiment_name,
+                redis_host,
+                inc_image_policy=resolved_policy,
+                inc_image_registry=resolved_registry,
+                inc_image_max_pull_bytes=resolved_max_pull_bytes,
+                inc_image_pull_timeout=resolved_pull_timeout,
+                local_image_prefix=resolved_local_prefix,
+            )
+            logger.info(f"Pre-build: enqueued {enqueued} build jobs")
 
     # Start dual-queue supervisor
     from crsbench.distributed.ci_supervisor import run_ci_supervisor
 
     logger.info("Starting dual-queue supervisor (build + verify)...")
-    _report_cloud_runtime_state(
-        redis_host,
-        state="ready",
-        detail="Evaluator supervisor managing build and verify queues",
-    )
-    return run_ci_supervisor(
-        redis_host=redis_host,
-        build_queue_name=build_queue_name,
-        verify_queue_name=verify_queue_name,
-        worker_name=f"evaluator-{experiment_name}",
-        build_jobs=build_jobs or 1,
-        build_cores_per_job=build_cores_per_job,
-        verify_cores_per_job=verify_cores_per_job,
-        verify_jobs=verify_jobs or (build_jobs or 1),
-        job_runner=_evaluator_job_runner,
-        use_cpuset=use_cpuset,
-        use_cgroups=use_cpuset,
-        cores=cores,
-        skip_cpus=skip_cpus,
-        cpu_tag=cpu_tag,
-        idle_timeout=idle_timeout,
-        progress_log_every_jobs=EVALUATOR_PROGRESS_LOG_EVERY_JOBS,
-    )
+    presence_loop: tuple[threading.Event, threading.Thread] | None = None
+    if routing_model == ROUTING_MODEL_DISPATCHER and evaluator_id is not None:
+        presence_loop = start_presence_thread(
+            redis_host=redis_host,
+            experiment_name=experiment_name,
+            evaluator_id=evaluator_id,
+            worker_name=resolved_worker_name,
+        )
+    try:
+        _report_cloud_runtime_state(
+            redis_host,
+            state="ready",
+            detail="Evaluator supervisor managing build and verify queues",
+        )
+        return run_ci_supervisor(
+            redis_host=redis_host,
+            build_queue_name=build_queue_name,
+            verify_queue_name=verify_queue_name,
+            worker_name=resolved_worker_name,
+            build_jobs=build_jobs or 1,
+            build_cores_per_job=build_cores_per_job,
+            verify_cores_per_job=verify_cores_per_job,
+            verify_jobs=verify_jobs or (build_jobs or 1),
+            job_runner=_evaluator_job_runner,
+            use_cpuset=use_cpuset,
+            use_cgroups=use_cpuset,
+            cores=cores,
+            skip_cpus=skip_cpus,
+            cpu_tag=cpu_tag,
+            idle_timeout=idle_timeout,
+            progress_log_every_jobs=EVALUATOR_PROGRESS_LOG_EVERY_JOBS,
+        )
+    finally:
+        if presence_loop is not None:
+            stop_event, thread = presence_loop
+            stop_event.set()
+            thread.join(timeout=1)
 
 
 def _evaluator_job_runner(
@@ -725,6 +768,11 @@ def run_evaluator_configless(
         )
         return 1
     redis_host = normalized_redis_host
+    if get_evaluator_routing_model() == ROUTING_MODEL_DISPATCHER:
+        logger.error(
+            "Dispatcher routing currently supports only --experiment-config mode"
+        )
+        return 1
 
     logger.info("=" * 60)
     logger.info("CRSBench Evaluator — Configless Mode")
@@ -1257,6 +1305,11 @@ def run_evaluator_ci_mode(
     Returns:
         Exit code (0 for success, non-zero for failure).
     """
+    if get_evaluator_routing_model() == ROUTING_MODEL_DISPATCHER:
+        logger.error(
+            "Dispatcher routing currently supports only --experiment-config mode"
+        )
+        return 1
     return run_evaluator_configless(
         redis_host=redis_host,
         worker_name=worker_name,

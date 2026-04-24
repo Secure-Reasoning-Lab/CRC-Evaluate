@@ -212,6 +212,19 @@ def run_evaluator(args: argparse.Namespace) -> int:
         logger.error("--ci and --experiment-config are mutually exclusive")
         return 1
 
+    from crsbench.distributed.queue import (
+        ROUTING_MODEL_DISPATCHER,
+        get_evaluator_routing_model,
+    )
+
+    if get_evaluator_routing_model() == ROUTING_MODEL_DISPATCHER and (
+        ci_mode or not args.experiment_config
+    ):
+        logger.error(
+            "Dispatcher routing currently supports only --experiment-config mode"
+        )
+        return 1
+
     try:
         # --- Configless mode: no --ci and no --experiment-config ---
         if not ci_mode and not args.experiment_config:
@@ -435,6 +448,7 @@ def run_evaluator(args: argparse.Namespace) -> int:
             verify_cores_per_job=resolved_verify_cores_per_job,
             verify_jobs=resolved_verify_jobs,
             idle_timeout=resolved_idle_timeout,
+            worker_name=args.worker_name,
         )
     except KeyboardInterrupt:
         logger.info("Evaluator interrupted by user")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol
 
@@ -130,6 +131,9 @@ class DispatcherStateStore:
     def _verify_attempts_key(self) -> str:
         return f"crsbench:dispatcher:{self.experiment_name}:verify_attempts"
 
+    def _evaluators_key(self) -> str:
+        return f"crsbench:dispatcher:{self.experiment_name}:evaluators"
+
     def submit_build_request(self, record: BuildRequestRecord) -> str:
         existing = self.load_build_request(record.request_id)
         if existing is not None and (
@@ -230,6 +234,36 @@ class DispatcherStateStore:
             json.dumps(asdict(result), sort_keys=True),
         )
         return bool(published)
+
+    def upsert_evaluator(
+        self,
+        *,
+        evaluator_id: str,
+        worker_name: str,
+        expires_in_seconds: int,
+    ) -> None:
+        expires_at = time.time() + expires_in_seconds
+        self.redis.hset(
+            self._evaluators_key(),
+            evaluator_id,
+            json.dumps(
+                {
+                    "evaluator_id": evaluator_id,
+                    "worker_name": worker_name,
+                    "expires_at": expires_at,
+                },
+                sort_keys=True,
+            ),
+        )
+
+    def list_live_evaluators(self, *, now: float) -> list[str]:
+        live: list[str] = []
+        for evaluator_id, raw in self.redis.hgetall(self._evaluators_key()).items():
+            payload = json.loads(_decode(raw))
+            if float(payload.get("expires_at", 0.0)) < now:
+                continue
+            live.append(_decode(evaluator_id))
+        return sorted(live)
 
     def submit_verify_request(self, record: VerifyRequestRecord) -> str:
         existing = self.load_verify_request(record.request_id)
