@@ -134,7 +134,7 @@ def test_build_dispatcher_warmup_specs_plans_serialized_build_jobs(
     job_b.cpv_id = None
     job_b.sanitizer = "address"
     job_b.job_type = "build"
-    planner.plan_builds.side_effect = [[job_a], [job_b]]
+    planner.iter_builds.side_effect = [iter([job_a]), iter([job_b])]
     mock_planner_cls.return_value = planner
     mock_filter.side_effect = lambda names, _mode, _root: names
     mock_serialize.side_effect = [{"kind": "build-a"}, {"kind": "build-b"}]
@@ -169,7 +169,7 @@ def test_build_dispatcher_warmup_specs_plans_serialized_build_jobs(
         source_mode="pkgs",
     )
     mock_filter.assert_not_called()
-    planner.plan_builds.assert_called_once_with(
+    planner.iter_builds.assert_called_once_with(
         benchmark_path_a,
         use_inc_build=True,
         skip_if_cached=True,
@@ -194,8 +194,8 @@ def test_build_dispatcher_warmup_specs_plans_serialized_build_jobs(
             ),
         },
     )
-    assert planner.plan_builds.call_args_list[1].args == (benchmark_path_b,)
-    assert planner.plan_builds.call_args_list[1].kwargs == {
+    assert planner.iter_builds.call_args_list[1].args == (benchmark_path_b,)
+    assert planner.iter_builds.call_args_list[1].kwargs == {
         "use_inc_build": True,
         "skip_if_cached": True,
         "inc_image_policy": "pull_only",
@@ -204,6 +204,69 @@ def test_build_dispatcher_warmup_specs_plans_serialized_build_jobs(
         "inc_image_pull_timeout": 77,
         "local_image_prefix": "custom-prefix",
     }
+
+
+@patch("crsbench.distributed.ci_jobs.serialize_ci_job")
+@patch("crsbench.executor.variant_planner.VariantPlanner")
+def test_build_dispatcher_warmup_specs_consumes_one_job_at_a_time_within_benchmark(
+    mock_planner_cls: MagicMock,
+    mock_serialize: MagicMock,
+    tmp_path: Path,
+) -> None:
+    class _CountingIterator:
+        def __init__(self, jobs: list[MagicMock]) -> None:
+            self._jobs = iter(jobs)
+            self.next_calls = 0
+
+        def __iter__(self) -> "_CountingIterator":
+            return self
+
+        def __next__(self) -> MagicMock:
+            self.next_calls += 1
+            return next(self._jobs)
+
+    benchmark_name_a = "afc-mock-full-01"
+    benchmark_name_b = "afc-mock-full-02"
+    (tmp_path / benchmark_name_a).mkdir(parents=True, exist_ok=True)
+    (tmp_path / benchmark_name_b).mkdir(parents=True, exist_ok=True)
+    config = SimpleNamespace(
+        benchmarks_root=tmp_path,
+        mode=SimpleNamespace(value="auto"),
+        source_mode="pkgs",
+        get_benchmark_list=lambda: [benchmark_name_a, benchmark_name_b],
+    )
+    planner = MagicMock()
+    job_a0 = MagicMock(job_id="build-a-0")
+    job_a1 = MagicMock(job_id="build-a-1")
+    job_b0 = MagicMock(job_id="build-b-0")
+    first_iter = _CountingIterator([job_a0, job_a1])
+    second_iter = _CountingIterator([job_b0])
+    planner.iter_builds.side_effect = [first_iter, second_iter]
+    mock_planner_cls.return_value = planner
+    mock_serialize.side_effect = [{"kind": "a0"}, {"kind": "a1"}, {"kind": "b0"}]
+
+    specs = build_dispatcher_warmup_specs(
+        config,
+        experiment_name="exp-test",
+        oss_fuzz_path=tmp_path / "oss-fuzz",
+        inc_image_policy="pull_only",
+        inc_image_registry="ghcr.io/example/custom",
+        inc_image_max_pull_bytes=123,
+        inc_image_pull_timeout=77,
+        local_image_prefix="custom-prefix",
+    )
+
+    assert next(specs).job_id == "build-a-0"
+    assert first_iter.next_calls == 1
+    assert planner.iter_builds.call_count == 1
+
+    assert next(specs).job_id == "build-a-1"
+    assert first_iter.next_calls == 2
+    assert planner.iter_builds.call_count == 1
+
+    assert next(specs).job_id == "build-b-0"
+    assert planner.iter_builds.call_count == 2
+    assert second_iter.next_calls == 1
 
 
 def test_feeder_enqueues_when_no_required_demand_and_spare_capacity_exists() -> None:
@@ -282,7 +345,7 @@ def test_feeder_rechecks_required_demand_before_each_enqueue() -> None:
 
         def has_pending_required_builds(self) -> bool:
             self.calls += 1
-            return self.calls > 1
+            return self.calls > 2
 
     queue = _FakeQueue(
         queued_job_ids=[],
@@ -295,6 +358,57 @@ def test_feeder_rechecks_required_demand_before_each_enqueue() -> None:
         warmup_specs=_warmup_specs(2),
         build_capacity=2,
     )
+
+    enqueued = feeder.tick()
+
+    assert enqueued == 1
+    assert [entry["job_id"] for entry in queue.enqueued] == ["warmup-build-0"]
+
+
+def test_feeder_buffers_planned_spec_when_demand_flips_during_planning() -> None:
+    class _MutableStateStore:
+        def __init__(self) -> None:
+            self.pending = False
+
+        def has_pending_required_builds(self) -> bool:
+            return self.pending
+
+    state_store = _MutableStateStore()
+
+    class _PlanningSpecs:
+        def __init__(self) -> None:
+            self._done = False
+
+        def __iter__(self) -> "_PlanningSpecs":
+            return self
+
+        def __next__(self) -> WarmupBuildSpec:
+            if self._done:
+                raise StopIteration
+            self._done = True
+            state_store.pending = True
+            return WarmupBuildSpec(
+                job_id="warmup-build-0",
+                payload={"id": 0},
+                meta={"experiment_name": "exp-test", "warmup": "true"},
+            )
+
+    queue = _FakeQueue(
+        queued_job_ids=[],
+        intermediate_job_ids=[],
+        started_job_ids=[],
+    )
+    feeder = DispatcherWarmupFeeder(
+        build_queue=queue,
+        state_store=state_store,
+        warmup_specs=_PlanningSpecs(),
+        build_capacity=1,
+    )
+
+    assert feeder.tick() == 0
+    assert queue.enqueued == []
+
+    state_store.pending = False
 
     enqueued = feeder.tick()
 

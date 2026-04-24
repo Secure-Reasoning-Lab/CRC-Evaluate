@@ -10,15 +10,21 @@ Replaces duplicated build job creation logic in:
 - crsbench/evaluation/verification/pov/engine.py
 """
 
-from pathlib import Path
-from typing import Optional
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Optional
 
 from crsbench.benchmark_ci.jobs.flat import BuildSingleVariantJob
 from crsbench.builder.types import BenchmarkMode, VariantType
 from crsbench.utils.logger import get_logger
-from crsbench.validation.meta_adapter import MetaYamlAdapter
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from pathlib import Path
+
+    from crsbench.validation.meta_adapter import MetaYamlAdapter
 
 
 class VariantPlanner:
@@ -80,28 +86,65 @@ class VariantPlanner:
         Returns:
             List of BuildSingleVariantJob instances
         """
+        supports_inc = self._check_inc_build_support(benchmark_path)
+        effective_inc = use_inc_build and supports_inc
+        jobs = list(
+            self.iter_builds(
+                benchmark_path,
+                use_inc_build=use_inc_build,
+                force_rebuild=force_rebuild,
+                skip_if_cached=skip_if_cached,
+                include_coverage=include_coverage,
+                include_patched=include_patched,
+                project_image_prefix=project_image_prefix,
+                inc_image_policy=inc_image_policy,
+                inc_image_registry=inc_image_registry,
+                inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+                inc_image_pull_timeout=inc_image_pull_timeout,
+                local_image_prefix=local_image_prefix,
+            )
+        )
+        benchmark_name = benchmark_path.name
+        logger.info(
+            f"VariantPlanner: {benchmark_name} -> {len(jobs)} build jobs "
+            f"(inc_build={effective_inc})"
+        )
+        return jobs
+
+    def iter_builds(
+        self,
+        benchmark_path: Path,
+        *,
+        use_inc_build: bool = True,
+        force_rebuild: bool = False,
+        skip_if_cached: bool = True,
+        include_coverage: bool = False,
+        include_patched: bool = False,
+        project_image_prefix: str = "crsbench",
+        inc_image_policy: str | None = None,
+        inc_image_registry: str | None = None,
+        inc_image_max_pull_bytes: int | None = None,
+        inc_image_pull_timeout: int | None = None,
+        local_image_prefix: str | None = None,
+    ) -> "Iterator[BuildSingleVariantJob]":
+        """Yield build jobs lazily for a single benchmark."""
         benchmark_name = benchmark_path.name
 
-        # Load benchmark adapter for metadata
         adapter = self._load_adapter(benchmark_path)
         if adapter is None:
             logger.warning(f"Failed to load adapter for {benchmark_name}")
-            return []
+            return
 
-        # Determine mode and commit
         mode, commit = self._resolve_mode_and_commit(adapter, benchmark_name)
         if mode is None or commit is None:
-            return []
+            return
 
-        # Check if benchmark supports inc-build
         supports_inc = self._check_inc_build_support(benchmark_path)
         effective_inc = use_inc_build and supports_inc
 
         main_repo = adapter.main_repo
         language = adapter.lang
         repo_name = adapter.repo_name
-
-        # Get required sanitizers and patches
         required_sanitizers = adapter.get_all_cpv_sanitizers()
 
         from crsbench.builder.infrastructure import OSSFuzzInfrastructure
@@ -109,94 +152,82 @@ class VariantPlanner:
         infra = OSSFuzzInfrastructure(self._oss_fuzz_path)
         all_patches = infra.get_all_patches(benchmark_path)
 
-        jobs: list[BuildSingleVariantJob] = []
-
-        # Vulnerable variant type depends on mode
         vulnerable_type = (
             VariantType.DELTA_REF
             if mode == BenchmarkMode.DELTA
             else VariantType.FULL_BASE
         )
 
-        # Build shared variants (vulnerable, allpatched) per sanitizer
         for sanitizer in required_sanitizers:
-            jobs.append(
-                BuildSingleVariantJob(
-                    benchmark_path=benchmark_path,
-                    benchmark_name=benchmark_name,
-                    variant_type=vulnerable_type,
-                    commit=commit,
-                    main_repo=main_repo,
-                    mode=mode,
-                    language=language,
-                    use_inc_build=effective_inc,
-                    force_rebuild=force_rebuild,
-                    skip_if_cached=skip_if_cached,
-                    source_mode=self._source_mode,
-                    sanitizer=sanitizer,
-                    repo_name=repo_name,
-                    project_image_prefix=project_image_prefix,
-                    inc_image_policy=inc_image_policy,
-                    inc_image_registry=inc_image_registry,
-                    inc_image_max_pull_bytes=inc_image_max_pull_bytes,
-                    inc_image_pull_timeout=inc_image_pull_timeout,
-                    local_image_prefix=local_image_prefix,
-                )
+            yield BuildSingleVariantJob(
+                benchmark_path=benchmark_path,
+                benchmark_name=benchmark_name,
+                variant_type=vulnerable_type,
+                commit=commit,
+                main_repo=main_repo,
+                mode=mode,
+                language=language,
+                use_inc_build=effective_inc,
+                force_rebuild=force_rebuild,
+                skip_if_cached=skip_if_cached,
+                source_mode=self._source_mode,
+                sanitizer=sanitizer,
+                repo_name=repo_name,
+                project_image_prefix=project_image_prefix,
+                inc_image_policy=inc_image_policy,
+                inc_image_registry=inc_image_registry,
+                inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+                inc_image_pull_timeout=inc_image_pull_timeout,
+                local_image_prefix=local_image_prefix,
             )
 
-            jobs.append(
-                BuildSingleVariantJob(
-                    benchmark_path=benchmark_path,
-                    benchmark_name=benchmark_name,
-                    variant_type=VariantType.ALL_PATCHED,
-                    commit=commit,
-                    main_repo=main_repo,
-                    mode=mode,
-                    language=language,
-                    patches=all_patches,
-                    use_inc_build=effective_inc,
-                    force_rebuild=force_rebuild,
-                    skip_if_cached=skip_if_cached,
-                    source_mode=self._source_mode,
-                    sanitizer=sanitizer,
-                    repo_name=repo_name,
-                    project_image_prefix=project_image_prefix,
-                    inc_image_policy=inc_image_policy,
-                    inc_image_registry=inc_image_registry,
-                    inc_image_max_pull_bytes=inc_image_max_pull_bytes,
-                    inc_image_pull_timeout=inc_image_pull_timeout,
-                    local_image_prefix=local_image_prefix,
-                )
+            yield BuildSingleVariantJob(
+                benchmark_path=benchmark_path,
+                benchmark_name=benchmark_name,
+                variant_type=VariantType.ALL_PATCHED,
+                commit=commit,
+                main_repo=main_repo,
+                mode=mode,
+                language=language,
+                patches=all_patches,
+                use_inc_build=effective_inc,
+                force_rebuild=force_rebuild,
+                skip_if_cached=skip_if_cached,
+                source_mode=self._source_mode,
+                sanitizer=sanitizer,
+                repo_name=repo_name,
+                project_image_prefix=project_image_prefix,
+                inc_image_policy=inc_image_policy,
+                inc_image_registry=inc_image_registry,
+                inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+                inc_image_pull_timeout=inc_image_pull_timeout,
+                local_image_prefix=local_image_prefix,
             )
 
-        # Coverage variant (optional)
         if include_coverage:
-            jobs.append(
-                BuildSingleVariantJob(
-                    benchmark_path=benchmark_path,
-                    benchmark_name=benchmark_name,
-                    variant_type=VariantType.COVERAGE,
-                    commit=commit,
-                    main_repo=main_repo,
-                    mode=mode,
-                    language=language,
-                    use_inc_build=False,
-                    force_rebuild=force_rebuild,
-                    skip_if_cached=skip_if_cached,
-                    source_mode=self._source_mode,
-                    sanitizer="coverage",
-                    repo_name=repo_name,
-                    project_image_prefix=project_image_prefix,
-                    inc_image_policy=inc_image_policy,
-                    inc_image_registry=inc_image_registry,
-                    inc_image_max_pull_bytes=inc_image_max_pull_bytes,
-                    inc_image_pull_timeout=inc_image_pull_timeout,
-                    local_image_prefix=local_image_prefix,
-                )
+            yield BuildSingleVariantJob(
+                benchmark_path=benchmark_path,
+                benchmark_name=benchmark_name,
+                variant_type=VariantType.COVERAGE,
+                commit=commit,
+                main_repo=main_repo,
+                mode=mode,
+                language=language,
+                use_inc_build=False,
+                force_rebuild=force_rebuild,
+                skip_if_cached=skip_if_cached,
+                source_mode=self._source_mode,
+                sanitizer="coverage",
+                repo_name=repo_name,
+                project_image_prefix=project_image_prefix,
+                inc_image_policy=inc_image_policy,
+                inc_image_registry=inc_image_registry,
+                inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+                inc_image_pull_timeout=inc_image_pull_timeout,
+                local_image_prefix=local_image_prefix,
             )
 
-        # CPV variants
-        cpv_jobs = self._plan_cpv_variants(
+        yield from self._iter_cpv_variants(
             benchmark_path=benchmark_path,
             benchmark_name=benchmark_name,
             adapter=adapter,
@@ -216,11 +247,9 @@ class VariantPlanner:
             inc_image_pull_timeout=inc_image_pull_timeout,
             local_image_prefix=local_image_prefix,
         )
-        jobs.extend(cpv_jobs)
 
-        # Patched variants (optional, for patch verification)
         if include_patched:
-            patched_jobs = self._plan_patched_variants(
+            yield from self._iter_patched_variants(
                 benchmark_path=benchmark_path,
                 benchmark_name=benchmark_name,
                 adapter=adapter,
@@ -239,13 +268,6 @@ class VariantPlanner:
                 inc_image_pull_timeout=inc_image_pull_timeout,
                 local_image_prefix=local_image_prefix,
             )
-            jobs.extend(patched_jobs)
-
-        logger.info(
-            f"VariantPlanner: {benchmark_name} -> {len(jobs)} build jobs "
-            f"(inc_build={effective_inc})"
-        )
-        return jobs
 
     def plan_all_builds(
         self,
@@ -326,7 +348,7 @@ class VariantPlanner:
         supports_inc, _ = _load_project_capabilities(benchmark_path)
         return supports_inc
 
-    def _plan_cpv_variants(
+    def _iter_cpv_variants(
         self,
         benchmark_path: Path,
         benchmark_name: str,
@@ -346,14 +368,13 @@ class VariantPlanner:
         inc_image_max_pull_bytes: int | None,
         inc_image_pull_timeout: int | None,
         local_image_prefix: str | None,
-    ) -> list[BuildSingleVariantJob]:
-        """Create CPV variant build jobs."""
+    ) -> "Iterator[BuildSingleVariantJob]":
+        """Yield CPV variant build jobs lazily."""
         from crsbench.benchmark_ci.cli.benchmark_discovery import (
             discover_cpv_ids,
             discover_harness_names,
         )
 
-        jobs: list[BuildSingleVariantJob] = []
         seen_cpvs: set[str] = set()
 
         harnesses = discover_harness_names(benchmark_path)
@@ -367,35 +388,31 @@ class VariantPlanner:
                 cpv_sanitizer = adapter.get_cpv_sanitizer(harness, cpv_id)  # type: ignore[attr-defined]
                 cpv_patches = infra.get_patches_except(benchmark_path, cpv_num)  # type: ignore[attr-defined]
 
-                jobs.append(
-                    BuildSingleVariantJob(
-                        benchmark_path=benchmark_path,
-                        benchmark_name=benchmark_name,
-                        variant_type=VariantType.CPV,
-                        commit=commit,
-                        main_repo=main_repo,
-                        mode=mode,
-                        language=language,
-                        cpv_num=cpv_num,
-                        patches=cpv_patches,
-                        use_inc_build=effective_inc,
-                        force_rebuild=force_rebuild,
-                        skip_if_cached=skip_if_cached,
-                        source_mode=self._source_mode,
-                        sanitizer=cpv_sanitizer,
-                        repo_name=repo_name,
-                        project_image_prefix=project_image_prefix,
-                        inc_image_policy=inc_image_policy,
-                        inc_image_registry=inc_image_registry,
-                        inc_image_max_pull_bytes=inc_image_max_pull_bytes,
-                        inc_image_pull_timeout=inc_image_pull_timeout,
-                        local_image_prefix=local_image_prefix,
-                    )
+                yield BuildSingleVariantJob(
+                    benchmark_path=benchmark_path,
+                    benchmark_name=benchmark_name,
+                    variant_type=VariantType.CPV,
+                    commit=commit,
+                    main_repo=main_repo,
+                    mode=mode,
+                    language=language,
+                    cpv_num=cpv_num,
+                    patches=cpv_patches,
+                    use_inc_build=effective_inc,
+                    force_rebuild=force_rebuild,
+                    skip_if_cached=skip_if_cached,
+                    source_mode=self._source_mode,
+                    sanitizer=cpv_sanitizer,
+                    repo_name=repo_name,
+                    project_image_prefix=project_image_prefix,
+                    inc_image_policy=inc_image_policy,
+                    inc_image_registry=inc_image_registry,
+                    inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+                    inc_image_pull_timeout=inc_image_pull_timeout,
+                    local_image_prefix=local_image_prefix,
                 )
 
-        return jobs
-
-    def _plan_patched_variants(
+    def _iter_patched_variants(
         self,
         benchmark_path: Path,
         benchmark_name: str,
@@ -414,8 +431,8 @@ class VariantPlanner:
         inc_image_max_pull_bytes: int | None,
         inc_image_pull_timeout: int | None,
         local_image_prefix: str | None,
-    ) -> list[BuildSingleVariantJob]:
-        """Create patched variant build jobs for patch verification.
+    ) -> "Iterator[BuildSingleVariantJob]":
+        """Yield patched variant build jobs for patch verification.
 
         Discovers all patches in the benchmark's .aixcc directory and creates
         one BuildSingleVariantJob per (cpv, patch) pair.
@@ -426,7 +443,6 @@ class VariantPlanner:
             discover_patch_paths,
         )
 
-        jobs: list[BuildSingleVariantJob] = []
         seen: set[tuple[str, str]] = set()
 
         harnesses = discover_harness_names(benchmark_path)
@@ -441,32 +457,28 @@ class VariantPlanner:
                         continue
                     seen.add(key)
 
-                    jobs.append(
-                        BuildSingleVariantJob(
-                            benchmark_path=benchmark_path,
-                            benchmark_name=benchmark_name,
-                            variant_type=VariantType.PATCHED,
-                            commit=commit,
-                            main_repo=main_repo,
-                            mode=mode,
-                            language=language,
-                            cpv_num=int(cpv_id.split("_")[1]),
-                            patch_id=patch_id,
-                            pov_id=cpv_id,
-                            patches=[patch_path],
-                            use_inc_build=effective_inc,
-                            force_rebuild=force_rebuild,
-                            skip_if_cached=skip_if_cached,
-                            source_mode=self._source_mode,
-                            sanitizer=cpv_sanitizer,
-                            repo_name=repo_name,
-                            project_image_prefix=project_image_prefix,
-                            inc_image_policy=inc_image_policy,
-                            inc_image_registry=inc_image_registry,
-                            inc_image_max_pull_bytes=inc_image_max_pull_bytes,
-                            inc_image_pull_timeout=inc_image_pull_timeout,
-                            local_image_prefix=local_image_prefix,
-                        )
+                    yield BuildSingleVariantJob(
+                        benchmark_path=benchmark_path,
+                        benchmark_name=benchmark_name,
+                        variant_type=VariantType.PATCHED,
+                        commit=commit,
+                        main_repo=main_repo,
+                        mode=mode,
+                        language=language,
+                        cpv_num=int(cpv_id.split("_")[1]),
+                        patch_id=patch_id,
+                        pov_id=cpv_id,
+                        patches=[patch_path],
+                        use_inc_build=effective_inc,
+                        force_rebuild=force_rebuild,
+                        skip_if_cached=skip_if_cached,
+                        source_mode=self._source_mode,
+                        sanitizer=cpv_sanitizer,
+                        repo_name=repo_name,
+                        project_image_prefix=project_image_prefix,
+                        inc_image_policy=inc_image_policy,
+                        inc_image_registry=inc_image_registry,
+                        inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+                        inc_image_pull_timeout=inc_image_pull_timeout,
+                        local_image_prefix=local_image_prefix,
                     )
-
-        return jobs

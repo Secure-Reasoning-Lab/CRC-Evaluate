@@ -87,6 +87,7 @@ class DispatcherWarmupFeeder:
         self.build_queue = build_queue
         self.state_store = state_store
         self._warmup_specs = iter(warmup_specs)
+        self._pending_spec: WarmupBuildSpec | None = None
         self.build_capacity = max(1, int(build_capacity))
 
     def _current_backlog(self) -> int:
@@ -105,9 +106,15 @@ class DispatcherWarmupFeeder:
         while enqueued < spare_capacity:
             if self.state_store.has_pending_required_builds():
                 break
-            spec = next(self._warmup_specs, None)
+            spec = self._pending_spec
+            if spec is None:
+                spec = next(self._warmup_specs, None)
             if spec is None:
                 break
+            if self.state_store.has_pending_required_builds():
+                self._pending_spec = spec
+                break
+            self._pending_spec = None
             try:
                 self.build_queue.enqueue(
                     "crsbench.distributed.build_jobs.execute_ci_build",
@@ -163,7 +170,7 @@ def build_dispatcher_warmup_specs(
         if not benchmark_path.exists():
             logger.warning(f"Warmup skip: {benchmark_path} not found")
             continue
-        jobs = planner.plan_builds(
+        jobs = planner.iter_builds(
             benchmark_path,
             use_inc_build=True,
             skip_if_cached=True,
