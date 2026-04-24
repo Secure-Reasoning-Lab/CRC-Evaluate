@@ -389,6 +389,11 @@ def test_required_build_request_ids_clear_after_build_success_and_verify_promoti
         ),
     )
 
+    before_promotion = store.load_verify_request("verify-1")
+
+    assert before_promotion is not None
+    assert before_promotion.state == "blocked_on_build"
+
     store.promote_ready_verify_requests(lineage_id=lineage_id, generation=1)
     promoted = store.load_verify_request("verify-1")
 
@@ -467,7 +472,10 @@ def test_required_build_request_ids_skip_missing_and_require_failed_or_mismatche
             terminal_state="failed",
         ),
     )
+    blocked = store.load_verify_request("verify-1")
 
+    assert blocked is not None
+    assert blocked.state == "blocked_on_build"
     assert store.required_build_request_ids() == {
         failed_request_id,
         mismatched_request_id,
