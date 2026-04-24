@@ -3412,6 +3412,105 @@ def test_distributed_enqueue_uses_deterministic_trial_job_id(tmp_path: Path) -> 
             run_experiment_distributed("exp-test", config, [trial])
 
 
+def test_distributed_run_preserves_trial_list_enqueue_order(tmp_path: Path) -> None:
+    config = _make_distributed_test_config(tmp_path)
+    config.max_total_time = 123
+    config.model_dump.return_value = {}
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.register_or_raise.return_value = None
+    session.lifecycle_store = MagicMock()
+    session.registry = MagicMock()
+
+    bench1 = BenchmarkHarness(
+        name="bench1",
+        path=Path("/tmp/bench1"),
+        harness=HarnessFile(name="harness1", path="/src/harness1.c"),
+    )
+    bench2 = BenchmarkHarness(
+        name="bench2",
+        path=Path("/tmp/bench2"),
+        harness=HarnessFile(name="harness2", path="/src/harness2.c"),
+    )
+    trials = [
+        Trial(
+            crs="crs-a",
+            benchmark_harness=bench1,
+            trial_num=1,
+            mode="delta",
+            sanitizer="address",
+        ),
+        Trial(
+            crs="crs-a",
+            benchmark_harness=bench2,
+            trial_num=1,
+            mode="delta",
+            sanitizer="address",
+        ),
+        Trial(
+            crs="crs-a",
+            benchmark_harness=bench1,
+            trial_num=2,
+            mode="delta",
+            sanitizer="address",
+        ),
+        Trial(
+            crs="crs-a",
+            benchmark_harness=bench2,
+            trial_num=2,
+            mode="delta",
+            sanitizer="address",
+        ),
+    ]
+    enqueue_order: list[tuple[str, int]] = []
+
+    def _enqueue(*_args, **kwargs):
+        enqueue_order.append((kwargs["benchmark"], kwargs["trial_num"]))
+        job = MagicMock()
+        job.id = f"job-{len(enqueue_order)}"
+        return job
+
+    queue.enqueue.side_effect = _enqueue
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={"queued": {}, "started": {}, "failed": {}, "finished": {}},
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            return_value={"queued": [], "started": [], "failed": [], "finished": []},
+        ),
+        patch("crsbench.distributed.queue.handle_orphaned_jobs", return_value=0),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch("crsbench.run_experiment.get_crs_cpu_count", return_value=None),
+        patch("crsbench.run_experiment.get_crs_memory", return_value=None),
+        patch("crsbench.run_experiment.monitor_jobs", return_value=[]),
+        patch("crsbench.run_experiment.generate_final_report"),
+        patch(
+            "crsbench.run_experiment.load_apprise_notification_config",
+            return_value=None,
+        ),
+    ):
+        run_experiment_distributed("exp-test", config, trials, queue_mode="fresh")
+
+    assert enqueue_order == [
+        ("bench1", 1),
+        ("bench2", 1),
+        ("bench1", 2),
+        ("bench2", 2),
+    ]
+
+
 def test_monitor_jobs_rich_includes_finished_none_result() -> None:
     queue = MagicMock()
     config = MagicMock()

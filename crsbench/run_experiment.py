@@ -787,6 +787,42 @@ def _filter_matched_cpvs(
     return matched_cpvs
 
 
+def _build_trial_stream(
+    *,
+    crs: str,
+    benchmark_harness: BenchmarkHarness,
+    trial_count: int,
+    mode: str,
+    sanitizer: str,
+    target_cpv_id: str | None = None,
+) -> list[Trial]:
+    """Build one FIFO trial stream for a single logical variant."""
+    return [
+        Trial(
+            crs=crs,
+            benchmark_harness=benchmark_harness,
+            trial_num=trial_num,
+            mode=mode,
+            sanitizer=sanitizer,
+            target_cpv_id=target_cpv_id,
+        )
+        for trial_num in range(1, trial_count + 1)
+    ]
+
+
+def _wavefront_trial_streams(trial_streams: list[list[Trial]]) -> list[Trial]:
+    """Interleave trial streams by wavefront while preserving stream discovery order."""
+    wavefront_trials: list[Trial] = []
+    max_stream_length = max((len(stream) for stream in trial_streams), default=0)
+
+    for index in range(max_stream_length):
+        for stream in trial_streams:
+            if index < len(stream):
+                wavefront_trials.append(stream[index])
+
+    return wavefront_trials
+
+
 def generate_trial_matrix(
     benchmark_harnesses: List["BenchmarkHarness"],
     oss_crs_registry: List[str],
@@ -808,6 +844,7 @@ def generate_trial_matrix(
     config_mode = config.mode.value  # Get string value from enum
 
     for crs in oss_crs_registry:
+        crs_trial_streams: list[list[Trial]] = []
         # CRS entries are resolved directly from registry.
         crs_type = get_crs_type(crs, registry_dir)
         is_bug_fixing = crs_type == "bug-fixing"
@@ -890,28 +927,28 @@ def generate_trial_matrix(
                             continue
 
                         for cpv_id in matched_cpvs:
-                            for trial_num in range(1, config.trials + 1):
-                                trials.append(
-                                    Trial(
-                                        crs=crs,
-                                        benchmark_harness=benchmark_harness,
-                                        trial_num=trial_num,
-                                        mode=mode,
-                                        sanitizer=sanitizer.value,
-                                        target_cpv_id=cpv_id,
-                                    )
-                                )
-                    else:
-                        for trial_num in range(1, config.trials + 1):
-                            trials.append(
-                                Trial(
+                            crs_trial_streams.append(
+                                _build_trial_stream(
                                     crs=crs,
                                     benchmark_harness=benchmark_harness,
-                                    trial_num=trial_num,
+                                    trial_count=config.trials,
                                     mode=mode,
                                     sanitizer=sanitizer.value,
+                                    target_cpv_id=cpv_id,
                                 )
                             )
+                    else:
+                        crs_trial_streams.append(
+                            _build_trial_stream(
+                                crs=crs,
+                                benchmark_harness=benchmark_harness,
+                                trial_count=config.trials,
+                                mode=mode,
+                                sanitizer=sanitizer.value,
+                            )
+                        )
+
+        trials.extend(_wavefront_trial_streams(crs_trial_streams))
 
     logger.info(
         f"Generated {len(trials)} trials: {len(oss_crs_registry)} CRSes × "
