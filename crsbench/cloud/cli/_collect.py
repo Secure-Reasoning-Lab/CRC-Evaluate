@@ -45,6 +45,10 @@ logger = get_logger(__name__)
 _MAX_PARALLEL_INSTANCE_COLLECTIONS = 8
 
 
+def _launch_state_collects_experiment_artifacts(launch_state) -> bool:
+    return launch_state is not None and launch_state.launch_mode == "reeval"
+
+
 def run_collect(args: argparse.Namespace) -> int:
     """Collect artifacts from live GCE workers/evaluators for the given experiment.
 
@@ -100,8 +104,13 @@ def run_collect(args: argparse.Namespace) -> int:
         )
         return 0
 
+    orchestrator_collects_artifacts = _launch_state_collects_experiment_artifacts(
+        launch_state
+    )
     destination = base_destination
-    if any(_collects_experiment_artifacts(worker) for worker in live_instances):
+    if any(_collects_experiment_artifacts(worker) for worker in live_instances) or (
+        orchestrator_collects_artifacts
+    ):
         if args.timestamp:
             destination = _fresh_timestamp_destination(
                 experiment_filestore,
@@ -141,6 +150,25 @@ def run_collect(args: argparse.Namespace) -> int:
         any(_collects_experiment_artifacts(worker) for worker in live_instances)
         and destination.exists()
     )
+
+    if orchestrator_collects_artifacts and launch_state is not None:
+        orchestrator_worker = launch_state.as_orchestrator_record()
+        try:
+            collector.collect(
+                worker=cast("CloudInstanceLike", orchestrator_worker),
+                fleet=launch_state.as_transport_config(),
+                experiment_name=experiment_name,
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir=remote_experiment_dir,
+                start_time_observations=start_time_observations,
+                destination=destination,
+            )
+            artifact_publish_succeeded = destination.exists()
+        except (ArtifactCollectionError, Exception) as exc:
+            logger.error(
+                "Artifact collection failed for {}: {}", orchestrator_worker.name, exc
+            )
+            failed += 1
 
     if launch_state is not None:
         orchestrator_worker = launch_state.as_orchestrator_record()

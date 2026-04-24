@@ -53,6 +53,10 @@ logger = get_logger(__name__)
 _MAX_PARALLEL_FLEET_DELETIONS = 8
 
 
+def _launch_state_collects_experiment_artifacts(launch_state) -> bool:
+    return launch_state is not None and launch_state.launch_mode == "reeval"
+
+
 def _job_state_value(job) -> str:
     state = getattr(job, "state", "")
     return state.value if hasattr(state, "value") else str(state)
@@ -189,8 +193,13 @@ def run_teardown(args: argparse.Namespace) -> int:
     )
     collection_failed = False
     start_time_observations: list[tuple[str | None, str]] = []
+    orchestrator_collects_artifacts = _launch_state_collects_experiment_artifacts(
+        launch_state
+    )
     destination = base_destination
-    if any(_collects_experiment_artifacts(worker) for worker in live_instances):
+    if any(_collects_experiment_artifacts(worker) for worker in live_instances) or (
+        orchestrator_collects_artifacts
+    ):
         if args.timestamp:
             destination = _fresh_timestamp_destination(
                 experiment_filestore,
@@ -225,6 +234,27 @@ def run_teardown(args: argparse.Namespace) -> int:
         any(_collects_experiment_artifacts(worker) for worker in live_instances)
         and destination.exists()
     )
+
+    if orchestrator_collects_artifacts and launch_state is not None:
+        orchestrator_worker = launch_state.as_orchestrator_record()
+        try:
+            collector.collect(
+                worker=cast("CloudInstanceLike", orchestrator_worker),
+                fleet=launch_state.as_transport_config(),
+                experiment_name=experiment_name,
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir=remote_experiment_dir,
+                start_time_observations=start_time_observations,
+                destination=destination,
+            )
+            artifact_publish_succeeded = destination.exists()
+        except (ArtifactCollectionError, Exception) as exc:
+            logger.error(
+                "Artifact collection failed for {}: {} -- continuing with teardown",
+                orchestrator_worker.name,
+                exc,
+            )
+            collection_failed = True
 
     if launch_state is not None:
         orchestrator_worker = launch_state.as_orchestrator_record()

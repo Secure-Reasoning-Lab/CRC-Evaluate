@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, cast
 
 from crsbench.cloud.launch_state import (
     CloudLaunchState,
+    find_launch_state_for_source_experiment,
     load_launch_state,
     save_launch_state,
 )
@@ -61,7 +62,18 @@ def resolve_effective_experiment_name(
     """Return the CLI experiment name, inferring from config when omitted."""
     if experiment_name:
         return experiment_name
-    config = load_experiment_config(Path(config_path))
+    resolved_config_path = Path(config_path)
+    config = load_experiment_config(resolved_config_path)
+    launch_state = (
+        find_launch_state_for_source_experiment(
+            resolved_config_path,
+            config.experiment,
+        )
+        if resolved_config_path.exists()
+        else None
+    )
+    if launch_state is not None:
+        return launch_state.effective_remote_experiment_name()
     return config.experiment
 
 
@@ -134,6 +146,14 @@ def resolve_cloud_context(
     ]
 
     launch_state = load_launch_state(Path(config_path), experiment_name)
+    if launch_state is None and Path(config_path).exists():
+        try:
+            launch_state = find_launch_state_for_source_experiment(
+                Path(config_path),
+                experiment_name,
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
     launch_state_changed = False
     if launch_state is not None:
         launch_state_updates: dict[str, object] = {}
@@ -145,7 +165,11 @@ def resolve_cloud_context(
             launch_state_updates["remote_experiment_root"] = str(
                 _resolve_remote_experiment_root_from_config(config)
             )
-        if not launch_state.worker_fleet_configs and derived_worker_fleets:
+        if (
+            launch_state.launch_mode != "reeval"
+            and not launch_state.worker_fleet_configs
+            and derived_worker_fleets
+        ):
             launch_state_updates["worker_fleet_configs"] = derived_worker_fleets
         if not launch_state.evaluator_fleet_configs and derived_evaluator_fleets:
             launch_state_updates["evaluator_fleet_configs"] = derived_evaluator_fleets
@@ -171,7 +195,10 @@ def resolve_cloud_context(
             raise SystemExit(
                 "Remote orchestrator launch state missing remote experiment root"
             )
-        if not launch_state.worker_fleet_configs:
+        if (
+            launch_state.launch_mode != "reeval"
+            and not launch_state.worker_fleet_configs
+        ):
             raise SystemExit(
                 "Remote orchestrator launch state missing worker fleet config"
             )

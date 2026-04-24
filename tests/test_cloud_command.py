@@ -329,6 +329,21 @@ def _make_provider_neutral_launch_state():
     )
 
 
+def _make_reeval_launch_state():
+    return _make_provider_neutral_launch_state().model_copy(
+        update={
+            "experiment_name": "test-exp-reeval-20260424-010203",
+            "launch_mode": "reeval",
+            "source_experiment_name": "test-exp",
+            "remote_experiment_name": "test-exp-reeval-20260424-010203",
+            "worker_fleet_configs": [],
+            "remote_experiment_root": "/tmp/remote-root/.crsbench-cloud/reeval/test-exp-reeval-20260424-010203/workspace",
+            "remote_submission_dir": "/tmp/remote-root/.crsbench-cloud/reeval/test-exp-reeval-20260424-010203",
+            "remote_bundle_path": "/tmp/remote-root/.crsbench-cloud/reeval/test-exp-reeval-20260424-010203/bundle",
+        }
+    )
+
+
 def _make_provider_neutral_operational_context(
     *,
     include_launch_state: bool,
@@ -1474,6 +1489,58 @@ class TestReconnect:
         )
         mock_redis.assert_called_once_with("127.0.0.1:16379")
 
+    @patch(
+        "crsbench.cloud.cli._config_reconnect.find_launch_state_for_source_experiment"
+    )
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_resolve_effective_experiment_name_prefers_remote_reeval_state(
+        self,
+        mock_load,
+        mock_find_launch_state,
+        tmp_path,
+    ):
+        """Commands without an explicit experiment should target the live remote re-eval namespace."""
+        mock_load.return_value = _make_provider_neutral_experiment_config()
+        mock_find_launch_state.return_value = _make_reeval_launch_state()
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("experiment: test-exp\n", encoding="utf-8")
+
+        from crsbench.cloud.cli._config_reconnect import (
+            resolve_effective_experiment_name,
+        )
+
+        resolved = resolve_effective_experiment_name(str(config_path), None)
+
+        assert resolved == "test-exp-reeval-20260424-010203"
+        mock_find_launch_state.assert_called_once_with(
+            config_path,
+            "test-exp",
+        )
+
+    @patch("crsbench.cloud.cli._config_reconnect.load_launch_state")
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_resolve_cloud_context_allows_workerless_reeval_launch_state(
+        self,
+        mock_load,
+        mock_state,
+    ):
+        """Cloud re-eval reconnect must accept launch state without worker fleets."""
+        mock_load.return_value = _make_provider_neutral_experiment_config()
+        mock_state.return_value = _make_reeval_launch_state()
+
+        from crsbench.cloud.cli._config_reconnect import resolve_cloud_context
+
+        context = resolve_cloud_context(
+            "/tmp/config.yaml", "test-exp-reeval-20260424-010203"
+        )
+
+        assert context.launch_state is not None
+        assert context.launch_state.launch_mode == "reeval"
+        assert context.worker_fleet_configs == []
+        assert context.remote_experiment_root == Path(
+            "/tmp/remote-root/.crsbench-cloud/reeval/test-exp-reeval-20260424-010203/workspace"
+        )
+
     @patch("crsbench.cloud.cli._config_reconnect.load_launch_state")
     @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
     def test_resolve_cloud_context_does_not_fall_back_to_legacy_filestore_state(
@@ -1858,6 +1925,26 @@ class TestArgParsing:
         assert args.command == "cloud"
         assert args.cloud_command == "launch"
         assert args.config == "c.yaml"
+
+    def test_parse_re_eval(self):
+        parser = self._build_parser()
+        args = parser.parse_args(
+            [
+                "cloud",
+                "re-eval",
+                "--config",
+                "c.yaml",
+                "--from",
+                "/tmp/source-exp",
+                "--remote-experiment",
+                "source-exp-reeval-20260424",
+            ]
+        )
+        assert args.command == "cloud"
+        assert args.cloud_command == "re-eval"
+        assert args.config == "c.yaml"
+        assert args.from_path == "/tmp/source-exp"
+        assert args.remote_experiment == "source-exp-reeval-20260424"
 
     def test_parse_launch_with_only_trial_keys_file(self):
         parser = self._build_parser()
@@ -2404,6 +2491,23 @@ def test_run_cloud_dispatches_list(mock_run_list):
 
     assert rc == 0
     mock_run_list.assert_called_once()
+
+
+@patch("crsbench.cloud.cli._reeval.run_cloud_reeval", return_value=0)
+def test_run_cloud_dispatches_re_eval(mock_run_reeval):
+    from crsbench.cloud.cli.cloud_command import run_cloud
+
+    rc = run_cloud(
+        argparse.Namespace(
+            cloud_command="re-eval",
+            config="config.yaml",
+            from_path=None,
+            remote_experiment=None,
+        )
+    )
+
+    assert rc == 0
+    mock_run_reeval.assert_called_once()
 
 
 def test_run_cloud_requires_config_for_non_keygen_commands():
@@ -8502,6 +8606,58 @@ class TestCollect:
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
     @patch("crsbench.cloud.cli._collect.provisioner_for_context")
     @patch("crsbench.cloud.cli._collect.reconnect")
+    def test_collect_reeval_mode_collects_orchestrator_artifacts_without_workers(
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
+    ):
+        """Cloud re-eval collection should pull the authoritative result tree from the orchestrator."""
+        launch_state = _make_reeval_launch_state()
+        mock_resolve_context.return_value = _make_collect_context(
+            experiment_filestore=Path("/tmp/filestore"),
+            remote_experiment_root=Path(launch_state.remote_experiment_root),
+            launch_state=launch_state,
+        )
+        mock_prov = MagicMock()
+        mock_prov.list_workers.return_value = []
+        mock_prov_cls.return_value = mock_prov
+
+        mock_coll = MagicMock()
+        mock_coll_cls.return_value = mock_coll
+
+        readiness = MagicMock()
+        readiness.list_workers.return_value = []
+        mock_reconnect.return_value = (
+            MagicMock(),
+            MagicMock(),
+            readiness,
+            MagicMock(),
+            Path("/tmp/filestore"),
+        )
+
+        from crsbench.cloud.cli._collect import run_collect
+
+        rc = run_collect(
+            _make_collect_args(
+                experiment=launch_state.experiment_name,
+                remote_dir=None,
+            )
+        )
+
+        assert rc == 0
+        assert mock_coll.collect.call_count == 1
+        assert mock_coll.collect_logs.call_count == 1
+        assert (
+            mock_coll.collect.call_args.kwargs["worker"].name
+            == launch_state.orchestrator_name
+        )
+        assert (
+            mock_coll.collect.call_args.kwargs["remote_experiment_dir"]
+            == f"{launch_state.remote_experiment_root}/{launch_state.experiment_name}"
+        )
+
+    @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._collect.ArtifactCollector")
+    @patch("crsbench.cloud.cli._collect.provisioner_for_context")
+    @patch("crsbench.cloud.cli._collect.reconnect")
     def test_collect_runs_live_instance_collection_in_parallel(
         self,
         mock_reconnect,
@@ -10045,6 +10201,64 @@ class TestTeardown:
         mock_prov.delete_workers.assert_called_once()
         mock_prov.delete_instance.assert_called_once()
         mock_delete_state.assert_called_once_with("/tmp/config.yaml", "test-exp")
+
+    @patch("crsbench.cloud.cli._teardown.delete_launch_state")
+    @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
+    @patch("crsbench.cloud.cli._teardown.provisioner_for_context")
+    @patch("crsbench.cloud.cli._teardown.reconnect")
+    def test_teardown_reeval_mode_collects_orchestrator_artifacts_without_workers(
+        self,
+        mock_reconnect,
+        mock_prov_cls,
+        mock_coll_cls,
+        mock_resolve_context,
+        mock_delete_state,
+    ):
+        """Cloud re-eval teardown should collect the orchestrator workspace even with no worker fleets."""
+        launch_state = _make_reeval_launch_state()
+        mock_resolve_context.return_value = _make_collect_context(
+            experiment_filestore=Path("/tmp/filestore"),
+            remote_experiment_root=Path(launch_state.remote_experiment_root),
+            launch_state=launch_state,
+        )
+        mock_prov = MagicMock()
+        mock_prov.list_workers.return_value = []
+        mock_prov_cls.return_value = mock_prov
+
+        mock_coll = MagicMock()
+        mock_coll_cls.return_value = mock_coll
+
+        readiness = MagicMock()
+        readiness.list_workers.return_value = []
+        lifecycle = MagicMock()
+        lifecycle.list_jobs.return_value = []
+        mock_reconnect.return_value = (
+            MagicMock(),
+            MagicMock(),
+            readiness,
+            lifecycle,
+            Path("/tmp/filestore"),
+        )
+
+        from crsbench.cloud.cli._teardown import run_teardown
+
+        rc = run_teardown(
+            _make_teardown_args(
+                experiment=launch_state.experiment_name,
+                force=True,
+            )
+        )
+
+        assert rc == 0
+        assert mock_coll.collect.call_count == 1
+        assert mock_coll.collect_logs.call_count == 1
+        mock_prov.delete_workers.assert_not_called()
+        mock_prov.delete_instance.assert_called_once()
+        mock_delete_state.assert_called_once_with(
+            "/tmp/config.yaml",
+            launch_state.experiment_name,
+        )
 
     @patch("crsbench.cloud.cli._teardown.delete_launch_state")
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
