@@ -159,6 +159,65 @@ def test_execute_dispatcher_build_attempt_publishes_build_result_and_promotes_ve
     assert verify_request.state == "ready"
 
 
+def test_execute_dispatcher_build_attempt_uses_current_job_connection_when_env_missing(
+    monkeypatch,
+) -> None:
+    from crsbench.distributed.evaluator_dispatcher_jobs import (
+        execute_dispatcher_build_attempt,
+    )
+
+    redis_conn = _FakeRedis()
+    store = DispatcherStateStore(redis_conn, experiment_name="exp-test")
+    build_request_id = "build:trial-1:bench:0"
+    lineage_id = "bench::address::pkgs::inc"
+
+    store.submit_build_request(
+        BuildRequestRecord(
+            request_id=build_request_id,
+            trial_id="trial-1",
+            benchmark="bench",
+            owner_key="ownerA",
+            lineage_id=lineage_id,
+            generation=1,
+            state="ready",
+            payload={"_job_class": "BuildSingleVariantJob"},
+        )
+    )
+    store.assign_build_attempt(
+        request_id=build_request_id,
+        evaluator_id="eval-1",
+        attempt_id="attempt-build-1",
+        generation=1,
+    )
+
+    monkeypatch.delenv("CRSBENCH_REDIS_HOST", raising=False)
+    current_job = type("CurrentJob", (), {"connection": redis_conn})()
+
+    with (
+        patch("rq.get_current_job", return_value=current_job),
+        patch(
+            "crsbench.distributed.evaluator_dispatcher_jobs.execute_ci_build",
+            return_value={"job_id": build_request_id, "success": True},
+        ),
+    ):
+        result = execute_dispatcher_build_attempt(
+            {
+                "experiment_name": "exp-test",
+                "request_id": build_request_id,
+                "attempt_id": "attempt-build-1",
+                "evaluator_id": "eval-1",
+                "generation": 1,
+                "lineage_id": lineage_id,
+                "ci_job_payload": {"_job_class": "BuildSingleVariantJob"},
+            }
+        )
+
+    assert result["success"] is True
+    build_result = store.load_build_result(build_request_id)
+    assert build_result is not None
+    assert build_result.terminal_state == "succeeded"
+
+
 def test_execute_dispatcher_verify_attempt_publishes_terminal_result(
     monkeypatch,
 ) -> None:

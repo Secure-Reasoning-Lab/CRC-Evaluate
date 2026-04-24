@@ -31,6 +31,16 @@ def _get_dispatcher_store(
     experiment_name: str, *, redis_conn: Any = None
 ) -> DispatcherStateStore:
     if redis_conn is None:
+        try:
+            import rq
+
+            current_job = rq.get_current_job()
+            if current_job is not None and current_job.connection is not None:
+                redis_conn = current_job.connection
+        except ImportError:
+            pass
+
+    if redis_conn is None:
         from crsbench.distributed.queue import create_redis_connection
 
         redis_host = os.environ.get("CRSBENCH_REDIS_HOST")
