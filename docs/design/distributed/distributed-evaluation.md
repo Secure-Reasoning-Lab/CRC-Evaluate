@@ -50,12 +50,15 @@ Startup behavior differs between the first two modes:
   capacity
 - async POV verification enqueues a benchmark-local build DAG on first POV
   discovery and each verify job depends on those build jobs before execution
+- async patch verification enqueues one logical build request per patch and
+  routes the corresponding patch verify request onto the same dispatcher
+  lineage so verify can reuse evaluator-local patched artifacts
 
 ## Verification Payload Contract
 
-Verification jobs must carry enough benchmark/trial/harness/POV context for an
-evaluator on another machine to execute verification without assuming a shared
-trial-working directory on the worker.
+Verification jobs must carry enough benchmark/trial/harness/target context for
+an evaluator on another machine to execute verification without assuming a
+shared trial-working directory on the worker.
 
 Embedded or staged payload data must be sufficient for non-local verification.
 
@@ -65,7 +68,8 @@ Distributed evaluation distinguishes trial queues from verify/build queues.
 Workers may enqueue verification work while trials continue, and evaluators may
 process those jobs independently.
 
-Async POV verification now has two runtime realizations:
+Async distributed verification now has two runtime realizations for both POV
+and patch validation:
 
 - shared routing: workers enqueue physical build and verify RQ jobs directly
   onto shared evaluator queues
@@ -86,12 +90,14 @@ physical evaluator RQ job IDs. Physical `attempt_id` values are internal to the
 dispatcher/evaluator contract and may change across retries or evaluator-death
 recovery.
 
-Async POV verification must preserve build/verify queue separation:
+Async POV and patch verification must preserve build/verify queue separation:
 
 - build prerequisites are enqueued to the build queue
-- verify jobs declare explicit queue dependencies on those build jobs
+- shared routing verify jobs declare explicit RQ dependencies on those build jobs
+- dispatcher routing verify requests remain blocked in Redis state until their
+  required logical build requests publish success for the current lineage
 - verify workers only hydrate prebuilt artifacts from evaluator disk for
-  dependency-backed POV jobs; they must not hide fresh variant builds inside the
+  dependency-backed jobs; they must not hide fresh variant builds inside the
   verify worker
 - scheduler fairness applies only to runnable queued work; build-before-verify
   correctness remains a dependency contract rather than a blanket build-priority

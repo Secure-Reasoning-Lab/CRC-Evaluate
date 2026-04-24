@@ -235,6 +235,12 @@ class DispatcherStateStore:
             )
         )
 
+    def load_build_attempt_id(self, request_id: str) -> str | None:
+        raw = self.redis.hget(self._build_attempts_key(), request_id)
+        if raw is None:
+            return None
+        return _decode(raw)
+
     def build_attempt_is_current(self, request_id: str, attempt_id: str) -> bool:
         current_attempt_id = self.redis.hget(self._build_attempts_key(), request_id)
         if current_attempt_id is None:

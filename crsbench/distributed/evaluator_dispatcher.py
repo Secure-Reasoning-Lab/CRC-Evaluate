@@ -258,6 +258,14 @@ class EvaluatorDispatcher:
             evaluator_id,
         )
         queue = rq.Queue(verify_queue_name, connection=self.redis)
+        verify_payload = dict(request.payload)
+        if "patch" in verify_payload and request.build_request_ids:
+            build_request_id = request.build_request_ids[0]
+            build_attempt_id = self.store.load_build_attempt_id(build_request_id)
+            if build_attempt_id is not None:
+                verify_payload["build_patch_job_id"] = _build_dispatcher_rq_job_id(
+                    build_attempt_id
+                )
         queue.enqueue(
             "crsbench.distributed.evaluator_dispatcher_jobs.execute_dispatcher_verify_attempt",
             {
@@ -267,7 +275,7 @@ class EvaluatorDispatcher:
                 "evaluator_id": evaluator_id,
                 "generation": request.generation,
                 "lineage_id": request.lineage_id,
-                "verify_payload": dict(request.payload),
+                "verify_payload": verify_payload,
             },
             result_ttl=-1,
             job_id=_build_dispatcher_rq_job_id(attempt_id),

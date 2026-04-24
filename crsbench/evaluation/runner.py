@@ -1971,6 +1971,7 @@ class BenchmarkRunner:
                 redis_host,
                 job_ids,
                 timeout=self.verify_timeout,
+                experiment_name=experiment_name,
             )
             completed_results = len(raw_results)
             if completed_results < len(job_ids):

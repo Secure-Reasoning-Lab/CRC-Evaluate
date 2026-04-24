@@ -13,6 +13,10 @@ from crsbench.distributed.evaluator_dispatcher_state import (
     VerifyResultRecord,
 )
 from crsbench.distributed.evaluator_jobs import verify_single_pov
+from crsbench.distributed.patch_evaluator_jobs import (
+    execute_patch_build,
+    execute_patch_verify,
+)
 
 
 @dataclass(frozen=True)
@@ -109,7 +113,16 @@ def execute_dispatcher_build_attempt(
 ) -> dict[str, Any]:
     payload = DispatcherAttemptPayload(**payload_dict)
     store = _get_dispatcher_store(payload.experiment_name, redis_conn=redis_conn)
-    result_dict = execute_ci_build(payload.ci_job_payload or {})
+    build_payload = payload.ci_job_payload or {}
+    if "_job_class" in build_payload:
+        result_dict = execute_ci_build(build_payload)
+    elif "patch" in build_payload:
+        result_dict = execute_patch_build(build_payload)
+    else:
+        raise ValueError(
+            "Dispatcher build attempt payload must contain either '_job_class' "
+            "or 'patch'"
+        )
     _publish_build_attempt_result(
         store=store,
         request_id=payload.request_id,
@@ -129,7 +142,11 @@ def execute_dispatcher_verify_attempt(
 ) -> dict[str, Any]:
     payload = DispatcherAttemptPayload(**payload_dict)
     store = _get_dispatcher_store(payload.experiment_name, redis_conn=redis_conn)
-    verdict = verify_single_pov(payload.verify_payload or {})
+    verify_payload = payload.verify_payload or {}
+    if "patch" in verify_payload:
+        verdict = execute_patch_verify(verify_payload)
+    else:
+        verdict = verify_single_pov(verify_payload)
     _publish_verify_attempt_result(
         store=store,
         request_id=payload.request_id,

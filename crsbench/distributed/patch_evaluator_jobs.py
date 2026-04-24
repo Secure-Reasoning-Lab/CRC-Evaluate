@@ -228,6 +228,8 @@ class PatchBuildResult:
     patch_id: str
     success: bool
     variant_name: str = ""
+    sanitizer: str = "address"
+    inc_build_available: bool = True
     error: Optional[str] = None
     completed_at: float = 0.0
     logs: dict[str, str] = field(default_factory=dict)
@@ -241,6 +243,8 @@ class PatchBuildResult:
             "patch_id": self.patch_id,
             "success": self.success,
             "variant_name": self.variant_name,
+            "sanitizer": self.sanitizer,
+            "inc_build_available": self.inc_build_available,
             "error": self.error,
             "completed_at": self.completed_at,
             "logs": self.logs,
@@ -256,6 +260,8 @@ class PatchBuildResult:
             patch_id=d["patch_id"],
             success=d["success"],
             variant_name=d.get("variant_name", ""),
+            sanitizer=d.get("sanitizer", "address"),
+            inc_build_available=d.get("inc_build_available", True),
             error=d.get("error"),
             completed_at=d.get("completed_at", 0.0),
             logs=d.get("logs", {}),
@@ -477,7 +483,15 @@ def execute_patch_build(payload_dict: dict[str, Any]) -> dict[str, Any]:
         result_dict = ci_jobs.execute_ci_job(params)
 
         success = result_dict.get("success", False)
-        variant_name = result_dict.get("details", {}).get("variant_name", "")
+        details = result_dict.get("details", {})
+        if not isinstance(details, dict):
+            details = {}
+        variant_name = details.get("variant_name", "")
+        resolved_sanitizer = details.get("sanitizer", payload.sanitizer)
+        upstream_inc = details.get("inc_build_available")
+        inc_build_available = (
+            upstream_inc if isinstance(upstream_inc, bool) else payload.use_inc_build
+        )
         error = result_dict.get("error")
         logs = _collect_bounded_stream_logs(build_output_dir) if not success else {}
 
@@ -489,6 +503,8 @@ def execute_patch_build(payload_dict: dict[str, Any]) -> dict[str, Any]:
             patch_id=patch.patch_id,
             success=success,
             variant_name=variant_name,
+            sanitizer=resolved_sanitizer,
+            inc_build_available=inc_build_available,
             error=error,
             completed_at=time.time(),
             logs=logs,
@@ -503,6 +519,8 @@ def execute_patch_build(payload_dict: dict[str, Any]) -> dict[str, Any]:
             cpv_id=payload.cpv_id,
             patch_id=patch.patch_id,
             success=False,
+            sanitizer=payload.sanitizer,
+            inc_build_available=payload.use_inc_build,
             error=str(e),
             completed_at=time.time(),
             logs=_collect_bounded_stream_logs(build_output_dir)

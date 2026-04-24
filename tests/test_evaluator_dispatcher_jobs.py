@@ -218,6 +218,66 @@ def test_execute_dispatcher_build_attempt_uses_current_job_connection_when_env_m
     assert build_result.terminal_state == "succeeded"
 
 
+def test_execute_dispatcher_build_attempt_runs_patch_build() -> None:
+    from crsbench.distributed.evaluator_dispatcher_jobs import (
+        execute_dispatcher_build_attempt,
+    )
+
+    redis_conn = _FakeRedis()
+    store = DispatcherStateStore(redis_conn, experiment_name="exp-test")
+    request_id = "patch-build:trial-1:bench:h0:cpv_0:patch_0:abc12345"
+    lineage_id = "patch::bench::h0::cpv_0::patch_0::address::pkgs::inc"
+    store.submit_build_request(
+        BuildRequestRecord(
+            request_id=request_id,
+            trial_id="trial-1",
+            benchmark="bench",
+            owner_key="ownerA",
+            lineage_id=lineage_id,
+            generation=1,
+            state="ready",
+            payload={
+                "trial_id": "trial-1",
+                "benchmark": "bench",
+                "patch": {"patch_id": "patch_0"},
+            },
+        )
+    )
+    store.assign_build_attempt(
+        request_id=request_id,
+        evaluator_id="eval-1",
+        attempt_id="attempt-build-1",
+        generation=1,
+    )
+
+    with patch(
+        "crsbench.distributed.evaluator_dispatcher_jobs.execute_patch_build",
+        return_value={"success": True, "variant_name": "bench-asan-patched"},
+    ) as mock_execute_patch_build:
+        result = execute_dispatcher_build_attempt(
+            {
+                "experiment_name": "exp-test",
+                "request_id": request_id,
+                "attempt_id": "attempt-build-1",
+                "evaluator_id": "eval-1",
+                "generation": 1,
+                "lineage_id": lineage_id,
+                "ci_job_payload": {
+                    "trial_id": "trial-1",
+                    "benchmark": "bench",
+                    "patch": {"patch_id": "patch_0"},
+                },
+            },
+            redis_conn=redis_conn,
+        )
+
+    mock_execute_patch_build.assert_called_once()
+    assert result["success"] is True
+    build_result = store.load_build_result(request_id)
+    assert build_result is not None
+    assert build_result.terminal_state == "succeeded"
+
+
 def test_execute_dispatcher_verify_attempt_publishes_terminal_result(
     monkeypatch,
 ) -> None:
@@ -277,6 +337,79 @@ def test_execute_dispatcher_verify_attempt_publishes_terminal_result(
     completed, remaining = store.poll_verify_results([request_id])
     assert remaining == []
     assert completed[0]["verdict"]["status"] == "cpv"
+
+
+def test_execute_dispatcher_verify_attempt_runs_patch_verify() -> None:
+    from crsbench.distributed.evaluator_dispatcher_jobs import (
+        execute_dispatcher_verify_attempt,
+    )
+
+    redis_conn = _FakeRedis()
+    store = DispatcherStateStore(redis_conn, experiment_name="exp-test")
+    request_id = "patch-verify:trial-1:bench:h0:cpv_0:patch_0:abc12345"
+    store.submit_verify_request(
+        VerifyRequestRecord(
+            request_id=request_id,
+            trial_id="trial-1",
+            benchmark="bench",
+            harness="h0",
+            pov_id="patch_0",
+            owner_key="ownerA",
+            lineage_id="patch::bench::h0::cpv_0::patch_0::address::pkgs::inc",
+            generation=1,
+            state="ready",
+            build_request_ids=[],
+            payload={
+                "trial_id": "trial-1",
+                "benchmark": "bench",
+                "harness": "h0",
+                "cpv_id": "cpv_0",
+                "patch": {"patch_id": "patch_0"},
+            },
+        )
+    )
+    store.assign_verify_attempt(
+        request_id=request_id,
+        evaluator_id="eval-1",
+        attempt_id="attempt-1",
+        generation=1,
+    )
+
+    with patch(
+        "crsbench.distributed.evaluator_dispatcher_jobs.execute_patch_verify",
+        return_value={
+            "trial_id": "trial-1",
+            "benchmark": "bench",
+            "harness": "h0",
+            "cpv_id": "cpv_0",
+            "patch_id": "patch_0",
+            "status": "valid",
+        },
+    ) as mock_execute_patch_verify:
+        verdict = execute_dispatcher_verify_attempt(
+            {
+                "experiment_name": "exp-test",
+                "request_id": request_id,
+                "attempt_id": "attempt-1",
+                "evaluator_id": "eval-1",
+                "generation": 1,
+                "lineage_id": "patch::bench::h0::cpv_0::patch_0::address::pkgs::inc",
+                "verify_payload": {
+                    "trial_id": "trial-1",
+                    "benchmark": "bench",
+                    "harness": "h0",
+                    "cpv_id": "cpv_0",
+                    "patch": {"patch_id": "patch_0"},
+                },
+            },
+            redis_conn=redis_conn,
+        )
+
+    mock_execute_patch_verify.assert_called_once()
+    assert verdict["status"] == "valid"
+    completed, remaining = store.poll_verify_results([request_id])
+    assert remaining == []
+    assert completed[0]["status"] == "valid"
 
 
 def test_stale_verify_attempt_cannot_publish() -> None:

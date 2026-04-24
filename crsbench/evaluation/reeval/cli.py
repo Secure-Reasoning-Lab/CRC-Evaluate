@@ -1038,7 +1038,11 @@ def _drain_all_async_results(
     start_time = time.monotonic()
     timed_out = False
 
-    experiment_names = {state.experiment_name for state in trials}
+    experiment_names = {
+        name
+        for name in (getattr(state, "experiment_name", "") for state in trials)
+        if name
+    }
     if len(experiment_names) > 1:
         raise ValueError(
             "_drain_all_async_results requires all trials to share the same "
@@ -1238,10 +1242,34 @@ def _drain_all_async_patch_results(
     for state in trials:
         all_job_ids.extend(state.job_ids)
 
+    experiment_names = {
+        name
+        for name in (getattr(state, "experiment_name", "") for state in trials)
+        if name
+    }
+    if len(experiment_names) > 1:
+        raise ValueError(
+            "_drain_all_async_patch_results requires all trials to share the same "
+            "experiment_name"
+        )
+    experiment_name = next(iter(experiment_names), "")
+
     logger.info(
         f"Draining {len(all_job_ids)} async patch jobs across {len(trials)} trials"
     )
-    raw_results = drain_patch_verdicts(redis_host, all_job_ids, timeout=timeout_seconds)
+    if experiment_name:
+        raw_results = drain_patch_verdicts(
+            redis_host,
+            all_job_ids,
+            timeout=timeout_seconds,
+            experiment_name=experiment_name,
+        )
+    else:
+        raw_results = drain_patch_verdicts(
+            redis_host,
+            all_job_ids,
+            timeout=timeout_seconds,
+        )
     timed_out = len(raw_results) < len(all_job_ids)
     if timed_out:
         logger.warning(

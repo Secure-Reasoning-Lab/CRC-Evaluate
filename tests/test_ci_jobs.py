@@ -705,6 +705,66 @@ class TestExecuteCiJobContextPreload:
         stored = context.shared[job.build_patch_job_id]
         assert stored["inc_build_available"] is True
 
+    def test_patch_context_reads_dispatcher_patch_build_wrapper_metadata(self) -> None:
+        """Patch context should accept dispatcher wrapper build-result payload shape."""
+        from crsbench.builder.types import BenchmarkMode
+        from crsbench.distributed.ci_jobs import _load_patch_build_context
+
+        context = MagicMock()
+        context.shared = {}
+
+        job = MagicMock()
+        job.build_patch_job_id = "dispatcher-attempt/build-wrapper"
+        job.benchmark_name = "bench"
+        job.benchmark_path = Path("/bench")
+        job.harness = "h0"
+        job.cpv_id = "cpv_0"
+        job.patch_id = "patch_0"
+        job.use_inc_build = True
+
+        adapter = MagicMock()
+        adapter.get_cpv_sanitizer.return_value = "address"
+        adapter.get_mode.return_value = BenchmarkMode.DELTA
+        adapter.lang = "c"
+        adapter.get_ref_commit.return_value = "abc123"
+        adapter.get_base_commit.return_value = "abc123"
+        adapter.main_repo = "https://example.com/repo"
+
+        current_rq_job = MagicMock()
+        current_rq_job.connection = MagicMock()
+        upstream_rq_job = MagicMock()
+        upstream_rq_job.result = {
+            "variant_name": "bench-delta-cpv_0-patch_0",
+            "sanitizer": "memory",
+            "inc_build_available": False,
+        }
+
+        with (
+            patch(
+                "crsbench.utils.run_helper.ensure_oss_fuzz_root", return_value="/tmp/of"
+            ),
+            patch(
+                "crsbench.evaluation.verification.pov.VerificationEngine"
+            ) as mock_engine_cls,
+            patch(
+                "crsbench.builder.infrastructure.OSSFuzzInfrastructure"
+            ) as mock_infra_cls,
+            patch("rq.get_current_job", return_value=current_rq_job),
+            patch("rq.job.Job.fetch", return_value=upstream_rq_job),
+        ):
+            mock_engine = MagicMock()
+            mock_engine.load_adapter.return_value = adapter
+            mock_engine_cls.return_value = mock_engine
+            mock_infra = MagicMock()
+            mock_infra.is_variant_built.return_value = True
+            mock_infra_cls.return_value = mock_infra
+            _load_patch_build_context(context, job, source_mode="pkgs")
+
+        stored = context.shared[job.build_patch_job_id]
+        assert stored["variant_name"] == "bench-delta-cpv_0-patch_0"
+        assert stored["sanitizer"] == "memory"
+        assert stored["inc_build_available"] is False
+
     def test_patch_context_missing_artifact_fails_fast(self) -> None:
         """Patch context should fail when build metadata exists but artifact is absent."""
         from crsbench.builder.types import BenchmarkMode

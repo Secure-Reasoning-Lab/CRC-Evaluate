@@ -9,6 +9,10 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from crsbench.builder.types import BenchmarkMode
+from crsbench.distributed.evaluator_dispatcher_state import (
+    DispatcherStateStore,
+    VerifyResultRecord,
+)
 from crsbench.distributed.patch_evaluator_jobs import (
     EmbeddedPatch,
     PatchBuildResult,
@@ -21,6 +25,59 @@ from crsbench.distributed.patch_evaluator_jobs import (
     execute_patch_build,
     execute_patch_verify,
 )
+from crsbench.distributed.queue import (
+    EVALUATOR_ROUTING_MODEL_ENV,
+    ROUTING_MODEL_DISPATCHER,
+)
+
+
+class _FakeDispatcherRedis:
+    """Minimal fake Redis for dispatcher-aware patch queue tests."""
+
+    def __init__(self) -> None:
+        self._hashes: dict[str, dict[str, str]] = {}
+
+    def hset(self, key: str, field: str, value: str) -> None:
+        self._hashes.setdefault(key, {})[field] = value
+
+    def hget(self, key: str, field: str) -> str | None:
+        return self._hashes.get(key, {}).get(field)
+
+    def hgetall(self, key: str) -> dict[str, str]:
+        return self._hashes.get(key, {}).copy()
+
+    def hdel(self, key: str, field: str) -> int:
+        bucket = self._hashes.get(key)
+        if not bucket or field not in bucket:
+            return 0
+        del bucket[field]
+        if not bucket:
+            self._hashes.pop(key, None)
+        return 1
+
+    def eval(
+        self, script: str, numkeys: int, *keys_and_args: str
+    ) -> int | list[str | None]:
+        assert keys_and_args
+        if numkeys == 1:
+            key = keys_and_args[0]
+            fields = keys_and_args[1:]
+            results: list[str | None] = []
+            for field in fields:
+                value = self.hget(key, field)
+                if value is not None:
+                    self.hdel(key, field)
+                results.append(value)
+            return results
+        if numkeys == 2:
+            attempts_key, results_key = keys_and_args[:2]
+            request_id, expected_attempt_id, result_payload = keys_and_args[2:]
+            current_attempt_id = self.hget(attempts_key, request_id)
+            if current_attempt_id != expected_attempt_id:
+                return 0
+            self.hset(results_key, request_id, result_payload)
+            return 1
+        raise AssertionError(f"unexpected eval call: numkeys={numkeys}")
 
 
 class TestEmbeddedPatch:
@@ -230,6 +287,57 @@ class TestExecutePatchBuild:
         assert isinstance(result.get("logs"), dict)
         assert result["logs"].get("bench/build/build.stderr") == "compile error detail"
         assert result["logs"].get("bench/build/build.stdout") == "build stdout"
+
+    @patch("crsbench.distributed.patch_evaluator_jobs.resolve_benchmark_path")
+    @patch("crsbench.distributed.patch_evaluator_jobs.get_evaluator_benchmarks_root")
+    @patch("crsbench.distributed.ci_jobs.serialize_ci_job")
+    @patch("crsbench.distributed.ci_jobs.execute_ci_job")
+    @patch("crsbench.distributed.patch_evaluator_jobs.tempfile.mkdtemp")
+    def test_execute_patch_build_preserves_build_context_metadata(
+        self,
+        mock_mkdtemp: MagicMock,
+        mock_execute_ci_job: MagicMock,
+        mock_serialize_ci_job: MagicMock,
+        mock_get_benchmarks_root: MagicMock,
+        mock_resolve_benchmark_path: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Patch build wrapper should preserve metadata needed by later verify jobs."""
+        benchmark_root = tmp_path / "benchmarks"
+        benchmark_path = benchmark_root / "bench"
+        benchmark_path.mkdir(parents=True)
+        mock_get_benchmarks_root.return_value = benchmark_root
+        mock_resolve_benchmark_path.return_value = benchmark_path
+        mock_mkdtemp.return_value = str(tmp_path / "build-output")
+        mock_execute_ci_job.return_value = {
+            "success": True,
+            "details": {
+                "variant_name": "bench-asan-patched",
+                "sanitizer": "memory",
+                "inc_build_available": False,
+            },
+        }
+        mock_serialize_ci_job.return_value = {"_job_class": "BuildPatchVariantJob"}
+
+        payload = PatchJobPayload(
+            experiment_name="exp",
+            trial_id="trial-1",
+            benchmark="bench",
+            harness="h0",
+            cpv_id="cpv_0",
+            patch=EmbeddedPatch(
+                patch_id="patch_0",
+                pov_id="cpv_0",
+                patch_content_b64="ZHVtbXk=",
+            ),
+        )
+
+        result = execute_patch_build(payload.to_dict())
+
+        assert result["success"] is True
+        assert result["variant_name"] == "bench-asan-patched"
+        assert result["sanitizer"] == "memory"
+        assert result["inc_build_available"] is False
 
 
 class TestPatchVerifyResult:
@@ -535,6 +643,58 @@ class TestEnqueuePatchJobs:
         assert build_a != build_b
         assert verify_a != verify_b
 
+    def test_enqueue_patch_jobs_dispatcher_submits_logical_requests(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Dispatcher mode should persist logical patch build/verify requests."""
+        from crsbench.distributed.patch_queue import enqueue_patch_jobs
+
+        monkeypatch.setenv(EVALUATOR_ROUTING_MODEL_ENV, ROUTING_MODEL_DISPATCHER)
+
+        patch_file = tmp_path / "patch.diff"
+        patch_file.write_text("--- a/x.c\n+++ b/x.c\n")
+
+        redis_conn = _FakeDispatcherRedis()
+        build_queue = MagicMock()
+        build_queue.connection = redis_conn
+        verify_queue = MagicMock()
+        verify_queue.connection = redis_conn
+
+        job_ids = enqueue_patch_jobs(
+            build_queue,
+            verify_queue,
+            "test-exp",
+            "trial-1",
+            "mock-bench",
+            "harness_0",
+            [("cpv_1", "patch_0", patch_file)],
+            sanitizer="undefined",
+            verify_variants=True,
+        )
+
+        assert build_queue.enqueue.call_count == 0
+        assert verify_queue.enqueue.call_count == 0
+        assert len(job_ids) == 1
+        assert job_ids[0].startswith("patch-verify:")
+
+        store = DispatcherStateStore(redis_conn, experiment_name="test-exp")
+        verify_request = store.load_verify_request(job_ids[0])
+        assert verify_request is not None
+        assert verify_request.state == "blocked_on_build"
+        assert verify_request.owner_key == "trial::test-exp::trial-1"
+        assert len(verify_request.build_request_ids) == 1
+        assert verify_request.payload["patch"]["patch_id"] == "patch_0"
+        assert (
+            verify_request.payload["build_patch_job_id"]
+            == verify_request.build_request_ids[0]
+        )
+
+        build_request = store.load_build_request(verify_request.build_request_ids[0])
+        assert build_request is not None
+        assert build_request.state == "ready"
+        assert build_request.owner_key == "trial::test-exp::trial-1"
+        assert build_request.payload["patch"]["patch_id"] == "patch_0"
+
 
 class TestPollPatchVerdicts:
     """Tests for poll_patch_verdicts function."""
@@ -793,6 +953,44 @@ class TestPollPatchVerdicts:
         assert len(completed) == 1
         assert completed[0]["trial_id"] == "trial-6"
         assert completed[0]["patch_id"] == "patch_6"
+        assert remaining == []
+
+    def test_poll_patch_verdicts_dispatcher(self, monkeypatch) -> None:
+        """Dispatcher mode should poll logical patch verify request IDs."""
+        from crsbench.distributed.patch_queue import poll_patch_verdicts
+
+        monkeypatch.setenv(EVALUATOR_ROUTING_MODEL_ENV, ROUTING_MODEL_DISPATCHER)
+
+        redis_conn = _FakeDispatcherRedis()
+        store = DispatcherStateStore(redis_conn, experiment_name="exp-test")
+        request_id = "patch-verify:trial-1:bench:h0:cpv_0:patch_0:abc12345"
+        verdict = {
+            "trial_id": "trial-1",
+            "benchmark": "bench",
+            "harness": "h0",
+            "cpv_id": "cpv_0",
+            "patch_id": "patch_0",
+            "status": "valid",
+            "security_verdict": "PASS",
+        }
+        store.publish_verify_result(
+            request_id,
+            VerifyResultRecord(
+                request_id=request_id,
+                attempt_id="attempt-1",
+                verdict=verdict,
+                terminal_state="succeeded",
+            ),
+        )
+
+        completed, remaining = poll_patch_verdicts(
+            "redis.local",
+            [request_id],
+            experiment_name="exp-test",
+            redis_conn=redis_conn,
+        )
+
+        assert completed == [verdict]
         assert remaining == []
 
 

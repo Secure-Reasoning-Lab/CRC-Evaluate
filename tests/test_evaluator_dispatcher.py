@@ -285,6 +285,82 @@ def test_dispatcher_verify_enqueue_uses_rq_safe_job_id() -> None:
     assert ":" not in enqueue_args.kwargs["job_id"]
 
 
+def test_dispatcher_verify_enqueue_rewrites_patch_build_job_id_to_wrapper_job_id() -> (
+    None
+):
+    from crsbench.distributed.evaluator_dispatcher import (
+        EvaluatorDispatcher,
+        _build_dispatcher_rq_job_id,
+    )
+
+    redis_conn = _FakeRedis()
+    store = DispatcherStateStore(redis_conn, experiment_name="exp-test")
+    store.upsert_evaluator(
+        evaluator_id="eval-1",
+        worker_name="eval-1",
+        expires_in_seconds=60,
+    )
+    build_request_id = "patch-build:trial-1:bench:h0:cpv_0:patch_0:abc12345"
+    store.submit_build_request(
+        BuildRequestRecord(
+            request_id=build_request_id,
+            trial_id="trial-1",
+            benchmark="bench",
+            owner_key="ownerA",
+            lineage_id="patch::bench::h0::cpv_0::patch_0::address::pkgs::inc",
+            generation=1,
+            state="ready",
+            payload={"patch": {"patch_id": "patch_0"}},
+        )
+    )
+    store.assign_build_attempt(
+        request_id=build_request_id,
+        evaluator_id="eval-1",
+        attempt_id=f"{build_request_id}:attempt:1",
+        generation=1,
+    )
+    store.submit_verify_request(
+        VerifyRequestRecord(
+            request_id="patch-verify:trial-1:bench:h0:cpv_0:patch_0:abc12345",
+            trial_id="trial-1",
+            benchmark="bench",
+            harness="h0",
+            pov_id="patch_0",
+            owner_key="ownerA",
+            lineage_id="patch::bench::h0::cpv_0::patch_0::address::pkgs::inc",
+            generation=1,
+            state="ready",
+            build_request_ids=[build_request_id],
+            payload={
+                "trial_id": "trial-1",
+                "benchmark": "bench",
+                "harness": "h0",
+                "cpv_id": "cpv_0",
+                "patch": {"patch_id": "patch_0"},
+                "build_patch_job_id": build_request_id,
+            },
+        )
+    )
+
+    dispatcher = EvaluatorDispatcher(
+        redis_conn=redis_conn,
+        experiment_name="exp-test",
+        evaluator_id="eval-1",
+    )
+
+    with patch("crsbench.distributed.evaluator_dispatcher.rq.Queue") as mock_queue_cls:
+        queue = MagicMock()
+        mock_queue_cls.return_value = queue
+
+        dispatcher.dispatch_one_verify(now=time.time())
+
+    enqueue_args = queue.enqueue.call_args
+    payload = enqueue_args.args[1]
+    assert payload["verify_payload"][
+        "build_patch_job_id"
+    ] == _build_dispatcher_rq_job_id(f"{build_request_id}:attempt:1")
+
+
 def test_dead_evaluator_reblocks_requests_and_advances_generation() -> None:
     from crsbench.distributed.evaluator_dispatcher import EvaluatorDispatcher
 
