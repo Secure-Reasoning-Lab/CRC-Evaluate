@@ -27,6 +27,7 @@ runtime:
   run_timeout: 28800
   verify_timeout: 28800 # a lot of benchmarks!
   per_pov_verify_timeout: 300
+  skip_verification: true
   redis_host: redis-server:6379
   source_mode: pkgs
   rts_enabled: false
@@ -112,11 +113,6 @@ cloud:
       - {}
       - {}
       - {}
-      # - {} # 6 workers x 224 vCPUs
-  evaluators:
-    defaults:
-      instance_profile: gce-evaluator-n2d
-    placements:
-      - {} # evaluator 1
-      - {} # evaluator 2
-      - {} # evaluator 3
+      - {}
+      - {}
+      - {} # 6 workers x 224 vCPUs
