@@ -36,12 +36,15 @@ execution plumbing under the shared-queue and dispatcher-routed models.
 
 Startup behavior differs between the first two modes:
 
-- config-pinned evaluator CLI mode normally performs a startup pre-build
-  enqueue phase
+- config-pinned evaluator CLI mode in shared routing normally performs a startup
+  pre-build enqueue phase
 - configless mode skips startup pre-build enqueue and relies on lazy build-queue
   consumption
 - dispatcher routing (`CRSBENCH_EVALUATOR_ROUTING_MODEL=dispatcher`) is
   currently supported only in config-pinned evaluator mode
+- dispatcher routing replaces the shared startup pre-build fanout with an
+  evaluator-local advisory warmup feeder that only tops up spare local build
+  capacity
 - async POV verification enqueues a benchmark-local build DAG on first POV
   discovery and each verify job depends on those build jobs before execution
 
@@ -67,6 +70,12 @@ Async POV verification now has two runtime realizations:
   experiment-scoped Redis state, one dispatcher leader applies global owner
   fairness over those ready requests, and the dispatcher then enqueues physical
   attempts onto evaluator-local build/verify queues
+- dispatcher warmup is separate from that logical request flow: evaluators may
+  enqueue local cache-priming build jobs before the first blocked verify demand,
+  but once any blocked verify still has unmet build prerequisites the evaluator
+  stops issuing new warmup jobs until that required build demand clears
+- already queued or running warmup jobs are not canceled when required build
+  demand appears; only new warmup dispatch is suppressed
 
 Dispatcher routing preserves the worker-facing contract around verdict payloads,
 but workers poll stable logical `request_id` values rather than depending on
@@ -84,6 +93,9 @@ Async POV verification must preserve build/verify queue separation:
 - scheduler fairness applies only to runnable queued work; build-before-verify
   correctness remains a dependency contract rather than a blanket build-priority
   rule
+- dispatcher warmup never satisfies correctness by itself; workers still wait on
+  logical dispatcher build request completion before a verify request becomes
+  runnable
 
 Build jobs that rely on incremental benchmark images must carry the resolved
 inc-image runtime settings needed by the evaluator worker (`inc_image_policy`,

@@ -128,6 +128,14 @@ worker-side contracts.
 - evaluator-local build/verify queues are execution-only queues; after
   dispatcher placement, local supervisors execute the already-selected work but
   do not define global owner turns
+- dispatcher-mode evaluators may enqueue advisory warmup builds onto their own
+  local build queue before async POV demand arrives; those warmup jobs are
+  cache priming only and are not part of the correctness path for dispatcher
+  logical build requests
+- when dispatcher state shows any blocked verify request still waiting on an
+  unmet required build, the evaluator stops issuing new warmup jobs until that
+  required-build demand clears; already queued or running warmup work is not
+  canceled
 - verify placement must respect lineage locality: the authoritative evaluator is
   the one that owns the current build generation for that lineage
 - dead-evaluator recovery must requeue local build work, increment affected
@@ -163,6 +171,9 @@ worker-side contracts.
 - if a job is explicitly refreshed or re-enqueued as a new physical attempt, the
   new attempt is admitted as new ready work under the same owner key unless the
   owning flow explicitly changes that identity
+- dispatcher warmup feed is best-effort and capacity-bounded: it only tops up
+  spare local build slots, re-checks required build demand between enqueue
+  attempts, and may resume after blocked verify demand clears
 
 ### Restart and reconciliation behavior
 
@@ -226,7 +237,8 @@ Validation should cover:
 - the bounded TLA+ model preserves abstract no-silent-loss safety and owner
   no-starvation under transient claim failures
 - the dispatcher locality TLA+ model preserves verify-on-current-owner routing
-  and rejects stale late publication from superseded attempts
+  and rejects stale late publication from superseded attempts while also
+  fencing new warmup dispatch once required build demand exists
 
 ## Implementation Pointers
 

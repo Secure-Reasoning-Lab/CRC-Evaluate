@@ -1,12 +1,14 @@
 ---- MODULE DistributedEvaluatorDispatcherLocality ----
 EXTENDS TLC, Naturals
 
-\* Bounded model for dispatcher-owned evaluator routing with local-only builds.
+\* Bounded model for dispatcher-owned evaluator routing with local-only builds
+\* and evaluator-local advisory warmup.
 \*
 \* Scope:
 \* - one shared lineage
 \* - two trial owners with verify requests
 \* - two evaluators, one of which may join later
+\* - optional evaluator-local warmup dispatch before first verify demand
 \* - queued-build rebalance before build start
 \* - evaluator death causing lineage generation advance
 \* - stale-attempt fencing on late verify publication
@@ -16,12 +18,12 @@ EXTENDS TLC, Naturals
 \* - exact RQ queue behavior
 \* - multi-lineage load balancing
 
-CONSTANTS EnforceLocalVerify, FenceAttemptPublishes
+CONSTANTS EnforceLocalVerify, FenceAttemptPublishes, SuppressWarmupOnDemand
 
 Evaluators == {"eval1", "eval2"}
 Owners == {"ownerA", "ownerB"}
-VerifyStates == {"blocked", "ready", "running", "succeeded"}
-BuildStates == {"queued", "running", "succeeded"}
+VerifyStates == {"pending", "blocked", "ready", "running", "succeeded"}
+BuildStates == {"idle", "queued", "running", "succeeded"}
 AttemptNos == 1..2
 Generations == 1..2
 NoEval == "<<no-eval>>"
@@ -43,6 +45,10 @@ VARIABLES alive,
           dead1,
           lineageOwner,
           generation,
+          warmupEnabled,
+          warmupQueued,
+          requiredBuildDemand,
+          warmupDispatchedWhileDemanded,
           buildState,
           builtOn,
           verifyState,
@@ -58,6 +64,10 @@ vars ==
       dead1,
       lineageOwner,
       generation,
+      warmupEnabled,
+      warmupQueued,
+      requiredBuildDemand,
+      warmupDispatchedWhileDemanded,
       buildState,
       builtOn,
       verifyState,
@@ -76,6 +86,9 @@ Ready(owner) ==
 Served(owner) ==
     verifyState[owner] = "running" \/ verifyState[owner] = "succeeded"
 
+Outstanding(owner) ==
+    verifyState[owner] \in {"blocked", "ready", "running"}
+
 NextReadyOwner ==
     IF Ready("ownerA") /\ Ready("ownerB")
     THEN IF lastVerifyOwner = "ownerA" THEN "ownerB" ELSE "ownerA"
@@ -91,15 +104,24 @@ CurrentBuildLocalAndReady ==
     /\ buildState = "succeeded"
     /\ builtOn[generation] = lineageOwner
 
+NeedsRecovery ==
+    buildState # "idle"
+    \/ (\E owner \in Owners :
+            Outstanding(owner) /\ terminalAttempt[owner] = NoAttempt)
+
 Init ==
     /\ alive = {"eval1"}
     /\ joined2 = FALSE
     /\ dead1 = FALSE
     /\ lineageOwner = "eval1"
+    /\ warmupEnabled = TRUE
+    /\ warmupQueued = FALSE
+    /\ requiredBuildDemand = FALSE
+    /\ warmupDispatchedWhileDemanded = FALSE
     /\ generation = 1
-    /\ buildState = "queued"
+    /\ buildState = "idle"
     /\ builtOn = [gen \in Generations |-> NoEval]
-    /\ verifyState = [owner \in Owners |-> "blocked"]
+    /\ verifyState = [owner \in Owners |-> "pending"]
     /\ attemptNo = [owner \in Owners |-> 0]
     /\ authAttempt = [owner \in Owners |-> NoAttempt]
     /\ terminalAttempt = [owner \in Owners |-> NoAttempt]
@@ -114,9 +136,86 @@ JoinEval2 ==
         <<dead1,
           lineageOwner,
           generation,
+          warmupEnabled,
+          warmupQueued,
+          requiredBuildDemand,
+          warmupDispatchedWhileDemanded,
           buildState,
           builtOn,
           verifyState,
+          attemptNo,
+          authAttempt,
+          terminalAttempt,
+          attemptsInWorld,
+          lastVerifyOwner>>
+
+WarmupDispatch ==
+    /\ warmupEnabled
+    /\ alive # {}
+    /\ ~warmupQueued
+    /\ IF SuppressWarmupOnDemand THEN ~requiredBuildDemand ELSE TRUE
+    /\ warmupQueued' = TRUE
+    /\ warmupDispatchedWhileDemanded' =
+         (warmupDispatchedWhileDemanded \/ requiredBuildDemand)
+    /\ UNCHANGED
+        <<alive,
+          joined2,
+          dead1,
+          lineageOwner,
+          generation,
+          warmupEnabled,
+          requiredBuildDemand,
+          buildState,
+          builtOn,
+          verifyState,
+          attemptNo,
+          authAttempt,
+          terminalAttempt,
+          attemptsInWorld,
+          lastVerifyOwner>>
+
+WarmupDrains ==
+    /\ warmupQueued
+    /\ warmupQueued' = FALSE
+    /\ UNCHANGED
+        <<alive,
+          joined2,
+          dead1,
+          lineageOwner,
+          generation,
+          warmupEnabled,
+          requiredBuildDemand,
+          warmupDispatchedWhileDemanded,
+          buildState,
+          builtOn,
+          verifyState,
+          attemptNo,
+          authAttempt,
+          terminalAttempt,
+          attemptsInWorld,
+          lastVerifyOwner>>
+
+DemandBuildArrives(owner) ==
+    /\ owner \in Owners
+    /\ verifyState[owner] = "pending"
+    /\ terminalAttempt[owner] = NoAttempt
+    /\ IF CurrentBuildLocalAndReady
+          THEN /\ verifyState' = [verifyState EXCEPT ![owner] = "ready"]
+               /\ buildState' = buildState
+               /\ requiredBuildDemand' = requiredBuildDemand
+          ELSE /\ verifyState' = [verifyState EXCEPT ![owner] = "blocked"]
+               /\ buildState' = IF buildState = "idle" THEN "queued" ELSE buildState
+               /\ requiredBuildDemand' = TRUE
+    /\ UNCHANGED
+        <<alive,
+          joined2,
+          dead1,
+          lineageOwner,
+          generation,
+          warmupEnabled,
+          warmupQueued,
+          warmupDispatchedWhileDemanded,
+          builtOn,
           attemptNo,
           authAttempt,
           terminalAttempt,
@@ -135,6 +234,10 @@ RebalanceQueuedBuildToEval2 ==
           joined2,
           dead1,
           generation,
+          warmupEnabled,
+          warmupQueued,
+          requiredBuildDemand,
+          warmupDispatchedWhileDemanded,
           buildState,
           builtOn,
           verifyState,
@@ -154,6 +257,10 @@ AssignUnownedLineageToEval2 ==
           joined2,
           dead1,
           generation,
+          warmupEnabled,
+          warmupQueued,
+          requiredBuildDemand,
+          warmupDispatchedWhileDemanded,
           buildState,
           builtOn,
           verifyState,
@@ -174,6 +281,10 @@ StartBuild ==
           dead1,
           lineageOwner,
           generation,
+          warmupEnabled,
+          warmupQueued,
+          requiredBuildDemand,
+          warmupDispatchedWhileDemanded,
           builtOn,
           verifyState,
           attemptNo,
@@ -194,12 +305,16 @@ FinishBuild ==
             THEN "ready"
             ELSE verifyState[owner]
         ]
+    /\ requiredBuildDemand' = FALSE
     /\ UNCHANGED
         <<alive,
           joined2,
           dead1,
           lineageOwner,
           generation,
+          warmupEnabled,
+          warmupQueued,
+          warmupDispatchedWhileDemanded,
           attemptNo,
           authAttempt,
           terminalAttempt,
@@ -211,30 +326,41 @@ Eval1Dies ==
     /\ "eval1" \in alive
     /\ alive' = alive \ {"eval1"}
     /\ dead1' = TRUE
-    /\ IF lineageOwner = "eval1" /\ (\E owner \in Owners : terminalAttempt[owner] = NoAttempt)
+    /\ IF lineageOwner = "eval1" /\ NeedsRecovery
           THEN /\ generation' = 2
                /\ lineageOwner' =
                     IF "eval2" \in alive THEN "eval2" ELSE NoEval
                /\ buildState' = "queued"
                /\ verifyState' =
                     [owner \in Owners |->
-                        IF terminalAttempt[owner] = NoAttempt
+                        IF Outstanding(owner) /\ terminalAttempt[owner] = NoAttempt
                         THEN "blocked"
                         ELSE verifyState[owner]
                     ]
                /\ authAttempt' =
                     [owner \in Owners |->
-                        IF terminalAttempt[owner] = NoAttempt
+                        IF Outstanding(owner) /\ terminalAttempt[owner] = NoAttempt
                         THEN NoAttempt
                         ELSE authAttempt[owner]
                     ]
+               /\ requiredBuildDemand' =
+                    \E owner \in Owners :
+                        Outstanding(owner) /\ terminalAttempt[owner] = NoAttempt
           ELSE /\ generation' = generation
-               /\ lineageOwner' = lineageOwner
-               /\ buildState' = buildState
+               /\ lineageOwner' =
+                    IF lineageOwner = "eval1"
+                    THEN IF "eval2" \in alive THEN "eval2" ELSE NoEval
+                    ELSE lineageOwner
+               /\ buildState' =
+                    IF lineageOwner = "eval1" THEN "idle" ELSE buildState
                /\ verifyState' = verifyState
                /\ authAttempt' = authAttempt
+               /\ requiredBuildDemand' = requiredBuildDemand
     /\ UNCHANGED
         <<joined2,
+          warmupEnabled,
+          warmupQueued,
+          warmupDispatchedWhileDemanded,
           builtOn,
           attemptNo,
           terminalAttempt,
@@ -267,6 +393,10 @@ DispatchVerify(owner, eval) ==
           dead1,
           lineageOwner,
           generation,
+          warmupEnabled,
+          warmupQueued,
+          requiredBuildDemand,
+          warmupDispatchedWhileDemanded,
           buildState,
           builtOn,
           terminalAttempt>>
@@ -285,6 +415,10 @@ PublishVerify(owner, att) ==
           dead1,
           lineageOwner,
           generation,
+          warmupEnabled,
+          warmupQueued,
+          requiredBuildDemand,
+          warmupDispatchedWhileDemanded,
           buildState,
           builtOn,
           attemptNo,
@@ -297,6 +431,9 @@ Stutter ==
 
 Next ==
     \/ JoinEval2
+    \/ WarmupDispatch
+    \/ WarmupDrains
+    \/ \E owner \in Owners : DemandBuildArrives(owner)
     \/ RebalanceQueuedBuildToEval2
     \/ AssignUnownedLineageToEval2
     \/ StartBuild
@@ -312,6 +449,10 @@ TypeInvariant ==
     /\ dead1 \in BOOLEAN
     /\ lineageOwner \in Evaluators \cup {NoEval}
     /\ generation \in Generations
+    /\ warmupEnabled \in BOOLEAN
+    /\ warmupQueued \in BOOLEAN
+    /\ requiredBuildDemand \in BOOLEAN
+    /\ warmupDispatchedWhileDemanded \in BOOLEAN
     /\ buildState \in BuildStates
     /\ builtOn \in [Generations -> Evaluators \cup {NoEval}]
     /\ verifyState \in [Owners -> VerifyStates]
@@ -344,6 +485,9 @@ AcceptedTerminalUsesBuiltGeneration ==
         terminalAttempt[owner] = NoAttempt
         \/ builtOn[terminalAttempt[owner].gen] = terminalAttempt[owner].eval
 
+NoWarmupDispatchWhileDemanded ==
+    ~warmupDispatchedWhileDemanded
+
 VerifyOwnerNoStarvation ==
     \A owner \in Owners :
         Ready(owner) ~> Served(owner)
@@ -357,6 +501,8 @@ Spec ==
 HealthySpec ==
     Spec
         /\ WF_vars(JoinEval2)
+        /\ \A demandOwner \in Owners :
+            WF_vars(DemandBuildArrives(demandOwner))
         /\ WF_vars(RebalanceQueuedBuildToEval2)
         /\ WF_vars(AssignUnownedLineageToEval2)
         /\ WF_vars(StartBuild)
