@@ -9,9 +9,9 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from crsbench.builder.types import BenchmarkMode
-from crsbench.distributed.evaluator_dispatcher_state import (
-    DispatcherStateStore,
-    VerifyResultRecord,
+from crsbench.distributed.evaluator_verify_claims import (
+    EvaluatorVerifyClaimStore,
+    VerifyRequestRecord,
 )
 from crsbench.distributed.patch_evaluator_jobs import (
     EmbeddedPatch,
@@ -646,7 +646,7 @@ class TestEnqueuePatchJobs:
     def test_enqueue_patch_jobs_dispatcher_submits_logical_requests(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        """Dispatcher mode should persist logical patch build/verify requests."""
+        """Dispatcher mode should persist logical patch verify requests."""
         from crsbench.distributed.patch_queue import enqueue_patch_jobs
 
         monkeypatch.setenv(EVALUATOR_ROUTING_MODEL_ENV, ROUTING_MODEL_DISPATCHER)
@@ -677,23 +677,14 @@ class TestEnqueuePatchJobs:
         assert len(job_ids) == 1
         assert job_ids[0].startswith("patch-verify:")
 
-        store = DispatcherStateStore(redis_conn, experiment_name="test-exp")
-        verify_request = store.load_verify_request(job_ids[0])
+        store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="test-exp")
+        verify_request = store.load_request(job_ids[0])
         assert verify_request is not None
-        assert verify_request.state == "blocked_on_build"
         assert verify_request.owner_key == "trial::test-exp::trial-1"
-        assert len(verify_request.build_request_ids) == 1
+        assert verify_request.request_kind == "patch"
+        assert verify_request.claim is None
+        assert verify_request.terminal_result is None
         assert verify_request.payload["patch"]["patch_id"] == "patch_0"
-        assert (
-            verify_request.payload["build_patch_job_id"]
-            == verify_request.build_request_ids[0]
-        )
-
-        build_request = store.load_build_request(verify_request.build_request_ids[0])
-        assert build_request is not None
-        assert build_request.state == "ready"
-        assert build_request.owner_key == "trial::test-exp::trial-1"
-        assert build_request.payload["patch"]["patch_id"] == "patch_0"
 
 
 class TestPollPatchVerdicts:
@@ -962,7 +953,7 @@ class TestPollPatchVerdicts:
         monkeypatch.setenv(EVALUATOR_ROUTING_MODEL_ENV, ROUTING_MODEL_DISPATCHER)
 
         redis_conn = _FakeDispatcherRedis()
-        store = DispatcherStateStore(redis_conn, experiment_name="exp-test")
+        store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp-test")
         request_id = "patch-verify:trial-1:bench:h0:cpv_0:patch_0:abc12345"
         verdict = {
             "trial_id": "trial-1",
@@ -973,14 +964,17 @@ class TestPollPatchVerdicts:
             "status": "valid",
             "security_verdict": "PASS",
         }
-        store.publish_verify_result(
-            request_id,
-            VerifyResultRecord(
+        store.submit_request(
+            VerifyRequestRecord(
                 request_id=request_id,
-                attempt_id="attempt-1",
-                verdict=verdict,
-                terminal_state="succeeded",
-            ),
+                owner_key="trial::exp-test::trial-1",
+                request_kind="patch",
+                payload={"patch_id": "patch_0"},
+            )
+        )
+        store.publish_result(
+            request_id=request_id,
+            result=verdict,
         )
 
         completed, remaining = poll_patch_verdicts(
