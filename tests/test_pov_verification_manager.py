@@ -3,6 +3,7 @@
 Tests for crsbench/evaluation/verification/pov/manager.py.
 """
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1407,6 +1408,29 @@ class TestAsyncMode:
         manager.drain_pending(per_pov_timeout=1, verify_timeout=1, poll_interval=0.1)
 
         manager.store.save.assert_called_once()
+
+    @patch("crsbench.distributed.verify_queue.poll_single_pov_verdicts")
+    def test_drain_pending_marks_undrained_timeout(
+        self, mock_poll, tmp_path: Path
+    ) -> None:
+        """Async POV drain timeout writes a shared verification-undrained marker."""
+        mock_poll.return_value = ([], ["job-123"])
+
+        manager = self._make_manager(tmp_path, redis_host="redis.local")
+        manager._pending_job_ids = ["job-123"]
+        manager._job_to_pov_id = {"job-123": "test.blob:abc123hash"}
+
+        manager.drain_pending(per_pov_timeout=1, verify_timeout=1, poll_interval=0.1)
+
+        marker_path = tmp_path / "trial-1" / ".verification-undrained.json"
+        assert marker_path.exists()
+        assert json.loads(marker_path.read_text()) == {
+            "verification_kind": "pov",
+            "reason": "async_verification_drain_incomplete",
+            "expected_jobs": 1,
+            "completed_results": 0,
+            "missing_results": 1,
+        }
 
 
 class TestExchangeDirScanning:

@@ -28,6 +28,10 @@ if TYPE_CHECKING:
     from crsbench.distributed.verify_queue import AsyncPovBuildPrereqs
     from crsbench.validation.meta_adapter import MetaYamlAdapter
 
+from crsbench.evaluation.verification.drain_marker import (
+    clear_verification_undrained_marker,
+    write_verification_undrained_marker,
+)
 from crsbench.evaluation.verification.models import (
     PovVerificationRequest,
     PovVerificationResult,
@@ -889,6 +893,8 @@ class POVVerificationManager:
             verify_timeout: Overall verification phase budget in seconds
             poll_interval: Seconds between poll attempts
         """
+        clear_verification_undrained_marker(self.trial_dir)
+
         if not self._pending_job_ids or not self._async_mode:
             return
 
@@ -907,8 +913,18 @@ class POVVerificationManager:
                 time.sleep(poll_interval)
 
         if self._pending_job_ids:
+            missing_results = len(self._pending_job_ids)
+            completed_results = n_pending - missing_results
+            marker_path = write_verification_undrained_marker(
+                self.trial_dir,
+                verification_kind="pov",
+                expected_jobs=n_pending,
+                completed_results=completed_results,
+                missing_results=missing_results,
+            )
             logger.warning(
-                f"Drain timeout: {len(self._pending_job_ids)} verdicts still pending"
+                f"Drain timeout: {missing_results} verdicts still pending "
+                f"(marker={marker_path})"
             )
             self._mark_pending_as_error()
         else:

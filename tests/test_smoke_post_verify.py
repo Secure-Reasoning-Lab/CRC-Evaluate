@@ -205,3 +205,50 @@ def test_run_smoke_post_verification_rejects_failed_trials_before_running_comman
 
     assert exit_code == 1
     assert called is False
+
+
+def test_run_smoke_post_verification_rejects_undrained_patch_verify_marker(
+    tmp_path: Path,
+) -> None:
+    benchmarks_root = tmp_path / "benchmarks"
+    benchmark_path = benchmarks_root / "demo-bench"
+    _write_meta(benchmark_path, {"fuzz_a": ["cpv_0"]})
+
+    experiment_dir = tmp_path / "experiment"
+    trial_dir = experiment_dir / "crs" / "demo-bench" / "fuzz_a" / "delta" / "trial-1"
+    _write_trial_metadata(trial_dir, "demo-bench", "fuzz_a")
+    (trial_dir / ".verification-undrained.json").write_text(
+        json.dumps(
+            {
+                "verification_kind": "patch",
+                "reason": "async_verification_drain_incomplete",
+                "expected_jobs": 1,
+                "completed_results": 0,
+                "missing_results": 1,
+            }
+        )
+    )
+    output_patches = trial_dir / "output" / "patches" / "cpv_0"
+    output_patches.mkdir(parents=True)
+    (output_patches / "patch.diff").write_text("--- a\n+++ b\n")
+    input_povs = trial_dir / "crs-input" / "povs"
+    input_povs.mkdir(parents=True)
+    (input_povs / "cpv_0.blob").write_bytes(b"pov")
+
+    called = False
+
+    def _runner(_command: list[str]) -> int:
+        nonlocal called
+        called = True
+        return 0
+
+    exit_code = run_smoke_post_verification(
+        experiment_dir=experiment_dir,
+        benchmarks_root=benchmarks_root,
+        suite="bugfixing",
+        run_command=_runner,
+        runner_prefix=["crsbench"],
+    )
+
+    assert exit_code == 1
+    assert called is False

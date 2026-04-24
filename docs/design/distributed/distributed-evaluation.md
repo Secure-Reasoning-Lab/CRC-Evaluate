@@ -136,6 +136,12 @@ not part of the worker-visible correctness contract.
 - non-local verification must not assume shared filesystem state unless that
   state is explicitly part of the deployment contract
 - delayed polling/early-stop is acceptable; silent result loss is not
+- if an async verification drain times out after the worker has already
+  preserved trial artifacts, the worker may still publish `.success` for the
+  trial, but it must also persist `.verification-undrained.json` at the trial
+  root with the verification kind (`pov` or `patch`) and missing-result counts;
+  CI/smoke validation must treat that marker as a hard failure and operators may
+  recover later via `crsbench re-eval`
 - dispatcher-routed stale attempts must be fenced from publishing terminal
   logical results after lineage reassignment or newer attempt issuance
 - the async final drain budget is `runtime.verify_timeout`; it covers both

@@ -13,6 +13,10 @@ from typing import Callable, Literal, cast
 
 from crsbench.benchmark_ci.checks import check_patch_verify, check_verify
 from crsbench.evaluation.trial_paths import TrialDir, resolve_benchmark_path
+from crsbench.evaluation.verification.drain_marker import (
+    read_verification_undrained_marker,
+    verification_undrained_marker_path,
+)
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -138,9 +142,22 @@ def _run_command(command: list[str]) -> int:
 def _validate_trial_outputs(task: SmokeVerificationTask) -> None:
     success_marker = task.trial_dir / ".success"
     fail_marker = task.trial_dir / ".fail"
+    undrained_marker = verification_undrained_marker_path(task.trial_dir)
 
     if fail_marker.exists():
         raise ValueError(f"trial failed: {task.trial_dir}")
+    if undrained_marker.exists():
+        payload = read_verification_undrained_marker(task.trial_dir)
+        if payload is None:
+            raise ValueError(f"malformed verification drain marker: {undrained_marker}")
+        verification_kind = payload.get("verification_kind", "unknown")
+        missing_results = payload.get("missing_results", "?")
+        expected_jobs = payload.get("expected_jobs", "?")
+        raise ValueError(
+            "verification drain incomplete "
+            f"({verification_kind}: {missing_results}/{expected_jobs} pending): "
+            f"{task.trial_dir}"
+        )
     if not success_marker.exists():
         raise ValueError(f"missing .success marker: {task.trial_dir}")
 

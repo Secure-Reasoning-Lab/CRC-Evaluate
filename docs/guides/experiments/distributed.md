@@ -679,6 +679,7 @@ Smoke bug-fixing suites currently run with LiteLLM tracking enabled in the sanit
 | Workers exit immediately | Worker was started with `--no-continuous` and the queue drained | Omit `--no-continuous` for the default continuous mode |
 | Stale jobs from previous run | Queue not cleaned | `uv run python scripts/valkey-helper.py clean <experiment>` |
 | `CRSBENCH_LLM_UPSTREAM_BASE_URL not set` | LiteLLM env contract is incomplete for this trial | Set `skip_litellm: true` when LLM is not needed, or provide required `CRSBENCH_LLM_*` vars |
+| `verification drain incomplete (...)` during smoke post-verify | Async POV/patch verification hit `runtime.verify_timeout`; the worker preserved artifacts but wrote `.verification-undrained.json` | Treat smoke as failed, inspect the worker/evaluator logs for the stalled verify queue, then re-run `crsbench re-eval` on the completed trial outputs once the evaluator path is fixed |
 
 ## CLI Reference
 
