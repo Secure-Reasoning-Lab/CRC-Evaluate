@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from crsbench.builder.types import BenchmarkMode, VariantType
+from crsbench.distributed.verify_queue import AsyncPovBuildPrereqs
 from crsbench.evaluation.verification.models import PovVerificationStatus
 from crsbench.evaluation.verification.pov.config import POVVerificationConfig
 from crsbench.evaluation.verification.pov.store import POVStore
@@ -775,7 +776,12 @@ class TestAsyncMode:
         build_dep = MagicMock()
         build_dep.id = "build-job-1"
         manager._ensure_async_build_jobs = MagicMock(
-            return_value=(["build-job-1"], [build_dep])
+            return_value=AsyncPovBuildPrereqs(
+                logical_build_request_ids=["build-job-1"],
+                artifact_build_ids=["artifact-job-1"],
+                rq_dependencies=[build_dep],
+                sanitizer="address",
+            )
         )
         manager._engine = MagicMock()
         manager._engine.builder.source_mode = "main_repo"
@@ -794,6 +800,7 @@ class TestAsyncMode:
         assert call_kwargs[1]["pov_id"] == "test.blob:abc123hash"
         assert call_kwargs[1]["sanitizer"] == "address"
         assert call_kwargs[1]["build_job_ids"] == ["build-job-1"]
+        assert call_kwargs[1]["build_artifact_ids"] == ["artifact-job-1"]
         assert call_kwargs[1]["depends_on"] == [build_dep]
         assert call_kwargs[1]["source_mode"] == "main_repo"
         assert call_kwargs[1]["use_inc_build"] is False
@@ -847,7 +854,14 @@ class TestAsyncMode:
         mock_enqueue.return_value = "job-1"
 
         manager = self._make_manager(tmp_path, redis_host="redis.local")
-        manager._ensure_async_build_jobs = MagicMock(return_value=(["build-job-1"], []))
+        manager._ensure_async_build_jobs = MagicMock(
+            return_value=AsyncPovBuildPrereqs(
+                logical_build_request_ids=["build-job-1"],
+                artifact_build_ids=["build-job-1"],
+                rq_dependencies=[],
+                sanitizer="address",
+            )
+        )
         manager._engine = MagicMock()
         manager._engine.builder.source_mode = "pkgs"
         manager._adapter = MagicMock()
@@ -939,10 +953,17 @@ class TestAsyncMode:
             configs=[config_a, config_b]
         )
 
-        build_job_ids, build_deps = manager._ensure_async_build_jobs()
+        build_prereqs = manager._ensure_async_build_jobs()
 
-        assert build_job_ids == [build_rq_job_1.id, build_rq_job_2.id]
-        assert build_deps == [build_rq_job_1, build_rq_job_2]
+        assert build_prereqs.logical_build_request_ids == [
+            build_rq_job_1.id,
+            build_rq_job_2.id,
+        ]
+        assert build_prereqs.rq_dependencies == [build_rq_job_1, build_rq_job_2]
+        assert build_prereqs.artifact_build_ids == [
+            build_rq_job_1.id,
+            build_rq_job_2.id,
+        ]
         assert manager._async_build_sanitizer == "address"
         assert mock_enqueue_ci_job.call_count == 3
         assert (
@@ -1029,13 +1050,26 @@ class TestAsyncMode:
             "build:trial-1:test-benchmark:2",
         ]
 
-        build_job_ids, build_deps = manager._ensure_async_build_jobs()
-        build_job_ids_repeat, build_deps_repeat = manager._ensure_async_build_jobs()
+        build_prereqs = manager._ensure_async_build_jobs()
+        build_prereqs_repeat = manager._ensure_async_build_jobs()
 
-        assert build_job_ids == mock_submit_builds.return_value[1:]
-        assert build_job_ids_repeat == build_job_ids
-        assert build_deps == []
-        assert build_deps_repeat == build_deps
+        assert (
+            build_prereqs.logical_build_request_ids
+            == mock_submit_builds.return_value[1:]
+        )
+        assert (
+            build_prereqs_repeat.logical_build_request_ids
+            == build_prereqs.logical_build_request_ids
+        )
+        assert build_prereqs.rq_dependencies == []
+        assert build_prereqs_repeat.rq_dependencies == build_prereqs.rq_dependencies
+        assert build_prereqs.artifact_build_ids == [
+            "build-single/test-benchmark/test-benchmark-asan-deltaref",
+            "build-single/test-benchmark/test-benchmark-asan-delta-cpv0",
+        ]
+        assert (
+            build_prereqs_repeat.artifact_build_ids == build_prereqs.artifact_build_ids
+        )
         assert manager._async_build_sanitizer == "address"
         mock_submit_builds.assert_called_once()
 
@@ -1052,7 +1086,14 @@ class TestAsyncMode:
         monkeypatch.setenv(EVALUATOR_ROUTING_MODEL_ENV, ROUTING_MODEL_DISPATCHER)
 
         manager = self._make_manager(tmp_path, redis_host="redis.local")
-        manager._ensure_async_build_jobs = MagicMock(return_value=(["build-1"], []))
+        manager._ensure_async_build_jobs = MagicMock(
+            return_value=AsyncPovBuildPrereqs(
+                logical_build_request_ids=["build-1"],
+                artifact_build_ids=["artifact-1"],
+                rq_dependencies=[],
+                sanitizer="address",
+            )
+        )
         manager._engine = MagicMock()
         manager._engine.builder.source_mode = "main_repo"
         manager._adapter = MagicMock()
@@ -1066,6 +1107,8 @@ class TestAsyncMode:
         call_kwargs = mock_enqueue.call_args.kwargs
         assert call_kwargs["verify_queue"] is None
         assert call_kwargs["redis_host"] == "redis.local"
+        assert call_kwargs["build_job_ids"] == ["build-1"]
+        assert call_kwargs["build_artifact_ids"] == ["artifact-1"]
 
     @patch("crsbench.evaluation.verification.pov.manager.time.sleep")
     @patch("crsbench.evaluation.verification.pov.manager.time.time")

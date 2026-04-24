@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
+    from crsbench.distributed.verify_queue import AsyncPovBuildPrereqs
     from crsbench.validation.meta_adapter import MetaYamlAdapter
 
 from crsbench.evaluation.verification.models import (
@@ -157,8 +158,7 @@ class POVVerificationManager:
         self._pending_job_ids: list[str] = []  # Job IDs awaiting results
         self._pov_hash_to_path: dict[str, Path] = {}  # hash → local file path
         self._job_to_pov_id: dict[str, str] = {}  # job_id → pov_id for timeout marking
-        self._async_build_job_ids: list[str] = []
-        self._async_build_dependencies: list[object] = []
+        self._async_build_prereqs: Optional["AsyncPovBuildPrereqs"] = None
         self._async_build_sanitizer: Optional[str] = None
 
         # EXCHANGE_DIR scanning for real-time POV discovery during CRS execution
@@ -242,10 +242,10 @@ class POVVerificationManager:
         )
         return self._build_queue
 
-    def _ensure_async_build_jobs(self) -> Optional[tuple[list[str], list[object]]]:
-        """Ensure async POV verification has an explicit build DAG."""
-        if self._async_build_job_ids:
-            return self._async_build_job_ids, self._async_build_dependencies
+    def _ensure_async_build_jobs(self) -> Optional["AsyncPovBuildPrereqs"]:
+        """Ensure async POV verification has explicit build prerequisites."""
+        if self._async_build_prereqs:
+            return self._async_build_prereqs
 
         if self._engine is None:
             logger.warning("VerificationEngine not initialized, cannot enqueue builds")
@@ -279,10 +279,8 @@ class POVVerificationManager:
         if build_prereqs is None:
             return None
 
-        build_job_ids, build_dependencies, sanitizer = build_prereqs
-        self._async_build_job_ids = build_job_ids
-        self._async_build_dependencies = build_dependencies
-        self._async_build_sanitizer = sanitizer
+        self._async_build_prereqs = build_prereqs
+        self._async_build_sanitizer = build_prereqs.sanitizer
 
         if get_evaluator_routing_model() == ROUTING_MODEL_DISPATCHER:
             logger.info(
@@ -290,8 +288,8 @@ class POVVerificationManager:
                 "({} request(s), sanitizer={})",
                 self.benchmark_id,
                 self.harness_name,
-                len(build_job_ids),
-                sanitizer,
+                len(build_prereqs.logical_build_request_ids),
+                build_prereqs.sanitizer,
             )
         else:
             logger.info(
@@ -299,10 +297,10 @@ class POVVerificationManager:
                 "sanitizer={})",
                 self.benchmark_id,
                 self.harness_name,
-                len(build_job_ids),
-                sanitizer,
+                len(build_prereqs.logical_build_request_ids),
+                build_prereqs.sanitizer,
             )
-        return self._async_build_job_ids, self._async_build_dependencies
+        return self._async_build_prereqs
 
     def _enqueue_pov(self, pov_path: Path, pov_hash: str) -> Optional[str]:
         """Enqueue a single POV for async verification via Redis.
@@ -328,7 +326,9 @@ class POVVerificationManager:
         build_prereqs = self._ensure_async_build_jobs()
         if build_prereqs is None:
             return None
-        build_job_ids, build_dependencies = build_prereqs
+        build_job_ids = build_prereqs.logical_build_request_ids
+        build_dependencies = build_prereqs.rq_dependencies
+        build_artifact_ids = build_prereqs.artifact_build_ids
 
         pov_data = pov_path.read_bytes()
         self._pov_hash_to_path[pov_hash] = pov_path
@@ -350,6 +350,7 @@ class POVVerificationManager:
             pov_data=pov_data,
             sanitizer=self._async_build_sanitizer or self._sanitizer,
             build_job_ids=build_job_ids,
+            build_artifact_ids=build_artifact_ids,
             depends_on=build_dependencies or None,
             source_mode=self._engine.builder.source_mode if self._engine else "pkgs",
             use_inc_build=bool(self._adapter.inc_build) if self._adapter else True,

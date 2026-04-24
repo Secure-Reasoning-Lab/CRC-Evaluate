@@ -10,6 +10,10 @@ from crsbench.distributed.evaluator_jobs import (
     SinglePovResult,
     verify_single_pov,
 )
+from crsbench.evaluation.verification.models import (
+    PovVerificationResult,
+    PovVerificationStatus,
+)
 
 
 class TestSinglePovPayload:
@@ -454,6 +458,50 @@ class TestVerifySinglePov:
             use_inc_build=False,
         )
         mock_engine.get_or_build_results.assert_not_called()
+
+    @patch("crsbench.distributed.evaluator_jobs._built_results", {})
+    def test_verify_single_pov_prefers_build_artifact_ids_when_present(self) -> None:
+        payload = self._make_payload()
+        payload["build_job_ids"] = ["logical-build-id"]
+        payload["build_artifact_ids"] = ["artifact-build-id"]
+        payload["source_mode"] = "main_repo"
+        payload["use_inc_build"] = False
+
+        mock_engine = MagicMock()
+        mock_adapter = MagicMock()
+        mock_engine.load_adapter.return_value = mock_adapter
+        mock_engine.verify_pov.return_value = PovVerificationResult(
+            status=PovVerificationStatus.CPV,
+            benchmark="test-bench",
+            pov_id="pov_0",
+            cpv_matched=["cpv_0"],
+            details="details",
+        )
+
+        mock_benchmark_path = MagicMock()
+
+        with (
+            patch(
+                "crsbench.distributed.evaluator_jobs._verification_engine",
+                mock_engine,
+            ),
+            patch(
+                "crsbench.distributed.evaluator_jobs.resolve_benchmark_path",
+                return_value=mock_benchmark_path,
+            ),
+            patch(
+                "crsbench.distributed.ci_jobs.load_build_context_from_disk",
+                return_value=MagicMock(build_results={}),
+            ) as mock_load_build_context,
+        ):
+            verify_single_pov(payload)
+
+        mock_load_build_context.assert_called_once_with(
+            build_job_ids=payload["build_artifact_ids"],
+            benchmark_path=mock_benchmark_path,
+            source_mode="main_repo",
+            use_inc_build=False,
+        )
 
 
 class TestLazyBuildCache:

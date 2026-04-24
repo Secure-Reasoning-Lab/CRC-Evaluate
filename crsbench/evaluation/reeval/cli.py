@@ -45,6 +45,8 @@ from crsbench.utils.run_helper import ensure_oss_fuzz_root
 if TYPE_CHECKING:
     import rq
 
+    from crsbench.distributed.verify_queue import AsyncPovBuildPrereqs
+
 logger = get_logger(__name__)
 _POV_HASH_RE = re.compile(r"^(?:[0-9a-f]{16}|[0-9a-f]{64})$")
 
@@ -729,7 +731,7 @@ def _prepare_async_pov_build_prereqs(
     trial_id: str,
     sanitizer: Optional[str],
     use_inc_build: bool,
-) -> tuple[list[str], list[object], str] | None:
+) -> "AsyncPovBuildPrereqs | None":
     """Build the explicit async POV prerequisite DAG for re-eval."""
     try:
         from crsbench.distributed.queue import (
@@ -863,7 +865,16 @@ def _enqueue_trial_povs(
             trial_id,
         )
         return None
-    build_job_ids, build_dependencies, resolved_sanitizer = build_prereqs
+    from crsbench.distributed.verify_queue import AsyncPovBuildPrereqs
+
+    if isinstance(build_prereqs, AsyncPovBuildPrereqs):
+        build_job_ids = build_prereqs.logical_build_request_ids
+        build_artifact_ids = build_prereqs.artifact_build_ids
+        build_dependencies = build_prereqs.rq_dependencies
+        resolved_sanitizer = build_prereqs.sanitizer
+    else:
+        build_job_ids, build_dependencies, resolved_sanitizer = build_prereqs
+        build_artifact_ids = build_job_ids
 
     for pov_file in pov_files:
         pov_data = pov_file.read_bytes()
@@ -890,6 +901,7 @@ def _enqueue_trial_povs(
             redis_host=redis_host,
             sanitizer=resolved_sanitizer,
             build_job_ids=build_job_ids,
+            build_artifact_ids=build_artifact_ids,
             depends_on=build_dependencies or None,
             source_mode=source_mode,
             use_inc_build=use_inc_build,

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 from crsbench.distributed.evaluator_scheduler import (
@@ -41,6 +42,14 @@ logger = get_logger(__name__)
 
 # Maximum POV size to enqueue (10MB). Larger POVs are skipped with a warning.
 MAX_POV_SIZE_BYTES = 10 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class AsyncPovBuildPrereqs:
+    logical_build_request_ids: list[str]
+    artifact_build_ids: list[str]
+    rq_dependencies: list[object]
+    sanitizer: str
 
 
 def _build_verify_request_id(
@@ -148,7 +157,7 @@ def prepare_async_pov_build_prereqs(
     build_queue: Optional[Any],
     sanitizer: Optional[str],
     use_inc_build: bool,
-) -> tuple[list[str], list[object], str] | None:
+) -> AsyncPovBuildPrereqs | None:
     """Prepare explicit build prerequisites for async POV verification."""
     try:
         from crsbench.benchmark_ci.jobs.flat import (
@@ -187,6 +196,7 @@ def prepare_async_pov_build_prereqs(
 
         if get_evaluator_routing_model() == ROUTING_MODEL_DISPATCHER:
             build_payloads: list[dict[str, object]] = []
+            artifact_build_ids: list[str] = []
             prepare_request_id = ""
             if use_inc_build:
                 prepare_job = PrepareIncImageJob(
@@ -232,6 +242,7 @@ def prepare_async_pov_build_prereqs(
                     inc_image_pull_timeout=engine.builder.infra.inc_image_pull_timeout,
                     local_image_prefix=engine.builder.infra.local_image_prefix,
                 )
+                artifact_build_ids.append(build_job.job_id)
                 build_payloads.append(serialize_ci_job(build_job))
 
             request_ids = submit_async_build_requests(
@@ -244,8 +255,15 @@ def prepare_async_pov_build_prereqs(
                 source_mode=source_mode,
                 use_inc_build=use_inc_build,
             )
-            build_job_ids = request_ids[1:] if use_inc_build else request_ids
-            return build_job_ids, [], resolved_sanitizer
+            logical_build_request_ids = (
+                request_ids[1:] if use_inc_build else request_ids
+            )
+            return AsyncPovBuildPrereqs(
+                logical_build_request_ids=logical_build_request_ids,
+                artifact_build_ids=artifact_build_ids,
+                rq_dependencies=[],
+                sanitizer=resolved_sanitizer,
+            )
 
         if build_queue is None:
             logger.warning("Build queue not available, skipping async POV enqueue")
@@ -316,7 +334,12 @@ def prepare_async_pov_build_prereqs(
             build_job_ids.append(build_rq_job.id)
             build_dependencies.append(build_rq_job)
 
-        return build_job_ids, build_dependencies, resolved_sanitizer
+        return AsyncPovBuildPrereqs(
+            logical_build_request_ids=list(build_job_ids),
+            artifact_build_ids=list(build_job_ids),
+            rq_dependencies=list(build_dependencies),
+            sanitizer=resolved_sanitizer,
+        )
     except Exception as e:
         logger.warning(f"Failed to enqueue async POV build DAG: {e}")
         return None
@@ -554,6 +577,7 @@ def enqueue_single_pov(
     job_timeout: int = 3600,
     cpu_tag: Optional[str] = None,
     build_job_ids: Optional[list[str]] = None,
+    build_artifact_ids: Optional[list[str]] = None,
     depends_on: Optional[list[Any]] = None,
     source_mode: str = "pkgs",
     use_inc_build: bool = True,
@@ -601,6 +625,7 @@ def enqueue_single_pov(
         enqueued_at=time.time(),
         sanitizer=sanitizer,
         build_job_ids=list(build_job_ids or []),
+        build_artifact_ids=list(build_artifact_ids or []),
         source_mode=source_mode,
         use_inc_build=use_inc_build,
     )
