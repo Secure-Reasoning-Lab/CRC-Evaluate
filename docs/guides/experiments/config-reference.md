@@ -195,8 +195,12 @@ Pull timeout:
 
 Evaluator mode note:
 
-- config-pinned evaluator CLI mode normally performs a startup pre-build
-  enqueue phase
+- focused worker/evaluator CLI modes default to dispatcher routing when
+  `CRSBENCH_EVALUATOR_ROUTING_MODEL` is unset; async POV verification then uses
+  logical build/verify requests plus evaluator-local warmup instead of the
+  legacy shared startup pre-build fanout
+- shared routing remains available as an explicit override via
+  `CRSBENCH_EVALUATOR_ROUTING_MODEL=shared`
 - configless evaluator mode does not enqueue startup pre-builds; it consumes
   build jobs lazily and async POV verification enqueues benchmark-local build
   jobs on first POV discovery, with verify jobs waiting on those dependencies

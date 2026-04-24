@@ -13,14 +13,18 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from crsbench.distributed.evaluator_scheduler import (
     SCHEDULER_OWNER_KEY_META,
     adopt_scheduler_owner_if_needed,
     build_scheduler_owner_key_from_payload,
 )
-from crsbench.distributed.queue import REDIS_AVAILABLE
+from crsbench.distributed.queue import (
+    REDIS_AVAILABLE,
+    ROUTING_MODEL_DISPATCHER,
+    get_evaluator_routing_model,
+)
 from crsbench.utils.logger import get_logger
 
 if REDIS_AVAILABLE:
@@ -29,6 +33,11 @@ if REDIS_AVAILABLE:
 
 if TYPE_CHECKING:
     import redis
+
+    from crsbench.distributed.evaluator_dispatcher_state import (
+        DispatcherStateRedisProtocol,
+        DispatcherStateStore,
+    )
 
 logger = get_logger(__name__)
 
@@ -126,6 +135,116 @@ def _make_patch_verify_rq_job_id(
         f"{_sanitize_job_id_component(cpv_id)}/"
         f"{_sanitize_job_id_component(patch_id)}/"
         f"{suffix}"
+    )
+
+
+def _make_patch_build_request_id(
+    *,
+    experiment_name: str,
+    trial_id: str,
+    benchmark: str,
+    harness: str,
+    cpv_id: str,
+    patch_id: str,
+    sanitizer: str,
+    source_mode: str,
+    use_inc_build: bool,
+    patch_content_hash: str,
+) -> str:
+    """Build deterministic logical dispatcher request_id for patch builds."""
+    suffix = _stable_job_suffix(
+        experiment_name,
+        trial_id,
+        benchmark,
+        harness,
+        cpv_id,
+        patch_id,
+        sanitizer,
+        source_mode,
+        str(use_inc_build),
+        patch_content_hash,
+    )
+    return (
+        "patch-build:"
+        f"{_sanitize_job_id_component(trial_id)}:"
+        f"{_sanitize_job_id_component(benchmark)}:"
+        f"{_sanitize_job_id_component(harness)}:"
+        f"{_sanitize_job_id_component(cpv_id)}:"
+        f"{_sanitize_job_id_component(patch_id)}:"
+        f"{suffix}"
+    )
+
+
+def _make_patch_verify_request_id(
+    *,
+    experiment_name: str,
+    trial_id: str,
+    benchmark: str,
+    harness: str,
+    cpv_id: str,
+    patch_id: str,
+    verify_variants: bool,
+    test_mode: str,
+    source_mode: str,
+    use_inc_build: bool,
+    sanitizer: str,
+    patch_content_hash: str,
+) -> str:
+    """Build deterministic logical dispatcher request_id for patch verify jobs."""
+    suffix = _stable_job_suffix(
+        experiment_name,
+        trial_id,
+        benchmark,
+        harness,
+        cpv_id,
+        patch_id,
+        str(verify_variants),
+        test_mode,
+        source_mode,
+        str(use_inc_build),
+        sanitizer,
+        patch_content_hash,
+    )
+    return (
+        "patch-verify:"
+        f"{_sanitize_job_id_component(trial_id)}:"
+        f"{_sanitize_job_id_component(benchmark)}:"
+        f"{_sanitize_job_id_component(harness)}:"
+        f"{_sanitize_job_id_component(cpv_id)}:"
+        f"{_sanitize_job_id_component(patch_id)}:"
+        f"{suffix}"
+    )
+
+
+def _build_patch_lineage_id(
+    *,
+    benchmark: str,
+    harness: str,
+    cpv_id: str,
+    patch_id: str,
+    sanitizer: str,
+    source_mode: str,
+    use_inc_build: bool,
+    patch_content_hash: str,
+) -> str:
+    inc_build_label = "inc" if use_inc_build else "clean"
+    return (
+        "patch::"
+        f"{benchmark}::{harness}::{cpv_id}::{patch_id}::"
+        f"{sanitizer}::{source_mode}::{inc_build_label}::{patch_content_hash}"
+    )
+
+
+def _get_dispatcher_store(
+    *,
+    experiment_name: str,
+    redis_conn: object,
+) -> "DispatcherStateStore":
+    from crsbench.distributed.evaluator_dispatcher_state import DispatcherStateStore
+
+    return DispatcherStateStore(
+        cast("DispatcherStateRedisProtocol", redis_conn),
+        experiment_name=experiment_name,
     )
 
 
@@ -298,6 +417,20 @@ def enqueue_patch_jobs(
     )
 
     verify_job_ids: list[str] = []
+    dispatcher_mode = get_evaluator_routing_model() == ROUTING_MODEL_DISPATCHER
+    dispatcher_store: DispatcherStateStore | None = None
+    if dispatcher_mode:
+        dispatcher_redis_conn = getattr(build_queue, "connection", None) or getattr(
+            verify_queue, "connection", None
+        )
+        if dispatcher_redis_conn is None:
+            raise ValueError(
+                "dispatcher patch enqueue requires build or verify queue connection"
+            )
+        dispatcher_store = _get_dispatcher_store(
+            experiment_name=experiment_name,
+            redis_conn=dispatcher_redis_conn,
+        )
 
     for cpv_id, patch_id, patch_path in patches:
         try:
@@ -317,6 +450,91 @@ def enqueue_patch_jobs(
                 enqueued_at=time.time(),
             )
             patch_content_hash = _patch_content_hash(embedded_patch.patch_content_b64)
+
+            if dispatcher_mode:
+                from crsbench.distributed.evaluator_dispatcher_state import (
+                    BuildRequestRecord,
+                    VerifyRequestRecord,
+                )
+
+                assert dispatcher_store is not None
+                owner_key = f"trial::{experiment_name}::{trial_id}"
+                lineage_id = _build_patch_lineage_id(
+                    benchmark=benchmark,
+                    harness=harness,
+                    cpv_id=cpv_id,
+                    patch_id=patch_id,
+                    sanitizer=sanitizer,
+                    source_mode=source_mode,
+                    use_inc_build=use_inc_build,
+                    patch_content_hash=patch_content_hash,
+                )
+                build_request_id = _make_patch_build_request_id(
+                    experiment_name=experiment_name,
+                    trial_id=trial_id,
+                    benchmark=benchmark,
+                    harness=harness,
+                    cpv_id=cpv_id,
+                    patch_id=patch_id,
+                    sanitizer=sanitizer,
+                    source_mode=source_mode,
+                    use_inc_build=use_inc_build,
+                    patch_content_hash=patch_content_hash,
+                )
+                build_payload = payload.to_dict()
+                dispatcher_store.submit_build_request(
+                    BuildRequestRecord(
+                        request_id=build_request_id,
+                        trial_id=trial_id,
+                        benchmark=benchmark,
+                        owner_key=owner_key,
+                        lineage_id=lineage_id,
+                        generation=1,
+                        state="ready",
+                        payload=build_payload,
+                    )
+                )
+
+                verify_payload = payload.to_dict()
+                verify_payload["build_patch_job_id"] = build_request_id
+                verify_request_id = _make_patch_verify_request_id(
+                    experiment_name=experiment_name,
+                    trial_id=trial_id,
+                    benchmark=benchmark,
+                    harness=harness,
+                    cpv_id=cpv_id,
+                    patch_id=patch_id,
+                    verify_variants=verify_variants,
+                    test_mode=test_mode,
+                    source_mode=source_mode,
+                    use_inc_build=use_inc_build,
+                    sanitizer=sanitizer,
+                    patch_content_hash=patch_content_hash,
+                )
+                dispatcher_store.submit_verify_request(
+                    VerifyRequestRecord(
+                        request_id=verify_request_id,
+                        trial_id=trial_id,
+                        benchmark=benchmark,
+                        harness=harness,
+                        pov_id=patch_id,
+                        owner_key=owner_key,
+                        lineage_id=lineage_id,
+                        generation=1,
+                        state="blocked_on_build",
+                        build_request_ids=[build_request_id],
+                        payload=verify_payload,
+                    )
+                )
+                logger.debug(
+                    "Submitted dispatcher patch verify request {} for {}/{} patch={}",
+                    verify_request_id,
+                    benchmark,
+                    cpv_id,
+                    patch_id,
+                )
+                verify_job_ids.append(verify_request_id)
+                continue
 
             # Enqueue build job to build queue (multi-CPU)
             effective_cpu_tag = cpu_tag or os.environ.get("CRSBENCH_JOB_CPU_TAG")
@@ -406,6 +624,8 @@ def poll_patch_verdicts(
     redis_host: str,
     job_ids: list[str],
     redis_conn: Optional["redis.Redis"] = None,
+    *,
+    experiment_name: Optional[str] = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Poll for completed patch verification verdicts.
 
@@ -420,7 +640,29 @@ def poll_patch_verdicts(
     Returns:
         Tuple of (completed_results, remaining_job_ids)
     """
-    if not REDIS_AVAILABLE or not job_ids:
+    if not job_ids:
+        return [], list(job_ids)
+
+    if (
+        get_evaluator_routing_model() == ROUTING_MODEL_DISPATCHER
+        and experiment_name
+        and all(job_id.startswith("patch-verify:") for job_id in job_ids)
+    ):
+        try:
+            if redis_conn is None:
+                from crsbench.distributed.queue import create_redis_connection
+
+                redis_conn = create_redis_connection(redis_host)
+            store = _get_dispatcher_store(
+                experiment_name=experiment_name,
+                redis_conn=redis_conn,
+            )
+            return store.poll_verify_results(job_ids)
+        except Exception as e:
+            logger.warning(f"Failed to poll dispatcher patch verdicts: {e}")
+            return [], list(job_ids)
+
+    if not REDIS_AVAILABLE:
         return [], list(job_ids)
 
     completed: list[dict[str, Any]] = []
@@ -490,6 +732,8 @@ def drain_patch_verdicts(
     job_ids: list[str],
     poll_interval: float = 5.0,
     timeout: float = 7200.0,
+    *,
+    experiment_name: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Blocking poll: wait until all patch jobs complete or timeout.
 
@@ -514,6 +758,11 @@ def drain_patch_verdicts(
     total = len(job_ids)
     start_time = time.monotonic()
     last_recovery = start_time
+    dispatcher_mode = (
+        get_evaluator_routing_model() == ROUTING_MODEL_DISPATCHER
+        and experiment_name is not None
+        and all(job_id.startswith("patch-verify:") for job_id in job_ids)
+    )
 
     # Recovery interval for orphaned deferred jobs
     recovery_interval = 30.0
@@ -529,13 +778,20 @@ def drain_patch_verdicts(
             break
 
         completed, remaining = poll_patch_verdicts(
-            redis_host, remaining, redis_conn=redis_conn
+            redis_host,
+            remaining,
+            redis_conn=redis_conn,
+            experiment_name=experiment_name,
         )
         all_completed.extend(completed)
 
         # Periodically recover orphaned deferred jobs
         now = time.monotonic()
-        if remaining and (now - last_recovery) >= recovery_interval:
+        if (
+            remaining
+            and not dispatcher_mode
+            and (now - last_recovery) >= recovery_interval
+        ):
             _try_recover_deferred_jobs(redis_host, remaining, redis_conn=redis_conn)
             last_recovery = now
 

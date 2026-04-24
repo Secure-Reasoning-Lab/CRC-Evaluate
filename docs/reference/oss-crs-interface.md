@@ -171,7 +171,10 @@ CRSBench preserves resolved `oss-crs artifacts` log paths under:
 
 This copied trial output is the durable result location. `cleanup_after_trial`
 removes internal workdirs such as `oss-crs-workdir`, but does not remove
-`trial/output/`, so copied logs remain available after cleanup.
+`trial/output/`, so copied logs remain available after cleanup. `cloud collect`
+applies the same durable-artifact contract: the main artifact rsync excludes
+`oss-crs-workdir/`, and any top-level trial entries that still symlink into
+that workdir are materialized into the collected tree before publish.
 
 ## Verification and Dedup
 

@@ -13,6 +13,22 @@ from typing import Any, Mapping, Optional
 DEFAULT_BENCHMARKS_ROOT = Path("benchmarks")
 
 
+def normalize_experiment_config_dict(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Flatten grouped experiment config keys into the legacy flat view.
+
+    Raw YAML consumers in reporting and post-processing still operate on
+    mapping-like configs instead of ``ExperimentConfig`` objects. Reuse the
+    schema's grouping normalizer here so those callers stay compatible with
+    both flat and grouped config layouts.
+    """
+    from crsbench.validation.schemas import normalize_grouped_experiment_config
+
+    normalized = normalize_grouped_experiment_config(dict(config))
+    if not isinstance(normalized, dict):
+        raise TypeError("Expected normalized experiment config to be a mapping")
+    return normalized
+
+
 @dataclass(frozen=True)
 class TrialDir:
     """Canonical path resolver for a single trial directory."""
@@ -88,8 +104,9 @@ class ExperimentDir:
 
     @classmethod
     def from_config_dict(cls, config: Mapping[str, Any]) -> "ExperimentDir":
-        filestore = config["experiment_filestore"]
-        experiment_name = config["experiment"]
+        normalized = normalize_experiment_config_dict(config)
+        filestore = normalized["experiment_filestore"]
+        experiment_name = normalized["experiment"]
         return cls(Path(filestore) / experiment_name)
 
     def trial_relative_path(self, trial_dir: Path) -> Path:

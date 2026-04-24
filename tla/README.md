@@ -122,6 +122,7 @@ config should complete with no TLC errors.
 | --- | --- | --- | --- |
 | `DistributedAsyncPovVerifyDrain` | async POV verification build prerequisites and final drain budget | verify starts before its build DAG resolves, or drain times out on a shortened budget | verify consumes only explicit prebuilt variants and drain spends the full `verify_timeout` budget |
 | `EvaluatorTrialFairScheduling` | evaluator trial-fair build/verify dispatch | transient claim failures or queue-order bias silently break fairness or lose pre-start work | owner-aware fair selection preserves build-gated verify ordering and no-silent-loss pre-start recovery |
+| `DistributedEvaluatorDispatcherLocality` | dispatcher-owned global fairness with evaluator-local build generations | verify can be routed to the wrong evaluator or a stale late attempt can publish after reassignment | verify stays on the evaluator that owns the required built generation and late stale publication is fenced to the authoritative attempt |
 
 ### Ownership, Callbacks, And Marker Writes
 

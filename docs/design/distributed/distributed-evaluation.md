@@ -30,23 +30,35 @@ The evaluator may operate in:
 - configless mode for registry-discovered experiments
 - CI compatibility mode for legacy CI build/verify queues
 
-These are queue-selection/runtime-discovery differences, not different result
-semantics.
+These are queue-selection/runtime-discovery differences. Verification verdict
+payloads stay stable across modes, but async POV verification may use different
+execution plumbing under the shared-queue and dispatcher-routed models.
 
 Startup behavior differs between the first two modes:
 
-- config-pinned evaluator CLI mode normally performs a startup pre-build
-  enqueue phase
+- focused worker/evaluator CLI modes default to dispatcher routing when
+  `CRSBENCH_EVALUATOR_ROUTING_MODEL` is unset
+- shared routing remains available as an explicit override via
+  `CRSBENCH_EVALUATOR_ROUTING_MODEL=shared`; in that mode, config-pinned
+  evaluator CLI startup performs the legacy shared pre-build enqueue phase
 - configless mode skips startup pre-build enqueue and relies on lazy build-queue
   consumption
+- dispatcher routing (`CRSBENCH_EVALUATOR_ROUTING_MODEL=dispatcher`) is
+  currently supported only in config-pinned evaluator mode
+- dispatcher routing replaces the shared startup pre-build fanout with an
+  evaluator-local advisory warmup feeder that only tops up spare local build
+  capacity
 - async POV verification enqueues a benchmark-local build DAG on first POV
   discovery and each verify job depends on those build jobs before execution
+- async patch verification enqueues one logical build request per patch and
+  routes the corresponding patch verify request onto the same dispatcher
+  lineage so verify can reuse evaluator-local patched artifacts
 
 ## Verification Payload Contract
 
-Verification jobs must carry enough benchmark/trial/harness/POV context for an
-evaluator on another machine to execute verification without assuming a shared
-trial-working directory on the worker.
+Verification jobs must carry enough benchmark/trial/harness/target context for
+an evaluator on another machine to execute verification without assuming a
+shared trial-working directory on the worker.
 
 Embedded or staged payload data must be sufficient for non-local verification.
 
@@ -56,16 +68,43 @@ Distributed evaluation distinguishes trial queues from verify/build queues.
 Workers may enqueue verification work while trials continue, and evaluators may
 process those jobs independently.
 
-Async POV verification must preserve build/verify queue separation:
+Async distributed verification now has two runtime realizations for both POV
+and patch validation:
+
+- shared routing: workers enqueue physical build and verify RQ jobs directly
+  onto shared evaluator queues
+- dispatcher routing: workers submit logical build/verify requests into
+  experiment-scoped Redis state, one dispatcher leader applies global owner
+  fairness over those ready requests, and the dispatcher then enqueues physical
+  attempts onto evaluator-local build/verify queues
+- dispatcher warmup is separate from that logical request flow: evaluators may
+  enqueue local cache-priming build jobs before the first blocked verify demand,
+  but once any blocked verify still has unmet build prerequisites the evaluator
+  stops issuing new warmup jobs until that required build demand clears
+- already queued or running warmup jobs are not canceled when required build
+  demand appears; only new warmup dispatch is suppressed
+
+Dispatcher routing preserves the worker-facing contract around verdict payloads,
+but workers poll stable logical `request_id` values rather than depending on
+physical evaluator RQ job IDs. Physical `attempt_id` values are internal to the
+dispatcher/evaluator contract and may change across retries or evaluator-death
+recovery.
+
+Async POV and patch verification must preserve build/verify queue separation:
 
 - build prerequisites are enqueued to the build queue
-- verify jobs declare explicit queue dependencies on those build jobs
+- shared routing verify jobs declare explicit RQ dependencies on those build jobs
+- dispatcher routing verify requests remain blocked in Redis state until their
+  required logical build requests publish success for the current lineage
 - verify workers only hydrate prebuilt artifacts from evaluator disk for
-  dependency-backed POV jobs; they must not hide fresh variant builds inside the
+  dependency-backed jobs; they must not hide fresh variant builds inside the
   verify worker
 - scheduler fairness applies only to runnable queued work; build-before-verify
   correctness remains a dependency contract rather than a blanket build-priority
   rule
+- dispatcher warmup never satisfies correctness by itself; workers still wait on
+  logical dispatcher build request completion before a verify request becomes
+  runnable
 
 Build jobs that rely on incremental benchmark images must carry the resolved
 inc-image runtime settings needed by the evaluator worker (`inc_image_policy`,
@@ -92,7 +131,9 @@ Verification results returned by evaluators must be attributable to:
 - the resulting verdict/error classification
 
 Workers and orchestrators may poll or aggregate those results later, but the
-stored result contract must remain stable.
+stored result contract must remain stable. In dispatcher mode, the authoritative
+result identity is the logical `request_id`; physical evaluator attempt IDs are
+not part of the worker-visible correctness contract.
 
 ## Failure Semantics
 
@@ -101,6 +142,14 @@ stored result contract must remain stable.
 - non-local verification must not assume shared filesystem state unless that
   state is explicitly part of the deployment contract
 - delayed polling/early-stop is acceptable; silent result loss is not
+- if an async verification drain times out after the worker has already
+  preserved trial artifacts, the worker may still publish `.success` for the
+  trial, but it must also persist `.verification-undrained.json` at the trial
+  root with the verification kind (`pov` or `patch`) and missing-result counts;
+  CI/smoke validation must treat that marker as a hard failure and operators may
+  recover later via `crsbench re-eval`
+- dispatcher-routed stale attempts must be fenced from publishing terminal
+  logical results after lineage reassignment or newer attempt issuance
 - the async final drain budget is `runtime.verify_timeout`; it covers both
   queued build prerequisites and queued POV verification work
 
@@ -116,6 +165,7 @@ ambiguous evaluator runtime silently.
 This contract should be covered by:
 - distributed evaluator tests
 - verify-payload/result serialization tests
+- dispatcher logical-request and evaluator-locality tests
 - registry-driven configless evaluator tests
 - CI-compatibility queue tests
 

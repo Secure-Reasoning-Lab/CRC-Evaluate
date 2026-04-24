@@ -1,7 +1,7 @@
 # Design: Trial-Fair Evaluator Scheduling
 - Audience: maintainers working on evaluator dispatch, build/verify queues, and distributed queue semantics
 - Scope: scheduler fairness contracts for evaluator-served build and verify work across config-pinned, configless, and CI-compatibility modes
-- Related: [Distributed Evaluation](./distributed-evaluation.md), [Distributed Job Queue](./distributed-job-queue.md), [Unified Build & Verify](./unified-build-verify.md), [Configless Runtime](./configless-runtime.md), [TLA+ Fairness Model](../../../tla/EvaluatorTrialFairScheduling.tla)
+- Related: [Distributed Evaluation](./distributed-evaluation.md), [Distributed Job Queue](./distributed-job-queue.md), [Unified Build & Verify](./unified-build-verify.md), [Configless Runtime](./configless-runtime.md), [TLA+ Fairness Model](../../../tla/EvaluatorTrialFairScheduling.tla), [TLA+ Dispatcher Locality Model](../../../tla/DistributedEvaluatorDispatcherLocality.tla)
 
 ## Goals and Non-goals
 
@@ -116,6 +116,32 @@ worker-side contracts.
 - if only one class has free capacity or runnable work, that class may continue
   dispatching without waiting for the other
 
+### Dispatcher-routed execution
+
+- shared routing keeps fairness at the evaluator-side scheduler over shared RQ
+  queued state
+- dispatcher routing (`CRSBENCH_EVALUATOR_ROUTING_MODEL=dispatcher`) is
+  config-pinned-only in this revision
+- in dispatcher routing, one lease-held dispatcher leader owns the
+  cluster-global ready pools for logical build and verify requests and applies
+  owner round-robin before any physical queue placement
+- evaluator-local build/verify queues are execution-only queues; after
+  dispatcher placement, local supervisors execute the already-selected work but
+  do not define global owner turns
+- dispatcher-mode evaluators may enqueue advisory warmup builds onto their own
+  local build queue before async POV demand arrives; those warmup jobs are
+  cache priming only and are not part of the correctness path for dispatcher
+  logical build requests
+- when dispatcher state shows any blocked verify request still waiting on an
+  unmet required build, the evaluator stops issuing new warmup jobs until that
+  required-build demand clears; already queued or running warmup work is not
+  canceled
+- verify placement must respect lineage locality: the authoritative evaluator is
+  the one that owns the current build generation for that lineage
+- dead-evaluator recovery must requeue local build work, increment affected
+  lineage generations, and re-block dependent verify requests before a new
+  placement is allowed
+
 ## Runtime Behavior
 
 ### Happy path
@@ -145,6 +171,9 @@ worker-side contracts.
 - if a job is explicitly refreshed or re-enqueued as a new physical attempt, the
   new attempt is admitted as new ready work under the same owner key unless the
   owning flow explicitly changes that identity
+- dispatcher warmup feed is best-effort and capacity-bounded: it only tops up
+  spare local build slots, re-checks required build demand between enqueue
+  attempts, and may resume after blocked verify demand clears
 
 ### Restart and reconciliation behavior
 
@@ -167,6 +196,9 @@ worker-side contracts.
 - each evaluator applies the same local fair-selection algorithm over the shared
   queued state; this revision does not add a separate distributed turn ledger
   for globally serialized owner rotation across evaluators
+- dispatcher routing is the exception to that shared-local pattern: it moves the
+  global owner-turn ledger into dispatcher-owned logical ready pools, then fans
+  out physical attempts to evaluator-local queues
 - flat and per-experiment queue models must preserve the same fairness contract;
   changing queue naming may change routing topology but must not reintroduce
   queue-order bias
@@ -204,6 +236,9 @@ Validation should cover:
   recovery edges
 - the bounded TLA+ model preserves abstract no-silent-loss safety and owner
   no-starvation under transient claim failures
+- the dispatcher locality TLA+ model preserves verify-on-current-owner routing
+  and rejects stale late publication from superseded attempts while also
+  fencing new warmup dispatch once required build demand exists
 
 ## Implementation Pointers
 

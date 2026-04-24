@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -27,9 +28,11 @@ from crsbench.evaluation.trial_identity import build_trial_uid
 from crsbench.evaluation.trial_paths import (
     ExperimentDir,
     TrialDir,
+    normalize_experiment_config_dict,
     resolve_benchmark_path,
 )
 from crsbench.evaluation.verification.models import (
+    PatchInfo,
     PatchVerificationOutput,
     PatchVerificationResult,
     PatchVerificationStatus,
@@ -41,6 +44,8 @@ from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
 if TYPE_CHECKING:
     import rq
+
+    from crsbench.distributed.verify_queue import AsyncPovBuildPrereqs
 
 logger = get_logger(__name__)
 _POV_HASH_RE = re.compile(r"^(?:[0-9a-f]{16}|[0-9a-f]{64})$")
@@ -87,6 +92,12 @@ Examples:
   # Re-evaluate with custom output directory
   crsbench re-eval -c experiment-config.yaml --output /tmp/reeval-results
 
+  # Override a tracked config's redis_host for local distributed re-eval
+  crsbench re-eval -c experiment-config.yaml --redis-host localhost:6379
+
+  # Force local mode even if the experiment config enables Redis/distributed queues
+  crsbench re-eval -c experiment-config.yaml --local
+
   # Re-evaluate with verbose logging
   crsbench re-eval -c experiment-config.yaml -v
         """,
@@ -108,8 +119,8 @@ Examples:
     parser.add_argument(
         "--source",
         choices=["pkgs", "main_repo"],
-        default="pkgs",
-        help="Source mode for builds (default: pkgs)",
+        default=None,
+        help="Source mode for builds (default: experiment config, otherwise pkgs)",
     )
     parser.add_argument(
         "--jobs",
@@ -127,6 +138,21 @@ Examples:
         "--force-rebuild",
         action="store_true",
         help="Force rebuild of variants",
+    )
+    runtime_mode_group = parser.add_mutually_exclusive_group()
+    runtime_mode_group.add_argument(
+        "--local",
+        action="store_true",
+        help="Force local re-eval and ignore any configured redis_host",
+    )
+    runtime_mode_group.add_argument(
+        "--redis-host",
+        type=str,
+        default=None,
+        help=(
+            "Override redis_host from config for distributed re-eval "
+            "(use 'none' to disable distributed queues)"
+        ),
     )
     parser.add_argument(
         "--mode",
@@ -162,13 +188,13 @@ Examples:
 
 
 def _load_experiment_config(config_path: Path) -> dict:
-    """Load and return raw experiment config dict from YAML.
+    """Load and normalize experiment config from YAML.
 
     Args:
         config_path: Path to experiment config YAML
 
     Returns:
-        Parsed YAML dict
+        Parsed config mapping with grouped keys flattened for compatibility
 
     Raises:
         SystemExit: If file not found or YAML invalid
@@ -178,7 +204,19 @@ def _load_experiment_config(config_path: Path) -> dict:
         sys.exit(1)
 
     with config_path.open() as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+
+    if not isinstance(config, dict):
+        logger.error(
+            f"Invalid experiment config format in {config_path}: expected a YAML mapping"
+        )
+        sys.exit(1)
+
+    try:
+        return normalize_experiment_config_dict(config)
+    except ValueError as exc:
+        logger.error(f"Invalid experiment config in {config_path}: {exc}")
+        sys.exit(1)
 
 
 def _resolve_experiment_dir(config: dict) -> Path:
@@ -302,6 +340,11 @@ def _reeval_bug_finding(
     sanitizer: Optional[str] = None,
     force_rebuild: bool,
     use_inc_build: bool,
+    inc_image_policy: Optional[str] = None,
+    inc_image_registry: Optional[str] = None,
+    inc_image_max_pull_bytes: Optional[int] = None,
+    inc_image_pull_timeout: Optional[int] = None,
+    local_image_prefix: Optional[str] = None,
 ) -> int:
     """Re-evaluate a bug_finding trial.
 
@@ -336,6 +379,11 @@ def _reeval_bug_finding(
         jobs=jobs,
         cores_per_job=cores_per_job,
         source_mode=source_mode,
+        inc_image_policy=inc_image_policy,
+        inc_image_registry=inc_image_registry,
+        inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+        inc_image_pull_timeout=inc_image_pull_timeout,
+        local_image_prefix=local_image_prefix,
     )
 
     output = engine.verify_benchmark(
@@ -404,6 +452,7 @@ class _AsyncTrialState:
     dest_dir: Path
     job_ids: list[str] = field(default_factory=list)
     pov_hash_to_path: dict[str, Path] = field(default_factory=dict)
+    job_to_pov_id: dict[str, str] = field(default_factory=dict)
 
     @property
     def trial_id(self) -> str:
@@ -512,43 +561,109 @@ def _discover_trial_patches(
     patch_dir: Path,
     *,
     target_cpv_id: Optional[str],
+    pov_dir: Optional[Path] = None,
+    infer_single_pov_target: bool = False,
 ) -> list[tuple[str, str, Path]]:
     """Discover trial patches from output/patches in structured or flat layout."""
     if not patch_dir.exists():
         return []
 
     discovered: list[tuple[str, str, Path]] = []
-    seen_patch_keys: set[tuple[str, str]] = set()
-    # Structured layout: output/patches/<cpv_id>/*.diff
     for cpv_dir in sorted(p for p in patch_dir.iterdir() if p.is_dir()):
         for patch_path in sorted(
             p for p in cpv_dir.iterdir() if p.is_file() and p.suffix == ".diff"
         ):
-            patch_key = (cpv_dir.name, patch_path.stem)
-            if patch_key in seen_patch_keys:
-                continue
-            seen_patch_keys.add(patch_key)
-            discovered.append((cpv_dir.name, patch_path.stem, patch_path))
+            patch_id = _build_trial_patch_id(
+                layout="structured",
+                cpv_id=cpv_dir.name,
+                patch_path=patch_path,
+                patch_dir=patch_dir,
+            )
+            discovered.append((cpv_dir.name, patch_id, patch_path))
 
-    # Flat layout: output/patches/*.diff (map to target CPV)
     flat_patches = sorted(
         p for p in patch_dir.iterdir() if p.is_file() and p.suffix == ".diff"
     )
     if flat_patches:
-        if not target_cpv_id:
-            # Discovery-only mode: no CPV to map flat patches to.
-            # Use "unknown" as a synthetic CPV ID so patches are still collected.
-            cpv_id = "unknown"
-        else:
-            cpv_id = target_cpv_id
+        inferred_target = (
+            _infer_single_trial_pov_id(pov_dir) if infer_single_pov_target else None
+        )
+        resolved_target = target_cpv_id or inferred_target or "unknown"
         for patch_path in flat_patches:
-            patch_key = (cpv_id, patch_path.stem)
-            if patch_key in seen_patch_keys:
-                continue
-            seen_patch_keys.add(patch_key)
-            discovered.append((cpv_id, patch_path.stem, patch_path))
+            patch_id = _build_trial_patch_id(
+                layout="flat",
+                cpv_id=resolved_target,
+                patch_path=patch_path,
+                patch_dir=patch_dir,
+            )
+            discovered.append((resolved_target, patch_id, patch_path))
 
-    return discovered
+    deduped: list[tuple[str, str, Path]] = []
+    seen_patch_keys: set[tuple[str, str]] = set()
+    for cpv_id, patch_id, patch_path in discovered:
+        patch_key = (cpv_id, patch_id)
+        if patch_key in seen_patch_keys:
+            continue
+        seen_patch_keys.add(patch_key)
+        deduped.append((cpv_id, patch_id, patch_path))
+
+    return deduped
+
+
+def _infer_single_trial_pov_id(pov_dir: Optional[Path]) -> Optional[str]:
+    """Infer a single staged POV/CPV id from crs-input/povs when unambiguous."""
+    if pov_dir is None or not pov_dir.exists():
+        return None
+
+    candidates = sorted(
+        p.name
+        for p in pov_dir.iterdir()
+        if not p.name.startswith(".") and (p.is_file() or p.is_dir())
+    )
+    if len(candidates) != 1:
+        return None
+
+    only_name = candidates[0]
+    suffix = Path(only_name).suffix
+    if suffix in {".blob", ".pov", ".bin"}:
+        return Path(only_name).stem
+    return only_name
+
+
+def _build_trial_patch_id(
+    *,
+    layout: str,
+    cpv_id: str,
+    patch_path: Path,
+    patch_dir: Path,
+) -> str:
+    """Build runner-compatible stable patch IDs within a trial."""
+    rel_path = patch_path.relative_to(patch_dir).as_posix()
+    name_part = re.sub(r"[^a-zA-Z0-9_-]+", "_", patch_path.stem).strip("_")
+    if not name_part:
+        name_part = "patch"
+    digest = hashlib.sha1(f"{layout}:{cpv_id}:{rel_path}".encode()).hexdigest()[:10]
+    return f"{layout}_{name_part}_{digest}"
+
+
+def _find_trial_pov_for_cpv(pov_dir: Path, cpv_id: str) -> Optional[Path]:
+    """Find the staged trial POV path for one CPV."""
+    direct = pov_dir / cpv_id
+    if direct.exists() and direct.is_file():
+        return direct
+
+    for ext in [".blob", ".pov", ".bin"]:
+        candidate = pov_dir / f"{cpv_id}{ext}"
+        if candidate.exists() and candidate.is_file():
+            return candidate
+
+    cpv_subdir = pov_dir / cpv_id
+    if cpv_subdir.is_dir():
+        for child in sorted(cpv_subdir.iterdir()):
+            if child.is_file():
+                return child
+
+    return None
 
 
 def _patch_result_from_dict(result: dict) -> PatchVerificationResult:
@@ -608,6 +723,83 @@ def _write_async_patch_logs(dest_dir: Path, result: dict) -> None:
         target.write_text(content)
 
 
+def _prepare_async_pov_build_prereqs(
+    *,
+    benchmark_name: str,
+    experiment_name: str,
+    redis_host: str,
+    trial_id: str,
+    sanitizer: Optional[str],
+    use_inc_build: bool,
+) -> "AsyncPovBuildPrereqs | None":
+    """Build the explicit async POV prerequisite DAG for re-eval."""
+    try:
+        from crsbench.distributed.queue import (
+            ROUTING_MODEL_DISPATCHER,
+            create_redis_connection,
+            get_evaluator_routing_model,
+        )
+        from crsbench.distributed.registry import RegistryClient
+        from crsbench.distributed.verify_queue import (
+            initialize_build_queue,
+            prepare_async_pov_build_prereqs,
+        )
+        from crsbench.evaluation.verification import VerificationEngine
+
+        redis_conn = create_redis_connection(redis_host)
+        registration = RegistryClient(redis_conn).get_experiment(experiment_name)
+        if registration is None:
+            logger.warning(
+                "Experiment registration not found in Redis: {}", experiment_name
+            )
+            return None
+
+        benchmark_path = _resolve_benchmark_path(
+            benchmark_name, Path(registration.benchmarks_root)
+        )
+        if not benchmark_path.exists():
+            logger.warning(
+                "Benchmark not found for async POV re-eval prereqs: {}", benchmark_path
+            )
+            return None
+
+        engine = VerificationEngine(
+            oss_fuzz_path=Path(ensure_oss_fuzz_root()),
+            timeout=registration.per_pov_verify_timeout,
+            source_mode=registration.source_mode,
+            inc_image_policy=registration.inc_image_policy,
+            inc_image_registry=registration.inc_image_registry,
+            inc_image_max_pull_bytes=registration.inc_image_max_pull_bytes,
+            inc_image_pull_timeout=registration.inc_image_pull_timeout_sec,
+            local_image_prefix=registration.local_image_prefix,
+        )
+        adapter = engine.load_adapter(benchmark_path)
+        if adapter is None:
+            logger.warning(
+                "Failed to load benchmark adapter for async POV re-eval: {}",
+                benchmark_path,
+            )
+            return None
+
+        build_queue = None
+        if get_evaluator_routing_model() != ROUTING_MODEL_DISPATCHER:
+            build_queue = initialize_build_queue(redis_host, experiment_name)
+
+        return prepare_async_pov_build_prereqs(
+            redis_host=redis_host,
+            experiment_name=experiment_name,
+            trial_id=trial_id,
+            engine=engine,
+            adapter=adapter,
+            build_queue=build_queue,
+            sanitizer=sanitizer,
+            use_inc_build=use_inc_build,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to prepare async POV build prereqs: {e}")
+        return None
+
+
 def _enqueue_trial_povs(
     trial_dir: Path,
     benchmark_name: str,
@@ -615,7 +807,11 @@ def _enqueue_trial_povs(
     dest_dir: Path,
     verify_queue: rq.Queue,
     experiment_name: str,
+    *,
+    redis_host: Optional[str] = None,
     sanitizer: Optional[str] = None,
+    source_mode: str = "pkgs",
+    use_inc_build: bool = True,
 ) -> Optional[_AsyncTrialState]:
     """Enqueue all POVs for a single trial without polling.
 
@@ -655,6 +851,30 @@ def _enqueue_trial_povs(
         dest_dir=dest_dir,
     )
     trial_id = state.trial_id
+    build_prereqs = _prepare_async_pov_build_prereqs(
+        benchmark_name=benchmark_name,
+        experiment_name=experiment_name,
+        redis_host=redis_host or "",
+        trial_id=trial_id,
+        sanitizer=sanitizer,
+        use_inc_build=use_inc_build,
+    )
+    if build_prereqs is None:
+        logger.warning(
+            "Skipping async POV enqueue for trial {}: build prereqs unavailable",
+            trial_id,
+        )
+        return None
+    from crsbench.distributed.verify_queue import AsyncPovBuildPrereqs
+
+    if isinstance(build_prereqs, AsyncPovBuildPrereqs):
+        build_job_ids = build_prereqs.logical_build_request_ids
+        build_artifact_ids = build_prereqs.artifact_build_ids
+        build_dependencies = build_prereqs.rq_dependencies
+        resolved_sanitizer = build_prereqs.sanitizer
+    else:
+        build_job_ids, build_dependencies, resolved_sanitizer = build_prereqs
+        build_artifact_ids = build_job_ids
 
     for pov_file in pov_files:
         pov_data = pov_file.read_bytes()
@@ -678,10 +898,17 @@ def _enqueue_trial_povs(
             harness=harness,
             pov_id=pov_id,
             pov_data=pov_data,
-            sanitizer=sanitizer,
+            redis_host=redis_host,
+            sanitizer=resolved_sanitizer,
+            build_job_ids=build_job_ids,
+            build_artifact_ids=build_artifact_ids,
+            depends_on=build_dependencies or None,
+            source_mode=source_mode,
+            use_inc_build=use_inc_build,
         )
         if job_id:
             state.job_ids.append(job_id)
+            state.job_to_pov_id[job_id] = pov_id
             logger.debug(f"Enqueued POV {pov_id} as job {job_id}")
         else:
             logger.warning(f"Failed to enqueue POV {pov_file.name}")
@@ -723,14 +950,18 @@ def _enqueue_trial_patches(
     target_cpv_id = _infer_target_cpv_id_from_trial_path(
         trial_dir
     ) or _load_target_cpv_id_from_trial_metadata(trial_dir)
-    patches = _discover_trial_patches(patch_dir, target_cpv_id=target_cpv_id)
-    if not patches:
-        logger.warning(f"No patches found in {patch_dir}")
-        return None
-
     pov_dir = TrialDir(trial_dir).input_povs
     if not pov_dir.exists():
         logger.warning(f"No POVs directory found: {pov_dir}")
+        return None
+
+    patches = _discover_trial_patches(
+        patch_dir,
+        target_cpv_id=target_cpv_id,
+        pov_dir=pov_dir,
+    )
+    if not patches:
+        logger.warning(f"No patches found in {patch_dir}")
         return None
 
     state = _AsyncPatchTrialState(
@@ -807,6 +1038,18 @@ def _drain_all_async_results(
     start_time = time.monotonic()
     timed_out = False
 
+    experiment_names = {
+        name
+        for name in (getattr(state, "experiment_name", "") for state in trials)
+        if name
+    }
+    if len(experiment_names) > 1:
+        raise ValueError(
+            "_drain_all_async_results requires all trials to share the same "
+            "experiment_name"
+        )
+    experiment_name = next(iter(experiment_names), "")
+
     while remaining:
         if time.monotonic() - start_time > timeout_seconds:
             timed_out = True
@@ -816,7 +1059,11 @@ def _drain_all_async_results(
             )
             break
 
-        completed, remaining = poll_single_pov_verdicts(redis_host, remaining)
+        completed, remaining = poll_single_pov_verdicts(
+            redis_host,
+            remaining,
+            experiment_name=experiment_name,
+        )
 
         for result_dict in completed:
             try:
@@ -853,6 +1100,30 @@ def _drain_all_async_results(
 
         if remaining:
             time.sleep(2)
+
+    if timed_out and remaining:
+        remaining_set = set(remaining)
+        for state in trials:
+            trial_results_for_state = trial_results[state.trial_id]
+            job_to_pov_id = getattr(state, "job_to_pov_id", {})
+            for job_id in state.job_ids:
+                if job_id not in remaining_set:
+                    continue
+                pov_id = job_to_pov_id.get(job_id)
+                if not pov_id:
+                    logger.warning(
+                        "Async POV job {} timed out but has no mapped pov_id",
+                        job_id,
+                    )
+                    continue
+                trial_results_for_state.append(
+                    PovVerificationResult(
+                        status=PovVerificationStatus.ERROR,
+                        benchmark=state.benchmark_name,
+                        cpv_matched=[],
+                        pov_id=pov_id,
+                    )
+                )
 
     # Save per-trial results (raw queue verdicts), matching distributed
     # execution semantics.
@@ -956,7 +1227,7 @@ def _drain_all_async_patch_results(
     timeout_seconds: float = 7200.0,
 ) -> int:
     """Poll all enqueued patch jobs and persist per-trial results."""
-    from crsbench.distributed.patch_queue import poll_patch_verdicts
+    from crsbench.distributed.patch_queue import drain_patch_verdicts
 
     trial_id_map: dict[str, _AsyncPatchTrialState] = {
         state.trial_id: state for state in trials
@@ -971,45 +1242,56 @@ def _drain_all_async_patch_results(
     for state in trials:
         all_job_ids.extend(state.job_ids)
 
+    experiment_names = {
+        name
+        for name in (getattr(state, "experiment_name", "") for state in trials)
+        if name
+    }
+    if len(experiment_names) > 1:
+        raise ValueError(
+            "_drain_all_async_patch_results requires all trials to share the same "
+            "experiment_name"
+        )
+    experiment_name = next(iter(experiment_names), "")
+
     logger.info(
         f"Draining {len(all_job_ids)} async patch jobs across {len(trials)} trials"
     )
-    remaining = all_job_ids
-    start_time = time.monotonic()
-    timed_out = False
+    if experiment_name:
+        raw_results = drain_patch_verdicts(
+            redis_host,
+            all_job_ids,
+            timeout=timeout_seconds,
+            experiment_name=experiment_name,
+        )
+    else:
+        raw_results = drain_patch_verdicts(
+            redis_host,
+            all_job_ids,
+            timeout=timeout_seconds,
+        )
+    timed_out = len(raw_results) < len(all_job_ids)
+    if timed_out:
+        logger.warning(
+            "Timed out draining async patch jobs ({} job(s) still pending)",
+            len(all_job_ids) - len(raw_results),
+        )
 
-    while remaining:
-        if time.monotonic() - start_time > timeout_seconds:
-            timed_out = True
-            logger.warning(
-                "Timed out draining async patch jobs ({} job(s) still pending)",
-                len(remaining),
-            )
-            break
-        completed, remaining = poll_patch_verdicts(redis_host, remaining)
-        for result_dict in completed:
+    for result_dict in raw_results:
+        try:
+            tid = result_dict.get("trial_id")
+            if not tid or tid not in trial_id_map:
+                logger.warning(
+                    f"Cannot route patch result for trial_id={tid}, skipping"
+                )
+                continue
+            trial_results[tid].append(_patch_result_from_dict(result_dict))
             try:
-                tid = result_dict.get("trial_id")
-                if not tid or tid not in trial_id_map:
-                    logger.warning(
-                        f"Cannot route patch result for trial_id={tid}, skipping"
-                    )
-                    continue
-                trial_results[tid].append(_patch_result_from_dict(result_dict))
-                try:
-                    _write_async_patch_logs(trial_id_map[tid].dest_dir, result_dict)
-                except Exception as e:
-                    logger.warning(f"Failed to persist async patch logs: {e}")
+                _write_async_patch_logs(trial_id_map[tid].dest_dir, result_dict)
             except Exception as e:
-                logger.warning(f"Failed to process async patch verdict: {e}")
-
-        if completed:
-            logger.info(
-                f"Processed {len(completed)} async patch verdicts, "
-                f"{len(remaining)} pending"
-            )
-        if remaining:
-            time.sleep(2)
+                logger.warning(f"Failed to persist async patch logs: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to process async patch verdict: {e}")
 
     total = 0
     for state in trials:
@@ -1022,7 +1304,7 @@ def _drain_all_async_patch_results(
     if timed_out:
         raise TimeoutError(
             "Timed out draining async patch jobs "
-            f"({len(remaining)} job(s) still pending)"
+            f"({len(all_job_ids) - len(raw_results)} job(s) still pending)"
         )
     return total
 
@@ -1042,6 +1324,11 @@ def _reeval_patch_generation(
     patch_verify_variants: bool = False,
     force_rebuild: bool,
     use_inc_build: bool,
+    inc_image_policy: Optional[str] = None,
+    inc_image_registry: Optional[str] = None,
+    inc_image_max_pull_bytes: Optional[int] = None,
+    inc_image_pull_timeout: Optional[int] = None,
+    local_image_prefix: Optional[str] = None,
 ) -> int:
     """Re-evaluate a patch_generation trial.
 
@@ -1078,29 +1365,75 @@ def _reeval_patch_generation(
         logger.warning(f"No POVs directory found: {pov_dir}")
         return 0
 
+    target_cpv_id = _infer_target_cpv_id_from_trial_path(
+        trial_dir
+    ) or _load_target_cpv_id_from_trial_metadata(trial_dir)
+    patches = _discover_trial_patches(
+        patch_dir,
+        target_cpv_id=target_cpv_id,
+        pov_dir=pov_dir,
+        infer_single_pov_target=True,
+    )
+    if not patches:
+        logger.warning(f"No patches found in {patch_dir}")
+        return 0
+
     work_dir = TrialDir(dest_dir).patch_verify_dir
     work_dir.mkdir(parents=True, exist_ok=True)
+    # Match BenchmarkRunner._verify_patches_local(): always rebuild fresh.
+    effective_force_rebuild = force_rebuild or True
 
     engine = PatchVerificationEngine(
         oss_fuzz_path=oss_fuzz_path,
         sanitizer=sanitizer or "address",
         timeout=per_pov_verify_timeout,
+        build_timeout=1200,
+        test_timeout=1800,
         log_dir=work_dir,
-        force_rebuild=force_rebuild,
+        force_rebuild=effective_force_rebuild,
         use_inc_build=use_inc_build,
         jobs=jobs,
         cores_per_job=cores_per_job,
         verify_variants=patch_verify_variants,
         source_mode=source_mode,
+        inc_image_policy=inc_image_policy,
+        inc_image_registry=inc_image_registry,
+        inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+        inc_image_pull_timeout=inc_image_pull_timeout,
+        local_image_prefix=local_image_prefix,
     )
 
     try:
-        results = engine.verify_patches(
-            benchmark_path=benchmark_path,
-            patch_dir=patch_dir,
-            harness=harness,
-            pov_dir=pov_dir,
-        )
+        results: list[PatchVerificationResult] = []
+        for cpv_id, patch_id, patch_path in patches:
+            pov_path = _find_trial_pov_for_cpv(pov_dir, cpv_id)
+            if pov_path is None:
+                results.append(
+                    PatchVerificationResult(
+                        status=PatchVerificationStatus.ERROR,
+                        patch_id=patch_id,
+                        pov_id=cpv_id,
+                        benchmark=str(benchmark_path.name),
+                        patch_path=patch_path,
+                        harness=harness,
+                        details=f"POV not found for {cpv_id}",
+                    )
+                )
+                continue
+
+            patch = PatchInfo(
+                patch_id=patch_id,
+                pov_id=cpv_id,
+                patch_path=patch_path,
+            )
+            results.append(
+                engine.verify_patch(
+                    benchmark_path=benchmark_path,
+                    patch=patch,
+                    harness=harness,
+                    pov_path=pov_path,
+                )
+            )
     finally:
         engine.cleanup()
 
@@ -1152,19 +1485,56 @@ def run_reeval(args: argparse.Namespace) -> int:
     if benchmarks_root:
         benchmarks_root = Path(benchmarks_root)
 
-    source_mode = args.source
-    use_snapshot = args.mode == "snapshot"
+    source_mode = args.source or config.get("source_mode") or "pkgs"
+    bug_finding_use_inc_build = bool(config.get("inc_build_enabled", True))
+    patch_use_inc_build = args.mode == "snapshot"
+    inc_image_policy = config.get("inc_image_policy")
+    inc_image_registry = config.get("inc_image_registry")
+    inc_image_max_pull_bytes = config.get("inc_image_max_pull_bytes")
+    inc_image_pull_timeout = config.get("inc_image_pull_timeout_sec")
+    local_image_prefix = config.get("project_image_prefix")
 
     # Resolve per-POV verify timeout: CLI flag > config > default 180s
     per_pov_verify_timeout = (
         args.per_pov_verify_timeout or config.get("per_pov_verify_timeout") or 180
     )
+    verify_timeout = config.get("verify_timeout") or 7200
     logger.info(f"Per-POV verify timeout: {per_pov_verify_timeout}s")
     patch_verify_variants = bool(config.get("patch_verify_variants", False))
     logger.info(f"Patch verify variants: {patch_verify_variants}")
 
     # Async mode: initialize Redis queues when redis_host is configured
-    redis_host = normalize_redis_host(config.get("redis_host"))
+    configured_redis_host = normalize_redis_host(config.get("redis_host"))
+    raw_cli_redis_host = getattr(args, "redis_host", None)
+    redis_host = configured_redis_host
+    if raw_cli_redis_host is not None:
+        redis_host = normalize_redis_host(raw_cli_redis_host)
+        if redis_host:
+            if configured_redis_host and configured_redis_host != redis_host:
+                logger.info(
+                    "Redis host overridden by CLI: using {} instead of configured "
+                    "redis_host={}",
+                    redis_host,
+                    configured_redis_host,
+                )
+            else:
+                logger.info(f"Redis host set by CLI: {redis_host}")
+        elif configured_redis_host:
+            logger.info(
+                "Local mode forced by CLI redis_host override; ignoring configured "
+                "redis_host={}",
+                configured_redis_host,
+            )
+        else:
+            logger.info("Local mode forced by CLI redis_host override")
+    elif getattr(args, "local", False):
+        if redis_host:
+            logger.info(
+                f"Local mode forced by CLI; ignoring configured redis_host={redis_host}"
+            )
+        else:
+            logger.info("Local mode forced by CLI")
+        redis_host = None
     experiment_name = config.get("experiment", "default")
     verify_queue = None
     patch_build_queue = None
@@ -1189,23 +1559,32 @@ def run_reeval(args: argparse.Namespace) -> int:
         patch_build_queue = runtime_session.build_queue
         patch_verify_queue = runtime_session.verify_queue
 
+        trial_queue, build_queue, verify_queue_name = resolve_queue_names(
+            experiment_name
+        )
+        desired_registration = RuntimeRegistration(
+            experiment=experiment_name,
+            trial_queue=trial_queue,
+            build_queue=build_queue,
+            verify_queue=verify_queue_name,
+            benchmarks_root=str(benchmarks_root or Path("benchmarks")),
+            source_mode=source_mode,
+            inc_image_policy=inc_image_policy or "auto",
+            inc_image_registry=inc_image_registry or "ghcr.io/team-atlanta/crsbench",
+            inc_image_max_pull_bytes=inc_image_max_pull_bytes
+            if inc_image_max_pull_bytes is not None
+            else 10 * 1024 * 1024 * 1024,
+            inc_image_pull_timeout_sec=inc_image_pull_timeout or 300,
+            local_image_prefix=local_image_prefix or "crsbench",
+            max_total_time=config.get("max_total_time") or 7200,
+            build_timeout=config.get("build_timeout") or 3600,
+            per_pov_verify_timeout=per_pov_verify_timeout,
+        )
         # Configless evaluators discover queues via Redis registry.
         existing = runtime_session.registry.get_experiment(experiment_name)
         if existing is None:
-            trial_queue, build_queue, verify_queue_name = resolve_queue_names(
-                experiment_name
-            )
-            registration = RuntimeRegistration(
-                experiment=experiment_name,
-                trial_queue=trial_queue,
-                build_queue=build_queue,
-                verify_queue=verify_queue_name,
-                benchmarks_root=str(benchmarks_root or Path("benchmarks")),
-                source_mode=source_mode,
-                per_pov_verify_timeout=per_pov_verify_timeout,
-            )
             try:
-                runtime_session.register_or_raise(registration)
+                runtime_session.register_or_raise(desired_registration)
             except LockContentionError:
                 logger.error(
                     f"Experiment '{experiment_name}' is already locked. "
@@ -1222,6 +1601,44 @@ def run_reeval(args: argparse.Namespace) -> int:
                 f"Registered re-eval experiment in Redis registry: {experiment_name}"
             )
         else:
+            comparable_fields = (
+                "trial_queue",
+                "build_queue",
+                "verify_queue",
+                "benchmarks_root",
+                "source_mode",
+                "inc_image_policy",
+                "inc_image_registry",
+                "inc_image_max_pull_bytes",
+                "inc_image_pull_timeout_sec",
+                "local_image_prefix",
+                "max_total_time",
+                "build_timeout",
+                "per_pov_verify_timeout",
+            )
+            mismatches = [
+                (
+                    field_name,
+                    getattr(existing, field_name),
+                    getattr(desired_registration, field_name),
+                )
+                for field_name in comparable_fields
+                if getattr(existing, field_name)
+                != getattr(desired_registration, field_name)
+            ]
+            if mismatches:
+                mismatch_text = ", ".join(
+                    f"{field_name}={current!r} (registry) != {desired!r} (config)"
+                    for field_name, current, desired in mismatches
+                )
+                runtime_session.cleanup()
+                logger.error(
+                    "Existing Redis registration for experiment '{}' conflicts with "
+                    "the requested re-eval runtime: {}",
+                    experiment_name,
+                    mismatch_text,
+                )
+                return 1
             logger.info(
                 f"Experiment already registered in Redis registry: {experiment_name}"
             )
@@ -1289,7 +1706,10 @@ def run_reeval(args: argparse.Namespace) -> int:
                             dest_dir=dest_dir,
                             verify_queue=verify_queue,
                             experiment_name=experiment_name,
+                            redis_host=redis_host,
                             sanitizer=trial_sanitizer,
+                            source_mode=source_mode,
+                            use_inc_build=bug_finding_use_inc_build,
                         )
                         if state:
                             async_trials.append(state)
@@ -1306,7 +1726,12 @@ def run_reeval(args: argparse.Namespace) -> int:
                         per_pov_verify_timeout=per_pov_verify_timeout,
                         sanitizer=trial_sanitizer,
                         force_rebuild=args.force_rebuild,
-                        use_inc_build=use_snapshot,
+                        use_inc_build=bug_finding_use_inc_build,
+                        inc_image_policy=inc_image_policy,
+                        inc_image_registry=inc_image_registry,
+                        inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+                        inc_image_pull_timeout=inc_image_pull_timeout,
+                        local_image_prefix=local_image_prefix,
                     )
                     total_results += count
 
@@ -1324,7 +1749,7 @@ def run_reeval(args: argparse.Namespace) -> int:
                             source_mode=source_mode,
                             sanitizer=trial_sanitizer,
                             patch_verify_variants=patch_verify_variants,
-                            use_inc_build=use_snapshot,
+                            use_inc_build=patch_use_inc_build,
                         )
                         if state:
                             async_patch_trials.append(state)
@@ -1342,7 +1767,12 @@ def run_reeval(args: argparse.Namespace) -> int:
                         per_pov_verify_timeout=per_pov_verify_timeout,
                         patch_verify_variants=patch_verify_variants,
                         force_rebuild=args.force_rebuild,
-                        use_inc_build=use_snapshot,
+                        use_inc_build=patch_use_inc_build,
+                        inc_image_policy=inc_image_policy,
+                        inc_image_registry=inc_image_registry,
+                        inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+                        inc_image_pull_timeout=inc_image_pull_timeout,
+                        local_image_prefix=local_image_prefix,
                     )
                     total_results += count
 
@@ -1359,7 +1789,11 @@ def run_reeval(args: argparse.Namespace) -> int:
         # async_trials is non-empty only in async mode.
         if async_trials and redis_host:
             try:
-                total_results += _drain_all_async_results(async_trials, redis_host)
+                total_results += _drain_all_async_results(
+                    async_trials,
+                    redis_host,
+                    timeout_seconds=verify_timeout,
+                )
             except AsyncPovDrainError as e:
                 total_results += e.processed_count
                 logger.exception(
@@ -1376,7 +1810,9 @@ def run_reeval(args: argparse.Namespace) -> int:
         if async_patch_trials and redis_host:
             try:
                 total_results += _drain_all_async_patch_results(
-                    async_patch_trials, redis_host
+                    async_patch_trials,
+                    redis_host,
+                    timeout_seconds=verify_timeout,
                 )
             except Exception:
                 logger.exception("Error draining async patch verification results")

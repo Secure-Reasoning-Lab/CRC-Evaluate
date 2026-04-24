@@ -76,6 +76,71 @@ def resolve_scope_queue_names(
     return tuple(dict.fromkeys(selected))
 
 
+def _normalize_rq_queue_name(name: object) -> str | None:
+    if isinstance(name, bytes):
+        return name.decode("utf-8", errors="ignore")
+    if isinstance(name, str):
+        return name
+    return None
+
+
+def resolve_experiment_queue_names_for_cleanup(
+    redis_conn,
+    *,
+    experiment_name: str,
+    scopes: Iterable[str],
+) -> tuple[str, ...]:
+    """Resolve all queue names that may hold experiment build/verify work."""
+    normalized_scopes = _normalize_scopes(scopes)
+    names = list(resolve_scope_queue_names(experiment_name, normalized_scopes))
+    if not {"build", "verify"} & set(normalized_scopes):
+        return tuple(names)
+
+    queue_prefix = f"crsbench_{experiment_name}_"
+    seen = set(names)
+    queue_all = getattr(rq.Queue, "all", None)  # type: ignore[attr-defined]
+    if not callable(queue_all):
+        return tuple(names)
+
+    for queue in queue_all(connection=redis_conn):
+        queue_name = _normalize_rq_queue_name(getattr(queue, "name", None))
+        if queue_name is None or queue_name in seen:
+            continue
+        if not queue_name.startswith(queue_prefix):
+            continue
+        if "build" in normalized_scopes and queue_name.endswith("_build"):
+            names.append(queue_name)
+            seen.add(queue_name)
+            continue
+        if "verify" in normalized_scopes and queue_name.endswith("_verify"):
+            names.append(queue_name)
+            seen.add(queue_name)
+    return tuple(names)
+
+
+def resolve_dispatcher_state_keys_for_cleanup(
+    *, experiment_name: str, scopes: Iterable[str]
+) -> tuple[str, ...]:
+    """Resolve dispatcher Redis hashes that belong to one experiment."""
+    validate_queue_name_component(experiment_name)
+    normalized_scopes = _normalize_scopes(scopes)
+    if not {"build", "verify"} <= set(normalized_scopes):
+        return ()
+
+    prefix = f"crsbench:dispatcher:{experiment_name}"
+    return (
+        f"{prefix}:build_requests",
+        f"{prefix}:build_results",
+        f"{prefix}:build_attempts",
+        f"{prefix}:lineages",
+        f"{prefix}:verify_requests",
+        f"{prefix}:verify_results",
+        f"{prefix}:verify_attempts",
+        f"{prefix}:evaluators",
+        f"{prefix}:lease",
+    )
+
+
 def clean_experiment_queues(
     redis_conn,
     *,
@@ -90,7 +155,11 @@ def clean_experiment_queues(
         raise RuntimeError("Redis and RQ packages are required")
 
     normalized_scopes = _normalize_scopes(scopes)
-    queue_names = resolve_scope_queue_names(experiment_name, normalized_scopes)
+    queue_names = resolve_experiment_queue_names_for_cleanup(
+        redis_conn,
+        experiment_name=experiment_name,
+        scopes=normalized_scopes,
+    )
     total_removed = 0
     total_matched = 0
     saw_started_trial_jobs = False
@@ -127,6 +196,14 @@ def clean_experiment_queues(
                     experiment_name,
                     exc,
                 )
+
+    if not dry_run:
+        dispatcher_state_keys = resolve_dispatcher_state_keys_for_cleanup(
+            experiment_name=experiment_name,
+            scopes=normalized_scopes,
+        )
+        if dispatcher_state_keys:
+            redis_conn.delete(*dispatcher_state_keys)
 
     removed_registry_entry = False
     removed_lock = False

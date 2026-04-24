@@ -3155,6 +3155,182 @@ class ExperimentInputsConfig(BaseModel):
         return self
 
 
+def normalize_grouped_experiment_config(data: Any) -> Any:
+    """Flatten grouped experiment/runtime/storage blocks into flat config keys."""
+    if not isinstance(data, dict):
+        return data
+
+    normalized = dict(data)
+    grouped: dict[str, Any] = {}
+    experiment_field = normalized.get("experiment")
+    if isinstance(experiment_field, dict):
+        grouped = dict(experiment_field)
+        name = grouped.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(
+                "Grouped experiment config requires 'experiment.name' as a non-empty string"
+            )
+        normalized["experiment"] = name.strip()
+
+        experiment_groupable_keys = (
+            "task",
+            "mode",
+            "benchmark_suite",
+            "benchmarks",
+            "sanitizers",
+            "only_cpv_harnesses",
+        )
+        for grouped_key in experiment_groupable_keys:
+            if grouped_key not in grouped:
+                continue
+            grouped_value = grouped[grouped_key]
+            if grouped_key in normalized and normalized[grouped_key] is not None:
+                if normalized[grouped_key] != grouped_value:
+                    raise ValueError(
+                        f"Conflicting values for '{grouped_key}' between top-level "
+                        "and grouped 'experiment' block"
+                    )
+                continue
+            normalized[grouped_key] = grouped_value
+
+    runtime = normalized.get("runtime")
+    if isinstance(runtime, dict):
+        runtime_groupable_keys = (
+            "trials",
+            "inputs",
+            "max_total_time",
+            "build_timeout",
+            "run_timeout",
+            "verify_timeout",
+            "per_pov_verify_timeout",
+            "redis_host",
+            "litellm_mode",
+            "llm_tracking_enabled",
+            "skip_litellm",
+            "patch_verify_variants",
+            "source_mode",
+            "snapshot_period",
+            "only_cpv_harnesses",
+            "pov_early_stop",
+            "coverage_enabled",
+            "coverage_saturation_time",
+            "coverage_early_stop",
+            "rts_enabled",
+            "inc_build_enabled",
+            "skip_verification",
+        )
+        for grouped_key in runtime_groupable_keys:
+            if grouped_key not in runtime:
+                continue
+            grouped_value = runtime[grouped_key]
+            if grouped_key == "redis_host":
+                normalized["redis_host"] = grouped_value
+                continue
+            if grouped_key in normalized and normalized[grouped_key] is not None:
+                if normalized[grouped_key] != grouped_value:
+                    raise ValueError(
+                        f"Conflicting values for '{grouped_key}' between top-level "
+                        "and grouped 'runtime' block"
+                    )
+                continue
+            normalized[grouped_key] = grouped_value
+
+        runtime_timeouts = runtime.get("timeouts")
+        if isinstance(runtime_timeouts, dict):
+            timeout_map = {
+                "total": "max_total_time",
+                "build": "build_timeout",
+                "run": "run_timeout",
+                "verify": "verify_timeout",
+                "per_pov_verify": "per_pov_verify_timeout",
+            }
+            for src_key, dst_key in timeout_map.items():
+                if src_key not in runtime_timeouts:
+                    continue
+                grouped_value = runtime_timeouts[src_key]
+                if dst_key in normalized and normalized[dst_key] is not None:
+                    if normalized[dst_key] != grouped_value:
+                        raise ValueError(
+                            f"Conflicting values for '{dst_key}' between top-level "
+                            "and grouped 'runtime.timeouts' block"
+                        )
+                    continue
+                normalized[dst_key] = grouped_value
+
+        runtime_redis = runtime.get("redis")
+        if isinstance(runtime_redis, dict) and "host" in runtime_redis:
+            normalized["redis_host"] = runtime_redis["host"]
+
+        runtime_litellm = runtime.get("litellm")
+        if isinstance(runtime_litellm, dict):
+            litellm_map = {
+                "mode": "litellm_mode",
+                "tracking_enabled": "llm_tracking_enabled",
+                "cost_budget": "litellm_cost_budget",
+                "skip": "skip_litellm",
+            }
+            for src_key, dst_key in litellm_map.items():
+                if src_key not in runtime_litellm:
+                    continue
+                grouped_value = runtime_litellm[src_key]
+                if dst_key in normalized and normalized[dst_key] is not None:
+                    if normalized[dst_key] != grouped_value:
+                        raise ValueError(
+                            f"Conflicting values for '{dst_key}' between top-level "
+                            "and grouped 'runtime.litellm' block"
+                        )
+                    continue
+                normalized[dst_key] = grouped_value
+
+        runtime_inc_build = runtime.get("inc_build")
+        if isinstance(runtime_inc_build, dict):
+            inc_build_map = {
+                "policy": "inc_image_policy",
+                "registry": "inc_image_registry",
+                "max_pull_bytes": "inc_image_max_pull_bytes",
+                "pull_timeout_sec": "inc_image_pull_timeout_sec",
+            }
+            for src_key, dst_key in inc_build_map.items():
+                if src_key not in runtime_inc_build:
+                    continue
+                grouped_value = runtime_inc_build[src_key]
+                if dst_key in normalized and normalized[dst_key] is not None:
+                    if normalized[dst_key] != grouped_value:
+                        raise ValueError(
+                            f"Conflicting values for '{dst_key}' between top-level "
+                            "and grouped 'runtime.inc_build' block"
+                        )
+                    continue
+                normalized[dst_key] = grouped_value
+
+    storage = normalized.get("storage")
+    if isinstance(storage, dict):
+        storage_groupable_keys = (
+            "experiment_filestore",
+            "report_filestore",
+            "keep_only_results",
+            "cleanup_after_trial",
+            "copy_results_after_trial",
+            "results_filestore",
+        )
+        for grouped_key in storage_groupable_keys:
+            if grouped_key not in storage:
+                continue
+            grouped_value = storage[grouped_key]
+            if grouped_key in normalized and normalized[grouped_key] is not None:
+                if normalized[grouped_key] != grouped_value:
+                    raise ValueError(
+                        f"Conflicting values for '{grouped_key}' between top-level "
+                        "and grouped 'storage' block"
+                    )
+                continue
+            normalized[grouped_key] = grouped_value
+
+    normalized.pop("runtime", None)
+    normalized.pop("storage", None)
+    return normalized
+
+
 class ExperimentConfig(BaseModel):
     """Experiment configuration schema."""
 
@@ -3452,182 +3628,7 @@ class ExperimentConfig(BaseModel):
         Top-level keys remain supported. When both grouped and top-level values
         are provided, they must match.
         """
-        if not isinstance(data, dict):
-            return data
-
-        normalized = dict(data)
-        grouped: dict[str, Any] = {}
-        experiment_field = normalized.get("experiment")
-        if isinstance(experiment_field, dict):
-            grouped = dict(experiment_field)
-            name = grouped.get("name")
-            if not isinstance(name, str) or not name.strip():
-                raise ValueError(
-                    "Grouped experiment config requires 'experiment.name' as a non-empty string"
-                )
-            normalized["experiment"] = name.strip()
-
-            experiment_groupable_keys = (
-                "task",
-                "mode",
-                "benchmark_suite",
-                "benchmarks",
-                "sanitizers",
-                "only_cpv_harnesses",
-            )
-            for grouped_key in experiment_groupable_keys:
-                if grouped_key not in grouped:
-                    continue
-                grouped_value = grouped[grouped_key]
-                if grouped_key in normalized and normalized[grouped_key] is not None:
-                    if normalized[grouped_key] != grouped_value:
-                        raise ValueError(
-                            f"Conflicting values for '{grouped_key}' between top-level "
-                            "and grouped 'experiment' block"
-                        )
-                    continue
-                normalized[grouped_key] = grouped_value
-
-        runtime = normalized.get("runtime")
-        if isinstance(runtime, dict):
-            runtime_groupable_keys = (
-                "trials",
-                "inputs",
-                "max_total_time",
-                "build_timeout",
-                "run_timeout",
-                "verify_timeout",
-                "per_pov_verify_timeout",
-                "redis_host",
-                "litellm_mode",
-                "llm_tracking_enabled",
-                "skip_litellm",
-                "patch_verify_variants",
-                "source_mode",
-                "snapshot_period",
-                "only_cpv_harnesses",
-                "pov_early_stop",
-                "coverage_enabled",
-                "coverage_saturation_time",
-                "coverage_early_stop",
-                "rts_enabled",
-                "inc_build_enabled",
-                "skip_verification",
-            )
-            for grouped_key in runtime_groupable_keys:
-                if grouped_key not in runtime:
-                    continue
-                grouped_value = runtime[grouped_key]
-                # Grouped runtime redis is authoritative over top-level compatibility key.
-                if grouped_key == "redis_host":
-                    normalized["redis_host"] = grouped_value
-                    continue
-                if grouped_key in normalized and normalized[grouped_key] is not None:
-                    if normalized[grouped_key] != grouped_value:
-                        raise ValueError(
-                            f"Conflicting values for '{grouped_key}' between top-level "
-                            "and grouped 'runtime' block"
-                        )
-                    continue
-                normalized[grouped_key] = grouped_value
-
-            runtime_timeouts = runtime.get("timeouts")
-            if isinstance(runtime_timeouts, dict):
-                timeout_map = {
-                    "total": "max_total_time",
-                    "build": "build_timeout",
-                    "run": "run_timeout",
-                    "verify": "verify_timeout",
-                    "per_pov_verify": "per_pov_verify_timeout",
-                }
-                for src_key, dst_key in timeout_map.items():
-                    if src_key not in runtime_timeouts:
-                        continue
-                    grouped_value = runtime_timeouts[src_key]
-                    if dst_key in normalized and normalized[dst_key] is not None:
-                        if normalized[dst_key] != grouped_value:
-                            raise ValueError(
-                                f"Conflicting values for '{dst_key}' between top-level "
-                                "and grouped 'runtime.timeouts' block"
-                            )
-                        continue
-                    normalized[dst_key] = grouped_value
-
-            runtime_redis = runtime.get("redis")
-            if isinstance(runtime_redis, dict) and "host" in runtime_redis:
-                # Most specific grouped redis value wins for compatibility.
-                normalized["redis_host"] = runtime_redis["host"]
-
-            runtime_litellm = runtime.get("litellm")
-            if isinstance(runtime_litellm, dict):
-                litellm_map = {
-                    "mode": "litellm_mode",
-                    "tracking_enabled": "llm_tracking_enabled",
-                    "cost_budget": "litellm_cost_budget",
-                    "skip": "skip_litellm",
-                }
-                for src_key, dst_key in litellm_map.items():
-                    if src_key not in runtime_litellm:
-                        continue
-                    grouped_value = runtime_litellm[src_key]
-                    if dst_key in normalized and normalized[dst_key] is not None:
-                        if normalized[dst_key] != grouped_value:
-                            raise ValueError(
-                                f"Conflicting values for '{dst_key}' between top-level "
-                                "and grouped 'runtime.litellm' block"
-                            )
-                        continue
-                    normalized[dst_key] = grouped_value
-
-            runtime_inc_build = runtime.get("inc_build")
-            if isinstance(runtime_inc_build, dict):
-                inc_build_map = {
-                    "policy": "inc_image_policy",
-                    "registry": "inc_image_registry",
-                    "max_pull_bytes": "inc_image_max_pull_bytes",
-                    "pull_timeout_sec": "inc_image_pull_timeout_sec",
-                }
-                for src_key, dst_key in inc_build_map.items():
-                    if src_key not in runtime_inc_build:
-                        continue
-                    grouped_value = runtime_inc_build[src_key]
-                    if dst_key in normalized and normalized[dst_key] is not None:
-                        if normalized[dst_key] != grouped_value:
-                            raise ValueError(
-                                f"Conflicting values for '{dst_key}' between top-level "
-                                "and grouped 'runtime.inc_build' block"
-                            )
-                        continue
-                    normalized[dst_key] = grouped_value
-
-        storage = normalized.get("storage")
-        if isinstance(storage, dict):
-            storage_groupable_keys = (
-                "experiment_filestore",
-                "report_filestore",
-                "keep_only_results",
-                "cleanup_after_trial",
-                "copy_results_after_trial",
-                "results_filestore",
-            )
-            for grouped_key in storage_groupable_keys:
-                if grouped_key not in storage:
-                    continue
-                grouped_value = storage[grouped_key]
-                if grouped_key in normalized and normalized[grouped_key] is not None:
-                    if normalized[grouped_key] != grouped_value:
-                        raise ValueError(
-                            f"Conflicting values for '{grouped_key}' between top-level "
-                            "and grouped 'storage' block"
-                        )
-                    continue
-                normalized[grouped_key] = grouped_value
-
-        # Keep temporary grouping blocks out of strict model fields.
-        normalized.pop("runtime", None)
-        normalized.pop("storage", None)
-
-        return normalized
+        return normalize_grouped_experiment_config(data)
 
     @model_validator(mode="before")
     @classmethod

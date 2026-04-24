@@ -3,10 +3,12 @@
 Tests for crsbench/evaluation/verification/pov/manager.py.
 """
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from crsbench.builder.types import BenchmarkMode, VariantType
+from crsbench.distributed.verify_queue import AsyncPovBuildPrereqs
 from crsbench.evaluation.verification.models import PovVerificationStatus
 from crsbench.evaluation.verification.pov.config import POVVerificationConfig
 from crsbench.evaluation.verification.pov.store import POVStore
@@ -775,7 +777,12 @@ class TestAsyncMode:
         build_dep = MagicMock()
         build_dep.id = "build-job-1"
         manager._ensure_async_build_jobs = MagicMock(
-            return_value=(["build-job-1"], [build_dep])
+            return_value=AsyncPovBuildPrereqs(
+                logical_build_request_ids=["build-job-1"],
+                artifact_build_ids=["artifact-job-1"],
+                rq_dependencies=[build_dep],
+                sanitizer="address",
+            )
         )
         manager._engine = MagicMock()
         manager._engine.builder.source_mode = "main_repo"
@@ -794,6 +801,7 @@ class TestAsyncMode:
         assert call_kwargs[1]["pov_id"] == "test.blob:abc123hash"
         assert call_kwargs[1]["sanitizer"] == "address"
         assert call_kwargs[1]["build_job_ids"] == ["build-job-1"]
+        assert call_kwargs[1]["build_artifact_ids"] == ["artifact-job-1"]
         assert call_kwargs[1]["depends_on"] == [build_dep]
         assert call_kwargs[1]["source_mode"] == "main_repo"
         assert call_kwargs[1]["use_inc_build"] is False
@@ -826,6 +834,11 @@ class TestAsyncMode:
 
         manager._poll_pending_verdicts()
 
+        mock_poll.assert_called_once_with(
+            "redis.local",
+            ["job-123"],
+            experiment_name="exp1",
+        )
         # Pending should be cleared
         assert manager._pending_job_ids == []
         # CPV should be found
@@ -842,7 +855,14 @@ class TestAsyncMode:
         mock_enqueue.return_value = "job-1"
 
         manager = self._make_manager(tmp_path, redis_host="redis.local")
-        manager._ensure_async_build_jobs = MagicMock(return_value=(["build-job-1"], []))
+        manager._ensure_async_build_jobs = MagicMock(
+            return_value=AsyncPovBuildPrereqs(
+                logical_build_request_ids=["build-job-1"],
+                artifact_build_ids=["build-job-1"],
+                rq_dependencies=[],
+                sanitizer="address",
+            )
+        )
         manager._engine = MagicMock()
         manager._engine.builder.source_mode = "pkgs"
         manager._adapter = MagicMock()
@@ -934,10 +954,17 @@ class TestAsyncMode:
             configs=[config_a, config_b]
         )
 
-        build_job_ids, build_deps = manager._ensure_async_build_jobs()
+        build_prereqs = manager._ensure_async_build_jobs()
 
-        assert build_job_ids == [build_rq_job_1.id, build_rq_job_2.id]
-        assert build_deps == [build_rq_job_1, build_rq_job_2]
+        assert build_prereqs.logical_build_request_ids == [
+            build_rq_job_1.id,
+            build_rq_job_2.id,
+        ]
+        assert build_prereqs.rq_dependencies == [build_rq_job_1, build_rq_job_2]
+        assert build_prereqs.artifact_build_ids == [
+            build_rq_job_1.id,
+            build_rq_job_2.id,
+        ]
         assert manager._async_build_sanitizer == "address"
         assert mock_enqueue_ci_job.call_count == 3
         assert (
@@ -946,6 +973,143 @@ class TestAsyncMode:
         assert (
             mock_enqueue_ci_job.call_args_list[2].kwargs["job_id"] == build_rq_job_2.id
         )
+
+    @patch("crsbench.distributed.verify_queue.submit_async_build_requests")
+    def test_ensure_async_build_jobs_dispatcher_submits_logical_builds(
+        self, mock_submit_builds, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Dispatcher routing submits logical build requests (no RQ deps)."""
+        from crsbench.distributed.queue import (
+            EVALUATOR_ROUTING_MODEL_ENV,
+            ROUTING_MODEL_DISPATCHER,
+        )
+
+        monkeypatch.setenv(EVALUATOR_ROUTING_MODEL_ENV, ROUTING_MODEL_DISPATCHER)
+
+        manager = self._make_manager(tmp_path, redis_host="redis.local")
+        manager._adapter = MagicMock()
+        manager._adapter.benchmark_path = Path("/benchmarks/test-benchmark")
+        manager._adapter.benchmark_name = "test-benchmark"
+        manager._adapter.main_repo = "https://example.com/repo.git"
+        manager._adapter.lang = "c"
+        manager._adapter.repo_name = "repo"
+        manager._adapter.inc_build = True
+        manager._adapter.get_all_cpv_sanitizers.return_value = ["address"]
+        manager._adapter.get_mode.return_value = BenchmarkMode.DELTA
+        manager._adapter.get_base_commit.return_value = "a" * 40
+        manager._adapter.get_ref_commit.return_value = "b" * 40
+        manager._adapter.get_cpv_numbers.return_value = [0]
+
+        config_a = MagicMock()
+        config_a.benchmark_path = Path("/benchmarks/test-benchmark")
+        config_a.benchmark_name = "test-benchmark"
+        config_a.variant_type = VariantType.DELTA_REF
+        config_a.commit = "b" * 40
+        config_a.main_repo = "https://example.com/repo.git"
+        config_a.mode = BenchmarkMode.DELTA
+        config_a.language = "c"
+        config_a.cpv_num = None
+        config_a.patch_id = None
+        config_a.pov_id = None
+        config_a.patches = []
+        config_a.use_inc_build = True
+        config_a.sanitizer = "address"
+        config_a.repo_name = "repo"
+        config_a.variant_name = "variant-a"
+
+        config_b = MagicMock()
+        config_b.benchmark_path = Path("/benchmarks/test-benchmark")
+        config_b.benchmark_name = "test-benchmark"
+        config_b.variant_type = VariantType.CPV
+        config_b.commit = "b" * 40
+        config_b.main_repo = "https://example.com/repo.git"
+        config_b.mode = BenchmarkMode.DELTA
+        config_b.language = "c"
+        config_b.cpv_num = 0
+        config_b.patch_id = None
+        config_b.pov_id = None
+        config_b.patches = []
+        config_b.use_inc_build = True
+        config_b.sanitizer = "address"
+        config_b.repo_name = "repo"
+        config_b.variant_name = "variant-b"
+
+        manager._engine = MagicMock()
+        manager._engine.builder.source_mode = "main_repo"
+        manager._engine.builder.infra.inc_image_policy = "auto"
+        manager._engine.builder.infra.inc_image_registry = "ghcr.io/example"
+        manager._engine.builder.infra.inc_image_max_pull_bytes = 123
+        manager._engine.builder.infra.inc_image_pull_timeout = 45
+        manager._engine.builder.infra.local_image_prefix = "crsbench"
+        manager._engine.builder.create_build_plan.return_value = MagicMock(
+            configs=[config_a, config_b]
+        )
+
+        mock_submit_builds.return_value = [
+            "build:trial-1:test-benchmark:0",
+            "build:trial-1:test-benchmark:1",
+            "build:trial-1:test-benchmark:2",
+        ]
+
+        build_prereqs = manager._ensure_async_build_jobs()
+        build_prereqs_repeat = manager._ensure_async_build_jobs()
+
+        assert (
+            build_prereqs.logical_build_request_ids
+            == mock_submit_builds.return_value[1:]
+        )
+        assert (
+            build_prereqs_repeat.logical_build_request_ids
+            == build_prereqs.logical_build_request_ids
+        )
+        assert build_prereqs.rq_dependencies == []
+        assert build_prereqs_repeat.rq_dependencies == build_prereqs.rq_dependencies
+        assert build_prereqs.artifact_build_ids == [
+            "build-single/test-benchmark/test-benchmark-asan-deltaref",
+            "build-single/test-benchmark/test-benchmark-asan-delta-cpv0",
+        ]
+        assert (
+            build_prereqs_repeat.artifact_build_ids == build_prereqs.artifact_build_ids
+        )
+        assert manager._async_build_sanitizer == "address"
+        mock_submit_builds.assert_called_once()
+
+    @patch("crsbench.distributed.verify_queue.enqueue_single_pov")
+    def test_enqueue_pov_dispatcher_uses_logical_queue(
+        self, mock_enqueue, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Dispatcher routing enqueues logical verify requests (no RQ queue)."""
+        from crsbench.distributed.queue import (
+            EVALUATOR_ROUTING_MODEL_ENV,
+            ROUTING_MODEL_DISPATCHER,
+        )
+
+        monkeypatch.setenv(EVALUATOR_ROUTING_MODEL_ENV, ROUTING_MODEL_DISPATCHER)
+
+        manager = self._make_manager(tmp_path, redis_host="redis.local")
+        manager._ensure_async_build_jobs = MagicMock(
+            return_value=AsyncPovBuildPrereqs(
+                logical_build_request_ids=["build-1"],
+                artifact_build_ids=["artifact-1"],
+                rq_dependencies=[],
+                sanitizer="address",
+            )
+        )
+        manager._engine = MagicMock()
+        manager._engine.builder.source_mode = "main_repo"
+        manager._adapter = MagicMock()
+        manager._adapter.inc_build = False
+
+        pov_file = tmp_path / "trial-1" / "pov_output" / "test.blob"
+        pov_file.write_bytes(b"pov_data_content")
+
+        manager._enqueue_pov(pov_file, "abc123hash")
+
+        call_kwargs = mock_enqueue.call_args.kwargs
+        assert call_kwargs["verify_queue"] is None
+        assert call_kwargs["redis_host"] == "redis.local"
+        assert call_kwargs["build_job_ids"] == ["build-1"]
+        assert call_kwargs["build_artifact_ids"] == ["artifact-1"]
 
     @patch("crsbench.evaluation.verification.pov.manager.time.sleep")
     @patch("crsbench.evaluation.verification.pov.manager.time.time")
@@ -1244,6 +1408,29 @@ class TestAsyncMode:
         manager.drain_pending(per_pov_timeout=1, verify_timeout=1, poll_interval=0.1)
 
         manager.store.save.assert_called_once()
+
+    @patch("crsbench.distributed.verify_queue.poll_single_pov_verdicts")
+    def test_drain_pending_marks_undrained_timeout(
+        self, mock_poll, tmp_path: Path
+    ) -> None:
+        """Async POV drain timeout writes a shared verification-undrained marker."""
+        mock_poll.return_value = ([], ["job-123"])
+
+        manager = self._make_manager(tmp_path, redis_host="redis.local")
+        manager._pending_job_ids = ["job-123"]
+        manager._job_to_pov_id = {"job-123": "test.blob:abc123hash"}
+
+        manager.drain_pending(per_pov_timeout=1, verify_timeout=1, poll_interval=0.1)
+
+        marker_path = tmp_path / "trial-1" / ".verification-undrained.json"
+        assert marker_path.exists()
+        assert json.loads(marker_path.read_text()) == {
+            "verification_kind": "pov",
+            "reason": "async_verification_drain_incomplete",
+            "expected_jobs": 1,
+            "completed_results": 0,
+            "missing_results": 1,
+        }
 
 
 class TestExchangeDirScanning:

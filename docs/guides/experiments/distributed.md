@@ -458,8 +458,12 @@ The evaluator is optional. Without it:
 - Use `crsbench re-eval` to verify POVs after the fact
 
 Mode note:
-- config-pinned evaluator CLI mode normally performs a startup pre-build
-  enqueue phase
+- focused worker/evaluator CLI modes default to dispatcher routing when
+  `CRSBENCH_EVALUATOR_ROUTING_MODEL` is unset; async POV verification then uses
+  logical build/verify requests plus evaluator-local warmup instead of the
+  legacy shared startup pre-build fanout
+- shared routing remains available as an explicit override via
+  `CRSBENCH_EVALUATOR_ROUTING_MODEL=shared`
 - configless evaluator mode skips startup pre-build enqueue and consumes build
   work lazily; async POV verification enqueues benchmark-local build jobs on
   first POV discovery and verify jobs wait on those build dependencies
@@ -582,6 +586,12 @@ Patch verification test execution context:
 # Basic re-evaluation with verbose output
 uv run crsbench re-eval -c config.yaml -v
 
+# Override a tracked config's redis_host for local distributed re-eval
+uv run crsbench re-eval -c config.yaml --redis-host localhost:6379
+
+# Force local re-eval and ignore any configured Redis runtime
+uv run crsbench re-eval -c config.yaml --local
+
 # With custom timeout and forced rebuild
 uv run crsbench re-eval -c config.yaml --force-rebuild --per-pov-verify-timeout 300
 
@@ -603,6 +613,8 @@ Bug-finding re-eval duplicate handling:
 |------|-------------|
 | `-c`, `--experiment-config` | Path to experiment config YAML (required) |
 | `--force-rebuild` | Force rebuild of variant images |
+| `--local` | Force local re-eval and ignore configured `redis_host` |
+| `--redis-host` | Override `redis_host` from config for distributed re-eval |
 | `--per-pov-verify-timeout` | Timeout per POV verification (seconds) |
 | `--output`, `-o` | Output directory (default: write to trial dirs) |
 | `--jobs` | Number of parallel verification jobs |
@@ -667,6 +679,7 @@ Smoke bug-fixing suites currently run with LiteLLM tracking enabled in the sanit
 | Workers exit immediately | Worker was started with `--no-continuous` and the queue drained | Omit `--no-continuous` for the default continuous mode |
 | Stale jobs from previous run | Queue not cleaned | `uv run python scripts/valkey-helper.py clean <experiment>` |
 | `CRSBENCH_LLM_UPSTREAM_BASE_URL not set` | LiteLLM env contract is incomplete for this trial | Set `skip_litellm: true` when LLM is not needed, or provide required `CRSBENCH_LLM_*` vars |
+| `verification drain incomplete (...)` during smoke post-verify | Async POV/patch verification hit `runtime.verify_timeout`; the worker preserved artifacts but wrote `.verification-undrained.json` | Treat smoke as failed, inspect the worker/evaluator logs for the stalled verify queue, then re-run `crsbench re-eval` on the completed trial outputs once the evaluator path is fixed |
 
 ## CLI Reference
 

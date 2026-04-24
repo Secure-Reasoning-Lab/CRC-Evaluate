@@ -60,16 +60,24 @@ Runtime registration and queue discovery work as follows:
 Configless evaluators use the same build and verify queues as config-pinned
 evaluators, but startup behavior differs:
 
-- config-pinned evaluator CLI mode normally enqueues startup pre-build jobs
-  before entering steady-state supervision
+- focused worker/evaluator CLI modes default to dispatcher routing when
+  `CRSBENCH_EVALUATOR_ROUTING_MODEL` is unset; async POV verification then uses
+  logical build/verify requests plus evaluator-local warmup instead of the
+  legacy shared startup pre-build fanout
+- shared routing remains available as an explicit override via
+  `CRSBENCH_EVALUATOR_ROUTING_MODEL=shared`
 - configless evaluator mode does not enqueue startup pre-build jobs
+- dispatcher routing (`CRSBENCH_EVALUATOR_ROUTING_MODEL=dispatcher`) is not
+  supported in configless evaluator mode in this revision; configless startup
+  must reject it and continue to rely on shared build/verify queues
 - configless evaluators still consume build queues lazily; when async POV
   verification discovers the first POV for a benchmark/sanitizer, it enqueues
   the required build DAG to the build queue and verify jobs wait on those build
   dependencies before running
 
-So configless mode keeps build/verify queue separation, but it does not have
-the same normal startup build-first phase as config-pinned evaluator CLI mode.
+So configless mode keeps build/verify queue separation, but it does not adopt
+the focused-runtime dispatcher default and continues to reject dispatcher
+routing in this revision.
 
 ## Cloud Worker Readiness Contract
 
@@ -148,6 +156,10 @@ legacy CI queue compatibility is documented in:
 - **Shared paths**: all experiments on a configless evaluator must share the
   same `benchmarks_root`. If different paths are needed,
   run separate evaluator processes or use `--experiment-config`.
+- **No dispatcher routing**: configless evaluators may not run with
+  `CRSBENCH_EVALUATOR_ROUTING_MODEL=dispatcher` in this revision because the
+  dispatcher currently assumes one experiment-pinned evaluator fleet and
+  experiment-derived evaluator-local queue names.
 - **Shared inc-image policy**: all experiments on a configless evaluator must
   have compatible inc-image settings (`inc_image_policy`, `inc_image_registry`,
   pull-timeout/size limits, and image prefix). These settings affect local

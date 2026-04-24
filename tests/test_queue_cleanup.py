@@ -105,7 +105,142 @@ def test_clean_experiment_queues_applies_registry_and_lock(monkeypatch) -> None:
     assert result.removed_registry_entry
     assert result.removed_lock
     registry.deregister.assert_called_once_with("exp-test")
-    redis_conn.delete.assert_called_once_with("crsbench:lock:exp-test")
+    redis_conn.delete.assert_any_call(
+        "crsbench:dispatcher:exp-test:build_requests",
+        "crsbench:dispatcher:exp-test:build_results",
+        "crsbench:dispatcher:exp-test:build_attempts",
+        "crsbench:dispatcher:exp-test:lineages",
+        "crsbench:dispatcher:exp-test:verify_requests",
+        "crsbench:dispatcher:exp-test:verify_results",
+        "crsbench:dispatcher:exp-test:verify_attempts",
+        "crsbench:dispatcher:exp-test:evaluators",
+        "crsbench:dispatcher:exp-test:lease",
+    )
+    redis_conn.delete.assert_any_call("crsbench:lock:exp-test")
+
+
+def test_clean_experiment_queues_discovers_dispatcher_local_queues(
+    monkeypatch,
+) -> None:
+    redis_conn = MagicMock()
+    queue_map = {
+        "q-build": MagicMock(),
+        "q-verify": MagicMock(),
+        "crsbench_exp-test_eval-1_build": MagicMock(),
+        "crsbench_exp-test_eval-1_verify": MagicMock(),
+    }
+
+    class _FakeQueue:
+        @staticmethod
+        def all(*, connection):
+            assert connection is redis_conn
+            return [
+                SimpleNamespace(name="crsbench_exp-test_eval-1_build"),
+                SimpleNamespace(name="crsbench_exp-test_eval-1_verify"),
+                SimpleNamespace(name="crsbench_exp-other_eval-1_build"),
+            ]
+
+        def __new__(cls, name, **_kwargs):
+            queue = queue_map[name]
+            queue.name = name
+            return queue
+
+    monkeypatch.setattr(
+        "crsbench.distributed.queue_cleanup.resolve_queue_names",
+        lambda _experiment: ("q-trial", "q-build", "q-verify"),
+    )
+    monkeypatch.setattr("crsbench.distributed.queue_cleanup.rq.Queue", _FakeQueue)
+    monkeypatch.setattr(
+        "crsbench.distributed.queue_cleanup.get_existing_trial_jobs",
+        lambda _queue, **_kwargs: {
+            "queued": [object()],
+            "started": [],
+            "failed": [],
+            "finished": [],
+            "deferred": [],
+            "scheduled": [],
+        },
+    )
+
+    result = clean_experiment_queues(
+        redis_conn,
+        experiment_name="exp-test",
+        scopes=("build", "verify"),
+        include_registry=False,
+        include_lock=False,
+        dry_run=True,
+    )
+
+    assert result.queue_names == (
+        "q-build",
+        "q-verify",
+        "crsbench_exp-test_eval-1_build",
+        "crsbench_exp-test_eval-1_verify",
+    )
+    assert result.matched_jobs == 4
+
+
+def test_clean_experiment_queues_clears_dispatcher_state_for_evaluator_scopes(
+    monkeypatch,
+) -> None:
+    redis_conn = MagicMock()
+    queue_map = {
+        "q-build": MagicMock(),
+        "q-verify": MagicMock(),
+    }
+
+    class _FakeQueue:
+        @staticmethod
+        def all(*, connection):
+            assert connection is redis_conn
+            return []
+
+        def __new__(cls, name, **_kwargs):
+            queue = queue_map[name]
+            queue.name = name
+            return queue
+
+    monkeypatch.setattr(
+        "crsbench.distributed.queue_cleanup.resolve_queue_names",
+        lambda _experiment: ("q-trial", "q-build", "q-verify"),
+    )
+    monkeypatch.setattr("crsbench.distributed.queue_cleanup.rq.Queue", _FakeQueue)
+    monkeypatch.setattr(
+        "crsbench.distributed.queue_cleanup.get_existing_trial_jobs",
+        lambda _queue, **_kwargs: {
+            "queued": [],
+            "started": [],
+            "failed": [],
+            "finished": [],
+            "deferred": [],
+            "scheduled": [],
+        },
+    )
+    monkeypatch.setattr(
+        "crsbench.distributed.queue_cleanup.clear_experiment_jobs",
+        lambda _queue, _experiment_name: 0,
+    )
+
+    clean_experiment_queues(
+        redis_conn,
+        experiment_name="exp-test",
+        scopes=("build", "verify"),
+        include_registry=False,
+        include_lock=False,
+        dry_run=False,
+    )
+
+    redis_conn.delete.assert_called_once_with(
+        "crsbench:dispatcher:exp-test:build_requests",
+        "crsbench:dispatcher:exp-test:build_results",
+        "crsbench:dispatcher:exp-test:build_attempts",
+        "crsbench:dispatcher:exp-test:lineages",
+        "crsbench:dispatcher:exp-test:verify_requests",
+        "crsbench:dispatcher:exp-test:verify_results",
+        "crsbench:dispatcher:exp-test:verify_attempts",
+        "crsbench:dispatcher:exp-test:evaluators",
+        "crsbench:dispatcher:exp-test:lease",
+    )
 
 
 def test_get_trial_key_falls_back_for_non_trial_jobs() -> None:

@@ -1,5 +1,6 @@
 """Unit tests for trial patch discovery in BenchmarkRunner."""
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -11,6 +12,19 @@ def _make_runner(mode: str = "bug-fixing") -> BenchmarkRunner:
     adapter = MagicMock()
     adapter.mode = mode
     return BenchmarkRunner(adapter=adapter, snapshot_period=0)
+
+
+def _write_structured_patch_trial(tmp_path: Path) -> tuple[Path, Path]:
+    trial_dir = tmp_path / "trial"
+    patch_dir = trial_dir / "output" / "patches" / "cpv_0"
+    patch_dir.mkdir(parents=True)
+    (patch_dir / "patch.diff").write_text("diff --git a b")
+
+    pov_dir = trial_dir / "crs-input" / "povs"
+    pov_dir.mkdir(parents=True)
+    (pov_dir / "cpv_0").write_bytes(b"pov")
+
+    return trial_dir, patch_dir
 
 
 def test_discover_trial_patches_flat_with_target(tmp_path: Path) -> None:
@@ -143,3 +157,51 @@ def test_verify_patches_local_cleans_engine_on_error(
 
     assert results == []
     assert cleanup_called["value"] is True
+
+
+def test_verify_patches_distributed_marks_undrained_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trial_dir, _patch_dir = _write_structured_patch_trial(tmp_path)
+
+    class _FakeQueue:
+        name = "verify"
+        connection = object()
+
+    runner = BenchmarkRunner(
+        adapter=MagicMock(mode="bug-fixing"),
+        snapshot_period=0,
+        redis_host="redis.local",
+        experiment_name="exp-undrained",
+    )
+
+    monkeypatch.setattr(
+        "crsbench.distributed.patch_queue.initialize_patch_queues",
+        lambda *_args, **_kwargs: (_FakeQueue(), _FakeQueue()),
+    )
+    monkeypatch.setattr(
+        "crsbench.distributed.patch_queue.enqueue_patch_jobs",
+        lambda *_args, **_kwargs: ["verify-job-1"],
+    )
+    monkeypatch.setattr(
+        "crsbench.distributed.patch_queue.drain_patch_verdicts",
+        lambda *_args, **_kwargs: [],
+    )
+
+    results = runner._verify_patches_distributed(
+        benchmark_path=tmp_path / "benchmark",
+        trial_output_dir=trial_dir,
+        harness_name="harness-a",
+        target_cpv_id="cpv_0",
+    )
+
+    marker_path = trial_dir / ".verification-undrained.json"
+    assert results == []
+    assert marker_path.exists()
+    assert json.loads(marker_path.read_text()) == {
+        "verification_kind": "patch",
+        "reason": "async_verification_drain_incomplete",
+        "expected_jobs": 1,
+        "completed_results": 0,
+        "missing_results": 1,
+    }

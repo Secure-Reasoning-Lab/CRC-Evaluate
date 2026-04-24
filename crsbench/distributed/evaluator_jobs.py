@@ -239,6 +239,7 @@ class SinglePovPayload:
     enqueued_at: float
     sanitizer: Optional[str] = None
     build_job_ids: list[str] = field(default_factory=list)
+    build_artifact_ids: list[str] = field(default_factory=list)
     source_mode: str = "pkgs"
     use_inc_build: bool = True
 
@@ -252,6 +253,7 @@ class SinglePovPayload:
             "enqueued_at": self.enqueued_at,
             "sanitizer": self.sanitizer,
             "build_job_ids": self.build_job_ids,
+            "build_artifact_ids": self.build_artifact_ids,
             "source_mode": self.source_mode,
             "use_inc_build": self.use_inc_build,
         }
@@ -267,6 +269,7 @@ class SinglePovPayload:
             enqueued_at=d["enqueued_at"],
             sanitizer=d.get("sanitizer"),
             build_job_ids=list(d.get("build_job_ids", [])),
+            build_artifact_ids=list(d.get("build_artifact_ids", [])),
             source_mode=d.get("source_mode", "pkgs"),
             use_inc_build=d.get("use_inc_build", True),
         )
@@ -331,6 +334,7 @@ def verify_single_pov(payload_dict: dict[str, Any]) -> dict[str, Any]:
     )
 
     payload = SinglePovPayload.from_dict(payload_dict)
+    build_ids_for_context = payload.build_artifact_ids or payload.build_job_ids
     pov = payload.pov
 
     logger.info(
@@ -342,7 +346,7 @@ def verify_single_pov(payload_dict: dict[str, Any]) -> dict[str, Any]:
         payload.experiment_name, payload.benchmark, payload.sanitizer
     )
     if cache_key not in _built_results:
-        if payload.build_job_ids:
+        if build_ids_for_context:
             try:
                 from crsbench.distributed.ci_jobs import load_build_context_from_disk
 
@@ -351,7 +355,7 @@ def verify_single_pov(payload_dict: dict[str, Any]) -> dict[str, Any]:
                     benchmarks_root, payload.benchmark
                 )
                 build_context = load_build_context_from_disk(
-                    build_job_ids=payload.build_job_ids,
+                    build_job_ids=build_ids_for_context,
                     benchmark_path=benchmark_path,
                     source_mode=payload.source_mode,
                     use_inc_build=payload.use_inc_build,

@@ -280,6 +280,10 @@ def run_worker(args: argparse.Namespace) -> int:
         Exit code (0 for success, non-zero for failure)
     """
     from crsbench.distributed.common import normalize_cpu_tag, normalize_redis_host
+    from crsbench.distributed.queue import (
+        ROUTING_MODEL_DISPATCHER,
+        evaluator_routing_model_default_scope,
+    )
     from crsbench.utils.logger import configure_logger, get_logger
 
     log_level = "DEBUG" if args.verbose else "INFO"
@@ -353,34 +357,35 @@ def run_worker(args: argparse.Namespace) -> int:
         continuous = True if args.continuous is not False else False
 
         try:
-            if continuous:
-                run_worker_continuous(
+            with evaluator_routing_model_default_scope(ROUTING_MODEL_DISPATCHER):
+                if continuous:
+                    run_worker_continuous(
+                        redis_host=redis_host_from_env,
+                        experiment_name=experiment_name,
+                        worker_name=args.worker_name,
+                        num_workers=num_workers,
+                        use_cpuset=use_cpuset,
+                        minimum_disk_size="10GB",
+                        disk_check_interval=60,
+                        cores=cores,
+                        skip_cpus=skip_cpus,
+                        cpu_tag=normalize_cpu_tag(cpu_tag),
+                        cores_per_job=cores_per_job,
+                        log_level=log_level,
+                    )
+                    return 0
+                result = worker_main(
                     redis_host=redis_host_from_env,
                     experiment_name=experiment_name,
                     worker_name=args.worker_name,
                     num_workers=num_workers,
                     use_cpuset=use_cpuset,
-                    minimum_disk_size="10GB",
-                    disk_check_interval=60,
                     cores=cores,
                     skip_cpus=skip_cpus,
                     cpu_tag=normalize_cpu_tag(cpu_tag),
                     cores_per_job=cores_per_job,
                     log_level=log_level,
                 )
-                return 0
-            result = worker_main(
-                redis_host=redis_host_from_env,
-                experiment_name=experiment_name,
-                worker_name=args.worker_name,
-                num_workers=num_workers,
-                use_cpuset=use_cpuset,
-                cores=cores,
-                skip_cpus=skip_cpus,
-                cpu_tag=normalize_cpu_tag(cpu_tag),
-                cores_per_job=cores_per_job,
-                log_level=log_level,
-            )
             if result != 0:
                 _report_cloud_worker_failure(
                     redis_host=redis_host_from_env,
@@ -501,36 +506,37 @@ def run_worker(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        if continuous:
-            run_worker_continuous(
+        with evaluator_routing_model_default_scope(ROUTING_MODEL_DISPATCHER):
+            if continuous:
+                run_worker_continuous(
+                    redis_host=redis_host,
+                    experiment_name=experiment_name,
+                    worker_name=worker_name,
+                    num_workers=num_workers,
+                    queue_name=queue_name,
+                    use_cpuset=use_cpuset,
+                    minimum_disk_size=minimum_disk_size,
+                    disk_check_interval=disk_check_interval,
+                    cores=cores,
+                    skip_cpus=skip_cpus,
+                    cpu_tag=cpu_tag,
+                    cores_per_job=cores_per_job,
+                    log_level=log_level,
+                )
+                return 0
+            return worker_main(
                 redis_host=redis_host,
                 experiment_name=experiment_name,
                 worker_name=worker_name,
                 num_workers=num_workers,
                 queue_name=queue_name,
                 use_cpuset=use_cpuset,
-                minimum_disk_size=minimum_disk_size,
-                disk_check_interval=disk_check_interval,
                 cores=cores,
                 skip_cpus=skip_cpus,
                 cpu_tag=cpu_tag,
                 cores_per_job=cores_per_job,
                 log_level=log_level,
             )
-            return 0
-        return worker_main(
-            redis_host=redis_host,
-            experiment_name=experiment_name,
-            worker_name=worker_name,
-            num_workers=num_workers,
-            queue_name=queue_name,
-            use_cpuset=use_cpuset,
-            cores=cores,
-            skip_cpus=skip_cpus,
-            cpu_tag=cpu_tag,
-            cores_per_job=cores_per_job,
-            log_level=log_level,
-        )
     except KeyboardInterrupt:
         logger.info("Worker interrupted by user")
         return 0

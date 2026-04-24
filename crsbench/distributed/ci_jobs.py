@@ -689,6 +689,15 @@ def _load_patch_build_context(
                     upstream_inc = details.get("inc_build_available")
                     if isinstance(upstream_inc, bool):
                         inc_build_available = upstream_inc
+                upstream_variant = upstream_result.get("variant_name")
+                if isinstance(upstream_variant, str) and upstream_variant:
+                    variant_name = upstream_variant
+                upstream_sanitizer = upstream_result.get("sanitizer")
+                if isinstance(upstream_sanitizer, str) and upstream_sanitizer:
+                    sanitizer = upstream_sanitizer
+                upstream_inc = upstream_result.get("inc_build_available")
+                if isinstance(upstream_inc, bool):
+                    inc_build_available = upstream_inc
     except Exception as e:
         logger.debug(f"Could not load upstream patch build result for {bid}: {e}")
 

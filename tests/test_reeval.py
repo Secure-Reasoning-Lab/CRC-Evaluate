@@ -4,16 +4,22 @@ import argparse
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 from crsbench.evaluation.reeval.cli import (
+    _AsyncPatchTrialState,
+    _AsyncTrialState,
     _discover_trial_patches,
     _drain_all_async_patch_results,
     _drain_all_async_results,
+    _enqueue_trial_povs,
     _load_experiment_config,
     _load_target_cpv_id_from_trial_metadata,
+    _prepare_async_pov_build_prereqs,
     _reeval_bug_finding,
+    _reeval_patch_generation,
     _resolve_benchmark_path,
     _resolve_experiment_dir,
     _resolve_output_dir,
@@ -27,7 +33,16 @@ from crsbench.evaluation.reeval.cli import (
 from crsbench.evaluation.verification.models import (
     PatchVerificationResult,
     PatchVerificationStatus,
+    PovVerificationStatus,
 )
+
+
+def _as_async_trial_states(*states: object) -> list[_AsyncTrialState]:
+    return cast("list[_AsyncTrialState]", list(states))
+
+
+def _as_async_patch_trial_states(*states: object) -> list[_AsyncPatchTrialState]:
+    return cast("list[_AsyncPatchTrialState]", list(states))
 
 
 class TestAddReevalSubparser:
@@ -51,11 +66,13 @@ class TestAddReevalSubparser:
 
         args = parser.parse_args(["re-eval", "-c", "/tmp/config.yaml"])
         assert args.oss_fuzz_path is None
-        assert args.source == "pkgs"
+        assert args.source is None
         assert args.mode == "snapshot"
         assert args.jobs is None
         assert args.cores_per_job is None
         assert args.force_rebuild is False
+        assert args.local is False
+        assert args.redis_host is None
         assert args.output is None
         assert args.verbose is False
 
@@ -81,6 +98,7 @@ class TestAddReevalSubparser:
                 "--force-rebuild",
                 "--mode",
                 "full",
+                "--local",
                 "--output",
                 "/tmp/out",
                 "-v",
@@ -92,8 +110,46 @@ class TestAddReevalSubparser:
         assert args.cores_per_job == 8
         assert args.force_rebuild is True
         assert args.mode == "full"
+        assert args.local is True
         assert args.output == Path("/tmp/out")
         assert args.verbose is True
+
+    def test_redis_host_override_flag(self) -> None:
+        """Should parse redis host override for tracked cloud configs."""
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers(dest="command")
+        add_reeval_subparser(subparsers)
+
+        args = parser.parse_args(
+            [
+                "re-eval",
+                "-c",
+                "/tmp/config.yaml",
+                "--redis-host",
+                "localhost:6379",
+            ]
+        )
+
+        assert args.redis_host == "localhost:6379"
+        assert args.local is False
+
+    def test_local_and_redis_host_are_mutually_exclusive(self) -> None:
+        """Should reject conflicting CLI runtime-mode overrides."""
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers(dest="command")
+        add_reeval_subparser(subparsers)
+
+        with pytest.raises(SystemExit):
+            parser.parse_args(
+                [
+                    "re-eval",
+                    "-c",
+                    "/tmp/config.yaml",
+                    "--local",
+                    "--redis-host",
+                    "localhost:6379",
+                ]
+            )
 
 
 class TestLoadExperimentConfig:
@@ -108,6 +164,31 @@ class TestLoadExperimentConfig:
         config = _load_experiment_config(config_path)
         assert config["experiment"] == "test-exp"
         assert config["experiment_filestore"] == "/tmp/store"
+
+    def test_loads_grouped_yaml_and_normalizes_compat_keys(
+        self, tmp_path: Path
+    ) -> None:
+        """Should flatten grouped experiment/runtime/storage fields for re-eval."""
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "experiment:\n"
+            "  name: test-exp\n"
+            "runtime:\n"
+            "  per_pov_verify_timeout: 91\n"
+            "  patch_verify_variants: true\n"
+            "  redis:\n"
+            "    host: localhost\n"
+            "storage:\n"
+            "  experiment_filestore: /tmp/store\n"
+        )
+
+        config = _load_experiment_config(config_path)
+
+        assert config["experiment"] == "test-exp"
+        assert config["experiment_filestore"] == "/tmp/store"
+        assert config["per_pov_verify_timeout"] == 91
+        assert config["patch_verify_variants"] is True
+        assert config["redis_host"] == "localhost"
 
     def test_missing_file_exits(self, tmp_path: Path) -> None:
         """Should exit if config file not found."""
@@ -234,6 +315,187 @@ class TestSavePatchResults:
         assert data["summary"]["patch_ids"] == ["patch_abc"]
 
 
+class TestReevalPatchGeneration:
+    """Tests for local patch-generation re-eval parity with live evaluator."""
+
+    def test_flat_trial_patches_use_trial_target_cpv_mapping(
+        self, tmp_path: Path
+    ) -> None:
+        """Local re-eval should use the trial-aware per-patch verification path."""
+        trial_dir = tmp_path / "trial-0"
+        patch_dir = trial_dir / "output" / "patches"
+        pov_dir = trial_dir / "crs-input" / "povs"
+        patch_dir.mkdir(parents=True)
+        pov_dir.mkdir(parents=True)
+
+        (trial_dir / "metadata.json").write_text(json.dumps({"target_cpv_id": "cpv_7"}))
+        patch_path = patch_dir / "patch.diff"
+        patch_path.write_text("--- a/a.c\n+++ b/a.c\n")
+        (pov_dir / "cpv_1.blob").write_bytes(b"other")
+        target_pov = pov_dir / "cpv_7.blob"
+        target_pov.write_bytes(b"target")
+
+        benchmark_path = tmp_path / "bench"
+        benchmark_path.mkdir()
+        oss_fuzz_path = tmp_path / "oss-fuzz"
+        oss_fuzz_path.mkdir()
+        dest_dir = tmp_path / "dest"
+
+        expected = PatchVerificationResult(
+            status=PatchVerificationStatus.VALID,
+            patch_id="patch_0",
+            pov_id="cpv_7",
+            benchmark="bench",
+            patch_path=patch_path,
+            harness="harness-a",
+        )
+
+        with patch(
+            "crsbench.evaluation.verification.patch.engine.PatchVerificationEngine"
+        ) as mock_engine_cls:
+            mock_engine = MagicMock()
+            mock_engine.verify_patches.side_effect = AssertionError(
+                "local re-eval should use per-patch verification"
+            )
+            mock_engine.verify_patch.return_value = expected
+            mock_engine_cls.return_value = mock_engine
+
+            count = _reeval_patch_generation(
+                trial_dir=trial_dir,
+                benchmark_path=benchmark_path,
+                oss_fuzz_path=oss_fuzz_path,
+                harness="harness-a",
+                dest_dir=dest_dir,
+                source_mode="pkgs",
+                sanitizer="address",
+                jobs=None,
+                cores_per_job=None,
+                per_pov_verify_timeout=91,
+                patch_verify_variants=False,
+                force_rebuild=False,
+                use_inc_build=True,
+            )
+
+        assert count == 1
+        mock_engine.verify_patch.assert_called_once()
+        call_kwargs = mock_engine.verify_patch.call_args.kwargs
+        assert call_kwargs["benchmark_path"] == benchmark_path
+        assert call_kwargs["harness"] == "harness-a"
+        assert call_kwargs["pov_path"] == target_pov
+        assert call_kwargs["patch"].pov_id == "cpv_7"
+
+    def test_flat_trial_patches_infer_single_staged_pov_when_target_missing(
+        self, tmp_path: Path
+    ) -> None:
+        """Flat patch trials should infer the lone staged POV like live verify does."""
+        trial_dir = tmp_path / "trial-0"
+        patch_dir = trial_dir / "output" / "patches"
+        pov_dir = trial_dir / "crs-input" / "povs"
+        patch_dir.mkdir(parents=True)
+        pov_dir.mkdir(parents=True)
+
+        patch_path = patch_dir / "patch.diff"
+        patch_path.write_text("--- a/a.c\n+++ b/a.c\n")
+        target_pov = pov_dir / "cpv_7.blob"
+        target_pov.write_bytes(b"target")
+
+        benchmark_path = tmp_path / "bench"
+        benchmark_path.mkdir()
+        oss_fuzz_path = tmp_path / "oss-fuzz"
+        oss_fuzz_path.mkdir()
+        dest_dir = tmp_path / "dest"
+
+        expected = PatchVerificationResult(
+            status=PatchVerificationStatus.VALID,
+            patch_id="patch_0",
+            pov_id="cpv_7",
+            benchmark="bench",
+            patch_path=patch_path,
+            harness="harness-a",
+        )
+
+        with patch(
+            "crsbench.evaluation.verification.patch.engine.PatchVerificationEngine"
+        ) as mock_engine_cls:
+            mock_engine = MagicMock()
+            mock_engine.verify_patch.return_value = expected
+            mock_engine_cls.return_value = mock_engine
+
+            count = _reeval_patch_generation(
+                trial_dir=trial_dir,
+                benchmark_path=benchmark_path,
+                oss_fuzz_path=oss_fuzz_path,
+                harness="harness-a",
+                dest_dir=dest_dir,
+                source_mode="pkgs",
+                sanitizer="address",
+                jobs=None,
+                cores_per_job=None,
+                per_pov_verify_timeout=91,
+                patch_verify_variants=False,
+                force_rebuild=False,
+                use_inc_build=True,
+            )
+
+        assert count == 1
+        mock_engine.verify_patch.assert_called_once()
+        call_kwargs = mock_engine.verify_patch.call_args.kwargs
+        assert call_kwargs["pov_path"] == target_pov
+        assert call_kwargs["patch"].pov_id == "cpv_7"
+
+    def test_local_patch_generation_always_forces_fresh_rebuild(
+        self, tmp_path: Path
+    ) -> None:
+        """Local re-eval should mirror live runner and always rebuild patches fresh."""
+        trial_dir = tmp_path / "trial-0"
+        patch_dir = trial_dir / "output" / "patches" / "cpv_7"
+        pov_dir = trial_dir / "crs-input" / "povs"
+        patch_dir.mkdir(parents=True)
+        pov_dir.mkdir(parents=True)
+
+        patch_path = patch_dir / "patch.diff"
+        patch_path.write_text("--- a/a.c\n+++ b/a.c\n")
+        (pov_dir / "cpv_7.blob").write_bytes(b"target")
+
+        benchmark_path = tmp_path / "bench"
+        benchmark_path.mkdir()
+        oss_fuzz_path = tmp_path / "oss-fuzz"
+        oss_fuzz_path.mkdir()
+        dest_dir = tmp_path / "dest"
+
+        with patch(
+            "crsbench.evaluation.verification.patch.engine.PatchVerificationEngine"
+        ) as mock_engine_cls:
+            mock_engine = MagicMock()
+            mock_engine.verify_patch.return_value = PatchVerificationResult(
+                status=PatchVerificationStatus.VALID,
+                patch_id="patch_0",
+                pov_id="cpv_7",
+                benchmark="bench",
+                patch_path=patch_path,
+                harness="harness-a",
+            )
+            mock_engine_cls.return_value = mock_engine
+
+            _reeval_patch_generation(
+                trial_dir=trial_dir,
+                benchmark_path=benchmark_path,
+                oss_fuzz_path=oss_fuzz_path,
+                harness="harness-a",
+                dest_dir=dest_dir,
+                source_mode="pkgs",
+                sanitizer="address",
+                jobs=None,
+                cores_per_job=None,
+                per_pov_verify_timeout=91,
+                patch_verify_variants=False,
+                force_rebuild=False,
+                use_inc_build=True,
+            )
+
+        assert mock_engine_cls.call_args.kwargs["force_rebuild"] is True
+
+
 class TestAsyncPatchLogPersistence:
     """Tests for async patch log persistence."""
 
@@ -280,6 +542,8 @@ class TestRunReeval:
             jobs=None,
             cores_per_job=None,
             force_rebuild=False,
+            local=False,
+            redis_host=None,
             per_pov_verify_timeout=None,
             output=output,
             verbose=False,
@@ -398,6 +662,82 @@ class TestRunReeval:
             assert call_kwargs.kwargs["sanitizer"] == "address"
             assert result == 0
 
+    def test_bug_finding_uses_config_source_mode_when_cli_omits_override(
+        self, tmp_path: Path
+    ) -> None:
+        """Should default bug-finding re-eval source mode from experiment config."""
+        experiment_dir = tmp_path / "my-exp"
+        trial_dir = (
+            experiment_dir / "crs" / "bench" / "harness" / "bug_finding" / "trial-0"
+        )
+        trial_dir.mkdir(parents=True)
+
+        metadata = self._make_trial_metadata(0)
+        (trial_dir / "metadata.json").write_text(json.dumps(metadata))
+        self._create_minimal_reeval_outputs(trial_dir, mode="bug_finding")
+
+        bench_dir = tmp_path / "benchmarks" / "test-bench"
+        bench_dir.mkdir(parents=True)
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "experiment: my-exp\n"
+            f"experiment_filestore: {tmp_path}\n"
+            f"benchmarks_root: {tmp_path / 'benchmarks'}\n"
+            "source_mode: main_repo\n"
+        )
+        oss_fuzz = tmp_path / "oss-fuzz"
+        oss_fuzz.mkdir()
+
+        args = self._make_args(config_path, oss_fuzz)
+        args.source = None
+
+        with patch("crsbench.evaluation.reeval.cli._reeval_bug_finding") as mock_bf:
+            mock_bf.return_value = 1
+            result = run_reeval(args)
+
+            mock_bf.assert_called_once()
+            assert mock_bf.call_args.kwargs["benchmark_path"] == bench_dir
+            assert mock_bf.call_args.kwargs["source_mode"] == "main_repo"
+            assert result == 0
+
+    def test_bug_finding_uses_config_inc_build_setting(self, tmp_path: Path) -> None:
+        """Bug-finding re-eval should honor experiment inc_build_enabled."""
+        experiment_dir = tmp_path / "my-exp"
+        trial_dir = (
+            experiment_dir / "crs" / "bench" / "harness" / "bug_finding" / "trial-0"
+        )
+        trial_dir.mkdir(parents=True)
+
+        metadata = self._make_trial_metadata(0)
+        (trial_dir / "metadata.json").write_text(json.dumps(metadata))
+        self._create_minimal_reeval_outputs(trial_dir, mode="bug_finding")
+
+        bench_dir = tmp_path / "benchmarks" / "test-bench"
+        bench_dir.mkdir(parents=True)
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "experiment: my-exp\n"
+            f"experiment_filestore: {tmp_path}\n"
+            f"benchmarks_root: {tmp_path / 'benchmarks'}\n"
+            "inc_build_enabled: false\n"
+        )
+        oss_fuzz = tmp_path / "oss-fuzz"
+        oss_fuzz.mkdir()
+
+        args = self._make_args(config_path, oss_fuzz)
+        args.source = None
+
+        with patch("crsbench.evaluation.reeval.cli._reeval_bug_finding") as mock_bf:
+            mock_bf.return_value = 1
+            result = run_reeval(args)
+
+            mock_bf.assert_called_once()
+            assert mock_bf.call_args.kwargs["benchmark_path"] == bench_dir
+            assert mock_bf.call_args.kwargs["use_inc_build"] is False
+            assert result == 0
+
     def test_dispatches_patch_generation(self, tmp_path: Path) -> None:
         """Should dispatch to _reeval_patch_generation for patch_generation trials."""
         experiment_dir = tmp_path / "my-exp"
@@ -441,6 +781,57 @@ class TestRunReeval:
             assert call_kwargs.kwargs["benchmark_path"] == bench_dir
             assert call_kwargs.kwargs["harness"] == "test-harness"
             assert call_kwargs.kwargs["patch_verify_variants"] is True
+            assert result == 0
+
+    def test_dispatches_patch_generation_with_grouped_config(
+        self, tmp_path: Path
+    ) -> None:
+        """Should read grouped storage/runtime keys for patch re-eval."""
+        experiment_dir = tmp_path / "my-exp"
+        trial_dir = (
+            experiment_dir
+            / "crs"
+            / "bench"
+            / "harness"
+            / "patch_generation"
+            / "trial-0"
+        )
+        trial_dir.mkdir(parents=True)
+
+        metadata = self._make_trial_metadata(0, mode="patch_generation")
+        (trial_dir / "metadata.json").write_text(json.dumps(metadata))
+        self._create_minimal_reeval_outputs(trial_dir, mode="patch_generation")
+
+        bench_dir = tmp_path / "benchmarks" / "test-bench"
+        bench_dir.mkdir(parents=True)
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "experiment:\n"
+            "  name: my-exp\n"
+            "runtime:\n"
+            "  per_pov_verify_timeout: 91\n"
+            "  patch_verify_variants: true\n"
+            "storage:\n"
+            f"  experiment_filestore: {tmp_path}\n"
+            f"benchmarks_root: {tmp_path / 'benchmarks'}\n"
+        )
+        oss_fuzz = tmp_path / "oss-fuzz"
+        oss_fuzz.mkdir()
+
+        args = self._make_args(config_path, oss_fuzz)
+
+        with patch(
+            "crsbench.evaluation.reeval.cli._reeval_patch_generation"
+        ) as mock_pg:
+            mock_pg.return_value = 2
+            result = run_reeval(args)
+
+            mock_pg.assert_called_once()
+            call_kwargs = mock_pg.call_args
+            assert call_kwargs.kwargs["benchmark_path"] == bench_dir
+            assert call_kwargs.kwargs["patch_verify_variants"] is True
+            assert call_kwargs.kwargs["per_pov_verify_timeout"] == 91
             assert result == 0
 
     def test_skips_missing_benchmark(self, tmp_path: Path) -> None:
@@ -679,6 +1070,151 @@ class TestRunReeval:
         mock_local_pg.assert_called_once()
         mock_enqueue.assert_not_called()
 
+    def test_patch_generation_local_flag_overrides_redis_config(
+        self, tmp_path: Path
+    ) -> None:
+        """CLI local mode should bypass Redis even when config sets redis_host."""
+        from crsbench.validation.schemas import TrialMode
+
+        experiment_dir = tmp_path / "my-exp"
+        trial_dir = (
+            experiment_dir
+            / "crs"
+            / "bench"
+            / "harness"
+            / "patch_generation"
+            / "trial-0"
+        )
+        trial_dir.mkdir(parents=True)
+        bench_dir = tmp_path / "benchmarks" / "test-bench"
+        bench_dir.mkdir(parents=True)
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "experiment: my-exp\n"
+            f"experiment_filestore: {tmp_path}\n"
+            f"benchmarks_root: {tmp_path / 'benchmarks'}\n"
+            "redis_host: localhost\n"
+        )
+        oss_fuzz = tmp_path / "oss-fuzz"
+        oss_fuzz.mkdir()
+        args = self._make_args(config_path, oss_fuzz)
+        args.local = True
+
+        mock_trial = SimpleNamespace(
+            status="valid",
+            reeval_ready=True,
+            reeval_reason="ready",
+            trial_dir=trial_dir,
+            benchmark="test-bench",
+            harness="test-harness",
+            mode=TrialMode.patch_generation,
+            trial_num=0,
+        )
+        with (
+            patch(
+                "crsbench.reporting.snapshot_loader.discover_trials",
+                return_value=[mock_trial],
+            ),
+            patch(
+                "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_reeval"
+            ) as mock_for_reeval,
+            patch(
+                "crsbench.evaluation.reeval.cli._reeval_patch_generation",
+                return_value=1,
+            ) as mock_local_pg,
+            patch(
+                "crsbench.evaluation.reeval.cli._enqueue_trial_patches"
+            ) as mock_enqueue,
+        ):
+            result = run_reeval(args)
+
+        assert result == 0
+        mock_for_reeval.assert_not_called()
+        mock_local_pg.assert_called_once()
+        mock_enqueue.assert_not_called()
+
+    def test_patch_generation_redis_host_flag_overrides_config(
+        self, tmp_path: Path
+    ) -> None:
+        """CLI redis host override should redirect async re-eval without config edits."""
+        from crsbench.validation.schemas import TrialMode
+
+        experiment_dir = tmp_path / "my-exp"
+        trial_dir = (
+            experiment_dir
+            / "crs"
+            / "bench"
+            / "harness"
+            / "patch_generation"
+            / "trial-0"
+        )
+        trial_dir.mkdir(parents=True)
+        bench_dir = tmp_path / "benchmarks" / "test-bench"
+        bench_dir.mkdir(parents=True)
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "experiment: my-exp\n"
+            f"experiment_filestore: {tmp_path}\n"
+            f"benchmarks_root: {tmp_path / 'benchmarks'}\n"
+            "redis_host: redis-server:6379\n"
+        )
+        oss_fuzz = tmp_path / "oss-fuzz"
+        oss_fuzz.mkdir()
+        args = self._make_args(config_path, oss_fuzz)
+        args.redis_host = "localhost:6379"
+
+        mock_trial = SimpleNamespace(
+            status="valid",
+            reeval_ready=True,
+            reeval_reason="ready",
+            trial_dir=trial_dir,
+            benchmark="test-bench",
+            harness="test-harness",
+            mode=TrialMode.patch_generation,
+            trial_num=0,
+        )
+
+        with (
+            patch(
+                "crsbench.reporting.snapshot_loader.discover_trials",
+                return_value=[mock_trial],
+            ),
+            patch(
+                "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_reeval"
+            ) as mock_for_reeval,
+            patch(
+                "crsbench.evaluation.reeval.cli._enqueue_trial_patches"
+            ) as mock_enqueue,
+            patch(
+                "crsbench.evaluation.reeval.cli._drain_all_async_patch_results",
+                return_value=1,
+            ) as mock_drain,
+            patch(
+                "crsbench.evaluation.reeval.cli._reeval_patch_generation"
+            ) as mock_local_pg,
+        ):
+            mock_session = MagicMock()
+            mock_session.trial_queue = MagicMock()
+            mock_session.build_queue = MagicMock()
+            mock_session.verify_queue = MagicMock()
+            mock_session.registry.get_experiment.return_value = None
+            mock_for_reeval.return_value = mock_session
+            mock_enqueue.return_value = SimpleNamespace(
+                trial_id="test-bench__test-harness__trial-0",
+                job_ids=["jid-1"],
+            )
+
+            result = run_reeval(args)
+
+        assert result == 0
+        mock_for_reeval.assert_called_once_with(
+            redis_host="localhost:6379",
+            experiment_name="my-exp",
+        )
+        mock_enqueue.assert_called_once()
+        mock_drain.assert_called_once()
+        mock_local_pg.assert_not_called()
+
     def test_bug_finding_async_enqueues_sanitizer(self, tmp_path: Path) -> None:
         """Async bug-finding re-eval should pass trial sanitizer to queue payloads."""
         from crsbench.validation.schemas import TrialMode
@@ -746,6 +1282,76 @@ class TestRunReeval:
         mock_local_bf.assert_not_called()
         mock_enqueue.assert_called_once()
         assert mock_enqueue.call_args.kwargs["sanitizer"] == "undefined"
+
+    def test_bug_finding_async_uses_config_source_mode_and_inc_build(
+        self, tmp_path: Path
+    ) -> None:
+        """Async bug-finding should forward config runtime settings to queue enqueue."""
+        from crsbench.validation.schemas import TrialMode
+
+        experiment_dir = tmp_path / "my-exp"
+        trial_dir = (
+            experiment_dir / "crs" / "bench" / "harness" / "bug_finding" / "trial-0"
+        )
+        trial_dir.mkdir(parents=True)
+        bench_dir = tmp_path / "benchmarks" / "test-bench"
+        bench_dir.mkdir(parents=True)
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "experiment: my-exp\n"
+            f"experiment_filestore: {tmp_path}\n"
+            f"benchmarks_root: {tmp_path / 'benchmarks'}\n"
+            "redis_host: localhost\n"
+            "source_mode: main_repo\n"
+            "inc_build_enabled: false\n"
+        )
+        oss_fuzz = tmp_path / "oss-fuzz"
+        oss_fuzz.mkdir()
+        args = self._make_args(config_path, oss_fuzz)
+        args.source = None
+
+        mock_trial = SimpleNamespace(
+            status="valid",
+            reeval_ready=True,
+            reeval_reason="ready",
+            trial_dir=trial_dir,
+            benchmark="test-bench",
+            harness="test-harness",
+            mode=TrialMode.bug_finding,
+            sanitizer="address",
+            trial_num=0,
+        )
+
+        with (
+            patch(
+                "crsbench.reporting.snapshot_loader.discover_trials",
+                return_value=[mock_trial],
+            ),
+            patch(
+                "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_reeval"
+            ) as mock_for_reeval,
+            patch(
+                "crsbench.evaluation.reeval.cli._enqueue_trial_povs",
+                return_value=SimpleNamespace(trial_id="t", job_ids=["jid-1"]),
+            ) as mock_enqueue,
+            patch(
+                "crsbench.evaluation.reeval.cli._drain_all_async_results",
+                return_value=1,
+            ),
+        ):
+            mock_session = MagicMock()
+            mock_session.trial_queue = MagicMock()
+            mock_session.build_queue = MagicMock()
+            mock_session.verify_queue = MagicMock()
+            mock_session.registry.get_experiment.return_value = None
+            mock_for_reeval.return_value = mock_session
+
+            result = run_reeval(args)
+
+        assert result == 0
+        mock_enqueue.assert_called_once()
+        assert mock_enqueue.call_args.kwargs["source_mode"] == "main_repo"
+        assert mock_enqueue.call_args.kwargs["use_inc_build"] is False
 
     @pytest.mark.parametrize("redis_host_value", ["false", "0"])
     def test_patch_generation_redis_host_falsy_stays_local(
@@ -944,6 +1550,117 @@ class TestRunReeval:
         mock_enqueue.assert_not_called()
         mock_session.cleanup.assert_called()
 
+    def test_async_registration_publishes_runtime_settings(
+        self, tmp_path: Path
+    ) -> None:
+        """Configless re-eval registration should publish evaluator runtime settings."""
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "experiment: my-exp\n"
+            f"experiment_filestore: {tmp_path}\n"
+            f"benchmarks_root: {tmp_path / 'benchmarks'}\n"
+            "redis_host: localhost\n"
+            "source_mode: main_repo\n"
+            "max_total_time: 999\n"
+            "build_timeout: 123\n"
+            "per_pov_verify_timeout: 91\n"
+            "inc_image_policy: pull_only\n"
+            "inc_image_registry: ghcr.io/example/custom\n"
+            "inc_image_max_pull_bytes: 456\n"
+            "inc_image_pull_timeout_sec: 78\n"
+            "project_image_prefix: custom-prefix\n"
+        )
+        experiment_dir = tmp_path / "my-exp"
+        experiment_dir.mkdir(parents=True)
+        (tmp_path / "benchmarks").mkdir()
+        oss_fuzz = tmp_path / "oss-fuzz"
+        oss_fuzz.mkdir()
+        args = self._make_args(config_path, oss_fuzz)
+        args.source = None
+
+        with (
+            patch(
+                "crsbench.reporting.snapshot_loader.discover_trials",
+                return_value=[],
+            ),
+            patch(
+                "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_reeval"
+            ) as mock_for_reeval,
+        ):
+            mock_session = MagicMock()
+            mock_session.trial_queue = MagicMock()
+            mock_session.build_queue = MagicMock()
+            mock_session.verify_queue = MagicMock()
+            mock_session.registry.get_experiment.return_value = None
+            mock_for_reeval.return_value = mock_session
+
+            result = run_reeval(args)
+
+        assert result == 1
+        registration = mock_session.register_or_raise.call_args.args[0]
+        assert registration.source_mode == "main_repo"
+        assert registration.max_total_time == 999
+        assert registration.build_timeout == 123
+        assert registration.per_pov_verify_timeout == 91
+        assert registration.inc_image_policy == "pull_only"
+        assert registration.inc_image_registry == "ghcr.io/example/custom"
+        assert registration.inc_image_max_pull_bytes == 456
+        assert registration.inc_image_pull_timeout_sec == 78
+        assert registration.local_image_prefix == "custom-prefix"
+
+    def test_async_registration_rejects_conflicting_existing_runtime(
+        self, tmp_path: Path
+    ) -> None:
+        """re-eval should fail fast when Redis already has conflicting runtime settings."""
+        from crsbench.distributed.registry import RuntimeRegistration
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "experiment: my-exp\n"
+            f"experiment_filestore: {tmp_path}\n"
+            f"benchmarks_root: {tmp_path / 'benchmarks'}\n"
+            "redis_host: localhost\n"
+            "source_mode: main_repo\n"
+        )
+        experiment_dir = tmp_path / "my-exp"
+        experiment_dir.mkdir(parents=True)
+        (tmp_path / "benchmarks").mkdir()
+        oss_fuzz = tmp_path / "oss-fuzz"
+        oss_fuzz.mkdir()
+        args = self._make_args(config_path, oss_fuzz)
+        args.source = None
+
+        existing = RuntimeRegistration(
+            experiment="my-exp",
+            trial_queue="crsbench_trial",
+            build_queue="crsbench_build",
+            verify_queue="crsbench_verify",
+            benchmarks_root=str(tmp_path / "benchmarks"),
+            source_mode="pkgs",
+        )
+
+        with (
+            patch(
+                "crsbench.reporting.snapshot_loader.discover_trials",
+                return_value=[],
+            ),
+            patch(
+                "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_reeval"
+            ) as mock_for_reeval,
+        ):
+            mock_session = MagicMock()
+            mock_session.trial_queue = MagicMock()
+            mock_session.build_queue = MagicMock()
+            mock_session.verify_queue = MagicMock()
+            mock_session.registry.get_experiment.return_value = existing
+            mock_for_reeval.return_value = mock_session
+
+            result = run_reeval(args)
+
+        assert result == 1
+        mock_session.register_or_raise.assert_not_called()
+        mock_session.cleanup.assert_called_once()
+
 
 class TestAsyncPatchDrain:
     """Tests for async patch result draining."""
@@ -978,9 +1695,47 @@ class TestAsyncPatchDrain:
             ),
             patch("crsbench.evaluation.reeval.cli._save_patch_results") as mock_save,
         ):
-            count = _drain_all_async_patch_results([trial_state], "localhost")
+            count = _drain_all_async_patch_results(
+                _as_async_patch_trial_states(trial_state),
+                "localhost",
+            )
 
         assert count == 1
+        mock_save.assert_called_once()
+
+    def test_drain_uses_live_patch_queue_drain_loop(self, tmp_path: Path) -> None:
+        """Async patch drain should use the shared drain loop with recovery semantics."""
+        trial_state = SimpleNamespace(
+            trial_id="bench__h__trial-1",
+            total_input_povs=1,
+            dest_dir=tmp_path,
+            job_ids=["job-1"],
+        )
+        verdict = {
+            "trial_id": "bench__h__trial-1",
+            "benchmark": "bench",
+            "harness": "h",
+            "cpv_id": "cpv_0",
+            "patch_id": "patch_0",
+            "status": "valid",
+            "security_verdict": "PASS",
+        }
+
+        with (
+            patch(
+                "crsbench.distributed.patch_queue.drain_patch_verdicts",
+                return_value=[verdict],
+            ) as mock_drain,
+            patch("crsbench.evaluation.reeval.cli._save_patch_results") as mock_save,
+        ):
+            count = _drain_all_async_patch_results(
+                _as_async_patch_trial_states(trial_state),
+                "localhost",
+                timeout_seconds=77.0,
+            )
+
+        assert count == 1
+        mock_drain.assert_called_once_with("localhost", ["job-1"], timeout=77.0)
         mock_save.assert_called_once()
 
 
@@ -1016,10 +1771,30 @@ class TestPatchDiscovery:
         assert len(discovered) == 1
         assert discovered[0][0] == "cpv_7"
 
+    def test_discover_trial_patches_single_pov_inference_is_opt_in(
+        self, tmp_path: Path
+    ) -> None:
+        """Single staged POV fallback should not affect async/default discovery."""
+        patch_dir = tmp_path / "output" / "patches"
+        pov_dir = tmp_path / "crs-input" / "povs"
+        patch_dir.mkdir(parents=True)
+        pov_dir.mkdir(parents=True)
+        (patch_dir / "patch_0.diff").write_text("diff")
+        (pov_dir / "pov_0.blob").write_bytes(b"blob")
+
+        discovered = _discover_trial_patches(
+            patch_dir,
+            target_cpv_id=None,
+            pov_dir=pov_dir,
+        )
+
+        assert len(discovered) == 1
+        assert discovered[0][0] == "unknown"
+
     def test_discover_trial_patches_deduplicates_mixed_layout(
         self, tmp_path: Path
     ) -> None:
-        """Mixed structured+flat patches with same identity should dedupe."""
+        """Mixed layouts should preserve runner-style distinct stable patch IDs."""
         patch_dir = tmp_path / "output" / "patches"
         structured = patch_dir / "cpv_0"
         structured.mkdir(parents=True)
@@ -1028,9 +1803,10 @@ class TestPatchDiscovery:
 
         discovered = _discover_trial_patches(patch_dir, target_cpv_id="cpv_0")
 
-        assert len(discovered) == 1
-        assert discovered[0][0] == "cpv_0"
-        assert discovered[0][1] == "patch_0"
+        assert len(discovered) == 2
+        assert [item[0] for item in discovered] == ["cpv_0", "cpv_0"]
+        assert discovered[0][1].startswith("structured_patch_0_")
+        assert discovered[1][1].startswith("flat_patch_0_")
 
     def test_resolve_trial_sanitizer_prefers_metadata_over_path(
         self, tmp_path: Path
@@ -1105,9 +1881,17 @@ class TestAsyncPatchDrainTimeout:
             dest_dir=tmp_path,
             job_ids=["job-1"],
         )
-        with pytest.raises(TimeoutError, match="Timed out draining async patch jobs"):
+        with (
+            patch(
+                "crsbench.distributed.patch_queue.drain_patch_verdicts",
+                return_value=[],
+            ),
+            pytest.raises(TimeoutError, match="Timed out draining async patch jobs"),
+        ):
             _drain_all_async_patch_results(
-                [trial_state], "localhost", timeout_seconds=0.0
+                _as_async_patch_trial_states(trial_state),
+                "localhost",
+                timeout_seconds=0.0,
             )
 
     def test_drain_timeout_persists_partial_results(self, tmp_path: Path) -> None:
@@ -1129,21 +1913,262 @@ class TestAsyncPatchDrainTimeout:
         }
         with (
             patch(
-                "crsbench.distributed.patch_queue.poll_patch_verdicts",
-                return_value=([verdict], ["job-2"]),
-            ),
-            patch(
-                "crsbench.evaluation.reeval.cli.time.monotonic",
-                side_effect=[0.0, 0.0, 1.0],
+                "crsbench.distributed.patch_queue.drain_patch_verdicts",
+                return_value=[verdict],
             ),
             patch("crsbench.evaluation.reeval.cli._save_patch_results") as mock_save,
             pytest.raises(TimeoutError, match="Timed out draining async patch jobs"),
         ):
             _drain_all_async_patch_results(
-                [trial_state], "localhost", timeout_seconds=0.1
+                _as_async_patch_trial_states(trial_state),
+                "localhost",
+                timeout_seconds=0.1,
             )
 
         mock_save.assert_called_once()
+
+
+def test_enqueue_trial_povs_passes_redis_host_to_dispatcher_enqueue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from crsbench.distributed.queue import (
+        EVALUATOR_ROUTING_MODEL_ENV,
+        ROUTING_MODEL_DISPATCHER,
+    )
+
+    monkeypatch.setenv(EVALUATOR_ROUTING_MODEL_ENV, ROUTING_MODEL_DISPATCHER)
+
+    trial_dir = tmp_path / "trial-1"
+    pov_dir = trial_dir / "output" / "povs"
+    pov_dir.mkdir(parents=True)
+    (pov_dir / "a.blob").write_bytes(b"blob")
+
+    with (
+        patch(
+            "crsbench.evaluation.reeval.cli._prepare_async_pov_build_prereqs",
+            return_value=(["build-1"], [], "address"),
+            create=True,
+        ),
+        patch(
+            "crsbench.distributed.verify_queue.enqueue_single_pov",
+            return_value="verify:trial-1:bench:h:a.blob:deadbeef",
+        ) as mock_enqueue,
+    ):
+        state = _enqueue_trial_povs(
+            trial_dir=trial_dir,
+            benchmark_name="bench",
+            harness="h",
+            dest_dir=tmp_path / "out",
+            verify_queue=MagicMock(),
+            experiment_name="exp1",
+            redis_host="redis.local",
+            sanitizer="address",
+        )
+
+    assert state is not None
+    assert state.job_ids == ["verify:trial-1:bench:h:a.blob:deadbeef"]
+    assert mock_enqueue.call_args.kwargs["redis_host"] == "redis.local"
+
+
+def test_prepare_async_pov_build_prereqs_uses_runtime_registration(
+    tmp_path: Path,
+) -> None:
+    benchmarks_root = tmp_path / "benchmarks"
+    benchmark_path = benchmarks_root / "bench"
+    benchmark_path.mkdir(parents=True)
+    oss_fuzz_path = tmp_path / "oss-fuzz"
+    expected = (["build-1"], [], "address")
+    registration = SimpleNamespace(
+        benchmarks_root=str(benchmarks_root),
+        per_pov_verify_timeout=321,
+        source_mode="main_repo",
+        inc_image_policy="always",
+        inc_image_registry="ghcr.io/example",
+        inc_image_max_pull_bytes=123,
+        inc_image_pull_timeout_sec=45,
+        local_image_prefix="local-prefix",
+    )
+    mock_engine = MagicMock()
+    mock_adapter = MagicMock()
+    mock_engine.load_adapter.return_value = mock_adapter
+
+    with (
+        patch(
+            "crsbench.evaluation.reeval.cli.ensure_oss_fuzz_root",
+            return_value=str(oss_fuzz_path),
+        ),
+        patch(
+            "crsbench.distributed.queue.create_redis_connection",
+            return_value=MagicMock(),
+        ),
+        patch("crsbench.distributed.registry.RegistryClient") as mock_registry_cls,
+        patch(
+            "crsbench.evaluation.verification.VerificationEngine",
+            return_value=mock_engine,
+        ) as mock_engine_cls,
+        patch(
+            "crsbench.distributed.verify_queue.initialize_build_queue",
+            return_value="build-queue",
+        ) as mock_init_build_queue,
+        patch(
+            "crsbench.distributed.verify_queue.prepare_async_pov_build_prereqs",
+            return_value=expected,
+        ) as mock_prepare,
+    ):
+        mock_registry_cls.return_value.get_experiment.return_value = registration
+
+        result = _prepare_async_pov_build_prereqs(
+            benchmark_name="bench",
+            experiment_name="exp1",
+            redis_host="redis.local",
+            trial_id="trial-1",
+            sanitizer="address",
+            use_inc_build=False,
+        )
+
+    assert result == expected
+    mock_engine_cls.assert_called_once_with(
+        oss_fuzz_path=oss_fuzz_path,
+        timeout=321,
+        source_mode="main_repo",
+        inc_image_policy="always",
+        inc_image_registry="ghcr.io/example",
+        inc_image_max_pull_bytes=123,
+        inc_image_pull_timeout=45,
+        local_image_prefix="local-prefix",
+    )
+    mock_engine.load_adapter.assert_called_once_with(benchmark_path)
+    mock_init_build_queue.assert_called_once_with("redis.local", "exp1")
+    mock_prepare.assert_called_once_with(
+        redis_host="redis.local",
+        experiment_name="exp1",
+        trial_id="trial-1",
+        engine=mock_engine,
+        adapter=mock_adapter,
+        build_queue="build-queue",
+        sanitizer="address",
+        use_inc_build=False,
+    )
+
+
+def test_enqueue_trial_povs_passes_source_mode_and_inc_build(
+    tmp_path: Path,
+) -> None:
+    trial_dir = tmp_path / "trial-1"
+    pov_dir = trial_dir / "output" / "povs"
+    pov_dir.mkdir(parents=True)
+    (pov_dir / "a.blob").write_bytes(b"blob")
+
+    with (
+        patch(
+            "crsbench.evaluation.reeval.cli._prepare_async_pov_build_prereqs",
+            return_value=(["build-1"], [MagicMock(id="build-1")], "address"),
+            create=True,
+        ),
+        patch(
+            "crsbench.distributed.verify_queue.enqueue_single_pov",
+            return_value="verify:trial-1:bench:h:a.blob:deadbeef",
+        ) as mock_enqueue,
+    ):
+        state = _enqueue_trial_povs(
+            trial_dir=trial_dir,
+            benchmark_name="bench",
+            harness="h",
+            dest_dir=tmp_path / "out",
+            verify_queue=MagicMock(),
+            experiment_name="exp1",
+            redis_host="redis.local",
+            sanitizer="address",
+            source_mode="main_repo",
+            use_inc_build=False,
+        )
+
+    assert state is not None
+    assert mock_enqueue.call_args.kwargs["source_mode"] == "main_repo"
+    assert mock_enqueue.call_args.kwargs["use_inc_build"] is False
+    assert mock_enqueue.call_args.kwargs["build_job_ids"] == ["build-1"]
+    assert len(mock_enqueue.call_args.kwargs["depends_on"]) == 1
+
+
+def test_enqueue_trial_povs_skips_verify_enqueue_without_build_prereqs(
+    tmp_path: Path,
+) -> None:
+    trial_dir = tmp_path / "trial-1"
+    pov_dir = trial_dir / "output" / "povs"
+    pov_dir.mkdir(parents=True)
+    (pov_dir / "a.blob").write_bytes(b"blob")
+
+    with (
+        patch(
+            "crsbench.evaluation.reeval.cli._prepare_async_pov_build_prereqs",
+            return_value=None,
+            create=True,
+        ),
+        patch("crsbench.distributed.verify_queue.enqueue_single_pov") as mock_enqueue,
+    ):
+        state = _enqueue_trial_povs(
+            trial_dir=trial_dir,
+            benchmark_name="bench",
+            harness="h",
+            dest_dir=tmp_path / "out",
+            verify_queue=MagicMock(),
+            experiment_name="exp1",
+            redis_host="redis.local",
+            sanitizer="address",
+        )
+
+    assert state is None
+    mock_enqueue.assert_not_called()
+
+
+def test_reeval_bug_finding_passes_inc_image_runtime_settings(tmp_path: Path) -> None:
+    """Local bug-finding re-eval should use the same inc-image knobs as runner."""
+    trial_dir = tmp_path / "trial-1"
+    pov_dir = trial_dir / "output" / "povs"
+    pov_dir.mkdir(parents=True)
+    (pov_dir / "a.blob").write_bytes(b"blob")
+
+    bench_dir = tmp_path / "bench"
+    bench_dir.mkdir()
+    oss_fuzz = tmp_path / "oss-fuzz"
+    oss_fuzz.mkdir()
+
+    mock_output = SimpleNamespace(results=[])
+    mock_engine = MagicMock()
+    mock_engine.verify_benchmark.return_value = mock_output
+
+    with patch(
+        "crsbench.evaluation.verification.VerificationEngine",
+        return_value=mock_engine,
+    ) as mock_engine_cls:
+        _reeval_bug_finding(
+            trial_dir=trial_dir,
+            benchmark_path=bench_dir,
+            oss_fuzz_path=oss_fuzz,
+            harness="h",
+            dest_dir=tmp_path / "out",
+            source_mode="main_repo",
+            jobs=None,
+            cores_per_job=None,
+            force_rebuild=False,
+            use_inc_build=False,
+            sanitizer="address",
+            inc_image_policy="pull_only",
+            inc_image_registry="ghcr.io/example/custom",
+            inc_image_max_pull_bytes=456,
+            inc_image_pull_timeout=78,
+            local_image_prefix="custom-prefix",
+        )
+
+    assert mock_engine_cls.call_args.kwargs["source_mode"] == "main_repo"
+    assert mock_engine_cls.call_args.kwargs["inc_image_policy"] == "pull_only"
+    assert (
+        mock_engine_cls.call_args.kwargs["inc_image_registry"]
+        == "ghcr.io/example/custom"
+    )
+    assert mock_engine_cls.call_args.kwargs["inc_image_max_pull_bytes"] == 456
+    assert mock_engine_cls.call_args.kwargs["inc_image_pull_timeout"] == 78
+    assert mock_engine_cls.call_args.kwargs["local_image_prefix"] == "custom-prefix"
 
 
 class TestAsyncPovDrain:
@@ -1162,6 +2187,7 @@ class TestAsyncPovDrain:
             job_ids=["job-1", "job-2"],
             pov_hash_to_path={pov_hash: pov_src},
             benchmark_name="bench",
+            experiment_name="bench",
         )
         verdict1 = {
             "trial_id": state.trial_id,
@@ -1198,7 +2224,7 @@ class TestAsyncPovDrain:
             patch(
                 "crsbench.distributed.verify_queue.poll_single_pov_verdicts",
                 side_effect=[([verdict1, verdict2], []), ([], [])],
-            ),
+            ) as mock_poll,
             patch("crsbench.evaluation.reeval.cli._save_pov_results") as mock_save,
             patch("crsbench.evaluation.reeval.cli._load_crs_run_start_time"),
             patch(
@@ -1212,15 +2238,43 @@ class TestAsyncPovDrain:
                 ":", 1
             )[1]
 
-            count = _drain_all_async_results([state], "localhost")
+            count = _drain_all_async_results(
+                _as_async_trial_states(state),
+                "localhost",
+            )
 
         assert count == 2
+        assert mock_poll.call_args_list[0].kwargs["experiment_name"] == "bench"
         # Persisted output should keep raw queue verdict count.
         saved_results = mock_save.call_args.args[0]
         assert len(saved_results) == 2
         # Store population follows raw result set.
         assert mock_store.add_pov.call_count == 2
         mock_store.save.assert_called_once()
+
+    def test_async_drain_rejects_mixed_experiment_names(self, tmp_path: Path) -> None:
+        state_a = SimpleNamespace(
+            trial_id="exp-a__bench__h__trial-1",
+            dest_dir=tmp_path / "trial-1",
+            job_ids=["job-1"],
+            pov_hash_to_path={},
+            benchmark_name="bench",
+            experiment_name="exp-a",
+        )
+        state_b = SimpleNamespace(
+            trial_id="exp-b__bench__h__trial-2",
+            dest_dir=tmp_path / "trial-2",
+            job_ids=["job-2"],
+            pov_hash_to_path={},
+            benchmark_name="bench",
+            experiment_name="exp-b",
+        )
+
+        with pytest.raises(ValueError, match="same experiment_name"):
+            _drain_all_async_results(
+                _as_async_trial_states(state_a, state_b),
+                "localhost",
+            )
 
     def test_async_drain_preserves_crash_logs_when_pov_file_missing(
         self, tmp_path: Path
@@ -1235,6 +2289,7 @@ class TestAsyncPovDrain:
             job_ids=["job-1"],
             pov_hash_to_path={},  # missing mapping on purpose
             benchmark_name="bench",
+            experiment_name="bench",
         )
         verdict = {
             "trial_id": state.trial_id,
@@ -1270,7 +2325,10 @@ class TestAsyncPovDrain:
                 ":", 1
             )[1]
 
-            count = _drain_all_async_results([state], "localhost")
+            count = _drain_all_async_results(
+                _as_async_trial_states(state),
+                "localhost",
+            )
 
         assert count == 1
         mock_store.store_crash_log.assert_called_once()
@@ -1293,6 +2351,7 @@ class TestAsyncPovDrain:
             job_ids=["job-1", "job-2"],
             pov_hash_to_path={pov_hash: pov_src},
             benchmark_name="bench",
+            experiment_name="bench",
         )
         verdict1 = {
             "trial_id": state.trial_id,
@@ -1344,7 +2403,10 @@ class TestAsyncPovDrain:
                 ":", 1
             )[1]
 
-            count = _drain_all_async_results([state], "localhost")
+            count = _drain_all_async_results(
+                _as_async_trial_states(state),
+                "localhost",
+            )
 
         assert count == 2
         # Drain should complete and still write collected verdict results.
@@ -1362,7 +2424,9 @@ class TestAsyncPovDrain:
             dest_dir=trial_dir,
             job_ids=["job-1"],
             pov_hash_to_path={},
+            job_to_pov_id={},
             benchmark_name="bench",
+            experiment_name="bench",
         )
 
         with (
@@ -1377,7 +2441,11 @@ class TestAsyncPovDrain:
             patch("crsbench.evaluation.reeval.cli._save_pov_results") as mock_save,
             pytest.raises(TimeoutError, match="Timed out draining async POV jobs"),
         ):
-            _drain_all_async_results([state], "localhost", timeout_seconds=0.1)
+            _drain_all_async_results(
+                _as_async_trial_states(state),
+                "localhost",
+                timeout_seconds=0.1,
+            )
 
         mock_save.assert_not_called()
 
@@ -1392,7 +2460,9 @@ class TestAsyncPovDrain:
             dest_dir=trial_dir,
             job_ids=["job-1", "job-2"],
             pov_hash_to_path={pov_hash: pov_src},
+            job_to_pov_id={},
             benchmark_name="bench",
+            experiment_name="bench",
         )
         verdict = {
             "trial_id": state.trial_id,
@@ -1429,9 +2499,91 @@ class TestAsyncPovDrain:
             mock_store.get_stats.return_value = {}
             mock_store_cls.return_value = mock_store
             with pytest.raises(TimeoutError, match="Timed out draining async POV jobs"):
-                _drain_all_async_results([state], "localhost", timeout_seconds=0.1)
+                _drain_all_async_results(
+                    _as_async_trial_states(state),
+                    "localhost",
+                    timeout_seconds=0.1,
+                )
 
         mock_save.assert_called_once()
+
+    def test_async_drain_timeout_marks_pending_povs_as_error(
+        self, tmp_path: Path
+    ) -> None:
+        """Timed out async POV drain should persist ERROR entries for pending jobs."""
+        trial_dir = tmp_path / "trial-1"
+        trial_dir.mkdir(parents=True)
+        completed_hash = "abcd1234efef9999"
+        pending_hash = "feedfacefeedface"
+        completed_src = tmp_path / "pov0.blob"
+        completed_src.write_bytes(b"blob")
+        state = SimpleNamespace(
+            trial_id="bench__h__trial-1",
+            dest_dir=trial_dir,
+            job_ids=["job-1", "job-2"],
+            pov_hash_to_path={completed_hash: completed_src},
+            job_to_pov_id={
+                "job-1": f"pov_1:{completed_hash}",
+                "job-2": f"pov_2:{pending_hash}",
+            },
+            benchmark_name="bench",
+            experiment_name="bench",
+        )
+        verdict = {
+            "trial_id": state.trial_id,
+            "benchmark": "bench",
+            "harness": "h",
+            "verdict": {
+                "pov_id": f"pov_1:{completed_hash}",
+                "triggered_bug": True,
+                "status": "cpv",
+                "cpv_matches": ["cpv_0"],
+                "variant_results": {},
+                "crash_logs": {},
+                "error": None,
+            },
+            "completed_at": 1.0,
+        }
+
+        with (
+            patch(
+                "crsbench.distributed.verify_queue.poll_single_pov_verdicts",
+                return_value=([verdict], ["job-2"]),
+            ),
+            patch(
+                "crsbench.evaluation.reeval.cli.time.monotonic",
+                side_effect=[0.0, 0.0, 1.0],
+            ),
+            patch("crsbench.evaluation.reeval.cli._save_pov_results") as mock_save,
+            patch("crsbench.evaluation.reeval.cli._load_crs_run_start_time"),
+            patch(
+                "crsbench.evaluation.verification.pov.store.POVStore"
+            ) as mock_store_cls,
+        ):
+            mock_store = MagicMock()
+            mock_store.get_stats.return_value = {}
+            mock_store_cls.return_value = mock_store
+            with pytest.raises(TimeoutError, match="Timed out draining async POV jobs"):
+                _drain_all_async_results(
+                    _as_async_trial_states(state),
+                    "localhost",
+                    timeout_seconds=0.1,
+                )
+
+        saved_results = mock_save.call_args.args[0]
+        assert len(saved_results) == 2
+        assert {result.status.value for result in saved_results} == {"cpv", "error"}
+        mock_store.add_pov.assert_any_call(
+            completed_src,
+            PovVerificationStatus.CPV,
+            ["cpv_0"],
+            pov_hash=completed_hash,
+        )
+        mock_store.add_pov_by_id.assert_any_call(
+            pending_hash,
+            PovVerificationStatus.ERROR,
+            [],
+        )
 
 
 class TestRunReevalCleanup:
@@ -1446,6 +2598,8 @@ class TestRunReevalCleanup:
             jobs=None,
             cores_per_job=None,
             force_rebuild=False,
+            local=False,
+            redis_host=None,
             per_pov_verify_timeout=None,
             output=None,
             verbose=False,

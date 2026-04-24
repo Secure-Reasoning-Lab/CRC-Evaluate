@@ -11,6 +11,10 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 from crsbench.evaluation.adapter import OssCrsAdapter
 from crsbench.evaluation.trial_identity import build_trial_uid
 from crsbench.evaluation.trial_paths import count_visible_files
+from crsbench.evaluation.verification.drain_marker import (
+    clear_verification_undrained_marker,
+    write_verification_undrained_marker,
+)
 
 if TYPE_CHECKING:
     from crsbench.evaluation.litellm_tracker import LiteLLMTracker
@@ -1727,6 +1731,8 @@ class BenchmarkRunner:
         Returns:
             List of patch verification results
         """
+        clear_verification_undrained_marker(trial_output_dir)
+
         # Distributed path: enqueue to evaluator queues when Redis is available
         if self.redis_host and self.experiment_name:
             return self._verify_patches_distributed(
@@ -1965,7 +1971,23 @@ class BenchmarkRunner:
                 redis_host,
                 job_ids,
                 timeout=self.verify_timeout,
+                experiment_name=experiment_name,
             )
+            completed_results = len(raw_results)
+            if completed_results < len(job_ids):
+                missing_results = len(job_ids) - completed_results
+                marker_path = write_verification_undrained_marker(
+                    trial_output_dir,
+                    verification_kind="patch",
+                    expected_jobs=len(job_ids),
+                    completed_results=completed_results,
+                    missing_results=missing_results,
+                )
+                self.logger.warning(
+                    "Distributed patch verification drain incomplete: "
+                    f"{completed_results}/{len(job_ids)} results collected "
+                    f"(marker={marker_path})"
+                )
 
             # Convert results to PatchVerificationResult
             results: list[PatchVerificationResult] = []
