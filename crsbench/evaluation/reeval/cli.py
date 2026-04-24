@@ -90,6 +90,9 @@ Examples:
   # Re-evaluate with custom output directory
   crsbench re-eval -c experiment-config.yaml --output /tmp/reeval-results
 
+  # Override a tracked config's redis_host for local distributed re-eval
+  crsbench re-eval -c experiment-config.yaml --redis-host localhost:6379
+
   # Force local mode even if the experiment config enables Redis/distributed queues
   crsbench re-eval -c experiment-config.yaml --local
 
@@ -134,10 +137,20 @@ Examples:
         action="store_true",
         help="Force rebuild of variants",
     )
-    parser.add_argument(
+    runtime_mode_group = parser.add_mutually_exclusive_group()
+    runtime_mode_group.add_argument(
         "--local",
         action="store_true",
         help="Force local re-eval and ignore any configured redis_host",
+    )
+    runtime_mode_group.add_argument(
+        "--redis-host",
+        type=str,
+        default=None,
+        help=(
+            "Override redis_host from config for distributed re-eval "
+            "(use 'none' to disable distributed queues)"
+        ),
     )
     parser.add_argument(
         "--mode",
@@ -1357,8 +1370,30 @@ def run_reeval(args: argparse.Namespace) -> int:
     logger.info(f"Patch verify variants: {patch_verify_variants}")
 
     # Async mode: initialize Redis queues when redis_host is configured
-    redis_host = normalize_redis_host(config.get("redis_host"))
-    if getattr(args, "local", False):
+    configured_redis_host = normalize_redis_host(config.get("redis_host"))
+    raw_cli_redis_host = getattr(args, "redis_host", None)
+    redis_host = configured_redis_host
+    if raw_cli_redis_host is not None:
+        redis_host = normalize_redis_host(raw_cli_redis_host)
+        if redis_host:
+            if configured_redis_host and configured_redis_host != redis_host:
+                logger.info(
+                    "Redis host overridden by CLI: using {} instead of configured "
+                    "redis_host={}",
+                    redis_host,
+                    configured_redis_host,
+                )
+            else:
+                logger.info(f"Redis host set by CLI: {redis_host}")
+        elif configured_redis_host:
+            logger.info(
+                "Local mode forced by CLI redis_host override; ignoring configured "
+                "redis_host={}",
+                configured_redis_host,
+            )
+        else:
+            logger.info("Local mode forced by CLI redis_host override")
+    elif getattr(args, "local", False):
         if redis_host:
             logger.info(
                 f"Local mode forced by CLI; ignoring configured redis_host={redis_host}"

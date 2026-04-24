@@ -71,6 +71,7 @@ class TestAddReevalSubparser:
         assert args.cores_per_job is None
         assert args.force_rebuild is False
         assert args.local is False
+        assert args.redis_host is None
         assert args.output is None
         assert args.verbose is False
 
@@ -111,6 +112,43 @@ class TestAddReevalSubparser:
         assert args.local is True
         assert args.output == Path("/tmp/out")
         assert args.verbose is True
+
+    def test_redis_host_override_flag(self) -> None:
+        """Should parse redis host override for tracked cloud configs."""
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers(dest="command")
+        add_reeval_subparser(subparsers)
+
+        args = parser.parse_args(
+            [
+                "re-eval",
+                "-c",
+                "/tmp/config.yaml",
+                "--redis-host",
+                "localhost:6379",
+            ]
+        )
+
+        assert args.redis_host == "localhost:6379"
+        assert args.local is False
+
+    def test_local_and_redis_host_are_mutually_exclusive(self) -> None:
+        """Should reject conflicting CLI runtime-mode overrides."""
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers(dest="command")
+        add_reeval_subparser(subparsers)
+
+        with pytest.raises(SystemExit):
+            parser.parse_args(
+                [
+                    "re-eval",
+                    "-c",
+                    "/tmp/config.yaml",
+                    "--local",
+                    "--redis-host",
+                    "localhost:6379",
+                ]
+            )
 
 
 class TestLoadExperimentConfig:
@@ -503,6 +541,8 @@ class TestRunReeval:
             jobs=None,
             cores_per_job=None,
             force_rebuild=False,
+            local=False,
+            redis_host=None,
             per_pov_verify_timeout=None,
             output=output,
             verbose=False,
@@ -1091,6 +1131,88 @@ class TestRunReeval:
         mock_for_reeval.assert_not_called()
         mock_local_pg.assert_called_once()
         mock_enqueue.assert_not_called()
+
+    def test_patch_generation_redis_host_flag_overrides_config(
+        self, tmp_path: Path
+    ) -> None:
+        """CLI redis host override should redirect async re-eval without config edits."""
+        from crsbench.validation.schemas import TrialMode
+
+        experiment_dir = tmp_path / "my-exp"
+        trial_dir = (
+            experiment_dir
+            / "crs"
+            / "bench"
+            / "harness"
+            / "patch_generation"
+            / "trial-0"
+        )
+        trial_dir.mkdir(parents=True)
+        bench_dir = tmp_path / "benchmarks" / "test-bench"
+        bench_dir.mkdir(parents=True)
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "experiment: my-exp\n"
+            f"experiment_filestore: {tmp_path}\n"
+            f"benchmarks_root: {tmp_path / 'benchmarks'}\n"
+            "redis_host: redis-server:6379\n"
+        )
+        oss_fuzz = tmp_path / "oss-fuzz"
+        oss_fuzz.mkdir()
+        args = self._make_args(config_path, oss_fuzz)
+        args.redis_host = "localhost:6379"
+
+        mock_trial = SimpleNamespace(
+            status="valid",
+            reeval_ready=True,
+            reeval_reason="ready",
+            trial_dir=trial_dir,
+            benchmark="test-bench",
+            harness="test-harness",
+            mode=TrialMode.patch_generation,
+            trial_num=0,
+        )
+
+        with (
+            patch(
+                "crsbench.reporting.snapshot_loader.discover_trials",
+                return_value=[mock_trial],
+            ),
+            patch(
+                "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_reeval"
+            ) as mock_for_reeval,
+            patch(
+                "crsbench.evaluation.reeval.cli._enqueue_trial_patches"
+            ) as mock_enqueue,
+            patch(
+                "crsbench.evaluation.reeval.cli._drain_all_async_patch_results",
+                return_value=1,
+            ) as mock_drain,
+            patch(
+                "crsbench.evaluation.reeval.cli._reeval_patch_generation"
+            ) as mock_local_pg,
+        ):
+            mock_session = MagicMock()
+            mock_session.trial_queue = MagicMock()
+            mock_session.build_queue = MagicMock()
+            mock_session.verify_queue = MagicMock()
+            mock_session.registry.get_experiment.return_value = None
+            mock_for_reeval.return_value = mock_session
+            mock_enqueue.return_value = SimpleNamespace(
+                trial_id="test-bench__test-harness__trial-0",
+                job_ids=["jid-1"],
+            )
+
+            result = run_reeval(args)
+
+        assert result == 0
+        mock_for_reeval.assert_called_once_with(
+            redis_host="localhost:6379",
+            experiment_name="my-exp",
+        )
+        mock_enqueue.assert_called_once()
+        mock_drain.assert_called_once()
+        mock_local_pg.assert_not_called()
 
     def test_bug_finding_async_enqueues_sanitizer(self, tmp_path: Path) -> None:
         """Async bug-finding re-eval should pass trial sanitizer to queue payloads."""
@@ -2347,6 +2469,8 @@ class TestRunReevalCleanup:
             jobs=None,
             cores_per_job=None,
             force_rebuild=False,
+            local=False,
+            redis_host=None,
             per_pov_verify_timeout=None,
             output=None,
             verbose=False,
