@@ -7,6 +7,7 @@ import threading
 import pytest
 from crsbench.distributed.evaluator_dispatcher_state import (
     BuildRequestRecord,
+    BuildResultRecord,
     DispatcherStateStore,
     VerifyRequestRecord,
     VerifyResultRecord,
@@ -305,3 +306,89 @@ def test_verify_attempt_is_current_decodes_redis_bytes() -> None:
     redis_conn.hget = _bytes_hget  # type: ignore[method-assign]
 
     assert store.verify_attempt_is_current(request_id, "attempt-1")
+
+
+def test_required_build_request_ids_only_include_unfinished_blocked_verify_deps() -> (
+    None
+):
+    store = DispatcherStateStore(_FakeRedis(), experiment_name="exp-1")
+    build_request_id = "build-1"
+    store.submit_build_request(
+        BuildRequestRecord(
+            request_id=build_request_id,
+            trial_id="trial-1",
+            benchmark="bench-1",
+            owner_key="owner-1",
+            lineage_id="lineage-1",
+            generation=1,
+            state="ready",
+            payload={"variant": "v1"},
+        )
+    )
+    store.submit_verify_request(
+        VerifyRequestRecord(
+            request_id="verify-1",
+            trial_id="trial-1",
+            benchmark="bench-1",
+            harness="h-1",
+            pov_id="pov-1",
+            owner_key="owner-1",
+            lineage_id="lineage-1",
+            generation=1,
+            state="blocked_on_build",
+            build_request_ids=[build_request_id],
+            payload={"trial_id": "trial-1"},
+        )
+    )
+
+    assert store.required_build_request_ids() == {build_request_id}
+    assert store.has_pending_required_builds() is True
+
+
+def test_required_build_request_ids_clear_after_build_success_and_verify_promotion() -> (
+    None
+):
+    store = DispatcherStateStore(_FakeRedis(), experiment_name="exp-1")
+    build_request_id = "build-1"
+    lineage_id = "lineage-1"
+    store.submit_build_request(
+        BuildRequestRecord(
+            request_id=build_request_id,
+            trial_id="trial-1",
+            benchmark="bench-1",
+            owner_key="owner-1",
+            lineage_id=lineage_id,
+            generation=1,
+            state="ready",
+            payload={"variant": "v1"},
+        )
+    )
+    store.submit_verify_request(
+        VerifyRequestRecord(
+            request_id="verify-1",
+            trial_id="trial-1",
+            benchmark="bench-1",
+            harness="h-1",
+            pov_id="pov-1",
+            owner_key="owner-1",
+            lineage_id=lineage_id,
+            generation=1,
+            state="blocked_on_build",
+            build_request_ids=[build_request_id],
+            payload={"trial_id": "trial-1"},
+        )
+    )
+    store.publish_build_result(
+        build_request_id,
+        BuildResultRecord(
+            request_id=build_request_id,
+            attempt_id="attempt-1",
+            generation=1,
+            evaluator_id="eval-1",
+            terminal_state="succeeded",
+        ),
+    )
+
+    store.promote_ready_verify_requests(lineage_id=lineage_id, generation=1)
+
+    assert store.has_pending_required_builds() is False

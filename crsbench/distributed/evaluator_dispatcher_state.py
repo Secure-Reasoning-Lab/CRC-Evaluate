@@ -412,6 +412,35 @@ class DispatcherStateStore:
             record for record in self.list_verify_requests() if record.state == "ready"
         ]
 
+    def list_blocked_verify_requests(self) -> list[VerifyRequestRecord]:
+        return [
+            record
+            for record in self.list_verify_requests()
+            if record.state == "blocked_on_build"
+        ]
+
+    def required_build_request_ids(self) -> set[str]:
+        required: set[str] = set()
+        for request in self.list_blocked_verify_requests():
+            for build_request_id in request.build_request_ids:
+                build_request = self.load_build_request(build_request_id)
+                if build_request is None:
+                    continue
+                result = self.load_build_result(build_request_id)
+                if result is None:
+                    required.add(build_request_id)
+                    continue
+                if result.generation != build_request.generation:
+                    required.add(build_request_id)
+                    continue
+                if result.terminal_state != "succeeded":
+                    required.add(build_request_id)
+                    continue
+        return required
+
+    def has_pending_required_builds(self) -> bool:
+        return bool(self.required_build_request_ids())
+
     def list_running_verify_requests(
         self, *, evaluator_id: str
     ) -> list[VerifyRequestRecord]:
