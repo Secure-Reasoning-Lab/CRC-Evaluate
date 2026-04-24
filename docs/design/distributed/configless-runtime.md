@@ -63,6 +63,9 @@ evaluators, but startup behavior differs:
 - config-pinned evaluator CLI mode normally enqueues startup pre-build jobs
   before entering steady-state supervision
 - configless evaluator mode does not enqueue startup pre-build jobs
+- dispatcher routing (`CRSBENCH_EVALUATOR_ROUTING_MODEL=dispatcher`) is not
+  supported in configless evaluator mode in this revision; configless startup
+  must reject it and continue to rely on shared build/verify queues
 - configless evaluators still consume build queues lazily; when async POV
   verification discovers the first POV for a benchmark/sanitizer, it enqueues
   the required build DAG to the build queue and verify jobs wait on those build
@@ -148,6 +151,10 @@ legacy CI queue compatibility is documented in:
 - **Shared paths**: all experiments on a configless evaluator must share the
   same `benchmarks_root`. If different paths are needed,
   run separate evaluator processes or use `--experiment-config`.
+- **No dispatcher routing**: configless evaluators may not run with
+  `CRSBENCH_EVALUATOR_ROUTING_MODEL=dispatcher` in this revision because the
+  dispatcher currently assumes one experiment-pinned evaluator fleet and
+  experiment-derived evaluator-local queue names.
 - **Shared inc-image policy**: all experiments on a configless evaluator must
   have compatible inc-image settings (`inc_image_policy`, `inc_image_registry`,
   pull-timeout/size limits, and image prefix). These settings affect local

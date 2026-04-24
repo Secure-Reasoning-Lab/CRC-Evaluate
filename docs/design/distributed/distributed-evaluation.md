@@ -30,8 +30,9 @@ The evaluator may operate in:
 - configless mode for registry-discovered experiments
 - CI compatibility mode for legacy CI build/verify queues
 
-These are queue-selection/runtime-discovery differences, not different result
-semantics.
+These are queue-selection/runtime-discovery differences. Verification verdict
+payloads stay stable across modes, but async POV verification may use different
+execution plumbing under the shared-queue and dispatcher-routed models.
 
 Startup behavior differs between the first two modes:
 
@@ -39,6 +40,8 @@ Startup behavior differs between the first two modes:
   enqueue phase
 - configless mode skips startup pre-build enqueue and relies on lazy build-queue
   consumption
+- dispatcher routing (`CRSBENCH_EVALUATOR_ROUTING_MODEL=dispatcher`) is
+  currently supported only in config-pinned evaluator mode
 - async POV verification enqueues a benchmark-local build DAG on first POV
   discovery and each verify job depends on those build jobs before execution
 
@@ -55,6 +58,21 @@ Embedded or staged payload data must be sufficient for non-local verification.
 Distributed evaluation distinguishes trial queues from verify/build queues.
 Workers may enqueue verification work while trials continue, and evaluators may
 process those jobs independently.
+
+Async POV verification now has two runtime realizations:
+
+- shared routing: workers enqueue physical build and verify RQ jobs directly
+  onto shared evaluator queues
+- dispatcher routing: workers submit logical build/verify requests into
+  experiment-scoped Redis state, one dispatcher leader applies global owner
+  fairness over those ready requests, and the dispatcher then enqueues physical
+  attempts onto evaluator-local build/verify queues
+
+Dispatcher routing preserves the worker-facing contract around verdict payloads,
+but workers poll stable logical `request_id` values rather than depending on
+physical evaluator RQ job IDs. Physical `attempt_id` values are internal to the
+dispatcher/evaluator contract and may change across retries or evaluator-death
+recovery.
 
 Async POV verification must preserve build/verify queue separation:
 
@@ -92,7 +110,9 @@ Verification results returned by evaluators must be attributable to:
 - the resulting verdict/error classification
 
 Workers and orchestrators may poll or aggregate those results later, but the
-stored result contract must remain stable.
+stored result contract must remain stable. In dispatcher mode, the authoritative
+result identity is the logical `request_id`; physical evaluator attempt IDs are
+not part of the worker-visible correctness contract.
 
 ## Failure Semantics
 
@@ -101,6 +121,8 @@ stored result contract must remain stable.
 - non-local verification must not assume shared filesystem state unless that
   state is explicitly part of the deployment contract
 - delayed polling/early-stop is acceptable; silent result loss is not
+- dispatcher-routed stale attempts must be fenced from publishing terminal
+  logical results after lineage reassignment or newer attempt issuance
 - the async final drain budget is `runtime.verify_timeout`; it covers both
   queued build prerequisites and queued POV verification work
 
@@ -116,6 +138,7 @@ ambiguous evaluator runtime silently.
 This contract should be covered by:
 - distributed evaluator tests
 - verify-payload/result serialization tests
+- dispatcher logical-request and evaluator-locality tests
 - registry-driven configless evaluator tests
 - CI-compatibility queue tests
 
