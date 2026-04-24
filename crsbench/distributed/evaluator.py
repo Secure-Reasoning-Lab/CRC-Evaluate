@@ -30,6 +30,7 @@ from crsbench.distributed.evaluator_scheduler import (
     SCHEDULER_OWNER_KEY_META,
     build_scheduler_owner_key_for_ci_job,
 )
+from crsbench.distributed.evaluator_warmup import start_dispatcher_warmup_thread
 from crsbench.distributed.queue import (
     REDIS_AVAILABLE,
     ROUTING_MODEL_DISPATCHER,
@@ -374,24 +375,19 @@ def run_evaluator_main(
     set_engine(engine)
     set_benchmarks_root(config.benchmarks_root)
 
-    # Pre-build: enqueue variant builds for all experiment benchmarks
-    if build_jobs is not None:
-        if routing_model == ROUTING_MODEL_DISPATCHER:
-            logger.info(
-                "Dispatcher routing enabled; skipping legacy shared pre-build enqueue"
-            )
-        else:
-            enqueued = _enqueue_pre_builds(
-                config,
-                experiment_name,
-                redis_host,
-                inc_image_policy=resolved_policy,
-                inc_image_registry=resolved_registry,
-                inc_image_max_pull_bytes=resolved_max_pull_bytes,
-                inc_image_pull_timeout=resolved_pull_timeout,
-                local_image_prefix=resolved_local_prefix,
-            )
-            logger.info(f"Pre-build: enqueued {enqueued} build jobs")
+    # Pre-build: shared mode keeps legacy one-shot enqueue behavior.
+    if build_jobs is not None and routing_model != ROUTING_MODEL_DISPATCHER:
+        enqueued = _enqueue_pre_builds(
+            config,
+            experiment_name,
+            redis_host,
+            inc_image_policy=resolved_policy,
+            inc_image_registry=resolved_registry,
+            inc_image_max_pull_bytes=resolved_max_pull_bytes,
+            inc_image_pull_timeout=resolved_pull_timeout,
+            local_image_prefix=resolved_local_prefix,
+        )
+        logger.info(f"Pre-build: enqueued {enqueued} build jobs")
 
     # Start dual-queue supervisor
     from crsbench.distributed.ci_supervisor import run_ci_supervisor
@@ -399,6 +395,7 @@ def run_evaluator_main(
     logger.info("Starting dual-queue supervisor (build + verify)...")
     presence_loop: tuple[threading.Event, threading.Thread] | None = None
     dispatcher_loop: tuple[threading.Event, threading.Thread] | None = None
+    warmup_loop: tuple[threading.Event, threading.Thread] | None = None
     if routing_model == ROUTING_MODEL_DISPATCHER and evaluator_id is not None:
         presence_loop = start_presence_thread(
             redis_host=redis_host,
@@ -412,6 +409,18 @@ def run_evaluator_main(
             evaluator_id=evaluator_id,
         )
         dispatcher_loop = start_dispatcher_thread(dispatcher)
+        warmup_loop = start_dispatcher_warmup_thread(
+            redis_host=redis_host,
+            config=config,
+            experiment_name=experiment_name,
+            build_queue_name=build_queue_name,
+            build_capacity=build_jobs or 1,
+            inc_image_policy=resolved_policy,
+            inc_image_registry=resolved_registry,
+            inc_image_max_pull_bytes=resolved_max_pull_bytes,
+            inc_image_pull_timeout=resolved_pull_timeout,
+            local_image_prefix=resolved_local_prefix,
+        )
     try:
         _report_cloud_runtime_state(
             redis_host,
@@ -437,6 +446,10 @@ def run_evaluator_main(
             progress_log_every_jobs=EVALUATOR_PROGRESS_LOG_EVERY_JOBS,
         )
     finally:
+        if warmup_loop is not None:
+            stop_event, thread = warmup_loop
+            stop_event.set()
+            thread.join(timeout=1)
         if dispatcher_loop is not None:
             stop_event, thread = dispatcher_loop
             stop_event.set()
