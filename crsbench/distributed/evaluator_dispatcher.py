@@ -148,18 +148,74 @@ class EvaluatorDispatcher:
         self.last_verify_owner = owner
         return request
 
-    def _choose_build_evaluator(self, *, now: float) -> str:
+    def _lineage_can_rebalance(self, *, lineage_id: str, generation: int) -> bool:
+        return not (
+            self.store.lineage_has_running_work(
+                lineage_id=lineage_id,
+                generation=generation,
+            )
+            or self.store.lineage_has_current_build_result(
+                lineage_id=lineage_id,
+                generation=generation,
+            )
+        )
+
+    def _evaluator_assignment_key(
+        self, evaluator_id: str, *, queue_class: str
+    ) -> tuple[int, int, str]:
+        build_load = self.store.count_running_build_requests(evaluator_id=evaluator_id)
+        verify_load = self.store.count_running_verify_requests(
+            evaluator_id=evaluator_id
+        )
+        primary_load = build_load if queue_class == "build" else verify_load
+        return primary_load, build_load + verify_load, evaluator_id
+
+    def _choose_evaluator_for_lineage(
+        self,
+        *,
+        now: float,
+        queue_class: str,
+        lineage_id: str,
+        generation: int,
+    ) -> str:
         live = self.store.list_live_evaluators(now=now)
-        return live[0] if live else self.evaluator_id
+        if not live:
+            return self.evaluator_id
+
+        ranked = sorted(
+            live,
+            key=lambda evaluator_id: self._evaluator_assignment_key(
+                evaluator_id,
+                queue_class=queue_class,
+            ),
+        )
+        best = ranked[0]
+        current_owner = self.store.lineage_owner(lineage_id)
+        if current_owner not in live:
+            return best
+        if not self._lineage_can_rebalance(
+            lineage_id=lineage_id,
+            generation=generation,
+        ):
+            return current_owner
+        if self._evaluator_assignment_key(
+            current_owner,
+            queue_class=queue_class,
+        ) <= self._evaluator_assignment_key(best, queue_class=queue_class):
+            return current_owner
+        return best
 
     def dispatch_one_build(self, *, now: float) -> BuildRequestRecord | None:
         request = self._choose_next_build_request()
         if request is None:
             return None
-        live = set(self.store.list_live_evaluators(now=now))
-        evaluator_id = self.store.lineage_owner(request.lineage_id)
-        if evaluator_id is None or (live and evaluator_id not in live):
-            evaluator_id = self._choose_build_evaluator(now=now)
+        evaluator_id = self._choose_evaluator_for_lineage(
+            now=now,
+            queue_class="build",
+            lineage_id=request.lineage_id,
+            generation=request.generation,
+        )
+        if evaluator_id != self.store.lineage_owner(request.lineage_id):
             self.store.set_lineage_owner(
                 lineage_id=request.lineage_id,
                 evaluator_id=evaluator_id,
@@ -184,10 +240,13 @@ class EvaluatorDispatcher:
         request = self._choose_next_verify_request()
         if request is None:
             return None
-        live = set(self.store.list_live_evaluators(now=now))
-        evaluator_id = self.store.lineage_owner(request.lineage_id)
-        if evaluator_id is None or (live and evaluator_id not in live):
-            evaluator_id = self._choose_build_evaluator(now=now)
+        evaluator_id = self._choose_evaluator_for_lineage(
+            now=now,
+            queue_class="verify",
+            lineage_id=request.lineage_id,
+            generation=request.generation,
+        )
+        if evaluator_id != self.store.lineage_owner(request.lineage_id):
             self.store.set_lineage_owner(
                 lineage_id=request.lineage_id,
                 evaluator_id=evaluator_id,

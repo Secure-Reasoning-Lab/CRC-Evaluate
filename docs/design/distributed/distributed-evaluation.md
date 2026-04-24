@@ -77,6 +77,10 @@ and patch validation:
   experiment-scoped Redis state, one dispatcher leader applies global owner
   fairness over those ready requests, and the dispatcher then enqueues physical
   attempts onto evaluator-local build/verify queues
+- dispatcher placement is load-aware across live evaluators: for a lineage that
+  does not yet have current-generation running work or published build results,
+  the dispatcher prefers the least-loaded live evaluator for the relevant class
+  (build or verify)
 - dispatcher warmup is separate from that logical request flow: evaluators may
   enqueue local cache-priming build jobs before the first blocked verify demand,
   but once any blocked verify still has unmet build prerequisites the evaluator
@@ -99,6 +103,10 @@ Async POV and patch verification must preserve build/verify queue separation:
 - verify workers only hydrate prebuilt artifacts from evaluator disk for
   dependency-backed jobs; they must not hide fresh variant builds inside the
   verify worker
+- once a lineage has current-generation running work or published build results,
+  verify locality becomes sticky to that evaluator; late-joining evaluators may
+  take future or still-cold lineages, but they must not steal hot dependency-
+  backed verify work whose build context only exists on another evaluator
 - scheduler fairness applies only to runnable queued work; build-before-verify
   correctness remains a dependency contract rather than a blanket build-priority
   rule

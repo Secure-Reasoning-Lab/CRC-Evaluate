@@ -125,6 +125,10 @@ worker-side contracts.
 - in dispatcher routing, one lease-held dispatcher leader owns the
   cluster-global ready pools for logical build and verify requests and applies
   owner round-robin before any physical queue placement
+- physical evaluator placement for dispatcher-routed work is load-aware across
+  live evaluators: when a lineage is still cold for the current generation
+  (no running work and no published build result), the dispatcher prefers the
+  least-loaded live evaluator for the target class
 - evaluator-local build/verify queues are execution-only queues; after
   dispatcher placement, local supervisors execute the already-selected work but
   do not define global owner turns
@@ -138,6 +142,9 @@ worker-side contracts.
   canceled
 - verify placement must respect lineage locality: the authoritative evaluator is
   the one that owns the current build generation for that lineage
+- once a lineage has current-generation running work or a published build
+  result, dispatcher placement must remain sticky to that evaluator until a
+  failure/requeue advances the lineage generation
 - dead-evaluator recovery must requeue local build work, increment affected
   lineage generations, and re-block dependent verify requests before a new
   placement is allowed

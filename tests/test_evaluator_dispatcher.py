@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from crsbench.distributed.evaluator_dispatcher_state import (
     BuildRequestRecord,
+    BuildResultRecord,
     DispatcherStateStore,
     VerifyRequestRecord,
 )
@@ -194,6 +195,234 @@ def test_dispatcher_dispatches_build_requests_to_local_build_queue() -> None:
 
     assert dispatched is not None
     queue.enqueue.assert_called_once()
+
+
+def test_dispatcher_assigns_new_build_lineage_to_least_loaded_live_evaluator() -> None:
+    from crsbench.distributed.evaluator_dispatcher import EvaluatorDispatcher
+
+    redis_conn = _FakeRedis()
+    store = DispatcherStateStore(redis_conn, experiment_name="exp-test")
+    now = time.time()
+    for evaluator_id in ("eval-1", "eval-2", "eval-3"):
+        store.upsert_evaluator(
+            evaluator_id=evaluator_id,
+            worker_name=evaluator_id,
+            expires_in_seconds=60,
+        )
+
+    for request_id in ("build:trial-a:bench-a:0", "build:trial-b:bench-b:0"):
+        store.submit_build_request(
+            BuildRequestRecord(
+                request_id=request_id,
+                trial_id=request_id.split(":")[1],
+                benchmark=request_id.split(":")[2],
+                owner_key=request_id,
+                lineage_id=f"{request_id}::lineage",
+                generation=1,
+                state="ready",
+                payload={"_job_class": "BuildSingleVariantJob"},
+            )
+        )
+        store.assign_build_attempt(
+            request_id=request_id,
+            evaluator_id="eval-1",
+            attempt_id=f"{request_id}:attempt:1",
+            generation=1,
+        )
+
+    store.submit_build_request(
+        BuildRequestRecord(
+            request_id="build:trial-new:bench-new:0",
+            trial_id="trial-new",
+            benchmark="bench-new",
+            owner_key="owner-new",
+            lineage_id="bench-new::address::pkgs::inc",
+            generation=1,
+            state="ready",
+            payload={"_job_class": "BuildSingleVariantJob"},
+        )
+    )
+
+    dispatcher = EvaluatorDispatcher(
+        redis_conn=redis_conn,
+        experiment_name="exp-test",
+        evaluator_id="eval-1",
+    )
+
+    with patch("crsbench.distributed.evaluator_dispatcher.rq.Queue") as mock_queue_cls:
+        queue = MagicMock()
+        mock_queue_cls.return_value = queue
+
+        dispatcher.dispatch_one_build(now=now)
+
+    assert mock_queue_cls.call_args.args[0] == "crsbench_exp-test_eval-2_build"
+
+
+def test_dispatcher_assigns_ready_verify_to_least_loaded_live_evaluator() -> None:
+    from crsbench.distributed.evaluator_dispatcher import EvaluatorDispatcher
+
+    redis_conn = _FakeRedis()
+    store = DispatcherStateStore(redis_conn, experiment_name="exp-test")
+    now = time.time()
+    for evaluator_id in ("eval-1", "eval-2"):
+        store.upsert_evaluator(
+            evaluator_id=evaluator_id,
+            worker_name=evaluator_id,
+            expires_in_seconds=60,
+        )
+
+    store.submit_verify_request(
+        VerifyRequestRecord(
+            request_id="verify:trial-a:bench:h1:pov-a",
+            trial_id="trial-a",
+            benchmark="bench",
+            harness="h1",
+            pov_id="pov-a",
+            owner_key="owner-a",
+            lineage_id="bench::address::pkgs::inc",
+            generation=1,
+            state="ready",
+            build_request_ids=[],
+            payload={"trial_id": "trial-a"},
+        )
+    )
+    store.assign_verify_attempt(
+        request_id="verify:trial-a:bench:h1:pov-a",
+        evaluator_id="eval-1",
+        attempt_id="verify:trial-a:bench:h1:pov-a:attempt:1",
+        generation=1,
+    )
+    store.submit_verify_request(
+        VerifyRequestRecord(
+            request_id="verify:trial-new:bench:h1:pov-new",
+            trial_id="trial-new",
+            benchmark="bench",
+            harness="h1",
+            pov_id="pov-new",
+            owner_key="owner-new",
+            lineage_id="bench::address::pkgs::inc",
+            generation=2,
+            state="ready",
+            build_request_ids=[],
+            payload={"trial_id": "trial-new"},
+        )
+    )
+
+    dispatcher = EvaluatorDispatcher(
+        redis_conn=redis_conn,
+        experiment_name="exp-test",
+        evaluator_id="eval-1",
+    )
+
+    with patch("crsbench.distributed.evaluator_dispatcher.rq.Queue") as mock_queue_cls:
+        queue = MagicMock()
+        mock_queue_cls.return_value = queue
+
+        dispatcher.dispatch_one_verify(now=now)
+
+    assert mock_queue_cls.call_args.args[0] == "crsbench_exp-test_eval-2_verify"
+
+
+def test_dispatcher_keeps_hot_lineage_on_current_owner_for_verify() -> None:
+    from crsbench.distributed.evaluator_dispatcher import EvaluatorDispatcher
+
+    redis_conn = _FakeRedis()
+    store = DispatcherStateStore(redis_conn, experiment_name="exp-test")
+    now = time.time()
+    for evaluator_id in ("eval-1", "eval-2"):
+        store.upsert_evaluator(
+            evaluator_id=evaluator_id,
+            worker_name=evaluator_id,
+            expires_in_seconds=60,
+        )
+
+    build_request_id = "build:trial-1:bench:0"
+    lineage_id = "bench::address::pkgs::inc"
+    store.submit_build_request(
+        BuildRequestRecord(
+            request_id=build_request_id,
+            trial_id="trial-1",
+            benchmark="bench",
+            owner_key="owner-a",
+            lineage_id=lineage_id,
+            generation=1,
+            state="ready",
+            payload={"_job_class": "BuildSingleVariantJob"},
+        )
+    )
+    store.assign_build_attempt(
+        request_id=build_request_id,
+        evaluator_id="eval-1",
+        attempt_id=f"{build_request_id}:attempt:1",
+        generation=1,
+    )
+    store.publish_build_result(
+        build_request_id,
+        BuildResultRecord(
+            request_id=build_request_id,
+            attempt_id=f"{build_request_id}:attempt:1",
+            generation=1,
+            evaluator_id="eval-1",
+            terminal_state="succeeded",
+        ),
+    )
+    store.set_lineage_owner(
+        lineage_id=lineage_id,
+        evaluator_id="eval-1",
+        generation=1,
+    )
+
+    store.submit_verify_request(
+        VerifyRequestRecord(
+            request_id="verify:trial-busy:bench:h1:pov-busy",
+            trial_id="trial-busy",
+            benchmark="bench-busy",
+            harness="h1",
+            pov_id="pov-busy",
+            owner_key="owner-busy",
+            lineage_id="busy::address::pkgs::inc",
+            generation=1,
+            state="ready",
+            build_request_ids=[],
+            payload={"trial_id": "trial-busy"},
+        )
+    )
+    store.assign_verify_attempt(
+        request_id="verify:trial-busy:bench:h1:pov-busy",
+        evaluator_id="eval-1",
+        attempt_id="verify:trial-busy:bench:h1:pov-busy:attempt:1",
+        generation=1,
+    )
+
+    store.submit_verify_request(
+        VerifyRequestRecord(
+            request_id="verify:trial-2:bench:h1:pov-2",
+            trial_id="trial-2",
+            benchmark="bench",
+            harness="h1",
+            pov_id="pov-2",
+            owner_key="owner-2",
+            lineage_id=lineage_id,
+            generation=1,
+            state="ready",
+            build_request_ids=[build_request_id],
+            payload={"trial_id": "trial-2"},
+        )
+    )
+
+    dispatcher = EvaluatorDispatcher(
+        redis_conn=redis_conn,
+        experiment_name="exp-test",
+        evaluator_id="eval-2",
+    )
+
+    with patch("crsbench.distributed.evaluator_dispatcher.rq.Queue") as mock_queue_cls:
+        queue = MagicMock()
+        mock_queue_cls.return_value = queue
+
+        dispatcher.dispatch_one_verify(now=now)
+
+    assert mock_queue_cls.call_args.args[0] == "crsbench_exp-test_eval-1_verify"
 
 
 def test_dispatcher_build_enqueue_uses_rq_safe_job_id() -> None:

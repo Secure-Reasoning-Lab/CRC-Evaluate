@@ -207,6 +207,9 @@ class DispatcherStateStore:
             and record.payload.get("evaluator_id") == evaluator_id
         ]
 
+    def count_running_build_requests(self, *, evaluator_id: str) -> int:
+        return len(self.list_running_build_requests(evaluator_id=evaluator_id))
+
     def assign_build_attempt(
         self,
         *,
@@ -456,6 +459,34 @@ class DispatcherStateStore:
             if record.state == "running"
             and record.payload.get("evaluator_id") == evaluator_id
         ]
+
+    def count_running_verify_requests(self, *, evaluator_id: str) -> int:
+        return len(self.list_running_verify_requests(evaluator_id=evaluator_id))
+
+    def lineage_has_running_work(self, *, lineage_id: str, generation: int) -> bool:
+        for request in self.list_build_requests():
+            if request.lineage_id != lineage_id or request.generation != generation:
+                continue
+            if request.state == "running":
+                return True
+        for request in self.list_verify_requests():
+            if request.lineage_id != lineage_id or request.generation != generation:
+                continue
+            if request.state == "running":
+                return True
+        return False
+
+    def lineage_has_current_build_result(
+        self, *, lineage_id: str, generation: int
+    ) -> bool:
+        for request in self.list_build_requests():
+            if request.lineage_id != lineage_id or request.generation != generation:
+                continue
+            result = self.load_build_result(request.request_id)
+            if result is None or result.generation != generation:
+                continue
+            return True
+        return False
 
     def assign_verify_attempt(
         self,
