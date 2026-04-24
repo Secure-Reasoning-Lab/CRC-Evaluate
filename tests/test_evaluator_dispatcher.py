@@ -52,8 +52,8 @@ class _FakeRedis:
         return 1
 
 
-class _LeaseRaceRedis(_FakeRedis):
-    """Fake Redis that simulates another evaluator winning the lease mid-race."""
+class _LeaseReadWriteRaceRedis(_FakeRedis):
+    """Fake Redis that injects a competing holder between read and write steps."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -143,10 +143,10 @@ def test_dispatcher_round_robins_ready_verify_requests_across_owners() -> None:
     assert first.owner_key != second.owner_key
 
 
-def test_dispatcher_leader_lease_rejects_racing_winner() -> None:
+def test_dispatcher_leader_lease_rejects_competing_holder_in_read_write_race() -> None:
     from crsbench.distributed.evaluator_dispatcher import EvaluatorDispatcher
 
-    redis_conn = _LeaseRaceRedis()
+    redis_conn = _LeaseReadWriteRaceRedis()
     dispatcher = EvaluatorDispatcher(
         redis_conn=redis_conn,
         experiment_name="exp-test",
@@ -155,6 +155,30 @@ def test_dispatcher_leader_lease_rejects_racing_winner() -> None:
 
     assert not dispatcher.try_acquire_leader_lease(now=0.0)
     assert redis_conn.hget("crsbench:dispatcher:exp-test:lease", "holder") == "eval-2"
+
+
+def test_dispatcher_leader_lease_allows_only_one_winner_per_expiry_boundary() -> None:
+    from crsbench.distributed.evaluator_dispatcher import EvaluatorDispatcher
+
+    redis_conn = _FakeRedis()
+    lease_key = "crsbench:dispatcher:exp-test:lease"
+    redis_conn.hset(lease_key, "holder", "stale-eval")
+    redis_conn.hset(lease_key, "expires_at", "1.0")
+
+    first = EvaluatorDispatcher(
+        redis_conn=redis_conn,
+        experiment_name="exp-test",
+        evaluator_id="eval-1",
+    )
+    second = EvaluatorDispatcher(
+        redis_conn=redis_conn,
+        experiment_name="exp-test",
+        evaluator_id="eval-2",
+    )
+
+    assert first.try_acquire_leader_lease(now=10.0)
+    assert not second.try_acquire_leader_lease(now=10.0)
+    assert redis_conn.hget(lease_key, "holder") == "eval-1"
 
 
 def test_dispatcher_dispatches_build_requests_to_local_build_queue() -> None:
