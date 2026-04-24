@@ -2,7 +2,8 @@
 # All 108 wireshark trials failed in the previous run (git-add timeout +
 # worker disk pressure). This config is the original gce-crs-all-agents-full-afc.yaml
 # with only two differences:
-#   1. benchmarks restricted to the 7 wireshark targets
+#   1. benchmarks restricted to the 7 wireshark targets (handler/CPV pairs
+#      auto-expand from each benchmark's .aixcc/meta.yaml)
 #   2. worker boot_disk_size_gb: 2048 → 4096 and workers.placements: 3 → 1
 # All other settings (CRS set, trials, timeouts, jobs, machine types, etc.)
 # are identical to the original.
@@ -27,25 +28,13 @@ experiment:
     - address
     - undefined
   benchmarks:
-    - afc-wireshark-delta-01:
-        handler_ber: [cpv_0]
-    - afc-wireshark-delta-02:
-        handler_icmp: [cpv_0]
-    - afc-wireshark-delta-03:
-        handler_irc: [cpv_0]
-    - afc-wireshark-delta-04:
-        handler_json: [cpv_0]
-    - afc-wireshark-delta-05:
-        handler_netbios: [cpv_0]
-    - afc-wireshark-delta-07:
-        handler_gvcp: [cpv_0]
-    - afc-wireshark-full-01:
-        handler_aim: [cpv_0]
-        handler_bat.vis: [cpv_0]
-        handler_netbios: [cpv_0]
-        handler_openvpn.udp: [cpv_0]
-        handler_telnet: [cpv_0]
-        handler_zbee_zdp: [cpv_0]
+    - afc-wireshark-delta-01
+    - afc-wireshark-delta-02
+    - afc-wireshark-delta-03
+    - afc-wireshark-delta-04
+    - afc-wireshark-delta-05
+    - afc-wireshark-delta-07
+    - afc-wireshark-full-01
 runtime:
   trials: 3
   max_total_time: 43200          # build 6h + run 2h + verify 3h + 1h buffer
