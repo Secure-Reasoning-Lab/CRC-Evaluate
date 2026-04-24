@@ -1066,9 +1066,12 @@ By default, `cloud collect` infers:
 In plain terms, `cloud collect` copies trial artifacts and VM diagnostics from
 the cloud VMs back to a local directory on the machine where you run the
 command. During artifact sync, CRSBench skips trial-local `oss-crs-workdir/`
-scratch directories. If a top-level trial entry such as `output/` or
-`result.log` is still a symlink into that excluded workdir, collect
-re-hydrates that entry so the local result tree remains usable.
+scratch directories and `trial/output/logs/`. If a top-level trial entry such
+as `output/` or `result.log` is still a symlink into that excluded workdir,
+collect re-hydrates that entry so the local result tree remains usable, but it
+still omits `output/logs/` from the rehydrated `output/` tree. Runtime and VM
+diagnostics remain available under
+`.crsbench-cloud/remote-logs/<experiment>/`.
 
 Override the local destination with `--dest`:
 

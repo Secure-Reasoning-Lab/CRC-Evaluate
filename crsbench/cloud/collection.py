@@ -48,7 +48,10 @@ logger = get_logger(__name__)
 _IAP_TUNNEL_PORT = 22
 _IAP_TUNNEL_STARTUP_TIMEOUT_SEC = 30.0
 _COLLECT_MARKER_FILENAME = ".crsbench-collect.json"
-_ARTIFACT_RSYNC_EXCLUDES: tuple[str, ...] = ("oss-crs-workdir/",)
+_ARTIFACT_RSYNC_EXCLUDES: tuple[str, ...] = (
+    "oss-crs-workdir/",
+    "output/logs/",
+)
 
 
 def collect_marker_path(destination: Path) -> Path:
@@ -396,6 +399,7 @@ class ArtifactCollector:
         - ``--delay-updates``: stage all files before renaming into place
         - ``--delete-delay``: remove remote-deleted files after transfer completes
         - ``--exclude=oss-crs-workdir/``: skip trial-local oss-crs scratch state
+        - ``--exclude=output/logs/``: skip bulky trial-local CRS/compose logs
         """
         if (
             known_hosts_path is None
@@ -440,6 +444,7 @@ class ArtifactCollector:
         fleet: SshTransportConfig,
         remote_source_path: str,
         destination_parent: Path,
+        exclude_patterns: tuple[str, ...] = (),
         known_hosts_path: Path | None = None,
         ssh_user: str | None = None,
         ssh_command: str | None = None,
@@ -462,17 +467,23 @@ class ArtifactCollector:
         source = f"{resolved_remote_host}:{remote_source_path}"
         dest = str(destination_parent) + "/"
 
-        return [
+        cmd = [
             "rsync",
             "-a",
             "--mkpath",
             "--copy-links",
-            "--rsync-path=sudo rsync",
-            "-e",
-            ssh_cmd,
-            source,
-            dest,
         ]
+        cmd.extend(f"--exclude={pattern}" for pattern in exclude_patterns)
+        cmd.extend(
+            [
+                "--rsync-path=sudo rsync",
+                "-e",
+                ssh_cmd,
+                source,
+                dest,
+            ]
+        )
+        return cmd
 
     def _build_log_rsync_cmd(
         self,
@@ -911,11 +922,13 @@ class ArtifactCollector:
             self._remove_staged_path(local_path)
             local_path.parent.mkdir(parents=True, exist_ok=True)
             remote_source_path = posixpath.join(remote_root, relpath.as_posix())
+            exclude_patterns = ("logs/",) if relpath.name == "output" else ()
             cmd = self._build_copy_link_rsync_cmd(
                 worker=worker,
                 fleet=fleet,
                 remote_source_path=remote_source_path,
                 destination_parent=local_path.parent,
+                exclude_patterns=exclude_patterns,
                 known_hosts_path=known_hosts_path,
                 ssh_user=ssh_user,
                 ssh_command=ssh_command,

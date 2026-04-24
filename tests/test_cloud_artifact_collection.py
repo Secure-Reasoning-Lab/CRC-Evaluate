@@ -130,6 +130,47 @@ def _write_trial_metadata(trial_dir: Path, payload: dict[str, object]) -> None:
     metadata_path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _rsync_exclude_patterns(cmd: list[str]) -> tuple[str, ...]:
+    """Return normalized rsync exclude patterns from a command line."""
+    return tuple(
+        arg.removeprefix("--exclude=").rstrip("/")
+        for arg in cmd
+        if arg.startswith("--exclude=")
+    )
+
+
+def _copytree_with_rsync_excludes(
+    source: Path,
+    destination: Path,
+    *,
+    exclude_patterns: tuple[str, ...],
+    symlinks: bool,
+) -> None:
+    """Copy a tree while honoring rsync-like exclude suffix matching."""
+    source = source.resolve()
+
+    def _ignore(directory: str, files: list[str]) -> set[str]:
+        relative_dir = Path(directory).resolve().relative_to(source)
+        ignored: set[str] = set()
+        for name in files:
+            relpath = (
+                Path(name) if relative_dir == Path() else relative_dir / name
+            ).as_posix()
+            for pattern in exclude_patterns:
+                if relpath == pattern or relpath.endswith(f"/{pattern}"):
+                    ignored.add(name)
+                    break
+        return ignored
+
+    shutil.copytree(
+        source,
+        destination,
+        dirs_exist_ok=True,
+        ignore=_ignore,
+        symlinks=symlinks,
+    )
+
+
 # ---------------------------------------------------------------------------
 # ARTF-01 / Task tests: rsync command construction
 # ---------------------------------------------------------------------------
@@ -409,9 +450,11 @@ class TestStagingAndPublish:
         source_root.mkdir()
         trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
         shutil.rmtree(trial_dir / "output")
-        workdir_out = trial_dir / "oss-crs-workdir" / "out" / "seeds"
-        workdir_out.mkdir(parents=True)
-        (workdir_out / "seed-0001").write_bytes(b"seed-content")
+        workdir_out = trial_dir / "oss-crs-workdir" / "out"
+        (workdir_out / "seeds").mkdir(parents=True)
+        (workdir_out / "seeds" / "seed-0001").write_bytes(b"seed-content")
+        (workdir_out / "logs" / "services").mkdir(parents=True)
+        (workdir_out / "logs" / "services" / "service.log").write_text("service log\n")
         (trial_dir / "output").symlink_to(Path("oss-crs-workdir") / "out")
 
         worker = _make_worker()
@@ -433,32 +476,25 @@ class TestStagingAndPublish:
             else:
                 local_source = Path(source.rstrip("/"))
 
+            exclude_patterns = _rsync_exclude_patterns(cmd)
+
             if "--copy-links" in cmd:
                 resolved_source = local_source.resolve()
                 if resolved_source.is_dir():
-                    shutil.copytree(
+                    _copytree_with_rsync_excludes(
                         resolved_source,
                         dest / local_source.name,
-                        dirs_exist_ok=True,
+                        exclude_patterns=exclude_patterns,
+                        symlinks=False,
                     )
                 else:
                     shutil.copy2(resolved_source, dest / local_source.name)
                 return subprocess.CompletedProcess(args=cmd, returncode=0)
 
-            excluded_names = {
-                arg.removeprefix("--exclude=").rstrip("/")
-                for arg in cmd
-                if arg.startswith("--exclude=")
-            }
-
-            def _ignore(_directory: str, files: list[str]) -> set[str]:
-                return {name for name in files if name in excluded_names}
-
-            shutil.copytree(
+            _copytree_with_rsync_excludes(
                 local_source,
                 dest,
-                dirs_exist_ok=True,
-                ignore=_ignore,
+                exclude_patterns=exclude_patterns,
                 symlinks=True,
             )
             return subprocess.CompletedProcess(args=cmd, returncode=0)
@@ -486,6 +522,84 @@ class TestStagingAndPublish:
         assert trial_output.exists()
         assert not trial_output.is_symlink()
         assert (trial_output / "seeds" / "seed-0001").exists()
+        assert not (trial_output / "logs").exists()
+
+    def test_staging_and_publish_excludes_output_logs_from_real_output_tree(
+        self, tmp_path: Path
+    ) -> None:
+        """Collection should omit real output/logs directories from the main artifact rsync."""
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        logs_dir = trial_dir / "output" / "logs" / "services"
+        logs_dir.mkdir(parents=True)
+        (logs_dir / "service.log").write_text("service log\n")
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            source = cmd[-2]
+            dest = Path(cmd[-1].rstrip("/"))
+            if ":" in source:
+                remote_source = source.split(":", 1)[1]
+                rel = Path(
+                    remote_source.removeprefix("/data/experiments/exp-42").lstrip("/")
+                )
+                local_source = source_root / "exp-42" / rel
+            else:
+                local_source = Path(source.rstrip("/"))
+
+            exclude_patterns = _rsync_exclude_patterns(cmd)
+
+            if "--copy-links" in cmd:
+                resolved_source = local_source.resolve()
+                if resolved_source.is_dir():
+                    _copytree_with_rsync_excludes(
+                        resolved_source,
+                        dest / local_source.name,
+                        exclude_patterns=exclude_patterns,
+                        symlinks=False,
+                    )
+                else:
+                    shutil.copy2(resolved_source, dest / local_source.name)
+                return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+            _copytree_with_rsync_excludes(
+                local_source,
+                dest,
+                exclude_patterns=exclude_patterns,
+                symlinks=True,
+            )
+            return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        trial_output = (
+            final_path
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+            / "output"
+        )
+        assert (trial_output / "seeds" / "seed-0001").exists()
+        assert not (trial_output / "logs").exists()
 
     def test_staging_and_publish_rehydrates_file_symlinks_into_excluded_workdir(
         self, tmp_path: Path
@@ -784,7 +898,7 @@ class TestCollectFullTrialTree:
     """test_collect_full_trial_tree — ARTF-01: rsync source covers the full experiment subtree."""
 
     def test_collect_full_trial_tree(self) -> None:
-        """rsync keeps full-tree behavior while excluding only the internal oss-crs workdir."""
+        """rsync keeps full-tree behavior while excluding only internal scratch/log paths."""
         worker = _make_worker()
         fleet = _make_fleet(ssh_via_iap=False)
         collector = ArtifactCollector()
@@ -801,8 +915,11 @@ class TestCollectFullTrialTree:
             "No --include filters; rsync must copy full tree"
         )
         exclude_args = [arg for arg in cmd if arg.startswith("--exclude=")]
-        assert exclude_args == ["--exclude=oss-crs-workdir/"], (
-            "Only the internal oss-crs workdir may be excluded from artifact collection"
+        assert exclude_args == [
+            "--exclude=oss-crs-workdir/",
+            "--exclude=output/logs/",
+        ], (
+            "Artifact collection should exclude only internal scratch data and trial output/logs"
         )
 
         # Source must end with trailing slash (rsync convention for directory contents)
