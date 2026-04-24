@@ -1,8 +1,10 @@
 ---- MODULE DistributedEvaluatorDispatcherLocality ----
 EXTENDS TLC, Naturals
 
-\* Bounded model for dispatcher-owned evaluator routing with local-only builds
-\* and evaluator-local advisory warmup.
+\* Bounded model for dispatcher-owned evaluator routing with evaluator-local
+\* advisory warmup and a toggle for verify flows that either require build-lineage
+\* locality (`EnforceLocalVerify = TRUE`) or may rebalance after build success
+\* and rebuild locally on cache miss (`EnforceLocalVerify = FALSE`).
 \*
 \* Scope:
 \* - one shared lineage
@@ -98,16 +100,29 @@ NextReadyOwner ==
               THEN "ownerB"
               ELSE NoOwner
 
-CurrentBuildLocalAndReady ==
-    /\ lineageOwner \in alive
-    /\ lineageOwner # NoEval
+CurrentGenerationReadyForVerify ==
     /\ buildState = "succeeded"
-    /\ builtOn[generation] = lineageOwner
+    /\ IF EnforceLocalVerify
+          THEN /\ lineageOwner \in alive
+               /\ lineageOwner # NoEval
+               /\ builtOn[generation] = lineageOwner
+          ELSE builtOn[generation] # NoEval
 
-NeedsRecovery ==
+LocalVerifyRecovery ==
     buildState # "idle"
     \/ (\E owner \in Owners :
             Outstanding(owner) /\ terminalAttempt[owner] = NoAttempt)
+
+RebalancedVerifyRecovery ==
+    buildState \in {"queued", "running"}
+    \/ (\E owner \in Owners :
+            verifyState[owner] = "running"
+            /\ terminalAttempt[owner] = NoAttempt)
+
+NeedsRecovery ==
+    IF EnforceLocalVerify
+    THEN LocalVerifyRecovery
+    ELSE RebalancedVerifyRecovery
 
 Init ==
     /\ alive = {"eval1"}
@@ -199,7 +214,7 @@ DemandBuildArrives(owner) ==
     /\ owner \in Owners
     /\ verifyState[owner] = "pending"
     /\ terminalAttempt[owner] = NoAttempt
-    /\ IF CurrentBuildLocalAndReady
+    /\ IF CurrentGenerationReadyForVerify
           THEN /\ verifyState' = [verifyState EXCEPT ![owner] = "ready"]
                /\ buildState' = buildState
                /\ requiredBuildDemand' = requiredBuildDemand
@@ -327,32 +342,55 @@ Eval1Dies ==
     /\ alive' = alive \ {"eval1"}
     /\ dead1' = TRUE
     /\ IF lineageOwner = "eval1" /\ NeedsRecovery
-          THEN /\ generation' = 2
+          THEN /\ generation' =
+                    IF EnforceLocalVerify \/ buildState # "succeeded"
+                    THEN 2
+                    ELSE generation
                /\ lineageOwner' =
                     IF "eval2" \in alive THEN "eval2" ELSE NoEval
-               /\ buildState' = "queued"
+               /\ buildState' =
+                    IF EnforceLocalVerify \/ buildState # "succeeded"
+                    THEN "queued"
+                    ELSE buildState
                /\ verifyState' =
                     [owner \in Owners |->
-                        IF Outstanding(owner) /\ terminalAttempt[owner] = NoAttempt
-                        THEN "blocked"
-                        ELSE verifyState[owner]
+                        IF terminalAttempt[owner] # NoAttempt
+                        THEN verifyState[owner]
+                        ELSE IF EnforceLocalVerify \/ buildState # "succeeded"
+                             THEN IF Outstanding(owner)
+                                  THEN "blocked"
+                                  ELSE verifyState[owner]
+                             ELSE IF verifyState[owner] = "running"
+                                  THEN "ready"
+                                  ELSE verifyState[owner]
                     ]
                /\ authAttempt' =
                     [owner \in Owners |->
-                        IF Outstanding(owner) /\ terminalAttempt[owner] = NoAttempt
-                        THEN NoAttempt
-                        ELSE authAttempt[owner]
+                        IF terminalAttempt[owner] # NoAttempt
+                        THEN authAttempt[owner]
+                        ELSE IF EnforceLocalVerify \/ buildState # "succeeded"
+                             THEN IF Outstanding(owner)
+                                  THEN NoAttempt
+                                  ELSE authAttempt[owner]
+                             ELSE IF verifyState[owner] = "running"
+                                  THEN NoAttempt
+                                  ELSE authAttempt[owner]
                     ]
                /\ requiredBuildDemand' =
-                    \E owner \in Owners :
-                        Outstanding(owner) /\ terminalAttempt[owner] = NoAttempt
+                    IF EnforceLocalVerify \/ buildState # "succeeded"
+                    THEN \E owner \in Owners :
+                             Outstanding(owner)
+                             /\ terminalAttempt[owner] = NoAttempt
+                    ELSE FALSE
           ELSE /\ generation' = generation
                /\ lineageOwner' =
                     IF lineageOwner = "eval1"
                     THEN IF "eval2" \in alive THEN "eval2" ELSE NoEval
                     ELSE lineageOwner
                /\ buildState' =
-                    IF lineageOwner = "eval1" THEN "idle" ELSE buildState
+                    IF EnforceLocalVerify /\ lineageOwner = "eval1"
+                    THEN "idle"
+                    ELSE buildState
                /\ verifyState' = verifyState
                /\ authAttempt' = authAttempt
                /\ requiredBuildDemand' = requiredBuildDemand
@@ -371,7 +409,7 @@ DispatchVerify(owner, eval) ==
     /\ owner = NextReadyOwner
     /\ owner \in Owners
     /\ eval \in alive
-    /\ CurrentBuildLocalAndReady
+    /\ CurrentGenerationReadyForVerify
     /\ verifyState[owner] = "ready"
     /\ terminalAttempt[owner] = NoAttempt
     /\ attemptNo[owner] < 2
@@ -465,15 +503,17 @@ TypeInvariant ==
 ReadyRequiresBuiltGeneration ==
     \A owner \in Owners :
         Ready(owner) =>
-            CurrentBuildLocalAndReady
+            CurrentGenerationReadyForVerify
 
-RunningVerifyUsesCurrentLocalGeneration ==
+RunningVerifyUsesCurrentGeneration ==
     \A owner \in Owners :
         verifyState[owner] = "running" =>
             /\ authAttempt[owner] # NoAttempt
             /\ authAttempt[owner].gen = generation
-            /\ authAttempt[owner].eval = lineageOwner
-            /\ builtOn[generation] = lineageOwner
+            /\ IF EnforceLocalVerify
+                  THEN /\ authAttempt[owner].eval = lineageOwner
+                       /\ builtOn[generation] = lineageOwner
+                  ELSE builtOn[generation] # NoEval
 
 TerminalAttemptMatchesAuthoritativeAssignment ==
     \A owner \in Owners :
@@ -483,7 +523,9 @@ TerminalAttemptMatchesAuthoritativeAssignment ==
 AcceptedTerminalUsesBuiltGeneration ==
     \A owner \in Owners :
         terminalAttempt[owner] = NoAttempt
-        \/ builtOn[terminalAttempt[owner].gen] = terminalAttempt[owner].eval
+        \/ IF EnforceLocalVerify
+              THEN builtOn[terminalAttempt[owner].gen] = terminalAttempt[owner].eval
+              ELSE builtOn[terminalAttempt[owner].gen] # NoEval
 
 NoWarmupDispatchWhileDemanded ==
     ~warmupDispatchedWhileDemanded

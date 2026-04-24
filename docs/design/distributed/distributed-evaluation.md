@@ -81,6 +81,10 @@ and patch validation:
   does not yet have current-generation running work or published build results,
   the dispatcher prefers the least-loaded live evaluator for the relevant class
   (build or verify)
+- once async POV build prerequisites for a lineage have published success, POV
+  verify requests may rebalance to any least-loaded live evaluator; the
+  receiving evaluator may hydrate prebuilt variants from local disk or rebuild
+  locally on cache miss
 - dispatcher warmup is separate from that logical request flow: evaluators may
   enqueue local cache-priming build jobs before the first blocked verify demand,
   but once any blocked verify still has unmet build prerequisites the evaluator
@@ -100,13 +104,13 @@ Async POV and patch verification must preserve build/verify queue separation:
 - shared routing verify jobs declare explicit RQ dependencies on those build jobs
 - dispatcher routing verify requests remain blocked in Redis state until their
   required logical build requests publish success for the current lineage
-- verify workers only hydrate prebuilt artifacts from evaluator disk for
-  dependency-backed jobs; they must not hide fresh variant builds inside the
-  verify worker
-- once a lineage has current-generation running work or published build results,
-  verify locality becomes sticky to that evaluator; late-joining evaluators may
-  take future or still-cold lineages, but they must not steal hot dependency-
-  backed verify work whose build context only exists on another evaluator
+- patch verify remains lineage-local: once a patch lineage has current-
+  generation running work or published build results, verify locality stays
+  sticky to that evaluator until requeue/death recovery advances the lineage
+- POV verify is different: after the current build generation succeeds, the
+  dispatcher may place POV verify on any least-loaded live evaluator, and that
+  evaluator may fall back to a local rebuild if prebuilt context is not already
+  present on disk
 - scheduler fairness applies only to runnable queued work; build-before-verify
   correctness remains a dependency contract rather than a blanket build-priority
   rule

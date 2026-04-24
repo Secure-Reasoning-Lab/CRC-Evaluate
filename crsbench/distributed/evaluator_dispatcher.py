@@ -170,6 +170,18 @@ class EvaluatorDispatcher:
         primary_load = build_load if queue_class == "build" else verify_load
         return primary_load, build_load + verify_load, evaluator_id
 
+    def _choose_least_loaded_evaluator(self, *, now: float, queue_class: str) -> str:
+        live = self.store.list_live_evaluators(now=now)
+        if not live:
+            return self.evaluator_id
+        return min(
+            live,
+            key=lambda evaluator_id: self._evaluator_assignment_key(
+                evaluator_id,
+                queue_class=queue_class,
+            ),
+        )
+
     def _choose_evaluator_for_lineage(
         self,
         *,
@@ -182,14 +194,7 @@ class EvaluatorDispatcher:
         if not live:
             return self.evaluator_id
 
-        ranked = sorted(
-            live,
-            key=lambda evaluator_id: self._evaluator_assignment_key(
-                evaluator_id,
-                queue_class=queue_class,
-            ),
-        )
-        best = ranked[0]
+        best = self._choose_least_loaded_evaluator(now=now, queue_class=queue_class)
         current_owner = self.store.lineage_owner(lineage_id)
         if current_owner not in live:
             return best
@@ -204,6 +209,9 @@ class EvaluatorDispatcher:
         ) <= self._evaluator_assignment_key(best, queue_class=queue_class):
             return current_owner
         return best
+
+    def _verify_request_requires_locality(self, request: VerifyRequestRecord) -> bool:
+        return "patch" in request.payload
 
     def dispatch_one_build(self, *, now: float) -> BuildRequestRecord | None:
         request = self._choose_next_build_request()
@@ -240,17 +248,23 @@ class EvaluatorDispatcher:
         request = self._choose_next_verify_request()
         if request is None:
             return None
-        evaluator_id = self._choose_evaluator_for_lineage(
-            now=now,
-            queue_class="verify",
-            lineage_id=request.lineage_id,
-            generation=request.generation,
-        )
-        if evaluator_id != self.store.lineage_owner(request.lineage_id):
-            self.store.set_lineage_owner(
+        if self._verify_request_requires_locality(request):
+            evaluator_id = self._choose_evaluator_for_lineage(
+                now=now,
+                queue_class="verify",
                 lineage_id=request.lineage_id,
-                evaluator_id=evaluator_id,
                 generation=request.generation,
+            )
+            if evaluator_id != self.store.lineage_owner(request.lineage_id):
+                self.store.set_lineage_owner(
+                    lineage_id=request.lineage_id,
+                    evaluator_id=evaluator_id,
+                    generation=request.generation,
+                )
+        else:
+            evaluator_id = self._choose_least_loaded_evaluator(
+                now=now,
+                queue_class="verify",
             )
         attempt_id = f"{request.request_id}:attempt:{request.generation}"
         self.store.assign_verify_attempt(

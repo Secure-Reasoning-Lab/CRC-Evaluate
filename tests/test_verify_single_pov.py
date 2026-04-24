@@ -8,6 +8,7 @@ from crsbench.distributed.evaluator_jobs import (
     PovVerdict,
     SinglePovPayload,
     SinglePovResult,
+    _build_cache_key,
     verify_single_pov,
 )
 from crsbench.evaluation.verification.models import (
@@ -80,6 +81,32 @@ class TestSinglePovPayload:
         assert restored.build_job_ids == ["build-single/b/b-ubsan-delta-cpv0/pkgs/inc"]
         assert restored.source_mode == "main_repo"
         assert restored.use_inc_build is False
+
+
+def test_build_cache_key_scopes_source_mode_and_inc_build() -> None:
+    assert (
+        _build_cache_key(
+            "exp",
+            "bench",
+            "address",
+            source_mode="pkgs",
+            use_inc_build=True,
+        )
+        == "exp::bench::address::pkgs::inc"
+    )
+    assert _build_cache_key(
+        "exp",
+        "bench",
+        "address",
+        source_mode="pkgs",
+        use_inc_build=True,
+    ) != _build_cache_key(
+        "exp",
+        "bench",
+        "address",
+        source_mode="main_repo",
+        use_inc_build=False,
+    )
 
 
 class TestPovVerdictStatus:
@@ -196,7 +223,7 @@ class TestVerifySinglePov:
     @patch("crsbench.distributed.evaluator_jobs._verification_engine", None)
     @patch(
         "crsbench.distributed.evaluator_jobs._built_results",
-        {"exp::test-bench::auto": {"v": "result"}},
+        {"exp::test-bench::auto::pkgs::inc": {"v": "result"}},
     )
     def test_engine_not_initialized(self) -> None:
         """Returns error when VerificationEngine is not initialized."""
@@ -209,7 +236,7 @@ class TestVerifySinglePov:
 
     @patch(
         "crsbench.distributed.evaluator_jobs._built_results",
-        {"exp::test-bench::auto": {}},
+        {"exp::test-bench::auto::pkgs::inc": {}},
     )
     def test_adapter_load_failure(self) -> None:
         """Returns error when adapter fails to load."""
@@ -228,7 +255,7 @@ class TestVerifySinglePov:
 
     @patch(
         "crsbench.distributed.evaluator_jobs._built_results",
-        {"exp::test-bench::auto": {}},
+        {"exp::test-bench::auto::pkgs::inc": {}},
     )
     def test_successful_cpv_match(self) -> None:
         """Successful verification with CPV match."""
@@ -259,7 +286,7 @@ class TestVerifySinglePov:
 
     @patch(
         "crsbench.distributed.evaluator_jobs._built_results",
-        {"exp::test-bench::auto": {}},
+        {"exp::test-bench::auto::pkgs::inc": {}},
     )
     def test_cpv_match_includes_crash_logs(self) -> None:
         """Crash logs from engine result are propagated to verdict."""
@@ -298,7 +325,7 @@ class TestVerifySinglePov:
 
     @patch(
         "crsbench.distributed.evaluator_jobs._built_results",
-        {"exp::test-bench::auto": {}},
+        {"exp::test-bench::auto::pkgs::inc": {}},
     )
     def test_no_crash_info_gives_empty_crash_logs(self) -> None:
         """When crash_info is None, crash_logs should be empty."""
@@ -327,7 +354,7 @@ class TestVerifySinglePov:
 
     @patch(
         "crsbench.distributed.evaluator_jobs._built_results",
-        {"exp::test-bench::auto": {}},
+        {"exp::test-bench::auto::pkgs::inc": {}},
     )
     def test_not_vulnerable(self) -> None:
         """POV does not trigger vulnerability."""
@@ -357,7 +384,7 @@ class TestVerifySinglePov:
 
     @patch(
         "crsbench.distributed.evaluator_jobs._built_results",
-        {"exp::test-bench::auto": {}},
+        {"exp::test-bench::auto::pkgs::inc": {}},
     )
     def test_unintended_crash_status(self) -> None:
         """UNINTENDED_CRASH is correctly reflected in verdict status."""
@@ -388,7 +415,7 @@ class TestVerifySinglePov:
 
     @patch(
         "crsbench.distributed.evaluator_jobs._built_results",
-        {"exp::test-bench::auto": {}},
+        {"exp::test-bench::auto::pkgs::inc": {}},
     )
     def test_verification_exception(self) -> None:
         """Exception during verification produces error verdict."""
@@ -500,6 +527,61 @@ class TestVerifySinglePov:
             build_job_ids=payload["build_artifact_ids"],
             benchmark_path=mock_benchmark_path,
             source_mode="main_repo",
+            use_inc_build=False,
+        )
+
+    @patch("crsbench.distributed.evaluator_jobs._built_results", {})
+    def test_build_context_load_failure_falls_back_to_local_build(self) -> None:
+        payload = self._make_payload()
+        payload["build_job_ids"] = [
+            "build-single/test-bench/test-bench-ubsan-cpv0/main_repo/clean"
+        ]
+        payload["sanitizer"] = "undefined"
+        payload["source_mode"] = "main_repo"
+        payload["use_inc_build"] = False
+
+        mock_engine = MagicMock()
+        mock_adapter = MagicMock()
+        mock_engine.load_adapter.return_value = mock_adapter
+        mock_engine.get_or_build_results.return_value = {"variant-ubsan": MagicMock()}
+        mock_engine.verify_pov.return_value = PovVerificationResult(
+            status=PovVerificationStatus.CPV,
+            benchmark="test-bench",
+            pov_id="pov_0",
+            cpv_matched=["cpv_0"],
+            details="details",
+        )
+
+        mock_benchmark_path = MagicMock()
+        mock_benchmark_path.exists.return_value = True
+
+        with (
+            patch(
+                "crsbench.distributed.evaluator_jobs._verification_engine",
+                mock_engine,
+            ),
+            patch(
+                "crsbench.distributed.evaluator_jobs.resolve_benchmark_path",
+                return_value=mock_benchmark_path,
+            ),
+            patch(
+                "crsbench.distributed.ci_jobs.load_build_context_from_disk",
+                side_effect=RuntimeError("missing local build context"),
+            ) as mock_load_build_context,
+        ):
+            result_dict = verify_single_pov(payload)
+
+        result = SinglePovResult.from_dict(result_dict)
+        assert result.verdict.status == "cpv"
+        mock_load_build_context.assert_called_once_with(
+            build_job_ids=payload["build_job_ids"],
+            benchmark_path=mock_benchmark_path,
+            source_mode="main_repo",
+            use_inc_build=False,
+        )
+        mock_engine.get_or_build_results.assert_called_once_with(
+            mock_adapter,
+            sanitizer="undefined",
             use_inc_build=False,
         )
 
@@ -620,5 +702,7 @@ class TestLazyBuildCache:
         result = SinglePovResult.from_dict(result_dict)
         assert result.verdict.triggered_bug is True
         mock_engine.get_or_build_results.assert_called_once_with(
-            mock_adapter, sanitizer="undefined"
+            mock_adapter,
+            sanitizer="undefined",
+            use_inc_build=True,
         )

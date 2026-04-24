@@ -162,15 +162,28 @@ def set_engine(engine: Any) -> None:
 
 
 def _build_cache_key(
-    experiment_name: str, benchmark_name: str, sanitizer: Optional[str]
+    experiment_name: str,
+    benchmark_name: str,
+    sanitizer: Optional[str],
+    source_mode: str,
+    use_inc_build: bool,
 ) -> str:
     """Build scoped cache key for build artifacts."""
     sanitizer_scope = sanitizer or "auto"
-    return f"{experiment_name}::{benchmark_name}::{sanitizer_scope}"
+    source_mode_scope = source_mode or "pkgs"
+    inc_build_scope = "inc" if use_inc_build else "clean"
+    return (
+        f"{experiment_name}::{benchmark_name}::{sanitizer_scope}"
+        f"::{source_mode_scope}::{inc_build_scope}"
+    )
 
 
 def _try_lazy_load_builds(
-    experiment_name: str, benchmark_name: str, sanitizer: Optional[str]
+    experiment_name: str,
+    benchmark_name: str,
+    sanitizer: Optional[str],
+    source_mode: str,
+    use_inc_build: bool,
 ) -> None:
     """Attempt to lazily load build results for a benchmark.
 
@@ -198,13 +211,24 @@ def _try_lazy_load_builds(
         return
 
     try:
-        results = engine.get_or_build_results(adapter, sanitizer=sanitizer)
-        _built_results[_build_cache_key(experiment_name, benchmark_name, sanitizer)] = (
-            results
+        results = engine.get_or_build_results(
+            adapter,
+            sanitizer=sanitizer,
+            use_inc_build=use_inc_build,
         )
+        _built_results[
+            _build_cache_key(
+                experiment_name,
+                benchmark_name,
+                sanitizer,
+                source_mode,
+                use_inc_build,
+            )
+        ] = results
         logger.info(
             f"Lazy loaded build results for {experiment_name}/{benchmark_name} "
-            f"(sanitizer={sanitizer or 'auto'}, {len(results)} variants)"
+            f"(sanitizer={sanitizer or 'auto'}, source_mode={source_mode}, "
+            f"use_inc_build={use_inc_build}, {len(results)} variants)"
         )
     except Exception as e:
         logger.warning(f"Lazy load failed for {benchmark_name}: {e}")
@@ -343,7 +367,11 @@ def verify_single_pov(payload_dict: dict[str, Any]) -> dict[str, Any]:
     )
 
     cache_key = _build_cache_key(
-        payload.experiment_name, payload.benchmark, payload.sanitizer
+        payload.experiment_name,
+        payload.benchmark,
+        payload.sanitizer,
+        payload.source_mode,
+        payload.use_inc_build,
     )
     if cache_key not in _built_results:
         if build_ids_for_context:
@@ -362,26 +390,24 @@ def verify_single_pov(payload_dict: dict[str, Any]) -> dict[str, Any]:
                 )
                 _built_results[cache_key] = build_context.build_results
             except Exception as e:
-                error_msg = (
-                    f"Failed to load prebuilt variants for benchmark "
-                    f"'{payload.benchmark}': {e}"
+                logger.warning(
+                    "Failed to load prebuilt variants for benchmark "
+                    f"'{payload.benchmark}': {e}. Falling back to local build."
                 )
-                logger.error(error_msg)
-                return SinglePovResult(
-                    trial_id=payload.trial_id,
-                    benchmark=payload.benchmark,
-                    harness=payload.harness,
-                    verdict=PovVerdict(
-                        pov_id=pov.pov_id,
-                        triggered_bug=False,
-                        status="error",
-                        error=error_msg,
-                    ),
-                    completed_at=time.time(),
-                ).to_dict()
+                _try_lazy_load_builds(
+                    payload.experiment_name,
+                    payload.benchmark,
+                    payload.sanitizer,
+                    payload.source_mode,
+                    payload.use_inc_build,
+                )
         else:
             _try_lazy_load_builds(
-                payload.experiment_name, payload.benchmark, payload.sanitizer
+                payload.experiment_name,
+                payload.benchmark,
+                payload.sanitizer,
+                payload.source_mode,
+                payload.use_inc_build,
             )
 
     if cache_key not in _built_results:

@@ -323,7 +323,7 @@ def test_dispatcher_assigns_ready_verify_to_least_loaded_live_evaluator() -> Non
     assert mock_queue_cls.call_args.args[0] == "crsbench_exp-test_eval-2_verify"
 
 
-def test_dispatcher_keeps_hot_lineage_on_current_owner_for_verify() -> None:
+def test_dispatcher_rebalances_hot_pov_lineage_to_least_loaded_evaluator() -> None:
     from crsbench.distributed.evaluator_dispatcher import EvaluatorDispatcher
 
     redis_conn = _FakeRedis()
@@ -407,6 +407,112 @@ def test_dispatcher_keeps_hot_lineage_on_current_owner_for_verify() -> None:
             state="ready",
             build_request_ids=[build_request_id],
             payload={"trial_id": "trial-2"},
+        )
+    )
+
+    dispatcher = EvaluatorDispatcher(
+        redis_conn=redis_conn,
+        experiment_name="exp-test",
+        evaluator_id="eval-2",
+    )
+
+    with patch("crsbench.distributed.evaluator_dispatcher.rq.Queue") as mock_queue_cls:
+        queue = MagicMock()
+        mock_queue_cls.return_value = queue
+
+        dispatcher.dispatch_one_verify(now=now)
+
+    assert mock_queue_cls.call_args.args[0] == "crsbench_exp-test_eval-2_verify"
+
+
+def test_dispatcher_keeps_hot_patch_verify_on_current_owner() -> None:
+    from crsbench.distributed.evaluator_dispatcher import EvaluatorDispatcher
+
+    redis_conn = _FakeRedis()
+    store = DispatcherStateStore(redis_conn, experiment_name="exp-test")
+    now = time.time()
+    for evaluator_id in ("eval-1", "eval-2"):
+        store.upsert_evaluator(
+            evaluator_id=evaluator_id,
+            worker_name=evaluator_id,
+            expires_in_seconds=60,
+        )
+
+    build_request_id = "patch-build:trial-1:bench:h1:cpv-1:patch-1:deadbeef"
+    lineage_id = "patch::bench::h1::cpv-1::patch-1::address::pkgs::inc"
+    store.submit_build_request(
+        BuildRequestRecord(
+            request_id=build_request_id,
+            trial_id="trial-1",
+            benchmark="bench",
+            owner_key="owner-a",
+            lineage_id=lineage_id,
+            generation=1,
+            state="ready",
+            payload={"patch": {"patch_id": "patch-1"}},
+        )
+    )
+    store.assign_build_attempt(
+        request_id=build_request_id,
+        evaluator_id="eval-1",
+        attempt_id=f"{build_request_id}:attempt:1",
+        generation=1,
+    )
+    store.publish_build_result(
+        build_request_id,
+        BuildResultRecord(
+            request_id=build_request_id,
+            attempt_id=f"{build_request_id}:attempt:1",
+            generation=1,
+            evaluator_id="eval-1",
+            terminal_state="succeeded",
+        ),
+    )
+    store.set_lineage_owner(
+        lineage_id=lineage_id,
+        evaluator_id="eval-1",
+        generation=1,
+    )
+
+    store.submit_verify_request(
+        VerifyRequestRecord(
+            request_id="verify:trial-busy:bench:h1:pov-busy",
+            trial_id="trial-busy",
+            benchmark="bench-busy",
+            harness="h1",
+            pov_id="pov-busy",
+            owner_key="owner-busy",
+            lineage_id="busy::address::pkgs::inc",
+            generation=1,
+            state="ready",
+            build_request_ids=[],
+            payload={"trial_id": "trial-busy"},
+        )
+    )
+    store.assign_verify_attempt(
+        request_id="verify:trial-busy:bench:h1:pov-busy",
+        evaluator_id="eval-1",
+        attempt_id="verify:trial-busy:bench:h1:pov-busy:attempt:1",
+        generation=1,
+    )
+
+    store.submit_verify_request(
+        VerifyRequestRecord(
+            request_id="patch-verify:trial-2:bench:h1:cpv-1:patch-1:beadfeed",
+            trial_id="trial-2",
+            benchmark="bench",
+            harness="h1",
+            pov_id="patch-1",
+            owner_key="owner-2",
+            lineage_id=lineage_id,
+            generation=1,
+            state="ready",
+            build_request_ids=[build_request_id],
+            payload={
+                "trial_id": "trial-2",
+                "patch": {"patch_id": "patch-1"},
+                "build_patch_job_id": build_request_id,
+            },
         )
     )
 

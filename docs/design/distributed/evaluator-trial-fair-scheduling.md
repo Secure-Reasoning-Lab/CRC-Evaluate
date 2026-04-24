@@ -129,6 +129,10 @@ worker-side contracts.
   live evaluators: when a lineage is still cold for the current generation
   (no running work and no published build result), the dispatcher prefers the
   least-loaded live evaluator for the target class
+- async POV verify keeps that least-loaded placement even after the lineage is
+  hot for the current generation; correctness comes from build gating plus
+  evaluator-side hydration or local rebuild on cache miss rather than from
+  sticky evaluator ownership
 - evaluator-local build/verify queues are execution-only queues; after
   dispatcher placement, local supervisors execute the already-selected work but
   do not define global owner turns
@@ -140,9 +144,10 @@ worker-side contracts.
   unmet required build, the evaluator stops issuing new warmup jobs until that
   required-build demand clears; already queued or running warmup work is not
   canceled
-- verify placement must respect lineage locality: the authoritative evaluator is
-  the one that owns the current build generation for that lineage
-- once a lineage has current-generation running work or a published build
+- patch verify placement must respect lineage locality: the authoritative
+  evaluator is the one that owns the current patched build generation for that
+  lineage
+- once a patch lineage has current-generation running work or a published build
   result, dispatcher placement must remain sticky to that evaluator until a
   failure/requeue advances the lineage generation
 - dead-evaluator recovery must requeue local build work, increment affected
@@ -225,8 +230,9 @@ worker-side contracts.
 
 ## Risks and Validation
 
-- regression risk: verify work could accidentally bypass missing build context
-  if dependency admission and scheduler admission diverge
+- regression risk: patch verify could accidentally bypass required local build
+  context, or POV verify could fail to rebuild after a non-local cache miss, if
+  dependency admission and runtime hydration diverge
 - regression risk: claim/requeue paths could silently drop a queued job or skew
   local fair-turn state after transient failures
 - distributed risk: restart reconciliation could miss queued jobs if the
@@ -243,9 +249,9 @@ Validation should cover:
   recovery edges
 - the bounded TLA+ model preserves abstract no-silent-loss safety and owner
   no-starvation under transient claim failures
-- the dispatcher locality TLA+ model preserves verify-on-current-owner routing
-  and rejects stale late publication from superseded attempts while also
-  fencing new warmup dispatch once required build demand exists
+- the dispatcher locality TLA+ model preserves locality-required verify routing
+  when enabled, rejects stale late publication from superseded attempts, and
+  fences new warmup dispatch once required build demand exists
 
 ## Implementation Pointers
 
