@@ -196,6 +196,95 @@ def test_dispatcher_dispatches_build_requests_to_local_build_queue() -> None:
     queue.enqueue.assert_called_once()
 
 
+def test_dispatcher_build_enqueue_uses_rq_safe_job_id() -> None:
+    from crsbench.distributed.evaluator_dispatcher import EvaluatorDispatcher
+
+    redis_conn = _FakeRedis()
+    store = DispatcherStateStore(redis_conn, experiment_name="exp-test")
+    store.upsert_evaluator(
+        evaluator_id="eval-1",
+        worker_name="eval-1",
+        expires_in_seconds=60,
+    )
+    store.submit_build_request(
+        BuildRequestRecord(
+            request_id="build:trial-1:bench:0",
+            trial_id="trial-1",
+            benchmark="bench",
+            owner_key="ownerA",
+            lineage_id="bench::address::pkgs::inc",
+            generation=1,
+            state="ready",
+            payload={"_job_class": "BuildSingleVariantJob"},
+        )
+    )
+
+    dispatcher = EvaluatorDispatcher(
+        redis_conn=redis_conn,
+        experiment_name="exp-test",
+        evaluator_id="eval-1",
+    )
+
+    with patch("crsbench.distributed.evaluator_dispatcher.rq.Queue") as mock_queue_cls:
+        queue = MagicMock()
+        mock_queue_cls.return_value = queue
+
+        dispatcher.dispatch_one_build(now=time.time())
+
+    enqueue_args = queue.enqueue.call_args
+    payload = enqueue_args.args[1]
+    assert payload["attempt_id"] == "build:trial-1:bench:0:attempt:1"
+    assert enqueue_args.kwargs["job_id"] != payload["attempt_id"]
+    assert ":" not in enqueue_args.kwargs["job_id"]
+
+
+def test_dispatcher_verify_enqueue_uses_rq_safe_job_id() -> None:
+    from crsbench.distributed.evaluator_dispatcher import EvaluatorDispatcher
+
+    redis_conn = _FakeRedis()
+    store = DispatcherStateStore(redis_conn, experiment_name="exp-test")
+    store.upsert_evaluator(
+        evaluator_id="eval-1",
+        worker_name="eval-1",
+        expires_in_seconds=60,
+    )
+    store.submit_verify_request(
+        VerifyRequestRecord(
+            request_id="verify:trial-1:bench:h1:pov-file:deadbeef",
+            trial_id="trial-1",
+            benchmark="bench",
+            harness="h1",
+            pov_id="pov-file:deadbeef",
+            owner_key="ownerA",
+            lineage_id="bench::address::pkgs::inc",
+            generation=1,
+            state="ready",
+            build_request_ids=[],
+            payload={"trial_id": "trial-1"},
+        )
+    )
+
+    dispatcher = EvaluatorDispatcher(
+        redis_conn=redis_conn,
+        experiment_name="exp-test",
+        evaluator_id="eval-1",
+    )
+
+    with patch("crsbench.distributed.evaluator_dispatcher.rq.Queue") as mock_queue_cls:
+        queue = MagicMock()
+        mock_queue_cls.return_value = queue
+
+        dispatcher.dispatch_one_verify(now=time.time())
+
+    enqueue_args = queue.enqueue.call_args
+    payload = enqueue_args.args[1]
+    assert (
+        payload["attempt_id"] == "verify:trial-1:bench:h1:pov-file:deadbeef:attempt:1"
+    )
+    assert enqueue_args.kwargs["job_id"] != payload["attempt_id"]
+    assert ":" not in enqueue_args.kwargs["job_id"]
+
+
 def test_dead_evaluator_reblocks_requests_and_advances_generation() -> None:
     from crsbench.distributed.evaluator_dispatcher import EvaluatorDispatcher
 

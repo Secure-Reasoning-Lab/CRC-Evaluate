@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import socket
 import threading
 import time
@@ -26,6 +27,12 @@ DISPATCHER_LEASE_TTL_SECONDS = 15
 DISPATCHER_POLL_INTERVAL_SECONDS = 1.0
 
 logger = get_logger(__name__)
+
+
+def _build_dispatcher_rq_job_id(attempt_id: str) -> str:
+    """Encode a logical dispatcher attempt id into an RQ-safe wrapper job id."""
+    encoded = base64.urlsafe_b64encode(attempt_id.encode("utf-8")).decode("ascii")
+    return f"dispatcher-attempt/{encoded.rstrip('=')}"
 
 
 def build_evaluator_id(worker_name: str | None) -> str:
@@ -236,7 +243,7 @@ class EvaluatorDispatcher:
                 "ci_job_payload": dict(request.payload),
             },
             result_ttl=-1,
-            job_id=attempt_id,
+            job_id=_build_dispatcher_rq_job_id(attempt_id),
         )
 
     def _enqueue_verify_attempt(
@@ -263,7 +270,7 @@ class EvaluatorDispatcher:
                 "verify_payload": dict(request.payload),
             },
             result_ttl=-1,
-            job_id=attempt_id,
+            job_id=_build_dispatcher_rq_job_id(attempt_id),
         )
 
     def handle_dead_evaluators(self, *, now: float) -> None:
