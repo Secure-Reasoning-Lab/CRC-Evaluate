@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 from crsbench.distributed.evaluator_dispatcher_state import (
     BuildRequestRecord,
@@ -50,6 +52,37 @@ class _FakeRedis:
                 self.hdel(key, field)
             results.append(value)
         return results
+
+
+class _LeaseExpiryBoundaryRedis(_FakeRedis):
+    """Fake Redis that exposes split-brain if lease acquisition is not atomic."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._read_barrier = threading.Barrier(2)
+        self._eval_lock = threading.Lock()
+
+    def hget(self, key: str, field: str) -> str | None:
+        value = super().hget(key, field)
+        if key.endswith(":lease") and field == "expires_at":
+            self._read_barrier.wait(timeout=1.0)
+        return value
+
+    def eval(self, script: str, numkeys: int, *keys_and_args: str) -> int:
+        with self._eval_lock:
+            assert numkeys == 1
+            lease_key = keys_and_args[0]
+            evaluator_id = keys_and_args[1]
+            now = float(keys_and_args[2])
+            ttl_seconds = float(keys_and_args[3])
+            current_holder = super().hget(lease_key, "holder")
+            current_expires = super().hget(lease_key, "expires_at")
+            if current_holder is not None and current_expires is not None:
+                if float(current_expires) > now and current_holder != evaluator_id:
+                    return 0
+            super().hset(lease_key, "holder", evaluator_id)
+            super().hset(lease_key, "expires_at", str(now + ttl_seconds))
+            return 1
 
 
 def test_submit_and_load_verify_request() -> None:
@@ -165,6 +198,38 @@ def test_poll_verify_results_rejects_eval_length_mismatch() -> None:
 
     with pytest.raises(ValueError, match="dispatcher verify poll returned 1 results"):
         store.poll_verify_results(["req-1", "req-2"])
+
+
+def test_try_acquire_dispatcher_lease_is_atomic_across_expiry_boundary() -> None:
+    redis_conn = _LeaseExpiryBoundaryRedis()
+    lease_key = "crsbench:dispatcher:exp-1:lease"
+    redis_conn.hset(lease_key, "holder", "stale-eval")
+    redis_conn.hset(lease_key, "expires_at", "1.0")
+
+    first = DispatcherStateStore(redis_conn, experiment_name="exp-1")
+    second = DispatcherStateStore(redis_conn, experiment_name="exp-1")
+    outcomes: dict[str, bool] = {}
+
+    def _attempt(store: DispatcherStateStore, evaluator_id: str) -> None:
+        outcomes[evaluator_id] = store.try_acquire_dispatcher_lease(
+            evaluator_id,
+            now=10.0,
+        )
+
+    threads = [
+        threading.Thread(target=_attempt, args=(first, "eval-1")),
+        threading.Thread(target=_attempt, args=(second, "eval-2")),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert sorted(outcomes.values()) == [False, True]
+    winner = next(
+        evaluator_id for evaluator_id, acquired in outcomes.items() if acquired
+    )
+    assert redis_conn.hget(lease_key, "holder") == winner
 
 
 def test_build_attempt_is_current_decodes_redis_bytes() -> None:
