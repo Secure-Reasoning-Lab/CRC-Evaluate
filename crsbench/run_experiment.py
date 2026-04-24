@@ -843,6 +843,13 @@ def generate_trial_matrix(
     trials = []
     config_mode = config.mode.value  # Get string value from enum
 
+    pov_from_experiment = config.inputs.pov.from_experiment
+    external_pov_source = None
+    if pov_from_experiment is not None:
+        from crsbench.evaluation.external_pov_source import ExternalPovSource
+
+        external_pov_source = ExternalPovSource(pov_from_experiment)
+
     for crs in oss_crs_registry:
         crs_trial_streams: list[list[Trial]] = []
         # CRS entries are resolved directly from registry.
@@ -915,8 +922,25 @@ def generate_trial_matrix(
                             )
                             continue
                     if is_bug_fixing and harness and harness.vulns:
+                        allowed_cpvs = target_cpv_set
+                        if external_pov_source is not None:
+                            found = external_pov_source.list_found_cpvs(
+                                benchmark=benchmark_harness.name,
+                                harness=benchmark_harness.harness.name,
+                                sanitizer=sanitizer.value,
+                            )
+                            if allowed_cpvs is None:
+                                allowed_cpvs = found
+                            else:
+                                allowed_cpvs = allowed_cpvs & found
+                            logger.info(
+                                f"{benchmark_harness.name}/"
+                                f"{benchmark_harness.harness.name}/{sanitizer.value}: "
+                                f"source experiment found {len(found)} CPVs; "
+                                f"scheduling {len(allowed_cpvs)} bug-fixing CPV trial(s)"
+                            )
                         matched_cpvs = _filter_matched_cpvs(
-                            harness, sanitizer.value, target_cpv_set
+                            harness, sanitizer.value, allowed_cpvs
                         )
 
                         if not matched_cpvs:

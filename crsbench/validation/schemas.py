@@ -3048,6 +3048,14 @@ class ExperimentPovInputs(BaseModel):
         description="Maximum POV variants per CPV when POV inputs are enabled. "
         "None means all available variants.",
     )
+    from_experiment: Optional[Path] = Field(
+        default=None,
+        description="Path to a prior bug-finding experiment directory "
+        "(``<experiment_filestore>/<experiment_name>``) whose discovered POVs "
+        "should be staged as bug-fixing inputs instead of benchmark ground truth. "
+        "Only valid for task='bugfixing'. When set, CPVs absent from the source "
+        "experiment are skipped and POVs are deduplicated by crash signature.",
+    )
 
 
 class ExperimentSarifInputs(BaseModel):
@@ -3853,7 +3861,21 @@ class ExperimentConfig(BaseModel):
         - bug-fixing  → True   (POV inputs are the normal workflow)
 
         Explicitly enabling POV inputs for bug-finding is always an error.
+
+        When ``inputs.pov.from_experiment`` is set, the task must be
+        ``bugfixing`` (otherwise we would be feeding ground-truth-adjacent data
+        into a bug-finding run) and POV staging is force-enabled.
         """
+        from_experiment = self.inputs.pov.from_experiment
+
+        if from_experiment is not None and self.task != "bugfixing":
+            raise ValueError(
+                "inputs.pov.from_experiment is only valid for task='bugfixing'. "
+                "It chains a prior bug-finding experiment's discovered POVs into "
+                "a bug-fixing run; using it with bug-finding would short-circuit "
+                "discovery."
+            )
+
         if self.inputs.pov.enabled is None:
             if self.task == "bugfixing":
                 self.inputs.pov.enabled = True
@@ -3865,6 +3887,11 @@ class ExperimentConfig(BaseModel):
                 "POV inputs stage ground-truth crash blobs that short-circuit "
                 "bug-finding evaluation. Disable POV inputs or change the task type."
             )
+
+        if from_experiment is not None and not self.inputs.pov.enabled:
+            # from_experiment implies we must stage POVs; enforce explicitly.
+            self.inputs.pov.enabled = True
+
         return self
 
     @model_validator(mode="after")
@@ -3891,6 +3918,13 @@ class ExperimentConfig(BaseModel):
         # Optional path field
         if self.results_filestore and not self.results_filestore.is_absolute():
             self.results_filestore = self.results_filestore.resolve()
+
+        # Bug-fixing POV source experiment (Optional path field)
+        if (
+            self.inputs.pov.from_experiment is not None
+            and not self.inputs.pov.from_experiment.is_absolute()
+        ):
+            self.inputs.pov.from_experiment = self.inputs.pov.from_experiment.resolve()
 
         # Compose-level optional path field
         if (

@@ -113,6 +113,43 @@ and may lag by up to one snapshot cycle. The policy is inert when no trial
 budget is configured. Budget enforcement must never fail a trial on
 polling errors; tracker-side failures are logged and ignored.
 
+## Chained Bug-finding → Bug-fixing Input
+
+Bug-fixing trials can be seeded with POVs discovered by a prior bug-finding
+experiment instead of the benchmark's ground-truth blobs. This enables a
+first-pass "full pipeline" where bug-finding runs first, producing POVs under
+its experiment store, and a subsequent bug-fixing run consumes those POVs.
+
+Contract:
+
+- Opt in via `inputs.pov.from_experiment: <path>` in the bug-fixing config,
+  pointing at a prior bug-finding experiment directory
+  (`<experiment_filestore>/<experiment_name>`). Only valid when
+  `task: bugfixing`; invalid for bug-finding.
+- CPVs absent from the source experiment are skipped at trial-matrix
+  generation time — no bug-fixing trial is scheduled for an undiscovered CPV.
+- POVs are deduplicated by crash signature (same algorithm as
+  `crsbench benchmark dedup-povs`): prefer the `crash_signature` recorded in
+  `pov_store.json`, fall back to `parse_crash_signature` on the associated
+  crash log, and conservatively keep POVs whose signature cannot be parsed.
+  Earliest `discovery_ts` wins within a signature bucket.
+- `inputs.pov.max_variants_per_cpv` continues to cap how many deduped variants
+  are staged per CPV.
+- Staging layout matches ground-truth bug-fixing (`trial/crs-input/povs/`,
+  `trial/crs-input/cpvs/<cpv>/`, `trial/povs/`), so downstream adapters see
+  the same shape regardless of POV provenance.
+
+Scope: v1 is local-only. The `from_experiment` path must be readable from the
+orchestrator process. For distributed/cloud runs the path must live on a
+shared filestore accessible to workers; an orchestrator-side bundling path is
+a planned follow-up.
+
+Implementation pointers:
+
+- `crsbench/evaluation/external_pov_source.py` — reads and dedups POVs.
+- `crsbench/evaluation/runner.py` — `_prepare_bugfix_inputs_from_experiment`.
+- `crsbench/run_experiment.py` — `generate_trial_matrix` CPV filter.
+
 ## Decisions and Tradeoffs
 
 - decision: keep evaluation centered on an adapter lifecycle
