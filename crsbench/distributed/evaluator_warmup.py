@@ -20,25 +20,20 @@ from crsbench.distributed.evaluator_scheduler import (
 from crsbench.distributed.queue import create_redis_connection
 from crsbench.utils.benchmark_utils import filter_benchmarks_by_mode
 from crsbench.utils.logger import get_logger
-from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
 logger = get_logger(__name__)
 
 DISPATCHER_WARMUP_POLL_INTERVAL_SECONDS = 1.0
+WARMUP_BUILD_JOB_TIMEOUT_SECONDS = 3600
 
 
 class _ModeProtocol(Protocol):
     value: str
 
 
-class _ResourcesProtocol(Protocol):
-    cpu_tag: str | None
-
-
 class WarmupConfigProtocol(Protocol):
     benchmarks_root: Path | str
     mode: _ModeProtocol
-    resources: _ResourcesProtocol | None
 
     def get_benchmark_list(self) -> list[str]: ...
 
@@ -68,18 +63,20 @@ class DispatcherWarmupFeeder:
     ) -> None:
         self.build_queue = build_queue
         self.state_store = state_store
-        self.warmup_specs = warmup_specs
+        self.warmup_specs = list(warmup_specs)
         self.build_capacity = max(1, int(build_capacity))
         self._next_spec_index = 0
 
     def _current_backlog(self) -> int:
-        queued = int(self.build_queue.count)
+        queued = len(list(self.build_queue.get_job_ids()))
         intermediate = len(list(self.build_queue.intermediate_queue.get_job_ids()))
-        started = int(self.build_queue.started_job_registry.count)
+        started = len(list(self.build_queue.started_job_registry.get_job_ids()))
         return queued + intermediate + started
 
     def tick(self) -> int:
         """Queue at most spare-capacity warmup jobs when no required demand exists."""
+        if self._next_spec_index >= len(self.warmup_specs):
+            return 0
         if self.state_store.has_pending_required_builds():
             return 0
 
@@ -97,17 +94,18 @@ class DispatcherWarmupFeeder:
                 self.build_queue.enqueue(
                     "crsbench.distributed.build_jobs.execute_ci_build",
                     spec.payload,
-                    job_timeout=3600,
+                    job_timeout=WARMUP_BUILD_JOB_TIMEOUT_SECONDS,
                     result_ttl=-1,
                     job_id=spec.job_id,
-                    meta=spec.meta,
+                    meta=dict(spec.meta),
                 )
                 enqueued += 1
             except Exception as exc:
                 if _is_duplicate_job_enqueue_error(exc):
                     continue
                 logger.exception(
-                    "Failed to enqueue dispatcher warmup job {}", spec.job_id
+                    "Failed to enqueue dispatcher warmup job {}",
+                    spec.job_id,
                 )
                 raise
         return enqueued
@@ -117,6 +115,7 @@ def build_dispatcher_warmup_specs(
     config: WarmupConfigProtocol,
     *,
     experiment_name: str,
+    oss_fuzz_path: Path,
     inc_image_policy: str,
     inc_image_registry: str,
     inc_image_max_pull_bytes: int | None,
@@ -137,14 +136,9 @@ def build_dispatcher_warmup_specs(
         )
 
     planner = VariantPlanner(
-        Path(ensure_oss_fuzz_root()),
+        oss_fuzz_path,
         source_mode=getattr(config, "source_mode", "pkgs"),
     )
-
-    cpu_tag = getattr(getattr(config, "resources", None), "cpu_tag", None)
-    base_meta: dict[str, Any] = {"experiment_name": experiment_name}
-    if cpu_tag:
-        base_meta["cpu_tag"] = cpu_tag
 
     specs: list[WarmupBuildSpec] = []
     for name in benchmark_names:
@@ -163,16 +157,18 @@ def build_dispatcher_warmup_specs(
             local_image_prefix=local_image_prefix,
         )
         for job in jobs:
-            meta = dict(base_meta)
-            meta[SCHEDULER_OWNER_KEY_META] = build_scheduler_owner_key_for_ci_job(
-                job,
-                experiment_name=experiment_name,
-            )
             specs.append(
                 WarmupBuildSpec(
                     job_id=job.job_id,
                     payload=serialize_ci_job(job),
-                    meta=meta,
+                    meta={
+                        "experiment_name": experiment_name,
+                        "warmup": "true",
+                        SCHEDULER_OWNER_KEY_META: build_scheduler_owner_key_for_ci_job(
+                            job,
+                            experiment_name=experiment_name,
+                        ),
+                    },
                 )
             )
     return specs
@@ -183,8 +179,10 @@ def start_dispatcher_warmup_thread(
     redis_host: str,
     config: WarmupConfigProtocol,
     experiment_name: str,
+    evaluator_id: str,
     build_queue_name: str,
-    build_capacity: int,
+    build_jobs: int,
+    oss_fuzz_path: Path,
     inc_image_policy: str,
     inc_image_registry: str,
     inc_image_max_pull_bytes: int | None,
@@ -196,30 +194,30 @@ def start_dispatcher_warmup_thread(
     warmup_specs = build_dispatcher_warmup_specs(
         config,
         experiment_name=experiment_name,
+        oss_fuzz_path=oss_fuzz_path,
         inc_image_policy=inc_image_policy,
         inc_image_registry=inc_image_registry,
         inc_image_max_pull_bytes=inc_image_max_pull_bytes,
         inc_image_pull_timeout=inc_image_pull_timeout,
         local_image_prefix=local_image_prefix,
     )
+    logger.info(f"Dispatcher warmup: planned {len(warmup_specs)} local build jobs")
+
     redis_conn = create_redis_connection(redis_host)
-    state_store = DispatcherStateStore(
-        cast("DispatcherStateRedisProtocol", redis_conn),
-        experiment_name=experiment_name,
-    )
     feeder = DispatcherWarmupFeeder(
         build_queue=rq.Queue(build_queue_name, connection=redis_conn),
-        state_store=state_store,
+        state_store=DispatcherStateStore(
+            cast("DispatcherStateRedisProtocol", redis_conn),
+            experiment_name=experiment_name,
+        ),
         warmup_specs=warmup_specs,
-        build_capacity=build_capacity,
+        build_capacity=build_jobs,
     )
 
     stop_event = threading.Event()
 
     def _loop() -> None:
         while True:
-            if stop_event.is_set():
-                return
             try:
                 feeder.tick()
             except Exception:
@@ -229,7 +227,7 @@ def start_dispatcher_warmup_thread(
 
     thread = threading.Thread(
         target=_loop,
-        name=f"dispatcher-warmup-{experiment_name}",
+        name=f"dispatcher-warmup-{evaluator_id}",
         daemon=True,
     )
     thread.start()

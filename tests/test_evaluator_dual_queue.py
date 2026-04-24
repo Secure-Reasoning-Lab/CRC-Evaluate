@@ -116,7 +116,7 @@ class TestRunEvaluatorMain:
         mock_start_dispatcher_thread.assert_called_once()
         mock_start_dispatcher_warmup_thread.assert_called_once()
         warmup_kwargs = mock_start_dispatcher_warmup_thread.call_args.kwargs
-        assert warmup_kwargs["build_capacity"] == 1
+        assert warmup_kwargs["build_jobs"] == 1
         assert warmup_kwargs["build_queue_name"] == "crsbench_exp-test_eval-1_build"
         presence_stop.set.assert_called_once()
         presence_thread.join.assert_called_once_with(timeout=1)
@@ -124,6 +124,50 @@ class TestRunEvaluatorMain:
         dispatcher_thread.join.assert_called_once_with(timeout=1)
         warmup_stop.set.assert_called_once()
         warmup_thread.join.assert_called_once_with(timeout=1)
+
+    @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
+    @patch("crsbench.distributed.evaluator._enqueue_pre_builds")
+    @patch("crsbench.distributed.ci_supervisor.run_ci_supervisor")
+    @patch("crsbench.distributed.evaluator.start_dispatcher_warmup_thread")
+    @patch("crsbench.distributed.evaluator.start_dispatcher_thread")
+    @patch("crsbench.distributed.evaluator.create_redis_connection")
+    @patch("crsbench.distributed.evaluator.start_presence_thread")
+    @patch("crsbench.distributed.evaluator_jobs.set_engine")
+    def test_dispatcher_mode_uses_warmup_thread_instead_of_legacy_prebuilds(
+        self,
+        mock_set_engine: MagicMock,
+        mock_start_presence_thread: MagicMock,
+        mock_create_redis_connection: MagicMock,
+        mock_start_dispatcher_thread: MagicMock,
+        mock_start_dispatcher_warmup_thread: MagicMock,
+        mock_supervisor: MagicMock,
+        mock_enqueue_pre_builds: MagicMock,
+        monkeypatch,
+    ) -> None:
+        from crsbench.distributed.evaluator import run_evaluator_main
+
+        mock_supervisor.return_value = 0
+        mock_start_presence_thread.return_value = (MagicMock(), MagicMock())
+        mock_create_redis_connection.return_value = MagicMock()
+        mock_start_dispatcher_thread.return_value = (MagicMock(), MagicMock())
+        mock_start_dispatcher_warmup_thread.return_value = (MagicMock(), MagicMock())
+        monkeypatch.setenv("CRSBENCH_EVALUATOR_ROUTING_MODEL", "dispatcher")
+        config = MagicMock()
+        config.oss_fuzz_path = "/tmp/oss-fuzz"
+        config.per_pov_verify_timeout = 180
+
+        with patch("crsbench.evaluation.verification.pov.engine.VerificationEngine"):
+            result = run_evaluator_main(
+                config,
+                "exp-test",
+                worker_name="eval-1",
+                build_jobs=2,
+            )
+
+        assert result == 0
+        mock_start_dispatcher_warmup_thread.assert_called_once()
+        assert mock_start_dispatcher_warmup_thread.call_args.kwargs["build_jobs"] == 2
+        mock_enqueue_pre_builds.assert_not_called()
 
     def test_no_build_workers_parameter(self) -> None:
         """run_evaluator_main no longer has build_workers parameter."""
