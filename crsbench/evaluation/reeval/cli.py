@@ -721,6 +721,83 @@ def _write_async_patch_logs(dest_dir: Path, result: dict) -> None:
         target.write_text(content)
 
 
+def _prepare_async_pov_build_prereqs(
+    *,
+    benchmark_name: str,
+    experiment_name: str,
+    redis_host: str,
+    trial_id: str,
+    sanitizer: Optional[str],
+    use_inc_build: bool,
+) -> tuple[list[str], list[object], str] | None:
+    """Build the explicit async POV prerequisite DAG for re-eval."""
+    try:
+        from crsbench.distributed.queue import (
+            ROUTING_MODEL_DISPATCHER,
+            create_redis_connection,
+            get_evaluator_routing_model,
+        )
+        from crsbench.distributed.registry import RegistryClient
+        from crsbench.distributed.verify_queue import (
+            initialize_build_queue,
+            prepare_async_pov_build_prereqs,
+        )
+        from crsbench.evaluation.verification import VerificationEngine
+
+        redis_conn = create_redis_connection(redis_host)
+        registration = RegistryClient(redis_conn).get_experiment(experiment_name)
+        if registration is None:
+            logger.warning(
+                "Experiment registration not found in Redis: {}", experiment_name
+            )
+            return None
+
+        benchmark_path = _resolve_benchmark_path(
+            benchmark_name, Path(registration.benchmarks_root)
+        )
+        if not benchmark_path.exists():
+            logger.warning(
+                "Benchmark not found for async POV re-eval prereqs: {}", benchmark_path
+            )
+            return None
+
+        engine = VerificationEngine(
+            oss_fuzz_path=Path(ensure_oss_fuzz_root()),
+            timeout=registration.per_pov_verify_timeout,
+            source_mode=registration.source_mode,
+            inc_image_policy=registration.inc_image_policy,
+            inc_image_registry=registration.inc_image_registry,
+            inc_image_max_pull_bytes=registration.inc_image_max_pull_bytes,
+            inc_image_pull_timeout=registration.inc_image_pull_timeout_sec,
+            local_image_prefix=registration.local_image_prefix,
+        )
+        adapter = engine.load_adapter(benchmark_path)
+        if adapter is None:
+            logger.warning(
+                "Failed to load benchmark adapter for async POV re-eval: {}",
+                benchmark_path,
+            )
+            return None
+
+        build_queue = None
+        if get_evaluator_routing_model() != ROUTING_MODEL_DISPATCHER:
+            build_queue = initialize_build_queue(redis_host, experiment_name)
+
+        return prepare_async_pov_build_prereqs(
+            redis_host=redis_host,
+            experiment_name=experiment_name,
+            trial_id=trial_id,
+            engine=engine,
+            adapter=adapter,
+            build_queue=build_queue,
+            sanitizer=sanitizer,
+            use_inc_build=use_inc_build,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to prepare async POV build prereqs: {e}")
+        return None
+
+
 def _enqueue_trial_povs(
     trial_dir: Path,
     benchmark_name: str,
@@ -772,6 +849,21 @@ def _enqueue_trial_povs(
         dest_dir=dest_dir,
     )
     trial_id = state.trial_id
+    build_prereqs = _prepare_async_pov_build_prereqs(
+        benchmark_name=benchmark_name,
+        experiment_name=experiment_name,
+        redis_host=redis_host or "",
+        trial_id=trial_id,
+        sanitizer=sanitizer,
+        use_inc_build=use_inc_build,
+    )
+    if build_prereqs is None:
+        logger.warning(
+            "Skipping async POV enqueue for trial {}: build prereqs unavailable",
+            trial_id,
+        )
+        return None
+    build_job_ids, build_dependencies, resolved_sanitizer = build_prereqs
 
     for pov_file in pov_files:
         pov_data = pov_file.read_bytes()
@@ -796,7 +888,9 @@ def _enqueue_trial_povs(
             pov_id=pov_id,
             pov_data=pov_data,
             redis_host=redis_host,
-            sanitizer=sanitizer,
+            sanitizer=resolved_sanitizer,
+            build_job_ids=build_job_ids,
+            depends_on=build_dependencies or None,
             source_mode=source_mode,
             use_inc_build=use_inc_build,
         )

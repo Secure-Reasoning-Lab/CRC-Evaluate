@@ -17,6 +17,7 @@ from crsbench.evaluation.reeval.cli import (
     _enqueue_trial_povs,
     _load_experiment_config,
     _load_target_cpv_id_from_trial_metadata,
+    _prepare_async_pov_build_prereqs,
     _reeval_bug_finding,
     _reeval_patch_generation,
     _resolve_benchmark_path,
@@ -1942,10 +1943,17 @@ def test_enqueue_trial_povs_passes_redis_host_to_dispatcher_enqueue(
     pov_dir.mkdir(parents=True)
     (pov_dir / "a.blob").write_bytes(b"blob")
 
-    with patch(
-        "crsbench.distributed.verify_queue.enqueue_single_pov",
-        return_value="verify:trial-1:bench:h:a.blob:deadbeef",
-    ) as mock_enqueue:
+    with (
+        patch(
+            "crsbench.evaluation.reeval.cli._prepare_async_pov_build_prereqs",
+            return_value=(["build-1"], [], "address"),
+            create=True,
+        ),
+        patch(
+            "crsbench.distributed.verify_queue.enqueue_single_pov",
+            return_value="verify:trial-1:bench:h:a.blob:deadbeef",
+        ) as mock_enqueue,
+    ):
         state = _enqueue_trial_povs(
             trial_dir=trial_dir,
             benchmark_name="bench",
@@ -1962,6 +1970,87 @@ def test_enqueue_trial_povs_passes_redis_host_to_dispatcher_enqueue(
     assert mock_enqueue.call_args.kwargs["redis_host"] == "redis.local"
 
 
+def test_prepare_async_pov_build_prereqs_uses_runtime_registration(
+    tmp_path: Path,
+) -> None:
+    benchmarks_root = tmp_path / "benchmarks"
+    benchmark_path = benchmarks_root / "bench"
+    benchmark_path.mkdir(parents=True)
+    oss_fuzz_path = tmp_path / "oss-fuzz"
+    expected = (["build-1"], [], "address")
+    registration = SimpleNamespace(
+        benchmarks_root=str(benchmarks_root),
+        per_pov_verify_timeout=321,
+        source_mode="main_repo",
+        inc_image_policy="always",
+        inc_image_registry="ghcr.io/example",
+        inc_image_max_pull_bytes=123,
+        inc_image_pull_timeout_sec=45,
+        local_image_prefix="local-prefix",
+    )
+    mock_engine = MagicMock()
+    mock_adapter = MagicMock()
+    mock_engine.load_adapter.return_value = mock_adapter
+
+    with (
+        patch(
+            "crsbench.evaluation.reeval.cli.ensure_oss_fuzz_root",
+            return_value=str(oss_fuzz_path),
+        ),
+        patch(
+            "crsbench.distributed.queue.create_redis_connection",
+            return_value=MagicMock(),
+        ),
+        patch("crsbench.distributed.registry.RegistryClient") as mock_registry_cls,
+        patch(
+            "crsbench.evaluation.verification.VerificationEngine",
+            return_value=mock_engine,
+        ) as mock_engine_cls,
+        patch(
+            "crsbench.distributed.verify_queue.initialize_build_queue",
+            return_value="build-queue",
+        ) as mock_init_build_queue,
+        patch(
+            "crsbench.distributed.verify_queue.prepare_async_pov_build_prereqs",
+            return_value=expected,
+        ) as mock_prepare,
+    ):
+        mock_registry_cls.return_value.get_experiment.return_value = registration
+
+        result = _prepare_async_pov_build_prereqs(
+            benchmark_name="bench",
+            experiment_name="exp1",
+            redis_host="redis.local",
+            trial_id="trial-1",
+            sanitizer="address",
+            use_inc_build=False,
+        )
+
+    assert result == expected
+    mock_engine_cls.assert_called_once_with(
+        oss_fuzz_path=oss_fuzz_path,
+        timeout=321,
+        source_mode="main_repo",
+        inc_image_policy="always",
+        inc_image_registry="ghcr.io/example",
+        inc_image_max_pull_bytes=123,
+        inc_image_pull_timeout=45,
+        local_image_prefix="local-prefix",
+    )
+    mock_engine.load_adapter.assert_called_once_with(benchmark_path)
+    mock_init_build_queue.assert_called_once_with("redis.local", "exp1")
+    mock_prepare.assert_called_once_with(
+        redis_host="redis.local",
+        experiment_name="exp1",
+        trial_id="trial-1",
+        engine=mock_engine,
+        adapter=mock_adapter,
+        build_queue="build-queue",
+        sanitizer="address",
+        use_inc_build=False,
+    )
+
+
 def test_enqueue_trial_povs_passes_source_mode_and_inc_build(
     tmp_path: Path,
 ) -> None:
@@ -1970,10 +2059,17 @@ def test_enqueue_trial_povs_passes_source_mode_and_inc_build(
     pov_dir.mkdir(parents=True)
     (pov_dir / "a.blob").write_bytes(b"blob")
 
-    with patch(
-        "crsbench.distributed.verify_queue.enqueue_single_pov",
-        return_value="verify:trial-1:bench:h:a.blob:deadbeef",
-    ) as mock_enqueue:
+    with (
+        patch(
+            "crsbench.evaluation.reeval.cli._prepare_async_pov_build_prereqs",
+            return_value=(["build-1"], [MagicMock(id="build-1")], "address"),
+            create=True,
+        ),
+        patch(
+            "crsbench.distributed.verify_queue.enqueue_single_pov",
+            return_value="verify:trial-1:bench:h:a.blob:deadbeef",
+        ) as mock_enqueue,
+    ):
         state = _enqueue_trial_povs(
             trial_dir=trial_dir,
             benchmark_name="bench",
@@ -1990,6 +2086,39 @@ def test_enqueue_trial_povs_passes_source_mode_and_inc_build(
     assert state is not None
     assert mock_enqueue.call_args.kwargs["source_mode"] == "main_repo"
     assert mock_enqueue.call_args.kwargs["use_inc_build"] is False
+    assert mock_enqueue.call_args.kwargs["build_job_ids"] == ["build-1"]
+    assert len(mock_enqueue.call_args.kwargs["depends_on"]) == 1
+
+
+def test_enqueue_trial_povs_skips_verify_enqueue_without_build_prereqs(
+    tmp_path: Path,
+) -> None:
+    trial_dir = tmp_path / "trial-1"
+    pov_dir = trial_dir / "output" / "povs"
+    pov_dir.mkdir(parents=True)
+    (pov_dir / "a.blob").write_bytes(b"blob")
+
+    with (
+        patch(
+            "crsbench.evaluation.reeval.cli._prepare_async_pov_build_prereqs",
+            return_value=None,
+            create=True,
+        ),
+        patch("crsbench.distributed.verify_queue.enqueue_single_pov") as mock_enqueue,
+    ):
+        state = _enqueue_trial_povs(
+            trial_dir=trial_dir,
+            benchmark_name="bench",
+            harness="h",
+            dest_dir=tmp_path / "out",
+            verify_queue=MagicMock(),
+            experiment_name="exp1",
+            redis_host="redis.local",
+            sanitizer="address",
+        )
+
+    assert state is None
+    mock_enqueue.assert_not_called()
 
 
 def test_reeval_bug_finding_passes_inc_image_runtime_settings(tmp_path: Path) -> None:

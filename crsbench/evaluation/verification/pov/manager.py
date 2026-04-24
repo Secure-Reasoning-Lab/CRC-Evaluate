@@ -256,203 +256,44 @@ class POVVerificationManager:
             )
             return None
 
-        try:
-            from crsbench.benchmark_ci.jobs.flat import (
-                BuildSingleVariantJob,
-                PrepareIncImageJob,
-            )
-            from crsbench.distributed.ci_jobs import serialize_ci_job
-            from crsbench.distributed.queue import (
-                ROUTING_MODEL_DISPATCHER,
-                get_evaluator_routing_model,
-            )
-            from crsbench.distributed.verify_queue import (
-                build_variant_rq_job_id,
-                enqueue_ci_job,
-                submit_async_build_requests,
-            )
+        from crsbench.distributed.queue import (
+            ROUTING_MODEL_DISPATCHER,
+            get_evaluator_routing_model,
+        )
+        from crsbench.distributed.verify_queue import prepare_async_pov_build_prereqs
 
-            adapter = self._adapter
-            engine = self._engine
-            benchmark_path = adapter.benchmark_path
-            assert benchmark_path is not None
-            source_mode = engine.builder.source_mode
-            use_inc_build = bool(adapter.inc_build)
-            sanitizer = self._sanitizer
-            if sanitizer is None:
-                sanitizers = adapter.get_all_cpv_sanitizers()
-                sanitizer = sanitizers[0] if sanitizers else "address"
-
-            plan = engine.builder.create_build_plan(
-                benchmark_name=adapter.benchmark_name,
-                benchmark_path=benchmark_path,
-                main_repo=adapter.main_repo,
-                mode=adapter.get_mode(),
-                base_commit=adapter.get_base_commit(),
-                ref_commit=adapter.get_ref_commit(),
-                cpv_numbers=adapter.get_cpv_numbers(),
-                language=adapter.lang,
-                repo_name=adapter.repo_name,
-                include_coverage=False,
-                use_inc_build=use_inc_build,
-                sanitizer=sanitizer,
-            )
-
-            if get_evaluator_routing_model() == ROUTING_MODEL_DISPATCHER:
-                build_payloads: list[dict[str, object]] = []
-                trial_id = self._trial_id or ""
-                prepare_request_id = ""
-                if use_inc_build:
-                    from crsbench.distributed.verify_queue import (
-                        build_dispatcher_build_request_id,
-                    )
-
-                    prepare_job = PrepareIncImageJob(
-                        benchmark_path=benchmark_path,
-                        benchmark_name=adapter.benchmark_name,
-                        sanitizer=sanitizer,
-                        use_inc_build=True,
-                        source_mode=source_mode,
-                        inc_image_policy=engine.builder.infra.inc_image_policy,
-                        inc_image_registry=engine.builder.infra.inc_image_registry,
-                        inc_image_max_pull_bytes=engine.builder.infra.inc_image_max_pull_bytes,
-                        inc_image_pull_timeout=engine.builder.infra.inc_image_pull_timeout,
-                        local_image_prefix=engine.builder.infra.local_image_prefix,
-                    )
-                    build_payloads.append(serialize_ci_job(prepare_job))
-                    prepare_request_id = build_dispatcher_build_request_id(
-                        trial_id=trial_id,
-                        benchmark=adapter.benchmark_name,
-                        index=0,
-                    )
-
-                for config in plan.configs:
-                    build_job = BuildSingleVariantJob(
-                        benchmark_path=config.benchmark_path,
-                        benchmark_name=config.benchmark_name,
-                        variant_type=config.variant_type,
-                        commit=config.commit,
-                        main_repo=config.main_repo,
-                        mode=config.mode or adapter.get_mode(),
-                        language=config.language,
-                        cpv_num=config.cpv_num,
-                        patch_id=config.patch_id,
-                        pov_id=config.pov_id,
-                        patches=config.patches,
-                        use_inc_build=config.use_inc_build,
-                        source_mode=source_mode,
-                        sanitizer=config.sanitizer,
-                        repo_name=config.repo_name,
-                        prepare_inc_job_id=prepare_request_id,
-                        inc_image_policy=engine.builder.infra.inc_image_policy,
-                        inc_image_registry=engine.builder.infra.inc_image_registry,
-                        inc_image_max_pull_bytes=engine.builder.infra.inc_image_max_pull_bytes,
-                        inc_image_pull_timeout=engine.builder.infra.inc_image_pull_timeout,
-                        local_image_prefix=engine.builder.infra.local_image_prefix,
-                    )
-                    build_payloads.append(serialize_ci_job(build_job))
-
-                try:
-                    request_ids = submit_async_build_requests(
-                        redis_host=self._redis_host,
-                        experiment_name=self._experiment_name or "",
-                        trial_id=trial_id,
-                        benchmark=adapter.benchmark_name,
-                        build_payloads=build_payloads,
-                        sanitizer=sanitizer,
-                        source_mode=source_mode,
-                        use_inc_build=use_inc_build,
-                    )
-                except ValueError as e:
-                    logger.warning(f"Skipping dispatcher async POV build enqueue: {e}")
-                    return None
-                build_job_ids = request_ids[1:] if use_inc_build else request_ids
-
-                self._async_build_job_ids = build_job_ids
-                self._async_build_dependencies = []
-                self._async_build_sanitizer = sanitizer
-                logger.info(
-                    "Prepared dispatcher async POV build requests for {}/{} "
-                    "({} request(s), sanitizer={})",
-                    self.benchmark_id,
-                    self.harness_name,
-                    len(build_job_ids),
-                    sanitizer,
-                )
-                return self._async_build_job_ids, self._async_build_dependencies
-
+        build_queue = None
+        if get_evaluator_routing_model() != ROUTING_MODEL_DISPATCHER:
             build_queue = self._get_build_queue()
-            if build_queue is None:
-                logger.warning("Build queue not available, skipping async POV enqueue")
-                return None
-            assert build_queue is not None
 
-            prepare_dependency: list[object] = []
-            if use_inc_build:
-                prepare_job = PrepareIncImageJob(
-                    benchmark_path=benchmark_path,
-                    benchmark_name=adapter.benchmark_name,
-                    sanitizer=sanitizer,
-                    use_inc_build=True,
-                    source_mode=source_mode,
-                    inc_image_policy=engine.builder.infra.inc_image_policy,
-                    inc_image_registry=engine.builder.infra.inc_image_registry,
-                    inc_image_max_pull_bytes=engine.builder.infra.inc_image_max_pull_bytes,
-                    inc_image_pull_timeout=engine.builder.infra.inc_image_pull_timeout,
-                    local_image_prefix=engine.builder.infra.local_image_prefix,
-                )
-                prepare_rq_job = enqueue_ci_job(
-                    build_queue, self._experiment_name or "", prepare_job
-                )
-                prepare_dependency = [prepare_rq_job]
+        build_prereqs = prepare_async_pov_build_prereqs(
+            redis_host=self._redis_host,
+            experiment_name=self._experiment_name or "",
+            trial_id=self._trial_id or "",
+            engine=self._engine,
+            adapter=self._adapter,
+            build_queue=build_queue,
+            sanitizer=self._sanitizer,
+            use_inc_build=bool(self._adapter.inc_build),
+        )
+        if build_prereqs is None:
+            return None
 
-            build_job_ids: list[str] = []
-            build_dependencies: list[object] = []
-            for config in plan.configs:
-                build_job = BuildSingleVariantJob(
-                    benchmark_path=config.benchmark_path,
-                    benchmark_name=config.benchmark_name,
-                    variant_type=config.variant_type,
-                    commit=config.commit,
-                    main_repo=config.main_repo,
-                    mode=config.mode or adapter.get_mode(),
-                    language=config.language,
-                    cpv_num=config.cpv_num,
-                    patch_id=config.patch_id,
-                    pov_id=config.pov_id,
-                    patches=config.patches,
-                    use_inc_build=config.use_inc_build,
-                    source_mode=source_mode,
-                    sanitizer=config.sanitizer,
-                    repo_name=config.repo_name,
-                    prepare_inc_job_id=prepare_dependency[0].id
-                    if prepare_dependency
-                    else "",
-                    inc_image_policy=engine.builder.infra.inc_image_policy,
-                    inc_image_registry=engine.builder.infra.inc_image_registry,
-                    inc_image_max_pull_bytes=engine.builder.infra.inc_image_max_pull_bytes,
-                    inc_image_pull_timeout=engine.builder.infra.inc_image_pull_timeout,
-                    local_image_prefix=engine.builder.infra.local_image_prefix,
-                )
-                rq_job_id = build_variant_rq_job_id(
-                    benchmark=config.benchmark_name,
-                    variant_name=config.variant_name,
-                    source_mode=source_mode,
-                    use_inc_build=config.use_inc_build,
-                )
-                build_rq_job = enqueue_ci_job(
-                    build_queue,
-                    self._experiment_name or "",
-                    build_job,
-                    depends_on=prepare_dependency or None,
-                    job_id=rq_job_id,
-                )
-                build_job_ids.append(build_rq_job.id)
-                build_dependencies.append(build_rq_job)
+        build_job_ids, build_dependencies, sanitizer = build_prereqs
+        self._async_build_job_ids = build_job_ids
+        self._async_build_dependencies = build_dependencies
+        self._async_build_sanitizer = sanitizer
 
-            self._async_build_job_ids = build_job_ids
-            self._async_build_dependencies = build_dependencies
-            self._async_build_sanitizer = sanitizer
+        if get_evaluator_routing_model() == ROUTING_MODEL_DISPATCHER:
+            logger.info(
+                "Prepared dispatcher async POV build requests for {}/{} "
+                "({} request(s), sanitizer={})",
+                self.benchmark_id,
+                self.harness_name,
+                len(build_job_ids),
+                sanitizer,
+            )
+        else:
             logger.info(
                 "Prepared async POV build DAG for {}/{} ({} variant jobs, "
                 "sanitizer={})",
@@ -461,10 +302,7 @@ class POVVerificationManager:
                 len(build_job_ids),
                 sanitizer,
             )
-            return self._async_build_job_ids, self._async_build_dependencies
-        except Exception as e:
-            logger.warning(f"Failed to enqueue async POV build DAG: {e}")
-            return None
+        return self._async_build_job_ids, self._async_build_dependencies
 
     def _enqueue_pov(self, pov_path: Path, pov_hash: str) -> Optional[str]:
         """Enqueue a single POV for async verification via Redis.
