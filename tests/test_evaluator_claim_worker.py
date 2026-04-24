@@ -89,16 +89,22 @@ class _FakeJob:
         *,
         status: str = "queued",
         result: object | None = None,
+        meta: dict[str, object] | None = None,
     ) -> None:
         self.id = job_id
         self._status = status
         self.result = result
+        self.meta = dict(meta or {})
+        self.save_meta_calls = 0
 
     def get_status(self) -> str:
         return self._status
 
     def set_status(self, status: str) -> None:
         self._status = status
+
+    def save_meta(self) -> None:
+        self.save_meta_calls += 1
 
 
 class _FakeQueue:
@@ -488,3 +494,31 @@ def test_refresh_active_claims_releases_claim_after_local_verify_failure() -> No
     assert record is not None
     assert record.claim is None
     assert record.terminal_result is None
+
+
+def test_enqueue_or_reuse_job_adopts_trial_owner_for_reused_warmup_job() -> None:
+    from crsbench.distributed.evaluator_claim_worker import _enqueue_or_reuse_job
+    from crsbench.distributed.evaluator_scheduler import SCHEDULER_OWNER_KEY_META
+
+    queue = _FakeQueue("build-q")
+    existing = _FakeJob(
+        "build-single/test-benchmark/test-benchmark-asan-deltaref/main_repo/inc/local/eval-1",
+        meta={SCHEDULER_OWNER_KEY_META: "unit::exp1::test-benchmark::address::build"},
+    )
+    queue.jobs[existing.id] = existing
+
+    reused = _enqueue_or_reuse_job(
+        queue,
+        "crsbench.distributed.build_jobs.execute_ci_build",
+        {"benchmark_name": "test-benchmark"},
+        job_timeout=3600,
+        job_id=existing.id,
+        meta={
+            "experiment_name": "exp1",
+            SCHEDULER_OWNER_KEY_META: "trial::exp1::trial-1",
+        },
+    )
+
+    assert reused is existing
+    assert existing.meta[SCHEDULER_OWNER_KEY_META] == "trial::exp1::trial-1"
+    assert existing.save_meta_calls == 1

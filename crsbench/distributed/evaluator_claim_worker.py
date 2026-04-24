@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from crsbench.distributed.evaluator_jobs import resolve_benchmark_path
 from crsbench.distributed.evaluator_scheduler import (
     SCHEDULER_OWNER_KEY_META,
+    adopt_scheduler_owner_if_needed,
     build_scheduler_owner_key_for_ci_job,
     build_scheduler_owner_key_from_payload,
 )
@@ -74,6 +75,10 @@ def _enqueue_or_reuse_job(
 ) -> Any:
     existing = queue.fetch_job(job_id)
     if existing is not None:
+        adopt_scheduler_owner_if_needed(
+            existing,
+            new_owner=meta.get(SCHEDULER_OWNER_KEY_META),
+        )
         return existing
     try:
         return queue.enqueue(
@@ -92,6 +97,10 @@ def _enqueue_or_reuse_job(
         existing = queue.fetch_job(job_id)
         if existing is None:
             raise
+        adopt_scheduler_owner_if_needed(
+            existing,
+            new_owner=meta.get(SCHEDULER_OWNER_KEY_META),
+        )
         return existing
 
 
