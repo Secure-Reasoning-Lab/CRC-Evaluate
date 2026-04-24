@@ -740,7 +740,7 @@ def test_monitor_queue_rich_applies_manual_page_navigation_immediately() -> None
     running_table = rendered_updates[1].renderables[1]
     assert "Page 2/2: showing 2 of 6 running jobs;" in running_table.caption
     assert "n/p active; auto-rotates when idle" in running_table.caption
-    assert running_table.columns[0]._cells == ["worker-4", "worker-5"]
+    assert list(running_table.columns[0].cells) == ["worker-4", "worker-5"]
 
 
 def test_display_worker_name_trims_cloud_experiment_prefix() -> None:
