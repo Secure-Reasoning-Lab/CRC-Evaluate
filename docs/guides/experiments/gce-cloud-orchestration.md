@@ -1499,8 +1499,8 @@ Useful manual checks:
   expected by `oss-crs`
 - On Ubuntu-based GCE images, CRSBench installs Docker Engine from Docker's
   official apt repository rather than the distro `docker.io` packages
-- Bootstrap also installs `iftop`, `rg`, and `fdfind`, and bootstraps Docker
-  Buildx for the default builder context
+- Bootstrap also installs `iftop`, `ncdu`, `gdu`, `duf`, `btop`, `rg`, and
+  `fdfind`, and bootstraps Docker Buildx for the default builder context
 
 You can verify those with:
 
@@ -1509,6 +1509,10 @@ You can verify those with:
 - `docker info --format '{{.CgroupDriver}}'`
 - `apt-cache policy docker-ce`
 - `command -v iftop`
+- `command -v ncdu`
+- `command -v gdu`
+- `command -v duf`
+- `command -v btop`
 - `docker buildx ls`
 - `docker buildx inspect`
 
