@@ -165,3 +165,78 @@ def test_poll_verify_results_rejects_eval_length_mismatch() -> None:
 
     with pytest.raises(ValueError, match="dispatcher verify poll returned 1 results"):
         store.poll_verify_results(["req-1", "req-2"])
+
+
+def test_build_attempt_is_current_decodes_redis_bytes() -> None:
+    redis_conn = _FakeRedis()
+    store = DispatcherStateStore(redis_conn, experiment_name="exp-1")
+    request_id = "build-1"
+    store.submit_build_request(
+        BuildRequestRecord(
+            request_id=request_id,
+            trial_id="trial-1",
+            benchmark="bench-1",
+            owner_key="owner-1",
+            lineage_id="lineage-1",
+            generation=1,
+            state="queued",
+            payload={"variant": "v1"},
+        )
+    )
+    store.assign_build_attempt(
+        request_id=request_id,
+        evaluator_id="eval-1",
+        attempt_id="attempt-1",
+        generation=1,
+    )
+
+    original_hget = redis_conn.hget
+
+    def _bytes_hget(key: str, field: str) -> str | bytes | None:
+        value = original_hget(key, field)
+        if value is None:
+            return None
+        return value.encode("utf-8")
+
+    redis_conn.hget = _bytes_hget  # type: ignore[method-assign]
+
+    assert store.build_attempt_is_current(request_id, "attempt-1")
+
+
+def test_verify_attempt_is_current_decodes_redis_bytes() -> None:
+    redis_conn = _FakeRedis()
+    store = DispatcherStateStore(redis_conn, experiment_name="exp-1")
+    request_id = "verify-1"
+    store.submit_verify_request(
+        VerifyRequestRecord(
+            request_id=request_id,
+            trial_id="trial-1",
+            benchmark="bench-1",
+            harness="h-1",
+            pov_id="pov-1",
+            owner_key="owner-1",
+            lineage_id="lineage-1",
+            generation=1,
+            state="ready",
+            build_request_ids=[],
+            payload={"trial_id": "trial-1"},
+        )
+    )
+    store.assign_verify_attempt(
+        request_id=request_id,
+        evaluator_id="eval-1",
+        attempt_id="attempt-1",
+        generation=1,
+    )
+
+    original_hget = redis_conn.hget
+
+    def _bytes_hget(key: str, field: str) -> str | bytes | None:
+        value = original_hget(key, field)
+        if value is None:
+            return None
+        return value.encode("utf-8")
+
+    redis_conn.hget = _bytes_hget  # type: ignore[method-assign]
+
+    assert store.verify_attempt_is_current(request_id, "attempt-1")

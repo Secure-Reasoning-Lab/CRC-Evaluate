@@ -186,7 +186,9 @@ class DispatcherStateStore:
 
     def build_attempt_is_current(self, request_id: str, attempt_id: str) -> bool:
         current_attempt_id = self.redis.hget(self._build_attempts_key(), request_id)
-        return current_attempt_id == attempt_id
+        if current_attempt_id is None:
+            return False
+        return _decode(current_attempt_id) == attempt_id
 
     def load_build_result(self, request_id: str) -> BuildResultRecord | None:
         raw = self.redis.hget(self._build_results_key(), request_id)
@@ -294,7 +296,9 @@ class DispatcherStateStore:
 
     def verify_attempt_is_current(self, request_id: str, attempt_id: str) -> bool:
         current_attempt_id = self.redis.hget(self._verify_attempts_key(), request_id)
-        return current_attempt_id == attempt_id
+        if current_attempt_id is None:
+            return False
+        return _decode(current_attempt_id) == attempt_id
 
     def publish_verify_result(
         self, request_id: str, result: VerifyResultRecord
