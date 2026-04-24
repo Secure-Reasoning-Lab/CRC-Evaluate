@@ -172,9 +172,21 @@ CRSBench preserves resolved `oss-crs artifacts` log paths under:
 This copied trial output is the durable result location. `cleanup_after_trial`
 removes internal workdirs such as `oss-crs-workdir`, but does not remove
 `trial/output/`, so copied logs remain available after cleanup. `cloud collect`
-applies the same durable-artifact contract: the main artifact rsync excludes
-`oss-crs-workdir/`, and any top-level trial entries that still symlink into
-that workdir are materialized into the collected tree before publish.
+preserves the non-log trial artifacts but intentionally omits
+`trial/output/logs/` and `oss-crs-workdir/` from the main artifact rsync. When
+top-level trial entries such as `output/` or `result.log` still symlink into
+that excluded workdir, collect materializes them before publish, prunes any
+bulk `output/logs/` copy, then restores only the report-critical subset needed
+by local CSV/report generation:
+
+- `trial/output/logs/services/*_patcher.stdout.log`
+- `trial/output/logs/services/*inc-builder-*.stdout.log`
+- `trial/output/logs/crs/<crs>/log_dir/verify_patch_timing.json`
+- legacy fallback `*_patcher.stdout.log` and `*inc-builder-*.stdout.log` paths
+  under `trial/output/logs/crs/**`
+
+Cloud-specific runtime and VM diagnostics are collected separately under
+`.crsbench-cloud/remote-logs/<experiment>/`.
 
 ## Verification and Dedup
 

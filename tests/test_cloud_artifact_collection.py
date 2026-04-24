@@ -22,6 +22,8 @@ from crsbench.cloud.gce.models import GceWorkerRecord
 from crsbench.reporting.snapshot_loader import discover_trials
 from crsbench.validation.schemas import GceWorkerFleetConfig
 
+_REAL_SUBPROCESS_RUN = subprocess.run
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -128,6 +130,44 @@ def _write_trial_metadata(trial_dir: Path, payload: dict[str, object]) -> None:
     """Write `metadata.json` directly with the supplied payload."""
     metadata_path = trial_dir / "metadata.json"
     metadata_path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _run_local_rsync_from_cloud_cmd(
+    cmd: list[str], *, source_root: Path, experiment_name: str
+) -> subprocess.CompletedProcess[bytes]:
+    """Run a cloud collector rsync command against a local fixture tree."""
+    source = cmd[-2]
+    destination = cmd[-1]
+
+    if ":" in source:
+        remote_source = source.split(":", 1)[1]
+        rel = Path(
+            remote_source.removeprefix(f"/data/experiments/{experiment_name}").lstrip(
+                "/"
+            )
+        )
+        local_source = source_root / experiment_name / rel
+    else:
+        local_source = Path(source.rstrip("/"))
+
+    local_cmd = ["rsync"]
+    skip_next = False
+    for arg in cmd[1:-2]:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == "-e":
+            skip_next = True
+            continue
+        if arg.startswith("--rsync-path="):
+            continue
+        local_cmd.append(arg)
+
+    local_source_arg = str(local_source)
+    if source.endswith("/"):
+        local_source_arg += "/"
+    local_cmd.extend([local_source_arg, destination])
+    return _REAL_SUBPROCESS_RUN(local_cmd, check=True)
 
 
 # ---------------------------------------------------------------------------
@@ -401,7 +441,10 @@ class TestStagingAndPublish:
     def test_staging_and_publish_excludes_internal_oss_crs_workdir(
         self, tmp_path: Path
     ) -> None:
-        """Collection should rehydrate top-level symlinks into excluded oss-crs scratch dirs."""
+        """Collection should rehydrate output symlinks without restoring bulk logs."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for output/log regression coverage")
+
         experiment_filestore = tmp_path / "filestore"
         experiment_filestore.mkdir()
 
@@ -409,9 +452,25 @@ class TestStagingAndPublish:
         source_root.mkdir()
         trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
         shutil.rmtree(trial_dir / "output")
-        workdir_out = trial_dir / "oss-crs-workdir" / "out" / "seeds"
-        workdir_out.mkdir(parents=True)
-        (workdir_out / "seed-0001").write_bytes(b"seed-content")
+        workdir_out = trial_dir / "oss-crs-workdir" / "out"
+        (workdir_out / "seeds").mkdir(parents=True)
+        (workdir_out / "seeds" / "seed-0001").write_bytes(b"seed-content")
+        (workdir_out / "logs" / "services").mkdir(parents=True)
+        (workdir_out / "logs" / "services" / "service.log").write_text("service log\n")
+        (
+            workdir_out
+            / "logs"
+            / "services"
+            / "builder-sidecar-lite_patcher.stdout.log"
+        ).write_text("  [test] 12.3s\n")
+        (
+            workdir_out / "logs" / "services" / "crs-codex_inc-builder-asan.stdout.log"
+        ).write_text("Tests run: 1, Failures: 0, Errors: 0, Skipped: 0\n")
+        timing_dir = workdir_out / "logs" / "crs" / "builder-sidecar-lite" / "log_dir"
+        timing_dir.mkdir(parents=True)
+        (timing_dir / "verify_patch_timing.json").write_text(
+            json.dumps({"rebuild": 70.4, "test": 481.0, "status": "pass"})
+        )
         (trial_dir / "output").symlink_to(Path("oss-crs-workdir") / "out")
 
         worker = _make_worker()
@@ -421,47 +480,11 @@ class TestStagingAndPublish:
         def _fake_rsync(
             cmd: list[str], **_: object
         ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
-            """Copy source_root/exp-42 contents into staging, emulating rsync exclude/copy-links behavior."""
-            source = cmd[-2]
-            dest = Path(cmd[-1].rstrip("/"))
-            if ":" in source:
-                remote_source = source.split(":", 1)[1]
-                rel = Path(
-                    remote_source.removeprefix("/data/experiments/exp-42").lstrip("/")
-                )
-                local_source = source_root / "exp-42" / rel
-            else:
-                local_source = Path(source.rstrip("/"))
-
-            if "--copy-links" in cmd:
-                resolved_source = local_source.resolve()
-                if resolved_source.is_dir():
-                    shutil.copytree(
-                        resolved_source,
-                        dest / local_source.name,
-                        dirs_exist_ok=True,
-                    )
-                else:
-                    shutil.copy2(resolved_source, dest / local_source.name)
-                return subprocess.CompletedProcess(args=cmd, returncode=0)
-
-            excluded_names = {
-                arg.removeprefix("--exclude=").rstrip("/")
-                for arg in cmd
-                if arg.startswith("--exclude=")
-            }
-
-            def _ignore(_directory: str, files: list[str]) -> set[str]:
-                return {name for name in files if name in excluded_names}
-
-            shutil.copytree(
-                local_source,
-                dest,
-                dirs_exist_ok=True,
-                ignore=_ignore,
-                symlinks=True,
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
             )
-            return subprocess.CompletedProcess(args=cmd, returncode=0)
 
         with patch("subprocess.run", side_effect=_fake_rsync):
             final_path = collector.collect(
@@ -486,11 +509,197 @@ class TestStagingAndPublish:
         assert trial_output.exists()
         assert not trial_output.is_symlink()
         assert (trial_output / "seeds" / "seed-0001").exists()
+        assert not (trial_output / "logs" / "services" / "service.log").exists()
+        assert (
+            trial_output
+            / "logs"
+            / "services"
+            / "builder-sidecar-lite_patcher.stdout.log"
+        ).exists()
+        assert (
+            trial_output / "logs" / "services" / "crs-codex_inc-builder-asan.stdout.log"
+        ).exists()
+        assert (
+            trial_output
+            / "logs"
+            / "crs"
+            / "builder-sidecar-lite"
+            / "log_dir"
+            / "verify_patch_timing.json"
+        ).exists()
+
+    def test_staging_and_publish_excludes_output_logs_from_real_output_tree(
+        self, tmp_path: Path
+    ) -> None:
+        """Collection should keep reporting logs while dropping unrelated output/log bulk."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for output/log regression coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        logs_dir = trial_dir / "output" / "logs" / "services"
+        logs_dir.mkdir(parents=True)
+        (logs_dir / "service.log").write_text("service log\n")
+        (logs_dir / "builder-sidecar-lite_patcher.stdout.log").write_text(
+            "  [test] 12.3s\n"
+        )
+        (logs_dir / "crs-codex_inc-builder-asan.stdout.log").write_text(
+            "Tests run: 1, Failures: 0, Errors: 0, Skipped: 0\n"
+        )
+        timing_dir = (
+            trial_dir / "output" / "logs" / "crs" / "builder-sidecar-lite" / "log_dir"
+        )
+        timing_dir.mkdir(parents=True)
+        (timing_dir / "verify_patch_timing.json").write_text(
+            json.dumps({"rebuild": 70.4, "test": 481.0, "status": "pass"})
+        )
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        trial_output = (
+            final_path
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+            / "output"
+        )
+        assert (trial_output / "seeds" / "seed-0001").exists()
+        assert not (trial_output / "logs" / "services" / "service.log").exists()
+        assert (
+            trial_output
+            / "logs"
+            / "services"
+            / "builder-sidecar-lite_patcher.stdout.log"
+        ).exists()
+        assert (
+            trial_output / "logs" / "services" / "crs-codex_inc-builder-asan.stdout.log"
+        ).exists()
+        assert (
+            trial_output
+            / "logs"
+            / "crs"
+            / "builder-sidecar-lite"
+            / "log_dir"
+            / "verify_patch_timing.json"
+        ).exists()
+
+    def test_staging_and_publish_preserves_legacy_reporting_logs_under_crs_tree(
+        self, tmp_path: Path
+    ) -> None:
+        """Collection should retain report-critical logs stored under the legacy CRS tree."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for output/log regression coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        legacy_logs_dir = trial_dir / "output" / "logs" / "crs" / "builder-sidecar-lite"
+        (legacy_logs_dir / "nested" / "patcher").mkdir(parents=True)
+        (legacy_logs_dir / "nested" / "builders").mkdir(parents=True)
+        (
+            legacy_logs_dir
+            / "nested"
+            / "patcher"
+            / "builder-sidecar-lite_patcher.stdout.log"
+        ).write_text("  [test] 12.3s\n")
+        (
+            legacy_logs_dir
+            / "nested"
+            / "builders"
+            / "crs-codex_inc-builder-asan.stdout.log"
+        ).write_text("Tests run: 1, Failures: 0, Errors: 0, Skipped: 0\n")
+        timing_dir = legacy_logs_dir / "log_dir"
+        timing_dir.mkdir(parents=True)
+        (timing_dir / "verify_patch_timing.json").write_text(
+            json.dumps({"rebuild": 70.4, "test": 481.0, "status": "pass"})
+        )
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        legacy_output_logs = (
+            final_path
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+            / "output"
+            / "logs"
+            / "crs"
+            / "builder-sidecar-lite"
+        )
+        assert (
+            legacy_output_logs
+            / "nested"
+            / "patcher"
+            / "builder-sidecar-lite_patcher.stdout.log"
+        ).exists()
+        assert (
+            legacy_output_logs
+            / "nested"
+            / "builders"
+            / "crs-codex_inc-builder-asan.stdout.log"
+        ).exists()
+        assert (legacy_output_logs / "log_dir" / "verify_patch_timing.json").exists()
 
     def test_staging_and_publish_rehydrates_file_symlinks_into_excluded_workdir(
         self, tmp_path: Path
     ) -> None:
         """Collection should copy top-level file symlinks whose targets live under excluded dirs."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for output/log regression coverage")
+
         experiment_filestore = tmp_path / "filestore"
         experiment_filestore.mkdir()
 
@@ -509,46 +718,11 @@ class TestStagingAndPublish:
         def _fake_rsync(
             cmd: list[str], **_: object
         ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
-            source = cmd[-2]
-            dest = Path(cmd[-1].rstrip("/"))
-            if ":" in source:
-                remote_source = source.split(":", 1)[1]
-                rel = Path(
-                    remote_source.removeprefix("/data/experiments/exp-42").lstrip("/")
-                )
-                local_source = source_root / "exp-42" / rel
-            else:
-                local_source = Path(source.rstrip("/"))
-
-            if "--copy-links" in cmd:
-                resolved_source = local_source.resolve()
-                if resolved_source.is_dir():
-                    shutil.copytree(
-                        resolved_source,
-                        dest / local_source.name,
-                        dirs_exist_ok=True,
-                    )
-                else:
-                    shutil.copy2(resolved_source, dest / local_source.name)
-                return subprocess.CompletedProcess(args=cmd, returncode=0)
-
-            excluded_names = {
-                arg.removeprefix("--exclude=").rstrip("/")
-                for arg in cmd
-                if arg.startswith("--exclude=")
-            }
-
-            def _ignore(_directory: str, files: list[str]) -> set[str]:
-                return {name for name in files if name in excluded_names}
-
-            shutil.copytree(
-                local_source,
-                dest,
-                dirs_exist_ok=True,
-                ignore=_ignore,
-                symlinks=True,
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
             )
-            return subprocess.CompletedProcess(args=cmd, returncode=0)
 
         with patch("subprocess.run", side_effect=_fake_rsync):
             final_path = collector.collect(
@@ -784,7 +958,7 @@ class TestCollectFullTrialTree:
     """test_collect_full_trial_tree — ARTF-01: rsync source covers the full experiment subtree."""
 
     def test_collect_full_trial_tree(self) -> None:
-        """rsync keeps full-tree behavior while excluding only the internal oss-crs workdir."""
+        """rsync keeps full-tree behavior while excluding only internal scratch/log paths."""
         worker = _make_worker()
         fleet = _make_fleet(ssh_via_iap=False)
         collector = ArtifactCollector()
@@ -801,8 +975,11 @@ class TestCollectFullTrialTree:
             "No --include filters; rsync must copy full tree"
         )
         exclude_args = [arg for arg in cmd if arg.startswith("--exclude=")]
-        assert exclude_args == ["--exclude=oss-crs-workdir/"], (
-            "Only the internal oss-crs workdir may be excluded from artifact collection"
+        assert exclude_args == [
+            "--exclude=oss-crs-workdir/",
+            "--exclude=output/logs/",
+        ], (
+            "Artifact collection should exclude only internal scratch data and trial output/logs"
         )
 
         # Source must end with trailing slash (rsync convention for directory contents)

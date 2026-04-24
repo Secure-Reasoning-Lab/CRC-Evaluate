@@ -737,15 +737,10 @@ def test_monitor_queue_rich_applies_manual_page_navigation_immediately() -> None
     assert len(rendered_updates) >= 2
     assert refresh_flags
     assert refresh_flags[0] is True
-    second_render_console = rich_console.Console(
-        width=120, force_terminal=True, record=True
-    )
-    second_render_console.print(rendered_updates[1])
-    output = second_render_console.export_text()
-    assert "Page 2/2: showing 2 of 6 running jobs;" in output
-    assert "n/p active; auto-rotates when idle" in output
-    assert "worker-4" in output
-    assert "worker-5" in output
+    running_table = rendered_updates[1].renderables[1]
+    assert "Page 2/2: showing 2 of 6 running jobs;" in running_table.caption
+    assert "n/p active; auto-rotates when idle" in running_table.caption
+    assert list(running_table.columns[0].cells) == ["worker-4", "worker-5"]
 
 
 def test_display_worker_name_trims_cloud_experiment_prefix() -> None:
