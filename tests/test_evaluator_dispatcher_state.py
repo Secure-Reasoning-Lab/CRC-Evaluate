@@ -390,5 +390,85 @@ def test_required_build_request_ids_clear_after_build_success_and_verify_promoti
     )
 
     store.promote_ready_verify_requests(lineage_id=lineage_id, generation=1)
+    promoted = store.load_verify_request("verify-1")
 
+    assert promoted is not None
+    assert promoted.state == "ready"
     assert store.has_pending_required_builds() is False
+
+
+def test_required_build_request_ids_skip_missing_and_require_failed_or_mismatched() -> (
+    None
+):
+    store = DispatcherStateStore(_FakeRedis(), experiment_name="exp-1")
+    missing_request_id = "build-missing"
+    mismatched_request_id = "build-mismatched"
+    failed_request_id = "build-failed"
+    store.submit_build_request(
+        BuildRequestRecord(
+            request_id=mismatched_request_id,
+            trial_id="trial-1",
+            benchmark="bench-1",
+            owner_key="owner-1",
+            lineage_id="lineage-1",
+            generation=2,
+            state="ready",
+            payload={"variant": "v1"},
+        )
+    )
+    store.submit_build_request(
+        BuildRequestRecord(
+            request_id=failed_request_id,
+            trial_id="trial-1",
+            benchmark="bench-1",
+            owner_key="owner-1",
+            lineage_id="lineage-1",
+            generation=1,
+            state="ready",
+            payload={"variant": "v1"},
+        )
+    )
+    store.submit_verify_request(
+        VerifyRequestRecord(
+            request_id="verify-1",
+            trial_id="trial-1",
+            benchmark="bench-1",
+            harness="h-1",
+            pov_id="pov-1",
+            owner_key="owner-1",
+            lineage_id="lineage-1",
+            generation=2,
+            state="blocked_on_build",
+            build_request_ids=[
+                missing_request_id,
+                mismatched_request_id,
+                failed_request_id,
+            ],
+            payload={"trial_id": "trial-1"},
+        )
+    )
+    store.publish_build_result(
+        mismatched_request_id,
+        BuildResultRecord(
+            request_id=mismatched_request_id,
+            attempt_id="attempt-1",
+            generation=1,
+            evaluator_id="eval-1",
+            terminal_state="succeeded",
+        ),
+    )
+    store.publish_build_result(
+        failed_request_id,
+        BuildResultRecord(
+            request_id=failed_request_id,
+            attempt_id="attempt-1",
+            generation=1,
+            evaluator_id="eval-1",
+            terminal_state="failed",
+        ),
+    )
+
+    assert store.required_build_request_ids() == {
+        failed_request_id,
+        mismatched_request_id,
+    }
