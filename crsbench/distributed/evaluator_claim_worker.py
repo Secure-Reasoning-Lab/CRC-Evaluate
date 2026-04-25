@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -163,6 +164,7 @@ class EvaluatorClaimWorker:
         benchmarks_root: Path,
         claim_lease_seconds: int = CLAIM_LEASE_SECONDS,
         max_inflight_requests: int = 1,
+        claim_batch_size: int = 1,
     ) -> None:
         self.store = EvaluatorVerifyClaimStore(
             redis_conn,
@@ -176,9 +178,11 @@ class EvaluatorClaimWorker:
         self.benchmarks_root = benchmarks_root
         self.claim_lease_seconds = max(1, int(claim_lease_seconds))
         self.max_inflight_requests = max(1, int(max_inflight_requests))
+        self.claim_batch_size = max(1, int(claim_batch_size))
         self._active_claims: dict[str, _ActiveClaim] = {}
         self._active_claims_lock = threading.Lock()
         self._warmup_enqueue_gate = threading.Lock()
+        self._claimed_request_buffer: deque[VerifyRequestRecord] = deque()
 
     def _active_claim_snapshot(self) -> tuple[set[str], tuple[_ActiveClaim, ...]]:
         with self._active_claims_lock:
@@ -283,12 +287,7 @@ class EvaluatorClaimWorker:
         # coordination is limited to warmup reads of active/materializing state.
         if len(self._active_claims) >= self.max_inflight_requests:
             return None
-        with self._warmup_enqueue_gate:
-            claimed = self.store.claim_next_request(
-                evaluator_id=self.evaluator_id,
-                now=now,
-                lease_seconds=self.claim_lease_seconds,
-            )
+        claimed = self._pop_next_claimed_request(now=now)
         if claimed is None:
             return None
         try:
@@ -309,6 +308,35 @@ class EvaluatorClaimWorker:
             active=active,
         )
         return claimed
+
+    def _claim_request_batch(self, *, now: float) -> list[VerifyRequestRecord]:
+        available_slots = self.max_inflight_requests - len(self._active_claims)
+        if available_slots <= 0:
+            return []
+        claim_limit = min(self.claim_batch_size, available_slots)
+        with self._warmup_enqueue_gate:
+            if claim_limit <= 1:
+                claimed = self.store.claim_next_request(
+                    evaluator_id=self.evaluator_id,
+                    now=now,
+                    lease_seconds=self.claim_lease_seconds,
+                )
+                return [] if claimed is None else [claimed]
+            return self.store.claim_next_requests(
+                evaluator_id=self.evaluator_id,
+                now=now,
+                lease_seconds=self.claim_lease_seconds,
+                limit=claim_limit,
+            )
+
+    def _pop_next_claimed_request(self, *, now: float) -> VerifyRequestRecord | None:
+        if self._claimed_request_buffer:
+            return self._claimed_request_buffer.popleft()
+        claimed_batch = self._claim_request_batch(now=now)
+        if not claimed_batch:
+            return None
+        self._claimed_request_buffer.extend(claimed_batch[1:])
+        return claimed_batch[0]
 
     def dispatch_available(self, *, now: float) -> VerifyRequestRecord | None:
         """Claim as many logical requests as the local inflight limit allows."""

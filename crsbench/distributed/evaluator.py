@@ -56,8 +56,30 @@ def _resolve_cloud_evaluator_placement_count(config: Any) -> int | None:
     placements = getattr(evaluators, "placements", None)
     if not isinstance(placements, (list, tuple)):
         return None
-    placement_count = len(placements)
-    return placement_count if placement_count > 0 else None
+    total_evaluators = 0
+    for placement in placements:
+        count = placement.get("count") if isinstance(placement, dict) else None
+        if count is None:
+            count = getattr(placement, "count", None)
+        if not isinstance(count, int) or count < 1:
+            count = 1
+        total_evaluators += count
+    return total_evaluators if total_evaluators > 0 else None
+
+
+def _resolve_dispatcher_verify_refill_headroom(
+    *,
+    config: Any,
+    build_jobs: Optional[int],
+    verify_jobs: Optional[int],
+) -> int | None:
+    """Derive verify refill headroom from local verify width and fleet size."""
+    local_build_capacity = max(build_jobs or 1, 1)
+    local_verify_capacity = max(verify_jobs or local_build_capacity, 1)
+    evaluator_count = _resolve_cloud_evaluator_placement_count(config)
+    if evaluator_count is None:
+        return None
+    return math.ceil(local_verify_capacity / evaluator_count)
 
 
 def _resolve_dispatcher_claim_inflight_requests(
@@ -70,13 +92,29 @@ def _resolve_dispatcher_claim_inflight_requests(
     local_build_capacity = max(build_jobs or 1, 1)
     local_verify_capacity = max(verify_jobs or local_build_capacity, 1)
     base_capacity = max(local_build_capacity, local_verify_capacity)
-
-    evaluator_count = _resolve_cloud_evaluator_placement_count(config)
-    if evaluator_count is None:
+    extra_buffer = _resolve_dispatcher_verify_refill_headroom(
+        config=config,
+        build_jobs=build_jobs,
+        verify_jobs=verify_jobs,
+    )
+    if extra_buffer is None:
         return base_capacity
-
-    extra_buffer = math.ceil(local_verify_capacity / evaluator_count)
     return max(base_capacity, local_verify_capacity + extra_buffer)
+
+
+def _resolve_dispatcher_claim_batch_size(
+    *,
+    config: Any,
+    build_jobs: Optional[int],
+    verify_jobs: Optional[int],
+) -> int:
+    """Derive the per-transaction claim batch size for dispatcher mode."""
+    extra_buffer = _resolve_dispatcher_verify_refill_headroom(
+        config=config,
+        build_jobs=build_jobs,
+        verify_jobs=verify_jobs,
+    )
+    return max(extra_buffer or 1, 1)
 
 
 def build_evaluator_id(worker_name: str | None) -> str:
@@ -548,6 +586,11 @@ def run_evaluator_main(
             # Keep dispatcher intake aligned with local execution width, with
             # extra verify headroom when cloud placement count is known.
             max_inflight_requests=_resolve_dispatcher_claim_inflight_requests(
+                config=config,
+                build_jobs=build_jobs,
+                verify_jobs=verify_jobs,
+            ),
+            claim_batch_size=_resolve_dispatcher_claim_batch_size(
                 config=config,
                 build_jobs=build_jobs,
                 verify_jobs=verify_jobs,

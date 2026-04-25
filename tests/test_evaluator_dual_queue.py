@@ -311,6 +311,7 @@ class TestRunEvaluatorMain:
         assert result == 0
         claim_worker = mock_start_claim_thread.call_args.args[0]
         assert claim_worker.max_inflight_requests == 5
+        assert claim_worker.claim_batch_size == 1
         mock_start_presence_thread.assert_not_called()
         mock_start_dispatcher_thread.assert_not_called()
 
@@ -344,7 +345,9 @@ class TestRunEvaluatorMain:
         config.oss_fuzz_path = "/tmp/oss-fuzz"
         config.per_pov_verify_timeout = 180
         config.cloud = argparse.Namespace(
-            evaluators=argparse.Namespace(placements=[{}, {}, {}]),
+            evaluators=argparse.Namespace(
+                placements=[argparse.Namespace(count=3)],
+            ),
         )
 
         with patch("crsbench.evaluation.verification.pov.engine.VerificationEngine"):
@@ -359,6 +362,7 @@ class TestRunEvaluatorMain:
         assert result == 0
         claim_worker = mock_start_claim_thread.call_args.args[0]
         assert claim_worker.max_inflight_requests == 7
+        assert claim_worker.claim_batch_size == 2
         mock_start_presence_thread.assert_not_called()
         mock_start_dispatcher_thread.assert_not_called()
 
@@ -392,7 +396,9 @@ class TestRunEvaluatorMain:
         config.oss_fuzz_path = "/tmp/oss-fuzz"
         config.per_pov_verify_timeout = 180
         config.cloud = argparse.Namespace(
-            evaluators=argparse.Namespace(placements=[{}, {}, {}]),
+            evaluators=argparse.Namespace(
+                placements=[argparse.Namespace(count=3)],
+            ),
         )
 
         with patch("crsbench.evaluation.verification.pov.engine.VerificationEngine"):
@@ -407,6 +413,7 @@ class TestRunEvaluatorMain:
         assert result == 0
         claim_worker = mock_start_claim_thread.call_args.args[0]
         assert claim_worker.max_inflight_requests == 8
+        assert claim_worker.claim_batch_size == 1
         mock_start_presence_thread.assert_not_called()
         mock_start_dispatcher_thread.assert_not_called()
 

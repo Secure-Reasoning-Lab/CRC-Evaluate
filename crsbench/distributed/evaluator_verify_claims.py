@@ -102,6 +102,46 @@ class EvaluatorVerifyClaimStore:
         records = [self._deserialize_record(raw) for raw in mapping.values()]
         return sorted(records, key=lambda record: record.request_id)
 
+    def _build_claim_batch(
+        self,
+        *,
+        eligible: list[VerifyRequestRecord],
+        evaluator_id: str,
+        now: float,
+        lease_seconds: int,
+        last_owner: str | None,
+        limit: int,
+    ) -> tuple[list[VerifyRequestRecord], str | None]:
+        remaining = list(eligible)
+        claimed_records: list[VerifyRequestRecord] = []
+        selected_owner = last_owner
+        batch_limit = max(1, int(limit))
+
+        while remaining and len(claimed_records) < batch_limit:
+            owner_order = list(dict.fromkeys(record.owner_key for record in remaining))
+            selected_owner = _next_owner(owner_order, last_owner=selected_owner)
+            selected_index = next(
+                index
+                for index, record in enumerate(remaining)
+                if record.owner_key == selected_owner
+            )
+            selected = remaining.pop(selected_index)
+            claimed_records.append(
+                VerifyRequestRecord(
+                    request_id=selected.request_id,
+                    owner_key=selected.owner_key,
+                    request_kind=selected.request_kind,
+                    payload=dict(selected.payload),
+                    claim=VerifyClaim(
+                        evaluator_id=evaluator_id,
+                        expires_at=now + lease_seconds,
+                    ),
+                    terminal_result=selected.terminal_result,
+                )
+            )
+
+        return claimed_records, selected_owner
+
     def submit_request(self, record: VerifyRequestRecord) -> str:
         existing = self.load_request(record.request_id)
         if existing is not None and (
@@ -136,6 +176,37 @@ class EvaluatorVerifyClaimStore:
         now: float,
         lease_seconds: int,
     ) -> VerifyRequestRecord | None:
+        claimed_records = self._claim_next_records(
+            evaluator_id=evaluator_id,
+            now=now,
+            lease_seconds=lease_seconds,
+            limit=1,
+        )
+        return claimed_records[0] if claimed_records else None
+
+    def claim_next_requests(
+        self,
+        *,
+        evaluator_id: str,
+        now: float,
+        lease_seconds: int,
+        limit: int,
+    ) -> list[VerifyRequestRecord]:
+        return self._claim_next_records(
+            evaluator_id=evaluator_id,
+            now=now,
+            lease_seconds=lease_seconds,
+            limit=limit,
+        )
+
+    def _claim_next_records(
+        self,
+        *,
+        evaluator_id: str,
+        now: float,
+        lease_seconds: int,
+        limit: int,
+    ) -> list[VerifyRequestRecord]:
         requests_key = self._requests_key()
         cursor_key = self._cursor_key()
         while True:
@@ -153,41 +224,30 @@ class EvaluatorVerifyClaimStore:
                     ]
                     if not eligible:
                         pipe.unwatch()
-                        return None
-
-                    owner_order = list(
-                        dict.fromkeys(record.owner_key for record in eligible)
-                    )
+                        return []
                     raw_last_owner = pipe.hget(cursor_key, "last_owner")
                     last_owner = (
                         _decode(raw_last_owner) if raw_last_owner is not None else None
                     )
-                    selected_owner = _next_owner(owner_order, last_owner=last_owner)
-                    selected = next(
-                        record
-                        for record in eligible
-                        if record.owner_key == selected_owner
-                    )
-                    claimed = VerifyRequestRecord(
-                        request_id=selected.request_id,
-                        owner_key=selected.owner_key,
-                        request_kind=selected.request_kind,
-                        payload=dict(selected.payload),
-                        claim=VerifyClaim(
-                            evaluator_id=evaluator_id,
-                            expires_at=now + lease_seconds,
-                        ),
-                        terminal_result=selected.terminal_result,
+                    claimed_records, selected_owner = self._build_claim_batch(
+                        eligible=eligible,
+                        evaluator_id=evaluator_id,
+                        now=now,
+                        lease_seconds=lease_seconds,
+                        last_owner=last_owner,
+                        limit=limit,
                     )
                     pipe.multi()
-                    pipe.hset(
-                        requests_key,
-                        claimed.request_id,
-                        self._serialize_record(claimed),
-                    )
-                    pipe.hset(cursor_key, "last_owner", selected_owner)
+                    for claimed in claimed_records:
+                        pipe.hset(
+                            requests_key,
+                            claimed.request_id,
+                            self._serialize_record(claimed),
+                        )
+                    if selected_owner is not None:
+                        pipe.hset(cursor_key, "last_owner", selected_owner)
                     pipe.execute()
-                    return claimed
+                    return claimed_records
             except WatchError:
                 continue
 

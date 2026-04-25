@@ -956,6 +956,89 @@ def test_tick_claims_until_inflight_limit() -> None:
     assert len(worker.verify_queue.enqueued) == 2
 
 
+def test_tick_uses_batched_claim_fetch_when_batch_size_exceeds_one() -> None:
+    from crsbench.distributed.evaluator_claim_worker import EvaluatorClaimWorker
+
+    redis_conn = _FakeRedis()
+    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
+    for index in (1, 2):
+        patch_payload = PatchJobPayload(
+            experiment_name="exp1",
+            trial_id="trial-1",
+            benchmark="test-benchmark",
+            harness="h1",
+            cpv_id=f"cpv-{index}",
+            patch=EmbeddedPatch(
+                patch_id=f"patch-{index}",
+                pov_id=f"cpv-{index}",
+                patch_content_b64="cGF0Y2g=",
+            ),
+            sanitizer="address",
+            source_mode="main_repo",
+            verify_variants=True,
+            test_mode="FULL",
+            use_inc_build=True,
+            enqueued_at=100.0,
+        )
+        store.submit_request(
+            VerifyRequestRecord(
+                request_id=f"patch-verify:trial-1:test-benchmark:h1:cpv-{index}:patch-{index}",
+                owner_key=f"trial::exp1::trial-{index}",
+                request_kind="patch",
+                payload=patch_payload.to_dict(),
+            )
+        )
+
+    worker = EvaluatorClaimWorker(
+        redis_conn=redis_conn,
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=_FakeQueue("build-q"),
+        verify_queue=_FakeQueue("verify-q"),
+        verification_engine=MagicMock(),
+        benchmarks_root=Path("/benchmarks"),
+        max_inflight_requests=2,
+        claim_batch_size=2,
+    )
+
+    batched_limits: list[int] = []
+
+    def _claim_next_requests(
+        *,
+        evaluator_id: str,
+        now: float,
+        lease_seconds: int,
+        limit: int,
+    ) -> list[VerifyRequestRecord]:
+        batched_limits.append(limit)
+        claimed: list[VerifyRequestRecord] = []
+        for _ in range(limit):
+            next_claim = EvaluatorVerifyClaimStore.claim_next_request(
+                worker.store,
+                evaluator_id=evaluator_id,
+                now=now,
+                lease_seconds=lease_seconds,
+            )
+            if next_claim is None:
+                break
+            claimed.append(next_claim)
+        return claimed
+
+    def _unexpected_single_claim(**_: object) -> VerifyRequestRecord | None:
+        raise AssertionError("single-claim path should not be used")
+
+    worker.store.claim_next_requests = _claim_next_requests  # type: ignore[method-assign]
+    worker.store.claim_next_request = _unexpected_single_claim  # type: ignore[method-assign]
+
+    claimed = worker.tick(now=100.0)
+
+    assert claimed is not None
+    assert batched_limits == [2]
+    assert len(worker._active_claims) == 2
+    assert len(worker.build_queue.enqueued) == 2
+    assert len(worker.verify_queue.enqueued) == 2
+
+
 def test_enqueue_or_reuse_job_adopts_trial_owner_for_reused_warmup_job() -> None:
     from crsbench.distributed.evaluator_claim_worker import _enqueue_or_reuse_job
     from crsbench.distributed.evaluator_scheduler import SCHEDULER_OWNER_KEY_META
