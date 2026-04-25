@@ -162,6 +162,7 @@ def build_dispatcher_warmup_specs(
 
     benchmarks_root = Path(config.benchmarks_root)
     benchmark_names = list(config.get_benchmark_list())
+    use_inc_build = bool(getattr(config, "inc_build_enabled", True))
 
     mode_str = config.mode.value
     if mode_str not in ("all", "auto"):
@@ -181,7 +182,7 @@ def build_dispatcher_warmup_specs(
             continue
         jobs = planner.iter_builds(
             benchmark_path,
-            use_inc_build=True,
+            use_inc_build=use_inc_build,
             skip_if_cached=True,
             inc_image_policy=inc_image_policy,
             inc_image_registry=inc_image_registry,

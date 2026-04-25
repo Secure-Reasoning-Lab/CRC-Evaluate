@@ -209,6 +209,76 @@ def test_build_dispatcher_warmup_specs_plans_serialized_build_jobs(
 
 @patch("crsbench.distributed.ci_jobs.serialize_ci_job")
 @patch("crsbench.executor.variant_planner.VariantPlanner")
+def test_build_dispatcher_warmup_specs_uses_clean_builds_when_inc_build_disabled(
+    mock_planner_cls: MagicMock,
+    mock_serialize: MagicMock,
+    tmp_path: Path,
+) -> None:
+    benchmark_name = "afc-mock-full-01"
+    benchmark_path = tmp_path / benchmark_name
+    benchmark_path.mkdir(parents=True, exist_ok=True)
+    config = SimpleNamespace(
+        benchmarks_root=tmp_path,
+        mode=SimpleNamespace(value="auto"),
+        source_mode="pkgs",
+        inc_build_enabled=False,
+        get_benchmark_list=lambda: [benchmark_name],
+    )
+    planner = MagicMock()
+    job = MagicMock()
+    job.job_id = "build-single/bench/variant-clean"
+    job.benchmark_name = "bench-clean"
+    job.benchmark = "bench-clean"
+    job.harness = "harness-clean"
+    job.cpv_id = None
+    job.sanitizer = "address"
+    job.job_type = "build"
+    planner.iter_builds.return_value = iter([job])
+    mock_planner_cls.return_value = planner
+    mock_serialize.return_value = {"kind": "build-clean"}
+
+    specs = list(
+        build_dispatcher_warmup_specs(
+            config,
+            experiment_name="exp-test",
+            evaluator_id="eval-1",
+            oss_fuzz_path=tmp_path / "oss-fuzz",
+            inc_image_policy="pull_only",
+            inc_image_registry="ghcr.io/example/custom",
+            inc_image_max_pull_bytes=123,
+            inc_image_pull_timeout=77,
+            local_image_prefix="custom-prefix",
+        )
+    )
+
+    assert specs == [
+        WarmupBuildSpec(
+            job_id="build-single/bench/variant-clean/local/eval-1",
+            payload={"kind": "build-clean"},
+            meta={
+                "experiment_name": "exp-test",
+                "warmup": "true",
+                SCHEDULER_OWNER_KEY_META: build_scheduler_owner_key_for_ci_job(
+                    job,
+                    experiment_name="exp-test",
+                ),
+            },
+        )
+    ]
+    planner.iter_builds.assert_called_once_with(
+        benchmark_path,
+        use_inc_build=False,
+        skip_if_cached=True,
+        inc_image_policy="pull_only",
+        inc_image_registry="ghcr.io/example/custom",
+        inc_image_max_pull_bytes=123,
+        inc_image_pull_timeout=77,
+        local_image_prefix="custom-prefix",
+    )
+
+
+@patch("crsbench.distributed.ci_jobs.serialize_ci_job")
+@patch("crsbench.executor.variant_planner.VariantPlanner")
 def test_build_dispatcher_warmup_specs_consumes_one_job_at_a_time_within_benchmark(
     mock_planner_cls: MagicMock,
     mock_serialize: MagicMock,

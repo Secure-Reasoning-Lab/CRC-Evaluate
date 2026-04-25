@@ -40,6 +40,7 @@ class TestRuntimeRegistration:
             sanitizers=["address"],
             modes=["delta"],
             benchmarks_root="/data/benchmarks",
+            inc_build_enabled=False,
             max_total_time=3600,
             build_timeout=1800,
             per_pov_verify_timeout=120,
@@ -53,6 +54,7 @@ class TestRuntimeRegistration:
         assert restored.cores_per_trial == 8
         assert restored.memory_per_trial == "16G"
         assert restored.benchmarks == ["bench-a", "bench-b"]
+        assert restored.inc_build_enabled is False
         assert restored.config_hash == "abc123"
 
     def test_extra_fields_ignored(self) -> None:
@@ -167,6 +169,39 @@ class TestRuntimeRegistration:
         assert reg.cores_per_trial is None
         assert reg.memory_per_trial is None
         assert reg.worker_cores_per_job is None
+
+    def test_from_experiment_config_honors_inc_build_enabled(self) -> None:
+        """Registration preserves experiment inc-build enablement for pre-build hints."""
+        from crsbench.distributed.registry import RuntimeRegistration
+
+        config = MagicMock()
+        config.experiment = "exp"
+        config.mode.value = "delta"
+        config.sanitizers = []
+        config.resources = None
+        config.worker = None
+        config.evaluator = None
+        config.inc_build_enabled = False
+        config.oss_fuzz_path = "/oss-fuzz"
+        config.benchmarks_root = "/benchmarks"
+        config.source_mode = "pkgs"
+        config.inc_image_policy = "auto"
+        config.inc_image_registry = "ghcr.io/team-atlanta/crsbench"
+        config.inc_image_max_pull_bytes = 10 * 1024 * 1024 * 1024
+        config.inc_image_pull_timeout_sec = 300
+        config.project_image_prefix = "crsbench"
+        config.max_total_time = 7200
+        config.build_timeout = 3600
+        config.per_pov_verify_timeout = 180
+        config.get_benchmark_list.return_value = []
+        config.model_dump.return_value = {
+            "experiment": "exp",
+            "inc_build_enabled": False,
+        }
+
+        reg = RuntimeRegistration.from_experiment_config(config)
+
+        assert reg.inc_build_enabled is False
 
     def test_from_experiment_config_evaluator_unified_defaults(self) -> None:
         """Unified evaluator jobs/cores_per_job populate build+verify metadata."""

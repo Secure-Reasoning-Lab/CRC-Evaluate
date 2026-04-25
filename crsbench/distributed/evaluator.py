@@ -298,6 +298,7 @@ def _enqueue_pre_builds(
     base_job_meta = {"experiment_name": experiment_name}
     if cpu_tag:
         base_job_meta["cpu_tag"] = cpu_tag
+    use_inc_build = bool(getattr(config, "inc_build_enabled", True))
 
     enqueued = 0
     for name in benchmark_names:
@@ -308,7 +309,7 @@ def _enqueue_pre_builds(
 
         jobs = planner.plan_builds(
             benchmark_path,
-            use_inc_build=True,
+            use_inc_build=use_inc_build,
             skip_if_cached=True,
             inc_image_policy=inc_image_policy,
             inc_image_registry=inc_image_registry,
@@ -808,6 +809,7 @@ def _enqueue_pre_builds_from_registration(
         base_job_meta["cpu_tag"] = registration.cpu_tag
 
     enqueued = 0
+    use_inc_build = bool(getattr(registration, "inc_build_enabled", True))
     for name in benchmark_names:
         benchmark_path = benchmarks_root / name
         if not benchmark_path.exists():
@@ -816,7 +818,7 @@ def _enqueue_pre_builds_from_registration(
 
         jobs = planner.plan_builds(
             benchmark_path,
-            use_inc_build=True,
+            use_inc_build=use_inc_build,
             skip_if_cached=True,
             inc_image_policy=registration.inc_image_policy,
             inc_image_registry=registration.inc_image_registry,

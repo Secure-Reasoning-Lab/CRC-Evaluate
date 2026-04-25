@@ -231,6 +231,52 @@ class TestRunEvaluatorMain:
     @patch("crsbench.distributed.evaluator.create_redis_connection")
     @patch("crsbench.distributed.evaluator.start_presence_thread")
     @patch("crsbench.distributed.evaluator_jobs.set_engine")
+    def test_dispatcher_mode_keeps_warmup_when_inc_build_disabled(
+        self,
+        mock_set_engine: MagicMock,
+        mock_start_presence_thread: MagicMock,
+        mock_create_redis_connection: MagicMock,
+        mock_start_dispatcher_thread: MagicMock,
+        mock_start_dispatcher_warmup_thread: MagicMock,
+        mock_start_claim_thread: MagicMock,
+        mock_supervisor: MagicMock,
+        monkeypatch,
+    ) -> None:
+        from crsbench.distributed.evaluator import run_evaluator_main
+
+        mock_supervisor.return_value = 0
+        mock_create_redis_connection.return_value = MagicMock()
+        mock_start_claim_thread.return_value = (MagicMock(), MagicMock())
+        mock_start_dispatcher_warmup_thread.return_value = (MagicMock(), MagicMock())
+        monkeypatch.setenv("CRSBENCH_EVALUATOR_ROUTING_MODEL", "dispatcher")
+        config = MagicMock()
+        config.oss_fuzz_path = "/tmp/oss-fuzz"
+        config.per_pov_verify_timeout = 180
+        config.inc_build_enabled = False
+
+        with patch("crsbench.evaluation.verification.pov.engine.VerificationEngine"):
+            result = run_evaluator_main(
+                config,
+                "exp-test",
+                worker_name="eval-1",
+                build_jobs=2,
+            )
+
+        assert result == 0
+        mock_start_claim_thread.assert_called_once()
+        mock_start_presence_thread.assert_not_called()
+        mock_start_dispatcher_thread.assert_not_called()
+        mock_start_dispatcher_warmup_thread.assert_called_once()
+        assert mock_start_dispatcher_warmup_thread.call_args.kwargs["build_jobs"] == 2
+
+    @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
+    @patch("crsbench.distributed.ci_supervisor.run_ci_supervisor")
+    @patch("crsbench.distributed.evaluator.start_claim_thread")
+    @patch("crsbench.distributed.evaluator.start_dispatcher_warmup_thread")
+    @patch("crsbench.distributed.evaluator.start_dispatcher_thread")
+    @patch("crsbench.distributed.evaluator.create_redis_connection")
+    @patch("crsbench.distributed.evaluator.start_presence_thread")
+    @patch("crsbench.distributed.evaluator_jobs.set_engine")
     def test_dispatcher_mode_scales_claim_inflight_with_local_capacity(
         self,
         mock_set_engine: MagicMock,
@@ -1388,6 +1434,68 @@ class TestConfiglessEvaluator:
     @patch("crsbench.distributed.queue.create_redis_connection")
     @patch("crsbench.distributed.ci_jobs.serialize_ci_job")
     @patch("crsbench.executor.variant_planner.VariantPlanner")
+    @patch("crsbench.utils.benchmark_utils.filter_benchmarks_by_mode")
+    def test_enqueue_pre_builds_from_registration_honors_inc_build_disabled(
+        self,
+        mock_filter: MagicMock,
+        mock_planner_cls: MagicMock,
+        mock_serialize: MagicMock,
+        mock_create_redis: MagicMock,
+        mock_queue_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        from crsbench.distributed.evaluator import _enqueue_pre_builds_from_registration
+        from crsbench.distributed.registry import RuntimeRegistration
+
+        benchmark_name = "afc-mock-full-02"
+        (tmp_path / benchmark_name).mkdir(parents=True, exist_ok=True)
+
+        reg = RuntimeRegistration(
+            experiment="exp-43",
+            trial_queue="crsbench_exp-43",
+            build_queue="crsbench_exp-43_build",
+            verify_queue="crsbench_exp-43_verify",
+            benchmarks=[benchmark_name],
+            modes=["full"],
+            benchmarks_root=str(tmp_path),
+            source_mode="pkgs",
+            build_timeout=3600,
+            inc_build_enabled=False,
+        )
+
+        mock_filter.side_effect = lambda names, _mode, _root: names
+        mock_create_redis.return_value = MagicMock()
+        mock_queue_cls.return_value = MagicMock()
+        mock_serialize.return_value = {"kind": "build"}
+
+        mock_planner = MagicMock()
+        job = MagicMock()
+        job.job_id = "job-2-clean"
+        mock_planner.plan_builds.return_value = [job]
+        mock_planner_cls.return_value = mock_planner
+
+        enqueued = _enqueue_pre_builds_from_registration(
+            reg,
+            redis_host="localhost",
+            benchmarks_root=str(tmp_path),
+        )
+
+        assert enqueued == 1
+        mock_planner.plan_builds.assert_called_once_with(
+            tmp_path / benchmark_name,
+            use_inc_build=False,
+            skip_if_cached=True,
+            inc_image_policy="auto",
+            inc_image_registry="ghcr.io/team-atlanta/crsbench",
+            inc_image_max_pull_bytes=10 * 1024 * 1024 * 1024,
+            inc_image_pull_timeout=300,
+            local_image_prefix="crsbench",
+        )
+
+    @patch("rq.Queue")
+    @patch("crsbench.distributed.queue.create_redis_connection")
+    @patch("crsbench.distributed.ci_jobs.serialize_ci_job")
+    @patch("crsbench.executor.variant_planner.VariantPlanner")
     @patch("crsbench.distributed.evaluator.filter_benchmarks_by_mode")
     def test_enqueue_pre_builds_propagates_inc_image_settings(
         self,
@@ -1450,6 +1558,64 @@ class TestConfiglessEvaluator:
             inc_image_max_pull_bytes=654321,
             inc_image_pull_timeout=91,
             local_image_prefix="resolved-prefix",
+        )
+
+    @patch("rq.Queue")
+    @patch("crsbench.distributed.queue.create_redis_connection")
+    @patch("crsbench.distributed.ci_jobs.serialize_ci_job")
+    @patch("crsbench.executor.variant_planner.VariantPlanner")
+    @patch("crsbench.distributed.evaluator.filter_benchmarks_by_mode")
+    def test_enqueue_pre_builds_honors_inc_build_disabled(
+        self,
+        mock_filter: MagicMock,
+        mock_planner_cls: MagicMock,
+        mock_serialize: MagicMock,
+        mock_create_redis: MagicMock,
+        mock_queue_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        from types import SimpleNamespace
+
+        from crsbench.distributed.evaluator import _enqueue_pre_builds
+
+        benchmark_name = "afc-mock-full-04"
+        (tmp_path / benchmark_name).mkdir(parents=True, exist_ok=True)
+
+        config = SimpleNamespace(
+            benchmarks_root=tmp_path,
+            mode=SimpleNamespace(value="full"),
+            resources=SimpleNamespace(cpu_tag=None),
+            inc_build_enabled=False,
+            get_benchmark_list=lambda: [benchmark_name],
+        )
+
+        mock_filter.side_effect = lambda names, _mode, _root: names
+        mock_create_redis.return_value = MagicMock()
+        mock_queue_cls.return_value = MagicMock()
+        mock_serialize.return_value = {"kind": "build"}
+
+        mock_planner = MagicMock()
+        job = MagicMock()
+        job.job_id = "job-4-clean"
+        mock_planner.plan_builds.return_value = [job]
+        mock_planner_cls.return_value = mock_planner
+
+        enqueued = _enqueue_pre_builds(
+            config,
+            experiment_name="exp-45",
+            redis_host="localhost",
+        )
+
+        assert enqueued == 1
+        mock_planner.plan_builds.assert_called_once_with(
+            tmp_path / benchmark_name,
+            use_inc_build=False,
+            skip_if_cached=True,
+            inc_image_policy="auto",
+            inc_image_registry="ghcr.io/team-atlanta/crsbench",
+            inc_image_max_pull_bytes=None,
+            inc_image_pull_timeout=300,
+            local_image_prefix="crsbench",
         )
 
     def test_evaluator_cli_configless_mode(self) -> None:
