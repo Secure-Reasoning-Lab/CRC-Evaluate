@@ -468,6 +468,10 @@ def test_should_auto_rotate_pages_respects_idle_timeout() -> None:
     )
 
 
+def test_page_navigation_idle_timeout_uses_auto_rotate_cadence() -> None:
+    assert _page_navigation_idle_timeout_sec(30.0) == 5.0
+
+
 def test_select_running_jobs_window_shows_all_rows_when_terminal_can_fit_them() -> None:
     rich_console = pytest.importorskip("rich.console")
     console = rich_console.Console(width=120, height=21, force_terminal=True)
@@ -1644,6 +1648,104 @@ def test_monitor_queue_rich_refreshes_tracked_jobs_on_poll_interval() -> None:
         )
 
     assert refresh_calls["count"] == 1
+
+
+def test_monitor_queue_rich_shutdown_does_not_wait_forever_on_blocked_refresh() -> None:
+    rich_console = pytest.importorskip("rich.console")
+    queue = MagicMock()
+    active = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 1, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[],
+    )
+    refresh_started = threading.Event()
+    allow_refresh_finish = threading.Event()
+    monitor_errors: queue_module.Queue[Exception] = queue_module.Queue()
+
+    class DummyLive:
+        def __init__(self, renderable, *args, **kwargs):
+            del renderable, args, kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def update(self, renderable, *args, **kwargs):
+            del renderable, args, kwargs
+
+    class DummyInput:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+            self.manual_navigation_available = True
+            self.manual_navigation_status = "n/p active; Space pauses auto-rotate"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read_command(self, timeout_sec: float) -> str | None:
+            del timeout_sec
+            assert refresh_started.wait(1.0)
+            raise RuntimeError("stop monitor")
+
+    build_calls = 0
+
+    def _build_snapshot(*args, **kwargs) -> QueueMonitorSnapshot:
+        del args, kwargs
+        nonlocal build_calls
+        build_calls += 1
+        if build_calls == 1:
+            return active
+        refresh_started.set()
+        assert allow_refresh_finish.wait(1.0)
+        return active
+
+    console = rich_console.Console(
+        width=120,
+        height=20,
+        force_terminal=True,
+        record=True,
+    )
+
+    def _run_monitor() -> None:
+        try:
+            monitor_queue(
+                queue,
+                "exp-1",
+                tracked_job_ids=None,
+                callbacks=QueueMonitorCallbacks(),
+                use_rich=True,
+                poll_interval=0.0,
+                exit_when_idle=False,
+            )
+        except Exception as exc:
+            monitor_errors.put(exc)
+
+    with (
+        patch(
+            "crsbench.distributed.queue_monitor.build_monitor_snapshot",
+            side_effect=_build_snapshot,
+        ),
+        patch("crsbench.distributed.queue_monitor._RichMonitorInput", DummyInput),
+        patch("rich.console.Console", return_value=console),
+        patch("rich.live.Live", DummyLive),
+    ):
+        monitor_thread = threading.Thread(target=_run_monitor, daemon=True)
+        monitor_thread.start()
+        try:
+            assert refresh_started.wait(1.0)
+            monitor_thread.join(0.5)
+            assert not monitor_thread.is_alive()
+        finally:
+            allow_refresh_finish.set()
+            monitor_thread.join(1.0)
+
+    raised = monitor_errors.get_nowait()
+    assert isinstance(raised, RuntimeError)
+    assert str(raised) == "stop monitor"
 
 
 def test_display_worker_name_trims_cloud_experiment_prefix() -> None:

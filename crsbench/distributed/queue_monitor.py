@@ -27,6 +27,7 @@ logger = get_logger(__name__)
 _RICH_MONITOR_INPUT_POLL_INTERVAL_SEC = 0.1
 _RICH_MONITOR_MIN_REFRESH_INTERVAL_SEC = 0.01
 _RICH_MONITOR_AUTO_ROTATE_INTERVAL_SEC = 5.0
+_RICH_MONITOR_POLLER_CLOSE_TIMEOUT_SEC = 0.2
 
 
 def _rich_console_available() -> bool:
@@ -416,7 +417,9 @@ class _RichMonitorSnapshotPoller:
 
     def close(self) -> None:
         self._stop_event.set()
-        self._thread.join()
+        self._thread.join(timeout=_RICH_MONITOR_POLLER_CLOSE_TIMEOUT_SEC)
+        if self._thread.is_alive():
+            logger.warning("Rich monitor refresh is still stopping in the background")
 
     def drain_latest(self) -> QueueMonitorSnapshot | None:
         latest_snapshot: QueueMonitorSnapshot | None = None
@@ -909,7 +912,7 @@ def _select_running_jobs_window(
 
 def _page_navigation_idle_timeout_sec(poll_interval: float) -> float:
     """Keep manual page selection visible briefly before auto-rotation resumes."""
-    return max(5.0, poll_interval * 2)
+    return _rich_monitor_auto_rotate_interval_sec(poll_interval)
 
 
 def _should_auto_rotate_pages(
