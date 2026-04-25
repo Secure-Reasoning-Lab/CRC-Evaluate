@@ -314,6 +314,102 @@ class TestRunEvaluatorMain:
         mock_start_presence_thread.assert_not_called()
         mock_start_dispatcher_thread.assert_not_called()
 
+    @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
+    @patch("crsbench.distributed.ci_supervisor.run_ci_supervisor")
+    @patch("crsbench.distributed.evaluator.start_claim_thread")
+    @patch("crsbench.distributed.evaluator.start_dispatcher_warmup_thread")
+    @patch("crsbench.distributed.evaluator.start_dispatcher_thread")
+    @patch("crsbench.distributed.evaluator.create_redis_connection")
+    @patch("crsbench.distributed.evaluator.start_presence_thread")
+    @patch("crsbench.distributed.evaluator_jobs.set_engine")
+    def test_dispatcher_mode_adds_verify_headroom_from_cloud_evaluator_count(
+        self,
+        mock_set_engine: MagicMock,
+        mock_start_presence_thread: MagicMock,
+        mock_create_redis_connection: MagicMock,
+        mock_start_dispatcher_thread: MagicMock,
+        mock_start_dispatcher_warmup_thread: MagicMock,
+        mock_start_claim_thread: MagicMock,
+        mock_supervisor: MagicMock,
+        monkeypatch,
+    ) -> None:
+        from crsbench.distributed.evaluator import run_evaluator_main
+
+        mock_supervisor.return_value = 0
+        mock_create_redis_connection.return_value = MagicMock()
+        mock_start_claim_thread.return_value = (MagicMock(), MagicMock())
+        mock_start_dispatcher_warmup_thread.return_value = (MagicMock(), MagicMock())
+        monkeypatch.setenv("CRSBENCH_EVALUATOR_ROUTING_MODEL", "dispatcher")
+        config = MagicMock()
+        config.oss_fuzz_path = "/tmp/oss-fuzz"
+        config.per_pov_verify_timeout = 180
+        config.cloud = argparse.Namespace(
+            evaluators=argparse.Namespace(placements=[{}, {}, {}]),
+        )
+
+        with patch("crsbench.evaluation.verification.pov.engine.VerificationEngine"):
+            result = run_evaluator_main(
+                config,
+                "exp-test",
+                worker_name="eval-1",
+                build_jobs=3,
+                verify_jobs=5,
+            )
+
+        assert result == 0
+        claim_worker = mock_start_claim_thread.call_args.args[0]
+        assert claim_worker.max_inflight_requests == 7
+        mock_start_presence_thread.assert_not_called()
+        mock_start_dispatcher_thread.assert_not_called()
+
+    @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
+    @patch("crsbench.distributed.ci_supervisor.run_ci_supervisor")
+    @patch("crsbench.distributed.evaluator.start_claim_thread")
+    @patch("crsbench.distributed.evaluator.start_dispatcher_warmup_thread")
+    @patch("crsbench.distributed.evaluator.start_dispatcher_thread")
+    @patch("crsbench.distributed.evaluator.create_redis_connection")
+    @patch("crsbench.distributed.evaluator.start_presence_thread")
+    @patch("crsbench.distributed.evaluator_jobs.set_engine")
+    def test_dispatcher_mode_keeps_build_capacity_floor_when_verify_headroom_is_lower(
+        self,
+        mock_set_engine: MagicMock,
+        mock_start_presence_thread: MagicMock,
+        mock_create_redis_connection: MagicMock,
+        mock_start_dispatcher_thread: MagicMock,
+        mock_start_dispatcher_warmup_thread: MagicMock,
+        mock_start_claim_thread: MagicMock,
+        mock_supervisor: MagicMock,
+        monkeypatch,
+    ) -> None:
+        from crsbench.distributed.evaluator import run_evaluator_main
+
+        mock_supervisor.return_value = 0
+        mock_create_redis_connection.return_value = MagicMock()
+        mock_start_claim_thread.return_value = (MagicMock(), MagicMock())
+        mock_start_dispatcher_warmup_thread.return_value = (MagicMock(), MagicMock())
+        monkeypatch.setenv("CRSBENCH_EVALUATOR_ROUTING_MODEL", "dispatcher")
+        config = MagicMock()
+        config.oss_fuzz_path = "/tmp/oss-fuzz"
+        config.per_pov_verify_timeout = 180
+        config.cloud = argparse.Namespace(
+            evaluators=argparse.Namespace(placements=[{}, {}, {}]),
+        )
+
+        with patch("crsbench.evaluation.verification.pov.engine.VerificationEngine"):
+            result = run_evaluator_main(
+                config,
+                "exp-test",
+                worker_name="eval-1",
+                build_jobs=8,
+                verify_jobs=2,
+            )
+
+        assert result == 0
+        claim_worker = mock_start_claim_thread.call_args.args[0]
+        assert claim_worker.max_inflight_requests == 8
+        mock_start_presence_thread.assert_not_called()
+        mock_start_dispatcher_thread.assert_not_called()
+
     def test_no_build_workers_parameter(self) -> None:
         """run_evaluator_main no longer has build_workers parameter."""
         import inspect

@@ -8,6 +8,7 @@ This module implements the evaluator process that:
 5. Stores results as RQ job results
 """
 
+import math
 import os
 import sys
 from pathlib import Path
@@ -46,6 +47,36 @@ LEGACY_CI_ALIAS_EXPERIMENT = "__legacy_ci_alias__"
 LEGACY_CI_BUILD_QUEUE = "crsbench_ci_build"
 LEGACY_CI_VERIFY_QUEUE = "crsbench_ci_verify"
 EVALUATOR_PROGRESS_LOG_EVERY_JOBS = 50
+
+
+def _resolve_cloud_evaluator_placement_count(config: Any) -> int | None:
+    """Return the configured cloud evaluator fleet size when explicitly set."""
+    cloud = getattr(config, "cloud", None)
+    evaluators = getattr(cloud, "evaluators", None)
+    placements = getattr(evaluators, "placements", None)
+    if not isinstance(placements, (list, tuple)):
+        return None
+    placement_count = len(placements)
+    return placement_count if placement_count > 0 else None
+
+
+def _resolve_dispatcher_claim_inflight_requests(
+    *,
+    config: Any,
+    build_jobs: Optional[int],
+    verify_jobs: Optional[int],
+) -> int:
+    """Size dispatcher claim intake to local width plus verify refill headroom."""
+    local_build_capacity = max(build_jobs or 1, 1)
+    local_verify_capacity = max(verify_jobs or local_build_capacity, 1)
+    base_capacity = max(local_build_capacity, local_verify_capacity)
+
+    evaluator_count = _resolve_cloud_evaluator_placement_count(config)
+    if evaluator_count is None:
+        return base_capacity
+
+    extra_buffer = math.ceil(local_verify_capacity / evaluator_count)
+    return max(base_capacity, local_verify_capacity + extra_buffer)
 
 
 def build_evaluator_id(worker_name: str | None) -> str:
@@ -503,8 +534,6 @@ def run_evaluator_main(
         redis_conn = create_redis_connection(redis_host)
         build_queue = rq.Queue(build_queue_name, connection=redis_conn)
         verify_queue = rq.Queue(verify_queue_name, connection=redis_conn)
-        local_build_capacity = build_jobs or 1
-        local_verify_capacity = verify_jobs or local_build_capacity
         benchmarks_root = getattr(config, "benchmarks_root", None)
         if not isinstance(benchmarks_root, (str, Path)):
             benchmarks_root = Path("benchmarks")
@@ -516,9 +545,13 @@ def run_evaluator_main(
             verify_queue=verify_queue,
             verification_engine=engine,
             benchmarks_root=Path(benchmarks_root),
-            # Keep dispatcher intake aligned with local execution width instead
-            # of hard-coding a single logical request per evaluator.
-            max_inflight_requests=max(local_build_capacity, local_verify_capacity),
+            # Keep dispatcher intake aligned with local execution width, with
+            # extra verify headroom when cloud placement count is known.
+            max_inflight_requests=_resolve_dispatcher_claim_inflight_requests(
+                config=config,
+                build_jobs=build_jobs,
+                verify_jobs=verify_jobs,
+            ),
         )
         claim_loop = start_claim_thread(claim_worker)
         warmup_loop = start_dispatcher_warmup_thread(
