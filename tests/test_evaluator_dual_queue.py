@@ -56,10 +56,17 @@ class TestRunEvaluatorMain:
         sys.modules.pop("rq", None)
         sys.modules.pop("rq.job", None)
 
-        evaluator = importlib.import_module("crsbench.distributed.evaluator")
+        try:
+            evaluator = importlib.import_module("crsbench.distributed.evaluator")
 
-        assert evaluator.REDIS_AVAILABLE is False
-        assert "crsbench.distributed.evaluator_warmup" not in sys.modules
+            assert evaluator.REDIS_AVAILABLE is False
+            assert "crsbench.distributed.evaluator_warmup" not in sys.modules
+        finally:
+            sys.modules.pop("crsbench.distributed.evaluator", None)
+            sys.modules.pop("crsbench.distributed.evaluator_warmup", None)
+            sys.modules.pop("crsbench.distributed.queue", None)
+            sys.modules.pop("rq", None)
+            sys.modules.pop("rq.job", None)
 
     @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=False)
     def test_returns_error_without_redis(self) -> None:

@@ -9,7 +9,9 @@ from crsbench.distributed.job_lifecycle import (
 from crsbench.distributed.jobs import (
     JobLifecycleRuntime,
     _apply_worker_overrides,
+    _begin_job_syncing,
     _build_trial_output_path,
+    _create_phase_callbacks,
     _finish_job_lifecycle,
     _initialize_job_lifecycle_runtime,
     _lifecycle_runtime_is_current_owner,
@@ -256,6 +258,72 @@ def test_initialize_job_lifecycle_runtime_does_not_steal_foreign_claim() -> None
     assert fetched.state is JobState.CLAIMED
     assert fetched.claimed_by == "worker-2"
     assert fetched.last_heartbeat is None
+
+
+def test_on_verification_start_keeps_lifecycle_running_until_sync_begins() -> None:
+    fake = _FakeRedis()
+    store = JobLifecycleStore(fake)
+    store.set(
+        "exp-1",
+        JobLifecycleRecord(
+            job_id="job-1",
+            trial_key="trial-1",
+            state=JobState.RUNNING,
+            claimed_by="worker-1",
+        ),
+    )
+    runtime = JobLifecycleRuntime(
+        experiment_name="exp-1",
+        job_id="job-1",
+        worker_name="worker-1",
+        store=store,
+    )
+    current_job = MagicMock()
+    current_job.id = "job-1"
+    current_job.meta = {}
+
+    _on_build_start, _on_run_start, on_verification_start = _create_phase_callbacks(
+        runtime
+    )
+
+    with patch("rq.get_current_job", return_value=current_job):
+        on_verification_start()
+
+    record = store.get("exp-1", "job-1")
+    assert record is not None
+    assert current_job.meta["phase"] == "verifying"
+    assert record.state is JobState.RUNNING
+
+
+def test_begin_job_syncing_updates_phase_metadata_and_lifecycle() -> None:
+    fake = _FakeRedis()
+    store = JobLifecycleStore(fake)
+    store.set(
+        "exp-1",
+        JobLifecycleRecord(
+            job_id="job-1",
+            trial_key="trial-1",
+            state=JobState.RUNNING,
+            claimed_by="worker-1",
+        ),
+    )
+    runtime = JobLifecycleRuntime(
+        experiment_name="exp-1",
+        job_id="job-1",
+        worker_name="worker-1",
+        store=store,
+    )
+    current_job = MagicMock()
+    current_job.id = "job-1"
+    current_job.meta = {"phase": "verifying"}
+
+    with patch("rq.get_current_job", return_value=current_job):
+        _begin_job_syncing(runtime)
+
+    record = store.get("exp-1", "job-1")
+    assert record is not None
+    assert current_job.meta["phase"] == "syncing"
+    assert record.state is JobState.SYNCING
 
 
 def test_finish_job_lifecycle_noops_for_superseded_worker() -> None:
