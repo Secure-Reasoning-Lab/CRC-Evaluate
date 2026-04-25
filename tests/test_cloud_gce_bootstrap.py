@@ -1122,6 +1122,30 @@ def test_orchestrator_startup_script_consumes_config_payload_and_preprovisioned_
     assert "CRSBENCH_CLOUD_PREPROVISIONED_WORKERS" in script
 
 
+def test_orchestrator_startup_script_waits_for_from_experiment_sentinel_before_run():
+    """Launcher must block on the push-complete sentinel before crsbench run.
+
+    Regression: previously the orchestrator service started immediately after
+    user creation and validated ``inputs.pov.from_experiment*`` before the
+    operator-side rsync push had landed the bundle, racing with provisioning.
+    """
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+
+    assert "wait_for_from_experiment_bundle" in script
+    # Sentinel path is built from the experiment name interpolated at
+    # generation time, so the launcher embeds the literal '/var/lib/...' root.
+    assert "/var/lib/crsbench/from-experiment/" in script
+    assert ".push-complete" in script
+    # The wait must happen before 'crsbench run' in the launcher body.
+    assert script.index("wait_for_from_experiment_bundle\n") < script.index(
+        "crsbench run --experiment-config"
+    )
+    # Skip-when-not-configured branch keeps non-from_experiment launches fast.
+    assert "from_experiment not configured" in script
+
+
 def test_orchestrator_startup_script_loads_passthrough_env_before_timezone_normalization():
     """Orchestrator startup must load metadata-passed env before ensure_timezone runs."""
     from crsbench.cloud.gce.metadata import load_orchestrator_startup_script

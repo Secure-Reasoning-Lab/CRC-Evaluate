@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from crsbench.cloud.collection import (
+    FROM_EXPERIMENT_PUSH_SENTINEL_NAME,
     ArtifactPusher,
     ArtifactPushError,
     build_push_rsync_cmd,
@@ -153,6 +154,73 @@ def test_push_direct_ip_runs_install_and_rsync(tmp_path: Path) -> None:
         rsync_args = rsync_mock.call_args.args[0]
         assert any(a.startswith("--files-from=") for a in rsync_args)
         assert "--chown=crsbench:crsbench" in rsync_args
+
+
+def test_mark_push_complete_drops_sentinel_via_sudo_install(tmp_path: Path) -> None:
+    """Sentinel must land at the requested path with crsbench ownership."""
+    broker = SshBroker(base_path=tmp_path)
+    pusher = ArtifactPusher(broker=broker)
+    instance = _fake_instance()
+    fleet = _fake_fleet(ssh_via_iap=False)
+    sentinel_path = (
+        f"/var/lib/crsbench/from-experiment/exp-1/{FROM_EXPERIMENT_PUSH_SENTINEL_NAME}"
+    )
+
+    with (
+        patch.object(
+            broker,
+            "prepare_direct_known_hosts",
+            return_value=tmp_path / "known_hosts",
+        ),
+        patch.object(broker, "direct_ssh_user", return_value="testuser"),
+        patch.object(
+            broker,
+            "run_remote_command",
+            return_value=subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            ),
+        ) as remote_cmd,
+    ):
+        pusher.mark_push_complete(
+            instance=instance,
+            fleet=fleet,
+            sentinel_path=sentinel_path,
+            experiment_filestore=tmp_path,
+        )
+
+    assert remote_cmd.call_count == 1
+    cmd = remote_cmd.call_args.kwargs["command"]
+    assert cmd.startswith("sudo install ")
+    assert "-o crsbench" in cmd
+    assert "-g crsbench" in cmd
+    assert "/dev/null" in cmd
+    assert sentinel_path in cmd
+
+
+def test_mark_push_complete_raises_on_remote_failure(tmp_path: Path) -> None:
+    broker = SshBroker(base_path=tmp_path)
+    pusher = ArtifactPusher(broker=broker)
+    instance = _fake_instance()
+    fleet = _fake_fleet(ssh_via_iap=False)
+
+    with (
+        patch.object(broker, "prepare_direct_known_hosts", return_value=None),
+        patch.object(broker, "direct_ssh_user", return_value="testuser"),
+        patch.object(
+            broker,
+            "run_remote_command",
+            return_value=subprocess.CompletedProcess(
+                args=[], returncode=1, stdout="", stderr="permission denied"
+            ),
+        ),
+    ):
+        with pytest.raises(ArtifactPushError, match="permission denied"):
+            pusher.mark_push_complete(
+                instance=instance,
+                fleet=fleet,
+                sentinel_path="/var/lib/crsbench/from-experiment/exp-1/.push-complete",
+                experiment_filestore=tmp_path,
+            )
 
 
 def test_push_reports_per_instance_failures(tmp_path: Path) -> None:

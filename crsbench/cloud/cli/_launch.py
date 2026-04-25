@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from crsbench.cloud.bootstrap import CloudVmBootstrapInputs
 from crsbench.cloud.collection import (
+    FROM_EXPERIMENT_PUSH_SENTINEL_NAME,
     ArtifactPusher,
     wait_for_ssh_ready,
 )
@@ -532,6 +533,20 @@ def run_launch(args: argparse.Namespace) -> int:
                     remote_destination=bundle.remote_destination,
                     experiment_filestore=Path(config.experiment_filestore),
                 )
+            sentinel_path = (
+                f"{_FROM_EXPERIMENT_REMOTE_ROOT}/{config.experiment}"
+                f"/{FROM_EXPERIMENT_PUSH_SENTINEL_NAME}"
+            )
+            pusher.mark_push_complete(
+                instance=orchestrator_record,
+                fleet=broker_fleet_map[orchestrator_record.name],
+                sentinel_path=sentinel_path,
+                experiment_filestore=Path(config.experiment_filestore),
+            )
+            logger.info(
+                "from_experiment push-complete sentinel dropped on orchestrator: {}",
+                sentinel_path,
+            )
 
         save_launch_state(
             config_path,

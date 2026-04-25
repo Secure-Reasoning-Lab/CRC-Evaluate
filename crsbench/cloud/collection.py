@@ -1129,6 +1129,7 @@ class ArtifactPushError(Exception):
 _DEFAULT_PUSH_PARALLELISM = 8
 _PUSH_REMOTE_OWNER = "crsbench"
 _PUSH_REMOTE_GROUP = "crsbench"
+FROM_EXPERIMENT_PUSH_SENTINEL_NAME = ".push-complete"
 
 
 def build_push_rsync_cmd(
@@ -1349,6 +1350,48 @@ class ArtifactPusher:
             ssh_command=ssh_cmd,
         )
         run_rsync_with_retry(cmd)
+
+    def mark_push_complete(
+        self,
+        *,
+        instance: "CloudInstanceLike",
+        fleet: "SshTransportConfig",
+        sentinel_path: str,
+        experiment_filestore: Path,
+    ) -> None:
+        """Drop a sentinel file owned by ``crsbench`` to signal push completion.
+
+        The remote launcher polls this path before invoking ``crsbench run``
+        so it never validates ``inputs.pov.from_experiment*`` against a
+        partially rsync'd directory tree.
+        """
+        ssh_user = self._broker.direct_ssh_user(fleet)
+        known_hosts: Path | None = None
+        if not fleet.ssh_via_iap:
+            known_hosts = self._broker.prepare_direct_known_hosts(
+                worker=instance,
+                fleet=fleet,
+                experiment_filestore=experiment_filestore,
+            )
+        quoted = shlex.quote(sentinel_path)
+        cmd = (
+            f"sudo install -o {_PUSH_REMOTE_OWNER} -g {_PUSH_REMOTE_GROUP} "
+            f"-m 0644 /dev/null {quoted}"
+        )
+        result = self._broker.run_remote_command(
+            worker=instance,
+            fleet=fleet,
+            command=cmd,
+            experiment_filestore=experiment_filestore,
+            known_hosts_path=known_hosts,
+            ssh_user=ssh_user,
+        )
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            raise ArtifactPushError(
+                f"failed to drop push-complete sentinel {sentinel_path} on "
+                f"{instance.name}: rc={result.returncode} stderr={stderr!r}"
+            )
 
     def _ensure_remote_parent(
         self,

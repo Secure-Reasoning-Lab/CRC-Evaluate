@@ -1219,6 +1219,45 @@ ensure_valkey_running() {
 
 ensure_valkey_running
 
+wait_for_from_experiment_bundle() {
+  local sentinel_path="/var/lib/crsbench/from-experiment/${EXPERIMENT_NAME}/.push-complete"
+  local needs_bundle
+  needs_bundle=\$(python3 - "\${CONFIG_PATH}" <<'PY'
+import sys
+
+import yaml
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    data = yaml.safe_load(fh) or {}
+runtime = data.get("runtime") or {}
+inputs = runtime.get("inputs") or data.get("inputs") or {}
+pov = inputs.get("pov") or {}
+single = pov.get("from_experiment")
+by_crs = pov.get("from_experiment_by_crs")
+print("1" if single or (isinstance(by_crs, dict) and by_crs) else "0")
+PY
+  )
+  if [[ "\${needs_bundle}" != "1" ]]; then
+    echo "from_experiment not configured; skipping bundle wait"
+    return 0
+  fi
+  echo "Waiting for from_experiment push-complete sentinel: \${sentinel_path}"
+  local timeout_sec=1800
+  local interval=5
+  local elapsed=0
+  while [[ ! -f "\${sentinel_path}" ]]; do
+    if (( elapsed >= timeout_sec )); then
+      echo "ERROR: timed out after \${timeout_sec}s waiting for \${sentinel_path}" >&2
+      exit 1
+    fi
+    sleep "\${interval}"
+    elapsed=\$((elapsed + interval))
+  done
+  echo "from_experiment bundle ready, proceeding"
+}
+
+wait_for_from_experiment_bundle
+
 echo "=== Starting crsbench run at \$(date -u) ==="
 echo "Config: \${CONFIG_PATH}"
 
