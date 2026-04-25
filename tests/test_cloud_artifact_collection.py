@@ -678,6 +678,9 @@ class TestStagingAndPublish:
         nested_staged_dir = trial_dir / "notes" / "staged" / "keepme"
         nested_staged_dir.mkdir(parents=True)
         (nested_staged_dir / "info.txt").write_text("preserve nested staged content\n")
+        (trial_dir / "nested-staged-link.txt").symlink_to(
+            Path("notes") / "staged" / "keepme" / "info.txt"
+        )
 
         worker = _make_worker()
         fleet = _make_fleet(ssh_via_iap=False)
@@ -722,6 +725,12 @@ class TestStagingAndPublish:
         assert (
             collected_trial / "notes" / "staged" / "keepme" / "info.txt"
         ).read_text() == "preserve nested staged content\n"
+        preserved_nested_symlink = collected_trial / "nested-staged-link.txt"
+        assert preserved_nested_symlink.is_symlink()
+        assert (
+            preserved_nested_symlink.resolve(strict=True).read_text()
+            == "preserve nested staged content\n"
+        )
 
     def test_staging_and_publish_excludes_output_logs_from_real_output_tree(
         self, tmp_path: Path

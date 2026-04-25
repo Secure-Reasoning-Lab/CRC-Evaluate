@@ -53,8 +53,8 @@ _ARTIFACT_RSYNC_EXCLUDES: tuple[str, ...] = (
     "trial-*/staged/",
     "output/logs/",
 )
-_REHYDRATE_EXCLUDED_SYMLINK_NAMES = frozenset({"oss-crs-workdir"})
-_DROP_EXCLUDED_SYMLINK_NAMES = frozenset({"staged"})
+_REHYDRATE_EXCLUDED_TOPLEVEL_DIRS = frozenset({"oss-crs-workdir"})
+_DROP_EXCLUDED_TOPLEVEL_DIRS = frozenset({"staged"})
 _REPORT_LOG_RSYNC_EXCLUDES: tuple[str, ...] = ("oss-crs-workdir/",)
 _LOG_RSYNC_EXCLUDES: tuple[str, ...] = ("trial-*/staged/",)
 _REPORT_LOG_RSYNC_INCLUDES: tuple[str, ...] = (
@@ -1277,15 +1277,13 @@ class ArtifactCollector:
                 except (OSError, ValueError):
                     continue
                 relpath = item.relative_to(staging_dir)
-                if any(
-                    part in _REHYDRATE_EXCLUDED_SYMLINK_NAMES
-                    for part in target_rel.parts
-                ):
+                if not target_rel.parts:
+                    continue
+                top_level_target = target_rel.parts[0]
+                if top_level_target in _REHYDRATE_EXCLUDED_TOPLEVEL_DIRS:
                     rehydrate_relpaths.append(relpath)
                     continue
-                if any(
-                    part in _DROP_EXCLUDED_SYMLINK_NAMES for part in target_rel.parts
-                ):
+                if top_level_target in _DROP_EXCLUDED_TOPLEVEL_DIRS:
                     drop_relpaths.append(relpath)
 
         return rehydrate_relpaths, drop_relpaths
