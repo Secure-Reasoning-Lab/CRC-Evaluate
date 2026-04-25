@@ -824,6 +824,8 @@ class GceProviderAdapter:
         experiment_config_path: str,
         env_passthrough: dict[str, str] | None = None,
         redis_password: str,
+        from_experiment_remote_path: str | None = None,
+        from_experiment_remote_by_crs: dict[str, str] | None = None,
     ) -> "GceWorkerRecord":
         """Create the remote orchestrator VM for a provider-neutral launch plan."""
         download_delay_schedule = self.download_delay_schedule(plan=plan)
@@ -835,6 +837,8 @@ class GceProviderAdapter:
             env_passthrough=env_passthrough,
             download_delay_sec=download_delay_schedule[orchestrator_name],
             redis_password=redis_password,
+            from_experiment_remote_path=from_experiment_remote_path,
+            from_experiment_remote_by_crs=from_experiment_remote_by_crs,
         )
 
     def create_workers(
@@ -913,6 +917,8 @@ class GceProviderAdapter:
         experiment_config_path: str,
         bootstrap_inputs: "CloudVmBootstrapInputs | None" = None,
         env_passthrough_by_placement: Sequence[dict[str, str]] | None = None,
+        from_experiment_remote_path: str | None = None,
+        from_experiment_remote_by_crs: dict[str, str] | None = None,
     ) -> list["GceWorkerRecord"]:
         """Create evaluators across all placements in a provider-neutral launch plan."""
         fleets = self.build_evaluator_fleets(plan)
@@ -936,6 +942,8 @@ class GceProviderAdapter:
                     env_passthrough_by_placement, index
                 ),
                 download_delay_by_name=download_delay_schedule,
+                from_experiment_remote_path=from_experiment_remote_path,
+                from_experiment_remote_by_crs=from_experiment_remote_by_crs,
             ),
         )
 

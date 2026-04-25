@@ -649,6 +649,8 @@ class GceProvisioner:
         bootstrap_inputs: CloudVmBootstrapInputs | None = None,
         env_passthrough: dict[str, str] | None = None,
         download_delay_by_name: Mapping[str, int] | None = None,
+        from_experiment_remote_path: str | None = None,
+        from_experiment_remote_by_crs: dict[str, str] | None = None,
     ) -> list[GceInstanceRequest]:
         """Render evaluator instance requests from validated config and runtime metadata."""
         if zone is None and not region_based:
@@ -677,6 +679,8 @@ class GceProvisioner:
                 evaluator_name=None if region_based else evaluator_name,
                 experiment_config_path=experiment_config_path,
                 startup_script=startup_script,
+                from_experiment_remote_path=from_experiment_remote_path,
+                from_experiment_remote_by_crs=from_experiment_remote_by_crs,
             )
             requests.append(
                 GceInstanceRequest(
@@ -792,6 +796,8 @@ class GceProvisioner:
         bootstrap_inputs: CloudVmBootstrapInputs | None = None,
         env_passthrough: dict[str, str] | None = None,
         download_delay_by_name: Mapping[str, int] | None = None,
+        from_experiment_remote_path: str | None = None,
+        from_experiment_remote_by_crs: dict[str, str] | None = None,
     ) -> list[GceWorkerRecord]:
         """Create an evaluator fleet and return normalized provider records."""
         candidate_regions = self._candidate_regions_for_fleet(fleet)
@@ -811,6 +817,8 @@ class GceProvisioner:
                     bootstrap_inputs=bootstrap_inputs,
                     env_passthrough=env_passthrough,
                     download_delay_by_name=download_delay_by_name,
+                    from_experiment_remote_path=from_experiment_remote_path,
+                    from_experiment_remote_by_crs=from_experiment_remote_by_crs,
                 ),
                 role_label="evaluator",
                 label_selector=build_evaluator_labels(
@@ -832,6 +840,8 @@ class GceProvisioner:
                 bootstrap_inputs=bootstrap_inputs,
                 env_passthrough=env_passthrough,
                 download_delay_by_name=download_delay_by_name,
+                from_experiment_remote_path=from_experiment_remote_path,
+                from_experiment_remote_by_crs=from_experiment_remote_by_crs,
             ),
             role_label="evaluator",
         )
@@ -846,6 +856,8 @@ class GceProvisioner:
         env_passthrough: dict[str, str] | None = None,
         download_delay_sec: int | None = None,
         redis_password: str,
+        from_experiment_remote_path: str | None = None,
+        from_experiment_remote_by_crs: dict[str, str] | None = None,
     ) -> GceInstanceRequest:
         """Render an instance request for the remote orchestrator VM."""
         if zone is None and orchestrator.region is None:
@@ -867,6 +879,8 @@ class GceProvisioner:
             download_delay_sec=download_delay_sec,
             redis_password=redis_password,
             startup_script=startup_script,
+            from_experiment_remote_path=from_experiment_remote_path,
+            from_experiment_remote_by_crs=from_experiment_remote_by_crs,
         )
         return GceInstanceRequest(
             project=orchestrator.project,
@@ -895,6 +909,8 @@ class GceProvisioner:
         env_passthrough: dict[str, str] | None = None,
         download_delay_sec: int | None = None,
         redis_password: str,
+        from_experiment_remote_path: str | None = None,
+        from_experiment_remote_by_crs: dict[str, str] | None = None,
     ) -> GceWorkerRecord:
         """Create the remote orchestrator VM and return its normalized record."""
         candidate_regions = self._candidate_regions_for_orchestrator(orchestrator)
@@ -911,6 +927,8 @@ class GceProvisioner:
                         env_passthrough=env_passthrough,
                         download_delay_sec=download_delay_sec,
                         redis_password=redis_password,
+                        from_experiment_remote_path=from_experiment_remote_path,
+                        from_experiment_remote_by_crs=from_experiment_remote_by_crs,
                     )
                 ],
                 role_label="orchestrator",
@@ -932,6 +950,8 @@ class GceProvisioner:
                     env_passthrough=env_passthrough,
                     download_delay_sec=download_delay_sec,
                     redis_password=redis_password,
+                    from_experiment_remote_path=from_experiment_remote_path,
+                    from_experiment_remote_by_crs=from_experiment_remote_by_crs,
                 )
             ],
             role_label="orchestrator",

@@ -151,16 +151,43 @@ Contract:
   `trial/crs-input/cpvs/<cpv>/`, `trial/povs/`), so downstream adapters see
   the same shape regardless of POV provenance.
 
-Scope: v1 is local-only. The `from_experiment` path must be readable from the
-orchestrator process. For distributed/cloud runs the path must live on a
-shared filestore accessible to workers; an orchestrator-side bundling path is
-a planned follow-up.
+Deployment behaviour:
+
+- **Local runs**: `from_experiment` is a local directory on the operator's
+  machine. The orchestrator process reads it directly.
+- **Cloud (GCE) runs**: `from_experiment` (or each entry of
+  `from_experiment_by_crs`) remains a local directory on the operator's
+  machine. At `crsbench cloud launch` time, the CLI walks each local
+  bundle and uploads only the files that `ExternalPovSource` will read
+  — `pov_store.json` for every trial, plus CPV blobs and (when a crash
+  signature is missing) the matching crash log — preserving their
+  relative layout under canonical absolute paths on every orchestrator
+  and worker VM:
+
+  - Single-path mode: `/var/lib/crsbench/from-experiment/<experiment_name>/`.
+  - Per-CRS mode: `/var/lib/crsbench/from-experiment/<experiment_name>/by-crs/<crs>/`
+    per map key.
+
+  The transported YAML is rewritten in memory so each entry resolves to
+  its remote path; the on-disk user config is untouched. Evaluators
+  receive the rewritten YAML for config parity but are not push targets —
+  they do not read `from_experiment*`.
+
+The push reuses the same SSH infrastructure as `cloud collect`. If SSH
+readiness or any per-VM rsync fails, the launch is aborted and the
+just-created VMs are rolled back. Re-running `cloud launch` is idempotent:
+rsync resumes any partial transfer via `--partial-dir`.
 
 Implementation pointers:
 
 - `crsbench/evaluation/external_pov_source.py` — reads and dedups POVs.
 - `crsbench/evaluation/runner.py` — `_prepare_bugfix_inputs_from_experiment`.
 - `crsbench/run_experiment.py` — `generate_trial_matrix` CPV filter.
+- `crsbench/cloud/from_experiment_bundle.py` — manifest walker that enumerates
+  only the files the reader will consume.
+- `crsbench/cloud/collection.py` — `ArtifactPusher`, `wait_for_ssh_ready`.
+- `crsbench/cloud/ssh_broker.py` — shared SSH/IAP transport helper.
+- `crsbench/cloud/gce/metadata.py` — `_rewrite_from_experiment_path`.
 
 ## Decisions and Tradeoffs
 
