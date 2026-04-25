@@ -470,9 +470,50 @@ configure_crsbench_bash_prompt() {
   cat >> "${bashrc_path}" <<'EOF'
 
 # >>> CRSBench prompt >>>
+__crsbench_prompt_short_host() {
+  local instance_name
+  instance_name="${CRSBENCH_CLOUD_INSTANCE_NAME:-$(hostname -s 2>/dev/null || hostname 2>/dev/null || printf 'unknown')}"
+  local short_host="${instance_name}"
+  local -a parts
+  IFS='-' read -r -a parts <<< "${instance_name}"
+  local count="${#parts[@]}"
+  if (( count >= 2 )) && [[ "${parts[count-1]}" =~ ^[0-9]+$ ]]; then
+    short_host="${parts[count-2]}-${parts[count-1]}"
+  elif (( count >= 1 )) && [[ -n "${parts[count-1]}" ]]; then
+    short_host="${parts[count-1]}"
+  fi
+  printf '%s' "${short_host}"
+}
+
+__crsbench_update_prompt() {
+  local cwd="${PWD/#${HOME}/~}"
+  local host="$(__crsbench_prompt_short_host)"
+  local cols="${COLUMNS:-}"
+  if [[ ! "${cols}" =~ ^[0-9]+$ ]] || (( cols < 20 )); then
+    cols="$(tput cols 2>/dev/null || printf '80')"
+  fi
+  if [[ ! "${cols}" =~ ^[0-9]+$ ]] || (( cols < 20 )); then
+    cols=80
+  fi
+  local spacer_width=$(( cols - ${#cwd} - ${#host} ))
+  if (( spacer_width < 1 )); then
+    spacer_width=1
+  fi
+  PS1="$(printf '\\[\\e[1;34m\\]%s\\[\\e[0m\\]%*s\\[\\e[0;36m\\]%s\\[\\e[0m\\]\\n\\$ ' "${cwd}" "${spacer_width}" "" "${host}")"
+}
+
 case "$-" in
   *i*)
-    PS1='\[\e[1;34m\]\w\[\e[0m\]\n\$ '
+    __CRSBENCH_PROMPT_HOOKED="${__CRSBENCH_PROMPT_HOOKED:-0}"
+    if [[ "${__CRSBENCH_PROMPT_HOOKED}" != "1" ]]; then
+      if [[ -n "${PROMPT_COMMAND:-}" ]]; then
+        PROMPT_COMMAND="__crsbench_update_prompt;${PROMPT_COMMAND}"
+      else
+        PROMPT_COMMAND="__crsbench_update_prompt"
+      fi
+      __CRSBENCH_PROMPT_HOOKED=1
+    fi
+    __crsbench_update_prompt
     ;;
 esac
 # <<< CRSBench prompt <<<

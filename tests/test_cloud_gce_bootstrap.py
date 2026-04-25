@@ -242,7 +242,16 @@ def test_load_startup_script_contains_managed_worker_service_bootstrap():
         "sed -i '/^# >>> CRSBench prompt >>>$/,/^# <<< CRSBench prompt <<<$/'d"
         in startup_script
     )
-    assert "PS1='\\[\\e[1;34m\\]\\w\\[\\e[0m\\]\\n\\$ '" in startup_script
+    assert "__crsbench_prompt_short_host()" in startup_script
+    assert "hostname -s 2>/dev/null || hostname 2>/dev/null" in startup_script
+    assert 'short_host="${parts[count-2]}-${parts[count-1]}"' in startup_script
+    assert '__CRSBENCH_PROMPT_HOOKED="${__CRSBENCH_PROMPT_HOOKED:-0}"' in startup_script
+    assert (
+        'PROMPT_COMMAND="__crsbench_update_prompt;${PROMPT_COMMAND}"' in startup_script
+    )
+    assert (
+        "\\\\]%*s\\\\[\\\\e[0;36m\\\\]%s\\\\[\\\\e[0m\\\\]\\\\n\\\\$ " in startup_script
+    )
 
 
 def test_load_startup_script_raises_fd_limits_for_issue_182():
@@ -1141,7 +1150,12 @@ def test_orchestrator_startup_script_consumes_config_payload_and_preprovisioned_
         "sed -i '/^# >>> CRSBench prompt >>>$/,/^# <<< CRSBench prompt <<<$/'d"
         in script
     )
-    assert "PS1='\\[\\e[1;34m\\]\\w\\[\\e[0m\\]\\n\\$ '" in script
+    assert "__crsbench_prompt_short_host()" in script
+    assert "hostname -s 2>/dev/null || hostname 2>/dev/null" in script
+    assert 'short_host="${parts[count-2]}-${parts[count-1]}"' in script
+    assert '__CRSBENCH_PROMPT_HOOKED="${__CRSBENCH_PROMPT_HOOKED:-0}"' in script
+    assert 'PROMPT_COMMAND="__crsbench_update_prompt;${PROMPT_COMMAND}"' in script
+    assert "\\\\]%*s\\\\[\\\\e[0;36m\\\\]%s\\\\[\\\\e[0m\\\\]\\\\n\\\\$ " in script
 
 
 def test_orchestrator_startup_script_loads_passthrough_env_before_timezone_normalization():
