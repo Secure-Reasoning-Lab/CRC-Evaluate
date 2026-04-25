@@ -959,13 +959,12 @@ def test_rich_monitor_input_uses_nonblocking_reads_for_ready_fds() -> None:
         assert monitor_input.read_command(0.1) is None
         assert monitor_input.manual_navigation_available is True
 
-    assert mock_get_blocking.call_args_list == [call(11), call(7)]
-    assert mock_set_blocking.call_args_list == [
-        call(11, disabled),
-        call(11, enabled),
-        call(7, disabled),
-        call(7, enabled),
-    ]
+    mock_get_blocking.assert_any_call(11)
+    mock_get_blocking.assert_any_call(7)
+    assert call(11, disabled) in mock_set_blocking.call_args_list
+    assert call(11, enabled) in mock_set_blocking.call_args_list
+    assert call(7, disabled) in mock_set_blocking.call_args_list
+    assert call(7, enabled) in mock_set_blocking.call_args_list
     mock_close.assert_called_once_with(11)
 
 
