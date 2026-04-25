@@ -186,8 +186,19 @@ def _is_trial_root_dir(path: Path, *, root: Path) -> bool:
     if not _trial_relpath_matches_layout(relpath):
         return False
     trial_identity = _load_trial_root_identity(path)
-    return trial_identity is not None and _trial_relpath_matches_metadata(
+    if trial_identity is not None and _trial_relpath_matches_metadata(
         relpath, trial_identity=trial_identity
+    ):
+        return True
+
+    # Local staging/publish backstop: if a canonical path still has the worker's
+    # metadata file and trial log, treat it as a real trial root even when the
+    # metadata payload is unreadable or stale. This lets collect() replace the
+    # final trial dir and drop staged/ without broadening remote discovery.
+    metadata_path = path / "metadata.json"
+    worker_log_path = path / "worker.log"
+    return metadata_path.is_file() and (
+        worker_log_path.exists() or worker_log_path.is_symlink()
     )
 
 

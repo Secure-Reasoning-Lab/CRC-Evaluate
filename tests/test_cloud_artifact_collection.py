@@ -799,6 +799,91 @@ class TestStagingAndPublish:
             == "preserve nested staged content\n"
         )
 
+    def test_staging_and_publish_excludes_trial_staged_dir_with_invalid_metadata(
+        self, tmp_path: Path
+    ) -> None:
+        """Corrupt metadata must not stop local staged-dir pruning and replacement."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for staged-dir regression coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        _build_trial_tree(source_root, experiment_name="exp-42", trial_n=1)
+        broken_trial = _build_trial_tree(
+            source_root, experiment_name="exp-42", trial_n=2
+        )
+        (broken_trial / "metadata.json").write_text("{broken json\n", encoding="utf-8")
+        broken_staged_dir = broken_trial / "staged" / "curl-delta-01"
+        broken_staged_dir.mkdir(parents=True)
+        (broken_staged_dir / "README.txt").write_text(
+            "temporary staged benchmark copy\n", encoding="utf-8"
+        )
+        stale_trial_dir = (
+            experiment_filestore
+            / "exp-42"
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-2"
+        )
+        (stale_trial_dir / "staged" / "stale-copy").mkdir(parents=True, exist_ok=True)
+        (stale_trial_dir / "staged" / "stale-copy" / "README.txt").write_text(
+            "stale staged artifact\n", encoding="utf-8"
+        )
+        (stale_trial_dir / "stale.txt").write_text("stale trial artifact\n")
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        collected_trial = (
+            final_path
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-2"
+        )
+        assert (collected_trial / "worker.log").exists()
+        assert (collected_trial / "output" / "seeds" / "seed-0001").exists()
+        assert not (collected_trial / "staged").exists()
+        assert not (collected_trial / "stale.txt").exists()
+
     def test_staging_and_publish_preserves_nested_trial_dash_dirs(
         self, tmp_path: Path
     ) -> None:
@@ -2542,6 +2627,124 @@ class TestRemoteLogCollection:
         )
         assert (trial_artifacts_dir / "worker.log").exists()
         assert not (trial_artifacts_dir / "staged").exists()
+
+    def test_collect_logs_excludes_trial_staged_dir_with_invalid_metadata(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        config_path = tmp_path / "config.yaml"
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+        collector = ArtifactCollector(base_path=config_path)
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        _build_trial_tree(source_root, experiment_name="exp-42", trial_n=1)
+        broken_trial = _build_trial_tree(
+            source_root, experiment_name="exp-42", trial_n=2
+        )
+        (broken_trial / "metadata.json").write_text("{broken json\n", encoding="utf-8")
+        broken_staged_dir = broken_trial / "staged" / "curl-delta-01"
+        broken_staged_dir.mkdir(parents=True)
+        (broken_staged_dir / "worker.log").write_text(
+            "staged worker log\n", encoding="utf-8"
+        )
+        stale_trial_artifacts_dir = (
+            collector._remote_logs_dir(experiment_filestore, "exp-42")
+            / worker.name
+            / "trial-artifacts"
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-2"
+        )
+        (stale_trial_artifacts_dir / "staged" / "stale-copy").mkdir(
+            parents=True, exist_ok=True
+        )
+        (stale_trial_artifacts_dir / "staged" / "stale-copy" / "worker.log").write_text(
+            "stale staged worker log\n", encoding="utf-8"
+        )
+        (stale_trial_artifacts_dir / "stale.txt").write_text(
+            "stale trial artifact\n", encoding="utf-8"
+        )
+
+        def _fake_remote_command(*args, **kwargs):
+            del args
+            command = str(kwargs["command"])
+            if command.startswith("sudo python3 -c "):
+                return _run_local_remote_command_from_cloud_cmd(
+                    command,
+                    source_root=source_root,
+                    experiment_name="exp-42",
+                )
+            return subprocess.CompletedProcess(
+                args=["ssh"],
+                returncode=0,
+                stdout="remote output\n",
+                stderr="",
+            )
+
+        def _fake_subprocess_run(cmd, *_args, **_kwargs):
+            if cmd and cmd[:3] == ["gcloud", "compute", "os-login"]:
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout="test-user\n",
+                    stderr="",
+                )
+
+            if cmd and cmd[0] == "ssh-keygen":
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout="",
+                    stderr="",
+                )
+
+            if cmd and cmd[0] == "ssh-keyscan":
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout=f"{worker.external_ip} ssh-ed25519 AAAATESTKEY\n",
+                    stderr="",
+                )
+
+            if cmd and cmd[0] == "rsync":
+                return _run_local_rsync_from_cloud_cmd(
+                    cmd,
+                    source_root=source_root,
+                    experiment_name="exp-42",
+                )
+
+            raise AssertionError(f"unexpected subprocess invocation: {cmd!r}")
+
+        monkeypatch.setattr(collector, "_run_remote_command", _fake_remote_command)
+        with patch("subprocess.run", side_effect=_fake_subprocess_run):
+            logs_dir = collector.collect_logs(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        trial_artifacts_dir = (
+            logs_dir
+            / worker.name
+            / "trial-artifacts"
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-2"
+        )
+        assert (trial_artifacts_dir / "worker.log").exists()
+        assert not (trial_artifacts_dir / "staged").exists()
+        assert not (trial_artifacts_dir / "stale.txt").exists()
 
     def test_collect_logs_drops_top_level_symlinks_into_trial_staged_dir(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
