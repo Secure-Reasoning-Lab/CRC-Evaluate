@@ -186,9 +186,9 @@ def _is_trial_root_dir(path: Path, *, root: Path) -> bool:
     if not _trial_relpath_matches_layout(relpath):
         return False
     trial_identity = _load_trial_root_identity(path)
-    if trial_identity is None:
-        return (path / ".success").exists() or (path / ".fail").exists()
-    return _trial_relpath_matches_metadata(relpath, trial_identity=trial_identity)
+    return trial_identity is not None and _trial_relpath_matches_metadata(
+        relpath, trial_identity=trial_identity
+    )
 
 
 def _iter_trial_dirs(root: Path) -> Iterator[Path]:
@@ -297,9 +297,9 @@ def _is_trial_root(path: pathlib.Path, rel_parts: tuple[str, ...]) -> bool:
     if not path.is_dir() or not _matches_layout(rel_parts):
         return False
     trial_identity = _load_trial_identity(path)
-    if trial_identity is None:
-        return (path / ".success").exists() or (path / ".fail").exists()
-    return _matches_metadata(rel_parts, trial_identity=trial_identity)
+    return trial_identity is not None and _matches_metadata(
+        rel_parts, trial_identity=trial_identity
+    )
 
 
 def _scan(path: pathlib.Path, rel_parts: tuple[str, ...], out: list[str]) -> None:
