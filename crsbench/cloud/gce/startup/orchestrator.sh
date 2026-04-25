@@ -600,6 +600,11 @@ __crsbench_prompt_short_host() {
   printf '%s' "${short_host}"
 }
 
+__crsbench_prompt_command_installed() {
+  local pattern='(^|;[[:space:]]*)__crsbench_update_prompt($|[[:space:]]*;)'
+  [[ "${PROMPT_COMMAND:-}" =~ ${pattern} ]]
+}
+
 __crsbench_update_prompt() {
   local cwd="${PWD/#${HOME}/~}"
   local host="$(__crsbench_prompt_short_host)"
@@ -619,14 +624,12 @@ __crsbench_update_prompt() {
 
 case "$-" in
   *i*)
-    __CRSBENCH_PROMPT_HOOKED="${__CRSBENCH_PROMPT_HOOKED:-0}"
-    if [[ "${__CRSBENCH_PROMPT_HOOKED}" != "1" ]]; then
+    if ! __crsbench_prompt_command_installed; then
       if [[ -n "${PROMPT_COMMAND:-}" ]]; then
         PROMPT_COMMAND="__crsbench_update_prompt;${PROMPT_COMMAND}"
       else
         PROMPT_COMMAND="__crsbench_update_prompt"
       fi
-      __CRSBENCH_PROMPT_HOOKED=1
     fi
     __crsbench_update_prompt
     ;;

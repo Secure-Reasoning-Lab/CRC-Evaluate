@@ -2,10 +2,12 @@
 
 import base64
 import json
+import os
 import shlex
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 from crsbench.cloud.bootstrap import CloudVmBootstrapInputs
 from crsbench.distributed.registry import RuntimeRegistration
@@ -81,6 +83,14 @@ def _make_orchestrator(**overrides) -> GceOrchestratorConfig:
 
 def _decode_payload(encoded: str) -> dict[str, object]:
     return json.loads(base64.b64decode(encoded).decode("utf-8"))
+
+
+def _extract_prompt_block(script: str) -> str:
+    start_marker = "\n# >>> CRSBench prompt >>>\n"
+    end_marker = "\n# <<< CRSBench prompt <<<\n"
+    start = script.index(start_marker) + 1
+    end = script.index(end_marker, start) + 1
+    return script[start:end]
 
 
 def test_build_instance_metadata_embeds_startup_script_and_bootstrap_payload():
@@ -245,13 +255,68 @@ def test_load_startup_script_contains_managed_worker_service_bootstrap():
     assert "__crsbench_prompt_short_host()" in startup_script
     assert "hostname -s 2>/dev/null || hostname 2>/dev/null" in startup_script
     assert 'short_host="${parts[count-2]}-${parts[count-1]}"' in startup_script
-    assert '__CRSBENCH_PROMPT_HOOKED="${__CRSBENCH_PROMPT_HOOKED:-0}"' in startup_script
+    assert "__crsbench_prompt_command_installed()" in startup_script
+    assert "if ! __crsbench_prompt_command_installed; then" in startup_script
     assert (
         'PROMPT_COMMAND="__crsbench_update_prompt;${PROMPT_COMMAND}"' in startup_script
     )
     assert (
         "\\\\]%*s\\\\[\\\\e[0;36m\\\\]%s\\\\[\\\\e[0m\\\\]\\\\n\\\\$ " in startup_script
     )
+
+
+@pytest.mark.parametrize(
+    "loader_name",
+    ["load_startup_script", "load_orchestrator_startup_script"],
+)
+def test_prompt_resourcing_reinstalls_prompt_command_without_duplication(
+    tmp_path, loader_name
+):
+    """Interactive re-sourcing should restore the prompt hook without stacking duplicates."""
+    from crsbench.cloud.gce import metadata
+
+    prompt_path = tmp_path / f"{loader_name}-prompt.sh"
+    prompt_path.write_text(
+        _extract_prompt_block(getattr(metadata, loader_name)()),
+        encoding="utf-8",
+    )
+
+    command = "\n".join(
+        [
+            f"source {shlex.quote(str(prompt_path))}",
+            'printf "first:%s\\n" "${PROMPT_COMMAND:-}"',
+            'PROMPT_COMMAND="user_override"',
+            f"source {shlex.quote(str(prompt_path))}",
+            'printf "second:%s\\n" "${PROMPT_COMMAND:-}"',
+            f"source {shlex.quote(str(prompt_path))}",
+            'printf "third:%s\\n" "${PROMPT_COMMAND:-}"',
+        ]
+    )
+
+    result = subprocess.run(
+        ["bash", "--norc", "-ic", command],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "CRSBENCH_CLOUD_INSTANCE_NAME": (
+                "crsbench-afc-cc-finding-original-corpus-eval-002"
+            ),
+            "HOME": str(tmp_path),
+            "COLUMNS": "80",
+            "TERM": "xterm",
+        },
+        timeout=2,
+    )
+
+    assert result.returncode == 0
+    assert [line for line in result.stdout.splitlines() if ":" in line] == [
+        "first:__crsbench_update_prompt",
+        "second:__crsbench_update_prompt;user_override",
+        "third:__crsbench_update_prompt;user_override",
+    ]
 
 
 def test_load_startup_script_raises_fd_limits_for_issue_182():
@@ -1153,7 +1218,8 @@ def test_orchestrator_startup_script_consumes_config_payload_and_preprovisioned_
     assert "__crsbench_prompt_short_host()" in script
     assert "hostname -s 2>/dev/null || hostname 2>/dev/null" in script
     assert 'short_host="${parts[count-2]}-${parts[count-1]}"' in script
-    assert '__CRSBENCH_PROMPT_HOOKED="${__CRSBENCH_PROMPT_HOOKED:-0}"' in script
+    assert "__crsbench_prompt_command_installed()" in script
+    assert "if ! __crsbench_prompt_command_installed; then" in script
     assert 'PROMPT_COMMAND="__crsbench_update_prompt;${PROMPT_COMMAND}"' in script
     assert "\\\\]%*s\\\\[\\\\e[0;36m\\\\]%s\\\\[\\\\e[0m\\\\]\\\\n\\\\$ " in script
 
