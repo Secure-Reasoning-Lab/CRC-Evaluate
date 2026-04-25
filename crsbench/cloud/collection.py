@@ -218,6 +218,8 @@ for spec in specs:
             files=files,
         )
         continue
+    if _actual_excluded(actual_root, exclude_actual_prefixes):
+        continue
     files.append(root.as_posix())
 
 print(
@@ -465,6 +467,7 @@ class ArtifactCollector:
             ssh_user=ssh_user,
             excluded_relpaths=drop_relpaths,
         )
+        self._drop_excluded_report_log_symlinks(staging_dir)
         failed_trial_relpaths = self._compact_failed_trials_to_diagnostics(staging_dir)
 
         # Verify before publishing
@@ -554,6 +557,7 @@ class ArtifactCollector:
                 known_hosts_path=known_hosts_path,
                 ssh_user=ssh_user,
             )
+            self._drop_excluded_top_level_trial_symlinks(trial_artifacts_dir)
 
         logger.info(
             "Remote log collection complete: worker={} experiment={} logs_dir={}",
@@ -667,8 +671,9 @@ class ArtifactCollector:
                 (relpath.parent / name).as_posix()
                 for name in _DROP_EXCLUDED_TOPLEVEL_DIRS
             ]
-            if relpath.name == "output":
-                exclude_actual_prefixes.append((relpath / "logs").as_posix())
+            exclude_actual_prefixes.append(
+                (relpath.parent / "output" / "logs").as_posix()
+            )
             specs.append(
                 {
                     "root": relpath.as_posix(),
@@ -971,7 +976,7 @@ class ArtifactCollector:
             "rsync",
             "-a",
             "--mkpath",
-            "--copy-links",
+            "--copy-dirlinks",
             "--prune-empty-dirs",
         ]
         cmd.extend(f"--exclude={pattern}" for pattern in _REPORT_LOG_RSYNC_EXCLUDES)
@@ -1328,6 +1333,36 @@ class ArtifactCollector:
         )
         self._run_rsync_with_retry(cmd)
 
+    @staticmethod
+    def _trial_symlink_target_parts(
+        *,
+        item: Path,
+        trial_dir: Path,
+        staging_dir: Path,
+    ) -> tuple[str, ...] | None:
+        """Return one top-level trial symlink target as parts relative to *trial_dir*."""
+        try:
+            raw_target = item.readlink()
+        except OSError:
+            return None
+
+        if raw_target.is_absolute():
+            trial_parts = trial_dir.relative_to(staging_dir).parts
+            target_parts = raw_target.parts
+            for index in range(len(target_parts) - len(trial_parts) + 1):
+                if tuple(target_parts[index : index + len(trial_parts)]) != trial_parts:
+                    continue
+                return tuple(target_parts[index + len(trial_parts) :])
+            return None
+
+        normalized = posixpath.normpath(raw_target.as_posix())
+        if normalized in {"", "."}:
+            return ()
+        target_parts = Path(normalized).parts
+        if target_parts and target_parts[0] == "..":
+            return None
+        return target_parts
+
     def _partition_excluded_symlink_entries(
         self, staging_dir: Path
     ) -> tuple[list[Path], list[Path]]:
@@ -1341,15 +1376,17 @@ class ArtifactCollector:
             for item in sorted(trial_dir.iterdir()):
                 if not item.is_symlink():
                     continue
-                try:
-                    target = item.resolve(strict=False)
-                    target_rel = target.relative_to(trial_dir)
-                except (OSError, ValueError):
+                target_parts = self._trial_symlink_target_parts(
+                    item=item,
+                    trial_dir=trial_dir,
+                    staging_dir=staging_dir,
+                )
+                if target_parts is None:
                     continue
                 relpath = item.relative_to(staging_dir)
-                if not target_rel.parts:
+                if not target_parts:
                     continue
-                top_level_target = target_rel.parts[0]
+                top_level_target = target_parts[0]
                 if top_level_target in _REHYDRATE_EXCLUDED_TOPLEVEL_DIRS:
                     rehydrate_relpaths.append(relpath)
                     continue
@@ -1389,6 +1426,62 @@ class ArtifactCollector:
         )
         for relpath in symlink_relpaths:
             self._remove_staged_path(staging_dir / relpath)
+
+    def _drop_excluded_top_level_trial_symlinks(self, staging_dir: Path) -> None:
+        """Remove top-level trial symlinks that resolve into omitted content."""
+        removed = 0
+        for trial_dir in sorted(staging_dir.rglob("trial-*")):
+            if not trial_dir.is_dir():
+                continue
+            for item in sorted(trial_dir.iterdir()):
+                if not item.is_symlink():
+                    continue
+                target_parts = self._trial_symlink_target_parts(
+                    item=item,
+                    trial_dir=trial_dir,
+                    staging_dir=staging_dir,
+                )
+                if (
+                    not target_parts
+                    or target_parts[0] not in _DROP_EXCLUDED_TOPLEVEL_DIRS
+                ):
+                    continue
+                self._remove_staged_path(item)
+                removed += 1
+        if removed:
+            logger.info(
+                "Dropped {} top-level staged symlink(s) from collected trial snapshots",
+                removed,
+            )
+
+    def _drop_excluded_report_log_symlinks(self, staging_dir: Path) -> None:
+        """Remove restored report-log symlinks that still resolve into omitted content."""
+        removed = 0
+        for trial_dir in sorted(staging_dir.rglob("trial-*")):
+            if not trial_dir.is_dir():
+                continue
+            logs_root = trial_dir / "output" / "logs"
+            if not logs_root.is_dir():
+                continue
+            for item in sorted(logs_root.rglob("*")):
+                if not item.is_symlink():
+                    continue
+                try:
+                    target = item.resolve(strict=False)
+                    target_rel = target.relative_to(trial_dir)
+                except (OSError, ValueError):
+                    continue
+                if (
+                    target_rel.parts
+                    and target_rel.parts[0] in _DROP_EXCLUDED_TOPLEVEL_DIRS
+                ):
+                    self._remove_staged_path(item)
+                    removed += 1
+        if removed:
+            logger.info(
+                "Dropped {} restored report-log symlink(s) that resolve into omitted content",
+                removed,
+            )
 
     def _compact_failed_trials_to_diagnostics(self, staging_dir: Path) -> list[Path]:
         """Reduce failed trials to marker/metadata/log diagnostics before publish."""
