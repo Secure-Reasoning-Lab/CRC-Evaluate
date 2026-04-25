@@ -909,6 +909,7 @@ class TestStagingAndPublish:
             / "services"
             / "builder-sidecar-lite_patcher.stdout.log"
         ).exists()
+
     def test_report_log_rsync_skips_internal_workdir_files(
         self, tmp_path: Path
     ) -> None:
@@ -1001,6 +1002,7 @@ class TestStagingAndPublish:
             / "trial-1"
             / "oss-crs-workdir"
         ).exists()
+
     def test_staging_and_publish_preserves_legacy_reporting_logs_under_crs_tree(
         self, tmp_path: Path
     ) -> None:
