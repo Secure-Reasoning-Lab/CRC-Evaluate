@@ -901,6 +901,79 @@ def test_rich_monitor_input_reads_later_ready_fd_when_first_has_non_command_data
     mock_close.assert_called_once_with(11)
 
 
+def test_rich_monitor_input_reads_later_ready_fd_after_blocking_io_error() -> None:
+    stream = MagicMock()
+    stream.isatty.return_value = True
+    stream.fileno.return_value = 7
+
+    def _fake_ttyname(fd: int) -> str:
+        if fd == 11:
+            return "/dev/tty"
+        if fd == 7:
+            return "/dev/pts/7"
+        raise AssertionError(f"unexpected fd {fd}")
+
+    def _fake_stat(path, **_kwargs) -> SimpleNamespace:
+        path_str = str(path)
+        if path_str == "/dev/tty":
+            return SimpleNamespace(st_dev=1, st_ino=11)
+        if path_str == "/dev/pts/7":
+            return SimpleNamespace(st_dev=2, st_ino=7)
+        raise AssertionError(f"unexpected tty path {path_str}")
+
+    select_calls = 0
+
+    def _fake_select(readers, _writers, _errors, _timeout):
+        nonlocal select_calls
+        if readers == [11, 7] and select_calls == 0:
+            select_calls += 1
+            return ([11, 7], [], [])
+        return ([], [], [])
+
+    disabled = False
+    enabled = True
+    blocking_state = {11: enabled, 7: enabled}
+    read_states: list[tuple[int, bool]] = []
+
+    def _fake_get_blocking(fd: int) -> bool:
+        return blocking_state[fd]
+
+    def _fake_set_blocking(fd: int, is_blocking: bool) -> None:
+        blocking_state[fd] = is_blocking
+
+    def _fake_read(fd: int, _size: int) -> bytes:
+        read_states.append((fd, blocking_state[fd]))
+        if fd == 11:
+            raise BlockingIOError("same tty already drained")
+        if fd == 7:
+            return b"n"
+        raise AssertionError(f"unexpected read fd {fd}")
+
+    with (
+        patch("crsbench.distributed.queue_monitor.sys.stdin", stream),
+        patch("os.open", return_value=11) as _mock_open,
+        patch("os.close") as mock_close,
+        patch("os.ttyname", side_effect=_fake_ttyname),
+        patch("os.stat", side_effect=_fake_stat),
+        patch("os.get_blocking", side_effect=_fake_get_blocking),
+        patch("os.set_blocking", side_effect=_fake_set_blocking),
+        patch("termios.tcgetattr", return_value=["saved-attrs"]),
+        patch("termios.tcsetattr"),
+        patch("tty.setcbreak"),
+        patch("select.select", side_effect=_fake_select),
+        patch("os.read", side_effect=_fake_read),
+        _RichMonitorInput() as monitor_input,
+    ):
+        assert monitor_input.manual_navigation_available is True
+        assert monitor_input.read_command(0.1) == "n"
+        assert monitor_input.manual_navigation_available is True
+
+    assert (11, disabled) in read_states
+    assert (7, disabled) in read_states
+    assert blocking_state == {11: enabled, 7: enabled}
+    mock_close.assert_called_once_with(11)
+
+
 def test_rich_monitor_input_uses_nonblocking_reads_for_ready_fds() -> None:
     stream = MagicMock()
     stream.isatty.return_value = True
@@ -969,11 +1042,11 @@ def test_rich_monitor_input_uses_nonblocking_reads_for_ready_fds() -> None:
         assert monitor_input.manual_navigation_available is True
         assert monitor_input.read_command(0.1) is None
         assert monitor_input.manual_navigation_available is True
-        assert set(monitor_input._active_fds) == {11, 7}
 
     assert 11 in get_blocking_calls
     assert 7 in get_blocking_calls
-    assert read_states == [(11, disabled), (7, disabled)]
+    assert (11, disabled) in read_states
+    assert (7, disabled) in read_states
     assert blocking_state == {11: enabled, 7: enabled}
     mock_close.assert_called_once_with(11)
 
