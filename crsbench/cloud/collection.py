@@ -52,6 +52,7 @@ _ARTIFACT_RSYNC_EXCLUDES: tuple[str, ...] = (
     "oss-crs-workdir/",
     "output/logs/",
 )
+_REPORT_LOG_RSYNC_EXCLUDES: tuple[str, ...] = ("oss-crs-workdir/",)
 _REPORT_LOG_RSYNC_INCLUDES: tuple[str, ...] = (
     "output/logs/services/*_patcher.stdout.log",
     "output/logs/services/*inc-builder-*.stdout.log",
@@ -901,8 +902,9 @@ class ArtifactCollector:
             "--mkpath",
             "--copy-links",
             "--prune-empty-dirs",
-            "--include=*/",
         ]
+        cmd.extend(f"--exclude={pattern}" for pattern in _REPORT_LOG_RSYNC_EXCLUDES)
+        cmd.append("--include=*/")
         cmd.extend(f"--include={pattern}" for pattern in _REPORT_LOG_RSYNC_INCLUDES)
         cmd.extend(
             [
