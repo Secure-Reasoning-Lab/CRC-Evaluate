@@ -1069,8 +1069,11 @@ command. During artifact sync, CRSBench skips trial-local `oss-crs-workdir/`
 scratch directories and the bulk of `trial/output/logs/`. If a top-level trial
 entry such as `output/` or `result.log` is still a symlink into that excluded
 workdir, collect re-hydrates that entry so the local result tree remains
-usable. After the main rsync, collect restores only the small reporting subset
-under `output/logs/`: `verify_patch_timing.json`,
+usable. Trials with `.success` keep that normal collected artifact tree. Trials
+with `.fail` are compacted before publish so the collected trial keeps only
+`metadata.json`, `.fail`, `worker.log`, and the reporting subset restored under
+`output/logs/`. After the main rsync, collect restores only the small
+reporting subset under `output/logs/`: `verify_patch_timing.json`,
 `*_patcher.stdout.log`, and `*inc-builder-*.stdout.log`. Runtime and VM
 diagnostics remain available under
 `.crsbench-cloud/remote-logs/<experiment>/`.
@@ -1221,7 +1224,7 @@ Diagnostics collected under `.crsbench-cloud/remote-logs/<experiment>/`:
 - `runtime-summary.txt` with timezone, Docker cgroup driver, user-bus, linger,
   and Redis listener state
 - Lightweight per-trial observability files such as `worker.log`,
-  `metadata.json`, `.success`, `.failure`, and the orchestrator
+  `metadata.json`, `.success`, `.fail`, and the orchestrator
   `trial_matrix.json`
 
 ## Listing Instances

@@ -59,6 +59,7 @@ _REPORT_LOG_RSYNC_INCLUDES: tuple[str, ...] = (
     "output/logs/crs/**/*_patcher.stdout.log",
     "output/logs/crs/**/*inc-builder-*.stdout.log",
 )
+_FAILED_TRIAL_ROOT_KEEP_FILENAMES = frozenset({"metadata.json", "worker.log", ".fail"})
 _REEVAL_SUBMISSION_ARTIFACT_DIRNAME = ".cloud-reeval"
 _REEVAL_TERMINAL_STATES = frozenset({"succeeded", "failed"})
 _REEVAL_REMOTE_TEXT_ARTIFACTS: tuple[tuple[str, str], ...] = (
@@ -406,6 +407,7 @@ class ArtifactCollector:
             known_hosts_path=known_hosts_path,
             ssh_user=ssh_user,
         )
+        failed_trial_relpaths = self._compact_failed_trials_to_diagnostics(staging_dir)
 
         # Verify before publishing
         self._verify_staging(staging_dir)
@@ -415,7 +417,11 @@ class ArtifactCollector:
                 start_time_observations.append(
                     discover_experiment_start_time_from_staging([staging_dir])
                 )
-            self._publish(staging_dir, final_dir)
+            self._publish(
+                staging_dir,
+                final_dir,
+                replace_trial_dirs=failed_trial_relpaths,
+            )
 
         # Clean up the per-worker staging parent
         worker_staging = experiment_filestore / ".collect-staging" / worker.name
@@ -838,7 +844,7 @@ class ArtifactCollector:
             "--include=metadata.json",
             "--include=worker.log",
             "--include=.success",
-            "--include=.failure",
+            "--include=.fail",
             "--exclude=*",
             "--rsync-path=sudo rsync",
             "-e",
@@ -1281,6 +1287,62 @@ class ArtifactCollector:
             if logs_path.exists() or logs_path.is_symlink():
                 self._remove_staged_path(logs_path)
 
+    def _compact_failed_trials_to_diagnostics(self, staging_dir: Path) -> list[Path]:
+        """Reduce failed trials to marker/metadata/log diagnostics before publish."""
+        compacted_trials: list[Path] = []
+
+        for trial_dir in sorted(staging_dir.rglob("trial-*")):
+            if not trial_dir.is_dir() or not self._is_failed_trial_dir(trial_dir):
+                continue
+
+            compacted_trials.append(trial_dir.relative_to(staging_dir))
+            for item in sorted(trial_dir.iterdir()):
+                if item.name in _FAILED_TRIAL_ROOT_KEEP_FILENAMES:
+                    continue
+                if item.name == "output":
+                    self._compact_failed_trial_output(
+                        trial_dir=trial_dir, output_dir=item
+                    )
+                    continue
+                self._remove_staged_path(item)
+
+        if compacted_trials:
+            logger.info(
+                "Compacted {} failed trial(s) to diagnostic-only artifacts",
+                len(compacted_trials),
+            )
+
+        return compacted_trials
+
+    @staticmethod
+    def _is_failed_trial_dir(trial_dir: Path) -> bool:
+        """Return whether *trial_dir* represents a failed trial collection target."""
+        return (trial_dir / ".fail").exists() and not (trial_dir / ".success").exists()
+
+    def _compact_failed_trial_output(
+        self, *, trial_dir: Path, output_dir: Path
+    ) -> None:
+        """Preserve only the restored reporting-log subset under ``output/logs``."""
+        if not (output_dir.exists() or output_dir.is_symlink()):
+            return
+
+        logs_path = output_dir / "logs"
+        if not logs_path.exists():
+            self._remove_staged_path(output_dir)
+            return
+
+        with tempfile.TemporaryDirectory(
+            dir=trial_dir,
+            prefix=".failed-trial-logs-",
+        ) as temp_root:
+            temp_logs_dir = Path(temp_root) / "logs"
+            shutil.copytree(logs_path, temp_logs_dir)
+            self._remove_staged_path(output_dir)
+
+            restored_logs_dir = trial_dir / "output" / "logs"
+            restored_logs_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(temp_logs_dir, restored_logs_dir)
+
     def _rehydrate_excluded_symlink_entries(
         self,
         *,
@@ -1665,7 +1727,13 @@ class ArtifactCollector:
             staging_dir,
         )
 
-    def _publish(self, staging_dir: Path, final_dir: Path) -> None:
+    def _publish(
+        self,
+        staging_dir: Path,
+        final_dir: Path,
+        *,
+        replace_trial_dirs: list[Path] | None = None,
+    ) -> None:
         """Merge *staging_dir* contents into *final_dir* and remove staging.
 
         Uses ``shutil.copytree`` with ``dirs_exist_ok=True`` so that incremental
@@ -1673,6 +1741,10 @@ class ArtifactCollector:
         same final experiment directory.
         """
         final_dir.mkdir(parents=True, exist_ok=True)
+        for relpath in replace_trial_dirs or []:
+            existing_trial_dir = final_dir / relpath
+            if existing_trial_dir.exists() or existing_trial_dir.is_symlink():
+                self._remove_staged_path(existing_trial_dir)
         subprocess.run(
             [
                 "rsync",

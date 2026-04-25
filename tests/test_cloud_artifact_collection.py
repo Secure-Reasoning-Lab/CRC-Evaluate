@@ -749,6 +749,167 @@ class TestStagingAndPublish:
             / "verify_patch_timing.json"
         ).exists()
 
+    def test_staging_and_publish_compacts_failed_trials_to_diagnostics_only(
+        self, tmp_path: Path
+    ) -> None:
+        """Failed trials should publish only marker/metadata/worker-log diagnostics."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for failed-trial collection coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        (trial_dir / ".fail").write_text("", encoding="utf-8")
+        (trial_dir / "llm-usage.json").write_text(
+            json.dumps({"total_cost_usd": 1.23, "request_count": 7}),
+            encoding="utf-8",
+        )
+        (trial_dir / "result.json").write_text("{}", encoding="utf-8")
+        logs_dir = trial_dir / "output" / "logs" / "services"
+        logs_dir.mkdir(parents=True)
+        (logs_dir / "builder-sidecar-lite_patcher.stdout.log").write_text(
+            "  [test] 12.3s\n",
+            encoding="utf-8",
+        )
+        timing_dir = (
+            trial_dir / "output" / "logs" / "crs" / "builder-sidecar-lite" / "log_dir"
+        )
+        timing_dir.mkdir(parents=True)
+        (timing_dir / "verify_patch_timing.json").write_text(
+            json.dumps({"rebuild": 70.4, "test": 481.0, "status": "fail"}),
+            encoding="utf-8",
+        )
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        failed_trial = (
+            final_path
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        assert (failed_trial / "metadata.json").exists()
+        assert (failed_trial / ".fail").exists()
+        assert (failed_trial / "worker.log").exists()
+        assert not (failed_trial / "snapshot-0001.tar.gz").exists()
+        assert not (failed_trial / "snapshot-0001.complete").exists()
+        assert not (failed_trial / "llm-usage.json").exists()
+        assert not (failed_trial / "result.json").exists()
+        assert not (failed_trial / "output" / "seeds").exists()
+        assert (
+            failed_trial
+            / "output"
+            / "logs"
+            / "services"
+            / "builder-sidecar-lite_patcher.stdout.log"
+        ).exists()
+        assert (
+            failed_trial
+            / "output"
+            / "logs"
+            / "crs"
+            / "builder-sidecar-lite"
+            / "log_dir"
+            / "verify_patch_timing.json"
+        ).exists()
+
+    def test_staging_and_publish_replaces_existing_failed_trial_contents_on_recollect(
+        self, tmp_path: Path
+    ) -> None:
+        """Re-collecting a failed trial should drop stale bulky files from earlier publishes."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for failed-trial collection coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+        existing_trial = _build_trial_tree(
+            experiment_filestore, experiment_name="exp-42"
+        )
+        (existing_trial / ".fail").write_text("", encoding="utf-8")
+        (existing_trial / "output" / "seeds" / "stale-seed").write_bytes(b"stale-seed")
+        (existing_trial / "old-artifact.txt").write_text(
+            "stale artifact\n", encoding="utf-8"
+        )
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        (trial_dir / ".fail").write_text("", encoding="utf-8")
+        logs_dir = trial_dir / "output" / "logs" / "services"
+        logs_dir.mkdir(parents=True)
+        (logs_dir / "builder-sidecar-lite_patcher.stdout.log").write_text(
+            "  [test] 12.3s\n",
+            encoding="utf-8",
+        )
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        failed_trial = (
+            final_path
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        assert not (failed_trial / "old-artifact.txt").exists()
+        assert not (failed_trial / "snapshot-0001.tar.gz").exists()
+        assert not (failed_trial / "output" / "seeds").exists()
+        assert (
+            failed_trial
+            / "output"
+            / "logs"
+            / "services"
+            / "builder-sidecar-lite_patcher.stdout.log"
+        ).exists()
+
     def test_staging_and_publish_preserves_legacy_reporting_logs_under_crs_tree(
         self, tmp_path: Path
     ) -> None:
@@ -1312,6 +1473,7 @@ class TestRemoteLogCollection:
         source_root = tmp_path / "worker-local"
         source_root.mkdir()
         trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        (trial_dir / ".fail").write_text("", encoding="utf-8")
 
         def _fake_remote_command(*args, **kwargs):
             del args, kwargs
@@ -1392,6 +1554,17 @@ class TestRemoteLogCollection:
         ).read_text(encoding="utf-8") == (trial_dir / "worker.log").read_text(
             encoding="utf-8"
         )
+        assert (
+            instance_dir
+            / "trial-artifacts"
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+            / ".fail"
+        ).exists()
 
     def test_collect_logs_raises_when_remote_command_transport_fails(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
