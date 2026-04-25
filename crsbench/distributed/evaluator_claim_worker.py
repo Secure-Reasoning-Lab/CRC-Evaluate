@@ -63,6 +63,30 @@ def _is_job_terminal(job: Any | None) -> bool:
     return status in {"finished", "failed", "stopped", "canceled", "cancelled"}
 
 
+def _remove_existing_job(queue: Any, *, job_id: str, existing: Any) -> bool:
+    try:
+        from crsbench.distributed.queue import remove_job_by_id
+
+        if remove_job_by_id(queue, job_id):
+            return True
+    except Exception:
+        pass
+
+    jobs = getattr(queue, "jobs", None)
+    if isinstance(jobs, dict) and jobs.pop(job_id, None) is not None:
+        return True
+
+    delete = getattr(existing, "delete", None)
+    if callable(delete):
+        try:
+            delete()
+            return True
+        except Exception:
+            pass
+
+    return False
+
+
 def _enqueue_or_reuse_job(
     queue: Any,
     func_name: str,
@@ -72,14 +96,20 @@ def _enqueue_or_reuse_job(
     job_id: str,
     meta: dict[str, Any],
     depends_on: list[Any] | None = None,
+    refresh_terminal: bool = False,
 ) -> Any:
     existing = queue.fetch_job(job_id)
     if existing is not None:
-        adopt_scheduler_owner_if_needed(
-            existing,
-            new_owner=meta.get(SCHEDULER_OWNER_KEY_META),
-        )
-        return existing
+        if refresh_terminal and _is_job_terminal(existing):
+            removed = _remove_existing_job(queue, job_id=job_id, existing=existing)
+            if removed:
+                existing = queue.fetch_job(job_id)
+        if existing is not None:
+            adopt_scheduler_owner_if_needed(
+                existing,
+                new_owner=meta.get(SCHEDULER_OWNER_KEY_META),
+            )
+            return existing
     try:
         return queue.enqueue(
             func_name,
@@ -97,6 +127,19 @@ def _enqueue_or_reuse_job(
         existing = queue.fetch_job(job_id)
         if existing is None:
             raise
+        if refresh_terminal and _is_job_terminal(existing):
+            removed = _remove_existing_job(queue, job_id=job_id, existing=existing)
+            if removed:
+                return _enqueue_or_reuse_job(
+                    queue,
+                    func_name,
+                    payload,
+                    job_timeout=job_timeout,
+                    job_id=job_id,
+                    meta=meta,
+                    depends_on=depends_on,
+                    refresh_terminal=refresh_terminal,
+                )
         adopt_scheduler_owner_if_needed(
             existing,
             new_owner=meta.get(SCHEDULER_OWNER_KEY_META),
@@ -451,6 +494,7 @@ class EvaluatorClaimWorker:
             job_id=local_verify_job_id,
             meta=verify_meta,
             depends_on=verify_dependencies or None,
+            refresh_terminal=True,
         )
         return _ActiveClaim(
             local_verify_job_id=verify_rq_job.id,
@@ -526,6 +570,7 @@ class EvaluatorClaimWorker:
             job_id=local_verify_job_id,
             meta=verify_meta,
             depends_on=[build_rq_job] if not _is_job_terminal(build_rq_job) else None,
+            refresh_terminal=True,
         )
         required_build_ids = (
             () if _is_job_terminal(build_rq_job) else (local_build_job_id,)

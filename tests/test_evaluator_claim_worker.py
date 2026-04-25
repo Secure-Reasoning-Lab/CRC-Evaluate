@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
 from crsbench.builder.types import BenchmarkMode, VariantType
 from crsbench.distributed.evaluator_jobs import EmbeddedPov, SinglePovPayload
 from crsbench.distributed.evaluator_verify_claims import (
@@ -708,6 +709,92 @@ def test_has_pending_required_builds_ignores_expired_claims() -> None:
     )
 
     assert worker.has_pending_required_builds() is False
+
+
+@pytest.mark.parametrize("terminal_status", ["failed", "finished"])
+def test_reclaimed_request_reenqueues_fresh_local_verify_job(
+    terminal_status: str,
+) -> None:
+    from crsbench.distributed.evaluator_claim_worker import (
+        EvaluatorClaimWorker,
+        build_local_verify_job_id,
+    )
+
+    redis_conn = _FakeRedis()
+    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
+    patch_payload = PatchJobPayload(
+        experiment_name="exp1",
+        trial_id="trial-1",
+        benchmark="test-benchmark",
+        harness="h1",
+        cpv_id="cpv-1",
+        patch=EmbeddedPatch(
+            patch_id="patch-1",
+            pov_id="cpv-1",
+            patch_content_b64="cGF0Y2g=",
+        ),
+        sanitizer="address",
+        source_mode="main_repo",
+        verify_variants=True,
+        test_mode="FULL",
+        use_inc_build=True,
+        enqueued_at=100.0,
+    )
+    request_id = "patch-verify:trial-1:test-benchmark:h1:cpv-1:patch-1"
+    store.submit_request(
+        VerifyRequestRecord(
+            request_id=request_id,
+            owner_key="trial::exp1::trial-1",
+            request_kind="patch",
+            payload=patch_payload.to_dict(),
+        )
+    )
+
+    build_queue = _FakeQueue("build-q")
+    verify_queue = _FakeQueue("verify-q")
+    worker = EvaluatorClaimWorker(
+        redis_conn=redis_conn,
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=build_queue,
+        verify_queue=verify_queue,
+        verification_engine=MagicMock(),
+        benchmarks_root=Path("/benchmarks"),
+    )
+
+    claimed = worker.dispatch_one(now=100.0)
+    assert claimed is not None
+
+    local_verify_job_id = build_local_verify_job_id(
+        request_id=request_id,
+        evaluator_id="eval-1",
+    )
+    first_verify_job = verify_queue.jobs[local_verify_job_id]
+    first_verify_job.set_status(terminal_status)
+
+    worker.refresh_active_claims(now=101.0)
+
+    released = store.load_request(request_id)
+    assert released is not None
+    assert released.claim is None
+    assert released.terminal_result is None
+
+    reclaimed = worker.dispatch_one(now=102.0)
+    assert reclaimed is not None
+    assert reclaimed.request_id == request_id
+    assert len(verify_queue.enqueued) == 2
+
+    second_verify_job = verify_queue.jobs[local_verify_job_id]
+    assert second_verify_job is not first_verify_job
+    assert second_verify_job.get_status() == "queued"
+
+    worker.refresh_active_claims(now=103.0)
+
+    active = store.load_request(request_id)
+    assert active is not None
+    assert active.claim is not None
+    assert active.claim.evaluator_id == "eval-1"
+    assert active.terminal_result is None
 
 
 def test_tick_claims_until_inflight_limit() -> None:
