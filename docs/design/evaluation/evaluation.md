@@ -126,6 +126,18 @@ Contract:
   pointing at a prior bug-finding experiment directory
   (`<experiment_filestore>/<experiment_name>`). Only valid when
   `task: bugfixing`; invalid for bug-finding.
+- For multi-CRS experiments, use `inputs.pov.from_experiment_by_crs` instead
+  to route each fixing CRS to a specific finding-experiment subtree:
+  ```yaml
+  inputs:
+    pov:
+      from_experiment_by_crs:
+        crs-claude-code: .run/cc-finding/crs-claude-code
+        crs-codex:       .run/cc-finding/crs-codex
+  ```
+  Mutually exclusive with `from_experiment`. A fixing CRS absent from the
+  map has no POVs and is skipped at trial-matrix generation — use this to
+  drop a CRS from the fixing run without editing `crs_compose`.
 - CPVs absent from the source experiment are skipped at trial-matrix
   generation time — no bug-fixing trial is scheduled for an undiscovered CPV.
 - POVs are deduplicated by crash signature (same algorithm as

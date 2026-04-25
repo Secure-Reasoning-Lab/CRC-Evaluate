@@ -3056,6 +3056,30 @@ class ExperimentPovInputs(BaseModel):
         "Only valid for task='bugfixing'. When set, CPVs absent from the source "
         "experiment are skipped and POVs are deduplicated by crash signature.",
     )
+    from_experiment_by_crs: Optional[Dict[str, Path]] = Field(
+        default=None,
+        description="Per-CRS mapping of prior bug-finding experiment directories. "
+        "Each key is a fixing-CRS name from ``crs_compose``, each value is a path "
+        "to that CRS's bug-finding experiment subtree (typically "
+        "``<finding_experiment_filestore>/<experiment_name>/<crs>``). Enables "
+        "matching specific finding CRS to specific fixing CRS within a single "
+        "multi-CRS experiment. Mutually exclusive with ``from_experiment``. "
+        "Fixing CRSes not present in the map have no POVs and are skipped at "
+        "trial-matrix generation. Only valid for task='bugfixing'.",
+    )
+
+    def resolve_from_experiment_for(self, crs: Optional[str]) -> Optional[Path]:
+        """Return the effective ``from_experiment`` path for *crs*.
+
+        Prefers the per-CRS map when configured: a missing key means "no POVs
+        for this CRS", returning None so trial-matrix generation skips it.
+        Falls back to the single-path ``from_experiment`` otherwise.
+        """
+        if self.from_experiment_by_crs is not None:
+            if crs is None:
+                return None
+            return self.from_experiment_by_crs.get(crs)
+        return self.from_experiment
 
 
 class ExperimentSarifInputs(BaseModel):
@@ -3867,6 +3891,15 @@ class ExperimentConfig(BaseModel):
         into a bug-finding run) and POV staging is force-enabled.
         """
         from_experiment = self.inputs.pov.from_experiment
+        from_experiment_by_crs = self.inputs.pov.from_experiment_by_crs
+
+        if from_experiment is not None and from_experiment_by_crs is not None:
+            raise ValueError(
+                "inputs.pov.from_experiment and inputs.pov.from_experiment_by_crs "
+                "are mutually exclusive. Use from_experiment for a single source "
+                "path (applies to all fixing CRSes) or from_experiment_by_crs for "
+                "an explicit per-CRS mapping."
+            )
 
         if from_experiment is not None and self.task != "bugfixing":
             raise ValueError(
@@ -3875,6 +3908,35 @@ class ExperimentConfig(BaseModel):
                 "a bug-fixing run; using it with bug-finding would short-circuit "
                 "discovery."
             )
+
+        if from_experiment_by_crs is not None:
+            if self.task != "bugfixing":
+                raise ValueError(
+                    "inputs.pov.from_experiment_by_crs is only valid for "
+                    "task='bugfixing'. It chains prior bug-finding POVs per CRS; "
+                    "using it with bug-finding would short-circuit discovery."
+                )
+            if not from_experiment_by_crs:
+                raise ValueError(
+                    "inputs.pov.from_experiment_by_crs must not be empty. "
+                    "Remove the key to fall back to ground-truth POVs."
+                )
+            configured_crses = (
+                set(self.crs_compose.services.keys())
+                if self.crs_compose is not None
+                else set()
+            )
+            unknown_crses = sorted(
+                set(from_experiment_by_crs.keys()) - configured_crses
+            )
+            if unknown_crses:
+                known = ", ".join(sorted(configured_crses)) or "<none>"
+                unknown = ", ".join(unknown_crses)
+                raise ValueError(
+                    "inputs.pov.from_experiment_by_crs keys must match fixing CRS "
+                    f"names from crs_compose. Unknown CRS key(s): {unknown}. "
+                    f"Known crs_compose services: {known}."
+                )
 
         if self.inputs.pov.enabled is None:
             if self.task == "bugfixing":
@@ -3888,8 +3950,10 @@ class ExperimentConfig(BaseModel):
                 "bug-finding evaluation. Disable POV inputs or change the task type."
             )
 
-        if from_experiment is not None and not self.inputs.pov.enabled:
-            # from_experiment implies we must stage POVs; enforce explicitly.
+        if (
+            from_experiment is not None or from_experiment_by_crs is not None
+        ) and not self.inputs.pov.enabled:
+            # Any from_experiment source implies we must stage POVs; enforce explicitly.
             self.inputs.pov.enabled = True
 
         return self
@@ -3925,6 +3989,13 @@ class ExperimentConfig(BaseModel):
             and not self.inputs.pov.from_experiment.is_absolute()
         ):
             self.inputs.pov.from_experiment = self.inputs.pov.from_experiment.resolve()
+
+        # Per-CRS POV source map — resolve each value to an absolute path.
+        if self.inputs.pov.from_experiment_by_crs is not None:
+            self.inputs.pov.from_experiment_by_crs = {
+                crs: (path if path.is_absolute() else path.resolve())
+                for crs, path in self.inputs.pov.from_experiment_by_crs.items()
+            }
 
         # Compose-level optional path field
         if (

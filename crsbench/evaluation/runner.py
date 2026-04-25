@@ -126,6 +126,7 @@ class BenchmarkRunner:
         patch_verify_variants: bool = False,
         pov_input_enabled: bool = False,
         pov_from_experiment: Optional[Path] = None,
+        pov_from_experiment_trial_num: Optional[int] = None,
         sarif_input_enabled: bool = False,
         sarif_level: Optional[int] = None,
         seed_corpus_enabled: bool = False,
@@ -213,6 +214,7 @@ class BenchmarkRunner:
         self.pov_from_experiment = (
             Path(pov_from_experiment) if pov_from_experiment is not None else None
         )
+        self.pov_from_experiment_trial_num = pov_from_experiment_trial_num
         self.sarif_input_enabled = sarif_input_enabled
         self.sarif_level = sarif_level
         self.seed_corpus_enabled = seed_corpus_enabled
@@ -1189,10 +1191,19 @@ class BenchmarkRunner:
                 "pov_from_experiment requires a target_cpv_id; bug-fixing "
                 "trials must be scheduled per CPV"
             )
+        if self.pov_from_experiment_trial_num is None:
+            raise EvaluationError(
+                "pov_from_experiment requires pov_from_experiment_trial_num "
+                "to enforce 1:1 trial pairing with the source finding "
+                "experiment"
+            )
 
         from crsbench.evaluation.external_pov_source import ExternalPovSource
 
-        source = ExternalPovSource(self.pov_from_experiment)
+        source = ExternalPovSource(
+            self.pov_from_experiment,
+            trial_num=self.pov_from_experiment_trial_num,
+        )
         records = source.get_pov_blobs(
             benchmark=benchmark_path.name,
             harness=harness_name,

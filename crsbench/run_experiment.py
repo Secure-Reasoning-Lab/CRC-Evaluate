@@ -795,8 +795,13 @@ def _build_trial_stream(
     mode: str,
     sanitizer: str,
     target_cpv_id: str | None = None,
+    allowed_trial_nums: set[int] | None = None,
 ) -> list[Trial]:
-    """Build one FIFO trial stream for a single logical variant."""
+    """Build one FIFO trial stream for a single logical variant.
+
+    When *allowed_trial_nums* is set (1:1 trial pairing with a finding
+    experiment), only those trial numbers are scheduled.
+    """
     return [
         Trial(
             crs=crs,
@@ -807,6 +812,7 @@ def _build_trial_stream(
             target_cpv_id=target_cpv_id,
         )
         for trial_num in range(1, trial_count + 1)
+        if allowed_trial_nums is None or trial_num in allowed_trial_nums
     ]
 
 
@@ -821,6 +827,39 @@ def _wavefront_trial_streams(trial_streams: list[list[Trial]]) -> list[Trial]:
                 wavefront_trials.append(stream[index])
 
     return wavefront_trials
+
+
+def _validate_from_experiment_paths_exist(config) -> None:
+    """Enforce that every configured from_experiment source exists on disk.
+
+    Applies to both ``inputs.pov.from_experiment`` (single path) and each
+    entry of ``inputs.pov.from_experiment_by_crs`` (per-CRS map). All
+    missing paths are collected and reported together so the user can fix
+    them in one pass.
+    """
+    pov_inputs = config.inputs.pov
+    missing: list[str] = []
+
+    if (
+        pov_inputs.from_experiment is not None
+        and not pov_inputs.from_experiment.is_dir()
+    ):
+        missing.append(f"  inputs.pov.from_experiment: {pov_inputs.from_experiment}")
+
+    if pov_inputs.from_experiment_by_crs is not None:
+        for crs, path in pov_inputs.from_experiment_by_crs.items():
+            if not path.is_dir():
+                missing.append(f"  inputs.pov.from_experiment_by_crs[{crs!r}]: {path}")
+
+    if missing:
+        raise ValueError(
+            "inputs.pov from_experiment source(s) do not exist on disk:\n"
+            + "\n".join(missing)
+            + "\nRun the phase-1 (bug-finding) experiment first, or fix the "
+            "path(s) above. All configured sources must exist — partial "
+            "runs are rejected to avoid silently producing fewer trials "
+            "than expected."
+        )
 
 
 def generate_trial_matrix(
@@ -843,18 +882,35 @@ def generate_trial_matrix(
     trials = []
     config_mode = config.mode.value  # Get string value from enum
 
-    pov_from_experiment = config.inputs.pov.from_experiment
-    external_pov_source = None
-    if pov_from_experiment is not None:
-        from crsbench.evaluation.external_pov_source import ExternalPovSource
+    # POV source is resolved per-CRS inside the loop so that
+    # inputs.pov.from_experiment_by_crs can route different fixing CRSes to
+    # different finding-experiment subtrees. The single-path
+    # inputs.pov.from_experiment falls through to the same resolver.
+    from crsbench.evaluation.external_pov_source import ExternalPovSource
 
-        external_pov_source = ExternalPovSource(pov_from_experiment)
+    # Pre-check: every configured from_experiment source (single-path or each
+    # entry of the per-CRS map) must exist on disk. We enforce this up front
+    # so a partial or forgotten phase-1 run fails the whole experiment
+    # rather than silently producing a subset of expected trials.
+    _validate_from_experiment_paths_exist(config)
 
     for crs in oss_crs_registry:
         crs_trial_streams: list[list[Trial]] = []
         # CRS entries are resolved directly from registry.
         crs_type = get_crs_type(crs, registry_dir)
         is_bug_fixing = crs_type == "bug-fixing"
+
+        pov_from_experiment = config.inputs.pov.resolve_from_experiment_for(crs)
+        if pov_from_experiment is None and (
+            is_bug_fixing and config.inputs.pov.from_experiment_by_crs is not None
+        ):
+            # Per-CRS map is set but this fixing CRS has no entry: skip all its
+            # trials (no POVs to seed bug-fixing for this CRS).
+            logger.info(
+                f"crs={crs}: no entry in inputs.pov.from_experiment_by_crs; "
+                "skipping all bug-fixing trials for this CRS"
+            )
+            continue
 
         for benchmark_harness in benchmark_harnesses:
             # Load harness metadata when needed:
@@ -923,21 +979,39 @@ def generate_trial_matrix(
                             continue
                     if is_bug_fixing and harness and harness.vulns:
                         allowed_cpvs = target_cpv_set
-                        if external_pov_source is not None:
-                            found = external_pov_source.list_found_cpvs(
-                                benchmark=benchmark_harness.name,
-                                harness=benchmark_harness.harness.name,
-                                sanitizer=sanitizer.value,
-                            )
+                        # When seeded from a finding experiment we enforce
+                        # 1:1 trial pairing: fixing trial-N consumes only
+                        # finding trial-N's POVs. Build a per-trial CPV
+                        # index here so the trial loop below can skip
+                        # (cpv, trial) pairs whose finding trial did not
+                        # discover the CPV.
+                        per_trial_cpvs: dict[int, set[str]] | None = None
+                        if pov_from_experiment is not None:
+                            per_trial_cpvs = {}
+                            for trial_num in range(1, config.trials + 1):
+                                source = ExternalPovSource(
+                                    pov_from_experiment, trial_num=trial_num
+                                )
+                                per_trial_cpvs[trial_num] = source.list_found_cpvs(
+                                    benchmark=benchmark_harness.name,
+                                    harness=benchmark_harness.harness.name,
+                                    sanitizer=sanitizer.value,
+                                )
+                            union_found = set().union(*per_trial_cpvs.values())
                             if allowed_cpvs is None:
-                                allowed_cpvs = found
+                                allowed_cpvs = union_found
                             else:
-                                allowed_cpvs = allowed_cpvs & found
+                                allowed_cpvs = allowed_cpvs & union_found
+                            per_trial_summary = ", ".join(
+                                f"trial-{n}={len(per_trial_cpvs[n])}"
+                                for n in sorted(per_trial_cpvs)
+                            )
                             logger.info(
                                 f"{benchmark_harness.name}/"
                                 f"{benchmark_harness.harness.name}/{sanitizer.value}: "
-                                f"source experiment found {len(found)} CPVs; "
-                                f"scheduling {len(allowed_cpvs)} bug-fixing CPV trial(s)"
+                                f"source experiment per-trial CPVs: {per_trial_summary}; "
+                                f"union={len(union_found)}, "
+                                f"target-filtered={len(allowed_cpvs)}"
                             )
                         matched_cpvs = _filter_matched_cpvs(
                             harness, sanitizer.value, allowed_cpvs
@@ -951,6 +1025,21 @@ def generate_trial_matrix(
                             continue
 
                         for cpv_id in matched_cpvs:
+                            allowed_trial_nums: set[int] | None = None
+                            if per_trial_cpvs is not None:
+                                allowed_trial_nums = {
+                                    n
+                                    for n, cpvs in per_trial_cpvs.items()
+                                    if cpv_id in cpvs
+                                }
+                                if not allowed_trial_nums:
+                                    logger.debug(
+                                        f"Skipping {benchmark_harness.name}/"
+                                        f"{benchmark_harness.harness.name}/"
+                                        f"{sanitizer.value}/{cpv_id}: "
+                                        "no finding trial discovered this CPV"
+                                    )
+                                    continue
                             crs_trial_streams.append(
                                 _build_trial_stream(
                                     crs=crs,
@@ -959,6 +1048,7 @@ def generate_trial_matrix(
                                     mode=mode,
                                     sanitizer=sanitizer.value,
                                     target_cpv_id=cpv_id,
+                                    allowed_trial_nums=allowed_trial_nums,
                                 )
                             )
                     else:

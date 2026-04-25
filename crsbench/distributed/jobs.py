@@ -122,6 +122,7 @@ def _resolve_effective_input_settings(
     raw_config: Dict[str, Any],
     *,
     trial_mode: Optional[str] = None,
+    crs: Optional[str] = None,
 ) -> EffectiveInputSettings:
     """Resolve effective runtime inputs from explicit runtime.inputs only.
 
@@ -131,12 +132,16 @@ def _resolve_effective_input_settings(
         trial_mode: Per-trial evaluation mode ("delta" or "full").
             When "delta", diff input is force-enabled because the reference
             diff is a definitional input for delta-mode evaluation.
+        crs: Fixing CRS name. Required when
+            ``inputs.pov.from_experiment_by_crs`` is set so per-CRS routing
+            picks the right source path for this trial.
     """
     del raw_config
     inputs = config.inputs
 
     pov_enabled = bool(inputs.pov.enabled)
     max_pov_variants = inputs.pov.max_variants_per_cpv
+    pov_from_experiment = inputs.pov.resolve_from_experiment_for(crs)
     hints_enabled = bool(inputs.sarif.enabled)
     hint_sarif_level = inputs.sarif.level
     seed_corpus_enabled = bool(inputs.seed.enabled)
@@ -157,7 +162,7 @@ def _resolve_effective_input_settings(
     return EffectiveInputSettings(
         pov_enabled=pov_enabled,
         max_pov_variants_per_cpv=max_pov_variants if pov_enabled else None,
-        pov_from_experiment=inputs.pov.from_experiment,
+        pov_from_experiment=pov_from_experiment,
         hints_enabled=hints_enabled,
         hint_sarif_level=hint_sarif_level if hints_enabled else None,
         hint_corpus_level=hint_corpus_level if hints_enabled else None,
@@ -1270,7 +1275,7 @@ def run_crs_trial(
     config_parse_dict = dict(config_dict)
     config = ExperimentConfig(**config_parse_dict)
     effective_inputs = _resolve_effective_input_settings(
-        config, config_dict, trial_mode=mode
+        config, config_dict, trial_mode=mode, crs=crs
     )
     trial_key = build_trial_key(
         crs=crs,
@@ -1562,6 +1567,9 @@ def run_crs_trial(
             patch_verify_variants=effective_inputs.patch_verify_variants,
             pov_input_enabled=effective_inputs.pov_enabled,
             pov_from_experiment=effective_inputs.pov_from_experiment,
+            pov_from_experiment_trial_num=(
+                trial_num if effective_inputs.pov_from_experiment is not None else None
+            ),
             sarif_input_enabled=effective_inputs.hints_enabled,
             sarif_level=effective_inputs.hint_sarif_level,
             seed_corpus_enabled=effective_inputs.seed_corpus_enabled,
