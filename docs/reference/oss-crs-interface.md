@@ -177,7 +177,10 @@ preserves the non-log trial artifacts but intentionally omits
 top-level trial entries such as `output/` or `result.log` still symlink into
 that excluded workdir, collect materializes them before publish, prunes any
 bulk `output/logs/` copy, then restores only the report-critical subset needed
-by local CSV/report generation:
+by local CSV/report generation. Trials with `.success` keep the normal
+collected artifact tree; trials with `.fail` are compacted before publish so
+they retain only `metadata.json`, `.fail`, `worker.log`, and this restored
+report-critical log subset:
 
 - `trial/output/logs/services/*_patcher.stdout.log`
 - `trial/output/logs/services/*inc-builder-*.stdout.log`
