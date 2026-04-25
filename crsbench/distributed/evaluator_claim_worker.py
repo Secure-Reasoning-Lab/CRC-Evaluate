@@ -63,28 +63,31 @@ def _is_job_terminal(job: Any | None) -> bool:
     return status in {"finished", "failed", "stopped", "canceled", "cancelled"}
 
 
-def _remove_existing_job(queue: Any, *, job_id: str, existing: Any) -> bool:
+def _refresh_terminal_job(queue: Any, *, job_id: str, existing: Any) -> Any | None:
+    """Best-effort delete of a terminal job; fail if a terminal wrapper still remains."""
     try:
         from crsbench.distributed.queue import remove_job_by_id
 
-        if remove_job_by_id(queue, job_id):
-            return True
+        remove_job_by_id(queue, job_id)
     except Exception:
         pass
 
     jobs = getattr(queue, "jobs", None)
-    if isinstance(jobs, dict) and jobs.pop(job_id, None) is not None:
-        return True
+    if isinstance(jobs, dict):
+        jobs.pop(job_id, None)
 
     delete = getattr(existing, "delete", None)
     if callable(delete):
         try:
             delete()
-            return True
         except Exception:
             pass
 
-    return False
+    remaining = queue.fetch_job(job_id)
+    if remaining is None or not _is_job_terminal(remaining):
+        return remaining
+
+    raise RuntimeError(f"Failed to remove terminal job {job_id} before refresh")
 
 
 def _enqueue_or_reuse_job(
@@ -101,9 +104,7 @@ def _enqueue_or_reuse_job(
     existing = queue.fetch_job(job_id)
     if existing is not None:
         if refresh_terminal and _is_job_terminal(existing):
-            removed = _remove_existing_job(queue, job_id=job_id, existing=existing)
-            if removed:
-                existing = queue.fetch_job(job_id)
+            existing = _refresh_terminal_job(queue, job_id=job_id, existing=existing)
         if existing is not None:
             adopt_scheduler_owner_if_needed(
                 existing,
@@ -128,8 +129,8 @@ def _enqueue_or_reuse_job(
         if existing is None:
             raise
         if refresh_terminal and _is_job_terminal(existing):
-            removed = _remove_existing_job(queue, job_id=job_id, existing=existing)
-            if removed:
+            existing = _refresh_terminal_job(queue, job_id=job_id, existing=existing)
+            if existing is None:
                 return _enqueue_or_reuse_job(
                     queue,
                     func_name,
