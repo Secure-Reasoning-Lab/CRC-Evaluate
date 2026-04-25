@@ -711,7 +711,10 @@ def test_has_pending_required_builds_ignores_expired_claims() -> None:
     assert worker.has_pending_required_builds() is False
 
 
-@pytest.mark.parametrize("terminal_status", ["failed", "finished"])
+@pytest.mark.parametrize(
+    "terminal_status",
+    ["failed", "finished", "stopped", "canceled", "cancelled"],
+)
 def test_reclaimed_request_reenqueues_fresh_local_verify_job(
     terminal_status: str,
 ) -> None:
@@ -765,6 +768,9 @@ def test_reclaimed_request_reenqueues_fresh_local_verify_job(
     claimed = worker.dispatch_one(now=100.0)
     assert claimed is not None
 
+    first_build_job_id = build_queue.enqueued[0]["job_id"]
+    first_build_job = build_queue.jobs[first_build_job_id]
+
     local_verify_job_id = build_local_verify_job_id(
         request_id=request_id,
         evaluator_id="eval-1",
@@ -773,6 +779,7 @@ def test_reclaimed_request_reenqueues_fresh_local_verify_job(
     first_verify_job.set_status(terminal_status)
 
     worker.refresh_active_claims(now=101.0)
+    assert request_id not in worker._active_claims
 
     released = store.load_request(request_id)
     assert released is not None
@@ -782,6 +789,9 @@ def test_reclaimed_request_reenqueues_fresh_local_verify_job(
     reclaimed = worker.dispatch_one(now=102.0)
     assert reclaimed is not None
     assert reclaimed.request_id == request_id
+    assert request_id in worker._active_claims
+    assert len(build_queue.enqueued) == 1
+    assert build_queue.jobs[first_build_job_id] is first_build_job
     assert len(verify_queue.enqueued) == 2
 
     second_verify_job = verify_queue.jobs[local_verify_job_id]
@@ -795,6 +805,103 @@ def test_reclaimed_request_reenqueues_fresh_local_verify_job(
     assert active.claim is not None
     assert active.claim.evaluator_id == "eval-1"
     assert active.terminal_result is None
+
+
+def test_reclaimed_pov_request_reenqueues_fresh_local_verify_job() -> None:
+    from crsbench.distributed.evaluator_claim_worker import (
+        EvaluatorClaimWorker,
+        build_local_ci_job_id,
+        build_local_verify_job_id,
+    )
+
+    redis_conn = _FakeRedis()
+    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
+    request_id = "verify:trial-1:test-benchmark:h1:pov-1"
+    payload = SinglePovPayload(
+        experiment_name="exp1",
+        trial_id="trial-1",
+        benchmark="test-benchmark",
+        harness="h1",
+        pov=EmbeddedPov.from_bytes("pov-1", b"boom"),
+        enqueued_at=100.0,
+        sanitizer="address",
+        build_job_ids=[
+            "build-single/test-benchmark/test-benchmark-asan-deltaref",
+            "build-single/test-benchmark/test-benchmark-asan-delta-cpv0",
+        ],
+        build_artifact_ids=[
+            "build-single/test-benchmark/test-benchmark-asan-deltaref",
+            "build-single/test-benchmark/test-benchmark-asan-delta-cpv0",
+        ],
+        source_mode="main_repo",
+        use_inc_build=True,
+    )
+    store.submit_request(
+        VerifyRequestRecord(
+            request_id=request_id,
+            owner_key="trial::exp1::trial-1",
+            request_kind="pov",
+            payload=payload.to_dict(),
+        )
+    )
+
+    engine, _adapter = _make_engine_and_adapter()
+    build_queue = _FakeQueue("build-q")
+    verify_queue = _FakeQueue("verify-q")
+    finished_build_id = build_local_ci_job_id(
+        "build-single/test-benchmark/test-benchmark-asan-deltaref/main_repo/inc",
+        evaluator_id="eval-1",
+    )
+    build_queue.jobs[finished_build_id] = _FakeJob(
+        finished_build_id,
+        status="finished",
+        result={"success": True},
+    )
+
+    worker = EvaluatorClaimWorker(
+        redis_conn=redis_conn,
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=build_queue,
+        verify_queue=verify_queue,
+        verification_engine=engine,
+        benchmarks_root=Path("/benchmarks"),
+    )
+
+    claimed = worker.dispatch_one(now=100.0)
+    assert claimed is not None
+
+    first_enqueued_build_job_ids = [entry["job_id"] for entry in build_queue.enqueued]
+    first_enqueued_build_jobs = {
+        job_id: build_queue.jobs[job_id] for job_id in first_enqueued_build_job_ids
+    }
+    local_verify_job_id = build_local_verify_job_id(
+        request_id=request_id,
+        evaluator_id="eval-1",
+    )
+    first_verify_job = verify_queue.jobs[local_verify_job_id]
+    first_verify_job.set_status("finished")
+
+    worker.refresh_active_claims(now=101.0)
+    assert request_id not in worker._active_claims
+
+    released = store.load_request(request_id)
+    assert released is not None
+    assert released.claim is None
+    assert released.terminal_result is None
+
+    reclaimed = worker.dispatch_one(now=102.0)
+    assert reclaimed is not None
+    assert reclaimed.request_id == request_id
+    assert request_id in worker._active_claims
+    assert len(build_queue.enqueued) == len(first_enqueued_build_job_ids)
+    for job_id, job in first_enqueued_build_jobs.items():
+        assert build_queue.jobs[job_id] is job
+    assert len(verify_queue.enqueued) == 2
+
+    second_verify_job = verify_queue.jobs[local_verify_job_id]
+    assert second_verify_job is not first_verify_job
+    assert second_verify_job.get_status() == "queued"
 
 
 def test_tick_claims_until_inflight_limit() -> None:
