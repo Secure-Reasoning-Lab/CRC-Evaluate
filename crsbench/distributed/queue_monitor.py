@@ -815,21 +815,20 @@ def _build_rich_group(
     footer = None
     if paging_active and total_running_jobs > len(visible_running_jobs):
         helper_text = paging_status_text or "auto-rotates automatically"
-        footer_text = (
+        page_text = (
             f"Page {page_index + 1}/{page_count}: "
-            f"showing {len(visible_running_jobs)} of {total_running_jobs} running jobs; "
-            f"{helper_text}"
+            f"showing {len(visible_running_jobs)} of {total_running_jobs} running jobs"
         )
-        footer = Table.grid(expand=True, padding=(0, 0))
-        footer.add_column(ratio=1)
-        footer.add_column(
+        helper_footer = Table.grid(expand=True, padding=(0, 0))
+        helper_footer.add_column(ratio=1)
+        helper_footer.add_column(
             justify="right",
             width=len(" [PAUSED]"),
             no_wrap=True,
         )
-        footer.add_row(
+        helper_footer.add_row(
             Text(
-                footer_text,
+                helper_text,
                 style="dim italic",
                 no_wrap=True,
                 overflow="ellipsis",
@@ -839,6 +838,15 @@ def _build_rich_group(
                 style="bold red",
                 no_wrap=True,
             ),
+        )
+        footer = Group(
+            Text(
+                page_text,
+                style="dim italic",
+                no_wrap=True,
+                overflow="ellipsis",
+            ),
+            helper_footer,
         )
     running_table.add_column("Worker", style="green")
     running_table.add_column("CRS", style="cyan")

@@ -47,16 +47,6 @@ def _render_rich_output(
     return console.export_text(styles=styles)
 
 
-def _rich_footer_badge(renderable):
-    if len(renderable.renderables) < 3:
-        return None
-    footer = renderable.renderables[2]
-    badge_cells = list(footer.columns[1].cells)
-    if not badge_cells:
-        return None
-    return badge_cells[0]
-
-
 def test_build_monitor_snapshot_uses_experiment_scoped_counts() -> None:
     queue = MagicMock()
     started_job = MagicMock()
@@ -413,7 +403,7 @@ def test_select_running_jobs_window_pages_when_terminal_height_is_limited() -> N
     )
 
     assert paging_active is True
-    assert [job.trial_num for job in visible_jobs] == ["0", "1", "2", "3"]
+    assert [job.trial_num for job in visible_jobs] == ["0", "1", "2"]
     assert (selected_page_index, page_count) == (0, 2)
 
     wrapped_jobs, wrapped_paging_active, wrapped_page_index, wrapped_page_count = (
@@ -429,7 +419,7 @@ def test_select_running_jobs_window_pages_when_terminal_height_is_limited() -> N
     )
 
     assert wrapped_paging_active is True
-    assert [job.trial_num for job in wrapped_jobs] == ["4", "5"]
+    assert [job.trial_num for job in wrapped_jobs] == ["3", "4", "5"]
     assert (wrapped_page_index, wrapped_page_count) == (1, 2)
 
 
@@ -468,7 +458,7 @@ def test_select_running_jobs_window_clamps_page_index_when_count_shrinks() -> No
     )
 
     assert paging_active is True
-    assert [job.trial_num for job in visible_jobs] == ["4", "5"]
+    assert [job.trial_num for job in visible_jobs] == ["3", "4", "5"]
     assert (selected_page_index, page_count) == (1, 2)
 
 
@@ -625,7 +615,7 @@ def test_build_rich_group_footer_shows_page_indicator_and_key_help() -> None:
     running_table = renderable.renderables[1]
     output = _render_rich_output(renderable, width=120)
     assert running_table.caption is None
-    assert "Page 2/2: showing 4 of 6 running jobs;" in output
+    assert "Page 2/2: showing 4 of 6 running jobs" in output
     assert "n/p active; auto-rotates when idle" in output
 
 
@@ -663,14 +653,13 @@ def test_build_rich_group_footer_reports_hotkeys_unavailable_reason() -> None:
     running_table = renderable.renderables[1]
     output = _render_rich_output(renderable, width=120)
     assert running_table.caption is None
-    assert "Page 1/2: showing 4 of 6 running jobs;" in output
+    assert "Page 1/2: showing 4 of 6 running jobs" in output
     assert "n/p unavailable: stdin not TTY;" in output
     assert "auto-rotates" in output
     assert "automatically" in output
 
 
 def test_build_rich_group_footer_marks_paused_state_in_red() -> None:
-    rich_text = pytest.importorskip("rich.text")
     snapshot = QueueMonitorSnapshot(
         stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
         running_jobs=[
@@ -703,14 +692,132 @@ def test_build_rich_group_footer_marks_paused_state_in_red() -> None:
         auto_rotate_paused=True,
     )
     running_table = renderable.renderables[1]
-    badge = _rich_footer_badge(renderable)
     output = _render_rich_output(renderable, width=120)
+    styled_output = _render_rich_output(renderable, width=120, styles=True)
 
     assert running_table.caption is None
     assert "[PAUSED]" in output
-    assert isinstance(badge, rich_text.Text)
-    assert badge.plain.strip() == "[PAUSED]"
-    assert "red" in str(badge.style)
+    assert "\x1b[1;31m [PAUSED]\x1b[0m" in styled_output
+
+
+def test_build_rich_group_footer_keeps_helper_text_visible_on_narrow_terminals() -> (
+    None
+):
+    snapshot = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[
+            RunningJobInfo(
+                worker_name=f"worker-{idx}",
+                crs="crs-a",
+                benchmark="bench-a",
+                harness="harness-a",
+                target_cpv_id="cpv-1",
+                mode="delta",
+                trial_num=str(idx),
+                phase="running",
+                elapsed="1m0s",
+            )
+            for idx in range(6)
+        ],
+    )
+
+    renderable = _build_rich_group(
+        snapshot,
+        experiment_name="exp-1",
+        total_jobs=6,
+        disk_skipped=0,
+        running_jobs=snapshot.running_jobs[:2],
+        running_job_count=6,
+        paging_active=True,
+        page_index=1,
+        page_count=3,
+        paging_status_text="n/p active; Space resumes auto-rotate",
+        auto_rotate_paused=True,
+    )
+
+    output = _render_rich_output(renderable, width=40, height=18)
+
+    assert "Page 2/3:" in output
+    assert "n/p active" in output
+    assert "[PAUSED]" in output
+
+
+def test_build_rich_group_footer_keeps_unavailable_reason_visible_on_narrow_terminals() -> (
+    None
+):
+    snapshot = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[
+            RunningJobInfo(
+                worker_name=f"worker-{idx}",
+                crs="crs-a",
+                benchmark="bench-a",
+                harness="harness-a",
+                target_cpv_id="cpv-1",
+                mode="delta",
+                trial_num=str(idx),
+                phase="running",
+                elapsed="1m0s",
+            )
+            for idx in range(6)
+        ],
+    )
+
+    renderable = _build_rich_group(
+        snapshot,
+        experiment_name="exp-1",
+        total_jobs=6,
+        disk_skipped=0,
+        running_jobs=snapshot.running_jobs[:2],
+        running_job_count=6,
+        paging_active=True,
+        page_index=1,
+        page_count=3,
+        paging_status_text="n/p unavailable: stdin not TTY; auto-rotates automatically",
+    )
+
+    output = _render_rich_output(renderable, width=40, height=18)
+
+    assert "Page 2/3:" in output
+    assert "stdin not TTY" in output
+
+
+def test_build_rich_group_footer_keeps_full_hotkey_hint_on_standard_width() -> None:
+    snapshot = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[
+            RunningJobInfo(
+                worker_name=f"worker-{idx}",
+                crs="crs-a",
+                benchmark="bench-a",
+                harness="harness-a",
+                target_cpv_id="cpv-1",
+                mode="delta",
+                trial_num=str(idx),
+                phase="running",
+                elapsed="1m0s",
+            )
+            for idx in range(6)
+        ],
+    )
+
+    renderable = _build_rich_group(
+        snapshot,
+        experiment_name="exp-1",
+        total_jobs=6,
+        disk_skipped=0,
+        running_jobs=snapshot.running_jobs[:3],
+        running_job_count=6,
+        paging_active=True,
+        page_index=1,
+        page_count=2,
+        paging_status_text="n/p active; Space pauses auto-rotate",
+    )
+
+    output = _render_rich_output(renderable, width=80, height=20)
+
+    assert "Page 2/2: showing 3 of 6 running jobs" in output
+    assert "n/p active; Space pauses auto-rotate" in output
 
 
 def test_rich_monitor_input_reports_non_tty_unavailability_reason() -> None:
@@ -1331,12 +1438,12 @@ def test_monitor_queue_rich_applies_manual_page_navigation_immediately() -> None
     running_table = rendered_updates[1].renderables[1]
     output = _render_rich_output(rendered_updates[1], width=120, height=20)
     assert running_table.caption is None
-    assert "Page 2/2: showing 2 of 6 running jobs;" in output
+    assert "Page 2/2:" in output
     assert "n/p active; Space pauses auto-rotate" in output
-    assert list(running_table.columns[0].cells) == ["worker-4", "worker-5"]
-    assert list(running_table.columns[6].cells) == ["4", "5"]
-    assert list(running_table.columns[7].cells) == ["running", "running"]
-    assert list(running_table.columns[8].cells) == ["1m0s", "1m0s"]
+    assert list(running_table.columns[0].cells) == ["worker-3", "worker-4", "worker-5"]
+    assert list(running_table.columns[6].cells) == ["3", "4", "5"]
+    assert list(running_table.columns[7].cells) == ["running", "running", "running"]
+    assert list(running_table.columns[8].cells) == ["1m0s", "1m0s", "1m0s"]
 
 
 def test_monitor_queue_rich_space_toggles_auto_rotate_pause_state() -> None:
