@@ -1221,6 +1221,33 @@ def test_orchestrator_startup_script_exports_download_delay_before_vm_bootstrap(
     assert write_index > bootstrap_index
 
 
+def test_orchestrator_startup_script_starts_valkey_before_repo_bootstrap():
+    """Valkey should come up before repo/bootstrap work so orchestrator failures do not suppress Redis."""
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+
+    valkey_index = script.index("\nensure_valkey_running\n\n# --- GitHub SSH setup")
+    bootstrap_index = script.index("run_cloud_vm_bootstrap(")
+    launcher_index = script.index('cat > "${LAUNCHER_PATH}" <<EOF')
+
+    assert valkey_index < bootstrap_index
+    assert valkey_index < launcher_index
+    assert script.count("ensure_valkey_running() {") == 1
+
+
+def test_orchestrator_startup_script_extracts_grouped_experiment_name():
+    """Grouped configs should populate EXPERIMENT_NAME from experiment.name, not the whole mapping."""
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+
+    assert 'value = loaded.get("experiment")' in script
+    assert "if isinstance(value, dict):" in script
+    assert 'value = value.get("name")' in script
+    assert "grouped 'experiment.name'" in script
+
+
 def test_orchestrator_startup_script_supports_file_backed_metadata_sources():
     """Orchestrator bootstrap should support local rehearsal without systemd."""
     from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
@@ -1334,7 +1361,7 @@ def test_orchestrator_startup_script_binds_valkey_to_loopback_and_internal_ip():
     assert 'instance_metadata_get "network-interfaces/0/ip"' in script
     assert 'write_env_var "CRSBENCH_REDIS_BIND_HOST" "${REDIS_BIND_HOST}"' in script
     assert '-p "127.0.0.1:6379:6379"' in script
-    assert '-p "\\${CRSBENCH_REDIS_BIND_HOST}:6379:6379"' in script
+    assert '-p "${CRSBENCH_REDIS_BIND_HOST}:6379:6379"' in script
     assert "0.0.0.0:6379:6379" not in script
 
 
