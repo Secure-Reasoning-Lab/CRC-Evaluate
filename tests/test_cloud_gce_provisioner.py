@@ -834,10 +834,10 @@ def test_gce_provider_adapter_passes_conservative_download_delay_schedule_to_pro
         "crsbench-exp-cloud-42-orch": 0,
         "crsbench-exp-cloud-42-work-001": 10,
         "crsbench-exp-cloud-42-eval-001": 20,
-        "crsbench-exp-cloud-42-work-002": 300,
-        "crsbench-exp-cloud-42-work-003": 310,
-        "crsbench-exp-cloud-42-eval-002": 320,
-        "crsbench-exp-cloud-42-eval-003": 600,
+        "crsbench-exp-cloud-42-eval-002": 300,
+        "crsbench-exp-cloud-42-eval-003": 310,
+        "crsbench-exp-cloud-42-work-002": 320,
+        "crsbench-exp-cloud-42-work-003": 600,
     }
 
     assert provisioner.create_workers.call_count == 2

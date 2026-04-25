@@ -121,7 +121,7 @@ into the shared readiness records.
 - When benchmark download is enabled, launch also injects per-instance `crsbench-download-delay-sec` metadata
   so startup sleeps only before the benchmark download step, not before the whole VM bootstrap
 - The download-delay schedule is deterministic and conservative: orchestrator first, then worker 1, then
-  evaluator 1, then remaining workers, then remaining evaluators; at most 3 VMs begin benchmark download in
+  evaluator 1, then remaining evaluators, then remaining workers; at most 3 VMs begin benchmark download in
   each 300-second window with 10-second spacing inside that window
 - Operator-selected remote env vars are delivered separately as base64-encoded JSON metadata after operator-side validation; they are not persisted in launch-state files
 - Live quota validation is required before launch begins

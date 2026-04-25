@@ -148,12 +148,12 @@ def test_build_download_delay_schedule_uses_conservative_priority_waves() -> Non
         "crsbench-exp-orch": 0,
         "crsbench-exp-work-001": 10,
         "crsbench-exp-eval-001": 20,
-        "crsbench-exp-work-002": 300,
-        "crsbench-exp-work-003": 310,
-        "crsbench-exp-work-004": 320,
-        "crsbench-exp-work-005": 600,
-        "crsbench-exp-eval-002": 610,
-        "crsbench-exp-eval-003": 620,
+        "crsbench-exp-eval-002": 300,
+        "crsbench-exp-eval-003": 310,
+        "crsbench-exp-work-002": 320,
+        "crsbench-exp-work-003": 600,
+        "crsbench-exp-work-004": 610,
+        "crsbench-exp-work-005": 620,
     }
 
 

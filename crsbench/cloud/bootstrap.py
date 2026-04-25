@@ -250,8 +250,8 @@ def build_download_delay_schedule(
         ordered_names.append(worker_names[0])
     if evaluator_names:
         ordered_names.append(evaluator_names[0])
-    ordered_names.extend(worker_names[1:])
     ordered_names.extend(evaluator_names[1:])
+    ordered_names.extend(worker_names[1:])
 
     if len(set(ordered_names)) != len(ordered_names):
         raise ValueError("Cloud download delay schedule requires unique instance names")
