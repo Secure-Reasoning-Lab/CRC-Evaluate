@@ -139,8 +139,19 @@ def _write_trial_metadata(trial_dir: Path, payload: dict[str, object]) -> None:
 
 
 class TestTrialRootDiscovery:
+    @pytest.mark.parametrize(
+        ("metadata_state", "include_worker_log"),
+        [
+            ("missing", False),
+            ("missing", True),
+            ("invalid", False),
+        ],
+    )
     def test_published_root_fallback_requires_corrupt_trial_shape(
-        self, tmp_path: Path
+        self,
+        tmp_path: Path,
+        metadata_state: str,
+        include_worker_log: bool,
     ) -> None:
         staging_root = tmp_path / "staging"
         published_root = tmp_path / "published"
@@ -155,6 +166,25 @@ class TestTrialRootDiscovery:
 
         partial_trial = staging_root / relpath
         partial_trial.mkdir(parents=True)
+        if metadata_state == "valid":
+            _write_trial_metadata(
+                partial_trial,
+                {
+                    "timestamp": "2026-03-13T00:00:00Z",
+                    "trial_num": 1,
+                    "crs": _REAL_LAYOUT_CRS,
+                    "benchmark": _MISSING_LAYOUT_BENCHMARK,
+                    "harness": _REAL_LAYOUT_HARNESS,
+                },
+            )
+        elif metadata_state == "invalid":
+            (partial_trial / "metadata.json").write_text(
+                "{broken json\n", encoding="utf-8"
+            )
+        if include_worker_log:
+            (partial_trial / "worker.log").write_text(
+                "partial worker log\n", encoding="utf-8"
+            )
         (partial_trial / "staged" / "cache.txt").parent.mkdir(parents=True)
         (partial_trial / "staged" / "cache.txt").write_text(
             "partial tree should not be promoted\n", encoding="utf-8"
