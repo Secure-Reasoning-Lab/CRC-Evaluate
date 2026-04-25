@@ -1148,6 +1148,8 @@ write_env_var "CRSBENCH_DOWNLOAD_DELAY_SEC" "${CRSBENCH_DOWNLOAD_DELAY_SEC}"
 write_env_var "CRSBENCH_CLOUD_INSTANCE_NAME" "crsbench-${EXPERIMENT_NAME}-orch"
 write_env_var "CONFIG_PATH" "${CONFIG_PATH}"
 write_env_var "LOG_PATH" "${LOG_PATH}"
+write_env_var "CLONE_DIR" "${CLONE_DIR}"
+write_env_var "CRSBENCH_USER" "${CRSBENCH_USER}"
 write_passthrough_env_vars "${ENV_PASSTHROUGH_B64}"
 if [[ -n "${VENV_BIN:-}" ]]; then
   write_env_var "PATH" "${VENV_BIN}:${CRSBENCH_MANAGED_BIN_DIR}:${CRSBENCH_USER_HOME}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -1210,11 +1212,27 @@ ensure_valkey_running() {
 
 ensure_valkey_running
 
-echo "=== Starting crsbench run at \$(date -u) ==="
-echo "Config: \${CONFIG_PATH}"
+case "\${CRSBENCH_CLOUD_LAUNCH_MODE:-run}" in
+  run)
+    echo "=== Starting crsbench run at \$(date -u) ==="
+    echo "Config: \${CONFIG_PATH}"
 
-cd "${CLONE_DIR}"
-crsbench run --experiment-config "\${CONFIG_PATH}"
+    cd "${CLONE_DIR}"
+    crsbench run --experiment-config "\${CONFIG_PATH}"
+    ;;
+  reeval)
+    echo "=== Cloud re-eval orchestrator ready at \$(date -u) ==="
+    echo "Config: \${CONFIG_PATH}"
+    echo "Awaiting remote bundle submission..."
+    while true; do
+      sleep 3600
+    done
+    ;;
+  *)
+    echo "Unsupported CRSBENCH_CLOUD_LAUNCH_MODE: \${CRSBENCH_CLOUD_LAUNCH_MODE}" >&2
+    exit 1
+    ;;
+esac
 EOF
 chmod +x "${LAUNCHER_PATH}"
 chown "${CRSBENCH_USER}:${CRSBENCH_USER}" "${ENV_PATH}" "${CONFIG_PATH}" "${LAUNCHER_PATH}"

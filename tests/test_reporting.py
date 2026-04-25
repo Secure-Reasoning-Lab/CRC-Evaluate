@@ -877,6 +877,40 @@ class TestDiscoverTrials:
         assert len(valid_trials) == 1
         assert len(missing_trials) == 1
 
+    def test_patch_trial_without_input_povs_is_not_reeval_ready(self, temp_dir):
+        """Patch re-eval readiness should require preserved input POVs."""
+        exp_dir = temp_dir / "test-exp"
+        exp_dir.mkdir()
+
+        trial_dir = (
+            exp_dir
+            / "json-c__ensemble-c"
+            / "fuzz_harness"
+            / "patch_generation"
+            / "trial-1"
+        )
+        trial_dir.mkdir(parents=True)
+        trial_metadata = {
+            "timestamp": "2024-01-01T00:00:00",
+            "trial_num": 1,
+            "crs": "ensemble-c",
+            "benchmark": "json-c",
+            "harness": "fuzz_harness",
+            "mode": "patch_generation",
+            "source": {"path": "/src", "commit": "abc123"},
+        }
+        (trial_dir / "metadata.json").write_text(json.dumps(trial_metadata))
+        patch_dir = trial_dir / "output" / "patches" / "cpv_0"
+        patch_dir.mkdir(parents=True)
+        (patch_dir / "patch.diff").write_text("--- a/a.c\n+++ b/a.c\n")
+
+        trials = discover_trials(exp_dir)
+
+        assert len(trials) == 1
+        assert trials[0].status == "valid"
+        assert trials[0].reeval_ready is False
+        assert trials[0].reeval_reason == "missing crs-input/povs directory"
+
 
 class TestReportGeneratorCPVFiltering:
     """Tests for ReportGenerator CPV filtering by sanitizer."""

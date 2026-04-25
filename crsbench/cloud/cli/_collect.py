@@ -45,13 +45,21 @@ logger = get_logger(__name__)
 _MAX_PARALLEL_INSTANCE_COLLECTIONS = 8
 
 
+def _launch_state_collects_experiment_artifacts(launch_state) -> bool:
+    return launch_state is not None and launch_state.launch_mode == "reeval"
+
+
 def run_collect(args: argparse.Namespace) -> int:
     """Collect artifacts from live GCE workers/evaluators for the given experiment.
 
     Returns 0 if all collections succeed, 1 if any failed.
     """
-    experiment_name = resolve_effective_experiment_name(args.config, args.experiment)
-    context = resolve_cloud_context(args.config, experiment_name)
+    requested_experiment_name = resolve_effective_experiment_name(
+        args.config,
+        args.experiment,
+    )
+    context = resolve_cloud_context(args.config, requested_experiment_name)
+    experiment_name = context.experiment_name
     launch_state = context.launch_state
     dest_override = getattr(args, "dest", None)
     if dest_override:
@@ -68,6 +76,7 @@ def run_collect(args: argparse.Namespace) -> int:
         )
         if not dest_override:
             experiment_filestore = _reconnect_filestore
+            base_destination = experiment_filestore / experiment_name
     except Exception as exc:
         logger.warning(
             "Redis reconnect unavailable for experiment {}; "
@@ -94,14 +103,33 @@ def run_collect(args: argparse.Namespace) -> int:
                 ", ".join(sorted(stale_names)),
             )
 
+    orchestrator_collects_artifacts = _launch_state_collects_experiment_artifacts(
+        launch_state
+    )
     if not live_instances and launch_state is None:
         logger.warning(
             "No live GCE instances found for experiment '{}'", experiment_name
         )
         return 0
 
+    if (
+        not live_instances
+        and orchestrator_collects_artifacts
+        and launch_state is not None
+        and not _orchestrator_exists(launch_state, provisioner)
+    ):
+        logger.warning(
+            "No live GCE instances found for cloud re-eval experiment '{}' and "
+            "orchestrator {} is already gone; skipping collection.",
+            experiment_name,
+            launch_state.orchestrator_name,
+        )
+        return 0
+
     destination = base_destination
-    if any(_collects_experiment_artifacts(worker) for worker in live_instances):
+    if any(_collects_experiment_artifacts(worker) for worker in live_instances) or (
+        orchestrator_collects_artifacts
+    ):
         if args.timestamp:
             destination = _fresh_timestamp_destination(
                 experiment_filestore,
@@ -125,6 +153,25 @@ def run_collect(args: argparse.Namespace) -> int:
         experiment_name,
         args.remote_dir,
     )
+    if orchestrator_collects_artifacts and launch_state is not None:
+        orchestrator_worker = launch_state.as_orchestrator_record()
+        try:
+            collector.collect_reeval_submission_artifacts(
+                worker=cast("CloudInstanceLike", orchestrator_worker),
+                fleet=launch_state.as_transport_config(),
+                experiment_name=experiment_name,
+                experiment_filestore=experiment_filestore,
+                remote_submission_dir=launch_state.effective_remote_submission_dir(),
+                destination=destination,
+            )
+        except (ArtifactCollectionError, Exception) as exc:
+            logger.error(
+                "Cloud re-eval submission artifact collection failed for {}: {}",
+                orchestrator_worker.name,
+                exc,
+            )
+            return 1
+
     artifact_publish_succeeded = False
     start_time_observations: list[tuple[str | None, str]] = []
     failed = _collect_live_instances_parallel(
@@ -141,6 +188,25 @@ def run_collect(args: argparse.Namespace) -> int:
         any(_collects_experiment_artifacts(worker) for worker in live_instances)
         and destination.exists()
     )
+
+    if orchestrator_collects_artifacts and launch_state is not None:
+        orchestrator_worker = launch_state.as_orchestrator_record()
+        try:
+            collector.collect(
+                worker=cast("CloudInstanceLike", orchestrator_worker),
+                fleet=launch_state.as_transport_config(),
+                experiment_name=experiment_name,
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir=remote_experiment_dir,
+                start_time_observations=start_time_observations,
+                destination=destination,
+            )
+            artifact_publish_succeeded = True
+        except (ArtifactCollectionError, Exception) as exc:
+            logger.error(
+                "Artifact collection failed for {}: {}", orchestrator_worker.name, exc
+            )
+            failed += 1
 
     if launch_state is not None:
         orchestrator_worker = launch_state.as_orchestrator_record()
@@ -330,6 +396,18 @@ def _sort_timestamp(value: str) -> datetime:
 
 def _current_time_iso8601() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _orchestrator_exists(launch_state, provisioner) -> bool:
+    try:
+        provisioner.get_instance_record(
+            project=launch_state.orchestrator_project,
+            zone=launch_state.orchestrator_zone,
+            instance_name=launch_state.orchestrator_name,
+        )
+    except Exception:
+        return False
+    return True
 
 
 def _list_live_instances(

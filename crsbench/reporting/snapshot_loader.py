@@ -444,6 +444,12 @@ def _evaluate_reeval_readiness(trial_dir: Path, mode: TrialMode) -> tuple[bool, 
         )
         if not has_patch:
             return False, "no patch diff files in output/patches"
+
+        input_povs_dir = TrialDir(trial_dir).input_povs
+        if not input_povs_dir.exists():
+            return False, "missing crs-input/povs directory"
+        if TrialDir(trial_dir).count_visible_input_povs() == 0:
+            return False, "no POV files in crs-input/povs"
         return True, "ready"
 
     # Unknown mode: treat as not re-evaluable by default.

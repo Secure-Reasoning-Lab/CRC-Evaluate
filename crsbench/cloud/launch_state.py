@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -41,9 +42,14 @@ class CloudLaunchState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     experiment_name: str
+    launch_mode: Literal["run", "reeval"] = "run"
+    source_experiment_name: str | None = None
+    remote_experiment_name: str | None = None
     config_path: str
     experiment_filestore: str | None = None
     remote_experiment_root: str | None = None
+    remote_submission_dir: str | None = None
+    remote_bundle_path: str | None = None
     redis_host: str
     redis_password: str
     orchestrator_provider: CloudProvider = CloudProvider.GCE
@@ -103,6 +109,18 @@ class CloudLaunchState(BaseModel):
     def resolved_evaluator_fleets(self) -> list[CloudFleetPlacementRecord]:
         """Return all evaluator fleet configs recorded for this launch."""
         return list(self.evaluator_fleet_configs)
+
+    def effective_remote_experiment_name(self) -> str:
+        """Return the live remote experiment namespace for this launch."""
+        return self.remote_experiment_name or self.experiment_name
+
+    def effective_remote_submission_dir(self) -> str:
+        """Return the remote submission directory for cloud re-eval launches."""
+        if self.remote_submission_dir:
+            return self.remote_submission_dir
+        if self.remote_experiment_root:
+            return str(Path(self.remote_experiment_root).parent)
+        raise ValueError("Cloud launch state missing remote submission directory")
 
 
 def _normalize_fleet_records(
@@ -289,6 +307,41 @@ def load_launch_state(
     if not path.is_file():
         return None
     return CloudLaunchState.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def find_launch_state_for_source_experiment(
+    base_path: Path | str,
+    source_experiment_name: str,
+) -> CloudLaunchState | None:
+    """Return the unique re-eval launch state that originated from source_experiment_name."""
+    state_dir = cloud_state_dir(base_path)
+    if not state_dir.is_dir():
+        return None
+
+    matches: list[CloudLaunchState] = []
+    for path in sorted(state_dir.glob("*.json")):
+        if path.name == _INSTANCE_CACHE_BASENAME:
+            continue
+        try:
+            state = CloudLaunchState.model_validate_json(
+                path.read_text(encoding="utf-8")
+            )
+        except Exception:
+            continue
+        if (
+            state.launch_mode == "reeval"
+            and state.source_experiment_name == source_experiment_name
+        ):
+            matches.append(state)
+
+    if not matches:
+        return None
+    if len(matches) > 1:
+        raise ValueError(
+            "Multiple cloud re-eval launch states match source experiment "
+            f"{source_experiment_name!r}"
+        )
+    return matches[0]
 
 
 def delete_launch_state(

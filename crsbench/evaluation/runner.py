@@ -620,6 +620,7 @@ class BenchmarkRunner:
             benchmark_path=benchmark_path,
             trial_output_dir=trial_output_dir,
             trial_start_time=trial_start_time,
+            skip_verification=skip_verification,
             sanitizer=sanitizer,
             target_cpv_id=target_cpv_id,
         )
@@ -720,6 +721,8 @@ class BenchmarkRunner:
         benchmark_path: Path,
         trial_output_dir: Path,
         trial_start_time: float,
+        *,
+        skip_verification: bool = False,
         sanitizer: str = "address",
         target_cpv_id: str | None = None,
     ) -> tuple[
@@ -774,16 +777,25 @@ class BenchmarkRunner:
                 )
             )
 
-            # Start POV verification manager for bug-finding CRS
-            pov_verification_manager, pov_stop_event = (
-                self._start_pov_verification_manager(
-                    benchmark_path=benchmark_path,
-                    trial_output_dir=trial_output_dir,
-                    trial_start_time=trial_start_time,
-                    harness_name=harness.name,
-                    sanitizer=sanitizer,
+            # skip_verification must disable live POV verification as well as the
+            # final post-run drain. Otherwise snapshots can still enqueue/verify
+            # POVs during the CRS run.
+            if skip_verification:
+                pov_verification_manager, pov_stop_event = None, None
+                self.logger.info(
+                    "skip_verification=True: live POV verification disabled"
                 )
-            )
+            else:
+                # Start POV verification manager for bug-finding CRS
+                pov_verification_manager, pov_stop_event = (
+                    self._start_pov_verification_manager(
+                        benchmark_path=benchmark_path,
+                        trial_output_dir=trial_output_dir,
+                        trial_start_time=trial_start_time,
+                        harness_name=harness.name,
+                        sanitizer=sanitizer,
+                    )
+                )
 
             # Start patch verification manager for bug-fixing CRS
             patch_verification_manager = self._start_patch_verification_manager(
