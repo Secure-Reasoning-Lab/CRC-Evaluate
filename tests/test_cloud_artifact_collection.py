@@ -140,11 +140,12 @@ def _write_trial_metadata(trial_dir: Path, payload: dict[str, object]) -> None:
 
 class TestTrialRootDiscovery:
     @pytest.mark.parametrize(
-        ("metadata_state", "include_worker_log"),
+        ("metadata_state", "include_worker_log", "expect_trial_dir"),
         [
-            ("missing", False),
-            ("missing", True),
-            ("invalid", False),
+            ("missing", False, False),
+            ("missing", True, False),
+            ("invalid", False, False),
+            ("invalid", True, True),
         ],
     )
     def test_published_root_fallback_requires_corrupt_trial_shape(
@@ -152,6 +153,7 @@ class TestTrialRootDiscovery:
         tmp_path: Path,
         metadata_state: str,
         include_worker_log: bool,
+        expect_trial_dir: bool,
     ) -> None:
         staging_root = tmp_path / "staging"
         published_root = tmp_path / "published"
@@ -166,18 +168,7 @@ class TestTrialRootDiscovery:
 
         partial_trial = staging_root / relpath
         partial_trial.mkdir(parents=True)
-        if metadata_state == "valid":
-            _write_trial_metadata(
-                partial_trial,
-                {
-                    "timestamp": "2026-03-13T00:00:00Z",
-                    "trial_num": 1,
-                    "crs": _REAL_LAYOUT_CRS,
-                    "benchmark": _MISSING_LAYOUT_BENCHMARK,
-                    "harness": _REAL_LAYOUT_HARNESS,
-                },
-            )
-        elif metadata_state == "invalid":
+        if metadata_state == "invalid":
             (partial_trial / "metadata.json").write_text(
                 "{broken json\n", encoding="utf-8"
             )
@@ -206,7 +197,13 @@ class TestTrialRootDiscovery:
             "previously published worker log\n", encoding="utf-8"
         )
 
-        assert list(_iter_trial_dirs(staging_root, published_root=published_root)) == []
+        discovered_trial_dirs = list(
+            _iter_trial_dirs(staging_root, published_root=published_root)
+        )
+        if expect_trial_dir:
+            assert discovered_trial_dirs == [partial_trial]
+        else:
+            assert discovered_trial_dirs == []
 
 
 def _run_local_rsync_from_cloud_cmd(
