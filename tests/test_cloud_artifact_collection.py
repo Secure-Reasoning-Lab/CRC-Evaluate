@@ -656,6 +656,63 @@ class TestStagingAndPublish:
             / "verify_patch_timing.json"
         ).exists()
 
+    def test_staging_and_publish_excludes_trial_staged_dir(
+        self, tmp_path: Path
+    ) -> None:
+        """Collection should skip trial-local staged benchmark copies."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for staged-dir regression coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        staged_dir = trial_dir / "staged" / "curl-delta-01"
+        staged_dir.mkdir(parents=True)
+        (staged_dir / "README.txt").write_text("temporary staged benchmark copy\n")
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        def _unexpected_remote_command(*args: object, **kwargs: object) -> object:
+            raise AssertionError(
+                f"unexpected remote command: args={args!r}, kwargs={kwargs!r}"
+            )
+
+        collector._run_remote_command = _unexpected_remote_command  # type: ignore[method-assign]
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        collected_trial = (
+            final_path
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        assert (collected_trial / "metadata.json").exists()
+        assert not (collected_trial / "staged").exists()
+
     def test_staging_and_publish_excludes_output_logs_from_real_output_tree(
         self, tmp_path: Path
     ) -> None:
@@ -1540,9 +1597,10 @@ class TestCollectFullTrialTree:
         exclude_args = [arg for arg in cmd if arg.startswith("--exclude=")]
         assert exclude_args == [
             "--exclude=oss-crs-workdir/",
+            "--exclude=staged/",
             "--exclude=output/logs/",
         ], (
-            "Artifact collection should exclude only internal scratch data and trial output/logs"
+            "Artifact collection should exclude only internal scratch data, staged benchmark copies, and trial output/logs"
         )
 
         # Source must end with trailing slash (rsync convention for directory contents)

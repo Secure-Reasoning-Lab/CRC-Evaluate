@@ -50,6 +50,7 @@ _IAP_TUNNEL_STARTUP_TIMEOUT_SEC = 30.0
 _COLLECT_MARKER_FILENAME = ".crsbench-collect.json"
 _ARTIFACT_RSYNC_EXCLUDES: tuple[str, ...] = (
     "oss-crs-workdir/",
+    "staged/",
     "output/logs/",
 )
 _REPORT_LOG_RSYNC_EXCLUDES: tuple[str, ...] = ("oss-crs-workdir/",)
@@ -724,6 +725,7 @@ class ArtifactCollector:
         - ``--delay-updates``: stage all files before renaming into place
         - ``--delete-delay``: remove remote-deleted files after transfer completes
         - ``--exclude=oss-crs-workdir/``: skip trial-local oss-crs scratch state
+        - ``--exclude=staged/``: skip trial-local staged benchmark copies
         - ``--exclude=output/logs/``: skip bulky trial-local CRS/compose logs
         """
         if (

@@ -1066,9 +1066,10 @@ By default, `cloud collect` infers:
 In plain terms, `cloud collect` copies trial artifacts and VM diagnostics from
 the cloud VMs back to a local directory on the machine where you run the
 command. During artifact sync, CRSBench skips trial-local `oss-crs-workdir/`
-scratch directories and the bulk of `trial/output/logs/`. If a top-level trial
-entry such as `output/` or `result.log` is still a symlink into that excluded
-workdir, collect re-hydrates that entry so the local result tree remains
+sandbox directories, trial-local `staged/` benchmark copies, and the bulk of
+`trial/output/logs/`. If a top-level trial entry such as `output/` or
+`result.log` is still a symlink into that excluded workdir, collect re-hydrates
+that entry so the local result tree remains
 usable. Trials with `.success` keep that normal collected artifact tree. Trials
 with `.fail` are compacted before publish so the collected trial keeps only
 `metadata.json`, `.fail`, `worker.log`, and the reporting subset restored under
