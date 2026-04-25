@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -494,6 +495,72 @@ def test_refresh_active_claims_releases_claim_after_local_verify_failure() -> No
     assert record is not None
     assert record.claim is None
     assert record.terminal_result is None
+
+
+def test_has_pending_required_builds_tolerates_concurrent_active_claim_refresh() -> (
+    None
+):
+    from crsbench.distributed.evaluator_claim_worker import (
+        EvaluatorClaimWorker,
+        _ActiveClaim,
+    )
+
+    class _BlockingBuildQueue(_FakeQueue):
+        def __init__(self) -> None:
+            super().__init__("build-q")
+            self.fetch_started = threading.Event()
+            self.allow_fetch = threading.Event()
+            self._calls = 0
+
+        def fetch_job(self, job_id: str) -> _FakeJob | None:
+            self._calls += 1
+            if self._calls == 1:
+                self.fetch_started.set()
+                self.allow_fetch.wait(timeout=5)
+            return _FakeJob(job_id, status="finished")
+
+    redis_conn = _FakeRedis()
+    build_queue = _BlockingBuildQueue()
+    verify_queue = _FakeQueue("verify-q")
+    worker = EvaluatorClaimWorker(
+        redis_conn=redis_conn,
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=build_queue,
+        verify_queue=verify_queue,
+        verification_engine=MagicMock(),
+        benchmarks_root=Path("/benchmarks"),
+    )
+    worker._active_claims["request-1"] = _ActiveClaim(
+        local_verify_job_id="verify-1",
+        required_build_job_ids=("build-1",),
+    )
+    worker._active_claims["request-2"] = _ActiveClaim(
+        local_verify_job_id="verify-2",
+        required_build_job_ids=("build-2",),
+    )
+
+    result: list[bool] = []
+    errors: list[BaseException] = []
+
+    def _check_pending() -> None:
+        try:
+            result.append(worker.has_pending_required_builds())
+        except BaseException as exc:  # pragma: no cover - assertion captures failure
+            errors.append(exc)
+
+    thread = threading.Thread(target=_check_pending)
+    thread.start()
+
+    assert build_queue.fetch_started.wait(timeout=5)
+
+    worker.refresh_active_claims(now=105.0)
+    build_queue.allow_fetch.set()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert errors == []
+    assert result == [False]
 
 
 def test_tick_claims_until_inflight_limit() -> None:

@@ -133,9 +133,12 @@ class EvaluatorClaimWorker:
         self.claim_lease_seconds = max(1, int(claim_lease_seconds))
         self.max_inflight_requests = max(1, int(max_inflight_requests))
         self._active_claims: dict[str, _ActiveClaim] = {}
+        self._active_claims_lock = threading.Lock()
 
     def has_pending_required_builds(self) -> bool:
-        for active in self._active_claims.values():
+        with self._active_claims_lock:
+            active_claims = tuple(self._active_claims.values())
+        for active in active_claims:
             for build_job_id in active.required_build_job_ids:
                 if not _is_job_terminal(self.build_queue.fetch_job(build_job_id)):
                     return True
@@ -143,7 +146,9 @@ class EvaluatorClaimWorker:
 
     def refresh_active_claims(self, *, now: float) -> None:
         completed: list[str] = []
-        for request_id, active in self._active_claims.items():
+        with self._active_claims_lock:
+            active_claims = tuple(self._active_claims.items())
+        for request_id, active in active_claims:
             record = self.store.load_request(request_id)
             if record is None or record.terminal_result is not None:
                 completed.append(request_id)
@@ -170,8 +175,10 @@ class EvaluatorClaimWorker:
             )
             if not renewed:
                 completed.append(request_id)
-        for request_id in completed:
-            self._active_claims.pop(request_id, None)
+        if completed:
+            with self._active_claims_lock:
+                for request_id in completed:
+                    self._active_claims.pop(request_id, None)
 
     def dispatch_one(self, *, now: float) -> VerifyRequestRecord | None:
         if len(self._active_claims) >= self.max_inflight_requests:
@@ -197,7 +204,8 @@ class EvaluatorClaimWorker:
             )
             return None
         if active is not None:
-            self._active_claims[claimed.request_id] = active
+            with self._active_claims_lock:
+                self._active_claims[claimed.request_id] = active
         return claimed
 
     def dispatch_available(self, *, now: float) -> VerifyRequestRecord | None:
