@@ -1199,6 +1199,12 @@ class TestStagingAndPublish:
         (staged_dir / "linked_patcher.stdout.log").write_text(
             "[drop] staged-linked log\n", encoding="utf-8"
         )
+        staged_log_dir = staged_dir / "staged-sidecar" / "log_dir"
+        staged_log_dir.mkdir(parents=True)
+        (staged_log_dir / "verify_patch_timing.json").write_text(
+            json.dumps({"rebuild": 10.0, "status": "drop"}),
+            encoding="utf-8",
+        )
         (report_logs / "linked_patcher.stdout.log").symlink_to(
             Path("..")
             / ".."
@@ -1206,6 +1212,20 @@ class TestStagingAndPublish:
             / "staged"
             / "curl-delta-01"
             / "linked_patcher.stdout.log"
+        )
+        linked_log_dir = (
+            trial_dir / "output" / "logs" / "crs" / "staged-sidecar" / "log_dir"
+        )
+        linked_log_dir.parent.mkdir(parents=True, exist_ok=True)
+        linked_log_dir.symlink_to(
+            Path("..")
+            / ".."
+            / ".."
+            / ".."
+            / "staged"
+            / "curl-delta-01"
+            / "staged-sidecar"
+            / "log_dir"
         )
 
         internal_services = (
@@ -1268,6 +1288,14 @@ class TestStagingAndPublish:
         ).exists()
         assert not (
             trial_output / "logs" / "services" / "linked_patcher.stdout.log"
+        ).exists()
+        assert not (
+            trial_output
+            / "logs"
+            / "crs"
+            / "staged-sidecar"
+            / "log_dir"
+            / "verify_patch_timing.json"
         ).exists()
         assert not any(path.name == "oss-crs-workdir" for path in final_path.rglob("*"))
         assert not (

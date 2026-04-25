@@ -21,7 +21,7 @@ import tempfile
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path  # noqa: TC003
+from pathlib import Path, PurePosixPath  # noqa: TC003
 from typing import TYPE_CHECKING, Iterator, Protocol
 
 import tenacity
@@ -438,7 +438,8 @@ class ArtifactCollector:
             ssh_user=ssh_user,
         )
         rehydrate_relpaths, drop_relpaths = self._partition_excluded_symlink_entries(
-            staging_dir
+            staging_dir,
+            remote_experiment_dir=remote_experiment_dir,
         )
         if drop_relpaths:
             self._drop_excluded_symlink_entries(
@@ -467,7 +468,20 @@ class ArtifactCollector:
             ssh_user=ssh_user,
             excluded_relpaths=drop_relpaths,
         )
-        self._drop_excluded_report_log_symlinks(staging_dir)
+        self._rehydrate_report_logs_from_output_symlinks(
+            worker=worker,
+            fleet=fleet,
+            remote_experiment_dir=remote_experiment_dir,
+            staging_dir=staging_dir,
+            experiment_filestore=experiment_filestore,
+            known_hosts_path=known_hosts_path,
+            ssh_user=ssh_user,
+            symlink_relpaths=rehydrate_relpaths,
+        )
+        self._drop_excluded_report_log_symlinks(
+            staging_dir,
+            remote_experiment_dir=remote_experiment_dir,
+        )
         failed_trial_relpaths = self._compact_failed_trials_to_diagnostics(staging_dir)
 
         # Verify before publishing
@@ -546,18 +560,23 @@ class ArtifactCollector:
             experiment_filestore=experiment_filestore,
         ):
             trial_artifacts_dir = instance_logs_dir / "trial-artifacts"
-            if trial_artifacts_dir.exists():
-                shutil.rmtree(trial_artifacts_dir, ignore_errors=True)
+            trial_artifacts_staging = instance_logs_dir / ".trial-artifacts-staging"
+            if trial_artifacts_staging.exists():
+                shutil.rmtree(trial_artifacts_staging, ignore_errors=True)
             self._run_log_rsync(
                 worker=worker,
                 fleet=fleet,
                 remote_experiment_dir=remote_experiment_dir,
-                staging_dir=trial_artifacts_dir,
+                staging_dir=trial_artifacts_staging,
                 experiment_filestore=experiment_filestore,
                 known_hosts_path=known_hosts_path,
                 ssh_user=ssh_user,
             )
-            self._drop_excluded_top_level_trial_symlinks(trial_artifacts_dir)
+            self._drop_excluded_top_level_trial_symlinks(
+                trial_artifacts_staging,
+                remote_experiment_dir=remote_experiment_dir,
+            )
+            self._publish(trial_artifacts_staging, trial_artifacts_dir)
 
         logger.info(
             "Remote log collection complete: worker={} experiment={} logs_dir={}",
@@ -681,6 +700,32 @@ class ArtifactCollector:
                     "exclude_actual_prefixes": exclude_actual_prefixes,
                 }
             )
+        return self._discover_remote_filelist(
+            worker=worker,
+            fleet=fleet,
+            remote_experiment_dir=remote_experiment_dir,
+            experiment_filestore=experiment_filestore,
+            known_hosts_path=known_hosts_path,
+            ssh_user=ssh_user,
+            specs=specs,
+            ssh_command=ssh_command,
+            remote_host=remote_host,
+        )
+
+    def _discover_remote_filelist(
+        self,
+        *,
+        worker: CloudInstanceLike,
+        fleet: SshTransportConfig,
+        remote_experiment_dir: str,
+        experiment_filestore: Path,
+        known_hosts_path: Path | None,
+        ssh_user: str | None,
+        specs: list[dict[str, object]],
+        ssh_command: str | None = None,
+        remote_host: str | None = None,
+    ) -> tuple[list[Path], list[str]]:
+        """Run the remote manifest walker and return discovered directories/files."""
         command = self._build_remote_python_command(
             _COPY_LINK_FILELIST_DISCOVERY_SCRIPT,
             remote_experiment_dir,
@@ -728,6 +773,54 @@ class ArtifactCollector:
         ]
         files = [value for value in files_raw if isinstance(value, str) and value]
         return directories, files
+
+    def _discover_report_log_filelist(
+        self,
+        *,
+        worker: CloudInstanceLike,
+        fleet: SshTransportConfig,
+        remote_experiment_dir: str,
+        experiment_filestore: Path,
+        known_hosts_path: Path | None,
+        ssh_user: str | None,
+        output_relpath: Path,
+        ssh_command: str | None = None,
+        remote_host: str | None = None,
+    ) -> list[str]:
+        """Return report-log file paths for one rehydrated top-level output symlink."""
+        try:
+            _, files = self._discover_remote_filelist(
+                worker=worker,
+                fleet=fleet,
+                remote_experiment_dir=remote_experiment_dir,
+                experiment_filestore=experiment_filestore,
+                known_hosts_path=known_hosts_path,
+                ssh_user=ssh_user,
+                specs=[
+                    {
+                        "root": (output_relpath / "logs").as_posix(),
+                        "exclude_prefixes": [],
+                        "exclude_actual_prefixes": [
+                            (output_relpath.parent / name).as_posix()
+                            for name in _DROP_EXCLUDED_TOPLEVEL_DIRS
+                        ],
+                    }
+                ],
+                ssh_command=ssh_command,
+                remote_host=remote_host,
+            )
+        except ArtifactCollectionError as exc:
+            if "failed to resolve" in str(exc):
+                return []
+            raise
+        return [
+            file_relpath
+            for file_relpath in files
+            if any(
+                PurePosixPath(file_relpath).match(pattern)
+                for pattern in _REPORT_LOG_RSYNC_INCLUDES
+            )
+        ]
 
     def _run_copy_link_filelist_rsync(
         self,
@@ -976,7 +1069,6 @@ class ArtifactCollector:
             "rsync",
             "-a",
             "--mkpath",
-            "--copy-dirlinks",
             "--prune-empty-dirs",
         ]
         cmd.extend(f"--exclude={pattern}" for pattern in _REPORT_LOG_RSYNC_EXCLUDES)
@@ -1333,29 +1425,157 @@ class ArtifactCollector:
         )
         self._run_rsync_with_retry(cmd)
 
+    def _rehydrate_report_logs_from_output_symlinks(
+        self,
+        *,
+        worker: CloudInstanceLike,
+        fleet: SshTransportConfig,
+        remote_experiment_dir: str,
+        staging_dir: Path,
+        experiment_filestore: Path,
+        known_hosts_path: Path | None,
+        ssh_user: str | None,
+        symlink_relpaths: list[Path],
+    ) -> None:
+        """Restore report-critical logs for top-level output symlinks rehydrated earlier."""
+        output_relpaths = [
+            relpath for relpath in symlink_relpaths if relpath.name == "output"
+        ]
+        if not output_relpaths:
+            return
+
+        if fleet.ssh_via_iap:
+            if not ssh_user:
+                raise ArtifactCollectionError(
+                    f"Unable to resolve SSH user for IAP report-log rehydration from {worker.name}"
+                )
+            iap_known_hosts_path = self._prepare_iap_known_hosts(
+                experiment_filestore=experiment_filestore,
+                host_key_alias=worker.name,
+            )
+            with self._open_iap_tunnel(worker=worker, fleet=fleet) as local_port:
+                ssh_command = self._build_iap_ssh_command(
+                    local_port=local_port,
+                    ssh_user=ssh_user,
+                    known_hosts_path=iap_known_hosts_path,
+                    host_key_alias=worker.name,
+                )
+                self._rehydrate_report_logs_from_output_symlinks_via_rsync(
+                    worker=worker,
+                    fleet=fleet,
+                    remote_experiment_dir=remote_experiment_dir,
+                    staging_dir=staging_dir,
+                    experiment_filestore=experiment_filestore,
+                    known_hosts_path=iap_known_hosts_path,
+                    ssh_user=ssh_user,
+                    output_relpaths=output_relpaths,
+                    ssh_command=ssh_command,
+                    remote_host="127.0.0.1",
+                )
+            return
+
+        self._rehydrate_report_logs_from_output_symlinks_via_rsync(
+            worker=worker,
+            fleet=fleet,
+            remote_experiment_dir=remote_experiment_dir,
+            staging_dir=staging_dir,
+            experiment_filestore=experiment_filestore,
+            known_hosts_path=known_hosts_path,
+            ssh_user=ssh_user,
+            output_relpaths=output_relpaths,
+        )
+
+    def _rehydrate_report_logs_from_output_symlinks_via_rsync(
+        self,
+        *,
+        worker: CloudInstanceLike,
+        fleet: SshTransportConfig,
+        remote_experiment_dir: str,
+        staging_dir: Path,
+        experiment_filestore: Path,
+        known_hosts_path: Path | None,
+        ssh_user: str | None,
+        output_relpaths: list[Path],
+        ssh_command: str | None = None,
+        remote_host: str | None = None,
+    ) -> None:
+        """Restore report logs for top-level output symlinks using an explicit file manifest."""
+        for output_relpath in output_relpaths:
+            file_relpaths = self._discover_report_log_filelist(
+                worker=worker,
+                fleet=fleet,
+                remote_experiment_dir=remote_experiment_dir,
+                experiment_filestore=experiment_filestore,
+                known_hosts_path=known_hosts_path,
+                ssh_user=ssh_user,
+                output_relpath=output_relpath,
+                ssh_command=ssh_command,
+                remote_host=remote_host,
+            )
+            if not file_relpaths:
+                continue
+            self._run_copy_link_filelist_rsync(
+                worker=worker,
+                fleet=fleet,
+                remote_experiment_dir=remote_experiment_dir,
+                destination_root=staging_dir,
+                experiment_filestore=experiment_filestore,
+                manifest_relpaths=file_relpaths,
+                known_hosts_path=known_hosts_path,
+                ssh_user=ssh_user,
+                ssh_command=ssh_command,
+                remote_host=remote_host,
+            )
+            self._verify_rehydrated_copy_link_manifest(
+                staging_dir=staging_dir,
+                symlink_relpath=output_relpath / "logs",
+                directory_relpaths=[],
+                file_relpaths=file_relpaths,
+            )
+
     @staticmethod
     def _trial_symlink_target_parts(
         *,
         item: Path,
         trial_dir: Path,
         staging_dir: Path,
+        remote_experiment_dir: str | None,
     ) -> tuple[str, ...] | None:
-        """Return one top-level trial symlink target as parts relative to *trial_dir*."""
+        """Return one symlink target as parts relative to *trial_dir*."""
         try:
             raw_target = item.readlink()
         except OSError:
             return None
 
         if raw_target.is_absolute():
-            trial_parts = trial_dir.relative_to(staging_dir).parts
-            target_parts = raw_target.parts
-            for index in range(len(target_parts) - len(trial_parts) + 1):
-                if tuple(target_parts[index : index + len(trial_parts)]) != trial_parts:
-                    continue
-                return tuple(target_parts[index + len(trial_parts) :])
-            return None
+            try:
+                return item.resolve(strict=False).relative_to(trial_dir).parts
+            except ValueError:
+                pass
+            if raw_target.exists():
+                trial_parts = trial_dir.relative_to(staging_dir).parts
+                target_parts = raw_target.parts
+                for index in range(len(target_parts) - len(trial_parts) + 1):
+                    if (
+                        tuple(target_parts[index : index + len(trial_parts)])
+                        != trial_parts
+                    ):
+                        continue
+                    return tuple(target_parts[index + len(trial_parts) :])
+            if remote_experiment_dir is None:
+                return None
+            trial_relpath = trial_dir.relative_to(staging_dir)
+            try:
+                return (
+                    raw_target.relative_to(Path(remote_experiment_dir))
+                    .relative_to(trial_relpath)
+                    .parts
+                )
+            except ValueError:
+                return None
 
-        normalized = posixpath.normpath(raw_target.as_posix())
+        base_relpath = item.parent.relative_to(trial_dir)
+        normalized = posixpath.normpath((base_relpath / raw_target).as_posix())
         if normalized in {"", "."}:
             return ()
         target_parts = Path(normalized).parts
@@ -1364,7 +1584,10 @@ class ArtifactCollector:
         return target_parts
 
     def _partition_excluded_symlink_entries(
-        self, staging_dir: Path
+        self,
+        staging_dir: Path,
+        *,
+        remote_experiment_dir: str,
     ) -> tuple[list[Path], list[Path]]:
         """Return excluded top-level symlink entries split by rehydrate vs drop."""
         rehydrate_relpaths: list[Path] = []
@@ -1380,6 +1603,7 @@ class ArtifactCollector:
                     item=item,
                     trial_dir=trial_dir,
                     staging_dir=staging_dir,
+                    remote_experiment_dir=remote_experiment_dir,
                 )
                 if target_parts is None:
                     continue
@@ -1427,7 +1651,9 @@ class ArtifactCollector:
         for relpath in symlink_relpaths:
             self._remove_staged_path(staging_dir / relpath)
 
-    def _drop_excluded_top_level_trial_symlinks(self, staging_dir: Path) -> None:
+    def _drop_excluded_top_level_trial_symlinks(
+        self, staging_dir: Path, *, remote_experiment_dir: str
+    ) -> None:
         """Remove top-level trial symlinks that resolve into omitted content."""
         removed = 0
         for trial_dir in sorted(staging_dir.rglob("trial-*")):
@@ -1440,6 +1666,7 @@ class ArtifactCollector:
                     item=item,
                     trial_dir=trial_dir,
                     staging_dir=staging_dir,
+                    remote_experiment_dir=remote_experiment_dir,
                 )
                 if (
                     not target_parts
@@ -1454,7 +1681,9 @@ class ArtifactCollector:
                 removed,
             )
 
-    def _drop_excluded_report_log_symlinks(self, staging_dir: Path) -> None:
+    def _drop_excluded_report_log_symlinks(
+        self, staging_dir: Path, *, remote_experiment_dir: str
+    ) -> None:
         """Remove restored report-log symlinks that still resolve into omitted content."""
         removed = 0
         for trial_dir in sorted(staging_dir.rglob("trial-*")):
@@ -1466,15 +1695,15 @@ class ArtifactCollector:
             for item in sorted(logs_root.rglob("*")):
                 if not item.is_symlink():
                     continue
-                try:
-                    target = item.resolve(strict=False)
-                    target_rel = target.relative_to(trial_dir)
-                except (OSError, ValueError):
+                target_parts = self._trial_symlink_target_parts(
+                    item=item,
+                    trial_dir=trial_dir,
+                    staging_dir=staging_dir,
+                    remote_experiment_dir=remote_experiment_dir,
+                )
+                if not target_parts:
                     continue
-                if (
-                    target_rel.parts
-                    and target_rel.parts[0] in _DROP_EXCLUDED_TOPLEVEL_DIRS
-                ):
+                if target_parts[0] in _DROP_EXCLUDED_TOPLEVEL_DIRS:
                     self._remove_staged_path(item)
                     removed += 1
         if removed:
