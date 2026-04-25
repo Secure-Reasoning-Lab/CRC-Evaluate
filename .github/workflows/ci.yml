@@ -16,8 +16,40 @@ jobs:
     runs-on: [self-hosted, linux, crs]
     timeout-minutes: 15
     steps:
+      - name: Reset self-hosted workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace="${GITHUB_WORKSPACE:?}"
+          mkdir -p "$workspace"
+
+          cleanup_workspace() {
+            find "$workspace" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+          }
+
+          workspace_dirty() {
+            find "$workspace" -mindepth 1 -maxdepth 1 -print -quit | grep -q .
+          }
+
+          cleanup_workspace
+          if workspace_dirty; then
+            if ! command -v docker >/dev/null 2>&1; then
+              echo "docker is required to clean root-owned workspace leftovers in $workspace" >&2
+              find "$workspace" -mindepth 1 -maxdepth 3 -ls | sed -n '1,200p' || true
+              exit 1
+            fi
+            docker run --rm -v "$workspace:/cleanup-path" alpine:3.20 \
+              sh -c 'rm -rf /cleanup-path/* /cleanup-path/.[!.]* /cleanup-path/..?* 2>/dev/null'
+          fi
+          cleanup_workspace
+          if workspace_dirty; then
+            echo "workspace cleanup failed: $workspace" >&2
+            find "$workspace" -mindepth 1 -maxdepth 3 -ls | sed -n '1,200p' || true
+            exit 1
+          fi
       - uses: actions/checkout@v5
         with:
+          clean: false
           submodules: recursive
           token: ${{ secrets.PAT_TOKEN }}
 
@@ -47,8 +79,40 @@ jobs:
     runs-on: [self-hosted, linux, crs]
     timeout-minutes: 10
     steps:
+      - name: Reset self-hosted workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace="${GITHUB_WORKSPACE:?}"
+          mkdir -p "$workspace"
+
+          cleanup_workspace() {
+            find "$workspace" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+          }
+
+          workspace_dirty() {
+            find "$workspace" -mindepth 1 -maxdepth 1 -print -quit | grep -q .
+          }
+
+          cleanup_workspace
+          if workspace_dirty; then
+            if ! command -v docker >/dev/null 2>&1; then
+              echo "docker is required to clean root-owned workspace leftovers in $workspace" >&2
+              find "$workspace" -mindepth 1 -maxdepth 3 -ls | sed -n '1,200p' || true
+              exit 1
+            fi
+            docker run --rm -v "$workspace:/cleanup-path" alpine:3.20 \
+              sh -c 'rm -rf /cleanup-path/* /cleanup-path/.[!.]* /cleanup-path/..?* 2>/dev/null'
+          fi
+          cleanup_workspace
+          if workspace_dirty; then
+            echo "workspace cleanup failed: $workspace" >&2
+            find "$workspace" -mindepth 1 -maxdepth 3 -ls | sed -n '1,200p' || true
+            exit 1
+          fi
       - uses: actions/checkout@v5
         with:
+          clean: false
           submodules: recursive
           token: ${{ secrets.PAT_TOKEN }}
 
@@ -81,8 +145,40 @@ jobs:
           - project: mock-java
             benchmark: sanity-mock-java-delta-01
     steps:
+      - name: Reset self-hosted workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace="${GITHUB_WORKSPACE:?}"
+          mkdir -p "$workspace"
+
+          cleanup_workspace() {
+            find "$workspace" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+          }
+
+          workspace_dirty() {
+            find "$workspace" -mindepth 1 -maxdepth 1 -print -quit | grep -q .
+          }
+
+          cleanup_workspace
+          if workspace_dirty; then
+            if ! command -v docker >/dev/null 2>&1; then
+              echo "docker is required to clean root-owned workspace leftovers in $workspace" >&2
+              find "$workspace" -mindepth 1 -maxdepth 3 -ls | sed -n '1,200p' || true
+              exit 1
+            fi
+            docker run --rm -v "$workspace:/cleanup-path" alpine:3.20 \
+              sh -c 'rm -rf /cleanup-path/* /cleanup-path/.[!.]* /cleanup-path/..?* 2>/dev/null'
+          fi
+          cleanup_workspace
+          if workspace_dirty; then
+            echo "workspace cleanup failed: $workspace" >&2
+            find "$workspace" -mindepth 1 -maxdepth 3 -ls | sed -n '1,200p' || true
+            exit 1
+          fi
       - uses: actions/checkout@v5
         with:
+          clean: false
           submodules: recursive
           token: ${{ secrets.PAT_TOKEN }}
           persist-credentials: false
@@ -150,8 +246,40 @@ jobs:
       group: crsbench-smoke
       cancel-in-progress: false
     steps:
+      - name: Reset self-hosted workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace="${GITHUB_WORKSPACE:?}"
+          mkdir -p "$workspace"
+
+          cleanup_workspace() {
+            find "$workspace" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+          }
+
+          workspace_dirty() {
+            find "$workspace" -mindepth 1 -maxdepth 1 -print -quit | grep -q .
+          }
+
+          cleanup_workspace
+          if workspace_dirty; then
+            if ! command -v docker >/dev/null 2>&1; then
+              echo "docker is required to clean root-owned workspace leftovers in $workspace" >&2
+              find "$workspace" -mindepth 1 -maxdepth 3 -ls | sed -n '1,200p' || true
+              exit 1
+            fi
+            docker run --rm -v "$workspace:/cleanup-path" alpine:3.20 \
+              sh -c 'rm -rf /cleanup-path/* /cleanup-path/.[!.]* /cleanup-path/..?* 2>/dev/null'
+          fi
+          cleanup_workspace
+          if workspace_dirty; then
+            echo "workspace cleanup failed: $workspace" >&2
+            find "$workspace" -mindepth 1 -maxdepth 3 -ls | sed -n '1,200p' || true
+            exit 1
+          fi
       - uses: actions/checkout@v5
         with:
+          clean: false
           submodules: recursive
           token: ${{ secrets.PAT_TOKEN }}
           persist-credentials: false
