@@ -420,6 +420,61 @@ class TestRsyncCmdDirectIp:
         assert directories == [Path("output"), Path("output/empty")]
         assert files == ["output/kept/artifact.txt"]
 
+    def test_discover_copy_link_filelist_reuses_supplied_ssh_transport(
+        self, tmp_path: Path
+    ) -> None:
+        """Discovery should reuse a caller-provided SSH transport instead of reopening it."""
+        worker = _make_worker(zone="us-central1-a")
+        fleet = _make_fleet(ssh_via_iap=True, zone="us-central1-a")
+        collector = ArtifactCollector(base_path=tmp_path / "config.yaml")
+        seen_cmds: list[list[str]] = []
+
+        def _unexpected_remote_command(*args: object, **kwargs: object) -> object:
+            del args, kwargs
+            raise AssertionError("discovery should reuse the supplied SSH command")
+
+        def _fake_run(cmd, *_args, **_kwargs):
+            seen_cmds.append(list(cmd))
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "directories": ["output", "output/empty"],
+                        "files": ["output/kept/artifact.txt"],
+                    }
+                ),
+                stderr="",
+            )
+
+        collector._run_remote_command = _unexpected_remote_command  # type: ignore[method-assign]
+        with patch("subprocess.run", side_effect=_fake_run):
+            directories, files = collector._discover_copy_link_filelist(
+                worker=worker,
+                fleet=fleet,
+                remote_experiment_dir="/data/experiments/exp-42",
+                experiment_filestore=tmp_path,
+                known_hosts_path=None,
+                ssh_user="test-user",
+                symlink_relpaths=[Path("output")],
+                ssh_command="ssh -p 2222 -o StrictHostKeyChecking=no",
+                remote_host="127.0.0.1",
+            )
+
+        assert seen_cmds
+        ssh_cmd = seen_cmds[0]
+        assert ssh_cmd[:5] == [
+            "ssh",
+            "-p",
+            "2222",
+            "-o",
+            "StrictHostKeyChecking=no",
+        ]
+        assert ssh_cmd[-2] == "test-user@127.0.0.1"
+        assert ssh_cmd[-1].startswith("sudo python3 -c ")
+        assert directories == [Path("output"), Path("output/empty")]
+        assert files == ["output/kept/artifact.txt"]
+
 
 class TestRsyncPreservesMtimes:
     """test_rsync_preserves_mtimes — ARTF-02."""
@@ -938,6 +993,69 @@ class TestStagingAndPublish:
         ).read_text() == "artifact content\n"
         assert artifact_paths == [Path("kept") / "artifact.txt"]
 
+    def test_staging_and_publish_fails_when_rehydrated_manifest_entries_vanish(
+        self, tmp_path: Path
+    ) -> None:
+        """Collection should fail if a rehydrated symlink tree changes after manifest discovery."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for output/log regression coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        shutil.rmtree(trial_dir / "output")
+        workdir_out = trial_dir / "oss-crs-workdir" / "out"
+        (workdir_out / "kept").mkdir(parents=True)
+        artifact_path = workdir_out / "kept" / "artifact.txt"
+        artifact_path.write_text("artifact content\n")
+        (trial_dir / "output").symlink_to(Path("oss-crs-workdir") / "out")
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+        manifest_recorded = False
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            nonlocal manifest_recorded
+            del args
+            result = _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+            if not manifest_recorded:
+                manifest_recorded = True
+                artifact_path.unlink()
+            return result
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            with pytest.raises(
+                ArtifactCollectionError,
+                match="manifest entries vanished during transfer",
+            ):
+                collector.collect(
+                    worker=worker,
+                    fleet=fleet,
+                    experiment_name="exp-42",
+                    experiment_filestore=experiment_filestore,
+                    remote_experiment_dir="/data/experiments/exp-42",
+                )
+
     def test_collect_reports_start_time_observation_from_staging(
         self, tmp_path: Path
     ) -> None:
@@ -1452,6 +1570,77 @@ class TestRemoteLogCollection:
         assert f"UserKnownHostsFile={known_hosts_path}" in ssh_cmd
         assert "127.0.0.1" in ssh_cmd
         assert "echo hello" in ssh_cmd
+
+    def test_rehydrate_excluded_symlink_entries_iap_reuses_single_tunnel(
+        self, tmp_path: Path
+    ) -> None:
+        """IAP symlink rehydration should share one tunnel across per-root discovery calls."""
+        worker = _make_worker(zone="us-central1-a")
+        fleet = _make_fleet(ssh_via_iap=True, zone="us-central1-a")
+        collector = ArtifactCollector(base_path=tmp_path / "config.yaml")
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+        staging_dir = tmp_path / "staging"
+        staging_dir.mkdir()
+        discovery_calls: list[tuple[str | None, str | None, list[Path]]] = []
+
+        class _Tunnel:
+            def __enter__(self):
+                return 2222
+
+            def __exit__(self, exc_type, exc, tb):
+                del exc_type, exc, tb
+                return False
+
+        def _fake_discover(
+            *args: object, **kwargs: object
+        ) -> tuple[list[Path], list[str]]:
+            del args
+            symlink_relpaths = list(kwargs["symlink_relpaths"])  # type: ignore[index]
+            discovery_calls.append(
+                (
+                    kwargs.get("ssh_command"),  # type: ignore[arg-type]
+                    kwargs.get("remote_host"),  # type: ignore[arg-type]
+                    symlink_relpaths,
+                )
+            )
+            return [symlink_relpaths[0]], []
+
+        with (
+            patch.object(
+                collector,
+                "_prepare_iap_known_hosts",
+                return_value=tmp_path / "known_hosts_iap",
+            ),
+            patch.object(
+                collector, "_open_iap_tunnel", return_value=_Tunnel()
+            ) as open_tunnel,
+            patch.object(
+                collector,
+                "_discover_copy_link_filelist",
+                side_effect=_fake_discover,
+            ),
+            patch.object(collector, "_run_copy_link_filelist_rsync"),
+            patch.object(collector, "_verify_rehydrated_copy_link_manifest"),
+        ):
+            collector._rehydrate_excluded_symlink_entries(
+                worker=worker,
+                fleet=fleet,
+                remote_experiment_dir="/data/experiments/exp-42",
+                staging_dir=staging_dir,
+                experiment_filestore=experiment_filestore,
+                known_hosts_path=None,
+                ssh_user="test-user",
+                symlink_relpaths=[Path("output"), Path("results")],
+            )
+
+        open_tunnel.assert_called_once_with(worker=worker, fleet=fleet)
+        assert len(discovery_calls) == 2
+        for ssh_command, remote_host, symlink_relpaths in discovery_calls:
+            assert ssh_command is not None
+            assert "-p 2222" in ssh_command
+            assert remote_host == "127.0.0.1"
+            assert len(symlink_relpaths) == 1
 
 
 # ---------------------------------------------------------------------------

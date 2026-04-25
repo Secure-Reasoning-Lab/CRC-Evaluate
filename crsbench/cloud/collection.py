@@ -590,6 +590,8 @@ class ArtifactCollector:
         known_hosts_path: Path | None,
         ssh_user: str | None,
         symlink_relpaths: list[Path],
+        ssh_command: str | None = None,
+        remote_host: str | None = None,
     ) -> tuple[list[Path], list[str]]:
         """Return cycle-safe rsync file-list entries for directory symlink rehydration."""
         specs = [
@@ -605,14 +607,22 @@ class ArtifactCollector:
             json.dumps(specs),
             use_sudo=True,
         )
-        result = self._run_remote_command(
-            worker=worker,
-            fleet=fleet,
-            known_hosts_path=known_hosts_path,
-            ssh_user=ssh_user,
-            command=command,
-            experiment_filestore=experiment_filestore,
-        )
+        if ssh_command is not None and remote_host is not None:
+            result = self._run_remote_command_via_ssh(
+                ssh_command=ssh_command,
+                remote_host=remote_host,
+                ssh_user=ssh_user,
+                command=command,
+            )
+        else:
+            result = self._run_remote_command(
+                worker=worker,
+                fleet=fleet,
+                known_hosts_path=known_hosts_path,
+                ssh_user=ssh_user,
+                command=command,
+                experiment_filestore=experiment_filestore,
+            )
         if result.returncode != 0:
             detail = result.stderr.strip() or result.stdout.strip() or "unknown error"
             raise ArtifactCollectionError(
@@ -647,14 +657,14 @@ class ArtifactCollector:
         remote_experiment_dir: str,
         destination_root: Path,
         experiment_filestore: Path,
-        file_relpaths: list[str],
+        manifest_relpaths: list[str],
         known_hosts_path: Path | None = None,
         ssh_user: str | None = None,
         ssh_command: str | None = None,
         remote_host: str | None = None,
     ) -> None:
-        """Run a copy-links rsync constrained to an explicit file list."""
-        if not file_relpaths:
+        """Run a copy-links rsync constrained to an explicit manifest of paths."""
+        if not manifest_relpaths:
             return
 
         temp_path: Path | None = None
@@ -668,7 +678,7 @@ class ArtifactCollector:
                 delete=False,
             ) as tmp:
                 temp_path = Path(tmp.name)
-                tmp.write("\n".join(file_relpaths))
+                tmp.write("\n".join(manifest_relpaths))
                 tmp.write("\n")
 
             cmd = self._build_copy_link_filelist_rsync_cmd(
@@ -782,7 +792,6 @@ class ArtifactCollector:
             "--mkpath",
             "--copy-links",
             "--ignore-missing-args",
-            "--prune-empty-dirs",
             f"--files-from={files_from_path}",
             "--rsync-path=sudo rsync",
             "-e",
@@ -1355,6 +1364,17 @@ class ArtifactCollector:
                 known_hosts_path=known_hosts_path,
                 ssh_user=ssh_user,
                 symlink_relpaths=[relpath],
+                ssh_command=ssh_command,
+                remote_host=remote_host,
+            )
+            manifest_relpaths = list(
+                dict.fromkeys(
+                    [
+                        directory_relpath.as_posix()
+                        for directory_relpath in directory_relpaths
+                    ]
+                    + file_relpaths
+                )
             )
             self._remove_staged_path(local_path)
             local_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1364,14 +1384,84 @@ class ArtifactCollector:
                 remote_experiment_dir=remote_experiment_dir,
                 destination_root=staging_dir,
                 experiment_filestore=experiment_filestore,
-                file_relpaths=file_relpaths,
+                manifest_relpaths=manifest_relpaths,
                 known_hosts_path=known_hosts_path,
                 ssh_user=ssh_user,
                 ssh_command=ssh_command,
                 remote_host=remote_host,
             )
-            for directory_relpath in directory_relpaths:
-                (staging_dir / directory_relpath).mkdir(parents=True, exist_ok=True)
+            self._verify_rehydrated_copy_link_manifest(
+                staging_dir=staging_dir,
+                symlink_relpath=relpath,
+                directory_relpaths=directory_relpaths,
+                file_relpaths=file_relpaths,
+            )
+
+    @staticmethod
+    def _verify_rehydrated_copy_link_manifest(
+        *,
+        staging_dir: Path,
+        symlink_relpath: Path,
+        directory_relpaths: list[Path],
+        file_relpaths: list[str],
+    ) -> None:
+        """Ensure manifest-discovered paths were materialized locally after rehydration."""
+        missing_directories = [
+            directory_relpath.as_posix()
+            for directory_relpath in directory_relpaths
+            if not (staging_dir / directory_relpath).is_dir()
+        ]
+        missing_files = [
+            file_relpath
+            for file_relpath in file_relpaths
+            if not (staging_dir / file_relpath).is_file()
+        ]
+        if not missing_directories and not missing_files:
+            return
+
+        details: list[str] = []
+        if missing_directories:
+            details.append(
+                "directories="
+                + ", ".join(missing_directories[:5])
+                + (
+                    f" (+{len(missing_directories) - 5} more)"
+                    if len(missing_directories) > 5
+                    else ""
+                )
+            )
+        if missing_files:
+            details.append(
+                "files="
+                + ", ".join(missing_files[:5])
+                + (
+                    f" (+{len(missing_files) - 5} more)"
+                    if len(missing_files) > 5
+                    else ""
+                )
+            )
+        raise ArtifactCollectionError(
+            "failed to rehydrate excluded symlink path "
+            f"{symlink_relpath.as_posix()}: manifest entries vanished during transfer "
+            f"({'; '.join(details)})"
+        )
+
+    @staticmethod
+    def _run_remote_command_via_ssh(
+        *,
+        ssh_command: str,
+        remote_host: str,
+        ssh_user: str | None,
+        command: str,
+    ) -> subprocess.CompletedProcess[str]:
+        """Run one remote command through a prebuilt SSH transport."""
+        destination = f"{ssh_user}@{remote_host}" if ssh_user else remote_host
+        return subprocess.run(
+            [*shlex.split(ssh_command), destination, command],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
 
     def _run_remote_command(
         self,
