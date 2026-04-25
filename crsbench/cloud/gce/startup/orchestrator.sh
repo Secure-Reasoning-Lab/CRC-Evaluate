@@ -534,48 +534,6 @@ ensure_docker_ready() {
   fi
 }
 
-ensure_valkey_running() {
-  local container_name="crsbench-valkey"
-  local volume_name="valkey_valkey-data"
-  local -a publish_args=(
-    -p "127.0.0.1:6379:6379"
-  )
-
-  if [[ -n "${CRSBENCH_REDIS_BIND_HOST:-}" && "${CRSBENCH_REDIS_BIND_HOST}" != "127.0.0.1" ]]; then
-    publish_args+=(-p "${CRSBENCH_REDIS_BIND_HOST}:6379:6379")
-  fi
-
-  if docker inspect "${container_name}" >/dev/null 2>&1; then
-    if docker inspect --format '{{.State.Running}}' "${container_name}" 2>/dev/null | grep -q true; then
-      return 0
-    fi
-    docker rm -f "${container_name}" >/dev/null 2>&1 || true
-  fi
-
-  echo "Starting Valkey..."
-  docker run -d \
-    --name "${container_name}" \
-    "${publish_args[@]}" \
-    -v "${volume_name}:/data" \
-    --restart unless-stopped \
-    "${CRSBENCH_VALKEY_IMAGE}" \
-    valkey-server \
-    --appendonly yes \
-    --requirepass "${CRSBENCH_REDIS_PASSWORD}"
-
-  for _i in $(seq 1 30); do
-    if docker exec -e "REDISCLI_AUTH=${CRSBENCH_REDIS_PASSWORD}" "${container_name}" \
-         valkey-cli ping 2>/dev/null | grep -q PONG; then
-      echo "Valkey is ready"
-      return 0
-    fi
-    sleep 1
-  done
-
-  echo "Valkey did not become ready in time" >&2
-  return 1
-}
-
 supports_systemd() {
   command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]
 }
@@ -1098,7 +1056,6 @@ trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR
 
 CRSBENCH_GITCACHE_ENABLED="$(read_gitcache_flag_from_config "${CONFIG_PATH}")"
 ensure_gitcache_ready
-ensure_valkey_running
 
 # --- GitHub SSH setup (if deploy key provided) ---
 configure_clone_ssh "${GITHUB_DEPLOY_KEY}"
@@ -1217,6 +1174,50 @@ set +a
 exec > >(tee -a "${LOG_PATH}") 2>&1
 
 echo "=== CRSBench orchestrator bootstrap started at \$(date -u) ==="
+
+ensure_valkey_running() {
+  local container_name="crsbench-valkey"
+  local volume_name="valkey_valkey-data"
+  local -a publish_args=(
+    -p "127.0.0.1:6379:6379"
+  )
+
+  if [[ -n "\${CRSBENCH_REDIS_BIND_HOST:-}" && "\${CRSBENCH_REDIS_BIND_HOST}" != "127.0.0.1" ]]; then
+    publish_args+=(-p "\${CRSBENCH_REDIS_BIND_HOST}:6379:6379")
+  fi
+
+  if docker inspect "\${container_name}" >/dev/null 2>&1; then
+    if docker inspect --format '{{.State.Running}}' "\${container_name}" 2>/dev/null | grep -q true; then
+      return 0
+    fi
+    docker rm -f "\${container_name}" >/dev/null 2>&1 || true
+  fi
+
+  echo "Starting Valkey..."
+  docker run -d \\
+    --name "\${container_name}" \\
+    "\${publish_args[@]}" \\
+    -v "\${volume_name}:/data" \\
+    --restart unless-stopped \\
+    "${CRSBENCH_VALKEY_IMAGE}" \\
+    valkey-server \\
+    --appendonly yes \\
+    --requirepass "\${CRSBENCH_REDIS_PASSWORD}"
+
+  for _i in \$(seq 1 30); do
+    if docker exec -e "REDISCLI_AUTH=\${CRSBENCH_REDIS_PASSWORD}" "\${container_name}" \\
+         valkey-cli ping 2>/dev/null | grep -q PONG; then
+      echo "Valkey is ready"
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "Valkey did not become ready in time" >&2
+  return 1
+}
+
+ensure_valkey_running
 
 echo "=== Starting crsbench run at \$(date -u) ==="
 echo "Config: \${CONFIG_PATH}"
