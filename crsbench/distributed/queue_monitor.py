@@ -815,10 +815,13 @@ def _build_rich_group(
     footer = None
     if paging_active and total_running_jobs > len(visible_running_jobs):
         helper_text = paging_status_text or "auto-rotates automatically"
-        page_text = (
-            f"Page {page_index + 1}/{page_count}: "
-            f"showing {len(visible_running_jobs)} of {total_running_jobs} running jobs"
-        )
+        compact_helper_text = helper_text
+        unavailable_prefix = "n/p unavailable: "
+        if helper_text.startswith(unavailable_prefix):
+            reason, _, _ = helper_text[len(unavailable_prefix) :].partition(";")
+            compact_reason = reason.strip()
+            if compact_reason:
+                compact_helper_text = f"{compact_reason}; n/p unavailable"
         helper_footer = Table.grid(expand=True, padding=(0, 0))
         helper_footer.add_column(ratio=1)
         helper_footer.add_column(
@@ -828,7 +831,7 @@ def _build_rich_group(
         )
         helper_footer.add_row(
             Text(
-                helper_text,
+                compact_helper_text,
                 style="dim italic",
                 no_wrap=True,
                 overflow="ellipsis",
@@ -839,14 +842,20 @@ def _build_rich_group(
                 no_wrap=True,
             ),
         )
-        footer = Group(
+        footer = Table.grid(expand=True, padding=(0, 1))
+        footer.add_column(ratio=1)
+        footer.add_column(justify="right")
+        footer.add_row(
+            helper_footer,
             Text(
-                page_text,
+                (
+                    f"Page {page_index + 1}/{page_count}: "
+                    f"{len(visible_running_jobs)}/{total_running_jobs}"
+                ),
                 style="dim italic",
                 no_wrap=True,
                 overflow="ellipsis",
             ),
-            helper_footer,
         )
     running_table.add_column("Worker", style="green")
     running_table.add_column("CRS", style="cyan")
