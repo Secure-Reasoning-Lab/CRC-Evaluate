@@ -134,40 +134,47 @@ class EvaluatorClaimWorker:
         self.max_inflight_requests = max(1, int(max_inflight_requests))
         self._active_claims: dict[str, _ActiveClaim] = {}
         self._active_claims_lock = threading.Lock()
-        self._dispatch_slots_reserved = 0
-
-    def _active_claims_values(self) -> tuple[_ActiveClaim, ...]:
-        with self._active_claims_lock:
-            return tuple(self._active_claims.values())
+        self._dispatch_slot_tokens: set[int] = set()
+        self._next_dispatch_slot_token = 0
 
     def _active_claims_items(self) -> tuple[tuple[str, _ActiveClaim], ...]:
         with self._active_claims_lock:
             return tuple(self._active_claims.items())
 
-    def _reserve_dispatch_slot(self) -> bool:
+    def _reserve_dispatch_slot(self) -> int | None:
         with self._active_claims_lock:
-            inflight = len(self._active_claims) + self._dispatch_slots_reserved
+            inflight = len(self._active_claims) + len(self._dispatch_slot_tokens)
             if inflight >= self.max_inflight_requests:
-                return False
-            self._dispatch_slots_reserved += 1
-            return True
+                return None
+            dispatch_slot_token = self._next_dispatch_slot_token
+            self._next_dispatch_slot_token += 1
+            self._dispatch_slot_tokens.add(dispatch_slot_token)
+            return dispatch_slot_token
 
-    def _release_dispatch_slot(self) -> None:
+    def _release_dispatch_slot(self, dispatch_slot_token: int) -> None:
         with self._active_claims_lock:
-            if self._dispatch_slots_reserved > 0:
-                self._dispatch_slots_reserved -= 1
+            self._dispatch_slot_tokens.discard(dispatch_slot_token)
 
     def _register_active_claim(
-        self, *, request_id: str, active: _ActiveClaim | None
+        self,
+        *,
+        request_id: str,
+        active: _ActiveClaim | None,
+        dispatch_slot_token: int,
     ) -> None:
         with self._active_claims_lock:
             if active is not None:
                 self._active_claims[request_id] = active
-            if self._dispatch_slots_reserved > 0:
-                self._dispatch_slots_reserved -= 1
+            self._dispatch_slot_tokens.discard(dispatch_slot_token)
 
     def has_pending_required_builds(self) -> bool:
-        for active in self._active_claims_values():
+        with self._active_claims_lock:
+            # A claimed request that is still materializing may enqueue required
+            # local builds, so warmup must treat reserved slots as pending demand.
+            if self._dispatch_slot_tokens:
+                return True
+            active_claims = tuple(self._active_claims.values())
+        for active in active_claims:
             for build_job_id in active.required_build_job_ids:
                 if not _is_job_terminal(self.build_queue.fetch_job(build_job_id)):
                     return True
@@ -208,7 +215,8 @@ class EvaluatorClaimWorker:
                     self._active_claims.pop(request_id, None)
 
     def dispatch_one(self, *, now: float) -> VerifyRequestRecord | None:
-        if not self._reserve_dispatch_slot():
+        dispatch_slot_token = self._reserve_dispatch_slot()
+        if dispatch_slot_token is None:
             return None
         try:
             claimed = self.store.claim_next_request(
@@ -231,10 +239,14 @@ class EvaluatorClaimWorker:
                     released,
                 )
                 return None
-            self._register_active_claim(request_id=claimed.request_id, active=active)
+            self._register_active_claim(
+                request_id=claimed.request_id,
+                active=active,
+                dispatch_slot_token=dispatch_slot_token,
+            )
             return claimed
         finally:
-            self._release_dispatch_slot()
+            self._release_dispatch_slot(dispatch_slot_token)
 
     def dispatch_available(self, *, now: float) -> VerifyRequestRecord | None:
         """Claim as many logical requests as the local inflight limit allows."""
