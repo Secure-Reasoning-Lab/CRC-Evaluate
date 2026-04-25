@@ -177,6 +177,8 @@ def _run_local_remote_command_from_cloud_cmd(
     remote_root = f"/data/experiments/{experiment_name}"
     local_root = str((source_root / experiment_name).resolve())
     rewritten = command.replace(remote_root, local_root)
+    if rewritten.startswith("sudo "):
+        rewritten = rewritten.removeprefix("sudo ")
     return _REAL_SUBPROCESS_RUN(
         ["bash", "-lc", rewritten],
         check=False,
@@ -372,6 +374,51 @@ class TestRsyncCmdDirectIp:
             f"UserKnownHostsFile={tmp_path / '.crsbench-cloud' / 'known_hosts'}"
             in ssh_cmd
         )
+
+    def test_discover_copy_link_filelist_uses_sudo_remote_python(
+        self, tmp_path: Path
+    ) -> None:
+        """Symlink rehydration discovery should enumerate remote paths with sudo privileges."""
+        worker = _make_worker(internal_ip="10.0.0.10", external_ip="34.1.2.3")
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector(base_path=tmp_path / "config.yaml")
+
+        seen_command: str | None = None
+
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            nonlocal seen_command
+            del args
+            seen_command = str(kwargs["command"])
+            return subprocess.CompletedProcess(
+                args=["ssh"],
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "directories": ["output", "output/empty"],
+                        "files": ["output/kept/artifact.txt"],
+                    }
+                ),
+                stderr="",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
+
+        directories, files = collector._discover_copy_link_filelist(
+            worker=worker,
+            fleet=fleet,
+            remote_experiment_dir="/data/experiments/exp-42",
+            experiment_filestore=tmp_path,
+            known_hosts_path=None,
+            ssh_user=None,
+            symlink_relpaths=[Path("output")],
+        )
+
+        assert seen_command is not None
+        assert seen_command.startswith("sudo python3 -c ")
+        assert directories == [Path("output"), Path("output/empty")]
+        assert files == ["output/kept/artifact.txt"]
 
 
 class TestRsyncPreservesMtimes:
@@ -828,6 +875,8 @@ class TestStagingAndPublish:
         workdir_out = trial_dir / "oss-crs-workdir" / "out"
         (workdir_out / "kept").mkdir(parents=True)
         (workdir_out / "kept" / "artifact.txt").write_text("artifact content\n")
+        (workdir_out / "empty").mkdir(parents=True)
+        (workdir_out / "nested" / "empty").mkdir(parents=True)
         (workdir_out / "cycle").symlink_to(Path())
         (trial_dir / "output").symlink_to(Path("oss-crs-workdir") / "out")
 
@@ -882,6 +931,8 @@ class TestStagingAndPublish:
         assert not any(path.name == "oss-crs-workdir" for path in final_path.rglob("*"))
         assert trial_output.exists()
         assert not trial_output.is_symlink()
+        assert (trial_output / "empty").is_dir()
+        assert (trial_output / "nested" / "empty").is_dir()
         assert (
             trial_output / "kept" / "artifact.txt"
         ).read_text() == "artifact content\n"

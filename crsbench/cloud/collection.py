@@ -91,6 +91,7 @@ def _walk(
     actual: pathlib.Path,
     active_dirs: set[str],
     exclude_prefixes: list[pathlib.PurePosixPath],
+    directories: list[str],
     files: list[str],
 ) -> None:
     if _excluded(logical_rel, exclude_prefixes):
@@ -103,6 +104,7 @@ def _walk(
             return
         next_active = set(active_dirs)
         next_active.add(real_key)
+        directories.append(full_logical.as_posix())
         for child in sorted(actual.iterdir(), key=lambda item: item.name):
             child_full = full_logical / child.name
             child_rel = logical_rel / child.name
@@ -117,6 +119,7 @@ def _walk(
                     actual=child_target,
                     active_dirs=next_active,
                     exclude_prefixes=exclude_prefixes,
+                    directories=directories,
                     files=files,
                 )
                 continue
@@ -126,6 +129,7 @@ def _walk(
                 actual=child,
                 active_dirs=next_active,
                 exclude_prefixes=exclude_prefixes,
+                directories=directories,
                 files=files,
             )
         return
@@ -135,7 +139,7 @@ def _walk(
 
 remote_root = pathlib.Path(sys.argv[1])
 specs = json.loads(sys.argv[2])
-dir_roots: list[str] = []
+directories: list[str] = []
 files: list[str] = []
 
 for spec in specs:
@@ -148,19 +152,26 @@ for spec in specs:
     except OSError as exc:
         raise SystemExit(f"failed to resolve {root.as_posix()}: {exc}")
     if actual_root.is_dir():
-        dir_roots.append(root.as_posix())
         _walk(
             full_logical=root,
             logical_rel=pathlib.PurePosixPath("."),
             actual=actual_root,
             active_dirs=set(),
             exclude_prefixes=exclude_prefixes,
+            directories=directories,
             files=files,
         )
         continue
     files.append(root.as_posix())
 
-print(json.dumps({"dir_roots": sorted(set(dir_roots)), "files": sorted(set(files))}))
+print(
+    json.dumps(
+        {
+            "directories": sorted(set(directories)),
+            "files": sorted(set(files)),
+        }
+    )
+)
 """
 
 
@@ -592,6 +603,7 @@ class ArtifactCollector:
             _COPY_LINK_FILELIST_DISCOVERY_SCRIPT,
             remote_experiment_dir,
             json.dumps(specs),
+            use_sudo=True,
         )
         result = self._run_remote_command(
             worker=worker,
@@ -614,18 +626,18 @@ class ArtifactCollector:
                 "failed to parse dereferenced artifact file list from remote output"
             ) from exc
 
-        dir_roots_raw = payload.get("dir_roots", [])
+        directories_raw = payload.get("directories", [])
         files_raw = payload.get("files", [])
-        if not isinstance(dir_roots_raw, list) or not isinstance(files_raw, list):
+        if not isinstance(directories_raw, list) or not isinstance(files_raw, list):
             raise ArtifactCollectionError(
                 "remote dereferenced artifact enumeration returned malformed payload"
             )
 
-        dir_roots = [
-            Path(value) for value in dir_roots_raw if isinstance(value, str) and value
+        directories = [
+            Path(value) for value in directories_raw if isinstance(value, str) and value
         ]
         files = [value for value in files_raw if isinstance(value, str) and value]
-        return dir_roots, files
+        return directories, files
 
     def _run_copy_link_filelist_rsync(
         self,
@@ -734,53 +746,6 @@ class ArtifactCollector:
         )
         return cmd
 
-    def _build_copy_link_rsync_cmd(
-        self,
-        worker: CloudInstanceLike,
-        fleet: SshTransportConfig,
-        remote_source_path: str,
-        destination_parent: Path,
-        exclude_patterns: tuple[str, ...] = (),
-        known_hosts_path: Path | None = None,
-        ssh_user: str | None = None,
-        ssh_command: str | None = None,
-        remote_host: str | None = None,
-    ) -> list[str]:
-        """Return an rsync command that dereferences one remote symlink entry."""
-        if (
-            known_hosts_path is None
-            and not fleet.ssh_via_iap
-            and self._base_path is not None
-        ):
-            known_hosts_path = cloud_state_dir(self._base_path) / "known_hosts"
-        ssh_cmd = ssh_command or self._build_ssh_command(
-            worker, fleet, known_hosts_path
-        )
-        resolved_remote_host = remote_host or self._remote_host(worker, fleet)
-        if ssh_user is not None and remote_host is None and not fleet.ssh_via_iap:
-            resolved_remote_host = f"{ssh_user}@{resolved_remote_host}"
-
-        source = f"{resolved_remote_host}:{remote_source_path}"
-        dest = str(destination_parent) + "/"
-
-        cmd = [
-            "rsync",
-            "-a",
-            "--mkpath",
-            "--copy-links",
-        ]
-        cmd.extend(f"--exclude={pattern}" for pattern in exclude_patterns)
-        cmd.extend(
-            [
-                "--rsync-path=sudo rsync",
-                "-e",
-                ssh_cmd,
-                source,
-                dest,
-            ]
-        )
-        return cmd
-
     def _build_copy_link_filelist_rsync_cmd(
         self,
         worker: CloudInstanceLike,
@@ -816,6 +781,7 @@ class ArtifactCollector:
             "-a",
             "--mkpath",
             "--copy-links",
+            "--ignore-missing-args",
             "--prune-empty-dirs",
             f"--files-from={files_from_path}",
             "--rsync-path=sudo rsync",
@@ -873,11 +839,17 @@ class ArtifactCollector:
         ]
 
     @staticmethod
-    def _build_remote_python_command(script: str, *args: str) -> str:
+    def _build_remote_python_command(
+        script: str,
+        *args: str,
+        use_sudo: bool = False,
+    ) -> str:
         """Return a quoted remote shell command that runs one inline Python script."""
         cmd = f"python3 -c {shlex.quote(script)}"
         if args:
             cmd += " " + " ".join(shlex.quote(arg) for arg in args)
+        if use_sudo:
+            cmd = f"sudo {cmd}"
         return cmd
 
     def _build_report_log_rsync_cmd(
@@ -1372,37 +1344,34 @@ class ArtifactCollector:
         remote_host: str | None = None,
     ) -> None:
         """Run targeted rsync --copy-links transfers for staged excluded-dir symlinks."""
-        dir_roots, file_relpaths = self._discover_copy_link_filelist(
-            worker=worker,
-            fleet=fleet,
-            remote_experiment_dir=remote_experiment_dir,
-            experiment_filestore=experiment_filestore,
-            known_hosts_path=known_hosts_path,
-            ssh_user=ssh_user,
-            symlink_relpaths=symlink_relpaths,
-        )
-
         for relpath in symlink_relpaths:
             local_path = staging_dir / relpath
             logger.debug("Rehydrating excluded symlink path: {}", local_path)
+            directory_relpaths, file_relpaths = self._discover_copy_link_filelist(
+                worker=worker,
+                fleet=fleet,
+                remote_experiment_dir=remote_experiment_dir,
+                experiment_filestore=experiment_filestore,
+                known_hosts_path=known_hosts_path,
+                ssh_user=ssh_user,
+                symlink_relpaths=[relpath],
+            )
             self._remove_staged_path(local_path)
             local_path.parent.mkdir(parents=True, exist_ok=True)
-
-        self._run_copy_link_filelist_rsync(
-            worker=worker,
-            fleet=fleet,
-            remote_experiment_dir=remote_experiment_dir,
-            destination_root=staging_dir,
-            experiment_filestore=experiment_filestore,
-            file_relpaths=file_relpaths,
-            known_hosts_path=known_hosts_path,
-            ssh_user=ssh_user,
-            ssh_command=ssh_command,
-            remote_host=remote_host,
-        )
-
-        for relpath in dir_roots:
-            (staging_dir / relpath).mkdir(parents=True, exist_ok=True)
+            self._run_copy_link_filelist_rsync(
+                worker=worker,
+                fleet=fleet,
+                remote_experiment_dir=remote_experiment_dir,
+                destination_root=staging_dir,
+                experiment_filestore=experiment_filestore,
+                file_relpaths=file_relpaths,
+                known_hosts_path=known_hosts_path,
+                ssh_user=ssh_user,
+                ssh_command=ssh_command,
+                remote_host=remote_host,
+            )
+            for directory_relpath in directory_relpaths:
+                (staging_dir / directory_relpath).mkdir(parents=True, exist_ok=True)
 
     def _run_remote_command(
         self,
