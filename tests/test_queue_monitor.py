@@ -930,15 +930,24 @@ def test_rich_monitor_input_uses_nonblocking_reads_for_ready_fds() -> None:
             return ([11, 7], [], [])
         return ([], [], [])
 
+    disabled = False
+    enabled = True
+    blocking_state = {11: enabled, 7: enabled}
+    read_states: list[tuple[int, bool]] = []
+
+    def _fake_get_blocking(fd: int) -> bool:
+        return blocking_state[fd]
+
+    def _fake_set_blocking(fd: int, is_blocking: bool) -> None:
+        blocking_state[fd] = is_blocking
+
     def _fake_read(fd: int, _size: int) -> bytes:
+        read_states.append((fd, blocking_state[fd]))
         if fd == 11:
             return b"x"
         if fd == 7:
             raise BlockingIOError("same tty already drained")
         raise AssertionError(f"unexpected read fd {fd}")
-
-    disabled = False
-    enabled = True
 
     with (
         patch("crsbench.distributed.queue_monitor.sys.stdin", stream),
@@ -946,8 +955,8 @@ def test_rich_monitor_input_uses_nonblocking_reads_for_ready_fds() -> None:
         patch("os.close") as mock_close,
         patch("os.ttyname", side_effect=_fake_ttyname),
         patch("os.stat", side_effect=_fake_stat),
-        patch("os.get_blocking", return_value=True) as mock_get_blocking,
-        patch("os.set_blocking") as mock_set_blocking,
+        patch("os.get_blocking", side_effect=_fake_get_blocking),
+        patch("os.set_blocking", side_effect=_fake_set_blocking),
         patch("termios.tcgetattr", return_value=["saved-attrs"]),
         patch("termios.tcsetattr"),
         patch("tty.setcbreak"),
@@ -959,12 +968,7 @@ def test_rich_monitor_input_uses_nonblocking_reads_for_ready_fds() -> None:
         assert monitor_input.read_command(0.1) is None
         assert monitor_input.manual_navigation_available is True
 
-    mock_get_blocking.assert_any_call(11)
-    mock_get_blocking.assert_any_call(7)
-    assert call(11, disabled) in mock_set_blocking.call_args_list
-    assert call(11, enabled) in mock_set_blocking.call_args_list
-    assert call(7, disabled) in mock_set_blocking.call_args_list
-    assert call(7, enabled) in mock_set_blocking.call_args_list
+    assert read_states == [(11, disabled), (7, disabled)]
     mock_close.assert_called_once_with(11)
 
 
