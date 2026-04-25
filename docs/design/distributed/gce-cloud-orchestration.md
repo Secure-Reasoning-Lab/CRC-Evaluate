@@ -120,9 +120,11 @@ into the shared readiness records.
 - Bootstrap payload delivered as base64-encoded JSON in instance metadata
 - When benchmark download is enabled, launch also injects per-instance `crsbench-download-delay-sec` metadata
   so startup sleeps only before the benchmark download step, not before the whole VM bootstrap
-- The download-delay schedule is deterministic and conservative: orchestrator first, then worker 1, then
-  evaluator 1, then remaining evaluators, then remaining workers; at most 3 VMs begin benchmark download in
-  each 300-second window with 10-second spacing inside that window
+- The assigned per-instance download-delay schedule is deterministic and conservative: orchestrator first,
+  then worker 1, then evaluator 1, then remaining evaluators, then remaining workers
+- The schedule assigns at most 3 download-delay slots in each 300-second window with 10-second spacing
+  between slots; actual wall-clock download start order still depends on when each VM reaches the shared
+  bootstrap step
 - Operator-selected remote env vars are delivered separately as base64-encoded JSON metadata after operator-side validation; they are not persisted in launch-state files
 - Live quota validation is required before launch begins
 - Regional placement uses GCE regional bulk insert with `ANY_SINGLE_ZONE`; optional `zones` are validated as an allowlist inside the resolved region set

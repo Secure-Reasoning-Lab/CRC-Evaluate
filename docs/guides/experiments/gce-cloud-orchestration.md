@@ -852,10 +852,11 @@ This path:
 
 When `cloud.bootstrap.download_benchmarks` resolves to enabled, CRSBench
 automatically staggers benchmark downloads across the fleet to reduce upstream
-bursting. The launch order is deterministic: orchestrator, worker 1,
-evaluator 1, remaining evaluators, then remaining workers. At most 3 VMs start
-their benchmark download in each 300-second window, spaced 10 seconds apart
-inside that window.
+bursting. The assigned download-delay slots are deterministic: orchestrator,
+worker 1, evaluator 1, remaining evaluators, then remaining workers. At most 3
+VMs are assigned slots in each 300-second window, spaced 10 seconds apart
+inside that window. Actual wall-clock download start order still depends on
+when each VM reaches the shared bootstrap step.
 
 `cloud launch` persists local launch state next to the config file under
 `.crsbench-cloud/<experiment>.json`. Later `cloud status`, `cloud collect`, and
