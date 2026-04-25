@@ -216,7 +216,10 @@ def _known_benchmark_harness_pairs() -> frozenset[tuple[str, str]]:
 
 
 def _trial_root_backstop_candidate(
-    path: Path, *, root: Path
+    path: Path,
+    *,
+    root: Path,
+    require_known_benchmark_harness: bool = True,
 ) -> tuple[PurePosixPath, tuple[str, ...]] | None:
     """Return one local fallback candidate for a corrupt-metadata trial root."""
     if not path.is_dir():
@@ -238,11 +241,15 @@ def _trial_root_backstop_candidate(
         return None
 
     # Only trust corrupt-metadata fallback paths when another metadata-backed
-    # trial under the same CRS proves this trial layout exists, and when the
-    # benchmark/harness pair itself is real in the local repo checkout.
-    benchmark_harness = (relpath.parts[1], relpath.parts[2])
-    if benchmark_harness not in _known_benchmark_harness_pairs():
-        return None
+    # trial under the same CRS proves this trial layout exists. By default,
+    # also require that the benchmark/harness pair is real in the local repo
+    # checkout. Local recollect of a previously published trial can opt out of
+    # that repo check, but it still has to look like a corrupt trial root
+    # locally (metadata.json + worker.log present).
+    if require_known_benchmark_harness:
+        benchmark_harness = (relpath.parts[1], relpath.parts[2])
+        if benchmark_harness not in _known_benchmark_harness_pairs():
+            return None
     return relpath, (relpath.parts[0], *relpath.parts[3:-1])
 
 
@@ -270,12 +277,19 @@ def _iter_trial_dirs(
         if _is_trial_root_dir(path, root=root):
             rooted_trial_dirs.append((relpath, path))
             continue
-        if published_root is not None and _is_trial_root_dir(
-            published_root / Path(relpath.as_posix()),
-            root=published_root,
-        ):
-            published_trial_dirs.append((relpath, path))
-            continue
+        published_candidate = None
+        if published_root is not None:
+            published_candidate = _trial_root_backstop_candidate(
+                path,
+                root=root,
+                require_known_benchmark_harness=False,
+            )
+            if published_candidate is not None and _is_trial_root_dir(
+                published_root / Path(relpath.as_posix()),
+                root=published_root,
+            ):
+                published_trial_dirs.append((relpath, path))
+                continue
         candidate = _trial_root_backstop_candidate(path, root=root)
         if candidate is None:
             continue

@@ -13,6 +13,7 @@ from crsbench.cloud.collection import (
     ArtifactCollectionError,
     ArtifactCollector,
     _is_report_log_file,
+    _iter_trial_dirs,
     collect_marker_path,
     discover_experiment_start_time_from_staging,
     merge_experiment_start_time,
@@ -135,6 +136,47 @@ def _write_trial_metadata(trial_dir: Path, payload: dict[str, object]) -> None:
     """Write `metadata.json` directly with the supplied payload."""
     metadata_path = trial_dir / "metadata.json"
     metadata_path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+class TestTrialRootDiscovery:
+    def test_published_root_fallback_requires_corrupt_trial_shape(
+        self, tmp_path: Path
+    ) -> None:
+        staging_root = tmp_path / "staging"
+        published_root = tmp_path / "published"
+        relpath = Path(
+            _REAL_LAYOUT_CRS,
+            _MISSING_LAYOUT_BENCHMARK,
+            _REAL_LAYOUT_HARNESS,
+            "delta",
+            "address",
+            "trial-1",
+        )
+
+        partial_trial = staging_root / relpath
+        partial_trial.mkdir(parents=True)
+        (partial_trial / "staged" / "cache.txt").parent.mkdir(parents=True)
+        (partial_trial / "staged" / "cache.txt").write_text(
+            "partial tree should not be promoted\n", encoding="utf-8"
+        )
+
+        published_trial = published_root / relpath
+        published_trial.mkdir(parents=True)
+        _write_trial_metadata(
+            published_trial,
+            {
+                "timestamp": "2026-03-13T00:00:00Z",
+                "trial_num": 1,
+                "crs": _REAL_LAYOUT_CRS,
+                "benchmark": _MISSING_LAYOUT_BENCHMARK,
+                "harness": _REAL_LAYOUT_HARNESS,
+            },
+        )
+        (published_trial / "worker.log").write_text(
+            "previously published worker log\n", encoding="utf-8"
+        )
+
+        assert list(_iter_trial_dirs(staging_root, published_root=published_root)) == []
 
 
 def _run_local_rsync_from_cloud_cmd(
