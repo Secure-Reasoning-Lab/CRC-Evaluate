@@ -672,6 +672,12 @@ class TestStagingAndPublish:
         staged_dir = trial_dir / "staged" / "curl-delta-01"
         staged_dir.mkdir(parents=True)
         (staged_dir / "README.txt").write_text("temporary staged benchmark copy\n")
+        (trial_dir / "staged-link.txt").symlink_to(
+            Path("staged") / "curl-delta-01" / "README.txt"
+        )
+        nested_staged_dir = trial_dir / "notes" / "staged" / "keepme"
+        nested_staged_dir.mkdir(parents=True)
+        (nested_staged_dir / "info.txt").write_text("preserve nested staged content\n")
 
         worker = _make_worker()
         fleet = _make_fleet(ssh_via_iap=False)
@@ -712,6 +718,10 @@ class TestStagingAndPublish:
         )
         assert (collected_trial / "metadata.json").exists()
         assert not (collected_trial / "staged").exists()
+        assert not (collected_trial / "staged-link.txt").exists()
+        assert (
+            collected_trial / "notes" / "staged" / "keepme" / "info.txt"
+        ).read_text() == "preserve nested staged content\n"
 
     def test_staging_and_publish_excludes_output_logs_from_real_output_tree(
         self, tmp_path: Path
@@ -1597,7 +1607,7 @@ class TestCollectFullTrialTree:
         exclude_args = [arg for arg in cmd if arg.startswith("--exclude=")]
         assert exclude_args == [
             "--exclude=oss-crs-workdir/",
-            "--exclude=staged/",
+            "--exclude=trial-*/staged/",
             "--exclude=output/logs/",
         ], (
             "Artifact collection should exclude only internal scratch data, staged benchmark copies, and trial output/logs"
@@ -1716,6 +1726,94 @@ class TestRemoteLogCollection:
             / "trial-1"
             / ".fail"
         ).exists()
+
+    def test_collect_logs_excludes_trial_staged_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        config_path = tmp_path / "config.yaml"
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+        collector = ArtifactCollector(base_path=config_path)
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        staged_dir = trial_dir / "staged" / "curl-delta-01"
+        staged_dir.mkdir(parents=True)
+        (staged_dir / "metadata.json").write_text(
+            '{"timestamp": "2026-03-13T00:00:00Z"}',
+            encoding="utf-8",
+        )
+        (staged_dir / "worker.log").write_text("staged worker log\n", encoding="utf-8")
+
+        def _fake_remote_command(*args, **kwargs):
+            del args, kwargs
+            return subprocess.CompletedProcess(
+                args=["ssh"],
+                returncode=0,
+                stdout="remote output\n",
+                stderr="",
+            )
+
+        def _fake_subprocess_run(cmd, *_args, **_kwargs):
+            if cmd and cmd[:3] == ["gcloud", "compute", "os-login"]:
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout="test-user\n",
+                    stderr="",
+                )
+
+            if cmd and cmd[0] == "ssh-keygen":
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout="",
+                    stderr="",
+                )
+
+            if cmd and cmd[0] == "ssh-keyscan":
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout=f"{worker.external_ip} ssh-ed25519 AAAATESTKEY\n",
+                    stderr="",
+                )
+
+            if cmd and cmd[0] == "rsync":
+                return _run_local_rsync_from_cloud_cmd(
+                    cmd,
+                    source_root=source_root,
+                    experiment_name="exp-42",
+                )
+
+            raise AssertionError(f"unexpected subprocess invocation: {cmd!r}")
+
+        monkeypatch.setattr(collector, "_run_remote_command", _fake_remote_command)
+        with patch("subprocess.run", side_effect=_fake_subprocess_run):
+            logs_dir = collector.collect_logs(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        trial_artifacts_dir = (
+            logs_dir
+            / worker.name
+            / "trial-artifacts"
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        assert (trial_artifacts_dir / "worker.log").exists()
+        assert not (trial_artifacts_dir / "staged").exists()
 
     def test_collect_logs_raises_when_remote_command_transport_fails(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

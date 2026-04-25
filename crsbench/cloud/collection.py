@@ -50,10 +50,13 @@ _IAP_TUNNEL_STARTUP_TIMEOUT_SEC = 30.0
 _COLLECT_MARKER_FILENAME = ".crsbench-collect.json"
 _ARTIFACT_RSYNC_EXCLUDES: tuple[str, ...] = (
     "oss-crs-workdir/",
-    "staged/",
+    "trial-*/staged/",
     "output/logs/",
 )
+_REHYDRATE_EXCLUDED_SYMLINK_NAMES = frozenset({"oss-crs-workdir"})
+_DROP_EXCLUDED_SYMLINK_NAMES = frozenset({"staged"})
 _REPORT_LOG_RSYNC_EXCLUDES: tuple[str, ...] = ("oss-crs-workdir/",)
+_LOG_RSYNC_EXCLUDES: tuple[str, ...] = ("trial-*/staged/",)
 _REPORT_LOG_RSYNC_INCLUDES: tuple[str, ...] = (
     "output/logs/services/*_patcher.stdout.log",
     "output/logs/services/*inc-builder-*.stdout.log",
@@ -224,11 +227,6 @@ def write_collect_marker(destination: Path, payload: dict[str, object]) -> None:
         raise
 
 
-def _artifact_rsync_excluded_names() -> set[str]:
-    """Return basename-only artifact rsync exclusions without trailing slashes."""
-    return {pattern.rstrip("/") for pattern in _ARTIFACT_RSYNC_EXCLUDES}
-
-
 def discover_experiment_start_time_from_staging(
     staging_dirs: list[Path],
 ) -> tuple[str | None, str]:
@@ -387,8 +385,15 @@ class ArtifactCollector:
             known_hosts_path=known_hosts_path,
             ssh_user=ssh_user,
         )
-        symlink_relpaths = self._find_excluded_symlink_entries(staging_dir)
-        if symlink_relpaths:
+        rehydrate_relpaths, drop_relpaths = self._partition_excluded_symlink_entries(
+            staging_dir
+        )
+        if drop_relpaths:
+            self._drop_excluded_symlink_entries(
+                staging_dir=staging_dir,
+                symlink_relpaths=drop_relpaths,
+            )
+        if rehydrate_relpaths:
             self._rehydrate_excluded_symlink_entries(
                 worker=worker,
                 fleet=fleet,
@@ -397,7 +402,7 @@ class ArtifactCollector:
                 experiment_filestore=experiment_filestore,
                 known_hosts_path=known_hosts_path,
                 ssh_user=ssh_user,
-                symlink_relpaths=symlink_relpaths,
+                symlink_relpaths=rehydrate_relpaths,
             )
         self._prune_staged_output_logs(staging_dir)
         self._run_report_log_rsync(
@@ -842,6 +847,7 @@ class ArtifactCollector:
             "-a",
             "--mkpath",
             "--prune-empty-dirs",
+            *[f"--exclude={pattern}" for pattern in _LOG_RSYNC_EXCLUDES],
             "--include=*/",
             "--include=trial_matrix.json",
             "--include=metadata.json",
@@ -1252,10 +1258,12 @@ class ArtifactCollector:
         )
         self._run_rsync_with_retry(cmd)
 
-    def _find_excluded_symlink_entries(self, staging_dir: Path) -> list[Path]:
-        """Return top-level trial symlink entries that point into excluded dirs."""
-        excluded_names = _artifact_rsync_excluded_names()
-        relpaths: list[Path] = []
+    def _partition_excluded_symlink_entries(
+        self, staging_dir: Path
+    ) -> tuple[list[Path], list[Path]]:
+        """Return excluded top-level symlink entries split by rehydrate vs drop."""
+        rehydrate_relpaths: list[Path] = []
+        drop_relpaths: list[Path] = []
 
         for trial_dir in sorted(staging_dir.rglob("trial-*")):
             if not trial_dir.is_dir():
@@ -1268,10 +1276,19 @@ class ArtifactCollector:
                     target_rel = target.relative_to(trial_dir)
                 except (OSError, ValueError):
                     continue
-                if any(part in excluded_names for part in target_rel.parts):
-                    relpaths.append(item.relative_to(staging_dir))
+                relpath = item.relative_to(staging_dir)
+                if any(
+                    part in _REHYDRATE_EXCLUDED_SYMLINK_NAMES
+                    for part in target_rel.parts
+                ):
+                    rehydrate_relpaths.append(relpath)
+                    continue
+                if any(
+                    part in _DROP_EXCLUDED_SYMLINK_NAMES for part in target_rel.parts
+                ):
+                    drop_relpaths.append(relpath)
 
-        return relpaths
+        return rehydrate_relpaths, drop_relpaths
 
     @staticmethod
     def _remove_staged_path(path: Path) -> None:
@@ -1290,6 +1307,20 @@ class ArtifactCollector:
             logs_path = trial_dir / "output" / "logs"
             if logs_path.exists() or logs_path.is_symlink():
                 self._remove_staged_path(logs_path)
+
+    def _drop_excluded_symlink_entries(
+        self,
+        *,
+        staging_dir: Path,
+        symlink_relpaths: list[Path],
+    ) -> None:
+        """Remove staged symlinks whose excluded targets should stay omitted."""
+        logger.info(
+            "Dropping {} staged symlinked artifact paths that resolve into omitted content",
+            len(symlink_relpaths),
+        )
+        for relpath in symlink_relpaths:
+            self._remove_staged_path(staging_dir / relpath)
 
     def _compact_failed_trials_to_diagnostics(self, staging_dir: Path) -> list[Path]:
         """Reduce failed trials to marker/metadata/log diagnostics before publish."""
