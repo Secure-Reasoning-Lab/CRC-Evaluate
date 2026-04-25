@@ -158,6 +158,21 @@ class _RichMonitorInput:
             return
         self._set_manual_navigation_unavailable("hotkey input unavailable")
 
+    def _deactivate_invalid_input_fds(self) -> bool:
+        try:
+            import select
+        except ImportError:
+            for fd in list(self._active_fds):
+                self._deactivate_input_fd(fd)
+            return False
+
+        for fd in list(self._active_fds):
+            try:
+                select.select([fd], [], [], 0)
+            except OSError:
+                self._deactivate_input_fd(fd)
+        return bool(self._active_fds)
+
     def _attach_stream(self, stream) -> str | None:
         isatty = getattr(stream, "isatty", None)
         fileno = getattr(stream, "fileno", None)
@@ -274,26 +289,30 @@ class _RichMonitorInput:
                 ready, _, _ = select.select(list(self._active_fds), [], [], remaining)
                 if not ready:
                     return None
+                fd = ready[0]
             except OSError:
-                for fd in list(self._active_fds):
-                    self._deactivate_input_fd(fd)
+                if self._deactivate_invalid_input_fds():
+                    continue
                 return None
 
-            for fd in list(ready):
-                try:
-                    data = os.read(fd, 64)
-                except OSError:
-                    self._deactivate_input_fd(fd)
-                    continue
+            try:
+                data = os.read(fd, 64)
+            except OSError:
+                self._deactivate_input_fd(fd)
+                if not self.manual_navigation_available:
+                    return None
+                continue
 
-                if not data:
-                    self._deactivate_input_fd(fd)
-                    continue
+            if not data:
+                self._deactivate_input_fd(fd)
+                if not self.manual_navigation_available:
+                    return None
+                continue
 
-                for char in data.decode(errors="ignore"):
-                    command = char.lower()
-                    if command in {"n", "p"}:
-                        self._pending_commands.append(command)
+            for char in data.decode(errors="ignore"):
+                command = char.lower()
+                if command in {"n", "p"}:
+                    self._pending_commands.append(command)
 
             if self._pending_commands:
                 return self._pending_commands.popleft()

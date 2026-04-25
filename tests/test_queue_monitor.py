@@ -720,6 +720,13 @@ def test_rich_monitor_input_disables_navigation_after_all_input_sources_fail() -
             raise OSError("stdin read failed")
         raise AssertionError(f"unexpected read fd {fd}")
 
+    def _fake_select(readers, _writers, _errors, _timeout):
+        if readers == [11, 7]:
+            return ([11, 7], [], [])
+        if readers == [7]:
+            return ([7], [], [])
+        raise AssertionError(f"unexpected readers {readers}")
+
     with (
         patch("crsbench.distributed.queue_monitor.sys.stdin", stream),
         patch("os.open", return_value=11),
@@ -729,7 +736,7 @@ def test_rich_monitor_input_disables_navigation_after_all_input_sources_fail() -
         patch("termios.tcgetattr", return_value=["saved-attrs"]),
         patch("termios.tcsetattr"),
         patch("tty.setcbreak"),
-        patch("select.select", return_value=([11, 7], [], [])),
+        patch("select.select", side_effect=_fake_select),
         patch("os.read", side_effect=_fake_read),
         _RichMonitorInput() as monitor_input,
     ):
@@ -739,6 +746,101 @@ def test_rich_monitor_input_disables_navigation_after_all_input_sources_fail() -
         assert monitor_input.manual_navigation_status == (
             "n/p unavailable: hotkey input unavailable; auto-rotates each refresh"
         )
+
+    mock_close.assert_called_once_with(11)
+
+
+def test_rich_monitor_input_recovers_when_select_fails_for_only_one_source() -> None:
+    stream = MagicMock()
+    stream.isatty.return_value = True
+    stream.fileno.return_value = 7
+
+    def _fake_ttyname(fd: int) -> str:
+        return f"/dev/pts/{fd}"
+
+    def _fake_stat(path, **_kwargs) -> SimpleNamespace:
+        fd = int(str(path).rsplit("/", maxsplit=1)[-1])
+        return SimpleNamespace(st_dev=fd, st_ino=fd)
+
+    def _fake_select(readers, _writers, _errors, _timeout):
+        if readers == [11, 7]:
+            raise OSError("bad fd in multi-select")
+        if readers == [11]:
+            raise OSError("controlling tty is stale")
+        if readers == [7]:
+            return ([7], [], [])
+        raise AssertionError(f"unexpected readers {readers}")
+
+    def _fake_read(fd: int, _size: int) -> bytes:
+        if fd != 7:
+            raise AssertionError(f"unexpected read fd {fd}")
+        return b"n"
+
+    with (
+        patch("crsbench.distributed.queue_monitor.sys.stdin", stream),
+        patch("os.open", return_value=11),
+        patch("os.close") as mock_close,
+        patch("os.ttyname", side_effect=_fake_ttyname),
+        patch("os.stat", side_effect=_fake_stat),
+        patch("termios.tcgetattr", return_value=["saved-attrs"]),
+        patch("termios.tcsetattr"),
+        patch("tty.setcbreak"),
+        patch("select.select", side_effect=_fake_select),
+        patch("os.read", side_effect=_fake_read),
+        _RichMonitorInput() as monitor_input,
+    ):
+        assert monitor_input.manual_navigation_available is True
+        assert monitor_input.read_command(0.1) == "n"
+        assert monitor_input.manual_navigation_available is True
+
+    mock_close.assert_called_once_with(11)
+
+
+def test_rich_monitor_input_stops_after_first_ready_fd_yields_a_command() -> None:
+    stream = MagicMock()
+    stream.isatty.return_value = True
+    stream.fileno.return_value = 7
+
+    def _fake_ttyname(fd: int) -> str:
+        if fd == 11:
+            return "/dev/tty"
+        if fd == 7:
+            return "/dev/pts/7"
+        raise AssertionError(f"unexpected fd {fd}")
+
+    def _fake_stat(path, **_kwargs) -> SimpleNamespace:
+        path_str = str(path)
+        if path_str == "/dev/tty":
+            return SimpleNamespace(st_dev=1, st_ino=11)
+        if path_str == "/dev/pts/7":
+            return SimpleNamespace(st_dev=2, st_ino=7)
+        raise AssertionError(f"unexpected tty path {path_str}")
+
+    def _fake_select(readers, _writers, _errors, _timeout):
+        if readers == [11, 7]:
+            return ([11, 7], [], [])
+        raise AssertionError(f"unexpected readers {readers}")
+
+    def _fake_read(fd: int, _size: int) -> bytes:
+        if fd == 11:
+            return b"n"
+        raise AssertionError("second ready fd should not be read after a command")
+
+    with (
+        patch("crsbench.distributed.queue_monitor.sys.stdin", stream),
+        patch("os.open", return_value=11),
+        patch("os.close") as mock_close,
+        patch("os.ttyname", side_effect=_fake_ttyname),
+        patch("os.stat", side_effect=_fake_stat),
+        patch("termios.tcgetattr", return_value=["saved-attrs"]),
+        patch("termios.tcsetattr"),
+        patch("tty.setcbreak"),
+        patch("select.select", side_effect=_fake_select),
+        patch("os.read", side_effect=_fake_read),
+        _RichMonitorInput() as monitor_input,
+    ):
+        assert monitor_input.manual_navigation_available is True
+        assert monitor_input.read_command(0.1) == "n"
 
     mock_close.assert_called_once_with(11)
 
