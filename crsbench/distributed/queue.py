@@ -740,6 +740,8 @@ def remove_job_by_id(queue: "rq.Queue", job_id: str) -> bool:
     ]
     if hasattr(queue, "scheduled_job_registry"):
         registries.append(queue.scheduled_job_registry)
+    if hasattr(queue, "canceled_job_registry"):
+        registries.append(queue.canceled_job_registry)
 
     for registry in registries:
         try:

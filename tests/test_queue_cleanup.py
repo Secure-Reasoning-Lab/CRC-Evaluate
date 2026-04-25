@@ -11,6 +11,46 @@ from crsbench.distributed.queue import clear_experiment_jobs, get_trial_key
 from crsbench.distributed.queue_cleanup import clean_experiment_queues
 
 
+def test_remove_job_by_id_clears_canceled_registry(monkeypatch) -> None:
+    if not queue_module.REDIS_AVAILABLE:
+        pytest.skip("Redis/RQ not available")
+
+    queue = SimpleNamespace(
+        started_job_registry=MagicMock(),
+        finished_job_registry=MagicMock(),
+        failed_job_registry=MagicMock(),
+        deferred_job_registry=MagicMock(),
+        scheduled_job_registry=MagicMock(),
+        canceled_job_registry=MagicMock(),
+        remove=MagicMock(),
+        connection=MagicMock(),
+    )
+    fetched_job = MagicMock()
+    fetch_job = MagicMock(return_value=fetched_job)
+    monkeypatch.setattr(queue_module.rq.job.Job, "fetch", fetch_job)  # type: ignore[union-attr]
+
+    removed = queue_module.remove_job_by_id(queue, "job-1")
+
+    assert removed is True
+    queue.started_job_registry.remove.assert_called_once_with("job-1", delete_job=False)
+    queue.finished_job_registry.remove.assert_called_once_with(
+        "job-1", delete_job=False
+    )
+    queue.failed_job_registry.remove.assert_called_once_with("job-1", delete_job=False)
+    queue.deferred_job_registry.remove.assert_called_once_with(
+        "job-1", delete_job=False
+    )
+    queue.scheduled_job_registry.remove.assert_called_once_with(
+        "job-1", delete_job=False
+    )
+    queue.canceled_job_registry.remove.assert_called_once_with(
+        "job-1", delete_job=False
+    )
+    queue.remove.assert_called_once_with("job-1")
+    fetch_job.assert_called_once_with("job-1", connection=queue.connection)
+    fetched_job.delete.assert_called_once_with()
+
+
 def test_clean_experiment_queues_dry_run(monkeypatch) -> None:
     queue_trial = MagicMock()
     queue_build = MagicMock()
