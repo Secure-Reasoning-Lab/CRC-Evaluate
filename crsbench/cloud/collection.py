@@ -68,9 +68,6 @@ _REPORT_LOG_RSYNC_INCLUDES: tuple[str, ...] = (
 _TRIAL_DIR_NAME_RE = re.compile(r"^trial-\d+$")
 _TRIAL_ROOT_MODES = frozenset({"delta", "full", "all"})
 _TRIAL_ROOT_SANITIZERS = frozenset({"address", "memory", "undefined"})
-_TRIAL_ROOT_SENTINEL_FILENAMES = frozenset(
-    {"metadata.json", "worker.log", ".success", ".fail"}
-)
 _FAILED_TRIAL_ROOT_KEEP_FILENAMES = frozenset({"metadata.json", "worker.log", ".fail"})
 _REEVAL_SUBMISSION_ARTIFACT_DIRNAME = ".cloud-reeval"
 _REEVAL_TERMINAL_STATES = frozenset({"succeeded", "failed"})
@@ -178,16 +175,9 @@ def _trial_relpath_matches_metadata(
     )
 
 
-def _has_trial_root_sentinel(path: Path) -> bool:
-    """Return whether one directory contains files that identify a real trial root."""
-    return any(
-        (path / sentinel).exists() for sentinel in _TRIAL_ROOT_SENTINEL_FILENAMES
-    )
-
-
 def _is_trial_root_dir(path: Path, *, root: Path) -> bool:
     """Return whether one directory is a real trial root rather than payload content."""
-    if not path.is_dir() or not _has_trial_root_sentinel(path):
+    if not path.is_dir():
         return False
     try:
         relpath = PurePosixPath(path.relative_to(root).as_posix())
@@ -197,7 +187,7 @@ def _is_trial_root_dir(path: Path, *, root: Path) -> bool:
         return False
     trial_identity = _load_trial_root_identity(path)
     if trial_identity is None:
-        return True
+        return (path / ".success").exists() or (path / ".fail").exists()
     return _trial_relpath_matches_metadata(relpath, trial_identity=trial_identity)
 
 
@@ -243,7 +233,6 @@ import sys
 TRIAL_DIR_RE = re.compile(r"^trial-\d+$")
 TRIAL_ROOT_MODES = {"delta", "full", "all"}
 TRIAL_ROOT_SANITIZERS = {"address", "memory", "undefined"}
-TRIAL_ROOT_SENTINELS = {"metadata.json", "worker.log", ".success", ".fail"}
 
 
 def _matches_layout(rel_parts: tuple[str, ...]) -> bool:
@@ -260,10 +249,6 @@ def _matches_layout(rel_parts: tuple[str, ...]) -> bool:
         and rel_parts[mode_index] in TRIAL_ROOT_MODES
         and rel_parts[sanitizer_index] in TRIAL_ROOT_SANITIZERS
     )
-
-
-def _has_sentinel(path: pathlib.Path) -> bool:
-    return any((path / sentinel).exists() for sentinel in TRIAL_ROOT_SENTINELS)
 
 
 def _load_trial_identity(path: pathlib.Path) -> tuple[str, str, str, str] | None:
@@ -309,11 +294,11 @@ def _matches_metadata(
 
 
 def _is_trial_root(path: pathlib.Path, rel_parts: tuple[str, ...]) -> bool:
-    if not path.is_dir() or not _has_sentinel(path) or not _matches_layout(rel_parts):
+    if not path.is_dir() or not _matches_layout(rel_parts):
         return False
     trial_identity = _load_trial_identity(path)
     if trial_identity is None:
-        return True
+        return (path / ".success").exists() or (path / ".fail").exists()
     return _matches_metadata(rel_parts, trial_identity=trial_identity)
 
 
