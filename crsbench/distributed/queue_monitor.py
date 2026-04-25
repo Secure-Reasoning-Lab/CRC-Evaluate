@@ -84,6 +84,10 @@ class _RichMonitorInput:
         self._fd: int | None = None
         self._saved_termios_attrs: Any = None
         self._owns_fd = False
+        self._active_fds: list[int] = []
+        self._saved_termios_attrs_by_fd: dict[int, Any] = {}
+        self._owned_fds: set[int] = set()
+        self._attached_signatures: set[tuple[int, int]] = set()
         self._pending_commands: deque[str] = deque()
         self.manual_navigation_available = False
         self.manual_navigation_status = (
@@ -97,11 +101,62 @@ class _RichMonitorInput:
         )
         return self
 
-    def _activate_manual_navigation(self, fd: int, saved_termios_attrs: Any) -> None:
-        self._fd = fd
-        self._saved_termios_attrs = saved_termios_attrs
+    def _sync_primary_fd(self) -> None:
+        if not self._active_fds:
+            self._fd = None
+            self._saved_termios_attrs = None
+            self._owns_fd = False
+            return
+        self._fd = self._active_fds[0]
+        self._saved_termios_attrs = self._saved_termios_attrs_by_fd[self._fd]
+        self._owns_fd = self._fd in self._owned_fds
+
+    def _fd_signature(self, fd: int) -> tuple[int, int] | None:
+        try:
+            import os
+            from pathlib import Path
+
+            tty_path = os.ttyname(fd)
+            stat_result = Path(tty_path).stat()
+        except OSError:
+            return None
+        return (stat_result.st_dev, stat_result.st_ino)
+
+    def _register_input_fd(
+        self,
+        fd: int,
+        saved_termios_attrs: Any,
+        *,
+        owns_fd: bool,
+    ) -> None:
+        signature = self._fd_signature(fd)
+        if signature is not None and signature in self._attached_signatures:
+            if owns_fd:
+                try:
+                    import os
+
+                    os.close(fd)
+                except OSError:
+                    pass
+            return
+        if signature is not None:
+            self._attached_signatures.add(signature)
+        self._active_fds.append(fd)
+        self._saved_termios_attrs_by_fd[fd] = saved_termios_attrs
+        if owns_fd:
+            self._owned_fds.add(fd)
+        self._sync_primary_fd()
         self.manual_navigation_available = True
         self.manual_navigation_status = "n/p active; auto-rotates when idle"
+
+    def _deactivate_input_fd(self, fd: int) -> None:
+        self._active_fds = [
+            active_fd for active_fd in self._active_fds if active_fd != fd
+        ]
+        self._sync_primary_fd()
+        if self._active_fds:
+            return
+        self._set_manual_navigation_unavailable("hotkey input unavailable")
 
     def _attach_stream(self, stream) -> str | None:
         isatty = getattr(stream, "isatty", None)
@@ -125,8 +180,7 @@ class _RichMonitorInput:
         except (OSError, ValueError, AttributeError):
             return "cbreak setup failed"
 
-        self._owns_fd = False
-        self._activate_manual_navigation(fd, saved_termios_attrs)
+        self._register_input_fd(fd, saved_termios_attrs, owns_fd=False)
         return None
 
     def _attach_controlling_terminal(self) -> str | None:
@@ -148,8 +202,7 @@ class _RichMonitorInput:
             os.close(fd)
             return "controlling terminal setup failed"
 
-        self._owns_fd = True
-        self._activate_manual_navigation(fd, saved_termios_attrs)
+        self._register_input_fd(fd, saved_termios_attrs, owns_fd=True)
         return None
 
     def __enter__(self) -> "_RichMonitorInput":
@@ -157,6 +210,8 @@ class _RichMonitorInput:
         if self._prefer_controlling_terminal:
             controlling_terminal_reason = self._attach_controlling_terminal()
             if controlling_terminal_reason is None:
+                if self._attached_signatures:
+                    self._attach_stream(self._stream)
                 return self
             reasons.append(controlling_terminal_reason)
 
@@ -168,24 +223,31 @@ class _RichMonitorInput:
         return self._set_manual_navigation_unavailable(" and ".join(reasons))
 
     def __exit__(self, exc_type, exc, tb) -> bool:
-        if self._fd is None or self._saved_termios_attrs is None:
+        if not self._saved_termios_attrs_by_fd:
             return False
 
+        termios_module: Any = None
         try:
-            import termios
-
-            termios.tcsetattr(
-                self._fd,
-                termios.TCSADRAIN,
-                self._saved_termios_attrs,
-            )
-        except (ImportError, OSError, ValueError, AttributeError):
+            import termios as termios_module
+        except ImportError:
             pass
-        if self._owns_fd:
+
+        for fd, saved_termios_attrs in list(self._saved_termios_attrs_by_fd.items()):
+            if termios_module is not None:
+                try:
+                    termios_module.tcsetattr(
+                        fd,
+                        termios_module.TCSADRAIN,
+                        saved_termios_attrs,
+                    )
+                except (OSError, ValueError, AttributeError):
+                    pass
+            if fd not in self._owned_fds:
+                continue
             try:
                 import os
 
-                os.close(self._fd)
+                os.close(fd)
             except OSError:
                 pass
         return False
@@ -194,7 +256,7 @@ class _RichMonitorInput:
         if self._pending_commands:
             return self._pending_commands.popleft()
 
-        if not self.manual_navigation_available or self._fd is None:
+        if not self.manual_navigation_available or not self._active_fds:
             if timeout_sec > 0:
                 time.sleep(timeout_sec)
             return None
@@ -209,23 +271,34 @@ class _RichMonitorInput:
                 import os
                 import select
 
-                ready, _, _ = select.select([self._fd], [], [], remaining)
+                ready, _, _ = select.select(list(self._active_fds), [], [], remaining)
                 if not ready:
                     return None
-                data = os.read(self._fd, 64)
             except OSError:
+                for fd in list(self._active_fds):
+                    self._deactivate_input_fd(fd)
                 return None
 
-            if not data:
-                return None
+            for fd in list(ready):
+                try:
+                    data = os.read(fd, 64)
+                except OSError:
+                    self._deactivate_input_fd(fd)
+                    continue
 
-            for char in data.decode(errors="ignore"):
-                command = char.lower()
-                if command in {"n", "p"}:
-                    self._pending_commands.append(command)
+                if not data:
+                    self._deactivate_input_fd(fd)
+                    continue
+
+                for char in data.decode(errors="ignore"):
+                    command = char.lower()
+                    if command in {"n", "p"}:
+                        self._pending_commands.append(command)
 
             if self._pending_commands:
                 return self._pending_commands.popleft()
+            if not self.manual_navigation_available:
+                return None
 
 
 def get_experiment_queue_stats(queue, experiment_name: str) -> dict[str, int]:
