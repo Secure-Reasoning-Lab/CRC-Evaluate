@@ -1039,6 +1039,73 @@ def test_tick_uses_batched_claim_fetch_when_batch_size_exceeds_one() -> None:
     assert len(worker.verify_queue.enqueued) == 2
 
 
+def test_refresh_active_claims_renews_buffered_claims() -> None:
+    from crsbench.distributed.evaluator_claim_worker import EvaluatorClaimWorker
+
+    redis_conn = _FakeRedis()
+    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
+    request_ids: list[str] = []
+    for index in (1, 2):
+        patch_payload = PatchJobPayload(
+            experiment_name="exp1",
+            trial_id="trial-1",
+            benchmark="test-benchmark",
+            harness="h1",
+            cpv_id=f"cpv-{index}",
+            patch=EmbeddedPatch(
+                patch_id=f"patch-{index}",
+                pov_id=f"cpv-{index}",
+                patch_content_b64="cGF0Y2g=",
+            ),
+            sanitizer="address",
+            source_mode="main_repo",
+            verify_variants=True,
+            test_mode="FULL",
+            use_inc_build=True,
+            enqueued_at=100.0,
+        )
+        request_id = f"patch-verify:trial-1:test-benchmark:h1:cpv-{index}:patch-{index}"
+        request_ids.append(request_id)
+        store.submit_request(
+            VerifyRequestRecord(
+                request_id=request_id,
+                owner_key=f"trial::exp1::trial-{index}",
+                request_kind="patch",
+                payload=patch_payload.to_dict(),
+            )
+        )
+
+    worker = EvaluatorClaimWorker(
+        redis_conn=redis_conn,
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=_FakeQueue("build-q"),
+        verify_queue=_FakeQueue("verify-q"),
+        verification_engine=MagicMock(),
+        benchmarks_root=Path("/benchmarks"),
+        claim_lease_seconds=5,
+        max_inflight_requests=2,
+        claim_batch_size=2,
+    )
+
+    claimed = worker.dispatch_one(now=100.0)
+
+    assert claimed is not None
+    assert len(worker._claimed_request_buffer) == 1
+    buffered_before = store.load_request(request_ids[1])
+    assert buffered_before is not None
+    assert buffered_before.claim is not None
+    assert buffered_before.claim.expires_at == 105.0
+
+    worker.refresh_active_claims(now=103.0)
+
+    buffered_after = store.load_request(request_ids[1])
+    assert buffered_after is not None
+    assert buffered_after.claim is not None
+    assert buffered_after.claim.expires_at == 108.0
+    assert len(worker._claimed_request_buffer) == 1
+
+
 def test_enqueue_or_reuse_job_adopts_trial_owner_for_reused_warmup_job() -> None:
     from crsbench.distributed.evaluator_claim_worker import _enqueue_or_reuse_job
     from crsbench.distributed.evaluator_scheduler import SCHEDULER_OWNER_KEY_META

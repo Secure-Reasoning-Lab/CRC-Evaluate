@@ -282,6 +282,22 @@ class EvaluatorClaimWorker:
                 for request_id in completed:
                     self._active_claims.pop(request_id, None)
 
+        if self._claimed_request_buffer:
+            retained_buffer: deque[VerifyRequestRecord] = deque()
+            for claimed in self._claimed_request_buffer:
+                record = self.store.load_request(claimed.request_id)
+                if record is None or record.terminal_result is not None:
+                    continue
+                renewed = self.store.renew_claim(
+                    request_id=claimed.request_id,
+                    evaluator_id=self.evaluator_id,
+                    now=now,
+                    lease_seconds=self.claim_lease_seconds,
+                )
+                if renewed:
+                    retained_buffer.append(claimed)
+            self._claimed_request_buffer = retained_buffer
+
     def dispatch_one(self, *, now: float) -> VerifyRequestRecord | None:
         # `dispatch_one()` only runs on the claim-loop thread; cross-thread
         # coordination is limited to warmup reads of active/materializing state.

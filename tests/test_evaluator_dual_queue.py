@@ -335,6 +335,7 @@ class TestRunEvaluatorMain:
         monkeypatch,
     ) -> None:
         from crsbench.distributed.evaluator import run_evaluator_main
+        from crsbench.validation.schemas import CloudEvaluatorsConfig
 
         mock_supervisor.return_value = 0
         mock_create_redis_connection.return_value = MagicMock()
@@ -345,8 +346,16 @@ class TestRunEvaluatorMain:
         config.oss_fuzz_path = "/tmp/oss-fuzz"
         config.per_pov_verify_timeout = 180
         config.cloud = argparse.Namespace(
-            evaluators=argparse.Namespace(
-                placements=[argparse.Namespace(count=3)],
+            evaluators=CloudEvaluatorsConfig.model_validate(
+                {
+                    "placements": [
+                        {
+                            "count": 3,
+                            "zone": "us-east1-b",
+                            "instance_profile": "gce-evaluator",
+                        }
+                    ]
+                }
             ),
         )
 
@@ -386,6 +395,7 @@ class TestRunEvaluatorMain:
         monkeypatch,
     ) -> None:
         from crsbench.distributed.evaluator import run_evaluator_main
+        from crsbench.validation.schemas import CloudEvaluatorsConfig
 
         mock_supervisor.return_value = 0
         mock_create_redis_connection.return_value = MagicMock()
@@ -396,8 +406,16 @@ class TestRunEvaluatorMain:
         config.oss_fuzz_path = "/tmp/oss-fuzz"
         config.per_pov_verify_timeout = 180
         config.cloud = argparse.Namespace(
-            evaluators=argparse.Namespace(
-                placements=[argparse.Namespace(count=3)],
+            evaluators=CloudEvaluatorsConfig.model_validate(
+                {
+                    "placements": [
+                        {
+                            "count": 3,
+                            "zone": "us-east1-b",
+                            "instance_profile": "gce-evaluator",
+                        }
+                    ]
+                }
             ),
         )
 
