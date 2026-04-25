@@ -787,9 +787,11 @@ def _build_rich_group(
     page_index: int = 0,
     page_count: int = 1,
     paging_status_text: str | None = None,
+    auto_rotate_paused: bool = False,
 ):
     from rich.console import Group
     from rich.table import Table
+    from rich.text import Text
 
     visible_running_jobs = (
         snapshot.running_jobs if running_jobs is None else running_jobs
@@ -812,11 +814,19 @@ def _build_rich_group(
     running_table = Table(title="Running Jobs")
     if paging_active and total_running_jobs > len(visible_running_jobs):
         helper_text = paging_status_text or "auto-rotates automatically"
-        running_table.caption = (
+        caption = (
             f"Page {page_index + 1}/{page_count}: "
             f"showing {len(visible_running_jobs)} of {total_running_jobs} running jobs; "
             f"{helper_text}"
         )
+        if auto_rotate_paused:
+            running_table.caption = Text.assemble(
+                caption,
+                " ",
+                ("[PAUSED]", "bold red"),
+            )
+        else:
+            running_table.caption = caption
     running_table.add_column("Worker", style="green")
     running_table.add_column("CRS", style="cyan")
     running_table.add_column("Benchmark", style="yellow")
@@ -859,6 +869,7 @@ def _select_running_jobs_window(
     disk_skipped: int,
     page_index: int,
     paging_status_text: str | None = None,
+    auto_rotate_paused: bool = False,
 ) -> tuple[list[RunningJobInfo], bool, int, int]:
     running_jobs = snapshot.running_jobs
     total_running_jobs = len(running_jobs)
@@ -892,6 +903,7 @@ def _select_running_jobs_window(
             page_index=0,
             page_count=1,
             paging_status_text=paging_status_text,
+            auto_rotate_paused=auto_rotate_paused,
         )
         if _count_rendered_lines(console, candidate_group) <= console.size.height:
             best = candidate_count
@@ -954,6 +966,7 @@ def _build_rich_renderable(
     disk_skipped: int,
     page_index: int,
     paging_status_text: str,
+    auto_rotate_paused: bool = False,
 ):
     visible_running_jobs, paging_active, selected_page_index, page_count = (
         _select_running_jobs_window(
@@ -964,6 +977,7 @@ def _build_rich_renderable(
             disk_skipped=disk_skipped,
             page_index=page_index,
             paging_status_text=paging_status_text,
+            auto_rotate_paused=auto_rotate_paused,
         )
     )
     renderable = _build_rich_group(
@@ -977,6 +991,7 @@ def _build_rich_renderable(
         page_index=selected_page_index,
         page_count=page_count,
         paging_status_text=paging_status_text,
+        auto_rotate_paused=auto_rotate_paused,
     )
     return renderable, selected_page_index, page_count, paging_active
 
@@ -1020,6 +1035,7 @@ def _monitor_queue_rich(
             disk_skipped=disk_skipped,
             page_index=page_index,
             paging_status_text=monitor_input.manual_navigation_status,
+            auto_rotate_paused=auto_rotate_paused,
         )
         with Live(
             renderable,
@@ -1051,6 +1067,7 @@ def _monitor_queue_rich(
                     disk_skipped=disk_skipped,
                     page_index=page_index,
                     paging_status_text=monitor_input.manual_navigation_status,
+                    auto_rotate_paused=auto_rotate_paused,
                 )
                 live.update(renderable, refresh=refresh)
 

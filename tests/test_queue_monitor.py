@@ -591,6 +591,50 @@ def test_build_rich_group_caption_reports_hotkeys_unavailable_reason() -> None:
     assert "automatically" in output
 
 
+def test_build_rich_group_caption_marks_paused_state_in_red() -> None:
+    rich_text = pytest.importorskip("rich.text")
+    snapshot = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[
+            RunningJobInfo(
+                worker_name=f"worker-{idx}",
+                crs="crs-a",
+                benchmark="bench-a",
+                harness="harness-a",
+                target_cpv_id="cpv-1",
+                mode="delta",
+                trial_num=str(idx),
+                phase="running",
+                elapsed="1m0s",
+            )
+            for idx in range(6)
+        ],
+    )
+
+    renderable = _build_rich_group(
+        snapshot,
+        experiment_name="exp-1",
+        total_jobs=6,
+        disk_skipped=0,
+        running_jobs=snapshot.running_jobs[:4],
+        running_job_count=6,
+        paging_active=True,
+        page_index=1,
+        page_count=2,
+        paging_status_text="n/p active; Space resumes auto-rotate",
+        auto_rotate_paused=True,
+    )
+    running_table = renderable.renderables[1]
+    caption = running_table.caption
+
+    assert isinstance(caption, rich_text.Text)
+    assert caption.plain.endswith("[PAUSED]")
+    assert any(
+        caption.plain[span.start : span.end] == "[PAUSED]" and "red" in str(span.style)
+        for span in caption.spans
+    )
+
+
 def test_rich_monitor_input_reports_non_tty_unavailability_reason() -> None:
     stream = MagicMock()
     stream.isatty.return_value = False
@@ -1258,9 +1302,13 @@ def test_monitor_queue_rich_space_toggles_auto_rotate_pause_state() -> None:
             del args, kwargs
             running_table = renderable.renderables[1]
             caption = str(getattr(running_table, "caption", "") or "")
-            if "Space resumes auto-rotate" in caption:
+            if "Space resumes auto-rotate" in caption and "[PAUSED]" in caption:
                 paused_caption_seen.set()
-            if paused_caption_seen.is_set() and "Space pauses auto-rotate" in caption:
+            if (
+                paused_caption_seen.is_set()
+                and "Space pauses auto-rotate" in caption
+                and "[PAUSED]" not in caption
+            ):
                 resumed_caption_seen.set()
 
     class DummyInput:
