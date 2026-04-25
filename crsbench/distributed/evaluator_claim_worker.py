@@ -134,20 +134,14 @@ class EvaluatorClaimWorker:
         self.max_inflight_requests = max(1, int(max_inflight_requests))
         self._active_claims: dict[str, _ActiveClaim] = {}
         self._active_claims_lock = threading.Lock()
-        self._materializing_claim_count = 0
+
+    def _active_claim_snapshot(self) -> tuple[set[str], tuple[_ActiveClaim, ...]]:
+        with self._active_claims_lock:
+            return set(self._active_claims), tuple(self._active_claims.values())
 
     def _active_claims_items(self) -> tuple[tuple[str, _ActiveClaim], ...]:
         with self._active_claims_lock:
             return tuple(self._active_claims.items())
-
-    def _start_materializing_claim(self) -> None:
-        with self._active_claims_lock:
-            self._materializing_claim_count += 1
-
-    def _finish_materializing_claim(self) -> None:
-        with self._active_claims_lock:
-            if self._materializing_claim_count > 0:
-                self._materializing_claim_count -= 1
 
     def _register_active_claim(
         self,
@@ -159,13 +153,25 @@ class EvaluatorClaimWorker:
             if active is not None:
                 self._active_claims[request_id] = active
 
-    def has_pending_required_builds(self) -> bool:
-        with self._active_claims_lock:
-            # Once a logical request is claimed, materialization may still enqueue
-            # required local builds even before the claim becomes active.
-            if self._materializing_claim_count > 0:
+    def _has_claimed_request_pending_activation(
+        self, *, active_request_ids: set[str]
+    ) -> bool:
+        for record in self.store.list_requests():
+            if record.request_id in active_request_ids:
+                continue
+            claim = record.claim
+            if claim is None or record.terminal_result is not None:
+                continue
+            if claim.evaluator_id == self.evaluator_id:
                 return True
-            active_claims = tuple(self._active_claims.values())
+        return False
+
+    def has_pending_required_builds(self) -> bool:
+        active_request_ids, active_claims = self._active_claim_snapshot()
+        if self._has_claimed_request_pending_activation(
+            active_request_ids=active_request_ids
+        ):
+            return True
         for active in active_claims:
             for build_job_id in active.required_build_job_ids:
                 if not _is_job_terminal(self.build_queue.fetch_job(build_job_id)):
@@ -218,7 +224,6 @@ class EvaluatorClaimWorker:
         )
         if claimed is None:
             return None
-        self._start_materializing_claim()
         try:
             active = self._materialize_claimed_request(claimed)
         except Exception:
@@ -232,8 +237,6 @@ class EvaluatorClaimWorker:
                 released,
             )
             return None
-        finally:
-            self._finish_materializing_claim()
         self._register_active_claim(
             request_id=claimed.request_id,
             active=active,
