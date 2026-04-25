@@ -1348,3 +1348,84 @@ def test_enqueue_or_reuse_job_reuses_fresh_nonterminal_wrapper_after_duplicate_i
     assert reused is replacement_job
     assert queue._jobs[raced_job.id] is replacement_job
     assert queue.enqueued == []
+
+
+def test_enqueue_or_reuse_job_refreshes_terminal_verify_job_via_opaque_queue_removal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import crsbench.distributed.queue as queue_module
+    from crsbench.distributed.evaluator_claim_worker import _enqueue_or_reuse_job
+
+    class _OpaqueQueue:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self._jobs: dict[str, _FakeJob] = {}
+            self.enqueued: list[dict[str, object]] = []
+
+        def fetch_job(self, job_id: str) -> _FakeJob | None:
+            return self._jobs.get(job_id)
+
+        def enqueue(
+            self,
+            func_name: str,
+            payload: dict[str, object],
+            *,
+            job_timeout: int,
+            result_ttl: int,
+            job_id: str,
+            depends_on: list[object] | None = None,
+            meta: dict[str, object] | None = None,
+        ) -> _FakeJob:
+            job = _FakeJob(job_id)
+            self._jobs[job_id] = job
+            self.enqueued.append(
+                {
+                    "func_name": func_name,
+                    "payload": payload,
+                    "job_timeout": job_timeout,
+                    "result_ttl": result_ttl,
+                    "job_id": job_id,
+                    "depends_on": list(depends_on or []),
+                    "meta": dict(meta or {}),
+                }
+            )
+            return job
+
+    queue = _OpaqueQueue("verify-q")
+    terminal_job = _FakeJob(
+        "claim-verify/eval-1/request-opaque-refresh",
+        status="finished",
+    )
+    delete_calls: list[str] = []
+
+    def _delete() -> None:
+        delete_calls.append(terminal_job.id)
+
+    terminal_job.delete = _delete  # type: ignore[attr-defined]
+    queue._jobs[terminal_job.id] = terminal_job
+
+    removed_job_ids: list[str] = []
+
+    def remove_job(queue_obj: _OpaqueQueue, job_id: str) -> bool:
+        removed_job_ids.append(job_id)
+        queue_obj._jobs.pop(job_id, None)
+        return True
+
+    monkeypatch.setattr(queue_module, "remove_job_by_id", remove_job)
+
+    refreshed = _enqueue_or_reuse_job(
+        queue,
+        "crsbench.distributed.evaluator_claim_jobs.execute_claimed_verify",
+        {"request_id": "verify:trial-1:test-benchmark:h1:pov-opaque-refresh"},
+        job_timeout=3600,
+        job_id=terminal_job.id,
+        meta={"experiment_name": "exp1"},
+        refresh_terminal=True,
+    )
+
+    assert removed_job_ids == [terminal_job.id]
+    assert delete_calls == [terminal_job.id]
+    assert len(queue.enqueued) == 1
+    assert refreshed.id == terminal_job.id
+    assert refreshed is not terminal_job
+    assert refreshed.get_status() == "queued"
