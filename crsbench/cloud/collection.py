@@ -66,6 +66,8 @@ _REPORT_LOG_RSYNC_INCLUDES: tuple[str, ...] = (
     "output/logs/crs/**/*inc-builder-*.stdout.log",
 )
 _TRIAL_DIR_NAME_RE = re.compile(r"^trial-\d+$")
+_TRIAL_ROOT_MODES = frozenset({"delta", "full", "all"})
+_TRIAL_ROOT_SANITIZERS = frozenset({"address", "memory", "undefined"})
 _TRIAL_ROOT_SENTINEL_FILENAMES = frozenset(
     {"metadata.json", "worker.log", ".success", ".fail"}
 )
@@ -113,6 +115,69 @@ def _is_trial_root_name(name: str) -> bool:
     return _TRIAL_DIR_NAME_RE.fullmatch(name) is not None
 
 
+def _trial_relpath_matches_layout(relpath: PurePosixPath) -> bool:
+    """Return whether one relative path matches the canonical trial layout."""
+    parts = relpath.parts
+    if len(parts) == 6:
+        mode_index = 3
+        sanitizer_index = 4
+    elif len(parts) == 7:
+        mode_index = 4
+        sanitizer_index = 5
+    else:
+        return False
+    return (
+        _is_trial_root_name(parts[-1])
+        and parts[mode_index] in _TRIAL_ROOT_MODES
+        and parts[sanitizer_index] in _TRIAL_ROOT_SANITIZERS
+    )
+
+
+def _load_trial_root_identity(path: Path) -> tuple[str, str, str, str] | None:
+    """Return trial metadata fields needed to validate one canonical trial path."""
+    metadata_path = path / "metadata.json"
+    if not metadata_path.is_file():
+        return None
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    crs = payload.get("crs")
+    benchmark = payload.get("benchmark")
+    harness = payload.get("harness")
+    trial_num = payload.get("trial_num")
+    if (
+        not isinstance(crs, str)
+        or not crs
+        or not isinstance(benchmark, str)
+        or not benchmark
+        or not isinstance(harness, str)
+        or not harness
+        or isinstance(trial_num, bool)
+    ):
+        return None
+    try:
+        trial_name = f"trial-{int(trial_num)}"
+    except (TypeError, ValueError):
+        return None
+    return crs, benchmark, harness, trial_name
+
+
+def _trial_relpath_matches_metadata(
+    relpath: PurePosixPath,
+    *,
+    trial_identity: tuple[str, str, str, str],
+) -> bool:
+    """Return whether one relative path agrees with metadata-derived identity."""
+    crs, benchmark, harness, trial_name = trial_identity
+    parts = relpath.parts
+    return (
+        parts[-1] == trial_name
+        and len(parts) in {6, 7}
+        and parts[:3] == (crs, benchmark, harness)
+    )
+
+
 def _has_trial_root_sentinel(path: Path) -> bool:
     """Return whether one directory contains files that identify a real trial root."""
     return any(
@@ -120,23 +185,35 @@ def _has_trial_root_sentinel(path: Path) -> bool:
     )
 
 
-def _is_trial_root_dir(path: Path) -> bool:
+def _is_trial_root_dir(path: Path, *, root: Path) -> bool:
     """Return whether one directory is a real trial root rather than payload content."""
-    return (
-        path.is_dir()
-        and _is_trial_root_name(path.name)
-        and _has_trial_root_sentinel(path)
-    )
+    if not path.is_dir() or not _has_trial_root_sentinel(path):
+        return False
+    try:
+        relpath = PurePosixPath(path.relative_to(root).as_posix())
+    except ValueError:
+        return False
+    if not _trial_relpath_matches_layout(relpath):
+        return False
+    trial_identity = _load_trial_root_identity(path)
+    if trial_identity is None:
+        return True
+    return _trial_relpath_matches_metadata(relpath, trial_identity=trial_identity)
 
 
 def _iter_trial_dirs(root: Path) -> Iterator[Path]:
     """Yield real trial roots under ``root`` and prune descent once one is found."""
-    if _is_trial_root_dir(root):
-        yield root
+    yield from _iter_trial_dirs_under(root, root=root)
+
+
+def _iter_trial_dirs_under(path: Path, *, root: Path) -> Iterator[Path]:
+    """Yield real trial roots while carrying the experiment-root context."""
+    if _is_trial_root_dir(path, root=root):
+        yield path
         return
 
     try:
-        iterator = os.scandir(root)
+        iterator = os.scandir(path)
     except OSError:
         return
 
@@ -152,10 +229,7 @@ def _iter_trial_dirs(root: Path) -> Iterator[Path]:
             child_dirs.append(Path(entry.path))
 
     for child_dir in sorted(child_dirs):
-        if _is_trial_root_dir(child_dir):
-            yield child_dir
-            continue
-        yield from _iter_trial_dirs(child_dir)
+        yield from _iter_trial_dirs_under(child_dir, root=root)
 
 
 _TRIAL_ROOT_DISCOVERY_SCRIPT = r"""
@@ -167,15 +241,80 @@ import sys
 
 
 TRIAL_DIR_RE = re.compile(r"^trial-\d+$")
+TRIAL_ROOT_MODES = {"delta", "full", "all"}
+TRIAL_ROOT_SANITIZERS = {"address", "memory", "undefined"}
 TRIAL_ROOT_SENTINELS = {"metadata.json", "worker.log", ".success", ".fail"}
+
+
+def _matches_layout(rel_parts: tuple[str, ...]) -> bool:
+    if len(rel_parts) == 6:
+        mode_index = 3
+        sanitizer_index = 4
+    elif len(rel_parts) == 7:
+        mode_index = 4
+        sanitizer_index = 5
+    else:
+        return False
+    return (
+        TRIAL_DIR_RE.fullmatch(rel_parts[-1])
+        and rel_parts[mode_index] in TRIAL_ROOT_MODES
+        and rel_parts[sanitizer_index] in TRIAL_ROOT_SANITIZERS
+    )
 
 
 def _has_sentinel(path: pathlib.Path) -> bool:
     return any((path / sentinel).exists() for sentinel in TRIAL_ROOT_SENTINELS)
 
 
-def _is_trial_root(path: pathlib.Path) -> bool:
-    return path.is_dir() and TRIAL_DIR_RE.fullmatch(path.name) and _has_sentinel(path)
+def _load_trial_identity(path: pathlib.Path) -> tuple[str, str, str, str] | None:
+    metadata_path = path / "metadata.json"
+    if not metadata_path.is_file():
+        return None
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    crs = payload.get("crs")
+    benchmark = payload.get("benchmark")
+    harness = payload.get("harness")
+    trial_num = payload.get("trial_num")
+    if (
+        not isinstance(crs, str)
+        or not crs
+        or not isinstance(benchmark, str)
+        or not benchmark
+        or not isinstance(harness, str)
+        or not harness
+        or isinstance(trial_num, bool)
+    ):
+        return None
+    try:
+        trial_name = f"trial-{int(trial_num)}"
+    except (TypeError, ValueError):
+        return None
+    return crs, benchmark, harness, trial_name
+
+
+def _matches_metadata(
+    rel_parts: tuple[str, ...],
+    *,
+    trial_identity: tuple[str, str, str, str],
+) -> bool:
+    crs, benchmark, harness, trial_name = trial_identity
+    return (
+        rel_parts[-1] == trial_name
+        and len(rel_parts) in {6, 7}
+        and rel_parts[:3] == (crs, benchmark, harness)
+    )
+
+
+def _is_trial_root(path: pathlib.Path, rel_parts: tuple[str, ...]) -> bool:
+    if not path.is_dir() or not _has_sentinel(path) or not _matches_layout(rel_parts):
+        return False
+    trial_identity = _load_trial_identity(path)
+    if trial_identity is None:
+        return True
+    return _matches_metadata(rel_parts, trial_identity=trial_identity)
 
 
 def _scan(path: pathlib.Path, rel_parts: tuple[str, ...], out: list[str]) -> None:
@@ -197,7 +336,7 @@ def _scan(path: pathlib.Path, rel_parts: tuple[str, ...], out: list[str]) -> Non
     for name in sorted(child_dirs):
         child = path / name
         child_rel_parts = (*rel_parts, name)
-        if _is_trial_root(child):
+        if _is_trial_root(child, child_rel_parts):
             out.append("/".join(child_rel_parts))
             continue
         _scan(child, child_rel_parts, out)

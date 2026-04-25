@@ -876,6 +876,88 @@ class TestStagingAndPublish:
             == "preserve nested staged cache\n"
         )
 
+    def test_staging_and_publish_preserves_non_trial_payload_with_trial_markers(
+        self, tmp_path: Path
+    ) -> None:
+        """Non-trial payload trees must not be filtered just because they contain trial markers."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for staged-dir regression coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        _build_trial_tree(source_root, experiment_name="exp-42")
+        faux_trial = source_root / "exp-42" / "archives" / "trial-7"
+        faux_trial.mkdir(parents=True)
+        _write_trial_metadata(
+            faux_trial,
+            {
+                "timestamp": "2026-03-13T00:00:00Z",
+                "trial_num": 7,
+                "crs": "oss-crs",
+                "benchmark": "curl-delta-01",
+                "harness": "fuzz_http",
+                "mode": "bug_finding",
+                "source": {"path": "/src/curl", "commit": "abc123"},
+            },
+        )
+        (faux_trial / "worker.log").write_text(
+            "archived worker log\n", encoding="utf-8"
+        )
+        faux_staged_dir = faux_trial / "staged"
+        faux_staged_dir.mkdir(parents=True)
+        (faux_staged_dir / "cache.txt").write_text(
+            "preserve archived staged cache\n", encoding="utf-8"
+        )
+        faux_link = faux_trial / "cache-link.txt"
+        faux_link.symlink_to(Path("staged") / "cache.txt")
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        collected_faux_trial = final_path / "archives" / "trial-7"
+        assert (collected_faux_trial / "staged" / "cache.txt").read_text() == (
+            "preserve archived staged cache\n"
+        )
+        preserved_faux_link = collected_faux_trial / "cache-link.txt"
+        assert preserved_faux_link.is_symlink()
+        assert (
+            preserved_faux_link.resolve(strict=True).read_text()
+            == "preserve archived staged cache\n"
+        )
+
     def test_staging_and_publish_rehydrates_absolute_workdir_symlink(
         self, tmp_path: Path
     ) -> None:
