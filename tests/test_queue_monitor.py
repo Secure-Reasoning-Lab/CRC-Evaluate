@@ -27,18 +27,24 @@ from crsbench.distributed.queue_monitor import (
 )
 
 
-def _rich_footer_text(renderable) -> str:
-    if len(renderable.renderables) < 3:
-        return ""
-    footer = renderable.renderables[2]
-    parts: list[str] = []
-    for column in footer.columns:
-        cells = list(column.cells)
-        if not cells:
-            continue
-        cell = cells[0]
-        parts.append(getattr(cell, "plain", str(cell)))
-    return " ".join(part for part in parts if part).strip()
+def _render_rich_output(
+    renderable,
+    *,
+    width: int = 120,
+    height: int | None = None,
+    styles: bool = False,
+) -> str:
+    rich_console = pytest.importorskip("rich.console")
+    console_kwargs = {
+        "width": width,
+        "force_terminal": True,
+        "record": True,
+    }
+    if height is not None:
+        console_kwargs["height"] = height
+    console = rich_console.Console(**console_kwargs)
+    console.print(renderable)
+    return console.export_text(styles=styles)
 
 
 def _rich_footer_badge(renderable):
@@ -586,7 +592,6 @@ def test_select_running_jobs_window_shows_all_rows_when_terminal_can_fit_them() 
 
 
 def test_build_rich_group_footer_shows_page_indicator_and_key_help() -> None:
-    rich_console = pytest.importorskip("rich.console")
     snapshot = QueueMonitorSnapshot(
         stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
         running_jobs=[
@@ -617,20 +622,14 @@ def test_build_rich_group_footer_shows_page_indicator_and_key_help() -> None:
         page_count=2,
         paging_status_text="n/p active; auto-rotates when idle",
     )
-    console = rich_console.Console(width=120, force_terminal=True, record=True)
-    console.print(renderable)
-
     running_table = renderable.renderables[1]
-    output = console.export_text()
+    output = _render_rich_output(renderable, width=120)
     assert running_table.caption is None
-    assert "Page 2/2: showing 4 of 6 running jobs;" in _rich_footer_text(renderable)
-    assert "n/p active; auto-rotates when idle" in _rich_footer_text(renderable)
     assert "Page 2/2: showing 4 of 6 running jobs;" in output
     assert "n/p active; auto-rotates when idle" in output
 
 
 def test_build_rich_group_footer_reports_hotkeys_unavailable_reason() -> None:
-    rich_console = pytest.importorskip("rich.console")
     snapshot = QueueMonitorSnapshot(
         stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
         running_jobs=[
@@ -661,14 +660,9 @@ def test_build_rich_group_footer_reports_hotkeys_unavailable_reason() -> None:
         page_count=2,
         paging_status_text="n/p unavailable: stdin not TTY; auto-rotates automatically",
     )
-    console = rich_console.Console(width=120, force_terminal=True, record=True)
-    console.print(renderable)
-
     running_table = renderable.renderables[1]
-    output = console.export_text()
+    output = _render_rich_output(renderable, width=120)
     assert running_table.caption is None
-    assert "Page 1/2: showing 4 of 6 running jobs;" in _rich_footer_text(renderable)
-    assert "n/p unavailable: stdin not TTY;" in _rich_footer_text(renderable)
     assert "Page 1/2: showing 4 of 6 running jobs;" in output
     assert "n/p unavailable: stdin not TTY;" in output
     assert "auto-rotates" in output
@@ -710,9 +704,10 @@ def test_build_rich_group_footer_marks_paused_state_in_red() -> None:
     )
     running_table = renderable.renderables[1]
     badge = _rich_footer_badge(renderable)
+    output = _render_rich_output(renderable, width=120)
 
     assert running_table.caption is None
-    assert "[PAUSED]" in _rich_footer_text(renderable)
+    assert "[PAUSED]" in output
     assert isinstance(badge, rich_text.Text)
     assert badge.plain.strip() == "[PAUSED]"
     assert "red" in str(badge.style)
@@ -1334,13 +1329,10 @@ def test_monitor_queue_rich_applies_manual_page_navigation_immediately() -> None
     assert refresh_flags
     assert refresh_flags[0] is True
     running_table = rendered_updates[1].renderables[1]
+    output = _render_rich_output(rendered_updates[1], width=120, height=20)
     assert running_table.caption is None
-    assert "Page 2/2: showing 2 of 6 running jobs;" in _rich_footer_text(
-        rendered_updates[1]
-    )
-    assert "n/p active; Space pauses auto-rotate" in _rich_footer_text(
-        rendered_updates[1]
-    )
+    assert "Page 2/2: showing 2 of 6 running jobs;" in output
+    assert "n/p active; Space pauses auto-rotate" in output
     assert list(running_table.columns[0].cells) == ["worker-4", "worker-5"]
     assert list(running_table.columns[6].cells) == ["4", "5"]
     assert list(running_table.columns[7].cells) == ["running", "running"]
@@ -1388,7 +1380,7 @@ def test_monitor_queue_rich_space_toggles_auto_rotate_pause_state() -> None:
 
         def update(self, renderable, *args, **kwargs):
             del args, kwargs
-            footer_text = _rich_footer_text(renderable)
+            footer_text = _render_rich_output(renderable, width=120, height=20)
             if "Space resumes auto-rotate" in footer_text and "[PAUSED]" in footer_text:
                 paused_caption_seen.set()
             if (
@@ -1511,7 +1503,7 @@ def test_monitor_queue_rich_auto_rotates_while_snapshots_refresh() -> None:
 
         def update(self, renderable, *args, **kwargs):
             del args, kwargs
-            if "Page 2/2:" in _rich_footer_text(renderable):
+            if "Page 2/2:" in _render_rich_output(renderable, width=120, height=20):
                 page_two_seen.set()
 
     class DummyInput:
@@ -1619,7 +1611,7 @@ def test_monitor_queue_rich_keeps_manual_navigation_responsive_during_refresh() 
 
         def update(self, renderable, *args, **kwargs):
             del args, kwargs
-            if "Page 2/2:" in _rich_footer_text(renderable):
+            if "Page 2/2:" in _render_rich_output(renderable, width=120, height=20):
                 page_two_seen.set()
 
     class DummyInput:
