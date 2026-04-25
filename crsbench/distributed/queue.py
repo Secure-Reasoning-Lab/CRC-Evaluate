@@ -638,6 +638,7 @@ def get_existing_trial_jobs(
         "started": [],
         "deferred": [],
         "scheduled": [],
+        "canceled": [],
         "finished": [],
         "failed": [],
     }
@@ -669,6 +670,15 @@ def get_existing_trial_jobs(
                         result["scheduled"].append(job)
                 except Exception as e:
                     logger.warning(f"Failed to fetch scheduled job {job_id}: {e}")
+
+        if hasattr(queue, "canceled_job_registry"):
+            for job_id in queue.canceled_job_registry.get_job_ids():
+                try:
+                    job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
+                    if job and is_job_for_experiment(job, experiment_name):
+                        result["canceled"].append(job)
+                except Exception as e:
+                    logger.warning(f"Failed to fetch canceled job {job_id}: {e}")
 
         return result
     except Exception as e:
@@ -705,6 +715,7 @@ def get_existing_trials(
         "started": {},
         "deferred": {},
         "scheduled": {},
+        "canceled": {},
         "finished": {},
         "failed": {},
     }

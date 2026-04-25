@@ -671,6 +671,10 @@ def test_get_existing_trial_jobs_filters_to_requested_experiment(monkeypatch) ->
         "started-test",
         "started-other",
     ]
+    queue.canceled_job_registry.get_job_ids.return_value = [
+        "canceled-test",
+        "canceled-other",
+    ]
     queue.finished_job_registry.get_job_ids.return_value = []
     queue.failed_job_registry.get_job_ids.return_value = []
     queue.deferred_job_registry.get_job_ids.return_value = []
@@ -693,11 +697,21 @@ def test_get_existing_trial_jobs_filters_to_requested_experiment(monkeypatch) ->
     started_other.id = "started-other"
     started_other.meta = {"experiment_name": "exp-other"}
 
+    canceled_test = MagicMock()
+    canceled_test.id = "canceled-test"
+    canceled_test.meta = {"experiment_name": "exp-test"}
+
+    canceled_other = MagicMock()
+    canceled_other.id = "canceled-other"
+    canceled_other.meta = {"experiment_name": "exp-other"}
+
     jobs_by_id = {
         "queued-test": queued_test,
         "queued-other": queued_other,
         "started-test": started_test,
         "started-other": started_other,
+        "canceled-test": canceled_test,
+        "canceled-other": canceled_other,
     }
 
     monkeypatch.setattr(queue_module, "REDIS_AVAILABLE", True)
@@ -714,6 +728,7 @@ def test_get_existing_trial_jobs_filters_to_requested_experiment(monkeypatch) ->
 
     assert existing["queued"] == [queued_test]
     assert existing["started"] == [started_test]
+    assert existing["canceled"] == [canceled_test]
     assert existing["failed"] == []
     assert existing["finished"] == []
 
