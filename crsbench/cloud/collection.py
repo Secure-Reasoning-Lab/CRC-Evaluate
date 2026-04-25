@@ -190,33 +190,89 @@ def _is_trial_root_dir(path: Path, *, root: Path) -> bool:
     if not _trial_relpath_matches_layout(relpath):
         return False
     trial_identity = _load_trial_root_identity(path)
-    if trial_identity is not None and _trial_relpath_matches_metadata(
+    return trial_identity is not None and _trial_relpath_matches_metadata(
         relpath, trial_identity=trial_identity
-    ):
-        return True
-
-    # Local staging/publish backstop: if a canonical path still has the worker's
-    # metadata file and trial log, treat it as a real trial root even when the
-    # metadata payload is unreadable or stale. This lets collect() replace the
-    # final trial dir and drop staged/ without broadening remote discovery.
-    metadata_path = path / "metadata.json"
-    worker_log_path = path / "worker.log"
-    return metadata_path.is_file() and (
-        worker_log_path.exists() or worker_log_path.is_symlink()
     )
 
 
+def _trial_root_backstop_candidate(
+    path: Path, *, root: Path
+) -> tuple[PurePosixPath, tuple[str, str, str]] | None:
+    """Return one local fallback candidate for a corrupt-metadata trial root."""
+    if not path.is_dir():
+        return None
+    try:
+        relpath = PurePosixPath(path.relative_to(root).as_posix())
+    except ValueError:
+        return None
+    if not _trial_relpath_matches_layout(relpath) or _is_trial_root_dir(
+        path, root=root
+    ):
+        return None
+
+    metadata_path = path / "metadata.json"
+    worker_log_path = path / "worker.log"
+    if not metadata_path.is_file() or not (
+        worker_log_path.exists() or worker_log_path.is_symlink()
+    ):
+        return None
+
+    # Only trust corrupt-metadata fallback paths when another metadata-backed
+    # trial under the same logical CRS/benchmark/harness prefix proves that the
+    # prefix is a real trial namespace rather than archived payload content.
+    prefix = relpath.parts[:3]
+    return relpath, (prefix[0], prefix[1], prefix[2])
+
+
 def _iter_trial_dirs(root: Path) -> Iterator[Path]:
-    """Yield real trial roots under ``root`` and prune descent once one is found."""
-    yield from _iter_trial_dirs_under(root, root=root)
+    """Yield real trial roots under ``root`` with a local corrupt-metadata backstop."""
+    rooted_trial_dirs: list[tuple[PurePosixPath, Path]] = []
+    backstop_candidates: list[tuple[PurePosixPath, tuple[str, str, str], Path]] = []
 
+    if _is_trial_root_dir(root, root=root):
+        rooted_trial_dirs.append((PurePosixPath("."), root))
+    else:
+        candidate = _trial_root_backstop_candidate(root, root=root)
+        if candidate is not None:
+            relpath, prefix = candidate
+            backstop_candidates.append((relpath, prefix, root))
 
-def _iter_trial_dirs_under(path: Path, *, root: Path) -> Iterator[Path]:
-    """Yield real trial roots while carrying the experiment-root context."""
-    if _is_trial_root_dir(path, root=root):
+    for path in _iter_trial_dirs_under(root):
+        try:
+            relpath = PurePosixPath(path.relative_to(root).as_posix())
+        except ValueError:
+            continue
+        if _is_trial_root_dir(path, root=root):
+            rooted_trial_dirs.append((relpath, path))
+            continue
+        candidate = _trial_root_backstop_candidate(path, root=root)
+        if candidate is None:
+            continue
+        candidate_relpath, prefix = candidate
+        backstop_candidates.append((candidate_relpath, prefix, path))
+
+    metadata_backed_prefixes = {
+        (relpath.parts[0], relpath.parts[1], relpath.parts[2])
+        for relpath, _ in rooted_trial_dirs
+        if len(relpath.parts) >= 3
+    }
+
+    yielded: set[PurePosixPath] = set()
+    for relpath, path in sorted(rooted_trial_dirs):
+        if relpath in yielded:
+            continue
+        yielded.add(relpath)
         yield path
-        return
 
+    for relpath, prefix, path in sorted(backstop_candidates):
+        if prefix not in metadata_backed_prefixes or relpath in yielded:
+            continue
+        yielded.add(relpath)
+        yield path
+
+
+def _iter_trial_dirs_under(path: Path) -> Iterator[Path]:
+    """Yield every descendant directory under ``path`` in sorted order."""
     try:
         iterator = os.scandir(path)
     except OSError:
@@ -234,7 +290,8 @@ def _iter_trial_dirs_under(path: Path, *, root: Path) -> Iterator[Path]:
             child_dirs.append(Path(entry.path))
 
     for child_dir in sorted(child_dirs):
-        yield from _iter_trial_dirs_under(child_dir, root=root)
+        yield child_dir
+        yield from _iter_trial_dirs_under(child_dir)
 
 
 _TRIAL_ROOT_DISCOVERY_SCRIPT = r"""
