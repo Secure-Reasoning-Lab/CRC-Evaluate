@@ -134,6 +134,7 @@ class EvaluatorClaimWorker:
         self.max_inflight_requests = max(1, int(max_inflight_requests))
         self._active_claims: dict[str, _ActiveClaim] = {}
         self._active_claims_lock = threading.Lock()
+        self._warmup_enqueue_gate = threading.Lock()
 
     def _active_claim_snapshot(self) -> tuple[set[str], tuple[_ActiveClaim, ...]]:
         with self._active_claims_lock:
@@ -178,6 +179,25 @@ class EvaluatorClaimWorker:
                     return True
         return False
 
+    def enqueue_warmup_build_if_idle(
+        self,
+        *,
+        build_queue: Any,
+        spec: Any,
+    ) -> bool:
+        with self._warmup_enqueue_gate:
+            if self.has_pending_required_builds():
+                return False
+            build_queue.enqueue(
+                "crsbench.distributed.build_jobs.execute_ci_build",
+                spec.payload,
+                job_timeout=BUILD_JOB_TIMEOUT_SECONDS,
+                result_ttl=-1,
+                job_id=spec.job_id,
+                meta=dict(spec.meta),
+            )
+            return True
+
     def refresh_active_claims(self, *, now: float) -> None:
         completed: list[str] = []
         for request_id, active in self._active_claims_items():
@@ -217,11 +237,12 @@ class EvaluatorClaimWorker:
         # coordination is limited to warmup reads of active/materializing state.
         if len(self._active_claims) >= self.max_inflight_requests:
             return None
-        claimed = self.store.claim_next_request(
-            evaluator_id=self.evaluator_id,
-            now=now,
-            lease_seconds=self.claim_lease_seconds,
-        )
+        with self._warmup_enqueue_gate:
+            claimed = self.store.claim_next_request(
+                evaluator_id=self.evaluator_id,
+                now=now,
+                lease_seconds=self.claim_lease_seconds,
+            )
         if claimed is None:
             return None
         try:
