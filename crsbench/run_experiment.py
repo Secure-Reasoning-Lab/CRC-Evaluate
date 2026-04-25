@@ -2476,7 +2476,8 @@ def run_experiment_distributed(
             bucket_name: list(jobs_by_key.values())
             for bucket_name, jobs_by_key in existing.items()
         }
-    has_existing = any(physical_existing.values())
+    has_resume_existing = any(existing.values())
+    has_physical_existing = any(physical_existing.values())
     existing_tracked_jobs: List = []
     active_existing_jobs = _active_existing_jobs(physical_existing)
     from crsbench.distributed.registry import RuntimeRegistration
@@ -2500,11 +2501,11 @@ def run_experiment_distributed(
     should_run_artifact_cleanup = False
 
     normalized_queue_mode = queue_mode.lower() if queue_mode else None
-    if normalized_queue_mode == "continue" and has_existing:
+    if normalized_queue_mode == "continue" and has_resume_existing:
         existing_tracked_jobs = _flatten_existing_jobs(physical_existing)
 
     try:
-        if has_existing and normalized_queue_mode is None:
+        if has_resume_existing and normalized_queue_mode is None:
             if sys.stdin.isatty():
                 normalized_queue_mode = prompt_queue_mode(existing)
                 if normalized_queue_mode == "quit":
@@ -2521,7 +2522,7 @@ def run_experiment_distributed(
                     "using scoped queue mode: continue"
                 )
 
-        if has_existing and normalized_queue_mode == "quit":
+        if has_physical_existing and normalized_queue_mode == "quit":
             existing_tracked_jobs = _flatten_existing_jobs(physical_existing)
             logger.info("Aborted by queue-mode=quit")
             return
@@ -2533,7 +2534,7 @@ def run_experiment_distributed(
         # TODO: too later to purge queue; as the old jobs are already taken by workers
         # Handle queue based on mode
         if normalized_queue_mode == "fresh":
-            if has_existing:
+            if has_physical_existing:
                 try:
                     session.register_or_raise(registration)
                     lock_acquired = True
@@ -2655,7 +2656,7 @@ def run_experiment_distributed(
                     }
 
         # Filter trials if in continue mode
-        if normalized_queue_mode == "continue" and has_existing:
+        if normalized_queue_mode == "continue" and has_resume_existing:
             # Build set of existing trial keys
             existing_keys = set()
             for status_dict in existing.values():
