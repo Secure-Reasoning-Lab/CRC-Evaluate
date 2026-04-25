@@ -563,194 +563,7 @@ def test_has_pending_required_builds_tolerates_concurrent_active_claim_refresh()
     assert result == [False]
 
 
-def test_dispatch_one_reserves_inflight_slot_during_materialization() -> None:
-    from crsbench.distributed.evaluator_claim_worker import (
-        EvaluatorClaimWorker,
-        _ActiveClaim,
-    )
-
-    redis_conn = _FakeRedis()
-    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
-    for request_id in ("request-1", "request-2"):
-        store.submit_request(
-            VerifyRequestRecord(
-                request_id=request_id,
-                owner_key=f"trial::exp1::{request_id}",
-                request_kind="pov",
-                payload={"benchmark": "test-benchmark"},
-            )
-        )
-
-    worker = EvaluatorClaimWorker(
-        redis_conn=redis_conn,
-        experiment_name="exp1",
-        evaluator_id="eval-1",
-        build_queue=_FakeQueue("build-q"),
-        verify_queue=_FakeQueue("verify-q"),
-        verification_engine=MagicMock(),
-        benchmarks_root=Path("/benchmarks"),
-        max_inflight_requests=1,
-    )
-
-    materialize_started = threading.Event()
-    allow_materialize = threading.Event()
-    call_count = 0
-
-    def _materialize(record: VerifyRequestRecord) -> _ActiveClaim:
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            materialize_started.set()
-            assert allow_materialize.wait(timeout=5)
-        return _ActiveClaim(
-            local_verify_job_id=f"verify-{record.request_id}",
-            required_build_job_ids=(),
-        )
-
-    worker._materialize_claimed_request = _materialize  # type: ignore[method-assign]
-
-    results: list[VerifyRequestRecord | None] = []
-    errors: list[BaseException] = []
-
-    def _dispatch_first() -> None:
-        try:
-            results.append(worker.dispatch_one(now=100.0))
-        except BaseException as exc:  # pragma: no cover - assertion captures failure
-            errors.append(exc)
-
-    thread = threading.Thread(target=_dispatch_first)
-    thread.start()
-
-    assert materialize_started.wait(timeout=5)
-
-    second_claim = worker.dispatch_one(now=100.0)
-    allow_materialize.set()
-    thread.join(timeout=5)
-
-    assert not thread.is_alive()
-    assert errors == []
-    assert len(results) == 1
-    assert results[0] is not None
-    assert second_claim is None
-    second_record = store.load_request("request-2")
-    assert second_record is not None
-    assert second_record.claim is None
-
-
-def test_dispatch_slot_release_is_owned_by_dispatch_attempt() -> None:
-    from crsbench.distributed.evaluator_claim_worker import (
-        EvaluatorClaimWorker,
-        _ActiveClaim,
-    )
-
-    redis_conn = _FakeRedis()
-    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
-    for request_id in ("request-1", "request-2", "request-3"):
-        store.submit_request(
-            VerifyRequestRecord(
-                request_id=request_id,
-                owner_key=f"trial::exp1::{request_id}",
-                request_kind="pov",
-                payload={"benchmark": "test-benchmark"},
-            )
-        )
-
-    worker = EvaluatorClaimWorker(
-        redis_conn=redis_conn,
-        experiment_name="exp1",
-        evaluator_id="eval-1",
-        build_queue=_FakeQueue("build-q"),
-        verify_queue=_FakeQueue("verify-q"),
-        verification_engine=MagicMock(),
-        benchmarks_root=Path("/benchmarks"),
-        max_inflight_requests=2,
-    )
-
-    first_registered = threading.Event()
-    allow_first_return = threading.Event()
-    first_release_completed = threading.Event()
-    second_materialize_started = threading.Event()
-    allow_second_materialize = threading.Event()
-    materialize_call_count = 0
-
-    def _materialize(record: VerifyRequestRecord) -> _ActiveClaim:
-        nonlocal materialize_call_count
-        materialize_call_count += 1
-        if materialize_call_count == 2:
-            second_materialize_started.set()
-            assert allow_second_materialize.wait(timeout=5)
-        return _ActiveClaim(
-            local_verify_job_id=f"verify-{record.request_id}",
-            required_build_job_ids=(),
-        )
-
-    original_register = worker._register_active_claim
-    original_release = worker._release_dispatch_slot
-    register_call_count = 0
-    release_call_count = 0
-
-    def _register_active_claim(*args, **kwargs) -> None:
-        nonlocal register_call_count
-        register_call_count += 1
-        original_register(*args, **kwargs)
-        if register_call_count == 1:
-            first_registered.set()
-            assert allow_first_return.wait(timeout=5)
-
-    def _release_dispatch_slot(*args, **kwargs) -> None:
-        nonlocal release_call_count
-        release_call_count += 1
-        original_release(*args, **kwargs)
-        if release_call_count == 1:
-            first_release_completed.set()
-
-    worker._materialize_claimed_request = _materialize  # type: ignore[method-assign]
-    worker._register_active_claim = _register_active_claim  # type: ignore[method-assign]
-    worker._release_dispatch_slot = _release_dispatch_slot  # type: ignore[method-assign]
-
-    first_results: list[VerifyRequestRecord | None] = []
-    second_results: list[VerifyRequestRecord | None] = []
-    errors: list[BaseException] = []
-
-    def _dispatch_first() -> None:
-        try:
-            first_results.append(worker.dispatch_one(now=100.0))
-        except BaseException as exc:  # pragma: no cover - assertion captures failure
-            errors.append(exc)
-
-    def _dispatch_second() -> None:
-        try:
-            second_results.append(worker.dispatch_one(now=100.0))
-        except BaseException as exc:  # pragma: no cover - assertion captures failure
-            errors.append(exc)
-
-    first_thread = threading.Thread(target=_dispatch_first)
-    first_thread.start()
-    assert first_registered.wait(timeout=5)
-
-    second_thread = threading.Thread(target=_dispatch_second)
-    second_thread.start()
-    assert second_materialize_started.wait(timeout=5)
-
-    allow_first_return.set()
-    assert first_release_completed.wait(timeout=5)
-    third_claim = worker.dispatch_one(now=100.0)
-    allow_second_materialize.set()
-
-    first_thread.join(timeout=5)
-    second_thread.join(timeout=5)
-
-    assert not first_thread.is_alive()
-    assert not second_thread.is_alive()
-    assert errors == []
-    assert len(first_results) == 1
-    assert first_results[0] is not None
-    assert len(second_results) == 1
-    assert second_results[0] is not None
-    assert third_claim is None
-
-
-def test_has_pending_required_builds_returns_true_while_dispatch_slot_reserved() -> (
+def test_has_pending_required_builds_returns_true_while_claim_materialization_is_in_progress() -> (
     None
 ):
     from crsbench.distributed.evaluator_claim_worker import (
@@ -816,6 +629,54 @@ def test_has_pending_required_builds_returns_true_while_dispatch_slot_reserved()
     assert errors == []
     assert len(results) == 1
     assert results[0] is not None
+
+
+def test_has_pending_required_builds_stays_false_during_empty_claim_poll() -> None:
+    from crsbench.distributed.evaluator_claim_worker import EvaluatorClaimWorker
+
+    worker = EvaluatorClaimWorker(
+        redis_conn=_FakeRedis(),
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=_FakeQueue("build-q"),
+        verify_queue=_FakeQueue("verify-q"),
+        verification_engine=MagicMock(),
+        benchmarks_root=Path("/benchmarks"),
+        max_inflight_requests=1,
+    )
+
+    claim_started = threading.Event()
+    allow_claim = threading.Event()
+
+    def _claim_next_request(*, evaluator_id: str, now: float, lease_seconds: int):
+        del evaluator_id, now, lease_seconds
+        claim_started.set()
+        assert allow_claim.wait(timeout=5)
+
+    worker.store.claim_next_request = _claim_next_request  # type: ignore[method-assign]
+
+    results: list[VerifyRequestRecord | None] = []
+    errors: list[BaseException] = []
+
+    def _dispatch() -> None:
+        try:
+            results.append(worker.dispatch_one(now=100.0))
+        except BaseException as exc:  # pragma: no cover - assertion captures failure
+            errors.append(exc)
+
+    thread = threading.Thread(target=_dispatch)
+    thread.start()
+
+    assert claim_started.wait(timeout=5)
+    try:
+        assert worker.has_pending_required_builds() is False
+    finally:
+        allow_claim.set()
+        thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert errors == []
+    assert results == [None]
 
 
 def test_tick_claims_until_inflight_limit() -> None:

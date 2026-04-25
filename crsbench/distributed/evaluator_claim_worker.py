@@ -134,44 +134,36 @@ class EvaluatorClaimWorker:
         self.max_inflight_requests = max(1, int(max_inflight_requests))
         self._active_claims: dict[str, _ActiveClaim] = {}
         self._active_claims_lock = threading.Lock()
-        self._dispatch_slot_tokens: set[int] = set()
-        self._next_dispatch_slot_token = 0
+        self._materializing_claim_count = 0
 
     def _active_claims_items(self) -> tuple[tuple[str, _ActiveClaim], ...]:
         with self._active_claims_lock:
             return tuple(self._active_claims.items())
 
-    def _reserve_dispatch_slot(self) -> int | None:
+    def _start_materializing_claim(self) -> None:
         with self._active_claims_lock:
-            inflight = len(self._active_claims) + len(self._dispatch_slot_tokens)
-            if inflight >= self.max_inflight_requests:
-                return None
-            dispatch_slot_token = self._next_dispatch_slot_token
-            self._next_dispatch_slot_token += 1
-            self._dispatch_slot_tokens.add(dispatch_slot_token)
-            return dispatch_slot_token
+            self._materializing_claim_count += 1
 
-    def _release_dispatch_slot(self, dispatch_slot_token: int) -> None:
+    def _finish_materializing_claim(self) -> None:
         with self._active_claims_lock:
-            self._dispatch_slot_tokens.discard(dispatch_slot_token)
+            if self._materializing_claim_count > 0:
+                self._materializing_claim_count -= 1
 
     def _register_active_claim(
         self,
         *,
         request_id: str,
         active: _ActiveClaim | None,
-        dispatch_slot_token: int,
     ) -> None:
         with self._active_claims_lock:
             if active is not None:
                 self._active_claims[request_id] = active
-            self._dispatch_slot_tokens.discard(dispatch_slot_token)
 
     def has_pending_required_builds(self) -> bool:
         with self._active_claims_lock:
-            # A claimed request that is still materializing may enqueue required
-            # local builds, so warmup must treat reserved slots as pending demand.
-            if self._dispatch_slot_tokens:
+            # Once a logical request is claimed, materialization may still enqueue
+            # required local builds even before the claim becomes active.
+            if self._materializing_claim_count > 0:
                 return True
             active_claims = tuple(self._active_claims.values())
         for active in active_claims:
@@ -215,38 +207,38 @@ class EvaluatorClaimWorker:
                     self._active_claims.pop(request_id, None)
 
     def dispatch_one(self, *, now: float) -> VerifyRequestRecord | None:
-        dispatch_slot_token = self._reserve_dispatch_slot()
-        if dispatch_slot_token is None:
+        # `dispatch_one()` only runs on the claim-loop thread; cross-thread
+        # coordination is limited to warmup reads of active/materializing state.
+        if len(self._active_claims) >= self.max_inflight_requests:
             return None
+        claimed = self.store.claim_next_request(
+            evaluator_id=self.evaluator_id,
+            now=now,
+            lease_seconds=self.claim_lease_seconds,
+        )
+        if claimed is None:
+            return None
+        self._start_materializing_claim()
         try:
-            claimed = self.store.claim_next_request(
-                evaluator_id=self.evaluator_id,
-                now=now,
-                lease_seconds=self.claim_lease_seconds,
-            )
-            if claimed is None:
-                return None
-            try:
-                active = self._materialize_claimed_request(claimed)
-            except Exception:
-                released = self.store.release_claim_if_current(
-                    request_id=claimed.request_id,
-                    evaluator_id=self.evaluator_id,
-                )
-                logger.exception(
-                    "Failed to materialize claimed verify request {}; released_claim={}",
-                    claimed.request_id,
-                    released,
-                )
-                return None
-            self._register_active_claim(
+            active = self._materialize_claimed_request(claimed)
+        except Exception:
+            released = self.store.release_claim_if_current(
                 request_id=claimed.request_id,
-                active=active,
-                dispatch_slot_token=dispatch_slot_token,
+                evaluator_id=self.evaluator_id,
             )
-            return claimed
+            logger.exception(
+                "Failed to materialize claimed verify request {}; released_claim={}",
+                claimed.request_id,
+                released,
+            )
+            return None
         finally:
-            self._release_dispatch_slot(dispatch_slot_token)
+            self._finish_materializing_claim()
+        self._register_active_claim(
+            request_id=claimed.request_id,
+            active=active,
+        )
+        return claimed
 
     def dispatch_available(self, *, now: float) -> VerifyRequestRecord | None:
         """Claim as many logical requests as the local inflight limit allows."""
