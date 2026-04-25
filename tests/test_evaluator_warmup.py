@@ -207,6 +207,40 @@ def test_build_dispatcher_warmup_specs_plans_serialized_build_jobs(
     }
 
 
+@patch("crsbench.executor.variant_planner.VariantPlanner")
+def test_build_dispatcher_warmup_specs_skips_when_inc_build_disabled(
+    mock_planner_cls: MagicMock,
+    tmp_path: Path,
+) -> None:
+    benchmark_name = "afc-mock-full-01"
+    benchmark_path = tmp_path / benchmark_name
+    benchmark_path.mkdir(parents=True, exist_ok=True)
+    config = SimpleNamespace(
+        benchmarks_root=tmp_path,
+        mode=SimpleNamespace(value="auto"),
+        source_mode="pkgs",
+        inc_build_enabled=False,
+        get_benchmark_list=lambda: [benchmark_name],
+    )
+
+    specs = list(
+        build_dispatcher_warmup_specs(
+            config,
+            experiment_name="exp-test",
+            evaluator_id="eval-1",
+            oss_fuzz_path=tmp_path / "oss-fuzz",
+            inc_image_policy="pull_only",
+            inc_image_registry="ghcr.io/example/custom",
+            inc_image_max_pull_bytes=123,
+            inc_image_pull_timeout=77,
+            local_image_prefix="custom-prefix",
+        )
+    )
+
+    assert specs == []
+    mock_planner_cls.assert_not_called()
+
+
 @patch("crsbench.distributed.ci_jobs.serialize_ci_job")
 @patch("crsbench.executor.variant_planner.VariantPlanner")
 def test_build_dispatcher_warmup_specs_consumes_one_job_at_a_time_within_benchmark(

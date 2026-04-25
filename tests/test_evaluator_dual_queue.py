@@ -231,6 +231,50 @@ class TestRunEvaluatorMain:
     @patch("crsbench.distributed.evaluator.create_redis_connection")
     @patch("crsbench.distributed.evaluator.start_presence_thread")
     @patch("crsbench.distributed.evaluator_jobs.set_engine")
+    def test_dispatcher_mode_skips_warmup_when_inc_build_disabled(
+        self,
+        mock_set_engine: MagicMock,
+        mock_start_presence_thread: MagicMock,
+        mock_create_redis_connection: MagicMock,
+        mock_start_dispatcher_thread: MagicMock,
+        mock_start_dispatcher_warmup_thread: MagicMock,
+        mock_start_claim_thread: MagicMock,
+        mock_supervisor: MagicMock,
+        monkeypatch,
+    ) -> None:
+        from crsbench.distributed.evaluator import run_evaluator_main
+
+        mock_supervisor.return_value = 0
+        mock_create_redis_connection.return_value = MagicMock()
+        mock_start_claim_thread.return_value = (MagicMock(), MagicMock())
+        monkeypatch.setenv("CRSBENCH_EVALUATOR_ROUTING_MODEL", "dispatcher")
+        config = MagicMock()
+        config.oss_fuzz_path = "/tmp/oss-fuzz"
+        config.per_pov_verify_timeout = 180
+        config.inc_build_enabled = False
+
+        with patch("crsbench.evaluation.verification.pov.engine.VerificationEngine"):
+            result = run_evaluator_main(
+                config,
+                "exp-test",
+                worker_name="eval-1",
+                build_jobs=2,
+            )
+
+        assert result == 0
+        mock_start_claim_thread.assert_called_once()
+        mock_start_presence_thread.assert_not_called()
+        mock_start_dispatcher_thread.assert_not_called()
+        mock_start_dispatcher_warmup_thread.assert_not_called()
+
+    @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
+    @patch("crsbench.distributed.ci_supervisor.run_ci_supervisor")
+    @patch("crsbench.distributed.evaluator.start_claim_thread")
+    @patch("crsbench.distributed.evaluator.start_dispatcher_warmup_thread")
+    @patch("crsbench.distributed.evaluator.start_dispatcher_thread")
+    @patch("crsbench.distributed.evaluator.create_redis_connection")
+    @patch("crsbench.distributed.evaluator.start_presence_thread")
+    @patch("crsbench.distributed.evaluator_jobs.set_engine")
     def test_dispatcher_mode_scales_claim_inflight_with_local_capacity(
         self,
         mock_set_engine: MagicMock,

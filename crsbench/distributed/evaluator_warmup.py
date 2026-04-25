@@ -157,6 +157,9 @@ def build_dispatcher_warmup_specs(
     local_image_prefix: str,
 ) -> "Iterator[WarmupBuildSpec]":
     """Lazily yield warmup build specs as spare local capacity becomes available."""
+    if not getattr(config, "inc_build_enabled", True):
+        return
+
     from crsbench.distributed.ci_jobs import serialize_ci_job
     from crsbench.executor.variant_planner import VariantPlanner
 
