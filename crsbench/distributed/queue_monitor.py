@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import queue as queue_module
 import sys
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -21,6 +23,9 @@ if TYPE_CHECKING:
     from crsbench.distributed.registry import RegistryClient
 
 logger = get_logger(__name__)
+
+_RICH_MONITOR_INPUT_POLL_INTERVAL_SEC = 0.1
+_RICH_MONITOR_MIN_REFRESH_INTERVAL_SEC = 0.01
 
 
 def _rich_console_available() -> bool:
@@ -345,6 +350,93 @@ class _RichMonitorInput:
                     return self._pending_commands.popleft()
             if not self.manual_navigation_available:
                 return None
+
+
+def _rich_monitor_refresh_interval_sec(poll_interval: float) -> float:
+    return (
+        poll_interval if poll_interval > 0 else _RICH_MONITOR_MIN_REFRESH_INTERVAL_SEC
+    )
+
+
+def _rich_monitor_input_wait_sec(poll_interval: float) -> float:
+    return min(
+        _RICH_MONITOR_INPUT_POLL_INTERVAL_SEC,
+        _rich_monitor_refresh_interval_sec(poll_interval),
+    )
+
+
+def _rich_monitor_auto_rotate_interval_sec(poll_interval: float) -> float:
+    return max(_RICH_MONITOR_INPUT_POLL_INTERVAL_SEC, poll_interval)
+
+
+class _RichMonitorSnapshotPoller:
+    """Refresh snapshots off the UI thread so local key handling stays responsive."""
+
+    def __init__(
+        self,
+        queue,
+        experiment_name: str,
+        *,
+        registry: "RegistryClient | None",
+        poll_interval: float,
+    ) -> None:
+        self._queue = queue
+        self._experiment_name = experiment_name
+        self._registry = registry
+        self._refresh_interval_sec = _rich_monitor_refresh_interval_sec(poll_interval)
+        self._last_renew = time.monotonic()
+        self._updates: queue_module.Queue[QueueMonitorSnapshot | Exception] = (
+            queue_module.Queue(maxsize=1)
+        )
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="crsbench-rich-monitor-refresh",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def close(self) -> None:
+        self._stop_event.set()
+        self._thread.join()
+
+    def drain_latest(self) -> QueueMonitorSnapshot | None:
+        latest_snapshot: QueueMonitorSnapshot | None = None
+        while True:
+            try:
+                item = self._updates.get_nowait()
+            except queue_module.Empty:
+                break
+            if isinstance(item, Exception):
+                raise item
+            latest_snapshot = item
+        return latest_snapshot
+
+    def _publish(self, item: QueueMonitorSnapshot | Exception) -> None:
+        while True:
+            try:
+                self._updates.put_nowait(item)
+                return
+            except queue_module.Full:
+                try:
+                    self._updates.get_nowait()
+                except queue_module.Empty:
+                    continue
+
+    def _run(self) -> None:
+        try:
+            while not self._stop_event.wait(self._refresh_interval_sec):
+                self._last_renew = _renew_registry(
+                    self._registry,
+                    experiment_name=self._experiment_name,
+                    last_renew=self._last_renew,
+                )
+                snapshot = build_monitor_snapshot(self._queue, self._experiment_name)
+                self._publish(snapshot)
+        except Exception as exc:
+            self._publish(exc)
 
 
 def get_experiment_queue_stats(queue, experiment_name: str) -> dict[str, int]:
@@ -886,7 +978,6 @@ def _monitor_queue_rich(
     from rich.live import Live
 
     console = Console()
-    last_renew = time.monotonic()
     seen_finished: set[str] = set()
     seen_failed: set[str] = set()
     page_index = 0
@@ -915,70 +1006,14 @@ def _monitor_queue_rich(
             refresh_per_second=1,
             console=console,
         ) as live:
-            while True:
-                completed, failed = _process_tracked_jobs(
-                    tracked_jobs,
-                    callbacks=callbacks,
-                    seen_finished=seen_finished,
-                    seen_failed=seen_failed,
-                )
+            poller: _RichMonitorSnapshotPoller | None = None
+            input_wait_sec = _rich_monitor_input_wait_sec(poll_interval)
+            auto_rotate_interval_sec = _rich_monitor_auto_rotate_interval_sec(
+                poll_interval
+            )
 
-                if tracked_jobs and completed + failed >= len(tracked_jobs):
-                    break
-                if (
-                    exit_when_idle
-                    and not tracked_jobs
-                    and snapshot.stats["queued"] + snapshot.stats["started"] == 0
-                ):
-                    break
-
-                refresh_deadline = time.monotonic() + poll_interval
-                while True:
-                    remaining = refresh_deadline - time.monotonic()
-                    if remaining <= 0:
-                        break
-                    command = monitor_input.read_command(remaining)
-                    if command is None:
-                        break
-                    if not paging_active:
-                        continue
-                    page_index = _apply_page_navigation_command(
-                        command=command,
-                        page_index=page_index,
-                        page_count=page_count,
-                    )
-                    last_manual_page_change_at = time.monotonic()
-                    (
-                        renderable,
-                        page_index,
-                        page_count,
-                        paging_active,
-                    ) = _build_rich_renderable(
-                        console,
-                        snapshot,
-                        experiment_name=experiment_name,
-                        total_jobs=display_total,
-                        disk_skipped=disk_skipped,
-                        page_index=page_index,
-                        paging_status_text=monitor_input.manual_navigation_status,
-                    )
-                    live.update(renderable, refresh=True)
-
-                if paging_active and _should_auto_rotate_pages(
-                    last_manual_page_change_at=last_manual_page_change_at,
-                    now=time.monotonic(),
-                    poll_interval=poll_interval,
-                ):
-                    page_index = (page_index + 1) % page_count
-
-                last_renew = _renew_registry(
-                    registry,
-                    experiment_name=experiment_name,
-                    last_renew=last_renew,
-                )
-                snapshot = build_monitor_snapshot(queue, experiment_name)
-                _notify_snapshot(callbacks, snapshot)
-                display_total = _display_total(snapshot, total_jobs)
+            def _render_current_snapshot(*, refresh: bool) -> None:
+                nonlocal renderable, page_index, page_count, paging_active
                 (
                     renderable,
                     page_index,
@@ -993,4 +1028,76 @@ def _monitor_queue_rich(
                     page_index=page_index,
                     paging_status_text=monitor_input.manual_navigation_status,
                 )
-                live.update(renderable, refresh=True)
+                live.update(renderable, refresh=refresh)
+
+            next_auto_rotate_at = time.monotonic() + auto_rotate_interval_sec
+            try:
+                while True:
+                    if poller is not None:
+                        latest_snapshot = poller.drain_latest()
+                        if latest_snapshot is not None:
+                            snapshot = latest_snapshot
+                            _notify_snapshot(callbacks, snapshot)
+                            display_total = _display_total(snapshot, total_jobs)
+                            next_auto_rotate_at = (
+                                time.monotonic() + auto_rotate_interval_sec
+                            )
+                            _render_current_snapshot(refresh=True)
+
+                    completed, failed = _process_tracked_jobs(
+                        tracked_jobs,
+                        callbacks=callbacks,
+                        seen_finished=seen_finished,
+                        seen_failed=seen_failed,
+                    )
+
+                    if tracked_jobs and completed + failed >= len(tracked_jobs):
+                        break
+                    if (
+                        exit_when_idle
+                        and not tracked_jobs
+                        and snapshot.stats["queued"] + snapshot.stats["started"] == 0
+                    ):
+                        break
+
+                    if poller is None:
+                        poller = _RichMonitorSnapshotPoller(
+                            queue,
+                            experiment_name,
+                            registry=registry,
+                            poll_interval=poll_interval,
+                        )
+                        poller.start()
+
+                    now = time.monotonic()
+                    if (
+                        paging_active
+                        and now >= next_auto_rotate_at
+                        and _should_auto_rotate_pages(
+                            last_manual_page_change_at=last_manual_page_change_at,
+                            now=now,
+                            poll_interval=poll_interval,
+                        )
+                    ):
+                        page_index = (page_index + 1) % page_count
+                        next_auto_rotate_at = now + auto_rotate_interval_sec
+                        _render_current_snapshot(refresh=True)
+
+                    command = monitor_input.read_command(input_wait_sec)
+                    if command is None:
+                        continue
+                    if not paging_active:
+                        continue
+                    page_index = _apply_page_navigation_command(
+                        command=command,
+                        page_index=page_index,
+                        page_count=page_count,
+                    )
+                    last_manual_page_change_at = time.monotonic()
+                    next_auto_rotate_at = (
+                        last_manual_page_change_at + auto_rotate_interval_sec
+                    )
+                    _render_current_snapshot(refresh=True)
+            finally:
+                if poller is not None:
+                    poller.close()
