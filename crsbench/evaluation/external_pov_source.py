@@ -47,15 +47,24 @@ class POVRecord:
 
 
 class ExternalPovSource:
-    """Read POVs from a prior bug-finding experiment directory."""
+    """Read POVs from a single trial of a prior bug-finding experiment.
+
+    Each ``ExternalPovSource`` is bound to exactly one finding ``trial_num``:
+    ``list_found_cpvs`` and ``get_pov_blobs`` only see POVs that finding
+    ``trial-<trial_num>`` produced. This enforces 1:1 trial pairing so a
+    fixing trial-N replays only what finding trial-N discovered, with no
+    cross-trial pooling or merging.
+    """
 
     def __init__(
         self,
         experiment_path: Path,
         *,
+        trial_num: int,
         dedup_top_n: int = DEFAULT_DEDUP_TOP_N,
     ):
         self.experiment_path = Path(experiment_path)
+        self.trial_num = trial_num
         self.dedup_top_n = dedup_top_n
 
         if not self.experiment_path.is_dir():
@@ -63,9 +72,11 @@ class ExternalPovSource:
                 f"inputs.pov.from_experiment path does not exist or is not a "
                 f"directory: {self.experiment_path}"
             )
+        if trial_num < 1:
+            raise ValueError(f"trial_num must be >= 1, got {trial_num}")
 
     def list_found_cpvs(self, benchmark: str, harness: str, sanitizer: str) -> set[str]:
-        """Return CPVs discovered across all trials for the given tuple."""
+        """Return CPVs discovered by finding trial-``trial_num`` only."""
         found: set[str] = set()
         for store_dir in self._iter_pov_stores(benchmark, harness, sanitizer):
             data = _read_pov_store_json(store_dir)
@@ -81,9 +92,11 @@ class ExternalPovSource:
         sanitizer: str,
         cpv_id: str,
     ) -> list[POVRecord]:
-        """Return deduplicated POV records for the given CPV, earliest first.
+        """Return deduplicated POV records discovered by finding
+        trial-``trial_num`` for the given CPV, earliest first.
 
-        Dedup mirrors ``crsbench benchmark dedup-povs``:
+        Dedup is applied within the single trial only (no cross-trial
+        merging):
         - Prefer ``POVEntry.crash_signature`` recorded by bug-finding.
         - Fall back to parsing the POV's crash log with ``parse_crash_signature``.
         - POVs with no parseable signature are conservatively kept.
@@ -145,19 +158,28 @@ class ExternalPovSource:
     def _iter_pov_stores(
         self, benchmark: str, harness: str, sanitizer: str
     ) -> list[Path]:
-        """Yield ``trial-*/povs`` directories across all modes."""
+        """Yield only ``trial-<trial_num>/povs`` across all modes.
+
+        A finding run usually has one mode per (benchmark, harness, sanitizer),
+        so this yields at most one store. Multi-mode finding runs (rare) get
+        each mode's trial-N treated equally — they share the same trial_num
+        identity by construction.
+        """
         base = self.experiment_path / benchmark / harness
         if not base.is_dir():
             return []
+        target = f"trial-{self.trial_num}"
         stores: list[Path] = []
         for mode_dir in sorted(p for p in base.iterdir() if p.is_dir()):
             sanitizer_dir = mode_dir / sanitizer
             if not sanitizer_dir.is_dir():
                 continue
-            for trial_dir in sorted(sanitizer_dir.glob("trial-*")):
-                store_dir = trial_dir / "povs"
-                if store_dir.is_dir():
-                    stores.append(store_dir)
+            trial_dir = sanitizer_dir / target
+            if not trial_dir.is_dir():
+                continue
+            store_dir = trial_dir / "povs"
+            if store_dir.is_dir():
+                stores.append(store_dir)
         return stores
 
     def _resolve_crash_signature(

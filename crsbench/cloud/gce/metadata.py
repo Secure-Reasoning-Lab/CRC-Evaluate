@@ -6,7 +6,7 @@ import base64
 import json
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import yaml
 
@@ -305,12 +305,40 @@ def _apply_startup_script_metadata(
 
 
 def _read_experiment_config_bytes(experiment_config_path: str | Path) -> bytes:
+    return _render_transported_config_bytes(experiment_config_path)
+
+
+def _render_transported_config_bytes(
+    experiment_config_path: str | Path,
+    *,
+    from_experiment_remote_path: str | None = None,
+    from_experiment_remote_by_crs: dict[str, str] | None = None,
+) -> bytes:
+    """Return the experiment config YAML as bytes, ready to be base64-encoded.
+
+    Transforms applied in order:
+    1. Strip local-only secret path references (``_strip_remote_only_secret_paths``).
+    2. When *from_experiment_remote_path* is set, rewrite
+       ``runtime.inputs.pov.from_experiment`` so the path resolves on the
+       remote VM instead of the operator's machine.
+    3. When *from_experiment_remote_by_crs* is set, rewrite each entry of
+       ``runtime.inputs.pov.from_experiment_by_crs`` to its remote equivalent.
+    """
     config_path = Path(experiment_config_path)
-    if config_path.is_file():
-        raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        sanitized_config = _strip_remote_only_secret_paths(raw_config)
-        return yaml.safe_dump(sanitized_config, sort_keys=False).encode("utf-8")
-    return str(experiment_config_path).encode("utf-8")
+    if not config_path.is_file():
+        return str(experiment_config_path).encode("utf-8")
+
+    raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    sanitized = _strip_remote_only_secret_paths(raw_config)
+    if from_experiment_remote_path is not None:
+        sanitized = _rewrite_from_experiment_path(
+            sanitized, from_experiment_remote_path
+        )
+    if from_experiment_remote_by_crs is not None:
+        sanitized = _rewrite_from_experiment_by_crs(
+            sanitized, from_experiment_remote_by_crs
+        )
+    return yaml.safe_dump(sanitized, sort_keys=False).encode("utf-8")
 
 
 def _strip_remote_only_secret_paths(value: object) -> object:
@@ -323,6 +351,55 @@ def _strip_remote_only_secret_paths(value: object) -> object:
         }
     if isinstance(value, list):
         return [_strip_remote_only_secret_paths(item) for item in value]
+    return value
+
+
+def _rewrite_from_experiment_path(value: Any, remote_path: str) -> Any:
+    """Overwrite ``runtime.inputs.pov.from_experiment`` with *remote_path*.
+
+    No-op when any of ``runtime`` / ``inputs`` / ``pov`` / ``from_experiment``
+    is missing; leaves unrelated fields untouched.
+    """
+    if not isinstance(value, dict):
+        return value
+    runtime = value.get("runtime")
+    if not isinstance(runtime, dict):
+        return value
+    inputs = runtime.get("inputs")
+    if not isinstance(inputs, dict):
+        return value
+    pov = inputs.get("pov")
+    if not isinstance(pov, dict) or "from_experiment" not in pov:
+        return value
+    pov["from_experiment"] = remote_path
+    return value
+
+
+def _rewrite_from_experiment_by_crs(value: Any, remote_by_crs: dict[str, str]) -> Any:
+    """Overwrite each entry of ``runtime.inputs.pov.from_experiment_by_crs``.
+
+    No-op when the field is missing. Unknown CRS keys (present in the config
+    but absent from *remote_by_crs*) are dropped so that workers never see a
+    stale operator-local path — trial-matrix generation skips those CRSes
+    anyway.
+    """
+    if not isinstance(value, dict):
+        return value
+    runtime = value.get("runtime")
+    if not isinstance(runtime, dict):
+        return value
+    inputs = runtime.get("inputs")
+    if not isinstance(inputs, dict):
+        return value
+    pov = inputs.get("pov")
+    if not isinstance(pov, dict):
+        return value
+    existing = pov.get("from_experiment_by_crs")
+    if not isinstance(existing, dict):
+        return value
+    pov["from_experiment_by_crs"] = {
+        crs: remote_by_crs[crs] for crs in existing if crs in remote_by_crs
+    }
     return value
 
 
@@ -395,8 +472,17 @@ def build_evaluator_metadata(
     env_passthrough: dict[str, str] | None = None,
     download_delay_sec: int | None = None,
     startup_script: str,
+    from_experiment_remote_path: str | None = None,
+    from_experiment_remote_by_crs: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    """Render metadata consumed by the GCE evaluator bootstrap."""
+    """Render metadata consumed by the GCE evaluator bootstrap.
+
+    *from_experiment_remote_path* and *from_experiment_remote_by_crs* are
+    threaded through for config parity with the orchestrator; the evaluator
+    itself does not read ``inputs.pov.from_experiment*`` so the actual POV
+    bundle is not pushed here. Keeping the paths consistent across all
+    transported configs avoids orchestrator/evaluator config drift.
+    """
     metadata = dict(fleet.metadata)
     metadata[CRSBENCH_BOOTSTRAP_PAYLOAD_KEY] = encode_bootstrap_payload(
         build_evaluator_bootstrap_payload(
@@ -415,7 +501,11 @@ def build_evaluator_metadata(
     if download_delay_sec is not None:
         metadata[CRSBENCH_DOWNLOAD_DELAY_SEC_KEY] = str(download_delay_sec)
     metadata[CRSBENCH_EXPERIMENT_CONFIG_B64_KEY] = base64.b64encode(
-        _read_experiment_config_bytes(experiment_config_path)
+        _render_transported_config_bytes(
+            experiment_config_path,
+            from_experiment_remote_path=from_experiment_remote_path,
+            from_experiment_remote_by_crs=from_experiment_remote_by_crs,
+        )
     ).decode("ascii")
     if redis_password:
         metadata[CRSBENCH_REDIS_PASSWORD_KEY] = redis_password
@@ -443,6 +533,8 @@ def build_orchestrator_metadata(
     download_delay_sec: int | None = None,
     redis_password: str,
     startup_script: str,
+    from_experiment_remote_path: str | None = None,
+    from_experiment_remote_by_crs: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Render metadata consumed by the GCE orchestrator bootstrap."""
     metadata = dict(orchestrator.metadata)
@@ -451,7 +543,11 @@ def build_orchestrator_metadata(
     if download_delay_sec is not None:
         metadata[CRSBENCH_DOWNLOAD_DELAY_SEC_KEY] = str(download_delay_sec)
     metadata[CRSBENCH_EXPERIMENT_CONFIG_B64_KEY] = base64.b64encode(
-        _read_experiment_config_bytes(experiment_config_path)
+        _render_transported_config_bytes(
+            experiment_config_path,
+            from_experiment_remote_path=from_experiment_remote_path,
+            from_experiment_remote_by_crs=from_experiment_remote_by_crs,
+        )
     ).decode("ascii")
 
     _apply_access_metadata(metadata=metadata, config=orchestrator)

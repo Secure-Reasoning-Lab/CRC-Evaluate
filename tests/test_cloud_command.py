@@ -5066,6 +5066,8 @@ class TestLaunch:
             experiment_config_path="/tmp/config.yaml",
             redis_password="shared-secret",
             env_passthrough={},
+            from_experiment_remote_path=None,
+            from_experiment_remote_by_crs=None,
         )
         mock_adapter.create_workers.assert_called_once()
         assert mock_adapter.create_workers.call_args.kwargs["plan"] is resolved_plan

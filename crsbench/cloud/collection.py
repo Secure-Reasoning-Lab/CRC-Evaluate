@@ -21,6 +21,8 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -31,6 +33,7 @@ import tenacity
 
 from crsbench.cloud.launch_state import cloud_state_dir, remote_logs_dir
 from crsbench.cloud.orchestrator_tunnel import allocate_local_port, wait_for_local_port
+from crsbench.cloud.ssh_broker import SshBroker, SshBrokerError, run_rsync_with_retry
 from crsbench.cloud.transport import CloudTransport, transport_for_provider
 from crsbench.utils.logger import get_logger
 
@@ -2692,3 +2695,394 @@ class ArtifactCollector:
         )
         shutil.rmtree(staging_dir)
         logger.debug("Published staging {} -> {}", staging_dir, final_dir)
+
+
+class ArtifactPushError(Exception):
+    """Raised when pushing the from_experiment bundle to one or more VMs fails."""
+
+
+_DEFAULT_PUSH_PARALLELISM = 8
+_PUSH_REMOTE_OWNER = "crsbench"
+_PUSH_REMOTE_GROUP = "crsbench"
+FROM_EXPERIMENT_PUSH_SENTINEL_NAME = ".push-complete"
+
+
+def build_push_rsync_cmd(
+    *,
+    local_source: Path,
+    manifest_file: Path,
+    remote_host: str,
+    remote_destination: str,
+    ssh_command: str,
+    chown: str = f"{_PUSH_REMOTE_OWNER}:{_PUSH_REMOTE_GROUP}",
+) -> list[str]:
+    """Return the rsync command list for a manifest-scoped push to one VM.
+
+    Flags:
+    - ``-a``: archive mode (preserves mtimes, permissions, symlinks)
+    - ``--mkpath``: create the destination parent dirs as needed
+    - ``--files-from=<manifest>``: upload only the listed relative paths,
+      preserving directory structure under *local_source*
+    - ``--partial-dir=.rsync-partial``: crash-safe partial transfers
+    - ``--delay-updates``: stage everything before renaming into place
+    - ``--rsync-path=sudo rsync``: land files as root so we can ``--chown``
+      into /var/lib/crsbench/
+    - ``--chown=crsbench:crsbench``: set final ownership so the crsbench
+      user service can read the bundle
+    """
+    return [
+        "rsync",
+        "-a",
+        "--mkpath",
+        f"--files-from={manifest_file}",
+        "--partial-dir=.rsync-partial",
+        "--delay-updates",
+        "--rsync-path=sudo rsync",
+        f"--chown={chown}",
+        "-e",
+        ssh_command,
+        f"{str(local_source).rstrip('/')}/",
+        f"{remote_host}:{remote_destination.rstrip('/')}/",
+    ]
+
+
+class ArtifactPusher:
+    """Push a minimal ``from_experiment`` bundle to cloud VMs via rsync.
+
+    Used by ``crsbench cloud launch`` before workers start picking up jobs,
+    so each VM has the POVs referenced by the bug-finding experiment at the
+    same canonical absolute path.
+    """
+
+    def __init__(
+        self,
+        *,
+        broker: SshBroker,
+    ) -> None:
+        self._broker = broker
+
+    def push_from_experiment(
+        self,
+        *,
+        instances: list["CloudInstanceLike"],
+        fleet_by_instance: dict[str, "SshTransportConfig"],
+        local_source: Path,
+        manifest: list[str],
+        remote_destination: str,
+        experiment_filestore: Path,
+        max_parallel: int = _DEFAULT_PUSH_PARALLELISM,
+    ) -> None:
+        """Push the same bundle to every instance concurrently.
+
+        Raises :class:`ArtifactPushError` if any instance fails. Successful
+        uploads are left in place — the caller is expected to either retry
+        the whole launch or tear down the VMs.
+        """
+        if not instances:
+            logger.info("from_experiment push: no target instances, skipping")
+            return
+        if not manifest:
+            raise ArtifactPushError(
+                "from_experiment push: manifest is empty; no files would be transferred"
+            )
+
+        local_source = Path(local_source)
+        if not local_source.is_dir():
+            raise ArtifactPushError(
+                f"from_experiment local source is not a directory: {local_source}"
+            )
+
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix="crsbench-from-experiment-manifest-",
+            suffix=".txt",
+            delete=False,
+        ) as tmp:
+            tmp.write("\n".join(manifest))
+            tmp.write("\n")
+            manifest_path = Path(tmp.name)
+
+        try:
+            logger.info(
+                "from_experiment push: source={} dest={} instances={} files={}",
+                local_source,
+                remote_destination,
+                len(instances),
+                len(manifest),
+            )
+
+            errors: list[tuple[str, Exception]] = []
+            worker_count = min(max_parallel, max(1, len(instances)))
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                future_to_name = {
+                    executor.submit(
+                        self._push_one,
+                        instance=instance,
+                        fleet=fleet_by_instance[instance.name],
+                        local_source=local_source,
+                        manifest_file=manifest_path,
+                        remote_destination=remote_destination,
+                        experiment_filestore=experiment_filestore,
+                    ): instance.name
+                    for instance in instances
+                }
+                for future in as_completed(future_to_name):
+                    name = future_to_name[future]
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        logger.error(
+                            "from_experiment push failed: instance={} error={}",
+                            name,
+                            exc,
+                        )
+                        errors.append((name, exc))
+                    else:
+                        logger.info(
+                            "from_experiment push complete: instance={}",
+                            name,
+                        )
+
+            if errors:
+                names = ", ".join(name for name, _ in errors)
+                raise ArtifactPushError(
+                    f"from_experiment push failed on {len(errors)} instance(s): {names}"
+                )
+        finally:
+            manifest_path.unlink(missing_ok=True)
+
+    def _push_one(
+        self,
+        *,
+        instance: "CloudInstanceLike",
+        fleet: "SshTransportConfig",
+        local_source: Path,
+        manifest_file: Path,
+        remote_destination: str,
+        experiment_filestore: Path,
+    ) -> None:
+        """Ensure the remote parent dir exists and rsync the manifest bundle."""
+        try:
+            self._ensure_remote_parent(
+                instance=instance,
+                fleet=fleet,
+                remote_destination=remote_destination,
+                experiment_filestore=experiment_filestore,
+            )
+        except SshBrokerError as exc:
+            raise ArtifactPushError(
+                f"failed to prepare remote destination on {instance.name}: {exc}"
+            ) from exc
+
+        if fleet.ssh_via_iap:
+            ssh_user = self._broker.direct_ssh_user(fleet)
+            if not ssh_user:
+                raise ArtifactPushError(
+                    f"Unable to resolve SSH user for IAP push to {instance.name}"
+                )
+            iap_known_hosts = self._broker.prepare_iap_known_hosts(
+                experiment_filestore=experiment_filestore,
+                host_key_alias=instance.name,
+            )
+            with self._broker.open_iap_tunnel(
+                worker=instance, fleet=fleet
+            ) as local_port:
+                ssh_cmd = self._broker.build_iap_ssh_command(
+                    local_port=local_port,
+                    ssh_user=ssh_user,
+                    known_hosts_path=iap_known_hosts,
+                    host_key_alias=instance.name,
+                )
+                cmd = build_push_rsync_cmd(
+                    local_source=local_source,
+                    manifest_file=manifest_file,
+                    remote_host="127.0.0.1",
+                    remote_destination=remote_destination,
+                    ssh_command=ssh_cmd,
+                )
+                run_rsync_with_retry(cmd)
+            return
+
+        known_hosts = self._broker.prepare_direct_known_hosts(
+            worker=instance,
+            fleet=fleet,
+            experiment_filestore=experiment_filestore,
+        )
+        ssh_user = self._broker.direct_ssh_user(fleet)
+        ssh_cmd = self._broker.build_direct_ssh_command(
+            project=fleet.project,
+            known_hosts_path=known_hosts,
+        )
+        remote_host = self._broker.remote_host(instance, fleet)
+        if ssh_user:
+            remote_host = f"{ssh_user}@{remote_host}"
+        cmd = build_push_rsync_cmd(
+            local_source=local_source,
+            manifest_file=manifest_file,
+            remote_host=remote_host,
+            remote_destination=remote_destination,
+            ssh_command=ssh_cmd,
+        )
+        run_rsync_with_retry(cmd)
+
+    def mark_push_complete(
+        self,
+        *,
+        instance: "CloudInstanceLike",
+        fleet: "SshTransportConfig",
+        sentinel_path: str,
+        experiment_filestore: Path,
+    ) -> None:
+        """Drop a sentinel file owned by ``crsbench`` to signal push completion.
+
+        The remote launcher polls this path before invoking ``crsbench run``
+        so it never validates ``inputs.pov.from_experiment*`` against a
+        partially rsync'd directory tree.
+        """
+        ssh_user = self._broker.direct_ssh_user(fleet)
+        known_hosts: Path | None = None
+        if not fleet.ssh_via_iap:
+            known_hosts = self._broker.prepare_direct_known_hosts(
+                worker=instance,
+                fleet=fleet,
+                experiment_filestore=experiment_filestore,
+            )
+        quoted = shlex.quote(sentinel_path)
+        cmd = (
+            f"sudo install -o {_PUSH_REMOTE_OWNER} -g {_PUSH_REMOTE_GROUP} "
+            f"-m 0644 /dev/null {quoted}"
+        )
+        result = self._broker.run_remote_command(
+            worker=instance,
+            fleet=fleet,
+            command=cmd,
+            experiment_filestore=experiment_filestore,
+            known_hosts_path=known_hosts,
+            ssh_user=ssh_user,
+        )
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            raise ArtifactPushError(
+                f"failed to drop push-complete sentinel {sentinel_path} on "
+                f"{instance.name}: rc={result.returncode} stderr={stderr!r}"
+            )
+
+    def _ensure_remote_parent(
+        self,
+        *,
+        instance: "CloudInstanceLike",
+        fleet: "SshTransportConfig",
+        remote_destination: str,
+        experiment_filestore: Path,
+    ) -> None:
+        """Create the remote destination dir with crsbench ownership before rsync."""
+        ssh_user = self._broker.direct_ssh_user(fleet)
+        known_hosts: Path | None = None
+        if not fleet.ssh_via_iap:
+            known_hosts = self._broker.prepare_direct_known_hosts(
+                worker=instance,
+                fleet=fleet,
+                experiment_filestore=experiment_filestore,
+            )
+        quoted = shlex.quote(remote_destination)
+        install_cmd = (
+            f"sudo install -d -o {_PUSH_REMOTE_OWNER} -g {_PUSH_REMOTE_GROUP} "
+            f"-m 0755 {quoted}"
+        )
+        result = self._broker.run_remote_command(
+            worker=instance,
+            fleet=fleet,
+            command=install_cmd,
+            experiment_filestore=experiment_filestore,
+            known_hosts_path=known_hosts,
+            ssh_user=ssh_user,
+        )
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            raise SshBrokerError(
+                f"remote 'install -d {remote_destination}' failed on "
+                f"{instance.name}: rc={result.returncode} stderr={stderr!r}"
+            )
+
+
+def wait_for_ssh_ready(
+    instances: list["CloudInstanceLike"],
+    *,
+    broker: SshBroker,
+    fleet_by_instance: dict[str, "SshTransportConfig"],
+    experiment_filestore: Path,
+    timeout_sec: float = 900.0,
+    poll_interval_sec: float = 5.0,
+    max_parallel: int = _DEFAULT_PUSH_PARALLELISM,
+) -> None:
+    """Block until each instance accepts SSH and the crsbench user exists.
+
+    Polls ``id crsbench`` on every instance in parallel. The crsbench user is
+    created late in the VM startup script, so success here implies both SSHD
+    readiness and that rsync ``--chown=crsbench:crsbench`` can land files.
+    """
+    if not instances:
+        return
+
+    deadline = time.monotonic() + timeout_sec
+
+    def _probe_once(instance: "CloudInstanceLike") -> bool:
+        fleet = fleet_by_instance[instance.name]
+        known_hosts: Path | None = None
+        if not fleet.ssh_via_iap:
+            try:
+                known_hosts = broker.prepare_direct_known_hosts(
+                    worker=instance,
+                    fleet=fleet,
+                    experiment_filestore=experiment_filestore,
+                )
+            except SshBrokerError:
+                return False
+        ssh_user = broker.direct_ssh_user(fleet)
+        try:
+            result = broker.run_remote_command(
+                worker=instance,
+                fleet=fleet,
+                command="id crsbench >/dev/null 2>&1",
+                experiment_filestore=experiment_filestore,
+                known_hosts_path=known_hosts,
+                ssh_user=ssh_user,
+            )
+        except SshBrokerError:
+            return False
+        return result.returncode == 0
+
+    pending = {instance.name: instance for instance in instances}
+    logger.info(
+        "Waiting for SSH + crsbench user on {} instance(s) (timeout={}s)",
+        len(pending),
+        int(timeout_sec),
+    )
+
+    while pending and time.monotonic() < deadline:
+        worker_count = min(max_parallel, max(1, len(pending)))
+        ready_now: list[str] = []
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            results = {
+                executor.submit(_probe_once, instance): name
+                for name, instance in pending.items()
+            }
+            for future in as_completed(results):
+                name = results[future]
+                if future.result():
+                    ready_now.append(name)
+
+        for name in ready_now:
+            logger.debug("Instance ready: {}", name)
+            pending.pop(name, None)
+
+        if pending:
+            time.sleep(poll_interval_sec)
+
+    if pending:
+        remaining = ", ".join(sorted(pending))
+        raise ArtifactPushError(
+            f"Timed out after {int(timeout_sec)}s waiting for SSH readiness "
+            f"on instance(s): {remaining}"
+        )

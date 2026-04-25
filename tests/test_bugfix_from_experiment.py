@@ -235,6 +235,7 @@ def _make_stub_bugfix_runner(
         snapshot_period=0,
         pov_input_enabled=True,
         pov_from_experiment=pov_from_experiment,
+        pov_from_experiment_trial_num=1,
         max_pov_variants_per_cpv=1,
     )
 
@@ -375,6 +376,7 @@ def test_staging_respects_max_variants(tmp_path: Path):
         snapshot_period=0,
         pov_input_enabled=True,
         pov_from_experiment=exp_dir,
+        pov_from_experiment_trial_num=1,
         max_pov_variants_per_cpv=2,
     )
     runner._prepare_bugfix_inputs_from_experiment(

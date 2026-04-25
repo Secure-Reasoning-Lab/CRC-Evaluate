@@ -1,0 +1,144 @@
+# GCE smoke test: Claude Code bug-fixing seeded from a prior bug-finding run.
+#
+# This mirrors smoke-cc-fixing-from-cc-finding.yaml but runs on GCE. The
+# from_experiment bundle is a LOCAL directory on the operator's machine;
+# cloud launch walks it, extracts the files ExternalPovSource reads
+# (pov_store.json + CPV blobs + optional crash logs), and rsyncs them into
+# /var/lib/crsbench/from-experiment/<experiment_name>/ on every orchestrator
+# and worker VM. The transported config YAML is rewritten on the wire so
+# from_experiment resolves to that remote path on the VM side.
+#
+# Prerequisites:
+#   1. gcloud auth login && gcloud auth application-default login
+#   2. uv run crsbench cloud keygen (add public key to GitHub deploy keys)
+#   3. Prior bug-finding run collected under ``.run/cc-finding/`` (e.g. via
+#      ``gce-smoke-cc-finding-async-pov-build-prereqs.yaml`` followed by
+#      ``cloud collect``).
+#
+# Usage:
+#   CONFIG=experiment-configs/smoke-testing/gce-smoke-cc-fixing-from-cc-finding.yaml
+#   uv run crsbench cloud launch --config "$CONFIG"
+#   uv run crsbench cloud --config "$CONFIG" monitor
+#   uv run crsbench cloud --config "$CONFIG" collect --force
+#   uv run crsbench cloud --config "$CONFIG" teardown --force
+
+experiment:
+  name: gce-smoke-cc-fixing-from-cc-finding
+  task: bugfixing
+  mode: auto
+  benchmarks:
+    # Subset of the finding experiment where at least one CPV was discovered.
+    # CPV filtering is automatic: trials are only scheduled for CPVs present
+    # in the source experiment's pov_store.json files.
+    - afc-curl-delta-02: [curl_fuzzer_ws]
+    - afc-shadowsocks-full-01: [json_fuzz]
+    - afc-pdfbox-full-01: [DomXmpParserFuzzer]
+    - afc-lcms-full-01: [cms_virtual_profile_fuzzer]
+  sanitizers:
+    - address
+
+runtime:
+  trials: 1
+  max_total_time: 10800
+  build_timeout: 4800
+  run_timeout: 1200
+  verify_timeout: 600
+  per_pov_verify_timeout: 120
+  redis_host: redis-server:6379
+  source_mode: pkgs
+  rts_enabled: true
+  inc_build_enabled: true
+  inputs:
+    pov:
+      max_variants_per_cpv: null
+      # Local operator-side directory produced by ``cloud collect`` of the
+      # prior bug-finding run. ``cloud launch`` uploads the referenced files
+      # to every VM and rewrites this path in the transported YAML to the
+      # canonical remote path.
+      from_experiment: .run/cc-finding
+  litellm:
+    mode: external
+    cost_budget: 5.0
+
+storage:
+  experiment_filestore: /data/crsbench/experiment-data/gce-smoke-cc-fixing-from-cc-finding
+  report_filestore: /data/crsbench/report-data/gce-smoke-cc-fixing-from-cc-finding
+
+resources:
+  cores_per_trial: 8
+  memory_per_trial: "64G"
+
+crs_compose:
+  oss_crs_infra:
+    shared: true
+  crs-claude-code:
+    num_cores: 8
+    budget_policy: terminate
+    additional_env:
+      CRS_AGENT: claude_code
+      ANTHROPIC_MODEL: claude-opus-4-6
+      CLAUDE_CODE_CLI_VERSION: 2.1.92
+
+worker:
+  jobs: 3
+  cores_per_job: 8
+  storage:
+    cleanup_after_trial: true
+evaluator:
+  jobs: 1
+  cores_per_job: 4
+
+cloud:
+  remote:
+    experiment_root: /data/crsbench/experiment-data
+  defaults:
+    readiness_timeout_sec: 1200
+    crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+    crsbench_git_ref: main
+    github_deploy_key_path: .crsbench-keys/crsbench-deploy
+  env:
+    HF_TOKEN: os.environ/HF_TOKEN
+    CRSBENCH_EVALUATOR_ROUTING_MODEL: dispatcher
+    CRSBENCH_LLM_UPSTREAM_BASE_URL: os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL
+    CRSBENCH_LLM_UPSTREAM_MASTER_KEY: os.environ/CRSBENCH_LLM_UPSTREAM_MASTER_KEY
+    CRSBENCH_NOTIFY_APPRISE_URLS: os.environ/CRSBENCH_NOTIFY_APPRISE_URLS
+  bootstrap:
+    prepare_mode: full
+    download_benchmarks: auto
+  providers:
+    gce:
+      project: aixcc-426805
+      ssh_via_iap: true
+      regions:
+        - us-central1
+        - us-south1
+        - us-east5
+        - us-east1
+      fallback: true
+      profile_defaults:
+        machine_type: n2d-standard-16
+        boot_disk_size_gb: 512
+        boot_disk_type: pd-ssd
+        image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+        service_account_email: 153298433405-compute@developer.gserviceaccount.com
+        owner_label: crsbench
+      instance_profiles:
+        gce-orchestrator-n2d: {}
+        gce-worker-n2d:
+          machine_type: n2d-standard-64
+          boot_disk_size_gb: 1024
+        gce-evaluator-n2d:
+          machine_type: n2d-standard-16
+          boot_disk_size_gb: 512
+  orchestrator:
+    instance_profile: gce-orchestrator-n2d
+  workers:
+    defaults:
+      instance_profile: gce-worker-n2d
+    placements:
+      - {}
+  evaluators:
+    defaults:
+      instance_profile: gce-evaluator-n2d
+    placements:
+      - {}

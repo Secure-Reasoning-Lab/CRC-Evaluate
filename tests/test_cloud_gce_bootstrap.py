@@ -1224,6 +1224,30 @@ def test_orchestrator_startup_script_consumes_config_payload_and_preprovisioned_
     assert "\\\\]%*s\\\\[\\\\e[0;36m\\\\]%s\\\\[\\\\e[0m\\\\]\\\\n\\\\$ " in script
 
 
+def test_orchestrator_startup_script_waits_for_from_experiment_sentinel_before_run():
+    """Launcher must block on the push-complete sentinel before crsbench run.
+
+    Regression: previously the orchestrator service started immediately after
+    user creation and validated ``inputs.pov.from_experiment*`` before the
+    operator-side rsync push had landed the bundle, racing with provisioning.
+    """
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+
+    assert "wait_for_from_experiment_bundle" in script
+    # Sentinel path is built from the experiment name interpolated at
+    # generation time, so the launcher embeds the literal '/var/lib/...' root.
+    assert "/var/lib/crsbench/from-experiment/" in script
+    assert ".push-complete" in script
+    # The wait must happen before 'crsbench run' in the launcher body.
+    assert script.index("wait_for_from_experiment_bundle\n") < script.index(
+        "crsbench run --experiment-config"
+    )
+    # Skip-when-not-configured branch keeps non-from_experiment launches fast.
+    assert "from_experiment not configured" in script
+
+
 def test_orchestrator_startup_script_loads_passthrough_env_before_timezone_normalization():
     """Orchestrator startup must load metadata-passed env before ensure_timezone runs."""
     from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
@@ -1321,6 +1345,39 @@ def test_orchestrator_startup_script_exports_download_delay_before_vm_bootstrap(
 
     assert read_index < bootstrap_index
     assert write_index > bootstrap_index
+
+
+def test_orchestrator_startup_script_starts_valkey_before_crsbench_run():
+    """Valkey must come up inside the launcher (after sourcing ENV_PATH for the redis
+    password) and before any ``crsbench run`` invocation."""
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+
+    launcher_start = script.index('cat > "${LAUNCHER_PATH}" <<EOF')
+    launcher_end = script.index('\nEOF\nchmod +x "${LAUNCHER_PATH}"')
+    launcher_body = script[launcher_start:launcher_end]
+
+    valkey_def_index = launcher_body.index("ensure_valkey_running() {")
+    valkey_call_index = launcher_body.index("\nensure_valkey_running\n")
+    crsbench_run_index = launcher_body.index(
+        'crsbench run --experiment-config "\\${CONFIG_PATH}"'
+    )
+
+    assert valkey_def_index < valkey_call_index < crsbench_run_index
+    assert script.count("ensure_valkey_running() {") == 1
+
+
+def test_orchestrator_startup_script_extracts_grouped_experiment_name():
+    """Grouped configs should populate EXPERIMENT_NAME from experiment.name, not the whole mapping."""
+    from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
+
+    script = load_orchestrator_startup_script()
+
+    assert 'value = loaded.get("experiment")' in script
+    assert "if isinstance(value, dict):" in script
+    assert 'value = value.get("name")' in script
+    assert "grouped 'experiment.name'" in script
 
 
 def test_orchestrator_startup_script_supports_file_backed_metadata_sources():
@@ -1446,6 +1503,7 @@ def test_orchestrator_startup_script_binds_valkey_to_loopback_and_internal_ip():
     assert 'instance_metadata_get "network-interfaces/0/ip"' in script
     assert 'write_env_var "CRSBENCH_REDIS_BIND_HOST" "${REDIS_BIND_HOST}"' in script
     assert '-p "127.0.0.1:6379:6379"' in script
+    # The valkey block lives inside the launcher heredoc so shell vars are escaped.
     assert '-p "\\${CRSBENCH_REDIS_BIND_HOST}:6379:6379"' in script
     assert "0.0.0.0:6379:6379" not in script
 

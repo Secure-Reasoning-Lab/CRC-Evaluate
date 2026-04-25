@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import secrets
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
 from crsbench.cloud.bootstrap import CloudVmBootstrapInputs
+from crsbench.cloud.collection import (
+    FROM_EXPERIMENT_PUSH_SENTINEL_NAME,
+    ArtifactPusher,
+    wait_for_ssh_ready,
+)
 from crsbench.cloud.errors import CloudProvisioningError
+from crsbench.cloud.from_experiment_bundle import build_from_experiment_manifest
 from crsbench.cloud.launch_checks import find_launch_target_conflicts
 from crsbench.cloud.launch_state import (
     CloudLaunchState,
@@ -25,6 +32,7 @@ from crsbench.cloud.providers import (
 )
 from crsbench.cloud.quota import CloudQuotaValidationError, QuotaValidator
 from crsbench.cloud.records import CloudFleetPlacementRecord
+from crsbench.cloud.ssh_broker import SshBroker, SshTransportConfig
 from crsbench.cloud.types import CloudProvider
 from crsbench.distributed.registry import RuntimeRegistration
 from crsbench.experiment.trial_selection import (
@@ -42,6 +50,84 @@ if TYPE_CHECKING:
     from crsbench.cloud.preflight import CloudLaunchPreflight
 
 logger = get_logger(__name__)
+
+
+_FROM_EXPERIMENT_REMOTE_ROOT = "/var/lib/crsbench/from-experiment"
+
+
+@dataclass(frozen=True)
+class _PushFleetInfo:
+    """Minimal fleet settings consumed by SshBroker/ArtifactPusher."""
+
+    project: str
+    zone: str | None
+    ssh_via_iap: bool
+
+
+def _resolve_fleet_for_instance(
+    instance,
+    *,
+    fleet_configs: list[CloudFleetPlacementRecord],
+) -> _PushFleetInfo | None:
+    """Match a worker/evaluator record to its fleet placement by zone."""
+    candidates = [fleet for fleet in fleet_configs if fleet.zone == instance.zone]
+    if not candidates:
+        candidates = fleet_configs
+    if not candidates:
+        return None
+    fleet = candidates[0]
+    return _PushFleetInfo(
+        project=fleet.project,
+        zone=fleet.zone,
+        ssh_via_iap=fleet.ssh_via_iap,
+    )
+
+
+def _from_experiment_remote_path(experiment_name: str) -> str:
+    return f"{_FROM_EXPERIMENT_REMOTE_ROOT}/{experiment_name}"
+
+
+def _from_experiment_remote_path_for_crs(experiment_name: str, crs: str) -> str:
+    return f"{_FROM_EXPERIMENT_REMOTE_ROOT}/{experiment_name}/by-crs/{crs}"
+
+
+@dataclass(frozen=True)
+class _FromExperimentBundle:
+    """One local→remote bundle that ArtifactPusher will push to every VM."""
+
+    local_source: Path
+    remote_destination: str
+    manifest: list[str]
+
+
+def _build_from_experiment_bundle_or_none(
+    *,
+    local: Path,
+    remote: str,
+    label: str,
+) -> _FromExperimentBundle | None:
+    """Validate *local* and build the minimal manifest; log+return None on failure."""
+    if not local.is_dir():
+        logger.error("{}: path is not a directory: {}", label, local)
+        return None
+    try:
+        manifest = build_from_experiment_manifest(local)
+    except ValueError as exc:
+        logger.error("{}: manifest error: {}", label, exc)
+        return None
+    if not manifest:
+        logger.warning(
+            "{}: bundle is empty under {}: bug-finding produced no CPV POVs "
+            "to seed bug-fixing for this source",
+            label,
+            local,
+        )
+        return None
+    return _FromExperimentBundle(
+        local_source=local,
+        remote_destination=remote,
+        manifest=manifest,
+    )
 
 
 def _resolve_trial_selector_env(args: argparse.Namespace, config) -> dict[str, str]:
@@ -156,6 +242,95 @@ def run_launch(args: argparse.Namespace) -> int:
         logger.error("Experiment config must define cloud configuration for launch")
         return 1
 
+    # Resolve the chained bug-finding -> bug-fixing input bundles (if any)
+    # before we touch any VM. Both the single-path from_experiment and the
+    # per-CRS map from_experiment_by_crs produce one or more local->remote
+    # bundles that will be rsync'd to every orchestrator + worker VM.
+    from_experiment_bundles: list[_FromExperimentBundle] = []
+    from_experiment_remote_path: str | None = None
+    from_experiment_remote_by_crs: dict[str, str] | None = None
+    single_source = config.inputs.pov.from_experiment
+    by_crs_sources = config.inputs.pov.from_experiment_by_crs
+
+    if single_source is not None:
+        bundle = _build_from_experiment_bundle_or_none(
+            local=single_source,
+            remote=_from_experiment_remote_path(config.experiment),
+            label="inputs.pov.from_experiment",
+        )
+        if bundle is None:
+            return 1
+        from_experiment_bundles.append(bundle)
+        from_experiment_remote_path = bundle.remote_destination
+
+    if by_crs_sources is not None:
+        # All-or-nothing: report every missing path before aborting so the
+        # operator can fix them in one pass rather than iterating.
+        missing_paths = [
+            (crs, path) for crs, path in by_crs_sources.items() if not path.is_dir()
+        ]
+        if missing_paths:
+            for crs, path in missing_paths:
+                logger.error(
+                    "inputs.pov.from_experiment_by_crs[{!r}]: path does not exist: {}",
+                    crs,
+                    path,
+                )
+            logger.error(
+                "All from_experiment_by_crs paths must exist. Run phase-1 "
+                "first, or fix the path(s) above."
+            )
+            return 1
+
+        remote_by_crs: dict[str, str] = {}
+        skipped_empty: list[str] = []
+        for crs, local_path in by_crs_sources.items():
+            bundle = _build_from_experiment_bundle_or_none(
+                local=local_path,
+                remote=_from_experiment_remote_path_for_crs(config.experiment, crs),
+                label=f"inputs.pov.from_experiment_by_crs[{crs!r}]",
+            )
+            if bundle is None:
+                # Path exists (we already validated above) but the bundle is
+                # empty — finding ran for this CRS but found no CPV POVs.
+                # Skip this CRS in the fixing run so the others can proceed.
+                logger.warning(
+                    "inputs.pov.from_experiment_by_crs[{!r}]: bundle is empty; "
+                    "skipping this CRS in the fixing run (other CRSes proceed)",
+                    crs,
+                )
+                skipped_empty.append(crs)
+                continue
+            from_experiment_bundles.append(bundle)
+            remote_by_crs[crs] = bundle.remote_destination
+
+        if not remote_by_crs:
+            logger.error(
+                "inputs.pov.from_experiment_by_crs: every configured CRS has "
+                "an empty source bundle (no CPV POVs to seed). Phase 1 "
+                "discovered nothing to fix."
+            )
+            return 1
+
+        from_experiment_remote_by_crs = remote_by_crs
+        if skipped_empty:
+            logger.info(
+                "Skipped {} empty CRS source(s): {}; fixing will run for: {}",
+                len(skipped_empty),
+                ", ".join(sorted(skipped_empty)),
+                ", ".join(sorted(remote_by_crs)),
+            )
+
+    if from_experiment_bundles:
+        logger.info(
+            "Will push {} from_experiment bundle(s): {}",
+            len(from_experiment_bundles),
+            ", ".join(
+                f"{b.local_source} -> {b.remote_destination} ({len(b.manifest)} files)"
+                for b in from_experiment_bundles
+            ),
+        )
+
     registration = (
         RuntimeRegistration.from_experiment_config(config)
         if isinstance(config, BaseModel)
@@ -229,6 +404,8 @@ def run_launch(args: argparse.Namespace) -> int:
             experiment_config_path=str(config_path),
             env_passthrough=orchestrator_env,
             redis_password=redis_password,
+            from_experiment_remote_path=from_experiment_remote_path,
+            from_experiment_remote_by_crs=from_experiment_remote_by_crs,
         )
 
         if not orchestrator_record.internal_ip:
@@ -293,6 +470,8 @@ def run_launch(args: argparse.Namespace) -> int:
             experiment_config_path=str(config_path),
             bootstrap_inputs=bootstrap_inputs,
             env_passthrough_by_placement=preflight.evaluator_placement_envs,
+            from_experiment_remote_path=from_experiment_remote_path,
+            from_experiment_remote_by_crs=from_experiment_remote_by_crs,
         )
         orchestrator_ssh_via_iap = resolved_orchestrator_config.ssh_via_iap
 
@@ -314,6 +493,59 @@ def run_launch(args: argparse.Namespace) -> int:
                 config_path,
                 experiment_name=config.experiment,
                 records=evaluator_created_records,
+            )
+
+        if from_experiment_bundles:
+            push_targets = [orchestrator_record, *workers]
+            fleet_by_instance: dict[str, _PushFleetInfo] = {}
+            orchestrator_fleet = _PushFleetInfo(
+                project=orchestrator_project,
+                zone=orchestrator_record.zone,
+                ssh_via_iap=orchestrator_ssh_via_iap,
+            )
+            fleet_by_instance[orchestrator_record.name] = orchestrator_fleet
+            for worker in workers:
+                info = _resolve_fleet_for_instance(
+                    worker, fleet_configs=worker_fleet_configs
+                )
+                if info is None:
+                    raise CloudProvisioningError(
+                        f"Unable to resolve fleet for worker {worker.name} "
+                        "while staging from_experiment bundle"
+                    )
+                fleet_by_instance[worker.name] = info
+
+            broker = SshBroker(base_path=config_path)
+            broker_fleet_map: dict[str, SshTransportConfig] = dict(fleet_by_instance)
+            wait_for_ssh_ready(
+                push_targets,
+                broker=broker,
+                fleet_by_instance=broker_fleet_map,
+                experiment_filestore=Path(config.experiment_filestore),
+            )
+            pusher = ArtifactPusher(broker=broker)
+            for bundle in from_experiment_bundles:
+                pusher.push_from_experiment(
+                    instances=push_targets,
+                    fleet_by_instance=broker_fleet_map,
+                    local_source=bundle.local_source,
+                    manifest=bundle.manifest,
+                    remote_destination=bundle.remote_destination,
+                    experiment_filestore=Path(config.experiment_filestore),
+                )
+            sentinel_path = (
+                f"{_FROM_EXPERIMENT_REMOTE_ROOT}/{config.experiment}"
+                f"/{FROM_EXPERIMENT_PUSH_SENTINEL_NAME}"
+            )
+            pusher.mark_push_complete(
+                instance=orchestrator_record,
+                fleet=broker_fleet_map[orchestrator_record.name],
+                sentinel_path=sentinel_path,
+                experiment_filestore=Path(config.experiment_filestore),
+            )
+            logger.info(
+                "from_experiment push-complete sentinel dropped on orchestrator: {}",
+                sentinel_path,
             )
 
         save_launch_state(

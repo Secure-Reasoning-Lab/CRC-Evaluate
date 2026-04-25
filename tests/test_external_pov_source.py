@@ -146,16 +146,35 @@ def experiment_dir(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_list_found_cpvs_aggregates_across_trials(experiment_dir: Path):
-    source = ExternalPovSource(experiment_dir)
-    found = source.list_found_cpvs(
+def test_list_found_cpvs_per_trial_isolation(experiment_dir: Path):
+    """1:1 mode: each trial only sees its own CPVs, no cross-trial pooling."""
+    source_t1 = ExternalPovSource(experiment_dir, trial_num=1)
+    source_t2 = ExternalPovSource(experiment_dir, trial_num=2)
+
+    found_t1 = source_t1.list_found_cpvs(
         benchmark="mock-bench", harness="fuzz_harness", sanitizer="address"
     )
-    assert found == {"cpv_0", "cpv_1"}
+    found_t2 = source_t2.list_found_cpvs(
+        benchmark="mock-bench", harness="fuzz_harness", sanitizer="address"
+    )
+    # trial-1 only had cpv_0 entries; trial-2 had cpv_0 (different sig) and cpv_1.
+    assert found_t1 == {"cpv_0"}
+    assert found_t2 == {"cpv_0", "cpv_1"}
+
+
+def test_list_found_cpvs_empty_for_missing_trial(experiment_dir: Path):
+    """A trial_num that did not run yields an empty CPV set, not an error."""
+    source = ExternalPovSource(experiment_dir, trial_num=99)
+    assert (
+        source.list_found_cpvs(
+            benchmark="mock-bench", harness="fuzz_harness", sanitizer="address"
+        )
+        == set()
+    )
 
 
 def test_list_found_cpvs_empty_for_unknown_tuple(experiment_dir: Path):
-    source = ExternalPovSource(experiment_dir)
+    source = ExternalPovSource(experiment_dir, trial_num=1)
     assert (
         source.list_found_cpvs(
             benchmark="other", harness="fuzz_harness", sanitizer="address"
@@ -164,27 +183,46 @@ def test_list_found_cpvs_empty_for_unknown_tuple(experiment_dir: Path):
     )
 
 
-def test_get_pov_blobs_dedups_by_signature_earliest_wins(experiment_dir: Path):
-    source = ExternalPovSource(experiment_dir)
+def test_get_pov_blobs_dedups_within_single_trial(experiment_dir: Path):
+    """Per-trial dedup: trial-1 has two SIG_A POVs → one survives."""
+    source = ExternalPovSource(experiment_dir, trial_num=1)
     records = source.get_pov_blobs(
         benchmark="mock-bench",
         harness="fuzz_harness",
         sanitizer="address",
         cpv_id="cpv_0",
     )
-    # Two distinct signatures → two kept. SIG_A's earlier POV (ts=100) wins
-    # over the later ts=200 duplicate.
-    assert [r.crash_signature for r in records] == ["SIG_A", "SIG_B"]
-    assert [r.content_hash for r in records] == [
-        "aaaa111111111111",
-        "bbbb111111111111",
-    ]
-    # Ordered by discovery_ts ascending.
-    assert records[0].discovery_ts < records[1].discovery_ts
+    # trial-1 has two SIG_A POVs (ts=100 and ts=200); earliest wins. trial-2's
+    # SIG_B POV is NOT pooled in (1:1 isolation).
+    assert [r.crash_signature for r in records] == ["SIG_A"]
+    assert [r.content_hash for r in records] == ["aaaa111111111111"]
+
+
+def test_get_pov_blobs_does_not_pool_across_trials(experiment_dir: Path):
+    """trial-1 has only cpv_0 (SIG_A); trial-2 has cpv_0 (SIG_B) and cpv_1.
+    Each trial returns only its own POVs."""
+    source_t1 = ExternalPovSource(experiment_dir, trial_num=1)
+    source_t2 = ExternalPovSource(experiment_dir, trial_num=2)
+
+    t1_cpv0 = source_t1.get_pov_blobs(
+        benchmark="mock-bench",
+        harness="fuzz_harness",
+        sanitizer="address",
+        cpv_id="cpv_0",
+    )
+    t2_cpv0 = source_t2.get_pov_blobs(
+        benchmark="mock-bench",
+        harness="fuzz_harness",
+        sanitizer="address",
+        cpv_id="cpv_0",
+    )
+    assert [r.crash_signature for r in t1_cpv0] == ["SIG_A"]
+    assert [r.crash_signature for r in t2_cpv0] == ["SIG_B"]
 
 
 def test_get_pov_blobs_conservatively_keeps_unparseable(experiment_dir: Path):
-    source = ExternalPovSource(experiment_dir)
+    """trial-2 has the unparseable cpv_1 entry; trial-1 should not see it."""
+    source = ExternalPovSource(experiment_dir, trial_num=2)
     records = source.get_pov_blobs(
         benchmark="mock-bench",
         harness="fuzz_harness",
@@ -197,7 +235,7 @@ def test_get_pov_blobs_conservatively_keeps_unparseable(experiment_dir: Path):
 
 
 def test_get_pov_blobs_returns_empty_for_missing_cpv(experiment_dir: Path):
-    source = ExternalPovSource(experiment_dir)
+    source = ExternalPovSource(experiment_dir, trial_num=1)
     records = source.get_pov_blobs(
         benchmark="mock-bench",
         harness="fuzz_harness",
@@ -209,7 +247,14 @@ def test_get_pov_blobs_returns_empty_for_missing_cpv(experiment_dir: Path):
 
 def test_missing_experiment_path_raises(tmp_path: Path):
     with pytest.raises(ValueError, match="from_experiment path does not exist"):
-        ExternalPovSource(tmp_path / "nope")
+        ExternalPovSource(tmp_path / "nope", trial_num=1)
+
+
+def test_trial_num_must_be_positive(tmp_path: Path):
+    with pytest.raises(ValueError, match="trial_num must be"):
+        ExternalPovSource(tmp_path, trial_num=0)
+    with pytest.raises(ValueError, match="trial_num must be"):
+        ExternalPovSource(tmp_path, trial_num=-1)
 
 
 def test_crash_signature_fallback_to_parser(tmp_path: Path):
@@ -245,7 +290,7 @@ def test_crash_signature_fallback_to_parser(tmp_path: Path):
         blob_content=b"z",
     )
 
-    source = ExternalPovSource(tmp_path)
+    source = ExternalPovSource(tmp_path, trial_num=1)
     records = source.get_pov_blobs(
         benchmark="b", harness="h", sanitizer="address", cpv_id="cpv_0"
     )
@@ -291,7 +336,7 @@ def test_non_cpv_status_ignored(tmp_path: Path):
         )
     )
 
-    source = ExternalPovSource(tmp_path)
+    source = ExternalPovSource(tmp_path, trial_num=1)
     assert (
         source.get_pov_blobs(
             benchmark="b", harness="h", sanitizer="address", cpv_id="cpv_0"
@@ -354,7 +399,7 @@ def test_multi_cpv_shared_blob_resolves_via_primary(tmp_path: Path):
         )
     )
 
-    source = ExternalPovSource(tmp_path)
+    source = ExternalPovSource(tmp_path, trial_num=1)
     for cpv in ("cpv_0", "cpv_1", "cpv_3"):
         records = source.get_pov_blobs(
             benchmark="b", harness="h", sanitizer="address", cpv_id=cpv
@@ -373,7 +418,7 @@ def test_multi_cpv_shared_blob_resolves_via_primary(tmp_path: Path):
 
 
 def test_record_fields_populated(experiment_dir: Path):
-    source = ExternalPovSource(experiment_dir)
+    source = ExternalPovSource(experiment_dir, trial_num=1)
     records = source.get_pov_blobs(
         benchmark="mock-bench",
         harness="fuzz_harness",
@@ -385,4 +430,4 @@ def test_record_fields_populated(experiment_dir: Path):
     assert isinstance(rec, POVRecord)
     assert rec.cpv_id == "cpv_0"
     assert rec.blob_path.is_file()
-    assert rec.source_trial_dir.name.startswith("trial-")
+    assert rec.source_trial_dir.name == "trial-1"

@@ -26,8 +26,28 @@ from crsbench.validation.ground_truth_paths import GroundTruthPaths
 logger = get_logger(__name__)
 
 
+def resolve_pov_from_experiment_for_crs(
+    pov_cfg: Dict[str, Any], crs: Optional[str]
+) -> Optional[Any]:
+    """Return the effective ``from_experiment`` value for *crs* from a raw dict.
+
+    Mirrors ``ExperimentPovInputs.resolve_from_experiment_for`` for code paths
+    that still operate on the raw configuration dict. The per-CRS map wins
+    when present; a missing key means "no POVs for this CRS".
+    """
+    by_crs = pov_cfg.get("from_experiment_by_crs")
+    if isinstance(by_crs, dict) and by_crs:
+        if crs is None:
+            return None
+        return by_crs.get(crs)
+    return pov_cfg.get("from_experiment")
+
+
 def _effective_inputs_from_config(
-    config: Dict[str, Any], *, trial_mode: Optional[str] = None
+    config: Dict[str, Any],
+    *,
+    trial_mode: Optional[str] = None,
+    crs: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Resolve trial input controls from explicit runtime.inputs only.
 
@@ -36,6 +56,9 @@ def _effective_inputs_from_config(
         trial_mode: Per-trial evaluation mode ("delta" or "full").
             When "delta", diff input is force-enabled because the reference
             diff is a definitional input for delta-mode evaluation.
+        crs: Fixing CRS name. Required when
+            ``inputs.pov.from_experiment_by_crs`` is set so per-CRS routing
+            picks the correct source path.
     """
     explicit_inputs = config.get("inputs") or {}
     if not isinstance(explicit_inputs, dict):
@@ -53,7 +76,7 @@ def _effective_inputs_from_config(
     seed_max_time = seed_cfg.get("max_time")
     pov_enabled = bool(pov_cfg.get("enabled", False))
     max_variants = pov_cfg.get("max_variants_per_cpv")
-    pov_from_experiment = pov_cfg.get("from_experiment")
+    pov_from_experiment = resolve_pov_from_experiment_for_crs(pov_cfg, crs)
     diff_enabled = bool(diff_cfg.get("enabled", False))
     ground_truth_patch_enabled = bool(gtp_cfg.get("enabled", False))
 
@@ -581,7 +604,7 @@ class TrialDirectoryPreparer:
 
         # Get source commit from git
         source_commit = self._get_git_commit(source_path)
-        effective_inputs = _effective_inputs_from_config(self.config)
+        effective_inputs = _effective_inputs_from_config(self.config, crs=crs)
 
         # Count files in hints/povs
         hints_stats = self._get_hints_stats(hints_dir) if hints_dir else None
