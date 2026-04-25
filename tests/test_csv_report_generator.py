@@ -28,10 +28,10 @@ def sample_trial_metrics():
         "mode": "bug_finding",
         "run_mode": "full",
         "sanitizer": "address",
-        "total_povs": 5,
-        "unique_povs": 3,
-        "total_patches": 0,
-        "unique_patches": 0,
+        "total_povs_discovered": 5,
+        "unique_pov_names": ["pov_a", "pov_b", "pov_c"],
+        "total_patches_generated": 0,
+        "unique_patch_names": [],
         "total_llm_cost": 1.23,
         "total_llm_tokens": 1000,
         "total_llm_input_tokens": 750,
@@ -78,10 +78,10 @@ def sample_experiment_metrics():
                 "mode": "bug_finding",
                 "run_mode": "full",
                 "sanitizer": "address",
-                "total_povs": 5,
-                "unique_povs": 3,
-                "total_patches": 0,
-                "unique_patches": 0,
+                "total_povs_discovered": 5,
+                "unique_pov_names": ["pov_a", "pov_b", "pov_c"],
+                "total_patches_generated": 0,
+                "unique_patch_names": [],
                 "total_llm_cost": 1.23,
                 "total_llm_tokens": 1000,
                 "total_llm_input_tokens": 750,
@@ -110,10 +110,10 @@ def sample_experiment_metrics():
                 "mode": "bug_finding",
                 "run_mode": "delta",
                 "sanitizer": "undefined",
-                "total_povs": 2,
-                "unique_povs": 2,
-                "total_patches": 0,
-                "unique_patches": 0,
+                "total_povs_discovered": 2,
+                "unique_pov_names": ["pov_x", "pov_y"],
+                "total_patches_generated": 0,
+                "unique_patch_names": [],
                 "total_llm_cost": 0.80,
                 "total_llm_tokens": 600,
                 "total_llm_input_tokens": 450,
@@ -268,6 +268,45 @@ def test_format_trial_row(temp_output_dir, sample_trial_metrics):
     assert row["unique_povs"] == 3
     assert row["total_llm_cost"] == 1.23
     assert row["snapshot_count"] == 2
+
+
+def test_format_trial_row_consumes_trial_metrics_model_dump(temp_output_dir):
+    """Regression: CSV row must read POV/patch counts from model_dump() keys.
+
+    ``TrialMetrics.unique_povs``/``unique_patches`` are plain ``@property``,
+    so Pydantic ``model_dump()`` does not include them. The CSV generator
+    must derive counts from the actual fields (``total_povs_discovered``,
+    ``unique_pov_names``, etc.) — not from the absent property keys, which
+    previously caused ``total_povs``/``unique_povs`` columns to render as 0
+    even when ``pov_names`` listed many entries.
+    """
+    from crsbench.reporting.models import TrialMetrics, TrialMode
+
+    trial = TrialMetrics(
+        trial_dir="experiment/json-c__ensemble-c/fuzz_json/full/address/trial-1",
+        trial_num=1,
+        crs="ensemble-c",
+        benchmark="json-c",
+        harness="fuzz_json",
+        mode=TrialMode.bug_finding,
+        total_povs_discovered=21,
+        unique_pov_names=[f"pov_{i}" for i in range(21)],
+        total_patches_generated=4,
+        unique_patch_names=[f"patch_{i}" for i in range(4)],
+    )
+    dumped = trial.model_dump()
+    assert "unique_povs" not in dumped
+    assert "unique_patches" not in dumped
+
+    generator = CSVReportGenerator(temp_output_dir)
+    row = generator._format_trial_row(dumped)
+
+    assert row["total_povs"] == 21
+    assert row["unique_povs"] == 21
+    assert row["total_patches"] == 4
+    assert row["unique_patches"] == 4
+    assert row["pov_names"].count(";") == 20
+    assert row["patch_names"].count(";") == 3
 
 
 def test_format_crs_row(temp_output_dir):
