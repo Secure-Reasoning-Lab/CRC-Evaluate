@@ -200,9 +200,20 @@ class EvaluatorClaimWorker:
             self._active_claims[claimed.request_id] = active
         return claimed
 
+    def dispatch_available(self, *, now: float) -> VerifyRequestRecord | None:
+        """Claim as many logical requests as the local inflight limit allows."""
+        first_claimed: VerifyRequestRecord | None = None
+        while len(self._active_claims) < self.max_inflight_requests:
+            claimed = self.dispatch_one(now=now)
+            if claimed is None:
+                break
+            if first_claimed is None:
+                first_claimed = claimed
+        return first_claimed
+
     def tick(self, *, now: float) -> VerifyRequestRecord | None:
         self.refresh_active_claims(now=now)
-        return self.dispatch_one(now=now)
+        return self.dispatch_available(now=now)
 
     def _materialize_claimed_request(
         self,

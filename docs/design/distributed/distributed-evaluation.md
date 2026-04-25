@@ -48,6 +48,9 @@ Startup behavior differs between the first two modes:
 - dispatcher routing now starts one evaluator-local claim loop plus one
   evaluator-local advisory warmup feeder over evaluator-local build and verify
   queues
+- the evaluator-local claim loop may materialize multiple logical verify
+  requests per poll; intake is capped by local evaluator execution width rather
+  than a fixed one-request-per-evaluator limit
 - workers submit logical verify requests only; evaluators derive the necessary
   local build DAG after claim rather than consuming a global logical build queue
 - async POV verification still uses explicit build prerequisites, but the

@@ -461,6 +461,8 @@ def run_evaluator_main(
         redis_conn = create_redis_connection(redis_host)
         build_queue = rq.Queue(build_queue_name, connection=redis_conn)
         verify_queue = rq.Queue(verify_queue_name, connection=redis_conn)
+        local_build_capacity = build_jobs or 1
+        local_verify_capacity = verify_jobs or local_build_capacity
         benchmarks_root = getattr(config, "benchmarks_root", None)
         if not isinstance(benchmarks_root, (str, Path)):
             benchmarks_root = Path("benchmarks")
@@ -472,6 +474,9 @@ def run_evaluator_main(
             verify_queue=verify_queue,
             verification_engine=engine,
             benchmarks_root=Path(benchmarks_root),
+            # Keep dispatcher intake aligned with local execution width instead
+            # of hard-coding a single logical request per evaluator.
+            max_inflight_requests=max(local_build_capacity, local_verify_capacity),
         )
         claim_loop = start_claim_thread(claim_worker)
         warmup_loop = start_dispatcher_warmup_thread(
