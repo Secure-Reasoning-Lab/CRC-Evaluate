@@ -66,6 +66,102 @@ _REEVAL_REMOTE_TEXT_ARTIFACTS: tuple[tuple[str, str], ...] = (
     ("runner.log", "runner.log"),
     ("bundle/manifest.json", "manifest.json"),
 )
+_COPY_LINK_FILELIST_DISCOVERY_SCRIPT = r"""
+import json
+import pathlib
+import sys
+
+
+def _path_under(path: pathlib.PurePosixPath, prefix: pathlib.PurePosixPath) -> bool:
+    prefix_parts = prefix.parts
+    return path.parts[: len(prefix_parts)] == prefix_parts
+
+
+def _excluded(
+    logical_rel: pathlib.PurePosixPath,
+    exclude_prefixes: list[pathlib.PurePosixPath],
+) -> bool:
+    return any(_path_under(logical_rel, prefix) for prefix in exclude_prefixes)
+
+
+def _walk(
+    *,
+    full_logical: pathlib.PurePosixPath,
+    logical_rel: pathlib.PurePosixPath,
+    actual: pathlib.Path,
+    active_dirs: set[str],
+    exclude_prefixes: list[pathlib.PurePosixPath],
+    files: list[str],
+) -> None:
+    if _excluded(logical_rel, exclude_prefixes):
+        return
+
+    if actual.is_dir():
+        real_dir = actual.resolve(strict=True)
+        real_key = str(real_dir)
+        if real_key in active_dirs:
+            return
+        next_active = set(active_dirs)
+        next_active.add(real_key)
+        for child in sorted(actual.iterdir(), key=lambda item: item.name):
+            child_full = full_logical / child.name
+            child_rel = logical_rel / child.name
+            if child.is_symlink():
+                try:
+                    child_target = child.resolve(strict=True)
+                except OSError:
+                    continue
+                _walk(
+                    full_logical=child_full,
+                    logical_rel=child_rel,
+                    actual=child_target,
+                    active_dirs=next_active,
+                    exclude_prefixes=exclude_prefixes,
+                    files=files,
+                )
+                continue
+            _walk(
+                full_logical=child_full,
+                logical_rel=child_rel,
+                actual=child,
+                active_dirs=next_active,
+                exclude_prefixes=exclude_prefixes,
+                files=files,
+            )
+        return
+
+    files.append(full_logical.as_posix())
+
+
+remote_root = pathlib.Path(sys.argv[1])
+specs = json.loads(sys.argv[2])
+dir_roots: list[str] = []
+files: list[str] = []
+
+for spec in specs:
+    root = pathlib.PurePosixPath(spec["root"])
+    exclude_prefixes = [
+        pathlib.PurePosixPath(prefix) for prefix in spec["exclude_prefixes"]
+    ]
+    try:
+        actual_root = (remote_root / root).resolve(strict=True)
+    except OSError as exc:
+        raise SystemExit(f"failed to resolve {root.as_posix()}: {exc}")
+    if actual_root.is_dir():
+        dir_roots.append(root.as_posix())
+        _walk(
+            full_logical=root,
+            logical_rel=pathlib.PurePosixPath("."),
+            actual=actual_root,
+            active_dirs=set(),
+            exclude_prefixes=exclude_prefixes,
+            files=files,
+        )
+        continue
+    files.append(root.as_posix())
+
+print(json.dumps({"dir_roots": sorted(set(dir_roots)), "files": sorted(set(files))}))
+"""
 
 
 def collect_marker_path(destination: Path) -> Path:
@@ -473,6 +569,112 @@ class ArtifactCollector:
 
         _run()
 
+    def _discover_copy_link_filelist(
+        self,
+        *,
+        worker: CloudInstanceLike,
+        fleet: SshTransportConfig,
+        remote_experiment_dir: str,
+        experiment_filestore: Path,
+        known_hosts_path: Path | None,
+        ssh_user: str | None,
+        symlink_relpaths: list[Path],
+    ) -> tuple[list[Path], list[str]]:
+        """Return cycle-safe rsync file-list entries for directory symlink rehydration."""
+        specs = [
+            {
+                "root": relpath.as_posix(),
+                "exclude_prefixes": ["logs"] if relpath.name == "output" else [],
+            }
+            for relpath in symlink_relpaths
+        ]
+        command = self._build_remote_python_command(
+            _COPY_LINK_FILELIST_DISCOVERY_SCRIPT,
+            remote_experiment_dir,
+            json.dumps(specs),
+        )
+        result = self._run_remote_command(
+            worker=worker,
+            fleet=fleet,
+            known_hosts_path=known_hosts_path,
+            ssh_user=ssh_user,
+            command=command,
+            experiment_filestore=experiment_filestore,
+        )
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip() or "unknown error"
+            raise ArtifactCollectionError(
+                f"failed to enumerate dereferenced artifact paths from {worker.name}: {detail}"
+            )
+
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise ArtifactCollectionError(
+                "failed to parse dereferenced artifact file list from remote output"
+            ) from exc
+
+        dir_roots_raw = payload.get("dir_roots", [])
+        files_raw = payload.get("files", [])
+        if not isinstance(dir_roots_raw, list) or not isinstance(files_raw, list):
+            raise ArtifactCollectionError(
+                "remote dereferenced artifact enumeration returned malformed payload"
+            )
+
+        dir_roots = [
+            Path(value) for value in dir_roots_raw if isinstance(value, str) and value
+        ]
+        files = [value for value in files_raw if isinstance(value, str) and value]
+        return dir_roots, files
+
+    def _run_copy_link_filelist_rsync(
+        self,
+        *,
+        worker: CloudInstanceLike,
+        fleet: SshTransportConfig,
+        remote_experiment_dir: str,
+        destination_root: Path,
+        experiment_filestore: Path,
+        file_relpaths: list[str],
+        known_hosts_path: Path | None = None,
+        ssh_user: str | None = None,
+        ssh_command: str | None = None,
+        remote_host: str | None = None,
+    ) -> None:
+        """Run a copy-links rsync constrained to an explicit file list."""
+        if not file_relpaths:
+            return
+
+        temp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                prefix="crsbench-copy-links-",
+                suffix=".txt",
+                dir=experiment_filestore,
+                delete=False,
+            ) as tmp:
+                temp_path = Path(tmp.name)
+                tmp.write("\n".join(file_relpaths))
+                tmp.write("\n")
+
+            cmd = self._build_copy_link_filelist_rsync_cmd(
+                worker=worker,
+                fleet=fleet,
+                remote_experiment_dir=remote_experiment_dir,
+                destination_root=destination_root,
+                files_from_path=temp_path,
+                known_hosts_path=known_hosts_path,
+                ssh_user=ssh_user,
+                ssh_command=ssh_command,
+                remote_host=remote_host,
+            )
+            self._run_rsync_with_retry(cmd)
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+
     def _build_rsync_cmd(
         self,
         worker: CloudInstanceLike,
@@ -579,6 +781,50 @@ class ArtifactCollector:
         )
         return cmd
 
+    def _build_copy_link_filelist_rsync_cmd(
+        self,
+        worker: CloudInstanceLike,
+        fleet: SshTransportConfig,
+        remote_experiment_dir: str,
+        destination_root: Path,
+        files_from_path: Path,
+        known_hosts_path: Path | None = None,
+        ssh_user: str | None = None,
+        ssh_command: str | None = None,
+        remote_host: str | None = None,
+    ) -> list[str]:
+        """Return a cycle-safe rsync command that dereferences explicit source paths."""
+        if (
+            known_hosts_path is None
+            and not fleet.ssh_via_iap
+            and self._base_path is not None
+        ):
+            known_hosts_path = cloud_state_dir(self._base_path) / "known_hosts"
+        ssh_cmd = ssh_command or self._build_ssh_command(
+            worker, fleet, known_hosts_path
+        )
+        resolved_remote_host = remote_host or self._remote_host(worker, fleet)
+        if ssh_user is not None and remote_host is None and not fleet.ssh_via_iap:
+            resolved_remote_host = f"{ssh_user}@{resolved_remote_host}"
+
+        remote_root = remote_experiment_dir.rstrip("/") or "/"
+        source = f"{resolved_remote_host}:{remote_root}/"
+        dest = str(destination_root) + "/"
+
+        return [
+            "rsync",
+            "-a",
+            "--mkpath",
+            "--copy-links",
+            "--prune-empty-dirs",
+            f"--files-from={files_from_path}",
+            "--rsync-path=sudo rsync",
+            "-e",
+            ssh_cmd,
+            source,
+            dest,
+        ]
+
     def _build_log_rsync_cmd(
         self,
         worker: CloudInstanceLike,
@@ -625,6 +871,14 @@ class ArtifactCollector:
             source,
             dest,
         ]
+
+    @staticmethod
+    def _build_remote_python_command(script: str, *args: str) -> str:
+        """Return a quoted remote shell command that runs one inline Python script."""
+        cmd = f"python3 -c {shlex.quote(script)}"
+        if args:
+            cmd += " " + " ".join(shlex.quote(arg) for arg in args)
+        return cmd
 
     def _build_report_log_rsync_cmd(
         self,
@@ -1085,6 +1339,7 @@ class ArtifactCollector:
                     fleet=fleet,
                     remote_experiment_dir=remote_experiment_dir,
                     staging_dir=staging_dir,
+                    experiment_filestore=experiment_filestore,
                     symlink_relpaths=symlink_relpaths,
                     ssh_command=ssh_command,
                     remote_host="127.0.0.1",
@@ -1096,6 +1351,7 @@ class ArtifactCollector:
             fleet=fleet,
             remote_experiment_dir=remote_experiment_dir,
             staging_dir=staging_dir,
+            experiment_filestore=experiment_filestore,
             symlink_relpaths=symlink_relpaths,
             known_hosts_path=known_hosts_path,
             ssh_user=ssh_user,
@@ -1108,6 +1364,7 @@ class ArtifactCollector:
         fleet: SshTransportConfig,
         remote_experiment_dir: str,
         staging_dir: Path,
+        experiment_filestore: Path,
         symlink_relpaths: list[Path],
         known_hosts_path: Path | None = None,
         ssh_user: str | None = None,
@@ -1115,26 +1372,37 @@ class ArtifactCollector:
         remote_host: str | None = None,
     ) -> None:
         """Run targeted rsync --copy-links transfers for staged excluded-dir symlinks."""
-        remote_root = remote_experiment_dir.rstrip("/") or "/"
+        dir_roots, file_relpaths = self._discover_copy_link_filelist(
+            worker=worker,
+            fleet=fleet,
+            remote_experiment_dir=remote_experiment_dir,
+            experiment_filestore=experiment_filestore,
+            known_hosts_path=known_hosts_path,
+            ssh_user=ssh_user,
+            symlink_relpaths=symlink_relpaths,
+        )
+
         for relpath in symlink_relpaths:
             local_path = staging_dir / relpath
             logger.debug("Rehydrating excluded symlink path: {}", local_path)
             self._remove_staged_path(local_path)
             local_path.parent.mkdir(parents=True, exist_ok=True)
-            remote_source_path = posixpath.join(remote_root, relpath.as_posix())
-            exclude_patterns = ("logs/",) if relpath.name == "output" else ()
-            cmd = self._build_copy_link_rsync_cmd(
-                worker=worker,
-                fleet=fleet,
-                remote_source_path=remote_source_path,
-                destination_parent=local_path.parent,
-                exclude_patterns=exclude_patterns,
-                known_hosts_path=known_hosts_path,
-                ssh_user=ssh_user,
-                ssh_command=ssh_command,
-                remote_host=remote_host,
-            )
-            self._run_rsync_with_retry(cmd)
+
+        self._run_copy_link_filelist_rsync(
+            worker=worker,
+            fleet=fleet,
+            remote_experiment_dir=remote_experiment_dir,
+            destination_root=staging_dir,
+            experiment_filestore=experiment_filestore,
+            file_relpaths=file_relpaths,
+            known_hosts_path=known_hosts_path,
+            ssh_user=ssh_user,
+            ssh_command=ssh_command,
+            remote_host=remote_host,
+        )
+
+        for relpath in dir_roots:
+            (staging_dir / relpath).mkdir(parents=True, exist_ok=True)
 
     def _run_remote_command(
         self,

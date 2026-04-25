@@ -170,6 +170,21 @@ def _run_local_rsync_from_cloud_cmd(
     return _REAL_SUBPROCESS_RUN(local_cmd, check=True)
 
 
+def _run_local_remote_command_from_cloud_cmd(
+    command: str, *, source_root: Path, experiment_name: str
+) -> subprocess.CompletedProcess[str]:
+    """Run one collector remote command against a local fixture tree."""
+    remote_root = f"/data/experiments/{experiment_name}"
+    local_root = str((source_root / experiment_name).resolve())
+    rewritten = command.replace(remote_root, local_root)
+    return _REAL_SUBPROCESS_RUN(
+        ["bash", "-lc", rewritten],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
 # ---------------------------------------------------------------------------
 # ARTF-01 / Task tests: rsync command construction
 # ---------------------------------------------------------------------------
@@ -486,6 +501,17 @@ class TestStagingAndPublish:
                 experiment_name="exp-42",
             )
 
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
         with patch("subprocess.run", side_effect=_fake_rsync):
             final_path = collector.collect(
                 worker=worker,
@@ -571,6 +597,17 @@ class TestStagingAndPublish:
                 experiment_name="exp-42",
             )
 
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
         with patch("subprocess.run", side_effect=_fake_rsync):
             final_path = collector.collect(
                 worker=worker,
@@ -657,6 +694,17 @@ class TestStagingAndPublish:
                 experiment_name="exp-42",
             )
 
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
         with patch("subprocess.run", side_effect=_fake_rsync):
             final_path = collector.collect(
                 worker=worker,
@@ -724,6 +772,17 @@ class TestStagingAndPublish:
                 experiment_name="exp-42",
             )
 
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
         with patch("subprocess.run", side_effect=_fake_rsync):
             final_path = collector.collect(
                 worker=worker,
@@ -746,6 +805,87 @@ class TestStagingAndPublish:
         assert not any(path.name == "oss-crs-workdir" for path in final_path.rglob("*"))
         assert result_log.read_text() == "log content\n"
         assert not result_log.is_symlink()
+
+    def test_staging_and_publish_rehydrates_top_level_symlink_without_following_cycle(
+        self, tmp_path: Path
+    ) -> None:
+        """Collection should materialize a top-level excluded-dir symlink without descending into nested cycles.
+
+        Current behavior fails during rehydration because rsync ``--copy-links``
+        follows the nested loop until it hits ``ELOOP``; the assertions below
+        define the intended post-fix outcome.
+        """
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for output/log regression coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        shutil.rmtree(trial_dir / "output")
+        workdir_out = trial_dir / "oss-crs-workdir" / "out"
+        (workdir_out / "kept").mkdir(parents=True)
+        (workdir_out / "kept" / "artifact.txt").write_text("artifact content\n")
+        (workdir_out / "cycle").symlink_to(Path())
+        (trial_dir / "output").symlink_to(Path("oss-crs-workdir") / "out")
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        trial_output = (
+            final_path
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+            / "output"
+        )
+        artifact_paths = sorted(
+            path.relative_to(trial_output)
+            for path in trial_output.rglob("artifact.txt")
+        )
+
+        assert not any(path.name == "oss-crs-workdir" for path in final_path.rglob("*"))
+        assert trial_output.exists()
+        assert not trial_output.is_symlink()
+        assert (
+            trial_output / "kept" / "artifact.txt"
+        ).read_text() == "artifact content\n"
+        assert artifact_paths == [Path("kept") / "artifact.txt"]
 
     def test_collect_reports_start_time_observation_from_staging(
         self, tmp_path: Path
