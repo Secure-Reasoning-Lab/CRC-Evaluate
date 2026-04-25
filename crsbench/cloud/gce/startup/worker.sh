@@ -463,6 +463,24 @@ print(pwd.getpwnam(sys.argv[1]).pw_dir)
 PY
 }
 
+configure_crsbench_bash_prompt() {
+  local bashrc_path="${CRSBENCH_USER_HOME}/.bashrc"
+  touch "${bashrc_path}"
+  sed -i '/^# >>> CRSBench prompt >>>$/,/^# <<< CRSBench prompt <<<$/'d "${bashrc_path}"
+  cat >> "${bashrc_path}" <<'EOF'
+
+# >>> CRSBench prompt >>>
+case "$-" in
+  *i*)
+    PS1='\[\e[1;34m\]\w\[\e[0m\]\n\$ '
+    ;;
+esac
+# <<< CRSBench prompt <<<
+EOF
+  chown "${CRSBENCH_USER}:${CRSBENCH_USER}" "${bashrc_path}"
+  chmod 0644 "${bashrc_path}"
+}
+
 ensure_crsbench_user() {
   if ! id -u "${CRSBENCH_USER}" >/dev/null 2>&1; then
     if command -v useradd >/dev/null 2>&1; then
@@ -496,6 +514,7 @@ ensure_crsbench_user() {
   install -d -o "${CRSBENCH_USER}" -g "${CRSBENCH_USER}" -m 0755 "${CRSBENCH_USER_HOME}/.config"
   install -d -o "${CRSBENCH_USER}" -g "${CRSBENCH_USER}" -m 0755 "${USER_SERVICE_DIR}"
   install -d -o "${CRSBENCH_USER}" -g "${CRSBENCH_USER}" -m 0755 "${STATE_DIR}"
+  configure_crsbench_bash_prompt
 }
 
 ensure_passwordless_sudo() {

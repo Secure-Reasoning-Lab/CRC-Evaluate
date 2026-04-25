@@ -237,6 +237,12 @@ def test_load_startup_script_contains_managed_worker_service_bootstrap():
     assert "systemctl --user enable --now crsbench-worker.service" in startup_script
     assert "/etc/systemd/system/crsbench-worker.service" not in startup_script
     assert "/etc/default/crsbench-worker" not in startup_script
+    assert 'local bashrc_path="${CRSBENCH_USER_HOME}/.bashrc"' in startup_script
+    assert (
+        "sed -i '/^# >>> CRSBench prompt >>>$/,/^# <<< CRSBench prompt <<<$/'d"
+        in startup_script
+    )
+    assert "PS1='\\[\\e[1;34m\\]\\w\\[\\e[0m\\]\\n\\$ '" in startup_script
 
 
 def test_load_startup_script_raises_fd_limits_for_issue_182():
@@ -1130,6 +1136,12 @@ def test_orchestrator_startup_script_consumes_config_payload_and_preprovisioned_
     assert "crsbench-experiment-config-b64" in script
     assert "crsbench-env-passthrough-b64" in script
     assert "CRSBENCH_CLOUD_PREPROVISIONED_WORKERS" in script
+    assert 'local bashrc_path="${CRSBENCH_USER_HOME}/.bashrc"' in script
+    assert (
+        "sed -i '/^# >>> CRSBench prompt >>>$/,/^# <<< CRSBench prompt <<<$/'d"
+        in script
+    )
+    assert "PS1='\\[\\e[1;34m\\]\\w\\[\\e[0m\\]\\n\\$ '" in script
 
 
 def test_orchestrator_startup_script_loads_passthrough_env_before_timezone_normalization():
