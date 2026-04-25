@@ -97,10 +97,14 @@ def _is_report_log_file(relpath: str) -> bool:
         tail = parts[index + 2 :]
         if len(tail) == 2 and tail[0] == "services":
             name = tail[-1]
-            return name.endswith("_patcher.stdout.log") or "inc-builder-" in name
+            return name.endswith("_patcher.stdout.log") or (
+                name.endswith(".stdout.log") and "inc-builder-" in name
+            )
         if len(tail) >= 2 and tail[0] == "crs":
             name = tail[-1]
-            if name.endswith("_patcher.stdout.log") or "inc-builder-" in name:
+            if name.endswith("_patcher.stdout.log") or (
+                name.endswith(".stdout.log") and "inc-builder-" in name
+            ):
                 return True
             if tail[-2] == "log_dir" and name == "verify_patch_timing.json":
                 return True

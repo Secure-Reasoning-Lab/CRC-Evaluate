@@ -12,6 +12,7 @@ import pytest
 from crsbench.cloud.collection import (
     ArtifactCollectionError,
     ArtifactCollector,
+    _is_report_log_file,
     collect_marker_path,
     discover_experiment_start_time_from_staging,
     merge_experiment_start_time,
@@ -503,6 +504,26 @@ class TestRsyncPreservesMtimes:
 class TestStagingAndPublish:
     """test_staging_and_publish — ARTF-03: staged tree published to final path."""
 
+    def test_is_report_log_file_matches_allowlist(self) -> None:
+        assert _is_report_log_file(
+            "trial-1/output/logs/services/crs-codex_inc-builder-asan.stdout.log"
+        )
+        assert _is_report_log_file(
+            "trial-1/output/logs/crs/foo/bar/crs-codex_inc-builder-asan.stdout.log"
+        )
+        assert _is_report_log_file(
+            "trial-1/output/logs/services/builder-sidecar-lite_patcher.stdout.log"
+        )
+        assert _is_report_log_file(
+            "trial-1/output/logs/crs/foo/log_dir/verify_patch_timing.json"
+        )
+        assert not _is_report_log_file(
+            "trial-1/output/logs/services/crs-codex_inc-builder-asan.stderr.log"
+        )
+        assert not _is_report_log_file(
+            "trial-1/output/logs/services/crs-codex_inc-builder-asan.json"
+        )
+
     def test_staging_and_publish(self, tmp_path: Path) -> None:
         """After successful rsync+verification, artifacts appear in final path; staging is cleaned."""
         experiment_filestore = tmp_path / "filestore"
@@ -594,6 +615,12 @@ class TestStagingAndPublish:
         (
             workdir_out / "logs" / "services" / "crs-codex_inc-builder-asan.stdout.log"
         ).write_text("Tests run: 1, Failures: 0, Errors: 0, Skipped: 0\n")
+        (
+            workdir_out / "logs" / "services" / "crs-codex_inc-builder-asan.stderr.log"
+        ).write_text("do not restore stderr log\n")
+        (
+            workdir_out / "logs" / "services" / "crs-codex_inc-builder-asan.json"
+        ).write_text('{"keep": false}\n')
         timing_dir = workdir_out / "logs" / "crs" / "builder-sidecar-lite" / "log_dir"
         timing_dir.mkdir(parents=True)
         (timing_dir / "verify_patch_timing.json").write_text(
@@ -700,6 +727,12 @@ class TestStagingAndPublish:
         ).exists()
         assert (
             trial_output / "logs" / "services" / "crs-codex_inc-builder-asan.stdout.log"
+        ).exists()
+        assert not (
+            trial_output / "logs" / "services" / "crs-codex_inc-builder-asan.stderr.log"
+        ).exists()
+        assert not (
+            trial_output / "logs" / "services" / "crs-codex_inc-builder-asan.json"
         ).exists()
         assert (
             trial_output
