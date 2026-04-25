@@ -678,6 +678,226 @@ def test_continue_mode_does_not_retry_failed_by_default(tmp_path: Path) -> None:
     failed_job.save_meta.assert_not_called()
 
 
+def test_canceled_only_residue_defaults_to_fresh_in_noninteractive_mode(
+    tmp_path: Path,
+) -> None:
+    """Canceled-only residue should be purged as stale state, not resumed."""
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = False
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.register_or_raise.return_value = None
+
+    canceled_job = MagicMock()
+    canceled_job.id = "job-1"
+    canceled_job.meta = {}
+
+    existing = {
+        "queued": {},
+        "started": {},
+        "failed": {},
+        "finished": {},
+        "deferred": {},
+        "scheduled": {},
+    }
+    physical_existing = {
+        "queued": [],
+        "started": [],
+        "failed": [],
+        "finished": [],
+        "deferred": [],
+        "scheduled": [],
+        "canceled": [canceled_job],
+    }
+    new_trial = _make_trial(None)
+
+    dump_trial_matrix = MagicMock(side_effect=RuntimeError("stop after queue handling"))
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch("sys.stdin.isatty", return_value=False),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value=existing,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            return_value=physical_existing,
+        ),
+        patch("crsbench.distributed.queue.clear_experiment_jobs") as clear_existing,
+        patch("crsbench.distributed.queue.handle_orphaned_jobs", return_value=0),
+        patch(
+            "crsbench.run_experiment.dump_trial_matrix",
+            dump_trial_matrix,
+        ),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="stop after queue handling"):
+            run_experiment_distributed("exp-test", config, [new_trial], queue_mode=None)
+
+    session.resume_or_raise.assert_not_called()
+    clear_existing.assert_called_once_with(queue, "exp-test")
+    dump_trial_matrix.assert_called_once_with([new_trial], config)
+
+
+def test_canceled_only_residue_explicit_continue_keeps_resume_path(
+    tmp_path: Path,
+) -> None:
+    """Explicit continue should still use resume handling even for canceled residue."""
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = False
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.register_or_raise.return_value = None
+    session.resume_or_raise.return_value = []
+
+    canceled_job = MagicMock()
+    canceled_job.id = "job-1"
+    canceled_job.meta = {}
+
+    existing = {
+        "queued": {},
+        "started": {},
+        "failed": {},
+        "finished": {},
+        "deferred": {},
+        "scheduled": {},
+    }
+    physical_existing = {
+        "queued": [],
+        "started": [],
+        "failed": [],
+        "finished": [],
+        "deferred": [],
+        "scheduled": [],
+        "canceled": [canceled_job],
+    }
+    new_trial = _make_trial(None)
+
+    dump_trial_matrix = MagicMock(side_effect=RuntimeError("stop after queue handling"))
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch("sys.stdin.isatty", return_value=False),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value=existing,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            return_value=physical_existing,
+        ),
+        patch("crsbench.distributed.queue.clear_experiment_jobs") as clear_existing,
+        patch("crsbench.distributed.queue.handle_orphaned_jobs", return_value=0),
+        patch(
+            "crsbench.run_experiment.dump_trial_matrix",
+            dump_trial_matrix,
+        ),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="stop after queue handling"):
+            run_experiment_distributed(
+                "exp-test",
+                config,
+                [new_trial],
+                queue_mode="continue",
+            )
+
+    session.resume_or_raise.assert_called_once()
+    clear_existing.assert_not_called()
+    dump_trial_matrix.assert_called_once_with([new_trial], config)
+
+
+def test_canceled_only_residue_explicit_quit_still_aborts(tmp_path: Path) -> None:
+    """Quit mode should still abort when any physical residue exists."""
+    config = MagicMock()
+    config.redis_host = "localhost"
+    config.resources = None
+    config.keep_only_results = False
+    config.experiment_filestore = tmp_path
+    config.experiment = "exp-test"
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.register_or_raise.return_value = None
+
+    canceled_job = MagicMock()
+    canceled_job.id = "job-1"
+    canceled_job.meta = {}
+
+    existing = {
+        "queued": {},
+        "started": {},
+        "failed": {},
+        "finished": {},
+        "deferred": {},
+        "scheduled": {},
+    }
+    physical_existing = {
+        "queued": [],
+        "started": [],
+        "failed": [],
+        "finished": [],
+        "deferred": [],
+        "scheduled": [],
+        "canceled": [canceled_job],
+    }
+
+    dump_trial_matrix = MagicMock()
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch("sys.stdin.isatty", return_value=False),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value=existing,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trial_jobs",
+            return_value=physical_existing,
+        ),
+        patch("crsbench.distributed.queue.clear_experiment_jobs") as clear_existing,
+        patch("crsbench.distributed.queue.handle_orphaned_jobs", return_value=0),
+        patch(
+            "crsbench.run_experiment.dump_trial_matrix",
+            dump_trial_matrix,
+        ),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+    ):
+        run_experiment_distributed(
+            "exp-test", config, [_make_trial(None)], queue_mode="quit"
+        )
+
+    session.resume_or_raise.assert_not_called()
+    clear_existing.assert_not_called()
+    dump_trial_matrix.assert_not_called()
+
+
 def test_continue_mode_retry_failed_requeues(tmp_path: Path) -> None:
     """Continue mode with retry_failed should mark and requeue failed jobs."""
     config = MagicMock()

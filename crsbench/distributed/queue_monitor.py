@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import queue as queue_module
 import sys
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -21,6 +23,11 @@ if TYPE_CHECKING:
     from crsbench.distributed.registry import RegistryClient
 
 logger = get_logger(__name__)
+
+_RICH_MONITOR_INPUT_POLL_INTERVAL_SEC = 0.1
+_RICH_MONITOR_MIN_REFRESH_INTERVAL_SEC = 0.01
+_RICH_MONITOR_AUTO_ROTATE_INTERVAL_SEC = 5.0
+_RICH_MONITOR_POLLER_CLOSE_TIMEOUT_SEC = 0.2
 
 
 def _rich_console_available() -> bool:
@@ -84,24 +91,130 @@ class _RichMonitorInput:
         self._fd: int | None = None
         self._saved_termios_attrs: Any = None
         self._owns_fd = False
+        self._active_fds: list[int] = []
+        self._saved_termios_attrs_by_fd: dict[int, Any] = {}
+        self._owned_fds: set[int] = set()
+        self._attached_signatures: set[tuple[int, int]] = set()
         self._pending_commands: deque[str] = deque()
+        self._auto_rotate_paused = False
         self.manual_navigation_available = False
         self.manual_navigation_status = (
-            "n/p unavailable: stdin not interactive; auto-rotates each refresh"
+            "n/p unavailable: stdin not interactive; auto-rotates automatically"
         )
 
     def _set_manual_navigation_unavailable(self, reason: str) -> "_RichMonitorInput":
+        self._auto_rotate_paused = False
         self.manual_navigation_available = False
         self.manual_navigation_status = (
-            f"n/p unavailable: {reason}; auto-rotates each refresh"
+            f"n/p unavailable: {reason}; auto-rotates automatically"
         )
         return self
 
-    def _activate_manual_navigation(self, fd: int, saved_termios_attrs: Any) -> None:
-        self._fd = fd
-        self._saved_termios_attrs = saved_termios_attrs
+    def set_auto_rotate_paused(self, paused: bool) -> None:
+        self._auto_rotate_paused = paused
+        if not self.manual_navigation_available:
+            return
+        if paused:
+            self.manual_navigation_status = "n/p active; Space resumes auto-rotate"
+            return
+        self.manual_navigation_status = "n/p active; Space pauses auto-rotate"
+
+    def _sync_primary_fd(self) -> None:
+        if not self._active_fds:
+            self._fd = None
+            self._saved_termios_attrs = None
+            self._owns_fd = False
+            return
+        self._fd = self._active_fds[0]
+        self._saved_termios_attrs = self._saved_termios_attrs_by_fd[self._fd]
+        self._owns_fd = self._fd in self._owned_fds
+
+    def _fd_signature(self, fd: int) -> tuple[int, int] | None:
+        try:
+            import os
+            from pathlib import Path
+
+            tty_path = os.ttyname(fd)
+            stat_result = Path(tty_path).stat()
+        except OSError:
+            return None
+        return (stat_result.st_dev, stat_result.st_ino)
+
+    def _register_input_fd(
+        self,
+        fd: int,
+        saved_termios_attrs: Any,
+        *,
+        owns_fd: bool,
+    ) -> None:
+        signature = self._fd_signature(fd)
+        if signature is not None and signature in self._attached_signatures:
+            if owns_fd:
+                try:
+                    import os
+
+                    os.close(fd)
+                except OSError:
+                    pass
+            return
+        if signature is not None:
+            self._attached_signatures.add(signature)
+        self._active_fds.append(fd)
+        self._saved_termios_attrs_by_fd[fd] = saved_termios_attrs
+        if owns_fd:
+            self._owned_fds.add(fd)
+        self._sync_primary_fd()
         self.manual_navigation_available = True
-        self.manual_navigation_status = "n/p active; auto-rotates when idle"
+        self.set_auto_rotate_paused(False)
+
+    def _deactivate_input_fd(self, fd: int) -> None:
+        self._active_fds = [
+            active_fd for active_fd in self._active_fds if active_fd != fd
+        ]
+        self._sync_primary_fd()
+        if self._active_fds:
+            return
+        self._set_manual_navigation_unavailable("hotkey input unavailable")
+
+    def _deactivate_invalid_input_fds(self) -> bool:
+        try:
+            import select
+        except ImportError:
+            for fd in list(self._active_fds):
+                self._deactivate_input_fd(fd)
+            return False
+
+        for fd in list(self._active_fds):
+            try:
+                select.select([fd], [], [], 0)
+            except OSError:
+                self._deactivate_input_fd(fd)
+        return bool(self._active_fds)
+
+    def _read_ready_input(self, fd: int, max_bytes: int) -> bytes:
+        import os
+
+        get_blocking = getattr(os, "get_blocking", None)
+        set_blocking = getattr(os, "set_blocking", None)
+        if not callable(get_blocking) or not callable(set_blocking):
+            return os.read(fd, max_bytes)
+
+        try:
+            was_blocking = get_blocking(fd)
+        except OSError:
+            return os.read(fd, max_bytes)
+
+        if not was_blocking:
+            return os.read(fd, max_bytes)
+
+        try:
+            set_blocking(fd, False)
+            return os.read(fd, max_bytes)
+        finally:
+            try:
+                set_blocking(fd, True)
+            except OSError:
+                pass
 
     def _attach_stream(self, stream) -> str | None:
         isatty = getattr(stream, "isatty", None)
@@ -125,8 +238,7 @@ class _RichMonitorInput:
         except (OSError, ValueError, AttributeError):
             return "cbreak setup failed"
 
-        self._owns_fd = False
-        self._activate_manual_navigation(fd, saved_termios_attrs)
+        self._register_input_fd(fd, saved_termios_attrs, owns_fd=False)
         return None
 
     def _attach_controlling_terminal(self) -> str | None:
@@ -148,8 +260,7 @@ class _RichMonitorInput:
             os.close(fd)
             return "controlling terminal setup failed"
 
-        self._owns_fd = True
-        self._activate_manual_navigation(fd, saved_termios_attrs)
+        self._register_input_fd(fd, saved_termios_attrs, owns_fd=True)
         return None
 
     def __enter__(self) -> "_RichMonitorInput":
@@ -157,6 +268,8 @@ class _RichMonitorInput:
         if self._prefer_controlling_terminal:
             controlling_terminal_reason = self._attach_controlling_terminal()
             if controlling_terminal_reason is None:
+                if self._attached_signatures:
+                    self._attach_stream(self._stream)
                 return self
             reasons.append(controlling_terminal_reason)
 
@@ -168,24 +281,31 @@ class _RichMonitorInput:
         return self._set_manual_navigation_unavailable(" and ".join(reasons))
 
     def __exit__(self, exc_type, exc, tb) -> bool:
-        if self._fd is None or self._saved_termios_attrs is None:
+        if not self._saved_termios_attrs_by_fd:
             return False
 
+        termios_module: Any = None
         try:
-            import termios
-
-            termios.tcsetattr(
-                self._fd,
-                termios.TCSADRAIN,
-                self._saved_termios_attrs,
-            )
-        except (ImportError, OSError, ValueError, AttributeError):
+            import termios as termios_module
+        except ImportError:
             pass
-        if self._owns_fd:
+
+        for fd, saved_termios_attrs in list(self._saved_termios_attrs_by_fd.items()):
+            if termios_module is not None:
+                try:
+                    termios_module.tcsetattr(
+                        fd,
+                        termios_module.TCSADRAIN,
+                        saved_termios_attrs,
+                    )
+                except (OSError, ValueError, AttributeError):
+                    pass
+            if fd not in self._owned_fds:
+                continue
             try:
                 import os
 
-                os.close(self._fd)
+                os.close(fd)
             except OSError:
                 pass
         return False
@@ -194,7 +314,7 @@ class _RichMonitorInput:
         if self._pending_commands:
             return self._pending_commands.popleft()
 
-        if not self.manual_navigation_available or self._fd is None:
+        if not self.manual_navigation_available or not self._active_fds:
             if timeout_sec > 0:
                 time.sleep(timeout_sec)
             return None
@@ -206,26 +326,136 @@ class _RichMonitorInput:
                 return None
 
             try:
-                import os
                 import select
 
-                ready, _, _ = select.select([self._fd], [], [], remaining)
+                ready, _, _ = select.select(list(self._active_fds), [], [], remaining)
                 if not ready:
                     return None
-                data = os.read(self._fd, 64)
+                fd = ready[0]
             except OSError:
+                if self._deactivate_invalid_input_fds():
+                    continue
                 return None
 
-            if not data:
+            for fd in list(ready):
+                try:
+                    data = self._read_ready_input(fd, 64)
+                except BlockingIOError:
+                    continue
+                except OSError:
+                    self._deactivate_input_fd(fd)
+                    if not self.manual_navigation_available:
+                        return None
+                    continue
+
+                if not data:
+                    self._deactivate_input_fd(fd)
+                    if not self.manual_navigation_available:
+                        return None
+                    continue
+
+                for char in data.decode(errors="ignore"):
+                    if char == " ":
+                        self._pending_commands.append("space")
+                        continue
+                    command = char.lower()
+                    if command in {"n", "p"}:
+                        self._pending_commands.append(command)
+
+                if self._pending_commands:
+                    return self._pending_commands.popleft()
+            if not self.manual_navigation_available:
                 return None
 
-            for char in data.decode(errors="ignore"):
-                command = char.lower()
-                if command in {"n", "p"}:
-                    self._pending_commands.append(command)
 
-            if self._pending_commands:
-                return self._pending_commands.popleft()
+def _rich_monitor_refresh_interval_sec(poll_interval: float) -> float:
+    return (
+        poll_interval if poll_interval > 0 else _RICH_MONITOR_MIN_REFRESH_INTERVAL_SEC
+    )
+
+
+def _rich_monitor_input_wait_sec(poll_interval: float) -> float:
+    return min(
+        _RICH_MONITOR_INPUT_POLL_INTERVAL_SEC,
+        _rich_monitor_refresh_interval_sec(poll_interval),
+    )
+
+
+def _rich_monitor_auto_rotate_interval_sec(poll_interval: float) -> float:
+    del poll_interval
+    return _RICH_MONITOR_AUTO_ROTATE_INTERVAL_SEC
+
+
+class _RichMonitorSnapshotPoller:
+    """Refresh snapshots off the UI thread so local key handling stays responsive."""
+
+    def __init__(
+        self,
+        queue,
+        experiment_name: str,
+        *,
+        registry: "RegistryClient | None",
+        poll_interval: float,
+    ) -> None:
+        self._queue = queue
+        self._experiment_name = experiment_name
+        self._registry = registry
+        self._refresh_interval_sec = _rich_monitor_refresh_interval_sec(poll_interval)
+        self._last_renew = time.monotonic()
+        self._updates: queue_module.Queue[QueueMonitorSnapshot | Exception] = (
+            queue_module.Queue(maxsize=1)
+        )
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="crsbench-rich-monitor-refresh",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def close(self) -> None:
+        self._stop_event.set()
+        self._thread.join(timeout=_RICH_MONITOR_POLLER_CLOSE_TIMEOUT_SEC)
+        if self._thread.is_alive():
+            logger.warning("Rich monitor refresh is still stopping in the background")
+
+    def drain_latest(self) -> QueueMonitorSnapshot | None:
+        latest_snapshot: QueueMonitorSnapshot | None = None
+        while True:
+            try:
+                item = self._updates.get_nowait()
+            except queue_module.Empty:
+                break
+            if isinstance(item, Exception):
+                raise item
+            latest_snapshot = item
+        return latest_snapshot
+
+    def _publish(self, item: QueueMonitorSnapshot | Exception) -> None:
+        while True:
+            try:
+                self._updates.put_nowait(item)
+                return
+            except queue_module.Full:
+                try:
+                    self._updates.get_nowait()
+                except queue_module.Empty:
+                    continue
+
+    def _run(self) -> None:
+        try:
+            while not self._stop_event.wait(self._refresh_interval_sec):
+                self._last_renew = _renew_registry(
+                    self._registry,
+                    experiment_name=self._experiment_name,
+                    last_renew=self._last_renew,
+                )
+                snapshot = build_monitor_snapshot(self._queue, self._experiment_name)
+                self._publish(snapshot)
+        except Exception as exc:
+            self._publish(exc)
 
 
 def get_experiment_queue_stats(queue, experiment_name: str) -> dict[str, int]:
@@ -557,9 +787,11 @@ def _build_rich_group(
     page_index: int = 0,
     page_count: int = 1,
     paging_status_text: str | None = None,
+    auto_rotate_paused: bool = False,
 ):
     from rich.console import Group
     from rich.table import Table
+    from rich.text import Text
 
     visible_running_jobs = (
         snapshot.running_jobs if running_jobs is None else running_jobs
@@ -580,12 +812,50 @@ def _build_rich_group(
     table.add_row("Total", str(total_jobs + disk_skipped))
 
     running_table = Table(title="Running Jobs")
+    footer = None
     if paging_active and total_running_jobs > len(visible_running_jobs):
-        helper_text = paging_status_text or "auto-rotates each refresh"
-        running_table.caption = (
-            f"Page {page_index + 1}/{page_count}: "
-            f"showing {len(visible_running_jobs)} of {total_running_jobs} running jobs; "
-            f"{helper_text}"
+        helper_text = paging_status_text or "auto-rotates automatically"
+        compact_helper_text = helper_text
+        unavailable_prefix = "n/p unavailable: "
+        if helper_text.startswith(unavailable_prefix):
+            reason, _, _ = helper_text[len(unavailable_prefix) :].partition(";")
+            compact_reason = reason.strip()
+            if compact_reason:
+                compact_helper_text = f"{compact_reason}; n/p unavailable"
+        helper_footer = Table.grid(expand=True, padding=(0, 0))
+        helper_footer.add_column(ratio=1)
+        helper_footer.add_column(
+            justify="right",
+            width=len(" [PAUSED]"),
+            no_wrap=True,
+        )
+        helper_footer.add_row(
+            Text(
+                compact_helper_text,
+                style="dim italic",
+                no_wrap=True,
+                overflow="ellipsis",
+            ),
+            Text(
+                " [PAUSED]" if auto_rotate_paused else "",
+                style="bold red",
+                no_wrap=True,
+            ),
+        )
+        footer = Table.grid(expand=True, padding=(0, 1))
+        footer.add_column(ratio=1)
+        footer.add_column(justify="right")
+        footer.add_row(
+            helper_footer,
+            Text(
+                (
+                    f"Page {page_index + 1}/{page_count}: "
+                    f"{len(visible_running_jobs)}/{total_running_jobs}"
+                ),
+                style="dim italic",
+                no_wrap=True,
+                overflow="ellipsis",
+            ),
         )
     running_table.add_column("Worker", style="green")
     running_table.add_column("CRS", style="cyan")
@@ -610,6 +880,8 @@ def _build_rich_group(
             job.elapsed or "N/A",
         )
 
+    if footer is not None:
+        return Group(table, running_table, footer)
     return Group(table, running_table)
 
 
@@ -629,6 +901,7 @@ def _select_running_jobs_window(
     disk_skipped: int,
     page_index: int,
     paging_status_text: str | None = None,
+    auto_rotate_paused: bool = False,
 ) -> tuple[list[RunningJobInfo], bool, int, int]:
     running_jobs = snapshot.running_jobs
     total_running_jobs = len(running_jobs)
@@ -662,6 +935,7 @@ def _select_running_jobs_window(
             page_index=0,
             page_count=1,
             paging_status_text=paging_status_text,
+            auto_rotate_paused=auto_rotate_paused,
         )
         if _count_rendered_lines(console, candidate_group) <= console.size.height:
             best = candidate_count
@@ -682,7 +956,7 @@ def _select_running_jobs_window(
 
 def _page_navigation_idle_timeout_sec(poll_interval: float) -> float:
     """Keep manual page selection visible briefly before auto-rotation resumes."""
-    return max(5.0, poll_interval * 2)
+    return _rich_monitor_auto_rotate_interval_sec(poll_interval)
 
 
 def _should_auto_rotate_pages(
@@ -724,6 +998,7 @@ def _build_rich_renderable(
     disk_skipped: int,
     page_index: int,
     paging_status_text: str,
+    auto_rotate_paused: bool = False,
 ):
     visible_running_jobs, paging_active, selected_page_index, page_count = (
         _select_running_jobs_window(
@@ -734,6 +1009,7 @@ def _build_rich_renderable(
             disk_skipped=disk_skipped,
             page_index=page_index,
             paging_status_text=paging_status_text,
+            auto_rotate_paused=auto_rotate_paused,
         )
     )
     renderable = _build_rich_group(
@@ -747,6 +1023,7 @@ def _build_rich_renderable(
         page_index=selected_page_index,
         page_count=page_count,
         paging_status_text=paging_status_text,
+        auto_rotate_paused=auto_rotate_paused,
     )
     return renderable, selected_page_index, page_count, paging_active
 
@@ -767,11 +1044,11 @@ def _monitor_queue_rich(
     from rich.live import Live
 
     console = Console()
-    last_renew = time.monotonic()
     seen_finished: set[str] = set()
     seen_failed: set[str] = set()
     page_index = 0
     last_manual_page_change_at: float | None = None
+    auto_rotate_paused = False
 
     snapshot = build_monitor_snapshot(queue, experiment_name)
     _notify_snapshot(callbacks, snapshot)
@@ -790,76 +1067,25 @@ def _monitor_queue_rich(
             disk_skipped=disk_skipped,
             page_index=page_index,
             paging_status_text=monitor_input.manual_navigation_status,
+            auto_rotate_paused=auto_rotate_paused,
         )
         with Live(
             renderable,
             refresh_per_second=1,
             console=console,
         ) as live:
-            while True:
-                completed, failed = _process_tracked_jobs(
-                    tracked_jobs,
-                    callbacks=callbacks,
-                    seen_finished=seen_finished,
-                    seen_failed=seen_failed,
-                )
+            poller: _RichMonitorSnapshotPoller | None = None
+            refresh_interval_sec = _rich_monitor_refresh_interval_sec(poll_interval)
+            input_wait_sec = _rich_monitor_input_wait_sec(poll_interval)
+            auto_rotate_interval_sec = _rich_monitor_auto_rotate_interval_sec(
+                poll_interval
+            )
+            tracked_job_refresh_at = time.monotonic()
+            completed = 0
+            failed = 0
 
-                if tracked_jobs and completed + failed >= len(tracked_jobs):
-                    break
-                if (
-                    exit_when_idle
-                    and not tracked_jobs
-                    and snapshot.stats["queued"] + snapshot.stats["started"] == 0
-                ):
-                    break
-
-                refresh_deadline = time.monotonic() + poll_interval
-                while True:
-                    remaining = refresh_deadline - time.monotonic()
-                    if remaining <= 0:
-                        break
-                    command = monitor_input.read_command(remaining)
-                    if command is None:
-                        break
-                    if not paging_active:
-                        continue
-                    page_index = _apply_page_navigation_command(
-                        command=command,
-                        page_index=page_index,
-                        page_count=page_count,
-                    )
-                    last_manual_page_change_at = time.monotonic()
-                    (
-                        renderable,
-                        page_index,
-                        page_count,
-                        paging_active,
-                    ) = _build_rich_renderable(
-                        console,
-                        snapshot,
-                        experiment_name=experiment_name,
-                        total_jobs=display_total,
-                        disk_skipped=disk_skipped,
-                        page_index=page_index,
-                        paging_status_text=monitor_input.manual_navigation_status,
-                    )
-                    live.update(renderable, refresh=True)
-
-                if paging_active and _should_auto_rotate_pages(
-                    last_manual_page_change_at=last_manual_page_change_at,
-                    now=time.monotonic(),
-                    poll_interval=poll_interval,
-                ):
-                    page_index = (page_index + 1) % page_count
-
-                last_renew = _renew_registry(
-                    registry,
-                    experiment_name=experiment_name,
-                    last_renew=last_renew,
-                )
-                snapshot = build_monitor_snapshot(queue, experiment_name)
-                _notify_snapshot(callbacks, snapshot)
-                display_total = _display_total(snapshot, total_jobs)
+            def _render_current_snapshot(*, refresh: bool) -> None:
+                nonlocal renderable, page_index, page_count, paging_active
                 (
                     renderable,
                     page_index,
@@ -873,5 +1099,95 @@ def _monitor_queue_rich(
                     disk_skipped=disk_skipped,
                     page_index=page_index,
                     paging_status_text=monitor_input.manual_navigation_status,
+                    auto_rotate_paused=auto_rotate_paused,
                 )
-                live.update(renderable, refresh=True)
+                live.update(renderable, refresh=refresh)
+
+            next_auto_rotate_at = time.monotonic() + auto_rotate_interval_sec
+            try:
+                while True:
+                    if poller is not None:
+                        latest_snapshot = poller.drain_latest()
+                        if latest_snapshot is not None:
+                            was_paging_active = paging_active
+                            was_page_count = page_count
+                            snapshot = latest_snapshot
+                            _notify_snapshot(callbacks, snapshot)
+                            display_total = _display_total(snapshot, total_jobs)
+                            _render_current_snapshot(refresh=True)
+                            if paging_active and (
+                                not was_paging_active or page_count != was_page_count
+                            ):
+                                next_auto_rotate_at = (
+                                    time.monotonic() + auto_rotate_interval_sec
+                                )
+
+                    now = time.monotonic()
+                    if tracked_jobs and now >= tracked_job_refresh_at:
+                        completed, failed = _process_tracked_jobs(
+                            tracked_jobs,
+                            callbacks=callbacks,
+                            seen_finished=seen_finished,
+                            seen_failed=seen_failed,
+                        )
+                        tracked_job_refresh_at = now + refresh_interval_sec
+
+                    if tracked_jobs and completed + failed >= len(tracked_jobs):
+                        break
+                    if (
+                        exit_when_idle
+                        and not tracked_jobs
+                        and snapshot.stats["queued"] + snapshot.stats["started"] == 0
+                    ):
+                        break
+
+                    if poller is None:
+                        poller = _RichMonitorSnapshotPoller(
+                            queue,
+                            experiment_name,
+                            registry=registry,
+                            poll_interval=poll_interval,
+                        )
+                        poller.start()
+
+                    if (
+                        paging_active
+                        and not auto_rotate_paused
+                        and now >= next_auto_rotate_at
+                        and _should_auto_rotate_pages(
+                            last_manual_page_change_at=last_manual_page_change_at,
+                            now=now,
+                            poll_interval=poll_interval,
+                        )
+                    ):
+                        page_index = (page_index + 1) % page_count
+                        next_auto_rotate_at = now + auto_rotate_interval_sec
+                        _render_current_snapshot(refresh=True)
+
+                    command = monitor_input.read_command(input_wait_sec)
+                    if command is None:
+                        continue
+                    if command == "space":
+                        auto_rotate_paused = not auto_rotate_paused
+                        monitor_input.set_auto_rotate_paused(auto_rotate_paused)
+                        if not auto_rotate_paused:
+                            next_auto_rotate_at = (
+                                time.monotonic() + auto_rotate_interval_sec
+                            )
+                        _render_current_snapshot(refresh=True)
+                        continue
+                    if not paging_active:
+                        continue
+                    page_index = _apply_page_navigation_command(
+                        command=command,
+                        page_index=page_index,
+                        page_count=page_count,
+                    )
+                    last_manual_page_change_at = time.monotonic()
+                    next_auto_rotate_at = (
+                        last_manual_page_change_at + auto_rotate_interval_sec
+                    )
+                    _render_current_snapshot(refresh=True)
+            finally:
+                if poller is not None:
+                    poller.close()

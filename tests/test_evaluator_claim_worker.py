@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
 from crsbench.builder.types import BenchmarkMode, VariantType
 from crsbench.distributed.evaluator_jobs import EmbeddedPov, SinglePovPayload
 from crsbench.distributed.evaluator_verify_claims import (
@@ -496,6 +499,411 @@ def test_refresh_active_claims_releases_claim_after_local_verify_failure() -> No
     assert record.terminal_result is None
 
 
+def test_has_pending_required_builds_tolerates_concurrent_active_claim_refresh() -> (
+    None
+):
+    from crsbench.distributed.evaluator_claim_worker import (
+        EvaluatorClaimWorker,
+        _ActiveClaim,
+    )
+
+    class _BlockingBuildQueue(_FakeQueue):
+        def __init__(self) -> None:
+            super().__init__("build-q")
+            self.fetch_started = threading.Event()
+            self.allow_fetch = threading.Event()
+            self._calls = 0
+
+        def fetch_job(self, job_id: str) -> _FakeJob | None:
+            self._calls += 1
+            if self._calls == 1:
+                self.fetch_started.set()
+                assert self.allow_fetch.wait(timeout=5)
+            return _FakeJob(job_id, status="finished")
+
+    redis_conn = _FakeRedis()
+    build_queue = _BlockingBuildQueue()
+    verify_queue = _FakeQueue("verify-q")
+    worker = EvaluatorClaimWorker(
+        redis_conn=redis_conn,
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=build_queue,
+        verify_queue=verify_queue,
+        verification_engine=MagicMock(),
+        benchmarks_root=Path("/benchmarks"),
+    )
+    worker._active_claims["request-1"] = _ActiveClaim(
+        local_verify_job_id="verify-1",
+        required_build_job_ids=("build-1",),
+    )
+    worker._active_claims["request-2"] = _ActiveClaim(
+        local_verify_job_id="verify-2",
+        required_build_job_ids=("build-2",),
+    )
+
+    result: list[bool] = []
+    errors: list[BaseException] = []
+
+    def _check_pending() -> None:
+        try:
+            result.append(worker.has_pending_required_builds())
+        except BaseException as exc:  # pragma: no cover - assertion captures failure
+            errors.append(exc)
+
+    thread = threading.Thread(target=_check_pending)
+    thread.start()
+
+    assert build_queue.fetch_started.wait(timeout=5)
+
+    worker.refresh_active_claims(now=105.0)
+    build_queue.allow_fetch.set()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert errors == []
+    assert result == [False]
+
+
+def test_has_pending_required_builds_returns_true_while_claim_materialization_is_in_progress() -> (
+    None
+):
+    from crsbench.distributed.evaluator_claim_worker import (
+        EvaluatorClaimWorker,
+        _ActiveClaim,
+    )
+
+    redis_conn = _FakeRedis()
+    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
+    store.submit_request(
+        VerifyRequestRecord(
+            request_id="request-1",
+            owner_key="trial::exp1::request-1",
+            request_kind="pov",
+            payload={"benchmark": "test-benchmark"},
+        )
+    )
+
+    worker = EvaluatorClaimWorker(
+        redis_conn=redis_conn,
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=_FakeQueue("build-q"),
+        verify_queue=_FakeQueue("verify-q"),
+        verification_engine=MagicMock(),
+        benchmarks_root=Path("/benchmarks"),
+        max_inflight_requests=1,
+    )
+
+    materialize_started = threading.Event()
+    allow_materialize = threading.Event()
+
+    def _materialize(record: VerifyRequestRecord) -> _ActiveClaim:
+        materialize_started.set()
+        assert allow_materialize.wait(timeout=5)
+        return _ActiveClaim(
+            local_verify_job_id=f"verify-{record.request_id}",
+            required_build_job_ids=(),
+        )
+
+    worker._materialize_claimed_request = _materialize  # type: ignore[method-assign]
+
+    results: list[VerifyRequestRecord | None] = []
+    errors: list[BaseException] = []
+
+    def _dispatch() -> None:
+        try:
+            results.append(worker.dispatch_one(now=time.time()))
+        except BaseException as exc:  # pragma: no cover - assertion captures failure
+            errors.append(exc)
+
+    thread = threading.Thread(target=_dispatch)
+    thread.start()
+
+    assert materialize_started.wait(timeout=5)
+    try:
+        assert worker.has_pending_required_builds() is True
+    finally:
+        allow_materialize.set()
+        thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert errors == []
+    assert len(results) == 1
+    assert results[0] is not None
+
+
+def test_has_pending_required_builds_stays_false_during_empty_claim_poll() -> None:
+    from crsbench.distributed.evaluator_claim_worker import EvaluatorClaimWorker
+
+    worker = EvaluatorClaimWorker(
+        redis_conn=_FakeRedis(),
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=_FakeQueue("build-q"),
+        verify_queue=_FakeQueue("verify-q"),
+        verification_engine=MagicMock(),
+        benchmarks_root=Path("/benchmarks"),
+        max_inflight_requests=1,
+    )
+
+    claim_started = threading.Event()
+    allow_claim = threading.Event()
+
+    def _claim_next_request(*, evaluator_id: str, now: float, lease_seconds: int):
+        del evaluator_id, now, lease_seconds
+        claim_started.set()
+        assert allow_claim.wait(timeout=5)
+
+    worker.store.claim_next_request = _claim_next_request  # type: ignore[method-assign]
+
+    results: list[VerifyRequestRecord | None] = []
+    errors: list[BaseException] = []
+
+    def _dispatch() -> None:
+        try:
+            results.append(worker.dispatch_one(now=100.0))
+        except BaseException as exc:  # pragma: no cover - assertion captures failure
+            errors.append(exc)
+
+    thread = threading.Thread(target=_dispatch)
+    thread.start()
+
+    assert claim_started.wait(timeout=5)
+    try:
+        assert worker.has_pending_required_builds() is False
+    finally:
+        allow_claim.set()
+        thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert errors == []
+    assert results == [None]
+
+
+def test_has_pending_required_builds_ignores_expired_claims() -> None:
+    from crsbench.distributed.evaluator_claim_worker import EvaluatorClaimWorker
+    from crsbench.distributed.evaluator_verify_claims import VerifyClaim
+
+    redis_conn = _FakeRedis()
+    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
+    store.submit_request(
+        VerifyRequestRecord(
+            request_id="request-1",
+            owner_key="trial::exp1::request-1",
+            request_kind="pov",
+            payload={"benchmark": "test-benchmark"},
+            claim=VerifyClaim(evaluator_id="eval-1", expires_at=time.time() - 1.0),
+        )
+    )
+
+    worker = EvaluatorClaimWorker(
+        redis_conn=redis_conn,
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=_FakeQueue("build-q"),
+        verify_queue=_FakeQueue("verify-q"),
+        verification_engine=MagicMock(),
+        benchmarks_root=Path("/benchmarks"),
+        max_inflight_requests=1,
+    )
+
+    assert worker.has_pending_required_builds() is False
+
+
+@pytest.mark.parametrize(
+    "terminal_status",
+    ["failed", "finished", "stopped", "canceled", "cancelled"],
+)
+def test_reclaimed_request_reenqueues_fresh_local_verify_job(
+    terminal_status: str,
+) -> None:
+    from crsbench.distributed.evaluator_claim_worker import (
+        EvaluatorClaimWorker,
+        build_local_verify_job_id,
+    )
+
+    redis_conn = _FakeRedis()
+    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
+    patch_payload = PatchJobPayload(
+        experiment_name="exp1",
+        trial_id="trial-1",
+        benchmark="test-benchmark",
+        harness="h1",
+        cpv_id="cpv-1",
+        patch=EmbeddedPatch(
+            patch_id="patch-1",
+            pov_id="cpv-1",
+            patch_content_b64="cGF0Y2g=",
+        ),
+        sanitizer="address",
+        source_mode="main_repo",
+        verify_variants=True,
+        test_mode="FULL",
+        use_inc_build=True,
+        enqueued_at=100.0,
+    )
+    request_id = "patch-verify:trial-1:test-benchmark:h1:cpv-1:patch-1"
+    store.submit_request(
+        VerifyRequestRecord(
+            request_id=request_id,
+            owner_key="trial::exp1::trial-1",
+            request_kind="patch",
+            payload=patch_payload.to_dict(),
+        )
+    )
+
+    build_queue = _FakeQueue("build-q")
+    verify_queue = _FakeQueue("verify-q")
+    worker = EvaluatorClaimWorker(
+        redis_conn=redis_conn,
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=build_queue,
+        verify_queue=verify_queue,
+        verification_engine=MagicMock(),
+        benchmarks_root=Path("/benchmarks"),
+    )
+
+    claimed = worker.dispatch_one(now=100.0)
+    assert claimed is not None
+
+    first_build_job_id = build_queue.enqueued[0]["job_id"]
+    first_build_job = build_queue.jobs[first_build_job_id]
+
+    local_verify_job_id = build_local_verify_job_id(
+        request_id=request_id,
+        evaluator_id="eval-1",
+    )
+    first_verify_job = verify_queue.jobs[local_verify_job_id]
+    first_verify_job.set_status(terminal_status)
+
+    worker.refresh_active_claims(now=101.0)
+    assert request_id not in worker._active_claims
+
+    released = store.load_request(request_id)
+    assert released is not None
+    assert released.claim is None
+    assert released.terminal_result is None
+
+    reclaimed = worker.dispatch_one(now=102.0)
+    assert reclaimed is not None
+    assert reclaimed.request_id == request_id
+    assert request_id in worker._active_claims
+    assert len(build_queue.enqueued) == 1
+    assert build_queue.jobs[first_build_job_id] is first_build_job
+    assert len(verify_queue.enqueued) == 2
+
+    second_verify_job = verify_queue.jobs[local_verify_job_id]
+    assert second_verify_job is not first_verify_job
+    assert second_verify_job.get_status() == "queued"
+
+    worker.refresh_active_claims(now=103.0)
+
+    active = store.load_request(request_id)
+    assert active is not None
+    assert active.claim is not None
+    assert active.claim.evaluator_id == "eval-1"
+    assert active.terminal_result is None
+
+
+def test_reclaimed_pov_request_reenqueues_fresh_local_verify_job() -> None:
+    from crsbench.distributed.evaluator_claim_worker import (
+        EvaluatorClaimWorker,
+        build_local_ci_job_id,
+        build_local_verify_job_id,
+    )
+
+    redis_conn = _FakeRedis()
+    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
+    request_id = "verify:trial-1:test-benchmark:h1:pov-1"
+    payload = SinglePovPayload(
+        experiment_name="exp1",
+        trial_id="trial-1",
+        benchmark="test-benchmark",
+        harness="h1",
+        pov=EmbeddedPov.from_bytes("pov-1", b"boom"),
+        enqueued_at=100.0,
+        sanitizer="address",
+        build_job_ids=[
+            "build-single/test-benchmark/test-benchmark-asan-deltaref",
+            "build-single/test-benchmark/test-benchmark-asan-delta-cpv0",
+        ],
+        build_artifact_ids=[
+            "build-single/test-benchmark/test-benchmark-asan-deltaref",
+            "build-single/test-benchmark/test-benchmark-asan-delta-cpv0",
+        ],
+        source_mode="main_repo",
+        use_inc_build=True,
+    )
+    store.submit_request(
+        VerifyRequestRecord(
+            request_id=request_id,
+            owner_key="trial::exp1::trial-1",
+            request_kind="pov",
+            payload=payload.to_dict(),
+        )
+    )
+
+    engine, _adapter = _make_engine_and_adapter()
+    build_queue = _FakeQueue("build-q")
+    verify_queue = _FakeQueue("verify-q")
+    finished_build_id = build_local_ci_job_id(
+        "build-single/test-benchmark/test-benchmark-asan-deltaref/main_repo/inc",
+        evaluator_id="eval-1",
+    )
+    build_queue.jobs[finished_build_id] = _FakeJob(
+        finished_build_id,
+        status="finished",
+        result={"success": True},
+    )
+
+    worker = EvaluatorClaimWorker(
+        redis_conn=redis_conn,
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=build_queue,
+        verify_queue=verify_queue,
+        verification_engine=engine,
+        benchmarks_root=Path("/benchmarks"),
+    )
+
+    claimed = worker.dispatch_one(now=100.0)
+    assert claimed is not None
+
+    first_enqueued_build_job_ids = [entry["job_id"] for entry in build_queue.enqueued]
+    first_enqueued_build_jobs = {
+        job_id: build_queue.jobs[job_id] for job_id in first_enqueued_build_job_ids
+    }
+    local_verify_job_id = build_local_verify_job_id(
+        request_id=request_id,
+        evaluator_id="eval-1",
+    )
+    first_verify_job = verify_queue.jobs[local_verify_job_id]
+    first_verify_job.set_status("finished")
+
+    worker.refresh_active_claims(now=101.0)
+    assert request_id not in worker._active_claims
+
+    released = store.load_request(request_id)
+    assert released is not None
+    assert released.claim is None
+    assert released.terminal_result is None
+
+    reclaimed = worker.dispatch_one(now=102.0)
+    assert reclaimed is not None
+    assert reclaimed.request_id == request_id
+    assert request_id in worker._active_claims
+    assert len(build_queue.enqueued) == len(first_enqueued_build_job_ids)
+    for job_id, job in first_enqueued_build_jobs.items():
+        assert build_queue.jobs[job_id] is job
+    assert len(verify_queue.enqueued) == 2
+
+    second_verify_job = verify_queue.jobs[local_verify_job_id]
+    assert second_verify_job is not first_verify_job
+    assert second_verify_job.get_status() == "queued"
+
+
 def test_tick_claims_until_inflight_limit() -> None:
     from crsbench.distributed.evaluator_claim_worker import EvaluatorClaimWorker
 
@@ -574,3 +982,450 @@ def test_enqueue_or_reuse_job_adopts_trial_owner_for_reused_warmup_job() -> None
     assert reused is existing
     assert existing.meta[SCHEDULER_OWNER_KEY_META] == "trial::exp1::trial-1"
     assert existing.save_meta_calls == 1
+
+
+def test_enqueue_or_reuse_job_refreshes_terminal_verify_job_via_queue_removal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import crsbench.distributed.queue as queue_module
+    from crsbench.distributed.evaluator_claim_worker import _enqueue_or_reuse_job
+
+    queue = _FakeQueue("verify-q")
+    terminal_job = _FakeJob(
+        "claim-verify/eval-1/request-1",
+        status="finished",
+    )
+    queue.jobs[terminal_job.id] = terminal_job
+
+    removed_job_ids: list[str] = []
+
+    def remove_job(queue_obj: _FakeQueue, job_id: str) -> bool:
+        removed_job_ids.append(job_id)
+        queue_obj.jobs.pop(job_id, None)
+        return True
+
+    monkeypatch.setattr(queue_module, "remove_job_by_id", remove_job)
+
+    refreshed = _enqueue_or_reuse_job(
+        queue,
+        "crsbench.distributed.evaluator_claim_jobs.execute_claimed_verify",
+        {"request_id": "verify:trial-1:test-benchmark:h1:pov-1"},
+        job_timeout=3600,
+        job_id=terminal_job.id,
+        meta={"experiment_name": "exp1"},
+        refresh_terminal=True,
+    )
+
+    assert removed_job_ids == [terminal_job.id]
+    assert len(queue.enqueued) == 1
+    assert refreshed.id == terminal_job.id
+    assert refreshed is not terminal_job
+    assert refreshed.get_status() == "queued"
+
+
+def test_enqueue_or_reuse_job_refreshes_terminal_verify_job_after_duplicate_id_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import crsbench.distributed.queue as queue_module
+    from crsbench.distributed.evaluator_claim_worker import _enqueue_or_reuse_job
+
+    class _RacingQueue(_FakeQueue):
+        def __init__(self, name: str, *, raced_job: _FakeJob) -> None:
+            super().__init__(name)
+            self._raced_job = raced_job
+            self.enqueue_attempts = 0
+
+        def enqueue(
+            self,
+            func_name: str,
+            payload: dict[str, object],
+            *,
+            job_timeout: int,
+            result_ttl: int,
+            job_id: str,
+            depends_on: list[object] | None = None,
+            meta: dict[str, object] | None = None,
+        ) -> _FakeJob:
+            self.enqueue_attempts += 1
+            if self.enqueue_attempts == 1:
+                self.jobs[job_id] = self._raced_job
+                raise RuntimeError(f"job id {job_id} already exists")
+            return super().enqueue(
+                func_name,
+                payload,
+                job_timeout=job_timeout,
+                result_ttl=result_ttl,
+                job_id=job_id,
+                depends_on=depends_on,
+                meta=meta,
+            )
+
+    raced_job = _FakeJob(
+        "claim-verify/eval-1/request-2",
+        status="finished",
+    )
+    queue = _RacingQueue("verify-q", raced_job=raced_job)
+    removed_job_ids: list[str] = []
+
+    def remove_job(queue_obj: _FakeQueue, job_id: str) -> bool:
+        removed_job_ids.append(job_id)
+        queue_obj.jobs.pop(job_id, None)
+        return True
+
+    monkeypatch.setattr(queue_module, "remove_job_by_id", remove_job)
+
+    refreshed = _enqueue_or_reuse_job(
+        queue,
+        "crsbench.distributed.evaluator_claim_jobs.execute_claimed_verify",
+        {"request_id": "verify:trial-1:test-benchmark:h1:pov-2"},
+        job_timeout=3600,
+        job_id=raced_job.id,
+        meta={"experiment_name": "exp1"},
+        refresh_terminal=True,
+    )
+
+    assert queue.enqueue_attempts == 2
+    assert removed_job_ids == [raced_job.id]
+    assert len(queue.enqueued) == 1
+    assert refreshed.id == raced_job.id
+    assert refreshed is not raced_job
+    assert refreshed.get_status() == "queued"
+
+
+def test_enqueue_or_reuse_job_raises_when_terminal_verify_job_persists_after_reported_removal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import crsbench.distributed.queue as queue_module
+    from crsbench.distributed.evaluator_claim_worker import _enqueue_or_reuse_job
+
+    class _OpaqueQueue:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self._jobs: dict[str, _FakeJob] = {}
+            self.enqueued: list[dict[str, object]] = []
+
+        def fetch_job(self, job_id: str) -> _FakeJob | None:
+            return self._jobs.get(job_id)
+
+        def enqueue(
+            self,
+            func_name: str,
+            payload: dict[str, object],
+            *,
+            job_timeout: int,
+            result_ttl: int,
+            job_id: str,
+            depends_on: list[object] | None = None,
+            meta: dict[str, object] | None = None,
+        ) -> _FakeJob:
+            job = _FakeJob(job_id)
+            self._jobs[job_id] = job
+            self.enqueued.append(
+                {
+                    "func_name": func_name,
+                    "payload": payload,
+                    "job_timeout": job_timeout,
+                    "result_ttl": result_ttl,
+                    "job_id": job_id,
+                    "depends_on": list(depends_on or []),
+                    "meta": dict(meta or {}),
+                }
+            )
+            return job
+
+    queue = _OpaqueQueue("verify-q")
+    terminal_job = _FakeJob(
+        "claim-verify/eval-1/request-stale",
+        status="finished",
+    )
+    delete_calls: list[str] = []
+
+    def _delete() -> None:
+        delete_calls.append(terminal_job.id)
+
+    terminal_job.delete = _delete  # type: ignore[attr-defined]
+    queue._jobs[terminal_job.id] = terminal_job
+
+    removed_job_ids: list[str] = []
+
+    def remove_job(queue_obj: _OpaqueQueue, job_id: str) -> bool:
+        del queue_obj
+        removed_job_ids.append(job_id)
+        return True
+
+    monkeypatch.setattr(queue_module, "remove_job_by_id", remove_job)
+
+    with pytest.raises(RuntimeError, match="Failed to remove terminal job"):
+        _enqueue_or_reuse_job(
+            queue,
+            "crsbench.distributed.evaluator_claim_jobs.execute_claimed_verify",
+            {"request_id": "verify:trial-1:test-benchmark:h1:pov-stale"},
+            job_timeout=3600,
+            job_id=terminal_job.id,
+            meta={"experiment_name": "exp1"},
+            refresh_terminal=True,
+        )
+
+    assert removed_job_ids == [terminal_job.id]
+    assert delete_calls == [terminal_job.id]
+    assert queue._jobs[terminal_job.id] is terminal_job
+    assert queue.enqueued == []
+
+
+def test_enqueue_or_reuse_job_raises_after_duplicate_id_race_when_terminal_job_persists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import crsbench.distributed.queue as queue_module
+    from crsbench.distributed.evaluator_claim_worker import _enqueue_or_reuse_job
+
+    class _RacingQueue:
+        def __init__(self, name: str, *, raced_job: _FakeJob) -> None:
+            self.name = name
+            self._raced_job = raced_job
+            self.enqueue_attempts = 0
+            self._jobs: dict[str, _FakeJob] = {}
+            self.enqueued: list[dict[str, object]] = []
+
+        def fetch_job(self, job_id: str) -> _FakeJob | None:
+            return self._jobs.get(job_id)
+
+        def enqueue(
+            self,
+            func_name: str,
+            payload: dict[str, object],
+            *,
+            job_timeout: int,
+            result_ttl: int,
+            job_id: str,
+            depends_on: list[object] | None = None,
+            meta: dict[str, object] | None = None,
+        ) -> _FakeJob:
+            self.enqueue_attempts += 1
+            if self.enqueue_attempts == 1:
+                self._jobs[job_id] = self._raced_job
+                raise RuntimeError(f"job id {job_id} already exists")
+            job = _FakeJob(job_id)
+            self._jobs[job_id] = job
+            self.enqueued.append(
+                {
+                    "func_name": func_name,
+                    "payload": payload,
+                    "job_timeout": job_timeout,
+                    "result_ttl": result_ttl,
+                    "job_id": job_id,
+                    "depends_on": list(depends_on or []),
+                    "meta": dict(meta or {}),
+                }
+            )
+            return job
+
+    raced_job = _FakeJob(
+        "claim-verify/eval-1/request-stale-race",
+        status="finished",
+    )
+    delete_calls: list[str] = []
+
+    def _delete() -> None:
+        delete_calls.append(raced_job.id)
+
+    raced_job.delete = _delete  # type: ignore[attr-defined]
+    queue = _RacingQueue("verify-q", raced_job=raced_job)
+    removed_job_ids: list[str] = []
+
+    def remove_job(queue_obj: _RacingQueue, job_id: str) -> bool:
+        del queue_obj
+        removed_job_ids.append(job_id)
+        return True
+
+    monkeypatch.setattr(queue_module, "remove_job_by_id", remove_job)
+
+    with pytest.raises(RuntimeError, match="Failed to remove terminal job"):
+        _enqueue_or_reuse_job(
+            queue,
+            "crsbench.distributed.evaluator_claim_jobs.execute_claimed_verify",
+            {"request_id": "verify:trial-1:test-benchmark:h1:pov-stale-race"},
+            job_timeout=3600,
+            job_id=raced_job.id,
+            meta={"experiment_name": "exp1"},
+            refresh_terminal=True,
+        )
+
+    assert queue.enqueue_attempts == 1
+    assert removed_job_ids == [raced_job.id]
+    assert delete_calls == [raced_job.id]
+    assert queue._jobs[raced_job.id] is raced_job
+    assert queue.enqueued == []
+
+
+def test_enqueue_or_reuse_job_reuses_fresh_nonterminal_wrapper_after_duplicate_id_race_on_opaque_queue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import crsbench.distributed.queue as queue_module
+    from crsbench.distributed.evaluator_claim_worker import _enqueue_or_reuse_job
+
+    class _RacingQueue:
+        def __init__(
+            self,
+            name: str,
+            *,
+            raced_job: _FakeJob,
+            replacement_job: _FakeJob,
+        ) -> None:
+            self.name = name
+            self._raced_job = raced_job
+            self._replacement_job = replacement_job
+            self.enqueue_attempts = 0
+            self._jobs: dict[str, _FakeJob] = {}
+            self.enqueued: list[dict[str, object]] = []
+
+        def fetch_job(self, job_id: str) -> _FakeJob | None:
+            return self._jobs.get(job_id)
+
+        def enqueue(
+            self,
+            func_name: str,
+            payload: dict[str, object],
+            *,
+            job_timeout: int,
+            result_ttl: int,
+            job_id: str,
+            depends_on: list[object] | None = None,
+            meta: dict[str, object] | None = None,
+        ) -> _FakeJob:
+            self.enqueue_attempts += 1
+            if self.enqueue_attempts == 1:
+                self._jobs[job_id] = self._raced_job
+                raise RuntimeError(f"job id {job_id} already exists")
+            job = _FakeJob(job_id)
+            self._jobs[job_id] = job
+            self.enqueued.append(
+                {
+                    "func_name": func_name,
+                    "payload": payload,
+                    "job_timeout": job_timeout,
+                    "result_ttl": result_ttl,
+                    "job_id": job_id,
+                    "depends_on": list(depends_on or []),
+                    "meta": dict(meta or {}),
+                }
+            )
+            return job
+
+    raced_job = _FakeJob(
+        "claim-verify/eval-1/request-opaque-race",
+        status="finished",
+    )
+    replacement_job = _FakeJob(
+        raced_job.id,
+        status="queued",
+    )
+    queue = _RacingQueue(
+        "verify-q",
+        raced_job=raced_job,
+        replacement_job=replacement_job,
+    )
+    removed_job_ids: list[str] = []
+
+    def remove_job(queue_obj: _RacingQueue, job_id: str) -> bool:
+        removed_job_ids.append(job_id)
+        queue_obj._jobs[job_id] = queue_obj._replacement_job
+        return True
+
+    monkeypatch.setattr(queue_module, "remove_job_by_id", remove_job)
+
+    reused = _enqueue_or_reuse_job(
+        queue,
+        "crsbench.distributed.evaluator_claim_jobs.execute_claimed_verify",
+        {"request_id": "verify:trial-1:test-benchmark:h1:pov-opaque-race"},
+        job_timeout=3600,
+        job_id=raced_job.id,
+        meta={"experiment_name": "exp1"},
+        refresh_terminal=True,
+    )
+
+    assert queue.enqueue_attempts == 1
+    assert removed_job_ids == [raced_job.id]
+    assert reused is replacement_job
+    assert queue._jobs[raced_job.id] is replacement_job
+    assert queue.enqueued == []
+
+
+def test_enqueue_or_reuse_job_refreshes_terminal_verify_job_via_opaque_queue_removal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import crsbench.distributed.queue as queue_module
+    from crsbench.distributed.evaluator_claim_worker import _enqueue_or_reuse_job
+
+    class _OpaqueQueue:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self._jobs: dict[str, _FakeJob] = {}
+            self.enqueued: list[dict[str, object]] = []
+
+        def fetch_job(self, job_id: str) -> _FakeJob | None:
+            return self._jobs.get(job_id)
+
+        def enqueue(
+            self,
+            func_name: str,
+            payload: dict[str, object],
+            *,
+            job_timeout: int,
+            result_ttl: int,
+            job_id: str,
+            depends_on: list[object] | None = None,
+            meta: dict[str, object] | None = None,
+        ) -> _FakeJob:
+            job = _FakeJob(job_id)
+            self._jobs[job_id] = job
+            self.enqueued.append(
+                {
+                    "func_name": func_name,
+                    "payload": payload,
+                    "job_timeout": job_timeout,
+                    "result_ttl": result_ttl,
+                    "job_id": job_id,
+                    "depends_on": list(depends_on or []),
+                    "meta": dict(meta or {}),
+                }
+            )
+            return job
+
+    queue = _OpaqueQueue("verify-q")
+    terminal_job = _FakeJob(
+        "claim-verify/eval-1/request-opaque-refresh",
+        status="finished",
+    )
+    delete_calls: list[str] = []
+
+    def _delete() -> None:
+        delete_calls.append(terminal_job.id)
+
+    terminal_job.delete = _delete  # type: ignore[attr-defined]
+    queue._jobs[terminal_job.id] = terminal_job
+
+    removed_job_ids: list[str] = []
+
+    def remove_job(queue_obj: _OpaqueQueue, job_id: str) -> bool:
+        removed_job_ids.append(job_id)
+        queue_obj._jobs.pop(job_id, None)
+        return True
+
+    monkeypatch.setattr(queue_module, "remove_job_by_id", remove_job)
+
+    refreshed = _enqueue_or_reuse_job(
+        queue,
+        "crsbench.distributed.evaluator_claim_jobs.execute_claimed_verify",
+        {"request_id": "verify:trial-1:test-benchmark:h1:pov-opaque-refresh"},
+        job_timeout=3600,
+        job_id=terminal_job.id,
+        meta={"experiment_name": "exp1"},
+        refresh_terminal=True,
+    )
+
+    assert removed_job_ids == [terminal_job.id]
+    assert delete_calls == [terminal_job.id]
+    assert len(queue.enqueued) == 1
+    assert refreshed.id == terminal_job.id
+    assert refreshed is not terminal_job
+    assert refreshed.get_status() == "queued"

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
@@ -540,6 +542,212 @@ def test_feeder_buffers_planned_spec_when_demand_flips_during_planning() -> None
     assert [entry["job_id"] for entry in queue.enqueued] == ["warmup-build-0"]
 
 
+def test_feeder_skips_warmup_while_claimed_request_is_materializing() -> None:
+    from pathlib import Path
+
+    from crsbench.distributed.evaluator_claim_worker import (
+        EvaluatorClaimWorker,
+        _ActiveClaim,
+    )
+    from crsbench.distributed.evaluator_verify_claims import (
+        VerifyClaim,
+        VerifyRequestRecord,
+    )
+
+    claimed_record = VerifyRequestRecord(
+        request_id="request-1",
+        owner_key="trial::exp1::request-1",
+        request_kind="pov",
+        payload={"benchmark": "test-benchmark"},
+        claim=VerifyClaim(evaluator_id="eval-1", expires_at=time.time() + 30.0),
+    )
+    worker = EvaluatorClaimWorker(
+        redis_conn=MagicMock(),
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=MagicMock(),
+        verify_queue=MagicMock(),
+        verification_engine=MagicMock(),
+        benchmarks_root=Path("/benchmarks"),
+        max_inflight_requests=1,
+    )
+    worker.store.claim_next_request = MagicMock(return_value=claimed_record)
+    worker.store.list_requests = MagicMock(return_value=[claimed_record])
+
+    materialize_started = threading.Event()
+    allow_materialize = threading.Event()
+
+    def _materialize(_record: VerifyRequestRecord) -> _ActiveClaim:
+        materialize_started.set()
+        assert allow_materialize.wait(timeout=5)
+        return _ActiveClaim(
+            local_verify_job_id="verify-request-1",
+            required_build_job_ids=(),
+        )
+
+    worker._materialize_claimed_request = _materialize  # type: ignore[method-assign]
+
+    warmup_queue = _FakeQueue(
+        queued_job_ids=[],
+        intermediate_job_ids=[],
+        started_job_ids=[],
+    )
+    feeder = DispatcherWarmupFeeder(
+        build_queue=warmup_queue,
+        required_build_tracker=worker,
+        warmup_specs=_warmup_specs(1),
+        build_capacity=1,
+    )
+
+    dispatch_errors: list[BaseException] = []
+
+    def _dispatch() -> None:
+        try:
+            worker.dispatch_one(now=100.0)
+        except BaseException as exc:  # pragma: no cover - assertion captures failure
+            dispatch_errors.append(exc)
+
+    dispatch_thread = threading.Thread(target=_dispatch)
+    dispatch_thread.start()
+
+    assert materialize_started.wait(timeout=5)
+    assert feeder.tick() == 0
+    assert warmup_queue.enqueued == []
+
+    allow_materialize.set()
+    dispatch_thread.join(timeout=5)
+
+    assert not dispatch_thread.is_alive()
+    assert dispatch_errors == []
+    assert feeder.tick() == 1
+    assert [entry["job_id"] for entry in warmup_queue.enqueued] == ["warmup-build-0"]
+
+
+def test_feeder_rechecks_under_claim_gate_before_enqueue() -> None:
+    from pathlib import Path
+
+    from crsbench.distributed.evaluator_claim_worker import (
+        EvaluatorClaimWorker,
+        _ActiveClaim,
+    )
+    from crsbench.distributed.evaluator_verify_claims import (
+        VerifyClaim,
+        VerifyRequestRecord,
+    )
+
+    claimed_record = VerifyRequestRecord(
+        request_id="request-1",
+        owner_key="trial::exp1::request-1",
+        request_kind="pov",
+        payload={"benchmark": "test-benchmark"},
+        claim=VerifyClaim(evaluator_id="eval-1", expires_at=time.time() + 30.0),
+    )
+    claim_visible = {"value": False}
+    worker = EvaluatorClaimWorker(
+        redis_conn=MagicMock(),
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=MagicMock(),
+        verify_queue=MagicMock(),
+        verification_engine=MagicMock(),
+        benchmarks_root=Path("/benchmarks"),
+        max_inflight_requests=1,
+    )
+
+    claim_started = threading.Event()
+    allow_claim = threading.Event()
+    materialize_started = threading.Event()
+    allow_materialize = threading.Event()
+    enqueue_guard_entered = threading.Event()
+
+    def _claim_next_request(*, evaluator_id: str, now: float, lease_seconds: int):
+        del evaluator_id, now, lease_seconds
+        claim_started.set()
+        assert allow_claim.wait(timeout=5)
+        claim_visible["value"] = True
+        return claimed_record
+
+    def _list_requests() -> list[VerifyRequestRecord]:
+        if claim_visible["value"]:
+            return [claimed_record]
+        return []
+
+    def _materialize(_record: VerifyRequestRecord) -> _ActiveClaim:
+        materialize_started.set()
+        assert allow_materialize.wait(timeout=5)
+        return _ActiveClaim(
+            local_verify_job_id="verify-request-1",
+            required_build_job_ids=(),
+        )
+
+    worker.store.claim_next_request = _claim_next_request  # type: ignore[method-assign]
+    worker.store.list_requests = _list_requests  # type: ignore[method-assign]
+    worker._materialize_claimed_request = _materialize  # type: ignore[method-assign]
+
+    original_enqueue_if_idle = worker.enqueue_warmup_build_if_idle
+
+    def _enqueue_warmup_build_if_idle(
+        *, build_queue: Any, spec: WarmupBuildSpec
+    ) -> bool:
+        enqueue_guard_entered.set()
+        return original_enqueue_if_idle(build_queue=build_queue, spec=spec)
+
+    worker.enqueue_warmup_build_if_idle = _enqueue_warmup_build_if_idle  # type: ignore[method-assign]
+
+    warmup_queue = _FakeQueue(
+        queued_job_ids=[],
+        intermediate_job_ids=[],
+        started_job_ids=[],
+    )
+    feeder = DispatcherWarmupFeeder(
+        build_queue=warmup_queue,
+        required_build_tracker=worker,
+        warmup_specs=_warmup_specs(1),
+        build_capacity=1,
+    )
+
+    dispatch_errors: list[BaseException] = []
+    tick_errors: list[BaseException] = []
+    tick_results: list[int] = []
+
+    def _dispatch() -> None:
+        try:
+            worker.dispatch_one(now=100.0)
+        except BaseException as exc:  # pragma: no cover - assertion captures failure
+            dispatch_errors.append(exc)
+
+    def _tick() -> None:
+        try:
+            tick_results.append(feeder.tick())
+        except BaseException as exc:  # pragma: no cover - assertion captures failure
+            tick_errors.append(exc)
+
+    dispatch_thread = threading.Thread(target=_dispatch)
+    dispatch_thread.start()
+    assert claim_started.wait(timeout=5)
+
+    tick_thread = threading.Thread(target=_tick)
+    tick_thread.start()
+    assert enqueue_guard_entered.wait(timeout=5)
+
+    allow_claim.set()
+    assert materialize_started.wait(timeout=5)
+    tick_thread.join(timeout=5)
+
+    assert not tick_thread.is_alive()
+    assert tick_errors == []
+    assert tick_results == [0]
+    assert warmup_queue.enqueued == []
+
+    allow_materialize.set()
+    dispatch_thread.join(timeout=5)
+
+    assert not dispatch_thread.is_alive()
+    assert dispatch_errors == []
+    assert feeder.tick() == 1
+    assert [entry["job_id"] for entry in warmup_queue.enqueued] == ["warmup-build-0"]
+
+
 def test_feeder_respects_running_claimed_and_queued_capacity() -> None:
     queue = _FakeQueue(
         queued_job_ids=["queued-0"],
@@ -579,3 +787,179 @@ def test_feeder_skips_duplicate_enqueue_errors() -> None:
 
     assert enqueued == 1
     assert queue.enqueue.call_count == 2
+    assert [call.kwargs["job_id"] for call in queue.enqueue.call_args_list] == [
+        "warmup-build-0",
+        "warmup-build-1",
+    ]
+
+
+def test_feeder_clears_buffered_spec_after_duplicate_enqueue() -> None:
+    queue = _FakeQueue(
+        queued_job_ids=[],
+        intermediate_job_ids=[],
+        started_job_ids=[],
+    )
+    queue.enqueue = MagicMock(
+        side_effect=[
+            Exception("Job warmup-build-0 already exists"),
+            AssertionError("buffered duplicate warmup spec was retried"),
+        ]
+    )
+    feeder = DispatcherWarmupFeeder(
+        build_queue=queue,
+        state_store=_FakeStateStore(pending_required_builds=False),
+        warmup_specs=(),
+        build_capacity=1,
+    )
+    feeder._pending_spec = WarmupBuildSpec(
+        job_id="warmup-build-0",
+        payload={"id": 0},
+        meta={"experiment_name": "exp-test", "warmup": "true"},
+    )
+
+    enqueued = feeder.tick()
+
+    assert enqueued == 0
+    assert feeder._pending_spec is None
+    assert queue.enqueue.call_count == 1
+
+
+def test_feeder_integrates_with_real_claim_store_before_enqueuing() -> None:
+    from pathlib import Path
+
+    from crsbench.distributed.evaluator_claim_worker import EvaluatorClaimWorker
+    from crsbench.distributed.evaluator_verify_claims import (
+        VerifyClaim,
+        VerifyRequestRecord,
+    )
+
+    from tests.test_evaluator_claim_worker import _FakeRedis
+
+    request_id = "request-1"
+    redis_conn = _FakeRedis()
+    worker = EvaluatorClaimWorker(
+        redis_conn=redis_conn,
+        experiment_name="exp-test",
+        evaluator_id="eval-1",
+        build_queue=MagicMock(),
+        verify_queue=MagicMock(),
+        verification_engine=MagicMock(),
+        benchmarks_root=Path("/benchmarks"),
+        max_inflight_requests=1,
+    )
+    worker.store.submit_request(
+        VerifyRequestRecord(
+            request_id=request_id,
+            owner_key="trial::exp-test::request-1",
+            request_kind="pov",
+            payload={"benchmark": "test-benchmark"},
+            claim=VerifyClaim(
+                evaluator_id="eval-1",
+                expires_at=time.time() + 30.0,
+            ),
+        )
+    )
+
+    warmup_queue = _FakeQueue(
+        queued_job_ids=[],
+        intermediate_job_ids=[],
+        started_job_ids=[],
+    )
+    feeder = DispatcherWarmupFeeder(
+        build_queue=warmup_queue,
+        required_build_tracker=worker,
+        warmup_specs=[
+            WarmupBuildSpec(
+                job_id="warmup-build-0",
+                payload={"id": 0},
+                meta={"experiment_name": "exp-test", "warmup": "true"},
+            )
+        ],
+        build_capacity=1,
+    )
+
+    assert feeder.tick() == 0
+    assert warmup_queue.enqueued == []
+
+    assert worker.store.release_claim_if_current(
+        request_id=request_id,
+        evaluator_id="eval-1",
+    )
+
+    assert feeder.tick() == 1
+    assert warmup_queue.enqueued == [
+        {
+            "func_name": "crsbench.distributed.build_jobs.execute_ci_build",
+            "payload": {"id": 0},
+            "job_timeout": 3600,
+            "result_ttl": -1,
+            "job_id": "warmup-build-0",
+            "meta": {"experiment_name": "exp-test", "warmup": "true"},
+        }
+    ]
+
+
+def test_feeder_ignores_expired_claims_in_real_store() -> None:
+    from pathlib import Path
+
+    from crsbench.distributed.evaluator_claim_worker import EvaluatorClaimWorker
+    from crsbench.distributed.evaluator_verify_claims import (
+        VerifyClaim,
+        VerifyRequestRecord,
+    )
+
+    from tests.test_evaluator_claim_worker import _FakeRedis
+
+    redis_conn = _FakeRedis()
+    worker = EvaluatorClaimWorker(
+        redis_conn=redis_conn,
+        experiment_name="exp-test",
+        evaluator_id="eval-1",
+        build_queue=MagicMock(),
+        verify_queue=MagicMock(),
+        verification_engine=MagicMock(),
+        benchmarks_root=Path("/benchmarks"),
+        max_inflight_requests=1,
+    )
+    worker.store.submit_request(
+        VerifyRequestRecord(
+            request_id="request-1",
+            owner_key="trial::exp-test::request-1",
+            request_kind="pov",
+            payload={"benchmark": "test-benchmark"},
+            claim=VerifyClaim(
+                evaluator_id="eval-1",
+                expires_at=time.time() - 1.0,
+            ),
+        )
+    )
+
+    warmup_queue = _FakeQueue(
+        queued_job_ids=[],
+        intermediate_job_ids=[],
+        started_job_ids=[],
+    )
+    feeder = DispatcherWarmupFeeder(
+        build_queue=warmup_queue,
+        required_build_tracker=worker,
+        warmup_specs=[
+            WarmupBuildSpec(
+                job_id="warmup-build-0",
+                payload={"id": 0},
+                meta={"experiment_name": "exp-test", "warmup": "true"},
+            )
+        ],
+        build_capacity=1,
+    )
+
+    assert feeder.tick() == 1
+    assert warmup_queue.enqueued == [
+        {
+            "func_name": "crsbench.distributed.build_jobs.execute_ci_build",
+            "payload": {"id": 0},
+            "job_timeout": 3600,
+            "result_ttl": -1,
+            "job_id": "warmup-build-0",
+            "meta": {"experiment_name": "exp-test", "warmup": "true"},
+        }
+    ]

@@ -11,6 +11,46 @@ from crsbench.distributed.queue import clear_experiment_jobs, get_trial_key
 from crsbench.distributed.queue_cleanup import clean_experiment_queues
 
 
+def test_remove_job_by_id_clears_canceled_registry(monkeypatch) -> None:
+    if not queue_module.REDIS_AVAILABLE:
+        pytest.skip("Redis/RQ not available")
+
+    queue = SimpleNamespace(
+        started_job_registry=MagicMock(),
+        finished_job_registry=MagicMock(),
+        failed_job_registry=MagicMock(),
+        deferred_job_registry=MagicMock(),
+        scheduled_job_registry=MagicMock(),
+        canceled_job_registry=MagicMock(),
+        remove=MagicMock(),
+        connection=MagicMock(),
+    )
+    fetched_job = MagicMock()
+    fetch_job = MagicMock(return_value=fetched_job)
+    monkeypatch.setattr(queue_module.rq.job.Job, "fetch", fetch_job)  # type: ignore[union-attr]
+
+    removed = queue_module.remove_job_by_id(queue, "job-1")
+
+    assert removed is True
+    queue.started_job_registry.remove.assert_called_once_with("job-1", delete_job=False)
+    queue.finished_job_registry.remove.assert_called_once_with(
+        "job-1", delete_job=False
+    )
+    queue.failed_job_registry.remove.assert_called_once_with("job-1", delete_job=False)
+    queue.deferred_job_registry.remove.assert_called_once_with(
+        "job-1", delete_job=False
+    )
+    queue.scheduled_job_registry.remove.assert_called_once_with(
+        "job-1", delete_job=False
+    )
+    queue.canceled_job_registry.remove.assert_called_once_with(
+        "job-1", delete_job=False
+    )
+    queue.remove.assert_called_once_with("job-1")
+    fetch_job.assert_called_once_with("job-1", connection=queue.connection)
+    fetched_job.delete.assert_called_once_with()
+
+
 def test_clean_experiment_queues_dry_run(monkeypatch) -> None:
     queue_trial = MagicMock()
     queue_build = MagicMock()
@@ -631,6 +671,10 @@ def test_get_existing_trial_jobs_filters_to_requested_experiment(monkeypatch) ->
         "started-test",
         "started-other",
     ]
+    queue.canceled_job_registry.get_job_ids.return_value = [
+        "canceled-test",
+        "canceled-other",
+    ]
     queue.finished_job_registry.get_job_ids.return_value = []
     queue.failed_job_registry.get_job_ids.return_value = []
     queue.deferred_job_registry.get_job_ids.return_value = []
@@ -653,11 +697,21 @@ def test_get_existing_trial_jobs_filters_to_requested_experiment(monkeypatch) ->
     started_other.id = "started-other"
     started_other.meta = {"experiment_name": "exp-other"}
 
+    canceled_test = MagicMock()
+    canceled_test.id = "canceled-test"
+    canceled_test.meta = {"experiment_name": "exp-test"}
+
+    canceled_other = MagicMock()
+    canceled_other.id = "canceled-other"
+    canceled_other.meta = {"experiment_name": "exp-other"}
+
     jobs_by_id = {
         "queued-test": queued_test,
         "queued-other": queued_other,
         "started-test": started_test,
         "started-other": started_other,
+        "canceled-test": canceled_test,
+        "canceled-other": canceled_other,
     }
 
     monkeypatch.setattr(queue_module, "REDIS_AVAILABLE", True)
@@ -674,8 +728,35 @@ def test_get_existing_trial_jobs_filters_to_requested_experiment(monkeypatch) ->
 
     assert existing["queued"] == [queued_test]
     assert existing["started"] == [started_test]
+    assert existing["canceled"] == [canceled_test]
     assert existing["failed"] == []
     assert existing["finished"] == []
+
+
+def test_get_existing_trials_excludes_canceled_registry_jobs_from_logical_view(
+    monkeypatch,
+) -> None:
+    canceled_test = MagicMock()
+    canceled_test.id = "canceled-test"
+    canceled_test.meta = {"experiment_name": "exp-test"}
+
+    monkeypatch.setattr(
+        queue_module,
+        "get_existing_trial_jobs",
+        lambda _queue, **_kwargs: {
+            "queued": [],
+            "started": [],
+            "deferred": [],
+            "scheduled": [],
+            "canceled": [canceled_test],
+            "finished": [],
+            "failed": [],
+        },
+    )
+
+    logical = queue_module.get_existing_trials(MagicMock(), experiment_name="exp-test")
+
+    assert "canceled" not in logical
 
 
 def test_handle_orphaned_jobs_requeues_when_only_unrelated_workers_exist(

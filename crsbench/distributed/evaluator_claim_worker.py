@@ -63,6 +63,33 @@ def _is_job_terminal(job: Any | None) -> bool:
     return status in {"finished", "failed", "stopped", "canceled", "cancelled"}
 
 
+def _refresh_terminal_job(queue: Any, *, job_id: str, existing: Any) -> Any | None:
+    """Best-effort delete of a terminal job; fail if a terminal wrapper still remains."""
+    try:
+        from crsbench.distributed.queue import remove_job_by_id
+
+        remove_job_by_id(queue, job_id)
+    except Exception:
+        pass
+
+    jobs = getattr(queue, "jobs", None)
+    if isinstance(jobs, dict):
+        jobs.pop(job_id, None)
+
+    delete = getattr(existing, "delete", None)
+    if callable(delete):
+        try:
+            delete()
+        except Exception:
+            pass
+
+    remaining = queue.fetch_job(job_id)
+    if remaining is None or not _is_job_terminal(remaining):
+        return remaining
+
+    raise RuntimeError(f"Failed to remove terminal job {job_id} before refresh")
+
+
 def _enqueue_or_reuse_job(
     queue: Any,
     func_name: str,
@@ -72,14 +99,18 @@ def _enqueue_or_reuse_job(
     job_id: str,
     meta: dict[str, Any],
     depends_on: list[Any] | None = None,
+    refresh_terminal: bool = False,
 ) -> Any:
     existing = queue.fetch_job(job_id)
     if existing is not None:
-        adopt_scheduler_owner_if_needed(
-            existing,
-            new_owner=meta.get(SCHEDULER_OWNER_KEY_META),
-        )
-        return existing
+        if refresh_terminal and _is_job_terminal(existing):
+            existing = _refresh_terminal_job(queue, job_id=job_id, existing=existing)
+        if existing is not None:
+            adopt_scheduler_owner_if_needed(
+                existing,
+                new_owner=meta.get(SCHEDULER_OWNER_KEY_META),
+            )
+            return existing
     try:
         return queue.enqueue(
             func_name,
@@ -97,6 +128,19 @@ def _enqueue_or_reuse_job(
         existing = queue.fetch_job(job_id)
         if existing is None:
             raise
+        if refresh_terminal and _is_job_terminal(existing):
+            existing = _refresh_terminal_job(queue, job_id=job_id, existing=existing)
+            if existing is None:
+                return _enqueue_or_reuse_job(
+                    queue,
+                    func_name,
+                    payload,
+                    job_timeout=job_timeout,
+                    job_id=job_id,
+                    meta=meta,
+                    depends_on=depends_on,
+                    refresh_terminal=refresh_terminal,
+                )
         adopt_scheduler_owner_if_needed(
             existing,
             new_owner=meta.get(SCHEDULER_OWNER_KEY_META),
@@ -133,17 +177,76 @@ class EvaluatorClaimWorker:
         self.claim_lease_seconds = max(1, int(claim_lease_seconds))
         self.max_inflight_requests = max(1, int(max_inflight_requests))
         self._active_claims: dict[str, _ActiveClaim] = {}
+        self._active_claims_lock = threading.Lock()
+        self._warmup_enqueue_gate = threading.Lock()
+
+    def _active_claim_snapshot(self) -> tuple[set[str], tuple[_ActiveClaim, ...]]:
+        with self._active_claims_lock:
+            return set(self._active_claims), tuple(self._active_claims.values())
+
+    def _active_claims_items(self) -> tuple[tuple[str, _ActiveClaim], ...]:
+        with self._active_claims_lock:
+            return tuple(self._active_claims.items())
+
+    def _register_active_claim(
+        self,
+        *,
+        request_id: str,
+        active: _ActiveClaim | None,
+    ) -> None:
+        with self._active_claims_lock:
+            if active is not None:
+                self._active_claims[request_id] = active
+
+    def _has_claimed_request_pending_activation(
+        self, *, active_request_ids: set[str]
+    ) -> bool:
+        for record in self.store.list_requests():
+            if record.request_id in active_request_ids:
+                continue
+            claim = record.claim
+            if claim is None or record.terminal_result is not None:
+                continue
+            if claim.expires_at <= time.time():
+                continue
+            if claim.evaluator_id == self.evaluator_id:
+                return True
+        return False
 
     def has_pending_required_builds(self) -> bool:
-        for active in self._active_claims.values():
+        active_request_ids, active_claims = self._active_claim_snapshot()
+        if self._has_claimed_request_pending_activation(
+            active_request_ids=active_request_ids
+        ):
+            return True
+        for active in active_claims:
             for build_job_id in active.required_build_job_ids:
                 if not _is_job_terminal(self.build_queue.fetch_job(build_job_id)):
                     return True
         return False
 
+    def enqueue_warmup_build_if_idle(
+        self,
+        *,
+        build_queue: Any,
+        spec: Any,
+    ) -> bool:
+        with self._warmup_enqueue_gate:
+            if self.has_pending_required_builds():
+                return False
+            build_queue.enqueue(
+                "crsbench.distributed.build_jobs.execute_ci_build",
+                spec.payload,
+                job_timeout=BUILD_JOB_TIMEOUT_SECONDS,
+                result_ttl=-1,
+                job_id=spec.job_id,
+                meta=dict(spec.meta),
+            )
+            return True
+
     def refresh_active_claims(self, *, now: float) -> None:
         completed: list[str] = []
-        for request_id, active in self._active_claims.items():
+        for request_id, active in self._active_claims_items():
             record = self.store.load_request(request_id)
             if record is None or record.terminal_result is not None:
                 completed.append(request_id)
@@ -170,17 +273,22 @@ class EvaluatorClaimWorker:
             )
             if not renewed:
                 completed.append(request_id)
-        for request_id in completed:
-            self._active_claims.pop(request_id, None)
+        if completed:
+            with self._active_claims_lock:
+                for request_id in completed:
+                    self._active_claims.pop(request_id, None)
 
     def dispatch_one(self, *, now: float) -> VerifyRequestRecord | None:
+        # `dispatch_one()` only runs on the claim-loop thread; cross-thread
+        # coordination is limited to warmup reads of active/materializing state.
         if len(self._active_claims) >= self.max_inflight_requests:
             return None
-        claimed = self.store.claim_next_request(
-            evaluator_id=self.evaluator_id,
-            now=now,
-            lease_seconds=self.claim_lease_seconds,
-        )
+        with self._warmup_enqueue_gate:
+            claimed = self.store.claim_next_request(
+                evaluator_id=self.evaluator_id,
+                now=now,
+                lease_seconds=self.claim_lease_seconds,
+            )
         if claimed is None:
             return None
         try:
@@ -196,14 +304,16 @@ class EvaluatorClaimWorker:
                 released,
             )
             return None
-        if active is not None:
-            self._active_claims[claimed.request_id] = active
+        self._register_active_claim(
+            request_id=claimed.request_id,
+            active=active,
+        )
         return claimed
 
     def dispatch_available(self, *, now: float) -> VerifyRequestRecord | None:
         """Claim as many logical requests as the local inflight limit allows."""
         first_claimed: VerifyRequestRecord | None = None
-        while len(self._active_claims) < self.max_inflight_requests:
+        while True:
             claimed = self.dispatch_one(now=now)
             if claimed is None:
                 break
@@ -385,6 +495,7 @@ class EvaluatorClaimWorker:
             job_id=local_verify_job_id,
             meta=verify_meta,
             depends_on=verify_dependencies or None,
+            refresh_terminal=True,
         )
         return _ActiveClaim(
             local_verify_job_id=verify_rq_job.id,
@@ -460,6 +571,7 @@ class EvaluatorClaimWorker:
             job_id=local_verify_job_id,
             meta=verify_meta,
             depends_on=[build_rq_job] if not _is_job_terminal(build_rq_job) else None,
+            refresh_terminal=True,
         )
         required_build_ids = (
             () if _is_job_terminal(build_rq_job) else (local_build_job_id,)

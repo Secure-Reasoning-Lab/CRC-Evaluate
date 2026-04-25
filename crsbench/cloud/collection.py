@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import posixpath
+import re
 import shlex
 import shutil
 import subprocess
@@ -21,7 +23,8 @@ import tempfile
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path  # noqa: TC003
+from functools import lru_cache
+from pathlib import Path, PurePosixPath  # noqa: TC003
 from typing import TYPE_CHECKING, Iterator, Protocol
 
 import tenacity
@@ -52,7 +55,10 @@ _ARTIFACT_RSYNC_EXCLUDES: tuple[str, ...] = (
     "oss-crs-workdir/",
     "output/logs/",
 )
+_REHYDRATE_EXCLUDED_TOPLEVEL_DIRS = frozenset({"oss-crs-workdir"})
+_DROP_EXCLUDED_TOPLEVEL_DIRS = frozenset({"staged"})
 _REPORT_LOG_RSYNC_EXCLUDES: tuple[str, ...] = ("oss-crs-workdir/",)
+_LOG_RSYNC_EXCLUDES: tuple[str, ...] = ()
 _REPORT_LOG_RSYNC_INCLUDES: tuple[str, ...] = (
     "output/logs/services/*_patcher.stdout.log",
     "output/logs/services/*inc-builder-*.stdout.log",
@@ -60,6 +66,9 @@ _REPORT_LOG_RSYNC_INCLUDES: tuple[str, ...] = (
     "output/logs/crs/**/*_patcher.stdout.log",
     "output/logs/crs/**/*inc-builder-*.stdout.log",
 )
+_TRIAL_DIR_NAME_RE = re.compile(r"^trial-\d+$")
+_TRIAL_ROOT_MODES = frozenset({"delta", "full", "all"})
+_TRIAL_ROOT_SANITIZERS = frozenset({"address", "memory", "undefined"})
 _FAILED_TRIAL_ROOT_KEEP_FILENAMES = frozenset({"metadata.json", "worker.log", ".fail"})
 _REEVAL_SUBMISSION_ARTIFACT_DIRNAME = ".cloud-reeval"
 _REEVAL_TERMINAL_STATES = frozenset({"succeeded", "failed"})
@@ -68,6 +77,386 @@ _REEVAL_REMOTE_TEXT_ARTIFACTS: tuple[tuple[str, str], ...] = (
     ("runner.log", "runner.log"),
     ("bundle/manifest.json", "manifest.json"),
 )
+
+
+def _rsync_exact_path_excludes(relpaths: list[Path]) -> list[str]:
+    """Return rsync exclude patterns that block exact paths and any descendants."""
+    patterns: list[str] = []
+    for relpath in relpaths:
+        posix = relpath.as_posix()
+        patterns.append(posix)
+        patterns.append(f"{posix}/***")
+    return patterns
+
+
+def _is_report_log_file(relpath: str) -> bool:
+    """Return whether one logical path is part of the kept report-log subset."""
+    parts = PurePosixPath(relpath).parts
+    for index in range(len(parts) - 1):
+        if parts[index : index + 2] != ("output", "logs"):
+            continue
+        tail = parts[index + 2 :]
+        if len(tail) == 2 and tail[0] == "services":
+            name = tail[-1]
+            return name.endswith("_patcher.stdout.log") or (
+                name.endswith(".stdout.log") and "inc-builder-" in name
+            )
+        if len(tail) >= 2 and tail[0] == "crs":
+            name = tail[-1]
+            if name.endswith("_patcher.stdout.log") or (
+                name.endswith(".stdout.log") and "inc-builder-" in name
+            ):
+                return True
+            if tail[-2] == "log_dir" and name == "verify_patch_timing.json":
+                return True
+    return False
+
+
+def _is_trial_root_name(name: str) -> bool:
+    """Return whether one directory name matches the canonical trial-root pattern."""
+    return _TRIAL_DIR_NAME_RE.fullmatch(name) is not None
+
+
+def _trial_relpath_matches_layout(relpath: PurePosixPath) -> bool:
+    """Return whether one relative path matches the canonical trial layout."""
+    parts = relpath.parts
+    if len(parts) == 6:
+        mode_index = 3
+        sanitizer_index = 4
+    elif len(parts) == 7:
+        mode_index = 4
+        sanitizer_index = 5
+    else:
+        return False
+    return (
+        _is_trial_root_name(parts[-1])
+        and parts[mode_index] in _TRIAL_ROOT_MODES
+        and parts[sanitizer_index] in _TRIAL_ROOT_SANITIZERS
+    )
+
+
+def _load_trial_root_identity(path: Path) -> tuple[str, str, str, str] | None:
+    """Return trial metadata fields needed to validate one canonical trial path."""
+    metadata_path = path / "metadata.json"
+    if not metadata_path.is_file():
+        return None
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    crs = payload.get("crs")
+    benchmark = payload.get("benchmark")
+    harness = payload.get("harness")
+    trial_num = payload.get("trial_num")
+    if (
+        not isinstance(crs, str)
+        or not crs
+        or not isinstance(benchmark, str)
+        or not benchmark
+        or not isinstance(harness, str)
+        or not harness
+        or isinstance(trial_num, bool)
+    ):
+        return None
+    try:
+        trial_name = f"trial-{int(trial_num)}"
+    except (TypeError, ValueError):
+        return None
+    return crs, benchmark, harness, trial_name
+
+
+def _trial_relpath_matches_metadata(
+    relpath: PurePosixPath,
+    *,
+    trial_identity: tuple[str, str, str, str],
+) -> bool:
+    """Return whether one relative path agrees with metadata-derived identity."""
+    crs, benchmark, harness, trial_name = trial_identity
+    parts = relpath.parts
+    return (
+        parts[-1] == trial_name
+        and len(parts) in {6, 7}
+        and parts[:3] == (crs, benchmark, harness)
+    )
+
+
+def _is_trial_root_dir(path: Path, *, root: Path) -> bool:
+    """Return whether one directory is a real trial root rather than payload content."""
+    if not path.is_dir():
+        return False
+    try:
+        relpath = PurePosixPath(path.relative_to(root).as_posix())
+    except ValueError:
+        return False
+    if not _trial_relpath_matches_layout(relpath):
+        return False
+    trial_identity = _load_trial_root_identity(path)
+    return trial_identity is not None and _trial_relpath_matches_metadata(
+        relpath, trial_identity=trial_identity
+    )
+
+
+@lru_cache(maxsize=1)
+def _known_benchmark_harness_pairs() -> frozenset[tuple[str, str]]:
+    """Return benchmark/harness pairs available in the local repo checkout."""
+    from crsbench.benchmark_ci.cli.benchmark_discovery import discover_harness_names
+
+    repo_root = Path(__file__).resolve().parents[2]
+    benchmarks_root = repo_root / "benchmarks"
+    if not benchmarks_root.is_dir():
+        return frozenset()
+
+    pairs: set[tuple[str, str]] = set()
+    for benchmark_dir in sorted(benchmarks_root.iterdir()):
+        if not benchmark_dir.is_dir():
+            continue
+        for harness in discover_harness_names(benchmark_dir):
+            pairs.add((benchmark_dir.name, harness))
+    return frozenset(pairs)
+
+
+def _trial_root_backstop_candidate(
+    path: Path,
+    *,
+    root: Path,
+    require_known_benchmark_harness: bool = True,
+) -> tuple[PurePosixPath, tuple[str, ...]] | None:
+    """Return one local fallback candidate for a corrupt-metadata trial root."""
+    if not path.is_dir():
+        return None
+    try:
+        relpath = PurePosixPath(path.relative_to(root).as_posix())
+    except ValueError:
+        return None
+    if not _trial_relpath_matches_layout(relpath) or _is_trial_root_dir(
+        path, root=root
+    ):
+        return None
+
+    metadata_path = path / "metadata.json"
+    worker_log_path = path / "worker.log"
+    if not metadata_path.is_file() or not (
+        worker_log_path.exists() or worker_log_path.is_symlink()
+    ):
+        return None
+
+    # Only trust corrupt-metadata fallback paths when another metadata-backed
+    # trial under the same CRS proves this trial layout exists. By default,
+    # also require that the benchmark/harness pair is real in the local repo
+    # checkout. Local recollect of a previously published trial can opt out of
+    # that repo check, but it still has to look like a corrupt trial root
+    # locally (metadata.json + worker.log present).
+    if require_known_benchmark_harness:
+        benchmark_harness = (relpath.parts[1], relpath.parts[2])
+        if benchmark_harness not in _known_benchmark_harness_pairs():
+            return None
+    return relpath, (relpath.parts[0], *relpath.parts[3:-1])
+
+
+def _iter_trial_dirs(
+    root: Path, *, published_root: Path | None = None
+) -> Iterator[Path]:
+    """Yield real trial roots under ``root`` with a local corrupt-metadata backstop."""
+    rooted_trial_dirs: list[tuple[PurePosixPath, Path]] = []
+    published_trial_dirs: list[tuple[PurePosixPath, Path]] = []
+    backstop_candidates: list[tuple[PurePosixPath, tuple[str, ...], Path]] = []
+
+    if _is_trial_root_dir(root, root=root):
+        rooted_trial_dirs.append((PurePosixPath("."), root))
+    else:
+        candidate = _trial_root_backstop_candidate(root, root=root)
+        if candidate is not None:
+            relpath, namespace = candidate
+            backstop_candidates.append((relpath, namespace, root))
+
+    for path in _iter_trial_dirs_under(root):
+        try:
+            relpath = PurePosixPath(path.relative_to(root).as_posix())
+        except ValueError:
+            continue
+        if _is_trial_root_dir(path, root=root):
+            rooted_trial_dirs.append((relpath, path))
+            continue
+        published_candidate = None
+        if published_root is not None:
+            published_candidate = _trial_root_backstop_candidate(
+                path,
+                root=root,
+                require_known_benchmark_harness=False,
+            )
+            if published_candidate is not None and _is_trial_root_dir(
+                published_root / Path(relpath.as_posix()),
+                root=published_root,
+            ):
+                published_trial_dirs.append((relpath, path))
+                continue
+        candidate = _trial_root_backstop_candidate(path, root=root)
+        if candidate is None:
+            continue
+        candidate_relpath, namespace = candidate
+        backstop_candidates.append((candidate_relpath, namespace, path))
+
+    metadata_backed_layouts = {
+        (relpath.parts[0], *relpath.parts[3:-1])
+        for relpath, _ in rooted_trial_dirs
+        if len(relpath.parts) >= 5
+    }
+
+    yielded: set[PurePosixPath] = set()
+    for relpath, path in sorted(rooted_trial_dirs):
+        if relpath in yielded:
+            continue
+        yielded.add(relpath)
+        yield path
+
+    for relpath, path in sorted(published_trial_dirs):
+        if relpath in yielded:
+            continue
+        yielded.add(relpath)
+        yield path
+
+    for relpath, namespace, path in sorted(backstop_candidates):
+        if namespace not in metadata_backed_layouts or relpath in yielded:
+            continue
+        yielded.add(relpath)
+        yield path
+
+
+def _iter_trial_dirs_under(path: Path) -> Iterator[Path]:
+    """Yield every descendant directory under ``path`` in sorted order."""
+    try:
+        iterator = os.scandir(path)
+    except OSError:
+        return
+
+    child_dirs: list[Path] = []
+    with iterator as entries:
+        for entry in entries:
+            try:
+                is_dir = entry.is_dir(follow_symlinks=False)
+            except OSError:
+                continue
+            if not is_dir:
+                continue
+            child_dirs.append(Path(entry.path))
+
+    for child_dir in sorted(child_dirs):
+        yield child_dir
+        yield from _iter_trial_dirs_under(child_dir)
+
+
+_TRIAL_ROOT_DISCOVERY_SCRIPT = r"""
+import json
+import os
+import pathlib
+import re
+import sys
+
+
+TRIAL_DIR_RE = re.compile(r"^trial-\d+$")
+TRIAL_ROOT_MODES = {"delta", "full", "all"}
+TRIAL_ROOT_SANITIZERS = {"address", "memory", "undefined"}
+
+
+def _matches_layout(rel_parts: tuple[str, ...]) -> bool:
+    if len(rel_parts) == 6:
+        mode_index = 3
+        sanitizer_index = 4
+    elif len(rel_parts) == 7:
+        mode_index = 4
+        sanitizer_index = 5
+    else:
+        return False
+    return (
+        TRIAL_DIR_RE.fullmatch(rel_parts[-1])
+        and rel_parts[mode_index] in TRIAL_ROOT_MODES
+        and rel_parts[sanitizer_index] in TRIAL_ROOT_SANITIZERS
+    )
+
+
+def _load_trial_identity(path: pathlib.Path) -> tuple[str, str, str, str] | None:
+    metadata_path = path / "metadata.json"
+    if not metadata_path.is_file():
+        return None
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    crs = payload.get("crs")
+    benchmark = payload.get("benchmark")
+    harness = payload.get("harness")
+    trial_num = payload.get("trial_num")
+    if (
+        not isinstance(crs, str)
+        or not crs
+        or not isinstance(benchmark, str)
+        or not benchmark
+        or not isinstance(harness, str)
+        or not harness
+        or isinstance(trial_num, bool)
+    ):
+        return None
+    try:
+        trial_name = f"trial-{int(trial_num)}"
+    except (TypeError, ValueError):
+        return None
+    return crs, benchmark, harness, trial_name
+
+
+def _matches_metadata(
+    rel_parts: tuple[str, ...],
+    *,
+    trial_identity: tuple[str, str, str, str],
+) -> bool:
+    crs, benchmark, harness, trial_name = trial_identity
+    return (
+        rel_parts[-1] == trial_name
+        and len(rel_parts) in {6, 7}
+        and rel_parts[:3] == (crs, benchmark, harness)
+    )
+
+
+def _is_trial_root(path: pathlib.Path, rel_parts: tuple[str, ...]) -> bool:
+    if not path.is_dir() or not _matches_layout(rel_parts):
+        return False
+    trial_identity = _load_trial_identity(path)
+    return trial_identity is not None and _matches_metadata(
+        rel_parts, trial_identity=trial_identity
+    )
+
+
+def _scan(path: pathlib.Path, rel_parts: tuple[str, ...], out: list[str]) -> None:
+    try:
+        iterator = os.scandir(path)
+    except OSError:
+        return
+
+    child_dirs: list[str] = []
+    with iterator as entries:
+        for entry in entries:
+            try:
+                is_dir = entry.is_dir(follow_symlinks=False)
+            except OSError:
+                continue
+            if is_dir:
+                child_dirs.append(entry.name)
+
+    for name in sorted(child_dirs):
+        child = path / name
+        child_rel_parts = (*rel_parts, name)
+        if _is_trial_root(child, child_rel_parts):
+            out.append("/".join(child_rel_parts))
+            continue
+        _scan(child, child_rel_parts, out)
+
+
+root = pathlib.Path(sys.argv[1])
+trial_dirs: list[str] = []
+_scan(root, (), trial_dirs)
+print(json.dumps(trial_dirs))
+"""
+
+
 _COPY_LINK_FILELIST_DISCOVERY_SCRIPT = r"""
 import json
 import pathlib
@@ -86,6 +475,27 @@ def _excluded(
     return any(_path_under(logical_rel, prefix) for prefix in exclude_prefixes)
 
 
+def _actual_under(path: pathlib.Path, prefix: pathlib.Path) -> bool:
+    try:
+        path.relative_to(prefix)
+        return True
+    except ValueError:
+        return False
+
+
+def _actual_excluded(
+    actual: pathlib.Path,
+    exclude_actual_prefixes: list[pathlib.Path],
+) -> bool:
+    try:
+        resolved_actual = actual.resolve(strict=True)
+    except OSError:
+        return True
+    return any(
+        _actual_under(resolved_actual, prefix) for prefix in exclude_actual_prefixes
+    )
+
+
 def _walk(
     *,
     full_logical: pathlib.PurePosixPath,
@@ -93,10 +503,13 @@ def _walk(
     actual: pathlib.Path,
     active_dirs: set[str],
     exclude_prefixes: list[pathlib.PurePosixPath],
+    exclude_actual_prefixes: list[pathlib.Path],
     directories: list[str],
     files: list[str],
 ) -> None:
-    if _excluded(logical_rel, exclude_prefixes):
+    if _excluded(logical_rel, exclude_prefixes) or _actual_excluded(
+        actual, exclude_actual_prefixes
+    ):
         return
 
     if actual.is_dir():
@@ -121,6 +534,7 @@ def _walk(
                     actual=child_target,
                     active_dirs=next_active,
                     exclude_prefixes=exclude_prefixes,
+                    exclude_actual_prefixes=exclude_actual_prefixes,
                     directories=directories,
                     files=files,
                 )
@@ -131,6 +545,7 @@ def _walk(
                 actual=child,
                 active_dirs=next_active,
                 exclude_prefixes=exclude_prefixes,
+                exclude_actual_prefixes=exclude_actual_prefixes,
                 directories=directories,
                 files=files,
             )
@@ -149,6 +564,14 @@ for spec in specs:
     exclude_prefixes = [
         pathlib.PurePosixPath(prefix) for prefix in spec["exclude_prefixes"]
     ]
+    exclude_actual_prefixes = []
+    for prefix in spec.get("exclude_actual_prefixes", []):
+        try:
+            exclude_actual_prefixes.append(
+                (remote_root / pathlib.PurePosixPath(prefix)).resolve(strict=True)
+            )
+        except OSError:
+            continue
     try:
         actual_root = (remote_root / root).resolve(strict=True)
     except OSError as exc:
@@ -160,9 +583,12 @@ for spec in specs:
             actual=actual_root,
             active_dirs=set(),
             exclude_prefixes=exclude_prefixes,
+            exclude_actual_prefixes=exclude_actual_prefixes,
             directories=directories,
             files=files,
         )
+        continue
+    if _actual_excluded(actual_root, exclude_actual_prefixes):
         continue
     files.append(root.as_posix())
 
@@ -221,11 +647,6 @@ def write_collect_marker(destination: Path, payload: dict[str, object]) -> None:
         if temp_path is not None:
             temp_path.unlink(missing_ok=True)
         raise
-
-
-def _artifact_rsync_excluded_names() -> set[str]:
-    """Return basename-only artifact rsync exclusions without trailing slashes."""
-    return {pattern.rstrip("/") for pattern in _ARTIFACT_RSYNC_EXCLUDES}
 
 
 def discover_experiment_start_time_from_staging(
@@ -370,6 +791,14 @@ class ArtifactCollector:
         staging_dir = (
             experiment_filestore / ".collect-staging" / worker.name / experiment_name
         )
+        excluded_trial_staged_relpaths = self._discover_remote_trial_staged_relpaths(
+            worker=worker,
+            fleet=fleet,
+            remote_experiment_dir=remote_experiment_dir,
+            experiment_filestore=experiment_filestore,
+            known_hosts_path=known_hosts_path,
+            ssh_user=ssh_user,
+        )
 
         # Clear any stale staging from a prior interrupted run
         if staging_dir.exists():
@@ -385,9 +814,21 @@ class ArtifactCollector:
             experiment_filestore=experiment_filestore,
             known_hosts_path=known_hosts_path,
             ssh_user=ssh_user,
+            excluded_relpaths=excluded_trial_staged_relpaths,
         )
-        symlink_relpaths = self._find_excluded_symlink_entries(staging_dir)
-        if symlink_relpaths:
+        final_dir = destination or (experiment_filestore / experiment_name)
+        self._drop_trial_staged_dirs(staging_dir, published_root=final_dir)
+        rehydrate_relpaths, drop_relpaths = self._partition_excluded_symlink_entries(
+            staging_dir,
+            remote_experiment_dir=remote_experiment_dir,
+            published_root=final_dir,
+        )
+        if drop_relpaths:
+            self._drop_excluded_symlink_entries(
+                staging_dir=staging_dir,
+                symlink_relpaths=drop_relpaths,
+            )
+        if rehydrate_relpaths:
             self._rehydrate_excluded_symlink_entries(
                 worker=worker,
                 fleet=fleet,
@@ -396,10 +837,16 @@ class ArtifactCollector:
                 experiment_filestore=experiment_filestore,
                 known_hosts_path=known_hosts_path,
                 ssh_user=ssh_user,
-                symlink_relpaths=symlink_relpaths,
+                symlink_relpaths=rehydrate_relpaths,
             )
-        self._prune_staged_output_logs(staging_dir)
-        self._run_report_log_rsync(
+        self._prune_staged_output_logs(staging_dir, published_root=final_dir)
+        report_log_output_relpaths = [
+            output_dir.relative_to(staging_dir)
+            for trial_dir in _iter_trial_dirs(staging_dir, published_root=final_dir)
+            for output_dir in [trial_dir / "output"]
+            if output_dir.exists() or output_dir.is_symlink()
+        ]
+        self._rehydrate_report_logs_from_output_symlinks(
             worker=worker,
             fleet=fleet,
             remote_experiment_dir=remote_experiment_dir,
@@ -407,12 +854,15 @@ class ArtifactCollector:
             experiment_filestore=experiment_filestore,
             known_hosts_path=known_hosts_path,
             ssh_user=ssh_user,
+            symlink_relpaths=report_log_output_relpaths,
         )
-        failed_trial_relpaths = self._compact_failed_trials_to_diagnostics(staging_dir)
+        failed_trial_relpaths = self._compact_failed_trials_to_diagnostics(
+            staging_dir,
+            published_root=final_dir,
+        )
 
         # Verify before publishing
         self._verify_staging(staging_dir)
-        final_dir = destination or (experiment_filestore / experiment_name)
         with self._publish_lock:
             if start_time_observations is not None:
                 start_time_observations.append(
@@ -485,15 +935,40 @@ class ArtifactCollector:
             remote_path=remote_experiment_dir,
             experiment_filestore=experiment_filestore,
         ):
+            trial_artifacts_dir = instance_logs_dir / "trial-artifacts"
+            trial_artifacts_staging = instance_logs_dir / ".trial-artifacts-staging"
+            if trial_artifacts_staging.exists():
+                shutil.rmtree(trial_artifacts_staging, ignore_errors=True)
+            excluded_trial_staged_relpaths = (
+                self._discover_remote_trial_staged_relpaths(
+                    worker=worker,
+                    fleet=fleet,
+                    remote_experiment_dir=remote_experiment_dir,
+                    experiment_filestore=experiment_filestore,
+                    known_hosts_path=known_hosts_path,
+                    ssh_user=ssh_user,
+                )
+            )
             self._run_log_rsync(
                 worker=worker,
                 fleet=fleet,
                 remote_experiment_dir=remote_experiment_dir,
-                staging_dir=instance_logs_dir / "trial-artifacts",
+                staging_dir=trial_artifacts_staging,
                 experiment_filestore=experiment_filestore,
                 known_hosts_path=known_hosts_path,
                 ssh_user=ssh_user,
+                excluded_relpaths=excluded_trial_staged_relpaths,
             )
+            self._drop_trial_staged_dirs(
+                trial_artifacts_staging,
+                published_root=trial_artifacts_dir,
+            )
+            self._drop_excluded_top_level_trial_symlinks(
+                trial_artifacts_staging,
+                remote_experiment_dir=remote_experiment_dir,
+                published_root=trial_artifacts_dir,
+            )
+            self._publish(trial_artifacts_staging, trial_artifacts_dir)
 
         logger.info(
             "Remote log collection complete: worker={} experiment={} logs_dir={}",
@@ -601,13 +1076,48 @@ class ArtifactCollector:
         remote_host: str | None = None,
     ) -> tuple[list[Path], list[str]]:
         """Return cycle-safe rsync file-list entries for directory symlink rehydration."""
-        specs = [
-            {
-                "root": relpath.as_posix(),
-                "exclude_prefixes": ["logs"] if relpath.name == "output" else [],
-            }
-            for relpath in symlink_relpaths
-        ]
+        specs = []
+        for relpath in symlink_relpaths:
+            exclude_actual_prefixes = [
+                (relpath.parent / name).as_posix()
+                for name in _DROP_EXCLUDED_TOPLEVEL_DIRS
+            ]
+            exclude_actual_prefixes.append(
+                (relpath.parent / "output" / "logs").as_posix()
+            )
+            specs.append(
+                {
+                    "root": relpath.as_posix(),
+                    "exclude_prefixes": ["logs"] if relpath.name == "output" else [],
+                    "exclude_actual_prefixes": exclude_actual_prefixes,
+                }
+            )
+        return self._discover_remote_filelist(
+            worker=worker,
+            fleet=fleet,
+            remote_experiment_dir=remote_experiment_dir,
+            experiment_filestore=experiment_filestore,
+            known_hosts_path=known_hosts_path,
+            ssh_user=ssh_user,
+            specs=specs,
+            ssh_command=ssh_command,
+            remote_host=remote_host,
+        )
+
+    def _discover_remote_filelist(
+        self,
+        *,
+        worker: CloudInstanceLike,
+        fleet: SshTransportConfig,
+        remote_experiment_dir: str,
+        experiment_filestore: Path,
+        known_hosts_path: Path | None,
+        ssh_user: str | None,
+        specs: list[dict[str, object]],
+        ssh_command: str | None = None,
+        remote_host: str | None = None,
+    ) -> tuple[list[Path], list[str]]:
+        """Run the remote manifest walker and return discovered directories/files."""
         command = self._build_remote_python_command(
             _COPY_LINK_FILELIST_DISCOVERY_SCRIPT,
             remote_experiment_dir,
@@ -655,6 +1165,118 @@ class ArtifactCollector:
         ]
         files = [value for value in files_raw if isinstance(value, str) and value]
         return directories, files
+
+    def _discover_remote_trial_root_relpaths(
+        self,
+        *,
+        worker: CloudInstanceLike,
+        fleet: SshTransportConfig,
+        remote_experiment_dir: str,
+        experiment_filestore: Path,
+        known_hosts_path: Path | None,
+        ssh_user: str | None,
+    ) -> list[Path]:
+        """Return every real trial root under the remote experiment directory."""
+        command = self._build_remote_python_command(
+            _TRIAL_ROOT_DISCOVERY_SCRIPT,
+            remote_experiment_dir,
+            use_sudo=True,
+        )
+        result = self._run_remote_command(
+            worker=worker,
+            fleet=fleet,
+            known_hosts_path=known_hosts_path,
+            ssh_user=ssh_user,
+            command=command,
+            experiment_filestore=experiment_filestore,
+        )
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip() or "unknown error"
+            raise ArtifactCollectionError(
+                f"failed to enumerate remote trial roots from {worker.name}: {detail}"
+            )
+
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise ArtifactCollectionError(
+                "failed to parse remote trial-root discovery output"
+            ) from exc
+
+        if not isinstance(payload, list) or any(
+            not isinstance(item, str) for item in payload
+        ):
+            raise ArtifactCollectionError(
+                "remote trial-root discovery returned a malformed payload"
+            )
+
+        return [Path(item) for item in payload]
+
+    def _discover_remote_trial_staged_relpaths(
+        self,
+        *,
+        worker: CloudInstanceLike,
+        fleet: SshTransportConfig,
+        remote_experiment_dir: str,
+        experiment_filestore: Path,
+        known_hosts_path: Path | None,
+        ssh_user: str | None,
+    ) -> list[Path]:
+        """Return exact ``trial-*/staged`` paths for real remote trial roots only."""
+        return [
+            trial_relpath / "staged"
+            for trial_relpath in self._discover_remote_trial_root_relpaths(
+                worker=worker,
+                fleet=fleet,
+                remote_experiment_dir=remote_experiment_dir,
+                experiment_filestore=experiment_filestore,
+                known_hosts_path=known_hosts_path,
+                ssh_user=ssh_user,
+            )
+        ]
+
+    def _discover_report_log_filelist(
+        self,
+        *,
+        worker: CloudInstanceLike,
+        fleet: SshTransportConfig,
+        remote_experiment_dir: str,
+        experiment_filestore: Path,
+        known_hosts_path: Path | None,
+        ssh_user: str | None,
+        output_relpath: Path,
+        ssh_command: str | None = None,
+        remote_host: str | None = None,
+    ) -> list[str]:
+        """Return report-log file paths for one rehydrated top-level output symlink."""
+        try:
+            _, files = self._discover_remote_filelist(
+                worker=worker,
+                fleet=fleet,
+                remote_experiment_dir=remote_experiment_dir,
+                experiment_filestore=experiment_filestore,
+                known_hosts_path=known_hosts_path,
+                ssh_user=ssh_user,
+                specs=[
+                    {
+                        "root": (output_relpath / "logs").as_posix(),
+                        "exclude_prefixes": [],
+                        "exclude_actual_prefixes": [
+                            (output_relpath.parent / name).as_posix()
+                            for name in _DROP_EXCLUDED_TOPLEVEL_DIRS
+                        ],
+                    }
+                ],
+                ssh_command=ssh_command,
+                remote_host=remote_host,
+            )
+        except ArtifactCollectionError as exc:
+            if "failed to resolve" in str(exc):
+                return []
+            raise
+        return [
+            file_relpath for file_relpath in files if _is_report_log_file(file_relpath)
+        ]
 
     def _run_copy_link_filelist_rsync(
         self,
@@ -714,6 +1336,7 @@ class ArtifactCollector:
         ssh_user: str | None = None,
         ssh_command: str | None = None,
         remote_host: str | None = None,
+        excluded_relpaths: list[Path] | None = None,
     ) -> list[str]:
         """Return the full rsync command as a list of strings.
 
@@ -724,6 +1347,7 @@ class ArtifactCollector:
         - ``--delay-updates``: stage all files before renaming into place
         - ``--delete-delay``: remove remote-deleted files after transfer completes
         - ``--exclude=oss-crs-workdir/``: skip trial-local oss-crs scratch state
+        - exact ``trial-*/staged`` excludes: skip only real trial-local staged copies
         - ``--exclude=output/logs/``: skip bulky trial-local CRS/compose logs
         """
         if (
@@ -752,6 +1376,10 @@ class ArtifactCollector:
             "--delete-delay",
         ]
         cmd.extend(f"--exclude={pattern}" for pattern in _ARTIFACT_RSYNC_EXCLUDES)
+        cmd.extend(
+            f"--exclude={pattern}"
+            for pattern in _rsync_exact_path_excludes(excluded_relpaths or [])
+        )
         cmd.extend(
             [
                 "--rsync-path=sudo rsync",
@@ -817,6 +1445,7 @@ class ArtifactCollector:
         ssh_user: str | None = None,
         ssh_command: str | None = None,
         remote_host: str | None = None,
+        excluded_relpaths: list[Path] | None = None,
     ) -> list[str]:
         """Return an rsync command that only copies lightweight trial-observability files."""
         if (
@@ -840,6 +1469,11 @@ class ArtifactCollector:
             "-a",
             "--mkpath",
             "--prune-empty-dirs",
+            *[f"--exclude={pattern}" for pattern in _LOG_RSYNC_EXCLUDES],
+            *[
+                f"--exclude={pattern}"
+                for pattern in _rsync_exact_path_excludes(excluded_relpaths or [])
+            ],
             "--include=*/",
             "--include=trial_matrix.json",
             "--include=metadata.json",
@@ -878,6 +1512,7 @@ class ArtifactCollector:
         ssh_user: str | None = None,
         ssh_command: str | None = None,
         remote_host: str | None = None,
+        excluded_relpaths: list[Path] | None = None,
     ) -> list[str]:
         """Return an rsync command that keeps only report-critical trial logs."""
         if (
@@ -900,10 +1535,13 @@ class ArtifactCollector:
             "rsync",
             "-a",
             "--mkpath",
-            "--copy-links",
             "--prune-empty-dirs",
         ]
         cmd.extend(f"--exclude={pattern}" for pattern in _REPORT_LOG_RSYNC_EXCLUDES)
+        cmd.extend(
+            f"--exclude={pattern}"
+            for pattern in _rsync_exact_path_excludes(excluded_relpaths or [])
+        )
         cmd.append("--include=*/")
         cmd.extend(f"--include={pattern}" for pattern in _REPORT_LOG_RSYNC_INCLUDES)
         cmd.extend(
@@ -1116,6 +1754,7 @@ class ArtifactCollector:
         experiment_filestore: Path,
         known_hosts_path: Path | None,
         ssh_user: str | None,
+        excluded_relpaths: list[Path] | None = None,
     ) -> None:
         """Run the full artifact rsync for one worker using the right transport."""
         if fleet.ssh_via_iap:
@@ -1140,6 +1779,7 @@ class ArtifactCollector:
                         host_key_alias=worker.name,
                     ),
                     remote_host="127.0.0.1",
+                    excluded_relpaths=excluded_relpaths,
                 )
                 self._run_rsync_with_retry(cmd)
             return
@@ -1151,6 +1791,7 @@ class ArtifactCollector:
             staging_dir=staging_dir,
             known_hosts_path=known_hosts_path,
             ssh_user=ssh_user,
+            excluded_relpaths=excluded_relpaths,
         )
         self._run_rsync_with_retry(cmd)
 
@@ -1164,6 +1805,7 @@ class ArtifactCollector:
         experiment_filestore: Path,
         known_hosts_path: Path | None,
         ssh_user: str | None,
+        excluded_relpaths: list[Path] | None = None,
     ) -> None:
         """Run the observability-only rsync for one worker using the right transport."""
         if fleet.ssh_via_iap:
@@ -1188,6 +1830,7 @@ class ArtifactCollector:
                         host_key_alias=worker.name,
                     ),
                     remote_host="127.0.0.1",
+                    excluded_relpaths=excluded_relpaths,
                 )
                 self._run_rsync_with_retry(cmd)
             return
@@ -1199,6 +1842,7 @@ class ArtifactCollector:
             staging_dir=staging_dir,
             known_hosts_path=known_hosts_path,
             ssh_user=ssh_user,
+            excluded_relpaths=excluded_relpaths,
         )
         self._run_rsync_with_retry(cmd)
 
@@ -1212,6 +1856,7 @@ class ArtifactCollector:
         experiment_filestore: Path,
         known_hosts_path: Path | None,
         ssh_user: str | None,
+        excluded_relpaths: list[Path] | None = None,
     ) -> None:
         """Sync the minimal trial log subset needed by report generation."""
         if fleet.ssh_via_iap:
@@ -1236,6 +1881,7 @@ class ArtifactCollector:
                         host_key_alias=worker.name,
                     ),
                     remote_host="127.0.0.1",
+                    excluded_relpaths=excluded_relpaths,
                 )
                 self._run_rsync_with_retry(cmd)
             return
@@ -1247,29 +1893,202 @@ class ArtifactCollector:
             staging_dir=staging_dir,
             known_hosts_path=known_hosts_path,
             ssh_user=ssh_user,
+            excluded_relpaths=excluded_relpaths,
         )
         self._run_rsync_with_retry(cmd)
 
-    def _find_excluded_symlink_entries(self, staging_dir: Path) -> list[Path]:
-        """Return top-level trial symlink entries that point into excluded dirs."""
-        excluded_names = _artifact_rsync_excluded_names()
-        relpaths: list[Path] = []
+    def _rehydrate_report_logs_from_output_symlinks(
+        self,
+        *,
+        worker: CloudInstanceLike,
+        fleet: SshTransportConfig,
+        remote_experiment_dir: str,
+        staging_dir: Path,
+        experiment_filestore: Path,
+        known_hosts_path: Path | None,
+        ssh_user: str | None,
+        symlink_relpaths: list[Path],
+    ) -> None:
+        """Restore report-critical logs for top-level output symlinks rehydrated earlier."""
+        output_relpaths = [
+            relpath for relpath in symlink_relpaths if relpath.name == "output"
+        ]
+        if not output_relpaths:
+            return
 
-        for trial_dir in sorted(staging_dir.rglob("trial-*")):
-            if not trial_dir.is_dir():
+        if fleet.ssh_via_iap:
+            if not ssh_user:
+                raise ArtifactCollectionError(
+                    f"Unable to resolve SSH user for IAP report-log rehydration from {worker.name}"
+                )
+            iap_known_hosts_path = self._prepare_iap_known_hosts(
+                experiment_filestore=experiment_filestore,
+                host_key_alias=worker.name,
+            )
+            with self._open_iap_tunnel(worker=worker, fleet=fleet) as local_port:
+                ssh_command = self._build_iap_ssh_command(
+                    local_port=local_port,
+                    ssh_user=ssh_user,
+                    known_hosts_path=iap_known_hosts_path,
+                    host_key_alias=worker.name,
+                )
+                self._rehydrate_report_logs_from_output_symlinks_via_rsync(
+                    worker=worker,
+                    fleet=fleet,
+                    remote_experiment_dir=remote_experiment_dir,
+                    staging_dir=staging_dir,
+                    experiment_filestore=experiment_filestore,
+                    known_hosts_path=iap_known_hosts_path,
+                    ssh_user=ssh_user,
+                    output_relpaths=output_relpaths,
+                    ssh_command=ssh_command,
+                    remote_host="127.0.0.1",
+                )
+            return
+
+        self._rehydrate_report_logs_from_output_symlinks_via_rsync(
+            worker=worker,
+            fleet=fleet,
+            remote_experiment_dir=remote_experiment_dir,
+            staging_dir=staging_dir,
+            experiment_filestore=experiment_filestore,
+            known_hosts_path=known_hosts_path,
+            ssh_user=ssh_user,
+            output_relpaths=output_relpaths,
+        )
+
+    def _rehydrate_report_logs_from_output_symlinks_via_rsync(
+        self,
+        *,
+        worker: CloudInstanceLike,
+        fleet: SshTransportConfig,
+        remote_experiment_dir: str,
+        staging_dir: Path,
+        experiment_filestore: Path,
+        known_hosts_path: Path | None,
+        ssh_user: str | None,
+        output_relpaths: list[Path],
+        ssh_command: str | None = None,
+        remote_host: str | None = None,
+    ) -> None:
+        """Restore report logs for top-level output symlinks using an explicit file manifest."""
+        for output_relpath in output_relpaths:
+            file_relpaths = self._discover_report_log_filelist(
+                worker=worker,
+                fleet=fleet,
+                remote_experiment_dir=remote_experiment_dir,
+                experiment_filestore=experiment_filestore,
+                known_hosts_path=known_hosts_path,
+                ssh_user=ssh_user,
+                output_relpath=output_relpath,
+                ssh_command=ssh_command,
+                remote_host=remote_host,
+            )
+            if not file_relpaths:
                 continue
+            self._run_copy_link_filelist_rsync(
+                worker=worker,
+                fleet=fleet,
+                remote_experiment_dir=remote_experiment_dir,
+                destination_root=staging_dir,
+                experiment_filestore=experiment_filestore,
+                manifest_relpaths=file_relpaths,
+                known_hosts_path=known_hosts_path,
+                ssh_user=ssh_user,
+                ssh_command=ssh_command,
+                remote_host=remote_host,
+            )
+            self._verify_rehydrated_copy_link_manifest(
+                staging_dir=staging_dir,
+                symlink_relpath=output_relpath / "logs",
+                directory_relpaths=[],
+                file_relpaths=file_relpaths,
+            )
+
+    @staticmethod
+    def _trial_symlink_target_parts(
+        *,
+        item: Path,
+        trial_dir: Path,
+        staging_dir: Path,
+        remote_experiment_dir: str | None,
+    ) -> tuple[str, ...] | None:
+        """Return one symlink target as parts relative to *trial_dir*."""
+        try:
+            raw_target = item.readlink()
+        except OSError:
+            return None
+
+        if raw_target.is_absolute():
+            try:
+                return item.resolve(strict=False).relative_to(trial_dir).parts
+            except ValueError:
+                pass
+            if raw_target.exists():
+                trial_parts = trial_dir.relative_to(staging_dir).parts
+                target_parts = raw_target.parts
+                for index in range(len(target_parts) - len(trial_parts) + 1):
+                    if (
+                        tuple(target_parts[index : index + len(trial_parts)])
+                        != trial_parts
+                    ):
+                        continue
+                    return tuple(target_parts[index + len(trial_parts) :])
+            if remote_experiment_dir is None:
+                return None
+            trial_relpath = trial_dir.relative_to(staging_dir)
+            try:
+                return (
+                    raw_target.relative_to(Path(remote_experiment_dir))
+                    .relative_to(trial_relpath)
+                    .parts
+                )
+            except ValueError:
+                return None
+
+        base_relpath = item.parent.relative_to(trial_dir)
+        normalized = posixpath.normpath((base_relpath / raw_target).as_posix())
+        if normalized in {"", "."}:
+            return ()
+        target_parts = Path(normalized).parts
+        if target_parts and target_parts[0] == "..":
+            return None
+        return target_parts
+
+    def _partition_excluded_symlink_entries(
+        self,
+        staging_dir: Path,
+        *,
+        remote_experiment_dir: str,
+        published_root: Path | None = None,
+    ) -> tuple[list[Path], list[Path]]:
+        """Return excluded top-level symlink entries split by rehydrate vs drop."""
+        rehydrate_relpaths: list[Path] = []
+        drop_relpaths: list[Path] = []
+
+        for trial_dir in _iter_trial_dirs(staging_dir, published_root=published_root):
             for item in sorted(trial_dir.iterdir()):
                 if not item.is_symlink():
                     continue
-                try:
-                    target = item.resolve(strict=False)
-                    target_rel = target.relative_to(trial_dir)
-                except (OSError, ValueError):
+                target_parts = self._trial_symlink_target_parts(
+                    item=item,
+                    trial_dir=trial_dir,
+                    staging_dir=staging_dir,
+                    remote_experiment_dir=remote_experiment_dir,
+                )
+                if target_parts is None:
                     continue
-                if any(part in excluded_names for part in target_rel.parts):
-                    relpaths.append(item.relative_to(staging_dir))
+                relpath = item.relative_to(staging_dir)
+                if not target_parts:
+                    continue
+                top_level_target = target_parts[0]
+                if top_level_target in _REHYDRATE_EXCLUDED_TOPLEVEL_DIRS:
+                    rehydrate_relpaths.append(relpath)
+                    continue
+                if top_level_target in _DROP_EXCLUDED_TOPLEVEL_DIRS:
+                    drop_relpaths.append(relpath)
 
-        return relpaths
+        return rehydrate_relpaths, drop_relpaths
 
     @staticmethod
     def _remove_staged_path(path: Path) -> None:
@@ -1280,21 +2099,128 @@ class ArtifactCollector:
         if path.is_dir():
             shutil.rmtree(path)
 
-    def _prune_staged_output_logs(self, staging_dir: Path) -> None:
+    def _prune_staged_output_logs(
+        self,
+        staging_dir: Path,
+        *,
+        published_root: Path | None = None,
+    ) -> None:
         """Drop any staged trial output/logs tree before restoring the keep-set."""
-        for trial_dir in sorted(staging_dir.rglob("trial-*")):
-            if not trial_dir.is_dir():
-                continue
+        for trial_dir in _iter_trial_dirs(staging_dir, published_root=published_root):
             logs_path = trial_dir / "output" / "logs"
             if logs_path.exists() or logs_path.is_symlink():
                 self._remove_staged_path(logs_path)
 
-    def _compact_failed_trials_to_diagnostics(self, staging_dir: Path) -> list[Path]:
+    def _drop_trial_staged_dirs(
+        self,
+        staging_dir: Path,
+        *,
+        published_root: Path | None = None,
+    ) -> None:
+        """Remove real trial-root ``staged`` dirs after collection as a backstop."""
+        removed = 0
+        for trial_dir in _iter_trial_dirs(staging_dir, published_root=published_root):
+            staged_path = trial_dir / "staged"
+            if not (staged_path.exists() or staged_path.is_symlink()):
+                continue
+            self._remove_staged_path(staged_path)
+            removed += 1
+        if removed:
+            logger.info(
+                "Dropped {} staged trial dir(s) from collected snapshots",
+                removed,
+            )
+
+    def _drop_excluded_symlink_entries(
+        self,
+        *,
+        staging_dir: Path,
+        symlink_relpaths: list[Path],
+    ) -> None:
+        """Remove staged symlinks whose excluded targets should stay omitted."""
+        logger.info(
+            "Dropping {} staged symlinked artifact paths that resolve into omitted content",
+            len(symlink_relpaths),
+        )
+        for relpath in symlink_relpaths:
+            self._remove_staged_path(staging_dir / relpath)
+
+    def _drop_excluded_top_level_trial_symlinks(
+        self,
+        staging_dir: Path,
+        *,
+        remote_experiment_dir: str,
+        published_root: Path | None = None,
+    ) -> None:
+        """Remove top-level trial symlinks that resolve into omitted content."""
+        removed = 0
+        for trial_dir in _iter_trial_dirs(staging_dir, published_root=published_root):
+            for item in sorted(trial_dir.iterdir()):
+                if not item.is_symlink():
+                    continue
+                target_parts = self._trial_symlink_target_parts(
+                    item=item,
+                    trial_dir=trial_dir,
+                    staging_dir=staging_dir,
+                    remote_experiment_dir=remote_experiment_dir,
+                )
+                if (
+                    not target_parts
+                    or target_parts[0] not in _DROP_EXCLUDED_TOPLEVEL_DIRS
+                ):
+                    continue
+                self._remove_staged_path(item)
+                removed += 1
+        if removed:
+            logger.info(
+                "Dropped {} top-level staged symlink(s) from collected trial snapshots",
+                removed,
+            )
+
+    def _drop_excluded_report_log_symlinks(
+        self,
+        staging_dir: Path,
+        *,
+        remote_experiment_dir: str,
+        published_root: Path | None = None,
+    ) -> None:
+        """Remove restored report-log symlinks that still resolve into omitted content."""
+        removed = 0
+        for trial_dir in _iter_trial_dirs(staging_dir, published_root=published_root):
+            logs_root = trial_dir / "output" / "logs"
+            if not logs_root.is_dir():
+                continue
+            for item in sorted(logs_root.rglob("*")):
+                if not item.is_symlink():
+                    continue
+                target_parts = self._trial_symlink_target_parts(
+                    item=item,
+                    trial_dir=trial_dir,
+                    staging_dir=staging_dir,
+                    remote_experiment_dir=remote_experiment_dir,
+                )
+                if not target_parts:
+                    continue
+                if target_parts[0] in _DROP_EXCLUDED_TOPLEVEL_DIRS:
+                    self._remove_staged_path(item)
+                    removed += 1
+        if removed:
+            logger.info(
+                "Dropped {} restored report-log symlink(s) that resolve into omitted content",
+                removed,
+            )
+
+    def _compact_failed_trials_to_diagnostics(
+        self,
+        staging_dir: Path,
+        *,
+        published_root: Path | None = None,
+    ) -> list[Path]:
         """Reduce failed trials to marker/metadata/log diagnostics before publish."""
         compacted_trials: list[Path] = []
 
-        for trial_dir in sorted(staging_dir.rglob("trial-*")):
-            if not trial_dir.is_dir() or not self._is_failed_trial_dir(trial_dir):
+        for trial_dir in _iter_trial_dirs(staging_dir, published_root=published_root):
+            if not self._is_failed_trial_dir(trial_dir):
                 continue
 
             compacted_trials.append(trial_dir.relative_to(staging_dir))
@@ -1738,12 +2664,20 @@ class ArtifactCollector:
     ) -> None:
         """Merge *staging_dir* contents into *final_dir* and remove staging.
 
-        Uses ``shutil.copytree`` with ``dirs_exist_ok=True`` so that incremental
-        collections (multiple workers, multiple runs) merge correctly into the
-        same final experiment directory.
+        Existing trial directories present in *staging_dir* are removed first so
+        re-collects replace each trial exactly while still allowing unrelated
+        trials from other workers or earlier runs to coexist under the same
+        final experiment directory.
         """
         final_dir.mkdir(parents=True, exist_ok=True)
-        for relpath in replace_trial_dirs or []:
+        staged_trial_dirs = [
+            trial_dir.relative_to(staging_dir)
+            for trial_dir in _iter_trial_dirs(staging_dir, published_root=final_dir)
+        ]
+        relpaths_to_replace = list(
+            dict.fromkeys([*staged_trial_dirs, *(replace_trial_dirs or [])])
+        )
+        for relpath in relpaths_to_replace:
             existing_trial_dir = final_dir / relpath
             if existing_trial_dir.exists() or existing_trial_dir.is_symlink():
                 self._remove_staged_path(existing_trial_dir)

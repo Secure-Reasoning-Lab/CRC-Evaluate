@@ -122,19 +122,28 @@ class DispatcherWarmupFeeder:
             if self.required_build_tracker.has_pending_required_builds():
                 self._pending_spec = spec
                 break
-            self._pending_spec = None
             try:
-                self.build_queue.enqueue(
-                    "crsbench.distributed.build_jobs.execute_ci_build",
-                    spec.payload,
-                    job_timeout=WARMUP_BUILD_JOB_TIMEOUT_SECONDS,
-                    result_ttl=-1,
-                    job_id=spec.job_id,
-                    meta=dict(spec.meta),
+                enqueue_if_idle = getattr(
+                    self.required_build_tracker, "enqueue_warmup_build_if_idle", None
                 )
+                if callable(enqueue_if_idle):
+                    if not enqueue_if_idle(build_queue=self.build_queue, spec=spec):
+                        self._pending_spec = spec
+                        break
+                else:
+                    self.build_queue.enqueue(
+                        "crsbench.distributed.build_jobs.execute_ci_build",
+                        spec.payload,
+                        job_timeout=WARMUP_BUILD_JOB_TIMEOUT_SECONDS,
+                        result_ttl=-1,
+                        job_id=spec.job_id,
+                        meta=dict(spec.meta),
+                    )
+                self._pending_spec = None
                 enqueued += 1
             except Exception as exc:
                 if _is_duplicate_job_enqueue_error(exc):
+                    self._pending_spec = None
                     continue
                 logger.exception(
                     "Failed to enqueue dispatcher warmup job {}",

@@ -173,7 +173,7 @@ This copied trial output is the durable result location. `cleanup_after_trial`
 removes internal workdirs such as `oss-crs-workdir`, but does not remove
 `trial/output/`, so copied logs remain available after cleanup. `cloud collect`
 preserves the non-log trial artifacts but intentionally omits
-`trial/output/logs/` and `oss-crs-workdir/` from the main artifact rsync. When
+`trial/output/logs/`, `trial/staged/`, and `oss-crs-workdir/` from the main artifact rsync. When
 top-level trial entries such as `output/` or `result.log` still symlink into
 that excluded workdir, collect materializes them before publish, prunes any
 bulk `output/logs/` copy, then restores only the report-critical subset needed

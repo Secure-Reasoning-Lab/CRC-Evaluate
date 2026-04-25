@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import os
+import queue as queue_module
+import threading
+from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -22,6 +25,26 @@ from crsbench.distributed.queue_monitor import (
     list_queue_job_entries,
     monitor_queue,
 )
+
+
+def _render_rich_output(
+    renderable,
+    *,
+    width: int = 120,
+    height: int | None = None,
+    styles: bool = False,
+) -> str:
+    rich_console = pytest.importorskip("rich.console")
+    console_kwargs = {
+        "width": width,
+        "force_terminal": True,
+        "record": True,
+    }
+    if height is not None:
+        console_kwargs["height"] = height
+    console = rich_console.Console(**console_kwargs)
+    console.print(renderable)
+    return console.export_text(styles=styles)
 
 
 def test_build_monitor_snapshot_uses_experiment_scoped_counts() -> None:
@@ -439,6 +462,58 @@ def test_select_running_jobs_window_clamps_page_index_when_count_shrinks() -> No
     assert (selected_page_index, page_count) == (1, 2)
 
 
+def test_select_running_jobs_window_keeps_page_geometry_when_paused_in_narrow_terminal() -> (
+    None
+):
+    rich_console = pytest.importorskip("rich.console")
+    console = rich_console.Console(width=40, height=18, force_terminal=True)
+    running_jobs = [
+        RunningJobInfo(
+            worker_name=f"worker-{idx}",
+            crs="crs-a",
+            benchmark="bench-a",
+            harness="harness-a",
+            target_cpv_id="cpv-1",
+            mode="delta",
+            trial_num=str(idx),
+            phase="running",
+            elapsed="1m0s",
+        )
+        for idx in range(6)
+    ]
+    snapshot = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=running_jobs,
+    )
+
+    unpaused = _select_running_jobs_window(
+        console,
+        snapshot,
+        experiment_name="exp-1",
+        total_jobs=6,
+        disk_skipped=0,
+        page_index=1,
+        paging_status_text="n/p active; Space pauses auto-rotate",
+        auto_rotate_paused=False,
+    )
+    paused = _select_running_jobs_window(
+        console,
+        snapshot,
+        experiment_name="exp-1",
+        total_jobs=6,
+        disk_skipped=0,
+        page_index=1,
+        paging_status_text="n/p active; Space resumes auto-rotate",
+        auto_rotate_paused=True,
+    )
+
+    assert [job.trial_num for job in unpaused[0]]
+    assert [job.trial_num for job in paused[0]] == [
+        job.trial_num for job in unpaused[0]
+    ]
+    assert paused[1:] == unpaused[1:]
+
+
 def test_apply_page_navigation_command_wraps_both_directions() -> None:
     assert _apply_page_navigation_command(command="n", page_index=1, page_count=2) == 0
     assert _apply_page_navigation_command(command="p", page_index=0, page_count=2) == 1
@@ -463,6 +538,10 @@ def test_should_auto_rotate_pages_respects_idle_timeout() -> None:
         now=10.0 + idle_timeout_sec,
         poll_interval=3.0,
     )
+
+
+def test_page_navigation_idle_timeout_uses_auto_rotate_cadence() -> None:
+    assert _page_navigation_idle_timeout_sec(30.0) == 5.0
 
 
 def test_select_running_jobs_window_shows_all_rows_when_terminal_can_fit_them() -> None:
@@ -502,8 +581,7 @@ def test_select_running_jobs_window_shows_all_rows_when_terminal_can_fit_them() 
     assert (page_index, page_count) == (0, 1)
 
 
-def test_build_rich_group_caption_shows_page_indicator_and_key_help() -> None:
-    rich_console = pytest.importorskip("rich.console")
+def test_build_rich_group_footer_shows_page_indicator_and_key_help() -> None:
     snapshot = QueueMonitorSnapshot(
         stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
         running_jobs=[
@@ -534,16 +612,14 @@ def test_build_rich_group_caption_shows_page_indicator_and_key_help() -> None:
         page_count=2,
         paging_status_text="n/p active; auto-rotates when idle",
     )
-    console = rich_console.Console(width=120, force_terminal=True, record=True)
-    console.print(renderable)
-
-    output = console.export_text()
-    assert "Page 2/2: showing 4 of 6 running jobs;" in output
+    running_table = renderable.renderables[1]
+    output = _render_rich_output(renderable, width=120)
+    assert running_table.caption is None
+    assert "Page 2/2: 4/6" in output
     assert "n/p active; auto-rotates when idle" in output
 
 
-def test_build_rich_group_caption_reports_hotkeys_unavailable_reason() -> None:
-    rich_console = pytest.importorskip("rich.console")
+def test_build_rich_group_footer_reports_hotkeys_unavailable_reason() -> None:
     snapshot = QueueMonitorSnapshot(
         stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
         running_jobs=[
@@ -572,16 +648,175 @@ def test_build_rich_group_caption_reports_hotkeys_unavailable_reason() -> None:
         paging_active=True,
         page_index=0,
         page_count=2,
-        paging_status_text="n/p unavailable: stdin not TTY; auto-rotates each refresh",
+        paging_status_text="n/p unavailable: stdin not TTY; auto-rotates automatically",
     )
-    console = rich_console.Console(width=120, force_terminal=True, record=True)
-    console.print(renderable)
+    running_table = renderable.renderables[1]
+    output = _render_rich_output(renderable, width=120)
+    assert running_table.caption is None
+    assert "Page 1/2: 4/6" in output
+    assert "stdin not TTY" in output
+    assert "n/p unavailable" in output
 
-    output = console.export_text()
-    assert "Page 1/2: showing 4 of 6 running jobs;" in output
-    assert "n/p unavailable: stdin not TTY;" in output
-    assert "auto-rotates each" in output
-    assert "refresh" in output
+
+def test_build_rich_group_footer_marks_paused_state_in_red() -> None:
+    snapshot = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[
+            RunningJobInfo(
+                worker_name=f"worker-{idx}",
+                crs="crs-a",
+                benchmark="bench-a",
+                harness="harness-a",
+                target_cpv_id="cpv-1",
+                mode="delta",
+                trial_num=str(idx),
+                phase="running",
+                elapsed="1m0s",
+            )
+            for idx in range(6)
+        ],
+    )
+
+    renderable = _build_rich_group(
+        snapshot,
+        experiment_name="exp-1",
+        total_jobs=6,
+        disk_skipped=0,
+        running_jobs=snapshot.running_jobs[:4],
+        running_job_count=6,
+        paging_active=True,
+        page_index=1,
+        page_count=2,
+        paging_status_text="n/p active; Space resumes auto-rotate",
+        auto_rotate_paused=True,
+    )
+    running_table = renderable.renderables[1]
+    output = _render_rich_output(renderable, width=120)
+    styled_output = _render_rich_output(renderable, width=120, styles=True)
+
+    assert running_table.caption is None
+    assert "[PAUSED]" in output
+    assert "\x1b[1;31m [PAUSED]\x1b[0m" in styled_output
+
+
+def test_build_rich_group_footer_keeps_helper_text_visible_on_narrow_terminals() -> (
+    None
+):
+    snapshot = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[
+            RunningJobInfo(
+                worker_name=f"worker-{idx}",
+                crs="crs-a",
+                benchmark="bench-a",
+                harness="harness-a",
+                target_cpv_id="cpv-1",
+                mode="delta",
+                trial_num=str(idx),
+                phase="running",
+                elapsed="1m0s",
+            )
+            for idx in range(6)
+        ],
+    )
+
+    renderable = _build_rich_group(
+        snapshot,
+        experiment_name="exp-1",
+        total_jobs=6,
+        disk_skipped=0,
+        running_jobs=snapshot.running_jobs[:2],
+        running_job_count=6,
+        paging_active=True,
+        page_index=1,
+        page_count=3,
+        paging_status_text="n/p active; Space resumes auto-rotate",
+        auto_rotate_paused=True,
+    )
+
+    output = _render_rich_output(renderable, width=40, height=18)
+
+    assert "Page 2/3: 2/6" in output
+    assert "n/p active" in output
+    assert "[PAUSED]" in output
+
+
+def test_build_rich_group_footer_keeps_unavailable_reason_visible_on_narrow_terminals() -> (
+    None
+):
+    snapshot = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[
+            RunningJobInfo(
+                worker_name=f"worker-{idx}",
+                crs="crs-a",
+                benchmark="bench-a",
+                harness="harness-a",
+                target_cpv_id="cpv-1",
+                mode="delta",
+                trial_num=str(idx),
+                phase="running",
+                elapsed="1m0s",
+            )
+            for idx in range(6)
+        ],
+    )
+
+    renderable = _build_rich_group(
+        snapshot,
+        experiment_name="exp-1",
+        total_jobs=6,
+        disk_skipped=0,
+        running_jobs=snapshot.running_jobs[:2],
+        running_job_count=6,
+        paging_active=True,
+        page_index=1,
+        page_count=3,
+        paging_status_text="n/p unavailable: stdin not TTY; auto-rotates automatically",
+    )
+
+    output = _render_rich_output(renderable, width=40, height=18)
+
+    assert "Page 2/3: 2/6" in output
+    assert "stdin not TTY" in output
+
+
+def test_build_rich_group_footer_keeps_full_hotkey_hint_on_standard_width() -> None:
+    snapshot = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[
+            RunningJobInfo(
+                worker_name=f"worker-{idx}",
+                crs="crs-a",
+                benchmark="bench-a",
+                harness="harness-a",
+                target_cpv_id="cpv-1",
+                mode="delta",
+                trial_num=str(idx),
+                phase="running",
+                elapsed="1m0s",
+            )
+            for idx in range(6)
+        ],
+    )
+
+    renderable = _build_rich_group(
+        snapshot,
+        experiment_name="exp-1",
+        total_jobs=6,
+        disk_skipped=0,
+        running_jobs=snapshot.running_jobs[:3],
+        running_job_count=6,
+        paging_active=True,
+        page_index=1,
+        page_count=2,
+        paging_status_text="n/p active; Space pauses auto-rotate",
+    )
+
+    output = _render_rich_output(renderable, width=80, height=20)
+
+    assert "Page 2/2: 3/6" in output
+    assert "n/p active; Space pauses auto-rotate" in output
 
 
 def test_rich_monitor_input_reports_non_tty_unavailability_reason() -> None:
@@ -591,7 +826,7 @@ def test_rich_monitor_input_reports_non_tty_unavailability_reason() -> None:
     with _RichMonitorInput(stream) as monitor_input:
         assert monitor_input.manual_navigation_available is False
         assert monitor_input.manual_navigation_status == (
-            "n/p unavailable: stdin not TTY; auto-rotates each refresh"
+            "n/p unavailable: stdin not TTY; auto-rotates automatically"
         )
 
 
@@ -612,7 +847,7 @@ def test_rich_monitor_input_prefers_controlling_terminal_when_available() -> Non
         assert monitor_input.manual_navigation_available is True
         assert (
             monitor_input.manual_navigation_status
-            == "n/p active; auto-rotates when idle"
+            == "n/p active; Space pauses auto-rotate"
         )
         assert monitor_input._fd == 11
         stream.fileno.assert_not_called()
@@ -640,7 +875,7 @@ def test_rich_monitor_input_falls_back_to_stdin_when_tty_open_fails() -> None:
         assert monitor_input.manual_navigation_available is True
         assert (
             monitor_input.manual_navigation_status
-            == "n/p active; auto-rotates when idle"
+            == "n/p active; Space pauses auto-rotate"
         )
         assert monitor_input._fd == 7
         stream.fileno.assert_called_once_with()
@@ -648,6 +883,468 @@ def test_rich_monitor_input_falls_back_to_stdin_when_tty_open_fails() -> None:
         mock_setcbreak.assert_called_once_with(7)
 
     mock_tcsetattr.assert_called_once()
+
+
+def test_rich_monitor_input_reads_from_distinct_stdin_when_tty_is_silent() -> None:
+    stream = MagicMock()
+    stream.isatty.return_value = True
+    stream.fileno.return_value = 7
+
+    def _fake_ttyname(fd: int) -> str:
+        if fd == 11:
+            return "/dev/pts/11"
+        if fd == 7:
+            return "/dev/pts/7"
+        raise AssertionError(f"unexpected fd {fd}")
+
+    def _fake_stat(path, **_kwargs) -> SimpleNamespace:
+        path_str = str(path)
+        if path_str == "/dev/pts/11":
+            return SimpleNamespace(st_dev=1, st_ino=11)
+        if path_str == "/dev/pts/7":
+            return SimpleNamespace(st_dev=2, st_ino=7)
+        raise AssertionError(f"unexpected tty path {path_str}")
+
+    def _fake_select(readers, _writers, _errors, _timeout):
+        return ([7] if 7 in readers else [], [], [])
+
+    def _fake_read(fd: int, _size: int) -> bytes:
+        if fd != 7:
+            raise AssertionError(f"unexpected read fd {fd}")
+        return b"n"
+
+    with (
+        patch("crsbench.distributed.queue_monitor.sys.stdin", stream),
+        patch("os.open", return_value=11),
+        patch("os.close") as mock_close,
+        patch("os.ttyname", side_effect=_fake_ttyname),
+        patch("os.stat", side_effect=_fake_stat),
+        patch("termios.tcgetattr", return_value=["saved-attrs"]) as mock_tcgetattr,
+        patch("termios.tcsetattr") as mock_tcsetattr,
+        patch("tty.setcbreak") as mock_setcbreak,
+        patch("select.select", side_effect=_fake_select),
+        patch("os.read", side_effect=_fake_read),
+        _RichMonitorInput() as monitor_input,
+    ):
+        assert monitor_input.manual_navigation_available is True
+        assert monitor_input.read_command(0.1) == "n"
+
+    assert mock_tcgetattr.call_args_list == [call(11), call(7)]
+    assert mock_setcbreak.call_args_list == [call(11), call(7)]
+    assert mock_tcsetattr.call_count == 2
+    mock_close.assert_called_once_with(11)
+
+
+def test_rich_monitor_input_disables_navigation_after_all_input_sources_fail() -> None:
+    stream = MagicMock()
+    stream.isatty.return_value = True
+    stream.fileno.return_value = 7
+
+    def _fake_ttyname(fd: int) -> str:
+        return f"/dev/pts/{fd}"
+
+    def _fake_stat(path, **_kwargs) -> SimpleNamespace:
+        fd = int(str(path).rsplit("/", maxsplit=1)[-1])
+        return SimpleNamespace(st_dev=fd, st_ino=fd)
+
+    def _fake_read(fd: int, _size: int) -> bytes:
+        if fd == 11:
+            return b""
+        if fd == 7:
+            raise OSError("stdin read failed")
+        raise AssertionError(f"unexpected read fd {fd}")
+
+    def _fake_select(readers, _writers, _errors, _timeout):
+        if readers == [11, 7]:
+            return ([11, 7], [], [])
+        if readers == [7]:
+            return ([7], [], [])
+        raise AssertionError(f"unexpected readers {readers}")
+
+    with (
+        patch("crsbench.distributed.queue_monitor.sys.stdin", stream),
+        patch("os.open", return_value=11),
+        patch("os.close") as mock_close,
+        patch("os.ttyname", side_effect=_fake_ttyname),
+        patch("os.stat", side_effect=_fake_stat),
+        patch("termios.tcgetattr", return_value=["saved-attrs"]),
+        patch("termios.tcsetattr"),
+        patch("tty.setcbreak"),
+        patch("select.select", side_effect=_fake_select),
+        patch("os.read", side_effect=_fake_read),
+        _RichMonitorInput() as monitor_input,
+    ):
+        assert monitor_input.manual_navigation_available is True
+        assert monitor_input.read_command(0.1) is None
+        assert monitor_input.manual_navigation_available is False
+        assert monitor_input.manual_navigation_status == (
+            "n/p unavailable: hotkey input unavailable; auto-rotates automatically"
+        )
+
+    mock_close.assert_called_once_with(11)
+
+
+def test_rich_monitor_input_recovers_when_select_fails_for_only_one_source() -> None:
+    stream = MagicMock()
+    stream.isatty.return_value = True
+    stream.fileno.return_value = 7
+
+    def _fake_ttyname(fd: int) -> str:
+        return f"/dev/pts/{fd}"
+
+    def _fake_stat(path, **_kwargs) -> SimpleNamespace:
+        fd = int(str(path).rsplit("/", maxsplit=1)[-1])
+        return SimpleNamespace(st_dev=fd, st_ino=fd)
+
+    def _fake_select(readers, _writers, _errors, _timeout):
+        if readers == [11, 7]:
+            raise OSError("bad fd in multi-select")
+        if readers == [11]:
+            raise OSError("controlling tty is stale")
+        if readers == [7]:
+            return ([7], [], [])
+        raise AssertionError(f"unexpected readers {readers}")
+
+    def _fake_read(fd: int, _size: int) -> bytes:
+        if fd != 7:
+            raise AssertionError(f"unexpected read fd {fd}")
+        return b"n"
+
+    with (
+        patch("crsbench.distributed.queue_monitor.sys.stdin", stream),
+        patch("os.open", return_value=11),
+        patch("os.close") as mock_close,
+        patch("os.ttyname", side_effect=_fake_ttyname),
+        patch("os.stat", side_effect=_fake_stat),
+        patch("termios.tcgetattr", return_value=["saved-attrs"]),
+        patch("termios.tcsetattr"),
+        patch("tty.setcbreak"),
+        patch("select.select", side_effect=_fake_select),
+        patch("os.read", side_effect=_fake_read),
+        _RichMonitorInput() as monitor_input,
+    ):
+        assert monitor_input.manual_navigation_available is True
+        assert monitor_input.read_command(0.1) == "n"
+        assert monitor_input.manual_navigation_available is True
+
+    mock_close.assert_called_once_with(11)
+
+
+def test_rich_monitor_input_stops_after_first_ready_fd_yields_a_command() -> None:
+    stream = MagicMock()
+    stream.isatty.return_value = True
+    stream.fileno.return_value = 7
+
+    def _fake_ttyname(fd: int) -> str:
+        if fd == 11:
+            return "/dev/tty"
+        if fd == 7:
+            return "/dev/pts/7"
+        raise AssertionError(f"unexpected fd {fd}")
+
+    def _fake_stat(path, **_kwargs) -> SimpleNamespace:
+        path_str = str(path)
+        if path_str == "/dev/tty":
+            return SimpleNamespace(st_dev=1, st_ino=11)
+        if path_str == "/dev/pts/7":
+            return SimpleNamespace(st_dev=2, st_ino=7)
+        raise AssertionError(f"unexpected tty path {path_str}")
+
+    def _fake_select(readers, _writers, _errors, _timeout):
+        if readers == [11, 7]:
+            return ([11, 7], [], [])
+        raise AssertionError(f"unexpected readers {readers}")
+
+    def _fake_read(fd: int, _size: int) -> bytes:
+        if fd == 11:
+            return b"n"
+        raise AssertionError("second ready fd should not be read after a command")
+
+    with (
+        patch("crsbench.distributed.queue_monitor.sys.stdin", stream),
+        patch("os.open", return_value=11),
+        patch("os.close") as mock_close,
+        patch("os.ttyname", side_effect=_fake_ttyname),
+        patch("os.stat", side_effect=_fake_stat),
+        patch("termios.tcgetattr", return_value=["saved-attrs"]),
+        patch("termios.tcsetattr"),
+        patch("tty.setcbreak"),
+        patch("select.select", side_effect=_fake_select),
+        patch("os.read", side_effect=_fake_read),
+        _RichMonitorInput() as monitor_input,
+    ):
+        assert monitor_input.manual_navigation_available is True
+        assert monitor_input.read_command(0.1) == "n"
+
+    mock_close.assert_called_once_with(11)
+
+
+def test_rich_monitor_input_reads_later_ready_fd_when_first_has_non_command_data() -> (
+    None
+):
+    stream = MagicMock()
+    stream.isatty.return_value = True
+    stream.fileno.return_value = 7
+
+    def _fake_ttyname(fd: int) -> str:
+        if fd == 11:
+            return "/dev/tty"
+        if fd == 7:
+            return "/dev/pts/7"
+        raise AssertionError(f"unexpected fd {fd}")
+
+    def _fake_stat(path, **_kwargs) -> SimpleNamespace:
+        path_str = str(path)
+        if path_str == "/dev/tty":
+            return SimpleNamespace(st_dev=1, st_ino=11)
+        if path_str == "/dev/pts/7":
+            return SimpleNamespace(st_dev=2, st_ino=7)
+        raise AssertionError(f"unexpected tty path {path_str}")
+
+    select_calls = {"count": 0}
+
+    def _fake_select(readers, _writers, _errors, _timeout):
+        select_calls["count"] += 1
+        if select_calls["count"] == 1 and readers == [11, 7]:
+            return ([11, 7], [], [])
+        return ([], [], [])
+
+    def _fake_read(fd: int, _size: int) -> bytes:
+        if fd == 11:
+            return b"x"
+        if fd == 7:
+            return b"n"
+        raise AssertionError(f"unexpected read fd {fd}")
+
+    with (
+        patch("crsbench.distributed.queue_monitor.sys.stdin", stream),
+        patch("os.open", return_value=11) as _mock_open,
+        patch("os.close") as mock_close,
+        patch("os.ttyname", side_effect=_fake_ttyname),
+        patch("os.stat", side_effect=_fake_stat),
+        patch("termios.tcgetattr", return_value=["saved-attrs"]),
+        patch("termios.tcsetattr"),
+        patch("tty.setcbreak"),
+        patch("select.select", side_effect=_fake_select),
+        patch("os.read", side_effect=_fake_read),
+        _RichMonitorInput() as monitor_input,
+    ):
+        assert monitor_input.manual_navigation_available is True
+        assert monitor_input.read_command(0.1) == "n"
+
+    mock_close.assert_called_once_with(11)
+
+
+def test_rich_monitor_input_reads_space_toggle_command() -> None:
+    stream = MagicMock()
+    stream.isatty.return_value = True
+    stream.fileno.return_value = 7
+
+    def _fake_ttyname(fd: int) -> str:
+        if fd == 11:
+            return "/dev/tty"
+        if fd == 7:
+            return "/dev/pts/7"
+        raise AssertionError(f"unexpected fd {fd}")
+
+    def _fake_stat(path, **_kwargs) -> SimpleNamespace:
+        path_str = str(path)
+        if path_str == "/dev/tty":
+            return SimpleNamespace(st_dev=1, st_ino=11)
+        if path_str == "/dev/pts/7":
+            return SimpleNamespace(st_dev=2, st_ino=7)
+        raise AssertionError(f"unexpected tty path {path_str}")
+
+    def _fake_select(readers, _writers, _errors, _timeout):
+        if readers == [11, 7]:
+            return ([11], [], [])
+        raise AssertionError(f"unexpected readers {readers}")
+
+    def _fake_read(fd: int, _size: int) -> bytes:
+        if fd == 11:
+            return b" "
+        raise AssertionError("unexpected read fd")
+
+    with (
+        patch("crsbench.distributed.queue_monitor.sys.stdin", stream),
+        patch("os.open", return_value=11),
+        patch("os.close") as mock_close,
+        patch("os.ttyname", side_effect=_fake_ttyname),
+        patch("os.stat", side_effect=_fake_stat),
+        patch("termios.tcgetattr", return_value=["saved-attrs"]),
+        patch("termios.tcsetattr"),
+        patch("tty.setcbreak"),
+        patch("select.select", side_effect=_fake_select),
+        patch("os.read", side_effect=_fake_read),
+        _RichMonitorInput() as monitor_input,
+    ):
+        assert monitor_input.manual_navigation_available is True
+        assert monitor_input.read_command(0.1) == "space"
+
+    mock_close.assert_called_once_with(11)
+
+
+def test_rich_monitor_input_reads_later_ready_fd_after_blocking_io_error() -> None:
+    stream = MagicMock()
+    stream.isatty.return_value = True
+    stream.fileno.return_value = 7
+
+    def _fake_ttyname(fd: int) -> str:
+        if fd == 11:
+            return "/dev/tty"
+        if fd == 7:
+            return "/dev/pts/7"
+        raise AssertionError(f"unexpected fd {fd}")
+
+    def _fake_stat(path, **_kwargs) -> SimpleNamespace:
+        path_str = str(path)
+        if path_str == "/dev/tty":
+            return SimpleNamespace(st_dev=1, st_ino=11)
+        if path_str == "/dev/pts/7":
+            return SimpleNamespace(st_dev=2, st_ino=7)
+        raise AssertionError(f"unexpected tty path {path_str}")
+
+    select_calls = 0
+    fd7_reads = 0
+
+    def _fake_select(readers, _writers, _errors, _timeout):
+        nonlocal select_calls
+        if readers == [11, 7] and select_calls == 0:
+            select_calls += 1
+            return ([11, 7], [], [])
+        if readers == [11, 7] and select_calls == 1:
+            select_calls += 1
+            return ([7], [], [])
+        return ([], [], [])
+
+    disabled = False
+    enabled = True
+    blocking_state = {11: enabled, 7: enabled}
+    read_states: list[tuple[int, bool]] = []
+
+    def _fake_get_blocking(fd: int) -> bool:
+        return blocking_state[fd]
+
+    def _fake_set_blocking(fd: int, is_blocking: bool) -> None:
+        blocking_state[fd] = is_blocking
+
+    def _fake_read(fd: int, _size: int) -> bytes:
+        read_states.append((fd, blocking_state[fd]))
+        if fd == 11:
+            raise BlockingIOError("same tty already drained")
+        if fd == 7:
+            return b"n"
+        raise AssertionError(f"unexpected read fd {fd}")
+
+    with (
+        patch("crsbench.distributed.queue_monitor.sys.stdin", stream),
+        patch("os.open", return_value=11) as _mock_open,
+        patch("os.close") as mock_close,
+        patch("os.ttyname", side_effect=_fake_ttyname),
+        patch("os.stat", side_effect=_fake_stat),
+        patch("os.get_blocking", side_effect=_fake_get_blocking),
+        patch("os.set_blocking", side_effect=_fake_set_blocking),
+        patch("termios.tcgetattr", return_value=["saved-attrs"]),
+        patch("termios.tcsetattr"),
+        patch("tty.setcbreak"),
+        patch("select.select", side_effect=_fake_select),
+        patch("os.read", side_effect=_fake_read),
+        _RichMonitorInput() as monitor_input,
+    ):
+        assert monitor_input.manual_navigation_available is True
+        assert monitor_input.read_command(0.1) == "n"
+        assert monitor_input.manual_navigation_available is True
+
+    assert (11, disabled) in read_states
+    assert (7, disabled) in read_states
+    assert blocking_state == {11: enabled, 7: enabled}
+    mock_close.assert_called_once_with(11)
+
+
+def test_rich_monitor_input_uses_nonblocking_reads_for_ready_fds() -> None:
+    stream = MagicMock()
+    stream.isatty.return_value = True
+    stream.fileno.return_value = 7
+
+    def _fake_ttyname(fd: int) -> str:
+        if fd == 11:
+            return "/dev/tty"
+        if fd == 7:
+            return "/dev/pts/7"
+        raise AssertionError(f"unexpected fd {fd}")
+
+    def _fake_stat(path, **_kwargs) -> SimpleNamespace:
+        path_str = str(path)
+        if path_str == "/dev/tty":
+            return SimpleNamespace(st_dev=1, st_ino=11)
+        if path_str == "/dev/pts/7":
+            return SimpleNamespace(st_dev=2, st_ino=7)
+        raise AssertionError(f"unexpected tty path {path_str}")
+
+    select_calls = 0
+    fd7_reads = 0
+
+    def _fake_select(readers, _writers, _errors, _timeout):
+        nonlocal select_calls
+        if readers == [11, 7] and select_calls == 0:
+            select_calls += 1
+            return ([11, 7], [], [])
+        if readers == [11, 7] and select_calls == 1:
+            select_calls += 1
+            return ([7], [], [])
+        return ([], [], [])
+
+    disabled = False
+    enabled = True
+    blocking_state = {11: enabled, 7: enabled}
+    get_blocking_calls: list[int] = []
+    read_states: list[tuple[int, bool]] = []
+
+    def _fake_get_blocking(fd: int) -> bool:
+        get_blocking_calls.append(fd)
+        return blocking_state[fd]
+
+    def _fake_set_blocking(fd: int, is_blocking: bool) -> None:
+        blocking_state[fd] = is_blocking
+
+    def _fake_read(fd: int, _size: int) -> bytes:
+        nonlocal fd7_reads
+        read_states.append((fd, blocking_state[fd]))
+        if fd == 11:
+            return b"x"
+        if fd == 7:
+            if fd7_reads == 0:
+                fd7_reads += 1
+                raise BlockingIOError("same tty already drained")
+            fd7_reads += 1
+            return b"n"
+        raise AssertionError(f"unexpected read fd {fd}")
+
+    with (
+        patch("crsbench.distributed.queue_monitor.sys.stdin", stream),
+        patch("os.open", return_value=11) as _mock_open,
+        patch("os.close") as mock_close,
+        patch("os.ttyname", side_effect=_fake_ttyname),
+        patch("os.stat", side_effect=_fake_stat),
+        patch("os.get_blocking", side_effect=_fake_get_blocking),
+        patch("os.set_blocking", side_effect=_fake_set_blocking),
+        patch("termios.tcgetattr", return_value=["saved-attrs"]),
+        patch("termios.tcsetattr"),
+        patch("tty.setcbreak"),
+        patch("select.select", side_effect=_fake_select),
+        patch("os.read", side_effect=_fake_read),
+        _RichMonitorInput() as monitor_input,
+    ):
+        assert monitor_input.manual_navigation_available is True
+        assert monitor_input.read_command(0.1) == "n"
+        assert monitor_input.manual_navigation_available is True
+
+    assert 11 in get_blocking_calls
+    assert 7 in get_blocking_calls
+    assert (11, disabled) in read_states
+    assert (7, disabled) in read_states
+    assert blocking_state == {11: enabled, 7: enabled}
+    mock_close.assert_called_once_with(11)
 
 
 def test_monitor_queue_rich_applies_manual_page_navigation_immediately() -> None:
@@ -696,7 +1393,7 @@ def test_monitor_queue_rich_applies_manual_page_navigation_immediately() -> None
         def __init__(self, *args, **kwargs):
             del args, kwargs
             self.manual_navigation_available = True
-            self.manual_navigation_status = "n/p active; auto-rotates when idle"
+            self.manual_navigation_status = "n/p active; Space pauses auto-rotate"
             self._commands = iter(["n", None])
 
         def __enter__(self):
@@ -738,12 +1435,546 @@ def test_monitor_queue_rich_applies_manual_page_navigation_immediately() -> None
     assert refresh_flags
     assert refresh_flags[0] is True
     running_table = rendered_updates[1].renderables[1]
-    assert "Page 2/2: showing 2 of 6 running jobs;" in running_table.caption
-    assert "n/p active; auto-rotates when idle" in running_table.caption
+    output = _render_rich_output(rendered_updates[1], width=120, height=20)
+    assert running_table.caption is None
+    assert "Page 2/2: 2/6" in output
+    assert "n/p active; Space pauses auto-rotate" in output
     assert list(running_table.columns[0].cells) == ["worker-4", "worker-5"]
     assert list(running_table.columns[6].cells) == ["4", "5"]
     assert list(running_table.columns[7].cells) == ["running", "running"]
     assert list(running_table.columns[8].cells) == ["1m0s", "1m0s"]
+
+
+def test_monitor_queue_rich_space_toggles_auto_rotate_pause_state() -> None:
+    rich_console = pytest.importorskip("rich.console")
+    queue = MagicMock()
+    active = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[
+            RunningJobInfo(
+                worker_name=f"worker-{idx}",
+                crs="crs-a",
+                benchmark="bench-a",
+                harness="harness-a",
+                target_cpv_id="cpv-1",
+                mode="delta",
+                trial_num=str(idx),
+                phase="running",
+                elapsed="1m0s",
+            )
+            for idx in range(6)
+        ],
+    )
+    done = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 0, "finished": 6, "failed": 0, "workers": 1},
+        running_jobs=[],
+    )
+    paused_caption_seen = threading.Event()
+    resumed_caption_seen = threading.Event()
+    command_queue: queue_module.Queue[str] = queue_module.Queue()
+
+    class DummyLive:
+        def __init__(self, renderable, *args, **kwargs):
+            del args, kwargs
+            self.update(renderable)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def update(self, renderable, *args, **kwargs):
+            del args, kwargs
+            footer_text = _render_rich_output(renderable, width=120, height=20)
+            if "Space resumes auto-rotate" in footer_text and "[PAUSED]" in footer_text:
+                paused_caption_seen.set()
+            if (
+                paused_caption_seen.is_set()
+                and "Space pauses auto-rotate" in footer_text
+                and "[PAUSED]" not in footer_text
+            ):
+                resumed_caption_seen.set()
+
+    class DummyInput:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+            self.manual_navigation_available = True
+            self.manual_navigation_status = "n/p active; Space pauses auto-rotate"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def set_auto_rotate_paused(self, paused: bool) -> None:
+            if paused:
+                self.manual_navigation_status = "n/p active; Space resumes auto-rotate"
+                return
+            self.manual_navigation_status = "n/p active; Space pauses auto-rotate"
+
+        def read_command(self, timeout_sec: float) -> str | None:
+            try:
+                return command_queue.get(timeout=max(timeout_sec, 0.0))
+            except queue_module.Empty:
+                return None
+
+    def _build_snapshot(*args, **kwargs) -> QueueMonitorSnapshot:
+        del args, kwargs
+        if resumed_caption_seen.is_set():
+            return done
+        return active
+
+    console = rich_console.Console(
+        width=120,
+        height=20,
+        force_terminal=True,
+        record=True,
+    )
+
+    with (
+        patch(
+            "crsbench.distributed.queue_monitor.build_monitor_snapshot",
+            side_effect=_build_snapshot,
+        ),
+        patch("crsbench.distributed.queue_monitor._RichMonitorInput", DummyInput),
+        patch(
+            "crsbench.distributed.queue_monitor._rich_monitor_auto_rotate_interval_sec",
+            return_value=999.0,
+        ),
+        patch("rich.console.Console", return_value=console),
+        patch("rich.live.Live", DummyLive),
+    ):
+        monitor_thread = threading.Thread(
+            target=monitor_queue,
+            kwargs={
+                "queue": queue,
+                "experiment_name": "exp-1",
+                "tracked_job_ids": None,
+                "callbacks": QueueMonitorCallbacks(),
+                "use_rich": True,
+                "poll_interval": 0.0,
+            },
+            daemon=True,
+        )
+        monitor_thread.start()
+        try:
+            command_queue.put("space")
+            assert paused_caption_seen.wait(0.2)
+            command_queue.put("space")
+            assert resumed_caption_seen.wait(0.2)
+        finally:
+            monitor_thread.join(1.0)
+
+    assert not monitor_thread.is_alive()
+
+
+def test_monitor_queue_rich_auto_rotates_while_snapshots_refresh() -> None:
+    rich_console = pytest.importorskip("rich.console")
+    queue = MagicMock()
+    active = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[
+            RunningJobInfo(
+                worker_name=f"worker-{idx}",
+                crs="crs-a",
+                benchmark="bench-a",
+                harness="harness-a",
+                target_cpv_id="cpv-1",
+                mode="delta",
+                trial_num=str(idx),
+                phase="running",
+                elapsed="1m0s",
+            )
+            for idx in range(6)
+        ],
+    )
+    done = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 0, "finished": 6, "failed": 0, "workers": 1},
+        running_jobs=[],
+    )
+    page_two_seen = threading.Event()
+
+    class DummyLive:
+        def __init__(self, renderable, *args, **kwargs):
+            del args, kwargs
+            self.update(renderable)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def update(self, renderable, *args, **kwargs):
+            del args, kwargs
+            if "Page 2/2:" in _render_rich_output(renderable, width=120, height=20):
+                page_two_seen.set()
+
+    class DummyInput:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+            self.manual_navigation_available = True
+            self.manual_navigation_status = "n/p active; Space pauses auto-rotate"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read_command(self, timeout_sec: float) -> str | None:
+            del timeout_sec
+            return None
+
+    def _build_snapshot(*args, **kwargs) -> QueueMonitorSnapshot:
+        del args, kwargs
+        if page_two_seen.is_set():
+            return done
+        return active
+
+    console = rich_console.Console(
+        width=120,
+        height=20,
+        force_terminal=True,
+        record=True,
+    )
+
+    with (
+        patch(
+            "crsbench.distributed.queue_monitor.build_monitor_snapshot",
+            side_effect=_build_snapshot,
+        ),
+        patch("crsbench.distributed.queue_monitor._RichMonitorInput", DummyInput),
+        patch(
+            "crsbench.distributed.queue_monitor._rich_monitor_auto_rotate_interval_sec",
+            return_value=0.05,
+        ),
+        patch("rich.console.Console", return_value=console),
+        patch("rich.live.Live", DummyLive),
+    ):
+        monitor_thread = threading.Thread(
+            target=monitor_queue,
+            kwargs={
+                "queue": queue,
+                "experiment_name": "exp-1",
+                "tracked_job_ids": None,
+                "callbacks": QueueMonitorCallbacks(),
+                "use_rich": True,
+                "poll_interval": 0.0,
+            },
+            daemon=True,
+        )
+        monitor_thread.start()
+        try:
+            assert page_two_seen.wait(0.5)
+        finally:
+            monitor_thread.join(1.0)
+
+    assert not monitor_thread.is_alive()
+
+
+def test_monitor_queue_rich_keeps_manual_navigation_responsive_during_refresh() -> None:
+    rich_console = pytest.importorskip("rich.console")
+    queue = MagicMock()
+    active = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 6, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[
+            RunningJobInfo(
+                worker_name=f"worker-{idx}",
+                crs="crs-a",
+                benchmark="bench-a",
+                harness="harness-a",
+                target_cpv_id="cpv-1",
+                mode="delta",
+                trial_num=str(idx),
+                phase="running",
+                elapsed="1m0s",
+            )
+            for idx in range(6)
+        ],
+    )
+    done = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 0, "finished": 6, "failed": 0, "workers": 1},
+        running_jobs=[],
+    )
+    refresh_started = threading.Event()
+    allow_refresh_finish = threading.Event()
+    page_two_seen = threading.Event()
+    command_queue: queue_module.Queue[str] = queue_module.Queue()
+
+    class DummyLive:
+        def __init__(self, renderable, *args, **kwargs):
+            del args, kwargs
+            self.update(renderable)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def update(self, renderable, *args, **kwargs):
+            del args, kwargs
+            if "Page 2/2:" in _render_rich_output(renderable, width=120, height=20):
+                page_two_seen.set()
+
+    class DummyInput:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+            self.manual_navigation_available = True
+            self.manual_navigation_status = "n/p active; Space pauses auto-rotate"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read_command(self, timeout_sec: float) -> str | None:
+            try:
+                return command_queue.get(timeout=max(timeout_sec, 0.0))
+            except queue_module.Empty:
+                return None
+
+    build_calls = 0
+
+    def _build_snapshot(*args, **kwargs) -> QueueMonitorSnapshot:
+        del args, kwargs
+        nonlocal build_calls
+        build_calls += 1
+        if build_calls == 1:
+            return active
+        if build_calls == 2:
+            refresh_started.set()
+            assert allow_refresh_finish.wait(1.0)
+            return done
+        raise AssertionError(f"unexpected build call {build_calls}")
+
+    console = rich_console.Console(
+        width=120,
+        height=20,
+        force_terminal=True,
+        record=True,
+    )
+
+    with (
+        patch(
+            "crsbench.distributed.queue_monitor.build_monitor_snapshot",
+            side_effect=_build_snapshot,
+        ),
+        patch("crsbench.distributed.queue_monitor._RichMonitorInput", DummyInput),
+        patch(
+            "crsbench.distributed.queue_monitor._rich_monitor_auto_rotate_interval_sec",
+            return_value=999.0,
+        ),
+        patch("rich.console.Console", return_value=console),
+        patch("rich.live.Live", DummyLive),
+    ):
+        monitor_thread = threading.Thread(
+            target=monitor_queue,
+            kwargs={
+                "queue": queue,
+                "experiment_name": "exp-1",
+                "tracked_job_ids": None,
+                "callbacks": QueueMonitorCallbacks(),
+                "use_rich": True,
+                "poll_interval": 0.0,
+            },
+            daemon=True,
+        )
+        monitor_thread.start()
+        try:
+            assert refresh_started.wait(1.0)
+            command_queue.put("n")
+            assert page_two_seen.wait(0.2)
+        finally:
+            allow_refresh_finish.set()
+            monitor_thread.join(1.0)
+
+    assert not monitor_thread.is_alive()
+
+
+def test_monitor_queue_rich_refreshes_tracked_jobs_on_poll_interval() -> None:
+    rich_console = pytest.importorskip("rich.console")
+    queue = MagicMock()
+    active = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 1, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[],
+    )
+    job = MagicMock()
+    job.id = "job-1"
+    job.is_finished = False
+    job.is_failed = False
+    refresh_calls = {"count": 0}
+
+    def _refresh() -> None:
+        refresh_calls["count"] += 1
+        job.is_finished = False
+        job.is_failed = False
+
+    job.refresh.side_effect = _refresh
+
+    class DummyLive:
+        def __init__(self, renderable, *args, **kwargs):
+            del renderable, args, kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def update(self, renderable, *args, **kwargs):
+            del renderable, args, kwargs
+
+    class DummyInput:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+            self.manual_navigation_available = True
+            self.manual_navigation_status = "n/p active; Space pauses auto-rotate"
+            self._reads = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read_command(self, timeout_sec: float) -> str | None:
+            del timeout_sec
+            self._reads += 1
+            if self._reads >= 4:
+                raise RuntimeError("stop monitor")
+            return None
+
+    console = rich_console.Console(
+        width=120,
+        height=20,
+        force_terminal=True,
+        record=True,
+    )
+
+    with (
+        patch(
+            "crsbench.distributed.queue_monitor.build_monitor_snapshot",
+            return_value=active,
+        ),
+        patch("crsbench.distributed.queue_monitor._RichMonitorInput", DummyInput),
+        patch("rich.console.Console", return_value=console),
+        patch("rich.live.Live", DummyLive),
+        pytest.raises(RuntimeError, match="stop monitor"),
+    ):
+        monitor_queue(
+            queue,
+            "exp-1",
+            tracked_jobs=[job],
+            callbacks=QueueMonitorCallbacks(),
+            use_rich=True,
+            poll_interval=1.0,
+            exit_when_idle=False,
+        )
+
+    assert refresh_calls["count"] == 1
+
+
+def test_monitor_queue_rich_shutdown_does_not_wait_forever_on_blocked_refresh() -> None:
+    rich_console = pytest.importorskip("rich.console")
+    queue = MagicMock()
+    active = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 1, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[],
+    )
+    refresh_started = threading.Event()
+    allow_refresh_finish = threading.Event()
+    monitor_errors: queue_module.Queue[Exception] = queue_module.Queue()
+
+    class DummyLive:
+        def __init__(self, renderable, *args, **kwargs):
+            del renderable, args, kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def update(self, renderable, *args, **kwargs):
+            del renderable, args, kwargs
+
+    class DummyInput:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+            self.manual_navigation_available = True
+            self.manual_navigation_status = "n/p active; Space pauses auto-rotate"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read_command(self, timeout_sec: float) -> str | None:
+            del timeout_sec
+            assert refresh_started.wait(1.0)
+            raise RuntimeError("stop monitor")
+
+    build_calls = 0
+
+    def _build_snapshot(*args, **kwargs) -> QueueMonitorSnapshot:
+        del args, kwargs
+        nonlocal build_calls
+        build_calls += 1
+        if build_calls == 1:
+            return active
+        refresh_started.set()
+        assert allow_refresh_finish.wait(1.0)
+        return active
+
+    console = rich_console.Console(
+        width=120,
+        height=20,
+        force_terminal=True,
+        record=True,
+    )
+
+    def _run_monitor() -> None:
+        try:
+            monitor_queue(
+                queue,
+                "exp-1",
+                tracked_job_ids=None,
+                callbacks=QueueMonitorCallbacks(),
+                use_rich=True,
+                poll_interval=0.0,
+                exit_when_idle=False,
+            )
+        except Exception as exc:
+            monitor_errors.put(exc)
+
+    with (
+        patch(
+            "crsbench.distributed.queue_monitor.build_monitor_snapshot",
+            side_effect=_build_snapshot,
+        ),
+        patch("crsbench.distributed.queue_monitor._RichMonitorInput", DummyInput),
+        patch("rich.console.Console", return_value=console),
+        patch("rich.live.Live", DummyLive),
+    ):
+        monitor_thread = threading.Thread(target=_run_monitor, daemon=True)
+        monitor_thread.start()
+        try:
+            assert refresh_started.wait(1.0)
+            monitor_thread.join(0.5)
+            assert not monitor_thread.is_alive()
+        finally:
+            allow_refresh_finish.set()
+            monitor_thread.join(1.0)
+
+    raised = monitor_errors.get_nowait()
+    assert isinstance(raised, RuntimeError)
+    assert str(raised) == "stop monitor"
 
 
 def test_display_worker_name_trims_cloud_experiment_prefix() -> None:

@@ -12,6 +12,8 @@ import pytest
 from crsbench.cloud.collection import (
     ArtifactCollectionError,
     ArtifactCollector,
+    _is_report_log_file,
+    _iter_trial_dirs,
     collect_marker_path,
     discover_experiment_start_time_from_staging,
     merge_experiment_start_time,
@@ -23,6 +25,10 @@ from crsbench.reporting.snapshot_loader import discover_trials
 from crsbench.validation.schemas import GceWorkerFleetConfig
 
 _REAL_SUBPROCESS_RUN = subprocess.run
+_REAL_LAYOUT_CRS = "oss-crs"
+_REAL_LAYOUT_BENCHMARK_A = "afc-curl-delta-01"
+_MISSING_LAYOUT_BENCHMARK = "not-a-real-bench"
+_REAL_LAYOUT_HARNESS = "curl_fuzzer_ws"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -130,6 +136,74 @@ def _write_trial_metadata(trial_dir: Path, payload: dict[str, object]) -> None:
     """Write `metadata.json` directly with the supplied payload."""
     metadata_path = trial_dir / "metadata.json"
     metadata_path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+class TestTrialRootDiscovery:
+    @pytest.mark.parametrize(
+        ("metadata_state", "include_worker_log", "expect_trial_dir"),
+        [
+            ("missing", False, False),
+            ("missing", True, False),
+            ("invalid", False, False),
+            ("invalid", True, True),
+        ],
+    )
+    def test_published_root_fallback_requires_corrupt_trial_shape(
+        self,
+        tmp_path: Path,
+        metadata_state: str,
+        include_worker_log: bool,
+        expect_trial_dir: bool,
+    ) -> None:
+        staging_root = tmp_path / "staging"
+        published_root = tmp_path / "published"
+        relpath = Path(
+            _REAL_LAYOUT_CRS,
+            _MISSING_LAYOUT_BENCHMARK,
+            _REAL_LAYOUT_HARNESS,
+            "delta",
+            "address",
+            "trial-1",
+        )
+
+        partial_trial = staging_root / relpath
+        partial_trial.mkdir(parents=True)
+        if metadata_state == "invalid":
+            (partial_trial / "metadata.json").write_text(
+                "{broken json\n", encoding="utf-8"
+            )
+        if include_worker_log:
+            (partial_trial / "worker.log").write_text(
+                "partial worker log\n", encoding="utf-8"
+            )
+        (partial_trial / "staged" / "cache.txt").parent.mkdir(parents=True)
+        (partial_trial / "staged" / "cache.txt").write_text(
+            "partial tree should not be promoted\n", encoding="utf-8"
+        )
+
+        published_trial = published_root / relpath
+        published_trial.mkdir(parents=True)
+        _write_trial_metadata(
+            published_trial,
+            {
+                "timestamp": "2026-03-13T00:00:00Z",
+                "trial_num": 1,
+                "crs": _REAL_LAYOUT_CRS,
+                "benchmark": _MISSING_LAYOUT_BENCHMARK,
+                "harness": _REAL_LAYOUT_HARNESS,
+            },
+        )
+        (published_trial / "worker.log").write_text(
+            "previously published worker log\n", encoding="utf-8"
+        )
+
+        discovered_trial_dirs = list(
+            _iter_trial_dirs(staging_root, published_root=published_root)
+        )
+        if expect_trial_dir:
+            assert discovered_trial_dirs == [partial_trial]
+        else:
+            assert discovered_trial_dirs == []
 
 
 def _run_local_rsync_from_cloud_cmd(
@@ -503,6 +577,26 @@ class TestRsyncPreservesMtimes:
 class TestStagingAndPublish:
     """test_staging_and_publish — ARTF-03: staged tree published to final path."""
 
+    def test_is_report_log_file_matches_allowlist(self) -> None:
+        assert _is_report_log_file(
+            "trial-1/output/logs/services/crs-codex_inc-builder-asan.stdout.log"
+        )
+        assert _is_report_log_file(
+            "trial-1/output/logs/crs/foo/bar/crs-codex_inc-builder-asan.stdout.log"
+        )
+        assert _is_report_log_file(
+            "trial-1/output/logs/services/builder-sidecar-lite_patcher.stdout.log"
+        )
+        assert _is_report_log_file(
+            "trial-1/output/logs/crs/foo/log_dir/verify_patch_timing.json"
+        )
+        assert not _is_report_log_file(
+            "trial-1/output/logs/services/crs-codex_inc-builder-asan.stderr.log"
+        )
+        assert not _is_report_log_file(
+            "trial-1/output/logs/services/crs-codex_inc-builder-asan.json"
+        )
+
     def test_staging_and_publish(self, tmp_path: Path) -> None:
         """After successful rsync+verification, artifacts appear in final path; staging is cleaned."""
         experiment_filestore = tmp_path / "filestore"
@@ -530,6 +624,17 @@ class TestStagingAndPublish:
             )
             return subprocess.CompletedProcess(args=cmd, returncode=0)
 
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
         with patch("subprocess.run", side_effect=_fake_rsync):
             final_path = collector.collect(
                 worker=worker,
@@ -583,10 +688,38 @@ class TestStagingAndPublish:
         (
             workdir_out / "logs" / "services" / "crs-codex_inc-builder-asan.stdout.log"
         ).write_text("Tests run: 1, Failures: 0, Errors: 0, Skipped: 0\n")
+        (
+            workdir_out / "logs" / "services" / "crs-codex_inc-builder-asan.stderr.log"
+        ).write_text("do not restore stderr log\n")
+        (
+            workdir_out / "logs" / "services" / "crs-codex_inc-builder-asan.json"
+        ).write_text('{"keep": false}\n')
         timing_dir = workdir_out / "logs" / "crs" / "builder-sidecar-lite" / "log_dir"
         timing_dir.mkdir(parents=True)
         (timing_dir / "verify_patch_timing.json").write_text(
             json.dumps({"rebuild": 70.4, "test": 481.0, "status": "pass"})
+        )
+        staged_dir = trial_dir / "staged" / "curl-delta-01"
+        staged_dir.mkdir(parents=True)
+        (staged_dir / "README.txt").write_text("staged leak target\n", encoding="utf-8")
+        kept_dir = workdir_out / "kept"
+        kept_dir.mkdir(parents=True)
+        (kept_dir / "artifact.txt").symlink_to(
+            Path("..") / ".." / ".." / "staged" / "curl-delta-01" / "README.txt"
+        )
+        (trial_dir / "result.log").symlink_to(Path("oss-crs-workdir") / "result.log")
+        (trial_dir / "log-echo.txt").symlink_to(
+            Path("oss-crs-workdir") / "log-echo.txt"
+        )
+        (trial_dir / "oss-crs-workdir" / "result.log").symlink_to(
+            Path("..") / "staged" / "curl-delta-01" / "README.txt"
+        )
+        (trial_dir / "oss-crs-workdir" / "log-echo.txt").symlink_to(
+            Path("..")
+            / "output"
+            / "logs"
+            / "services"
+            / "builder-sidecar-lite_patcher.stdout.log"
         )
         (trial_dir / "output").symlink_to(Path("oss-crs-workdir") / "out")
 
@@ -637,6 +770,27 @@ class TestStagingAndPublish:
         assert trial_output.exists()
         assert not trial_output.is_symlink()
         assert (trial_output / "seeds" / "seed-0001").exists()
+        assert not (trial_output / "kept" / "artifact.txt").exists()
+        assert not (
+            final_path
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+            / "result.log"
+        ).exists()
+        assert not (
+            final_path
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+            / "log-echo.txt"
+        ).exists()
         assert not (trial_output / "logs" / "services" / "service.log").exists()
         assert (
             trial_output
@@ -647,6 +801,12 @@ class TestStagingAndPublish:
         assert (
             trial_output / "logs" / "services" / "crs-codex_inc-builder-asan.stdout.log"
         ).exists()
+        assert not (
+            trial_output / "logs" / "services" / "crs-codex_inc-builder-asan.stderr.log"
+        ).exists()
+        assert not (
+            trial_output / "logs" / "services" / "crs-codex_inc-builder-asan.json"
+        ).exists()
         assert (
             trial_output
             / "logs"
@@ -654,6 +814,710 @@ class TestStagingAndPublish:
             / "builder-sidecar-lite"
             / "log_dir"
             / "verify_patch_timing.json"
+        ).exists()
+
+    def test_staging_and_publish_excludes_trial_staged_dir(
+        self, tmp_path: Path
+    ) -> None:
+        """Collection should skip trial-local staged benchmark copies."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for staged-dir regression coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        staged_dir = trial_dir / "staged" / "curl-delta-01"
+        staged_dir.mkdir(parents=True)
+        (staged_dir / "README.txt").write_text("temporary staged benchmark copy\n")
+        staged_output_logs = staged_dir / "output" / "logs" / "services"
+        staged_output_logs.mkdir(parents=True)
+        (staged_output_logs / "builder-sidecar-lite_patcher.stdout.log").write_text(
+            "staged patcher log\n", encoding="utf-8"
+        )
+        (trial_dir / "staged-link.txt").symlink_to(
+            Path("staged") / "curl-delta-01" / "README.txt"
+        )
+        shutil.rmtree(trial_dir / "output")
+        (trial_dir / "output").symlink_to(Path("staged") / "curl-delta-01" / "output")
+        nested_staged_dir = trial_dir / "notes" / "staged" / "keepme"
+        nested_staged_dir.mkdir(parents=True)
+        (nested_staged_dir / "info.txt").write_text("preserve nested staged content\n")
+        (trial_dir / "nested-staged-link.txt").symlink_to(
+            Path("notes") / "staged" / "keepme" / "info.txt"
+        )
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        collected_trial = (
+            final_path
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        assert (collected_trial / "metadata.json").exists()
+        assert not (collected_trial / "staged").exists()
+        assert not (collected_trial / "staged-link.txt").exists()
+        assert not (collected_trial / "output").exists()
+        assert (
+            collected_trial / "notes" / "staged" / "keepme" / "info.txt"
+        ).read_text() == "preserve nested staged content\n"
+        preserved_nested_symlink = collected_trial / "nested-staged-link.txt"
+        assert preserved_nested_symlink.is_symlink()
+        assert (
+            preserved_nested_symlink.resolve(strict=True).read_text()
+            == "preserve nested staged content\n"
+        )
+
+    def test_staging_and_publish_excludes_trial_staged_dir_with_invalid_metadata(
+        self, tmp_path: Path
+    ) -> None:
+        """Corrupt metadata must not stop local staged-dir pruning and replacement."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for staged-dir regression coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        _build_trial_tree(
+            source_root,
+            experiment_name="exp-42",
+            crs=_REAL_LAYOUT_CRS,
+            benchmark=_REAL_LAYOUT_BENCHMARK_A,
+            harness=_REAL_LAYOUT_HARNESS,
+            trial_n=1,
+        )
+        broken_trial = _build_trial_tree(
+            source_root,
+            experiment_name="exp-42",
+            crs=_REAL_LAYOUT_CRS,
+            benchmark=_MISSING_LAYOUT_BENCHMARK,
+            harness=_REAL_LAYOUT_HARNESS,
+            trial_n=1,
+        )
+        (broken_trial / "metadata.json").write_text("{broken json\n", encoding="utf-8")
+        broken_staged_dir = broken_trial / "staged" / "curl-delta-01"
+        broken_staged_dir.mkdir(parents=True)
+        (broken_staged_dir / "README.txt").write_text(
+            "temporary staged benchmark copy\n", encoding="utf-8"
+        )
+        stale_trial_dir = (
+            experiment_filestore
+            / "exp-42"
+            / _REAL_LAYOUT_CRS
+            / _MISSING_LAYOUT_BENCHMARK
+            / _REAL_LAYOUT_HARNESS
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        stale_trial_dir.mkdir(parents=True, exist_ok=True)
+        _write_trial_metadata(
+            stale_trial_dir,
+            {
+                "timestamp": "2026-03-13T00:00:00Z",
+                "trial_num": 1,
+                "crs": _REAL_LAYOUT_CRS,
+                "benchmark": _MISSING_LAYOUT_BENCHMARK,
+                "harness": _REAL_LAYOUT_HARNESS,
+            },
+        )
+        (stale_trial_dir / "worker.log").write_text(
+            "stale worker log\n", encoding="utf-8"
+        )
+        (stale_trial_dir / "staged" / "stale-copy").mkdir(parents=True, exist_ok=True)
+        (stale_trial_dir / "staged" / "stale-copy" / "README.txt").write_text(
+            "stale staged artifact\n", encoding="utf-8"
+        )
+        (stale_trial_dir / "stale.txt").write_text("stale trial artifact\n")
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        collected_trial = (
+            final_path
+            / _REAL_LAYOUT_CRS
+            / _MISSING_LAYOUT_BENCHMARK
+            / _REAL_LAYOUT_HARNESS
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        assert (collected_trial / "worker.log").exists()
+        assert (collected_trial / "output" / "seeds" / "seed-0001").exists()
+        assert not (collected_trial / "staged").exists()
+        assert not (collected_trial / "stale.txt").exists()
+
+    def test_staging_and_publish_preserves_nested_trial_dash_dirs(
+        self, tmp_path: Path
+    ) -> None:
+        """Nested payload dirs named ``trial-*`` must not be treated as trial roots."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for staged-dir regression coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        nested_trial_cache = trial_dir / "output" / "trial-cache"
+        nested_trial_cache.mkdir(parents=True)
+        nested_staged_dir = nested_trial_cache / "staged"
+        nested_staged_dir.mkdir(parents=True)
+        (nested_staged_dir / "cache.txt").write_text(
+            "preserve nested staged cache\n", encoding="utf-8"
+        )
+        nested_link = nested_trial_cache / "cache-link.txt"
+        nested_link.symlink_to(Path("staged") / "cache.txt")
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        collected_nested_trial_cache = (
+            final_path
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+            / "output"
+            / "trial-cache"
+        )
+        assert (
+            collected_nested_trial_cache / "staged" / "cache.txt"
+        ).read_text() == "preserve nested staged cache\n"
+        preserved_nested_link = collected_nested_trial_cache / "cache-link.txt"
+        assert preserved_nested_link.is_symlink()
+        assert (
+            preserved_nested_link.resolve(strict=True).read_text()
+            == "preserve nested staged cache\n"
+        )
+
+    def test_staging_and_publish_preserves_non_trial_payload_with_trial_markers(
+        self, tmp_path: Path
+    ) -> None:
+        """Non-trial payload trees must not be filtered just because they contain trial markers."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for staged-dir regression coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        _build_trial_tree(source_root, experiment_name="exp-42")
+        faux_trial = source_root / "exp-42" / "archives" / "trial-7"
+        faux_trial.mkdir(parents=True)
+        _write_trial_metadata(
+            faux_trial,
+            {
+                "timestamp": "2026-03-13T00:00:00Z",
+                "trial_num": 7,
+                "crs": "oss-crs",
+                "benchmark": "curl-delta-01",
+                "harness": "fuzz_http",
+                "mode": "bug_finding",
+                "source": {"path": "/src/curl", "commit": "abc123"},
+            },
+        )
+        (faux_trial / "worker.log").write_text(
+            "archived worker log\n", encoding="utf-8"
+        )
+        faux_staged_dir = faux_trial / "staged"
+        faux_staged_dir.mkdir(parents=True)
+        (faux_staged_dir / "cache.txt").write_text(
+            "preserve archived staged cache\n", encoding="utf-8"
+        )
+        faux_link = faux_trial / "cache-link.txt"
+        faux_link.symlink_to(Path("staged") / "cache.txt")
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        collected_faux_trial = final_path / "archives" / "trial-7"
+        assert (collected_faux_trial / "staged" / "cache.txt").read_text() == (
+            "preserve archived staged cache\n"
+        )
+        preserved_faux_link = collected_faux_trial / "cache-link.txt"
+        assert preserved_faux_link.is_symlink()
+        assert (
+            preserved_faux_link.resolve(strict=True).read_text()
+            == "preserve archived staged cache\n"
+        )
+
+    def test_staging_and_publish_preserves_layout_shaped_payload_without_metadata(
+        self, tmp_path: Path
+    ) -> None:
+        """Layout-shaped payload trees without valid trial metadata must stay untouched."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for staged-dir regression coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        _build_trial_tree(source_root, experiment_name="exp-42")
+        faux_trial = (
+            source_root
+            / "exp-42"
+            / "archives"
+            / "bundle"
+            / "export"
+            / "delta"
+            / "address"
+            / "trial-7"
+        )
+        faux_trial.mkdir(parents=True)
+        (faux_trial / "worker.log").write_text(
+            "archived worker log\n", encoding="utf-8"
+        )
+        faux_staged_dir = faux_trial / "staged"
+        faux_staged_dir.mkdir(parents=True)
+        (faux_staged_dir / "cache.txt").write_text(
+            "preserve layout-shaped staged cache\n", encoding="utf-8"
+        )
+        faux_link = faux_trial / "cache-link.txt"
+        faux_link.symlink_to(Path("staged") / "cache.txt")
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        collected_faux_trial = (
+            final_path
+            / "archives"
+            / "bundle"
+            / "export"
+            / "delta"
+            / "address"
+            / "trial-7"
+        )
+        assert (collected_faux_trial / "staged" / "cache.txt").read_text() == (
+            "preserve layout-shaped staged cache\n"
+        )
+        preserved_faux_link = collected_faux_trial / "cache-link.txt"
+        assert preserved_faux_link.is_symlink()
+        assert (
+            preserved_faux_link.resolve(strict=True).read_text()
+            == "preserve layout-shaped staged cache\n"
+        )
+
+    def test_staging_and_publish_preserves_same_prefix_nested_payload_with_broken_metadata(
+        self, tmp_path: Path
+    ) -> None:
+        """Broken metadata in same-prefix nested payload content must still stay untouched."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for staged-dir regression coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        _build_trial_tree(
+            source_root,
+            experiment_name="exp-42",
+            crs=_REAL_LAYOUT_CRS,
+            benchmark=_REAL_LAYOUT_BENCHMARK_A,
+            harness=_REAL_LAYOUT_HARNESS,
+        )
+        faux_trial = (
+            source_root
+            / "exp-42"
+            / _REAL_LAYOUT_CRS
+            / _REAL_LAYOUT_BENCHMARK_A
+            / _REAL_LAYOUT_HARNESS
+            / "archive"
+            / "delta"
+            / "address"
+            / "trial-9"
+        )
+        faux_trial.mkdir(parents=True)
+        (faux_trial / "metadata.json").write_text("{broken json\n", encoding="utf-8")
+        (faux_trial / "worker.log").write_text(
+            "archived worker log\n", encoding="utf-8"
+        )
+        faux_staged_dir = faux_trial / "staged"
+        faux_staged_dir.mkdir(parents=True)
+        (faux_staged_dir / "cache.txt").write_text(
+            "preserve broken-metadata staged cache\n", encoding="utf-8"
+        )
+        faux_link = faux_trial / "cache-link.txt"
+        faux_link.symlink_to(Path("staged") / "cache.txt")
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        collected_faux_trial = (
+            final_path
+            / _REAL_LAYOUT_CRS
+            / _REAL_LAYOUT_BENCHMARK_A
+            / _REAL_LAYOUT_HARNESS
+            / "archive"
+            / "delta"
+            / "address"
+            / "trial-9"
+        )
+        assert (collected_faux_trial / "staged" / "cache.txt").read_text() == (
+            "preserve broken-metadata staged cache\n"
+        )
+        preserved_faux_link = collected_faux_trial / "cache-link.txt"
+        assert preserved_faux_link.is_symlink()
+        assert (
+            preserved_faux_link.resolve(strict=True).read_text()
+            == "preserve broken-metadata staged cache\n"
+        )
+
+    def test_staging_and_publish_preserves_layout_shaped_failed_payload_without_metadata(
+        self, tmp_path: Path
+    ) -> None:
+        """Layout-shaped payload trees with only failure markers must stay untouched."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for staged-dir regression coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        _build_trial_tree(source_root, experiment_name="exp-42")
+        faux_trial = (
+            source_root
+            / "exp-42"
+            / "archives"
+            / "bundle"
+            / "export"
+            / "delta"
+            / "address"
+            / "trial-8"
+        )
+        faux_trial.mkdir(parents=True)
+        (faux_trial / ".fail").write_text("", encoding="utf-8")
+        faux_staged_dir = faux_trial / "staged"
+        faux_staged_dir.mkdir(parents=True)
+        (faux_staged_dir / "cache.txt").write_text(
+            "preserve failed layout-shaped staged cache\n", encoding="utf-8"
+        )
+        faux_link = faux_trial / "cache-link.txt"
+        faux_link.symlink_to(Path("staged") / "cache.txt")
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        collected_faux_trial = (
+            final_path
+            / "archives"
+            / "bundle"
+            / "export"
+            / "delta"
+            / "address"
+            / "trial-8"
+        )
+        assert (collected_faux_trial / "staged" / "cache.txt").read_text() == (
+            "preserve failed layout-shaped staged cache\n"
+        )
+        preserved_faux_link = collected_faux_trial / "cache-link.txt"
+        assert preserved_faux_link.is_symlink()
+        assert (
+            preserved_faux_link.resolve(strict=True).read_text()
+            == "preserve failed layout-shaped staged cache\n"
+        )
+
+    def test_staging_and_publish_rehydrates_absolute_workdir_symlink(
+        self, tmp_path: Path
+    ) -> None:
+        """Collection should rehydrate absolute top-level symlinks into oss-crs-workdir."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for absolute-symlink coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        shutil.rmtree(trial_dir / "output")
+        workdir_out = trial_dir / "oss-crs-workdir" / "out"
+        (workdir_out / "seeds").mkdir(parents=True)
+        (workdir_out / "seeds" / "seed-0001").write_bytes(b"seed-content")
+        logs_dir = workdir_out / "logs" / "services"
+        logs_dir.mkdir(parents=True)
+        (logs_dir / "builder-sidecar-lite_patcher.stdout.log").write_text(
+            "  [test] 12.3s\n", encoding="utf-8"
+        )
+        (trial_dir / "output").symlink_to(workdir_out.resolve())
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        collected_output = (
+            final_path
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+            / "output"
+        )
+        assert collected_output.exists()
+        assert not collected_output.is_symlink()
+        assert (collected_output / "seeds" / "seed-0001").exists()
+        assert (
+            collected_output
+            / "logs"
+            / "services"
+            / "builder-sidecar-lite_patcher.stdout.log"
         ).exists()
 
     def test_staging_and_publish_excludes_output_logs_from_real_output_tree(
@@ -796,6 +1660,17 @@ class TestStagingAndPublish:
                 experiment_name="exp-42",
             )
 
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
         with patch("subprocess.run", side_effect=_fake_rsync):
             final_path = collector.collect(
                 worker=worker,
@@ -881,6 +1756,17 @@ class TestStagingAndPublish:
                 experiment_name="exp-42",
             )
 
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
         with patch("subprocess.run", side_effect=_fake_rsync):
             final_path = collector.collect(
                 worker=worker,
@@ -910,6 +1796,75 @@ class TestStagingAndPublish:
             / "builder-sidecar-lite_patcher.stdout.log"
         ).exists()
 
+    def test_staging_and_publish_replaces_existing_successful_trial_contents_on_recollect(
+        self, tmp_path: Path
+    ) -> None:
+        """Re-collecting a successful trial should drop previously leaked staged content."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for successful-trial collection coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+        existing_trial = _build_trial_tree(
+            experiment_filestore, experiment_name="exp-42"
+        )
+        stale_staged_dir = existing_trial / "staged" / "stale-copy"
+        stale_staged_dir.mkdir(parents=True)
+        (stale_staged_dir / "README.txt").write_text("stale staged content\n")
+        other_trial = _build_trial_tree(
+            experiment_filestore, experiment_name="exp-42", trial_n=2
+        )
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        _build_trial_tree(source_root, experiment_name="exp-42")
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        refreshed_trial = (
+            final_path
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        assert not (refreshed_trial / "staged").exists()
+        assert (refreshed_trial / "output" / "seeds" / "seed-0001").exists()
+        assert other_trial.exists()
+
     def test_report_log_rsync_skips_internal_workdir_files(
         self, tmp_path: Path
     ) -> None:
@@ -931,6 +1886,50 @@ class TestStagingAndPublish:
         )
         (report_logs / "crs-codex_inc-builder-asan.stdout.log").write_text(
             "[keep] legit log\n"
+        )
+        real_timing_dir = trial_dir / "output" / "real-timing"
+        real_timing_dir.mkdir(parents=True)
+        (real_timing_dir / "verify_patch_timing.json").write_text(
+            json.dumps({"rebuild": 70.4, "status": "keep"}),
+            encoding="utf-8",
+        )
+        linked_log_dir = (
+            trial_dir / "output" / "logs" / "crs" / "builder-sidecar-lite" / "log_dir"
+        )
+        linked_log_dir.parent.mkdir(parents=True, exist_ok=True)
+        linked_log_dir.symlink_to(Path("..") / ".." / ".." / "real-timing")
+        staged_dir = trial_dir / "staged" / "curl-delta-01"
+        staged_dir.mkdir(parents=True)
+        (staged_dir / "linked_patcher.stdout.log").write_text(
+            "[drop] staged-linked log\n", encoding="utf-8"
+        )
+        staged_log_dir = staged_dir / "staged-sidecar" / "log_dir"
+        staged_log_dir.mkdir(parents=True)
+        (staged_log_dir / "verify_patch_timing.json").write_text(
+            json.dumps({"rebuild": 10.0, "status": "drop"}),
+            encoding="utf-8",
+        )
+        (report_logs / "linked_patcher.stdout.log").symlink_to(
+            Path("..")
+            / ".."
+            / ".."
+            / "staged"
+            / "curl-delta-01"
+            / "linked_patcher.stdout.log"
+        )
+        linked_log_dir = (
+            trial_dir / "output" / "logs" / "crs" / "staged-sidecar" / "log_dir"
+        )
+        linked_log_dir.parent.mkdir(parents=True, exist_ok=True)
+        linked_log_dir.symlink_to(
+            Path("..")
+            / ".."
+            / ".."
+            / ".."
+            / "staged"
+            / "curl-delta-01"
+            / "staged-sidecar"
+            / "log_dir"
         )
 
         internal_services = (
@@ -990,6 +1989,25 @@ class TestStagingAndPublish:
         ).exists()
         assert (
             trial_output / "logs" / "services" / "crs-codex_inc-builder-asan.stdout.log"
+        ).exists()
+        assert (
+            trial_output
+            / "logs"
+            / "crs"
+            / "builder-sidecar-lite"
+            / "log_dir"
+            / "verify_patch_timing.json"
+        ).exists()
+        assert not (
+            trial_output / "logs" / "services" / "linked_patcher.stdout.log"
+        ).exists()
+        assert not (
+            trial_output
+            / "logs"
+            / "crs"
+            / "staged-sidecar"
+            / "log_dir"
+            / "verify_patch_timing.json"
         ).exists()
         assert not any(path.name == "oss-crs-workdir" for path in final_path.rglob("*"))
         assert not (
@@ -1286,12 +2304,13 @@ class TestStagingAndPublish:
         ) -> subprocess.CompletedProcess[str]:
             nonlocal manifest_recorded
             del args
+            command = str(kwargs["command"])
             result = _run_local_remote_command_from_cloud_cmd(
-                str(kwargs["command"]),
+                command,
                 source_root=source_root,
                 experiment_name="exp-42",
             )
-            if not manifest_recorded:
+            if not manifest_recorded and "active_dirs" in command:
                 manifest_recorded = True
                 artifact_path.unlink()
             return result
@@ -1350,6 +2369,17 @@ class TestStagingAndPublish:
             )
             return subprocess.CompletedProcess(args=cmd, returncode=0)
 
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
         with patch("subprocess.run", side_effect=_fake_rsync):
             collector.collect(
                 worker=worker,
@@ -1442,6 +2472,17 @@ class TestPartialStagingNotPublished:
             )
             return subprocess.CompletedProcess(args=cmd, returncode=0)
 
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-bad",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
         with patch("subprocess.run", side_effect=_fake_rsync):
             with pytest.raises(ArtifactCollectionError):
                 collector.collect(
@@ -1493,6 +2534,17 @@ class TestReportingCompat:
             )
             return subprocess.CompletedProcess(args=cmd, returncode=0)
 
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
         with patch("subprocess.run", side_effect=_fake_rsync):
             final_path = collector.collect(
                 worker=worker,
@@ -1542,12 +2594,38 @@ class TestCollectFullTrialTree:
             "--exclude=oss-crs-workdir/",
             "--exclude=output/logs/",
         ], (
-            "Artifact collection should exclude only internal scratch data and trial output/logs"
+            "Artifact collection should keep only the unconditional scratch/log excludes in the base rsync command"
         )
 
         # Source must end with trailing slash (rsync convention for directory contents)
         source = cmd[-2]
         assert source.endswith("/"), "rsync source must have trailing slash"
+
+    def test_collect_full_trial_tree_adds_exact_trial_staged_excludes(self) -> None:
+        """Per-trial staged excludes should be injected as exact paths, not globs."""
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        cmd = collector._build_rsync_cmd(
+            worker=worker,
+            fleet=fleet,
+            remote_experiment_dir="/data/experiments/exp-42",
+            staging_dir=Path("/tmp/staging"),
+            excluded_relpaths=[
+                Path("oss-crs/curl-delta-01/fuzz_http/delta/address/trial-1/staged")
+            ],
+        )
+
+        exclude_args = [arg for arg in cmd if arg.startswith("--exclude=")]
+        assert (
+            "--exclude=oss-crs/curl-delta-01/fuzz_http/delta/address/trial-1/staged"
+            in exclude_args
+        )
+        assert (
+            "--exclude=oss-crs/curl-delta-01/fuzz_http/delta/address/trial-1/staged/***"
+            in exclude_args
+        )
 
 
 class TestRemoteLogCollection:
@@ -1569,7 +2647,14 @@ class TestRemoteLogCollection:
         (trial_dir / ".fail").write_text("", encoding="utf-8")
 
         def _fake_remote_command(*args, **kwargs):
-            del args, kwargs
+            del args
+            command = str(kwargs["command"])
+            if command.startswith("sudo python3 -c "):
+                return _run_local_remote_command_from_cloud_cmd(
+                    command,
+                    source_root=source_root,
+                    experiment_name="exp-42",
+                )
             return subprocess.CompletedProcess(
                 args=["ssh"],
                 returncode=0,
@@ -1659,6 +2744,357 @@ class TestRemoteLogCollection:
             / ".fail"
         ).exists()
 
+    def test_collect_logs_excludes_trial_staged_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        config_path = tmp_path / "config.yaml"
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+        collector = ArtifactCollector(base_path=config_path)
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        staged_dir = trial_dir / "staged" / "curl-delta-01"
+        staged_dir.mkdir(parents=True)
+        (staged_dir / "metadata.json").write_text(
+            '{"timestamp": "2026-03-13T00:00:00Z"}',
+            encoding="utf-8",
+        )
+        (staged_dir / "worker.log").write_text("staged worker log\n", encoding="utf-8")
+        stale_trial_artifacts_dir = (
+            collector._remote_logs_dir(experiment_filestore, "exp-42")
+            / worker.name
+            / "trial-artifacts"
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+            / "staged"
+            / "stale-copy"
+        )
+        stale_trial_artifacts_dir.mkdir(parents=True, exist_ok=True)
+        (stale_trial_artifacts_dir / "worker.log").write_text(
+            "stale staged log\n", encoding="utf-8"
+        )
+
+        def _fake_remote_command(*args, **kwargs):
+            del args
+            command = str(kwargs["command"])
+            if command.startswith("sudo python3 -c "):
+                return _run_local_remote_command_from_cloud_cmd(
+                    command,
+                    source_root=source_root,
+                    experiment_name="exp-42",
+                )
+            return subprocess.CompletedProcess(
+                args=["ssh"],
+                returncode=0,
+                stdout="remote output\n",
+                stderr="",
+            )
+
+        def _fake_subprocess_run(cmd, *_args, **_kwargs):
+            if cmd and cmd[:3] == ["gcloud", "compute", "os-login"]:
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout="test-user\n",
+                    stderr="",
+                )
+
+            if cmd and cmd[0] == "ssh-keygen":
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout="",
+                    stderr="",
+                )
+
+            if cmd and cmd[0] == "ssh-keyscan":
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout=f"{worker.external_ip} ssh-ed25519 AAAATESTKEY\n",
+                    stderr="",
+                )
+
+            if cmd and cmd[0] == "rsync":
+                return _run_local_rsync_from_cloud_cmd(
+                    cmd,
+                    source_root=source_root,
+                    experiment_name="exp-42",
+                )
+
+            raise AssertionError(f"unexpected subprocess invocation: {cmd!r}")
+
+        monkeypatch.setattr(collector, "_run_remote_command", _fake_remote_command)
+        with patch("subprocess.run", side_effect=_fake_subprocess_run):
+            logs_dir = collector.collect_logs(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        trial_artifacts_dir = (
+            logs_dir
+            / worker.name
+            / "trial-artifacts"
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        assert (trial_artifacts_dir / "worker.log").exists()
+        assert not (trial_artifacts_dir / "staged").exists()
+
+    def test_collect_logs_excludes_trial_staged_dir_with_invalid_metadata(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        config_path = tmp_path / "config.yaml"
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+        collector = ArtifactCollector(base_path=config_path)
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        _build_trial_tree(
+            source_root,
+            experiment_name="exp-42",
+            crs=_REAL_LAYOUT_CRS,
+            benchmark=_REAL_LAYOUT_BENCHMARK_A,
+            harness=_REAL_LAYOUT_HARNESS,
+            trial_n=1,
+        )
+        broken_trial = _build_trial_tree(
+            source_root,
+            experiment_name="exp-42",
+            crs=_REAL_LAYOUT_CRS,
+            benchmark=_MISSING_LAYOUT_BENCHMARK,
+            harness=_REAL_LAYOUT_HARNESS,
+            trial_n=1,
+        )
+        (broken_trial / "metadata.json").write_text("{broken json\n", encoding="utf-8")
+        broken_staged_dir = broken_trial / "staged" / "curl-delta-01"
+        broken_staged_dir.mkdir(parents=True)
+        (broken_staged_dir / "worker.log").write_text(
+            "staged worker log\n", encoding="utf-8"
+        )
+        stale_trial_artifacts_dir = (
+            collector._remote_logs_dir(experiment_filestore, "exp-42")
+            / worker.name
+            / "trial-artifacts"
+            / _REAL_LAYOUT_CRS
+            / _MISSING_LAYOUT_BENCHMARK
+            / _REAL_LAYOUT_HARNESS
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        stale_trial_artifacts_dir.mkdir(parents=True, exist_ok=True)
+        _write_trial_metadata(
+            stale_trial_artifacts_dir,
+            {
+                "timestamp": "2026-03-13T00:00:00Z",
+                "trial_num": 1,
+                "crs": _REAL_LAYOUT_CRS,
+                "benchmark": _MISSING_LAYOUT_BENCHMARK,
+                "harness": _REAL_LAYOUT_HARNESS,
+            },
+        )
+        (stale_trial_artifacts_dir / "worker.log").write_text(
+            "stale worker log\n", encoding="utf-8"
+        )
+        (stale_trial_artifacts_dir / "staged" / "stale-copy").mkdir(
+            parents=True, exist_ok=True
+        )
+        (stale_trial_artifacts_dir / "staged" / "stale-copy" / "worker.log").write_text(
+            "stale staged worker log\n", encoding="utf-8"
+        )
+        (stale_trial_artifacts_dir / "stale.txt").write_text(
+            "stale trial artifact\n", encoding="utf-8"
+        )
+
+        def _fake_remote_command(*args, **kwargs):
+            del args
+            command = str(kwargs["command"])
+            if command.startswith("sudo python3 -c "):
+                return _run_local_remote_command_from_cloud_cmd(
+                    command,
+                    source_root=source_root,
+                    experiment_name="exp-42",
+                )
+            return subprocess.CompletedProcess(
+                args=["ssh"],
+                returncode=0,
+                stdout="remote output\n",
+                stderr="",
+            )
+
+        def _fake_subprocess_run(cmd, *_args, **_kwargs):
+            if cmd and cmd[:3] == ["gcloud", "compute", "os-login"]:
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout="test-user\n",
+                    stderr="",
+                )
+
+            if cmd and cmd[0] == "ssh-keygen":
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout="",
+                    stderr="",
+                )
+
+            if cmd and cmd[0] == "ssh-keyscan":
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout=f"{worker.external_ip} ssh-ed25519 AAAATESTKEY\n",
+                    stderr="",
+                )
+
+            if cmd and cmd[0] == "rsync":
+                return _run_local_rsync_from_cloud_cmd(
+                    cmd,
+                    source_root=source_root,
+                    experiment_name="exp-42",
+                )
+
+            raise AssertionError(f"unexpected subprocess invocation: {cmd!r}")
+
+        monkeypatch.setattr(collector, "_run_remote_command", _fake_remote_command)
+        with patch("subprocess.run", side_effect=_fake_subprocess_run):
+            logs_dir = collector.collect_logs(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        trial_artifacts_dir = (
+            logs_dir
+            / worker.name
+            / "trial-artifacts"
+            / _REAL_LAYOUT_CRS
+            / _MISSING_LAYOUT_BENCHMARK
+            / _REAL_LAYOUT_HARNESS
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        assert (trial_artifacts_dir / "worker.log").exists()
+        assert not (trial_artifacts_dir / "staged").exists()
+        assert not (trial_artifacts_dir / "stale.txt").exists()
+
+    def test_collect_logs_drops_top_level_symlinks_into_trial_staged_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        config_path = tmp_path / "config.yaml"
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+        collector = ArtifactCollector(base_path=config_path)
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        staged_dir = trial_dir / "staged" / "curl-delta-01"
+        staged_dir.mkdir(parents=True)
+        (staged_dir / "worker.log").write_text("staged worker log\n", encoding="utf-8")
+        (trial_dir / "worker.log").unlink()
+        (trial_dir / "worker.log").symlink_to(
+            Path("staged") / "curl-delta-01" / "worker.log"
+        )
+
+        def _fake_remote_command(*args, **kwargs):
+            del args
+            command = str(kwargs["command"])
+            if command.startswith("sudo python3 -c "):
+                return _run_local_remote_command_from_cloud_cmd(
+                    command,
+                    source_root=source_root,
+                    experiment_name="exp-42",
+                )
+            return subprocess.CompletedProcess(
+                args=["ssh"],
+                returncode=0,
+                stdout="remote output\n",
+                stderr="",
+            )
+
+        def _fake_subprocess_run(cmd, *_args, **_kwargs):
+            if cmd and cmd[:3] == ["gcloud", "compute", "os-login"]:
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout="test-user\n",
+                    stderr="",
+                )
+
+            if cmd and cmd[0] == "ssh-keygen":
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout="",
+                    stderr="",
+                )
+
+            if cmd and cmd[0] == "ssh-keyscan":
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout=f"{worker.external_ip} ssh-ed25519 AAAATESTKEY\n",
+                    stderr="",
+                )
+
+            if cmd and cmd[0] == "rsync":
+                return _run_local_rsync_from_cloud_cmd(
+                    cmd,
+                    source_root=source_root,
+                    experiment_name="exp-42",
+                )
+
+            raise AssertionError(f"unexpected subprocess invocation: {cmd!r}")
+
+        monkeypatch.setattr(collector, "_run_remote_command", _fake_remote_command)
+        with patch("subprocess.run", side_effect=_fake_subprocess_run):
+            logs_dir = collector.collect_logs(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        trial_artifacts_dir = (
+            logs_dir
+            / worker.name
+            / "trial-artifacts"
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        assert not (trial_artifacts_dir / "worker.log").exists()
+        assert (trial_artifacts_dir / "metadata.json").exists()
+
     def test_collect_logs_raises_when_remote_command_transport_fails(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1724,7 +3160,14 @@ class TestRemoteLogCollection:
         _build_trial_tree(source_root, experiment_name="exp-42")
 
         def _fake_remote_command(*args, **kwargs):
-            del args, kwargs
+            del args
+            command = str(kwargs["command"])
+            if command.startswith("sudo python3 -c "):
+                return _run_local_remote_command_from_cloud_cmd(
+                    command,
+                    source_root=source_root,
+                    experiment_name="exp-42",
+                )
             return subprocess.CompletedProcess(
                 args=["ssh"],
                 returncode=0,
