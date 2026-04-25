@@ -812,21 +812,34 @@ def _build_rich_group(
     table.add_row("Total", str(total_jobs + disk_skipped))
 
     running_table = Table(title="Running Jobs")
+    footer = None
     if paging_active and total_running_jobs > len(visible_running_jobs):
         helper_text = paging_status_text or "auto-rotates automatically"
-        caption = (
+        footer_text = (
             f"Page {page_index + 1}/{page_count}: "
             f"showing {len(visible_running_jobs)} of {total_running_jobs} running jobs; "
             f"{helper_text}"
         )
-        if auto_rotate_paused:
-            running_table.caption = Text.assemble(
-                caption,
-                " ",
-                ("[PAUSED]", "bold red"),
-            )
-        else:
-            running_table.caption = caption
+        footer = Table.grid(expand=True, padding=(0, 0))
+        footer.add_column(ratio=1)
+        footer.add_column(
+            justify="right",
+            width=len(" [PAUSED]"),
+            no_wrap=True,
+        )
+        footer.add_row(
+            Text(
+                footer_text,
+                style="dim italic",
+                no_wrap=True,
+                overflow="ellipsis",
+            ),
+            Text(
+                " [PAUSED]" if auto_rotate_paused else "",
+                style="bold red",
+                no_wrap=True,
+            ),
+        )
     running_table.add_column("Worker", style="green")
     running_table.add_column("CRS", style="cyan")
     running_table.add_column("Benchmark", style="yellow")
@@ -850,6 +863,8 @@ def _build_rich_group(
             job.elapsed or "N/A",
         )
 
+    if footer is not None:
+        return Group(table, running_table, footer)
     return Group(table, running_table)
 
 
