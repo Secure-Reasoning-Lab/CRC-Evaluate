@@ -115,7 +115,7 @@ def _build_from_experiment_bundle_or_none(
         logger.error("{}: manifest error: {}", label, exc)
         return None
     if not manifest:
-        logger.error(
+        logger.warning(
             "{}: bundle is empty under {}: bug-finding produced no CPV POVs "
             "to seed bug-fixing for this source",
             label,
