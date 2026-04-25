@@ -173,6 +173,31 @@ class _RichMonitorInput:
                 self._deactivate_input_fd(fd)
         return bool(self._active_fds)
 
+    def _read_ready_input(self, fd: int, max_bytes: int) -> bytes:
+        import os
+
+        get_blocking = getattr(os, "get_blocking", None)
+        set_blocking = getattr(os, "set_blocking", None)
+        if not callable(get_blocking) or not callable(set_blocking):
+            return os.read(fd, max_bytes)
+
+        try:
+            was_blocking = get_blocking(fd)
+        except OSError:
+            return os.read(fd, max_bytes)
+
+        if not was_blocking:
+            return os.read(fd, max_bytes)
+
+        try:
+            set_blocking(fd, False)
+            return os.read(fd, max_bytes)
+        finally:
+            try:
+                set_blocking(fd, True)
+            except OSError:
+                pass
+
     def _attach_stream(self, stream) -> str | None:
         isatty = getattr(stream, "isatty", None)
         fileno = getattr(stream, "fileno", None)
@@ -283,7 +308,6 @@ class _RichMonitorInput:
                 return None
 
             try:
-                import os
                 import select
 
                 ready, _, _ = select.select(list(self._active_fds), [], [], remaining)
@@ -295,27 +319,30 @@ class _RichMonitorInput:
                     continue
                 return None
 
-            try:
-                data = os.read(fd, 64)
-            except OSError:
-                self._deactivate_input_fd(fd)
-                if not self.manual_navigation_available:
-                    return None
-                continue
+            for fd in list(ready):
+                try:
+                    data = self._read_ready_input(fd, 64)
+                except BlockingIOError:
+                    continue
+                except OSError:
+                    self._deactivate_input_fd(fd)
+                    if not self.manual_navigation_available:
+                        return None
+                    continue
 
-            if not data:
-                self._deactivate_input_fd(fd)
-                if not self.manual_navigation_available:
-                    return None
-                continue
+                if not data:
+                    self._deactivate_input_fd(fd)
+                    if not self.manual_navigation_available:
+                        return None
+                    continue
 
-            for char in data.decode(errors="ignore"):
-                command = char.lower()
-                if command in {"n", "p"}:
-                    self._pending_commands.append(command)
+                for char in data.decode(errors="ignore"):
+                    command = char.lower()
+                    if command in {"n", "p"}:
+                        self._pending_commands.append(command)
 
-            if self._pending_commands:
-                return self._pending_commands.popleft()
+                if self._pending_commands:
+                    return self._pending_commands.popleft()
             if not self.manual_navigation_available:
                 return None
 

@@ -845,6 +845,62 @@ def test_rich_monitor_input_stops_after_first_ready_fd_yields_a_command() -> Non
     mock_close.assert_called_once_with(11)
 
 
+def test_rich_monitor_input_reads_later_ready_fd_when_first_has_non_command_data() -> (
+    None
+):
+    stream = MagicMock()
+    stream.isatty.return_value = True
+    stream.fileno.return_value = 7
+
+    def _fake_ttyname(fd: int) -> str:
+        if fd == 11:
+            return "/dev/tty"
+        if fd == 7:
+            return "/dev/pts/7"
+        raise AssertionError(f"unexpected fd {fd}")
+
+    def _fake_stat(path, **_kwargs) -> SimpleNamespace:
+        path_str = str(path)
+        if path_str == "/dev/tty":
+            return SimpleNamespace(st_dev=1, st_ino=11)
+        if path_str == "/dev/pts/7":
+            return SimpleNamespace(st_dev=2, st_ino=7)
+        raise AssertionError(f"unexpected tty path {path_str}")
+
+    select_calls = {"count": 0}
+
+    def _fake_select(readers, _writers, _errors, _timeout):
+        select_calls["count"] += 1
+        if select_calls["count"] == 1 and readers == [11, 7]:
+            return ([11, 7], [], [])
+        return ([], [], [])
+
+    def _fake_read(fd: int, _size: int) -> bytes:
+        if fd == 11:
+            return b"x"
+        if fd == 7:
+            return b"n"
+        raise AssertionError(f"unexpected read fd {fd}")
+
+    with (
+        patch("crsbench.distributed.queue_monitor.sys.stdin", stream),
+        patch("os.open", return_value=11) as _mock_open,
+        patch("os.close") as mock_close,
+        patch("os.ttyname", side_effect=_fake_ttyname),
+        patch("os.stat", side_effect=_fake_stat),
+        patch("termios.tcgetattr", return_value=["saved-attrs"]),
+        patch("termios.tcsetattr"),
+        patch("tty.setcbreak"),
+        patch("select.select", side_effect=_fake_select),
+        patch("os.read", side_effect=_fake_read),
+        _RichMonitorInput() as monitor_input,
+    ):
+        assert monitor_input.manual_navigation_available is True
+        assert monitor_input.read_command(0.1) == "n"
+
+    mock_close.assert_called_once_with(11)
+
+
 def test_monitor_queue_rich_applies_manual_page_navigation_immediately() -> None:
     rich_console = pytest.importorskip("rich.console")
     queue = MagicMock()
