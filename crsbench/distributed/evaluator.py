@@ -178,6 +178,38 @@ def _resolve_inc_image_runtime_settings(
     )
 
 
+def _resolve_engine_verify_cores_per_job(
+    *,
+    verify_cores_per_job: Optional[int],
+    use_cpuset: bool,
+    verify_jobs: Optional[int],
+    build_jobs: Optional[int] = None,
+    cores: Optional[str] = None,
+    skip_cpus: Optional[str] = None,
+) -> Optional[int]:
+    """Resolve POV-engine verify parallelism for the current evaluator runtime.
+
+    The evaluator supervisor already allocates a dedicated CPU slice per verify
+    child when cpuset mode is enabled. The inherited VerificationEngine must use
+    the same width; otherwise verify children fall back to the engine default
+    (4) and leave most of their cpuset idle.
+
+    Outside cpuset mode, keep the engine unset unless the caller explicitly
+    configured ``verify_cores_per_job``. Expanding every verify child to the
+    full host width in shared-CPU mode would oversubscribe the machine.
+    """
+    if verify_cores_per_job is not None:
+        return verify_cores_per_job
+    if not use_cpuset:
+        return None
+    resolved_verify_jobs = max(verify_jobs or build_jobs or 1, 1)
+    return auto_cores_per_job(
+        resolved_verify_jobs,
+        cores=cores,
+        skip_cpus=skip_cpus,
+    )
+
+
 def _enqueue_pre_builds(
     config,
     experiment_name: str,
@@ -407,6 +439,14 @@ def run_evaluator_main(
         pull_timeout_sec=getattr(config, "inc_image_pull_timeout_sec", None),
         local_prefix=getattr(config, "project_image_prefix", None),
     )
+    engine_verify_cores_per_job = _resolve_engine_verify_cores_per_job(
+        verify_cores_per_job=verify_cores_per_job,
+        use_cpuset=use_cpuset,
+        verify_jobs=verify_jobs,
+        build_jobs=build_jobs,
+        cores=cores,
+        skip_cpus=skip_cpus,
+    )
 
     # Create verification engine for lazy verify use
     from crsbench.evaluation.verification.pov.engine import VerificationEngine
@@ -418,6 +458,7 @@ def run_evaluator_main(
         oss_fuzz_path=oss_fuzz_path,
         timeout=config.per_pov_verify_timeout,
         source_mode=getattr(config, "source_mode", "pkgs"),
+        cores_per_job=engine_verify_cores_per_job,
         inc_image_policy=resolved_policy,
         inc_image_registry=resolved_registry,
         inc_image_max_pull_bytes=resolved_max_pull_bytes,
@@ -989,25 +1030,6 @@ def run_evaluator_configless(
         local_prefix=first_reg.local_image_prefix,
     )
 
-    # Set up verification engine
-    from crsbench.evaluation.verification.pov.engine import VerificationEngine
-
-    engine = VerificationEngine(
-        oss_fuzz_path=oss_fuzz_path,
-        timeout=per_pov_verify_timeout,
-        source_mode=first_reg.source_mode,
-        inc_image_policy=resolved_policy,
-        inc_image_registry=resolved_registry,
-        inc_image_max_pull_bytes=resolved_max_pull_bytes,
-        inc_image_pull_timeout=resolved_pull_timeout,
-        local_image_prefix=resolved_local_prefix,
-    )
-
-    from crsbench.distributed.evaluator_jobs import set_benchmarks_root, set_engine
-
-    set_engine(engine)
-    set_benchmarks_root(Path(effective_benchmarks_root))
-
     # Use stable experiment ordering so metadata precedence is deterministic.
     ordered_regs = [experiments[name] for name in sorted(experiments)]
     source_modes = sorted({reg.source_mode for reg in ordered_regs})
@@ -1147,6 +1169,33 @@ def run_evaluator_configless(
             )
             return 1
         resolved_cpu_tag = distinct_cpu_tags[0] if distinct_cpu_tags else None
+
+    engine_verify_cores_per_job = (
+        resolved_verify_cores_per_job
+        if resolved_verify_cores_per_job is not None
+        else (effective_verify_cores_per_job if use_cpuset else None)
+    )
+
+    # Set up verification engine after resource resolution so per-job verify
+    # parallelism matches the CPU slice each verify child receives.
+    from crsbench.evaluation.verification.pov.engine import VerificationEngine
+
+    engine = VerificationEngine(
+        oss_fuzz_path=oss_fuzz_path,
+        timeout=per_pov_verify_timeout,
+        source_mode=first_reg.source_mode,
+        cores_per_job=engine_verify_cores_per_job,
+        inc_image_policy=resolved_policy,
+        inc_image_registry=resolved_registry,
+        inc_image_max_pull_bytes=resolved_max_pull_bytes,
+        inc_image_pull_timeout=resolved_pull_timeout,
+        local_image_prefix=resolved_local_prefix,
+    )
+
+    from crsbench.distributed.evaluator_jobs import set_benchmarks_root, set_engine
+
+    set_engine(engine)
+    set_benchmarks_root(Path(effective_benchmarks_root))
 
     logger.info(f"Build queues: {build_queue_names}")
     logger.info(f"Verify queues: {verify_queue_names}")
