@@ -1138,6 +1138,12 @@ def test_enqueue_or_reuse_job_raises_when_terminal_verify_job_persists_after_rep
         "claim-verify/eval-1/request-stale",
         status="finished",
     )
+    delete_calls: list[str] = []
+
+    def _delete() -> None:
+        delete_calls.append(terminal_job.id)
+
+    terminal_job.delete = _delete  # type: ignore[attr-defined]
     queue._jobs[terminal_job.id] = terminal_job
 
     removed_job_ids: list[str] = []
@@ -1161,6 +1167,7 @@ def test_enqueue_or_reuse_job_raises_when_terminal_verify_job_persists_after_rep
         )
 
     assert removed_job_ids == [terminal_job.id]
+    assert delete_calls == [terminal_job.id]
     assert queue._jobs[terminal_job.id] is terminal_job
     assert queue.enqueued == []
 
@@ -1216,6 +1223,12 @@ def test_enqueue_or_reuse_job_raises_after_duplicate_id_race_when_terminal_job_p
         "claim-verify/eval-1/request-stale-race",
         status="finished",
     )
+    delete_calls: list[str] = []
+
+    def _delete() -> None:
+        delete_calls.append(raced_job.id)
+
+    raced_job.delete = _delete  # type: ignore[attr-defined]
     queue = _RacingQueue("verify-q", raced_job=raced_job)
     removed_job_ids: list[str] = []
 
@@ -1239,5 +1252,99 @@ def test_enqueue_or_reuse_job_raises_after_duplicate_id_race_when_terminal_job_p
 
     assert queue.enqueue_attempts == 1
     assert removed_job_ids == [raced_job.id]
+    assert delete_calls == [raced_job.id]
     assert queue._jobs[raced_job.id] is raced_job
+    assert queue.enqueued == []
+
+
+def test_enqueue_or_reuse_job_reuses_fresh_nonterminal_wrapper_after_duplicate_id_race_on_opaque_queue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import crsbench.distributed.queue as queue_module
+    from crsbench.distributed.evaluator_claim_worker import _enqueue_or_reuse_job
+
+    class _RacingQueue:
+        def __init__(
+            self,
+            name: str,
+            *,
+            raced_job: _FakeJob,
+            replacement_job: _FakeJob,
+        ) -> None:
+            self.name = name
+            self._raced_job = raced_job
+            self._replacement_job = replacement_job
+            self.enqueue_attempts = 0
+            self._jobs: dict[str, _FakeJob] = {}
+            self.enqueued: list[dict[str, object]] = []
+
+        def fetch_job(self, job_id: str) -> _FakeJob | None:
+            return self._jobs.get(job_id)
+
+        def enqueue(
+            self,
+            func_name: str,
+            payload: dict[str, object],
+            *,
+            job_timeout: int,
+            result_ttl: int,
+            job_id: str,
+            depends_on: list[object] | None = None,
+            meta: dict[str, object] | None = None,
+        ) -> _FakeJob:
+            self.enqueue_attempts += 1
+            if self.enqueue_attempts == 1:
+                self._jobs[job_id] = self._raced_job
+                raise RuntimeError(f"job id {job_id} already exists")
+            job = _FakeJob(job_id)
+            self._jobs[job_id] = job
+            self.enqueued.append(
+                {
+                    "func_name": func_name,
+                    "payload": payload,
+                    "job_timeout": job_timeout,
+                    "result_ttl": result_ttl,
+                    "job_id": job_id,
+                    "depends_on": list(depends_on or []),
+                    "meta": dict(meta or {}),
+                }
+            )
+            return job
+
+    raced_job = _FakeJob(
+        "claim-verify/eval-1/request-opaque-race",
+        status="finished",
+    )
+    replacement_job = _FakeJob(
+        raced_job.id,
+        status="queued",
+    )
+    queue = _RacingQueue(
+        "verify-q",
+        raced_job=raced_job,
+        replacement_job=replacement_job,
+    )
+    removed_job_ids: list[str] = []
+
+    def remove_job(queue_obj: _RacingQueue, job_id: str) -> bool:
+        removed_job_ids.append(job_id)
+        queue_obj._jobs[job_id] = queue_obj._replacement_job
+        return True
+
+    monkeypatch.setattr(queue_module, "remove_job_by_id", remove_job)
+
+    reused = _enqueue_or_reuse_job(
+        queue,
+        "crsbench.distributed.evaluator_claim_jobs.execute_claimed_verify",
+        {"request_id": "verify:trial-1:test-benchmark:h1:pov-opaque-race"},
+        job_timeout=3600,
+        job_id=raced_job.id,
+        meta={"experiment_name": "exp1"},
+        refresh_terminal=True,
+    )
+
+    assert queue.enqueue_attempts == 1
+    assert removed_job_ids == [raced_job.id]
+    assert reused is replacement_job
+    assert queue._jobs[raced_job.id] is replacement_job
     assert queue.enqueued == []
