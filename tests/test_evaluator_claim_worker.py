@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -611,7 +612,7 @@ def test_has_pending_required_builds_returns_true_while_claim_materialization_is
 
     def _dispatch() -> None:
         try:
-            results.append(worker.dispatch_one(now=100.0))
+            results.append(worker.dispatch_one(now=time.time()))
         except BaseException as exc:  # pragma: no cover - assertion captures failure
             errors.append(exc)
 
@@ -677,6 +678,36 @@ def test_has_pending_required_builds_stays_false_during_empty_claim_poll() -> No
     assert not thread.is_alive()
     assert errors == []
     assert results == [None]
+
+
+def test_has_pending_required_builds_ignores_expired_claims() -> None:
+    from crsbench.distributed.evaluator_claim_worker import EvaluatorClaimWorker
+    from crsbench.distributed.evaluator_verify_claims import VerifyClaim
+
+    redis_conn = _FakeRedis()
+    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
+    store.submit_request(
+        VerifyRequestRecord(
+            request_id="request-1",
+            owner_key="trial::exp1::request-1",
+            request_kind="pov",
+            payload={"benchmark": "test-benchmark"},
+            claim=VerifyClaim(evaluator_id="eval-1", expires_at=time.time() - 1.0),
+        )
+    )
+
+    worker = EvaluatorClaimWorker(
+        redis_conn=redis_conn,
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=_FakeQueue("build-q"),
+        verify_queue=_FakeQueue("verify-q"),
+        verification_engine=MagicMock(),
+        benchmarks_root=Path("/benchmarks"),
+        max_inflight_requests=1,
+    )
+
+    assert worker.has_pending_required_builds() is False
 
 
 def test_tick_claims_until_inflight_limit() -> None:

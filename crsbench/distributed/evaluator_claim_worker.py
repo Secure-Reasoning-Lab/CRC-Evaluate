@@ -163,6 +163,8 @@ class EvaluatorClaimWorker:
             claim = record.claim
             if claim is None or record.terminal_result is not None:
                 continue
+            if claim.expires_at <= time.time():
+                continue
             if claim.evaluator_id == self.evaluator_id:
                 return True
         return False

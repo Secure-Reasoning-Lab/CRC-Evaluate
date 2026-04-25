@@ -143,6 +143,7 @@ class DispatcherWarmupFeeder:
                 enqueued += 1
             except Exception as exc:
                 if _is_duplicate_job_enqueue_error(exc):
+                    self._pending_spec = None
                     continue
                 logger.exception(
                     "Failed to enqueue dispatcher warmup job {}",
