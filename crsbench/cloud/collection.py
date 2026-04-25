@@ -197,7 +197,7 @@ def _is_trial_root_dir(path: Path, *, root: Path) -> bool:
 
 def _trial_root_backstop_candidate(
     path: Path, *, root: Path
-) -> tuple[PurePosixPath, tuple[str, str, str]] | None:
+) -> tuple[PurePosixPath, tuple[str, ...]] | None:
     """Return one local fallback candidate for a corrupt-metadata trial root."""
     if not path.is_dir():
         return None
@@ -218,24 +218,23 @@ def _trial_root_backstop_candidate(
         return None
 
     # Only trust corrupt-metadata fallback paths when another metadata-backed
-    # trial under the same logical CRS/benchmark/harness prefix proves that the
-    # prefix is a real trial namespace rather than archived payload content.
-    prefix = relpath.parts[:3]
-    return relpath, (prefix[0], prefix[1], prefix[2])
+    # trial under the same logical namespace proves this exact layout is a real
+    # trial namespace rather than nested payload content.
+    return relpath, relpath.parts[:-1]
 
 
 def _iter_trial_dirs(root: Path) -> Iterator[Path]:
     """Yield real trial roots under ``root`` with a local corrupt-metadata backstop."""
     rooted_trial_dirs: list[tuple[PurePosixPath, Path]] = []
-    backstop_candidates: list[tuple[PurePosixPath, tuple[str, str, str], Path]] = []
+    backstop_candidates: list[tuple[PurePosixPath, tuple[str, ...], Path]] = []
 
     if _is_trial_root_dir(root, root=root):
         rooted_trial_dirs.append((PurePosixPath("."), root))
     else:
         candidate = _trial_root_backstop_candidate(root, root=root)
         if candidate is not None:
-            relpath, prefix = candidate
-            backstop_candidates.append((relpath, prefix, root))
+            relpath, namespace = candidate
+            backstop_candidates.append((relpath, namespace, root))
 
     for path in _iter_trial_dirs_under(root):
         try:
@@ -248,13 +247,11 @@ def _iter_trial_dirs(root: Path) -> Iterator[Path]:
         candidate = _trial_root_backstop_candidate(path, root=root)
         if candidate is None:
             continue
-        candidate_relpath, prefix = candidate
-        backstop_candidates.append((candidate_relpath, prefix, path))
+        candidate_relpath, namespace = candidate
+        backstop_candidates.append((candidate_relpath, namespace, path))
 
-    metadata_backed_prefixes = {
-        (relpath.parts[0], relpath.parts[1], relpath.parts[2])
-        for relpath, _ in rooted_trial_dirs
-        if len(relpath.parts) >= 3
+    metadata_backed_namespaces = {
+        relpath.parts[:-1] for relpath, _ in rooted_trial_dirs if relpath.parts
     }
 
     yielded: set[PurePosixPath] = set()
@@ -264,8 +261,8 @@ def _iter_trial_dirs(root: Path) -> Iterator[Path]:
         yielded.add(relpath)
         yield path
 
-    for relpath, prefix, path in sorted(backstop_candidates):
-        if prefix not in metadata_backed_prefixes or relpath in yielded:
+    for relpath, namespace, path in sorted(backstop_candidates):
+        if namespace not in metadata_backed_namespaces or relpath in yielded:
             continue
         yielded.add(relpath)
         yield path

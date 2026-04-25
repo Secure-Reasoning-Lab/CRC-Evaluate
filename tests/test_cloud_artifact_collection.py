@@ -1163,10 +1163,10 @@ class TestStagingAndPublish:
             == "preserve layout-shaped staged cache\n"
         )
 
-    def test_staging_and_publish_preserves_layout_shaped_payload_with_broken_metadata(
+    def test_staging_and_publish_preserves_same_prefix_nested_payload_with_broken_metadata(
         self, tmp_path: Path
     ) -> None:
-        """Broken metadata plus worker.log in payload content must still stay untouched."""
+        """Broken metadata in same-prefix nested payload content must still stay untouched."""
         if shutil.which("rsync") is None:
             pytest.skip("rsync is required for staged-dir regression coverage")
 
@@ -1179,9 +1179,10 @@ class TestStagingAndPublish:
         faux_trial = (
             source_root
             / "exp-42"
-            / "archives"
-            / "bundle"
-            / "export"
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "archive"
             / "delta"
             / "address"
             / "trial-9"
@@ -1234,9 +1235,10 @@ class TestStagingAndPublish:
 
         collected_faux_trial = (
             final_path
-            / "archives"
-            / "bundle"
-            / "export"
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "archive"
             / "delta"
             / "address"
             / "trial-9"
