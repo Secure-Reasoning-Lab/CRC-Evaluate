@@ -933,9 +933,11 @@ def test_rich_monitor_input_uses_nonblocking_reads_for_ready_fds() -> None:
     disabled = False
     enabled = True
     blocking_state = {11: enabled, 7: enabled}
+    get_blocking_calls: list[int] = []
     read_states: list[tuple[int, bool]] = []
 
     def _fake_get_blocking(fd: int) -> bool:
+        get_blocking_calls.append(fd)
         return blocking_state[fd]
 
     def _fake_set_blocking(fd: int, is_blocking: bool) -> None:
@@ -967,8 +969,12 @@ def test_rich_monitor_input_uses_nonblocking_reads_for_ready_fds() -> None:
         assert monitor_input.manual_navigation_available is True
         assert monitor_input.read_command(0.1) is None
         assert monitor_input.manual_navigation_available is True
+        assert set(monitor_input._active_fds) == {11, 7}
 
+    assert 11 in get_blocking_calls
+    assert 7 in get_blocking_calls
     assert read_states == [(11, disabled), (7, disabled)]
+    assert blocking_state == {11: enabled, 7: enabled}
     mock_close.assert_called_once_with(11)
 
 
