@@ -733,6 +733,32 @@ def test_get_existing_trial_jobs_filters_to_requested_experiment(monkeypatch) ->
     assert existing["finished"] == []
 
 
+def test_get_existing_trials_excludes_canceled_registry_jobs_from_logical_view(
+    monkeypatch,
+) -> None:
+    canceled_test = MagicMock()
+    canceled_test.id = "canceled-test"
+    canceled_test.meta = {"experiment_name": "exp-test"}
+
+    monkeypatch.setattr(
+        queue_module,
+        "get_existing_trial_jobs",
+        lambda _queue, **_kwargs: {
+            "queued": [],
+            "started": [],
+            "deferred": [],
+            "scheduled": [],
+            "canceled": [canceled_test],
+            "finished": [],
+            "failed": [],
+        },
+    )
+
+    logical = queue_module.get_existing_trials(MagicMock(), experiment_name="exp-test")
+
+    assert "canceled" not in logical
+
+
 def test_handle_orphaned_jobs_requeues_when_only_unrelated_workers_exist(
     monkeypatch,
 ) -> None:

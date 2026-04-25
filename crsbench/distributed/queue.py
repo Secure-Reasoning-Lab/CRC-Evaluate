@@ -715,13 +715,14 @@ def get_existing_trials(
         "started": {},
         "deferred": {},
         "scheduled": {},
-        "canceled": {},
         "finished": {},
         "failed": {},
     }
 
     physical_jobs = get_existing_trial_jobs(queue, experiment_name=experiment_name)
     for bucket_name, jobs in physical_jobs.items():
+        if bucket_name == "canceled":
+            continue
         duplicate_keys: set[str] = set()
         for job in jobs:
             trial_key = get_trial_key(job)
