@@ -23,6 +23,7 @@ import tempfile
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path, PurePosixPath  # noqa: TC003
 from typing import TYPE_CHECKING, Iterator, Protocol
 
@@ -195,6 +196,25 @@ def _is_trial_root_dir(path: Path, *, root: Path) -> bool:
     )
 
 
+@lru_cache(maxsize=1)
+def _known_benchmark_harness_pairs() -> frozenset[tuple[str, str]]:
+    """Return benchmark/harness pairs available in the local repo checkout."""
+    from crsbench.benchmark_ci.cli.benchmark_discovery import discover_harness_names
+
+    repo_root = Path(__file__).resolve().parents[2]
+    benchmarks_root = repo_root / "benchmarks"
+    if not benchmarks_root.is_dir():
+        return frozenset()
+
+    pairs: set[tuple[str, str]] = set()
+    for benchmark_dir in sorted(benchmarks_root.iterdir()):
+        if not benchmark_dir.is_dir():
+            continue
+        for harness in discover_harness_names(benchmark_dir):
+            pairs.add((benchmark_dir.name, harness))
+    return frozenset(pairs)
+
+
 def _trial_root_backstop_candidate(
     path: Path, *, root: Path
 ) -> tuple[PurePosixPath, tuple[str, ...]] | None:
@@ -218,9 +238,12 @@ def _trial_root_backstop_candidate(
         return None
 
     # Only trust corrupt-metadata fallback paths when another metadata-backed
-    # trial under the same logical namespace proves this exact layout is a real
-    # trial namespace rather than nested payload content.
-    return relpath, relpath.parts[:-1]
+    # trial under the same CRS proves this trial layout exists, and when the
+    # benchmark/harness pair itself is real in the local repo checkout.
+    benchmark_harness = (relpath.parts[1], relpath.parts[2])
+    if benchmark_harness not in _known_benchmark_harness_pairs():
+        return None
+    return relpath, (relpath.parts[0], *relpath.parts[3:-1])
 
 
 def _iter_trial_dirs(root: Path) -> Iterator[Path]:
@@ -250,8 +273,10 @@ def _iter_trial_dirs(root: Path) -> Iterator[Path]:
         candidate_relpath, namespace = candidate
         backstop_candidates.append((candidate_relpath, namespace, path))
 
-    metadata_backed_namespaces = {
-        relpath.parts[:-1] for relpath, _ in rooted_trial_dirs if relpath.parts
+    metadata_backed_layouts = {
+        (relpath.parts[0], *relpath.parts[3:-1])
+        for relpath, _ in rooted_trial_dirs
+        if len(relpath.parts) >= 5
     }
 
     yielded: set[PurePosixPath] = set()
@@ -262,7 +287,7 @@ def _iter_trial_dirs(root: Path) -> Iterator[Path]:
         yield path
 
     for relpath, namespace, path in sorted(backstop_candidates):
-        if namespace not in metadata_backed_namespaces or relpath in yielded:
+        if namespace not in metadata_backed_layouts or relpath in yielded:
             continue
         yielded.add(relpath)
         yield path

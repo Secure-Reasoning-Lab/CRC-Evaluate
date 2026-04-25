@@ -24,6 +24,10 @@ from crsbench.reporting.snapshot_loader import discover_trials
 from crsbench.validation.schemas import GceWorkerFleetConfig
 
 _REAL_SUBPROCESS_RUN = subprocess.run
+_REAL_LAYOUT_CRS = "oss-crs"
+_REAL_LAYOUT_BENCHMARK_A = "afc-curl-delta-01"
+_REAL_LAYOUT_BENCHMARK_B = "afc-curl-delta-02"
+_REAL_LAYOUT_HARNESS = "curl_fuzzer_ws"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -844,9 +848,21 @@ class TestStagingAndPublish:
 
         source_root = tmp_path / "worker-local"
         source_root.mkdir()
-        _build_trial_tree(source_root, experiment_name="exp-42", trial_n=1)
+        _build_trial_tree(
+            source_root,
+            experiment_name="exp-42",
+            crs=_REAL_LAYOUT_CRS,
+            benchmark=_REAL_LAYOUT_BENCHMARK_A,
+            harness=_REAL_LAYOUT_HARNESS,
+            trial_n=1,
+        )
         broken_trial = _build_trial_tree(
-            source_root, experiment_name="exp-42", trial_n=2
+            source_root,
+            experiment_name="exp-42",
+            crs=_REAL_LAYOUT_CRS,
+            benchmark=_REAL_LAYOUT_BENCHMARK_B,
+            harness=_REAL_LAYOUT_HARNESS,
+            trial_n=1,
         )
         (broken_trial / "metadata.json").write_text("{broken json\n", encoding="utf-8")
         broken_staged_dir = broken_trial / "staged" / "curl-delta-01"
@@ -857,12 +873,12 @@ class TestStagingAndPublish:
         stale_trial_dir = (
             experiment_filestore
             / "exp-42"
-            / "oss-crs"
-            / "curl-delta-01"
-            / "fuzz_http"
+            / _REAL_LAYOUT_CRS
+            / _REAL_LAYOUT_BENCHMARK_B
+            / _REAL_LAYOUT_HARNESS
             / "delta"
             / "address"
-            / "trial-2"
+            / "trial-1"
         )
         (stale_trial_dir / "staged" / "stale-copy").mkdir(parents=True, exist_ok=True)
         (stale_trial_dir / "staged" / "stale-copy" / "README.txt").write_text(
@@ -905,12 +921,12 @@ class TestStagingAndPublish:
 
         collected_trial = (
             final_path
-            / "oss-crs"
-            / "curl-delta-01"
-            / "fuzz_http"
+            / _REAL_LAYOUT_CRS
+            / _REAL_LAYOUT_BENCHMARK_B
+            / _REAL_LAYOUT_HARNESS
             / "delta"
             / "address"
-            / "trial-2"
+            / "trial-1"
         )
         assert (collected_trial / "worker.log").exists()
         assert (collected_trial / "output" / "seeds" / "seed-0001").exists()
@@ -1175,13 +1191,19 @@ class TestStagingAndPublish:
 
         source_root = tmp_path / "worker-local"
         source_root.mkdir()
-        _build_trial_tree(source_root, experiment_name="exp-42")
+        _build_trial_tree(
+            source_root,
+            experiment_name="exp-42",
+            crs=_REAL_LAYOUT_CRS,
+            benchmark=_REAL_LAYOUT_BENCHMARK_A,
+            harness=_REAL_LAYOUT_HARNESS,
+        )
         faux_trial = (
             source_root
             / "exp-42"
-            / "oss-crs"
-            / "curl-delta-01"
-            / "fuzz_http"
+            / _REAL_LAYOUT_CRS
+            / _REAL_LAYOUT_BENCHMARK_A
+            / _REAL_LAYOUT_HARNESS
             / "archive"
             / "delta"
             / "address"
@@ -1235,9 +1257,9 @@ class TestStagingAndPublish:
 
         collected_faux_trial = (
             final_path
-            / "oss-crs"
-            / "curl-delta-01"
-            / "fuzz_http"
+            / _REAL_LAYOUT_CRS
+            / _REAL_LAYOUT_BENCHMARK_A
+            / _REAL_LAYOUT_HARNESS
             / "archive"
             / "delta"
             / "address"
@@ -2763,9 +2785,21 @@ class TestRemoteLogCollection:
 
         source_root = tmp_path / "worker-local"
         source_root.mkdir()
-        _build_trial_tree(source_root, experiment_name="exp-42", trial_n=1)
+        _build_trial_tree(
+            source_root,
+            experiment_name="exp-42",
+            crs=_REAL_LAYOUT_CRS,
+            benchmark=_REAL_LAYOUT_BENCHMARK_A,
+            harness=_REAL_LAYOUT_HARNESS,
+            trial_n=1,
+        )
         broken_trial = _build_trial_tree(
-            source_root, experiment_name="exp-42", trial_n=2
+            source_root,
+            experiment_name="exp-42",
+            crs=_REAL_LAYOUT_CRS,
+            benchmark=_REAL_LAYOUT_BENCHMARK_B,
+            harness=_REAL_LAYOUT_HARNESS,
+            trial_n=1,
         )
         (broken_trial / "metadata.json").write_text("{broken json\n", encoding="utf-8")
         broken_staged_dir = broken_trial / "staged" / "curl-delta-01"
@@ -2777,12 +2811,12 @@ class TestRemoteLogCollection:
             collector._remote_logs_dir(experiment_filestore, "exp-42")
             / worker.name
             / "trial-artifacts"
-            / "oss-crs"
-            / "curl-delta-01"
-            / "fuzz_http"
+            / _REAL_LAYOUT_CRS
+            / _REAL_LAYOUT_BENCHMARK_B
+            / _REAL_LAYOUT_HARNESS
             / "delta"
             / "address"
-            / "trial-2"
+            / "trial-1"
         )
         (stale_trial_artifacts_dir / "staged" / "stale-copy").mkdir(
             parents=True, exist_ok=True
@@ -2858,12 +2892,12 @@ class TestRemoteLogCollection:
             logs_dir
             / worker.name
             / "trial-artifacts"
-            / "oss-crs"
-            / "curl-delta-01"
-            / "fuzz_http"
+            / _REAL_LAYOUT_CRS
+            / _REAL_LAYOUT_BENCHMARK_B
+            / _REAL_LAYOUT_HARNESS
             / "delta"
             / "address"
-            / "trial-2"
+            / "trial-1"
         )
         assert (trial_artifacts_dir / "worker.log").exists()
         assert not (trial_artifacts_dir / "staged").exists()
