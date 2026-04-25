@@ -400,6 +400,23 @@ def _transition_job_lifecycle_syncing(runtime: JobLifecycleRuntime | None) -> No
         logger.warning(f"Failed to transition job lifecycle to syncing: {exc}")
 
 
+def _begin_job_syncing(runtime: JobLifecycleRuntime | None) -> None:
+    """Project the post-run syncing/finalization phase into RQ metadata and lifecycle."""
+    try:
+        import rq
+
+        job = rq.get_current_job()
+        if job and job.meta.get("phase") != "syncing":
+            job.meta["phase"] = "syncing"
+            job.meta["phase_started_at"] = time.time()
+            job.save_meta()
+            logger.debug(f"Job {job.id[:8]} phase -> syncing")
+    except Exception as exc:
+        logger.warning(f"Failed to update job metadata for syncing phase: {exc}")
+
+    _transition_job_lifecycle_syncing(runtime)
+
+
 def _finish_job_lifecycle(
     runtime: JobLifecycleRuntime | None,
     *,
@@ -884,7 +901,7 @@ def _create_phase_callbacks(lifecycle_runtime: JobLifecycleRuntime | None = None
                 logger.debug(f"Job {job.id[:8]} phase -> verifying")
         except Exception as e:
             logger.warning(f"Failed to update job metadata: {e}")
-        _transition_job_lifecycle_syncing(lifecycle_runtime)
+        _update_job_lifecycle_heartbeat(lifecycle_runtime)
 
     return on_build_start, on_run_start, on_verification_start
 
@@ -1712,6 +1729,7 @@ def run_crs_trial(
                     trial_id=trial_id,
                 )
 
+        _begin_job_syncing(lifecycle_runtime)
         execution_time = time.time() - start_time
 
         # Extract build/run timing from harness result (single harness per trial)

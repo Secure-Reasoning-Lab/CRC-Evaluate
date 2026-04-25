@@ -133,6 +133,7 @@ Then re-run the quality gate command above.
 - Architecture: `docs/design/architecture.md`
 - Design doc policy: `docs/design/doc-authoring-guidelines.md`
 - Cloud orchestration: `docs/design/distributed/cloud-orchestration.md`
+- Cloud distributed re-eval: `docs/design/distributed/cloud-reeval.md`
 - Cloud live logs: `docs/design/distributed/cloud-live-log-streaming.md`
 - GCE cloud realization: `docs/design/distributed/gce-cloud-orchestration.md`
 - Distributed systems: `docs/design/distributed/distributed-evaluation.md`

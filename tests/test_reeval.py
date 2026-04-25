@@ -622,6 +622,9 @@ class TestRunReeval:
             patch_dir = trial_dir / "output" / "patches" / "cpv_0"
             patch_dir.mkdir(parents=True, exist_ok=True)
             (patch_dir / "patch.diff").write_text("--- a/a.c\n+++ b/a.c\n")
+            input_povs = trial_dir / "crs-input" / "povs"
+            input_povs.mkdir(parents=True, exist_ok=True)
+            (input_povs / "cpv_0.blob").write_bytes(b"pov")
 
     def test_dispatches_bug_finding(self, tmp_path: Path) -> None:
         """Should dispatch to _reeval_bug_finding for bug_finding trials."""

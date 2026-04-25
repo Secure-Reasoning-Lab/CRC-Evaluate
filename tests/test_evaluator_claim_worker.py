@@ -1,0 +1,524 @@
+"""Tests for evaluator-side claim-loop DAG materialization."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import MagicMock
+
+from crsbench.builder.types import BenchmarkMode, VariantType
+from crsbench.distributed.evaluator_jobs import EmbeddedPov, SinglePovPayload
+from crsbench.distributed.evaluator_verify_claims import (
+    EvaluatorVerifyClaimStore,
+    VerifyRequestRecord,
+)
+from crsbench.distributed.patch_evaluator_jobs import EmbeddedPatch, PatchJobPayload
+
+
+class _FakePipeline:
+    def __init__(self, redis_conn: "_FakeRedis") -> None:
+        self._redis = redis_conn
+        self._commands: list[tuple[str, str, str, str]] = []
+
+    def __enter__(self) -> "_FakePipeline":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.reset()
+
+    def watch(self, *keys: str) -> None:
+        del keys
+
+    def unwatch(self) -> None:
+        return None
+
+    def hget(self, key: str, field: str) -> str | None:
+        return self._redis.hget(key, field)
+
+    def hgetall(self, key: str) -> dict[str, str]:
+        return self._redis.hgetall(key)
+
+    def multi(self) -> None:
+        return None
+
+    def hset(self, key: str, field: str, value: str) -> None:
+        self._commands.append(("hset", key, field, value))
+
+    def execute(self) -> list[int]:
+        results = []
+        for op, key, field, value in self._commands:
+            if op == "hset":
+                results.append(self._redis.hset(key, field, value))
+        self.reset()
+        return results
+
+    def reset(self) -> None:
+        self._commands = []
+
+
+class _FakeRedis:
+    def __init__(self) -> None:
+        self._hashes: dict[str, dict[str, str]] = {}
+
+    def pipeline(self) -> _FakePipeline:
+        return _FakePipeline(self)
+
+    def hset(self, key: str, field: str, value: str) -> int:
+        self._hashes.setdefault(key, {})[field] = value
+        return 1
+
+    def hget(self, key: str, field: str) -> str | None:
+        return self._hashes.get(key, {}).get(field)
+
+    def hgetall(self, key: str) -> dict[str, str]:
+        return self._hashes.get(key, {}).copy()
+
+    def hdel(self, key: str, field: str) -> int:
+        bucket = self._hashes.get(key)
+        if not bucket or field not in bucket:
+            return 0
+        del bucket[field]
+        if not bucket:
+            self._hashes.pop(key, None)
+        return 1
+
+
+class _FakeJob:
+    def __init__(
+        self,
+        job_id: str,
+        *,
+        status: str = "queued",
+        result: object | None = None,
+        meta: dict[str, object] | None = None,
+    ) -> None:
+        self.id = job_id
+        self._status = status
+        self.result = result
+        self.meta = dict(meta or {})
+        self.save_meta_calls = 0
+
+    def get_status(self) -> str:
+        return self._status
+
+    def set_status(self, status: str) -> None:
+        self._status = status
+
+    def save_meta(self) -> None:
+        self.save_meta_calls += 1
+
+
+class _FakeQueue:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.jobs: dict[str, _FakeJob] = {}
+        self.enqueued: list[dict[str, object]] = []
+
+    def fetch_job(self, job_id: str) -> _FakeJob | None:
+        return self.jobs.get(job_id)
+
+    def enqueue(
+        self,
+        func_name: str,
+        payload: dict[str, object],
+        *,
+        job_timeout: int,
+        result_ttl: int,
+        job_id: str,
+        depends_on: list[object] | None = None,
+        meta: dict[str, object] | None = None,
+    ) -> _FakeJob:
+        job = self.jobs.get(job_id)
+        if job is None:
+            job = _FakeJob(job_id)
+            self.jobs[job_id] = job
+        self.enqueued.append(
+            {
+                "func_name": func_name,
+                "payload": payload,
+                "job_timeout": job_timeout,
+                "result_ttl": result_ttl,
+                "job_id": job_id,
+                "depends_on": list(depends_on or []),
+                "meta": dict(meta or {}),
+            }
+        )
+        return job
+
+
+def _make_engine_and_adapter():
+    builder_infra = MagicMock(
+        inc_image_policy="auto",
+        inc_image_registry="ghcr.io/example",
+        inc_image_max_pull_bytes=123,
+        inc_image_pull_timeout=45,
+        local_image_prefix="crsbench",
+    )
+    builder = MagicMock()
+    builder.source_mode = "main_repo"
+    builder.infra = builder_infra
+
+    adapter = MagicMock()
+    adapter.benchmark_path = Path("/benchmarks/test-benchmark")
+    adapter.benchmark_name = "test-benchmark"
+    adapter.main_repo = "https://example.com/repo.git"
+    adapter.get_mode.return_value = BenchmarkMode.DELTA
+    adapter.get_base_commit.return_value = "a" * 40
+    adapter.get_ref_commit.return_value = "b" * 40
+    adapter.get_cpv_numbers.return_value = [0]
+    adapter.lang = "c"
+    adapter.repo_name = "repo"
+    adapter.get_all_cpv_sanitizers.return_value = ["address"]
+    adapter.inc_build = True
+
+    config_a = MagicMock()
+    config_a.benchmark_path = Path("/benchmarks/test-benchmark")
+    config_a.benchmark_name = "test-benchmark"
+    config_a.variant_type = VariantType.DELTA_REF
+    config_a.commit = "b" * 40
+    config_a.main_repo = "https://example.com/repo.git"
+    config_a.mode = BenchmarkMode.DELTA
+    config_a.language = "c"
+    config_a.cpv_num = None
+    config_a.patch_id = None
+    config_a.pov_id = None
+    config_a.patches = []
+    config_a.use_inc_build = True
+    config_a.sanitizer = "address"
+    config_a.repo_name = "repo"
+    config_a.variant_name = "test-benchmark-asan-deltaref"
+
+    config_b = MagicMock()
+    config_b.benchmark_path = Path("/benchmarks/test-benchmark")
+    config_b.benchmark_name = "test-benchmark"
+    config_b.variant_type = VariantType.CPV
+    config_b.commit = "b" * 40
+    config_b.main_repo = "https://example.com/repo.git"
+    config_b.mode = BenchmarkMode.DELTA
+    config_b.language = "c"
+    config_b.cpv_num = 0
+    config_b.patch_id = None
+    config_b.pov_id = None
+    config_b.patches = []
+    config_b.use_inc_build = True
+    config_b.sanitizer = "address"
+    config_b.repo_name = "repo"
+    config_b.variant_name = "test-benchmark-asan-delta-cpv0"
+
+    builder.create_build_plan.return_value = MagicMock(configs=[config_a, config_b])
+    engine = MagicMock()
+    engine.builder = builder
+    engine.load_adapter.return_value = adapter
+    return engine, adapter
+
+
+def test_claim_worker_materializes_pov_with_local_build_ids_and_unfinished_deps() -> (
+    None
+):
+    from crsbench.distributed.evaluator_claim_worker import (
+        EvaluatorClaimWorker,
+        build_local_ci_job_id,
+        build_local_verify_job_id,
+    )
+
+    redis_conn = _FakeRedis()
+    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
+    payload = SinglePovPayload(
+        experiment_name="exp1",
+        trial_id="trial-1",
+        benchmark="test-benchmark",
+        harness="h1",
+        pov=EmbeddedPov.from_bytes("pov-1", b"boom"),
+        enqueued_at=100.0,
+        sanitizer="address",
+        build_job_ids=[
+            "build-single/test-benchmark/test-benchmark-asan-deltaref",
+            "build-single/test-benchmark/test-benchmark-asan-delta-cpv0",
+        ],
+        build_artifact_ids=[
+            "build-single/test-benchmark/test-benchmark-asan-deltaref",
+            "build-single/test-benchmark/test-benchmark-asan-delta-cpv0",
+        ],
+        source_mode="main_repo",
+        use_inc_build=True,
+    )
+    store.submit_request(
+        VerifyRequestRecord(
+            request_id="verify:trial-1:test-benchmark:h1:pov-1",
+            owner_key="trial::exp1::trial-1",
+            request_kind="pov",
+            payload=payload.to_dict(),
+        )
+    )
+
+    engine, _adapter = _make_engine_and_adapter()
+    build_queue = _FakeQueue("build-q")
+    verify_queue = _FakeQueue("verify-q")
+    finished_build_id = build_local_ci_job_id(
+        "build-single/test-benchmark/test-benchmark-asan-deltaref/main_repo/inc",
+        evaluator_id="eval-1",
+    )
+    build_queue.jobs[finished_build_id] = _FakeJob(
+        finished_build_id,
+        status="finished",
+        result={"success": True},
+    )
+
+    worker = EvaluatorClaimWorker(
+        redis_conn=redis_conn,
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=build_queue,
+        verify_queue=verify_queue,
+        verification_engine=engine,
+        benchmarks_root=Path("/benchmarks"),
+    )
+
+    claimed = worker.dispatch_one(now=100.0)
+
+    assert claimed is not None
+    assert [entry["job_id"] for entry in build_queue.enqueued] == [
+        "prepare-inc-image/test-benchmark/address/main_repo/inc/cached/local/eval-1",
+        "build-single/test-benchmark/test-benchmark-asan-delta-cpv0/main_repo/inc/local/eval-1",
+    ]
+    assert len(verify_queue.enqueued) == 1
+    verify_entry = verify_queue.enqueued[0]
+    assert verify_entry["func_name"] == (
+        "crsbench.distributed.evaluator_claim_jobs.execute_claimed_verify"
+    )
+    assert verify_entry["job_id"] == build_local_verify_job_id(
+        request_id="verify:trial-1:test-benchmark:h1:pov-1",
+        evaluator_id="eval-1",
+    )
+    assert [dep.id for dep in verify_entry["depends_on"]] == [
+        "build-single/test-benchmark/test-benchmark-asan-delta-cpv0/main_repo/inc/local/eval-1"
+    ]
+    claimed_payload = verify_entry["payload"]
+    assert claimed_payload["request_id"] == "verify:trial-1:test-benchmark:h1:pov-1"
+    assert claimed_payload["request_kind"] == "pov"
+    verify_payload = claimed_payload["verify_payload"]
+    assert verify_payload["build_job_ids"] == [
+        finished_build_id,
+        "build-single/test-benchmark/test-benchmark-asan-delta-cpv0/main_repo/inc/local/eval-1",
+    ]
+    assert verify_payload["build_artifact_ids"] == verify_payload["build_job_ids"]
+    assert worker.has_pending_required_builds()
+
+
+def test_claim_worker_materializes_patch_with_local_build_dependency() -> None:
+    from crsbench.distributed.evaluator_claim_worker import (
+        EvaluatorClaimWorker,
+        build_local_ci_job_id,
+    )
+
+    redis_conn = _FakeRedis()
+    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
+    patch_payload = PatchJobPayload(
+        experiment_name="exp1",
+        trial_id="trial-1",
+        benchmark="test-benchmark",
+        harness="h1",
+        cpv_id="cpv-1",
+        patch=EmbeddedPatch(
+            patch_id="patch-1",
+            pov_id="cpv-1",
+            patch_content_b64="cGF0Y2g=",
+        ),
+        sanitizer="address",
+        source_mode="main_repo",
+        verify_variants=True,
+        test_mode="FULL",
+        use_inc_build=True,
+        enqueued_at=100.0,
+    )
+    request_id = "patch-verify:trial-1:test-benchmark:h1:cpv-1:patch-1"
+    store.submit_request(
+        VerifyRequestRecord(
+            request_id=request_id,
+            owner_key="trial::exp1::trial-1",
+            request_kind="patch",
+            payload=patch_payload.to_dict(),
+        )
+    )
+
+    engine = MagicMock()
+    build_queue = _FakeQueue("build-q")
+    verify_queue = _FakeQueue("verify-q")
+    worker = EvaluatorClaimWorker(
+        redis_conn=redis_conn,
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=build_queue,
+        verify_queue=verify_queue,
+        verification_engine=engine,
+        benchmarks_root=Path("/benchmarks"),
+    )
+
+    claimed = worker.dispatch_one(now=100.0)
+
+    assert claimed is not None
+    assert len(build_queue.enqueued) == 1
+    build_entry = build_queue.enqueued[0]
+    assert build_entry["func_name"] == (
+        "crsbench.distributed.patch_evaluator_jobs.execute_patch_build"
+    )
+    local_build_id = build_local_ci_job_id(
+        build_entry["job_id"],
+        evaluator_id="eval-1",
+    )
+    assert len(verify_queue.enqueued) == 1
+    verify_entry = verify_queue.enqueued[0]
+    assert verify_entry["func_name"] == (
+        "crsbench.distributed.evaluator_claim_jobs.execute_claimed_verify"
+    )
+    assert [dep.id for dep in verify_entry["depends_on"]] == [build_entry["job_id"]]
+    claimed_payload = verify_entry["payload"]
+    assert claimed_payload["request_id"] == request_id
+    assert claimed_payload["request_kind"] == "patch"
+    assert (
+        claimed_payload["verify_payload"]["build_patch_job_id"] == build_entry["job_id"]
+    )
+
+
+def test_claim_worker_releases_claim_when_materialization_fails() -> None:
+    from crsbench.distributed.evaluator_claim_worker import EvaluatorClaimWorker
+
+    redis_conn = _FakeRedis()
+    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
+    request_id = "verify:trial-1:test-benchmark:h1:pov-1"
+    payload = SinglePovPayload(
+        experiment_name="exp1",
+        trial_id="trial-1",
+        benchmark="test-benchmark",
+        harness="h1",
+        pov=EmbeddedPov.from_bytes("pov-1", b"boom"),
+        enqueued_at=100.0,
+        sanitizer="address",
+        build_job_ids=[],
+        build_artifact_ids=[],
+        source_mode="main_repo",
+        use_inc_build=True,
+    )
+    store.submit_request(
+        VerifyRequestRecord(
+            request_id=request_id,
+            owner_key="trial::exp1::trial-1",
+            request_kind="pov",
+            payload=payload.to_dict(),
+        )
+    )
+
+    engine = MagicMock()
+    engine.builder = MagicMock()
+    engine.builder.source_mode = "main_repo"
+    engine.load_adapter.return_value = None
+    build_queue = _FakeQueue("build-q")
+    verify_queue = _FakeQueue("verify-q")
+    worker = EvaluatorClaimWorker(
+        redis_conn=redis_conn,
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=build_queue,
+        verify_queue=verify_queue,
+        verification_engine=engine,
+        benchmarks_root=Path("/benchmarks"),
+    )
+
+    claimed = worker.dispatch_one(now=100.0)
+
+    assert claimed is None
+    stored = store.load_request(request_id)
+    assert stored is not None
+    assert stored.claim is None
+    assert stored.terminal_result is None
+    assert build_queue.enqueued == []
+    assert verify_queue.enqueued == []
+    assert not worker.has_pending_required_builds()
+
+    reclaimed = store.claim_next_request(
+        evaluator_id="eval-2",
+        now=100.0,
+        lease_seconds=30,
+    )
+    assert reclaimed is not None
+    assert reclaimed.claim is not None
+    assert reclaimed.claim.evaluator_id == "eval-2"
+
+
+def test_refresh_active_claims_releases_claim_after_local_verify_failure() -> None:
+    from crsbench.distributed.evaluator_claim_worker import (
+        EvaluatorClaimWorker,
+        _ActiveClaim,
+    )
+
+    redis_conn = _FakeRedis()
+    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
+    request_id = "verify:trial-1:test-benchmark:h1:pov-1"
+    store.submit_request(
+        VerifyRequestRecord(
+            request_id=request_id,
+            owner_key="trial::exp1::trial-1",
+            request_kind="pov",
+            payload={"benchmark": "test-benchmark"},
+        )
+    )
+    claimed = store.claim_next_request(
+        evaluator_id="eval-1",
+        now=100.0,
+        lease_seconds=30,
+    )
+    assert claimed is not None
+
+    build_queue = _FakeQueue("build-q")
+    verify_queue = _FakeQueue("verify-q")
+    failed_verify_job = _FakeJob("claim-verify/eval-1/test", status="failed")
+    verify_queue.jobs[failed_verify_job.id] = failed_verify_job
+
+    worker = EvaluatorClaimWorker(
+        redis_conn=redis_conn,
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=build_queue,
+        verify_queue=verify_queue,
+        verification_engine=MagicMock(),
+        benchmarks_root=Path("/benchmarks"),
+    )
+    worker._active_claims[request_id] = _ActiveClaim(
+        local_verify_job_id=failed_verify_job.id,
+        required_build_job_ids=(),
+    )
+
+    worker.refresh_active_claims(now=105.0)
+
+    assert request_id not in worker._active_claims
+    record = store.load_request(request_id)
+    assert record is not None
+    assert record.claim is None
+    assert record.terminal_result is None
+
+
+def test_enqueue_or_reuse_job_adopts_trial_owner_for_reused_warmup_job() -> None:
+    from crsbench.distributed.evaluator_claim_worker import _enqueue_or_reuse_job
+    from crsbench.distributed.evaluator_scheduler import SCHEDULER_OWNER_KEY_META
+
+    queue = _FakeQueue("build-q")
+    existing = _FakeJob(
+        "build-single/test-benchmark/test-benchmark-asan-deltaref/main_repo/inc/local/eval-1",
+        meta={SCHEDULER_OWNER_KEY_META: "unit::exp1::test-benchmark::address::build"},
+    )
+    queue.jobs[existing.id] = existing
+
+    reused = _enqueue_or_reuse_job(
+        queue,
+        "crsbench.distributed.build_jobs.execute_ci_build",
+        {"benchmark_name": "test-benchmark"},
+        job_timeout=3600,
+        job_id=existing.id,
+        meta={
+            "experiment_name": "exp1",
+            SCHEDULER_OWNER_KEY_META: "trial::exp1::trial-1",
+        },
+    )
+
+    assert reused is existing
+    assert existing.meta[SCHEDULER_OWNER_KEY_META] == "trial::exp1::trial-1"
+    assert existing.save_meta_calls == 1

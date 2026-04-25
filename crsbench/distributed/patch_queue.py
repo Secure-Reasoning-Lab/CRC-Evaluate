@@ -248,6 +248,21 @@ def _get_dispatcher_store(
     )
 
 
+def _get_verify_claim_store(
+    *,
+    experiment_name: str,
+    redis_conn: object,
+):
+    from crsbench.distributed.evaluator_verify_claims import (
+        EvaluatorVerifyClaimStore,
+    )
+
+    return EvaluatorVerifyClaimStore(
+        cast("Any", redis_conn),
+        experiment_name=experiment_name,
+    )
+
+
 def _is_duplicate_job_enqueue_error(exc: Exception) -> bool:
     """Best-effort duplicate enqueue detection across RQ versions."""
     msg = str(exc).lower()
@@ -418,7 +433,7 @@ def enqueue_patch_jobs(
 
     verify_job_ids: list[str] = []
     dispatcher_mode = get_evaluator_routing_model() == ROUTING_MODEL_DISPATCHER
-    dispatcher_store: DispatcherStateStore | None = None
+    claim_store = None
     if dispatcher_mode:
         dispatcher_redis_conn = getattr(build_queue, "connection", None) or getattr(
             verify_queue, "connection", None
@@ -427,7 +442,7 @@ def enqueue_patch_jobs(
             raise ValueError(
                 "dispatcher patch enqueue requires build or verify queue connection"
             )
-        dispatcher_store = _get_dispatcher_store(
+        claim_store = _get_verify_claim_store(
             experiment_name=experiment_name,
             redis_conn=dispatcher_redis_conn,
         )
@@ -452,51 +467,12 @@ def enqueue_patch_jobs(
             patch_content_hash = _patch_content_hash(embedded_patch.patch_content_b64)
 
             if dispatcher_mode:
-                from crsbench.distributed.evaluator_dispatcher_state import (
-                    BuildRequestRecord,
+                from crsbench.distributed.evaluator_verify_claims import (
                     VerifyRequestRecord,
                 )
 
-                assert dispatcher_store is not None
+                assert claim_store is not None
                 owner_key = f"trial::{experiment_name}::{trial_id}"
-                lineage_id = _build_patch_lineage_id(
-                    benchmark=benchmark,
-                    harness=harness,
-                    cpv_id=cpv_id,
-                    patch_id=patch_id,
-                    sanitizer=sanitizer,
-                    source_mode=source_mode,
-                    use_inc_build=use_inc_build,
-                    patch_content_hash=patch_content_hash,
-                )
-                build_request_id = _make_patch_build_request_id(
-                    experiment_name=experiment_name,
-                    trial_id=trial_id,
-                    benchmark=benchmark,
-                    harness=harness,
-                    cpv_id=cpv_id,
-                    patch_id=patch_id,
-                    sanitizer=sanitizer,
-                    source_mode=source_mode,
-                    use_inc_build=use_inc_build,
-                    patch_content_hash=patch_content_hash,
-                )
-                build_payload = payload.to_dict()
-                dispatcher_store.submit_build_request(
-                    BuildRequestRecord(
-                        request_id=build_request_id,
-                        trial_id=trial_id,
-                        benchmark=benchmark,
-                        owner_key=owner_key,
-                        lineage_id=lineage_id,
-                        generation=1,
-                        state="ready",
-                        payload=build_payload,
-                    )
-                )
-
-                verify_payload = payload.to_dict()
-                verify_payload["build_patch_job_id"] = build_request_id
                 verify_request_id = _make_patch_verify_request_id(
                     experiment_name=experiment_name,
                     trial_id=trial_id,
@@ -511,23 +487,16 @@ def enqueue_patch_jobs(
                     sanitizer=sanitizer,
                     patch_content_hash=patch_content_hash,
                 )
-                dispatcher_store.submit_verify_request(
+                claim_store.submit_request(
                     VerifyRequestRecord(
                         request_id=verify_request_id,
-                        trial_id=trial_id,
-                        benchmark=benchmark,
-                        harness=harness,
-                        pov_id=patch_id,
                         owner_key=owner_key,
-                        lineage_id=lineage_id,
-                        generation=1,
-                        state="blocked_on_build",
-                        build_request_ids=[build_request_id],
-                        payload=verify_payload,
+                        request_kind="patch",
+                        payload=payload.to_dict(),
                     )
                 )
                 logger.debug(
-                    "Submitted dispatcher patch verify request {} for {}/{} patch={}",
+                    "Submitted logical patch verify request {} for {}/{} patch={}",
                     verify_request_id,
                     benchmark,
                     cpv_id,
@@ -653,11 +622,11 @@ def poll_patch_verdicts(
                 from crsbench.distributed.queue import create_redis_connection
 
                 redis_conn = create_redis_connection(redis_host)
-            store = _get_dispatcher_store(
+            store = _get_verify_claim_store(
                 experiment_name=experiment_name,
                 redis_conn=redis_conn,
             )
-            return store.poll_verify_results(job_ids)
+            return store.poll_results(job_ids)
         except Exception as e:
             logger.warning(f"Failed to poll dispatcher patch verdicts: {e}")
             return [], list(job_ids)

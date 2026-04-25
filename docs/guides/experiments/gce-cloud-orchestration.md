@@ -1066,9 +1066,17 @@ By default, `cloud collect` infers:
 In plain terms, `cloud collect` copies trial artifacts and VM diagnostics from
 the cloud VMs back to a local directory on the machine where you run the
 command. During artifact sync, CRSBench skips trial-local `oss-crs-workdir/`
-scratch directories. If a top-level trial entry such as `output/` or
-`result.log` is still a symlink into that excluded workdir, collect
-re-hydrates that entry so the local result tree remains usable.
+scratch directories and the bulk of `trial/output/logs/`. If a top-level trial
+entry such as `output/` or `result.log` is still a symlink into that excluded
+workdir, collect re-hydrates that entry so the local result tree remains
+usable. Trials with `.success` keep that normal collected artifact tree. Trials
+with `.fail` are compacted before publish so the collected trial keeps only
+`metadata.json`, `.fail`, `worker.log`, and the reporting subset restored under
+`output/logs/`. After the main rsync, collect restores only the small
+reporting subset under `output/logs/`: `verify_patch_timing.json`,
+`*_patcher.stdout.log`, and `*inc-builder-*.stdout.log`. Runtime and VM
+diagnostics remain available under
+`.crsbench-cloud/remote-logs/<experiment>/`.
 
 Override the local destination with `--dest`:
 
@@ -1216,7 +1224,7 @@ Diagnostics collected under `.crsbench-cloud/remote-logs/<experiment>/`:
 - `runtime-summary.txt` with timezone, Docker cgroup driver, user-bus, linger,
   and Redis listener state
 - Lightweight per-trial observability files such as `worker.log`,
-  `metadata.json`, `.success`, `.failure`, and the orchestrator
+  `metadata.json`, `.success`, `.fail`, and the orchestrator
   `trial_matrix.json`
 
 ## Listing Instances
@@ -1494,8 +1502,8 @@ Useful manual checks:
   expected by `oss-crs`
 - On Ubuntu-based GCE images, CRSBench installs Docker Engine from Docker's
   official apt repository rather than the distro `docker.io` packages
-- Bootstrap also installs `iftop`, `rg`, and `fdfind`, and bootstraps Docker
-  Buildx for the default builder context
+- Bootstrap also installs `iftop`, `ncdu`, `gdu`, `duf`, `btop`, `rg`, and
+  `fdfind`, and bootstraps Docker Buildx for the default builder context
 
 You can verify those with:
 
@@ -1504,6 +1512,10 @@ You can verify those with:
 - `docker info --format '{{.CgroupDriver}}'`
 - `apt-cache policy docker-ce`
 - `command -v iftop`
+- `command -v ncdu`
+- `command -v gdu`
+- `command -v duf`
+- `command -v btop`
 - `docker buildx ls`
 - `docker buildx inspect`
 

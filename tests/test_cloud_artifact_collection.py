@@ -22,6 +22,8 @@ from crsbench.cloud.gce.models import GceWorkerRecord
 from crsbench.reporting.snapshot_loader import discover_trials
 from crsbench.validation.schemas import GceWorkerFleetConfig
 
+_REAL_SUBPROCESS_RUN = subprocess.run
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -128,6 +130,61 @@ def _write_trial_metadata(trial_dir: Path, payload: dict[str, object]) -> None:
     """Write `metadata.json` directly with the supplied payload."""
     metadata_path = trial_dir / "metadata.json"
     metadata_path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _run_local_rsync_from_cloud_cmd(
+    cmd: list[str], *, source_root: Path, experiment_name: str
+) -> subprocess.CompletedProcess[bytes]:
+    """Run a cloud collector rsync command against a local fixture tree."""
+    source = cmd[-2]
+    destination = cmd[-1]
+
+    if ":" in source:
+        remote_source = source.split(":", 1)[1]
+        rel = Path(
+            remote_source.removeprefix(f"/data/experiments/{experiment_name}").lstrip(
+                "/"
+            )
+        )
+        local_source = source_root / experiment_name / rel
+    else:
+        local_source = Path(source.rstrip("/"))
+
+    local_cmd = ["rsync"]
+    skip_next = False
+    for arg in cmd[1:-2]:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == "-e":
+            skip_next = True
+            continue
+        if arg.startswith("--rsync-path="):
+            continue
+        local_cmd.append(arg)
+
+    local_source_arg = str(local_source)
+    if source.endswith("/"):
+        local_source_arg += "/"
+    local_cmd.extend([local_source_arg, destination])
+    return _REAL_SUBPROCESS_RUN(local_cmd, check=True)
+
+
+def _run_local_remote_command_from_cloud_cmd(
+    command: str, *, source_root: Path, experiment_name: str
+) -> subprocess.CompletedProcess[str]:
+    """Run one collector remote command against a local fixture tree."""
+    remote_root = f"/data/experiments/{experiment_name}"
+    local_root = str((source_root / experiment_name).resolve())
+    rewritten = command.replace(remote_root, local_root)
+    if rewritten.startswith("sudo "):
+        rewritten = rewritten.removeprefix("sudo ")
+    return _REAL_SUBPROCESS_RUN(
+        ["bash", "-lc", rewritten],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +375,106 @@ class TestRsyncCmdDirectIp:
             in ssh_cmd
         )
 
+    def test_discover_copy_link_filelist_uses_sudo_remote_python(
+        self, tmp_path: Path
+    ) -> None:
+        """Symlink rehydration discovery should enumerate remote paths with sudo privileges."""
+        worker = _make_worker(internal_ip="10.0.0.10", external_ip="34.1.2.3")
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector(base_path=tmp_path / "config.yaml")
+
+        seen_command: str | None = None
+
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            nonlocal seen_command
+            del args
+            seen_command = str(kwargs["command"])
+            return subprocess.CompletedProcess(
+                args=["ssh"],
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "directories": ["output", "output/empty"],
+                        "files": ["output/kept/artifact.txt"],
+                    }
+                ),
+                stderr="",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
+
+        directories, files = collector._discover_copy_link_filelist(
+            worker=worker,
+            fleet=fleet,
+            remote_experiment_dir="/data/experiments/exp-42",
+            experiment_filestore=tmp_path,
+            known_hosts_path=None,
+            ssh_user=None,
+            symlink_relpaths=[Path("output")],
+        )
+
+        assert seen_command is not None
+        assert seen_command.startswith("sudo python3 -c ")
+        assert directories == [Path("output"), Path("output/empty")]
+        assert files == ["output/kept/artifact.txt"]
+
+    def test_discover_copy_link_filelist_reuses_supplied_ssh_transport(
+        self, tmp_path: Path
+    ) -> None:
+        """Discovery should reuse a caller-provided SSH transport instead of reopening it."""
+        worker = _make_worker(zone="us-central1-a")
+        fleet = _make_fleet(ssh_via_iap=True, zone="us-central1-a")
+        collector = ArtifactCollector(base_path=tmp_path / "config.yaml")
+        seen_cmds: list[list[str]] = []
+
+        def _unexpected_remote_command(*args: object, **kwargs: object) -> object:
+            del args, kwargs
+            raise AssertionError("discovery should reuse the supplied SSH command")
+
+        def _fake_run(cmd, *_args, **_kwargs):
+            seen_cmds.append(list(cmd))
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "directories": ["output", "output/empty"],
+                        "files": ["output/kept/artifact.txt"],
+                    }
+                ),
+                stderr="",
+            )
+
+        collector._run_remote_command = _unexpected_remote_command  # type: ignore[method-assign]
+        with patch("subprocess.run", side_effect=_fake_run):
+            directories, files = collector._discover_copy_link_filelist(
+                worker=worker,
+                fleet=fleet,
+                remote_experiment_dir="/data/experiments/exp-42",
+                experiment_filestore=tmp_path,
+                known_hosts_path=None,
+                ssh_user="test-user",
+                symlink_relpaths=[Path("output")],
+                ssh_command="ssh -p 2222 -o StrictHostKeyChecking=no",
+                remote_host="127.0.0.1",
+            )
+
+        assert seen_cmds
+        ssh_cmd = seen_cmds[0]
+        assert ssh_cmd[:5] == [
+            "ssh",
+            "-p",
+            "2222",
+            "-o",
+            "StrictHostKeyChecking=no",
+        ]
+        assert ssh_cmd[-2] == "test-user@127.0.0.1"
+        assert ssh_cmd[-1].startswith("sudo python3 -c ")
+        assert directories == [Path("output"), Path("output/empty")]
+        assert files == ["output/kept/artifact.txt"]
+
 
 class TestRsyncPreservesMtimes:
     """test_rsync_preserves_mtimes — ARTF-02."""
@@ -401,7 +558,10 @@ class TestStagingAndPublish:
     def test_staging_and_publish_excludes_internal_oss_crs_workdir(
         self, tmp_path: Path
     ) -> None:
-        """Collection should rehydrate top-level symlinks into excluded oss-crs scratch dirs."""
+        """Collection should rehydrate output symlinks without restoring bulk logs."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for output/log regression coverage")
+
         experiment_filestore = tmp_path / "filestore"
         experiment_filestore.mkdir()
 
@@ -409,9 +569,25 @@ class TestStagingAndPublish:
         source_root.mkdir()
         trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
         shutil.rmtree(trial_dir / "output")
-        workdir_out = trial_dir / "oss-crs-workdir" / "out" / "seeds"
-        workdir_out.mkdir(parents=True)
-        (workdir_out / "seed-0001").write_bytes(b"seed-content")
+        workdir_out = trial_dir / "oss-crs-workdir" / "out"
+        (workdir_out / "seeds").mkdir(parents=True)
+        (workdir_out / "seeds" / "seed-0001").write_bytes(b"seed-content")
+        (workdir_out / "logs" / "services").mkdir(parents=True)
+        (workdir_out / "logs" / "services" / "service.log").write_text("service log\n")
+        (
+            workdir_out
+            / "logs"
+            / "services"
+            / "builder-sidecar-lite_patcher.stdout.log"
+        ).write_text("  [test] 12.3s\n")
+        (
+            workdir_out / "logs" / "services" / "crs-codex_inc-builder-asan.stdout.log"
+        ).write_text("Tests run: 1, Failures: 0, Errors: 0, Skipped: 0\n")
+        timing_dir = workdir_out / "logs" / "crs" / "builder-sidecar-lite" / "log_dir"
+        timing_dir.mkdir(parents=True)
+        (timing_dir / "verify_patch_timing.json").write_text(
+            json.dumps({"rebuild": 70.4, "test": 481.0, "status": "pass"})
+        )
         (trial_dir / "output").symlink_to(Path("oss-crs-workdir") / "out")
 
         worker = _make_worker()
@@ -421,48 +597,23 @@ class TestStagingAndPublish:
         def _fake_rsync(
             cmd: list[str], **_: object
         ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
-            """Copy source_root/exp-42 contents into staging, emulating rsync exclude/copy-links behavior."""
-            source = cmd[-2]
-            dest = Path(cmd[-1].rstrip("/"))
-            if ":" in source:
-                remote_source = source.split(":", 1)[1]
-                rel = Path(
-                    remote_source.removeprefix("/data/experiments/exp-42").lstrip("/")
-                )
-                local_source = source_root / "exp-42" / rel
-            else:
-                local_source = Path(source.rstrip("/"))
-
-            if "--copy-links" in cmd:
-                resolved_source = local_source.resolve()
-                if resolved_source.is_dir():
-                    shutil.copytree(
-                        resolved_source,
-                        dest / local_source.name,
-                        dirs_exist_ok=True,
-                    )
-                else:
-                    shutil.copy2(resolved_source, dest / local_source.name)
-                return subprocess.CompletedProcess(args=cmd, returncode=0)
-
-            excluded_names = {
-                arg.removeprefix("--exclude=").rstrip("/")
-                for arg in cmd
-                if arg.startswith("--exclude=")
-            }
-
-            def _ignore(_directory: str, files: list[str]) -> set[str]:
-                return {name for name in files if name in excluded_names}
-
-            shutil.copytree(
-                local_source,
-                dest,
-                dirs_exist_ok=True,
-                ignore=_ignore,
-                symlinks=True,
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
             )
-            return subprocess.CompletedProcess(args=cmd, returncode=0)
 
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
         with patch("subprocess.run", side_effect=_fake_rsync):
             final_path = collector.collect(
                 worker=worker,
@@ -486,11 +637,473 @@ class TestStagingAndPublish:
         assert trial_output.exists()
         assert not trial_output.is_symlink()
         assert (trial_output / "seeds" / "seed-0001").exists()
+        assert not (trial_output / "logs" / "services" / "service.log").exists()
+        assert (
+            trial_output
+            / "logs"
+            / "services"
+            / "builder-sidecar-lite_patcher.stdout.log"
+        ).exists()
+        assert (
+            trial_output / "logs" / "services" / "crs-codex_inc-builder-asan.stdout.log"
+        ).exists()
+        assert (
+            trial_output
+            / "logs"
+            / "crs"
+            / "builder-sidecar-lite"
+            / "log_dir"
+            / "verify_patch_timing.json"
+        ).exists()
+
+    def test_staging_and_publish_excludes_output_logs_from_real_output_tree(
+        self, tmp_path: Path
+    ) -> None:
+        """Collection should keep reporting logs while dropping unrelated output/log bulk."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for output/log regression coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        logs_dir = trial_dir / "output" / "logs" / "services"
+        logs_dir.mkdir(parents=True)
+        (logs_dir / "service.log").write_text("service log\n")
+        (logs_dir / "builder-sidecar-lite_patcher.stdout.log").write_text(
+            "  [test] 12.3s\n"
+        )
+        (logs_dir / "crs-codex_inc-builder-asan.stdout.log").write_text(
+            "Tests run: 1, Failures: 0, Errors: 0, Skipped: 0\n"
+        )
+        timing_dir = (
+            trial_dir / "output" / "logs" / "crs" / "builder-sidecar-lite" / "log_dir"
+        )
+        timing_dir.mkdir(parents=True)
+        (timing_dir / "verify_patch_timing.json").write_text(
+            json.dumps({"rebuild": 70.4, "test": 481.0, "status": "pass"})
+        )
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        trial_output = (
+            final_path
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+            / "output"
+        )
+        assert (trial_output / "seeds" / "seed-0001").exists()
+        assert not (trial_output / "logs" / "services" / "service.log").exists()
+        assert (
+            trial_output
+            / "logs"
+            / "services"
+            / "builder-sidecar-lite_patcher.stdout.log"
+        ).exists()
+        assert (
+            trial_output / "logs" / "services" / "crs-codex_inc-builder-asan.stdout.log"
+        ).exists()
+        assert (
+            trial_output
+            / "logs"
+            / "crs"
+            / "builder-sidecar-lite"
+            / "log_dir"
+            / "verify_patch_timing.json"
+        ).exists()
+
+    def test_staging_and_publish_compacts_failed_trials_to_diagnostics_only(
+        self, tmp_path: Path
+    ) -> None:
+        """Failed trials should publish only marker/metadata/worker-log diagnostics."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for failed-trial collection coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        (trial_dir / ".fail").write_text("", encoding="utf-8")
+        (trial_dir / "llm-usage.json").write_text(
+            json.dumps({"total_cost_usd": 1.23, "request_count": 7}),
+            encoding="utf-8",
+        )
+        (trial_dir / "result.json").write_text("{}", encoding="utf-8")
+        logs_dir = trial_dir / "output" / "logs" / "services"
+        logs_dir.mkdir(parents=True)
+        (logs_dir / "builder-sidecar-lite_patcher.stdout.log").write_text(
+            "  [test] 12.3s\n",
+            encoding="utf-8",
+        )
+        timing_dir = (
+            trial_dir / "output" / "logs" / "crs" / "builder-sidecar-lite" / "log_dir"
+        )
+        timing_dir.mkdir(parents=True)
+        (timing_dir / "verify_patch_timing.json").write_text(
+            json.dumps({"rebuild": 70.4, "test": 481.0, "status": "fail"}),
+            encoding="utf-8",
+        )
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        failed_trial = (
+            final_path
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        assert (failed_trial / "metadata.json").exists()
+        assert (failed_trial / ".fail").exists()
+        assert (failed_trial / "worker.log").exists()
+        assert not (failed_trial / "snapshot-0001.tar.gz").exists()
+        assert not (failed_trial / "snapshot-0001.complete").exists()
+        assert not (failed_trial / "llm-usage.json").exists()
+        assert not (failed_trial / "result.json").exists()
+        assert not (failed_trial / "output" / "seeds").exists()
+        assert (
+            failed_trial
+            / "output"
+            / "logs"
+            / "services"
+            / "builder-sidecar-lite_patcher.stdout.log"
+        ).exists()
+        assert (
+            failed_trial
+            / "output"
+            / "logs"
+            / "crs"
+            / "builder-sidecar-lite"
+            / "log_dir"
+            / "verify_patch_timing.json"
+        ).exists()
+
+    def test_staging_and_publish_replaces_existing_failed_trial_contents_on_recollect(
+        self, tmp_path: Path
+    ) -> None:
+        """Re-collecting a failed trial should drop stale bulky files from earlier publishes."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for failed-trial collection coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+        existing_trial = _build_trial_tree(
+            experiment_filestore, experiment_name="exp-42"
+        )
+        (existing_trial / ".fail").write_text("", encoding="utf-8")
+        (existing_trial / "output" / "seeds" / "stale-seed").write_bytes(b"stale-seed")
+        (existing_trial / "old-artifact.txt").write_text(
+            "stale artifact\n", encoding="utf-8"
+        )
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        (trial_dir / ".fail").write_text("", encoding="utf-8")
+        logs_dir = trial_dir / "output" / "logs" / "services"
+        logs_dir.mkdir(parents=True)
+        (logs_dir / "builder-sidecar-lite_patcher.stdout.log").write_text(
+            "  [test] 12.3s\n",
+            encoding="utf-8",
+        )
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        failed_trial = (
+            final_path
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        assert not (failed_trial / "old-artifact.txt").exists()
+        assert not (failed_trial / "snapshot-0001.tar.gz").exists()
+        assert not (failed_trial / "output" / "seeds").exists()
+        assert (
+            failed_trial
+            / "output"
+            / "logs"
+            / "services"
+            / "builder-sidecar-lite_patcher.stdout.log"
+        ).exists()
+
+    def test_report_log_rsync_skips_internal_workdir_files(
+        self, tmp_path: Path
+    ) -> None:
+        """Report-log copy should not restore oss-crs-workdir artifacts."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for output/log regression coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+
+        report_logs = trial_dir / "output" / "logs" / "services"
+        report_logs.mkdir(parents=True, exist_ok=True)
+        (report_logs / "builder-sidecar-lite_patcher.stdout.log").write_text(
+            "[keep] legit log\n"
+        )
+        (report_logs / "crs-codex_inc-builder-asan.stdout.log").write_text(
+            "[keep] legit log\n"
+        )
+
+        internal_services = (
+            trial_dir / "oss-crs-workdir" / "run" / "output" / "logs" / "services"
+        )
+        internal_services.mkdir(parents=True, exist_ok=True)
+        (internal_services / "bad_patcher.stdout.log").write_text("[drop] bad log\n")
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        trial_output = (
+            final_path
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+            / "output"
+        )
+        assert (
+            trial_output
+            / "logs"
+            / "services"
+            / "builder-sidecar-lite_patcher.stdout.log"
+        ).exists()
+        assert (
+            trial_output / "logs" / "services" / "crs-codex_inc-builder-asan.stdout.log"
+        ).exists()
+        assert not any(path.name == "oss-crs-workdir" for path in final_path.rglob("*"))
+        assert not (
+            final_path
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+            / "oss-crs-workdir"
+        ).exists()
+
+    def test_staging_and_publish_preserves_legacy_reporting_logs_under_crs_tree(
+        self, tmp_path: Path
+    ) -> None:
+        """Collection should retain report-critical logs stored under the legacy CRS tree."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for output/log regression coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        legacy_logs_dir = trial_dir / "output" / "logs" / "crs" / "builder-sidecar-lite"
+        (legacy_logs_dir / "nested" / "patcher").mkdir(parents=True)
+        (legacy_logs_dir / "nested" / "builders").mkdir(parents=True)
+        (
+            legacy_logs_dir
+            / "nested"
+            / "patcher"
+            / "builder-sidecar-lite_patcher.stdout.log"
+        ).write_text("  [test] 12.3s\n")
+        (
+            legacy_logs_dir
+            / "nested"
+            / "builders"
+            / "crs-codex_inc-builder-asan.stdout.log"
+        ).write_text("Tests run: 1, Failures: 0, Errors: 0, Skipped: 0\n")
+        timing_dir = legacy_logs_dir / "log_dir"
+        timing_dir.mkdir(parents=True)
+        (timing_dir / "verify_patch_timing.json").write_text(
+            json.dumps({"rebuild": 70.4, "test": 481.0, "status": "pass"})
+        )
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        legacy_output_logs = (
+            final_path
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+            / "output"
+            / "logs"
+            / "crs"
+            / "builder-sidecar-lite"
+        )
+        assert (
+            legacy_output_logs
+            / "nested"
+            / "patcher"
+            / "builder-sidecar-lite_patcher.stdout.log"
+        ).exists()
+        assert (
+            legacy_output_logs
+            / "nested"
+            / "builders"
+            / "crs-codex_inc-builder-asan.stdout.log"
+        ).exists()
+        assert (legacy_output_logs / "log_dir" / "verify_patch_timing.json").exists()
 
     def test_staging_and_publish_rehydrates_file_symlinks_into_excluded_workdir(
         self, tmp_path: Path
     ) -> None:
         """Collection should copy top-level file symlinks whose targets live under excluded dirs."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for output/log regression coverage")
+
         experiment_filestore = tmp_path / "filestore"
         experiment_filestore.mkdir()
 
@@ -509,47 +1122,23 @@ class TestStagingAndPublish:
         def _fake_rsync(
             cmd: list[str], **_: object
         ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
-            source = cmd[-2]
-            dest = Path(cmd[-1].rstrip("/"))
-            if ":" in source:
-                remote_source = source.split(":", 1)[1]
-                rel = Path(
-                    remote_source.removeprefix("/data/experiments/exp-42").lstrip("/")
-                )
-                local_source = source_root / "exp-42" / rel
-            else:
-                local_source = Path(source.rstrip("/"))
-
-            if "--copy-links" in cmd:
-                resolved_source = local_source.resolve()
-                if resolved_source.is_dir():
-                    shutil.copytree(
-                        resolved_source,
-                        dest / local_source.name,
-                        dirs_exist_ok=True,
-                    )
-                else:
-                    shutil.copy2(resolved_source, dest / local_source.name)
-                return subprocess.CompletedProcess(args=cmd, returncode=0)
-
-            excluded_names = {
-                arg.removeprefix("--exclude=").rstrip("/")
-                for arg in cmd
-                if arg.startswith("--exclude=")
-            }
-
-            def _ignore(_directory: str, files: list[str]) -> set[str]:
-                return {name for name in files if name in excluded_names}
-
-            shutil.copytree(
-                local_source,
-                dest,
-                dirs_exist_ok=True,
-                ignore=_ignore,
-                symlinks=True,
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
             )
-            return subprocess.CompletedProcess(args=cmd, returncode=0)
 
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
         with patch("subprocess.run", side_effect=_fake_rsync):
             final_path = collector.collect(
                 worker=worker,
@@ -572,6 +1161,154 @@ class TestStagingAndPublish:
         assert not any(path.name == "oss-crs-workdir" for path in final_path.rglob("*"))
         assert result_log.read_text() == "log content\n"
         assert not result_log.is_symlink()
+
+    def test_staging_and_publish_rehydrates_top_level_symlink_without_following_cycle(
+        self, tmp_path: Path
+    ) -> None:
+        """Collection should materialize a top-level excluded-dir symlink without descending into nested cycles.
+
+        Current behavior fails during rehydration because rsync ``--copy-links``
+        follows the nested loop until it hits ``ELOOP``; the assertions below
+        define the intended post-fix outcome.
+        """
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for output/log regression coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        shutil.rmtree(trial_dir / "output")
+        workdir_out = trial_dir / "oss-crs-workdir" / "out"
+        (workdir_out / "kept").mkdir(parents=True)
+        (workdir_out / "kept" / "artifact.txt").write_text("artifact content\n")
+        (workdir_out / "empty").mkdir(parents=True)
+        (workdir_out / "nested" / "empty").mkdir(parents=True)
+        (workdir_out / "cycle").symlink_to(Path())
+        (trial_dir / "output").symlink_to(Path("oss-crs-workdir") / "out")
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        trial_output = (
+            final_path
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+            / "output"
+        )
+        artifact_paths = sorted(
+            path.relative_to(trial_output)
+            for path in trial_output.rglob("artifact.txt")
+        )
+
+        assert not any(path.name == "oss-crs-workdir" for path in final_path.rglob("*"))
+        assert trial_output.exists()
+        assert not trial_output.is_symlink()
+        assert (trial_output / "empty").is_dir()
+        assert (trial_output / "nested" / "empty").is_dir()
+        assert (
+            trial_output / "kept" / "artifact.txt"
+        ).read_text() == "artifact content\n"
+        assert artifact_paths == [Path("kept") / "artifact.txt"]
+
+    def test_staging_and_publish_fails_when_rehydrated_manifest_entries_vanish(
+        self, tmp_path: Path
+    ) -> None:
+        """Collection should fail if a rehydrated symlink tree changes after manifest discovery."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for output/log regression coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        shutil.rmtree(trial_dir / "output")
+        workdir_out = trial_dir / "oss-crs-workdir" / "out"
+        (workdir_out / "kept").mkdir(parents=True)
+        artifact_path = workdir_out / "kept" / "artifact.txt"
+        artifact_path.write_text("artifact content\n")
+        (trial_dir / "output").symlink_to(Path("oss-crs-workdir") / "out")
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+        manifest_recorded = False
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            nonlocal manifest_recorded
+            del args
+            result = _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+            if not manifest_recorded:
+                manifest_recorded = True
+                artifact_path.unlink()
+            return result
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            with pytest.raises(
+                ArtifactCollectionError,
+                match="manifest entries vanished during transfer",
+            ):
+                collector.collect(
+                    worker=worker,
+                    fleet=fleet,
+                    experiment_name="exp-42",
+                    experiment_filestore=experiment_filestore,
+                    remote_experiment_dir="/data/experiments/exp-42",
+                )
 
     def test_collect_reports_start_time_observation_from_staging(
         self, tmp_path: Path
@@ -784,7 +1521,7 @@ class TestCollectFullTrialTree:
     """test_collect_full_trial_tree — ARTF-01: rsync source covers the full experiment subtree."""
 
     def test_collect_full_trial_tree(self) -> None:
-        """rsync keeps full-tree behavior while excluding only the internal oss-crs workdir."""
+        """rsync keeps full-tree behavior while excluding only internal scratch/log paths."""
         worker = _make_worker()
         fleet = _make_fleet(ssh_via_iap=False)
         collector = ArtifactCollector()
@@ -801,8 +1538,11 @@ class TestCollectFullTrialTree:
             "No --include filters; rsync must copy full tree"
         )
         exclude_args = [arg for arg in cmd if arg.startswith("--exclude=")]
-        assert exclude_args == ["--exclude=oss-crs-workdir/"], (
-            "Only the internal oss-crs workdir may be excluded from artifact collection"
+        assert exclude_args == [
+            "--exclude=oss-crs-workdir/",
+            "--exclude=output/logs/",
+        ], (
+            "Artifact collection should exclude only internal scratch data and trial output/logs"
         )
 
         # Source must end with trailing slash (rsync convention for directory contents)
@@ -826,6 +1566,7 @@ class TestRemoteLogCollection:
         source_root = tmp_path / "worker-local"
         source_root.mkdir()
         trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        (trial_dir / ".fail").write_text("", encoding="utf-8")
 
         def _fake_remote_command(*args, **kwargs):
             del args, kwargs
@@ -906,6 +1647,17 @@ class TestRemoteLogCollection:
         ).read_text(encoding="utf-8") == (trial_dir / "worker.log").read_text(
             encoding="utf-8"
         )
+        assert (
+            instance_dir
+            / "trial-artifacts"
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+            / ".fail"
+        ).exists()
 
     def test_collect_logs_raises_when_remote_command_transport_fails(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1084,6 +1836,77 @@ class TestRemoteLogCollection:
         assert f"UserKnownHostsFile={known_hosts_path}" in ssh_cmd
         assert "127.0.0.1" in ssh_cmd
         assert "echo hello" in ssh_cmd
+
+    def test_rehydrate_excluded_symlink_entries_iap_reuses_single_tunnel(
+        self, tmp_path: Path
+    ) -> None:
+        """IAP symlink rehydration should share one tunnel across per-root discovery calls."""
+        worker = _make_worker(zone="us-central1-a")
+        fleet = _make_fleet(ssh_via_iap=True, zone="us-central1-a")
+        collector = ArtifactCollector(base_path=tmp_path / "config.yaml")
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+        staging_dir = tmp_path / "staging"
+        staging_dir.mkdir()
+        discovery_calls: list[tuple[str | None, str | None, list[Path]]] = []
+
+        class _Tunnel:
+            def __enter__(self):
+                return 2222
+
+            def __exit__(self, exc_type, exc, tb):
+                del exc_type, exc, tb
+                return False
+
+        def _fake_discover(
+            *args: object, **kwargs: object
+        ) -> tuple[list[Path], list[str]]:
+            del args
+            symlink_relpaths = list(kwargs["symlink_relpaths"])  # type: ignore[index]
+            discovery_calls.append(
+                (
+                    kwargs.get("ssh_command"),  # type: ignore[arg-type]
+                    kwargs.get("remote_host"),  # type: ignore[arg-type]
+                    symlink_relpaths,
+                )
+            )
+            return [symlink_relpaths[0]], []
+
+        with (
+            patch.object(
+                collector,
+                "_prepare_iap_known_hosts",
+                return_value=tmp_path / "known_hosts_iap",
+            ),
+            patch.object(
+                collector, "_open_iap_tunnel", return_value=_Tunnel()
+            ) as open_tunnel,
+            patch.object(
+                collector,
+                "_discover_copy_link_filelist",
+                side_effect=_fake_discover,
+            ),
+            patch.object(collector, "_run_copy_link_filelist_rsync"),
+            patch.object(collector, "_verify_rehydrated_copy_link_manifest"),
+        ):
+            collector._rehydrate_excluded_symlink_entries(
+                worker=worker,
+                fleet=fleet,
+                remote_experiment_dir="/data/experiments/exp-42",
+                staging_dir=staging_dir,
+                experiment_filestore=experiment_filestore,
+                known_hosts_path=None,
+                ssh_user="test-user",
+                symlink_relpaths=[Path("output"), Path("results")],
+            )
+
+        open_tunnel.assert_called_once_with(worker=worker, fleet=fleet)
+        assert len(discovery_calls) == 2
+        for ssh_command, remote_host, symlink_relpaths in discovery_calls:
+            assert ssh_command is not None
+            assert "-p 2222" in ssh_command
+            assert remote_host == "127.0.0.1"
+            assert len(symlink_relpaths) == 1
 
 
 # ---------------------------------------------------------------------------

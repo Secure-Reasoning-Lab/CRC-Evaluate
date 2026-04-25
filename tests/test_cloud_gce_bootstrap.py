@@ -738,7 +738,7 @@ def test_startup_script_supports_file_backed_metadata_and_foreground_service_mod
 
 
 def test_startup_script_supports_apt_and_apk_bootstrap_dependencies():
-    """Worker bootstrap should install missing dependencies on Debian or Alpine hosts."""
+    """Worker bootstrap should install missing dependencies on apt- or apk-based hosts."""
     from crsbench.cloud.gce.metadata import load_startup_script
 
     script = load_startup_script()
@@ -752,6 +752,16 @@ def test_startup_script_supports_apt_and_apk_bootstrap_dependencies():
         in script
     )
     assert "iftop" in script
+    assert "ncdu" in script
+    assert "gdu" in script
+    assert "duf" in script
+    assert "btop" in script
+    assert "local apt_diagnostics_ready=0" in script
+    assert '[[ "${apt_diagnostics_ready}" -eq 1 ]]' in script
+    assert "command -v ncdu >/dev/null 2>&1" in script
+    assert "command -v gdu >/dev/null 2>&1" in script
+    assert "command -v duf >/dev/null 2>&1" in script
+    assert "command -v btop >/dev/null 2>&1" in script
     assert "ripgrep" in script
     assert "fd-find" in script
     assert "install_packages docker.io docker-compose-v2 docker-buildx" not in script
@@ -1289,7 +1299,7 @@ def test_orchestrator_startup_script_supports_file_backed_metadata_sources():
 
 
 def test_orchestrator_startup_script_supports_apt_and_apk_bootstrap_dependencies():
-    """Orchestrator bootstrap should install missing dependencies on Debian or Alpine hosts."""
+    """Orchestrator bootstrap should install missing dependencies on apt- or apk-based hosts."""
     from crsbench.cloud.gce.metadata import load_orchestrator_startup_script
 
     script = load_orchestrator_startup_script()
@@ -1303,6 +1313,16 @@ def test_orchestrator_startup_script_supports_apt_and_apk_bootstrap_dependencies
         in script
     )
     assert "iftop" in script
+    assert "ncdu" in script
+    assert "gdu" in script
+    assert "duf" in script
+    assert "btop" in script
+    assert "local apt_diagnostics_ready=0" in script
+    assert '[[ "${apt_diagnostics_ready}" -eq 1 ]]' in script
+    assert "command -v ncdu >/dev/null 2>&1" in script
+    assert "command -v gdu >/dev/null 2>&1" in script
+    assert "command -v duf >/dev/null 2>&1" in script
+    assert "command -v btop >/dev/null 2>&1" in script
     assert "ripgrep" in script
     assert "fd-find" in script
     assert "install_packages docker.io docker-compose-v2 docker-buildx" not in script

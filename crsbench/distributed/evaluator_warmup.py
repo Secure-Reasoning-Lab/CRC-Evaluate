@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
+import copy
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from crsbench.distributed.evaluator_dispatcher_state import (
-    DispatcherStateRedisProtocol,
-    DispatcherStateStore,
-)
+from crsbench.distributed.evaluator_claim_worker import build_local_ci_job_id
 from crsbench.distributed.evaluator_scheduler import (
     SCHEDULER_OWNER_KEY_META,
     build_scheduler_owner_key_for_ci_job,
@@ -61,6 +59,10 @@ class BuildQueueProtocol(Protocol):
     ) -> object: ...
 
 
+class RequiredBuildTrackerProtocol(Protocol):
+    def has_pending_required_builds(self) -> bool: ...
+
+
 @dataclass(frozen=True)
 class WarmupBuildSpec:
     job_id: str
@@ -80,12 +82,18 @@ class DispatcherWarmupFeeder:
         self,
         *,
         build_queue: BuildQueueProtocol,
-        state_store: DispatcherStateStore,
+        required_build_tracker: RequiredBuildTrackerProtocol | None = None,
+        state_store: RequiredBuildTrackerProtocol | None = None,
         warmup_specs: Iterable[WarmupBuildSpec],
         build_capacity: int,
     ) -> None:
         self.build_queue = build_queue
-        self.state_store = state_store
+        tracker = required_build_tracker or state_store
+        if tracker is None:
+            raise ValueError(
+                "required_build_tracker or state_store is required for warmup feeder"
+            )
+        self.required_build_tracker = tracker
         self._warmup_specs = iter(warmup_specs)
         self._pending_spec: WarmupBuildSpec | None = None
         self.build_capacity = max(1, int(build_capacity))
@@ -104,14 +112,14 @@ class DispatcherWarmupFeeder:
 
         enqueued = 0
         while enqueued < spare_capacity:
-            if self.state_store.has_pending_required_builds():
+            if self.required_build_tracker.has_pending_required_builds():
                 break
             spec = self._pending_spec
             if spec is None:
                 spec = next(self._warmup_specs, None)
             if spec is None:
                 break
-            if self.state_store.has_pending_required_builds():
+            if self.required_build_tracker.has_pending_required_builds():
                 self._pending_spec = spec
                 break
             self._pending_spec = None
@@ -140,6 +148,7 @@ def build_dispatcher_warmup_specs(
     config: WarmupConfigProtocol,
     *,
     experiment_name: str,
+    evaluator_id: str,
     oss_fuzz_path: Path,
     inc_image_policy: str,
     inc_image_registry: str,
@@ -181,9 +190,16 @@ def build_dispatcher_warmup_specs(
             local_image_prefix=local_image_prefix,
         )
         for job in jobs:
+            localized_job = copy.copy(job)
+            prepare_inc_job_id = getattr(localized_job, "prepare_inc_job_id", "")
+            if isinstance(prepare_inc_job_id, str) and prepare_inc_job_id:
+                localized_job.prepare_inc_job_id = build_local_ci_job_id(
+                    prepare_inc_job_id,
+                    evaluator_id=evaluator_id,
+                )
             yield WarmupBuildSpec(
-                job_id=job.job_id,
-                payload=serialize_ci_job(job),
+                job_id=build_local_ci_job_id(job.job_id, evaluator_id=evaluator_id),
+                payload=serialize_ci_job(localized_job),
                 meta={
                     "experiment_name": experiment_name,
                     "warmup": "true",
@@ -203,6 +219,7 @@ def start_dispatcher_warmup_thread(
     evaluator_id: str,
     build_queue_name: str,
     build_jobs: int,
+    required_build_tracker: RequiredBuildTrackerProtocol,
     oss_fuzz_path: Path,
     inc_image_policy: str,
     inc_image_registry: str,
@@ -217,6 +234,7 @@ def start_dispatcher_warmup_thread(
     warmup_specs = build_dispatcher_warmup_specs(
         config,
         experiment_name=experiment_name,
+        evaluator_id=evaluator_id,
         oss_fuzz_path=oss_fuzz_path,
         inc_image_policy=inc_image_policy,
         inc_image_registry=inc_image_registry,
@@ -232,10 +250,7 @@ def start_dispatcher_warmup_thread(
             "BuildQueueProtocol",
             rq.Queue(build_queue_name, connection=redis_conn),
         ),
-        state_store=DispatcherStateStore(
-            cast("DispatcherStateRedisProtocol", redis_conn),
-            experiment_name=experiment_name,
-        ),
+        required_build_tracker=required_build_tracker,
         warmup_specs=warmup_specs,
         build_capacity=build_jobs,
     )

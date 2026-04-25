@@ -243,8 +243,20 @@ install_packages() {
 
 ensure_system_packages() {
   local have_fd_find=1
+  # The extra diagnostics bundle is only installed on the existing apt bootstrap path.
+  local apt_diagnostics_ready=0
   if command -v fdfind >/dev/null 2>&1 || command -v fd >/dev/null 2>&1; then
     have_fd_find=0
+  fi
+  if command -v apt-get >/dev/null 2>&1; then
+    if command -v ncdu >/dev/null 2>&1 \
+      && command -v gdu >/dev/null 2>&1 \
+      && command -v duf >/dev/null 2>&1 \
+      && command -v btop >/dev/null 2>&1; then
+      apt_diagnostics_ready=1
+    fi
+  else
+    apt_diagnostics_ready=1
   fi
   if command -v git >/dev/null 2>&1 \
     && command -v python3 >/dev/null 2>&1 \
@@ -253,6 +265,7 @@ ensure_system_packages() {
     && command -v iftop >/dev/null 2>&1 \
     && command -v rg >/dev/null 2>&1 \
     && [[ "${have_fd_find}" -eq 0 ]] \
+    && [[ "${apt_diagnostics_ready}" -eq 1 ]] \
     && command -v ssh-keyscan >/dev/null 2>&1 \
     && command -v sudo >/dev/null 2>&1 \
     && [[ -e /usr/share/zoneinfo/UTC ]]; then
@@ -261,7 +274,7 @@ ensure_system_packages() {
 
   echo "Installing system packages..."
   if command -v apt-get >/dev/null 2>&1; then
-    install_packages git python3 python3-pip python3-venv python3-yaml rsync tar bash coreutils openssh-client tzdata sudo iftop ripgrep fd-find
+    install_packages git python3 python3-pip python3-venv python3-yaml rsync tar bash coreutils openssh-client tzdata sudo iftop ncdu gdu duf btop ripgrep fd-find
     return 0
   fi
   if command -v apk >/dev/null 2>&1; then
@@ -1157,6 +1170,8 @@ write_env_var "CRSBENCH_DOWNLOAD_DELAY_SEC" "${CRSBENCH_DOWNLOAD_DELAY_SEC}"
 write_env_var "CRSBENCH_CLOUD_INSTANCE_NAME" "crsbench-${EXPERIMENT_NAME}-orch"
 write_env_var "CONFIG_PATH" "${CONFIG_PATH}"
 write_env_var "LOG_PATH" "${LOG_PATH}"
+write_env_var "CLONE_DIR" "${CLONE_DIR}"
+write_env_var "CRSBENCH_USER" "${CRSBENCH_USER}"
 write_passthrough_env_vars "${ENV_PASSTHROUGH_B64}"
 if [[ -n "${VENV_BIN:-}" ]]; then
   write_env_var "PATH" "${VENV_BIN}:${CRSBENCH_MANAGED_BIN_DIR}:${CRSBENCH_USER_HOME}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -1256,13 +1271,29 @@ PY
   echo "from_experiment bundle ready, proceeding"
 }
 
-wait_for_from_experiment_bundle
+case "\${CRSBENCH_CLOUD_LAUNCH_MODE:-run}" in
+  run)
+    wait_for_from_experiment_bundle
 
-echo "=== Starting crsbench run at \$(date -u) ==="
-echo "Config: \${CONFIG_PATH}"
+    echo "=== Starting crsbench run at \$(date -u) ==="
+    echo "Config: \${CONFIG_PATH}"
 
-cd "${CLONE_DIR}"
-crsbench run --experiment-config "\${CONFIG_PATH}"
+    cd "${CLONE_DIR}"
+    crsbench run --experiment-config "\${CONFIG_PATH}"
+    ;;
+  reeval)
+    echo "=== Cloud re-eval orchestrator ready at \$(date -u) ==="
+    echo "Config: \${CONFIG_PATH}"
+    echo "Awaiting remote bundle submission..."
+    while true; do
+      sleep 3600
+    done
+    ;;
+  *)
+    echo "Unsupported CRSBENCH_CLOUD_LAUNCH_MODE: \${CRSBENCH_CLOUD_LAUNCH_MODE}" >&2
+    exit 1
+    ;;
+esac
 EOF
 chmod +x "${LAUNCHER_PATH}"
 chown "${CRSBENCH_USER}:${CRSBENCH_USER}" "${ENV_PATH}" "${CONFIG_PATH}" "${LAUNCHER_PATH}"

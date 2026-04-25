@@ -100,6 +100,17 @@ def start_dispatcher_warmup_thread(
     return _start_dispatcher_warmup_thread(*args, **kwargs)
 
 
+def start_claim_thread(
+    worker: Any,
+) -> tuple["threading.Event", "threading.Thread"]:
+    """Lazily import claim-loop startup for simplified dispatcher mode."""
+    from crsbench.distributed.evaluator_claim_worker import (
+        start_claim_thread as _start_claim_thread,
+    )
+
+    return _start_claim_thread(worker)
+
+
 def _report_cloud_runtime_state(
     redis_host: str,
     *,
@@ -438,24 +449,31 @@ def run_evaluator_main(
     from crsbench.distributed.ci_supervisor import run_ci_supervisor
 
     logger.info("Starting dual-queue supervisor (build + verify)...")
-    presence_loop: tuple[threading.Event, threading.Thread] | None = None
-    dispatcher_loop: tuple[threading.Event, threading.Thread] | None = None
+    claim_loop: tuple[threading.Event, threading.Thread] | None = None
     warmup_loop: tuple[threading.Event, threading.Thread] | None = None
     if routing_model == ROUTING_MODEL_DISPATCHER and evaluator_id is not None:
-        from crsbench.distributed.evaluator_dispatcher import EvaluatorDispatcher
+        import rq
 
-        presence_loop = start_presence_thread(
-            redis_host=redis_host,
+        from crsbench.distributed.evaluator_claim_worker import (
+            EvaluatorClaimWorker,
+        )
+
+        redis_conn = create_redis_connection(redis_host)
+        build_queue = rq.Queue(build_queue_name, connection=redis_conn)
+        verify_queue = rq.Queue(verify_queue_name, connection=redis_conn)
+        benchmarks_root = getattr(config, "benchmarks_root", None)
+        if not isinstance(benchmarks_root, (str, Path)):
+            benchmarks_root = Path("benchmarks")
+        claim_worker = EvaluatorClaimWorker(
+            redis_conn=redis_conn,
             experiment_name=experiment_name,
             evaluator_id=evaluator_id,
-            worker_name=resolved_worker_name,
+            build_queue=build_queue,
+            verify_queue=verify_queue,
+            verification_engine=engine,
+            benchmarks_root=Path(benchmarks_root),
         )
-        dispatcher = EvaluatorDispatcher(
-            redis_conn=create_redis_connection(redis_host),
-            experiment_name=experiment_name,
-            evaluator_id=evaluator_id,
-        )
-        dispatcher_loop = start_dispatcher_thread(dispatcher)
+        claim_loop = start_claim_thread(claim_worker)
         warmup_loop = start_dispatcher_warmup_thread(
             redis_host=redis_host,
             config=config,
@@ -463,6 +481,7 @@ def run_evaluator_main(
             evaluator_id=evaluator_id,
             build_queue_name=build_queue_name,
             build_jobs=build_jobs or 1,
+            required_build_tracker=claim_worker,
             oss_fuzz_path=oss_fuzz_path,
             inc_image_policy=resolved_policy,
             inc_image_registry=resolved_registry,
@@ -499,12 +518,8 @@ def run_evaluator_main(
             stop_event, thread = warmup_loop
             stop_event.set()
             thread.join(timeout=1)
-        if dispatcher_loop is not None:
-            stop_event, thread = dispatcher_loop
-            stop_event.set()
-            thread.join(timeout=1)
-        if presence_loop is not None:
-            stop_event, thread = presence_loop
+        if claim_loop is not None:
+            stop_event, thread = claim_loop
             stop_event.set()
             thread.join(timeout=1)
 

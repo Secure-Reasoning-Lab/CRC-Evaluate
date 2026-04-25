@@ -142,6 +142,7 @@ def test_build_dispatcher_warmup_specs_plans_serialized_build_jobs(
     specs = build_dispatcher_warmup_specs(
         config,
         experiment_name="exp-test",
+        evaluator_id="eval-1",
         oss_fuzz_path=tmp_path / "oss-fuzz",
         inc_image_policy="pull_only",
         inc_image_registry="ghcr.io/example/custom",
@@ -153,7 +154,7 @@ def test_build_dispatcher_warmup_specs_plans_serialized_build_jobs(
     first_spec = next(specs)
 
     assert first_spec == WarmupBuildSpec(
-        job_id="build-single/bench/variant-a/pkgs/inc",
+        job_id="build-single/bench/variant-a/pkgs/inc/local/eval-1",
         payload={"kind": "build-a"},
         meta={
             "experiment_name": "exp-test",
@@ -183,7 +184,7 @@ def test_build_dispatcher_warmup_specs_plans_serialized_build_jobs(
     second_spec = next(specs)
 
     assert second_spec == WarmupBuildSpec(
-        job_id="build-single/bench/variant-b/pkgs/inc",
+        job_id="build-single/bench/variant-b/pkgs/inc/local/eval-1",
         payload={"kind": "build-b"},
         meta={
             "experiment_name": "exp-test",
@@ -248,6 +249,7 @@ def test_build_dispatcher_warmup_specs_consumes_one_job_at_a_time_within_benchma
     specs = build_dispatcher_warmup_specs(
         config,
         experiment_name="exp-test",
+        evaluator_id="eval-1",
         oss_fuzz_path=tmp_path / "oss-fuzz",
         inc_image_policy="pull_only",
         inc_image_registry="ghcr.io/example/custom",
@@ -256,17 +258,69 @@ def test_build_dispatcher_warmup_specs_consumes_one_job_at_a_time_within_benchma
         local_image_prefix="custom-prefix",
     )
 
-    assert next(specs).job_id == "build-a-0"
+    assert next(specs).job_id == "build-a-0/local/eval-1"
     assert first_iter.next_calls == 1
     assert planner.iter_builds.call_count == 1
 
-    assert next(specs).job_id == "build-a-1"
+    assert next(specs).job_id == "build-a-1/local/eval-1"
     assert first_iter.next_calls == 2
     assert planner.iter_builds.call_count == 1
 
-    assert next(specs).job_id == "build-b-0"
+    assert next(specs).job_id == "build-b-0/local/eval-1"
     assert planner.iter_builds.call_count == 2
     assert second_iter.next_calls == 1
+
+
+@patch("crsbench.distributed.ci_jobs.serialize_ci_job")
+@patch("crsbench.executor.variant_planner.VariantPlanner")
+def test_build_dispatcher_warmup_specs_localizes_prepare_dependencies(
+    mock_planner_cls: MagicMock,
+    mock_serialize: MagicMock,
+    tmp_path: Path,
+) -> None:
+    benchmark_name = "afc-mock-full-01"
+    benchmark_path = tmp_path / benchmark_name
+    benchmark_path.mkdir(parents=True, exist_ok=True)
+    config = SimpleNamespace(
+        benchmarks_root=tmp_path,
+        mode=SimpleNamespace(value="auto"),
+        source_mode="pkgs",
+        get_benchmark_list=lambda: [benchmark_name],
+    )
+    planner = MagicMock()
+    prepare_job = MagicMock()
+    prepare_job.job_id = "prepare-inc-image/bench/address/pkgs/inc/cached"
+    build_job = MagicMock()
+    build_job.job_id = "build-single/bench/variant-a/pkgs/inc"
+    build_job.prepare_inc_job_id = prepare_job.job_id
+    planner.iter_builds.return_value = iter([prepare_job, build_job])
+    mock_planner_cls.return_value = planner
+    mock_serialize.side_effect = lambda job: {
+        "job_id": job.job_id,
+        "prepare_inc_job_id": getattr(job, "prepare_inc_job_id", ""),
+    }
+
+    specs = list(
+        build_dispatcher_warmup_specs(
+            config,
+            experiment_name="exp-test",
+            evaluator_id="eval-1",
+            oss_fuzz_path=tmp_path / "oss-fuzz",
+            inc_image_policy="pull_only",
+            inc_image_registry="ghcr.io/example/custom",
+            inc_image_max_pull_bytes=123,
+            inc_image_pull_timeout=77,
+            local_image_prefix="custom-prefix",
+        )
+    )
+
+    assert [spec.job_id for spec in specs] == [
+        "prepare-inc-image/bench/address/pkgs/inc/cached/local/eval-1",
+        "build-single/bench/variant-a/pkgs/inc/local/eval-1",
+    ]
+    assert specs[1].payload["prepare_inc_job_id"] == (
+        "prepare-inc-image/bench/address/pkgs/inc/cached/local/eval-1"
+    )
 
 
 def test_feeder_enqueues_when_no_required_demand_and_spare_capacity_exists() -> None:
