@@ -246,9 +246,12 @@ def _trial_root_backstop_candidate(
     return relpath, (relpath.parts[0], *relpath.parts[3:-1])
 
 
-def _iter_trial_dirs(root: Path) -> Iterator[Path]:
+def _iter_trial_dirs(
+    root: Path, *, published_root: Path | None = None
+) -> Iterator[Path]:
     """Yield real trial roots under ``root`` with a local corrupt-metadata backstop."""
     rooted_trial_dirs: list[tuple[PurePosixPath, Path]] = []
+    published_trial_dirs: list[tuple[PurePosixPath, Path]] = []
     backstop_candidates: list[tuple[PurePosixPath, tuple[str, ...], Path]] = []
 
     if _is_trial_root_dir(root, root=root):
@@ -267,6 +270,12 @@ def _iter_trial_dirs(root: Path) -> Iterator[Path]:
         if _is_trial_root_dir(path, root=root):
             rooted_trial_dirs.append((relpath, path))
             continue
+        if published_root is not None and _is_trial_root_dir(
+            published_root / Path(relpath.as_posix()),
+            root=published_root,
+        ):
+            published_trial_dirs.append((relpath, path))
+            continue
         candidate = _trial_root_backstop_candidate(path, root=root)
         if candidate is None:
             continue
@@ -281,6 +290,12 @@ def _iter_trial_dirs(root: Path) -> Iterator[Path]:
 
     yielded: set[PurePosixPath] = set()
     for relpath, path in sorted(rooted_trial_dirs):
+        if relpath in yielded:
+            continue
+        yielded.add(relpath)
+        yield path
+
+    for relpath, path in sorted(published_trial_dirs):
         if relpath in yielded:
             continue
         yielded.add(relpath)
@@ -787,10 +802,12 @@ class ArtifactCollector:
             ssh_user=ssh_user,
             excluded_relpaths=excluded_trial_staged_relpaths,
         )
-        self._drop_trial_staged_dirs(staging_dir)
+        final_dir = destination or (experiment_filestore / experiment_name)
+        self._drop_trial_staged_dirs(staging_dir, published_root=final_dir)
         rehydrate_relpaths, drop_relpaths = self._partition_excluded_symlink_entries(
             staging_dir,
             remote_experiment_dir=remote_experiment_dir,
+            published_root=final_dir,
         )
         if drop_relpaths:
             self._drop_excluded_symlink_entries(
@@ -808,10 +825,10 @@ class ArtifactCollector:
                 ssh_user=ssh_user,
                 symlink_relpaths=rehydrate_relpaths,
             )
-        self._prune_staged_output_logs(staging_dir)
+        self._prune_staged_output_logs(staging_dir, published_root=final_dir)
         report_log_output_relpaths = [
             output_dir.relative_to(staging_dir)
-            for trial_dir in _iter_trial_dirs(staging_dir)
+            for trial_dir in _iter_trial_dirs(staging_dir, published_root=final_dir)
             for output_dir in [trial_dir / "output"]
             if output_dir.exists() or output_dir.is_symlink()
         ]
@@ -825,11 +842,13 @@ class ArtifactCollector:
             ssh_user=ssh_user,
             symlink_relpaths=report_log_output_relpaths,
         )
-        failed_trial_relpaths = self._compact_failed_trials_to_diagnostics(staging_dir)
+        failed_trial_relpaths = self._compact_failed_trials_to_diagnostics(
+            staging_dir,
+            published_root=final_dir,
+        )
 
         # Verify before publishing
         self._verify_staging(staging_dir)
-        final_dir = destination or (experiment_filestore / experiment_name)
         with self._publish_lock:
             if start_time_observations is not None:
                 start_time_observations.append(
@@ -926,10 +945,14 @@ class ArtifactCollector:
                 ssh_user=ssh_user,
                 excluded_relpaths=excluded_trial_staged_relpaths,
             )
-            self._drop_trial_staged_dirs(trial_artifacts_staging)
+            self._drop_trial_staged_dirs(
+                trial_artifacts_staging,
+                published_root=trial_artifacts_dir,
+            )
             self._drop_excluded_top_level_trial_symlinks(
                 trial_artifacts_staging,
                 remote_experiment_dir=remote_experiment_dir,
+                published_root=trial_artifacts_dir,
             )
             self._publish(trial_artifacts_staging, trial_artifacts_dir)
 
@@ -2023,12 +2046,13 @@ class ArtifactCollector:
         staging_dir: Path,
         *,
         remote_experiment_dir: str,
+        published_root: Path | None = None,
     ) -> tuple[list[Path], list[Path]]:
         """Return excluded top-level symlink entries split by rehydrate vs drop."""
         rehydrate_relpaths: list[Path] = []
         drop_relpaths: list[Path] = []
 
-        for trial_dir in _iter_trial_dirs(staging_dir):
+        for trial_dir in _iter_trial_dirs(staging_dir, published_root=published_root):
             for item in sorted(trial_dir.iterdir()):
                 if not item.is_symlink():
                     continue
@@ -2061,17 +2085,27 @@ class ArtifactCollector:
         if path.is_dir():
             shutil.rmtree(path)
 
-    def _prune_staged_output_logs(self, staging_dir: Path) -> None:
+    def _prune_staged_output_logs(
+        self,
+        staging_dir: Path,
+        *,
+        published_root: Path | None = None,
+    ) -> None:
         """Drop any staged trial output/logs tree before restoring the keep-set."""
-        for trial_dir in _iter_trial_dirs(staging_dir):
+        for trial_dir in _iter_trial_dirs(staging_dir, published_root=published_root):
             logs_path = trial_dir / "output" / "logs"
             if logs_path.exists() or logs_path.is_symlink():
                 self._remove_staged_path(logs_path)
 
-    def _drop_trial_staged_dirs(self, staging_dir: Path) -> None:
+    def _drop_trial_staged_dirs(
+        self,
+        staging_dir: Path,
+        *,
+        published_root: Path | None = None,
+    ) -> None:
         """Remove real trial-root ``staged`` dirs after collection as a backstop."""
         removed = 0
-        for trial_dir in _iter_trial_dirs(staging_dir):
+        for trial_dir in _iter_trial_dirs(staging_dir, published_root=published_root):
             staged_path = trial_dir / "staged"
             if not (staged_path.exists() or staged_path.is_symlink()):
                 continue
@@ -2098,11 +2132,15 @@ class ArtifactCollector:
             self._remove_staged_path(staging_dir / relpath)
 
     def _drop_excluded_top_level_trial_symlinks(
-        self, staging_dir: Path, *, remote_experiment_dir: str
+        self,
+        staging_dir: Path,
+        *,
+        remote_experiment_dir: str,
+        published_root: Path | None = None,
     ) -> None:
         """Remove top-level trial symlinks that resolve into omitted content."""
         removed = 0
-        for trial_dir in _iter_trial_dirs(staging_dir):
+        for trial_dir in _iter_trial_dirs(staging_dir, published_root=published_root):
             for item in sorted(trial_dir.iterdir()):
                 if not item.is_symlink():
                     continue
@@ -2126,11 +2164,15 @@ class ArtifactCollector:
             )
 
     def _drop_excluded_report_log_symlinks(
-        self, staging_dir: Path, *, remote_experiment_dir: str
+        self,
+        staging_dir: Path,
+        *,
+        remote_experiment_dir: str,
+        published_root: Path | None = None,
     ) -> None:
         """Remove restored report-log symlinks that still resolve into omitted content."""
         removed = 0
-        for trial_dir in _iter_trial_dirs(staging_dir):
+        for trial_dir in _iter_trial_dirs(staging_dir, published_root=published_root):
             logs_root = trial_dir / "output" / "logs"
             if not logs_root.is_dir():
                 continue
@@ -2154,11 +2196,16 @@ class ArtifactCollector:
                 removed,
             )
 
-    def _compact_failed_trials_to_diagnostics(self, staging_dir: Path) -> list[Path]:
+    def _compact_failed_trials_to_diagnostics(
+        self,
+        staging_dir: Path,
+        *,
+        published_root: Path | None = None,
+    ) -> list[Path]:
         """Reduce failed trials to marker/metadata/log diagnostics before publish."""
         compacted_trials: list[Path] = []
 
-        for trial_dir in _iter_trial_dirs(staging_dir):
+        for trial_dir in _iter_trial_dirs(staging_dir, published_root=published_root):
             if not self._is_failed_trial_dir(trial_dir):
                 continue
 
@@ -2611,7 +2658,7 @@ class ArtifactCollector:
         final_dir.mkdir(parents=True, exist_ok=True)
         staged_trial_dirs = [
             trial_dir.relative_to(staging_dir)
-            for trial_dir in _iter_trial_dirs(staging_dir)
+            for trial_dir in _iter_trial_dirs(staging_dir, published_root=final_dir)
         ]
         relpaths_to_replace = list(
             dict.fromkeys([*staged_trial_dirs, *(replace_trial_dirs or [])])

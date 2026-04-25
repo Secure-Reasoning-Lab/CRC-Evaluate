@@ -26,7 +26,7 @@ from crsbench.validation.schemas import GceWorkerFleetConfig
 _REAL_SUBPROCESS_RUN = subprocess.run
 _REAL_LAYOUT_CRS = "oss-crs"
 _REAL_LAYOUT_BENCHMARK_A = "afc-curl-delta-01"
-_REAL_LAYOUT_BENCHMARK_B = "afc-curl-delta-02"
+_MISSING_LAYOUT_BENCHMARK = "not-a-real-bench"
 _REAL_LAYOUT_HARNESS = "curl_fuzzer_ws"
 
 # ---------------------------------------------------------------------------
@@ -860,7 +860,7 @@ class TestStagingAndPublish:
             source_root,
             experiment_name="exp-42",
             crs=_REAL_LAYOUT_CRS,
-            benchmark=_REAL_LAYOUT_BENCHMARK_B,
+            benchmark=_MISSING_LAYOUT_BENCHMARK,
             harness=_REAL_LAYOUT_HARNESS,
             trial_n=1,
         )
@@ -874,11 +874,25 @@ class TestStagingAndPublish:
             experiment_filestore
             / "exp-42"
             / _REAL_LAYOUT_CRS
-            / _REAL_LAYOUT_BENCHMARK_B
+            / _MISSING_LAYOUT_BENCHMARK
             / _REAL_LAYOUT_HARNESS
             / "delta"
             / "address"
             / "trial-1"
+        )
+        stale_trial_dir.mkdir(parents=True, exist_ok=True)
+        _write_trial_metadata(
+            stale_trial_dir,
+            {
+                "timestamp": "2026-03-13T00:00:00Z",
+                "trial_num": 1,
+                "crs": _REAL_LAYOUT_CRS,
+                "benchmark": _MISSING_LAYOUT_BENCHMARK,
+                "harness": _REAL_LAYOUT_HARNESS,
+            },
+        )
+        (stale_trial_dir / "worker.log").write_text(
+            "stale worker log\n", encoding="utf-8"
         )
         (stale_trial_dir / "staged" / "stale-copy").mkdir(parents=True, exist_ok=True)
         (stale_trial_dir / "staged" / "stale-copy" / "README.txt").write_text(
@@ -922,7 +936,7 @@ class TestStagingAndPublish:
         collected_trial = (
             final_path
             / _REAL_LAYOUT_CRS
-            / _REAL_LAYOUT_BENCHMARK_B
+            / _MISSING_LAYOUT_BENCHMARK
             / _REAL_LAYOUT_HARNESS
             / "delta"
             / "address"
@@ -2797,7 +2811,7 @@ class TestRemoteLogCollection:
             source_root,
             experiment_name="exp-42",
             crs=_REAL_LAYOUT_CRS,
-            benchmark=_REAL_LAYOUT_BENCHMARK_B,
+            benchmark=_MISSING_LAYOUT_BENCHMARK,
             harness=_REAL_LAYOUT_HARNESS,
             trial_n=1,
         )
@@ -2812,11 +2826,25 @@ class TestRemoteLogCollection:
             / worker.name
             / "trial-artifacts"
             / _REAL_LAYOUT_CRS
-            / _REAL_LAYOUT_BENCHMARK_B
+            / _MISSING_LAYOUT_BENCHMARK
             / _REAL_LAYOUT_HARNESS
             / "delta"
             / "address"
             / "trial-1"
+        )
+        stale_trial_artifacts_dir.mkdir(parents=True, exist_ok=True)
+        _write_trial_metadata(
+            stale_trial_artifacts_dir,
+            {
+                "timestamp": "2026-03-13T00:00:00Z",
+                "trial_num": 1,
+                "crs": _REAL_LAYOUT_CRS,
+                "benchmark": _MISSING_LAYOUT_BENCHMARK,
+                "harness": _REAL_LAYOUT_HARNESS,
+            },
+        )
+        (stale_trial_artifacts_dir / "worker.log").write_text(
+            "stale worker log\n", encoding="utf-8"
         )
         (stale_trial_artifacts_dir / "staged" / "stale-copy").mkdir(
             parents=True, exist_ok=True
@@ -2893,7 +2921,7 @@ class TestRemoteLogCollection:
             / worker.name
             / "trial-artifacts"
             / _REAL_LAYOUT_CRS
-            / _REAL_LAYOUT_BENCHMARK_B
+            / _MISSING_LAYOUT_BENCHMARK
             / _REAL_LAYOUT_HARNESS
             / "delta"
             / "address"
