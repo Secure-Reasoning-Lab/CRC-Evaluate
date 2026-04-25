@@ -105,6 +105,10 @@ and patch validation:
   but once any claimed request on that evaluator still has unmet local build
   prerequisites the evaluator stops issuing new warmup jobs until that required
   demand clears
+- warmup honors `inc_build_enabled`: when enabled it plans incremental
+  build variants, and when disabled it still prebuilds benchmark variants for
+  configured experiment benchmarks but does so via clean/full builds instead of
+  preparing incremental images
 - already queued or running warmup jobs are not canceled when required build
   demand appears; only new warmup dispatch is suppressed
 

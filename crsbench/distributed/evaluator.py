@@ -298,6 +298,7 @@ def _enqueue_pre_builds(
     base_job_meta = {"experiment_name": experiment_name}
     if cpu_tag:
         base_job_meta["cpu_tag"] = cpu_tag
+    use_inc_build = bool(getattr(config, "inc_build_enabled", True))
 
     enqueued = 0
     for name in benchmark_names:
@@ -308,7 +309,7 @@ def _enqueue_pre_builds(
 
         jobs = planner.plan_builds(
             benchmark_path,
-            use_inc_build=True,
+            use_inc_build=use_inc_build,
             skip_if_cached=True,
             inc_image_policy=inc_image_policy,
             inc_image_registry=inc_image_registry,
@@ -520,26 +521,21 @@ def run_evaluator_main(
             max_inflight_requests=max(local_build_capacity, local_verify_capacity),
         )
         claim_loop = start_claim_thread(claim_worker)
-        if getattr(config, "inc_build_enabled", True):
-            warmup_loop = start_dispatcher_warmup_thread(
-                redis_host=redis_host,
-                config=config,
-                experiment_name=experiment_name,
-                evaluator_id=evaluator_id,
-                build_queue_name=build_queue_name,
-                build_jobs=build_jobs or 1,
-                required_build_tracker=claim_worker,
-                oss_fuzz_path=oss_fuzz_path,
-                inc_image_policy=resolved_policy,
-                inc_image_registry=resolved_registry,
-                inc_image_max_pull_bytes=resolved_max_pull_bytes,
-                inc_image_pull_timeout=resolved_pull_timeout,
-                local_image_prefix=resolved_local_prefix,
-            )
-        else:
-            logger.info(
-                "Dispatcher warmup disabled because runtime.inc_build_enabled=false"
-            )
+        warmup_loop = start_dispatcher_warmup_thread(
+            redis_host=redis_host,
+            config=config,
+            experiment_name=experiment_name,
+            evaluator_id=evaluator_id,
+            build_queue_name=build_queue_name,
+            build_jobs=build_jobs or 1,
+            required_build_tracker=claim_worker,
+            oss_fuzz_path=oss_fuzz_path,
+            inc_image_policy=resolved_policy,
+            inc_image_registry=resolved_registry,
+            inc_image_max_pull_bytes=resolved_max_pull_bytes,
+            inc_image_pull_timeout=resolved_pull_timeout,
+            local_image_prefix=resolved_local_prefix,
+        )
     try:
         _report_cloud_runtime_state(
             redis_host,
@@ -813,6 +809,7 @@ def _enqueue_pre_builds_from_registration(
         base_job_meta["cpu_tag"] = registration.cpu_tag
 
     enqueued = 0
+    use_inc_build = bool(getattr(registration, "inc_build_enabled", True))
     for name in benchmark_names:
         benchmark_path = benchmarks_root / name
         if not benchmark_path.exists():
@@ -821,7 +818,7 @@ def _enqueue_pre_builds_from_registration(
 
         jobs = planner.plan_builds(
             benchmark_path,
-            use_inc_build=True,
+            use_inc_build=use_inc_build,
             skip_if_cached=True,
             inc_image_policy=registration.inc_image_policy,
             inc_image_registry=registration.inc_image_registry,

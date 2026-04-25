@@ -111,6 +111,7 @@ class RuntimeRegistration(BaseModel):
     inc_image_max_pull_bytes: Optional[int] = 10 * 1024 * 1024 * 1024
     inc_image_pull_timeout_sec: int = 300
     local_image_prefix: str = "crsbench"
+    inc_build_enabled: bool = True
 
     # Timeouts
     max_total_time: int = 7200
@@ -249,6 +250,7 @@ class RuntimeRegistration(BaseModel):
             inc_image_max_pull_bytes=inc_image_max_pull_bytes,
             inc_image_pull_timeout_sec=inc_image_pull_timeout_sec,
             local_image_prefix=local_image_prefix,
+            inc_build_enabled=bool(getattr(config, "inc_build_enabled", True)),
             max_total_time=config.max_total_time,
             build_timeout=config.build_timeout,
             per_pov_verify_timeout=config.per_pov_verify_timeout,

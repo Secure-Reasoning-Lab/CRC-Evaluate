@@ -462,6 +462,9 @@ Mode note:
   `CRSBENCH_EVALUATOR_ROUTING_MODEL` is unset; async POV verification then uses
   logical build/verify requests plus evaluator-local warmup instead of the
   legacy shared startup pre-build fanout
+- evaluator-local warmup honors `inc_build_enabled`: with inc-build on
+  it primes incremental-capable variants, and with inc-build off it still
+  prebuilds configured benchmark variants via clean builds
 - shared routing remains available as an explicit override via
   `CRSBENCH_EVALUATOR_ROUTING_MODEL=shared`
 - configless evaluator mode skips startup pre-build enqueue and consumes build
