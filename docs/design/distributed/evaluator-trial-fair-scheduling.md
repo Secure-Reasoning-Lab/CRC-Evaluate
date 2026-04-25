@@ -136,6 +136,9 @@ worker-side contracts.
 - evaluator-local build/verify queues are execution-only queues; after
   dispatcher placement, local supervisors execute the already-selected work but
   do not define global owner turns
+- evaluator-local claim intake is capacity-bounded: one claim-loop tick may
+  materialize multiple logical verify requests until the local inflight limit is
+  reached instead of pinning dispatcher intake to a single active request
 - dispatcher-mode evaluators may enqueue advisory warmup builds onto their own
   local build queue before async POV demand arrives; those warmup jobs are
   cache priming only and are not part of the correctness path for dispatcher

@@ -1,10 +1,14 @@
 """Worker configuration utilities.
 
-This module provides utilities for resolving worker count configuration
-with a clear priority hierarchy: CLI > Config > Default.
+Build workers use a simple priority hierarchy: CLI > config > default.
+Verify workers additionally inherit the supervisor-assigned cpuset width when
+running inside a pinned child process and no explicit override was provided.
 """
 
+import os
 from typing import Optional
+
+from crsbench.utils.cpu_pool import cpuset_count
 
 DEFAULT_WORKERS = 4
 
@@ -39,7 +43,8 @@ def resolve_verify_workers(
     Priority (highest to lowest):
     1. Explicit caller value (highest priority)
     2. Fallback config value
-    3. Default value (4)
+    3. Active cpuset width inherited from the supervisor
+    4. Default value (4)
 
     Args:
         cli_workers: Worker count (highest priority)
@@ -48,12 +53,18 @@ def resolve_verify_workers(
     Returns:
         Resolved worker count (always >= 1)
     """
-    return _resolve_workers(cli_workers, config_workers)
+    return _resolve_workers(
+        cli_workers,
+        config_workers,
+        default_workers=_resolve_cpuset_verify_workers(),
+    )
 
 
 def _resolve_workers(
     cli_workers: Optional[int],
     config_workers: Optional[int],
+    *,
+    default_workers: Optional[int] = None,
 ) -> int:
     """Internal helper to resolve worker count.
 
@@ -73,4 +84,18 @@ def _resolve_workers(
         return config_workers
 
     # Priority 3: Default
+    if default_workers is not None and default_workers >= 1:
+        return default_workers
+
     return DEFAULT_WORKERS
+
+
+def _resolve_cpuset_verify_workers() -> Optional[int]:
+    """Return supervisor-assigned verify CPU width when running in a cpuset child."""
+    cpuset = os.environ.get("OSS_FUZZ_CPUSET_CPUS", "").strip()
+    if not cpuset:
+        return None
+    try:
+        return cpuset_count(cpuset)
+    except ValueError:
+        return None

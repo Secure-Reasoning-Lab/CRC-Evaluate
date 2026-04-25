@@ -54,8 +54,21 @@ class TestResolveVerifyWorkers:
         result = resolve_verify_workers(cli_workers=None, config_workers=6)
         assert result == 6
 
-    def test_default_used_when_nothing_specified(self):
+    def test_default_used_when_nothing_specified(self, monkeypatch):
         """Default value should be used when nothing is specified."""
+        monkeypatch.delenv("OSS_FUZZ_CPUSET_CPUS", raising=False)
+        result = resolve_verify_workers(cli_workers=None, config_workers=None)
+        assert result == DEFAULT_WORKERS
+
+    def test_cpuset_env_used_when_no_cli_or_config(self, monkeypatch):
+        """Supervisor cpuset width should drive verify parallelism by default."""
+        monkeypatch.setenv("OSS_FUZZ_CPUSET_CPUS", "0-15")
+        result = resolve_verify_workers(cli_workers=None, config_workers=None)
+        assert result == 16
+
+    def test_invalid_cpuset_env_falls_back_to_default(self, monkeypatch):
+        """Malformed cpuset env should not break worker resolution."""
+        monkeypatch.setenv("OSS_FUZZ_CPUSET_CPUS", "invalid")
         result = resolve_verify_workers(cli_workers=None, config_workers=None)
         assert result == DEFAULT_WORKERS
 
