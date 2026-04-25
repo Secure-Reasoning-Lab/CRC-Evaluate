@@ -588,6 +588,14 @@ class TestStagingAndPublish:
         (timing_dir / "verify_patch_timing.json").write_text(
             json.dumps({"rebuild": 70.4, "test": 481.0, "status": "pass"})
         )
+        staged_dir = trial_dir / "staged" / "curl-delta-01"
+        staged_dir.mkdir(parents=True)
+        (staged_dir / "README.txt").write_text("staged leak target\n", encoding="utf-8")
+        kept_dir = workdir_out / "kept"
+        kept_dir.mkdir(parents=True)
+        (kept_dir / "artifact.txt").symlink_to(
+            Path("..") / ".." / ".." / "staged" / "curl-delta-01" / "README.txt"
+        )
         (trial_dir / "output").symlink_to(Path("oss-crs-workdir") / "out")
 
         worker = _make_worker()
@@ -637,6 +645,7 @@ class TestStagingAndPublish:
         assert trial_output.exists()
         assert not trial_output.is_symlink()
         assert (trial_output / "seeds" / "seed-0001").exists()
+        assert not (trial_output / "kept" / "artifact.txt").exists()
         assert not (trial_output / "logs" / "services" / "service.log").exists()
         assert (
             trial_output
@@ -672,9 +681,16 @@ class TestStagingAndPublish:
         staged_dir = trial_dir / "staged" / "curl-delta-01"
         staged_dir.mkdir(parents=True)
         (staged_dir / "README.txt").write_text("temporary staged benchmark copy\n")
+        staged_output_logs = staged_dir / "output" / "logs" / "services"
+        staged_output_logs.mkdir(parents=True)
+        (staged_output_logs / "builder-sidecar-lite_patcher.stdout.log").write_text(
+            "staged patcher log\n", encoding="utf-8"
+        )
         (trial_dir / "staged-link.txt").symlink_to(
             Path("staged") / "curl-delta-01" / "README.txt"
         )
+        shutil.rmtree(trial_dir / "output")
+        (trial_dir / "output").symlink_to(Path("staged") / "curl-delta-01" / "output")
         nested_staged_dir = trial_dir / "notes" / "staged" / "keepme"
         nested_staged_dir.mkdir(parents=True)
         (nested_staged_dir / "info.txt").write_text("preserve nested staged content\n")
@@ -722,6 +738,7 @@ class TestStagingAndPublish:
         assert (collected_trial / "metadata.json").exists()
         assert not (collected_trial / "staged").exists()
         assert not (collected_trial / "staged-link.txt").exists()
+        assert not (collected_trial / "output").exists()
         assert (
             collected_trial / "notes" / "staged" / "keepme" / "info.txt"
         ).read_text() == "preserve nested staged content\n"
@@ -985,6 +1002,64 @@ class TestStagingAndPublish:
             / "services"
             / "builder-sidecar-lite_patcher.stdout.log"
         ).exists()
+
+    def test_staging_and_publish_replaces_existing_successful_trial_contents_on_recollect(
+        self, tmp_path: Path
+    ) -> None:
+        """Re-collecting a successful trial should drop previously leaked staged content."""
+        if shutil.which("rsync") is None:
+            pytest.skip("rsync is required for successful-trial collection coverage")
+
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+        existing_trial = _build_trial_tree(
+            experiment_filestore, experiment_name="exp-42"
+        )
+        stale_staged_dir = existing_trial / "staged" / "stale-copy"
+        stale_staged_dir.mkdir(parents=True)
+        (stale_staged_dir / "README.txt").write_text("stale staged content\n")
+        other_trial = _build_trial_tree(
+            experiment_filestore, experiment_name="exp-42", trial_n=2
+        )
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        _build_trial_tree(source_root, experiment_name="exp-42")
+
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        collector = ArtifactCollector()
+
+        def _fake_rsync(
+            cmd: list[str], **_: object
+        ) -> subprocess.CompletedProcess[bytes]:  # type: ignore[type-arg]
+            return _run_local_rsync_from_cloud_cmd(
+                cmd,
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        with patch("subprocess.run", side_effect=_fake_rsync):
+            final_path = collector.collect(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        refreshed_trial = (
+            final_path
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        assert not (refreshed_trial / "staged").exists()
+        assert (refreshed_trial / "output" / "seeds" / "seed-0001").exists()
+        assert other_trial.exists()
 
     def test_report_log_rsync_skips_internal_workdir_files(
         self, tmp_path: Path
@@ -1756,6 +1831,23 @@ class TestRemoteLogCollection:
             encoding="utf-8",
         )
         (staged_dir / "worker.log").write_text("staged worker log\n", encoding="utf-8")
+        stale_trial_artifacts_dir = (
+            collector._remote_logs_dir(experiment_filestore, "exp-42")
+            / worker.name
+            / "trial-artifacts"
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+            / "staged"
+            / "stale-copy"
+        )
+        stale_trial_artifacts_dir.mkdir(parents=True, exist_ok=True)
+        (stale_trial_artifacts_dir / "worker.log").write_text(
+            "stale staged log\n", encoding="utf-8"
+        )
 
         def _fake_remote_command(*args, **kwargs):
             del args, kwargs

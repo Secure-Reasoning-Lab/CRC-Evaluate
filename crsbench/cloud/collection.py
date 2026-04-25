@@ -55,7 +55,10 @@ _ARTIFACT_RSYNC_EXCLUDES: tuple[str, ...] = (
 )
 _REHYDRATE_EXCLUDED_TOPLEVEL_DIRS = frozenset({"oss-crs-workdir"})
 _DROP_EXCLUDED_TOPLEVEL_DIRS = frozenset({"staged"})
-_REPORT_LOG_RSYNC_EXCLUDES: tuple[str, ...] = ("oss-crs-workdir/",)
+_REPORT_LOG_RSYNC_EXCLUDES: tuple[str, ...] = (
+    "oss-crs-workdir/",
+    "trial-*/staged/",
+)
 _LOG_RSYNC_EXCLUDES: tuple[str, ...] = ("trial-*/staged/",)
 _REPORT_LOG_RSYNC_INCLUDES: tuple[str, ...] = (
     "output/logs/services/*_patcher.stdout.log",
@@ -72,6 +75,18 @@ _REEVAL_REMOTE_TEXT_ARTIFACTS: tuple[tuple[str, str], ...] = (
     ("runner.log", "runner.log"),
     ("bundle/manifest.json", "manifest.json"),
 )
+
+
+def _rsync_exact_path_excludes(relpaths: list[Path]) -> list[str]:
+    """Return rsync exclude patterns that block exact paths and any descendants."""
+    patterns: list[str] = []
+    for relpath in relpaths:
+        posix = relpath.as_posix()
+        patterns.append(posix)
+        patterns.append(f"{posix}/***")
+    return patterns
+
+
 _COPY_LINK_FILELIST_DISCOVERY_SCRIPT = r"""
 import json
 import pathlib
@@ -90,6 +105,27 @@ def _excluded(
     return any(_path_under(logical_rel, prefix) for prefix in exclude_prefixes)
 
 
+def _actual_under(path: pathlib.Path, prefix: pathlib.Path) -> bool:
+    try:
+        path.relative_to(prefix)
+        return True
+    except ValueError:
+        return False
+
+
+def _actual_excluded(
+    actual: pathlib.Path,
+    exclude_actual_prefixes: list[pathlib.Path],
+) -> bool:
+    try:
+        resolved_actual = actual.resolve(strict=True)
+    except OSError:
+        return True
+    return any(
+        _actual_under(resolved_actual, prefix) for prefix in exclude_actual_prefixes
+    )
+
+
 def _walk(
     *,
     full_logical: pathlib.PurePosixPath,
@@ -97,10 +133,13 @@ def _walk(
     actual: pathlib.Path,
     active_dirs: set[str],
     exclude_prefixes: list[pathlib.PurePosixPath],
+    exclude_actual_prefixes: list[pathlib.Path],
     directories: list[str],
     files: list[str],
 ) -> None:
-    if _excluded(logical_rel, exclude_prefixes):
+    if _excluded(logical_rel, exclude_prefixes) or _actual_excluded(
+        actual, exclude_actual_prefixes
+    ):
         return
 
     if actual.is_dir():
@@ -125,6 +164,7 @@ def _walk(
                     actual=child_target,
                     active_dirs=next_active,
                     exclude_prefixes=exclude_prefixes,
+                    exclude_actual_prefixes=exclude_actual_prefixes,
                     directories=directories,
                     files=files,
                 )
@@ -135,6 +175,7 @@ def _walk(
                 actual=child,
                 active_dirs=next_active,
                 exclude_prefixes=exclude_prefixes,
+                exclude_actual_prefixes=exclude_actual_prefixes,
                 directories=directories,
                 files=files,
             )
@@ -153,6 +194,14 @@ for spec in specs:
     exclude_prefixes = [
         pathlib.PurePosixPath(prefix) for prefix in spec["exclude_prefixes"]
     ]
+    exclude_actual_prefixes = []
+    for prefix in spec.get("exclude_actual_prefixes", []):
+        try:
+            exclude_actual_prefixes.append(
+                (remote_root / pathlib.PurePosixPath(prefix)).resolve(strict=True)
+            )
+        except OSError:
+            continue
     try:
         actual_root = (remote_root / root).resolve(strict=True)
     except OSError as exc:
@@ -164,6 +213,7 @@ for spec in specs:
             actual=actual_root,
             active_dirs=set(),
             exclude_prefixes=exclude_prefixes,
+            exclude_actual_prefixes=exclude_actual_prefixes,
             directories=directories,
             files=files,
         )
@@ -413,6 +463,7 @@ class ArtifactCollector:
             experiment_filestore=experiment_filestore,
             known_hosts_path=known_hosts_path,
             ssh_user=ssh_user,
+            excluded_relpaths=drop_relpaths,
         )
         failed_trial_relpaths = self._compact_failed_trials_to_diagnostics(staging_dir)
 
@@ -491,11 +542,14 @@ class ArtifactCollector:
             remote_path=remote_experiment_dir,
             experiment_filestore=experiment_filestore,
         ):
+            trial_artifacts_dir = instance_logs_dir / "trial-artifacts"
+            if trial_artifacts_dir.exists():
+                shutil.rmtree(trial_artifacts_dir, ignore_errors=True)
             self._run_log_rsync(
                 worker=worker,
                 fleet=fleet,
                 remote_experiment_dir=remote_experiment_dir,
-                staging_dir=instance_logs_dir / "trial-artifacts",
+                staging_dir=trial_artifacts_dir,
                 experiment_filestore=experiment_filestore,
                 known_hosts_path=known_hosts_path,
                 ssh_user=ssh_user,
@@ -607,13 +661,21 @@ class ArtifactCollector:
         remote_host: str | None = None,
     ) -> tuple[list[Path], list[str]]:
         """Return cycle-safe rsync file-list entries for directory symlink rehydration."""
-        specs = [
-            {
-                "root": relpath.as_posix(),
-                "exclude_prefixes": ["logs"] if relpath.name == "output" else [],
-            }
-            for relpath in symlink_relpaths
-        ]
+        specs = []
+        for relpath in symlink_relpaths:
+            exclude_actual_prefixes = [
+                (relpath.parent / name).as_posix()
+                for name in _DROP_EXCLUDED_TOPLEVEL_DIRS
+            ]
+            if relpath.name == "output":
+                exclude_actual_prefixes.append((relpath / "logs").as_posix())
+            specs.append(
+                {
+                    "root": relpath.as_posix(),
+                    "exclude_prefixes": ["logs"] if relpath.name == "output" else [],
+                    "exclude_actual_prefixes": exclude_actual_prefixes,
+                }
+            )
         command = self._build_remote_python_command(
             _COPY_LINK_FILELIST_DISCOVERY_SCRIPT,
             remote_experiment_dir,
@@ -886,6 +948,7 @@ class ArtifactCollector:
         ssh_user: str | None = None,
         ssh_command: str | None = None,
         remote_host: str | None = None,
+        excluded_relpaths: list[Path] | None = None,
     ) -> list[str]:
         """Return an rsync command that keeps only report-critical trial logs."""
         if (
@@ -912,6 +975,10 @@ class ArtifactCollector:
             "--prune-empty-dirs",
         ]
         cmd.extend(f"--exclude={pattern}" for pattern in _REPORT_LOG_RSYNC_EXCLUDES)
+        cmd.extend(
+            f"--exclude={pattern}"
+            for pattern in _rsync_exact_path_excludes(excluded_relpaths or [])
+        )
         cmd.append("--include=*/")
         cmd.extend(f"--include={pattern}" for pattern in _REPORT_LOG_RSYNC_INCLUDES)
         cmd.extend(
@@ -1220,6 +1287,7 @@ class ArtifactCollector:
         experiment_filestore: Path,
         known_hosts_path: Path | None,
         ssh_user: str | None,
+        excluded_relpaths: list[Path] | None = None,
     ) -> None:
         """Sync the minimal trial log subset needed by report generation."""
         if fleet.ssh_via_iap:
@@ -1244,6 +1312,7 @@ class ArtifactCollector:
                         host_key_alias=worker.name,
                     ),
                     remote_host="127.0.0.1",
+                    excluded_relpaths=excluded_relpaths,
                 )
                 self._run_rsync_with_retry(cmd)
             return
@@ -1255,6 +1324,7 @@ class ArtifactCollector:
             staging_dir=staging_dir,
             known_hosts_path=known_hosts_path,
             ssh_user=ssh_user,
+            excluded_relpaths=excluded_relpaths,
         )
         self._run_rsync_with_retry(cmd)
 
@@ -1769,12 +1839,21 @@ class ArtifactCollector:
     ) -> None:
         """Merge *staging_dir* contents into *final_dir* and remove staging.
 
-        Uses ``shutil.copytree`` with ``dirs_exist_ok=True`` so that incremental
-        collections (multiple workers, multiple runs) merge correctly into the
-        same final experiment directory.
+        Existing trial directories present in *staging_dir* are removed first so
+        re-collects replace each trial exactly while still allowing unrelated
+        trials from other workers or earlier runs to coexist under the same
+        final experiment directory.
         """
         final_dir.mkdir(parents=True, exist_ok=True)
-        for relpath in replace_trial_dirs or []:
+        staged_trial_dirs = [
+            trial_dir.relative_to(staging_dir)
+            for trial_dir in sorted(staging_dir.rglob("trial-*"))
+            if trial_dir.is_dir()
+        ]
+        relpaths_to_replace = list(
+            dict.fromkeys([*staged_trial_dirs, *(replace_trial_dirs or [])])
+        )
+        for relpath in relpaths_to_replace:
             existing_trial_dir = final_dir / relpath
             if existing_trial_dir.exists() or existing_trial_dir.is_symlink():
                 self._remove_staged_path(existing_trial_dir)
