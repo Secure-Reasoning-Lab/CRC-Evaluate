@@ -94,6 +94,117 @@ class TestTimeoutHandling:
         assert result.crashed is False
 
 
+class TestContainerCleanup:
+    """Test reproduce container naming and explicit cleanup."""
+
+    def test_reproduce_uses_unique_named_containers(self, mock_oss_fuzz):
+        from unittest.mock import MagicMock, patch
+
+        infra = OSSFuzzInfrastructure(mock_oss_fuzz)
+
+        with patch("crsbench.builder.infrastructure.run_with_timeout") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+            infra.reproduce(
+                project_name="test",
+                harness="fuzz",
+                pov_data=b"OK",
+                timeout=5,
+            )
+            infra.reproduce(
+                project_name="test",
+                harness="fuzz",
+                pov_data=b"OK-2",
+                timeout=5,
+            )
+
+        container_names = [
+            call.kwargs["env"]["OSS_FUZZ_SAVE_CONTAINERS_NAME"]
+            for call in mock_run.call_args_list
+        ]
+        assert len(container_names) == 2
+        assert all(
+            container_name.startswith("crsbench-repro-")
+            for container_name in container_names
+        )
+        assert len(set(container_names)) == 2
+
+    def test_reproduce_does_not_cleanup_inline_on_normal_completion(
+        self, mock_oss_fuzz
+    ):
+        from unittest.mock import MagicMock, patch
+
+        infra = OSSFuzzInfrastructure(mock_oss_fuzz)
+
+        with (
+            patch("crsbench.builder.infrastructure.run_with_timeout") as mock_run,
+            patch("crsbench.builder.infrastructure.subprocess.run") as mock_cleanup,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+            infra.reproduce(
+                project_name="test",
+                harness="fuzz",
+                pov_data=b"OK",
+                timeout=5,
+            )
+
+        mock_cleanup.assert_not_called()
+
+    def test_timeout_cleans_up_named_container_before_returning(self, mock_oss_fuzz):
+        import subprocess
+        import threading
+        from unittest.mock import MagicMock, patch
+
+        infra = OSSFuzzInfrastructure(mock_oss_fuzz)
+        cleanup_started = threading.Event()
+        release_cleanup = threading.Event()
+        result_holder: dict[str, object] = {}
+
+        def _cleanup_side_effect(*_args, **_kwargs):
+            cleanup_started.set()
+            assert release_cleanup.wait(timeout=1)
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        def _run_reproduce():
+            result_holder["result"] = infra.reproduce(
+                project_name="test",
+                harness="fuzz",
+                pov_data=b"HANG",
+                timeout=1,
+            )
+
+        with (
+            patch("crsbench.builder.infrastructure.run_with_timeout") as mock_run,
+            patch("crsbench.builder.infrastructure.subprocess.run") as mock_cleanup,
+        ):
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd="test", timeout=1)
+            mock_cleanup.side_effect = _cleanup_side_effect
+
+            reproduce_thread = threading.Thread(target=_run_reproduce)
+            reproduce_thread.start()
+            assert cleanup_started.wait(timeout=1)
+            reproduce_thread.join(timeout=0.1)
+            assert reproduce_thread.is_alive()
+            release_cleanup.set()
+            reproduce_thread.join(timeout=1)
+
+        assert not reproduce_thread.is_alive()
+        result = result_holder["result"]
+        assert result.crashed is False
+        env = mock_run.call_args.kwargs["env"]
+        container_name = env["OSS_FUZZ_SAVE_CONTAINERS_NAME"]
+        mock_cleanup.assert_called_once_with(
+            ["docker", "rm", "-f", container_name],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+            stdin=subprocess.DEVNULL,
+        )
+
+
 class TestCommandConstruction:
     """Test that commands are constructed correctly by mocking subprocess.run."""
 
@@ -137,9 +248,10 @@ class TestCommandConstruction:
             assert mock_run.called
             cmd = mock_run.call_args[0][0]
             assert "--timeout" not in cmd
-            # Outer subprocess timeout keeps a small grace above helper timeout.
+            # Preserve the historical timeout + 10s outer bound by reserving
+            # 5s for helper exit semantics and 5s for forced cleanup.
             assert mock_run.call_args.kwargs["timeout"] > requested_timeout
-            assert mock_run.call_args.kwargs["timeout"] == requested_timeout + 10
+            assert mock_run.call_args.kwargs["timeout"] == requested_timeout + 5
 
     def test_detect_leaks_disabled(self, mock_oss_fuzz):
         """Command should include -detect_leaks=0."""
