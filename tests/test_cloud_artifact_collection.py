@@ -205,6 +205,142 @@ class TestTrialRootDiscovery:
         else:
             assert discovered_trial_dirs == []
 
+    def test_remote_trial_staged_discovery_includes_corrupt_real_trial_roots(
+        self, tmp_path: Path
+    ) -> None:
+        """Remote staged excludes should cover corrupt real trial roots too."""
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        _build_trial_tree(
+            source_root,
+            experiment_name="exp-42",
+            crs=_REAL_LAYOUT_CRS,
+            benchmark=_REAL_LAYOUT_BENCHMARK_A,
+            harness=_REAL_LAYOUT_HARNESS,
+            trial_n=1,
+        )
+        broken_trial = _build_trial_tree(
+            source_root,
+            experiment_name="exp-42",
+            crs=_REAL_LAYOUT_CRS,
+            benchmark=_MISSING_LAYOUT_BENCHMARK,
+            harness=_REAL_LAYOUT_HARNESS,
+            trial_n=1,
+        )
+        (broken_trial / "metadata.json").write_text("{broken json\n", encoding="utf-8")
+
+        collector = ArtifactCollector()
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
+        relpaths = collector._discover_remote_trial_staged_relpaths(
+            worker=worker,
+            fleet=fleet,
+            remote_experiment_dir="/data/experiments/exp-42",
+            experiment_filestore=tmp_path / "filestore",
+            known_hosts_path=None,
+            ssh_user=None,
+        )
+
+        assert [path.as_posix() for path in relpaths] == [
+            Path(
+                _REAL_LAYOUT_CRS,
+                _REAL_LAYOUT_BENCHMARK_A,
+                _REAL_LAYOUT_HARNESS,
+                "delta",
+                "address",
+                "trial-1",
+                "staged",
+            ).as_posix(),
+            Path(
+                _REAL_LAYOUT_CRS,
+                _MISSING_LAYOUT_BENCHMARK,
+                _REAL_LAYOUT_HARNESS,
+                "delta",
+                "address",
+                "trial-1",
+                "staged",
+            ).as_posix(),
+        ]
+
+    def test_remote_trial_staged_discovery_skips_nested_archive_like_payloads(
+        self, tmp_path: Path
+    ) -> None:
+        """Remote staged excludes must not treat nested archive payloads as real trials."""
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        _build_trial_tree(
+            source_root,
+            experiment_name="exp-42",
+            crs=_REAL_LAYOUT_CRS,
+            benchmark=_REAL_LAYOUT_BENCHMARK_A,
+            harness=_REAL_LAYOUT_HARNESS,
+            trial_n=1,
+        )
+        faux_trial = (
+            source_root
+            / "exp-42"
+            / _REAL_LAYOUT_CRS
+            / _REAL_LAYOUT_BENCHMARK_A
+            / _REAL_LAYOUT_HARNESS
+            / "archive"
+            / "delta"
+            / "address"
+            / "trial-9"
+        )
+        faux_trial.mkdir(parents=True)
+        (faux_trial / "metadata.json").write_text("{broken json\n", encoding="utf-8")
+        (faux_trial / "worker.log").write_text(
+            "archived worker log\n", encoding="utf-8"
+        )
+
+        collector = ArtifactCollector()
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+
+        def _fake_remote_command(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del args
+            return _run_local_remote_command_from_cloud_cmd(
+                str(kwargs["command"]),
+                source_root=source_root,
+                experiment_name="exp-42",
+            )
+
+        collector._run_remote_command = _fake_remote_command  # type: ignore[method-assign]
+        relpaths = collector._discover_remote_trial_staged_relpaths(
+            worker=worker,
+            fleet=fleet,
+            remote_experiment_dir="/data/experiments/exp-42",
+            experiment_filestore=tmp_path / "filestore",
+            known_hosts_path=None,
+            ssh_user=None,
+        )
+
+        assert [path.as_posix() for path in relpaths] == [
+            Path(
+                _REAL_LAYOUT_CRS,
+                _REAL_LAYOUT_BENCHMARK_A,
+                _REAL_LAYOUT_HARNESS,
+                "delta",
+                "address",
+                "trial-1",
+                "staged",
+            ).as_posix()
+        ]
+
 
 def _run_local_rsync_from_cloud_cmd(
     cmd: list[str], *, source_root: Path, experiment_name: str

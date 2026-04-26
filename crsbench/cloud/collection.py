@@ -428,7 +428,31 @@ def _is_trial_root(path: pathlib.Path, rel_parts: tuple[str, ...]) -> bool:
     )
 
 
-def _scan(path: pathlib.Path, rel_parts: tuple[str, ...], out: list[str]) -> None:
+def _trial_namespace(rel_parts: tuple[str, ...]) -> tuple[str, ...]:
+    return (rel_parts[0], *rel_parts[3:-1])
+
+
+def _backstop_candidate(
+    path: pathlib.Path,
+    rel_parts: tuple[str, ...],
+) -> tuple[str, tuple[str, ...]] | None:
+    if not path.is_dir() or not _matches_layout(rel_parts) or _is_trial_root(path, rel_parts):
+        return None
+    metadata_path = path / "metadata.json"
+    worker_log_path = path / "worker.log"
+    if not metadata_path.is_file() or not (
+        worker_log_path.exists() or worker_log_path.is_symlink()
+    ):
+        return None
+    return "/".join(rel_parts), _trial_namespace(rel_parts)
+
+
+def _scan(
+    path: pathlib.Path,
+    rel_parts: tuple[str, ...],
+    rooted: list[str],
+    backstop: list[tuple[str, tuple[str, ...]]],
+) -> None:
     try:
         iterator = os.scandir(path)
     except OSError:
@@ -448,15 +472,30 @@ def _scan(path: pathlib.Path, rel_parts: tuple[str, ...], out: list[str]) -> Non
         child = path / name
         child_rel_parts = (*rel_parts, name)
         if _is_trial_root(child, child_rel_parts):
-            out.append("/".join(child_rel_parts))
+            rooted.append("/".join(child_rel_parts))
             continue
-        _scan(child, child_rel_parts, out)
+        candidate = _backstop_candidate(child, child_rel_parts)
+        if candidate is not None:
+            backstop.append(candidate)
+        _scan(child, child_rel_parts, rooted, backstop)
 
 
 root = pathlib.Path(sys.argv[1])
-trial_dirs: list[str] = []
-_scan(root, (), trial_dirs)
-print(json.dumps(trial_dirs))
+rooted_trial_dirs: list[str] = []
+backstop_candidates: list[tuple[str, tuple[str, ...]]] = []
+_scan(root, (), rooted_trial_dirs, backstop_candidates)
+
+metadata_backed_layouts = {
+    _trial_namespace(tuple(relpath.split("/")))
+    for relpath in rooted_trial_dirs
+}
+
+trial_dirs = list(rooted_trial_dirs)
+for relpath, namespace in backstop_candidates:
+    if namespace in metadata_backed_layouts and relpath not in trial_dirs:
+        trial_dirs.append(relpath)
+
+print(json.dumps(sorted(trial_dirs)))
 """
 
 
