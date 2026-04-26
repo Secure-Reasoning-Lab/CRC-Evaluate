@@ -114,11 +114,12 @@ cloud:
       - {}
       - {}
       - {}
-      - {} # 5 workers x 224 vCPUs
-  evaluators:
-    defaults:
-      instance_profile: gce-evaluator-n2d
-    placements:
-      - {} # evaluator 1
-      - {} # evaluator 2
-      - {} # evaluator 3
+      - {}
+      - {} # 6 workers
+  # evaluators:
+  #   defaults:
+  #     instance_profile: gce-evaluator-n2d
+  #   placements:
+  #     - {} # evaluator 1
+  #     - {} # evaluator 2
+  #     - {} # evaluator 3
