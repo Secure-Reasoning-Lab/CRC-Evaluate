@@ -12,10 +12,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
+import os
+import random
 import re
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,12 +47,106 @@ from crsbench.utils.logger import get_logger
 from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     import rq
 
     from crsbench.distributed.verify_queue import AsyncPovBuildPrereqs
 
 logger = get_logger(__name__)
 _POV_HASH_RE = re.compile(r"^(?:[0-9a-f]{16}|[0-9a-f]{64})$")
+
+REEVAL_POV_SAMPLE_SIZE_ENV = "CRSBENCH_REEVAL_POV_SAMPLE_SIZE"
+DEFAULT_REEVAL_POV_SAMPLE_SIZE = 1000
+
+
+def _get_reeval_pov_sample_size() -> int:
+    """Return the per-trial POV cap for re-eval.
+
+    Controlled by ``CRSBENCH_REEVAL_POV_SAMPLE_SIZE`` (default 1000). A value
+    of 0 disables capping (verify all POVs). Invalid values fall back to the
+    default with a warning.
+    """
+    raw = os.environ.get(REEVAL_POV_SAMPLE_SIZE_ENV)
+    if raw is None or not raw.strip():
+        return DEFAULT_REEVAL_POV_SAMPLE_SIZE
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            f"Invalid {REEVAL_POV_SAMPLE_SIZE_ENV}={raw!r}; "
+            f"falling back to {DEFAULT_REEVAL_POV_SAMPLE_SIZE}"
+        )
+        return DEFAULT_REEVAL_POV_SAMPLE_SIZE
+    if value < 0:
+        logger.warning(
+            f"Negative {REEVAL_POV_SAMPLE_SIZE_ENV}={value}; "
+            f"falling back to {DEFAULT_REEVAL_POV_SAMPLE_SIZE}"
+        )
+        return DEFAULT_REEVAL_POV_SAMPLE_SIZE
+    return value
+
+
+def _stratified_sample_pov_files(
+    pov_files: list[Path],
+    sample_size: int,
+    *,
+    seed: str = "",
+) -> list[Path]:
+    """Return a discovery-time stratified random subset of ``pov_files``.
+
+    Files are sorted by mtime (a proxy for CRS discovery time) and split into
+    ``sample_size`` contiguous buckets of roughly equal size; one file is
+    chosen uniformly at random from each non-empty bucket. Sampling is
+    deterministic given the same ``seed``.
+
+    If ``sample_size <= 0`` or the list is already at or below the cap, the
+    input is returned unchanged (as a new list).
+    """
+    if sample_size <= 0 or len(pov_files) <= sample_size:
+        return list(pov_files)
+
+    sorted_files = sorted(pov_files, key=lambda p: (p.stat().st_mtime, p.name))
+    rng = random.Random(seed or "crsbench-reeval-pov-sample")
+    n = len(sorted_files)
+    sampled: list[Path] = []
+    for i in range(sample_size):
+        start = (i * n) // sample_size
+        end = ((i + 1) * n) // sample_size
+        bucket = sorted_files[start:end]
+        if not bucket:
+            continue
+        sampled.append(rng.choice(bucket))
+    return sampled
+
+
+@contextlib.contextmanager
+def _maybe_subset_pov_dir(pov_dir: Path, *, trial_dir: Path) -> Iterator[Path]:
+    """Yield ``pov_dir`` unchanged, or a temp dir of symlinks to a sampled subset.
+
+    When the trial has more POVs than ``CRSBENCH_REEVAL_POV_SAMPLE_SIZE``, a
+    temporary directory of symlinks pointing to the stratified random subset
+    is yielded instead, so the verification engine sees only the sampled
+    files. The temp directory is cleaned up on exit.
+    """
+    pov_files = [
+        p for p in pov_dir.iterdir() if p.is_file() and not p.name.startswith(".")
+    ]
+    sample_size = _get_reeval_pov_sample_size()
+    if sample_size <= 0 or len(pov_files) <= sample_size:
+        yield pov_dir
+        return
+
+    sampled = _stratified_sample_pov_files(pov_files, sample_size, seed=str(trial_dir))
+    logger.info(
+        f"Reeval: sampled {len(sampled)}/{len(pov_files)} POVs by discovery time "
+        f"for trial {trial_dir.name} ({REEVAL_POV_SAMPLE_SIZE_ENV}={sample_size})"
+    )
+    with tempfile.TemporaryDirectory(prefix="crsbench-reeval-pov-") as staged:
+        staged_dir = Path(staged)
+        for src in sampled:
+            (staged_dir / src.name).symlink_to(src.resolve())
+        yield staged_dir
 
 
 class AsyncPovDrainError(TimeoutError):
@@ -386,16 +484,17 @@ def _reeval_bug_finding(
         local_image_prefix=local_image_prefix,
     )
 
-    output = engine.verify_benchmark(
-        benchmark_path=benchmark_path,
-        pov_dir=pov_dir,
-        harness_filter=harness,
-        force_rebuild=force_rebuild,
-        deduplicate=False,
-        max_per_hash=1,
-        use_inc_build=use_inc_build,
-        sanitizer=sanitizer,
-    )
+    with _maybe_subset_pov_dir(pov_dir, trial_dir=trial_dir) as active_pov_dir:
+        output = engine.verify_benchmark(
+            benchmark_path=benchmark_path,
+            pov_dir=active_pov_dir,
+            harness_filter=harness,
+            force_rebuild=force_rebuild,
+            deduplicate=False,
+            max_per_hash=1,
+            use_inc_build=use_inc_build,
+            sanitizer=sanitizer,
+        )
 
     if output.results:
         path = _save_pov_results(output.results, dest_dir)
@@ -842,6 +941,18 @@ def _enqueue_trial_povs(
     if not pov_files:
         logger.warning(f"No POV files found in {pov_dir}")
         return None
+
+    sample_size = _get_reeval_pov_sample_size()
+    total_pov_count = len(pov_files)
+    if sample_size > 0 and total_pov_count > sample_size:
+        pov_files = _stratified_sample_pov_files(
+            pov_files, sample_size, seed=str(trial_dir)
+        )
+        logger.info(
+            f"Reeval: sampled {len(pov_files)}/{total_pov_count} POVs "
+            f"by discovery time for trial {trial_dir.name} "
+            f"({REEVAL_POV_SAMPLE_SIZE_ENV}={sample_size})"
+        )
 
     state = _AsyncTrialState(
         trial_dir=trial_dir,
