@@ -1053,6 +1053,7 @@ def _monitor_queue_rich(
     snapshot = build_monitor_snapshot(queue, experiment_name)
     _notify_snapshot(callbacks, snapshot)
     display_total = _display_total(snapshot, total_jobs)
+    use_alt_screen = console.is_terminal and not console.legacy_windows
     with _RichMonitorInput() as monitor_input:
         (
             renderable,
@@ -1073,7 +1074,7 @@ def _monitor_queue_rich(
             renderable,
             refresh_per_second=1,
             console=console,
-            screen=True,
+            screen=use_alt_screen,
         ) as live:
             poller: _RichMonitorSnapshotPoller | None = None
             refresh_interval_sec = _rich_monitor_refresh_interval_sec(poll_interval)
