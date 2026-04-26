@@ -1879,6 +1879,73 @@ def test_monitor_queue_rich_refreshes_tracked_jobs_on_poll_interval() -> None:
     assert refresh_calls["count"] == 1
 
 
+def test_monitor_queue_rich_uses_alternate_screen() -> None:
+    rich_console = pytest.importorskip("rich.console")
+    queue = MagicMock()
+    done = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 0, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[],
+    )
+    live_kwargs: dict[str, object] = {}
+
+    class DummyLive:
+        def __init__(self, renderable, *args, **kwargs):
+            del renderable, args
+            live_kwargs.update(kwargs)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def update(self, renderable, *args, **kwargs):
+            del renderable, args, kwargs
+
+    class DummyInput:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+            self.manual_navigation_available = False
+            self.manual_navigation_status = ""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read_command(self, timeout_sec: float) -> str | None:
+            del timeout_sec
+            return None
+
+    console = rich_console.Console(
+        width=120,
+        height=20,
+        force_terminal=True,
+        record=True,
+    )
+
+    with (
+        patch(
+            "crsbench.distributed.queue_monitor.build_monitor_snapshot",
+            return_value=done,
+        ),
+        patch("crsbench.distributed.queue_monitor._RichMonitorInput", DummyInput),
+        patch("rich.console.Console", return_value=console),
+        patch("rich.live.Live", DummyLive),
+    ):
+        monitor_queue(
+            queue,
+            "exp-1",
+            tracked_job_ids=None,
+            callbacks=QueueMonitorCallbacks(),
+            use_rich=True,
+            poll_interval=1.0,
+        )
+
+    assert live_kwargs["screen"] is True
+
+
 def test_monitor_queue_rich_shutdown_does_not_wait_forever_on_blocked_refresh() -> None:
     rich_console = pytest.importorskip("rich.console")
     queue = MagicMock()

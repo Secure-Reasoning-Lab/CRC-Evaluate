@@ -1073,6 +1073,7 @@ def _monitor_queue_rich(
             renderable,
             refresh_per_second=1,
             console=console,
+            screen=True,
         ) as live:
             poller: _RichMonitorSnapshotPoller | None = None
             refresh_interval_sec = _rich_monitor_refresh_interval_sec(poll_interval)
