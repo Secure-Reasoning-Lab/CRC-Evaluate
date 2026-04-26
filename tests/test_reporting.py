@@ -591,6 +591,99 @@ class TestMetricsAggregator:
 
         assert metrics.total_povs_discovered == 0
         assert metrics.total_patches_generated == 0
+        assert metrics.povs_cpv == 0
+        assert metrics.povs_unintended == 0
+        assert metrics.povs_not_vulnerable == 0
+        assert metrics.povs_error == 0
+        assert metrics.unintended_unique_sites == 0
+
+    def test_pov_status_breakdown_from_store(self, temp_dir):
+        """Counts POVs by verification status from pov_store.json.
+
+        Validates that unintended (zero-day) entries are deduped by
+        ``crash_signature``: two entries sharing a signature collapse to a
+        single unique site, while a third entry without a signature is
+        counted on its own (cannot be deduped).
+        """
+        povs_dir = temp_dir / "povs"
+        povs_dir.mkdir()
+        store = {
+            "crs_run_start_time": 0.0,
+            "povs": {
+                "h1": {"status": "cpv", "cpv_matched": ["cpv_0"]},
+                "h2": {"status": "cpv", "cpv_matched": ["cpv_0"]},
+                "h3": {
+                    "status": "unintended_crash",
+                    "cpv_matched": [],
+                    "crash_signature": "sig_a",
+                },
+                "h4": {
+                    "status": "unintended_crash",
+                    "cpv_matched": [],
+                    "crash_signature": "sig_a",
+                },
+                "h5": {
+                    "status": "unintended_crash",
+                    "cpv_matched": [],
+                    "crash_signature": None,
+                },
+                "h6": {"status": "not_vulnerable", "cpv_matched": []},
+                "h7": {"status": "error", "cpv_matched": []},
+            },
+        }
+        (povs_dir / "pov_store.json").write_text(json.dumps(store))
+
+        breakdown = MetricsAggregator._load_pov_status_breakdown(temp_dir)
+        assert breakdown == {
+            "povs_cpv": 2,
+            "povs_unintended": 3,
+            "povs_not_vulnerable": 1,
+            "povs_error": 1,
+            "unintended_unique_sites": 2,
+        }
+
+    def test_pov_status_breakdown_missing_file(self, temp_dir):
+        """Returns zeros when no pov_store.json exists."""
+        breakdown = MetricsAggregator._load_pov_status_breakdown(temp_dir)
+        assert breakdown == {
+            "povs_cpv": 0,
+            "povs_unintended": 0,
+            "povs_not_vulnerable": 0,
+            "povs_error": 0,
+            "unintended_unique_sites": 0,
+        }
+
+    def test_aggregate_trial_includes_pov_breakdown(self, temp_dir):
+        """``aggregate_trial`` propagates pov_store.json counts to TrialMetrics."""
+        povs_dir = temp_dir / "povs"
+        povs_dir.mkdir()
+        store = {
+            "povs": {
+                "h1": {"status": "cpv", "cpv_matched": ["cpv_0"]},
+                "h2": {
+                    "status": "unintended_crash",
+                    "cpv_matched": [],
+                    "crash_signature": "sig",
+                },
+            },
+        }
+        (povs_dir / "pov_store.json").write_text(json.dumps(store))
+
+        trial_info = TrialInfo(
+            trial_dir=temp_dir,
+            trial_num=1,
+            crs="ensemble-c",
+            benchmark="json-c",
+            harness="fuzz_harness",
+            mode="bug_finding",
+            status="valid",
+        )
+
+        aggregator = MetricsAggregator()
+        metrics = aggregator.aggregate_trial(trial_info=trial_info, snapshots=[])
+        assert metrics.povs_cpv == 1
+        assert metrics.povs_unintended == 1
+        assert metrics.unintended_unique_sites == 1
 
 
 class TestExperimentValidator:

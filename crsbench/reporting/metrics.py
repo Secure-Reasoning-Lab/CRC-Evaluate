@@ -1,5 +1,6 @@
 """Metrics aggregation for the reporting module."""
 
+import json
 from collections import defaultdict
 from pathlib import Path
 
@@ -17,6 +18,11 @@ from crsbench.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+# Persistent per-trial POV verification store written by the evaluator
+# (see crsbench/evaluation/verification/pov/store.py).
+_POV_STORE_RELPATH = Path("povs") / "pov_store.json"
+
+
 class MetricsAggregator:
     """Aggregate metrics from snapshot data.
 
@@ -30,6 +36,65 @@ class MetricsAggregator:
         aggregator = MetricsAggregator()
         trial_metrics = aggregator.aggregate_trial(trial_info, snapshots)
     """
+
+    @staticmethod
+    def _load_pov_status_breakdown(trial_dir: str | Path) -> dict[str, int]:
+        """Count POV entries by verification status from pov_store.json.
+
+        Reads the persistent per-trial POV store (written by the evaluator's
+        POV verification manager) and returns a count for each
+        ``PovVerificationStatus`` plus a unique-crash-site count for the
+        unintended (zero-day) bucket. Missing or malformed stores yield zeros
+        so the caller does not need to guard.
+
+        Args:
+            trial_dir: Path to the trial directory.
+
+        Returns:
+            Dict with keys: povs_cpv, povs_unintended, povs_not_vulnerable,
+            povs_error, unintended_unique_sites.
+        """
+        zero = {
+            "povs_cpv": 0,
+            "povs_unintended": 0,
+            "povs_not_vulnerable": 0,
+            "povs_error": 0,
+            "unintended_unique_sites": 0,
+        }
+        store_path = Path(trial_dir) / _POV_STORE_RELPATH
+        if not store_path.exists():
+            return zero
+
+        try:
+            data = json.loads(store_path.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning(f"Invalid pov_store.json at {store_path}: {e}")
+            return zero
+
+        povs = data.get("povs", {}) or {}
+        counts = dict(zero)
+        unintended_signatures: set[str] = set()
+        unintended_unsigned = 0
+        for entry in povs.values():
+            status = entry.get("status")
+            if status == "cpv":
+                counts["povs_cpv"] += 1
+            elif status == "unintended_crash":
+                counts["povs_unintended"] += 1
+                sig = entry.get("crash_signature")
+                if sig:
+                    unintended_signatures.add(sig)
+                else:
+                    unintended_unsigned += 1
+            elif status == "not_vulnerable":
+                counts["povs_not_vulnerable"] += 1
+            elif status == "error":
+                counts["povs_error"] += 1
+        # Unsigned unintended entries cannot be deduped; count each as its own site.
+        counts["unintended_unique_sites"] = (
+            len(unintended_signatures) + unintended_unsigned
+        )
+        return counts
 
     @staticmethod
     def _extract_run_config(trial_dir: str | Path) -> tuple[str | None, str | None]:
@@ -84,6 +149,11 @@ class MetricsAggregator:
         # Extract run configuration from trial path
         run_mode, sanitizer = self._extract_run_config(trial_info.trial_dir)
 
+        # Load per-status POV breakdown from the evaluator's pov_store.json.
+        # Independent of CRS snapshot tarballs, so populate even when no
+        # snapshots are available.
+        pov_status = self._load_pov_status_breakdown(trial_info.trial_dir)
+
         if not snapshots:
             return TrialMetrics(
                 trial_dir=str(trial_info.trial_dir),
@@ -94,6 +164,11 @@ class MetricsAggregator:
                 mode=trial_info.mode,
                 run_mode=run_mode,
                 sanitizer=sanitizer,
+                povs_cpv=pov_status["povs_cpv"],
+                povs_unintended=pov_status["povs_unintended"],
+                povs_not_vulnerable=pov_status["povs_not_vulnerable"],
+                povs_error=pov_status["povs_error"],
+                unintended_unique_sites=pov_status["unintended_unique_sites"],
             )
 
         # Sort snapshots by cycle
@@ -199,6 +274,11 @@ class MetricsAggregator:
             early_stop_cost=early_stop_cost,
             time_saved=time_saved,
             cost_saved=cost_saved,
+            povs_cpv=pov_status["povs_cpv"],
+            povs_unintended=pov_status["povs_unintended"],
+            povs_not_vulnerable=pov_status["povs_not_vulnerable"],
+            povs_error=pov_status["povs_error"],
+            unintended_unique_sites=pov_status["unintended_unique_sites"],
         )
 
     def aggregate_experiment(

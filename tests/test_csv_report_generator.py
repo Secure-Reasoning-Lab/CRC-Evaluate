@@ -30,6 +30,11 @@ def sample_trial_metrics():
         "sanitizer": "address",
         "total_povs_discovered": 5,
         "unique_pov_names": ["pov_a", "pov_b", "pov_c"],
+        "povs_cpv": 2,
+        "povs_unintended": 1,
+        "povs_not_vulnerable": 0,
+        "povs_error": 0,
+        "unintended_unique_sites": 1,
         "total_patches_generated": 0,
         "unique_patch_names": [],
         "total_llm_cost": 1.23,
@@ -80,6 +85,11 @@ def sample_experiment_metrics():
                 "sanitizer": "address",
                 "total_povs_discovered": 5,
                 "unique_pov_names": ["pov_a", "pov_b", "pov_c"],
+                "povs_cpv": 2,
+                "povs_unintended": 1,
+                "povs_not_vulnerable": 0,
+                "povs_error": 0,
+                "unintended_unique_sites": 1,
                 "total_patches_generated": 0,
                 "unique_patch_names": [],
                 "total_llm_cost": 1.23,
@@ -112,6 +122,11 @@ def sample_experiment_metrics():
                 "sanitizer": "undefined",
                 "total_povs_discovered": 2,
                 "unique_pov_names": ["pov_x", "pov_y"],
+                "povs_cpv": 0,
+                "povs_unintended": 2,
+                "povs_not_vulnerable": 0,
+                "povs_error": 0,
+                "unintended_unique_sites": 2,
                 "total_patches_generated": 0,
                 "unique_patch_names": [],
                 "total_llm_cost": 0.80,
@@ -266,8 +281,37 @@ def test_format_trial_row(temp_output_dir, sample_trial_metrics):
     assert row["mode"] == "bug_finding"
     assert row["total_povs"] == 5
     assert row["unique_povs"] == 3
+    # Per-status breakdown surfaced from pov_store.json.
+    assert row["povs_cpv"] == 2
+    assert row["povs_unintended"] == 1
+    assert row["povs_not_vulnerable"] == 0
+    assert row["povs_error"] == 0
+    assert row["unintended_unique_sites"] == 1
     assert row["total_llm_cost"] == 1.23
     assert row["snapshot_count"] == 2
+
+
+def test_format_trial_row_breakdown_defaults_when_missing(temp_output_dir):
+    """Trials with no pov_store.json yield zero counts, not KeyErrors."""
+    generator = CSVReportGenerator(temp_output_dir)
+    minimal = {
+        "trial_dir": "experiment/x/y/full/address/trial-1",
+        "trial_num": "trial-1",
+        "crs": "x",
+        "benchmark": "y",
+        "harness": "h",
+        "mode": "bug_finding",
+        "total_povs_discovered": 0,
+        "unique_pov_names": [],
+        "total_patches_generated": 0,
+        "unique_patch_names": [],
+    }
+    row = generator._format_trial_row(minimal)
+    assert row["povs_cpv"] == 0
+    assert row["povs_unintended"] == 0
+    assert row["povs_not_vulnerable"] == 0
+    assert row["povs_error"] == 0
+    assert row["unintended_unique_sites"] == 0
 
 
 def test_format_trial_row_consumes_trial_metrics_model_dump(temp_output_dir):

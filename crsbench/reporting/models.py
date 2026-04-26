@@ -189,6 +189,13 @@ class TrialMetrics(BaseModel):
     total_povs_discovered: int = 0
     unique_pov_names: list[str] = Field(default_factory=list)
 
+    # POV verification status breakdown (from <trial>/povs/pov_store.json)
+    povs_cpv: int = 0
+    povs_unintended: int = 0
+    povs_not_vulnerable: int = 0
+    povs_error: int = 0
+    unintended_unique_sites: int = 0
+
     # Patch metrics
     total_patches_generated: int = 0
     unique_patch_names: list[str] = Field(default_factory=list)
