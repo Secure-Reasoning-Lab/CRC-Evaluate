@@ -386,6 +386,53 @@ class TestRunEvaluatorMain:
     @patch("crsbench.distributed.evaluator.create_redis_connection")
     @patch("crsbench.distributed.evaluator.start_presence_thread")
     @patch("crsbench.distributed.evaluator_jobs.set_engine")
+    def test_dispatcher_mode_passes_claim_refill_callback_to_supervisor(
+        self,
+        mock_set_engine: MagicMock,
+        mock_start_presence_thread: MagicMock,
+        mock_create_redis_connection: MagicMock,
+        mock_start_dispatcher_thread: MagicMock,
+        mock_start_dispatcher_warmup_thread: MagicMock,
+        mock_start_claim_thread: MagicMock,
+        mock_supervisor: MagicMock,
+        monkeypatch,
+    ) -> None:
+        from crsbench.distributed.evaluator import run_evaluator_main
+
+        mock_supervisor.return_value = 0
+        mock_create_redis_connection.return_value = MagicMock()
+        mock_start_claim_thread.return_value = (MagicMock(), MagicMock())
+        mock_start_dispatcher_warmup_thread.return_value = (MagicMock(), MagicMock())
+        monkeypatch.setenv("CRSBENCH_EVALUATOR_ROUTING_MODEL", "dispatcher")
+        config = MagicMock()
+        config.oss_fuzz_path = "/tmp/oss-fuzz"
+        config.per_pov_verify_timeout = 180
+
+        with patch("crsbench.evaluation.verification.pov.engine.VerificationEngine"):
+            result = run_evaluator_main(
+                config,
+                "exp-test",
+                worker_name="eval-1",
+                build_jobs=3,
+                verify_jobs=5,
+            )
+
+        assert result == 0
+        claim_worker = mock_start_claim_thread.call_args.args[0]
+        assert claim_worker.local_verify_capacity == 5
+        callback = mock_supervisor.call_args.kwargs["on_verify_workers_reaped"]
+        assert callback == claim_worker.notify_verify_capacity_opened
+        mock_start_presence_thread.assert_not_called()
+        mock_start_dispatcher_thread.assert_not_called()
+
+    @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
+    @patch("crsbench.distributed.ci_supervisor.run_ci_supervisor")
+    @patch("crsbench.distributed.evaluator.start_claim_thread")
+    @patch("crsbench.distributed.evaluator.start_dispatcher_warmup_thread")
+    @patch("crsbench.distributed.evaluator.start_dispatcher_thread")
+    @patch("crsbench.distributed.evaluator.create_redis_connection")
+    @patch("crsbench.distributed.evaluator.start_presence_thread")
+    @patch("crsbench.distributed.evaluator_jobs.set_engine")
     def test_dispatcher_mode_keeps_build_capacity_floor_when_verify_headroom_is_lower(
         self,
         mock_set_engine: MagicMock,

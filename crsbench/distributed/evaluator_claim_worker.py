@@ -35,6 +35,7 @@ CLAIM_LEASE_SECONDS = 30
 CLAIM_POLL_INTERVAL_SECONDS = 1.0
 VERIFY_JOB_TIMEOUT_SECONDS = 3600
 BUILD_JOB_TIMEOUT_SECONDS = 3600
+DEFAULT_ADAPTIVE_HEADROOM_DECAY_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -165,6 +166,11 @@ class EvaluatorClaimWorker:
         claim_lease_seconds: int = CLAIM_LEASE_SECONDS,
         max_inflight_requests: int = 1,
         claim_batch_size: int = 1,
+        local_verify_capacity: int | None = None,
+        buffered_claim_max_hold_seconds: float | None = None,
+        adaptive_headroom_decay_seconds: float = (
+            DEFAULT_ADAPTIVE_HEADROOM_DECAY_SECONDS
+        ),
     ) -> None:
         self.store = EvaluatorVerifyClaimStore(
             redis_conn,
@@ -179,10 +185,113 @@ class EvaluatorClaimWorker:
         self.claim_lease_seconds = max(1, int(claim_lease_seconds))
         self.max_inflight_requests = max(1, int(max_inflight_requests))
         self.claim_batch_size = max(1, int(claim_batch_size))
+        self.local_verify_capacity = max(
+            1,
+            int(local_verify_capacity or self.max_inflight_requests),
+        )
+        if buffered_claim_max_hold_seconds is None:
+            buffered_claim_max_hold_seconds = float(self.claim_lease_seconds)
+        self.buffered_claim_max_hold_seconds = max(
+            0.0,
+            float(buffered_claim_max_hold_seconds),
+        )
+        self.adaptive_headroom_decay_seconds = max(
+            0.0,
+            float(adaptive_headroom_decay_seconds),
+        )
         self._active_claims: dict[str, _ActiveClaim] = {}
         self._active_claims_lock = threading.Lock()
         self._warmup_enqueue_gate = threading.Lock()
         self._claimed_request_buffer: deque[VerifyRequestRecord] = deque()
+        self._claimed_request_buffered_at: dict[str, float] = {}
+        self._adaptive_extra_headroom = 0
+        self._last_refill_miss_at: float | None = None
+        self._pending_verify_capacity_open = 0
+        self._wake_event = threading.Event()
+
+    def notify_verify_capacity_opened(self) -> None:
+        self._pending_verify_capacity_open += 1
+        self._wake_event.set()
+
+    def wait_for_claim_work(
+        self,
+        stop_event: threading.Event,
+        *,
+        poll_interval_seconds: float,
+    ) -> bool:
+        deadline = time.monotonic() + max(float(poll_interval_seconds), 0.0)
+        while True:
+            if stop_event.is_set():
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            if self._wake_event.wait(timeout=min(remaining, 0.1)):
+                self._wake_event.clear()
+                return stop_event.is_set()
+
+    def _current_outstanding_target(self) -> int:
+        return self.max_inflight_requests + self._adaptive_extra_headroom
+
+    def _outstanding_claim_count(self) -> int:
+        return len(self._active_claims) + len(self._claimed_request_buffer)
+
+    def _record_buffered_claims(
+        self,
+        claimed_records: list[VerifyRequestRecord],
+        *,
+        now: float,
+    ) -> None:
+        for claimed in claimed_records:
+            self._claimed_request_buffer.append(claimed)
+            self._claimed_request_buffered_at[claimed.request_id] = now
+
+    def _pop_buffered_claim(self) -> VerifyRequestRecord | None:
+        if not self._claimed_request_buffer:
+            return None
+        claimed = self._claimed_request_buffer.popleft()
+        self._claimed_request_buffered_at.pop(claimed.request_id, None)
+        return claimed
+
+    def _release_claimed_request(self, *, request_id: str) -> bool:
+        self._claimed_request_buffered_at.pop(request_id, None)
+        return self.store.release_claim_if_current(
+            request_id=request_id,
+            evaluator_id=self.evaluator_id,
+        )
+
+    def _apply_adaptive_headroom_decay(self, *, now: float) -> None:
+        if (
+            self._adaptive_extra_headroom <= 0
+            or self.adaptive_headroom_decay_seconds <= 0
+            or self._last_refill_miss_at is None
+        ):
+            return
+        while (
+            self._adaptive_extra_headroom > 0
+            and now - self._last_refill_miss_at >= self.adaptive_headroom_decay_seconds
+        ):
+            self._adaptive_extra_headroom -= 1
+            if self._adaptive_extra_headroom <= 0:
+                self._adaptive_extra_headroom = 0
+                self._last_refill_miss_at = None
+                return
+            self._last_refill_miss_at += self.adaptive_headroom_decay_seconds
+
+    def _maybe_record_refill_miss(
+        self,
+        *,
+        now: float,
+        claimed_any: bool,
+        buffer_was_empty: bool,
+    ) -> None:
+        if self._pending_verify_capacity_open > 0 and buffer_was_empty and claimed_any:
+            self._adaptive_extra_headroom = min(
+                self.local_verify_capacity,
+                self._adaptive_extra_headroom + 1,
+            )
+            self._last_refill_miss_at = now
+        self._pending_verify_capacity_open = 0
 
     def _active_claim_snapshot(self) -> tuple[set[str], tuple[_ActiveClaim, ...]]:
         with self._active_claims_lock:
@@ -282,11 +391,25 @@ class EvaluatorClaimWorker:
                 for request_id in completed:
                     self._active_claims.pop(request_id, None)
 
+        self._apply_adaptive_headroom_decay(now=now)
+
         if self._claimed_request_buffer:
             retained_buffer: deque[VerifyRequestRecord] = deque()
+            active_count = len(self._active_claims)
+            allowed_buffered = max(0, self._current_outstanding_target() - active_count)
             for claimed in self._claimed_request_buffer:
+                buffered_at = self._claimed_request_buffered_at.get(
+                    claimed.request_id,
+                    now,
+                )
+                if len(retained_buffer) >= allowed_buffered or (
+                    now - buffered_at > self.buffered_claim_max_hold_seconds
+                ):
+                    self._release_claimed_request(request_id=claimed.request_id)
+                    continue
                 record = self.store.load_request(claimed.request_id)
                 if record is None or record.terminal_result is not None:
+                    self._claimed_request_buffered_at.pop(claimed.request_id, None)
                     continue
                 renewed = self.store.renew_claim(
                     request_id=claimed.request_id,
@@ -296,12 +419,14 @@ class EvaluatorClaimWorker:
                 )
                 if renewed:
                     retained_buffer.append(claimed)
+                else:
+                    self._claimed_request_buffered_at.pop(claimed.request_id, None)
             self._claimed_request_buffer = retained_buffer
 
     def dispatch_one(self, *, now: float) -> VerifyRequestRecord | None:
         # `dispatch_one()` only runs on the claim-loop thread; cross-thread
         # coordination is limited to warmup reads of active/materializing state.
-        if len(self._active_claims) >= self.max_inflight_requests:
+        if len(self._active_claims) >= self._current_outstanding_target():
             return None
         claimed = self._pop_next_claimed_request(now=now)
         if claimed is None:
@@ -326,10 +451,18 @@ class EvaluatorClaimWorker:
         return claimed
 
     def _claim_request_batch(self, *, now: float) -> list[VerifyRequestRecord]:
-        available_slots = self.max_inflight_requests - len(self._active_claims)
-        if available_slots <= 0:
+        buffer_was_empty = not self._claimed_request_buffer
+        target_gap = (
+            self._current_outstanding_target() - self._outstanding_claim_count()
+        )
+        if target_gap <= 0:
+            self._pending_verify_capacity_open = 0
             return []
-        claim_limit = min(self.claim_batch_size, available_slots)
+        claim_limit = min(
+            self.claim_batch_size,
+            self.local_verify_capacity,
+            target_gap,
+        )
         with self._warmup_enqueue_gate:
             if claim_limit <= 1:
                 claimed = self.store.claim_next_request(
@@ -337,21 +470,29 @@ class EvaluatorClaimWorker:
                     now=now,
                     lease_seconds=self.claim_lease_seconds,
                 )
-                return [] if claimed is None else [claimed]
-            return self.store.claim_next_requests(
-                evaluator_id=self.evaluator_id,
-                now=now,
-                lease_seconds=self.claim_lease_seconds,
-                limit=claim_limit,
-            )
+                claimed_records = [] if claimed is None else [claimed]
+            else:
+                claimed_records = self.store.claim_next_requests(
+                    evaluator_id=self.evaluator_id,
+                    now=now,
+                    lease_seconds=self.claim_lease_seconds,
+                    limit=claim_limit,
+                )
+        self._maybe_record_refill_miss(
+            now=now,
+            claimed_any=bool(claimed_records),
+            buffer_was_empty=buffer_was_empty,
+        )
+        return claimed_records
 
     def _pop_next_claimed_request(self, *, now: float) -> VerifyRequestRecord | None:
-        if self._claimed_request_buffer:
-            return self._claimed_request_buffer.popleft()
+        claimed = self._pop_buffered_claim()
+        if claimed is not None:
+            return claimed
         claimed_batch = self._claim_request_batch(now=now)
         if not claimed_batch:
             return None
-        self._claimed_request_buffer.extend(claimed_batch[1:])
+        self._record_buffered_claims(claimed_batch[1:], now=now)
         return claimed_batch[0]
 
     def dispatch_available(self, *, now: float) -> VerifyRequestRecord | None:
@@ -640,7 +781,10 @@ def start_claim_thread(
                 worker.tick(now=time.time())
             except Exception:
                 logger.exception("Evaluator claim loop iteration failed")
-            if stop_event.wait(poll_interval_seconds):
+            if worker.wait_for_claim_work(
+                stop_event,
+                poll_interval_seconds=poll_interval_seconds,
+            ):
                 return
 
     thread = threading.Thread(

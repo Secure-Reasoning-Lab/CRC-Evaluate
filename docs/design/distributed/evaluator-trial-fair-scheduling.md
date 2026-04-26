@@ -137,15 +137,23 @@ worker-side contracts.
   dispatcher placement, local supervisors execute the already-selected work but
   do not define global owner turns
 - evaluator-local claim intake is capacity-bounded: one claim-loop tick may
-  materialize multiple logical verify requests until the local inflight limit is
-  reached instead of pinning dispatcher intake to a single active request
-- when config-pinned cloud evaluator fleet size is known from
-  `cloud.evaluators.placements[].count`, dispatcher claim intake adds
-  `ceil(local_verify_capacity / evaluator_count)` extra logical verify
-  headroom above local verify width, uses the same derived value as the
-  per-transaction claim batch size, and still keeps local build capacity as a
-  floor so short verify completions can be refilled without waiting for the
-  next one-second poll to expose idle local slots
+  materialize multiple logical verify requests until the current local
+  outstanding target is reached instead of pinning dispatcher intake to a
+  single active request
+- `evaluator.py` still resolves a conservative baseline
+  `max_inflight_requests` and `claim_batch_size` from local build/verify width,
+  with optional config-pinned cloud fleet-size headroom when
+  `cloud.evaluators.placements[].count` is known; that baseline is not the only
+  source of dispatcher refill aggressiveness
+- when local verify workers finish, the claim loop must wake immediately via
+  verify-capacity-open notifications rather than relying only on the one-second
+  poll fallback
+- after such a wakeup, if the local claimed-request buffer was empty and a
+  refill claim succeeds, the evaluator may increase an adaptive extra verify
+  headroom by one to compensate for refill misses; that extra headroom is
+  capped by `local_verify_capacity` and must decay over time
+- adaptive headroom and immediate wakeups change refill timing only; they must
+  not change Redis-side owner-fair claim ordering for logical requests
 - dispatcher-mode evaluators may enqueue advisory warmup builds onto their own
   local build queue before async POV demand arrives; those warmup jobs are
   cache priming only and are not part of the correctness path for dispatcher
@@ -184,6 +192,14 @@ worker-side contracts.
 - the runtime currently uses a Redis-backed fair-claim lease to distinguish an
   in-progress pre-start handoff from an abandoned claim; lease refresh and
   expiry are implementation details, not part of the TLA+ abstraction
+- claimed logical verify requests may be buffered locally only as short-lived
+  leased claims while they remain within the evaluator's current outstanding
+  target
+- buffered claims may be renewed while retained, but they must not be renewed
+  indefinitely just because they were claimed once
+- if buffered claims exceed the current target or outlive the local buffered
+  hold window, the evaluator must explicitly release them back to Redis so they
+  re-enter normal owner-fair claim ordering
 - retries caused by spawn failure, CPU allocation failure, or similar local
   retry paths restore the queued job to the queue front so the same attempt can
   be retried without reserialization
@@ -204,6 +220,9 @@ worker-side contracts.
 - stale intermediate claim state from an evaluator crash or startup failure must
   be reconciled back into runnable or terminal state without silently
   discarding the job
+- reconciliation must tolerate both lease expiry and explicit local release of
+  buffered claims; restart recovery must not assume those claims were renewed
+  indefinitely
 - evaluator startup and configless queue refresh recompute that derived ready
   view idempotently so fairness does not depend on a clean prior shutdown
 - stale scheduler metadata must not suppress queued jobs from being dispatched

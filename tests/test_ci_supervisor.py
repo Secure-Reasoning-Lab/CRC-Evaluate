@@ -88,6 +88,47 @@ class TestCiSupervisorQueues:
         assert "crsbench_ci_verify" in queues_created
         assert result == 0
 
+    def test_notifies_when_verify_workers_finish(self) -> None:
+        """Supervisor should notify when verify worker capacity opens."""
+        from crsbench.distributed.ci_supervisor import run_ci_supervisor
+
+        mock_build_queue = _make_mock_queue("crsbench_ci_build")
+        mock_verify_queue = _make_mock_queue("crsbench_ci_verify")
+        _configure_intermediate_queue(mock_build_queue)
+        _configure_intermediate_queue(mock_verify_queue)
+        callback = MagicMock()
+
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor._reap_finished",
+                side_effect=[0, 1, KeyboardInterrupt],
+            ),
+            patch(
+                "crsbench.distributed.ci_supervisor._select_fair_job",
+                return_value=None,
+            ),
+            patch("crsbench.distributed.ci_supervisor.time.sleep", return_value=None),
+        ):
+            mock_rq.Queue.side_effect = lambda name, **_kwargs: (
+                mock_build_queue if "build" in name else mock_verify_queue
+            )
+            result = run_ci_supervisor(
+                redis_host="localhost",
+                build_queue_name="crsbench_ci_build",
+                verify_queue_name="crsbench_ci_verify",
+                worker_name="test-worker",
+                build_jobs=1,
+                build_cores_per_job=1,
+                verify_jobs=1,
+                job_runner=lambda _h, _n, _j: None,
+                on_verify_workers_reaped=callback,
+            )
+
+        assert result == 0
+        callback.assert_called_once()
+
     def test_no_longer_uses_ordered_dequeue_priority(self) -> None:
         """Supervisor should not call legacy ordered `dequeue_any()` anymore."""
         from crsbench.distributed.ci_supervisor import run_ci_supervisor

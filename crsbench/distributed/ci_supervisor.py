@@ -424,6 +424,7 @@ def run_ci_supervisor(
     idle_timeout: int = 0,
     cpu_tag: Optional[str] = None,
     progress_log_every_jobs: int = 0,
+    on_verify_workers_reaped: Callable[[], None] | None = None,
 ) -> int:
     """Dual-queue supervisor for evaluator CI mode.
 
@@ -568,13 +569,16 @@ def run_ci_supervisor(
                 deferred_cgroup_cleanup,
                 redis_conn=redis_conn,
             )
-            handled_verify_jobs += _reap_finished(
+            reaped_verify_jobs = _reap_finished(
                 verify_active,
                 cpu_pool,
                 used_worker_nums,
                 deferred_cgroup_cleanup,
                 redis_conn=redis_conn,
             )
+            handled_verify_jobs += reaped_verify_jobs
+            if reaped_verify_jobs > 0 and on_verify_workers_reaped is not None:
+                on_verify_workers_reaped()
             if handled_build_jobs + handled_verify_jobs != previous_total:
                 _log_handled_job_progress(
                     previous_total=previous_total,

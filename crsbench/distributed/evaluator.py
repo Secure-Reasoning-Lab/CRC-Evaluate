@@ -595,6 +595,8 @@ def run_evaluator_main(
                 build_jobs=build_jobs,
                 verify_jobs=verify_jobs,
             ),
+            local_verify_capacity=max(verify_jobs or (build_jobs or 1), 1),
+            buffered_claim_max_hold_seconds=2.0,
         )
         claim_loop = start_claim_thread(claim_worker)
         warmup_loop = start_dispatcher_warmup_thread(
@@ -635,6 +637,11 @@ def run_evaluator_main(
             cpu_tag=cpu_tag,
             idle_timeout=idle_timeout,
             progress_log_every_jobs=EVALUATOR_PROGRESS_LOG_EVERY_JOBS,
+            on_verify_workers_reaped=(
+                claim_worker.notify_verify_capacity_opened
+                if claim_loop is not None
+                else None
+            ),
         )
     finally:
         if warmup_loop is not None:

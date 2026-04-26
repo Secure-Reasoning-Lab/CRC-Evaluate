@@ -956,6 +956,69 @@ def test_tick_claims_until_inflight_limit() -> None:
     assert len(worker.verify_queue.enqueued) == 2
 
 
+def test_claim_request_batch_uses_outstanding_target_not_active_claim_count() -> None:
+    from crsbench.distributed.evaluator_claim_worker import (
+        EvaluatorClaimWorker,
+        _ActiveClaim,
+    )
+
+    redis_conn = _FakeRedis()
+    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
+    patch_payload = PatchJobPayload(
+        experiment_name="exp1",
+        trial_id="trial-1",
+        benchmark="test-benchmark",
+        harness="h1",
+        cpv_id="cpv-1",
+        patch=EmbeddedPatch(
+            patch_id="patch-1",
+            pov_id="cpv-1",
+            patch_content_b64="cGF0Y2g=",
+        ),
+        sanitizer="address",
+        source_mode="main_repo",
+        verify_variants=True,
+        test_mode="FULL",
+        use_inc_build=True,
+        enqueued_at=100.0,
+    )
+    request_id = "patch-verify:trial-1:test-benchmark:h1:cpv-1:patch-1"
+    store.submit_request(
+        VerifyRequestRecord(
+            request_id=request_id,
+            owner_key="trial::exp1::trial-3",
+            request_kind="patch",
+            payload=patch_payload.to_dict(),
+        )
+    )
+
+    worker = EvaluatorClaimWorker(
+        redis_conn=redis_conn,
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=_FakeQueue("build-q"),
+        verify_queue=_FakeQueue("verify-q"),
+        verification_engine=MagicMock(),
+        benchmarks_root=Path("/benchmarks"),
+        max_inflight_requests=2,
+        claim_batch_size=2,
+        local_verify_capacity=2,
+    )
+    worker._adaptive_extra_headroom = 1
+    worker._active_claims["request-a"] = _ActiveClaim(
+        local_verify_job_id="verify-a",
+        required_build_job_ids=(),
+    )
+    worker._active_claims["request-b"] = _ActiveClaim(
+        local_verify_job_id="verify-b",
+        required_build_job_ids=(),
+    )
+
+    claimed = worker._claim_request_batch(now=100.0)
+
+    assert [record.request_id for record in claimed] == [request_id]
+
+
 def test_tick_uses_batched_claim_fetch_when_batch_size_exceeds_one() -> None:
     from crsbench.distributed.evaluator_claim_worker import EvaluatorClaimWorker
 
@@ -1039,6 +1102,58 @@ def test_tick_uses_batched_claim_fetch_when_batch_size_exceeds_one() -> None:
     assert len(worker.verify_queue.enqueued) == 2
 
 
+def test_tick_grows_adaptive_headroom_after_refill_miss() -> None:
+    from crsbench.distributed.evaluator_claim_worker import EvaluatorClaimWorker
+
+    redis_conn = _FakeRedis()
+    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
+    patch_payload = PatchJobPayload(
+        experiment_name="exp1",
+        trial_id="trial-1",
+        benchmark="test-benchmark",
+        harness="h1",
+        cpv_id="cpv-1",
+        patch=EmbeddedPatch(
+            patch_id="patch-1",
+            pov_id="cpv-1",
+            patch_content_b64="cGF0Y2g=",
+        ),
+        sanitizer="address",
+        source_mode="main_repo",
+        verify_variants=True,
+        test_mode="FULL",
+        use_inc_build=True,
+        enqueued_at=100.0,
+    )
+    store.submit_request(
+        VerifyRequestRecord(
+            request_id="patch-verify:trial-1:test-benchmark:h1:cpv-1:patch-1",
+            owner_key="trial::exp1::trial-1",
+            request_kind="patch",
+            payload=patch_payload.to_dict(),
+        )
+    )
+
+    worker = EvaluatorClaimWorker(
+        redis_conn=redis_conn,
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=_FakeQueue("build-q"),
+        verify_queue=_FakeQueue("verify-q"),
+        verification_engine=MagicMock(),
+        benchmarks_root=Path("/benchmarks"),
+        max_inflight_requests=1,
+        claim_batch_size=2,
+        local_verify_capacity=2,
+    )
+
+    worker.notify_verify_capacity_opened()
+    claimed = worker.tick(now=100.0)
+
+    assert claimed is not None
+    assert worker._adaptive_extra_headroom == 1
+
+
 def test_refresh_active_claims_renews_buffered_claims() -> None:
     from crsbench.distributed.evaluator_claim_worker import EvaluatorClaimWorker
 
@@ -1104,6 +1219,134 @@ def test_refresh_active_claims_renews_buffered_claims() -> None:
     assert buffered_after.claim is not None
     assert buffered_after.claim.expires_at == 108.0
     assert len(worker._claimed_request_buffer) == 1
+
+
+def test_refresh_active_claims_releases_buffered_claims_above_target() -> None:
+    from crsbench.distributed.evaluator_claim_worker import EvaluatorClaimWorker
+
+    redis_conn = _FakeRedis()
+    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
+    request_ids: list[str] = []
+    for index in (1, 2):
+        patch_payload = PatchJobPayload(
+            experiment_name="exp1",
+            trial_id="trial-1",
+            benchmark="test-benchmark",
+            harness="h1",
+            cpv_id=f"cpv-{index}",
+            patch=EmbeddedPatch(
+                patch_id=f"patch-{index}",
+                pov_id=f"cpv-{index}",
+                patch_content_b64="cGF0Y2g=",
+            ),
+            sanitizer="address",
+            source_mode="main_repo",
+            verify_variants=True,
+            test_mode="FULL",
+            use_inc_build=True,
+            enqueued_at=100.0,
+        )
+        request_id = f"patch-verify:trial-1:test-benchmark:h1:cpv-{index}:patch-{index}"
+        request_ids.append(request_id)
+        store.submit_request(
+            VerifyRequestRecord(
+                request_id=request_id,
+                owner_key=f"trial::exp1::trial-{index}",
+                request_kind="patch",
+                payload=patch_payload.to_dict(),
+            )
+        )
+
+    worker = EvaluatorClaimWorker(
+        redis_conn=redis_conn,
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=_FakeQueue("build-q"),
+        verify_queue=_FakeQueue("verify-q"),
+        verification_engine=MagicMock(),
+        benchmarks_root=Path("/benchmarks"),
+        claim_lease_seconds=5,
+        max_inflight_requests=2,
+        claim_batch_size=2,
+        local_verify_capacity=2,
+    )
+
+    claimed = worker.dispatch_one(now=100.0)
+
+    assert claimed is not None
+    assert len(worker._claimed_request_buffer) == 1
+
+    worker.max_inflight_requests = 1
+    worker.refresh_active_claims(now=103.0)
+
+    buffered_after = store.load_request(request_ids[1])
+    assert buffered_after is not None
+    assert buffered_after.claim is None
+    assert len(worker._claimed_request_buffer) == 0
+
+
+def test_refresh_active_claims_releases_buffered_claim_past_hold_window() -> None:
+    from crsbench.distributed.evaluator_claim_worker import EvaluatorClaimWorker
+
+    redis_conn = _FakeRedis()
+    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
+    request_ids: list[str] = []
+    for index in (1, 2):
+        patch_payload = PatchJobPayload(
+            experiment_name="exp1",
+            trial_id="trial-1",
+            benchmark="test-benchmark",
+            harness="h1",
+            cpv_id=f"cpv-{index}",
+            patch=EmbeddedPatch(
+                patch_id=f"patch-{index}",
+                pov_id=f"cpv-{index}",
+                patch_content_b64="cGF0Y2g=",
+            ),
+            sanitizer="address",
+            source_mode="main_repo",
+            verify_variants=True,
+            test_mode="FULL",
+            use_inc_build=True,
+            enqueued_at=100.0,
+        )
+        request_id = f"patch-verify:trial-1:test-benchmark:h1:cpv-{index}:patch-{index}"
+        request_ids.append(request_id)
+        store.submit_request(
+            VerifyRequestRecord(
+                request_id=request_id,
+                owner_key=f"trial::exp1::trial-{index}",
+                request_kind="patch",
+                payload=patch_payload.to_dict(),
+            )
+        )
+
+    worker = EvaluatorClaimWorker(
+        redis_conn=redis_conn,
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=_FakeQueue("build-q"),
+        verify_queue=_FakeQueue("verify-q"),
+        verification_engine=MagicMock(),
+        benchmarks_root=Path("/benchmarks"),
+        claim_lease_seconds=5,
+        max_inflight_requests=2,
+        claim_batch_size=2,
+        local_verify_capacity=2,
+        buffered_claim_max_hold_seconds=2.0,
+    )
+
+    claimed = worker.dispatch_one(now=100.0)
+
+    assert claimed is not None
+    assert len(worker._claimed_request_buffer) == 1
+
+    worker.refresh_active_claims(now=103.0)
+
+    buffered_after = store.load_request(request_ids[1])
+    assert buffered_after is not None
+    assert buffered_after.claim is None
+    assert len(worker._claimed_request_buffer) == 0
 
 
 def test_enqueue_or_reuse_job_adopts_trial_owner_for_reused_warmup_job() -> None:
@@ -1579,3 +1822,31 @@ def test_enqueue_or_reuse_job_refreshes_terminal_verify_job_via_opaque_queue_rem
     assert refreshed.id == terminal_job.id
     assert refreshed is not terminal_job
     assert refreshed.get_status() == "queued"
+
+
+def test_wait_for_claim_work_returns_early_after_notify() -> None:
+    from crsbench.distributed.evaluator_claim_worker import EvaluatorClaimWorker
+
+    worker = EvaluatorClaimWorker(
+        redis_conn=_FakeRedis(),
+        experiment_name="exp1",
+        evaluator_id="eval-1",
+        build_queue=_FakeQueue("build-q"),
+        verify_queue=_FakeQueue("verify-q"),
+        verification_engine=MagicMock(),
+        benchmarks_root=Path("/benchmarks"),
+        max_inflight_requests=1,
+        local_verify_capacity=1,
+    )
+    stop_event = threading.Event()
+
+    worker.notify_verify_capacity_opened()
+    started_at = time.monotonic()
+    should_stop = worker.wait_for_claim_work(
+        stop_event,
+        poll_interval_seconds=30.0,
+    )
+    elapsed = time.monotonic() - started_at
+
+    assert should_stop is False
+    assert elapsed < 1.0
