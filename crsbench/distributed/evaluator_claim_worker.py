@@ -189,11 +189,10 @@ class EvaluatorClaimWorker:
             1,
             int(local_verify_capacity or self.max_inflight_requests),
         )
-        if buffered_claim_max_hold_seconds is None:
-            buffered_claim_max_hold_seconds = float(self.claim_lease_seconds)
-        self.buffered_claim_max_hold_seconds = max(
-            0.0,
-            float(buffered_claim_max_hold_seconds),
+        self.buffered_claim_max_hold_seconds = (
+            None
+            if buffered_claim_max_hold_seconds is None
+            else max(0.0, float(buffered_claim_max_hold_seconds))
         )
         self.adaptive_headroom_decay_seconds = max(
             0.0,
@@ -207,11 +206,13 @@ class EvaluatorClaimWorker:
         self._adaptive_extra_headroom = 0
         self._last_refill_miss_at: float | None = None
         self._pending_verify_capacity_open = 0
-        self._wake_event = threading.Event()
+        self._pending_verify_capacity_open_lock = threading.Lock()
+        self._wake_semaphore = threading.Semaphore(0)
 
     def notify_verify_capacity_opened(self) -> None:
-        self._pending_verify_capacity_open += 1
-        self._wake_event.set()
+        with self._pending_verify_capacity_open_lock:
+            self._pending_verify_capacity_open += 1
+        self._wake_semaphore.release()
 
     def wait_for_claim_work(
         self,
@@ -226,8 +227,7 @@ class EvaluatorClaimWorker:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return False
-            if self._wake_event.wait(timeout=min(remaining, 0.1)):
-                self._wake_event.clear()
+            if self._wake_semaphore.acquire(timeout=min(remaining, 0.1)):
                 return stop_event.is_set()
 
     def _current_outstanding_target(self) -> int:
@@ -253,12 +253,31 @@ class EvaluatorClaimWorker:
         self._claimed_request_buffered_at.pop(claimed.request_id, None)
         return claimed
 
-    def _release_claimed_request(self, *, request_id: str) -> bool:
+    def _release_claimed_request(
+        self,
+        *,
+        request_id: str,
+        now: float | None = None,
+        restore_owner_turn: bool = False,
+    ) -> bool:
         self._claimed_request_buffered_at.pop(request_id, None)
         return self.store.release_claim_if_current(
             request_id=request_id,
             evaluator_id=self.evaluator_id,
+            now=now,
+            restore_owner_turn=restore_owner_turn,
         )
+
+    def _consume_verify_capacity_open(self) -> None:
+        with self._pending_verify_capacity_open_lock:
+            if self._pending_verify_capacity_open > 0:
+                self._pending_verify_capacity_open -= 1
+
+    def _take_pending_verify_capacity_open(self) -> int:
+        with self._pending_verify_capacity_open_lock:
+            pending = self._pending_verify_capacity_open
+            self._pending_verify_capacity_open = 0
+            return pending
 
     def _apply_adaptive_headroom_decay(self, *, now: float) -> None:
         if (
@@ -285,13 +304,13 @@ class EvaluatorClaimWorker:
         claimed_any: bool,
         buffer_was_empty: bool,
     ) -> None:
-        if self._pending_verify_capacity_open > 0 and buffer_was_empty and claimed_any:
+        had_pending_capacity_open = self._take_pending_verify_capacity_open() > 0
+        if had_pending_capacity_open and buffer_was_empty and claimed_any:
             self._adaptive_extra_headroom = min(
                 self.local_verify_capacity,
                 self._adaptive_extra_headroom + 1,
             )
             self._last_refill_miss_at = now
-        self._pending_verify_capacity_open = 0
 
     def _active_claim_snapshot(self) -> tuple[set[str], tuple[_ActiveClaim, ...]]:
         with self._active_claims_lock:
@@ -395,6 +414,7 @@ class EvaluatorClaimWorker:
 
         if self._claimed_request_buffer:
             retained_buffer: deque[VerifyRequestRecord] = deque()
+            released_buffered_request_ids: list[str] = []
             active_count = len(self._active_claims)
             allowed_buffered = max(0, self._current_outstanding_target() - active_count)
             for claimed in self._claimed_request_buffer:
@@ -403,9 +423,10 @@ class EvaluatorClaimWorker:
                     now,
                 )
                 if len(retained_buffer) >= allowed_buffered or (
-                    now - buffered_at > self.buffered_claim_max_hold_seconds
+                    self.buffered_claim_max_hold_seconds is not None
+                    and now - buffered_at > self.buffered_claim_max_hold_seconds
                 ):
-                    self._release_claimed_request(request_id=claimed.request_id)
+                    released_buffered_request_ids.append(claimed.request_id)
                     continue
                 record = self.store.load_request(claimed.request_id)
                 if record is None or record.terminal_result is not None:
@@ -422,6 +443,12 @@ class EvaluatorClaimWorker:
                 else:
                     self._claimed_request_buffered_at.pop(claimed.request_id, None)
             self._claimed_request_buffer = retained_buffer
+            for request_id in reversed(released_buffered_request_ids):
+                self._release_claimed_request(
+                    request_id=request_id,
+                    now=now,
+                    restore_owner_turn=True,
+                )
 
     def dispatch_one(self, *, now: float) -> VerifyRequestRecord | None:
         # `dispatch_one()` only runs on the claim-loop thread; cross-thread
@@ -456,7 +483,7 @@ class EvaluatorClaimWorker:
             self._current_outstanding_target() - self._outstanding_claim_count()
         )
         if target_gap <= 0:
-            self._pending_verify_capacity_open = 0
+            self._take_pending_verify_capacity_open()
             return []
         claim_limit = min(
             self.claim_batch_size,
@@ -488,6 +515,7 @@ class EvaluatorClaimWorker:
     def _pop_next_claimed_request(self, *, now: float) -> VerifyRequestRecord | None:
         claimed = self._pop_buffered_claim()
         if claimed is not None:
+            self._consume_verify_capacity_open()
             return claimed
         claimed_batch = self._claim_request_batch(now=now)
         if not claimed_batch:

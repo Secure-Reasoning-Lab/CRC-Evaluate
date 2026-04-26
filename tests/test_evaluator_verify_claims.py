@@ -224,6 +224,54 @@ def test_claim_next_requests_batches_round_robin_owners() -> None:
     )
 
 
+def test_release_claim_restores_released_owner_turn() -> None:
+    redis_conn = _FakeRedis()
+    store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")
+    request_ids = (
+        "verify:trial-1:bench-a:h1:pov-1",
+        "verify:trial-2:bench-b:h1:pov-1",
+        "verify:trial-3:bench-c:h1:pov-1",
+    )
+    for request_id, owner_key, benchmark in (
+        (request_ids[0], "trial::exp1::trial-1", "bench-a"),
+        (request_ids[1], "trial::exp1::trial-2", "bench-b"),
+        (request_ids[2], "trial::exp1::trial-3", "bench-c"),
+    ):
+        store.submit_request(
+            VerifyRequestRecord(
+                request_id=request_id,
+                owner_key=owner_key,
+                request_kind="pov",
+                payload={"benchmark": benchmark},
+            )
+        )
+
+    claimed = store.claim_next_requests(
+        evaluator_id="eval-1",
+        now=100.0,
+        lease_seconds=30,
+        limit=2,
+    )
+
+    assert [record.request_id for record in claimed] == list(request_ids[:2])
+    assert store.release_claim_if_current(
+        request_id=request_ids[1],
+        evaluator_id="eval-1",
+        now=101.0,
+        restore_owner_turn=True,
+    )
+
+    reclaimed = store.claim_next_request(
+        evaluator_id="eval-2",
+        now=101.0,
+        lease_seconds=30,
+    )
+
+    assert reclaimed is not None
+    assert reclaimed.request_id == request_ids[1]
+    assert reclaimed.claim == VerifyClaim(evaluator_id="eval-2", expires_at=131.0)
+
+
 def test_expired_claim_can_be_reclaimed() -> None:
     redis_conn = _FakeRedis()
     store = EvaluatorVerifyClaimStore(redis_conn, experiment_name="exp1")

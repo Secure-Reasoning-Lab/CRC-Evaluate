@@ -102,6 +102,25 @@ class EvaluatorVerifyClaimStore:
         records = [self._deserialize_record(raw) for raw in mapping.values()]
         return sorted(records, key=lambda record: record.request_id)
 
+    def _eligible_records_for_claim(
+        self,
+        records: list[VerifyRequestRecord],
+        *,
+        now: float,
+    ) -> list[VerifyRequestRecord]:
+        return [
+            record
+            for record in records
+            if record.terminal_result is None
+            and (record.claim is None or record.claim.expires_at <= now)
+        ]
+
+    def _owner_order_for_records(
+        self,
+        records: list[VerifyRequestRecord],
+    ) -> list[str]:
+        return list(dict.fromkeys(record.owner_key for record in records))
+
     def _build_claim_batch(
         self,
         *,
@@ -216,12 +235,7 @@ class EvaluatorVerifyClaimStore:
                     records = self._sorted_records_from_mapping(
                         pipe.hgetall(requests_key)
                     )
-                    eligible = [
-                        record
-                        for record in records
-                        if record.terminal_result is None
-                        and (record.claim is None or record.claim.expires_at <= now)
-                    ]
+                    eligible = self._eligible_records_for_claim(records, now=now)
                     if not eligible:
                         pipe.unwatch()
                         return []
@@ -319,13 +333,25 @@ class EvaluatorVerifyClaimStore:
         *,
         request_id: str,
         evaluator_id: str,
+        now: float | None = None,
+        restore_owner_turn: bool = False,
     ) -> bool:
         requests_key = self._requests_key()
+        cursor_key = self._cursor_key()
+        if restore_owner_turn and now is None:
+            raise ValueError("`now` is required when restore_owner_turn is True")
+        release_now = now
         while True:
             try:
                 with self.redis.pipeline() as pipe:
-                    pipe.watch(requests_key)
-                    raw = pipe.hget(requests_key, request_id)
+                    watched_keys = [requests_key]
+                    if restore_owner_turn:
+                        watched_keys.append(cursor_key)
+                    pipe.watch(*watched_keys)
+                    mapping = pipe.hgetall(requests_key) if restore_owner_turn else None
+                    raw = (
+                        None if mapping is None else mapping.get(request_id)
+                    ) or pipe.hget(requests_key, request_id)
                     if raw is None:
                         pipe.unwatch()
                         return False
@@ -345,12 +371,31 @@ class EvaluatorVerifyClaimStore:
                         claim=None,
                         terminal_result=None,
                     )
+                    restored_last_owner: str | None = None
+                    if restore_owner_turn and mapping is not None:
+                        assert release_now is not None
+                        records_after_release = [
+                            released if existing.request_id == request_id else existing
+                            for existing in self._sorted_records_from_mapping(mapping)
+                        ]
+                        eligible_after_release = self._eligible_records_for_claim(
+                            records_after_release,
+                            now=release_now,
+                        )
+                        owner_order = self._owner_order_for_records(
+                            eligible_after_release
+                        )
+                        if released.owner_key in owner_order:
+                            restored_index = owner_order.index(released.owner_key)
+                            restored_last_owner = owner_order[restored_index - 1]
                     pipe.multi()
                     pipe.hset(
                         requests_key,
                         released.request_id,
                         self._serialize_record(released),
                     )
+                    if restore_owner_turn and restored_last_owner is not None:
+                        pipe.hset(cursor_key, "last_owner", restored_last_owner)
                     pipe.execute()
                     return True
             except WatchError:
