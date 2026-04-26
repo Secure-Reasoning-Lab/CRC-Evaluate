@@ -3764,11 +3764,28 @@ def test_monitor_jobs_rich_includes_finished_none_result() -> None:
         def update(self, *args, **kwargs):
             return None
 
+    class DummyInput:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+            self.manual_navigation_available = False
+            self.manual_navigation_status = ""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read_command(self, timeout_sec: float) -> str | None:
+            del timeout_sec
+            return None
+
     with (
         patch(
             "crsbench.distributed.queue.get_queue_stats",
             return_value={"queued": 0, "started": 0, "finished": 1, "failed": 0},
         ),
+        patch("crsbench.distributed.queue_monitor._RichMonitorInput", DummyInput),
         patch("rich.live.Live", DummyLive),
         patch("crsbench.run_experiment._write_orchestrator_marker") as marker,
     ):

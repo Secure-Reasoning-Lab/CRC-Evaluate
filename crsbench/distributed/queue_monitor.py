@@ -1053,7 +1053,13 @@ def _monitor_queue_rich(
     snapshot = build_monitor_snapshot(queue, experiment_name)
     _notify_snapshot(callbacks, snapshot)
     display_total = _display_total(snapshot, total_jobs)
-    use_alt_screen = console.is_terminal and not console.legacy_windows
+    stream_is_tty = False
+    isatty = getattr(console.file, "isatty", None)
+    try:
+        stream_is_tty = False if isatty is None else isatty()
+    except ValueError:
+        stream_is_tty = False
+    use_alt_screen = stream_is_tty and not console.legacy_windows
     with _RichMonitorInput() as monitor_input:
         (
             renderable,
