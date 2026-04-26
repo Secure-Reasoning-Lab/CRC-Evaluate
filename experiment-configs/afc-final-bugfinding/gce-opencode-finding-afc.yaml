@@ -110,8 +110,7 @@ cloud:
     defaults:
       instance_profile: gce-worker-n2d
     placements:
-      - {}
-      - {} # 2 workers x 224 (reduced from 3 due to LLM rate limits)
+      - {} # 1 worker x 224 (reduced from 2 due to LLM rate limits)
   evaluators:
     defaults:
       instance_profile: gce-evaluator-n2d
