@@ -64,7 +64,7 @@ evaluator:
   cores_per_job: 16
 cloud:
   remote:
-    experiment_root: /data/crsbench/experiment-data
+    experiment_root: /data/crsbench/experiment-data/cc-finding-original-except-afc-final-corpus-rerun
   defaults:
     readiness_timeout_sec: 1200
     crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
