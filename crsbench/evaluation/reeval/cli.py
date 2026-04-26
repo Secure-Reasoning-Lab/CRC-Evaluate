@@ -57,7 +57,7 @@ logger = get_logger(__name__)
 _POV_HASH_RE = re.compile(r"^(?:[0-9a-f]{16}|[0-9a-f]{64})$")
 
 REEVAL_POV_SAMPLE_SIZE_ENV = "CRSBENCH_REEVAL_POV_SAMPLE_SIZE"
-DEFAULT_REEVAL_POV_SAMPLE_SIZE = 1000
+DEFAULT_REEVAL_POV_SAMPLE_SIZE = 100
 
 
 def _get_reeval_pov_sample_size() -> int:
