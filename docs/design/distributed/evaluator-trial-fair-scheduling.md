@@ -139,6 +139,13 @@ worker-side contracts.
 - evaluator-local claim intake is capacity-bounded: one claim-loop tick may
   materialize multiple logical verify requests until the local inflight limit is
   reached instead of pinning dispatcher intake to a single active request
+- when config-pinned cloud evaluator fleet size is known from
+  `cloud.evaluators.placements[].count`, dispatcher claim intake adds
+  `ceil(local_verify_capacity / evaluator_count)` extra logical verify
+  headroom above local verify width, uses the same derived value as the
+  per-transaction claim batch size, and still keeps local build capacity as a
+  floor so short verify completions can be refilled without waiting for the
+  next one-second poll to expose idle local slots
 - dispatcher-mode evaluators may enqueue advisory warmup builds onto their own
   local build queue before async POV demand arrives; those warmup jobs are
   cache priming only and are not part of the correctness path for dispatcher
