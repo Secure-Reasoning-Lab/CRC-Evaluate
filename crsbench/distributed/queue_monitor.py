@@ -1059,7 +1059,9 @@ def _monitor_queue_rich(
         stream_is_tty = False if isatty is None else isatty()
     except ValueError:
         stream_is_tty = False
-    use_alt_screen = stream_is_tty and not console.legacy_windows
+    use_alt_screen = (
+        console.is_terminal and stream_is_tty and not console.legacy_windows
+    )
     with _RichMonitorInput() as monitor_input:
         (
             renderable,
