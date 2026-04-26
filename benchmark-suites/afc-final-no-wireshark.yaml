@@ -1,0 +1,35 @@
+Name: afc-final-no-wireshark
+Description: AFC Final round benchmarks excluding wireshark (delta-01..05, delta-07, full-01). Use when wireshark builds are too costly or run separately.
+Release date: 12.21.2025
+benchmark_list:
+  # C/C++ benchmarks
+  - afc-dav1d-full-01
+  - afc-curl-delta-02
+  - afc-curl-delta-03
+  - afc-curl-delta-04
+  - afc-curl-delta-05
+  - afc-freerdp-delta-02
+  - afc-freerdp-delta-03
+  - afc-lcms-full-01
+  - afc-libavif-delta-02
+  - afc-libexif-delta-02
+  - afc-libexif-delta-03
+  - afc-libxml2-delta-03
+  - afc-mongoose-delta-01
+  - afc-mongoose-delta-02
+  - afc-mongoose-full-01
+  - afc-shadowsocks-full-01
+  - afc-systemd-full-01
+  - afc-xz-full-01
+  # JVM benchmarks
+  - afc-apache-commons-compress-delta-01
+  - afc-apache-commons-compress-delta-04
+  - afc-apache-commons-compress-delta-05
+  - afc-apache-commons-compress-delta-06
+  - afc-apache-commons-compress-delta-07
+  - afc-apache-poi-delta-01
+  - afc-apache-poi-full-01
+  - afc-log4j2-delta-01
+  - afc-pdfbox-delta-01
+  - afc-pdfbox-full-01
+  - afc-tika-delta-06
