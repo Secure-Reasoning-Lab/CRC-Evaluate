@@ -13,6 +13,7 @@ os.killpg(). This ensures all descendants (including docker run) are terminated.
 import os
 import signal
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Optional, Union
 
@@ -29,6 +30,7 @@ def run_with_timeout(
     capture_output: bool = True,
     text: bool = True,
     stdin: Optional[int] = subprocess.DEVNULL,
+    env: Optional[Mapping[str, str]] = None,
 ) -> subprocess.CompletedProcess:
     """Run a command with timeout that kills the entire process group.
 
@@ -44,6 +46,7 @@ def run_with_timeout(
         capture_output: If True, capture stdout and stderr via PIPE.
         text: If True, decode stdout/stderr as text. If False, return bytes.
         stdin: File descriptor for stdin. Defaults to DEVNULL.
+        env: Optional environment variables for the subprocess.
 
     Returns:
         subprocess.CompletedProcess with stdout, stderr, and returncode.
@@ -66,6 +69,7 @@ def run_with_timeout(
             encoding="utf-8",
             errors="replace",
             start_new_session=True,
+            env=env,
         )
     else:
         process = subprocess.Popen(
@@ -76,6 +80,7 @@ def run_with_timeout(
             stderr=stderr_arg,
             text=False,
             start_new_session=True,
+            env=env,
         )
 
     try:

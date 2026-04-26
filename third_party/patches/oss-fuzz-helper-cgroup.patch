@@ -33,15 +33,21 @@ index cb0f2ffa..3d0f1c6c 100755
  def workdir_from_lines(lines, default='/src'):
    """Gets the WORKDIR from the given lines."""
    for line in reversed(lines):  # reversed to get last WORKDIR.
-@@ -658,6 +675,7 @@ def docker_run(run_args, *, print_output=True, architecture='x86_64'):
+@@ -658,11 +686,11 @@ def docker_run(run_args, *, print_output=True, architecture='x86_64'):
    command = [
        'docker', 'run', '--privileged', '--shm-size=2g', '--platform', platform
    ]
 +  command.extend(_runtime_resource_docker_args())
++  command.append('--rm')
    if os.getenv('OSS_FUZZ_SAVE_CONTAINERS_NAME'):
      command.append('--name')
      command.append(os.getenv('OSS_FUZZ_SAVE_CONTAINERS_NAME'))
-@@ -677,7 +695,10 @@ def docker_run(run_args, *, print_output=True, architecture='x86_64'):
+-  else:
+-    command.append('--rm')
+ 
+   # Support environments with a TTY.
+   if sys.stdin.isatty():
+@@ -677,7 +705,10 @@ def docker_run(run_args, *, print_output=True, architecture='x86_64'):
  
    try:
      subprocess.check_call(command, stdout=stdout, stderr=subprocess.STDOUT)

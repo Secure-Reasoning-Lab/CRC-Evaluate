@@ -206,3 +206,138 @@ def test_run_smoke_logged_command_preserves_failure_exit_code(tmp_path: Path) ->
     combined = result.stdout + result.stderr
     assert "[smoke:bugfinding:run] before-fail" in combined
     assert log_path.read_text() == "before-fail\n"
+
+
+def test_cleanup_smoke_bg_logging_ignores_failed_logger(tmp_path: Path) -> None:
+    stream_dir = tmp_path / "stream-dir"
+    fifo_path = stream_dir / "stream"
+
+    result = _run_bash(
+        f"""
+        export CRSBENCH_RUN_LOCAL_SOURCE_ONLY=1
+        source "{SCRIPT_PATH}"
+        mkdir -p "{stream_dir}"
+        mkfifo "{fifo_path}"
+        bash -lc 'exit 1' &
+        SMOKE_BG_LOGGER_PID=$!
+        SMOKE_BG_STREAM_DIR="{stream_dir}"
+        SMOKE_BG_STREAM_FIFO="{fifo_path}"
+        cleanup_smoke_bg_logging
+        [ ! -e "{fifo_path}" ]
+        [ ! -d "{stream_dir}" ]
+        """
+    )
+
+    assert result.returncode == 0
+
+
+def test_cleanup_stale_smoke_state_uses_runner_temp_and_keeps_unrelated_dirs(
+    tmp_path: Path,
+) -> None:
+    runner_temp = tmp_path / "runner-temp"
+    runner_temp.mkdir()
+    stale_bugfinding = runner_temp / "crsbench-smoke-bugfinding-old"
+    stale_bugfixing = runner_temp / "crsbench-smoke-bugfixing-old"
+    stale_stream = runner_temp / "crsbench-smoke-stream-old"
+    unrelated = runner_temp / "leave-alone"
+    stale_bugfinding.mkdir()
+    stale_bugfixing.mkdir()
+    stale_stream.mkdir()
+    unrelated.mkdir()
+
+    result = _run_bash(
+        f"""
+        export CRSBENCH_RUN_LOCAL_SOURCE_ONLY=1
+        export RUNNER_TEMP="{runner_temp}"
+        export SMOKE_CLEAN_STALE=1
+        source "{SCRIPT_PATH}"
+        cleanup_stale_smoke_state
+        """
+    )
+
+    assert result.returncode == 0
+    assert not stale_bugfinding.exists()
+    assert not stale_bugfixing.exists()
+    assert not stale_stream.exists()
+    assert unrelated.exists()
+    assert (runner_temp / "crsbench-smoke-workspaces").exists()
+
+
+def test_run_smoke_suite_verify_failure_cleans_workspace_and_marker(
+    tmp_path: Path,
+) -> None:
+    marker_dir = tmp_path / "markers"
+    workspace = tmp_path / "workspace"
+    marker_dir.mkdir()
+    (workspace / "experiment-data").mkdir(parents=True)
+    (marker_dir / "bugfinding").write_text(str(workspace))
+
+    result = _run_bash(
+        f"""
+        export CRSBENCH_RUN_LOCAL_SOURCE_ONLY=1
+        export SMOKE_WORKSPACE_DIR="{marker_dir}"
+        source "{SCRIPT_PATH}"
+        run_stage() {{ :; }}
+        smoke_skip_verification_for_suite() {{ echo 0; }}
+        _smoke_verify_summary() {{ :; }}
+        run_smoke_logged_command() {{
+            : > "$1"
+            return 7
+        }}
+        run_smoke_suite_verify bugfinding "Verify bugfinding"
+        """
+    )
+
+    assert result.returncode == 1
+    assert not workspace.exists()
+    assert not (marker_dir / "bugfinding").exists()
+
+
+def test_run_smoke_suite_run_failure_cleans_workspace_and_marker(
+    tmp_path: Path,
+) -> None:
+    runner_temp = tmp_path / "runner-temp"
+    base_config = tmp_path / "smoke-config.yaml"
+    runner_temp.mkdir()
+    base_config.write_text("experiment: smoke\n")
+
+    result = _run_bash(
+        f"""
+        export CRSBENCH_RUN_LOCAL_SOURCE_ONLY=1
+        export RUNNER_TEMP="{runner_temp}"
+        export CRSBENCH_REDIS_HOST=localhost:6379
+        source "{SCRIPT_PATH}"
+        run_stage() {{ :; }}
+        success() {{ :; }}
+        sleep() {{
+            if [ "$1" = "3" ]; then
+                return 0
+            fi
+            command sleep "$@"
+        }}
+        smoke_config_for_suite() {{ printf '%s\\n' "{base_config}"; }}
+        smoke_skip_verification_for_suite() {{ echo 0; }}
+        render_smoke_config() {{
+            : > "$3"
+            return 0
+        }}
+        start_smoke_logged_command_bg() {{
+            bash -lc 'trap "exit 0" TERM; while :; do sleep 10; done' &
+            SMOKE_BG_PID=$!
+            SMOKE_BG_LOGGER_PID=""
+        }}
+        stop_worker_process() {{
+            kill "$1" 2>/dev/null || true
+            wait "$1" 2>/dev/null || true
+            return 0
+        }}
+        run_smoke_logged_command() {{
+            return 7
+        }}
+        run_smoke_suite_run bugfinding "Run bugfinding"
+        """
+    )
+
+    assert result.returncode == 1
+    assert not list(runner_temp.glob("crsbench-smoke-bugfinding-*"))
+    assert not (runner_temp / "crsbench-smoke-workspaces" / "bugfinding").exists()

@@ -54,6 +54,11 @@ reproduce_logger = get_logger("reproduce")
 # Exit code constants from helper.py
 EXIT_CODE_TIMEOUT = 124  # Subprocess timeout in helper.py
 DEFAULT_CONTAINER_LOCALE = "C.UTF-8"
+REPRODUCE_TOTAL_TIMEOUT_GRACE = 10
+REPRODUCE_CONTAINER_CLEANUP_TIMEOUT = 5
+REPRODUCE_HELPER_TIMEOUT_GRACE = (
+    REPRODUCE_TOTAL_TIMEOUT_GRACE - REPRODUCE_CONTAINER_CLEANUP_TIMEOUT
+)
 
 _LEAK_MARKERS = (
     "LeakSanitizer:",
@@ -1901,6 +1906,9 @@ class OSSFuzzInfrastructure:
 
         req_prefix = f"[Request #{request_id}] " if request_id else ""
         pov_prefix = f"[{pov_id}] " if pov_id else ""
+        container_name = self._new_reproduce_container_name()
+        env = dict(os.environ)
+        env["OSS_FUZZ_SAVE_CONTAINERS_NAME"] = container_name
 
         try:
             # Note: sanitizer is embedded in project_name (e.g., project-asan-deltaref)
@@ -1919,17 +1927,17 @@ class OSSFuzzInfrastructure:
 
             logger.debug(f"{req_prefix}Reproducing: {' '.join(cmd)}")
 
-            # Use a longer outer timeout than the helper/libFuzzer timeout path
-            # so helper.py can return its native reproduce exit semantics
-            # (e.g., non-zero crash code or 124 timeout) instead of being cut off
-            # by our subprocess guard under load.
-            helper_timeout = timeout + 10
+            # Preserve the historical timeout + 10s outer bound while reserving
+            # part of that grace for forced container cleanup on the rare
+            # external-timeout path.
+            helper_timeout = timeout + REPRODUCE_HELPER_TIMEOUT_GRACE
             # Use binary mode to handle fuzzer output that may contain non-UTF-8 bytes
             result = run_with_timeout(
                 cmd,
                 timeout=helper_timeout,
                 cwd=self.oss_fuzz_path,
                 text=False,
+                env=env,
             )
 
             # Decode output with error handling for binary content
@@ -1994,6 +2002,10 @@ class OSSFuzzInfrastructure:
             logger.warning(
                 f"{req_prefix}Subprocess timeout for {project_name}/{harness}"
             )
+            self._cleanup_reproduce_container(
+                container_name,
+                timeout=REPRODUCE_CONTAINER_CLEANUP_TIMEOUT,
+            )
             return ReproduceOutput(crashed=False)
         except Exception as e:
             logger.error(
@@ -2003,6 +2015,47 @@ class OSSFuzzInfrastructure:
         finally:
             # Clean up temporary file
             testcase_path.unlink(missing_ok=True)
+
+    def _new_reproduce_container_name(self) -> str:
+        return f"crsbench-repro-{uuid.uuid4().hex}"
+
+    def _cleanup_reproduce_container(
+        self,
+        container_name: str,
+        *,
+        timeout: int = REPRODUCE_CONTAINER_CLEANUP_TIMEOUT,
+    ) -> None:
+        try:
+            result = subprocess.run(
+                ["docker", "rm", "-f", container_name],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+                stdin=subprocess.DEVNULL,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning(f"Timed out removing reproduce container {container_name}")
+            return
+        except Exception as e:
+            logger.warning(
+                f"Failed to remove reproduce container {container_name}: {e}"
+            )
+            return
+
+        if result.returncode == 0:
+            return
+
+        stderr = (result.stderr or "").strip()
+        stdout = (result.stdout or "").strip()
+        if "No such container" in stderr or "No such container" in stdout:
+            return
+
+        logger.warning(
+            f"Failed to remove reproduce container {container_name}: "
+            f"{stderr or stdout or f'exit code {result.returncode}'}"
+        )
 
     def run_coverage(
         self,

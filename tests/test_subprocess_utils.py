@@ -89,6 +89,20 @@ class TestRunWithTimeoutNormalExecution:
         assert result.stdout is None
         assert result.stderr is None
 
+    def test_env_parameter(self):
+        env = dict(os.environ)
+        env["CRSBENCH_TEST_RUN_WITH_TIMEOUT"] = "expected-value"
+        result = run_with_timeout(
+            [
+                sys.executable,
+                "-c",
+                ("import os; print(os.environ['CRSBENCH_TEST_RUN_WITH_TIMEOUT'])"),
+            ],
+            timeout=10,
+            env=env,
+        )
+        assert result.stdout.strip() == "expected-value"
+
 
 class TestRunWithTimeoutKillsProcessGroup:
     """Tests that timeout kills the entire process group."""

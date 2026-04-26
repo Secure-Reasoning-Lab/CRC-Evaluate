@@ -55,6 +55,42 @@ fail() {
     exit 1
 }
 
+smoke_temp_root() {
+    local root="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+    mkdir -p "$root"
+    printf '%s\n' "$root"
+}
+
+smoke_should_cleanup_stale() {
+    local flag="${SMOKE_CLEAN_STALE:-${CI:-}}"
+    case "${flag,,}" in
+        1|true|yes)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+cleanup_stale_smoke_state() {
+    local root path
+    smoke_should_cleanup_stale || return 0
+
+    root="$(smoke_temp_root)"
+    echo "[smoke] cleaning stale smoke state under $root"
+    cleanup_path "$SMOKE_WORKSPACE_DIR"
+    mkdir -p "$SMOKE_WORKSPACE_DIR"
+
+    for path in \
+        "$root"/crsbench-smoke-bugfinding-* \
+        "$root"/crsbench-smoke-bugfixing-* \
+        "$root"/crsbench-smoke-stream-*; do
+        [ -e "$path" ] || continue
+        cleanup_path "$path"
+    done
+}
+
 smoke_stream_logs_enabled() {
     [ "${SMOKE_STREAM_LOGS:-1}" = "1" ]
 }
@@ -115,7 +151,7 @@ PY
 }
 
 create_smoke_stream_fifo_dir() {
-    mktemp -d "${TMPDIR:-/tmp}/crsbench-smoke-stream-XXXXXX"
+    mktemp -d "$(smoke_temp_root)/crsbench-smoke-stream-XXXXXX"
 }
 
 cleanup_smoke_stream_dir() {
@@ -143,7 +179,7 @@ run_smoke_logged_command() {
         else
             cmd_rc=$?
         fi
-        wait "$logger_pid"
+        wait "$logger_pid" 2>/dev/null || true
         cleanup_smoke_stream_dir "$stream_dir" "$fifo"
         return "$cmd_rc"
     else
@@ -161,7 +197,7 @@ SMOKE_BG_STREAM_FIFO=""
 
 cleanup_smoke_bg_logging() {
     if [ -n "$SMOKE_BG_LOGGER_PID" ]; then
-        wait "$SMOKE_BG_LOGGER_PID"
+        wait "$SMOKE_BG_LOGGER_PID" 2>/dev/null || true
     fi
     if [ -n "$SMOKE_BG_STREAM_FIFO" ]; then
         rm -f "$SMOKE_BG_STREAM_FIFO"
@@ -720,7 +756,7 @@ stop_worker_process() {
 }
 
 # Workspace marker: stores the workspace path so post-verify can find it.
-SMOKE_WORKSPACE_DIR="/tmp/crsbench-smoke-workspaces"
+SMOKE_WORKSPACE_DIR="${SMOKE_WORKSPACE_DIR:-$(smoke_temp_root)/crsbench-smoke-workspaces}"
 
 # Print a compact summary of smoke run results from log files.
 _smoke_run_summary() {
@@ -776,6 +812,7 @@ run_smoke_suite_run() {
     local stage_name="$2"
     local base_config workspace config_path exp_dir report_dir
     local worker_log evaluator_log run_log worker_pid evaluator_pid rc cpuset skip_cpuset skip_verification
+    local run_phase_complete=0
 
     _smoke_kill_tree() {
         local pid="$1"
@@ -805,6 +842,10 @@ run_smoke_suite_run() {
     _smoke_suite_full_cleanup() {
         _smoke_suite_cleanup
         _smoke_suite_cleanup_valkey
+        if [ "$run_phase_complete" -ne 1 ] && [ "${SMOKE_KEEP_WORKSPACE:-0}" != "1" ]; then
+            cleanup_path "${workspace:-}"
+            rm -f "$(_smoke_workspace_marker "$suite")"
+        fi
     }
     trap _smoke_suite_full_cleanup EXIT
 
@@ -847,7 +888,7 @@ run_smoke_suite_run() {
         suite_redis_host="${CRSBENCH_REDIS_HOST}"
     fi
 
-    workspace=$(mktemp -d "/tmp/crsbench-smoke-${suite}-XXXXXX")
+    workspace=$(mktemp -d "$(smoke_temp_root)/crsbench-smoke-${suite}-XXXXXX")
     config_path="$workspace/experiment-config.yaml"
     exp_dir="$workspace/experiment-data"
     report_dir="$workspace/report-data"
@@ -927,6 +968,7 @@ run_smoke_suite_run() {
     fi
 
     _smoke_run_summary "$suite" "$workspace"
+    run_phase_complete=1
     success "Smoke run $suite passed"
 }
 
@@ -937,6 +979,19 @@ run_smoke_suite_verify() {
     local suite="$1"
     local stage_name="$2"
     local workspace exp_dir post_verify_log rc skip_verification
+    local verify_cleanup_on_exit=1
+
+    if [ "${SMOKE_KEEP_WORKSPACE:-0}" = "1" ]; then
+        verify_cleanup_on_exit=0
+    fi
+
+    _smoke_suite_verify_cleanup() {
+        if [ "$verify_cleanup_on_exit" -eq 1 ]; then
+            cleanup_path "${workspace:-}"
+            rm -f "$(_smoke_workspace_marker "$suite")"
+        fi
+    }
+    trap _smoke_suite_verify_cleanup EXIT
 
     run_stage "$stage_name"
 
@@ -968,12 +1023,9 @@ run_smoke_suite_verify() {
     _smoke_verify_summary "$suite" "$workspace"
 
     if [ "${SMOKE_KEEP_WORKSPACE:-0}" = "1" ]; then
+        rm -f "$(_smoke_workspace_marker "$suite")"
         echo "[smoke] kept workspace: $workspace"
-    else
-        cleanup_path "$workspace"
     fi
-    # Clean up marker
-    rm -f "$(_smoke_workspace_marker "$suite")"
     success "Smoke verify $suite passed"
 }
 
@@ -988,6 +1040,7 @@ run_smoke_suite_config() {
 run_smoke_bugfinding() {
     local bugfind_requires_litellm bugfind_requires_tracking
     load_smoke_env_file
+    cleanup_stale_smoke_state
     bugfind_requires_litellm="$(suite_requires_litellm bugfinding)" || fail "Failed to inspect bugfinding smoke LiteLLM requirements"
     bugfind_requires_tracking="$(suite_requires_litellm_tracking bugfinding)" || fail "Failed to inspect bugfinding smoke LiteLLM tracking requirements"
     if [ "$bugfind_requires_litellm" = "1" ]; then
@@ -1000,6 +1053,7 @@ run_smoke_bugfinding() {
 run_smoke_bugfixing() {
     local bugfix_requires_litellm bugfix_requires_tracking
     load_smoke_env_file
+    cleanup_stale_smoke_state
     bugfix_requires_litellm="$(suite_requires_litellm bugfixing)" || fail "Failed to inspect bugfixing smoke LiteLLM requirements"
     bugfix_requires_tracking="$(suite_requires_litellm_tracking bugfixing)" || fail "Failed to inspect bugfixing smoke LiteLLM tracking requirements"
     if [ "$bugfix_requires_litellm" = "1" ]; then
@@ -1035,6 +1089,7 @@ _smoke_parallel_preflight() {
 # Workspaces are preserved for smoke-post-verify.
 run_smoke_run() {
     run_stage "Stage 4a: Parallel Smoke Run (worker + evaluator + orchestrator)"
+    cleanup_stale_smoke_state
     _smoke_parallel_preflight
 
     # Each suite starts its own Valkey inside run_smoke_suite_run
@@ -1080,6 +1135,7 @@ run_smoke_post_verify() {
 # Combined: run + verify (default for `smoke` subcommand).
 run_smoke_parallel() {
     run_stage "Stage 4: Parallel Smoke (config-first)"
+    cleanup_stale_smoke_state
     _smoke_parallel_preflight
 
     # Each suite starts its own Valkey inside run_smoke_suite_run

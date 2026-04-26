@@ -105,6 +105,9 @@ class TestRunEvaluatorMain:
 
         # Should set engine (not call _build_all_variants)
         mock_set_engine.assert_called_once()
+        assert (
+            mock_engine_cls.call_args.kwargs["timeout"] == config.per_pov_verify_timeout
+        )
         call_args = mock_set_engine.call_args
         # Verify it was called with just the engine argument (no built_results)
         assert len(call_args[0]) == 1  # Only one positional argument
@@ -741,7 +744,9 @@ class TestConfiglessEvaluator:
                 "crsbench.distributed.evaluator.discover_registered_experiments",
                 return_value=(MagicMock(), {"exp-42": reg}),
             ),
-            patch("crsbench.evaluation.verification.pov.engine.VerificationEngine"),
+            patch(
+                "crsbench.evaluation.verification.pov.engine.VerificationEngine"
+            ) as mock_engine_cls,
             patch("crsbench.distributed.evaluator_jobs.set_engine"),
             patch("crsbench.distributed.evaluator_jobs.set_benchmarks_root"),
             patch(
@@ -755,6 +760,7 @@ class TestConfiglessEvaluator:
             )
 
         assert result == 0
+        assert mock_engine_cls.call_args.kwargs["timeout"] == reg.per_pov_verify_timeout
         mock_supervisor.assert_called_once()
         call_kwargs = mock_supervisor.call_args[1]
         assert call_kwargs["build_queue_names"] == ["crsbench_exp-42_build"]
@@ -851,6 +857,7 @@ class TestConfiglessEvaluator:
             result = run_evaluator_configless(redis_host="localhost")
 
         assert result == 0
+        assert mock_engine_cls.call_args.kwargs["timeout"] == reg.per_pov_verify_timeout
         assert mock_engine_cls.call_args.kwargs["cores_per_job"] == 16
 
     @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
