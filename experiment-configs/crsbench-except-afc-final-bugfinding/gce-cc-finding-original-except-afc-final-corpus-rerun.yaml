@@ -13,7 +13,7 @@
 #   uv run crsbench cloud --config "$CONFIG" teardown --force
 
 experiment:
-  name: cc-finding-original-except-afc-final-corpus-rerun
+  name: cc-finding-original-xafc-corpus-rerun
   task: bugfinding
   benchmark_suite: crsbench-except-afc-final
   sanitizers:
@@ -39,8 +39,8 @@ runtime:
     mode: external
     cost_budget: 30.0
 storage:
-  experiment_filestore: /data/crsbench/experiment-data/cc-finding-original-except-afc-final-corpus-rerun
-  report_filestore: /data/crsbench/report-data/cc-finding-original-except-afc-final-corpus-rerun
+  experiment_filestore: /data/crsbench/experiment-data/cc-finding-original-xafc-corpus-rerun
+  report_filestore: /data/crsbench/report-data/cc-finding-original-xafc-corpus-rerun
 resources:
   cores_per_trial: 16
   memory_per_trial: "64G"
