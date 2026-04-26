@@ -4,7 +4,7 @@
 # Reference: docs/experiment-config-distributed-example.yaml
 # Validate with: crsbench gen-config --validate --output <file>
 
-description: 'Smoke test: smoke-bug-finding-mini-models (haiku / gpt-5.4-mini / gemini-3.1-flash-lite-preview)'
+description: 'Smoke test: smoke-bug-finding-mini-models (haiku / gpt-5.4-mini / gemini-3-flash-preview)'
 
 experiment:
   name: smoke-bug-finding-mini-models
@@ -42,7 +42,7 @@ crs_compose:
     budget_policy: terminate
     additional_env:
       CRS_AGENT: gemini_cli
-      GEMINI_MODEL: gemini-3.1-flash-lite-preview
+      GEMINI_MODEL: gemini-3-flash-preview
       GEMINI_CLI_VERSION: 0.38.1
 
 # Runtime settings. For distributed mode, add redis_host.
