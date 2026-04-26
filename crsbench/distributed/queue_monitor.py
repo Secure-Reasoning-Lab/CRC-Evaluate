@@ -85,9 +85,10 @@ class QueueMonitorCallbacks:
 class _RichMonitorInput:
     """Best-effort non-blocking key reader for Rich monitor pagination."""
 
-    def __init__(self, stream=None) -> None:
+    def __init__(self, stream=None, *, allow_keyboard_quit: bool = False) -> None:
         self._stream = sys.stdin if stream is None else stream
         self._prefer_controlling_terminal = stream is None
+        self._allow_keyboard_quit = allow_keyboard_quit
         self._fd: int | None = None
         self._saved_termios_attrs: Any = None
         self._owns_fd = False
@@ -110,16 +111,23 @@ class _RichMonitorInput:
         )
         return self
 
+    def _active_manual_navigation_status(self, *, paused: bool) -> str:
+        status = (
+            "n/p active; Space resumes auto-rotate"
+            if paused
+            else "n/p active; Space pauses auto-rotate"
+        )
+        if self._allow_keyboard_quit:
+            return f"{status}; q exits"
+        return status
+
     def set_auto_rotate_paused(self, paused: bool) -> None:
         self._auto_rotate_paused = paused
         if not self.manual_navigation_available:
             return
-        if paused:
-            self.manual_navigation_status = (
-                "n/p active; Space resumes auto-rotate; q exits"
-            )
-            return
-        self.manual_navigation_status = "n/p active; Space pauses auto-rotate; q exits"
+        self.manual_navigation_status = self._active_manual_navigation_status(
+            paused=paused
+        )
 
     def _sync_primary_fd(self) -> None:
         if not self._active_fds:
@@ -361,7 +369,9 @@ class _RichMonitorInput:
                         self._pending_commands.append("space")
                         continue
                     command = char.lower()
-                    if command in {"n", "p", "q"}:
+                    if command in {"n", "p"} or (
+                        self._allow_keyboard_quit and command == "q"
+                    ):
                         self._pending_commands.append(command)
 
                 if self._pending_commands:
@@ -559,6 +569,7 @@ def monitor_queue(
     use_rich: bool | None = None,
     poll_interval: float = 3.0,
     exit_when_idle: bool = True,
+    allow_keyboard_quit: bool = False,
 ) -> None:
     """Run the shared operator queue monitor until completion."""
     del tracked_job_ids  # Reserved for future queue-only tracked attach mode.
@@ -579,6 +590,7 @@ def monitor_queue(
             callbacks=callbacks,
             poll_interval=poll_interval,
             exit_when_idle=exit_when_idle,
+            allow_keyboard_quit=allow_keyboard_quit,
         )
         return
 
@@ -1041,6 +1053,7 @@ def _monitor_queue_rich(
     callbacks: QueueMonitorCallbacks,
     poll_interval: float,
     exit_when_idle: bool,
+    allow_keyboard_quit: bool,
 ) -> None:
     from rich.console import Console
     from rich.live import Live
@@ -1064,7 +1077,7 @@ def _monitor_queue_rich(
     use_alt_screen = (
         console.is_terminal and stream_is_tty and not console.legacy_windows
     )
-    with _RichMonitorInput() as monitor_input:
+    with _RichMonitorInput(allow_keyboard_quit=allow_keyboard_quit) as monitor_input:
         (
             renderable,
             page_index,
@@ -1180,7 +1193,9 @@ def _monitor_queue_rich(
                     if command is None:
                         continue
                     if command == "q":
-                        break
+                        if allow_keyboard_quit:
+                            break
+                        continue
                     if command == "space":
                         auto_rotate_paused = not auto_rotate_paused
                         monitor_input.set_auto_rotate_paused(auto_rotate_paused)

@@ -848,7 +848,7 @@ def test_rich_monitor_input_prefers_controlling_terminal_when_available() -> Non
         assert monitor_input.manual_navigation_available is True
         assert (
             monitor_input.manual_navigation_status
-            == "n/p active; Space pauses auto-rotate; q exits"
+            == "n/p active; Space pauses auto-rotate"
         )
         assert monitor_input._fd == 11
         stream.fileno.assert_not_called()
@@ -876,7 +876,7 @@ def test_rich_monitor_input_falls_back_to_stdin_when_tty_open_fails() -> None:
         assert monitor_input.manual_navigation_available is True
         assert (
             monitor_input.manual_navigation_status
-            == "n/p active; Space pauses auto-rotate; q exits"
+            == "n/p active; Space pauses auto-rotate"
         )
         assert monitor_input._fd == 7
         stream.fileno.assert_called_once_with()
@@ -1226,10 +1226,62 @@ def test_rich_monitor_input_reads_q_exit_command() -> None:
         patch("tty.setcbreak"),
         patch("select.select", side_effect=_fake_select),
         patch("os.read", side_effect=_fake_read),
-        _RichMonitorInput() as monitor_input,
+        _RichMonitorInput(allow_keyboard_quit=True) as monitor_input,
     ):
         assert monitor_input.manual_navigation_available is True
         assert monitor_input.read_command(0.1) == "q"
+
+    mock_close.assert_called_once_with(11)
+
+
+def test_rich_monitor_input_ignores_q_when_keyboard_quit_disabled() -> None:
+    stream = MagicMock()
+    stream.isatty.return_value = True
+    stream.fileno.return_value = 7
+
+    def _fake_ttyname(fd: int) -> str:
+        if fd == 11:
+            return "/dev/tty"
+        if fd == 7:
+            return "/dev/pts/7"
+        raise AssertionError(f"unexpected fd {fd}")
+
+    def _fake_stat(path, **_kwargs) -> SimpleNamespace:
+        path_str = str(path)
+        if path_str == "/dev/tty":
+            return SimpleNamespace(st_dev=1, st_ino=11)
+        if path_str == "/dev/pts/7":
+            return SimpleNamespace(st_dev=2, st_ino=7)
+        raise AssertionError(f"unexpected tty path {path_str}")
+
+    def _fake_select(readers, _writers, _errors, _timeout):
+        if readers == [11, 7]:
+            return ([11], [], [])
+        raise AssertionError(f"unexpected readers {readers}")
+
+    def _fake_read(fd: int, _size: int) -> bytes:
+        if fd == 11:
+            return b"q"
+        raise AssertionError("unexpected read fd")
+
+    with (
+        patch("crsbench.distributed.queue_monitor.sys.stdin", stream),
+        patch("os.open", return_value=11),
+        patch("os.close") as mock_close,
+        patch("os.ttyname", side_effect=_fake_ttyname),
+        patch("os.stat", side_effect=_fake_stat),
+        patch("termios.tcgetattr", return_value=["saved-attrs"]),
+        patch("termios.tcsetattr"),
+        patch("tty.setcbreak"),
+        patch("select.select", side_effect=_fake_select),
+        patch("os.read", side_effect=_fake_read),
+        _RichMonitorInput() as monitor_input,
+    ):
+        assert monitor_input.manual_navigation_available is True
+        assert monitor_input.read_command(0.1) is None
+        assert monitor_input.manual_navigation_status == (
+            "n/p active; Space pauses auto-rotate"
+        )
 
     mock_close.assert_called_once_with(11)
 
@@ -1481,6 +1533,7 @@ def test_monitor_queue_rich_applies_manual_page_navigation_immediately() -> None
             callbacks=QueueMonitorCallbacks(),
             use_rich=True,
             poll_interval=1.0,
+            allow_keyboard_quit=True,
         )
 
     assert len(rendered_updates) >= 2
@@ -1616,6 +1669,7 @@ def test_monitor_queue_rich_space_toggles_auto_rotate_pause_state() -> None:
                 "callbacks": QueueMonitorCallbacks(),
                 "use_rich": True,
                 "poll_interval": 0.0,
+                "allow_keyboard_quit": True,
             },
             daemon=True,
         )
@@ -1727,9 +1781,132 @@ def test_monitor_queue_rich_q_exits_immediately() -> None:
             callbacks=QueueMonitorCallbacks(),
             use_rich=True,
             poll_interval=0.0,
+            allow_keyboard_quit=True,
         )
 
     assert poller_closed.is_set()
+
+
+def test_monitor_queue_rich_ignores_q_during_tracked_run_monitoring() -> None:
+    rich_console = pytest.importorskip("rich.console")
+    queue = MagicMock()
+    active = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 1, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[
+            RunningJobInfo(
+                worker_name="worker-0",
+                crs="crs-a",
+                benchmark="bench-a",
+                harness="harness-a",
+                target_cpv_id="cpv-1",
+                mode="delta",
+                trial_num="0",
+                phase="running",
+                elapsed="1m0s",
+            )
+        ],
+    )
+    tracked_job = MagicMock()
+    tracked_job.id = "job-1"
+    process_call_count = 0
+
+    class DummyLive:
+        def __init__(self, renderable, *args, **kwargs):
+            del renderable, args, kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def update(self, renderable, *args, **kwargs):
+            del renderable, args, kwargs
+
+    class DummyInput:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+            self.manual_navigation_available = True
+            self.manual_navigation_status = "n/p active; Space pauses auto-rotate"
+            self._reads = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read_command(self, timeout_sec: float) -> str | None:
+            del timeout_sec
+            self._reads += 1
+            if self._reads == 1:
+                return "q"
+            raise AssertionError(
+                "tracked run monitor should complete before rereading q"
+            )
+
+    class DummyPoller:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+
+        def start(self) -> None:
+            return None
+
+        def drain_latest(self):
+            return None
+
+        def close(self) -> None:
+            return None
+
+    def _process(*args, **kwargs) -> tuple[int, int]:
+        del args, kwargs
+        nonlocal process_call_count
+        process_call_count += 1
+        if process_call_count == 1:
+            return (0, 0)
+        if process_call_count == 2:
+            return (1, 0)
+        raise AssertionError(f"unexpected tracked-job scan {process_call_count}")
+
+    console = rich_console.Console(
+        width=120,
+        height=20,
+        force_terminal=True,
+        record=True,
+    )
+
+    with (
+        patch(
+            "crsbench.distributed.queue_monitor.build_monitor_snapshot",
+            return_value=active,
+        ),
+        patch("crsbench.distributed.queue_monitor._RichMonitorInput", DummyInput),
+        patch(
+            "crsbench.distributed.queue_monitor._RichMonitorSnapshotPoller",
+            DummyPoller,
+        ),
+        patch(
+            "crsbench.distributed.queue_monitor._rich_monitor_refresh_interval_sec",
+            return_value=0.0,
+        ),
+        patch(
+            "crsbench.distributed.queue_monitor._process_tracked_jobs",
+            side_effect=_process,
+        ),
+        patch("rich.console.Console", return_value=console),
+        patch("rich.live.Live", DummyLive),
+    ):
+        monitor_queue(
+            queue,
+            "exp-1",
+            tracked_jobs=[tracked_job],
+            total_jobs=1,
+            callbacks=QueueMonitorCallbacks(),
+            use_rich=True,
+            poll_interval=0.0,
+        )
+
+    assert process_call_count == 2
 
 
 def test_monitor_queue_rich_auto_rotates_while_snapshots_refresh() -> None:

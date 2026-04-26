@@ -323,6 +323,7 @@ def run_monitor(args: argparse.Namespace) -> int:
                         on_snapshot=notification_state.on_snapshot,
                     ),
                     exit_when_idle=False,
+                    allow_keyboard_quit=True,
                 )
             except KeyboardInterrupt:
                 return 130

@@ -19,9 +19,9 @@ Today that managed-cloud path is implemented for GCE launches.
   keeps the queue summary visible, shows a page indicator in the running-job
   caption, reports whether `n`/`p` page hotkeys are active for that session,
   lets you switch running-job pages manually when they are, lets `Space`
-  pause or resume auto-rotation, exits immediately on `q`, and resumes
-  auto-rotation after the monitor sits idle instead of pinning the same top
-  rows forever.
+  pause or resume auto-rotation, exits immediately on `q`, and after manual
+  `n`/`p` page changes resumes auto-rotation when the monitor sits idle
+  instead of pinning the same top rows forever.
   Cloud worker names in the monitor use the same short aliases as other cloud
   commands, so prefixes like `crsbench-<experiment>-` are hidden and workers
   appear as `work-001`, `work-002`, and so on.
