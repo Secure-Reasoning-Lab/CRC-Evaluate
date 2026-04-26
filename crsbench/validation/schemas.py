@@ -3243,6 +3243,7 @@ def normalize_grouped_experiment_config(data: Any) -> Any:
             "source_mode",
             "snapshot_period",
             "only_cpv_harnesses",
+            "interleave_crs_enqueue",
             "pov_early_stop",
             "coverage_enabled",
             "coverage_saturation_time",
@@ -3571,6 +3572,14 @@ class ExperimentConfig(BaseModel):
         description="Skip harnesses without CPVs (default: True). "
         "Applies to all CRS types (bug-finding and bug-fixing). "
         "Set to false for discovery-only runs on projects without ground truth.",
+    )
+    interleave_crs_enqueue: bool = Field(
+        default=True,
+        description="Round-robin trials across CRSes when enqueueing (default: True). "
+        "Distributes per-CRS trials across the queue so multiple CRSes run "
+        "concurrently under N workers, spreading external rate limits. "
+        "Set to false to restore the legacy CRS-by-CRS sequential enqueue "
+        "(all of CRS-A, then all of CRS-B, ...).",
     )
     resources: Optional[ResourceConfig] = Field(
         default=None, description="Resource allocation configuration for trials"

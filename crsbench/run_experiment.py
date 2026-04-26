@@ -879,7 +879,8 @@ def generate_trial_matrix(
     Returns:
         List of Trial namedtuples with mode information
     """
-    trials = []
+    trials: List[Trial] = []
+    per_crs_streams: list[list[Trial]] = []
     config_mode = config.mode.value  # Get string value from enum
 
     # POV source is resolved per-CRS inside the loop so that
@@ -1062,7 +1063,16 @@ def generate_trial_matrix(
                             )
                         )
 
-        trials.extend(_wavefront_trial_streams(crs_trial_streams))
+        per_crs_streams.append(_wavefront_trial_streams(crs_trial_streams))
+
+    if config.interleave_crs_enqueue:
+        # Round-robin across CRSes so multiple CRSes run concurrently under N
+        # workers, spreading external rate limits.
+        trials = _wavefront_trial_streams(per_crs_streams)
+    else:
+        # Legacy CRS-by-CRS sequential enqueue.
+        for stream in per_crs_streams:
+            trials.extend(stream)
 
     logger.info(
         f"Generated {len(trials)} trials: {len(oss_crs_registry)} CRSes × "

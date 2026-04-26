@@ -409,8 +409,68 @@ class TestTrialMatrixGeneration:
         )
         assert all(1 <= t.trial_num <= config.trials for t in trials)
 
-    def test_generate_trial_matrix_ordering(self):
-        """Test trial matrix ordering wavefronts trial numbers within each CRS."""
+    def test_generate_trial_matrix_ordering_sequential(self):
+        """Legacy CRS-by-CRS sequential ordering (interleave_crs_enqueue=False)."""
+        config = ExperimentConfig(
+            experiment="test",
+            trials=2,
+            mode="delta",
+            max_total_time=20000,
+            inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crs_compose={"crs1": {"num_cores": 1}},
+            benchmarks=["bench1", "bench2"],
+            only_cpv_harnesses=False,
+            interleave_crs_enqueue=False,
+        )
+
+        benchmark_harnesses = [
+            BenchmarkHarness(
+                name="bench1",
+                path=Path("/tmp/bench1"),
+                harness=HarnessFile(name="harness1", path="/src/harness1.c"),
+            ),
+            BenchmarkHarness(
+                name="bench2",
+                path=Path("/tmp/bench2"),
+                harness=HarnessFile(name="harness2", path="/src/harness2.c"),
+            ),
+        ]
+        crs_registry_ids = ["crs1", "crs2"]
+
+        trials = generate_trial_matrix(
+            benchmark_harnesses,
+            crs_registry_ids,
+            config,
+            registry_dir=Path("/tmp/registry"),
+        )
+
+        # Verify ordering: CRS outer loop, then wavefront by trial number across streams.
+        expected = [
+            ("crs1", "bench1", "harness1", 1),
+            ("crs1", "bench2", "harness2", 1),
+            ("crs1", "bench1", "harness1", 2),
+            ("crs1", "bench2", "harness2", 2),
+            ("crs2", "bench1", "harness1", 1),
+            ("crs2", "bench2", "harness2", 1),
+            ("crs2", "bench1", "harness1", 2),
+            ("crs2", "bench2", "harness2", 2),
+        ]
+
+        actual = [
+            (
+                t.crs,
+                t.benchmark_harness.name,
+                t.benchmark_harness.harness.name,
+                t.trial_num,
+            )
+            for t in trials
+        ]
+        assert actual == expected
+
+    def test_generate_trial_matrix_ordering_interleaved(self):
+        """Default ordering round-robins across CRSes for rate-limit dispersion."""
         config = ExperimentConfig(
             experiment="test",
             trials=2,
@@ -445,15 +505,17 @@ class TestTrialMatrixGeneration:
             registry_dir=Path("/tmp/registry"),
         )
 
-        # Verify ordering: CRS outer loop, then wavefront by trial number across streams.
+        # Each CRS' internal wavefront is preserved; CRSes are then interleaved.
+        # Per-CRS wavefront: (b1,t1), (b2,t1), (b1,t2), (b2,t2)
+        # Outer wavefront across CRSes interleaves index 0 across all, then 1, ...
         expected = [
             ("crs1", "bench1", "harness1", 1),
-            ("crs1", "bench2", "harness2", 1),
-            ("crs1", "bench1", "harness1", 2),
-            ("crs1", "bench2", "harness2", 2),
             ("crs2", "bench1", "harness1", 1),
+            ("crs1", "bench2", "harness2", 1),
             ("crs2", "bench2", "harness2", 1),
+            ("crs1", "bench1", "harness1", 2),
             ("crs2", "bench1", "harness1", 2),
+            ("crs1", "bench2", "harness2", 2),
             ("crs2", "bench2", "harness2", 2),
         ]
 

@@ -484,6 +484,7 @@ def build_grouped_config(
         },
         "runtime": {
             "trials": runtime_state.get("trials"),
+            "interleave_crs_enqueue": runtime_state.get("interleave_crs_enqueue"),
             "max_total_time": runtime_state.get("max_total_time"),
             "build_timeout": runtime_state.get("build_timeout"),
             "run_timeout": runtime_state.get("run_timeout"),

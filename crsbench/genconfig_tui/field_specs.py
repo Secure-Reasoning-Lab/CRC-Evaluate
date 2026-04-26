@@ -111,6 +111,12 @@ SECTION_SPECS: dict[str, SectionSpec] = {
         description="Trial counts, timeout budget, Redis, LiteLLM, and explicit runtime inputs.",
         fields=(
             FieldSpec("trials", "Trials", "int", 1),
+            FieldSpec(
+                "interleave_crs_enqueue",
+                "Round-robin CRS enqueue",
+                "bool",
+                default=True,
+            ),
             FieldSpec("max_total_time", "Max total time (sec)", "int", 7201),
             FieldSpec("build_timeout", "Build timeout (sec)", "int", 3600),
             FieldSpec("run_timeout", "Run timeout (sec)", "int", 600),
