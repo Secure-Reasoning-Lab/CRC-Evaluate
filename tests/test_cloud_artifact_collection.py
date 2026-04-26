@@ -225,7 +225,7 @@ class TestTrialRootDiscovery:
             crs=_REAL_LAYOUT_CRS,
             benchmark=_MISSING_LAYOUT_BENCHMARK,
             harness=_REAL_LAYOUT_HARNESS,
-            trial_n=1,
+            trial_n=2,
         )
         (broken_trial / "metadata.json").write_text("{broken json\n", encoding="utf-8")
 
@@ -269,7 +269,7 @@ class TestTrialRootDiscovery:
                 _REAL_LAYOUT_HARNESS,
                 "delta",
                 "address",
-                "trial-1",
+                "trial-2",
                 "staged",
             ).as_posix(),
         ]
