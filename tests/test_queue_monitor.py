@@ -848,7 +848,7 @@ def test_rich_monitor_input_prefers_controlling_terminal_when_available() -> Non
         assert monitor_input.manual_navigation_available is True
         assert (
             monitor_input.manual_navigation_status
-            == "n/p active; Space pauses auto-rotate"
+            == "n/p active; Space pauses auto-rotate; q exits"
         )
         assert monitor_input._fd == 11
         stream.fileno.assert_not_called()
@@ -876,7 +876,7 @@ def test_rich_monitor_input_falls_back_to_stdin_when_tty_open_fails() -> None:
         assert monitor_input.manual_navigation_available is True
         assert (
             monitor_input.manual_navigation_status
-            == "n/p active; Space pauses auto-rotate"
+            == "n/p active; Space pauses auto-rotate; q exits"
         )
         assert monitor_input._fd == 7
         stream.fileno.assert_called_once_with()
@@ -1185,6 +1185,55 @@ def test_rich_monitor_input_reads_space_toggle_command() -> None:
     mock_close.assert_called_once_with(11)
 
 
+def test_rich_monitor_input_reads_q_exit_command() -> None:
+    stream = MagicMock()
+    stream.isatty.return_value = True
+    stream.fileno.return_value = 7
+
+    def _fake_ttyname(fd: int) -> str:
+        if fd == 11:
+            return "/dev/tty"
+        if fd == 7:
+            return "/dev/pts/7"
+        raise AssertionError(f"unexpected fd {fd}")
+
+    def _fake_stat(path, **_kwargs) -> SimpleNamespace:
+        path_str = str(path)
+        if path_str == "/dev/tty":
+            return SimpleNamespace(st_dev=1, st_ino=11)
+        if path_str == "/dev/pts/7":
+            return SimpleNamespace(st_dev=2, st_ino=7)
+        raise AssertionError(f"unexpected tty path {path_str}")
+
+    def _fake_select(readers, _writers, _errors, _timeout):
+        if readers == [11, 7]:
+            return ([11], [], [])
+        raise AssertionError(f"unexpected readers {readers}")
+
+    def _fake_read(fd: int, _size: int) -> bytes:
+        if fd == 11:
+            return b"q"
+        raise AssertionError("unexpected read fd")
+
+    with (
+        patch("crsbench.distributed.queue_monitor.sys.stdin", stream),
+        patch("os.open", return_value=11),
+        patch("os.close") as mock_close,
+        patch("os.ttyname", side_effect=_fake_ttyname),
+        patch("os.stat", side_effect=_fake_stat),
+        patch("termios.tcgetattr", return_value=["saved-attrs"]),
+        patch("termios.tcsetattr"),
+        patch("tty.setcbreak"),
+        patch("select.select", side_effect=_fake_select),
+        patch("os.read", side_effect=_fake_read),
+        _RichMonitorInput() as monitor_input,
+    ):
+        assert monitor_input.manual_navigation_available is True
+        assert monitor_input.read_command(0.1) == "q"
+
+    mock_close.assert_called_once_with(11)
+
+
 def test_rich_monitor_input_reads_later_ready_fd_after_blocking_io_error() -> None:
     stream = MagicMock()
     stream.isatty.return_value = True
@@ -1394,7 +1443,9 @@ def test_monitor_queue_rich_applies_manual_page_navigation_immediately() -> None
         def __init__(self, *args, **kwargs):
             del args, kwargs
             self.manual_navigation_available = True
-            self.manual_navigation_status = "n/p active; Space pauses auto-rotate"
+            self.manual_navigation_status = (
+                "n/p active; Space pauses auto-rotate; q exits"
+            )
             self._commands = iter(["n", None])
 
         def __enter__(self):
@@ -1439,7 +1490,7 @@ def test_monitor_queue_rich_applies_manual_page_navigation_immediately() -> None
     output = _render_rich_output(rendered_updates[1], width=120, height=20)
     assert running_table.caption is None
     assert "Page 2/2: 2/6" in output
-    assert "n/p active; Space pauses auto-rotate" in output
+    assert "n/p active; Space pauses auto-rotate; q exits" in output
     assert list(running_table.columns[0].cells) == ["worker-4", "worker-5"]
     assert list(running_table.columns[6].cells) == ["4", "5"]
     assert list(running_table.columns[7].cells) == ["running", "running"]
@@ -1488,11 +1539,14 @@ def test_monitor_queue_rich_space_toggles_auto_rotate_pause_state() -> None:
         def update(self, renderable, *args, **kwargs):
             del args, kwargs
             footer_text = _render_rich_output(renderable, width=120, height=20)
-            if "Space resumes auto-rotate" in footer_text and "[PAUSED]" in footer_text:
+            if (
+                "Space resumes auto-rotate; q exits" in footer_text
+                and "[PAUSED]" in footer_text
+            ):
                 paused_caption_seen.set()
             if (
                 paused_caption_seen.is_set()
-                and "Space pauses auto-rotate" in footer_text
+                and "Space pauses auto-rotate; q exits" in footer_text
                 and "[PAUSED]" not in footer_text
             ):
                 resumed_caption_seen.set()
@@ -1501,7 +1555,9 @@ def test_monitor_queue_rich_space_toggles_auto_rotate_pause_state() -> None:
         def __init__(self, *args, **kwargs):
             del args, kwargs
             self.manual_navigation_available = True
-            self.manual_navigation_status = "n/p active; Space pauses auto-rotate"
+            self.manual_navigation_status = (
+                "n/p active; Space pauses auto-rotate; q exits"
+            )
 
         def __enter__(self):
             return self
@@ -1511,9 +1567,13 @@ def test_monitor_queue_rich_space_toggles_auto_rotate_pause_state() -> None:
 
         def set_auto_rotate_paused(self, paused: bool) -> None:
             if paused:
-                self.manual_navigation_status = "n/p active; Space resumes auto-rotate"
+                self.manual_navigation_status = (
+                    "n/p active; Space resumes auto-rotate; q exits"
+                )
                 return
-            self.manual_navigation_status = "n/p active; Space pauses auto-rotate"
+            self.manual_navigation_status = (
+                "n/p active; Space pauses auto-rotate; q exits"
+            )
 
         def read_command(self, timeout_sec: float) -> str | None:
             try:
@@ -1569,6 +1629,107 @@ def test_monitor_queue_rich_space_toggles_auto_rotate_pause_state() -> None:
             monitor_thread.join(1.0)
 
     assert not monitor_thread.is_alive()
+
+
+def test_monitor_queue_rich_q_exits_immediately() -> None:
+    rich_console = pytest.importorskip("rich.console")
+    queue = MagicMock()
+    active = QueueMonitorSnapshot(
+        stats={"queued": 0, "started": 1, "finished": 0, "failed": 0, "workers": 1},
+        running_jobs=[
+            RunningJobInfo(
+                worker_name="worker-0",
+                crs="crs-a",
+                benchmark="bench-a",
+                harness="harness-a",
+                target_cpv_id="cpv-1",
+                mode="delta",
+                trial_num="0",
+                phase="running",
+                elapsed="1m0s",
+            )
+        ],
+    )
+    poller_closed = threading.Event()
+
+    class DummyLive:
+        def __init__(self, renderable, *args, **kwargs):
+            del renderable, args, kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def update(self, renderable, *args, **kwargs):
+            del renderable, args, kwargs
+
+    class DummyInput:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+            self.manual_navigation_available = True
+            self.manual_navigation_status = (
+                "n/p active; Space pauses auto-rotate; q exits"
+            )
+            self._reads = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read_command(self, timeout_sec: float) -> str | None:
+            del timeout_sec
+            self._reads += 1
+            if self._reads == 1:
+                return "q"
+            raise AssertionError("rich monitor should stop after q")
+
+    class DummyPoller:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+
+        def start(self) -> None:
+            return None
+
+        def drain_latest(self):
+            return None
+
+        def close(self) -> None:
+            poller_closed.set()
+
+    console = rich_console.Console(
+        width=120,
+        height=20,
+        force_terminal=True,
+        record=True,
+    )
+
+    with (
+        patch(
+            "crsbench.distributed.queue_monitor.build_monitor_snapshot",
+            return_value=active,
+        ),
+        patch("crsbench.distributed.queue_monitor._RichMonitorInput", DummyInput),
+        patch(
+            "crsbench.distributed.queue_monitor._RichMonitorSnapshotPoller",
+            DummyPoller,
+        ),
+        patch("rich.console.Console", return_value=console),
+        patch("rich.live.Live", DummyLive),
+    ):
+        monitor_queue(
+            queue,
+            "exp-1",
+            tracked_job_ids=None,
+            callbacks=QueueMonitorCallbacks(),
+            use_rich=True,
+            poll_interval=0.0,
+        )
+
+    assert poller_closed.is_set()
 
 
 def test_monitor_queue_rich_auto_rotates_while_snapshots_refresh() -> None:

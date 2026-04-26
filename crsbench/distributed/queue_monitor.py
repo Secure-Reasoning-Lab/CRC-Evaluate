@@ -115,9 +115,11 @@ class _RichMonitorInput:
         if not self.manual_navigation_available:
             return
         if paused:
-            self.manual_navigation_status = "n/p active; Space resumes auto-rotate"
+            self.manual_navigation_status = (
+                "n/p active; Space resumes auto-rotate; q exits"
+            )
             return
-        self.manual_navigation_status = "n/p active; Space pauses auto-rotate"
+        self.manual_navigation_status = "n/p active; Space pauses auto-rotate; q exits"
 
     def _sync_primary_fd(self) -> None:
         if not self._active_fds:
@@ -359,7 +361,7 @@ class _RichMonitorInput:
                         self._pending_commands.append("space")
                         continue
                     command = char.lower()
-                    if command in {"n", "p"}:
+                    if command in {"n", "p", "q"}:
                         self._pending_commands.append(command)
 
                 if self._pending_commands:
@@ -1177,6 +1179,8 @@ def _monitor_queue_rich(
                     command = monitor_input.read_command(input_wait_sec)
                     if command is None:
                         continue
+                    if command == "q":
+                        break
                     if command == "space":
                         auto_rotate_paused = not auto_rotate_paused
                         monitor_input.set_auto_rotate_paused(auto_rotate_paused)

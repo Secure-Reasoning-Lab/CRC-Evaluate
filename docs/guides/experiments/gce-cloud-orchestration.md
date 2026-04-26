@@ -948,7 +948,8 @@ the live RQ queue/registry view when lifecycle tracking is still empty. Use
 `cloud monitor` when you want the continuously updating queue view. When the
 Rich monitor needs to paginate running jobs, the caption reports whether
 `n`/`p` page hotkeys are active for that session. When they are available you
-can switch pages manually; if you leave the monitor idle, page rotation resumes
+can switch pages manually, `Space` pauses or resumes auto-rotation, `q` exits
+the monitor immediately, and leaving the monitor idle resumes page rotation
 automatically.
 `cloud status --json` and `cloud list --json` include `placement_source` so you
 can tell config-declared placements from `runtime_added` ones.
