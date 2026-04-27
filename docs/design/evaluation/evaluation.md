@@ -1,7 +1,7 @@
 # Design: Evaluation
 - Audience: maintainers working on CRS execution, result aggregation, and verify semantics
 - Scope: evaluation contracts for benchmark execution and result aggregation
-- Related: [Snapshots](./snapshots.md), [Patch Verification](./patch-verification.md), [Distributed Evaluation](../distributed/distributed-evaluation.md)
+- Related: [Snapshots](./snapshots.md), [Patch Verification](./patch-verification.md), [Historical POV Replay](./pov-replay.md), [Distributed Evaluation](../distributed/distributed-evaluation.md)
 
 ## Goals and Non-goals
 
@@ -21,8 +21,12 @@ The evaluation subsystem bridges:
 - benchmark metadata and harness definitions
 - CRS adapter lifecycle (`prepare`, `build-target`, `run`)
 - POV/patch verification and aggregate reporting
+- historical POV replay against latest OSS-Fuzz targets as an adjacent, non-scoring workflow
 
 It consumes validated experiment/benchmark inputs and produces structured per-harness and aggregate results.
+Historical replay reuses reproduce semantics and infrastructure contracts, but its
+canonical artifact and provenance behavior lives in
+[Historical POV Replay](./pov-replay.md).
 
 ## Lifecycle Contract
 
