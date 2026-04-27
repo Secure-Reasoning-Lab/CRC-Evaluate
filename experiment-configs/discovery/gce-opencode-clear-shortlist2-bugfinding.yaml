@@ -1,0 +1,163 @@
+# GCE discovery run: opencode-clear bug-finding against OSS-Fuzz
+# shortlist 2 (28 harnesses across 12 projects).
+#
+# Managed cloud bootstrap materializes the selected OSS-Fuzz projects from the
+# sparse third_party/oss-fuzz checkout and generates .aixcc/meta.yaml on each
+# VM before the run starts.
+#
+# Usage:
+#   CONFIG=experiment-configs/discovery/gce-opencode-clear-shortlist2-bugfinding.yaml
+#   uv run crsbench cloud launch --config "$CONFIG"
+#   uv run crsbench cloud --config "$CONFIG" monitor
+#   uv run crsbench cloud --config "$CONFIG" collect --force
+#   uv run crsbench cloud --config "$CONFIG" teardown --force
+#
+# Removed from the active shortlist after local validation on 2026-04-27:
+#   - samba: build failed (`bootstrap.sh: not found`)
+#   - mapserver: missing `build.sh` in the archived project tree
+#   - espeak-ng: build failed (`./autogen.sh: No such file or directory`)
+#   - dlplibs: build script emits too many fuzzers for the 28-harness target
+#
+# Note: the current `mysql-server` OSS-Fuzz build emits 23 router fuzzers; this
+# shortlist keeps 4 of them so the aggregate harness count stays at 28.
+
+description: 'GCE discovery run: opencode-clear bug-finding on OSS-Fuzz shortlist 2'
+
+experiment:
+  name: gce-discovery-opencode-clear-shortlist2
+  task: bugfinding
+  mode: full
+  benchmarks:
+    - duckdb:
+        - parse_fuzz_test
+    - mysql-server:
+        - routertest_fuzz_mysql_protocol_client_greeting
+        - routertest_fuzz_mysql_protocol_query
+        - routertest_fuzz_mysql_protocol_stmt_execute
+        - routertest_fuzz_mysql_protocol_stmt_fetch
+    - gstreamer:
+        - gst-codec-utils
+        - gst-discoverer
+        - gst-subparse
+        - gst-tag
+        - typefind
+    - libplist:
+        - bplist_fuzzer
+        - jplist_fuzzer
+        - oplist_fuzzer
+        - xplist_fuzzer
+    - dng_sdk:
+        - dng_camera_profile_fuzzer
+        - dng_fixed_validate_fuzzer
+        - dng_parser_fuzzer
+        - dng_stage_fuzzer
+        - dng_validate_fuzzer
+    - radare2:
+        - ia_fuzz
+    - metadata-extractor:
+        - ImageMetadataReaderFuzzer
+    - zxing:
+        - MultiFormatDecodeFuzzer
+        - MultiFormatEncodeFuzzer
+    - joni:
+        - AddrListFixFuzzer
+        - RegexMatcherFuzzer
+    - janino:
+        - ExpressionEvaluatorFuzzer
+    - jflex:
+        - JflexFuzzer
+    - rdf4j:
+        - ParserFuzzer
+  only_cpv_harnesses: false
+  sanitizers:
+    - address
+
+benchmarks_root: third_party/oss-fuzz/projects
+oss_fuzz_path: third_party/oss-fuzz
+
+runtime:
+  trials: 1
+  max_total_time: 76800
+  build_timeout: 21600
+  run_timeout: 28800
+  verify_timeout: 14400
+  skip_verification: true
+  source_mode: main_repo
+  redis_host: redis-server:6379
+  rts_enabled: false
+  inc_build_enabled: false
+  litellm:
+    mode: external
+    cost_budget: 30.0
+
+storage:
+  experiment_filestore: /data/crsbench/experiment-data/gce-opencode-clear-shortlist2-bugfinding
+  report_filestore: /data/crsbench/report-data/gce-opencode-clear-shortlist2-bugfinding
+
+crs_compose:
+  oss_crs_infra:
+    shared: true
+  crs-bug-finding-opencode-clear:
+    num_cores: 16
+    budget_policy: terminate
+    additional_env:
+      CRS_AGENT: opencode
+      OPENCODE_MODEL: zai-org/GLM-5.1
+
+resources:
+  cores_per_trial: 16
+  memory_per_trial: "64G"
+
+worker:
+  jobs: 14
+  cores_per_job: 16
+  storage:
+    cleanup_after_trial: true
+
+cloud:
+  remote:
+    experiment_root: /data/crsbench/experiment-data
+  defaults:
+    readiness_timeout_sec: 10800
+    crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+    crsbench_git_ref: feat/discovery-all-languages
+    github_deploy_key_path: .crsbench-keys/crsbench-deploy
+  env:
+    HF_TOKEN: os.environ/HF_TOKEN
+    CRSBENCH_LLM_UPSTREAM_BASE_URL: os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL
+    CRSBENCH_LLM_UPSTREAM_MASTER_KEY: os.environ/CRSBENCH_LLM_UPSTREAM_MASTER_KEY
+    CRSBENCH_NOTIFY_APPRISE_URLS: os.environ/CRSBENCH_NOTIFY_APPRISE_URLS
+  bootstrap:
+    prepare_mode: full
+    download_benchmarks: auto
+  providers:
+    gce:
+      project: aixcc-426805
+      ssh_via_iap: true
+      regions:
+        - us-east5
+        - us-east1
+      fallback: true
+      profile_defaults:
+        machine_type: n2d-standard-16
+        boot_disk_size_gb: 512
+        boot_disk_type: pd-ssd
+        image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+        service_account_email: 153298433405-compute@developer.gserviceaccount.com
+        owner_label: crsbench
+      instance_profiles:
+        gce-orchestrator-n2d:
+          machine_type: n2d-standard-128
+          boot_disk_size_gb: 1024
+        gce-worker-n2d:
+          machine_type: n2d-standard-224
+          boot_disk_size_gb: 4096
+        gce-evaluator-n2d: {}
+  orchestrator:
+    instance_profile: gce-orchestrator-n2d
+  workers:
+    defaults:
+      instance_profile: gce-worker-n2d
+    placements:
+      - {} # worker 1
+      - {} # worker 2
