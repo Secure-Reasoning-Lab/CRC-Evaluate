@@ -26,7 +26,7 @@ experiment:
     - mpv:
         - fuzzer_json
         # - fuzzer_load_config_file
-        # - fuzzer_load_input_conf
+        - fuzzer_load_input_conf
         - fuzzer_loadfile
         # - fuzzer_loadfile_direct
         # - fuzzer_loadfile_mkv
@@ -55,11 +55,11 @@ experiment:
         # - HTMLLayoutFuzzer-wchar_t
         - JSONLayoutFuzzer-utf-8
         # - JSONLayoutFuzzer-wchar_t
-        # - PatternConverterFuzzer-utf-8
+        - PatternConverterFuzzer-utf-8
         # - PatternConverterFuzzer-wchar_t
         - PatternLayoutFuzzer-utf-8
         # - PatternLayoutFuzzer-wchar_t
-        # - PatternParserFuzzer-utf-8
+        - PatternParserFuzzer-utf-8
         # - PatternParserFuzzer-wchar_t
         # - TimeBasedRollingPolicyFuzzer-utf-8
         # - TimeBasedRollingPolicyFuzzer-wchar_t
