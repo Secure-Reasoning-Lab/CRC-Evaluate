@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from importlib import resources
+from typing import Literal
+
+MappingReason = Literal["mapped", "unsupported_mapping", "missing_mapping"]
 
 
 @dataclass(frozen=True)
@@ -13,7 +16,7 @@ class MappingResolution:
 
     benchmark: str
     mapped_project: str | None
-    reason: str
+    reason: MappingReason
 
 
 def load_benchmark_project_mapping() -> dict[str, str | None]:
