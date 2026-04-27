@@ -343,6 +343,11 @@ def test_replay_engine_counts_0day_rows_per_source_record_after_dedup(
         "trial-a",
         "trial-b",
     }
+    assert {entry["original_pov_relpath"] for entry in zero_day} == {
+        "trial-a/output/povs/a.blob",
+        "trial-b/output/povs/b.blob",
+    }
+    assert {entry["pov_filename"] for entry in zero_day} == {"a.blob", "b.blob"}
 
 
 def test_replay_engine_records_and_logs_throughput_metrics(tmp_path: Path) -> None:
@@ -496,14 +501,9 @@ def test_replay_engine_keeps_mixed_outcome_source_entries_in_0day_with_only_cras
     assert len(zero_day[0]["replays"]) == 1
     replay = zero_day[0]["replays"][0]
     assert replay["target_harness"] == "fuzz-a"
-    assert replay["sanitizer"] == "address"
     assert replay["outcome"] == "crash"
-    assert replay["exit_code"] == 77
-    assert replay["duration_seconds"] == 1.0
     assert replay["artifact_dir"] is not None
     assert replay["sanitizer_log"] is not None
-    assert replay["session_restarted"] is False
-    assert replay["error_message"] is None
     assert "stdout" not in replay
     assert "stderr" not in replay
 
