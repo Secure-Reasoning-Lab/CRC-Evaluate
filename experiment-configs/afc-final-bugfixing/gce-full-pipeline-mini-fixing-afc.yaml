@@ -8,9 +8,10 @@
 #   crs-bug-finding-gemini-cli   -> crs-gemini-cli    (gemini_cli: gemini-3-flash-preview)
 #   crs-bug-finding-opencode     -> crs-opencode      (opencode: GLM-5.1)
 #
-# opencode finding lives in its own experiment tree (afc-opencode-finding) since
-# it runs via gce-opencode-finding-afc.yaml; the other three share the
-# afc-full-pipeline-mini-finding tree.
+# opencode finding originally ran via gce-opencode-finding-afc.yaml and was
+# collected to its own experiment tree (afc-opencode-finding); for this run
+# the opencode CRS subtree was rsynced into the afc-full-pipeline-mini-finding
+# tree so all four finding CRS subtrees share a single root path.
 #
 # CPVs that a given finding CRS did not discover are skipped at trial-matrix
 # generation for the matching fixing CRS. If a CRS's finding subtree is empty
@@ -22,14 +23,16 @@
 #      - afc-final-bugfinding/gce-opencode-finding-afc.yaml launched, monitored
 #      - cloud collect --force pulled results locally for both
 #      - cloud teardown --force released the phase-1 clusters
+#      - opencode CRS subtree rsynced into the mini-finding tree, e.g.:
+#          rsync -aH \
+#            /data/crsbench/experiment-data/afc-opencode-finding/afc-opencode-finding/afc-opencode-finding/crs-bug-finding-opencode/ \
+#            /data/crsbench/experiment-data/afc-full-pipeline-mini-finding/afc-full-pipeline-mini-finding/afc-full-pipeline-mini-finding/crs-bug-finding-opencode/
 #   2. By default, cloud collect publishes phase-1 results under:
 #      /data/crsbench/experiment-data/afc-full-pipeline-mini-finding/
 #        afc-full-pipeline-mini-finding/afc-full-pipeline-mini-finding/
-#      (claude-code, codex, gemini-cli) and
-#      /data/crsbench/experiment-data/afc-opencode-finding/
-#        afc-opencode-finding/afc-opencode-finding/
-#      (opencode). If you collected phase 1 elsewhere, update the
-#      from_experiment_by_crs paths below before launching phase 2.
+#      (claude-code, codex, gemini-cli, plus opencode after the rsync above).
+#      If you collected phase 1 elsewhere, update the from_experiment_by_crs
+#      paths below before launching phase 2.
 #   3. gcloud auth login && gcloud auth application-default login
 #   4. HF_TOKEN in .env or environment (opencode needs HF models)
 #
@@ -62,9 +65,9 @@ runtime:
   patch_verify_variants: true
   inputs:
     pov:
-      max_variants_per_cpv: 1
+      max_variants_per_cpv: null  # stage every POV finding CRS discovered for each CPV
       from_experiment_by_crs:
-        crs-opencode: /data/crsbench/experiment-data/afc-opencode-finding/afc-opencode-finding/afc-opencode-finding/crs-bug-finding-opencode
+        crs-opencode: /data/crsbench/experiment-data/afc-full-pipeline-mini-finding/afc-full-pipeline-mini-finding/afc-full-pipeline-mini-finding/crs-bug-finding-opencode
         crs-claude-code: /data/crsbench/experiment-data/afc-full-pipeline-mini-finding/afc-full-pipeline-mini-finding/afc-full-pipeline-mini-finding/crs-bug-finding-claude-code
         crs-codex: /data/crsbench/experiment-data/afc-full-pipeline-mini-finding/afc-full-pipeline-mini-finding/afc-full-pipeline-mini-finding/crs-bug-finding-codex
         crs-gemini-cli: /data/crsbench/experiment-data/afc-full-pipeline-mini-finding/afc-full-pipeline-mini-finding/afc-full-pipeline-mini-finding/crs-bug-finding-gemini-cli
