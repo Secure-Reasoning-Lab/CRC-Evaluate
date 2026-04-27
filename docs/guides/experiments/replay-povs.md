@@ -83,7 +83,7 @@ For each source POV, replay:
 1. discovers replayable POV files from the requested source trees
 2. resolves the source benchmark to a latest OSS-Fuzz project
 3. builds that latest project for the relevant sanitizer
-4. discovers the current fuzz targets from the build output
+4. discovers the current runnable fuzz-target wrappers from the build output
 5. runs the POV against every current harness through warm reused containers
 6. writes artifacts once per physical replay and records provenance for every
    original POV instance
@@ -112,13 +112,13 @@ Replay writes the following under `--output`:
 - `manifest.json`: source roots, helper/projects paths, and runtime settings
 - `summary.json`: aggregate counters for mappings, builds, crashes, timeouts,
   errors, plus `0day_count` and `crashing_replay_count` for the emitted
-  crash-only view
-- `0day.log`: append-only JSONL crash stream written as each crashing harness
-  result lands; this is the earliest view during a long scan and is deduplicated
-  across `--resume` reruns
-- `0day.json`: additive crash-only export that keeps only source entries with at
-  least one crashing replay, and within those entries keeps only crashing replay
-  rows
+  ASan-only 0day view
+- `0day.log`: append-only JSONL stream written as each qualifying
+  AddressSanitizer harness result lands; this is the earliest view during a
+  long scan and is deduplicated across `--resume` reruns
+- `0day.json`: additive ASan-only export that keeps only source entries with at
+  least one qualifying AddressSanitizer replay, and within those entries keeps
+  only those replay rows
 - `pov-to-crash-map.json`: full mapping from original POV provenance to replay
   artifacts, including non-crashing replay rows
 - `.state/groups/<project>/<sanitizer>/group-result.json`: completed replay-group
@@ -144,15 +144,16 @@ Each artifact directory contains:
 - resolved latest OSS-Fuzz project
 - one replay entry per current target harness, with outcome and artifact paths
 
-`0day.json` is derived from that full mapping. Its replay rows are crash-only
-and omit `stdout` and `stderr`, while keeping crash-focused fields such as
-harness, sanitizer, exit code, duration, artifact directory, sanitizer log,
-session restart, and error message.
+`0day.json` is derived from that full mapping. Its replay rows are limited to
+crashes whose output contains `AddressSanitizer`, excluding timeout-like and
+out-of-memory reports. Those rows omit `stdout` and `stderr`, while keeping
+crash-focused fields such as harness, sanitizer, exit code, duration, artifact
+directory, sanitizer log, session restart, and error message.
 
 `0day.log` is intentionally more granular than `0day.json`: each line is one
-source POV plus one crashing replay row, appended immediately after that harness
-finishes. The final `0day.json` later folds those crashes back into one entry
-per source POV.
+source POV plus one qualifying AddressSanitizer replay row, appended
+immediately after that harness finishes. The final `0day.json` later folds
+those rows back into one entry per source POV.
 
 ## Operational Notes
 
@@ -164,6 +165,8 @@ per source POV.
 - `--resume` only reuses groups that finished cleanly and whose discovered input
   signature still matches the current source records. Interrupted or erroring
   groups rerun from scratch on the next invocation.
+- Replay checkpoints are format-versioned, so incompatible older group
+  checkpoints are ignored instead of being reused under newer replay semantics.
 - If a rebuild is needed, replay clears the old plain-build metadata before
   invoking `helper.py build_fuzzers`, so a failed rebuild is not treated as a
   reusable cache hit later.

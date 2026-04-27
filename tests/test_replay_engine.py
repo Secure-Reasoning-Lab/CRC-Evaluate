@@ -11,6 +11,21 @@ from crsbench.evaluation.replay.models import (
 )
 
 
+def _asan_stderr(crash_type: str = "heap-buffer-overflow") -> str:
+    return (
+        f"==1==ERROR: AddressSanitizer: {crash_type} on address 0x1\n"
+        f"SUMMARY: AddressSanitizer: {crash_type} /src/example.c:42:7"
+    )
+
+
+def _asan_oom_stderr() -> str:
+    return (
+        "==1==ERROR: AddressSanitizer: allocator is out of memory trying to "
+        "allocate 0x1000 bytes\n"
+        "SUMMARY: AddressSanitizer: out-of-memory"
+    )
+
+
 class FakeInfra:
     def __init__(
         self,
@@ -213,13 +228,13 @@ def _run_0day_replay(tmp_path: Path) -> Path:
             ("fuzz-a", crash_hash): _session_result(
                 exit_code=77,
                 stdout="stdout crash",
-                stderr="stderr crash",
+                stderr=_asan_stderr(),
                 crashed=True,
             ),
             ("fuzz-b", crash_hash): _session_result(
                 exit_code=77,
                 stdout="stdout crash",
-                stderr="stderr crash",
+                stderr=_asan_stderr("use-after-free"),
                 crashed=True,
             ),
             ("fuzz-a", no_crash_hash): _session_result(
@@ -266,7 +281,7 @@ def _run_mixed_outcome_0day_replay(tmp_path: Path) -> Path:
             ("fuzz-a", pov_hash): _session_result(
                 exit_code=77,
                 stdout="stdout crash",
-                stderr="stderr crash",
+                stderr=_asan_stderr(),
                 crashed=True,
             ),
             ("fuzz-b", pov_hash): _session_result(
@@ -315,7 +330,7 @@ def test_replay_engine_deduplicates_physical_execution_but_preserves_provenance(
         _session_result(
             exit_code=77,
             stdout="stdout crash",
-            stderr="stderr crash",
+            stderr=_asan_stderr(),
             crashed=True,
         )
     )
@@ -347,7 +362,7 @@ def test_replay_engine_deduplicates_physical_execution_but_preserves_provenance(
 
     sanitizer_log = Path(data[0]["replays"][0]["sanitizer_log"])
     assert sanitizer_log.read_text(encoding="utf-8") == (
-        "stdout crash\n===== STDERR =====\nstderr crash"
+        f"stdout crash\n===== STDERR =====\n{_asan_stderr()}"
     )
 
 
@@ -373,7 +388,7 @@ def test_replay_engine_counts_0day_rows_per_source_record_after_dedup(
         _session_result(
             exit_code=77,
             stdout="stdout crash",
-            stderr="stderr crash",
+            stderr=_asan_stderr(),
             crashed=True,
         )
     )
@@ -639,7 +654,7 @@ def test_replay_engine_writes_incremental_0day_log_before_group_completes(
             _session_result(
                 exit_code=77,
                 stdout="stdout crash",
-                stderr="stderr crash",
+                stderr=_asan_stderr(),
                 crashed=True,
             )
         ),
@@ -724,6 +739,170 @@ def test_replay_engine_keeps_mixed_outcome_source_entries_in_0day_with_only_cras
     assert replay["sanitizer_log"] is not None
     assert "stdout" not in replay
     assert "stderr" not in replay
+
+
+def test_replay_engine_excludes_non_asan_crashes_from_0day_outputs(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "exp-a"
+    latest_projects = tmp_path / "latest-projects"
+    (latest_projects / "curl").mkdir(parents=True)
+    pov = source_dir / "trial-a" / "output" / "povs" / "a.blob"
+    pov.parent.mkdir(parents=True, exist_ok=True)
+    pov.write_bytes(b"CRASH")
+    pov_hash = "88" * 32
+    records = [_record(source_dir, "trial-a", pov, pov_hash)]
+    pool = FakeSessionPool(
+        _session_result(
+            exit_code=126,
+            stdout="stdout crash",
+            stderr="bash: /out/raw.jar: cannot execute binary file: Exec format error",
+            crashed=True,
+        )
+    )
+    engine = ReplayEngine(
+        oss_fuzz_path=tmp_path / "oss-fuzz",
+        projects_root=latest_projects,
+        output_dir=tmp_path / "replay-out",
+        jobs=1,
+        per_pov_timeout=5,
+        infra=FakeInfra(),
+        mapping={"afc-curl-delta-01": "curl"},
+        session_pool_factory=lambda **_kwargs: pool,
+    )
+
+    engine.run(records, source_dirs=[source_dir])
+
+    summary = json.loads((tmp_path / "replay-out" / "summary.json").read_text())
+    assert summary["crash_count"] == 1
+    assert summary["0day_count"] == 0
+    assert summary["crashing_replay_count"] == 0
+    assert json.loads((tmp_path / "replay-out" / "0day.json").read_text()) == []
+    zero_day_log = tmp_path / "replay-out" / "0day.log"
+    assert not zero_day_log.exists() or zero_day_log.read_text() == ""
+
+    data = json.loads((tmp_path / "replay-out" / "pov-to-crash-map.json").read_text())
+    assert data[0]["replays"][0]["outcome"] == "crash"
+    assert data[0]["replays"][0]["artifact_dir"] is not None
+
+
+def test_replay_engine_excludes_asan_oom_crashes_from_0day_outputs(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "exp-a"
+    latest_projects = tmp_path / "latest-projects"
+    (latest_projects / "curl").mkdir(parents=True)
+    pov = source_dir / "trial-a" / "output" / "povs" / "a.blob"
+    pov.parent.mkdir(parents=True, exist_ok=True)
+    pov.write_bytes(b"CRASH")
+    pov_hash = "99" * 32
+    records = [_record(source_dir, "trial-a", pov, pov_hash)]
+    pool = FakeSessionPool(
+        _session_result(
+            exit_code=77,
+            stdout="stdout crash",
+            stderr=_asan_oom_stderr(),
+            crashed=True,
+        )
+    )
+    engine = ReplayEngine(
+        oss_fuzz_path=tmp_path / "oss-fuzz",
+        projects_root=latest_projects,
+        output_dir=tmp_path / "replay-out",
+        jobs=1,
+        per_pov_timeout=5,
+        infra=FakeInfra(),
+        mapping={"afc-curl-delta-01": "curl"},
+        session_pool_factory=lambda **_kwargs: pool,
+    )
+
+    engine.run(records, source_dirs=[source_dir])
+
+    summary = json.loads((tmp_path / "replay-out" / "summary.json").read_text())
+    assert summary["crash_count"] == 1
+    assert summary["0day_count"] == 0
+    assert summary["crashing_replay_count"] == 0
+    assert json.loads((tmp_path / "replay-out" / "0day.json").read_text()) == []
+
+
+def test_replay_engine_resume_ignores_legacy_group_checkpoints(tmp_path: Path) -> None:
+    source_dir = tmp_path / "exp-a"
+    latest_projects = tmp_path / "latest-projects"
+    (latest_projects / "curl").mkdir(parents=True)
+    pov = source_dir / "trial-a" / "output" / "povs" / "a.blob"
+    pov.parent.mkdir(parents=True, exist_ok=True)
+    pov.write_bytes(b"A")
+    record = _record(source_dir, "trial-a", pov, "ab" * 32)
+
+    checkpoint_path = (
+        tmp_path
+        / "replay-out"
+        / ".state"
+        / "groups"
+        / "curl"
+        / "address"
+        / "group-result.json"
+    )
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_signature = ReplayEngine(
+        oss_fuzz_path=tmp_path / "oss-fuzz",
+        projects_root=latest_projects,
+        output_dir=tmp_path / "replay-out",
+        jobs=1,
+        per_pov_timeout=5,
+        infra=FakeInfra(),
+        mapping={"afc-curl-delta-01": "curl"},
+        session_pool_factory=lambda **_kwargs: FakeSessionPool(
+            _session_result(
+                exit_code=0,
+                stdout="ok",
+                stderr="",
+                duration_seconds=0.1,
+                crashed=False,
+            )
+        ),
+    )._group_input_signature([record])
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "input_signature": legacy_signature,
+                "outcome": {
+                    "entries": [],
+                    "zero_day_entries": [],
+                    "trial_entries": [],
+                    "summary_updates": {},
+                    "naive_replay_tasks": 0,
+                    "physical_replay_tasks": 0,
+                },
+            },
+            indent=2,
+        )
+    )
+
+    resume_infra = FakeInfra()
+    engine = ReplayEngine(
+        oss_fuzz_path=tmp_path / "oss-fuzz",
+        projects_root=latest_projects,
+        output_dir=tmp_path / "replay-out",
+        jobs=1,
+        per_pov_timeout=5,
+        infra=resume_infra,
+        resume=True,
+        mapping={"afc-curl-delta-01": "curl"},
+        session_pool_factory=lambda **_kwargs: FakeSessionPool(
+            _session_result(
+                exit_code=0,
+                stdout="ok",
+                stderr="",
+                duration_seconds=0.1,
+                crashed=False,
+            )
+        ),
+    )
+
+    engine.run([record], source_dirs=[source_dir])
+
+    assert resume_infra.build_calls == [("curl", "address")]
 
 
 def test_replay_engine_allows_direct_oss_fuzz_project_names_for_discovery_mode(

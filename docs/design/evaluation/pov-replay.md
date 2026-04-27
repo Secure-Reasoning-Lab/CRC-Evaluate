@@ -56,8 +56,8 @@ The replay command consumes prior trial outputs, resolves each benchmark to a cu
 - replay groups work by `(mapped_project, sanitizer)`
 - replay may process multiple groups concurrently when configured with `--group-jobs > 1`
 - groups for the same mapped project still serialize within one replay process because `build/out/<project>` is shared across sanitizers and warm-session reuse depends on that shared build tree staying stable
-- replay is restartable at the `(mapped_project, sanitizer)` group level: a cleanly finished group writes a checkpoint, and `--resume` skips only those completed groups whose source-record signature still matches
-- each group rebuilds the latest project once, then discovers the current fuzz targets from the build output
+- replay is restartable at the `(mapped_project, sanitizer)` group level: a cleanly finished group writes a versioned checkpoint, and `--resume` skips only those completed groups whose source-record signature and checkpoint format both still match
+- each group rebuilds the latest project once, then discovers the current runnable fuzz-target wrappers from the build output
 - plain latest-project builds are serialized by OSS-Fuzz project within one helper checkout, so concurrent replay commands do not race on the shared `build/out/<project>` directory
 - a prior plain build is reusable only when `.build-meta.json` exists, records a non-inc build for the requested sanitizer, and current fuzz target discovery still finds at least one valid harness
 - every discovered POV is scheduled against every current target harness for that group
@@ -81,18 +81,20 @@ Replay also writes:
 
 - `manifest.json` for command-level inputs and runtime settings
 - `summary.json` for aggregate counters, including `0day_count` and `crashing_replay_count`
-- `0day.log` for append-only crash JSONL rows emitted as individual crashing harness results finish
-- `0day.json` for a crash-only top-level export
+- `0day.log` for append-only AddressSanitizer JSONL rows emitted as individual qualifying harness results finish
+- `0day.json` for an AddressSanitizer-only top-level export
 - `pov-to-crash-map.json` for the global mapping from original POV provenance to replay artifacts
 - `trials/<source-id>/<trial-relative-path>/pov-index.json` for a per-trial replay index
 - `.state/groups/<mapped-project>/<sanitizer>/group-result.json` for completed replay-group checkpoints
 
 `0day.json` is additive and does not replace the full replay index. It contains
-only source POV entries with at least one crashing replay, and each included
-entry keeps only crashing replay rows. Those rows omit `stdout` and `stderr`
-but retain crash-focused fields such as harness, sanitizer, exit code,
-duration, artifact directory, sanitizer log, session restart, and error
-message.
+only source POV entries with at least one qualifying AddressSanitizer replay,
+and each included entry keeps only those replay rows. A qualifying row must be
+a replay crash whose output contains `AddressSanitizer`; timeout-like and
+out-of-memory reports are excluded from this 0day view. Those rows omit
+`stdout` and `stderr` but retain crash-focused fields such as harness,
+sanitizer, exit code, duration, artifact directory, sanitizer log, session
+restart, and error message.
 
 ## Runtime Behavior
 
@@ -106,20 +108,21 @@ message.
 6. execute deduplicated replay tasks through a warm session pool
 7. classify outcomes using the same crash/timeout/leak semantics as helper-based reproduce
 8. write artifacts once per physical replay, emit both the full replay mapping and
-   crash-only `0day.json`, and re-index them for every original source POV
+   AddressSanitizer-only `0day.json`, and re-index them for every original source POV
 
 If another replay process is already building the same OSS-Fuzz project in the
 same checkout, later processes wait on that per-project lock and re-check the
 result after the lock is released instead of rebuilding blindly.
 
 `summary.json` reports `0day_count` and `crashing_replay_count` for the emitted
-crash-only view: source entries included in `0day.json` and crashing replay rows
-kept there, not deduplicated physical replay tasks.
+AddressSanitizer-only view: source entries included in `0day.json` and replay
+rows kept there, not deduplicated physical replay tasks.
 
 `0day.log` is deliberately earlier and more granular than `0day.json`. Each line
-contains one source record plus one crashing replay row and is flushed to disk
-immediately so operators can tail live results during long scans. The final
-`0day.json` remains the aggregated crash-only export.
+contains one source record plus one qualifying AddressSanitizer replay row and
+is flushed to disk immediately so operators can tail live results during long
+scans. The final `0day.json` remains the aggregated AddressSanitizer-only
+export.
 
 ### Warm Session Behavior
 

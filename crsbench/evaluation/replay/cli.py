@@ -109,13 +109,16 @@ def run_replay_povs(args: argparse.Namespace) -> int:
     """Replay historical POVs against latest OSS-Fuzz projects and harnesses."""
     configure_logger(level="DEBUG" if args.verbose else "INFO")
 
+    group_jobs = getattr(args, "group_jobs", 1)
+    resume = getattr(args, "resume", False)
+
     source_dirs = [Path(item).resolve() for item in args.source_dirs]
     if any(not source_dir.is_dir() for source_dir in source_dirs):
         raise SystemExit("All --source-dir values must exist and be directories")
 
     if args.jobs < 1:
         raise SystemExit("--jobs must be at least 1")
-    if args.group_jobs < 1:
+    if group_jobs < 1:
         raise SystemExit("--group-jobs must be at least 1")
     if args.per_pov_timeout < 1:
         raise SystemExit("--per-pov-timeout must be at least 1")
@@ -148,8 +151,8 @@ def run_replay_povs(args: argparse.Namespace) -> int:
         projects_root=projects_root,
         output_dir=output_dir,
         jobs=args.jobs,
-        group_jobs=args.group_jobs,
-        resume=args.resume,
+        group_jobs=group_jobs,
+        resume=resume,
         per_pov_timeout=args.per_pov_timeout,
     )
     engine.run(records, discovery_stats=discovery_stats, source_dirs=source_dirs)

@@ -4,12 +4,15 @@ import hashlib
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 
 from crsbench.evaluation.trial_paths import TrialDir
 from crsbench.reporting.snapshot_loader import discover_trials
 
 from .models import SourcePovRecord
+
+if TYPE_CHECKING:
+    from crsbench.reporting.models import TrialInfo
 
 _VALID_SANITIZERS = {"address", "memory", "undefined", "thread", "leak"}
 
@@ -18,7 +21,7 @@ _VALID_SANITIZERS = {"address", "memory", "undefined", "thread", "leak"}
 class _CandidateTrial:
     source_id: str
     source_dir: Path
-    trial: object
+    trial: "TrialInfo"
     trial_dir: Path
     trial_relative: str
     experiment_name: str
@@ -39,7 +42,7 @@ def _visible_povs(pov_dir: Path) -> Iterable[Path]:
     )
 
 
-def _resolve_trial_sanitizer(trial: object, trial_dir: Path) -> str:
+def _resolve_trial_sanitizer(trial: "TrialInfo", trial_dir: Path) -> str:
     """Return replay sanitizer, defaulting to address when discovery cannot infer one."""
     trial_sanitizer = getattr(trial, "sanitizer", None)
     if hasattr(trial_sanitizer, "value"):

@@ -69,4 +69,5 @@ class ReplayResult:
     stderr_path: Path | None
     sanitizer_log_path: Path | None
     session_restarted: bool
+    standard_zero_day: bool = False
     error_message: str | None = None

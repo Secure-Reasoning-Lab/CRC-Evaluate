@@ -18,6 +18,7 @@ from crsbench.evaluation.replay.mapping import (
     resolve_mapped_project,
 )
 from crsbench.evaluation.replay.models import (
+    ReplayOutcome,
     ReplayResult,
     ReplayTask,
     SessionReplayResult,
@@ -29,6 +30,15 @@ from crsbench.utils.logger import get_logger
 
 SessionPoolFactory = Callable[..., WarmReplaySessionPool]
 logger = get_logger(__name__)
+
+_GROUP_CHECKPOINT_FORMAT_VERSION = 2
+_REPLAY_OUTPUT_FORMAT_VERSION = 2
+_ZERO_DAY_REQUIRED_MARKER = "AddressSanitizer"
+_ZERO_DAY_EXCLUDED_SUBSTRINGS = (
+    "out of memory",
+    "out-of-memory",
+    "libfuzzer: timeout",
+)
 
 
 @dataclass
@@ -219,6 +229,8 @@ class ReplayEngine:
         except Exception:
             return None
 
+        if data.get("format_version") != _GROUP_CHECKPOINT_FORMAT_VERSION:
+            return None
         if data.get("input_signature") != input_signature:
             return None
 
@@ -239,6 +251,7 @@ class ReplayEngine:
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = checkpoint_path.with_suffix(".tmp")
         payload = {
+            "format_version": _GROUP_CHECKPOINT_FORMAT_VERSION,
             "input_signature": self._group_input_signature(records),
             "outcome": self._serialize_group_outcome(outcome),
         }
@@ -275,12 +288,31 @@ class ReplayEngine:
                     )
                 )
 
+    @staticmethod
+    def _is_standard_zero_day_output(
+        *,
+        outcome: str,
+        stdout: str,
+        stderr: str,
+    ) -> bool:
+        if outcome != "crash":
+            return False
+
+        combined = f"{stdout}\n{stderr}"
+        if _ZERO_DAY_REQUIRED_MARKER not in combined:
+            return False
+
+        combined_lower = combined.casefold()
+        return not any(
+            token in combined_lower for token in _ZERO_DAY_EXCLUDED_SUBSTRINGS
+        )
+
     def _append_zero_day_log(
         self,
         record: SourcePovRecord,
         replay_result: ReplayResult,
     ) -> None:
-        if replay_result.outcome != "crash":
+        if not replay_result.standard_zero_day:
             return
 
         key = (
@@ -347,7 +379,9 @@ class ReplayEngine:
         self,
         task: ReplayTask,
         session_result: SessionReplayResult,
-        outcome: str,
+        outcome: ReplayOutcome,
+        *,
+        standard_zero_day: bool,
     ) -> ReplayResult:
         artifact_dir = self._artifact_dir(task)
         artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -392,6 +426,7 @@ class ReplayEngine:
             stderr_path=stderr_path,
             sanitizer_log_path=sanitizer_log_path,
             session_restarted=session_result.session_restarted,
+            standard_zero_day=standard_zero_day,
             error_message=session_result.error_message,
         )
 
@@ -464,7 +499,7 @@ class ReplayEngine:
     def _classify_session_outcome(
         self,
         session_result: SessionReplayResult,
-    ) -> str:
+    ) -> ReplayOutcome:
         if session_result.error_message:
             return "error"
         if session_result.timed_out:
@@ -626,7 +661,17 @@ class ReplayEngine:
                 session_result: SessionReplayResult,
             ) -> None:
                 outcome = self._classify_session_outcome(session_result)
-                replay_result = self._write_artifact(task, session_result, outcome)
+                standard_zero_day = self._is_standard_zero_day_output(
+                    outcome=outcome,
+                    stdout=session_result.stdout,
+                    stderr=session_result.stderr,
+                )
+                replay_result = self._write_artifact(
+                    task,
+                    session_result,
+                    outcome,
+                    standard_zero_day=standard_zero_day,
+                )
                 crash_records: list[SourcePovRecord] = []
                 with results_lock:
                     if task in replay_results_by_task:
@@ -634,7 +679,7 @@ class ReplayEngine:
                     replay_results_by_task[task] = replay_result
                     for record in task.source_records:
                         replay_results_by_record[record].append(replay_result)
-                        if outcome == "crash":
+                        if replay_result.standard_zero_day:
                             crash_records.append(record)
 
                 for record in crash_records:
@@ -681,7 +726,7 @@ class ReplayEngine:
                     replay_results_by_record[record],
                     key=lambda item: (item.target_harness, item.pov_content_hash),
                 )
-                crashing_replays = [item for item in replays if item.outcome == "crash"]
+                zero_day_replays = [item for item in replays if item.standard_zero_day]
                 entry = self._base_entry(
                     record,
                     mapped_project=mapped_project,
@@ -692,7 +737,7 @@ class ReplayEngine:
                 trial_entries[(record.source_id, record.trial_relative_path)].append(
                     entry
                 )
-                if crashing_replays:
+                if zero_day_replays:
                     zero_day_entries.append(
                         self._base_entry(
                             record,
@@ -700,7 +745,7 @@ class ReplayEngine:
                             status="replayed",
                             replays=[
                                 self._serialize_0day_replay_result(item)
-                                for item in crashing_replays
+                                for item in zero_day_replays
                             ],
                         )
                     )
@@ -737,6 +782,7 @@ class ReplayEngine:
             else sorted({record.source_dir.resolve() for record in source_records})
         )
         manifest = {
+            "format_version": _REPLAY_OUTPUT_FORMAT_VERSION,
             "source_dirs": [str(item) for item in input_source_dirs],
             "source_ids": sorted({record.source_id for record in source_records}),
             "oss_fuzz_path": str(self.oss_fuzz_path),
@@ -821,9 +867,8 @@ class ReplayEngine:
                 )
                 if checkpoint is not None:
                     logger.info(
-                        "Reusing checkpointed replay group project=%s sanitizer=%s",
-                        key[0],
-                        key[1],
+                        "Reusing checkpointed replay group "
+                        f"project={key[0]} sanitizer={key[1]}"
                     )
                     group_outcomes[key] = checkpoint
                     continue
