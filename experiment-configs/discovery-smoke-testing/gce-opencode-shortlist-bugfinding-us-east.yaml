@@ -74,8 +74,8 @@ oss_fuzz_path: third_party/oss-fuzz
 
 runtime:
   trials: 1
-  max_total_time: 2460
-  build_timeout: 1800
+  max_total_time: 8400
+  build_timeout: 7200
   run_timeout: 540
   verify_timeout: 60
   skip_verification: true
@@ -95,19 +95,19 @@ crs_compose:
   oss_crs_infra:
     shared: true
   crs-bug-finding-opencode:
-    num_cores: 8
+    num_cores: 16
     budget_policy: terminate
     additional_env:
       CRS_AGENT: opencode
       OPENCODE_MODEL: zai-org/GLM-5.1
 
 resources:
-  cores_per_trial: 8
-  memory_per_trial: "32G"
+  cores_per_trial: 16
+  memory_per_trial: "64G"
 
 worker:
-  jobs: 1
-  cores_per_job: 8
+  jobs: 14
+  cores_per_job: 16
   storage:
     cleanup_after_trial: true
 
@@ -115,7 +115,7 @@ cloud:
   remote:
     experiment_root: /data/crsbench/experiment-data
   defaults:
-    readiness_timeout_sec: 1800
+    readiness_timeout_sec: 10800
     crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
     crsbench_git_ref: feat/discovery-all-languages
     github_deploy_key_path: .crsbench-keys/crsbench-deploy
@@ -144,7 +144,8 @@ cloud:
         owner_label: crsbench
       instance_profiles:
         gce-orchestrator-n2d: {}
-        gce-worker-n2d: {}
+        gce-worker-n2d:
+          machine_type: n2d-standard-224
         gce-evaluator-n2d: {}
   orchestrator:
     instance_profile: gce-orchestrator-n2d
@@ -152,4 +153,5 @@ cloud:
     defaults:
       instance_profile: gce-worker-n2d
     placements:
-      - {}
+      - {} # worker 1
+      - {} # worker 2

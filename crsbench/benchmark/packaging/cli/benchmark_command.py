@@ -719,6 +719,7 @@ def handle_init(args: argparse.Namespace) -> int:
     config = load_experiment_config(config_path)
     benchmarks_root = resolve_benchmarks_root(config.benchmarks_root)
     oss_fuzz_path = config.oss_fuzz_path
+    build_timeout = config.build_timeout
     cpuset_cpus = args.cpuset_cpus
 
     benchmark_names = config.get_benchmark_list()
@@ -759,6 +760,7 @@ def handle_init(args: argparse.Namespace) -> int:
                 benchmark_path,
                 oss_fuzz_path,
                 cpuset_cpus=assigned_cpuset,
+                build_timeout=build_timeout,
             )
 
             # Count harnesses from generated meta.yaml

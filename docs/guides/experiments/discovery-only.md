@@ -94,6 +94,10 @@ Key settings:
   failing the whole run.
 - `runtime.skip_verification: true` is recommended because there is no
   benchmark ground truth to verify against.
+- `runtime.build_timeout` is reused by both `crsbench benchmark init` and
+  managed cloud bootstrap when they build OSS-Fuzz projects to discover
+  harnesses. Increase it for large upstream projects instead of relying on a
+  fixed short discovery-build timeout.
 - `runtime.source_mode: main_repo` is recommended for raw OSS-Fuzz projects,
   because their sources usually come from `project.yaml:main_repo` rather than
   CRSBench-style `pkgs/` tarballs.
@@ -140,6 +144,8 @@ projects. When `--cpuset-cpus` is also set and `--jobs > 1`, CRSBench treats
 that cpuset as the total CPU envelope for the init command and splits it into
 per-job slices before calling the underlying OSS-Fuzz build path. Without an
 explicit cpuset, parallel init uses the current process affinity envelope.
+The init build and the equivalent managed cloud bootstrap build both honor
+`runtime.build_timeout` from the experiment config.
 
 `benchmark init` does the following for each selected benchmark:
 

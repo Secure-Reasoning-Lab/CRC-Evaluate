@@ -30,6 +30,7 @@ CRSBENCH_REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BENCHMARKS_ROOT = Path("benchmarks")
 DEFAULT_BENCHMARK_SUITES_ROOT = Path("benchmark-suites")
 MANAGED_OSS_FUZZ_ROOT = Path("third_party/oss-fuzz")
+DEFAULT_DISCOVERY_BUILD_TIMEOUT = 3600
 CRSBENCH_DOWNLOAD_DELAY_SEC_ENV = "CRSBENCH_DOWNLOAD_DELAY_SEC"
 _DOWNLOAD_DELAY_WINDOW_SEC = 300
 _DOWNLOAD_DELAY_SPACING_SEC = 10
@@ -109,6 +110,7 @@ class CloudVmBootstrapInputs:
     prepare_mode: PrepareMode = "full"
     download_benchmarks: DownloadBenchmarksMode = "auto"
     gitcache: bool = False
+    build_timeout: int = DEFAULT_DISCOVERY_BUILD_TIMEOUT
     benchmark_init_jobs: int | None = None
     benchmark_init_cores_per_job: int | None = None
     benchmark_suite: str | None = None
@@ -137,6 +139,7 @@ class CloudVmBootstrapInputs:
                 bootstrap.download_benchmarks if bootstrap is not None else "auto"
             ),
             gitcache=bootstrap.gitcache if bootstrap is not None else False,
+            build_timeout=config.build_timeout,
             benchmark_init_jobs=benchmark_init_jobs,
             benchmark_init_cores_per_job=benchmark_init_cores_per_job,
             benchmark_suite=config.benchmark_suite,
@@ -164,6 +167,11 @@ def bootstrap_inputs_from_payload(payload: dict[str, Any]) -> CloudVmBootstrapIn
             payload.get("download_benchmarks")
         ),
         gitcache=bool(payload.get("gitcache", False)),
+        build_timeout=_coerce_optional_positive_int(
+            payload.get("build_timeout", DEFAULT_DISCOVERY_BUILD_TIMEOUT),
+            field_name="build_timeout",
+        )
+        or DEFAULT_DISCOVERY_BUILD_TIMEOUT,
         benchmark_init_jobs=_coerce_optional_positive_int(
             payload.get("benchmark_init_jobs"),
             field_name="benchmark_init_jobs",
@@ -240,6 +248,7 @@ def run_benchmark_download(
     download_dataset_fn: Callable[..., Path] | None = None,
     cwd: Path | None = None,
     oss_fuzz_path: Path | str = MANAGED_OSS_FUZZ_ROOT,
+    build_timeout: int = DEFAULT_DISCOVERY_BUILD_TIMEOUT,
     benchmark_init_jobs: int | None = None,
     benchmark_init_cores_per_job: int | None = None,
 ) -> list[Path]:
@@ -261,6 +270,7 @@ def run_benchmark_download(
         selector,
         cwd=cwd,
         oss_fuzz_path=oss_fuzz_path,
+        build_timeout=build_timeout,
         benchmark_init_jobs=benchmark_init_jobs,
         benchmark_init_cores_per_job=benchmark_init_cores_per_job,
     )
@@ -347,6 +357,7 @@ def run_cloud_vm_bootstrap(
                 selector,
                 cwd=cwd,
                 oss_fuzz_path=inputs.oss_fuzz_path,
+                build_timeout=inputs.build_timeout,
                 benchmark_init_jobs=inputs.benchmark_init_jobs,
                 benchmark_init_cores_per_job=inputs.benchmark_init_cores_per_job,
             )
@@ -361,6 +372,7 @@ def run_cloud_vm_bootstrap(
             download_dataset_fn=download_dataset_fn,
             cwd=cwd,
             oss_fuzz_path=inputs.oss_fuzz_path,
+            build_timeout=inputs.build_timeout,
             benchmark_init_jobs=inputs.benchmark_init_jobs,
             benchmark_init_cores_per_job=inputs.benchmark_init_cores_per_job,
         ),
@@ -393,6 +405,7 @@ def _prepare_external_benchmarks(
     *,
     cwd: Path | None,
     oss_fuzz_path: Path | str = MANAGED_OSS_FUZZ_ROOT,
+    build_timeout: int = DEFAULT_DISCOVERY_BUILD_TIMEOUT,
     benchmark_init_jobs: int | None = None,
     benchmark_init_cores_per_job: int | None = None,
 ) -> list[Path] | None:
@@ -407,6 +420,7 @@ def _prepare_external_benchmarks(
         benchmarks_root=selector.effective_benchmarks_root(),
         cwd=cwd,
         oss_fuzz_path=oss_fuzz_path,
+        build_timeout=build_timeout,
         benchmark_init_jobs=benchmark_init_jobs,
         benchmark_init_cores_per_job=benchmark_init_cores_per_job,
     )
@@ -445,6 +459,7 @@ def _resolve_external_benchmark_paths(
     benchmarks_root: Path,
     cwd: Path | None,
     oss_fuzz_path: Path | str = MANAGED_OSS_FUZZ_ROOT,
+    build_timeout: int = DEFAULT_DISCOVERY_BUILD_TIMEOUT,
     benchmark_init_jobs: int | None = None,
     benchmark_init_cores_per_job: int | None = None,
 ) -> list[Path]:
@@ -469,6 +484,7 @@ def _resolve_external_benchmark_paths(
                 benchmark_name,
                 oss_fuzz_root=resolved_oss_fuzz_root,
                 cpuset_cpus=cpuset_cpus,
+                build_timeout=build_timeout,
             )
 
         return _run_cpuset_bounded_benchmark_inits(
@@ -514,6 +530,7 @@ def _resolve_external_benchmark_paths(
             benchmark_path,
             oss_fuzz_root=resolved_oss_fuzz_root,
             cpuset_cpus=cpuset_cpus,
+            build_timeout=build_timeout,
         )
 
     return _run_cpuset_bounded_benchmark_inits(
@@ -529,6 +546,7 @@ def _ensure_managed_oss_fuzz_project(
     *,
     oss_fuzz_root: Path,
     cpuset_cpus: str | None = None,
+    build_timeout: int = DEFAULT_DISCOVERY_BUILD_TIMEOUT,
 ) -> Path:
     project_dir = oss_fuzz_root / "projects" / benchmark_name
     if not project_dir.is_dir():
@@ -545,6 +563,7 @@ def _ensure_managed_oss_fuzz_project(
         project_dir,
         oss_fuzz_root=oss_fuzz_root,
         cpuset_cpus=cpuset_cpus,
+        build_timeout=build_timeout,
     )
     return project_dir
 
@@ -602,6 +621,7 @@ def _ensure_external_meta_yaml(
     *,
     oss_fuzz_root: Path,
     cpuset_cpus: str | None = None,
+    build_timeout: int = DEFAULT_DISCOVERY_BUILD_TIMEOUT,
 ) -> Path:
     meta_yaml_path = benchmark_path / ".aixcc" / "meta.yaml"
     if meta_yaml_path.is_file():
@@ -610,6 +630,7 @@ def _ensure_external_meta_yaml(
         benchmark_path,
         oss_fuzz_root,
         cpuset_cpus=cpuset_cpus,
+        build_timeout=build_timeout,
     )
 
 
@@ -618,11 +639,13 @@ def _ensure_external_meta_yaml_and_return_path(
     *,
     oss_fuzz_root: Path,
     cpuset_cpus: str | None = None,
+    build_timeout: int = DEFAULT_DISCOVERY_BUILD_TIMEOUT,
 ) -> Path:
     _ensure_external_meta_yaml(
         benchmark_path,
         oss_fuzz_root=oss_fuzz_root,
         cpuset_cpus=cpuset_cpus,
+        build_timeout=build_timeout,
     )
     return benchmark_path
 

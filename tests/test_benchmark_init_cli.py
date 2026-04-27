@@ -42,6 +42,7 @@ def _make_init_fixture(
         benchmarks_root=benchmarks_root,
         oss_fuzz_path=tmp_path / "oss-fuzz",
         benchmark_names=benchmark_names,
+        build_timeout=1800,
         trials=1,
         sanitizers=["address"],
     )
@@ -77,7 +78,7 @@ def test_benchmark_init_parser_accepts_jobs() -> None:
 
 def test_handle_init_single_job_preserves_explicit_cpuset(tmp_path: Path) -> None:
     benchmarks_root, config = _make_init_fixture(tmp_path, ["gpac"])
-    calls: list[str | None] = []
+    calls: list[tuple[str | None, int]] = []
 
     def fake_auto_generate_meta_yaml(
         benchmark_path: Path,
@@ -85,9 +86,10 @@ def test_handle_init_single_job_preserves_explicit_cpuset(tmp_path: Path) -> Non
         sanitizer: str = "address",
         *,
         cpuset_cpus: str | None = None,
+        build_timeout: int,
     ) -> Path:
         del oss_fuzz_path, sanitizer
-        calls.append(cpuset_cpus)
+        calls.append((cpuset_cpus, build_timeout))
         return _write_generated_meta(benchmark_path)
 
     args = argparse.Namespace(
@@ -117,12 +119,12 @@ def test_handle_init_single_job_preserves_explicit_cpuset(tmp_path: Path) -> Non
         result = handle_init(args)
 
     assert result == 0
-    assert calls == ["0-7"]
+    assert calls == [("0-7", 1800)]
 
 
 def test_handle_init_parallel_jobs_split_cpuset_across_builds(tmp_path: Path) -> None:
     benchmarks_root, config = _make_init_fixture(tmp_path, ["gpac", "mpv", "upx"])
-    calls: list[tuple[str, str | None]] = []
+    calls: list[tuple[str, str | None, int]] = []
     calls_lock = threading.Lock()
     overlap_ready = threading.Event()
 
@@ -132,10 +134,11 @@ def test_handle_init_parallel_jobs_split_cpuset_across_builds(tmp_path: Path) ->
         sanitizer: str = "address",
         *,
         cpuset_cpus: str | None = None,
+        build_timeout: int,
     ) -> Path:
         del oss_fuzz_path, sanitizer
         with calls_lock:
-            calls.append((benchmark_path.name, cpuset_cpus))
+            calls.append((benchmark_path.name, cpuset_cpus, build_timeout))
             if len(calls) == 2:
                 overlap_ready.set()
             should_wait = len(calls) < 2
@@ -173,3 +176,4 @@ def test_handle_init_parallel_jobs_split_cpuset_across_builds(tmp_path: Path) ->
     assert len(calls) == 3
     assert {calls[0][1], calls[1][1]} == {"0-3", "4-7"}
     assert calls[2][1] in {"0-3", "4-7"}
+    assert {call[2] for call in calls} == {1800}
