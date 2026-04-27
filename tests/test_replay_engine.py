@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from crsbench.evaluation.replay.engine import ReplayEngine
 from crsbench.evaluation.replay.models import (
@@ -145,6 +146,62 @@ def test_replay_engine_deduplicates_physical_execution_but_preserves_provenance(
     assert sanitizer_log.read_text(encoding="utf-8") == (
         "stdout crash\n===== STDERR =====\nstderr crash"
     )
+
+
+def test_replay_engine_records_and_logs_throughput_metrics(tmp_path: Path) -> None:
+    source_dir = tmp_path / "exp-a"
+    latest_projects = tmp_path / "latest-projects"
+    (latest_projects / "curl").mkdir(parents=True)
+    pov_a = source_dir / "trial-a" / "output" / "povs" / "a.blob"
+    pov_b = source_dir / "trial-b" / "output" / "povs" / "b.blob"
+    pov_a.parent.mkdir(parents=True, exist_ok=True)
+    pov_b.parent.mkdir(parents=True, exist_ok=True)
+    pov_a.write_bytes(b"SAME")
+    pov_b.write_bytes(b"SAME")
+    records = [
+        _record(source_dir, "trial-a", pov_a, "33" * 32),
+        _record(source_dir, "trial-b", pov_b, "33" * 32),
+    ]
+    pool = FakeSessionPool(
+        SessionReplayResult(
+            exit_code=77,
+            stdout="stdout crash",
+            stderr="stderr crash",
+            duration_seconds=1.0,
+            timed_out=False,
+            session_restarted=False,
+            crashed=True,
+        )
+    )
+    engine = ReplayEngine(
+        oss_fuzz_path=tmp_path / "oss-fuzz",
+        projects_root=latest_projects,
+        output_dir=tmp_path / "replay-out",
+        jobs=1,
+        per_pov_timeout=5,
+        infra=FakeInfra(),
+        mapping={"afc-curl-delta-01": "curl"},
+        session_pool_factory=lambda **_kwargs: pool,
+    )
+
+    with (
+        patch("crsbench.evaluation.replay.engine.time.monotonic") as mock_monotonic,
+        patch("crsbench.evaluation.replay.engine.logger.info") as mock_info,
+    ):
+        mock_monotonic.side_effect = [100.0, 104.0]
+        engine.run(records, source_dirs=[source_dir])
+
+    summary = json.loads((tmp_path / "replay-out" / "summary.json").read_text())
+    assert summary["elapsed_seconds"] == 4.0
+    assert summary["naive_replay_tasks"] == 2
+    assert summary["physical_replay_tasks"] == 1
+    assert summary["deduplicated_replay_tasks_saved"] == 1
+    assert summary["physical_replay_tasks_per_second"] == 0.25
+    assert summary["original_pov_instances_per_second"] == 0.5
+    assert summary["dedup_multiplier"] == 2.0
+    mock_info.assert_called_once()
+    assert "throughput" in mock_info.call_args.args[0]
+    assert "dedup_multiplier=2.000" in mock_info.call_args.args[0]
 
 
 def test_replay_engine_marks_build_failures_without_aborting_unrelated_work(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Callable
@@ -19,8 +20,10 @@ from crsbench.evaluation.replay.models import (
 )
 from crsbench.evaluation.replay.projects import ensure_project_link
 from crsbench.evaluation.replay.session import WarmReplaySession, WarmReplaySessionPool
+from crsbench.utils.logger import get_logger
 
 SessionPoolFactory = Callable[..., WarmReplaySessionPool]
+logger = get_logger(__name__)
 
 
 class ReplayEngine:
@@ -256,6 +259,7 @@ class ReplayEngine:
         discovery_stats: dict[str, int] | None = None,
         source_dirs: list[Path] | None = None,
     ) -> None:
+        started_at = time.monotonic()
         self.output_dir.mkdir(parents=True, exist_ok=True)
         discovery_stats = discovery_stats or {}
         input_source_dirs = (
@@ -263,6 +267,8 @@ class ReplayEngine:
             if source_dirs is not None
             else sorted({record.source_dir.resolve() for record in source_records})
         )
+        naive_replay_tasks = 0
+        physical_replay_tasks = 0
         summary = {
             "source_roots_processed": discovery_stats.get(
                 "source_roots_processed",
@@ -367,6 +373,7 @@ class ReplayEngine:
 
             summary["projects_built"] += 1
             harnesses = self.infra.list_fuzz_targets(mapped_project)
+            naive_replay_tasks += len(records) * len(harnesses)
             tasks = self._build_replay_tasks(
                 mapped_project, sanitizer, harnesses, records
             )
@@ -436,6 +443,7 @@ class ReplayEngine:
                     task,
                     self._empty_session_result("Session pool did not return a result"),
                 )
+                physical_replay_tasks += 1
                 if session_result.error_message:
                     outcome = "error"
                 elif session_result.timed_out:
@@ -472,6 +480,37 @@ class ReplayEngine:
                     entry
                 )
 
+        elapsed_seconds = round(time.monotonic() - started_at, 6)
+        physical_replay_tasks_per_second = (
+            physical_replay_tasks / elapsed_seconds if elapsed_seconds > 0 else 0.0
+        )
+        original_pov_instances_per_second = (
+            len(source_records) / elapsed_seconds if elapsed_seconds > 0 else 0.0
+        )
+        deduplicated_replay_tasks_saved = naive_replay_tasks - physical_replay_tasks
+        dedup_multiplier = (
+            naive_replay_tasks / physical_replay_tasks
+            if physical_replay_tasks > 0
+            else 0.0
+        )
+        summary.update(
+            {
+                "elapsed_seconds": elapsed_seconds,
+                "naive_replay_tasks": naive_replay_tasks,
+                "physical_replay_tasks": physical_replay_tasks,
+                "deduplicated_replay_tasks_saved": deduplicated_replay_tasks_saved,
+                "physical_replay_tasks_per_second": round(
+                    physical_replay_tasks_per_second,
+                    6,
+                ),
+                "original_pov_instances_per_second": round(
+                    original_pov_instances_per_second,
+                    6,
+                ),
+                "dedup_multiplier": round(dedup_multiplier, 6),
+            }
+        )
+
         manifest = {
             "source_dirs": [str(item) for item in input_source_dirs],
             "source_ids": sorted({record.source_id for record in source_records}),
@@ -506,3 +545,15 @@ class ReplayEngine:
                 json.dumps(entries, indent=2),
                 encoding="utf-8",
             )
+
+        logger.info(
+            "Replay throughput: "
+            f"naive_tasks={naive_replay_tasks} "
+            f"physical_tasks={physical_replay_tasks} "
+            f"saved_tasks={deduplicated_replay_tasks_saved} "
+            f"original_pov_instances={len(source_records)} "
+            f"elapsed={elapsed_seconds:.3f}s "
+            f"physical_tasks_per_second={summary['physical_replay_tasks_per_second']:.3f} "
+            f"original_pov_instances_per_second={summary['original_pov_instances_per_second']:.3f} "
+            f"dedup_multiplier={summary['dedup_multiplier']:.3f}"
+        )
