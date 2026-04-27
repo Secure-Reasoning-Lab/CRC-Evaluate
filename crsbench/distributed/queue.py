@@ -11,7 +11,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from enum import StrEnum
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from crsbench.distributed.job_lifecycle import JobLifecycleStore, JobState
 from crsbench.utils.logger import get_logger
@@ -643,42 +643,44 @@ def get_existing_trial_jobs(
         "failed": [],
     }
 
-    try:
-        for job in get_all_jobs(queue):
-            if job.is_queued and is_job_for_experiment(job, experiment_name):
-                result["queued"].append(job)
+    def _fetch_bucket(bucket: str, job_ids: list[str]) -> None:
+        if not job_ids:
+            return
+        try:
+            jobs = rq.job.Job.fetch_many(job_ids, connection=queue.connection)  # type: ignore[attr-defined]
+        except Exception as exc:
+            logger.warning(f"Failed to batch-fetch {bucket} jobs: {exc}")
+            return
+        for job_id, job in zip(job_ids, jobs, strict=True):
+            if job is None:
+                logger.warning(f"Failed to fetch {bucket} job {job_id}: not found")
+                continue
+            if is_job_for_experiment(job, experiment_name):
+                result[bucket].append(job)
 
-        for bucket_name, registry in (
+    try:
+        # ``get_all_jobs`` already pipelines via ``Job.fetch_many``; jobs returned
+        # from ``queue.get_job_ids()`` are queued by RQ contract, so re-checking
+        # ``is_queued`` would just add one HGET round-trip per job.
+        result["queued"] = [
+            job
+            for job in get_all_jobs(queue)
+            if is_job_for_experiment(job, experiment_name)
+        ]
+
+        registries: list[tuple[str, Any]] = [
             ("started", queue.started_job_registry),
             ("finished", queue.finished_job_registry),
             ("deferred", queue.deferred_job_registry),
             ("failed", queue.failed_job_registry),
-        ):
-            for job_id in registry.get_job_ids():
-                try:
-                    job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
-                    if job and is_job_for_experiment(job, experiment_name):
-                        result[bucket_name].append(job)
-                except Exception as e:
-                    logger.warning(f"Failed to fetch {bucket_name} job {job_id}: {e}")
-
+        ]
         if hasattr(queue, "scheduled_job_registry"):
-            for job_id in queue.scheduled_job_registry.get_job_ids():
-                try:
-                    job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
-                    if job and is_job_for_experiment(job, experiment_name):
-                        result["scheduled"].append(job)
-                except Exception as e:
-                    logger.warning(f"Failed to fetch scheduled job {job_id}: {e}")
-
+            registries.append(("scheduled", queue.scheduled_job_registry))
         if hasattr(queue, "canceled_job_registry"):
-            for job_id in queue.canceled_job_registry.get_job_ids():
-                try:
-                    job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
-                    if job and is_job_for_experiment(job, experiment_name):
-                        result["canceled"].append(job)
-                except Exception as e:
-                    logger.warning(f"Failed to fetch canceled job {job_id}: {e}")
+            registries.append(("canceled", queue.canceled_job_registry))
+
+        for bucket_name, registry in registries:
+            _fetch_bucket(bucket_name, list(registry.get_job_ids()))
 
         return result
     except Exception as e:

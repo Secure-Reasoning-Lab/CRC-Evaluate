@@ -721,7 +721,11 @@ def test_get_existing_trial_jobs_filters_to_requested_experiment(monkeypatch) ->
     monkeypatch.setattr(
         queue_module.rq.job,  # type: ignore[union-attr]
         "Job",
-        SimpleNamespace(fetch=lambda job_id, **_kwargs: jobs_by_id[job_id]),
+        SimpleNamespace(
+            fetch_many=lambda job_ids, **_kwargs: [
+                jobs_by_id.get(job_id) for job_id in job_ids
+            ],
+        ),
     )
 
     existing = queue_module.get_existing_trial_jobs(queue, experiment_name="exp-test")
@@ -731,6 +735,52 @@ def test_get_existing_trial_jobs_filters_to_requested_experiment(monkeypatch) ->
     assert existing["canceled"] == [canceled_test]
     assert existing["failed"] == []
     assert existing["finished"] == []
+
+
+def test_get_existing_trial_jobs_batches_one_fetch_per_registry(monkeypatch) -> None:
+    """Registry hydration must use a single ``fetch_many`` call per registry.
+
+    Per-id ``Job.fetch`` loops produce one Redis round-trip per job; on
+    high-latency operator links (cloud monitor over an SSH tunnel) that turns
+    a single snapshot into thousands of serial HGETs and effectively hangs.
+    """
+    queue = MagicMock()
+    queue.connection = MagicMock()
+    queue.get_job_ids.return_value = []
+    queue.started_job_registry.get_job_ids.return_value = ["s1", "s2", "s3"]
+    queue.finished_job_registry.get_job_ids.return_value = ["f1"]
+    queue.deferred_job_registry.get_job_ids.return_value = []
+    queue.failed_job_registry.get_job_ids.return_value = []
+    queue.scheduled_job_registry.get_job_ids.return_value = []
+    queue.canceled_job_registry.get_job_ids.return_value = []
+
+    def _make(job_id: str) -> MagicMock:
+        job = MagicMock()
+        job.id = job_id
+        job.meta = {"experiment_name": "exp-test"}
+        return job
+
+    fetch_many_calls: list[list[str]] = []
+
+    def fake_fetch_many(job_ids, **_kwargs):
+        ids = list(job_ids)
+        fetch_many_calls.append(ids)
+        return [_make(job_id) for job_id in ids]
+
+    monkeypatch.setattr(queue_module, "REDIS_AVAILABLE", True)
+    monkeypatch.setattr(queue_module, "get_all_jobs", lambda _queue: [])
+    monkeypatch.setattr(
+        queue_module.rq.job,  # type: ignore[union-attr]
+        "Job",
+        SimpleNamespace(fetch_many=fake_fetch_many),
+    )
+
+    existing = queue_module.get_existing_trial_jobs(queue, experiment_name="exp-test")
+
+    # One batched call per non-empty registry — empty registries must short-circuit.
+    assert fetch_many_calls == [["s1", "s2", "s3"], ["f1"]]
+    assert [job.id for job in existing["started"]] == ["s1", "s2", "s3"]
+    assert [job.id for job in existing["finished"]] == ["f1"]
 
 
 def test_get_existing_trials_excludes_canceled_registry_jobs_from_logical_view(
