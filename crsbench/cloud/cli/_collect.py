@@ -165,9 +165,11 @@ def run_collect(args: argparse.Namespace) -> int:
             destination = decision.destination
 
     remote_experiment_dir = resolve_remote_experiment_dir(
+        context.experiment_filestore,
         context.remote_experiment_root,
         experiment_name,
         args.remote_dir,
+        launch_state=launch_state,
     )
     if orchestrator_collects_artifacts and launch_state is not None:
         orchestrator_worker = launch_state.as_orchestrator_record()

@@ -210,9 +210,11 @@ def run_teardown(args: argparse.Namespace) -> int:
     if not skip_collect:
         # Collect phase -- abort before deletion on any failure unless --force is set.
         remote_experiment_dir = resolve_remote_experiment_dir(
+            context.experiment_filestore,
             context.remote_experiment_root,
             experiment_name,
             args.remote_dir,
+            launch_state=launch_state,
         )
         start_time_observations: list[tuple[str | None, str]] = []
         if any(_collects_experiment_artifacts(worker) for worker in live_instances) or (

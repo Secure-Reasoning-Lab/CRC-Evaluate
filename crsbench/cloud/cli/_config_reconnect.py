@@ -82,14 +82,19 @@ def resolve_effective_experiment_name(
 
 
 def resolve_remote_experiment_dir(
+    experiment_filestore: Path,
     remote_experiment_root: Path,
     experiment_name: str,
     remote_dir: str | None,
+    *,
+    launch_state: CloudLaunchState | None = None,
 ) -> str:
-    """Return the remote experiment tree path, inferring from filestore when omitted."""
+    """Return the remote experiment tree path used by standalone cloud commands."""
     if remote_dir:
         return remote_dir
-    return str(remote_experiment_root / experiment_name)
+    if launch_state is not None and launch_state.launch_mode == "reeval":
+        return str(remote_experiment_root / experiment_name)
+    return str(experiment_filestore / experiment_name)
 
 
 def _resolve_remote_redis_ready_timeout_sec(context: ResolvedCloudContext) -> int:

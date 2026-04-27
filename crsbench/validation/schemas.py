@@ -2797,8 +2797,10 @@ class CloudRemoteConfig(BaseModel):
     experiment_root: Optional[str] = Field(
         default=None,
         description=(
-            "Remote VM root directory that contains per-experiment trees. "
-            "Defaults to storage.experiment_filestore when unset."
+            "Remote VM workspace root used by standalone cloud re-eval helpers "
+            "and explicit remote-path overrides. Run-mode cloud collect/teardown "
+            "default to storage.experiment_filestore/<experiment>. When unset, "
+            "reeval helpers fall back to storage.experiment_filestore."
         ),
     )
 

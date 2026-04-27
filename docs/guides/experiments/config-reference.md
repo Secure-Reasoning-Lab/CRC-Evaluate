@@ -35,9 +35,10 @@ Managed cloud execution uses a provider-neutral top-level shape:
 - `cloud.defaults`: provider-agnostic launch/bootstrap defaults such as
   `readiness_timeout_sec`, `crsbench_install_spec`, `crsbench_git_ref`, and
   `github_deploy_key_path`
-- `cloud.remote.experiment_root`: remote-VM experiment root used by
-  `cloud collect` / `cloud teardown`; defaults to
-  `storage.experiment_filestore` when unset for backward compatibility
+- `cloud.remote.experiment_root`: remote-VM workspace root used by cloud
+  re-eval helpers and explicit `--remote-dir` overrides; run-mode
+  `cloud collect` / `cloud teardown` default to
+  `storage.experiment_filestore/<experiment>`
 - `cloud.env`: global environment variables merged into all launched cloud roles;
   this is also the top-level place to set startup-script overrides such as
   `CRSBENCH_TIMEZONE`
