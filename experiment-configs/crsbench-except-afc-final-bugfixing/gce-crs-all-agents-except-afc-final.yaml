@@ -108,10 +108,10 @@ cloud:
         gce-orchestrator-n2d: {} # n2d-standard-16, 1 TB pd-ssd
         gce-worker-n2d:
           machine_type: n2d-standard-224 # 224 vCPUs — 14 jobs × 16 cores
-          boot_disk_size_gb: 2048        # 2 TB pd-ssd — 14 concurrent jobs need disk
+          boot_disk_size_gb: 3072        # 3 TB pd-ssd — 14 concurrent jobs need disk
         gce-evaluator-n2d:
           machine_type: n2d-standard-224 # 224 vCPUs — 14 jobs × 16 cores
-          boot_disk_size_gb: 2048        # 2 TB pd-ssd — holds Docker build cache
+          boot_disk_size_gb: 3072        # 3 TB pd-ssd — holds Docker build cache
   orchestrator:
     instance_profile: gce-orchestrator-n2d
   workers:
