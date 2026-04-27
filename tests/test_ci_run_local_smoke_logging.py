@@ -322,12 +322,12 @@ def test_run_smoke_suite_run_failure_cleans_workspace_and_marker(
             return 0
         }}
         start_smoke_logged_command_bg() {{
-            bash -lc 'trap "exit 0" TERM; while :; do sleep 10; done' &
+            setsid python3 -c "import signal, sys, time; signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); signal.signal(signal.SIGINT, lambda *_: sys.exit(0)); time.sleep(3600)" </dev/null &
             SMOKE_BG_PID=$!
             SMOKE_BG_LOGGER_PID=""
         }}
         stop_worker_process() {{
-            kill "$1" 2>/dev/null || true
+            kill -TERM -- -"$1" 2>/dev/null || kill "$1" 2>/dev/null || true
             wait "$1" 2>/dev/null || true
             return 0
         }}
