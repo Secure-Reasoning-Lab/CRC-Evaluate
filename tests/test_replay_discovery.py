@@ -245,6 +245,25 @@ def test_discover_source_povs_defaults_sanitizer_for_flat_trial_layout(
     assert records[0].trial_relative_path == "afc-curl-delta-01__codex/trial-4"
 
 
+def test_discover_source_povs_preserves_explicit_unknown_sanitizer(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "exp-a"
+    _write_trial(
+        source_dir,
+        benchmark="afc-curl-delta-01",
+        harness="curl_fuzzer",
+        trial_name="trial-4",
+        metadata_sanitizer="coverage",
+        povs={"coverage.blob": b"COVERAGE"},
+    )
+
+    records, _ = discover_source_povs([source_dir])
+
+    assert len(records) == 1
+    assert records[0].source_sanitizer == "coverage"
+
+
 def test_discover_source_povs_skips_failed_trials_with_povs(tmp_path: Path) -> None:
     source_dir = tmp_path / "exp-a"
     _write_trial(
@@ -267,6 +286,61 @@ def test_discover_source_povs_skips_failed_trials_with_povs(tmp_path: Path) -> N
     records, stats = discover_source_povs([source_dir])
 
     assert [record.pov_filename for record in records] == ["complete.blob"]
+    assert stats["trials_processed"] == 1
+    assert stats["trials_skipped"] == 1
+
+
+def test_discover_source_povs_rejects_ambiguous_trial_leaf_filter(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "exp-a"
+    _write_trial(
+        source_dir,
+        benchmark="afc-curl-delta-01",
+        harness="curl_fuzzer",
+        trial_name="trial-1",
+        povs={"curl.blob": b"CURL"},
+    )
+    _write_trial(
+        source_dir,
+        benchmark="afc-wireshark-delta-01",
+        harness="wire_fuzzer",
+        trial_name="trial-1",
+        povs={"wire.blob": b"WIRE"},
+    )
+
+    records, stats = discover_source_povs([source_dir], trial_filters={"trial-1"})
+
+    assert records == []
+    assert stats["trials_processed"] == 0
+    assert stats["trials_skipped"] == 2
+
+
+def test_discover_source_povs_accepts_relative_trial_filter(tmp_path: Path) -> None:
+    source_dir = tmp_path / "exp-a"
+    _write_trial(
+        source_dir,
+        benchmark="afc-curl-delta-01",
+        harness="curl_fuzzer",
+        trial_name="trial-1",
+        povs={"curl.blob": b"CURL"},
+    )
+    _write_trial(
+        source_dir,
+        benchmark="afc-wireshark-delta-01",
+        harness="wire_fuzzer",
+        trial_name="trial-1",
+        povs={"wire.blob": b"WIRE"},
+    )
+
+    records, stats = discover_source_povs(
+        [source_dir],
+        trial_filters={"afc-wireshark-delta-01/wire_fuzzer/full/address/trial-1"},
+    )
+
+    assert len(records) == 1
+    assert records[0].benchmark == "afc-wireshark-delta-01"
+    assert records[0].pov_filename == "wire.blob"
     assert stats["trials_processed"] == 1
     assert stats["trials_skipped"] == 1
 

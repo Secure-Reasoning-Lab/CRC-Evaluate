@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
@@ -10,6 +12,18 @@ from crsbench.reporting.snapshot_loader import discover_trials
 from .models import SourcePovRecord
 
 _VALID_SANITIZERS = {"address", "memory", "undefined", "thread", "leak"}
+
+
+@dataclass(frozen=True)
+class _CandidateTrial:
+    source_id: str
+    source_dir: Path
+    trial: object
+    trial_dir: Path
+    trial_relative: str
+    experiment_name: str
+    source_sanitizer: str
+    visible_povs: list[Path]
 
 
 def make_source_id(source_dir: Path) -> str:
@@ -37,6 +51,8 @@ def _resolve_trial_sanitizer(trial: object, trial_dir: Path) -> str:
     metadata_sanitizer = getattr(metadata, "sanitizer", None)
     if isinstance(metadata_sanitizer, str) and metadata_sanitizer in _VALID_SANITIZERS:
         return metadata_sanitizer
+    if isinstance(metadata_sanitizer, str) and metadata_sanitizer:
+        return metadata_sanitizer
 
     for index, part in enumerate(trial_dir.parts):
         if part.startswith("trial-") and index > 0:
@@ -53,6 +69,7 @@ def discover_source_povs(
     trial_filters: set[str] | None = None,
 ) -> tuple[list[SourcePovRecord], dict[str, int]]:
     records: list[SourcePovRecord] = []
+    candidate_trials: list[_CandidateTrial] = []
     trials_processed = 0
     trials_skipped = 0
     resolved_source_dirs: list[Path] = []
@@ -77,9 +94,6 @@ def discover_source_povs(
             if benchmark_filters and trial.benchmark not in benchmark_filters:
                 trials_skipped += 1
                 continue
-            if trial_filters and trial.trial_dir.name not in trial_filters:
-                trials_skipped += 1
-                continue
 
             trial_dir = trial.trial_dir.resolve()
             paths = TrialDir(trial_dir)
@@ -98,24 +112,56 @@ def discover_source_povs(
             experiment_name = (
                 getattr(metadata, "experiment_name", None) or source_dir.name
             )
-            trials_processed += 1
-            for pov_path in visible_povs:
-                payload = pov_path.read_bytes()
-                records.append(
-                    SourcePovRecord(
-                        source_id=source_id,
-                        source_dir=source_dir,
-                        experiment_name=experiment_name,
-                        trial_relative_path=trial_relative,
-                        benchmark=trial.benchmark,
-                        source_harness=trial.harness,
-                        source_sanitizer=source_sanitizer,
-                        original_pov_path=pov_path,
-                        original_pov_relpath=str(pov_path.relative_to(source_dir)),
-                        pov_filename=pov_path.name,
-                        pov_content_hash=hashlib.sha256(payload).hexdigest(),
-                    )
+            candidate_trials.append(
+                _CandidateTrial(
+                    source_id=source_id,
+                    source_dir=source_dir,
+                    trial=trial,
+                    trial_dir=trial_dir,
+                    trial_relative=trial_relative,
+                    experiment_name=experiment_name,
+                    source_sanitizer=source_sanitizer,
+                    visible_povs=visible_povs,
                 )
+            )
+
+    if trial_filters:
+        leaf_counts = Counter(
+            candidate.trial_dir.name for candidate in candidate_trials
+        )
+        filtered_candidates: list[_CandidateTrial] = []
+        for candidate in candidate_trials:
+            trial_leaf = candidate.trial_dir.name
+            trial_relative = candidate.trial_relative
+            if trial_relative in trial_filters or (
+                trial_leaf in trial_filters and leaf_counts[trial_leaf] == 1
+            ):
+                filtered_candidates.append(candidate)
+            else:
+                trials_skipped += 1
+        candidate_trials = filtered_candidates
+
+    for candidate in candidate_trials:
+        trials_processed += 1
+        for pov_path in candidate.visible_povs:
+            payload = pov_path.read_bytes()
+            records.append(
+                SourcePovRecord(
+                    source_id=candidate.source_id,
+                    source_dir=candidate.source_dir,
+                    experiment_name=candidate.experiment_name,
+                    trial_relative_path=candidate.trial_relative,
+                    benchmark=candidate.trial.benchmark,
+                    source_harness=candidate.trial.harness,
+                    source_sanitizer=candidate.source_sanitizer,
+                    original_pov_path=pov_path,
+                    original_pov_relpath=str(
+                        pov_path.relative_to(candidate.source_dir)
+                    ),
+                    pov_filename=pov_path.name,
+                    pov_content_hash=hashlib.sha256(payload).hexdigest(),
+                )
+            )
 
     stats = {
         "source_roots_processed": len(resolved_source_dirs),
