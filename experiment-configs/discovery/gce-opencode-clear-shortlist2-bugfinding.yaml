@@ -135,6 +135,8 @@ cloud:
       project: aixcc-426805
       ssh_via_iap: true
       regions:
+        - us-central1
+        - us-south1
         - us-east5
         - us-east1
       fallback: true
