@@ -10,6 +10,7 @@ def _args(
     *,
     source_dirs: list[Path],
     output: Path,
+    cache_root: Path | None = None,
     oss_fuzz_path: Path | None = None,
     projects_root: Path | None = None,
     sync_projects: bool = False,
@@ -24,6 +25,7 @@ def _args(
     return Namespace(
         source_dirs=source_dirs,
         output=output,
+        cache_root=cache_root,
         oss_fuzz_path=oss_fuzz_path,
         projects_root=projects_root,
         sync_projects=sync_projects,
@@ -171,6 +173,85 @@ def test_run_replay_povs_uses_explicit_oss_fuzz_path(tmp_path: Path) -> None:
         resume=False,
         per_pov_timeout=180,
     )
+
+
+def test_run_replay_povs_uses_cache_root_to_resolve_paths(tmp_path: Path) -> None:
+    source_dir = tmp_path / "exp-a"
+    source_dir.mkdir()
+    output_dir = tmp_path / "replay-out"
+    cache_root = tmp_path / "replay-cache"
+    cached_oss_fuzz = cache_root / "oss-fuzz-helper"
+    cached_projects = cache_root / "oss-fuzz-projects" / "projects"
+    engine = MagicMock()
+
+    with (
+        patch("crsbench.evaluation.replay.cli.configure_logger"),
+        patch(
+            "crsbench.evaluation.replay.cli.ensure_oss_fuzz_root",
+            return_value=str(tmp_path / "managed-oss-fuzz"),
+        ) as mock_ensure_root,
+        patch(
+            "crsbench.evaluation.replay.cli.ensure_cached_oss_fuzz_workspace",
+            return_value=cached_oss_fuzz.resolve(),
+        ) as mock_cached_oss_fuzz,
+        patch(
+            "crsbench.evaluation.replay.cli.resolve_cache_projects_root",
+            return_value=cached_projects.resolve(),
+        ) as mock_cached_projects,
+        patch(
+            "crsbench.evaluation.replay.cli.discover_source_povs",
+            return_value=([], {"source_roots_processed": 1}),
+        ),
+        patch(
+            "crsbench.evaluation.replay.cli.ReplayEngine",
+            return_value=engine,
+        ) as mock_engine,
+    ):
+        exit_code = run_replay_povs(
+            _args(
+                source_dirs=[source_dir],
+                output=output_dir,
+                cache_root=cache_root,
+                sync_projects=True,
+            )
+        )
+
+    assert exit_code == 0
+    mock_ensure_root.assert_called_once_with()
+    mock_cached_oss_fuzz.assert_called_once_with(
+        cache_root.resolve(),
+        seed_oss_fuzz_root=(tmp_path / "managed-oss-fuzz").resolve(),
+    )
+    mock_cached_projects.assert_called_once_with(
+        cache_root.resolve(),
+        sync_projects=True,
+    )
+    mock_engine.assert_called_once_with(
+        oss_fuzz_path=cached_oss_fuzz.resolve(),
+        projects_root=cached_projects.resolve(),
+        output_dir=output_dir.resolve(),
+        jobs=1,
+        group_jobs=1,
+        resume=False,
+        per_pov_timeout=180,
+    )
+
+
+def test_run_replay_povs_rejects_cache_root_with_explicit_oss_fuzz_path(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "exp-a"
+    source_dir.mkdir()
+
+    with pytest.raises(SystemExit, match="cannot be combined"):
+        run_replay_povs(
+            _args(
+                source_dirs=[source_dir],
+                output=tmp_path / "replay-out",
+                cache_root=tmp_path / "cache-root",
+                oss_fuzz_path=tmp_path / "oss-fuzz",
+            )
+        )
 
 
 def test_run_replay_povs_rejects_non_positive_group_jobs(tmp_path: Path) -> None:

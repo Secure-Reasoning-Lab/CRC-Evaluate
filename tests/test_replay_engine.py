@@ -26,6 +26,26 @@ def _asan_oom_stderr() -> str:
     )
 
 
+def _java_exception_stderr(
+    exception_type: str = "java.lang.IllegalStateException",
+) -> str:
+    return (
+        f'Exception in thread "main" {exception_type}: boom\n'
+        "\tat com.example.Fuzzer.fuzzerTestOneInput(Fuzzer.java:42)\n"
+        "\tat com.example.Runner.main(Runner.java:10)\n"
+    )
+
+
+def _jazzer_java_exception_stderr(
+    exception_type: str = "java.lang.IllegalStateException",
+) -> str:
+    return (
+        f"== Java Exception: {exception_type}\n"
+        "\tat com.example.Fuzzer.fuzzerTestOneInput(Fuzzer.java:42)\n"
+        "\tat com.example.Runner.main(Runner.java:10)\n"
+    )
+
+
 class FakeInfra:
     def __init__(
         self,
@@ -741,7 +761,7 @@ def test_replay_engine_keeps_mixed_outcome_source_entries_in_0day_with_only_cras
     assert "stderr" not in replay
 
 
-def test_replay_engine_excludes_non_asan_crashes_from_0day_outputs(
+def test_replay_engine_excludes_unrecognized_crashes_from_0day_outputs(
     tmp_path: Path,
 ) -> None:
     source_dir = tmp_path / "exp-a"
@@ -784,6 +804,88 @@ def test_replay_engine_excludes_non_asan_crashes_from_0day_outputs(
     data = json.loads((tmp_path / "replay-out" / "pov-to-crash-map.json").read_text())
     assert data[0]["replays"][0]["outcome"] == "crash"
     assert data[0]["replays"][0]["artifact_dir"] is not None
+
+
+def test_replay_engine_includes_java_exception_crashes_in_0day_outputs(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "exp-a"
+    latest_projects = tmp_path / "latest-projects"
+    (latest_projects / "curl").mkdir(parents=True)
+    pov = source_dir / "trial-a" / "output" / "povs" / "a.blob"
+    pov.parent.mkdir(parents=True, exist_ok=True)
+    pov.write_bytes(b"CRASH")
+    pov_hash = "aa" * 32
+    records = [_record(source_dir, "trial-a", pov, pov_hash)]
+    pool = FakeSessionPool(
+        _session_result(
+            exit_code=77,
+            stdout="stdout crash",
+            stderr=_java_exception_stderr(),
+            crashed=True,
+        )
+    )
+    engine = ReplayEngine(
+        oss_fuzz_path=tmp_path / "oss-fuzz",
+        projects_root=latest_projects,
+        output_dir=tmp_path / "replay-out",
+        jobs=1,
+        per_pov_timeout=5,
+        infra=FakeInfra(),
+        mapping={"afc-curl-delta-01": "curl"},
+        session_pool_factory=lambda **_kwargs: pool,
+    )
+
+    engine.run(records, source_dirs=[source_dir])
+
+    summary = json.loads((tmp_path / "replay-out" / "summary.json").read_text())
+    assert summary["crash_count"] == 1
+    assert summary["0day_count"] == 1
+    assert summary["crashing_replay_count"] == 1
+    zero_day = json.loads((tmp_path / "replay-out" / "0day.json").read_text())
+    assert len(zero_day) == 1
+    assert zero_day[0]["replays"][0]["sanitizer_log"] is not None
+
+
+def test_replay_engine_includes_jazzer_java_exception_crashes_in_0day_outputs(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "exp-a"
+    latest_projects = tmp_path / "latest-projects"
+    (latest_projects / "curl").mkdir(parents=True)
+    pov = source_dir / "trial-a" / "output" / "povs" / "a.blob"
+    pov.parent.mkdir(parents=True, exist_ok=True)
+    pov.write_bytes(b"CRASH")
+    pov_hash = "ab" * 32
+    records = [_record(source_dir, "trial-a", pov, pov_hash)]
+    pool = FakeSessionPool(
+        _session_result(
+            exit_code=77,
+            stdout="stdout crash",
+            stderr=_jazzer_java_exception_stderr(),
+            crashed=True,
+        )
+    )
+    engine = ReplayEngine(
+        oss_fuzz_path=tmp_path / "oss-fuzz",
+        projects_root=latest_projects,
+        output_dir=tmp_path / "replay-out",
+        jobs=1,
+        per_pov_timeout=5,
+        infra=FakeInfra(),
+        mapping={"afc-curl-delta-01": "curl"},
+        session_pool_factory=lambda **_kwargs: pool,
+    )
+
+    engine.run(records, source_dirs=[source_dir])
+
+    summary = json.loads((tmp_path / "replay-out" / "summary.json").read_text())
+    assert summary["crash_count"] == 1
+    assert summary["0day_count"] == 1
+    assert summary["crashing_replay_count"] == 1
+    zero_day = json.loads((tmp_path / "replay-out" / "0day.json").read_text())
+    assert len(zero_day) == 1
+    assert zero_day[0]["replays"][0]["sanitizer_log"] is not None
 
 
 def test_replay_engine_excludes_asan_oom_crashes_from_0day_outputs(

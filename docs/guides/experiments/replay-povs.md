@@ -19,7 +19,8 @@ Related references:
 
 - One or more completed experiment-output roots containing successful
   bug-finding trials with POVs under `output/povs/`.
-- A helper/build OSS-Fuzz checkout for `--oss-fuzz-path`.
+- Either a persistent replay cache root via `--cache-root`, or an explicit
+  helper/build OSS-Fuzz checkout via `--oss-fuzz-path`.
 - A latest-project mirror for `--projects-root`, or permission to let
   CRSBench create and update a managed mirror with `--sync-projects`.
 - Local Docker access, because replay builds latest OSS-Fuzz targets and runs
@@ -27,6 +28,11 @@ Related references:
 
 Important:
 
+- `--cache-root` is the simplest persistent setup. Replay derives a stable
+  helper workspace at `<cache-root>/oss-fuzz-helper` and a managed latest-project
+  mirror at `<cache-root>/oss-fuzz-projects`, so later runs can reuse helper
+  state and prior `build/out/<project>` results instead of rebuilding from a
+  fresh helper checkout.
 - `--oss-fuzz-path` is the checkout used for helper-based builds and build
   outputs.
 - `--projects-root` is the mirror containing the latest `projects/<name>/`
@@ -44,7 +50,7 @@ uv run crsbench replay-povs \
   --source-dir /data/crsbench/experiment-a \
   --source-dir /data/crsbench/experiment-b \
   --output /tmp/replay-results \
-  --oss-fuzz-path third_party/oss-fuzz \
+  --cache-root /data/crsbench/replay-cache \
   --sync-projects \
   --jobs 8 \
   --group-jobs 2 \
@@ -95,8 +101,9 @@ resolved project.
 Plain OSS-Fuzz project builds are reused conservatively. Within one
 `--oss-fuzz-path` checkout, concurrent replay commands serialize builds per
 project, then reuse the result only if the existing `.build-meta.json` matches
-the requested sanitizer and fuzz target discovery still finds at least one
-valid harness in `build/out/<project>/`.
+the requested sanitizer, the current `projects/<project>` tree fingerprint, and
+fuzz target discovery still finds at least one valid harness in
+`build/out/<project>/`.
 
 Resource note:
 
@@ -112,13 +119,13 @@ Replay writes the following under `--output`:
 - `manifest.json`: source roots, helper/projects paths, and runtime settings
 - `summary.json`: aggregate counters for mappings, builds, crashes, timeouts,
   errors, plus `0day_count` and `crashing_replay_count` for the emitted
-  ASan-only 0day view
+  crash-only 0day view
 - `0day.log`: append-only JSONL stream written as each qualifying
-  AddressSanitizer harness result lands; this is the earliest view during a
-  long scan and is deduplicated across `--resume` reruns
-- `0day.json`: additive ASan-only export that keeps only source entries with at
-  least one qualifying AddressSanitizer replay, and within those entries keeps
-  only those replay rows
+  crash row lands; this is the earliest view during a long scan and is
+  deduplicated across `--resume` reruns
+- `0day.json`: additive crash-only export that keeps only source entries with at
+  least one qualifying replay, and within those entries keeps only those replay
+  rows
 - `pov-to-crash-map.json`: full mapping from original POV provenance to replay
   artifacts, including non-crashing replay rows
 - `.state/groups/<project>/<sanitizer>/group-result.json`: completed replay-group
@@ -145,15 +152,17 @@ Each artifact directory contains:
 - one replay entry per current target harness, with outcome and artifact paths
 
 `0day.json` is derived from that full mapping. Its replay rows are limited to
-crashes whose output contains `AddressSanitizer`, excluding timeout-like and
-out-of-memory reports. Those rows omit `stdout` and `stderr`, while keeping
-crash-focused fields such as harness, sanitizer, exit code, duration, artifact
-directory, sanitizer log, session restart, and error message.
+crashes whose output either contains `AddressSanitizer` or matches the JVM/Jazzer
+Java exception patterns already used by POV verification (`== Java Exception:`
+or `Exception in thread "`), excluding timeout-like and out-of-memory reports.
+Those rows omit `stdout` and `stderr`, while keeping crash-focused fields such
+as harness, sanitizer, exit code, duration, artifact directory, sanitizer log,
+session restart, and error message.
 
 `0day.log` is intentionally more granular than `0day.json`: each line is one
-source POV plus one qualifying AddressSanitizer replay row, appended
-immediately after that harness finishes. The final `0day.json` later folds
-those rows back into one entry per source POV.
+source POV plus one qualifying replay row, appended immediately after that
+harness finishes. The final `0day.json` later folds those rows back into one
+entry per source POV.
 
 ## Operational Notes
 
@@ -167,6 +176,9 @@ those rows back into one entry per source POV.
   groups rerun from scratch on the next invocation.
 - Replay checkpoints are format-versioned, so incompatible older group
   checkpoints are ignored instead of being reused under newer replay semantics.
+- `--cache-root` is persistent by design. If you need to discard the cached
+  helper workspace and force a clean bootstrap, remove
+  `<cache-root>/oss-fuzz-helper` before the next run.
 - If a rebuild is needed, replay clears the old plain-build metadata before
   invoking `helper.py build_fuzzers`, so a failed rebuild is not treated as a
   reusable cache hit later.

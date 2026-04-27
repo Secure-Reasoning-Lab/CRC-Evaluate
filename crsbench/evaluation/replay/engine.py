@@ -34,6 +34,10 @@ logger = get_logger(__name__)
 _GROUP_CHECKPOINT_FORMAT_VERSION = 2
 _REPLAY_OUTPUT_FORMAT_VERSION = 2
 _ZERO_DAY_REQUIRED_MARKER = "AddressSanitizer"
+_ZERO_DAY_JAVA_EXCEPTION_MARKERS = (
+    "== Java Exception:",
+    'Exception in thread "',
+)
 _ZERO_DAY_EXCLUDED_SUBSTRINGS = (
     "out of memory",
     "out-of-memory",
@@ -299,13 +303,14 @@ class ReplayEngine:
             return False
 
         combined = f"{stdout}\n{stderr}"
-        if _ZERO_DAY_REQUIRED_MARKER not in combined:
+        combined_lower = combined.casefold()
+        if any(token in combined_lower for token in _ZERO_DAY_EXCLUDED_SUBSTRINGS):
             return False
 
-        combined_lower = combined.casefold()
-        return not any(
-            token in combined_lower for token in _ZERO_DAY_EXCLUDED_SUBSTRINGS
-        )
+        if _ZERO_DAY_REQUIRED_MARKER in combined:
+            return True
+
+        return any(marker in combined for marker in _ZERO_DAY_JAVA_EXCEPTION_MARKERS)
 
     def _append_zero_day_log(
         self,

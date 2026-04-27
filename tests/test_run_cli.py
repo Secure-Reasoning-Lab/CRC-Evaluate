@@ -141,6 +141,24 @@ def test_replay_povs_cli_accepts_repeated_source_dir() -> None:
     assert args.output == Path("out/replay")
 
 
+def test_replay_povs_cli_accepts_cache_root() -> None:
+    args = _parse(
+        [
+            "crsbench",
+            "replay-povs",
+            "--source-dir",
+            "experiments/run-a",
+            "--output",
+            "out/replay",
+            "--cache-root",
+            "/data/crsbench/replay-cache",
+        ]
+    )
+
+    assert args.command == "replay-povs"
+    assert args.cache_root == Path("/data/crsbench/replay-cache")
+
+
 def test_replay_povs_cli_sets_handler() -> None:
     from crsbench.evaluation.replay.cli import run_replay_povs
 
@@ -221,6 +239,7 @@ def test_run_replay_povs_returns_success_when_engine_completes() -> None:
     args = Namespace(
         source_dirs=[Path("experiments/run-a")],
         output=Path("out/replay"),
+        cache_root=None,
         oss_fuzz_path=Path("third_party/oss-fuzz"),
         projects_root=Path("projects"),
         sync_projects=False,

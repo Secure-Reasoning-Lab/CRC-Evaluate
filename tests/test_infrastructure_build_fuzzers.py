@@ -36,6 +36,19 @@ def _write_executable_target(path: Path) -> None:
     path.chmod(0o755)
 
 
+def _seed_project_definition(
+    infra: OSSFuzzInfrastructure,
+    project_name: str,
+    *,
+    contents: str = "language: c\n",
+) -> Path:
+    project_dir = infra.projects_base / project_name
+    project_dir.mkdir(parents=True, exist_ok=True)
+    project_file = project_dir / "project.yaml"
+    project_file.write_text(contents)
+    return project_file
+
+
 def _seed_plain_build(
     infra: OSSFuzzInfrastructure,
     project_name: str,
@@ -45,9 +58,14 @@ def _seed_plain_build(
 ) -> Path:
     build_out = infra.get_build_output_path(project_name)
     build_out.mkdir(parents=True, exist_ok=True)
-    (infra.projects_base / project_name).mkdir(parents=True, exist_ok=True)
+    _seed_project_definition(infra, project_name)
     _write_executable_target(build_out / target_name)
-    infra.write_build_metadata(project_name, inc_build=False, sanitizer=sanitizer)
+    infra.write_build_metadata(
+        project_name,
+        inc_build=False,
+        sanitizer=sanitizer,
+        project_fingerprint=infra._plain_build_project_fingerprint(project_name),
+    )
     return build_out
 
 
@@ -60,6 +78,9 @@ def _assert_plain_build_metadata(
     assert metadata.sanitizer == sanitizer
     assert metadata.fallback_used is False
     assert metadata.timestamp
+    assert metadata.project_fingerprint == infra._plain_build_project_fingerprint(
+        project_name
+    )
 
 
 def test_build_fuzzers_fixes_build_output_ownership_on_success(tmp_path: Path) -> None:
@@ -121,9 +142,14 @@ def test_build_project_fuzzers_rebuilds_when_metadata_exists_but_no_valid_target
     project_name = "plain-project"
     build_out = infra.get_build_output_path(project_name)
     build_out.mkdir(parents=True)
-    (infra.projects_base / project_name).mkdir(parents=True)
+    _seed_project_definition(infra, project_name)
     (build_out / "not_a_target.txt").write_text("plain text, not executable\n")
-    infra.write_build_metadata(project_name, inc_build=False, sanitizer="address")
+    infra.write_build_metadata(
+        project_name,
+        inc_build=False,
+        sanitizer="address",
+        project_fingerprint=infra._plain_build_project_fingerprint(project_name),
+    )
     assert infra.list_fuzz_targets(project_name) == []
 
     def _successful_plain_build(*_args, **_kwargs):
@@ -200,7 +226,7 @@ def test_build_project_fuzzers_writes_reusable_metadata_after_successful_plain_b
     infra = _make_infra(tmp_path)
     project_name = "plain-project"
     build_out = infra.get_build_output_path(project_name)
-    (infra.projects_base / project_name).mkdir(parents=True)
+    _seed_project_definition(infra, project_name)
 
     def _successful_plain_build(*_args, **_kwargs):
         build_out.mkdir(parents=True, exist_ok=True)
@@ -219,6 +245,27 @@ def test_build_project_fuzzers_writes_reusable_metadata_after_successful_plain_b
     _assert_plain_build_metadata(infra, project_name, sanitizer="address")
 
 
+def test_build_project_fuzzers_rebuilds_when_project_fingerprint_changes(
+    tmp_path: Path,
+) -> None:
+    infra = _make_infra(tmp_path)
+    project_name = "plain-project"
+    _seed_plain_build(infra, project_name)
+    _seed_project_definition(
+        infra,
+        project_name,
+        contents="language: c\nmain_repo: https://example.com/updated.git\n",
+    )
+
+    with patch("crsbench.builder.infrastructure.run_with_timeout") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="rebuilt", stderr="")
+        result = infra.build_project_fuzzers(project_name, sanitizer="address")
+
+    assert result.success is True
+    assert mock_run.call_count == 1
+    _assert_plain_build_metadata(infra, project_name, sanitizer="address")
+
+
 def test_build_project_fuzzers_treats_malformed_metadata_as_non_reusable_and_rebuilds(
     tmp_path: Path,
 ) -> None:
@@ -226,7 +273,7 @@ def test_build_project_fuzzers_treats_malformed_metadata_as_non_reusable_and_reb
     project_name = "plain-project"
     build_out = infra.get_build_output_path(project_name)
     build_out.mkdir(parents=True)
-    (infra.projects_base / project_name).mkdir(parents=True)
+    _seed_project_definition(infra, project_name)
     _write_executable_target(build_out / "existing_fuzzer")
     (build_out / ".build-meta.json").write_text("{not valid json")
     assert infra.read_build_metadata(project_name) is None
@@ -251,7 +298,7 @@ def test_build_project_fuzzers_failed_plain_build_does_not_write_reusable_metada
     infra = _make_infra(tmp_path)
     project_name = "plain-project"
     build_out = infra.get_build_output_path(project_name)
-    (infra.projects_base / project_name).mkdir(parents=True)
+    _seed_project_definition(infra, project_name)
 
     def _failed_plain_build(*_args, **_kwargs):
         build_out.mkdir(parents=True, exist_ok=True)

@@ -8,6 +8,10 @@ from pathlib import Path
 from crsbench.evaluation.replay.discovery import discover_source_povs
 from crsbench.evaluation.replay.engine import ReplayEngine
 from crsbench.evaluation.replay.projects import resolve_projects_root
+from crsbench.evaluation.replay.workspace import (
+    ensure_cached_oss_fuzz_workspace,
+    resolve_cache_projects_root,
+)
 from crsbench.utils.logger import configure_logger
 from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
@@ -36,6 +40,16 @@ def add_replay_povs_subparser(subparsers: argparse._SubParsersAction) -> None:
         type=Path,
         required=True,
         help="Directory where replay outputs should be written",
+    )
+    parser.add_argument(
+        "--cache-root",
+        type=Path,
+        default=None,
+        help=(
+            "Persistent replay cache root. Reuses a stable helper workspace at "
+            "<cache-root>/oss-fuzz-helper and a managed projects mirror at "
+            "<cache-root>/oss-fuzz-projects."
+        ),
     )
     parser.add_argument(
         "--oss-fuzz-path",
@@ -111,6 +125,11 @@ def run_replay_povs(args: argparse.Namespace) -> int:
 
     group_jobs = getattr(args, "group_jobs", 1)
     resume = getattr(args, "resume", False)
+    cache_root = (
+        Path(args.cache_root).resolve()
+        if getattr(args, "cache_root", None) is not None
+        else None
+    )
 
     source_dirs = [Path(item).resolve() for item in args.source_dirs]
     if any(not source_dir.is_dir() for source_dir in source_dirs):
@@ -130,17 +149,35 @@ def run_replay_povs(args: argparse.Namespace) -> int:
     ):
         raise SystemExit("--output must be outside every source experiment tree")
 
-    oss_fuzz_path = (
-        Path(args.oss_fuzz_path).resolve()
-        if args.oss_fuzz_path is not None
-        else Path(ensure_oss_fuzz_root()).resolve()
-    )
     repo_root = Path(__file__).resolve().parents[3]
-    projects_root = resolve_projects_root(
-        args.projects_root,
-        sync_projects=args.sync_projects,
-        repo_root=repo_root,
-    )
+    if cache_root is not None and args.oss_fuzz_path is not None:
+        raise SystemExit("--cache-root cannot be combined with --oss-fuzz-path")
+
+    if cache_root is not None:
+        seed_oss_fuzz_root = Path(ensure_oss_fuzz_root()).resolve()
+        oss_fuzz_path = ensure_cached_oss_fuzz_workspace(
+            cache_root,
+            seed_oss_fuzz_root=seed_oss_fuzz_root,
+        )
+        projects_root = (
+            Path(args.projects_root).resolve()
+            if args.projects_root is not None
+            else resolve_cache_projects_root(
+                cache_root,
+                sync_projects=args.sync_projects,
+            )
+        )
+    else:
+        oss_fuzz_path = (
+            Path(args.oss_fuzz_path).resolve()
+            if args.oss_fuzz_path is not None
+            else Path(ensure_oss_fuzz_root()).resolve()
+        )
+        projects_root = resolve_projects_root(
+            args.projects_root,
+            sync_projects=args.sync_projects,
+            repo_root=repo_root,
+        )
     records, discovery_stats = discover_source_povs(
         source_dirs,
         benchmark_filters=set(args.benchmarks or []),

@@ -85,6 +85,19 @@ def _coverage_lock_token(value: str) -> str:
     return token or "unknown"
 
 
+def _directory_fingerprint(root: Path) -> str:
+    digest = hashlib.sha256()
+    resolved_root = root.resolve()
+    for path in sorted(p for p in resolved_root.rglob("*") if p.is_file()):
+        rel = path.relative_to(resolved_root)
+        digest.update(str(rel).encode("utf-8"))
+        digest.update(b"\0")
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _is_leak_only_exit(output: str) -> bool:
     """Check if reproduce output is a LeakSanitizer-only exit (not a real crash).
 
@@ -923,6 +936,7 @@ class OSSFuzzInfrastructure:
         inc_build: bool = False,
         sanitizer: str = "address",
         fallback_used: bool = False,
+        project_fingerprint: str = "",
     ) -> None:
         """Write build metadata to the build output directory.
 
@@ -934,6 +948,8 @@ class OSSFuzzInfrastructure:
             inc_build: Whether this was an incremental build
             sanitizer: Sanitizer used for the build
             fallback_used: Whether fallback to clean build was used
+            project_fingerprint: Deterministic fingerprint for the project tree
+                used by plain OSS-Fuzz builds
         """
         from datetime import datetime
 
@@ -947,6 +963,7 @@ class OSSFuzzInfrastructure:
             sanitizer=sanitizer,
             timestamp=datetime.now().isoformat(),
             fallback_used=fallback_used,
+            project_fingerprint=project_fingerprint,
         )
 
         metadata_path = self._build_metadata_path(variant_name)
@@ -988,7 +1005,20 @@ class OSSFuzzInfrastructure:
     def _build_metadata_path(self, variant_name: str) -> Path:
         return self.get_build_output_path(variant_name) / BUILD_METADATA_FILE
 
-    def _plain_build_is_reusable(self, project_name: str, *, sanitizer: str) -> bool:
+    def _plain_build_project_fingerprint(self, project_name: str) -> str:
+        safe_project = self._validate_variant_name(project_name)
+        project_path = self.projects_base / safe_project
+        if not project_path.exists():
+            return ""
+        return _directory_fingerprint(project_path)
+
+    def _plain_build_is_reusable(
+        self,
+        project_name: str,
+        *,
+        sanitizer: str,
+        project_fingerprint: str | None = None,
+    ) -> bool:
         safe_project = self._validate_variant_name(project_name)
         build_path = self.get_build_output_path(safe_project)
         project_path = self.projects_base / safe_project
@@ -1011,6 +1041,18 @@ class OSSFuzzInfrastructure:
             logger.debug(
                 f"Plain build cache mismatch for {safe_project}: "
                 f"cached sanitizer={metadata.sanitizer}, required={sanitizer}"
+            )
+            return False
+
+        current_project_fingerprint = (
+            project_fingerprint
+            if project_fingerprint is not None
+            else self._plain_build_project_fingerprint(safe_project)
+        )
+        if metadata.project_fingerprint != current_project_fingerprint:
+            logger.debug(
+                f"Plain build cache mismatch for {safe_project}: "
+                "project fingerprint changed"
             )
             return False
 
@@ -1488,7 +1530,12 @@ class OSSFuzzInfrastructure:
     ) -> FuzzerBuildResult:
         """Build a plain OSS-Fuzz project without CRSBench variant metadata."""
         safe_project = self._validate_variant_name(project_name)
-        if self._plain_build_is_reusable(safe_project, sanitizer=sanitizer):
+        project_fingerprint = self._plain_build_project_fingerprint(safe_project)
+        if self._plain_build_is_reusable(
+            safe_project,
+            sanitizer=sanitizer,
+            project_fingerprint=project_fingerprint,
+        ):
             logger.debug(f"Reusing existing plain build for {safe_project}")
             return FuzzerBuildResult(success=True, stdout="", stderr="")
 
@@ -1504,7 +1551,12 @@ class OSSFuzzInfrastructure:
         metadata_path = self._build_metadata_path(safe_project)
 
         with self._acquire_plain_build_lock(safe_project):
-            if self._plain_build_is_reusable(safe_project, sanitizer=sanitizer):
+            project_fingerprint = self._plain_build_project_fingerprint(safe_project)
+            if self._plain_build_is_reusable(
+                safe_project,
+                sanitizer=sanitizer,
+                project_fingerprint=project_fingerprint,
+            ):
                 logger.debug(
                     f"Plain build for {safe_project} completed by another process"
                 )
@@ -1513,10 +1565,14 @@ class OSSFuzzInfrastructure:
             metadata_path.unlink(missing_ok=True)
             result = run_with_timeout(cmd, timeout=timeout, cwd=self.oss_fuzz_path)
             if result.returncode == 0:
+                project_fingerprint = self._plain_build_project_fingerprint(
+                    safe_project
+                )
                 self.write_build_metadata(
                     safe_project,
                     inc_build=False,
                     sanitizer=sanitizer,
+                    project_fingerprint=project_fingerprint,
                 )
         return FuzzerBuildResult(
             success=result.returncode == 0,
