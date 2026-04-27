@@ -10,6 +10,8 @@ Use these example files as reference inputs:
 
 Discovery-only example configs live under
 [`experiment-configs/discovery-testing/`](../../experiment-configs/discovery-testing/).
+Discovery smoke configs live under
+[`experiment-configs/discovery-smoke-testing/`](../../experiment-configs/discovery-smoke-testing/).
 
 The grouped distributed experiment config is the primary contract reference for
 experiment YAML structure.

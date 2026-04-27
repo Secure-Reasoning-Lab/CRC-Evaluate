@@ -56,6 +56,7 @@ runtime:
   run_timeout: 600
   verify_timeout: 60
   skip_verification: true
+  source_mode: main_repo
   redis_host: localhost
 
 storage:
@@ -77,6 +78,9 @@ Key settings:
   CPVs in metadata.
 - `runtime.skip_verification: true` is recommended because there is no
   benchmark ground truth to verify against.
+- `runtime.source_mode: main_repo` is recommended for raw OSS-Fuzz projects,
+  because their sources usually come from `project.yaml:main_repo` rather than
+  CRSBench-style `pkgs/` tarballs.
 - `benchmarks_root` and `oss_fuzz_path` must match the checkout you want to run
   against.
 
@@ -84,6 +88,7 @@ Repository examples:
 
 - [`experiment-configs/discovery-testing/oss-fuzz-given-fuzzer-8core.yaml`](../../../experiment-configs/discovery-testing/oss-fuzz-given-fuzzer-8core.yaml)
 - [`experiment-configs/discovery-testing/atlantis-multilang-wo-concolic-full-10min-5usd.yaml`](../../../experiment-configs/discovery-testing/atlantis-multilang-wo-concolic-full-10min-5usd.yaml)
+- [`experiment-configs/discovery-smoke-testing/opencode-go-yaml-bugfinding.yaml`](../../../experiment-configs/discovery-smoke-testing/opencode-go-yaml-bugfinding.yaml)
 
 ## Initialize The Benchmarks
 

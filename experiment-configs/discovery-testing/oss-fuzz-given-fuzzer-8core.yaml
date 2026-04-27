@@ -24,6 +24,7 @@ runtime:
   run_timeout: 300
   verify_timeout: 60
   skip_verification: true
+  source_mode: main_repo
   skip_litellm: true
   redis_host: localhost
 

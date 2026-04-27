@@ -15,6 +15,8 @@
 - Additional workflow examples:
   - `discovery-testing/` for discovery-only runs against OSS-Fuzz projects
     without CRSBench ground truth
+  - `discovery-smoke-testing/` for small discovery-only smoke runs against
+    OSS-Fuzz projects using one CRS / one benchmark
 
 ## Naming Convention
 
