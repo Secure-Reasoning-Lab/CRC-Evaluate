@@ -111,10 +111,6 @@ worker:
   storage:
     cleanup_after_trial: true
 
-evaluator:
-  jobs: 1
-  cores_per_job: 4
-
 cloud:
   remote:
     experiment_root: /data/crsbench/experiment-data
@@ -155,10 +151,5 @@ cloud:
   workers:
     defaults:
       instance_profile: gce-worker-n2d
-    placements:
-      - {}
-  evaluators:
-    defaults:
-      instance_profile: gce-evaluator-n2d
     placements:
       - {}
