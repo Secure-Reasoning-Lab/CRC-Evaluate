@@ -55,8 +55,17 @@ def discover_source_povs(
     records: list[SourcePovRecord] = []
     trials_processed = 0
     trials_skipped = 0
+    resolved_source_dirs: list[Path] = []
+    seen_source_dirs: set[Path] = set()
 
-    for source_dir in [Path(item).resolve() for item in source_dirs]:
+    for item in source_dirs:
+        resolved = Path(item).resolve()
+        if resolved in seen_source_dirs:
+            continue
+        seen_source_dirs.add(resolved)
+        resolved_source_dirs.append(resolved)
+
+    for source_dir in resolved_source_dirs:
         source_id = make_source_id(source_dir)
         for trial in discover_trials(source_dir):
             if trial.status != "valid" or trial.mode.value != "bug_finding":
@@ -109,7 +118,7 @@ def discover_source_povs(
                 )
 
     stats = {
-        "source_roots_processed": len(source_dirs),
+        "source_roots_processed": len(resolved_source_dirs),
         "trials_processed": trials_processed,
         "trials_skipped": trials_skipped,
         "original_pov_instances": len(records),

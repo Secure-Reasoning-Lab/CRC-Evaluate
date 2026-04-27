@@ -288,3 +288,32 @@ def test_discover_source_povs_skips_trials_without_visible_povs(
     assert records == []
     assert stats["trials_processed"] == 0
     assert stats["trials_skipped"] == 1
+
+
+def test_discover_source_povs_deduplicates_duplicate_source_roots(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "exp-a"
+    trial_dir = _write_trial(
+        source_dir,
+        benchmark="afc-curl-delta-01",
+        harness="curl_fuzzer",
+        trial_name="trial-8",
+        povs={"same.blob": b"SAME"},
+    )
+
+    records, stats = discover_source_povs([source_dir, source_dir.resolve()])
+
+    assert len(records) == 1
+    assert records[0].source_id == make_source_id(source_dir)
+    assert records[0].source_dir == source_dir.resolve()
+    assert (
+        records[0].original_pov_path
+        == (trial_dir / "output" / "povs" / "same.blob").resolve()
+    )
+    assert records[0].pov_content_hash == (
+        "d1ed0d26ea9bd962c0f13e5ffe5bfea928bb8c9ca808dbcaa565e02a3ae1e1db"
+    )
+    assert stats["source_roots_processed"] == 1
+    assert stats["trials_processed"] == 1
+    assert stats["original_pov_instances"] == 1
