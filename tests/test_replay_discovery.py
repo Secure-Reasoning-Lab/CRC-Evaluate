@@ -17,6 +17,7 @@ def _write_trial(
     sanitizer_dir: str = "address",
     experiment_name: str | None = None,
     mark_success: bool = True,
+    mark_fail: bool = False,
 ) -> Path:
     trial_dir = (
         source_dir
@@ -47,6 +48,8 @@ def _write_trial(
     (trial_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
     if mark_success:
         (trial_dir / ".success").touch()
+    if mark_fail:
+        (trial_dir / ".fail").touch()
     (pov_dir / ".hidden.blob").write_bytes(b"hidden")
     for name, payload in povs.items():
         (pov_dir / name).write_bytes(payload)
@@ -240,3 +243,48 @@ def test_discover_source_povs_defaults_sanitizer_for_flat_trial_layout(
     assert len(records) == 1
     assert records[0].source_sanitizer == "address"
     assert records[0].trial_relative_path == "afc-curl-delta-01__codex/trial-4"
+
+
+def test_discover_source_povs_skips_failed_trials_with_povs(tmp_path: Path) -> None:
+    source_dir = tmp_path / "exp-a"
+    _write_trial(
+        source_dir,
+        benchmark="afc-curl-delta-01",
+        harness="curl_fuzzer",
+        trial_name="trial-5",
+        mark_success=False,
+        mark_fail=True,
+        povs={"failed.blob": b"FAIL"},
+    )
+    _write_trial(
+        source_dir,
+        benchmark="afc-curl-delta-01",
+        harness="curl_fuzzer",
+        trial_name="trial-6",
+        povs={"complete.blob": b"OK"},
+    )
+
+    records, stats = discover_source_povs([source_dir])
+
+    assert [record.pov_filename for record in records] == ["complete.blob"]
+    assert stats["trials_processed"] == 1
+    assert stats["trials_skipped"] == 1
+
+
+def test_discover_source_povs_skips_trials_without_visible_povs(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "exp-a"
+    _write_trial(
+        source_dir,
+        benchmark="afc-curl-delta-01",
+        harness="curl_fuzzer",
+        trial_name="trial-7",
+        povs={},
+    )
+
+    records, stats = discover_source_povs([source_dir])
+
+    assert records == []
+    assert stats["trials_processed"] == 0
+    assert stats["trials_skipped"] == 1

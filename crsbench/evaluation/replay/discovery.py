@@ -25,7 +25,8 @@ def _visible_povs(pov_dir: Path) -> Iterable[Path]:
     )
 
 
-def _resolve_trial_sanitizer(trial: object, trial_dir: Path) -> str | None:
+def _resolve_trial_sanitizer(trial: object, trial_dir: Path) -> str:
+    """Return replay sanitizer, defaulting to address when discovery cannot infer one."""
     trial_sanitizer = getattr(trial, "sanitizer", None)
     if hasattr(trial_sanitizer, "value"):
         trial_sanitizer = trial_sanitizer.value
@@ -77,14 +78,19 @@ def discover_source_povs(
                 trials_skipped += 1
                 continue
 
-            trials_processed += 1
+            visible_povs = list(_visible_povs(paths.output_povs))
+            if not visible_povs:
+                trials_skipped += 1
+                continue
+
             source_sanitizer = _resolve_trial_sanitizer(trial, trial_dir)
             trial_relative = str(trial_dir.relative_to(source_dir))
             metadata = getattr(trial, "metadata", None)
             experiment_name = (
                 getattr(metadata, "experiment_name", None) or source_dir.name
             )
-            for pov_path in _visible_povs(paths.output_povs):
+            trials_processed += 1
+            for pov_path in visible_povs:
                 payload = pov_path.read_bytes()
                 records.append(
                     SourcePovRecord(
