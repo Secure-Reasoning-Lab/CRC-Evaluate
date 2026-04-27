@@ -345,6 +345,70 @@ def test_discover_source_povs_accepts_relative_trial_filter(tmp_path: Path) -> N
     assert stats["trials_skipped"] == 1
 
 
+def test_discover_source_povs_rejects_ambiguous_multi_root_relative_filter(
+    tmp_path: Path,
+) -> None:
+    source_a = tmp_path / "exp-a"
+    source_b = tmp_path / "exp-b"
+    _write_trial(
+        source_a,
+        benchmark="afc-curl-delta-01",
+        harness="curl_fuzzer",
+        trial_name="trial-1",
+        povs={"a.blob": b"A"},
+    )
+    _write_trial(
+        source_b,
+        benchmark="afc-curl-delta-01",
+        harness="curl_fuzzer",
+        trial_name="trial-1",
+        povs={"b.blob": b"B"},
+    )
+
+    records, stats = discover_source_povs(
+        [source_a, source_b],
+        trial_filters={"afc-curl-delta-01/curl_fuzzer/full/address/trial-1"},
+    )
+
+    assert records == []
+    assert stats["trials_processed"] == 0
+    assert stats["trials_skipped"] == 2
+
+
+def test_discover_source_povs_accepts_source_qualified_trial_filter(
+    tmp_path: Path,
+) -> None:
+    source_a = tmp_path / "exp-a"
+    source_b = tmp_path / "exp-b"
+    _write_trial(
+        source_a,
+        benchmark="afc-curl-delta-01",
+        harness="curl_fuzzer",
+        trial_name="trial-1",
+        povs={"a.blob": b"A"},
+    )
+    _write_trial(
+        source_b,
+        benchmark="afc-curl-delta-01",
+        harness="curl_fuzzer",
+        trial_name="trial-1",
+        povs={"b.blob": b"B"},
+    )
+
+    records, stats = discover_source_povs(
+        [source_a, source_b],
+        trial_filters={
+            f"{make_source_id(source_a)}:afc-curl-delta-01/curl_fuzzer/full/address/trial-1"
+        },
+    )
+
+    assert len(records) == 1
+    assert records[0].source_id == make_source_id(source_a)
+    assert records[0].pov_filename == "a.blob"
+    assert stats["trials_processed"] == 1
+    assert stats["trials_skipped"] == 1
+
+
 def test_discover_source_povs_skips_trials_without_visible_povs(
     tmp_path: Path,
 ) -> None:

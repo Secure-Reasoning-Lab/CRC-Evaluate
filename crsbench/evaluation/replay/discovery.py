@@ -129,12 +129,21 @@ def discover_source_povs(
         leaf_counts = Counter(
             candidate.trial_dir.name for candidate in candidate_trials
         )
+        relative_counts = Counter(
+            candidate.trial_relative for candidate in candidate_trials
+        )
         filtered_candidates: list[_CandidateTrial] = []
         for candidate in candidate_trials:
             trial_leaf = candidate.trial_dir.name
             trial_relative = candidate.trial_relative
-            if trial_relative in trial_filters or (
-                trial_leaf in trial_filters and leaf_counts[trial_leaf] == 1
+            source_qualified_trial = f"{candidate.source_id}:{trial_relative}"
+            if (
+                source_qualified_trial in trial_filters
+                or (
+                    trial_relative in trial_filters
+                    and relative_counts[trial_relative] == 1
+                )
+                or (trial_leaf in trial_filters and leaf_counts[trial_leaf] == 1)
             ):
                 filtered_candidates.append(candidate)
             else:
