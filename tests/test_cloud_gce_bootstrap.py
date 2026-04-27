@@ -290,6 +290,17 @@ def test_load_startup_script_contains_managed_worker_service_bootstrap():
     assert "__crsbench_prompt_short_host()" in startup_script
     assert "hostname -s 2>/dev/null || hostname 2>/dev/null" in startup_script
     assert 'short_host="${parts[count-2]}-${parts[count-1]}"' in startup_script
+    assert (
+        "if ! command -v fd >/dev/null 2>&1 && command -v fdfind >/dev/null 2>&1; then"
+        in startup_script
+    )
+    assert "alias fd='fdfind'" in startup_script
+    assert "alias ..='cd ..'" in startup_script
+    assert "alias ...='cd ../..'" in startup_script
+    assert "alias ....='cd ../../..'" in startup_script
+    assert "alias ll='ls -alF'" in startup_script
+    assert "alias la='ls -A'" in startup_script
+    assert "alias l='ls -CF'" in startup_script
     assert "__crsbench_prompt_command_installed()" in startup_script
     assert "if ! __crsbench_prompt_command_installed; then" in startup_script
     assert (
@@ -1259,6 +1270,17 @@ def test_orchestrator_startup_script_consumes_config_payload_and_preprovisioned_
     assert "__crsbench_prompt_short_host()" in script
     assert "hostname -s 2>/dev/null || hostname 2>/dev/null" in script
     assert 'short_host="${parts[count-2]}-${parts[count-1]}"' in script
+    assert (
+        "if ! command -v fd >/dev/null 2>&1 && command -v fdfind >/dev/null 2>&1; then"
+        in script
+    )
+    assert "alias fd='fdfind'" in script
+    assert "alias ..='cd ..'" in script
+    assert "alias ...='cd ../..'" in script
+    assert "alias ....='cd ../../..'" in script
+    assert "alias ll='ls -alF'" in script
+    assert "alias la='ls -A'" in script
+    assert "alias l='ls -CF'" in script
     assert "__crsbench_prompt_command_installed()" in script
     assert "if ! __crsbench_prompt_command_installed; then" in script
     assert 'PROMPT_COMMAND="__crsbench_update_prompt;${PROMPT_COMMAND}"' in script
