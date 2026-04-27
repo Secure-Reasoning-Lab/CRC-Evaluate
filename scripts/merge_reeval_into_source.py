@@ -26,6 +26,10 @@ This script overlays the reeval tree onto the source tree without using
   marker; their timing fields are not corrected
 - top-level `crs_run_start_time` and `cpv_to_first_pov` are preserved from
   the source because they describe original-run timing
+- trials where the source has no `pov_store.json` at all (e.g. the source
+  experiment was run with `skip_verification=true`) get the reeval
+  `pov_store.json` copied verbatim; there is no SRC verdict/timing to
+  preserve in that case
 
 Trials whose POV file_mtime distribution is inconsistent with a single CRS
 run (typically because the source was retried/resumed and
@@ -109,20 +113,23 @@ def run_rsync(rsync_bin: str, ree: Path, src: Path, *, dry_run: bool) -> None:
 
 def find_pov_store_pairs(
     src_root: Path, ree_root: Path
-) -> tuple[list[tuple[Path, Path, Path]], list[Path]]:
-    """Return (pairs, missing) where pairs is list of (rel, src_ps, ree_ps)
-    and missing lists relative paths that exist in REE but not SRC.
+) -> tuple[list[tuple[Path, Path, Path]], list[tuple[Path, Path, Path]]]:
+    """Return (pairs, ree_only) where pairs is list of (rel, src_ps, ree_ps)
+    for trials that have a pov_store.json in both SRC and REE, and ree_only
+    lists trials where REE has pov_store.json but SRC does not (typically
+    because the source experiment was run with skip_verification=true and
+    has no per-trial verdict file).
     """
     pairs: list[tuple[Path, Path, Path]] = []
-    missing: list[Path] = []
+    ree_only: list[tuple[Path, Path, Path]] = []
     for ree_ps in sorted(ree_root.rglob("povs/pov_store.json")):
         rel = ree_ps.relative_to(ree_root)
         src_ps = src_root / rel
         if not src_ps.exists():
-            missing.append(rel)
+            ree_only.append((rel, src_ps, ree_ps))
             continue
         pairs.append((rel, src_ps, ree_ps))
-    return pairs, missing
+    return pairs, ree_only
 
 
 # Trial timing-anomaly thresholds. A POV file_mtime falling outside
@@ -327,19 +334,20 @@ def main() -> int:
     run_rsync(args.rsync_bin, ree, src, dry_run=not args.apply)
     print()
 
-    pairs, missing = find_pov_store_pairs(src, ree)
+    pairs, ree_only = find_pov_store_pairs(src, ree)
     print(f"[{mode}] === step 2: pov_store.json surgical merge ===")
     print(
         f"[{mode}] {len(pairs)} trials with pov_store.json pairs, "
-        f"{len(missing)} missing in source"
+        f"{len(ree_only)} REE-only (will be copied verbatim)"
     )
-    for rel in missing:
-        print(f"[{mode}] missing in source, skipping: {rel}")
 
     if not args.apply:
         totals, anomalies = summarize_pairs(pairs, src)
         print()
-        print(f"[dry-run] would merge {totals['trials']} pov_store.json files:")
+        print(
+            f"[dry-run] would merge {totals['trials']} pov_store.json files "
+            f"and copy {len(ree_only)} REE-only pov_store.json files verbatim:"
+        )
         print(
             "[dry-run]   reverified entries (REE verdict + SRC timing): "
             f"{totals['reverified']}"
@@ -351,6 +359,10 @@ def main() -> int:
         print(
             "[dry-run]   REE-only entries added (verbatim REE record):  "
             f"{totals['ree_only_added']}"
+        )
+        print(
+            "[dry-run]   REE-only pov_store.json copied verbatim:       "
+            f"{len(ree_only)}"
         )
         if anomalies:
             print()
@@ -364,6 +376,7 @@ def main() -> int:
         return 0
 
     applied = 0
+    copied = 0
     backups = 0
     grand = {"reverified": 0, "src_only": 0, "ree_only_added": 0}
     anomalies: list[tuple[Path, str]] = []
@@ -385,9 +398,15 @@ def main() -> int:
         if reason:
             anomalies.append((src_ps.relative_to(src), reason))
 
+    for _, src_ps, ree_ps in ree_only:
+        src_ps.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ree_ps, src_ps)
+        copied += 1
+
     marker = append_marker(src, ree)
     print()
     print(f"[apply] merged pov_store.json files: {applied}")
+    print(f"[apply] copied REE-only pov_store.json files verbatim: {copied}")
     print(f"[apply] backups created (.pre-reeval-*): {backups}")
     print(f"[apply]   reverified entries:           {grand['reverified']}")
     print(f"[apply]   SRC-only entries kept:        {grand['src_only']}")
