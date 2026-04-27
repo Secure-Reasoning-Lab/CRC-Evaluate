@@ -683,17 +683,27 @@ def resolve_benchmark_harnesses(
 
             # Parse harness files into dict for lookup
             harness_files_dict = {
-                h.get("name"): h for h in meta_data.get("harness_files", [])
+                h["name"]: h
+                for h in meta_data.get("harness_files", [])
+                if h.get("name")
             }
+            if not harness_files_dict:
+                raise ValueError(
+                    f"No harness_files found in meta.yaml for benchmark '{entry.name}'"
+                )
 
             # Validate each specified harness exists and create BenchmarkHarness
             harness_cpvs = entry.harness_cpvs or {}
             for harness_name in entry.harnesses:
                 if harness_name not in harness_files_dict:
-                    raise ValueError(
-                        f"Harness '{harness_name}' not found in benchmark '{entry.name}'. "
-                        f"Available harnesses: {sorted(harness_files_dict.keys())}"
+                    logger.warning(
+                        "Skipping unknown harness '{}' requested for benchmark '{}'; "
+                        "available harnesses: {}",
+                        harness_name,
+                        entry.name,
+                        sorted(harness_files_dict.keys()),
                     )
+                    continue
                 harness_data = harness_files_dict[harness_name]
                 harness_obj = HarnessFile(
                     name=harness_name, path=harness_data.get("path", "")

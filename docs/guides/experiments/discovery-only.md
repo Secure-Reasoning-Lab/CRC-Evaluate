@@ -80,6 +80,18 @@ Key settings:
 
 - `experiment.only_cpv_harnesses: false` keeps harnesses even when there are no
   CPVs in metadata.
+- Discovery mode also supports explicit harness selectors:
+  ```yaml
+  experiment:
+    benchmarks:
+      - libyang:
+          - fuzz_yang
+          - fuzz_xpath
+  ```
+  Harness names are resolved from `.aixcc/meta.yaml` after
+  `crsbench benchmark init`. If a selected harness is not present in the
+  generated metadata, CRSBench logs a warning and skips that harness instead of
+  failing the whole run.
 - `runtime.skip_verification: true` is recommended because there is no
   benchmark ground truth to verify against.
 - `runtime.source_mode: main_repo` is recommended for raw OSS-Fuzz projects,

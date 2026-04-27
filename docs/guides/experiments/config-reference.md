@@ -131,6 +131,10 @@ Workflow summary:
 
 - `experiment.only_cpv_harnesses: false` — include harnesses regardless of CPV
   availability. Applies to both bug-finding and bug-fixing CRS types.
+- `experiment.benchmarks` may use explicit harness selectors in discovery mode
+  too, for example `- go-yaml: [fuzz_yaml]`. Harness names are resolved from
+  generated `.aixcc/meta.yaml` after `crsbench benchmark init`; unknown harness
+  names are skipped with a warning.
 - `runtime.skip_verification: true` — skip POV/patch verification when the
   benchmark has no ground-truth CPVs/POVs.
 - `benchmarks_root` — root directory containing the OSS-Fuzz project
