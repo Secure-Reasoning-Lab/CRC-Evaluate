@@ -155,6 +155,8 @@ def test_build_instance_metadata_includes_vm_bootstrap_policy_and_selector():
     assert payload["prepare_mode"] == "skip_base_images"
     assert payload["download_benchmarks"] == "always"
     assert payload["gitcache"] is True
+    assert payload["benchmark_init_jobs"] == 3
+    assert payload["benchmark_init_cores_per_job"] == 6
     assert payload["benchmark_suite"] == "afc-final"
     assert payload["benchmarks_root"] == "/srv/benchmarks"
     assert payload["benchmark_suites_root"] == "/srv/benchmark-suites"
@@ -415,6 +417,8 @@ def test_build_evaluator_metadata_embeds_startup_script_and_config_payload(tmp_p
     assert payload["evaluator_cpu_tag"] == "c3d"
     assert metadata[CRSBENCH_DOWNLOAD_DELAY_SEC_KEY] == "20"
     assert payload["gitcache"] is True
+    assert payload["benchmark_init_jobs"] == 2
+    assert payload["benchmark_init_cores_per_job"] == 8
 
 
 def test_build_evaluator_metadata_omits_evaluator_name_for_regional_bulk_insert(

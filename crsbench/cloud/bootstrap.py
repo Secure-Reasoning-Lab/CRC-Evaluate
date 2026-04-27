@@ -6,13 +6,15 @@ import os
 import subprocess
 import time
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Literal, cast
+from typing import Any, Callable, Literal, TypeVar, cast
 
 from crsbench.benchmark.discovery import auto_generate_meta_yaml
 from crsbench.dataset.download import download_dataset, download_suite
 from crsbench.dataset.registry import resolve_prefix
+from crsbench.utils.cpu_pool import CPUPool, format_cpuset, resolve_parallel_job_plan
 from crsbench.validation.schemas import (
     ExperimentConfig,
     _normalize_benchmark_selector_list,
@@ -32,6 +34,8 @@ CRSBENCH_DOWNLOAD_DELAY_SEC_ENV = "CRSBENCH_DOWNLOAD_DELAY_SEC"
 _DOWNLOAD_DELAY_WINDOW_SEC = 300
 _DOWNLOAD_DELAY_SPACING_SEC = 10
 _DOWNLOAD_DELAY_WAVE_SIZE = 3
+T = TypeVar("T")
+R = TypeVar("R")
 
 
 @dataclass(frozen=True)
@@ -105,6 +109,8 @@ class CloudVmBootstrapInputs:
     prepare_mode: PrepareMode = "full"
     download_benchmarks: DownloadBenchmarksMode = "auto"
     gitcache: bool = False
+    benchmark_init_jobs: int | None = None
+    benchmark_init_cores_per_job: int | None = None
     benchmark_suite: str | None = None
     benchmarks: BenchmarkSelectorList | None = None
     benchmarks_root: Path | str = DEFAULT_BENCHMARKS_ROOT
@@ -122,12 +128,17 @@ class CloudVmBootstrapInputs:
         config: ExperimentConfig,
     ) -> CloudVmBootstrapInputs:
         bootstrap = config.cloud.bootstrap if config.cloud is not None else None
+        benchmark_init_jobs, benchmark_init_cores_per_job = (
+            _derive_benchmark_init_parallelism_from_experiment_config(config)
+        )
         return cls(
             prepare_mode=bootstrap.prepare_mode if bootstrap is not None else "full",
             download_benchmarks=(
                 bootstrap.download_benchmarks if bootstrap is not None else "auto"
             ),
             gitcache=bootstrap.gitcache if bootstrap is not None else False,
+            benchmark_init_jobs=benchmark_init_jobs,
+            benchmark_init_cores_per_job=benchmark_init_cores_per_job,
             benchmark_suite=config.benchmark_suite,
             benchmarks=config.benchmarks,
             benchmarks_root=_restore_repo_relative_path(
@@ -153,6 +164,14 @@ def bootstrap_inputs_from_payload(payload: dict[str, Any]) -> CloudVmBootstrapIn
             payload.get("download_benchmarks")
         ),
         gitcache=bool(payload.get("gitcache", False)),
+        benchmark_init_jobs=_coerce_optional_positive_int(
+            payload.get("benchmark_init_jobs"),
+            field_name="benchmark_init_jobs",
+        ),
+        benchmark_init_cores_per_job=_coerce_optional_positive_int(
+            payload.get("benchmark_init_cores_per_job"),
+            field_name="benchmark_init_cores_per_job",
+        ),
         benchmark_suite=_normalize_optional_string(
             _coerce_optional_string(payload.get("benchmark_suite"))
         ),
@@ -221,6 +240,8 @@ def run_benchmark_download(
     download_dataset_fn: Callable[..., Path] | None = None,
     cwd: Path | None = None,
     oss_fuzz_path: Path | str = MANAGED_OSS_FUZZ_ROOT,
+    benchmark_init_jobs: int | None = None,
+    benchmark_init_cores_per_job: int | None = None,
 ) -> list[Path]:
     """Download benchmarks required by one cloud VM bootstrap."""
     selected_download_suite = (
@@ -240,6 +261,8 @@ def run_benchmark_download(
         selector,
         cwd=cwd,
         oss_fuzz_path=oss_fuzz_path,
+        benchmark_init_jobs=benchmark_init_jobs,
+        benchmark_init_cores_per_job=benchmark_init_cores_per_job,
     )
     if external_paths is not None:
         return external_paths
@@ -324,6 +347,8 @@ def run_cloud_vm_bootstrap(
                 selector,
                 cwd=cwd,
                 oss_fuzz_path=inputs.oss_fuzz_path,
+                benchmark_init_jobs=inputs.benchmark_init_jobs,
+                benchmark_init_cores_per_job=inputs.benchmark_init_cores_per_job,
             )
             or [],
         )
@@ -336,6 +361,8 @@ def run_cloud_vm_bootstrap(
             download_dataset_fn=download_dataset_fn,
             cwd=cwd,
             oss_fuzz_path=inputs.oss_fuzz_path,
+            benchmark_init_jobs=inputs.benchmark_init_jobs,
+            benchmark_init_cores_per_job=inputs.benchmark_init_cores_per_job,
         ),
     )
 
@@ -366,6 +393,8 @@ def _prepare_external_benchmarks(
     *,
     cwd: Path | None,
     oss_fuzz_path: Path | str = MANAGED_OSS_FUZZ_ROOT,
+    benchmark_init_jobs: int | None = None,
+    benchmark_init_cores_per_job: int | None = None,
 ) -> list[Path] | None:
     grouped, external_benchmarks = _external_benchmark_groups(selector)
     if grouped is None:
@@ -378,6 +407,8 @@ def _prepare_external_benchmarks(
         benchmarks_root=selector.effective_benchmarks_root(),
         cwd=cwd,
         oss_fuzz_path=oss_fuzz_path,
+        benchmark_init_jobs=benchmark_init_jobs,
+        benchmark_init_cores_per_job=benchmark_init_cores_per_job,
     )
 
 
@@ -414,6 +445,8 @@ def _resolve_external_benchmark_paths(
     benchmarks_root: Path,
     cwd: Path | None,
     oss_fuzz_path: Path | str = MANAGED_OSS_FUZZ_ROOT,
+    benchmark_init_jobs: int | None = None,
+    benchmark_init_cores_per_job: int | None = None,
 ) -> list[Path]:
     resolved_root = _resolve_root_path(benchmarks_root, cwd=cwd)
     resolved_oss_fuzz_root = _resolve_root_path(oss_fuzz_path, cwd=cwd)
@@ -427,13 +460,23 @@ def _resolve_external_benchmark_paths(
                 "Cloud VM bootstrap requires cwd when benchmarks_root points to "
                 "managed third_party/oss-fuzz/projects"
             )
-        return [
-            _ensure_managed_oss_fuzz_project(
+
+        def ensure_managed_project(
+            benchmark_name: str,
+            cpuset_cpus: str | None,
+        ) -> Path:
+            return _ensure_managed_oss_fuzz_project(
                 benchmark_name,
                 oss_fuzz_root=resolved_oss_fuzz_root,
+                cpuset_cpus=cpuset_cpus,
             )
-            for benchmark_name in benchmark_names
-        ]
+
+        return _run_cpuset_bounded_benchmark_inits(
+            benchmark_names,
+            benchmark_init_jobs=benchmark_init_jobs,
+            benchmark_init_cores_per_job=benchmark_init_cores_per_job,
+            worker=ensure_managed_project,
+        )
 
     benchmark_paths = [
         resolved_root / benchmark_name for benchmark_name in benchmark_names
@@ -466,15 +509,26 @@ def _resolve_external_benchmark_paths(
             )
         return benchmark_paths
 
-    for benchmark_path in benchmark_paths:
-        _ensure_external_meta_yaml(benchmark_path, oss_fuzz_root=resolved_oss_fuzz_root)
-    return benchmark_paths
+    def ensure_benchmark_path(benchmark_path: Path, cpuset_cpus: str | None) -> Path:
+        return _ensure_external_meta_yaml_and_return_path(
+            benchmark_path,
+            oss_fuzz_root=resolved_oss_fuzz_root,
+            cpuset_cpus=cpuset_cpus,
+        )
+
+    return _run_cpuset_bounded_benchmark_inits(
+        benchmark_paths,
+        benchmark_init_jobs=benchmark_init_jobs,
+        benchmark_init_cores_per_job=benchmark_init_cores_per_job,
+        worker=ensure_benchmark_path,
+    )
 
 
 def _ensure_managed_oss_fuzz_project(
     benchmark_name: str,
     *,
     oss_fuzz_root: Path,
+    cpuset_cpus: str | None = None,
 ) -> Path:
     project_dir = oss_fuzz_root / "projects" / benchmark_name
     if not project_dir.is_dir():
@@ -487,7 +541,11 @@ def _ensure_managed_oss_fuzz_project(
             f"Managed OSS-Fuzz checkout did not produce projects/{benchmark_name}: "
             f"{project_dir}"
         )
-    _ensure_external_meta_yaml(project_dir, oss_fuzz_root=oss_fuzz_root)
+    _ensure_external_meta_yaml(
+        project_dir,
+        oss_fuzz_root=oss_fuzz_root,
+        cpuset_cpus=cpuset_cpus,
+    )
     return project_dir
 
 
@@ -539,11 +597,81 @@ def _materialize_managed_oss_fuzz_project(
     return project_dir
 
 
-def _ensure_external_meta_yaml(benchmark_path: Path, *, oss_fuzz_root: Path) -> Path:
+def _ensure_external_meta_yaml(
+    benchmark_path: Path,
+    *,
+    oss_fuzz_root: Path,
+    cpuset_cpus: str | None = None,
+) -> Path:
     meta_yaml_path = benchmark_path / ".aixcc" / "meta.yaml"
     if meta_yaml_path.is_file():
         return meta_yaml_path
-    return auto_generate_meta_yaml(benchmark_path, oss_fuzz_root)
+    return auto_generate_meta_yaml(
+        benchmark_path,
+        oss_fuzz_root,
+        cpuset_cpus=cpuset_cpus,
+    )
+
+
+def _ensure_external_meta_yaml_and_return_path(
+    benchmark_path: Path,
+    *,
+    oss_fuzz_root: Path,
+    cpuset_cpus: str | None = None,
+) -> Path:
+    _ensure_external_meta_yaml(
+        benchmark_path,
+        oss_fuzz_root=oss_fuzz_root,
+        cpuset_cpus=cpuset_cpus,
+    )
+    return benchmark_path
+
+
+def _run_cpuset_bounded_benchmark_inits(
+    items: list[T],
+    *,
+    benchmark_init_jobs: int | None,
+    benchmark_init_cores_per_job: int | None,
+    worker: Callable[[T, str | None], R],
+) -> list[R]:
+    if not items:
+        return []
+
+    plan = resolve_parallel_job_plan(
+        len(items),
+        requested_jobs=benchmark_init_jobs,
+        requested_cores_per_job=benchmark_init_cores_per_job,
+    )
+    if plan is None:
+        return [worker(item, None) for item in items]
+
+    max_parallel_jobs, cores_per_job = plan
+    cpu_pool = CPUPool()
+
+    def run_with_allocated_cpus(item: T) -> R:
+        allocated_cpus = cpu_pool.allocate(cores_per_job)
+        if allocated_cpus is None:
+            raise RuntimeError(
+                "cloud bootstrap CPU allocation failed despite bounded executor sizing"
+            )
+        assigned_cpuset = format_cpuset(allocated_cpus)
+        try:
+            return worker(item, assigned_cpuset)
+        finally:
+            cpu_pool.release(allocated_cpus)
+
+    if max_parallel_jobs == 1:
+        return [run_with_allocated_cpus(item) for item in items]
+
+    results: list[R | None] = [None] * len(items)
+    with ThreadPoolExecutor(max_workers=max_parallel_jobs) as executor:
+        futures = {
+            executor.submit(run_with_allocated_cpus, item): index
+            for index, item in enumerate(items)
+        }
+        for future in as_completed(futures):
+            results[futures[future]] = future.result()
+    return cast("list[R]", results)
 
 
 def _resolve_root_path(path: Path | str, *, cwd: Path | None) -> Path:
@@ -562,6 +690,40 @@ def _is_managed_oss_fuzz_projects_root(
     return _resolve_root_path(path, cwd=cwd) == (
         _resolve_root_path(oss_fuzz_path, cwd=cwd) / "projects"
     )
+
+
+def _derive_benchmark_init_parallelism_from_experiment_config(
+    config: ExperimentConfig,
+) -> tuple[int | None, int | None]:
+    from crsbench.distributed.registry import RuntimeRegistration
+
+    registration = RuntimeRegistration.from_experiment_config(config)
+    return _derive_benchmark_init_parallelism_from_registration(registration)
+
+
+def _derive_benchmark_init_parallelism_from_registration(
+    registration: Any,
+) -> tuple[int | None, int | None]:
+    worker_jobs = getattr(registration, "worker_jobs", None)
+    worker_cores_per_job = getattr(registration, "worker_cores_per_job", None)
+    cores_per_trial = getattr(registration, "cores_per_trial", None)
+    if (
+        worker_jobs is not None
+        or worker_cores_per_job is not None
+        or cores_per_trial is not None
+    ):
+        return worker_jobs or 1, worker_cores_per_job or cores_per_trial
+
+    evaluator_build_jobs = getattr(registration, "evaluator_build_jobs", None)
+    evaluator_build_cores_per_job = getattr(
+        registration,
+        "evaluator_build_cores_per_job",
+        None,
+    )
+    if evaluator_build_jobs is not None or evaluator_build_cores_per_job is not None:
+        return evaluator_build_jobs or 1, evaluator_build_cores_per_job
+
+    return None, None
 
 
 def _resolve_download_delay_sec(download_delay_sec: int | None) -> int:
@@ -595,6 +757,15 @@ def _coerce_optional_string(value: Any) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _coerce_optional_positive_int(value: Any, *, field_name: str) -> int | None:
+    if value is None:
+        return None
+    parsed = int(value)
+    if parsed <= 0:
+        raise ValueError(f"{field_name} must be > 0, got {parsed}")
+    return parsed
 
 
 def _coerce_root_path(value: Any, *, default_path: Path) -> Path:

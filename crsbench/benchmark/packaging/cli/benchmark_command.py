@@ -16,6 +16,11 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from crsbench.utils.cpu_pool import (
+    CPUPool,
+    format_cpuset,
+    resolve_parallel_job_plan,
+)
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -665,6 +670,12 @@ Examples:
         default=None,
         help="Pin build to specific CPU cores (e.g., '0-7'). Default: use all cores.",
     )
+    init_parser.add_argument(
+        "--jobs",
+        type=_positive_int,
+        default=1,
+        help="Number of benchmarks to initialize in parallel (default: 1).",
+    )
     init_parser.set_defaults(func=handle_init)
 
     # crsbench benchmark migrate (nested subparser group)
@@ -717,32 +728,37 @@ def handle_init(args: argparse.Namespace) -> int:
 
     total_harnesses = 0
     initialized = 0
+    jobs = getattr(args, "jobs", 1)
 
-    for name in benchmark_names:
+    def init_one(
+        name: str,
+        *,
+        assigned_cpuset: str | None,
+    ) -> tuple[int, bool]:
         benchmark_path = benchmarks_root / name
 
         if not benchmark_path.exists():
             logger.warning(f"Benchmark directory not found: {benchmark_path}")
-            continue
+            return 0, False
 
         # Skip benchmarks that already have meta.yaml
         meta_yaml = GroundTruthPaths(benchmark_path).meta_yaml
         if meta_yaml.exists():
             logger.info(f"[{name}] meta.yaml already exists, skipping")
-            continue
+            return 0, False
 
         if not is_oss_fuzz_project(benchmark_path):
             logger.warning(
                 f"[{name}] Not a valid OSS-Fuzz project "
                 "(missing project.yaml/Dockerfile/build.sh), skipping"
             )
-            continue
+            return 0, False
 
         try:
             result_path = auto_generate_meta_yaml(
                 benchmark_path,
                 oss_fuzz_path,
-                cpuset_cpus=cpuset_cpus,
+                cpuset_cpus=assigned_cpuset,
             )
 
             # Count harnesses from generated meta.yaml
@@ -751,14 +767,67 @@ def handle_init(args: argparse.Namespace) -> int:
             with result_path.open() as f:
                 meta = yaml.safe_load(f)
             harness_count = len(meta.get("harness_files", []))
-            total_harnesses += harness_count
-            initialized += 1
-
             logger.info(f"[{name}] Initialized: {harness_count} harnesses")
+            return harness_count, True
 
         except Exception:
             logger.exception(f"[{name}] Failed to initialize")
-            continue
+            return 0, False
+
+    if jobs == 1:
+        for name in benchmark_names:
+            harness_count, did_initialize = init_one(
+                name,
+                assigned_cpuset=cpuset_cpus,
+            )
+            total_harnesses += harness_count
+            initialized += int(did_initialize)
+    else:
+        plan = resolve_parallel_job_plan(
+            len(benchmark_names),
+            requested_jobs=jobs,
+            cores=cpuset_cpus,
+        )
+        if plan is None:
+            raise RuntimeError(
+                "benchmark init parallel plan unexpectedly resolved to None"
+            )
+        max_parallel_jobs, cores_per_job = plan
+        cpu_pool = CPUPool(cores=cpuset_cpus)
+
+        if max_parallel_jobs != jobs:
+            logger.info(
+                f"Initializing benchmarks with {jobs} requested jobs, bounded to "
+                f"{max_parallel_jobs} by the visible CPU envelope "
+                f"({cores_per_job} CPUs/job)"
+            )
+        else:
+            logger.info(
+                f"Initializing benchmarks with {max_parallel_jobs} parallel jobs "
+                f"({cores_per_job} CPUs/job)"
+            )
+
+        def init_with_allocated_cpus(name: str) -> tuple[int, bool]:
+            allocated_cpus = cpu_pool.allocate(cores_per_job)
+            if allocated_cpus is None:
+                raise RuntimeError(
+                    "benchmark init CPU allocation failed despite bounded executor sizing"
+                )
+            assigned_cpuset = format_cpuset(allocated_cpus)
+            try:
+                return init_one(name, assigned_cpuset=assigned_cpuset)
+            finally:
+                cpu_pool.release(allocated_cpus)
+
+        with ThreadPoolExecutor(max_workers=max_parallel_jobs) as executor:
+            futures = {
+                executor.submit(init_with_allocated_cpus, name): name
+                for name in benchmark_names
+            }
+            for future in as_completed(futures):
+                harness_count, did_initialize = future.result()
+                total_harnesses += harness_count
+                initialized += int(did_initialize)
 
     # Print summary
     logger.info("=" * 60)

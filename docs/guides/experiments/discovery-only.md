@@ -112,6 +112,22 @@ uv run crsbench benchmark init \
   --cpuset-cpus 0-7
 ```
 
+To initialize multiple benchmarks in parallel while keeping each OSS-Fuzz build
+inside a disjoint CPU slice:
+
+```bash
+uv run crsbench benchmark init \
+  --experiment-config config.yaml \
+  --jobs 4 \
+  --cpuset-cpus 0-31
+```
+
+`--jobs` parallelizes benchmark initialization across multiple OSS-Fuzz
+projects. When `--cpuset-cpus` is also set and `--jobs > 1`, CRSBench treats
+that cpuset as the total CPU envelope for the init command and splits it into
+per-job slices before calling the underlying OSS-Fuzz build path. Without an
+explicit cpuset, parallel init uses the current process affinity envelope.
+
 `benchmark init` does the following for each selected benchmark:
 
 - checks that the project looks like an OSS-Fuzz project
@@ -124,7 +140,10 @@ If `.aixcc/meta.yaml` already exists, `benchmark init` skips that benchmark.
 Managed cloud launches using
 `benchmarks_root: third_party/oss-fuzz/projects` do this automatically during
 VM bootstrap for raw OSS-Fuzz project names, so you do not need a separate
-pre-initialized benchmark checkout on the VMs.
+pre-initialized benchmark checkout on the VMs. When cloud worker/evaluator
+sizing is configured, bootstrap reuses that sizing to initialize multiple
+OSS-Fuzz benchmarks in parallel under disjoint CPU slices instead of building
+them strictly one by one.
 
 ## Run The Experiment
 

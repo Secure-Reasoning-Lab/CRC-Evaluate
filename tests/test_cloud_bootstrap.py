@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import crsbench.cloud.bootstrap as bootstrap_module
@@ -115,6 +116,8 @@ def test_bootstrap_inputs_from_payload_restores_defaults_and_explicit_fields():
             "download_benchmarks": "always",
             "benchmark_suite": "afc-final",
             "gitcache": True,
+            "benchmark_init_jobs": 5,
+            "benchmark_init_cores_per_job": 7,
             "benchmarks_root": "benchmarks",
             "benchmark_suites_root": "benchmark-suites-custom",
             "oss_fuzz_path": "third_party/oss-fuzz-custom",
@@ -125,6 +128,8 @@ def test_bootstrap_inputs_from_payload_restores_defaults_and_explicit_fields():
     assert inputs.download_benchmarks == "always"
     assert inputs.benchmark_suite == "afc-final"
     assert inputs.gitcache is True
+    assert inputs.benchmark_init_jobs == 5
+    assert inputs.benchmark_init_cores_per_job == 7
     assert inputs.benchmarks is None
     assert inputs.benchmarks_root == Path("benchmarks")
     assert inputs.benchmark_suites_root == Path("benchmark-suites-custom")
@@ -144,6 +149,7 @@ def test_from_experiment_config_restores_repo_relative_managed_oss_fuzz_paths() 
         benchmarks=["go-yaml"],
         benchmarks_root=str(repo_root / "third_party" / "oss-fuzz" / "projects"),
         oss_fuzz_path=str(repo_root / "third_party" / "oss-fuzz"),
+        worker={"jobs": 2, "cores_per_job": 8},
         crs_compose={"test-crs": {"num_cores": 1}},
         cloud={
             "bootstrap": {"download_benchmarks": "auto"},
@@ -189,6 +195,8 @@ def test_from_experiment_config_restores_repo_relative_managed_oss_fuzz_paths() 
 
     assert inputs.benchmarks_root == Path("third_party/oss-fuzz/projects")
     assert inputs.oss_fuzz_path == Path("third_party/oss-fuzz")
+    assert inputs.benchmark_init_jobs == 2
+    assert inputs.benchmark_init_cores_per_job == 8
 
 
 def test_build_download_delay_schedule_uses_conservative_priority_waves() -> None:
@@ -318,7 +326,10 @@ def test_run_cloud_vm_bootstrap_applies_download_delay_to_external_benchmarks(
         *,
         cwd: Path | None,
         oss_fuzz_path: Path = Path("third_party/oss-fuzz"),
+        benchmark_init_jobs: int | None = None,
+        benchmark_init_cores_per_job: int | None = None,
     ) -> list[Path] | None:
+        del benchmark_init_jobs, benchmark_init_cores_per_job
         assert cwd is not None
         assert oss_fuzz_path == Path("third_party/oss-fuzz")
         external_calls.append(
@@ -397,7 +408,10 @@ def test_run_cloud_vm_bootstrap_skips_external_benchmark_prep_when_policy_is_nev
         *,
         cwd: Path | None,
         oss_fuzz_path: Path = Path("third_party/oss-fuzz"),
+        benchmark_init_jobs: int | None = None,
+        benchmark_init_cores_per_job: int | None = None,
     ) -> list[Path] | None:
+        del benchmark_init_jobs, benchmark_init_cores_per_job
         assert cwd is not None
         assert oss_fuzz_path == Path("third_party/oss-fuzz")
         external_calls.append(
@@ -631,6 +645,85 @@ def test_run_benchmark_download_materializes_managed_oss_fuzz_projects_and_inits
     assert meta_calls == [(project_dir, checkout_root / "third_party" / "oss-fuzz")]
     assert dataset_calls == []
     assert (project_dir / ".aixcc" / "meta.yaml").exists()
+
+
+def test_run_benchmark_download_parallelizes_managed_oss_fuzz_init_with_disjoint_cpuset_slices(
+    monkeypatch, tmp_path: Path
+) -> None:
+    checkout_root = tmp_path
+    managed_projects_root = checkout_root / "third_party" / "oss-fuzz" / "projects"
+    managed_projects_root.mkdir(parents=True)
+    real_cpu_pool = bootstrap_module.CPUPool
+
+    calls: list[tuple[str, str | None]] = []
+    calls_lock = threading.Lock()
+    overlap_ready = threading.Event()
+
+    def fake_ensure_managed_oss_fuzz_project(
+        benchmark_name: str,
+        *,
+        oss_fuzz_root: Path,
+        cpuset_cpus: str | None = None,
+    ) -> Path:
+        with calls_lock:
+            calls.append((benchmark_name, cpuset_cpus))
+            if len(calls) == 2:
+                overlap_ready.set()
+            should_wait = len(calls) < 2
+        if should_wait:
+            assert overlap_ready.wait(timeout=2)
+
+        project_dir = oss_fuzz_root / "projects" / benchmark_name
+        project_dir.mkdir(parents=True, exist_ok=True)
+        meta_path = project_dir / ".aixcc" / "meta.yaml"
+        meta_path.parent.mkdir(parents=True, exist_ok=True)
+        meta_path.write_text("full_mode:\n  base_commit: " + ("0" * 40) + "\n")
+        return project_dir
+
+    monkeypatch.setattr(
+        bootstrap_module,
+        "_ensure_managed_oss_fuzz_project",
+        fake_ensure_managed_oss_fuzz_project,
+    )
+
+    def fake_resolve_parallel_job_plan(
+        _total_tasks: int,
+        **_kwargs,
+    ) -> tuple[int, int]:
+        return (2, 4)
+
+    def fake_cpu_pool(*, _cores=None):
+        return real_cpu_pool(cores="0-7")
+
+    monkeypatch.setattr(
+        bootstrap_module,
+        "resolve_parallel_job_plan",
+        fake_resolve_parallel_job_plan,
+    )
+    monkeypatch.setattr(bootstrap_module, "CPUPool", fake_cpu_pool)
+
+    selector = CloudBenchmarkSelector.from_inputs(
+        CloudVmBootstrapInputs(
+            benchmarks=["go-yaml", "libyang", "x509-parser"],
+            benchmarks_root=Path("third_party/oss-fuzz/projects"),
+        )
+    )
+
+    result = run_benchmark_download(
+        selector,
+        cwd=checkout_root,
+        benchmark_init_jobs=2,
+        benchmark_init_cores_per_job=4,
+    )
+
+    assert result == [
+        managed_projects_root / "go-yaml",
+        managed_projects_root / "libyang",
+        managed_projects_root / "x509-parser",
+    ]
+    assert len(calls) == 3
+    assert {calls[0][1], calls[1][1]} == {"0-3", "4-7"}
+    assert calls[2][1] in {"0-3", "4-7"}
 
 
 def test_run_benchmark_download_uses_existing_external_benchmark_under_unmanaged_root(

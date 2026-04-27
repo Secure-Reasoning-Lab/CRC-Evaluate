@@ -160,6 +160,9 @@ def build_bootstrap_payload(
             "prepare_mode": bootstrap_inputs.prepare_mode,
             "download_benchmarks": bootstrap_inputs.download_benchmarks,
             "gitcache": bootstrap_inputs.gitcache,
+            "benchmark_init_jobs": registration.worker_jobs or 1,
+            "benchmark_init_cores_per_job": registration.worker_cores_per_job
+            or registration.cores_per_trial,
             "benchmarks_root": str(selector.effective_benchmarks_root()),
             "oss_fuzz_path": str(bootstrap_inputs.oss_fuzz_path),
         }
@@ -209,6 +212,9 @@ def build_evaluator_bootstrap_payload(
             "prepare_mode": bootstrap_inputs.prepare_mode,
             "download_benchmarks": bootstrap_inputs.download_benchmarks,
             "gitcache": bootstrap_inputs.gitcache,
+            "benchmark_init_jobs": registration.evaluator_build_jobs or 1,
+            "benchmark_init_cores_per_job": registration.evaluator_build_cores_per_job
+            or 4,
             "benchmarks_root": str(selector.effective_benchmarks_root()),
             "oss_fuzz_path": str(bootstrap_inputs.oss_fuzz_path),
         }
