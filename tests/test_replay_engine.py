@@ -54,8 +54,14 @@ class FakeInfra:
 
 
 class FakeSessionPool:
-    def __init__(self, result: SessionReplayResult) -> None:
+    def __init__(
+        self,
+        result: SessionReplayResult | None = None,
+        *,
+        results_by_task: dict[tuple[str, str], SessionReplayResult] | None = None,
+    ) -> None:
         self.result = result
+        self.results_by_task = results_by_task or {}
         self.run_calls: list[tuple[str, str]] = []
 
     def run_many(self, tasks, timeout: int):
@@ -63,7 +69,18 @@ class FakeSessionPool:
         out = {}
         for task in tasks:
             self.run_calls.append((task.target_harness, task.pov_content_hash))
-            out[task] = self.result
+            task_key = (task.target_harness, task.pov_content_hash)
+            if task_key in self.results_by_task:
+                out[task] = self.results_by_task[task_key]
+                continue
+            if self.result is not None:
+                out[task] = self.result
+                continue
+            raise AssertionError(
+                "FakeSessionPool missing result for task "
+                f"harness={task.target_harness} "
+                f"pov_content_hash={task.pov_content_hash}"
+            )
         return out
 
     def close(self) -> None:
@@ -93,6 +110,89 @@ def _record(
     )
 
 
+def _session_result(
+    *,
+    exit_code: int | None,
+    stdout: str,
+    stderr: str,
+    crashed: bool | None,
+    duration_seconds: float = 1.0,
+    timed_out: bool = False,
+    session_restarted: bool = False,
+    error_message: str | None = None,
+) -> SessionReplayResult:
+    return SessionReplayResult(
+        exit_code=exit_code,
+        stdout=stdout,
+        stderr=stderr,
+        duration_seconds=duration_seconds,
+        timed_out=timed_out,
+        session_restarted=session_restarted,
+        crashed=crashed,
+        error_message=error_message,
+    )
+
+
+def _run_0day_replay(tmp_path: Path) -> Path:
+    source_dir = tmp_path / "exp-a"
+    latest_projects = tmp_path / "latest-projects"
+    (latest_projects / "curl").mkdir(parents=True)
+    crash_pov = source_dir / "trial-a" / "output" / "povs" / "a.blob"
+    no_crash_pov = source_dir / "trial-b" / "output" / "povs" / "b.blob"
+    crash_pov.parent.mkdir(parents=True, exist_ok=True)
+    no_crash_pov.parent.mkdir(parents=True, exist_ok=True)
+    crash_pov.write_bytes(b"CRASH")
+    no_crash_pov.write_bytes(b"NOCRASH")
+    crash_hash = "44" * 32
+    no_crash_hash = "55" * 32
+    records = [
+        _record(source_dir, "trial-a", crash_pov, crash_hash),
+        _record(source_dir, "trial-b", no_crash_pov, no_crash_hash),
+    ]
+    pool = FakeSessionPool(
+        results_by_task={
+            ("fuzz-a", crash_hash): _session_result(
+                exit_code=77,
+                stdout="stdout crash",
+                stderr="stderr crash",
+                crashed=True,
+            ),
+            ("fuzz-b", crash_hash): _session_result(
+                exit_code=77,
+                stdout="stdout crash",
+                stderr="stderr crash",
+                crashed=True,
+            ),
+            ("fuzz-a", no_crash_hash): _session_result(
+                exit_code=0,
+                stdout="stdout ok",
+                stderr="stderr ok",
+                crashed=False,
+            ),
+            ("fuzz-b", no_crash_hash): _session_result(
+                exit_code=0,
+                stdout="stdout ok",
+                stderr="stderr ok",
+                crashed=False,
+            ),
+        }
+    )
+    engine = ReplayEngine(
+        oss_fuzz_path=tmp_path / "oss-fuzz",
+        projects_root=latest_projects,
+        output_dir=tmp_path / "replay-out",
+        jobs=1,
+        per_pov_timeout=5,
+        infra=FakeInfra(harnesses=["fuzz-a", "fuzz-b"]),
+        mapping={"afc-curl-delta-01": "curl"},
+        session_pool_factory=lambda **_kwargs: pool,
+    )
+
+    engine.run(records, source_dirs=[source_dir])
+
+    return tmp_path / "replay-out"
+
+
 def test_replay_engine_deduplicates_physical_execution_but_preserves_provenance(
     tmp_path: Path,
 ) -> None:
@@ -112,13 +212,10 @@ def test_replay_engine_deduplicates_physical_execution_but_preserves_provenance(
         _record(source_dir, "trial-b", pov_b, shared_hash),
     ]
     pool = FakeSessionPool(
-        SessionReplayResult(
+        _session_result(
             exit_code=77,
             stdout="stdout crash",
             stderr="stderr crash",
-            duration_seconds=1.0,
-            timed_out=False,
-            session_restarted=False,
             crashed=True,
         )
     )
@@ -163,13 +260,10 @@ def test_replay_engine_records_and_logs_throughput_metrics(tmp_path: Path) -> No
         _record(source_dir, "trial-b", pov_b, "33" * 32),
     ]
     pool = FakeSessionPool(
-        SessionReplayResult(
+        _session_result(
             exit_code=77,
             stdout="stdout crash",
             stderr="stderr crash",
-            duration_seconds=1.0,
-            timed_out=False,
-            session_restarted=False,
             crashed=True,
         )
     )
@@ -224,13 +318,11 @@ def test_replay_engine_marks_build_failures_without_aborting_unrelated_work(
         infra=FakeInfra(build_success=False),
         mapping={"afc-curl-delta-01": "curl"},
         session_pool_factory=lambda **_kwargs: FakeSessionPool(
-            SessionReplayResult(
+            _session_result(
                 exit_code=0,
                 stdout="",
                 stderr="",
                 duration_seconds=0.0,
-                timed_out=False,
-                session_restarted=False,
                 crashed=False,
             )
         ),
@@ -241,6 +333,53 @@ def test_replay_engine_marks_build_failures_without_aborting_unrelated_work(
     data = json.loads((tmp_path / "replay-out" / "pov-to-crash-map.json").read_text())
     assert data[0]["status"] == "build_error"
     assert data[0]["replays"] == []
+
+
+def test_replay_engine_tracks_0day_entries_separately_from_crashing_replays(
+    tmp_path: Path,
+) -> None:
+    replay_out = _run_0day_replay(tmp_path)
+    summary = json.loads((replay_out / "summary.json").read_text())
+    assert summary["0day_count"] == 1
+    assert summary["crashing_replay_count"] == 2
+
+
+def test_replay_engine_writes_crash_only_0day_rows_without_stdio_fields(
+    tmp_path: Path,
+) -> None:
+    replay_out = _run_0day_replay(tmp_path)
+    zero_day_path = replay_out / "0day.json"
+    assert zero_day_path.exists()
+
+    data = json.loads(zero_day_path.read_text())
+    assert len(data) == 1
+    entry = data[0]
+    assert entry["status"] == "replayed"
+    assert entry["benchmark"] == "afc-curl-delta-01"
+    assert entry["original_pov_relpath"] == "trial-a/output/povs/a.blob"
+    assert entry["replays"]
+    assert {replay["target_harness"] for replay in entry["replays"]} == {
+        "fuzz-a",
+        "fuzz-b",
+    }
+    assert all(replay["outcome"] == "crash" for replay in entry["replays"])
+    required_replay_fields = {
+        "target_harness",
+        "sanitizer",
+        "outcome",
+        "exit_code",
+        "duration_seconds",
+        "artifact_dir",
+        "sanitizer_log",
+        "session_restarted",
+        "error_message",
+    }
+    assert all(required_replay_fields.issubset(replay) for replay in entry["replays"])
+    assert all("stdout" not in replay for replay in entry["replays"])
+    assert all("stderr" not in replay for replay in entry["replays"])
+    assert all(
+        entry["original_pov_relpath"] != "trial-b/output/povs/b.blob" for entry in data
+    )
 
 
 def test_replay_engine_allows_direct_oss_fuzz_project_names_for_discovery_mode(
@@ -254,13 +393,11 @@ def test_replay_engine_allows_direct_oss_fuzz_project_names_for_discovery_mode(
     pov.write_bytes(b"A")
     records = [_record(source_dir, "trial-a", pov, "22" * 32, benchmark="gpac")]
     pool = FakeSessionPool(
-        SessionReplayResult(
+        _session_result(
             exit_code=0,
             stdout="ok",
             stderr="",
             duration_seconds=0.5,
-            timed_out=False,
-            session_restarted=False,
             crashed=False,
         )
     )

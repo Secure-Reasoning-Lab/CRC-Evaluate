@@ -94,9 +94,13 @@ Replay writes the following under `--output`:
 
 - `manifest.json`: source roots, helper/projects paths, and runtime settings
 - `summary.json`: aggregate counters for mappings, builds, crashes, timeouts,
-  and errors
-- `pov-to-crash-map.json`: global mapping from original POV provenance to replay
-  artifacts
+  errors, plus `0day_count` and `crashing_replay_count` for the emitted
+  crash-only view
+- `0day.json`: additive crash-only export that keeps only source entries with at
+  least one crashing replay, and within those entries keeps only crashing replay
+  rows
+- `pov-to-crash-map.json`: full mapping from original POV provenance to replay
+  artifacts, including non-crashing replay rows
 - `artifacts/<project>/<sanitizer>/<target-harness>/<pov-hash>/`: one physical
   replay artifact directory
 - `trials/<source-id>/<trial-relative-path>/pov-index.json`: per-trial replay
@@ -117,6 +121,11 @@ Each artifact directory contains:
   `pov_filename`, `pov_content_hash`)
 - resolved latest OSS-Fuzz project
 - one replay entry per current target harness, with outcome and artifact paths
+
+`0day.json` is derived from that full mapping. Its replay rows are crash-only
+and omit `stdout` and `stderr`, while keeping crash-focused fields such as
+harness, sanitizer, exit code, duration, artifact directory, sanitizer log,
+session restart, and error message.
 
 ## Operational Notes
 

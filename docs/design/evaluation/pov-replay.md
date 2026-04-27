@@ -74,9 +74,17 @@ Each artifact directory contains:
 Replay also writes:
 
 - `manifest.json` for command-level inputs and runtime settings
-- `summary.json` for aggregate counters
+- `summary.json` for aggregate counters, including `0day_count` and `crashing_replay_count`
+- `0day.json` for a crash-only top-level export
 - `pov-to-crash-map.json` for the global mapping from original POV provenance to replay artifacts
 - `trials/<source-id>/<trial-relative-path>/pov-index.json` for a per-trial replay index
+
+`0day.json` is additive and does not replace the full replay index. It contains
+only source POV entries with at least one crashing replay, and each included
+entry keeps only crashing replay rows. Those rows omit `stdout` and `stderr`
+but retain crash-focused fields such as harness, sanitizer, exit code,
+duration, artifact directory, sanitizer log, session restart, and error
+message.
 
 ## Runtime Behavior
 
@@ -89,7 +97,12 @@ Replay also writes:
 5. discover current fuzz targets from the fresh build output
 6. execute deduplicated replay tasks through a warm session pool
 7. classify outcomes using the same crash/timeout/leak semantics as helper-based reproduce
-8. write artifacts once per physical replay and re-index them for every original source POV
+8. write artifacts once per physical replay, emit both the full replay mapping and
+   crash-only `0day.json`, and re-index them for every original source POV
+
+`summary.json` reports `0day_count` and `crashing_replay_count` for the emitted
+crash-only view: source entries included in `0day.json` and crashing replay rows
+kept there, not deduplicated physical replay tasks.
 
 ### Warm Session Behavior
 

@@ -222,8 +222,10 @@ class ReplayEngine:
         }
 
     @staticmethod
-    def _serialize_replay_result(result: ReplayResult) -> dict:
-        return {
+    def _serialize_replay_result(
+        result: ReplayResult, *, include_stdio: bool = True
+    ) -> dict:
+        payload = {
             "target_harness": result.target_harness,
             "sanitizer": result.sanitizer,
             "outcome": result.outcome,
@@ -233,11 +235,17 @@ class ReplayEngine:
             "sanitizer_log": (
                 str(result.sanitizer_log_path) if result.sanitizer_log_path else None
             ),
-            "stdout": str(result.stdout_path) if result.stdout_path else None,
-            "stderr": str(result.stderr_path) if result.stderr_path else None,
             "session_restarted": result.session_restarted,
             "error_message": result.error_message,
         }
+        if include_stdio:
+            payload["stdout"] = str(result.stdout_path) if result.stdout_path else None
+            payload["stderr"] = str(result.stderr_path) if result.stderr_path else None
+        return payload
+
+    @staticmethod
+    def _serialize_0day_replay_result(result: ReplayResult) -> dict:
+        return ReplayEngine._serialize_replay_result(result, include_stdio=False)
 
     @staticmethod
     def _empty_session_result(error_message: str) -> SessionReplayResult:
@@ -288,8 +296,11 @@ class ReplayEngine:
             "unsupported_mapping_count": 0,
             "target_project_missing_count": 0,
             "build_error_count": 0,
+            "0day_count": 0,
+            "crashing_replay_count": 0,
         }
         global_entries: list[dict] = []
+        zero_day_entries: list[dict] = []
         trial_entries: dict[tuple[str, str], list[dict]] = defaultdict(list)
         grouped_records: dict[tuple[str, str], list[SourcePovRecord]] = defaultdict(
             list
@@ -469,6 +480,7 @@ class ReplayEngine:
                     replay_results_by_record[record],
                     key=lambda item: (item.target_harness, item.pov_content_hash),
                 )
+                crashing_replays = [item for item in replays if item.outcome == "crash"]
                 entry = self._base_entry(
                     record,
                     mapped_project=mapped_project,
@@ -479,6 +491,18 @@ class ReplayEngine:
                 trial_entries[(record.source_id, record.trial_relative_path)].append(
                     entry
                 )
+                if crashing_replays:
+                    zero_day_entries.append(
+                        self._base_entry(
+                            record,
+                            mapped_project=mapped_project,
+                            status="replayed",
+                            replays=[
+                                self._serialize_0day_replay_result(item)
+                                for item in crashing_replays
+                            ],
+                        )
+                    )
 
         elapsed_seconds = round(time.monotonic() - started_at, 6)
         physical_replay_tasks_per_second = (
@@ -492,6 +516,12 @@ class ReplayEngine:
             naive_replay_tasks / physical_replay_tasks
             if physical_replay_tasks > 0
             else 0.0
+        )
+        # These counters reflect the emitted crash-only 0day view, not
+        # deduplicated physical replay tasks.
+        summary["0day_count"] = len(zero_day_entries)
+        summary["crashing_replay_count"] = sum(
+            len(entry["replays"]) for entry in zero_day_entries
         )
         summary.update(
             {
@@ -530,6 +560,10 @@ class ReplayEngine:
         )
         (self.output_dir / "pov-to-crash-map.json").write_text(
             json.dumps(global_entries, indent=2),
+            encoding="utf-8",
+        )
+        (self.output_dir / "0day.json").write_text(
+            json.dumps(zero_day_entries, indent=2),
             encoding="utf-8",
         )
         for (source_id, trial_relative_path), entries in sorted(trial_entries.items()):
