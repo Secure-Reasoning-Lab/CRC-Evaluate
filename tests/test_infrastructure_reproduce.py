@@ -323,6 +323,34 @@ class TestLeakSanitizerHandling:
         )
 
 
+class TestClassifyReproduceResult:
+    """Tests for shared reproduce result classification."""
+
+    def test_classifies_success_timeout_and_leak_only_as_not_crashes(self, infra):
+        ok = infra.classify_reproduce_result(exit_code=0, stdout="ok", stderr="")
+        timeout = infra.classify_reproduce_result(exit_code=124, stdout="", stderr="")
+        leak = infra.classify_reproduce_result(
+            exit_code=1,
+            stdout="",
+            stderr="==ERROR: LeakSanitizer: detected memory leaks",
+        )
+
+        assert ok.crashed is False
+        assert timeout.crashed is False
+        assert timeout.exit_code == 124
+        assert leak.crashed is False
+
+    def test_classifies_non_timeout_non_leak_exit_as_crash(self, infra):
+        crash = infra.classify_reproduce_result(
+            exit_code=77,
+            stdout="AddressSanitizer:DEADLYSIGNAL",
+            stderr="",
+        )
+
+        assert crash.crashed is True
+        assert crash.exit_code == 77
+
+
 class TestEnsureOssFuzzReady:
     """Test race condition prevention in ensure_oss_fuzz_ready()."""
 

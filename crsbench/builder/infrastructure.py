@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from crsbench.benchmark.discovery import discover_fuzz_targets
 from crsbench.builder.replay_policy import (
     REPLAY_MODE_ENFORCE,
     replay_install_script,
@@ -987,6 +988,10 @@ class OSSFuzzInfrastructure:
         harness_path = build_path / harness_name
         return harness_path.exists() and harness_path.is_file()
 
+    def list_fuzz_targets(self, project_name: str) -> list[str]:
+        """List fuzz targets in the build output for a project."""
+        return discover_fuzz_targets(self.get_build_output_path(project_name))
+
     # =========================================================================
     # Cleanup methods (shared by POV, patch, coverage verification)
     # =========================================================================
@@ -1419,6 +1424,30 @@ class OSSFuzzInfrastructure:
             fallback_used=False,
             stdout=result.stdout or "",
             stderr=result.stderr or "",
+        )
+
+    def build_project_fuzzers(
+        self,
+        project_name: str,
+        *,
+        sanitizer: str = "address",
+        timeout: int = 3600,
+    ) -> FuzzerBuildResult:
+        """Build a plain OSS-Fuzz project without CRSBench variant metadata."""
+        cmd = [
+            "python3",
+            str(self._helper_script),
+            "build_fuzzers",
+            "--sanitizer",
+            sanitizer,
+            *self._locale_helper_env_args(),
+            project_name,
+        ]
+        result = run_with_timeout(cmd, timeout=timeout, cwd=self.oss_fuzz_path)
+        return FuzzerBuildResult(
+            success=result.returncode == 0,
+            stdout=result.stdout if isinstance(result.stdout, str) else "",
+            stderr=result.stderr if isinstance(result.stderr, str) else "",
         )
 
     def get_patch_superset_map(self, benchmark_path: Path) -> dict[int, int]:
@@ -1864,6 +1893,45 @@ class OSSFuzzInfrastructure:
         self.cleanup_build_outputs(variant_name)
         self.cleanup_source(variant_name)
 
+    def classify_reproduce_result(
+        self,
+        *,
+        exit_code: int,
+        stdout: str,
+        stderr: str,
+    ) -> ReproduceOutput:
+        """Classify helper.py reproduce output with shared crash semantics."""
+        if exit_code == 0:
+            return ReproduceOutput(
+                crashed=False,
+                stdout=stdout,
+                stderr=stderr,
+                exit_code=0,
+            )
+        if exit_code == EXIT_CODE_TIMEOUT:
+            return ReproduceOutput(
+                crashed=False,
+                stdout=stdout,
+                stderr=stderr,
+                exit_code=EXIT_CODE_TIMEOUT,
+            )
+
+        combined_output = f"{stdout}\n{stderr}"
+        if _is_leak_only_exit(combined_output):
+            return ReproduceOutput(
+                crashed=False,
+                stdout=stdout,
+                stderr=stderr,
+                exit_code=exit_code,
+            )
+
+        return ReproduceOutput(
+            crashed=True,
+            stdout=stdout,
+            stderr=stderr,
+            exit_code=exit_code,
+        )
+
     def reproduce(
         self,
         project_name: str,
@@ -1943,59 +2011,32 @@ class OSSFuzzInfrastructure:
             # Decode output with error handling for binary content
             stdout = result.stdout.decode("utf-8", errors="replace")
             stderr = result.stderr.decode("utf-8", errors="replace")
-
-            # Handle exit codes explicitly
-            if result.returncode == 0:
+            classification = self.classify_reproduce_result(
+                exit_code=result.returncode,
+                stdout=stdout,
+                stderr=stderr,
+            )
+            if classification.exit_code == 0:
                 reproduce_logger.debug(
                     f"{req_prefix}{pov_prefix}{project_name}/{harness} did not crash"
                 )
-                return ReproduceOutput(
-                    crashed=False,
-                    stdout=stdout,
-                    stderr=stderr,
-                    exit_code=0,
-                )
-            if result.returncode == EXIT_CODE_TIMEOUT:
+            elif classification.exit_code == EXIT_CODE_TIMEOUT:
                 reproduce_logger.debug(
                     f"{req_prefix}{pov_prefix}{project_name}/{harness} "
                     "timed out (exit code 124)"
                 )
-                return ReproduceOutput(
-                    crashed=False,
-                    stdout=stdout,
-                    stderr=stderr,
-                    exit_code=124,
+            elif classification.crashed:
+                logger.debug(
+                    f"{req_prefix}{pov_prefix}{project_name}/{harness} crashed "
+                    f"(exit code {classification.exit_code})"
                 )
-
-            combined_output = f"{stdout}\n{stderr}"
-
-            # Check for LeakSanitizer-only exit (not a real crash)
-            # -detect_leaks=0 flag may not suppress ASAN_OPTIONS=detect_leaks=1
-            if _is_leak_only_exit(combined_output):
+            else:
                 reproduce_logger.debug(
                     f"{req_prefix}{pov_prefix}{project_name}/{harness} "
-                    f"LeakSanitizer only (exit code {result.returncode}), not a crash"
+                    f"LeakSanitizer only (exit code {classification.exit_code}), "
+                    "not a crash"
                 )
-                return ReproduceOutput(
-                    crashed=False,
-                    stdout=stdout,
-                    stderr=stderr,
-                    exit_code=result.returncode,
-                )
-
-            # Keep origin/main semantics:
-            # any non-zero exit (except 124 and leak-only) is treated as crash.
-            logger.debug(
-                f"{req_prefix}{pov_prefix}{project_name}/{harness} crashed "
-                f"(exit code {result.returncode})"
-            )
-
-            return ReproduceOutput(
-                crashed=True,
-                stdout=stdout,
-                stderr=stderr,
-                exit_code=result.returncode,
-            )
+            return classification
 
         except subprocess.TimeoutExpired:
             # Our subprocess timeout (shouldn't happen with grace period)
