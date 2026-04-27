@@ -111,10 +111,16 @@ Examples:
         dest="remote_dir",
         help="Absolute path on workers containing the experiment tree",
     )
-    teardown_p.add_argument(
+    teardown_collect_behavior = teardown_p.add_mutually_exclusive_group()
+    teardown_collect_behavior.add_argument(
         "--timestamp",
         action="store_true",
         help="Collect artifacts into a fresh timestamped sibling directory",
+    )
+    teardown_collect_behavior.add_argument(
+        "--skip-collect",
+        action="store_true",
+        help="Delete VMs without collecting artifacts or remote logs",
     )
 
     # collect

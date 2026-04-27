@@ -165,7 +165,9 @@ The shared cloud control plane includes:
   with `--all`, `--role`, or repeated `--instance`; ambiguous selectors must
   not implicitly widen to multiple streams
 - `cloud collect`: retrieve worker artifacts plus role diagnostics
-- `cloud teardown`: collect first, then reclaim the fleet
+- `cloud teardown`: collect first, then reclaim the fleet unless the operator
+  explicitly requests `--skip-collect`, in which case teardown may delete the
+  fleet without collecting artifacts or remote logs
 
 Shared reconnect semantics:
 

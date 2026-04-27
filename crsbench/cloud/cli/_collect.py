@@ -55,6 +55,12 @@ class _CollectLiveInstanceResult:
     staged_collection: StagedArtifactCollection | None = None
 
 
+@dataclass(frozen=True)
+class _DestinationOverwriteDecision:
+    destination: Path | None
+    skip_collection: bool = False
+
+
 def _launch_state_collects_experiment_artifacts(launch_state) -> bool:
     return launch_state is not None and launch_state.launch_mode == "reeval"
 
@@ -146,7 +152,7 @@ def run_collect(args: argparse.Namespace) -> int:
                 experiment_name,
             )
         else:
-            resolved_destination = _confirm_destination_overwrite(
+            decision = _confirm_destination_overwrite(
                 base_destination,
                 force=args.force,
                 timestamp_destination_factory=lambda: _fresh_timestamp_destination(
@@ -154,9 +160,9 @@ def run_collect(args: argparse.Namespace) -> int:
                     experiment_name,
                 ),
             )
-            if resolved_destination is None:
+            if decision.destination is None:
                 return 1
-            destination = resolved_destination
+            destination = decision.destination
 
     remote_experiment_dir = resolve_remote_experiment_dir(
         context.remote_experiment_root,
@@ -300,10 +306,11 @@ def _confirm_destination_overwrite(
     *,
     force: bool,
     timestamp_destination_factory,
-) -> Path | None:
+    allow_skip_collection: bool = False,
+) -> _DestinationOverwriteDecision:
     """Gate collection when the local destination already exists."""
     if force or not destination.exists():
-        return destination
+        return _DestinationOverwriteDecision(destination=destination)
 
     marker = read_collect_marker(destination)
     marker_path = collect_marker_path(destination)
@@ -324,32 +331,56 @@ def _confirm_destination_overwrite(
     logger.warning(
         "Rerun with --force to skip this prompt or --timestamp for a fresh sibling."
     )
+    if allow_skip_collection:
+        logger.warning(
+            "Rerun with --skip-collect to delete instances without collecting."
+        )
 
     if not sys.stdin.isatty():
-        logger.error(
+        message = (
             "Local destination already exists and stdin is not interactive. "
             "Rerun with --force to merge into it or --timestamp for a fresh sibling."
         )
-        return None
+        if allow_skip_collection:
+            message = (
+                "Local destination already exists and stdin is not interactive. "
+                "Rerun with --force to merge into it, --timestamp for a fresh "
+                "sibling, or --skip-collect to delete without collecting."
+            )
+        logger.error(message)
+        return _DestinationOverwriteDecision(destination=None)
+
+    prompt = "Continue and merge into the existing destination? [Y/n/t] "
+    if allow_skip_collection:
+        prompt = "Continue and merge into the existing destination? [Y/n/t/s] "
+
+    invalid_answer_message = "Please answer y, yes, n, no, t, or timestamp."
+    if allow_skip_collection:
+        invalid_answer_message = (
+            "Please answer y, yes, n, no, t, timestamp, s, or skip."
+        )
 
     while True:
         try:
-            answer = (
-                input("Continue and merge into the existing destination? [Y/n/t] ")
-                .strip()
-                .lower()
-            )
+            answer = input(prompt).strip().lower()
         except (EOFError, KeyboardInterrupt):
             logger.info("Cancelled.")
-            return None
+            return _DestinationOverwriteDecision(destination=None)
         if answer in {"", "y", "yes"}:
-            return destination
+            return _DestinationOverwriteDecision(destination=destination)
         if answer in {"n", "no"}:
             logger.info("Cancelled.")
-            return None
+            return _DestinationOverwriteDecision(destination=None)
         if answer in {"t", "timestamp"}:
-            return timestamp_destination_factory()
-        logger.warning("Please answer y, yes, n, no, t, or timestamp.")
+            return _DestinationOverwriteDecision(
+                destination=timestamp_destination_factory()
+            )
+        if allow_skip_collection and answer in {"s", "skip"}:
+            return _DestinationOverwriteDecision(
+                destination=None,
+                skip_collection=True,
+            )
+        logger.warning(invalid_answer_message)
 
 
 def _format_collect_timestamp(value: str | datetime | None = None) -> str:
