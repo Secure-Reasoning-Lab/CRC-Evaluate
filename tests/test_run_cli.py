@@ -112,3 +112,56 @@ def test_run_gen_config_tui_passes_config_path_to_app() -> None:
 
     assert result == 0
     mock_main.assert_called_once_with(config_path=args.config_path)
+
+
+def test_replay_povs_cli_accepts_repeated_source_dir() -> None:
+    args = _parse(
+        [
+            "crsbench",
+            "replay-povs",
+            "--source-dir",
+            "experiments/run-a",
+            "--source-dir",
+            "experiments/run-b",
+            "--output",
+            "out/replay",
+        ]
+    )
+
+    assert args.command == "replay-povs"
+    assert args.source_dirs == [
+        Path("experiments/run-a"),
+        Path("experiments/run-b"),
+    ]
+    assert args.output == Path("out/replay")
+
+
+def test_replay_povs_cli_sets_handler() -> None:
+    args = _parse(
+        [
+            "crsbench",
+            "replay-povs",
+            "--source-dir",
+            "experiments/run-a",
+            "--output",
+            "out/replay",
+        ]
+    )
+
+    assert args.func is run_experiment.run_replay_povs
+
+
+def test_main_dispatches_replay_povs() -> None:
+    args = Namespace(command="replay-povs")
+
+    with (
+        patch.object(run_experiment, "parse_arguments", return_value=args),
+        patch.object(
+            run_experiment, "run_replay_povs", return_value=0
+        ) as mock_replay_povs,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        run_experiment.main()
+
+    assert exc_info.value.code == 0
+    mock_replay_povs.assert_called_once_with(args)

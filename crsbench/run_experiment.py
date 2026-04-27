@@ -56,6 +56,10 @@ from crsbench.distributed.queue_monitor import (
     get_experiment_queue_stats as get_shared_queue_stats,
 )
 from crsbench.evaluation.cleanup import cleanup_trial_directory
+from crsbench.evaluation.replay.cli import (
+    add_replay_povs_subparser,
+    run_replay_povs,
+)
 from crsbench.evaluation.results import TrialMetadata, TrialResult
 from crsbench.evaluation.trial_paths import (
     experiment_dir as resolve_experiment_dir,
@@ -473,6 +477,9 @@ Examples:
     )
 
     add_coverage_subparser(subparsers)
+
+    # 'replay-povs' subcommand - replay discovered POVs against OSS-Fuzz
+    add_replay_povs_subparser(subparsers)
 
     # 'report' subcommand - report generation
     from crsbench.reporting.cli import add_report_subparser
@@ -3279,6 +3286,9 @@ def main() -> None:
         from crsbench.evaluation.coverage.cli.coverage_command import run_coverage
 
         sys.exit(run_coverage(args))
+
+    if args.command == "replay-povs":
+        sys.exit(run_replay_povs(args))
 
     if args.command == "patch-verify":
         # Handle patch-verify command
