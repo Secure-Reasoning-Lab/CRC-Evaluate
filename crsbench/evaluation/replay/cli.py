@@ -74,6 +74,23 @@ def add_replay_povs_subparser(subparsers: argparse._SubParsersAction) -> None:
         help="Number of replay jobs to run in parallel",
     )
     parser.add_argument(
+        "--group-jobs",
+        type=int,
+        default=1,
+        help=(
+            "Number of (project, sanitizer) replay groups to process in parallel. "
+            "Each group still uses up to --jobs warm replay sessions."
+        ),
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Reuse completed replay groups from --output when the discovered "
+            "input signature still matches, and rerun only unfinished groups"
+        ),
+    )
+    parser.add_argument(
         "--per-pov-timeout",
         type=int,
         default=180,
@@ -98,6 +115,8 @@ def run_replay_povs(args: argparse.Namespace) -> int:
 
     if args.jobs < 1:
         raise SystemExit("--jobs must be at least 1")
+    if args.group_jobs < 1:
+        raise SystemExit("--group-jobs must be at least 1")
     if args.per_pov_timeout < 1:
         raise SystemExit("--per-pov-timeout must be at least 1")
 
@@ -129,6 +148,8 @@ def run_replay_povs(args: argparse.Namespace) -> int:
         projects_root=projects_root,
         output_dir=output_dir,
         jobs=args.jobs,
+        group_jobs=args.group_jobs,
+        resume=args.resume,
         per_pov_timeout=args.per_pov_timeout,
     )
     engine.run(records, discovery_stats=discovery_stats, source_dirs=source_dirs)

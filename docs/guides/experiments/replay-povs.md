@@ -37,7 +37,7 @@ Important:
 ## Example
 
 Replay POVs from two historical experiment trees, reusing up to eight warm
-sessions per `(project, sanitizer)` group:
+sessions per `(project, sanitizer)` group and running up to two groups at once:
 
 ```bash
 uv run crsbench replay-povs \
@@ -47,6 +47,8 @@ uv run crsbench replay-povs \
   --oss-fuzz-path third_party/oss-fuzz \
   --sync-projects \
   --jobs 8 \
+  --group-jobs 2 \
+  --resume \
   --per-pov-timeout 180
 ```
 
@@ -65,6 +67,8 @@ Useful filters:
 - repeat `--benchmark <name>` to limit replay to selected benchmarks
 - repeat `--trial <id>` to limit replay to selected trial paths
 - use a larger `--jobs` value to widen the warm-session pool for one replay group
+- use `--group-jobs` to let different `(project, sanitizer)` groups run at the same time; same-project groups still serialize because they share one `build/out/<project>` tree
+- use `--resume` to reuse cleanly finished `(project, sanitizer)` groups already checkpointed under the same output directory and rerun only unfinished or changed groups
 
 Discovery-only note:
 
@@ -94,6 +98,13 @@ project, then reuse the result only if the existing `.build-meta.json` matches
 the requested sanitizer and fuzz target discovery still finds at least one
 valid harness in `build/out/<project>/`.
 
+Resource note:
+
+- `--jobs` is per replay group, not global.
+- `--group-jobs` multiplies that fanout across different projects. For example,
+  `--jobs 40 --group-jobs 2` can keep up to eighty warm replay containers live
+  across two projects, plus any active helper build containers.
+
 ## Output Layout
 
 Replay writes the following under `--output`:
@@ -102,11 +113,16 @@ Replay writes the following under `--output`:
 - `summary.json`: aggregate counters for mappings, builds, crashes, timeouts,
   errors, plus `0day_count` and `crashing_replay_count` for the emitted
   crash-only view
+- `0day.log`: append-only JSONL crash stream written as each crashing harness
+  result lands; this is the earliest view during a long scan and is deduplicated
+  across `--resume` reruns
 - `0day.json`: additive crash-only export that keeps only source entries with at
   least one crashing replay, and within those entries keeps only crashing replay
   rows
 - `pov-to-crash-map.json`: full mapping from original POV provenance to replay
   artifacts, including non-crashing replay rows
+- `.state/groups/<project>/<sanitizer>/group-result.json`: completed replay-group
+  checkpoints used by `--resume`
 - `artifacts/<project>/<sanitizer>/<target-harness>/<pov-hash>/`: one physical
   replay artifact directory
 - `trials/<source-id>/<trial-relative-path>/pov-index.json`: per-trial replay
@@ -133,6 +149,11 @@ and omit `stdout` and `stderr`, while keeping crash-focused fields such as
 harness, sanitizer, exit code, duration, artifact directory, sanitizer log,
 session restart, and error message.
 
+`0day.log` is intentionally more granular than `0day.json`: each line is one
+source POV plus one crashing replay row, appended immediately after that harness
+finishes. The final `0day.json` later folds those crashes back into one entry
+per source POV.
+
 ## Operational Notes
 
 - Replay only scans successful bug-finding trials with visible files in
@@ -140,6 +161,9 @@ session restart, and error message.
 - Missing or unsupported mappings are recorded in the output JSON instead of
   aborting the whole run.
 - A build failure only blocks the affected `(project, sanitizer)` group.
+- `--resume` only reuses groups that finished cleanly and whose discovered input
+  signature still matches the current source records. Interrupted or erroring
+  groups rerun from scratch on the next invocation.
 - If a rebuild is needed, replay clears the old plain-build metadata before
   invoking `helper.py build_fuzzers`, so a failed rebuild is not treated as a
   reusable cache hit later.

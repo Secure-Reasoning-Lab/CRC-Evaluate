@@ -7,7 +7,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import yaml
 
@@ -216,6 +216,7 @@ class WarmReplaySessionPool(AbstractContextManager["WarmReplaySessionPool"]):
         self,
         tasks: list[ReplayTask],
         timeout: int,
+        on_result: Callable[[ReplayTask, SessionReplayResult], None] | None = None,
     ) -> dict[ReplayTask, SessionReplayResult]:
         if not tasks:
             return {}
@@ -228,10 +229,15 @@ class WarmReplaySessionPool(AbstractContextManager["WarmReplaySessionPool"]):
             session: WarmReplaySession,
             shard: list[ReplayTask],
         ) -> dict[ReplayTask, SessionReplayResult]:
-            return {
-                task: session.run(task.target_harness, task.pov_path, timeout=timeout)
-                for task in shard
-            }
+            shard_results: dict[ReplayTask, SessionReplayResult] = {}
+            for task in shard:
+                result = session.run(
+                    task.target_harness, task.pov_path, timeout=timeout
+                )
+                shard_results[task] = result
+                if on_result is not None:
+                    on_result(task, result)
+            return shard_results
 
         results: dict[ReplayTask, SessionReplayResult] = {}
         with ThreadPoolExecutor(max_workers=len(self.sessions)) as executor:

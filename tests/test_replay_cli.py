@@ -16,6 +16,8 @@ def _args(
     benchmarks: list[str] | None = None,
     trials: list[str] | None = None,
     jobs: int = 1,
+    group_jobs: int = 1,
+    resume: bool = False,
     per_pov_timeout: int = 180,
     verbose: bool = False,
 ) -> Namespace:
@@ -28,6 +30,8 @@ def _args(
         benchmarks=benchmarks,
         trials=trials,
         jobs=jobs,
+        group_jobs=group_jobs,
+        resume=resume,
         per_pov_timeout=per_pov_timeout,
         verbose=verbose,
     )
@@ -91,6 +95,7 @@ def test_run_replay_povs_wires_discovery_projects_and_engine(tmp_path: Path) -> 
                 source_dirs=[source_dir],
                 output=output_dir,
                 jobs=4,
+                group_jobs=2,
                 per_pov_timeout=12,
                 benchmarks=["bench-a"],
                 trials=["trial-1"],
@@ -112,6 +117,8 @@ def test_run_replay_povs_wires_discovery_projects_and_engine(tmp_path: Path) -> 
         projects_root=projects_root.resolve(),
         output_dir=output_dir.resolve(),
         jobs=4,
+        group_jobs=2,
+        resume=False,
         per_pov_timeout=12,
     )
     engine.run.assert_called_once_with(
@@ -160,5 +167,21 @@ def test_run_replay_povs_uses_explicit_oss_fuzz_path(tmp_path: Path) -> None:
         projects_root=projects_root.resolve(),
         output_dir=output_dir.resolve(),
         jobs=1,
+        group_jobs=1,
+        resume=False,
         per_pov_timeout=180,
     )
+
+
+def test_run_replay_povs_rejects_non_positive_group_jobs(tmp_path: Path) -> None:
+    source_dir = tmp_path / "exp-a"
+    source_dir.mkdir()
+
+    with pytest.raises(SystemExit, match="group-jobs must be at least 1"):
+        run_replay_povs(
+            _args(
+                source_dirs=[source_dir],
+                output=tmp_path / "replay-out",
+                group_jobs=0,
+            )
+        )

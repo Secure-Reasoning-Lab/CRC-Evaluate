@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -64,7 +66,7 @@ class FakeSessionPool:
         self.results_by_task = results_by_task or {}
         self.run_calls: list[tuple[str, str]] = []
 
-    def run_many(self, tasks, timeout: int):
+    def run_many(self, tasks, timeout: int, on_result=None):
         del timeout
         out = {}
         for task in tasks:
@@ -72,9 +74,13 @@ class FakeSessionPool:
             task_key = (task.target_harness, task.pov_content_hash)
             if task_key in self.results_by_task:
                 out[task] = self.results_by_task[task_key]
+                if on_result is not None:
+                    on_result(task, out[task])
                 continue
             if self.result is not None:
                 out[task] = self.result
+                if on_result is not None:
+                    on_result(task, out[task])
                 continue
             raise AssertionError(
                 "FakeSessionPool missing result for task "
@@ -82,6 +88,59 @@ class FakeSessionPool:
                 f"pov_content_hash={task.pov_content_hash}"
             )
         return out
+
+    def close(self) -> None:
+        return None
+
+
+class ConcurrentBuildInfra(FakeInfra):
+    def __init__(self) -> None:
+        super().__init__()
+        self._lock = threading.Lock()
+        self._both_builds_started = threading.Event()
+        self._builds_started = 0
+        self.active_builds = 0
+        self.max_active_builds = 0
+
+    def build_project_fuzzers(
+        self,
+        project_name: str,
+        *,
+        sanitizer: str = "address",
+        timeout: int = 3600,
+    ):
+        del timeout
+        with self._lock:
+            self.build_calls.append((project_name, sanitizer))
+            self._builds_started += 1
+            self.active_builds += 1
+            self.max_active_builds = max(self.max_active_builds, self.active_builds)
+            if self._builds_started >= 2:
+                self._both_builds_started.set()
+
+        self._both_builds_started.wait(timeout=1)
+        time.sleep(0.05)
+
+        with self._lock:
+            self.active_builds -= 1
+
+        return type(
+            "BuildResult",
+            (),
+            {"success": self.build_success, "stdout": "", "stderr": ""},
+        )()
+
+
+class PartialResultPool:
+    def __init__(self, first_result: SessionReplayResult) -> None:
+        self.first_result = first_result
+
+    def run_many(self, tasks, timeout: int, on_result=None):
+        del timeout
+        first_task = tasks[0]
+        if on_result is not None:
+            on_result(first_task, self.first_result)
+        raise RuntimeError("mid-group failure")
 
     def close(self) -> None:
         return None
@@ -446,6 +505,157 @@ def test_replay_engine_marks_build_failures_without_aborting_unrelated_work(
     data = json.loads((tmp_path / "replay-out" / "pov-to-crash-map.json").read_text())
     assert data[0]["status"] == "build_error"
     assert data[0]["replays"] == []
+
+
+def test_replay_engine_can_overlap_independent_project_groups(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "exp-a"
+    latest_projects = tmp_path / "latest-projects"
+    (latest_projects / "curl").mkdir(parents=True)
+    (latest_projects / "zlib").mkdir(parents=True)
+    pov_a = source_dir / "trial-a" / "output" / "povs" / "a.blob"
+    pov_b = source_dir / "trial-b" / "output" / "povs" / "b.blob"
+    pov_a.parent.mkdir(parents=True, exist_ok=True)
+    pov_b.parent.mkdir(parents=True, exist_ok=True)
+    pov_a.write_bytes(b"A")
+    pov_b.write_bytes(b"B")
+    records = [
+        _record(source_dir, "trial-a", pov_a, "aa" * 32, benchmark="bench-a"),
+        _record(source_dir, "trial-b", pov_b, "bb" * 32, benchmark="bench-b"),
+    ]
+    infra = ConcurrentBuildInfra()
+    engine = ReplayEngine(
+        oss_fuzz_path=tmp_path / "oss-fuzz",
+        projects_root=latest_projects,
+        output_dir=tmp_path / "replay-out",
+        jobs=1,
+        group_jobs=2,
+        per_pov_timeout=5,
+        infra=infra,
+        mapping={"bench-a": "curl", "bench-b": "zlib"},
+        session_pool_factory=lambda **_kwargs: FakeSessionPool(
+            _session_result(
+                exit_code=0,
+                stdout="ok",
+                stderr="",
+                duration_seconds=0.1,
+                crashed=False,
+            )
+        ),
+    )
+
+    engine.run(records, source_dirs=[source_dir])
+
+    summary = json.loads((tmp_path / "replay-out" / "summary.json").read_text())
+    assert summary["projects_built"] == 2
+    assert infra.max_active_builds == 2
+    assert sorted(infra.build_calls) == [("curl", "address"), ("zlib", "address")]
+
+
+def test_replay_engine_resume_skips_completed_groups(tmp_path: Path) -> None:
+    source_dir = tmp_path / "exp-a"
+    latest_projects = tmp_path / "latest-projects"
+    (latest_projects / "curl").mkdir(parents=True)
+    (latest_projects / "zlib").mkdir(parents=True)
+    pov_a = source_dir / "trial-a" / "output" / "povs" / "a.blob"
+    pov_b = source_dir / "trial-b" / "output" / "povs" / "b.blob"
+    pov_a.parent.mkdir(parents=True, exist_ok=True)
+    pov_b.parent.mkdir(parents=True, exist_ok=True)
+    pov_a.write_bytes(b"A")
+    pov_b.write_bytes(b"B")
+    record_a = _record(source_dir, "trial-a", pov_a, "aa" * 32, benchmark="bench-a")
+    record_b = _record(source_dir, "trial-b", pov_b, "bb" * 32, benchmark="bench-b")
+
+    first_engine = ReplayEngine(
+        oss_fuzz_path=tmp_path / "oss-fuzz",
+        projects_root=latest_projects,
+        output_dir=tmp_path / "replay-out",
+        jobs=1,
+        group_jobs=1,
+        per_pov_timeout=5,
+        infra=FakeInfra(),
+        mapping={"bench-a": "curl", "bench-b": "zlib"},
+        session_pool_factory=lambda **_kwargs: FakeSessionPool(
+            _session_result(
+                exit_code=0,
+                stdout="ok",
+                stderr="",
+                duration_seconds=0.1,
+                crashed=False,
+            )
+        ),
+    )
+    first_engine.run([record_a], source_dirs=[source_dir])
+
+    resume_infra = FakeInfra()
+    resume_engine = ReplayEngine(
+        oss_fuzz_path=tmp_path / "oss-fuzz",
+        projects_root=latest_projects,
+        output_dir=tmp_path / "replay-out",
+        jobs=1,
+        group_jobs=1,
+        per_pov_timeout=5,
+        infra=resume_infra,
+        resume=True,
+        mapping={"bench-a": "curl", "bench-b": "zlib"},
+        session_pool_factory=lambda **_kwargs: FakeSessionPool(
+            _session_result(
+                exit_code=0,
+                stdout="ok",
+                stderr="",
+                duration_seconds=0.1,
+                crashed=False,
+            )
+        ),
+    )
+    resume_engine.run([record_a, record_b], source_dirs=[source_dir])
+
+    assert resume_infra.build_calls == [("zlib", "address")]
+    data = json.loads((tmp_path / "replay-out" / "pov-to-crash-map.json").read_text())
+    assert {entry["mapped_oss_fuzz_project"] for entry in data} == {"curl", "zlib"}
+
+
+def test_replay_engine_writes_incremental_0day_log_before_group_completes(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "exp-a"
+    latest_projects = tmp_path / "latest-projects"
+    (latest_projects / "curl").mkdir(parents=True)
+    pov = source_dir / "trial-a" / "output" / "povs" / "a.blob"
+    pov.parent.mkdir(parents=True, exist_ok=True)
+    pov.write_bytes(b"CRASH")
+    record = _record(source_dir, "trial-a", pov, "cc" * 32)
+    engine = ReplayEngine(
+        oss_fuzz_path=tmp_path / "oss-fuzz",
+        projects_root=latest_projects,
+        output_dir=tmp_path / "replay-out",
+        jobs=1,
+        group_jobs=1,
+        per_pov_timeout=5,
+        infra=FakeInfra(harnesses=["fuzz-a", "fuzz-b"]),
+        mapping={"afc-curl-delta-01": "curl"},
+        session_pool_factory=lambda **_kwargs: PartialResultPool(
+            _session_result(
+                exit_code=77,
+                stdout="stdout crash",
+                stderr="stderr crash",
+                crashed=True,
+            )
+        ),
+    )
+
+    engine.run([record], source_dirs=[source_dir])
+
+    zero_day_log = tmp_path / "replay-out" / "0day.log"
+    assert zero_day_log.exists()
+    lines = [json.loads(line) for line in zero_day_log.read_text().splitlines()]
+    assert len(lines) == 1
+    assert lines[0]["status"] == "replayed"
+    assert lines[0]["replays"][0]["target_harness"] == "fuzz-a"
+
+    data = json.loads((tmp_path / "replay-out" / "pov-to-crash-map.json").read_text())
+    assert data[0]["status"] == "error"
 
 
 def test_replay_engine_tracks_0day_entries_separately_from_crashing_replays(
