@@ -88,6 +88,12 @@ Replay does not try to infer which historical harness produced a POV. The
 workflow intentionally replays every POV against every current harness for the
 resolved project.
 
+Plain OSS-Fuzz project builds are reused conservatively. Within one
+`--oss-fuzz-path` checkout, concurrent replay commands serialize builds per
+project, then reuse the result only if the existing `.build-meta.json` matches
+the requested sanitizer and fuzz target discovery still finds at least one
+valid harness in `build/out/<project>/`.
+
 ## Output Layout
 
 Replay writes the following under `--output`:
@@ -134,5 +140,8 @@ session restart, and error message.
 - Missing or unsupported mappings are recorded in the output JSON instead of
   aborting the whole run.
 - A build failure only blocks the affected `(project, sanitizer)` group.
+- If a rebuild is needed, replay clears the old plain-build metadata before
+  invoking `helper.py build_fuzzers`, so a failed rebuild is not treated as a
+  reusable cache hit later.
 - A replay timeout restarts the warm container once and retries once before
   recording a timeout outcome.

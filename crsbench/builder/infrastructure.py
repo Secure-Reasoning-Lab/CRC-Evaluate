@@ -479,6 +479,21 @@ class OSSFuzzInfrastructure:
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
+    def _plain_build_lock_file_path(self, project_name: str) -> Path:
+        project = _coverage_lock_token(project_name)
+        return self.oss_fuzz_path / ".crsbench-locks" / f"plain-build-{project}.lock"
+
+    @contextmanager
+    def _acquire_plain_build_lock(self, project_name: str):
+        lock_path = self._plain_build_lock_file_path(project_name)
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("w") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
     def _ensure_replay_hooks_in_image(self, image_name: str, policy) -> bool:
         """Install replay hook files into an image via docker run+commit."""
         if not policy.enabled:
@@ -934,7 +949,7 @@ class OSSFuzzInfrastructure:
             fallback_used=fallback_used,
         )
 
-        metadata_path = build_path / BUILD_METADATA_FILE
+        metadata_path = self._build_metadata_path(variant_name)
         temp_path = metadata_path.with_suffix(".tmp")
         try:
             # Atomic write: write to temp file, then rename
@@ -957,8 +972,7 @@ class OSSFuzzInfrastructure:
         Returns:
             BuildMetadata if found, None otherwise
         """
-        build_path = self.get_build_output_path(variant_name)
-        metadata_path = build_path / BUILD_METADATA_FILE
+        metadata_path = self._build_metadata_path(variant_name)
 
         if not metadata_path.exists():
             return None
@@ -970,6 +984,45 @@ class OSSFuzzInfrastructure:
         except Exception as e:
             logger.warning(f"Failed to read build metadata: {e}")
             return None
+
+    def _build_metadata_path(self, variant_name: str) -> Path:
+        return self.get_build_output_path(variant_name) / BUILD_METADATA_FILE
+
+    def _plain_build_is_reusable(self, project_name: str, *, sanitizer: str) -> bool:
+        safe_project = self._validate_variant_name(project_name)
+        build_path = self.get_build_output_path(safe_project)
+        project_path = self.projects_base / safe_project
+
+        if not build_path.exists() or not project_path.exists():
+            return False
+
+        metadata = self.read_build_metadata(safe_project)
+        if metadata is None:
+            return False
+
+        if metadata.inc_build:
+            logger.debug(
+                f"Plain build cache mismatch for {safe_project}: "
+                "cached build is inc-build metadata"
+            )
+            return False
+
+        if metadata.sanitizer != sanitizer:
+            logger.debug(
+                f"Plain build cache mismatch for {safe_project}: "
+                f"cached sanitizer={metadata.sanitizer}, required={sanitizer}"
+            )
+            return False
+
+        targets = self.list_fuzz_targets(safe_project)
+        if not targets:
+            logger.debug(
+                f"Plain build cache incomplete for {safe_project}: "
+                "no valid fuzz targets discovered"
+            )
+            return False
+
+        return True
 
     def has_harness(self, variant_name: str, harness_name: str) -> bool:
         """Check if a specific harness exists in the build output.
@@ -1434,6 +1487,11 @@ class OSSFuzzInfrastructure:
         timeout: int = 3600,
     ) -> FuzzerBuildResult:
         """Build a plain OSS-Fuzz project without CRSBench variant metadata."""
+        safe_project = self._validate_variant_name(project_name)
+        if self._plain_build_is_reusable(safe_project, sanitizer=sanitizer):
+            logger.debug(f"Reusing existing plain build for {safe_project}")
+            return FuzzerBuildResult(success=True, stdout="", stderr="")
+
         cmd = [
             "python3",
             str(self._helper_script),
@@ -1441,9 +1499,26 @@ class OSSFuzzInfrastructure:
             "--sanitizer",
             sanitizer,
             *self._locale_helper_env_args(),
-            project_name,
+            safe_project,
         ]
-        result = run_with_timeout(cmd, timeout=timeout, cwd=self.oss_fuzz_path)
+        metadata_path = self._build_metadata_path(safe_project)
+
+        with self._acquire_plain_build_lock(safe_project):
+            if self._plain_build_is_reusable(safe_project, sanitizer=sanitizer):
+                logger.debug(
+                    f"Plain build for {safe_project} completed by another process"
+                )
+                return FuzzerBuildResult(success=True, stdout="", stderr="")
+
+            metadata_path.unlink(missing_ok=True)
+            result = run_with_timeout(cmd, timeout=timeout, cwd=self.oss_fuzz_path)
+
+        if result.returncode == 0:
+            self.write_build_metadata(
+                safe_project,
+                inc_build=False,
+                sanitizer=sanitizer,
+            )
         return FuzzerBuildResult(
             success=result.returncode == 0,
             stdout=result.stdout if isinstance(result.stdout, str) else "",

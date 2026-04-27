@@ -54,6 +54,8 @@ The replay command consumes prior trial outputs, resolves each benchmark to a cu
 
 - replay groups work by `(mapped_project, sanitizer)`
 - each group rebuilds the latest project once, then discovers the current fuzz targets from the build output
+- plain latest-project builds are serialized by OSS-Fuzz project within one helper checkout, so concurrent replay commands do not race on the shared `build/out/<project>` directory
+- a prior plain build is reusable only when `.build-meta.json` exists, records a non-inc build for the requested sanitizer, and current fuzz target discovery still finds at least one valid harness
 - every discovered POV is scheduled against every current target harness for that group
 - physical execution is deduplicated by `(mapped_project, sanitizer, target_harness, pov_content_hash)`
 - provenance is never deduplicated away: every original POV instance keeps its own replay index entry even when it shares an artifact directory with another source record
@@ -100,6 +102,10 @@ message.
 8. write artifacts once per physical replay, emit both the full replay mapping and
    crash-only `0day.json`, and re-index them for every original source POV
 
+If another replay process is already building the same OSS-Fuzz project in the
+same checkout, later processes wait on that per-project lock and re-check the
+result after the lock is released instead of rebuilding blindly.
+
 `summary.json` reports `0day_count` and `crashing_replay_count` for the emitted
 crash-only view: source entries included in `0day.json` and crashing replay rows
 kept there, not deduplicated physical replay tasks.
@@ -116,6 +122,7 @@ kept there, not deduplicated physical replay tasks.
 - unresolved mappings produce `missing_mapping` or `unsupported_mapping` without aborting unrelated work
 - a missing latest project directory produces `target_project_missing`
 - build failures produce `build_error` for every record in that `(mapped_project, sanitizer)` group
+- when a rebuild is required, stale plain-build metadata is discarded before the build starts so a failed rebuild cannot leave a false reusable cache marker behind
 - session start or replay runtime failures produce `error`
 - one group's failure must not abort replay for unrelated groups
 
