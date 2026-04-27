@@ -898,3 +898,191 @@ def test_ci_test_report_structured_build_failure_classified(temp_output_dir):
     assert len(rows) == 1
     assert rows[0]["ci_status"] == "BUILD_FAILED"
     assert rows[0]["failure_reason"] == "Patched build failed (exit=1)"
+
+
+def _write_cpv_trial(
+    trial_dir: Path,
+    *,
+    trial_num: int,
+    benchmark: str,
+    harness: str,
+    expected_cpv_ids: list[str],
+    cpv_to_first_pov: dict,
+) -> None:
+    """Helper to scaffold a trial dir with metadata + pov_store + history."""
+    trial_dir.mkdir(parents=True, exist_ok=True)
+    (trial_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "trial_num": trial_num,
+                "crs": "crs-bug-finding-claude-code",
+                "benchmark": benchmark,
+                "harness": harness,
+                "mode": "bug_finding",
+                "build_mode": "delta",
+                "sanitizer": "address",
+            }
+        )
+    )
+    pov_dir = trial_dir / "povs"
+    pov_dir.mkdir(parents=True, exist_ok=True)
+    (pov_dir / "snapshot_history.json").write_text(
+        json.dumps({"expected_cpv_ids": expected_cpv_ids})
+    )
+    (pov_dir / "pov_store.json").write_text(
+        json.dumps({"cpv_to_first_pov": cpv_to_first_pov})
+    )
+
+
+def test_cpv_analysis_emits_row_per_trial_cpv(temp_output_dir):
+    """One row per (trial, cpv) pair, matched flag reflects pov_store."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+
+        # Trial with one expected CPV that was matched.
+        _write_cpv_trial(
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "afc-x"
+            / "harness_a"
+            / "delta"
+            / "address"
+            / "trial-1",
+            trial_num=1,
+            benchmark="afc-x",
+            harness="harness_a",
+            expected_cpv_ids=["cpv_0"],
+            cpv_to_first_pov={
+                "cpv_0": {
+                    "pov_hash": "abc123",
+                    "discovery_ts": 1000.0,
+                    "relative_time": 42.5,
+                }
+            },
+        )
+
+        # Trial with two expected CPVs, one matched one not.
+        _write_cpv_trial(
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "afc-y"
+            / "harness_b"
+            / "delta"
+            / "address"
+            / "trial-2",
+            trial_num=2,
+            benchmark="afc-y",
+            harness="harness_b",
+            expected_cpv_ids=["cpv_0", "cpv_1"],
+            cpv_to_first_pov={
+                "cpv_1": {
+                    "pov_hash": "def456",
+                    "discovery_ts": 2000.0,
+                    "relative_time": 100.0,
+                }
+            },
+        )
+
+        out_path = generator.generate_cpv_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    by_key = {(r["benchmark"], r["cpv_id"]): r for r in rows}
+    assert len(rows) == 3
+
+    matched = by_key[("afc-x", "cpv_0")]
+    assert matched["matched"] == "True"
+    assert matched["time_to_trigger"] == "42.5"
+    assert matched["pov_hash"] == "abc123"
+    assert matched["trial_num"] == "1"
+
+    unmatched = by_key[("afc-y", "cpv_0")]
+    assert unmatched["matched"] == "False"
+    assert unmatched["time_to_trigger"] == ""
+    assert unmatched["pov_hash"] == ""
+
+    matched_y = by_key[("afc-y", "cpv_1")]
+    assert matched_y["matched"] == "True"
+    assert matched_y["time_to_trigger"] == "100.0"
+
+
+def test_cpv_analysis_skips_trial_without_pov_store(temp_output_dir):
+    """Trials missing both pov_store and expected_cpv_ids produce no rows."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+        trial_dir = (
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "afc-x"
+            / "harness_a"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        trial_dir.mkdir(parents=True, exist_ok=True)
+        (trial_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "trial_num": 1,
+                    "crs": "crs-bug-finding-claude-code",
+                    "benchmark": "afc-x",
+                    "harness": "harness_a",
+                    "mode": "bug_finding",
+                    "build_mode": "delta",
+                    "sanitizer": "address",
+                }
+            )
+        )
+
+        out_path = generator.generate_cpv_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert rows == []
+
+
+def test_cpv_analysis_surfaces_unexpected_match(temp_output_dir):
+    """A CPV present in pov_store but not in expected list still appears."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+        _write_cpv_trial(
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "afc-z"
+            / "harness_c"
+            / "delta"
+            / "address"
+            / "trial-1",
+            trial_num=1,
+            benchmark="afc-z",
+            harness="harness_c",
+            expected_cpv_ids=["cpv_0"],
+            cpv_to_first_pov={
+                "cpv_0": {
+                    "pov_hash": "h0",
+                    "discovery_ts": 1.0,
+                    "relative_time": 10.0,
+                },
+                "cpv_extra": {
+                    "pov_hash": "h1",
+                    "discovery_ts": 2.0,
+                    "relative_time": 20.0,
+                },
+            },
+        )
+
+        out_path = generator.generate_cpv_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    cpv_ids = sorted(r["cpv_id"] for r in rows)
+    assert cpv_ids == ["cpv_0", "cpv_extra"]
+    extra = next(r for r in rows if r["cpv_id"] == "cpv_extra")
+    assert extra["matched"] == "True"
+    assert extra["time_to_trigger"] == "20.0"

@@ -322,6 +322,111 @@ class CSVReportGenerator:
         logger.debug(f"Generated patch analysis CSV: {out_path}")
         return out_path
 
+    def generate_cpv_analysis_report(self, experiment_dir: Path) -> Path:
+        """Generate per-(trial, cpv) CSV from per-trial pov_store.json.
+
+        One row per (trial, expected CPV) pair. Reads authoritative match data
+        from ``povs/pov_store.json`` (populated after async verdict drain), so
+        this CSV reflects the trial's final state — unlike the per-snapshot
+        ``pov_verification.json`` which is sealed before drain completes.
+
+        Columns:
+            trial_num, crs, benchmark, harness, mode, run_mode, sanitizer,
+            cpv_id, matched, time_to_trigger, pov_hash, discovery_ts, trial_dir
+        """
+        out_path = self.output_dir / "cpv_analysis.csv"
+        rows: list[dict[str, Any]] = []
+
+        for trial_dir in sorted(experiment_dir.rglob("trial-*")):
+            if not trial_dir.is_dir():
+                continue
+            paths = TrialDir(trial_dir)
+
+            metadata_path = paths.metadata_path
+            if not metadata_path.exists():
+                continue
+            try:
+                metadata = json.loads(metadata_path.read_text())
+            except Exception:
+                continue
+
+            expected_cpvs = self._load_expected_cpv_ids(paths)
+            cpv_to_first_pov = self._load_cpv_to_first_pov(paths)
+
+            # Union of expected and matched ensures we surface unexpected
+            # matches as well as expected-but-unmatched gaps.
+            cpv_ids = sorted(set(expected_cpvs) | set(cpv_to_first_pov.keys()))
+            if not cpv_ids:
+                continue
+
+            base = {
+                "trial_num": metadata.get("trial_num", ""),
+                "crs": metadata.get("crs", ""),
+                "benchmark": metadata.get("benchmark", ""),
+                "harness": metadata.get("harness", ""),
+                "mode": metadata.get("mode", ""),
+                "run_mode": metadata.get("build_mode", ""),
+                "sanitizer": metadata.get("sanitizer", ""),
+                "trial_dir": str(trial_dir),
+            }
+
+            for cpv_id in cpv_ids:
+                match = cpv_to_first_pov.get(cpv_id)
+                row = {
+                    **base,
+                    "cpv_id": cpv_id,
+                    "matched": match is not None,
+                    "time_to_trigger": match.get("relative_time") if match else "",
+                    "pov_hash": match.get("pov_hash") if match else "",
+                    "discovery_ts": match.get("discovery_ts") if match else "",
+                }
+                rows.append(row)
+
+        fieldnames = [
+            "trial_num",
+            "crs",
+            "benchmark",
+            "harness",
+            "mode",
+            "run_mode",
+            "sanitizer",
+            "cpv_id",
+            "matched",
+            "time_to_trigger",
+            "pov_hash",
+            "discovery_ts",
+            "trial_dir",
+        ]
+        self._write_csv_rows(out_path, rows, fieldnames)
+        logger.debug(f"Generated CPV analysis CSV: {out_path}")
+        return out_path
+
+    @staticmethod
+    def _load_expected_cpv_ids(paths: TrialDir) -> list[str]:
+        """Read expected CPV ids from snapshot_history.json (authoritative)."""
+        history_path = paths.pov_snapshot_history_path
+        if not history_path.exists():
+            return []
+        try:
+            data = json.loads(history_path.read_text())
+        except Exception:
+            return []
+        ids = data.get("expected_cpv_ids") or []
+        return [str(x) for x in ids if x]
+
+    @staticmethod
+    def _load_cpv_to_first_pov(paths: TrialDir) -> dict[str, dict[str, Any]]:
+        """Read cpv_to_first_pov from pov_store.json (post-drain truth)."""
+        store_path = paths.pov_store_path
+        if not store_path.exists():
+            return {}
+        try:
+            data = json.loads(store_path.read_text())
+        except Exception:
+            return {}
+        first = data.get("cpv_to_first_pov") or {}
+        return {str(k): v for k, v in first.items() if isinstance(v, dict)}
+
     @staticmethod
     def _resolve_trial_status(trial_dir: Path) -> str:
         if (trial_dir / ".success").exists():
