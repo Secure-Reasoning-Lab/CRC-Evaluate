@@ -137,6 +137,7 @@ def test_build_instance_metadata_includes_vm_bootstrap_policy_and_selector():
         registration=_make_registration(),
         bootstrap_inputs=CloudVmBootstrapInputs(
             prepare_mode="skip_base_images",
+            skip_rts_images=True,
             download_benchmarks="always",
             gitcache=True,
             build_timeout=4321,
@@ -154,6 +155,7 @@ def test_build_instance_metadata_includes_vm_bootstrap_policy_and_selector():
 
     assert metadata[CRSBENCH_DOWNLOAD_DELAY_SEC_KEY] == "10"
     assert payload["prepare_mode"] == "skip_base_images"
+    assert payload["skip_rts_images"] is True
     assert payload["download_benchmarks"] == "always"
     assert payload["gitcache"] is True
     assert payload["build_timeout"] == 4321
@@ -401,6 +403,7 @@ def test_build_evaluator_metadata_embeds_startup_script_and_config_payload(tmp_p
             benchmark_suite="sanity",
             gitcache=True,
             build_timeout=4321,
+            skip_rts_images=True,
         ),
         download_delay_sec=20,
         evaluator_name="gce-evaluator-001",
@@ -421,6 +424,7 @@ def test_build_evaluator_metadata_embeds_startup_script_and_config_payload(tmp_p
     assert metadata[CRSBENCH_DOWNLOAD_DELAY_SEC_KEY] == "20"
     assert payload["gitcache"] is True
     assert payload["build_timeout"] == 4321
+    assert payload["skip_rts_images"] is True
     assert payload["benchmark_init_jobs"] == 2
     assert payload["benchmark_init_cores_per_job"] == 8
 

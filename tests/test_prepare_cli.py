@@ -21,17 +21,25 @@ def test_prepare_parses_defaults() -> None:
     assert args.command == "prepare"
     assert args.coverage is False
     assert args.skip_base_images is False
+    assert args.skip_rts_images is False
     assert args.build_base_images is False
 
 
 def test_prepare_parses_supported_flags() -> None:
     parser = _parser()
     args = parser.parse_args(
-        ["prepare", "--coverage", "--skip-base-images", "--build-base-images"]
+        [
+            "prepare",
+            "--coverage",
+            "--skip-base-images",
+            "--skip-rts-images",
+            "--build-base-images",
+        ]
     )
     assert args.command == "prepare"
     assert args.coverage is True
     assert args.skip_base_images is True
+    assert args.skip_rts_images is True
     assert args.build_base_images is True
 
 
@@ -291,6 +299,7 @@ def test_run_prepare_skip_base_images_skips_rts_prebuild(monkeypatch) -> None:
     args = argparse.Namespace(
         coverage=False,
         skip_base_images=True,
+        skip_rts_images=False,
         build_base_images=False,
     )
 
@@ -326,6 +335,7 @@ def test_run_prepare_rts_prebuild_failure_returns_nonzero(monkeypatch) -> None:
     args = argparse.Namespace(
         coverage=False,
         skip_base_images=False,
+        skip_rts_images=False,
         build_base_images=False,
     )
 
@@ -358,3 +368,42 @@ def test_run_prepare_rts_prebuild_failure_returns_nonzero(monkeypatch) -> None:
 
     assert run_prepare(args) == 1
     assert calls[-1] == "rts"
+
+
+def test_run_prepare_skip_rts_images_skips_rts_prebuild(monkeypatch) -> None:
+    args = argparse.Namespace(
+        coverage=False,
+        skip_base_images=False,
+        skip_rts_images=True,
+        build_base_images=False,
+    )
+
+    monkeypatch.setattr(
+        "crsbench.prepare.cli.ensure_oss_fuzz_root",
+        lambda: "/tmp/oss-fuzz",
+    )
+
+    calls: list[object] = []
+
+    def _run(cmd, **_kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _run)
+
+    def _ensure_all_rts_images():
+        calls.append("rts")
+        raise AssertionError("RTS image preparation should be skipped")
+
+    monkeypatch.setattr(
+        "crsbench.builder.rts.dockerfile_swap.ensure_all_rts_images",
+        _ensure_all_rts_images,
+    )
+    monkeypatch.setattr(
+        "crsbench.prepare.cli.ensure_all_rts_images",
+        _ensure_all_rts_images,
+        raising=False,
+    )
+
+    assert run_prepare(args) == 0
+    assert "rts" not in calls

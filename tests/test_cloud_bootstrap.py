@@ -113,6 +113,7 @@ def test_bootstrap_inputs_from_payload_restores_defaults_and_explicit_fields():
     inputs = bootstrap_inputs_from_payload(
         {
             "prepare_mode": "skip_base_images",
+            "skip_rts_images": True,
             "download_benchmarks": "always",
             "benchmark_suite": "afc-final",
             "gitcache": True,
@@ -126,6 +127,7 @@ def test_bootstrap_inputs_from_payload_restores_defaults_and_explicit_fields():
     )
 
     assert inputs.prepare_mode == "skip_base_images"
+    assert inputs.skip_rts_images is True
     assert inputs.download_benchmarks == "always"
     assert inputs.benchmark_suite == "afc-final"
     assert inputs.gitcache is True
@@ -146,6 +148,7 @@ def test_from_experiment_config_restores_repo_relative_managed_oss_fuzz_paths() 
         mode="full",
         build_timeout=5400,
         max_total_time=20000,
+        rts_enabled=False,
         inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
         experiment_filestore="/tmp/exp",
         report_filestore="/tmp/rep",
@@ -196,6 +199,7 @@ def test_from_experiment_config_restores_repo_relative_managed_oss_fuzz_paths() 
 
     inputs = CloudVmBootstrapInputs.from_experiment_config(config)
 
+    assert inputs.skip_rts_images is True
     assert inputs.benchmarks_root == Path("third_party/oss-fuzz/projects")
     assert inputs.oss_fuzz_path == Path("third_party/oss-fuzz")
     assert inputs.build_timeout == 5400
@@ -262,18 +266,19 @@ def test_run_benchmark_download_with_delay_sleeps_before_download(monkeypatch) -
 def test_run_cloud_vm_bootstrap_reads_download_delay_from_env(
     monkeypatch, tmp_path: Path
 ) -> None:
-    prepare_calls: list[tuple[str, Path]] = []
+    prepare_calls: list[tuple[str, bool, Path]] = []
     download_calls: list[tuple[str | None, int, bool]] = []
 
     def fake_run_prepare(
         prepare_mode: str,
         *,
+        skip_rts_images: bool = False,
         cwd: Path | None = None,
         runner=None,
     ) -> None:
         del runner
         assert cwd is not None
-        prepare_calls.append((prepare_mode, cwd))
+        prepare_calls.append((prepare_mode, skip_rts_images, cwd))
 
     def fake_run_benchmark_download_with_delay(
         selector: CloudBenchmarkSelector,
@@ -303,7 +308,7 @@ def test_run_cloud_vm_bootstrap_reads_download_delay_from_env(
         cwd=tmp_path,
     )
 
-    assert prepare_calls == [("full", tmp_path)]
+    assert prepare_calls == [("full", False, tmp_path)]
     assert download_calls == [("afc-final", 20, True)]
     assert result == [Path("/tmp/benchmarks")]
 
@@ -311,19 +316,20 @@ def test_run_cloud_vm_bootstrap_reads_download_delay_from_env(
 def test_run_cloud_vm_bootstrap_applies_download_delay_to_external_benchmarks(
     monkeypatch, tmp_path: Path
 ) -> None:
-    prepare_calls: list[tuple[str, Path]] = []
+    prepare_calls: list[tuple[str, bool, Path]] = []
     external_calls: list[tuple[tuple[str, ...], Path, Path, int]] = []
     delayed_download_calls: list[tuple[tuple[str, ...], int, bool]] = []
 
     def fake_run_prepare(
         prepare_mode: str,
         *,
+        skip_rts_images: bool = False,
         cwd: Path | None = None,
         runner=None,
     ) -> None:
         del runner
         assert cwd is not None
-        prepare_calls.append((prepare_mode, cwd))
+        prepare_calls.append((prepare_mode, skip_rts_images, cwd))
 
     def fake_prepare_external_benchmarks(
         selector: CloudBenchmarkSelector,
@@ -381,11 +387,12 @@ def test_run_cloud_vm_bootstrap_applies_download_delay_to_external_benchmarks(
             benchmarks=["go-yaml"],
             benchmarks_root=Path("third_party/oss-fuzz/projects"),
             build_timeout=4321,
+            skip_rts_images=True,
         ),
         cwd=tmp_path,
     )
 
-    assert prepare_calls == [("full", tmp_path)]
+    assert prepare_calls == [("full", True, tmp_path)]
     assert external_calls == [
         (("go-yaml",), Path("third_party/oss-fuzz/projects"), tmp_path, 4321)
     ]
@@ -396,19 +403,20 @@ def test_run_cloud_vm_bootstrap_applies_download_delay_to_external_benchmarks(
 def test_run_cloud_vm_bootstrap_skips_external_benchmark_prep_when_policy_is_never(
     monkeypatch, tmp_path: Path
 ) -> None:
-    prepare_calls: list[tuple[str, Path]] = []
+    prepare_calls: list[tuple[str, bool, Path]] = []
     external_calls: list[tuple[tuple[str, ...], Path, Path]] = []
     delayed_download_calls: list[tuple[tuple[str, ...], int, bool]] = []
 
     def fake_run_prepare(
         prepare_mode: str,
         *,
+        skip_rts_images: bool = False,
         cwd: Path | None = None,
         runner=None,
     ) -> None:
         del runner
         assert cwd is not None
-        prepare_calls.append((prepare_mode, cwd))
+        prepare_calls.append((prepare_mode, skip_rts_images, cwd))
 
     def fake_prepare_external_benchmarks(
         selector: CloudBenchmarkSelector,
@@ -467,21 +475,30 @@ def test_run_cloud_vm_bootstrap_skips_external_benchmark_prep_when_policy_is_nev
         cwd=tmp_path,
     )
 
-    assert prepare_calls == [("full", tmp_path)]
+    assert prepare_calls == [("full", False, tmp_path)]
     assert external_calls == []
     assert delayed_download_calls == []
     assert result == []
 
 
 @pytest.mark.parametrize(
-    ("prepare_mode", "expected"),
+    ("prepare_mode", "skip_rts_images", "expected"),
     [
-        ("full", ["crsbench", "prepare"]),
-        ("skip_base_images", ["crsbench", "prepare", "--skip-base-images"]),
+        ("full", False, ["crsbench", "prepare"]),
+        ("full", True, ["crsbench", "prepare", "--skip-rts-images"]),
+        (
+            "skip_base_images",
+            True,
+            ["crsbench", "prepare", "--skip-base-images", "--skip-rts-images"],
+        ),
     ],
 )
-def test_prepare_command_args(prepare_mode: str, expected: list[str]):
-    assert prepare_command_args(prepare_mode) == expected
+def test_prepare_command_args(
+    prepare_mode: str, skip_rts_images: bool, expected: list[str]
+):
+    assert (
+        prepare_command_args(prepare_mode, skip_rts_images=skip_rts_images) == expected
+    )
 
 
 def test_run_prepare_invokes_prepare_command(monkeypatch):
@@ -492,10 +509,13 @@ def test_run_prepare_invokes_prepare_command(monkeypatch):
 
     monkeypatch.setattr(bootstrap_module.subprocess, "run", fake_run)
 
-    run_prepare("skip_base_images")
+    run_prepare("skip_base_images", skip_rts_images=True)
 
     assert commands == [
-        (["crsbench", "prepare", "--skip-base-images"], True),
+        (
+            ["crsbench", "prepare", "--skip-base-images", "--skip-rts-images"],
+            True,
+        ),
     ]
 
 

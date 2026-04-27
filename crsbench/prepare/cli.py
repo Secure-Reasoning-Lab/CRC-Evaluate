@@ -38,6 +38,7 @@ Examples:
   %(prog)s prepare
   %(prog)s prepare --coverage
   %(prog)s prepare --skip-base-images
+  %(prog)s prepare --skip-rts-images
   %(prog)s prepare --build-base-images
         """,
     )
@@ -56,6 +57,11 @@ Examples:
         help="Only bootstrap managed third_party checkout; skip OSS-Fuzz base images",
     )
     parser.add_argument(
+        "--skip-rts-images",
+        action="store_true",
+        help="Skip RTS image preparation while still pulling OSS-Fuzz base images",
+    )
+    parser.add_argument(
         "--build-base-images",
         action="store_true",
         help="Build OSS-Fuzz base images locally via infra/base-images/all.sh",
@@ -65,6 +71,7 @@ Examples:
 
 def run_prepare(args: argparse.Namespace) -> int:
     """Execute local environment preparation."""
+    skip_rts_images = getattr(args, "skip_rts_images", False)
     if getattr(args, "coverage", False):
         if args.skip_base_images or args.build_base_images:
             logger.error(
@@ -154,11 +161,14 @@ def run_prepare(args: argparse.Namespace) -> int:
                 logger.error(aixcc_pull.stderr.strip())
             return aixcc_pull.returncode or 1
 
-    try:
-        ensure_all_rts_images()
-    except (FileNotFoundError, RuntimeError, ValueError, OSError) as e:
-        logger.error(f"Failed to prepare RTS base images: {e}")
-        return 1
+    if skip_rts_images:
+        logger.info("Skipping RTS image preparation (--skip-rts-images)")
+    else:
+        try:
+            ensure_all_rts_images()
+        except (FileNotFoundError, RuntimeError, ValueError, OSError) as e:
+            logger.error(f"Failed to prepare RTS base images: {e}")
+            return 1
 
     if args.build_base_images:
         build_script = oss_fuzz_root / "infra" / "base-images" / "all.sh"

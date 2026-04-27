@@ -511,6 +511,11 @@ Cloud VMs always run `crsbench prepare`. `download_benchmarks: auto` skips the
 VM-side download only when `benchmark_suite: sanity`; other suites download
 before the worker joins Redis.
 
+When the experiment config sets `runtime.rts_enabled: false`, cloud bootstrap
+now runs `crsbench prepare --skip-rts-images` on orchestrators, workers, and
+evaluators. That keeps the normal OSS-Fuzz base-image/bootstrap path intact
+while avoiding RTS image pulls/builds for runs that will never enable RTS.
+
 Cloud VMs also always install the pinned `gitcache` binary in a CRSBench-managed
 bin directory. `gitcache: false` leaves the normal `git` command unchanged.
 `gitcache: true` adds a managed `git -> gitcache` wrapper in the CRSBench PATH,

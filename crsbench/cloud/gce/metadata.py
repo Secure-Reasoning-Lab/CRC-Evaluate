@@ -158,6 +158,7 @@ def build_bootstrap_payload(
     payload.update(
         {
             "prepare_mode": bootstrap_inputs.prepare_mode,
+            "skip_rts_images": bootstrap_inputs.skip_rts_images,
             "download_benchmarks": bootstrap_inputs.download_benchmarks,
             "gitcache": bootstrap_inputs.gitcache,
             "build_timeout": bootstrap_inputs.build_timeout,
@@ -211,6 +212,7 @@ def build_evaluator_bootstrap_payload(
     payload.update(
         {
             "prepare_mode": bootstrap_inputs.prepare_mode,
+            "skip_rts_images": bootstrap_inputs.skip_rts_images,
             "download_benchmarks": bootstrap_inputs.download_benchmarks,
             "gitcache": bootstrap_inputs.gitcache,
             "build_timeout": bootstrap_inputs.build_timeout,

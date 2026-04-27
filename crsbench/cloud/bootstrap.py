@@ -108,6 +108,7 @@ class CloudVmBootstrapInputs:
     """Provider-neutral bootstrap inputs for one cloud VM."""
 
     prepare_mode: PrepareMode = "full"
+    skip_rts_images: bool = False
     download_benchmarks: DownloadBenchmarksMode = "auto"
     gitcache: bool = False
     build_timeout: int = DEFAULT_DISCOVERY_BUILD_TIMEOUT
@@ -135,6 +136,7 @@ class CloudVmBootstrapInputs:
         )
         return cls(
             prepare_mode=bootstrap.prepare_mode if bootstrap is not None else "full",
+            skip_rts_images=not config.rts_enabled,
             download_benchmarks=(
                 bootstrap.download_benchmarks if bootstrap is not None else "auto"
             ),
@@ -163,6 +165,7 @@ def bootstrap_inputs_from_payload(payload: dict[str, Any]) -> CloudVmBootstrapIn
     """Decode VM bootstrap inputs from the worker metadata payload."""
     return CloudVmBootstrapInputs(
         prepare_mode=_coerce_prepare_mode(payload.get("prepare_mode")),
+        skip_rts_images=bool(payload.get("skip_rts_images", False)),
         download_benchmarks=_coerce_download_benchmarks_mode(
             payload.get("download_benchmarks")
         ),
@@ -211,24 +214,31 @@ def should_download_benchmarks(inputs: CloudVmBootstrapInputs) -> bool:
     return True
 
 
-def prepare_command_args(prepare_mode: PrepareMode) -> list[str]:
+def prepare_command_args(
+    prepare_mode: PrepareMode,
+    *,
+    skip_rts_images: bool = False,
+) -> list[str]:
     """Return the `crsbench prepare` command for the selected mode."""
     cmd = ["crsbench", "prepare"]
-    if prepare_mode == "full":
-        return cmd
     if prepare_mode == "skip_base_images":
-        return [*cmd, "--skip-base-images"]
-    raise ValueError(f"Unsupported prepare mode: {prepare_mode}")
+        cmd.append("--skip-base-images")
+    elif prepare_mode != "full":
+        raise ValueError(f"Unsupported prepare mode: {prepare_mode}")
+    if skip_rts_images:
+        cmd.append("--skip-rts-images")
+    return cmd
 
 
 def run_prepare(
     prepare_mode: PrepareMode,
     *,
+    skip_rts_images: bool = False,
     cwd: Path | None = None,
     runner: Callable[..., object] | None = None,
 ) -> None:
     """Run `crsbench prepare` from a cloud VM checkout."""
-    cmd = prepare_command_args(prepare_mode)
+    cmd = prepare_command_args(prepare_mode, skip_rts_images=skip_rts_images)
     if runner is None:
         if cwd is None:
             subprocess.run(cmd, check=True)
@@ -345,7 +355,12 @@ def run_cloud_vm_bootstrap(
     download_delay_sec: int | None = None,
 ) -> list[Path]:
     """Run the shared prepare/download bootstrap sequence for a cloud VM."""
-    run_prepare(inputs.prepare_mode, cwd=cwd, runner=runner)
+    run_prepare(
+        inputs.prepare_mode,
+        skip_rts_images=inputs.skip_rts_images,
+        cwd=cwd,
+        runner=runner,
+    )
     resolved_download_delay_sec = _resolve_download_delay_sec(download_delay_sec)
     if not should_download_benchmarks(inputs):
         return []
