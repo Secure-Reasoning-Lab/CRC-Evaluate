@@ -117,6 +117,7 @@ def test_bootstrap_inputs_from_payload_restores_defaults_and_explicit_fields():
             "gitcache": True,
             "benchmarks_root": "benchmarks",
             "benchmark_suites_root": "benchmark-suites-custom",
+            "oss_fuzz_path": "third_party/oss-fuzz-custom",
         }
     )
 
@@ -127,6 +128,67 @@ def test_bootstrap_inputs_from_payload_restores_defaults_and_explicit_fields():
     assert inputs.benchmarks is None
     assert inputs.benchmarks_root == Path("benchmarks")
     assert inputs.benchmark_suites_root == Path("benchmark-suites-custom")
+    assert inputs.oss_fuzz_path == Path("third_party/oss-fuzz-custom")
+
+
+def test_from_experiment_config_restores_repo_relative_managed_oss_fuzz_paths() -> None:
+    repo_root = bootstrap_module.CRSBENCH_REPO_ROOT
+    config = ExperimentConfig(
+        experiment="cloud-bootstrap-managed-oss-fuzz",
+        trials=1,
+        mode="full",
+        max_total_time=20000,
+        inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
+        experiment_filestore="/tmp/exp",
+        report_filestore="/tmp/rep",
+        benchmarks=["go-yaml"],
+        benchmarks_root=str(repo_root / "third_party" / "oss-fuzz" / "projects"),
+        oss_fuzz_path=str(repo_root / "third_party" / "oss-fuzz"),
+        crs_compose={"test-crs": {"num_cores": 1}},
+        cloud={
+            "bootstrap": {"download_benchmarks": "auto"},
+            "providers": {
+                "gce": {
+                    "project": "test-project",
+                    "profile_defaults": {
+                        "machine_type": "e2-standard-4",
+                        "boot_disk_size_gb": 100,
+                        "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+                        "service_account_email": "crsbench@test-project.iam.gserviceaccount.com",
+                        "owner_label": "team-crs",
+                    },
+                    "instance_profiles": {
+                        "gce-orchestrator-default": {
+                            "service_account_email": "crsbench-orchestrator@test-project.iam.gserviceaccount.com",
+                        },
+                        "gce-worker-default": {
+                            "service_account_email": "crsbench-worker@test-project.iam.gserviceaccount.com",
+                        },
+                    },
+                }
+            },
+            "orchestrator": {
+                "zone": "us-central1-a",
+                "instance_profile": "gce-orchestrator-default",
+            },
+            "workers": {
+                "defaults": {
+                    "instance_profile": "gce-worker-default",
+                    "count": 1,
+                },
+                "placements": [
+                    {
+                        "zone": "us-central1-a",
+                    }
+                ],
+            },
+        },
+    )
+
+    inputs = CloudVmBootstrapInputs.from_experiment_config(config)
+
+    assert inputs.benchmarks_root == Path("third_party/oss-fuzz/projects")
+    assert inputs.oss_fuzz_path == Path("third_party/oss-fuzz")
 
 
 def test_build_download_delay_schedule_uses_conservative_priority_waves() -> None:
@@ -234,12 +296,12 @@ def test_run_cloud_vm_bootstrap_reads_download_delay_from_env(
     assert result == [Path("/tmp/benchmarks")]
 
 
-def test_run_cloud_vm_bootstrap_prepares_external_benchmarks_even_when_policy_is_never(
+def test_run_cloud_vm_bootstrap_applies_download_delay_to_external_benchmarks(
     monkeypatch, tmp_path: Path
 ) -> None:
     prepare_calls: list[tuple[str, Path]] = []
     external_calls: list[tuple[tuple[str, ...], Path, Path]] = []
-    delayed_download_calls: list[tuple[str | None, int, bool]] = []
+    delayed_download_calls: list[tuple[tuple[str, ...], int, bool]] = []
 
     def fake_run_prepare(
         prepare_mode: str,
@@ -255,8 +317,10 @@ def test_run_cloud_vm_bootstrap_prepares_external_benchmarks_even_when_policy_is
         selector: CloudBenchmarkSelector,
         *,
         cwd: Path | None,
+        oss_fuzz_path: Path = Path("third_party/oss-fuzz"),
     ) -> list[Path] | None:
         assert cwd is not None
+        assert oss_fuzz_path == Path("third_party/oss-fuzz")
         external_calls.append(
             (
                 tuple(selector.benchmark_names()),
@@ -274,7 +338,86 @@ def test_run_cloud_vm_bootstrap_prepares_external_benchmarks_even_when_policy_is
     ) -> list[Path]:
         delayed_download_calls.append(
             (
-                selector.benchmark_suite,
+                tuple(selector.benchmark_names()),
+                download_delay_sec,
+                download_fn is not None,
+            )
+        )
+        assert download_fn is not None
+        return download_fn(selector)
+
+    monkeypatch.setenv("CRSBENCH_DOWNLOAD_DELAY_SEC", "20")
+    monkeypatch.setattr(bootstrap_module, "run_prepare", fake_run_prepare)
+    monkeypatch.setattr(
+        bootstrap_module,
+        "_prepare_external_benchmarks",
+        fake_prepare_external_benchmarks,
+    )
+    monkeypatch.setattr(
+        bootstrap_module,
+        "run_benchmark_download_with_delay",
+        fake_run_benchmark_download_with_delay,
+    )
+
+    result = run_cloud_vm_bootstrap(
+        CloudVmBootstrapInputs(
+            benchmarks=["go-yaml"],
+            benchmarks_root=Path("third_party/oss-fuzz/projects"),
+        ),
+        cwd=tmp_path,
+    )
+
+    assert prepare_calls == [("full", tmp_path)]
+    assert external_calls == [
+        (("go-yaml",), Path("third_party/oss-fuzz/projects"), tmp_path)
+    ]
+    assert delayed_download_calls == [(("go-yaml",), 20, True)]
+    assert result == [tmp_path / "third_party" / "oss-fuzz" / "projects" / "go-yaml"]
+
+
+def test_run_cloud_vm_bootstrap_skips_external_benchmark_prep_when_policy_is_never(
+    monkeypatch, tmp_path: Path
+) -> None:
+    prepare_calls: list[tuple[str, Path]] = []
+    external_calls: list[tuple[tuple[str, ...], Path, Path]] = []
+    delayed_download_calls: list[tuple[tuple[str, ...], int, bool]] = []
+
+    def fake_run_prepare(
+        prepare_mode: str,
+        *,
+        cwd: Path | None = None,
+        runner=None,
+    ) -> None:
+        del runner
+        assert cwd is not None
+        prepare_calls.append((prepare_mode, cwd))
+
+    def fake_prepare_external_benchmarks(
+        selector: CloudBenchmarkSelector,
+        *,
+        cwd: Path | None,
+        oss_fuzz_path: Path = Path("third_party/oss-fuzz"),
+    ) -> list[Path] | None:
+        assert cwd is not None
+        assert oss_fuzz_path == Path("third_party/oss-fuzz")
+        external_calls.append(
+            (
+                tuple(selector.benchmark_names()),
+                selector.effective_benchmarks_root(),
+                cwd,
+            )
+        )
+        return [cwd / "third_party" / "oss-fuzz" / "projects" / "go-yaml"]
+
+    def fake_run_benchmark_download_with_delay(
+        selector: CloudBenchmarkSelector,
+        *,
+        download_delay_sec: int,
+        download_fn,
+    ) -> list[Path]:
+        delayed_download_calls.append(
+            (
+                tuple(selector.benchmark_names()),
                 download_delay_sec,
                 download_fn is not None,
             )
@@ -303,11 +446,9 @@ def test_run_cloud_vm_bootstrap_prepares_external_benchmarks_even_when_policy_is
     )
 
     assert prepare_calls == [("full", tmp_path)]
-    assert external_calls == [
-        (("go-yaml",), Path("third_party/oss-fuzz/projects"), tmp_path)
-    ]
+    assert external_calls == []
     assert delayed_download_calls == []
-    assert result == [tmp_path / "third_party" / "oss-fuzz" / "projects" / "go-yaml"]
+    assert result == []
 
 
 @pytest.mark.parametrize(
@@ -496,6 +637,7 @@ def test_run_benchmark_download_uses_existing_external_benchmark_under_unmanaged
     monkeypatch, tmp_path: Path
 ) -> None:
     external_root = tmp_path / "external-benchmarks"
+    custom_oss_fuzz_root = tmp_path / "custom-oss-fuzz"
     benchmark_dir = external_root / "go-yaml"
     benchmark_dir.mkdir(parents=True)
     (benchmark_dir / "project.yaml").write_text("language: go\n")
@@ -542,11 +684,15 @@ def test_run_benchmark_download_uses_existing_external_benchmark_under_unmanaged
         )
     )
 
-    result = run_benchmark_download(selector, cwd=tmp_path)
+    result = run_benchmark_download(
+        selector,
+        cwd=tmp_path,
+        oss_fuzz_path=custom_oss_fuzz_root,
+    )
 
     assert result == [benchmark_dir]
     assert dataset_calls == []
-    assert meta_calls == [(benchmark_dir, tmp_path / "third_party" / "oss-fuzz")]
+    assert meta_calls == [(benchmark_dir, custom_oss_fuzz_root)]
     assert (benchmark_dir / ".aixcc" / "meta.yaml").exists()
 
 

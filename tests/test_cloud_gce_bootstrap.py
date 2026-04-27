@@ -142,6 +142,7 @@ def test_build_instance_metadata_includes_vm_bootstrap_policy_and_selector():
             benchmark_suite="afc-final",
             benchmarks_root=Path("/srv/benchmarks"),
             benchmark_suites_root=Path("/srv/benchmark-suites"),
+            oss_fuzz_path=Path("/srv/oss-fuzz"),
         ),
         download_delay_sec=10,
         worker_name="gce-worker-001",
@@ -157,6 +158,34 @@ def test_build_instance_metadata_includes_vm_bootstrap_policy_and_selector():
     assert payload["benchmark_suite"] == "afc-final"
     assert payload["benchmarks_root"] == "/srv/benchmarks"
     assert payload["benchmark_suites_root"] == "/srv/benchmark-suites"
+    assert payload["oss_fuzz_path"] == "/srv/oss-fuzz"
+
+
+def test_build_instance_metadata_preserves_repo_relative_managed_oss_fuzz_paths():
+    """Managed OSS-Fuzz paths should stay repo-relative in worker bootstrap payloads."""
+    from crsbench.cloud.gce.metadata import (
+        CRSBENCH_BOOTSTRAP_PAYLOAD_KEY,
+        build_instance_metadata,
+    )
+
+    metadata = build_instance_metadata(
+        experiment_name="Exp.Cloud 42",
+        fleet=_make_fleet(),
+        redis_host="redis.internal:6380",
+        registration=_make_registration(),
+        bootstrap_inputs=CloudVmBootstrapInputs(
+            benchmarks=["go-yaml"],
+            benchmarks_root=Path("third_party/oss-fuzz/projects"),
+            oss_fuzz_path=Path("third_party/oss-fuzz"),
+        ),
+        worker_name="gce-worker-001",
+        startup_script="#!/usr/bin/env bash\necho boot\n",
+    )
+
+    payload = _decode_payload(metadata[CRSBENCH_BOOTSTRAP_PAYLOAD_KEY])
+
+    assert payload["benchmarks_root"] == "third_party/oss-fuzz/projects"
+    assert payload["oss_fuzz_path"] == "third_party/oss-fuzz"
 
 
 def test_build_instance_metadata_omits_worker_name_for_regional_bulk_insert():

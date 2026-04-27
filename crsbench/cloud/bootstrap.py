@@ -24,10 +24,10 @@ BenchmarkSelectorValue = list[str] | dict[str, list[str]]
 BenchmarkSelectorInput = str | dict[str, BenchmarkSelectorValue]
 BenchmarkSelectorList = list[BenchmarkSelectorInput]
 
+CRSBENCH_REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BENCHMARKS_ROOT = Path("benchmarks")
 DEFAULT_BENCHMARK_SUITES_ROOT = Path("benchmark-suites")
 MANAGED_OSS_FUZZ_ROOT = Path("third_party/oss-fuzz")
-MANAGED_OSS_FUZZ_PROJECTS_ROOT = MANAGED_OSS_FUZZ_ROOT / "projects"
 CRSBENCH_DOWNLOAD_DELAY_SEC_ENV = "CRSBENCH_DOWNLOAD_DELAY_SEC"
 _DOWNLOAD_DELAY_WINDOW_SEC = 300
 _DOWNLOAD_DELAY_SPACING_SEC = 10
@@ -109,6 +109,7 @@ class CloudVmBootstrapInputs:
     benchmarks: BenchmarkSelectorList | None = None
     benchmarks_root: Path | str = DEFAULT_BENCHMARKS_ROOT
     benchmark_suites_root: Path | str = DEFAULT_BENCHMARK_SUITES_ROOT
+    oss_fuzz_path: Path | str = MANAGED_OSS_FUZZ_ROOT
 
     @property
     def selector(self) -> CloudBenchmarkSelector:
@@ -129,13 +130,17 @@ class CloudVmBootstrapInputs:
             gitcache=bootstrap.gitcache if bootstrap is not None else False,
             benchmark_suite=config.benchmark_suite,
             benchmarks=config.benchmarks,
-            benchmarks_root=_restore_default_root(
+            benchmarks_root=_restore_repo_relative_path(
                 Path(config.benchmarks_root),
                 default_path=DEFAULT_BENCHMARKS_ROOT,
             ),
-            benchmark_suites_root=_restore_default_root(
+            benchmark_suites_root=_restore_repo_relative_path(
                 Path(config.benchmark_suites_root),
                 default_path=DEFAULT_BENCHMARK_SUITES_ROOT,
+            ),
+            oss_fuzz_path=_restore_repo_relative_path(
+                Path(config.oss_fuzz_path),
+                default_path=MANAGED_OSS_FUZZ_ROOT,
             ),
         )
 
@@ -159,6 +164,10 @@ def bootstrap_inputs_from_payload(payload: dict[str, Any]) -> CloudVmBootstrapIn
         benchmark_suites_root=_coerce_root_path(
             payload.get("benchmark_suites_root"),
             default_path=DEFAULT_BENCHMARK_SUITES_ROOT,
+        ),
+        oss_fuzz_path=_coerce_root_path(
+            payload.get("oss_fuzz_path"),
+            default_path=MANAGED_OSS_FUZZ_ROOT,
         ),
     )
 
@@ -211,6 +220,7 @@ def run_benchmark_download(
     download_suite_fn: Callable[..., list[Path]] | None = None,
     download_dataset_fn: Callable[..., Path] | None = None,
     cwd: Path | None = None,
+    oss_fuzz_path: Path | str = MANAGED_OSS_FUZZ_ROOT,
 ) -> list[Path]:
     """Download benchmarks required by one cloud VM bootstrap."""
     selected_download_suite = (
@@ -226,7 +236,11 @@ def run_benchmark_download(
             selector.effective_benchmark_suites_root(),
             no_ground_truth=False,
         )
-    external_paths = _prepare_external_benchmarks(selector, cwd=cwd)
+    external_paths = _prepare_external_benchmarks(
+        selector,
+        cwd=cwd,
+        oss_fuzz_path=oss_fuzz_path,
+    )
     if external_paths is not None:
         return external_paths
     if selector.benchmarks:
@@ -299,19 +313,29 @@ def run_cloud_vm_bootstrap(
 ) -> list[Path]:
     """Run the shared prepare/download bootstrap sequence for a cloud VM."""
     run_prepare(inputs.prepare_mode, cwd=cwd, runner=runner)
-    external_paths = _prepare_external_benchmarks(inputs.selector, cwd=cwd)
-    if external_paths is not None:
-        return external_paths
+    resolved_download_delay_sec = _resolve_download_delay_sec(download_delay_sec)
     if not should_download_benchmarks(inputs):
         return []
+    if _selector_has_external_benchmarks(inputs.selector):
+        return run_benchmark_download_with_delay(
+            inputs.selector,
+            download_delay_sec=resolved_download_delay_sec,
+            download_fn=lambda selector: _prepare_external_benchmarks(
+                selector,
+                cwd=cwd,
+                oss_fuzz_path=inputs.oss_fuzz_path,
+            )
+            or [],
+        )
     return run_benchmark_download_with_delay(
         inputs.selector,
-        download_delay_sec=_resolve_download_delay_sec(download_delay_sec),
+        download_delay_sec=resolved_download_delay_sec,
         download_fn=lambda selector: run_benchmark_download(
             selector,
             download_suite_fn=download_suite_fn,
             download_dataset_fn=download_dataset_fn,
             cwd=cwd,
+            oss_fuzz_path=inputs.oss_fuzz_path,
         ),
     )
 
@@ -341,12 +365,36 @@ def _prepare_external_benchmarks(
     selector: CloudBenchmarkSelector,
     *,
     cwd: Path | None,
+    oss_fuzz_path: Path | str = MANAGED_OSS_FUZZ_ROOT,
 ) -> list[Path] | None:
-    if selector.benchmarks is None:
+    grouped, external_benchmarks = _external_benchmark_groups(selector)
+    if grouped is None:
+        return None
+    if not external_benchmarks:
         return None
 
-    benchmark_names = selector.benchmark_names()
-    grouped, external_benchmarks = _split_benchmarks_by_dataset(benchmark_names)
+    return _resolve_external_benchmark_paths(
+        external_benchmarks,
+        benchmarks_root=selector.effective_benchmarks_root(),
+        cwd=cwd,
+        oss_fuzz_path=oss_fuzz_path,
+    )
+
+
+def _selector_has_external_benchmarks(selector: CloudBenchmarkSelector) -> bool:
+    _, external_benchmarks = _external_benchmark_groups(selector)
+    return bool(external_benchmarks)
+
+
+def _external_benchmark_groups(
+    selector: CloudBenchmarkSelector,
+) -> tuple[OrderedDict[str, list[str]] | None, list[str]]:
+    if selector.benchmarks is None:
+        return None, []
+
+    grouped, external_benchmarks = _split_benchmarks_by_dataset(
+        selector.benchmark_names()
+    )
     if grouped and external_benchmarks:
         dataset_benchmarks = [
             benchmark_name for names in grouped.values() for benchmark_name in names
@@ -357,14 +405,7 @@ def _prepare_external_benchmarks(
             f"dataset={dataset_benchmarks!r}, "
             f"external={external_benchmarks!r}"
         )
-    if not external_benchmarks:
-        return None
-
-    return _resolve_external_benchmark_paths(
-        external_benchmarks,
-        benchmarks_root=selector.effective_benchmarks_root(),
-        cwd=cwd,
-    )
+    return grouped, external_benchmarks
 
 
 def _resolve_external_benchmark_paths(
@@ -372,19 +413,24 @@ def _resolve_external_benchmark_paths(
     *,
     benchmarks_root: Path,
     cwd: Path | None,
+    oss_fuzz_path: Path | str = MANAGED_OSS_FUZZ_ROOT,
 ) -> list[Path]:
     resolved_root = _resolve_root_path(benchmarks_root, cwd=cwd)
-    if _is_managed_oss_fuzz_projects_root(benchmarks_root, cwd=cwd):
+    resolved_oss_fuzz_root = _resolve_root_path(oss_fuzz_path, cwd=cwd)
+    if _is_managed_oss_fuzz_projects_root(
+        benchmarks_root,
+        cwd=cwd,
+        oss_fuzz_path=oss_fuzz_path,
+    ):
         if cwd is None:
             raise ValueError(
                 "Cloud VM bootstrap requires cwd when benchmarks_root points to "
                 "managed third_party/oss-fuzz/projects"
             )
-        oss_fuzz_root = cwd / MANAGED_OSS_FUZZ_ROOT
         return [
             _ensure_managed_oss_fuzz_project(
                 benchmark_name,
-                oss_fuzz_root=oss_fuzz_root,
+                oss_fuzz_root=resolved_oss_fuzz_root,
             )
             for benchmark_name in benchmark_names
         ]
@@ -420,9 +466,8 @@ def _resolve_external_benchmark_paths(
             )
         return benchmark_paths
 
-    oss_fuzz_root = cwd / MANAGED_OSS_FUZZ_ROOT
     for benchmark_path in benchmark_paths:
-        _ensure_external_meta_yaml(benchmark_path, oss_fuzz_root=oss_fuzz_root)
+        _ensure_external_meta_yaml(benchmark_path, oss_fuzz_root=resolved_oss_fuzz_root)
     return benchmark_paths
 
 
@@ -501,16 +546,22 @@ def _ensure_external_meta_yaml(benchmark_path: Path, *, oss_fuzz_root: Path) -> 
     return auto_generate_meta_yaml(benchmark_path, oss_fuzz_root)
 
 
-def _resolve_root_path(path: Path, *, cwd: Path | None) -> Path:
-    if path.is_absolute() or cwd is None:
-        return path
-    return cwd / path
+def _resolve_root_path(path: Path | str, *, cwd: Path | None) -> Path:
+    root = Path(path)
+    if root.is_absolute() or cwd is None:
+        return root
+    return cwd / root
 
 
-def _is_managed_oss_fuzz_projects_root(path: Path, *, cwd: Path | None) -> bool:
-    if cwd is None:
-        return path == MANAGED_OSS_FUZZ_PROJECTS_ROOT
-    return _resolve_root_path(path, cwd=cwd) == cwd / MANAGED_OSS_FUZZ_PROJECTS_ROOT
+def _is_managed_oss_fuzz_projects_root(
+    path: Path,
+    *,
+    cwd: Path | None,
+    oss_fuzz_path: Path | str = MANAGED_OSS_FUZZ_ROOT,
+) -> bool:
+    return _resolve_root_path(path, cwd=cwd) == (
+        _resolve_root_path(oss_fuzz_path, cwd=cwd) / "projects"
+    )
 
 
 def _resolve_download_delay_sec(download_delay_sec: int | None) -> int:
@@ -579,10 +630,15 @@ def _normalize_override_path(
     return path
 
 
-def _restore_default_root(path: Path, *, default_path: Path) -> Path:
+def _restore_repo_relative_path(path: Path, *, default_path: Path) -> Path:
+    if not path.is_absolute():
+        return default_path if path == default_path else path
+
     try:
-        if path.resolve() == default_path.resolve():
+        resolved_path = path.resolve()
+        resolved_default = (CRSBENCH_REPO_ROOT / default_path).resolve()
+        if resolved_path == resolved_default:
             return default_path
-    except OSError:
-        pass
-    return path
+        return resolved_path.relative_to(CRSBENCH_REPO_ROOT)
+    except (OSError, ValueError):
+        return path

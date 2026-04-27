@@ -161,6 +161,7 @@ def build_bootstrap_payload(
             "download_benchmarks": bootstrap_inputs.download_benchmarks,
             "gitcache": bootstrap_inputs.gitcache,
             "benchmarks_root": str(selector.effective_benchmarks_root()),
+            "oss_fuzz_path": str(bootstrap_inputs.oss_fuzz_path),
         }
     )
     if selector.benchmark_suite is not None:
@@ -209,6 +210,7 @@ def build_evaluator_bootstrap_payload(
             "download_benchmarks": bootstrap_inputs.download_benchmarks,
             "gitcache": bootstrap_inputs.gitcache,
             "benchmarks_root": str(selector.effective_benchmarks_root()),
+            "oss_fuzz_path": str(bootstrap_inputs.oss_fuzz_path),
         }
     )
     if selector.benchmark_suite is not None:
