@@ -13,5 +13,9 @@ Discovery-only example configs live under
 Discovery smoke configs live under
 [`experiment-configs/discovery-smoke-testing/`](../../experiment-configs/discovery-smoke-testing/).
 
+Concrete discovery smoke examples:
+- [`opencode-go-yaml-bugfinding.yaml`](../../experiment-configs/discovery-smoke-testing/opencode-go-yaml-bugfinding.yaml)
+- [`gce-opencode-go-yaml-bugfinding.yaml`](../../experiment-configs/discovery-smoke-testing/gce-opencode-go-yaml-bugfinding.yaml)
+
 The grouped distributed experiment config is the primary contract reference for
 experiment YAML structure.

@@ -29,6 +29,10 @@ Important:
   is used as the helper/build-output checkout.
 - It does not populate `projects/<name>/` by default, so `benchmarks_root`
   usually needs to point at a separate OSS-Fuzz projects checkout.
+- Managed cloud launches can use `benchmarks_root: third_party/oss-fuzz/projects`
+  for raw OSS-Fuzz project names. VM bootstrap materializes the selected
+  `projects/<name>/` directories from the managed checkout and generates
+  `.aixcc/meta.yaml` automatically on each VM before the run starts.
 
 ## Minimal Config
 
@@ -89,10 +93,12 @@ Repository examples:
 - [`experiment-configs/discovery-testing/oss-fuzz-given-fuzzer-8core.yaml`](../../../experiment-configs/discovery-testing/oss-fuzz-given-fuzzer-8core.yaml)
 - [`experiment-configs/discovery-testing/atlantis-multilang-wo-concolic-full-10min-5usd.yaml`](../../../experiment-configs/discovery-testing/atlantis-multilang-wo-concolic-full-10min-5usd.yaml)
 - [`experiment-configs/discovery-smoke-testing/opencode-go-yaml-bugfinding.yaml`](../../../experiment-configs/discovery-smoke-testing/opencode-go-yaml-bugfinding.yaml)
+- [`experiment-configs/discovery-smoke-testing/gce-opencode-go-yaml-bugfinding.yaml`](../../../experiment-configs/discovery-smoke-testing/gce-opencode-go-yaml-bugfinding.yaml)
 
 ## Initialize The Benchmarks
 
-Run initialization before `crsbench run`:
+Run initialization before `crsbench run` for local or manually managed worker
+setups:
 
 ```bash
 uv run crsbench benchmark init --experiment-config config.yaml
@@ -115,6 +121,11 @@ uv run crsbench benchmark init \
 
 If `.aixcc/meta.yaml` already exists, `benchmark init` skips that benchmark.
 
+Managed cloud launches using
+`benchmarks_root: third_party/oss-fuzz/projects` do this automatically during
+VM bootstrap for raw OSS-Fuzz project names, so you do not need a separate
+pre-initialized benchmark checkout on the VMs.
+
 ## Run The Experiment
 
 After initialization, run the experiment normally:
@@ -131,6 +142,9 @@ uv run crsbench run --experiment-config config.yaml --local-only
 
 The same initialized benchmarks can also be used with the distributed worker
 and evaluator workflows documented in [Distributed](./distributed.md).
+
+For a managed GCE smoke example pinned to `us-central1`, see
+[`gce-opencode-go-yaml-bugfinding.yaml`](../../../experiment-configs/discovery-smoke-testing/gce-opencode-go-yaml-bugfinding.yaml).
 
 ## Limits And Expectations
 
