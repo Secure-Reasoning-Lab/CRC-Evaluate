@@ -339,15 +339,23 @@ def test_replay_engine_counts_0day_rows_per_source_record_after_dedup(
 
     zero_day = json.loads((tmp_path / "replay-out" / "0day.json").read_text())
     assert len(zero_day) == 2
-    assert {entry["trial_relative_path"] for entry in zero_day} == {
-        "trial-a",
-        "trial-b",
+    rows_by_trial = {
+        entry["trial_relative_path"]: {
+            "original_pov_relpath": entry["original_pov_relpath"],
+            "pov_filename": entry["pov_filename"],
+        }
+        for entry in zero_day
     }
-    assert {entry["original_pov_relpath"] for entry in zero_day} == {
-        "trial-a/output/povs/a.blob",
-        "trial-b/output/povs/b.blob",
+    assert rows_by_trial == {
+        "trial-a": {
+            "original_pov_relpath": "trial-a/output/povs/a.blob",
+            "pov_filename": "a.blob",
+        },
+        "trial-b": {
+            "original_pov_relpath": "trial-b/output/povs/b.blob",
+            "pov_filename": "b.blob",
+        },
     }
-    assert {entry["pov_filename"] for entry in zero_day} == {"a.blob", "b.blob"}
 
 
 def test_replay_engine_records_and_logs_throughput_metrics(tmp_path: Path) -> None:
