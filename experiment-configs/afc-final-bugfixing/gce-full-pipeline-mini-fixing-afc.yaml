@@ -1,13 +1,16 @@
 # AFC final bug-fixing — full-pipeline phase 2 with mini models (production scale).
 #
-# 3 trials × all AFC benchmarks (excluding wireshark) × 3 CRSes.
+# 3 trials × all AFC benchmarks (excluding wireshark) × 4 CRSes.
 # Each fixing CRS pairs with its finding counterpart from phase 1:
 #
 #   crs-bug-finding-claude-code  -> crs-claude-code   (claude_code: claude-haiku-4-5)
 #   crs-bug-finding-codex        -> crs-codex         (codex: gpt-5.4-mini)
 #   crs-bug-finding-gemini-cli   -> crs-gemini-cli    (gemini_cli: gemini-3-flash-preview)
+#   crs-bug-finding-opencode     -> crs-opencode      (opencode: GLM-5.1)
 #
-# (opencode is commented out — runs separately via gce-opencode-fixing-afc.yaml.)
+# opencode finding lives in its own experiment tree (afc-opencode-finding) since
+# it runs via gce-opencode-finding-afc.yaml; the other three share the
+# afc-full-pipeline-mini-finding tree.
 #
 # CPVs that a given finding CRS did not discover are skipped at trial-matrix
 # generation for the matching fixing CRS. If a CRS's finding subtree is empty
@@ -16,14 +19,17 @@
 # Prerequisites:
 #   1. Phase 1 completed:
 #      - afc-final-bugfinding/gce-full-pipeline-mini-finding-afc.yaml launched, monitored
-#      - cloud collect --force pulled results locally
-#      - cloud teardown --force released the phase-1 cluster
+#      - afc-final-bugfinding/gce-opencode-finding-afc.yaml launched, monitored
+#      - cloud collect --force pulled results locally for both
+#      - cloud teardown --force released the phase-1 clusters
 #   2. By default, cloud collect publishes phase-1 results under:
 #      /data/crsbench/experiment-data/afc-full-pipeline-mini-finding/
 #        afc-full-pipeline-mini-finding/afc-full-pipeline-mini-finding/
-#      with each crs-bug-finding-* CRS beneath that experiment directory.
-#      If you collected phase 1 elsewhere, update the from_experiment_by_crs
-#      paths below before launching phase 2.
+#      (claude-code, codex, gemini-cli) and
+#      /data/crsbench/experiment-data/afc-opencode-finding/
+#        afc-opencode-finding/afc-opencode-finding/
+#      (opencode). If you collected phase 1 elsewhere, update the
+#      from_experiment_by_crs paths below before launching phase 2.
 #   3. gcloud auth login && gcloud auth application-default login
 #   4. HF_TOKEN in .env or environment (opencode needs HF models)
 #
@@ -58,7 +64,7 @@ runtime:
     pov:
       max_variants_per_cpv: 1
       from_experiment_by_crs:
-        # crs-opencode: /data/crsbench/experiment-data/afc-full-pipeline-mini-finding/afc-full-pipeline-mini-finding/afc-full-pipeline-mini-finding/crs-bug-finding-opencode
+        crs-opencode: /data/crsbench/experiment-data/afc-opencode-finding/afc-opencode-finding/afc-opencode-finding/crs-bug-finding-opencode
         crs-claude-code: /data/crsbench/experiment-data/afc-full-pipeline-mini-finding/afc-full-pipeline-mini-finding/afc-full-pipeline-mini-finding/crs-bug-finding-claude-code
         crs-codex: /data/crsbench/experiment-data/afc-full-pipeline-mini-finding/afc-full-pipeline-mini-finding/afc-full-pipeline-mini-finding/crs-bug-finding-codex
         crs-gemini-cli: /data/crsbench/experiment-data/afc-full-pipeline-mini-finding/afc-full-pipeline-mini-finding/afc-full-pipeline-mini-finding/crs-bug-finding-gemini-cli
@@ -74,12 +80,12 @@ resources:
 crs_compose:
   oss_crs_infra:
     shared: true
-  # crs-opencode:
-  #   num_cores: 16
-  #   budget_policy: terminate
-  #   additional_env:
-  #     CRS_AGENT: opencode
-  #     OPENCODE_MODEL: zai-org/GLM-5.1
+  crs-opencode:
+    num_cores: 16
+    budget_policy: terminate
+    additional_env:
+      CRS_AGENT: opencode
+      OPENCODE_MODEL: zai-org/GLM-5.1
   crs-claude-code:
     num_cores: 16
     budget_policy: terminate
