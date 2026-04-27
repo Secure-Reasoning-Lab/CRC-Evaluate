@@ -9,14 +9,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from crsbench.evaluation.reeval.cli import (
+    DEFAULT_REEVAL_POV_SAMPLE_SIZE,
+    REEVAL_POV_SAMPLE_SIZE_ENV,
     _AsyncPatchTrialState,
     _AsyncTrialState,
     _discover_trial_patches,
     _drain_all_async_patch_results,
     _drain_all_async_results,
     _enqueue_trial_povs,
+    _get_reeval_pov_sample_size,
     _load_experiment_config,
     _load_target_cpv_id_from_trial_metadata,
+    _maybe_subset_pov_dir,
     _prepare_async_pov_build_prereqs,
     _reeval_bug_finding,
     _reeval_patch_generation,
@@ -26,6 +30,7 @@ from crsbench.evaluation.reeval.cli import (
     _resolve_trial_sanitizer,
     _save_patch_results,
     _save_pov_results,
+    _stratified_sample_pov_files,
     _write_async_patch_logs,
     add_reeval_subparser,
     run_reeval,
@@ -2752,3 +2757,136 @@ class TestRunReevalCleanup:
             result = run_reeval(args)
 
         assert result == 1
+
+
+class TestReevalPovSampleSizeEnv:
+    """Tests for ``_get_reeval_pov_sample_size``."""
+
+    def test_default_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv(REEVAL_POV_SAMPLE_SIZE_ENV, raising=False)
+        assert _get_reeval_pov_sample_size() == DEFAULT_REEVAL_POV_SAMPLE_SIZE
+
+    def test_default_when_blank(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(REEVAL_POV_SAMPLE_SIZE_ENV, "   ")
+        assert _get_reeval_pov_sample_size() == DEFAULT_REEVAL_POV_SAMPLE_SIZE
+
+    def test_custom_value(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(REEVAL_POV_SAMPLE_SIZE_ENV, "250")
+        assert _get_reeval_pov_sample_size() == 250
+
+    def test_zero_disables_capping(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(REEVAL_POV_SAMPLE_SIZE_ENV, "0")
+        assert _get_reeval_pov_sample_size() == 0
+
+    def test_invalid_falls_back(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(REEVAL_POV_SAMPLE_SIZE_ENV, "not-a-number")
+        assert _get_reeval_pov_sample_size() == DEFAULT_REEVAL_POV_SAMPLE_SIZE
+
+    def test_negative_falls_back(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(REEVAL_POV_SAMPLE_SIZE_ENV, "-5")
+        assert _get_reeval_pov_sample_size() == DEFAULT_REEVAL_POV_SAMPLE_SIZE
+
+
+class TestStratifiedSamplePovFiles:
+    """Tests for ``_stratified_sample_pov_files``."""
+
+    @staticmethod
+    def _make_pov_files(tmp_path: Path, count: int) -> list[Path]:
+        import os as _os
+
+        files: list[Path] = []
+        for i in range(count):
+            f = tmp_path / f"pov-{i:04d}"
+            f.write_bytes(b"x")
+            _os.utime(f, (1_700_000_000 + i, 1_700_000_000 + i))
+            files.append(f)
+        return files
+
+    def test_returns_input_when_below_cap(self, tmp_path: Path) -> None:
+        files = self._make_pov_files(tmp_path, 5)
+        sampled = _stratified_sample_pov_files(files, sample_size=10)
+        assert sampled == files
+        assert sampled is not files
+
+    def test_zero_sample_size_returns_all(self, tmp_path: Path) -> None:
+        files = self._make_pov_files(tmp_path, 100)
+        sampled = _stratified_sample_pov_files(files, sample_size=0)
+        assert len(sampled) == 100
+
+    def test_caps_at_sample_size(self, tmp_path: Path) -> None:
+        files = self._make_pov_files(tmp_path, 100)
+        sampled = _stratified_sample_pov_files(files, sample_size=10, seed="t")
+        assert len(sampled) == 10
+        assert set(sampled).issubset(set(files))
+
+    def test_stratification_covers_full_time_range(self, tmp_path: Path) -> None:
+        files = self._make_pov_files(tmp_path, 1000)
+        sampled = _stratified_sample_pov_files(files, sample_size=10, seed="t")
+        sampled_mtimes = sorted(p.stat().st_mtime for p in sampled)
+        first_bucket_end = 1_700_000_000 + 100
+        last_bucket_start = 1_700_000_000 + 900
+        assert sampled_mtimes[0] < first_bucket_end
+        assert sampled_mtimes[-1] >= last_bucket_start
+
+    def test_deterministic_seed(self, tmp_path: Path) -> None:
+        files = self._make_pov_files(tmp_path, 100)
+        a = _stratified_sample_pov_files(files, sample_size=10, seed="abc")
+        b = _stratified_sample_pov_files(files, sample_size=10, seed="abc")
+        assert [p.name for p in a] == [p.name for p in b]
+
+    def test_no_duplicates(self, tmp_path: Path) -> None:
+        files = self._make_pov_files(tmp_path, 50)
+        sampled = _stratified_sample_pov_files(files, sample_size=10, seed="s")
+        assert len(set(sampled)) == len(sampled)
+
+
+class TestMaybeSubsetPovDir:
+    """Tests for ``_maybe_subset_pov_dir`` context manager."""
+
+    def test_returns_original_when_under_cap(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(REEVAL_POV_SAMPLE_SIZE_ENV, "100")
+        pov_dir = tmp_path / "povs"
+        pov_dir.mkdir()
+        for i in range(10):
+            (pov_dir / f"p-{i}").write_bytes(b"x")
+
+        with _maybe_subset_pov_dir(pov_dir, trial_dir=tmp_path) as active:
+            assert active == pov_dir
+
+    def test_stages_symlinked_subset_when_over_cap(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import os as _os
+
+        monkeypatch.setenv(REEVAL_POV_SAMPLE_SIZE_ENV, "5")
+        pov_dir = tmp_path / "povs"
+        pov_dir.mkdir()
+        for i in range(50):
+            f = pov_dir / f"p-{i:03d}"
+            f.write_bytes(f"data-{i}".encode())
+            _os.utime(f, (1_700_000_000 + i, 1_700_000_000 + i))
+
+        with _maybe_subset_pov_dir(pov_dir, trial_dir=tmp_path) as active:
+            assert active != pov_dir
+            staged_files = list(active.iterdir())
+            assert len(staged_files) == 5
+            for sf in staged_files:
+                assert sf.is_symlink()
+                assert sf.resolve().parent == pov_dir.resolve()
+                assert sf.read_bytes() == (pov_dir / sf.name).read_bytes()
+
+        assert not active.exists()
+
+    def test_zero_disables_subsetting(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(REEVAL_POV_SAMPLE_SIZE_ENV, "0")
+        pov_dir = tmp_path / "povs"
+        pov_dir.mkdir()
+        for i in range(2000):
+            (pov_dir / f"p-{i}").write_bytes(b"x")
+
+        with _maybe_subset_pov_dir(pov_dir, trial_dir=tmp_path) as active:
+            assert active == pov_dir

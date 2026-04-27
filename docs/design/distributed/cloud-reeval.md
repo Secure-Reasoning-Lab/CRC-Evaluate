@@ -305,6 +305,7 @@ re-evaluation:
 - the orchestrator registers the remote experiment in Redis using the existing re-eval runtime session
 - evaluators consume the normal build and verify queues for that remote experiment
 - POV and patch verification continue to use the existing async queue/result semantics
+- per-trial POV verification load is bounded by `CRSBENCH_REEVAL_POV_SAMPLE_SIZE` (default 100): when a trial holds more output POVs than the cap, re-eval verifies a discovery-time stratified random subset of that many POVs (sorted by file mtime, partitioned into equal time buckets, one randomly chosen per bucket, deterministically seeded by the trial path); set the env var to `0` to disable capping
 
 No new evaluator RPC or evaluator-only protocol is introduced for cloud re-eval.
 The cloud-specific layer is limited to transport, staging, remote config
