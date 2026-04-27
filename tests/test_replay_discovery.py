@@ -16,6 +16,7 @@ def _write_trial(
     mode_dir: str = "full",
     sanitizer_dir: str = "address",
     experiment_name: str | None = None,
+    mark_success: bool = True,
 ) -> Path:
     trial_dir = (
         source_dir
@@ -44,8 +45,44 @@ def _write_trial(
         metadata["experiment_name"] = experiment_name
 
     (trial_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
-    (trial_dir / ".success").touch()
+    if mark_success:
+        (trial_dir / ".success").touch()
     (pov_dir / ".hidden.blob").write_bytes(b"hidden")
+    for name, payload in povs.items():
+        (pov_dir / name).write_bytes(payload)
+    return trial_dir
+
+
+def _write_flat_trial(
+    source_dir: Path,
+    *,
+    benchmark: str,
+    harness: str,
+    trial_name: str,
+    povs: dict[str, bytes],
+    crs_name: str = "codex",
+    metadata_sanitizer: str | None = None,
+    mark_success: bool = True,
+) -> Path:
+    trial_dir = source_dir / f"{benchmark}__{crs_name}" / trial_name
+    pov_dir = trial_dir / "output" / "povs"
+    pov_dir.mkdir(parents=True, exist_ok=True)
+
+    metadata = {
+        "timestamp": "2026-04-27T00:00:00+00:00",
+        "trial_num": int(trial_name.split("-")[-1]),
+        "crs": crs_name,
+        "benchmark": benchmark,
+        "harness": harness,
+        "mode": "bug_finding",
+        "source": {"path": "/src", "commit": "abc123"},
+    }
+    if metadata_sanitizer is not None:
+        metadata["sanitizer"] = metadata_sanitizer
+
+    (trial_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    if mark_success:
+        (trial_dir / ".success").touch()
     for name, payload in povs.items():
         (pov_dir / name).write_bytes(payload)
     return trial_dir
@@ -157,3 +194,49 @@ def test_discover_source_povs_applies_benchmark_and_trial_filters(
     ]
     assert stats["trials_processed"] == 1
     assert stats["trials_skipped"] == 1
+
+
+def test_discover_source_povs_skips_trials_without_success_marker(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "exp-a"
+    _write_trial(
+        source_dir,
+        benchmark="afc-curl-delta-01",
+        harness="curl_fuzzer",
+        trial_name="trial-1",
+        mark_success=False,
+        povs={"partial.blob": b"A"},
+    )
+    _write_trial(
+        source_dir,
+        benchmark="afc-curl-delta-01",
+        harness="curl_fuzzer",
+        trial_name="trial-2",
+        povs={"complete.blob": b"B"},
+    )
+
+    records, stats = discover_source_povs([source_dir])
+
+    assert [record.pov_filename for record in records] == ["complete.blob"]
+    assert stats["trials_processed"] == 1
+    assert stats["trials_skipped"] == 1
+
+
+def test_discover_source_povs_defaults_sanitizer_for_flat_trial_layout(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "exp-a"
+    _write_flat_trial(
+        source_dir,
+        benchmark="afc-curl-delta-01",
+        harness="curl_fuzzer",
+        trial_name="trial-4",
+        povs={"flat.blob": b"FLAT"},
+    )
+
+    records, _ = discover_source_povs([source_dir])
+
+    assert len(records) == 1
+    assert records[0].source_sanitizer == "address"
+    assert records[0].trial_relative_path == "afc-curl-delta-01__codex/trial-4"

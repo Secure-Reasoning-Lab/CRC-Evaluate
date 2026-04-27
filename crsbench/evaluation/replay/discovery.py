@@ -42,7 +42,7 @@ def _resolve_trial_sanitizer(trial: object, trial_dir: Path) -> str | None:
             candidate = trial_dir.parts[index - 1]
             if candidate in _VALID_SANITIZERS:
                 return candidate
-    return None
+    return "address"
 
 
 def discover_source_povs(
@@ -59,6 +59,9 @@ def discover_source_povs(
         source_id = make_source_id(source_dir)
         for trial in discover_trials(source_dir):
             if trial.status != "valid" or trial.mode.value != "bug_finding":
+                trials_skipped += 1
+                continue
+            if getattr(trial, "execution_status", None) != "success":
                 trials_skipped += 1
                 continue
             if benchmark_filters and trial.benchmark not in benchmark_filters:
