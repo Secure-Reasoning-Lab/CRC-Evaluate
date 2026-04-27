@@ -165,3 +165,12 @@ def test_main_dispatches_replay_povs() -> None:
 
     assert exc_info.value.code == 0
     mock_replay_povs.assert_called_once_with(args)
+
+
+def test_run_replay_povs_scaffold_raises_expected_error() -> None:
+    with pytest.raises(NotImplementedError) as exc_info:
+        run_experiment.run_replay_povs(Namespace())
+
+    assert (
+        str(exc_info.value) == "replay-povs wiring is added in later tasks"
+    )
