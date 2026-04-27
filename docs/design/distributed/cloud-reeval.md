@@ -347,7 +347,10 @@ collected result set and summary data.
 Collection uses the existing cloud control plane, but cloud re-eval changes what
 must be collected:
 
-- `cloud collect` and `cloud teardown` for a cloud re-eval deployment must collect the orchestrator-hosted re-eval workspace and remote logs
+- `cloud collect` and `cloud teardown` for a cloud re-eval deployment must
+  collect the orchestrator-hosted re-eval workspace and remote logs unless the
+  operator explicitly uses `cloud teardown --skip-collect` to trade those
+  artifacts for immediate cleanup
 - default local publish destination is a fresh local experiment tree keyed by the remote experiment name
 - the collected local tree must also retain the remote wrapper's authoritative submission artifacts in a dedicated hidden sidecar directory, including submission state, manifest, summary, and runner log
 - collection must not silently overwrite the original source experiment tree

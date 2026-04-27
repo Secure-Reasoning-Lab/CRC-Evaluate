@@ -1,4 +1,4 @@
-"""Teardown sub-action: collect artifacts then delete GCE instances with safety gates."""
+"""Teardown sub-action: optionally collect artifacts before deleting GCE instances."""
 
 from __future__ import annotations
 
@@ -99,13 +99,13 @@ def _count_uncollected_jobs(redis_conn, lifecycle, experiment_name: str) -> int:
 
 
 def run_teardown(args: argparse.Namespace) -> int:
-    """Collect remaining artifacts then delete all cloud instances for the experiment.
+    """Collect remaining artifacts, or skip collection, then delete cloud instances.
 
     Safety flow:
     1. Validate GCE instances exist
     2. Cross-reference Redis for stale entries
     3. Prompt for confirmation (unless --force)
-    4. Collect artifacts from each live worker
+    4. Collect artifacts/logs from each live worker unless skipped
     5. Abort before deletion if any collection failed, unless --force is set
     6. Delete workers
 
@@ -173,6 +173,7 @@ def run_teardown(args: argparse.Namespace) -> int:
         lifecycle,
         experiment_name,
     )
+    skip_collect = getattr(args, "skip_collect", False)
 
     # Confirmation prompt
     if not args.force:
@@ -181,182 +182,208 @@ def run_teardown(args: argparse.Namespace) -> int:
             return 1
 
         worker_count = len(live_instances) + (1 if launch_state is not None else 0)
-        logger.info(
-            "This will collect artifacts from {} instances ({} uncollected jobs) "
-            "and delete all cloud VMs.",
-            worker_count,
-            str(uncollected_count) if lifecycle is not None else "unknown",
-        )
+        if skip_collect:
+            logger.info(
+                "This will delete all cloud VMs without collecting artifacts or logs "
+                "from {} instances ({} uncollected jobs).",
+                worker_count,
+                str(uncollected_count) if lifecycle is not None else "unknown",
+            )
+        else:
+            logger.info(
+                "This will collect artifacts from {} instances ({} uncollected jobs) "
+                "and delete all cloud VMs.",
+                worker_count,
+                str(uncollected_count) if lifecycle is not None else "unknown",
+            )
         confirm = input("Type 'yes' to continue: ").strip().lower()
         if confirm != "yes":
             logger.info("Cancelled.")
             return 0
 
-    # Collect phase -- abort before deletion on any failure unless --force is set.
-    remote_experiment_dir = resolve_remote_experiment_dir(
-        context.remote_experiment_root,
-        experiment_name,
-        args.remote_dir,
-    )
     collection_failed = False
-    start_time_observations: list[tuple[str | None, str]] = []
     orchestrator_collects_artifacts = _launch_state_collects_experiment_artifacts(
         launch_state
     )
     destination = base_destination
-    if any(_collects_experiment_artifacts(worker) for worker in live_instances) or (
-        orchestrator_collects_artifacts
-    ):
-        if args.timestamp:
-            destination = _fresh_timestamp_destination(
-                experiment_filestore,
-                experiment_name,
-            )
-        else:
-            resolved_destination = _confirm_destination_overwrite(
-                base_destination,
-                force=args.force,
-                timestamp_destination_factory=lambda: _fresh_timestamp_destination(
+    artifact_publish_succeeded = False
+    if not skip_collect:
+        # Collect phase -- abort before deletion on any failure unless --force is set.
+        remote_experiment_dir = resolve_remote_experiment_dir(
+            context.remote_experiment_root,
+            experiment_name,
+            args.remote_dir,
+        )
+        start_time_observations: list[tuple[str | None, str]] = []
+        if any(_collects_experiment_artifacts(worker) for worker in live_instances) or (
+            orchestrator_collects_artifacts
+        ):
+            if args.timestamp:
+                destination = _fresh_timestamp_destination(
                     experiment_filestore,
                     experiment_name,
-                ),
-            )
-            if resolved_destination is None:
-                return 1
-            destination = resolved_destination
+                )
+            else:
+                decision = _confirm_destination_overwrite(
+                    base_destination,
+                    force=args.force,
+                    timestamp_destination_factory=lambda: _fresh_timestamp_destination(
+                        experiment_filestore,
+                        experiment_name,
+                    ),
+                    allow_skip_collection=True,
+                )
+                if decision.skip_collection:
+                    skip_collect = True
+                elif decision.destination is None:
+                    return 1
+                else:
+                    destination = decision.destination
 
-    reeval_submission_artifacts_ready = True
-    if orchestrator_collects_artifacts and launch_state is not None:
-        orchestrator_worker = launch_state.as_orchestrator_record()
-        try:
-            collector.collect_reeval_submission_artifacts(
-                worker=cast("CloudInstanceLike", orchestrator_worker),
-                fleet=launch_state.as_transport_config(),
+        if not skip_collect:
+            reeval_submission_artifacts_ready = True
+            if orchestrator_collects_artifacts and launch_state is not None:
+                orchestrator_worker = launch_state.as_orchestrator_record()
+                try:
+                    collector.collect_reeval_submission_artifacts(
+                        worker=cast("CloudInstanceLike", orchestrator_worker),
+                        fleet=launch_state.as_transport_config(),
+                        experiment_name=experiment_name,
+                        experiment_filestore=experiment_filestore,
+                        remote_submission_dir=launch_state.effective_remote_submission_dir(),
+                        destination=destination,
+                    )
+                except (ArtifactCollectionError, Exception) as exc:
+                    logger.error(
+                        "Cloud re-eval submission artifact collection failed for {}: {}",
+                        orchestrator_worker.name,
+                        exc,
+                    )
+                    collection_failed = True
+                    reeval_submission_artifacts_ready = False
+
+            (
+                failed_collections,
+                artifact_failures,
+                artifact_publish_succeeded,
+                staged_collections,
+            ) = _collect_live_instances_parallel(
+                collector=collector,
+                context=context,
+                live_instances=live_instances,
                 experiment_name=experiment_name,
                 experiment_filestore=experiment_filestore,
-                remote_submission_dir=launch_state.effective_remote_submission_dir(),
+                remote_experiment_dir=remote_experiment_dir,
                 destination=destination,
+                start_time_observations=start_time_observations,
+                continue_on_error=True,
             )
-        except (ArtifactCollectionError, Exception) as exc:
-            logger.error(
-                "Cloud re-eval submission artifact collection failed for {}: {}",
-                orchestrator_worker.name,
-                exc,
-            )
-            collection_failed = True
-            reeval_submission_artifacts_ready = False
+            collection_failed = collection_failed or failed_collections > 0
 
-    (
-        failed_collections,
-        artifact_failures,
-        artifact_publish_succeeded,
-        staged_collections,
-    ) = _collect_live_instances_parallel(
-        collector=collector,
-        context=context,
-        live_instances=live_instances,
-        experiment_name=experiment_name,
-        experiment_filestore=experiment_filestore,
-        remote_experiment_dir=remote_experiment_dir,
-        destination=destination,
-        start_time_observations=start_time_observations,
-        continue_on_error=True,
-    )
-    collection_failed = collection_failed or failed_collections > 0
+            if (
+                orchestrator_collects_artifacts
+                and launch_state is not None
+                and reeval_submission_artifacts_ready
+            ):
+                orchestrator_worker = launch_state.as_orchestrator_record()
+                if _collector_supports_staged_publish(collector):
+                    try:
+                        staged_collections.append(
+                            collector.stage_collection(
+                                worker=cast("CloudInstanceLike", orchestrator_worker),
+                                fleet=launch_state.as_transport_config(),
+                                experiment_name=experiment_name,
+                                experiment_filestore=experiment_filestore,
+                                remote_experiment_dir=remote_experiment_dir,
+                                destination=destination,
+                            )
+                        )
+                        logger.info("Collection staged: {}", orchestrator_worker.name)
+                    except (ArtifactCollectionError, Exception) as exc:
+                        logger.error(
+                            "Artifact collection failed for {}: {} -- continuing with teardown",
+                            orchestrator_worker.name,
+                            exc,
+                        )
+                        collection_failed = True
+                        artifact_failures += 1
+                else:
+                    try:
+                        collector.collect(
+                            worker=cast("CloudInstanceLike", orchestrator_worker),
+                            fleet=launch_state.as_transport_config(),
+                            experiment_name=experiment_name,
+                            experiment_filestore=experiment_filestore,
+                            remote_experiment_dir=remote_experiment_dir,
+                            start_time_observations=start_time_observations,
+                            destination=destination,
+                        )
+                        artifact_publish_succeeded = True
+                    except (ArtifactCollectionError, Exception) as exc:
+                        logger.error(
+                            "Artifact collection failed for {}: {} -- continuing with teardown",
+                            orchestrator_worker.name,
+                            exc,
+                        )
+                        collection_failed = True
+                        artifact_failures += 1
 
-    if (
-        orchestrator_collects_artifacts
-        and launch_state is not None
-        and reeval_submission_artifacts_ready
-    ):
-        orchestrator_worker = launch_state.as_orchestrator_record()
-        if _collector_supports_staged_publish(collector):
-            try:
-                staged_collections.append(
-                    collector.stage_collection(
+            if artifact_failures == 0 and staged_collections:
+                publish_failures, published = _publish_staged_collections(
+                    collector=collector,
+                    staged_collections=staged_collections,
+                    start_time_observations=start_time_observations,
+                )
+                collection_failed = collection_failed or publish_failures > 0
+                artifact_publish_succeeded = artifact_publish_succeeded or published
+
+            if launch_state is not None:
+                orchestrator_worker = launch_state.as_orchestrator_record()
+                try:
+                    collector.collect_logs(
                         worker=cast("CloudInstanceLike", orchestrator_worker),
                         fleet=launch_state.as_transport_config(),
                         experiment_name=experiment_name,
                         experiment_filestore=experiment_filestore,
                         remote_experiment_dir=remote_experiment_dir,
-                        destination=destination,
                     )
+                    logger.info(
+                        "Log collection succeeded: {}", orchestrator_worker.name
+                    )
+                except (ArtifactCollectionError, Exception) as exc:
+                    logger.error(
+                        "Log collection failed for {}: {} -- continuing with teardown",
+                        orchestrator_worker.name,
+                        exc,
+                    )
+                    collection_failed = True
+
+            if (
+                artifact_publish_succeeded
+                and not collection_failed
+                and destination.exists()
+            ):
+                current_start_time = _resolve_current_run_start_time(
+                    start_time_observations
                 )
-                logger.info("Collection staged: {}", orchestrator_worker.name)
-            except (ArtifactCollectionError, Exception) as exc:
-                logger.error(
-                    "Artifact collection failed for {}: {} -- continuing with teardown",
-                    orchestrator_worker.name,
-                    exc,
-                )
-                collection_failed = True
-                artifact_failures += 1
-        else:
-            try:
-                collector.collect(
-                    worker=cast("CloudInstanceLike", orchestrator_worker),
-                    fleet=launch_state.as_transport_config(),
-                    experiment_name=experiment_name,
-                    experiment_filestore=experiment_filestore,
-                    remote_experiment_dir=remote_experiment_dir,
-                    start_time_observations=start_time_observations,
+                marker = _build_collect_marker(
                     destination=destination,
+                    experiment_name=experiment_name,
+                    prior_marker=read_collect_marker(destination),
+                    current_start_time=current_start_time,
                 )
-                artifact_publish_succeeded = True
-            except (ArtifactCollectionError, Exception) as exc:
-                logger.error(
-                    "Artifact collection failed for {}: {} -- continuing with teardown",
-                    orchestrator_worker.name,
-                    exc,
-                )
-                collection_failed = True
-                artifact_failures += 1
+                try:
+                    write_collect_marker(destination, marker)
+                except OSError as exc:
+                    logger.error(
+                        "Failed to write collect marker {}: {}",
+                        collect_marker_path(destination),
+                        exc,
+                    )
+                    collection_failed = True
 
-    if artifact_failures == 0 and staged_collections:
-        publish_failures, published = _publish_staged_collections(
-            collector=collector,
-            staged_collections=staged_collections,
-            start_time_observations=start_time_observations,
-        )
-        collection_failed = collection_failed or publish_failures > 0
-        artifact_publish_succeeded = artifact_publish_succeeded or published
-
-    if launch_state is not None:
-        orchestrator_worker = launch_state.as_orchestrator_record()
-        try:
-            collector.collect_logs(
-                worker=cast("CloudInstanceLike", orchestrator_worker),
-                fleet=launch_state.as_transport_config(),
-                experiment_name=experiment_name,
-                experiment_filestore=experiment_filestore,
-                remote_experiment_dir=remote_experiment_dir,
-            )
-            logger.info("Log collection succeeded: {}", orchestrator_worker.name)
-        except (ArtifactCollectionError, Exception) as exc:
-            logger.error(
-                "Log collection failed for {}: {} -- continuing with teardown",
-                orchestrator_worker.name,
-                exc,
-            )
-            collection_failed = True
-
-    if artifact_publish_succeeded and not collection_failed and destination.exists():
-        current_start_time = _resolve_current_run_start_time(start_time_observations)
-        marker = _build_collect_marker(
-            destination=destination,
-            experiment_name=experiment_name,
-            prior_marker=read_collect_marker(destination),
-            current_start_time=current_start_time,
-        )
-        try:
-            write_collect_marker(destination, marker)
-        except OSError as exc:
-            logger.error(
-                "Failed to write collect marker {}: {}",
-                collect_marker_path(destination),
-                exc,
-            )
-            collection_failed = True
+    if skip_collect:
+        logger.info("Skipping artifact collection for experiment '{}'", experiment_name)
 
     if collection_failed and not args.force:
         logger.error(

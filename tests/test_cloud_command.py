@@ -1911,6 +1911,36 @@ class TestArgParsing:
         assert args.cloud_command == "teardown"
         assert args.timestamp is True
 
+    def test_parse_teardown_skip_collect(self):
+        parser = self._build_parser()
+        args = parser.parse_args(
+            [
+                "cloud",
+                "teardown",
+                "my-exp",
+                "--config",
+                "c.yaml",
+                "--skip-collect",
+            ]
+        )
+        assert args.cloud_command == "teardown"
+        assert args.skip_collect is True
+
+    def test_parse_teardown_rejects_timestamp_with_skip_collect(self):
+        parser = self._build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(
+                [
+                    "cloud",
+                    "teardown",
+                    "my-exp",
+                    "--config",
+                    "c.yaml",
+                    "--timestamp",
+                    "--skip-collect",
+                ]
+            )
+
     def test_parse_teardown_allows_inferred_experiment_and_remote_dir(self):
         parser = self._build_parser()
         args = parser.parse_args(
@@ -9990,6 +10020,7 @@ def _make_teardown_args(
     *,
     force: bool = False,
     timestamp: bool = False,
+    skip_collect: bool = False,
 ):
     return argparse.Namespace(
         experiment=experiment,
@@ -9997,6 +10028,7 @@ def _make_teardown_args(
         remote_dir=remote_dir,
         force=force,
         timestamp=timestamp,
+        skip_collect=skip_collect,
         cloud_command="teardown",
     )
 
@@ -10150,6 +10182,81 @@ class TestTeardown:
         marker = read_collect_marker(timestamp_destination)
         assert marker is not None
         assert marker["local_destination"] == str(timestamp_destination)
+
+    @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")
+    @patch("crsbench.cloud.cli._teardown.ArtifactCollector")
+    @patch("crsbench.cloud.cli._teardown.provisioner_for_context")
+    @patch("crsbench.cloud.cli._teardown.reconnect")
+    def test_teardown_skip_collect_flag_deletes_without_collecting(
+        self, mock_reconnect, mock_prov_cls, mock_coll_cls, mock_resolve_context
+    ):
+        """Teardown should delete VMs without collection when --skip-collect is set."""
+        mock_resolve_context.return_value = _make_resolved_cloud_context()
+        mock_prov, mock_coll, _, _ = _setup_teardown_mocks(
+            mock_reconnect, mock_prov_cls, mock_coll_cls
+        )
+
+        from crsbench.cloud.cli._teardown import run_teardown
+
+        rc = run_teardown(_make_teardown_args(force=True, skip_collect=True))
+
+        assert rc == 0
+        mock_coll.collect.assert_not_called()
+        mock_coll.collect_logs.assert_not_called()
+        mock_coll.collect_reeval_submission_artifacts.assert_not_called()
+        mock_prov.delete_workers.assert_called_once()
+
+    def test_teardown_existing_destination_prompt_can_skip_collection(
+        self,
+        tmp_path: Path,
+    ):
+        experiment_filestore = tmp_path / "filestore"
+        (experiment_filestore / "test-exp").mkdir(parents=True)
+        with (
+            patch(
+                "crsbench.cloud.cli._teardown.resolve_cloud_context"
+            ) as mock_resolve_context,
+            patch("crsbench.cloud.cli._teardown.ArtifactCollector") as mock_coll_cls,
+            patch(
+                "crsbench.cloud.cli._teardown.provisioner_for_context"
+            ) as mock_prov_cls,
+            patch("crsbench.cloud.cli._teardown.reconnect") as mock_reconnect,
+            patch("sys.stdin.isatty", return_value=True),
+            patch("builtins.input", side_effect=["yes", "s"]) as mock_input,
+        ):
+            mock_prov = MagicMock()
+            mock_prov.list_workers.return_value = [_make_gce_worker("w-1")]
+            mock_prov_cls.return_value = mock_prov
+            mock_resolve_context.return_value = _make_collect_context(
+                experiment_filestore=experiment_filestore,
+                remote_experiment_root=tmp_path / "remote-root",
+            )
+
+            mock_coll = MagicMock()
+            mock_coll_cls.return_value = mock_coll
+
+            readiness = MagicMock()
+            readiness.list_workers.return_value = []
+            lifecycle = MagicMock()
+            lifecycle.list_jobs.return_value = []
+            mock_reconnect.return_value = (
+                MagicMock(),
+                MagicMock(),
+                readiness,
+                lifecycle,
+                experiment_filestore,
+            )
+
+            from crsbench.cloud.cli._teardown import run_teardown
+
+            rc = run_teardown(_make_teardown_args(force=False))
+
+        assert rc == 0
+        assert mock_input.call_count == 2
+        mock_coll.collect.assert_not_called()
+        mock_coll.collect_logs.assert_not_called()
+        mock_coll.collect_reeval_submission_artifacts.assert_not_called()
+        mock_prov.delete_workers.assert_called_once()
 
     @patch("crsbench.cloud.cli._teardown.resolve_effective_experiment_name")
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")

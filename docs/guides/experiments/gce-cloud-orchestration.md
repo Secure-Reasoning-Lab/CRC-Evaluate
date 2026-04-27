@@ -1413,6 +1413,13 @@ experiment directory:
 uv run crsbench cloud --config config.yaml teardown --timestamp --force
 ```
 
+Use `--skip-collect` when you want teardown to reclaim the fleet without
+collecting worker artifacts, orchestrator submission artifacts, or remote logs:
+
+```bash
+uv run crsbench cloud --config config.yaml teardown --skip-collect --force
+```
+
 Teardown now reuses the same local destination safeguards as `cloud collect`:
 
 - When worker artifacts are being published, `--timestamp` chooses a fresh
@@ -1420,6 +1427,10 @@ Teardown now reuses the same local destination safeguards as `cloud collect`:
   `/tmp/crsbench/experiment-data/my-experiment-2026-03-21-17-45`
 - Without `--timestamp`, teardown prompts before merging into an existing local
   destination unless `--force` is set
+- At that overwrite prompt, `s` / `skip` skips collection entirely and proceeds
+  straight to VM deletion
+- `--skip-collect` bypasses artifact/log collection and the local destination
+  prompt entirely
 - Successful teardown collections that publish worker artifacts refresh the same
   `<local-destination>/.crsbench-collect.json` marker metadata used by
   standalone `cloud collect`
