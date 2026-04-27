@@ -143,7 +143,8 @@ cloud:
         service_account_email: 153298433405-compute@developer.gserviceaccount.com
         owner_label: crsbench
       instance_profiles:
-        gce-orchestrator-n2d: {}
+        gce-orchestrator-n2d:
+          machine_type: n2d-standard-128
         gce-worker-n2d:
           machine_type: n2d-standard-224
         gce-evaluator-n2d: {}
