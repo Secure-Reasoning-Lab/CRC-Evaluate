@@ -1,0 +1,80 @@
+# Local discovery smoke: opencode bug-finding against a 10-project OSS-Fuzz
+# shortlist.
+#
+# This config uses an extracted OSS-Fuzz projects mirror under `.run/` so local
+# `benchmark init` does not depend on sparse checkout state in
+# `third_party/oss-fuzz/projects`.
+#
+# Prep the local shortlist mirror:
+#   SHORTLIST_ROOT=.run/discovery-smoke-testing/oss-fuzz-shortlist
+#   rm -rf "$SHORTLIST_ROOT"
+#   mkdir -p "$SHORTLIST_ROOT"
+#   for p in gpac mpv edk2 upx kamailio wamr coturn tinyusb open5gs apache-logging-log4cxx; do
+#     git -C third_party/oss-fuzz archive --format=tar HEAD "projects/$p" | tar -xf - -C "$SHORTLIST_ROOT"
+#   done
+#
+# Usage:
+#   CONFIG=experiment-configs/discovery-smoke-testing/opencode-shortlist-bugfinding.yaml
+#   uv run crsbench benchmark init --experiment-config "$CONFIG" --jobs 4 --cpuset-cpus 0-31
+#   uv run crsbench run --experiment-config "$CONFIG" --dry-run --local-only
+#   uv run crsbench run --experiment-config "$CONFIG" --local-only
+
+description: 'Local discovery smoke: opencode bug-finding on an OSS-Fuzz shortlist'
+
+experiment:
+  name: discovery-smoke-opencode-shortlist
+  task: bugfinding
+  mode: full
+  benchmarks:
+    - gpac
+    - mpv
+    - edk2
+    - upx
+    - kamailio
+    - wamr
+    - coturn
+    - tinyusb
+    - open5gs
+    - apache-logging-log4cxx
+  only_cpv_harnesses: false
+  sanitizers:
+    - address
+
+benchmarks_root: .run/discovery-smoke-testing/oss-fuzz-shortlist/projects
+oss_fuzz_path: third_party/oss-fuzz
+
+runtime:
+  trials: 1
+  max_total_time: 2460
+  build_timeout: 1800
+  run_timeout: 540
+  verify_timeout: 60
+  skip_verification: true
+  source_mode: main_repo
+  redis_host: localhost
+  rts_enabled: false
+  inc_build_enabled: false
+  litellm:
+    mode: external
+    cost_budget: 0.5
+
+storage:
+  copy_results_after_trial: true
+  cleanup_after_trial: true
+  results_filestore: .run/discovery-smoke-testing/results/opencode-shortlist-bugfinding
+  experiment_filestore: .run/discovery-smoke-testing/experiment-data/opencode-shortlist-bugfinding
+  report_filestore: .run/discovery-smoke-testing/report-data/opencode-shortlist-bugfinding
+
+crs_compose:
+  oss_crs_infra:
+    shared: true
+  crs-bug-finding-opencode:
+    num_cores: 8
+    budget_policy: terminate
+    additional_env:
+      CRS_AGENT: opencode
+      OPENCODE_MODEL: zai-org/GLM-5.1
+
+resources:
+  cores_per_trial: 8
+  memory_per_trial: "32G"

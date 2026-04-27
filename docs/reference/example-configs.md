@@ -15,6 +15,7 @@ Discovery smoke configs live under
 
 Concrete discovery smoke examples:
 - [`opencode-go-yaml-bugfinding.yaml`](../../experiment-configs/discovery-smoke-testing/opencode-go-yaml-bugfinding.yaml)
+- [`opencode-shortlist-bugfinding.yaml`](../../experiment-configs/discovery-smoke-testing/opencode-shortlist-bugfinding.yaml)
 - [`gce-opencode-go-yaml-bugfinding.yaml`](../../experiment-configs/discovery-smoke-testing/gce-opencode-go-yaml-bugfinding.yaml)
 
 The grouped distributed experiment config is the primary contract reference for
