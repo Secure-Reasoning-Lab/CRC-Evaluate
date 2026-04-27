@@ -215,10 +215,35 @@ def test_main_dispatches_replay_povs() -> None:
     mock_replay_povs.assert_called_once_with(args)
 
 
-def test_run_replay_povs_scaffold_raises_expected_error() -> None:
+def test_run_replay_povs_returns_success_when_engine_completes() -> None:
     from crsbench.evaluation.replay.cli import run_replay_povs
 
-    with pytest.raises(NotImplementedError) as exc_info:
-        run_replay_povs(Namespace())
+    args = Namespace(
+        source_dirs=[Path("experiments/run-a")],
+        output=Path("out/replay"),
+        oss_fuzz_path=Path("third_party/oss-fuzz"),
+        projects_root=Path("projects"),
+        sync_projects=False,
+        benchmarks=None,
+        trials=None,
+        jobs=1,
+        per_pov_timeout=180,
+        verbose=False,
+    )
 
-    assert str(exc_info.value) == "replay-povs wiring is added in later tasks"
+    with (
+        patch("crsbench.evaluation.replay.cli.configure_logger"),
+        patch(
+            "crsbench.evaluation.replay.cli.resolve_projects_root",
+            return_value=Path("/tmp/projects"),
+        ),
+        patch(
+            "crsbench.evaluation.replay.cli.discover_source_povs",
+            return_value=([], {"source_roots_processed": 1}),
+        ),
+        patch("crsbench.evaluation.replay.cli.ReplayEngine") as mock_engine,
+        patch.object(Path, "is_dir", return_value=True),
+    ):
+        assert run_replay_povs(args) == 0
+
+    mock_engine.return_value.run.assert_called_once()

@@ -5,6 +5,12 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from crsbench.evaluation.replay.discovery import discover_source_povs
+from crsbench.evaluation.replay.engine import ReplayEngine
+from crsbench.evaluation.replay.projects import resolve_projects_root
+from crsbench.utils.logger import configure_logger
+from crsbench.utils.run_helper import ensure_oss_fuzz_root
+
 
 def add_replay_povs_subparser(subparsers: argparse._SubParsersAction) -> None:
     """Register the ``replay-povs`` top-level command."""
@@ -83,5 +89,47 @@ def add_replay_povs_subparser(subparsers: argparse._SubParsersAction) -> None:
 
 
 def run_replay_povs(args: argparse.Namespace) -> int:
-    """Placeholder replay entry point for the Task 1 scaffold."""
-    raise NotImplementedError("replay-povs wiring is added in later tasks")
+    """Replay historical POVs against latest OSS-Fuzz projects and harnesses."""
+    configure_logger(level="DEBUG" if args.verbose else "INFO")
+
+    source_dirs = [Path(item).resolve() for item in args.source_dirs]
+    if any(not source_dir.is_dir() for source_dir in source_dirs):
+        raise SystemExit("All --source-dir values must exist and be directories")
+
+    if args.jobs < 1:
+        raise SystemExit("--jobs must be at least 1")
+    if args.per_pov_timeout < 1:
+        raise SystemExit("--per-pov-timeout must be at least 1")
+
+    output_dir = Path(args.output).resolve()
+    if any(
+        output_dir == source_dir or output_dir.is_relative_to(source_dir)
+        for source_dir in source_dirs
+    ):
+        raise SystemExit("--output must be outside every source experiment tree")
+
+    oss_fuzz_path = (
+        Path(args.oss_fuzz_path).resolve()
+        if args.oss_fuzz_path is not None
+        else Path(ensure_oss_fuzz_root()).resolve()
+    )
+    repo_root = Path(__file__).resolve().parents[3]
+    projects_root = resolve_projects_root(
+        args.projects_root,
+        sync_projects=args.sync_projects,
+        repo_root=repo_root,
+    )
+    records, discovery_stats = discover_source_povs(
+        source_dirs,
+        benchmark_filters=set(args.benchmarks or []),
+        trial_filters=set(args.trials or []),
+    )
+    engine = ReplayEngine(
+        oss_fuzz_path=oss_fuzz_path,
+        projects_root=projects_root,
+        output_dir=output_dir,
+        jobs=args.jobs,
+        per_pov_timeout=args.per_pov_timeout,
+    )
+    engine.run(records, discovery_stats=discovery_stats, source_dirs=source_dirs)
+    return 0
