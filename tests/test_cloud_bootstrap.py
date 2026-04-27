@@ -234,6 +234,82 @@ def test_run_cloud_vm_bootstrap_reads_download_delay_from_env(
     assert result == [Path("/tmp/benchmarks")]
 
 
+def test_run_cloud_vm_bootstrap_prepares_external_benchmarks_even_when_policy_is_never(
+    monkeypatch, tmp_path: Path
+) -> None:
+    prepare_calls: list[tuple[str, Path]] = []
+    external_calls: list[tuple[tuple[str, ...], Path, Path]] = []
+    delayed_download_calls: list[tuple[str | None, int, bool]] = []
+
+    def fake_run_prepare(
+        prepare_mode: str,
+        *,
+        cwd: Path | None = None,
+        runner=None,
+    ) -> None:
+        del runner
+        assert cwd is not None
+        prepare_calls.append((prepare_mode, cwd))
+
+    def fake_prepare_external_benchmarks(
+        selector: CloudBenchmarkSelector,
+        *,
+        cwd: Path | None,
+    ) -> list[Path] | None:
+        assert cwd is not None
+        external_calls.append(
+            (
+                tuple(selector.benchmark_names()),
+                selector.effective_benchmarks_root(),
+                cwd,
+            )
+        )
+        return [cwd / "third_party" / "oss-fuzz" / "projects" / "go-yaml"]
+
+    def fake_run_benchmark_download_with_delay(
+        selector: CloudBenchmarkSelector,
+        *,
+        download_delay_sec: int,
+        download_fn,
+    ) -> list[Path]:
+        delayed_download_calls.append(
+            (
+                selector.benchmark_suite,
+                download_delay_sec,
+                download_fn is not None,
+            )
+        )
+        return [Path("/tmp/unexpected-download")]
+
+    monkeypatch.setattr(bootstrap_module, "run_prepare", fake_run_prepare)
+    monkeypatch.setattr(
+        bootstrap_module,
+        "_prepare_external_benchmarks",
+        fake_prepare_external_benchmarks,
+    )
+    monkeypatch.setattr(
+        bootstrap_module,
+        "run_benchmark_download_with_delay",
+        fake_run_benchmark_download_with_delay,
+    )
+
+    result = run_cloud_vm_bootstrap(
+        CloudVmBootstrapInputs(
+            benchmarks=["go-yaml"],
+            benchmarks_root=Path("third_party/oss-fuzz/projects"),
+            download_benchmarks="never",
+        ),
+        cwd=tmp_path,
+    )
+
+    assert prepare_calls == [("full", tmp_path)]
+    assert external_calls == [
+        (("go-yaml",), Path("third_party/oss-fuzz/projects"), tmp_path)
+    ]
+    assert delayed_download_calls == []
+    assert result == [tmp_path / "third_party" / "oss-fuzz" / "projects" / "go-yaml"]
+
+
 @pytest.mark.parametrize(
     ("prepare_mode", "expected"),
     [
@@ -335,6 +411,180 @@ def test_run_benchmark_download_uses_python_download_api_for_explicit_benchmarks
         )
     ]
     assert result == [Path("/srv/benchmarks")]
+
+
+def test_run_benchmark_download_materializes_managed_oss_fuzz_projects_and_inits_meta(
+    monkeypatch, tmp_path: Path
+) -> None:
+    checkout_root = tmp_path
+    managed_projects_root = checkout_root / "third_party" / "oss-fuzz" / "projects"
+    managed_projects_root.mkdir(parents=True)
+
+    materialized: list[tuple[str, Path, Path]] = []
+    meta_calls: list[tuple[Path, Path]] = []
+    dataset_calls: list[tuple[str, Path, list[str] | None, bool]] = []
+
+    def fake_materialize(
+        benchmark_name: str,
+        *,
+        oss_fuzz_root: Path,
+    ) -> Path:
+        materialized.append((benchmark_name, tmp_path, oss_fuzz_root))
+        project_dir = oss_fuzz_root / "projects" / benchmark_name
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "project.yaml").write_text("language: c\n")
+        (project_dir / "Dockerfile").write_text("FROM scratch\n")
+        (project_dir / "build.sh").write_text("#!/bin/sh\n")
+        return project_dir
+
+    def fake_auto_generate_meta_yaml(
+        benchmark_path: Path,
+        oss_fuzz_path: Path,
+        sanitizer: str = "address",
+        *,
+        cpuset_cpus: str | None = None,
+    ) -> Path:
+        del sanitizer, cpuset_cpus
+        meta_calls.append((benchmark_path, oss_fuzz_path))
+        meta_path = benchmark_path / ".aixcc" / "meta.yaml"
+        meta_path.parent.mkdir(parents=True, exist_ok=True)
+        meta_path.write_text("full_mode:\n  base_commit: " + ("0" * 40) + "\n")
+        return meta_path
+
+    def fake_download_dataset(
+        dataset: str,
+        output_dir: Path,
+        *,
+        benchmarks: list[str] | None = None,
+        no_ground_truth: bool = False,
+    ) -> Path:
+        dataset_calls.append((dataset, output_dir, benchmarks, no_ground_truth))
+        return output_dir
+
+    monkeypatch.setattr(
+        bootstrap_module,
+        "_materialize_managed_oss_fuzz_project",
+        fake_materialize,
+    )
+    monkeypatch.setattr(
+        bootstrap_module,
+        "auto_generate_meta_yaml",
+        fake_auto_generate_meta_yaml,
+    )
+    monkeypatch.setattr(bootstrap_module, "download_dataset", fake_download_dataset)
+
+    selector = CloudBenchmarkSelector.from_inputs(
+        CloudVmBootstrapInputs(
+            benchmarks=["go-yaml"],
+            benchmarks_root=Path("third_party/oss-fuzz/projects"),
+        )
+    )
+
+    result = run_benchmark_download(selector, cwd=checkout_root)
+
+    project_dir = managed_projects_root / "go-yaml"
+    assert result == [project_dir]
+    assert materialized == [
+        ("go-yaml", checkout_root, checkout_root / "third_party" / "oss-fuzz")
+    ]
+    assert meta_calls == [(project_dir, checkout_root / "third_party" / "oss-fuzz")]
+    assert dataset_calls == []
+    assert (project_dir / ".aixcc" / "meta.yaml").exists()
+
+
+def test_run_benchmark_download_uses_existing_external_benchmark_under_unmanaged_root(
+    monkeypatch, tmp_path: Path
+) -> None:
+    external_root = tmp_path / "external-benchmarks"
+    benchmark_dir = external_root / "go-yaml"
+    benchmark_dir.mkdir(parents=True)
+    (benchmark_dir / "project.yaml").write_text("language: go\n")
+    (benchmark_dir / "Dockerfile").write_text("FROM scratch\n")
+    (benchmark_dir / "build.sh").write_text("#!/bin/sh\n")
+    dataset_calls: list[tuple[str, Path, list[str] | None, bool]] = []
+    meta_calls: list[tuple[Path, Path]] = []
+
+    def fake_download_dataset(
+        dataset: str,
+        output_dir: Path,
+        *,
+        benchmarks: list[str] | None = None,
+        no_ground_truth: bool = False,
+    ) -> Path:
+        dataset_calls.append((dataset, output_dir, benchmarks, no_ground_truth))
+        return output_dir
+
+    def fake_auto_generate_meta_yaml(
+        benchmark_path: Path,
+        oss_fuzz_path: Path,
+        sanitizer: str = "address",
+        *,
+        cpuset_cpus: str | None = None,
+    ) -> Path:
+        del sanitizer, cpuset_cpus
+        meta_calls.append((benchmark_path, oss_fuzz_path))
+        meta_path = benchmark_path / ".aixcc" / "meta.yaml"
+        meta_path.parent.mkdir(parents=True, exist_ok=True)
+        meta_path.write_text("full_mode:\n  base_commit: " + ("0" * 40) + "\n")
+        return meta_path
+
+    monkeypatch.setattr(bootstrap_module, "download_dataset", fake_download_dataset)
+    monkeypatch.setattr(
+        bootstrap_module,
+        "auto_generate_meta_yaml",
+        fake_auto_generate_meta_yaml,
+    )
+
+    selector = CloudBenchmarkSelector.from_inputs(
+        CloudVmBootstrapInputs(
+            benchmarks=["go-yaml"],
+            benchmarks_root=external_root,
+        )
+    )
+
+    result = run_benchmark_download(selector, cwd=tmp_path)
+
+    assert result == [benchmark_dir]
+    assert dataset_calls == []
+    assert meta_calls == [(benchmark_dir, tmp_path / "third_party" / "oss-fuzz")]
+    assert (benchmark_dir / ".aixcc" / "meta.yaml").exists()
+
+
+def test_run_benchmark_download_fails_for_missing_external_benchmark_under_unmanaged_root(
+    tmp_path: Path,
+) -> None:
+    external_root = tmp_path / "external-benchmarks"
+    external_root.mkdir(parents=True)
+
+    selector = CloudBenchmarkSelector.from_inputs(
+        CloudVmBootstrapInputs(
+            benchmarks=["go-yaml"],
+            benchmarks_root=external_root,
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="External benchmark directories are missing under unmanaged benchmarks_root",
+    ):
+        run_benchmark_download(selector, cwd=tmp_path)
+
+
+def test_run_benchmark_download_fails_for_mixed_dataset_and_external_benchmarks(
+    tmp_path: Path,
+) -> None:
+    selector = CloudBenchmarkSelector.from_inputs(
+        CloudVmBootstrapInputs(
+            benchmarks=["afc-demo-01", "go-yaml"],
+            benchmarks_root=Path("third_party/oss-fuzz/projects"),
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="cannot mix CRSBench dataset benchmarks with external benchmarks",
+    ):
+        run_benchmark_download(selector, cwd=tmp_path)
 
 
 def test_from_experiment_config_restores_repo_default_roots() -> None:

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal, cast
 
+from crsbench.benchmark.discovery import auto_generate_meta_yaml
 from crsbench.dataset.download import download_dataset, download_suite
 from crsbench.dataset.registry import resolve_prefix
 from crsbench.validation.schemas import (
@@ -25,6 +26,8 @@ BenchmarkSelectorList = list[BenchmarkSelectorInput]
 
 DEFAULT_BENCHMARKS_ROOT = Path("benchmarks")
 DEFAULT_BENCHMARK_SUITES_ROOT = Path("benchmark-suites")
+MANAGED_OSS_FUZZ_ROOT = Path("third_party/oss-fuzz")
+MANAGED_OSS_FUZZ_PROJECTS_ROOT = MANAGED_OSS_FUZZ_ROOT / "projects"
 CRSBENCH_DOWNLOAD_DELAY_SEC_ENV = "CRSBENCH_DOWNLOAD_DELAY_SEC"
 _DOWNLOAD_DELAY_WINDOW_SEC = 300
 _DOWNLOAD_DELAY_SPACING_SEC = 10
@@ -207,6 +210,7 @@ def run_benchmark_download(
     *,
     download_suite_fn: Callable[..., list[Path]] | None = None,
     download_dataset_fn: Callable[..., Path] | None = None,
+    cwd: Path | None = None,
 ) -> list[Path]:
     """Download benchmarks required by one cloud VM bootstrap."""
     selected_download_suite = (
@@ -222,10 +226,14 @@ def run_benchmark_download(
             selector.effective_benchmark_suites_root(),
             no_ground_truth=False,
         )
+    external_paths = _prepare_external_benchmarks(selector, cwd=cwd)
+    if external_paths is not None:
+        return external_paths
     if selector.benchmarks:
         results: list[Path] = []
-        grouped = _group_benchmarks_by_dataset(selector.benchmark_names())
-        for dataset, names in grouped.items():
+        for dataset, names in _group_benchmarks_by_dataset(
+            selector.benchmark_names()
+        ).items():
             results.append(
                 selected_download_dataset(
                     dataset,
@@ -291,6 +299,9 @@ def run_cloud_vm_bootstrap(
 ) -> list[Path]:
     """Run the shared prepare/download bootstrap sequence for a cloud VM."""
     run_prepare(inputs.prepare_mode, cwd=cwd, runner=runner)
+    external_paths = _prepare_external_benchmarks(inputs.selector, cwd=cwd)
+    if external_paths is not None:
+        return external_paths
     if not should_download_benchmarks(inputs):
         return []
     return run_benchmark_download_with_delay(
@@ -300,18 +311,206 @@ def run_cloud_vm_bootstrap(
             selector,
             download_suite_fn=download_suite_fn,
             download_dataset_fn=download_dataset_fn,
+            cwd=cwd,
         ),
     )
 
 
 def _group_benchmarks_by_dataset(benchmarks: list[str]) -> OrderedDict[str, list[str]]:
+    grouped, unknown = _split_benchmarks_by_dataset(benchmarks)
+    if unknown:
+        raise ValueError(f"Unknown benchmark selector: {unknown[0]}")
+    return grouped
+
+
+def _split_benchmarks_by_dataset(
+    benchmarks: list[str],
+) -> tuple[OrderedDict[str, list[str]], list[str]]:
     grouped: OrderedDict[str, list[str]] = OrderedDict()
+    external_benchmarks: list[str] = []
     for benchmark in benchmarks:
         dataset = resolve_prefix(benchmark)
         if dataset is None:
-            raise ValueError(f"Unknown benchmark selector: {benchmark}")
+            external_benchmarks.append(benchmark)
+            continue
         grouped.setdefault(dataset, []).append(benchmark)
-    return grouped
+    return grouped, external_benchmarks
+
+
+def _prepare_external_benchmarks(
+    selector: CloudBenchmarkSelector,
+    *,
+    cwd: Path | None,
+) -> list[Path] | None:
+    if selector.benchmarks is None:
+        return None
+
+    benchmark_names = selector.benchmark_names()
+    grouped, external_benchmarks = _split_benchmarks_by_dataset(benchmark_names)
+    if grouped and external_benchmarks:
+        dataset_benchmarks = [
+            benchmark_name for names in grouped.values() for benchmark_name in names
+        ]
+        raise ValueError(
+            "Cloud VM bootstrap cannot mix CRSBench dataset benchmarks with "
+            f"external benchmarks in one explicit benchmark list: "
+            f"dataset={dataset_benchmarks!r}, "
+            f"external={external_benchmarks!r}"
+        )
+    if not external_benchmarks:
+        return None
+
+    return _resolve_external_benchmark_paths(
+        external_benchmarks,
+        benchmarks_root=selector.effective_benchmarks_root(),
+        cwd=cwd,
+    )
+
+
+def _resolve_external_benchmark_paths(
+    benchmark_names: list[str],
+    *,
+    benchmarks_root: Path,
+    cwd: Path | None,
+) -> list[Path]:
+    resolved_root = _resolve_root_path(benchmarks_root, cwd=cwd)
+    if _is_managed_oss_fuzz_projects_root(benchmarks_root, cwd=cwd):
+        if cwd is None:
+            raise ValueError(
+                "Cloud VM bootstrap requires cwd when benchmarks_root points to "
+                "managed third_party/oss-fuzz/projects"
+            )
+        oss_fuzz_root = cwd / MANAGED_OSS_FUZZ_ROOT
+        return [
+            _ensure_managed_oss_fuzz_project(
+                benchmark_name,
+                oss_fuzz_root=oss_fuzz_root,
+            )
+            for benchmark_name in benchmark_names
+        ]
+
+    benchmark_paths = [
+        resolved_root / benchmark_name for benchmark_name in benchmark_names
+    ]
+    missing = [
+        benchmark_name
+        for benchmark_name, benchmark_path in zip(
+            benchmark_names, benchmark_paths, strict=True
+        )
+        if not benchmark_path.is_dir()
+    ]
+    if missing:
+        raise ValueError(
+            "External benchmark directories are missing under unmanaged "
+            f"benchmarks_root {resolved_root}: {missing!r}. Pre-create those "
+            "directories on the VM, or use benchmarks_root=third_party/oss-fuzz/projects "
+            "to materialize them from the managed OSS-Fuzz checkout."
+        )
+
+    if cwd is None:
+        missing_meta = [
+            benchmark_path.name
+            for benchmark_path in benchmark_paths
+            if not (benchmark_path / ".aixcc" / "meta.yaml").is_file()
+        ]
+        if missing_meta:
+            raise ValueError(
+                "Cloud VM bootstrap requires cwd to auto-generate "
+                f".aixcc/meta.yaml for external benchmarks: {missing_meta!r}"
+            )
+        return benchmark_paths
+
+    oss_fuzz_root = cwd / MANAGED_OSS_FUZZ_ROOT
+    for benchmark_path in benchmark_paths:
+        _ensure_external_meta_yaml(benchmark_path, oss_fuzz_root=oss_fuzz_root)
+    return benchmark_paths
+
+
+def _ensure_managed_oss_fuzz_project(
+    benchmark_name: str,
+    *,
+    oss_fuzz_root: Path,
+) -> Path:
+    project_dir = oss_fuzz_root / "projects" / benchmark_name
+    if not project_dir.is_dir():
+        project_dir = _materialize_managed_oss_fuzz_project(
+            benchmark_name,
+            oss_fuzz_root=oss_fuzz_root,
+        )
+    if not project_dir.is_dir():
+        raise ValueError(
+            f"Managed OSS-Fuzz checkout did not produce projects/{benchmark_name}: "
+            f"{project_dir}"
+        )
+    _ensure_external_meta_yaml(project_dir, oss_fuzz_root=oss_fuzz_root)
+    return project_dir
+
+
+def _materialize_managed_oss_fuzz_project(
+    benchmark_name: str,
+    *,
+    oss_fuzz_root: Path,
+) -> Path:
+    project_prefix = f"projects/{benchmark_name}"
+    archive_cmd = [
+        "git",
+        "-C",
+        str(oss_fuzz_root),
+        "archive",
+        "--format=tar",
+        "HEAD",
+        project_prefix,
+    ]
+    archive = subprocess.Popen(
+        archive_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert archive.stdout is not None
+    extract = subprocess.Popen(
+        ["tar", "-xf", "-"],
+        cwd=oss_fuzz_root,
+        stdin=archive.stdout,
+        stderr=subprocess.PIPE,
+    )
+    archive.stdout.close()
+    _, archive_stderr = archive.communicate()
+    _, extract_stderr = extract.communicate()
+    if archive.returncode != 0 or extract.returncode != 0:
+        archive_error = archive_stderr.decode("utf-8", errors="replace").strip()
+        extract_error = extract_stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(
+            f"Failed to materialize OSS-Fuzz project {benchmark_name!r} from "
+            f"{oss_fuzz_root}: git archive rc={archive.returncode}, tar rc={extract.returncode}, "
+            f"git stderr={archive_error!r}, tar stderr={extract_error!r}"
+        )
+
+    project_dir = oss_fuzz_root / project_prefix
+    if not project_dir.is_dir():
+        raise ValueError(
+            f"Managed OSS-Fuzz checkout does not contain {project_prefix}. "
+            "Verify the benchmark name matches an OSS-Fuzz project in third_party/oss-fuzz."
+        )
+    return project_dir
+
+
+def _ensure_external_meta_yaml(benchmark_path: Path, *, oss_fuzz_root: Path) -> Path:
+    meta_yaml_path = benchmark_path / ".aixcc" / "meta.yaml"
+    if meta_yaml_path.is_file():
+        return meta_yaml_path
+    return auto_generate_meta_yaml(benchmark_path, oss_fuzz_root)
+
+
+def _resolve_root_path(path: Path, *, cwd: Path | None) -> Path:
+    if path.is_absolute() or cwd is None:
+        return path
+    return cwd / path
+
+
+def _is_managed_oss_fuzz_projects_root(path: Path, *, cwd: Path | None) -> bool:
+    if cwd is None:
+        return path == MANAGED_OSS_FUZZ_PROJECTS_ROOT
+    return _resolve_root_path(path, cwd=cwd) == cwd / MANAGED_OSS_FUZZ_PROJECTS_ROOT
 
 
 def _resolve_download_delay_sec(download_delay_sec: int | None) -> int:
