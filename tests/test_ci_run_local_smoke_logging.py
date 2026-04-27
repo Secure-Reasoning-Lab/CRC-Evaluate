@@ -326,11 +326,6 @@ def test_run_smoke_suite_run_failure_cleans_workspace_and_marker(
             SMOKE_BG_PID=$!
             SMOKE_BG_LOGGER_PID=""
         }}
-        stop_worker_process() {{
-            kill -TERM -- -"$1" 2>/dev/null || kill "$1" 2>/dev/null || true
-            wait "$1" 2>/dev/null || true
-            return 0
-        }}
         run_smoke_logged_command() {{
             return 7
         }}
