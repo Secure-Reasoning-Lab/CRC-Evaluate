@@ -7,6 +7,7 @@ This mode is intended for discovery and improvement pipelines on arbitrary
 OSS-Fuzz projects:
 
 - benchmark directories come from an OSS-Fuzz `projects/` tree
+- project language comes from `project.yaml` and is not limited to C/C++ or JVM
 - CRSBench generates a minimal `.aixcc/meta.yaml` by discovering fuzz targets
 - harnesses without CPVs are still scheduled when
   `experiment.only_cpv_harnesses: false`
@@ -141,3 +142,10 @@ and evaluator workflows documented in [Distributed](./distributed.md).
 - `only_cpv_harnesses: false` applies to both bug-finding and bug-fixing CRS
   types. For bug-fixing workflows, you still need a POV source such as a prior
   finding experiment.
+- Discovery-mode initialization and trial orchestration work with arbitrary
+  OSS-Fuzz benchmark languages such as C/C++, JVM, Go, Rust, and Python, as
+  long as the selected CRS can run that target language.
+- Coverage and RTS remain language-specific subsystems. Coverage currently
+  supports C/C++ and JVM only; if enabled for an unsupported benchmark
+  language, CRSBench skips coverage for that benchmark with a warning instead
+  of failing the discovery run.

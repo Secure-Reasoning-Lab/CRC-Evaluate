@@ -124,6 +124,8 @@ Workflow summary:
   `full_mode` metadata only.
 - Set `runtime.skip_verification: true` unless you are supplying an external
   verification source.
+- Discovery-mode benchmark loading is language-agnostic; language-specific
+  limits apply only to specific subsystems such as coverage and RTS.
 
 ### Config Fields
 
@@ -140,6 +142,8 @@ Workflow summary:
 
 CRS runs proceed normally, POVs and patches are collected as artifacts,
 and reports show raw discovery counts without CPV-based scoring.
+If coverage is enabled for an unsupported benchmark language, CRSBench skips
+coverage for that benchmark with a warning instead of failing the run.
 
 ## Input Contract
 
