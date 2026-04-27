@@ -9,8 +9,10 @@ from typing import TYPE_CHECKING, cast
 from crsbench.cloud.cli._collect import (
     _build_collect_marker,
     _collect_live_instances_parallel,
+    _collector_supports_staged_publish,
     _confirm_destination_overwrite,
     _fresh_timestamp_destination,
+    _publish_staged_collections,
     _resolve_current_run_start_time,
 )
 from crsbench.cloud.cli._config_reconnect import (
@@ -244,7 +246,12 @@ def run_teardown(args: argparse.Namespace) -> int:
             collection_failed = True
             reeval_submission_artifacts_ready = False
 
-    failed_collections = _collect_live_instances_parallel(
+    (
+        failed_collections,
+        artifact_failures,
+        artifact_publish_succeeded,
+        staged_collections,
+    ) = _collect_live_instances_parallel(
         collector=collector,
         context=context,
         live_instances=live_instances,
@@ -255,11 +262,7 @@ def run_teardown(args: argparse.Namespace) -> int:
         start_time_observations=start_time_observations,
         continue_on_error=True,
     )
-    collection_failed = failed_collections > 0
-    artifact_publish_succeeded = (
-        any(_collects_experiment_artifacts(worker) for worker in live_instances)
-        and destination.exists()
-    )
+    collection_failed = collection_failed or failed_collections > 0
 
     if (
         orchestrator_collects_artifacts
@@ -267,24 +270,56 @@ def run_teardown(args: argparse.Namespace) -> int:
         and reeval_submission_artifacts_ready
     ):
         orchestrator_worker = launch_state.as_orchestrator_record()
-        try:
-            collector.collect(
-                worker=cast("CloudInstanceLike", orchestrator_worker),
-                fleet=launch_state.as_transport_config(),
-                experiment_name=experiment_name,
-                experiment_filestore=experiment_filestore,
-                remote_experiment_dir=remote_experiment_dir,
-                start_time_observations=start_time_observations,
-                destination=destination,
-            )
-            artifact_publish_succeeded = True
-        except (ArtifactCollectionError, Exception) as exc:
-            logger.error(
-                "Artifact collection failed for {}: {} -- continuing with teardown",
-                orchestrator_worker.name,
-                exc,
-            )
-            collection_failed = True
+        if _collector_supports_staged_publish(collector):
+            try:
+                staged_collections.append(
+                    collector.stage_collection(
+                        worker=cast("CloudInstanceLike", orchestrator_worker),
+                        fleet=launch_state.as_transport_config(),
+                        experiment_name=experiment_name,
+                        experiment_filestore=experiment_filestore,
+                        remote_experiment_dir=remote_experiment_dir,
+                        destination=destination,
+                    )
+                )
+                logger.info("Collection staged: {}", orchestrator_worker.name)
+            except (ArtifactCollectionError, Exception) as exc:
+                logger.error(
+                    "Artifact collection failed for {}: {} -- continuing with teardown",
+                    orchestrator_worker.name,
+                    exc,
+                )
+                collection_failed = True
+                artifact_failures += 1
+        else:
+            try:
+                collector.collect(
+                    worker=cast("CloudInstanceLike", orchestrator_worker),
+                    fleet=launch_state.as_transport_config(),
+                    experiment_name=experiment_name,
+                    experiment_filestore=experiment_filestore,
+                    remote_experiment_dir=remote_experiment_dir,
+                    start_time_observations=start_time_observations,
+                    destination=destination,
+                )
+                artifact_publish_succeeded = True
+            except (ArtifactCollectionError, Exception) as exc:
+                logger.error(
+                    "Artifact collection failed for {}: {} -- continuing with teardown",
+                    orchestrator_worker.name,
+                    exc,
+                )
+                collection_failed = True
+                artifact_failures += 1
+
+    if artifact_failures == 0 and staged_collections:
+        publish_failures, published = _publish_staged_collections(
+            collector=collector,
+            staged_collections=staged_collections,
+            start_time_observations=start_time_observations,
+        )
+        collection_failed = collection_failed or publish_failures > 0
+        artifact_publish_succeeded = artifact_publish_succeeded or published
 
     if launch_state is not None:
         orchestrator_worker = launch_state.as_orchestrator_record()

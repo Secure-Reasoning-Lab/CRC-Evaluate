@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -23,6 +24,7 @@ from crsbench.cloud.cli._instance_inventory import (
 from crsbench.cloud.collection import (
     ArtifactCollectionError,
     ArtifactCollector,
+    StagedArtifactCollection,
     collect_marker_path,
     merge_experiment_start_time,
     read_collect_marker,
@@ -43,6 +45,14 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 _MAX_PARALLEL_INSTANCE_COLLECTIONS = 8
+
+
+@dataclass(frozen=True)
+class _CollectLiveInstanceResult:
+    failed: int
+    artifact_failed: bool
+    artifact_publish_succeeded: bool
+    staged_collection: StagedArtifactCollection | None = None
 
 
 def _launch_state_collects_experiment_artifacts(launch_state) -> bool:
@@ -173,40 +183,74 @@ def run_collect(args: argparse.Namespace) -> int:
             return 1
 
     artifact_publish_succeeded = False
+    artifact_failures = 0
     start_time_observations: list[tuple[str | None, str]] = []
-    failed = _collect_live_instances_parallel(
-        collector=collector,
-        context=context,
-        live_instances=live_instances,
-        experiment_name=experiment_name,
-        experiment_filestore=experiment_filestore,
-        remote_experiment_dir=remote_experiment_dir,
-        destination=destination,
-        start_time_observations=start_time_observations,
-    )
-    artifact_publish_succeeded = (
-        any(_collects_experiment_artifacts(worker) for worker in live_instances)
-        and destination.exists()
+    failed, artifact_failures, artifact_publish_succeeded, staged_collections = (
+        _collect_live_instances_parallel(
+            collector=collector,
+            context=context,
+            live_instances=live_instances,
+            experiment_name=experiment_name,
+            experiment_filestore=experiment_filestore,
+            remote_experiment_dir=remote_experiment_dir,
+            destination=destination,
+            start_time_observations=start_time_observations,
+        )
     )
 
     if orchestrator_collects_artifacts and launch_state is not None:
         orchestrator_worker = launch_state.as_orchestrator_record()
-        try:
-            collector.collect(
-                worker=cast("CloudInstanceLike", orchestrator_worker),
-                fleet=launch_state.as_transport_config(),
-                experiment_name=experiment_name,
-                experiment_filestore=experiment_filestore,
-                remote_experiment_dir=remote_experiment_dir,
-                start_time_observations=start_time_observations,
-                destination=destination,
-            )
-            artifact_publish_succeeded = True
-        except (ArtifactCollectionError, Exception) as exc:
-            logger.error(
-                "Artifact collection failed for {}: {}", orchestrator_worker.name, exc
-            )
-            failed += 1
+        if _collector_supports_staged_publish(collector):
+            try:
+                staged_collections.append(
+                    collector.stage_collection(
+                        worker=cast("CloudInstanceLike", orchestrator_worker),
+                        fleet=launch_state.as_transport_config(),
+                        experiment_name=experiment_name,
+                        experiment_filestore=experiment_filestore,
+                        remote_experiment_dir=remote_experiment_dir,
+                        destination=destination,
+                    )
+                )
+                logger.info("Collection staged: {}", orchestrator_worker.name)
+            except (ArtifactCollectionError, Exception) as exc:
+                logger.error(
+                    "Artifact collection failed for {}: {}",
+                    orchestrator_worker.name,
+                    exc,
+                )
+                failed += 1
+                artifact_failures += 1
+        else:
+            try:
+                collector.collect(
+                    worker=cast("CloudInstanceLike", orchestrator_worker),
+                    fleet=launch_state.as_transport_config(),
+                    experiment_name=experiment_name,
+                    experiment_filestore=experiment_filestore,
+                    remote_experiment_dir=remote_experiment_dir,
+                    start_time_observations=start_time_observations,
+                    destination=destination,
+                )
+                artifact_publish_succeeded = True
+            except (ArtifactCollectionError, Exception) as exc:
+                logger.error(
+                    "Artifact collection failed for {}: {}",
+                    orchestrator_worker.name,
+                    exc,
+                )
+                failed += 1
+                artifact_failures += 1
+
+    if artifact_failures == 0 and staged_collections:
+        publish_failures, published = _publish_staged_collections(
+            collector=collector,
+            staged_collections=staged_collections,
+            start_time_observations=start_time_observations,
+        )
+        failed += publish_failures
+        artifact_failures += publish_failures
+        artifact_publish_succeeded = artifact_publish_succeeded or published
 
     if launch_state is not None:
         orchestrator_worker = launch_state.as_orchestrator_record()
@@ -447,6 +491,13 @@ def _collects_experiment_artifacts(worker: "CloudInstanceLike") -> bool:
     return worker.labels.get("crsbench-role") != CloudInstanceRole.EVALUATOR.value
 
 
+def _collector_supports_staged_publish(collector: ArtifactCollector) -> bool:
+    """Return whether *collector* exposes the staged-publish collection API."""
+    return callable(getattr(type(collector), "stage_collection", None)) and callable(
+        getattr(type(collector), "publish_staged_collection", None)
+    )
+
+
 def _collect_live_instances_parallel(
     *,
     collector: ArtifactCollector,
@@ -458,14 +509,18 @@ def _collect_live_instances_parallel(
     destination: Path,
     start_time_observations: list[tuple[str | None, str]],
     continue_on_error: bool = False,
-) -> int:
+) -> tuple[int, int, bool, list[StagedArtifactCollection]]:
     """Collect logs and artifacts from live instances with bounded parallelism."""
     if not live_instances:
-        return 0
+        return 0, 0, False, []
 
     max_workers = min(_MAX_PARALLEL_INSTANCE_COLLECTIONS, len(live_instances))
     suffix = " -- continuing with teardown" if continue_on_error else ""
     futures = {}
+    failed = 0
+    artifact_failures = 0
+    artifact_publish_succeeded = False
+    staged_collections: list[StagedArtifactCollection] = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         for worker in live_instances:
             futures[
@@ -482,7 +537,16 @@ def _collect_live_instances_parallel(
                     failure_suffix=suffix,
                 )
             ] = worker.name
-        return sum(future.result() for future in as_completed(futures))
+        for future in as_completed(futures):
+            result = future.result()
+            failed += result.failed
+            artifact_failures += int(result.artifact_failed)
+            artifact_publish_succeeded = (
+                artifact_publish_succeeded or result.artifact_publish_succeeded
+            )
+            if result.staged_collection is not None:
+                staged_collections.append(result.staged_collection)
+    return failed, artifact_failures, artifact_publish_succeeded, staged_collections
 
 
 def _collect_single_live_instance(
@@ -496,7 +560,7 @@ def _collect_single_live_instance(
     destination: Path,
     start_time_observations: list[tuple[str | None, str]],
     failure_suffix: str,
-) -> int:
+) -> _CollectLiveInstanceResult:
     """Collect logs and optional artifacts for one live instance."""
     failed = 0
     try:
@@ -519,7 +583,38 @@ def _collect_single_live_instance(
             "Skipping artifact collection for evaluator {}; logs only",
             worker.name,
         )
-        return failed
+        return _CollectLiveInstanceResult(
+            failed=failed,
+            artifact_failed=False,
+            artifact_publish_succeeded=False,
+        )
+
+    if _collector_supports_staged_publish(collector):
+        try:
+            staged_collection = collector.stage_collection(
+                worker=worker,
+                fleet=_resolve_instance_fleet(context, worker),
+                experiment_name=experiment_name,
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir=remote_experiment_dir,
+                destination=destination,
+            )
+            logger.info("Collection staged: {}", worker.name)
+            return _CollectLiveInstanceResult(
+                failed=failed,
+                artifact_failed=False,
+                artifact_publish_succeeded=False,
+                staged_collection=staged_collection,
+            )
+        except (ArtifactCollectionError, Exception) as exc:
+            logger.error(
+                "Collection failed for {}: {}{}", worker.name, exc, failure_suffix
+            )
+            return _CollectLiveInstanceResult(
+                failed=failed + 1,
+                artifact_failed=True,
+                artifact_publish_succeeded=False,
+            )
 
     try:
         collector.collect(
@@ -535,4 +630,39 @@ def _collect_single_live_instance(
     except (ArtifactCollectionError, Exception) as exc:
         logger.error("Collection failed for {}: {}{}", worker.name, exc, failure_suffix)
         failed += 1
-    return failed
+        return _CollectLiveInstanceResult(
+            failed=failed,
+            artifact_failed=True,
+            artifact_publish_succeeded=False,
+        )
+    return _CollectLiveInstanceResult(
+        failed=failed,
+        artifact_failed=False,
+        artifact_publish_succeeded=True,
+    )
+
+
+def _publish_staged_collections(
+    *,
+    collector: ArtifactCollector,
+    staged_collections: list[StagedArtifactCollection],
+    start_time_observations: list[tuple[str | None, str]],
+) -> tuple[int, bool]:
+    """Publish verified staged worker trees after all artifact staging succeeds."""
+    published = False
+    for staged_collection in sorted(
+        staged_collections, key=lambda item: item.worker_name
+    ):
+        try:
+            collector.publish_staged_collection(staged_collection)
+            start_time_observations.append(staged_collection.start_time_observation)
+            logger.info("Collection succeeded: {}", staged_collection.worker_name)
+            published = True
+        except (ArtifactCollectionError, Exception) as exc:
+            logger.error(
+                "Collection failed for {}: {}",
+                staged_collection.worker_name,
+                exc,
+            )
+            return 1, published
+    return 0, published

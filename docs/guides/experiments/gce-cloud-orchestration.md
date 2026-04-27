@@ -1134,6 +1134,10 @@ Collection behavior:
   and reuses the local GCE OS Login username
 - Stages worker artifacts in a temporary directory, verifies at least one valid
   trial exists, then publishes to the experiment filestore
+- Keeps per-worker artifact trees under `.collect-staging/` until every worker
+  artifact stage has finished successfully; if one worker rsync fails, already
+  staged worker trees remain unpublished instead of partially merging into the
+  final destination
 - Continues to remaining worker and evaluator VMs if one fails; exits with code
   `1` on partial failure
 - Evaluator VMs are log-only for collection; they do not rsync

@@ -24,6 +24,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path, PurePosixPath  # noqa: TC003
@@ -778,6 +779,19 @@ class ArtifactCollectionError(Exception):
     """Raised when artifact collection fails verification or publication."""
 
 
+@dataclass(frozen=True)
+class StagedArtifactCollection:
+    """One verified per-worker artifact tree staged and ready to publish."""
+
+    worker_name: str
+    experiment_name: str
+    staging_dir: Path
+    worker_staging_root: Path
+    final_dir: Path
+    replace_trial_dirs: tuple[Path, ...]
+    start_time_observation: tuple[str | None, str]
+
+
 class ArtifactCollector:
     """Collect trial artifacts from a GCE worker via rsync.
 
@@ -824,6 +838,36 @@ class ArtifactCollector:
         Raises:
             ArtifactCollectionError: If the staged tree fails verification or rsync fails.
         """
+        staged_collection = self.stage_collection(
+            worker=worker,
+            fleet=fleet,
+            experiment_name=experiment_name,
+            experiment_filestore=experiment_filestore,
+            remote_experiment_dir=remote_experiment_dir,
+            destination=destination,
+        )
+        if start_time_observations is not None:
+            start_time_observations.append(staged_collection.start_time_observation)
+        final_dir = self.publish_staged_collection(staged_collection)
+        logger.info(
+            "Artifact collection complete: worker={} experiment={} final_dir={}",
+            worker.name,
+            experiment_name,
+            final_dir,
+        )
+        return final_dir
+
+    def stage_collection(
+        self,
+        *,
+        worker: CloudInstanceLike,
+        fleet: SshTransportConfig,
+        experiment_name: str,
+        experiment_filestore: Path,
+        remote_experiment_dir: str,
+        destination: Path | None = None,
+    ) -> StagedArtifactCollection:
+        """Stage and verify one worker artifact tree without publishing it."""
         known_hosts_path = self._prepare_ssh_access(
             worker=worker,
             fleet=fleet,
@@ -903,31 +947,31 @@ class ArtifactCollector:
             published_root=final_dir,
         )
 
-        # Verify before publishing
         self._verify_staging(staging_dir)
-        with self._publish_lock:
-            if start_time_observations is not None:
-                start_time_observations.append(
-                    discover_experiment_start_time_from_staging([staging_dir])
-                )
-            self._publish(
-                staging_dir,
-                final_dir,
-                replace_trial_dirs=failed_trial_relpaths,
-            )
-
-        # Clean up the per-worker staging parent
-        worker_staging = experiment_filestore / ".collect-staging" / worker.name
-        if worker_staging.exists():
-            shutil.rmtree(worker_staging, ignore_errors=True)
-
-        logger.info(
-            "Artifact collection complete: worker={} experiment={} final_dir={}",
+        return StagedArtifactCollection(
             worker.name,
             experiment_name,
+            staging_dir,
+            staging_dir.parent,
             final_dir,
+            tuple(failed_trial_relpaths),
+            discover_experiment_start_time_from_staging([staging_dir]),
         )
-        return final_dir
+
+    def publish_staged_collection(
+        self, staged_collection: StagedArtifactCollection
+    ) -> Path:
+        """Publish one previously verified staged collection into its final path."""
+        with self._publish_lock:
+            self._publish(
+                staged_collection.staging_dir,
+                staged_collection.final_dir,
+                replace_trial_dirs=list(staged_collection.replace_trial_dirs),
+            )
+
+        if staged_collection.worker_staging_root.exists():
+            shutil.rmtree(staged_collection.worker_staging_root, ignore_errors=True)
+        return staged_collection.final_dir
 
     def collect_logs(
         self,

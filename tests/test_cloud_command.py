@@ -9637,6 +9637,120 @@ class TestCollect:
         assert mock_coll.collect_logs.call_count == 2
         assert mock_coll.collect.call_count == 2
 
+    def test_collect_partial_failure_leaves_worker_artifacts_in_staging(
+        self, tmp_path: Path
+    ) -> None:
+        """Failed multi-worker collect must not publish staged artifacts into the final destination."""
+        from crsbench.cloud.collection import ArtifactCollectionError
+
+        workers = [_make_gce_worker("w-1"), _make_gce_worker("w-2")]
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+        context = SimpleNamespace(
+            experiment_name="test-exp",
+            launch_state=None,
+            experiment_filestore=experiment_filestore,
+            remote_experiment_root=Path("/tmp/remote-root"),
+        )
+        readiness = MagicMock()
+        readiness.list_workers.return_value = []
+        provisioner = MagicMock()
+        provisioner.list_workers.return_value = workers
+        fleet = MagicMock()
+
+        @dataclasses.dataclass
+        class _FakeStage:
+            staging_dir: Path
+            final_dir: Path
+
+        class _FakeCollector:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                del args, kwargs
+
+            def collect_logs(self, *args: object, **kwargs: object) -> Path:
+                del args, kwargs
+                return experiment_filestore / "logs"
+
+            def collect(self, **kwargs: object) -> Path:
+                worker = kwargs["worker"]
+                destination = kwargs["destination"]
+                if worker.name == "w-1":
+                    destination.mkdir(parents=True, exist_ok=True)
+                    (destination / "partial.txt").write_text(
+                        "published too early\n", encoding="utf-8"
+                    )
+                    return destination
+                raise ArtifactCollectionError("rsync failed")
+
+            def stage_collection(self, **kwargs: object) -> _FakeStage:
+                worker = kwargs["worker"]
+                destination = kwargs["destination"]
+                if worker.name == "w-1":
+                    staging_dir = (
+                        experiment_filestore
+                        / ".collect-staging"
+                        / worker.name
+                        / kwargs["experiment_name"]
+                    )
+                    staging_dir.mkdir(parents=True, exist_ok=True)
+                    (staging_dir / "partial.txt").write_text(
+                        "staged artifact\n", encoding="utf-8"
+                    )
+                    return _FakeStage(staging_dir=staging_dir, final_dir=destination)
+                raise ArtifactCollectionError("rsync failed")
+
+            def publish_staged_collection(self, stage: _FakeStage) -> Path:
+                stage.final_dir.mkdir(parents=True, exist_ok=True)
+                (stage.final_dir / "partial.txt").write_text(
+                    "published after barrier\n", encoding="utf-8"
+                )
+                return stage.final_dir
+
+        with (
+            patch(
+                "crsbench.cloud.cli._collect.resolve_cloud_context",
+                return_value=context,
+            ),
+            patch(
+                "crsbench.cloud.cli._collect.provisioner_for_context",
+                return_value=provisioner,
+            ),
+            patch(
+                "crsbench.cloud.cli._collect._list_live_instances",
+                return_value=workers,
+            ),
+            patch(
+                "crsbench.cloud.cli._collect._resolve_instance_fleet",
+                return_value=fleet,
+            ),
+            patch(
+                "crsbench.cloud.cli._collect.reconnect",
+                return_value=(
+                    MagicMock(),
+                    MagicMock(),
+                    readiness,
+                    MagicMock(),
+                    experiment_filestore,
+                ),
+            ),
+            patch("crsbench.cloud.cli._collect.ArtifactCollector", _FakeCollector),
+        ):
+            from crsbench.cloud.cli._collect import run_collect
+
+            rc = run_collect(_make_collect_args(config=str(tmp_path / "config.yaml")))
+
+        destination = experiment_filestore / "test-exp"
+        staged_file = (
+            experiment_filestore
+            / ".collect-staging"
+            / "w-1"
+            / "test-exp"
+            / "partial.txt"
+        )
+        assert rc == 1
+        assert not destination.exists()
+        assert staged_file.read_text(encoding="utf-8") == "staged artifact\n"
+
     @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
     @patch("crsbench.cloud.cli._collect.ArtifactCollector")
     @patch("crsbench.cloud.cli._collect.provisioner_for_context")
