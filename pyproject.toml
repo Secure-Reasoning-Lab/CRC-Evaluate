@@ -170,6 +170,9 @@ ignore = [
 "crsbench/genconfig/generator.py" = [
     "T201",     # print is intentional for interactive CLI section headers
 ]
+"crsbench/benchmark_ci/cli/pov_cleanup.py" = [
+    "T201",     # print is intentional for interactive confirmation prompt
+]
 # RTS scripts are standalone container CLIs ported from oss-crs-old, not CRSBench library code.
 "crsbench/builder/rts/scripts/**/*.py" = [
     "T201",     # print is the intended output mechanism (container CLI)

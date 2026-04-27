@@ -57,6 +57,15 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         ],
         help="Run POV verification",
     )
+    parser.add_argument(
+        "--delete-failed-povs",
+        action="store_true",
+        dest="delete_failed_povs",
+        help=(
+            "After verification, prompt to delete variant POV blobs/logs "
+            "(pov_1+) whose verdict is not 'cpv'. pov_0 is never deleted."
+        ),
+    )
     parser.set_defaults(ci_func=run_pov)
 
 
@@ -203,6 +212,13 @@ def run_pov(args: argparse.Namespace) -> int:
         out = Path(output_path)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(summary.to_dict(), indent=2))
+
+    if getattr(args, "delete_failed_povs", False):
+        from crsbench.benchmark_ci.cli.pov_cleanup import (
+            prompt_and_delete_failed_povs,
+        )
+
+        prompt_and_delete_failed_povs(relevant_jobs, dag_results)
 
     if summary.failed > 0 or summary.errors > 0:
         return 1
