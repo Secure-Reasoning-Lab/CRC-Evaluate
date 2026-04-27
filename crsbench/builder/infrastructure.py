@@ -1512,13 +1512,12 @@ class OSSFuzzInfrastructure:
 
             metadata_path.unlink(missing_ok=True)
             result = run_with_timeout(cmd, timeout=timeout, cwd=self.oss_fuzz_path)
-
-        if result.returncode == 0:
-            self.write_build_metadata(
-                safe_project,
-                inc_build=False,
-                sanitizer=sanitizer,
-            )
+            if result.returncode == 0:
+                self.write_build_metadata(
+                    safe_project,
+                    inc_build=False,
+                    sanitizer=sanitizer,
+                )
         return FuzzerBuildResult(
             success=result.returncode == 0,
             stdout=result.stdout if isinstance(result.stdout, str) else "",

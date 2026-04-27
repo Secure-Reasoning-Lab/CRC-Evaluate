@@ -806,7 +806,6 @@ def _child_plain_project_build(
         (Path(oss_fuzz_path) / "projects" / project_name).mkdir(
             parents=True, exist_ok=True
         )
-        infra.write_build_metadata(project_name, inc_build=False, sanitizer="address")
         return MagicMock(returncode=0, stdout="ok", stderr="")
 
     with mock_patch(
