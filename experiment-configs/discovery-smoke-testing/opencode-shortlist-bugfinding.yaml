@@ -1,4 +1,4 @@
-# Local discovery smoke: opencode bug-finding against a 10-project OSS-Fuzz
+# Local discovery smoke: opencode bug-finding against a 7-project OSS-Fuzz
 # shortlist.
 #
 # This config uses an extracted OSS-Fuzz projects mirror under `.run/` so local
@@ -9,9 +9,15 @@
 #   SHORTLIST_ROOT=.run/discovery-smoke-testing/oss-fuzz-shortlist
 #   rm -rf "$SHORTLIST_ROOT"
 #   mkdir -p "$SHORTLIST_ROOT"
-#   for p in gpac mpv edk2 upx kamailio wamr coturn tinyusb open5gs apache-logging-log4cxx; do
+#   for p in gpac mpv kamailio wamr tinyusb open5gs apache-logging-log4cxx; do
 #     git -C third_party/oss-fuzz archive --format=tar HEAD "projects/$p" | tar -xf - -C "$SHORTLIST_ROOT"
 #   done
+#
+# Removed from the shortlist after local `benchmark init` validation on
+# 2026-04-27 due to current upstream/OSS-Fuzz build failures:
+#   - edk2
+#   - upx
+#   - coturn
 #
 # Usage:
 #   CONFIG=experiment-configs/discovery-smoke-testing/opencode-shortlist-bugfinding.yaml
@@ -28,11 +34,8 @@ experiment:
   benchmarks:
     - gpac
     - mpv
-    - edk2
-    - upx
     - kamailio
     - wamr
-    - coturn
     - tinyusb
     - open5gs
     - apache-logging-log4cxx
