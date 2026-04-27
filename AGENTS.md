@@ -129,6 +129,7 @@ Then re-run the quality gate command above.
 - Documentation taxonomy: `docs/governance/documentation-taxonomy.md`
 - Install: `docs/getting-started/install.md`
 - Configuration: `docs/getting-started/configuration.md`
+- Discovery-only OSS-Fuzz experiments: `docs/guides/experiments/discovery-only.md`
 - Normative benchmark spec: `docs/RFC.md`
 - Architecture: `docs/design/architecture.md`
 - Design doc policy: `docs/design/doc-authoring-guidelines.md`

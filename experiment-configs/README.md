@@ -12,6 +12,9 @@
   - `sanity-bugfinding/`
   - `sanity-bugfixing/`
   - `cloud-testing/`
+- Additional workflow examples:
+  - `discovery-testing/` for discovery-only runs against OSS-Fuzz projects
+    without CRSBench ground truth
 
 ## Naming Convention
 

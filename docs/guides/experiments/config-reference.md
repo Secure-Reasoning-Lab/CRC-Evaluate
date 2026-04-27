@@ -107,39 +107,36 @@ For GCE in v1:
 
 ## Discovery-Only Mode
 
-Run against OSS-Fuzz-format projects without ground truth CPVs.
+For the full workflow, see
+[Discovery-Only OSS-Fuzz Experiments](./discovery-only.md).
 
-### Quick Start
+Use this mode for OSS-Fuzz-format projects that do not have CRSBench ground
+truth under `.aixcc/`.
 
-Point `benchmarks` at any OSS-Fuzz project directory (one with
-`project.yaml`, `Dockerfile`, `build.sh`). CRSBench auto-generates
-`.aixcc/meta.yaml` on first run by building the project and discovering
-fuzz targets:
+Workflow summary:
 
-```yaml
-experiment:
-  name: my-discovery-run
-  mode: full
-  benchmarks:
-    - libyang     # raw OSS-Fuzz project — meta.yaml auto-generated
-  only_cpv_harnesses: false
-runtime:
-  trials: 1
-  max_total_time: 3600
-  skip_verification: true
-  skip_litellm: true
-```
-
-Auto-generation uses `oss_fuzz_path` (default: `third_party/oss-fuzz`)
-to build the project via `helper.py build_fuzzers`. The generated
-`meta.yaml` is persisted so subsequent runs skip the build.
+- Point `benchmarks_root` at an OSS-Fuzz `projects/` directory and
+  `oss_fuzz_path` at the corresponding OSS-Fuzz checkout.
+- Run `crsbench benchmark init --experiment-config ...` before
+  `crsbench run`. This generates `.aixcc/meta.yaml` by building the project and
+  discovering fuzz targets.
+- Use `experiment.mode: full`, because discovery initialization writes
+  `full_mode` metadata only.
+- Set `runtime.skip_verification: true` unless you are supplying an external
+  verification source.
 
 ### Config Fields
 
-- `only_cpv_harnesses: false` — include harnesses regardless of CPV
+- `experiment.only_cpv_harnesses: false` — include harnesses regardless of CPV
   availability. Applies to both bug-finding and bug-fixing CRS types.
-- `skip_verification: true` — skip POV/patch verification (no ground
-  truth to verify against).
+- `runtime.skip_verification: true` — skip POV/patch verification when the
+  benchmark has no ground-truth CPVs/POVs.
+- `benchmarks_root` — root directory containing the OSS-Fuzz project
+  subdirectories to initialize and run. In this repository, that is usually a
+  separate OSS-Fuzz `projects/` checkout, not the sparse managed
+  `third_party/oss-fuzz` helper checkout.
+- `oss_fuzz_path` — OSS-Fuzz checkout used for discovery build outputs and
+  initialization.
 
 CRS runs proceed normally, POVs and patches are collected as artifacts,
 and reports show raw discovery counts without CPV-based scoring.

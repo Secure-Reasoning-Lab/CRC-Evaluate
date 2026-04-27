@@ -26,6 +26,7 @@ Use this page as the primary navigation hub.
 - [Guides Hub](./guides/README.md)
 - [Experiments Hub](./guides/experiments/README.md)
   - [Single Machine](./guides/experiments/single-machine.md)
+  - [Discovery-Only OSS-Fuzz](./guides/experiments/discovery-only.md)
   - [Distributed](./guides/experiments/distributed.md)
   - [Cloud Orchestration on GCE](./guides/experiments/gce-cloud-orchestration.md)
   - [Local Cloud Rehearsal](./guides/experiments/local-cloud-rehearsal.md)
