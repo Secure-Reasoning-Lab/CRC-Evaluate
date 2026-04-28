@@ -50,6 +50,24 @@ from crsbench.validation.schemas import BenchmarkConfig, BenchmarkHarness, Harne
 logger = get_logger(__name__)
 
 
+def _load_benchmark_language(benchmark_path: Path) -> str:
+    """Load and normalize benchmark language from project.yaml."""
+    project_yaml = benchmark_path / "project.yaml"
+    if not project_yaml.exists():
+        return "c"
+
+    try:
+        import yaml
+
+        with project_yaml.open() as f:
+            project_config = yaml.safe_load(f) or {}
+    except Exception:
+        return "c"
+
+    language = str(project_config.get("language", "c")).strip().lower()
+    return language or "c"
+
+
 class EvaluationError(Exception):
     """Exception raised during benchmark evaluation."""
 
@@ -2342,7 +2360,11 @@ class BenchmarkRunner:
             from crsbench.evaluation.coverage.collector import CoverageCollector
             from crsbench.evaluation.coverage.models import CoverageConfig
             from crsbench.evaluation.coverage.store import CoverageStore
-            from crsbench.evaluation.coverage.strategy import create_coverage_strategy
+            from crsbench.evaluation.coverage.strategy import (
+                create_coverage_strategy,
+                is_coverage_supported_language,
+                supported_coverage_languages_summary,
+            )
             from crsbench.validation.meta_adapter import MetaYamlAdapter
 
             # Load project.yaml for main_repo and language
@@ -2356,7 +2378,15 @@ class BenchmarkRunner:
 
             main_repo = project_config.get("main_repo")
             repo_name = project_config.get("repo_name")
-            language = project_config.get("language", "c")
+            language = str(project_config.get("language", "c")).strip().lower() or "c"
+
+            if not is_coverage_supported_language(language):
+                self.logger.warning(
+                    f"Skipping coverage for benchmark '{benchmark_path.name}' "
+                    f"with unsupported language '{language}'. "
+                    f"{supported_coverage_languages_summary()}"
+                )
+                return None
 
             if not main_repo:
                 self.logger.error(f"main_repo not found in {project_yaml}")
@@ -2484,6 +2514,20 @@ class BenchmarkRunner:
         corpus_dir = trial_output_dir / "output" / "seeds"
         if not corpus_dir.exists() or not any(corpus_dir.iterdir()):
             self.logger.info("No corpus files for post-experiment coverage")
+            return
+
+        from crsbench.evaluation.coverage.strategy import (
+            is_coverage_supported_language,
+            supported_coverage_languages_summary,
+        )
+
+        language = _load_benchmark_language(benchmark_path)
+        if not is_coverage_supported_language(language):
+            self.logger.warning(
+                f"Skipping post-experiment coverage for benchmark "
+                f"'{benchmark_path.name}' with unsupported language '{language}'. "
+                f"{supported_coverage_languages_summary()}"
+            )
             return
 
         try:

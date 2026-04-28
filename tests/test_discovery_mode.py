@@ -261,3 +261,88 @@ class TestReevalFlatPatchDiscoveryMode:
         """Empty or missing patch dir returns empty list."""
         result = _discover_trial_patches(tmp_path / "nonexistent", target_cpv_id=None)
         assert result == []
+
+
+class TestUnsupportedLanguageCoverageHandling:
+    """Coverage setup should not block discovery runs for unsupported languages."""
+
+    def _make_benchmark(self, tmp_path: Path, *, language: str) -> Path:
+        benchmark_path = tmp_path / f"{language}-bench"
+        benchmark_path.mkdir()
+        (benchmark_path / ".aixcc").mkdir()
+        (benchmark_path / ".aixcc" / "meta.yaml").write_text("harness_files: []\n")
+        (benchmark_path / "project.yaml").write_text(
+            f"language: {language}\nmain_repo: https://example.com/repo.git\n"
+        )
+        return benchmark_path
+
+    def test_create_coverage_manager_skips_unsupported_language_before_build(
+        self, tmp_path
+    ):
+        """Unsupported languages should skip coverage before variant-build setup."""
+        from crsbench.evaluation.runner import BenchmarkRunner
+
+        benchmark_path = self._make_benchmark(tmp_path, language="go")
+        trial_output_dir = tmp_path / "trial"
+        trial_output_dir.mkdir()
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_mode.return_value = "full"
+        mock_adapter.get_ref_commit.return_value = None
+        mock_adapter.get_base_commit.return_value = "a" * 40
+        mock_adapter.get_variant_name.return_value = "go-bench-full-coverage"
+
+        with (
+            patch(
+                "crsbench.validation.meta_adapter.MetaYamlAdapter.from_meta_yaml",
+                return_value=mock_adapter,
+            ),
+            patch("crsbench.builder.OSSFuzzBuilder") as mock_builder_cls,
+        ):
+            runner = BenchmarkRunner(
+                adapter=MagicMock(),
+                coverage_enabled=True,
+                oss_fuzz_path=tmp_path / "oss-fuzz",
+            )
+
+            manager = runner._create_coverage_manager(
+                benchmark_path=benchmark_path,
+                trial_output_dir=trial_output_dir,
+                trial_start_time=0.0,
+                harness_name="fuzz_target",
+            )
+
+        assert manager is None
+        mock_builder_cls.assert_not_called()
+
+    def test_post_experiment_coverage_skips_unsupported_language_before_engine(
+        self, tmp_path
+    ):
+        """Unsupported languages should skip final coverage before engine setup."""
+        from crsbench.evaluation.runner import BenchmarkRunner
+
+        benchmark_path = self._make_benchmark(tmp_path, language="rust")
+        trial_output_dir = tmp_path / "trial"
+        corpus_dir = trial_output_dir / "output" / "seeds"
+        corpus_dir.mkdir(parents=True)
+        (corpus_dir / "seed").write_bytes(b"seed")
+
+        with (
+            patch(
+                "crsbench.evaluation.coverage.timeline.normalize_seed_inputs",
+                return_value=[MagicMock()],
+            ),
+            patch("crsbench.evaluation.coverage.engine.CoverageEngine") as mock_engine,
+        ):
+            runner = BenchmarkRunner(
+                adapter=MagicMock(),
+                coverage_enabled=True,
+            )
+
+            runner._run_post_experiment_coverage(
+                benchmark_path=benchmark_path,
+                trial_output_dir=trial_output_dir,
+                harness_name="fuzz_target",
+            )
+
+        mock_engine.assert_not_called()

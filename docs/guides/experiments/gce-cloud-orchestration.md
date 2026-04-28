@@ -251,7 +251,7 @@ cloud:
 | `cloud.defaults.crsbench_install_spec` | no | CRSBench install source for remote VMs; cloud launch expects a `git+...` spec |
 | `cloud.defaults.crsbench_git_ref` | no | Git ref checked out when `crsbench_install_spec` points at a Git source |
 | `cloud.defaults.github_deploy_key_path` | no | Optional secret reference for a private Git deploy key used during CRSBench install |
-| `cloud.remote.experiment_root` | no | Remote experiment root used by `cloud collect` / `cloud teardown`; defaults to `storage.experiment_filestore` for backward compatibility |
+| `cloud.remote.experiment_root` | no | Remote workspace root used by cloud re-eval helpers and explicit `--remote-dir` overrides; run-mode `cloud collect` / `cloud teardown` default to `storage.experiment_filestore/<experiment>` |
 | `cloud.env` | no | Global environment variables merged into every launched cloud role |
 
 #### GCE Provider Fields
@@ -510,6 +510,11 @@ remote orchestrator is counted as ready:
 Cloud VMs always run `crsbench prepare`. `download_benchmarks: auto` skips the
 VM-side download only when `benchmark_suite: sanity`; other suites download
 before the worker joins Redis.
+
+When the experiment config sets `runtime.rts_enabled: false`, cloud bootstrap
+now runs `crsbench prepare --skip-rts-images` on orchestrators, workers, and
+evaluators. That keeps the normal OSS-Fuzz base-image/bootstrap path intact
+while avoiding RTS image pulls/builds for runs that will never enable RTS.
 
 Cloud VMs also always install the pinned `gitcache` binary in a CRSBench-managed
 bin directory. `gitcache: false` leaves the normal `git` command unchanged.
@@ -1060,10 +1065,11 @@ uv run crsbench cloud --config config.yaml collect
 By default, `cloud collect` infers:
 
 - the experiment name from `experiment.name`
-- the remote worker artifact directory as
+- for normal remote-orchestrator runs, the remote worker artifact directory as
+  `<storage.experiment_filestore>/<experiment.name>`
+- for cloud re-eval runs, the remote workspace directory as
   `<cloud.remote.experiment_root>/<experiment.name>`
-  when `cloud.remote.experiment_root` is set
-- otherwise, for legacy configs, `<storage.experiment_filestore>/<experiment.name>`
+- `--remote-dir` still overrides the inferred remote source path for either mode
 
 In plain terms, `cloud collect` copies trial artifacts and VM diagnostics from
 the cloud VMs back to a local directory on the machine where you run the
@@ -1094,10 +1100,10 @@ storage configuration.
 Key paths:
 
 - `storage.experiment_filestore`: local destination on your machine
-- `cloud.remote.experiment_root`: remote source root on the VMs used by
-  `cloud collect` and `cloud teardown`
-- If `cloud.remote.experiment_root` is unset, CRSBench falls back to the
-  legacy behavior of reusing `storage.experiment_filestore` for both
+- `storage.experiment_filestore/<experiment>`: default remote source tree for
+  run-mode `cloud collect` and `cloud teardown`
+- `cloud.remote.experiment_root`: remote workspace root used by cloud re-eval
+  helpers and explicit `--remote-dir` overrides
 
 You can still override either value explicitly:
 

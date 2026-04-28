@@ -137,11 +137,14 @@ def test_build_instance_metadata_includes_vm_bootstrap_policy_and_selector():
         registration=_make_registration(),
         bootstrap_inputs=CloudVmBootstrapInputs(
             prepare_mode="skip_base_images",
+            skip_rts_images=True,
             download_benchmarks="always",
             gitcache=True,
+            build_timeout=4321,
             benchmark_suite="afc-final",
             benchmarks_root=Path("/srv/benchmarks"),
             benchmark_suites_root=Path("/srv/benchmark-suites"),
+            oss_fuzz_path=Path("/srv/oss-fuzz"),
         ),
         download_delay_sec=10,
         worker_name="gce-worker-001",
@@ -152,11 +155,43 @@ def test_build_instance_metadata_includes_vm_bootstrap_policy_and_selector():
 
     assert metadata[CRSBENCH_DOWNLOAD_DELAY_SEC_KEY] == "10"
     assert payload["prepare_mode"] == "skip_base_images"
+    assert payload["skip_rts_images"] is True
     assert payload["download_benchmarks"] == "always"
     assert payload["gitcache"] is True
+    assert payload["build_timeout"] == 4321
+    assert payload["benchmark_init_jobs"] == 3
+    assert payload["benchmark_init_cores_per_job"] == 6
     assert payload["benchmark_suite"] == "afc-final"
     assert payload["benchmarks_root"] == "/srv/benchmarks"
     assert payload["benchmark_suites_root"] == "/srv/benchmark-suites"
+    assert payload["oss_fuzz_path"] == "/srv/oss-fuzz"
+
+
+def test_build_instance_metadata_preserves_repo_relative_managed_oss_fuzz_paths():
+    """Managed OSS-Fuzz paths should stay repo-relative in worker bootstrap payloads."""
+    from crsbench.cloud.gce.metadata import (
+        CRSBENCH_BOOTSTRAP_PAYLOAD_KEY,
+        build_instance_metadata,
+    )
+
+    metadata = build_instance_metadata(
+        experiment_name="Exp.Cloud 42",
+        fleet=_make_fleet(),
+        redis_host="redis.internal:6380",
+        registration=_make_registration(),
+        bootstrap_inputs=CloudVmBootstrapInputs(
+            benchmarks=["go-yaml"],
+            benchmarks_root=Path("third_party/oss-fuzz/projects"),
+            oss_fuzz_path=Path("third_party/oss-fuzz"),
+        ),
+        worker_name="gce-worker-001",
+        startup_script="#!/usr/bin/env bash\necho boot\n",
+    )
+
+    payload = _decode_payload(metadata[CRSBENCH_BOOTSTRAP_PAYLOAD_KEY])
+
+    assert payload["benchmarks_root"] == "third_party/oss-fuzz/projects"
+    assert payload["oss_fuzz_path"] == "third_party/oss-fuzz"
 
 
 def test_build_instance_metadata_omits_worker_name_for_regional_bulk_insert():
@@ -255,6 +290,17 @@ def test_load_startup_script_contains_managed_worker_service_bootstrap():
     assert "__crsbench_prompt_short_host()" in startup_script
     assert "hostname -s 2>/dev/null || hostname 2>/dev/null" in startup_script
     assert 'short_host="${parts[count-2]}-${parts[count-1]}"' in startup_script
+    assert (
+        "if ! command -v fd >/dev/null 2>&1 && command -v fdfind >/dev/null 2>&1; then"
+        in startup_script
+    )
+    assert "alias fd='fdfind'" in startup_script
+    assert "alias ..='cd ..'" in startup_script
+    assert "alias ...='cd ../..'" in startup_script
+    assert "alias ....='cd ../../..'" in startup_script
+    assert "alias ll='ls -alF'" in startup_script
+    assert "alias la='ls -A'" in startup_script
+    assert "alias l='ls -CF'" in startup_script
     assert "__crsbench_prompt_command_installed()" in startup_script
     assert "if ! __crsbench_prompt_command_installed; then" in startup_script
     assert (
@@ -367,6 +413,8 @@ def test_build_evaluator_metadata_embeds_startup_script_and_config_payload(tmp_p
         bootstrap_inputs=CloudVmBootstrapInputs(
             benchmark_suite="sanity",
             gitcache=True,
+            build_timeout=4321,
+            skip_rts_images=True,
         ),
         download_delay_sec=20,
         evaluator_name="gce-evaluator-001",
@@ -386,6 +434,10 @@ def test_build_evaluator_metadata_embeds_startup_script_and_config_payload(tmp_p
     assert payload["evaluator_cpu_tag"] == "c3d"
     assert metadata[CRSBENCH_DOWNLOAD_DELAY_SEC_KEY] == "20"
     assert payload["gitcache"] is True
+    assert payload["build_timeout"] == 4321
+    assert payload["skip_rts_images"] is True
+    assert payload["benchmark_init_jobs"] == 2
+    assert payload["benchmark_init_cores_per_job"] == 8
 
 
 def test_build_evaluator_metadata_omits_evaluator_name_for_regional_bulk_insert(
@@ -1218,6 +1270,17 @@ def test_orchestrator_startup_script_consumes_config_payload_and_preprovisioned_
     assert "__crsbench_prompt_short_host()" in script
     assert "hostname -s 2>/dev/null || hostname 2>/dev/null" in script
     assert 'short_host="${parts[count-2]}-${parts[count-1]}"' in script
+    assert (
+        "if ! command -v fd >/dev/null 2>&1 && command -v fdfind >/dev/null 2>&1; then"
+        in script
+    )
+    assert "alias fd='fdfind'" in script
+    assert "alias ..='cd ..'" in script
+    assert "alias ...='cd ../..'" in script
+    assert "alias ....='cd ../../..'" in script
+    assert "alias ll='ls -alF'" in script
+    assert "alias la='ls -A'" in script
+    assert "alias l='ls -CF'" in script
     assert "__crsbench_prompt_command_installed()" in script
     assert "if ! __crsbench_prompt_command_installed; then" in script
     assert 'PROMPT_COMMAND="__crsbench_update_prompt;${PROMPT_COMMAND}"' in script

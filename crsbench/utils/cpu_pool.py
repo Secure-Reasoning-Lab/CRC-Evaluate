@@ -160,6 +160,47 @@ def auto_cores_per_job(
     return max(1, total // max(jobs, 1))
 
 
+def resolve_parallel_job_plan(
+    total_tasks: int,
+    *,
+    requested_jobs: Optional[int] = None,
+    requested_cores_per_job: Optional[int] = None,
+    skip_cpus: Optional[str] = None,
+    cores: Optional[Union[str, int]] = None,
+) -> Optional[tuple[int, int]]:
+    """Resolve bounded parallelism and per-job CPU width for a task batch.
+
+    Returns ``(max_parallel_jobs, cores_per_job)`` when an explicit parallel
+    policy is requested, or ``None`` when the caller should run sequentially
+    without CPU slicing.
+    """
+    if total_tasks <= 0:
+        return None
+    if requested_jobs is None and requested_cores_per_job is None:
+        return None
+
+    visible = visible_cpu_count(skip_cpus=skip_cpus, cores=cores)
+    if requested_jobs is None:
+        assert requested_cores_per_job is not None
+        requested_jobs = max(1, visible // max(requested_cores_per_job, 1))
+
+    requested_jobs = max(1, min(requested_jobs, total_tasks))
+    if requested_cores_per_job is None:
+        cores_per_job = auto_cores_per_job(
+            requested_jobs,
+            skip_cpus=skip_cpus,
+            cores=cores,
+        )
+    else:
+        cores_per_job = min(max(1, requested_cores_per_job), visible)
+
+    max_parallel_jobs = min(
+        requested_jobs,
+        max(1, visible // max(cores_per_job, 1)),
+    )
+    return max_parallel_jobs, cores_per_job
+
+
 class CPUPool:
     """Thread-safe CPU pool for dynamic allocation to workers.
 

@@ -35,9 +35,10 @@ Managed cloud execution uses a provider-neutral top-level shape:
 - `cloud.defaults`: provider-agnostic launch/bootstrap defaults such as
   `readiness_timeout_sec`, `crsbench_install_spec`, `crsbench_git_ref`, and
   `github_deploy_key_path`
-- `cloud.remote.experiment_root`: remote-VM experiment root used by
-  `cloud collect` / `cloud teardown`; defaults to
-  `storage.experiment_filestore` when unset for backward compatibility
+- `cloud.remote.experiment_root`: remote-VM workspace root used by cloud
+  re-eval helpers and explicit `--remote-dir` overrides; run-mode
+  `cloud collect` / `cloud teardown` default to
+  `storage.experiment_filestore/<experiment>`
 - `cloud.env`: global environment variables merged into all launched cloud roles;
   this is also the top-level place to set startup-script overrides such as
   `CRSBENCH_TIMEZONE`
@@ -124,11 +125,17 @@ Workflow summary:
   `full_mode` metadata only.
 - Set `runtime.skip_verification: true` unless you are supplying an external
   verification source.
+- Discovery-mode benchmark loading is language-agnostic; language-specific
+  limits apply only to specific subsystems such as coverage and RTS.
 
 ### Config Fields
 
 - `experiment.only_cpv_harnesses: false` — include harnesses regardless of CPV
   availability. Applies to both bug-finding and bug-fixing CRS types.
+- `experiment.benchmarks` may use explicit harness selectors in discovery mode
+  too, for example `- go-yaml: [fuzz_yaml]`. Harness names are resolved from
+  generated `.aixcc/meta.yaml` after `crsbench benchmark init`; unknown harness
+  names are skipped with a warning.
 - `runtime.skip_verification: true` — skip POV/patch verification when the
   benchmark has no ground-truth CPVs/POVs.
 - `benchmarks_root` — root directory containing the OSS-Fuzz project
@@ -140,6 +147,8 @@ Workflow summary:
 
 CRS runs proceed normally, POVs and patches are collected as artifacts,
 and reports show raw discovery counts without CPV-based scoring.
+If coverage is enabled for an unsupported benchmark language, CRSBench skips
+coverage for that benchmark with a warning instead of failing the run.
 
 ## Input Contract
 

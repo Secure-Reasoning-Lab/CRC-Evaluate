@@ -219,7 +219,8 @@ Shared collection semantics are owned by
 [Cloud Orchestration](./cloud-orchestration.md). GCE realizes them as follows:
 
 - worker artifact transfer uses `rsync` over either direct SSH or an IAP-backed local tunnel
-- default remote source path is still derived from `cloud.remote.experiment_root` when present, else the legacy `storage.experiment_filestore` fallback
+- run-mode default remote source path is `storage.experiment_filestore/<experiment>`
+- reeval default remote source path is derived from `cloud.remote.experiment_root`
 - the stage-verify-publish pipeline prevents partial worker trees from becoming visible results
 
 Transport details:

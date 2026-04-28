@@ -18,9 +18,28 @@ from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_NATIVE_COVERAGE_LANGUAGES = frozenset({"c", "c++", "cpp"})
+_JVM_COVERAGE_LANGUAGES = frozenset({"jvm", "java"})
+_SUPPORTED_COVERAGE_LANGUAGES = _NATIVE_COVERAGE_LANGUAGES | _JVM_COVERAGE_LANGUAGES
+
 
 class CoverageStrategyError(Exception):
     """Exception raised for coverage strategy errors."""
+
+
+def normalize_coverage_language(language: str) -> str:
+    """Normalize a benchmark language name for coverage support checks."""
+    return str(language).strip().lower()
+
+
+def is_coverage_supported_language(language: str) -> bool:
+    """Return True when CRSBench coverage supports the given language."""
+    return normalize_coverage_language(language) in _SUPPORTED_COVERAGE_LANGUAGES
+
+
+def supported_coverage_languages_summary() -> str:
+    """Human-readable summary of benchmark languages supported by coverage."""
+    return "Supported languages: c, c++, jvm, java"
 
 
 class CoverageStrategy(ABC):
@@ -301,9 +320,9 @@ def create_coverage_strategy(
     work_dir: Optional[Path] = None,
 ) -> CoverageStrategy:
     """Create the Atlantis-backed coverage strategy for the benchmark language."""
-    normalized = language.lower()
+    normalized = normalize_coverage_language(language)
 
-    if normalized in ("c", "c++", "cpp"):
+    if normalized in _NATIVE_COVERAGE_LANGUAGES:
         return LLVMCovLineStrategy(
             oss_fuzz_path,
             project_name,
@@ -312,7 +331,7 @@ def create_coverage_strategy(
             benchmark_path=benchmark_path,
             work_dir=work_dir,
         )
-    if normalized in ("jvm", "java"):
+    if normalized in _JVM_COVERAGE_LANGUAGES:
         return JaCoCoLineStrategy(
             oss_fuzz_path,
             project_name,
@@ -324,7 +343,7 @@ def create_coverage_strategy(
 
     raise CoverageStrategyError(
         f"Unsupported language for coverage: {language}. "
-        f"Supported languages: c, c++, jvm, java"
+        f"{supported_coverage_languages_summary()}"
     )
 
 

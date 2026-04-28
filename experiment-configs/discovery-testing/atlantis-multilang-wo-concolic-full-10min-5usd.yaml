@@ -28,6 +28,7 @@ runtime:
   per_pov_verify_timeout: 300
   snapshot_period: 120
   redis_host: localhost
+  source_mode: main_repo
   skip_verification: true
   pov_early_stop: false
   litellm:

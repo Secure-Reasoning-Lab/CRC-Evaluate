@@ -1732,16 +1732,36 @@ class TestReconnect:
         assert experiment_name == "test-exp"
         mock_load.assert_called_once_with(Path("/tmp/config.yaml"))
 
-    def test_resolve_remote_experiment_dir_defaults_to_remote_root_and_experiment(self):
+    def test_resolve_remote_experiment_dir_defaults_to_experiment_filestore_for_run_mode(
+        self,
+    ):
         from crsbench.cloud.cli._config_reconnect import resolve_remote_experiment_dir
 
         remote_dir = resolve_remote_experiment_dir(
+            Path("/tmp/remote-root/scoped-filestore"),
             Path("/tmp/remote-root"),
             "test-exp",
             None,
         )
 
-        assert remote_dir == "/tmp/remote-root/test-exp"
+        assert remote_dir == "/tmp/remote-root/scoped-filestore/test-exp"
+
+    def test_resolve_remote_experiment_dir_uses_workspace_root_for_reeval(self):
+        from crsbench.cloud.cli._config_reconnect import resolve_remote_experiment_dir
+
+        launch_state = _make_reeval_launch_state()
+        remote_dir = resolve_remote_experiment_dir(
+            Path("/tmp/filestore"),
+            Path(launch_state.remote_experiment_root),
+            launch_state.effective_remote_experiment_name(),
+            None,
+            launch_state=launch_state,
+        )
+
+        assert (
+            remote_dir
+            == f"{launch_state.remote_experiment_root}/{launch_state.remote_experiment_name}"
+        )
 
     @patch("crsbench.cloud.cli._config_reconnect.load_launch_state")
     @patch("crsbench.cloud.cli._config_reconnect.warn_for_persisted_storage_roots")
@@ -8615,7 +8635,10 @@ class TestCollect:
         mock_prov = MagicMock()
         mock_prov.list_workers.return_value = workers
         mock_prov_cls.return_value = mock_prov
-        mock_resolve_context.return_value = _make_resolved_cloud_context()
+        mock_resolve_context.return_value = _make_collect_context(
+            experiment_filestore=Path("/tmp/remote-root/scoped-filestore"),
+            remote_experiment_root=Path("/tmp/remote-root"),
+        )
 
         mock_coll = MagicMock()
         mock_coll_cls.return_value = mock_coll
@@ -8627,7 +8650,7 @@ class TestCollect:
             MagicMock(),
             readiness,
             MagicMock(),
-            Path("/tmp/filestore"),
+            Path("/tmp/remote-root/scoped-filestore"),
         )
 
         from crsbench.cloud.cli._collect import run_collect
@@ -8639,7 +8662,7 @@ class TestCollect:
         mock_coll.collect.assert_called_once()
         assert (
             mock_coll.collect.call_args.kwargs["remote_experiment_dir"]
-            == "/tmp/remote-root/test-exp"
+            == "/tmp/remote-root/scoped-filestore/test-exp"
         )
 
     @patch("crsbench.cloud.cli._collect.resolve_cloud_context")
@@ -10040,10 +10063,13 @@ def _setup_teardown_mocks(
     workers=None,
     redis_workers=None,
     jobs=None,
+    experiment_filestore: Path | None = None,
 ):
     """Wire up common mock structure for teardown tests."""
     if workers is None:
         workers = [_make_gce_worker("w-1"), _make_gce_worker("w-2")]
+    if experiment_filestore is None:
+        experiment_filestore = Path("/tmp/filestore")
 
     mock_prov = MagicMock()
     mock_prov.list_workers.return_value = workers
@@ -10063,7 +10089,7 @@ def _setup_teardown_mocks(
         MagicMock(),  # redis_conn
         readiness,
         lifecycle,
-        Path("/tmp/filestore"),
+        experiment_filestore,
     )
 
     return mock_prov, mock_coll, readiness, lifecycle
@@ -10272,12 +10298,16 @@ class TestTeardown:
         mock_resolve_experiment_name,
     ):
         mock_resolve_experiment_name.return_value = "test-exp"
-        mock_resolve_context.return_value = _make_resolved_cloud_context()
+        mock_resolve_context.return_value = _make_collect_context(
+            experiment_filestore=Path("/tmp/remote-root/scoped-filestore"),
+            remote_experiment_root=Path("/tmp/remote-root"),
+        )
         mock_prov, mock_coll, _, _ = _setup_teardown_mocks(
             mock_reconnect,
             mock_prov_cls,
             mock_coll_cls,
             workers=[_make_gce_worker("w-1")],
+            experiment_filestore=Path("/tmp/remote-root/scoped-filestore"),
         )
 
         from crsbench.cloud.cli._teardown import run_teardown
@@ -10292,7 +10322,7 @@ class TestTeardown:
         mock_coll.collect.assert_called_once()
         assert (
             mock_coll.collect.call_args.kwargs["remote_experiment_dir"]
-            == "/tmp/remote-root/test-exp"
+            == "/tmp/remote-root/scoped-filestore/test-exp"
         )
 
     @patch("crsbench.cloud.cli._teardown.resolve_cloud_context")

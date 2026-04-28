@@ -2407,10 +2407,47 @@ harness_files:
         assert len(trials) == 2  # only cpv_1, across trial_num=1..2
         assert {t.target_cpv_id for t in trials} == {"cpv_1"}
 
-    def test_resolve_benchmark_harnesses_rejects_unknown_harness_in_selector(
+    def test_resolve_benchmark_harnesses_skips_unknown_harness_in_selector(
         self, tmp_path
     ):
-        """Resolver should fail fast when selector references a missing harness."""
+        """Resolver should warn and skip missing harnesses referenced by a selector."""
+        bench_name = "bench1"
+        bench_aixcc = tmp_path / bench_name / ".aixcc"
+        bench_aixcc.mkdir(parents=True)
+        (bench_aixcc / "meta.yaml").write_text(
+            """
+harness_files:
+  - name: harness1
+    path: /src/harness1.c
+"""
+        )
+
+        entries = [
+            BenchmarkEntry(
+                name=bench_name,
+                harnesses=["harness1", "missing-harness"],
+                harness_cpvs={
+                    "harness1": ["cpv_0"],
+                    "missing-harness": ["cpv_missing"],
+                },
+            )
+        ]
+
+        with patch("crsbench.run_experiment.logger.warning") as mock_warning:
+            resolved = resolve_benchmark_harnesses(entries, tmp_path)
+
+        assert len(resolved) == 1
+        assert resolved[0].harness.name == "harness1"
+        assert resolved[0].target_cpvs == ["cpv_0"]
+        mock_warning.assert_called_once()
+        assert "Skipping unknown harness '{}'" in mock_warning.call_args.args[0]
+        assert mock_warning.call_args.args[1] == "missing-harness"
+        assert mock_warning.call_args.args[2] == bench_name
+
+    def test_resolve_benchmark_harnesses_returns_empty_when_all_selected_harnesses_are_missing(
+        self, tmp_path
+    ):
+        """Resolver should warn and return no pairs when all selected harnesses are missing."""
         bench_name = "bench1"
         bench_aixcc = tmp_path / bench_name / ".aixcc"
         bench_aixcc.mkdir(parents=True)
@@ -2430,8 +2467,14 @@ harness_files:
             )
         ]
 
-        with pytest.raises(ValueError, match="not found in benchmark"):
-            resolve_benchmark_harnesses(entries, tmp_path)
+        with patch("crsbench.run_experiment.logger.warning") as mock_warning:
+            resolved = resolve_benchmark_harnesses(entries, tmp_path)
+
+        assert resolved == []
+        mock_warning.assert_called_once()
+        assert "Skipping unknown harness '{}'" in mock_warning.call_args.args[0]
+        assert mock_warning.call_args.args[1] == "missing-harness"
+        assert mock_warning.call_args.args[2] == bench_name
 
     def test_bugfix_cpv_selector_absent_in_harness_produces_zero_trials(self, tmp_path):
         """If selected CPV is not present in harness metadata, no trials should be generated."""

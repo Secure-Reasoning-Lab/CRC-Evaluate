@@ -2,11 +2,14 @@
 
 import stat
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import yaml
 from crsbench.benchmark.discovery import (
+    _build_project_image,
     auto_generate_meta_yaml,
+    build_oss_fuzz_project,
     discover_fuzz_targets,
     is_oss_fuzz_project,
 )
@@ -212,6 +215,130 @@ class TestAutoGenerateMetaYaml:
         assert data["full_mode"]["base_commit"] == commit
         harness_names = [h["name"] for h in data["harness_files"]]
         assert harness_names == ["fuzz_json", "fuzz_xml"]
+
+    def test_build_project_image_uses_requested_build_timeout(self, tmp_path):
+        """Docker image build honors the caller-provided timeout."""
+        subprocess_calls: list[tuple[list[str], int]] = []
+
+        def fake_run(
+            cmd: list[str],
+            *,
+            capture_output: bool,
+            text: bool,
+            timeout: int,
+        ) -> SimpleNamespace:
+            del capture_output, text
+            subprocess_calls.append((cmd, timeout))
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch(
+            "crsbench.benchmark.discovery.subprocess.run",
+            side_effect=fake_run,
+        ):
+            image_tag = _build_project_image(
+                "my-project",
+                tmp_path,
+                build_timeout=1234,
+            )
+
+        assert image_tag == "gcr.io/oss-fuzz/my-project"
+        assert subprocess_calls == [
+            (
+                ["docker", "build", "-t", "gcr.io/oss-fuzz/my-project", str(tmp_path)],
+                1234,
+            )
+        ]
+
+    def test_build_oss_fuzz_project_uses_requested_build_timeout(self, tmp_path):
+        """Docker run for target discovery honors the caller-provided timeout."""
+        project_dir = tmp_path / "my-project"
+        self._make_oss_fuzz_project(project_dir)
+        oss_fuzz_path = tmp_path / "oss-fuzz"
+
+        image_build_calls: list[tuple[str, Path, int]] = []
+        subprocess_calls: list[tuple[list[str], int]] = []
+
+        def fake_build_project_image(
+            project_name: str,
+            project_path: Path,
+            *,
+            build_timeout: int,
+        ) -> str:
+            image_build_calls.append((project_name, project_path, build_timeout))
+            return f"gcr.io/oss-fuzz/{project_name}"
+
+        def fake_run(
+            cmd: list[str],
+            *,
+            capture_output: bool,
+            text: bool,
+            timeout: int,
+        ) -> SimpleNamespace:
+            del capture_output, text
+            subprocess_calls.append((cmd, timeout))
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with (
+            patch(
+                "crsbench.benchmark.discovery._build_project_image",
+                side_effect=fake_build_project_image,
+            ),
+            patch(
+                "crsbench.benchmark.discovery.subprocess.run",
+                side_effect=fake_run,
+            ),
+        ):
+            build_out_dir = build_oss_fuzz_project(
+                project_dir,
+                oss_fuzz_path,
+                build_timeout=2345,
+            )
+
+        assert build_out_dir == oss_fuzz_path / "build" / "out" / "my-project"
+        assert image_build_calls == [("my-project", project_dir, 2345)]
+        assert len(subprocess_calls) == 1
+        assert subprocess_calls[0][0][:3] == ["docker", "run", "--rm"]
+        assert subprocess_calls[0][1] == 2345
+
+    def test_auto_generate_meta_yaml_passes_requested_build_timeout(self, tmp_path):
+        """Meta generation threads build_timeout into the OSS-Fuzz build step."""
+        project_dir = tmp_path / "my-project"
+        self._make_oss_fuzz_project(project_dir)
+
+        build_out = tmp_path / "build-out"
+        self._make_build_output(build_out, ["fuzzer"])
+
+        build_calls: list[int] = []
+
+        def fake_build_oss_fuzz_project(
+            benchmark_path: Path,
+            oss_fuzz_path: Path,
+            sanitizer: str = "address",
+            *,
+            cpuset_cpus: str | None = None,
+            build_timeout: int,
+        ) -> Path:
+            del benchmark_path, oss_fuzz_path, sanitizer, cpuset_cpus
+            build_calls.append(build_timeout)
+            return build_out
+
+        with (
+            patch(
+                "crsbench.benchmark.discovery.build_oss_fuzz_project",
+                side_effect=fake_build_oss_fuzz_project,
+            ),
+            patch(
+                "crsbench.benchmark.discovery._resolve_base_commit",
+                return_value="a" * 40,
+            ),
+        ):
+            auto_generate_meta_yaml(
+                project_dir,
+                tmp_path / "oss-fuzz",
+                build_timeout=3456,
+            )
+
+        assert build_calls == [3456]
 
     def test_skips_if_meta_yaml_exists(self, tmp_path):
         """Does not overwrite existing meta.yaml."""

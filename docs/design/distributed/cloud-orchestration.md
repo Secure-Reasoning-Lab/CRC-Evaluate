@@ -220,10 +220,9 @@ from a specific provider.
 Canonical semantics:
 
 - local destination defaults to `storage.experiment_filestore/<experiment>`
-- remote source defaults to `<cloud.remote.experiment_root>/<experiment>` when
-  `cloud.remote.experiment_root` is set
-- when `cloud.remote.experiment_root` is unset, standalone cloud operations fall
-  back to the legacy remote path derived from `storage.experiment_filestore`
+- run-mode remote source defaults to `storage.experiment_filestore/<experiment>`
+- reeval remote source defaults to `<cloud.remote.experiment_root>/<experiment>`
+- explicit `--remote-dir` overrides either inferred source path
 - worker artifacts are staged, verified, then published so partial trees do not
   become the visible experiment result
 - evaluator and orchestrator collection may be log-only even when workers publish artifacts

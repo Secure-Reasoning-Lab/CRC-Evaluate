@@ -1,0 +1,160 @@
+# GCE discovery run: opencode bug-finding against a curated OSS-Fuzz
+# shortlist.
+#
+# Managed cloud bootstrap materializes the selected OSS-Fuzz projects from the
+# sparse third_party/oss-fuzz checkout and generates .aixcc/meta.yaml on each
+# VM before the run starts.
+#
+# Usage:
+#   CONFIG=experiment-configs/discovery/gce-opencode-shortlist-bugfinding.yaml
+#   uv run crsbench cloud launch --config "$CONFIG"
+#   uv run crsbench cloud --config "$CONFIG" monitor
+#   uv run crsbench cloud --config "$CONFIG" collect --force
+#   uv run crsbench cloud --config "$CONFIG" teardown --force
+#
+# This config is pinned to the feature branch until the raw OSS-Fuzz
+# cloud-bootstrap support is fully tested and merged back to main.
+
+description: 'GCE discovery run: opencode bug-finding on an OSS-Fuzz shortlist'
+
+experiment:
+  name: gce-discovery-opencode-shortlist
+  task: bugfinding
+  mode: full
+  benchmarks:
+    - gpac
+    - mpv:
+        - fuzzer_json
+        # - fuzzer_load_config_file
+        - fuzzer_load_input_conf
+        - fuzzer_loadfile
+        # - fuzzer_loadfile_direct
+        # - fuzzer_loadfile_mkv
+        - fuzzer_options_parser
+        # - fuzzer_protocol_dvb
+        # - fuzzer_protocol_edl
+        - fuzzer_protocol_file
+        - fuzzer_protocol_lavf
+        # - fuzzer_protocol_memory
+        # - fuzzer_set_property_MPV_FORMAT_DOUBLE_0
+        # - fuzzer_set_property_MPV_FORMAT_DOUBLE_1
+        # - fuzzer_set_property_MPV_FORMAT_FLAG_0
+        # - fuzzer_set_property_MPV_FORMAT_FLAG_1
+        # - fuzzer_set_property_MPV_FORMAT_INT64_0
+        # - fuzzer_set_property_MPV_FORMAT_INT64_1
+        # - fuzzer_set_property_MPV_FORMAT_STRING_0
+        # - fuzzer_set_property_MPV_FORMAT_STRING_1
+    - kamailio
+    - wamr
+    - tinyusb
+    - open5gs
+    - apache-logging-log4cxx:
+        - DOMConfiguratorFuzzer-utf-8
+        # - DOMConfiguratorFuzzer-wchar_t
+        - HTMLLayoutFuzzer-utf-8
+        # - HTMLLayoutFuzzer-wchar_t
+        - JSONLayoutFuzzer-utf-8
+        # - JSONLayoutFuzzer-wchar_t
+        - PatternConverterFuzzer-utf-8
+        # - PatternConverterFuzzer-wchar_t
+        - PatternLayoutFuzzer-utf-8
+        # - PatternLayoutFuzzer-wchar_t
+        - PatternParserFuzzer-utf-8
+        # - PatternParserFuzzer-wchar_t
+        # - TimeBasedRollingPolicyFuzzer-utf-8
+        # - TimeBasedRollingPolicyFuzzer-wchar_t
+        - XMLLayoutFuzzer-utf-8
+        # - XMLLayoutFuzzer-wchar_t
+  only_cpv_harnesses: false
+  sanitizers:
+    - address
+
+benchmarks_root: third_party/oss-fuzz/projects
+oss_fuzz_path: third_party/oss-fuzz
+
+runtime:
+  trials: 1
+  max_total_time: 76800
+  build_timeout: 21600
+  run_timeout: 28800
+  verify_timeout: 14400
+  skip_verification: true
+  source_mode: main_repo
+  redis_host: redis-server:6379
+  rts_enabled: false
+  inc_build_enabled: false
+  litellm:
+    mode: external
+    cost_budget: 30.0
+
+storage:
+  experiment_filestore: /data/crsbench/experiment-data/gce-opencode-shortlist-bugfinding
+  report_filestore: /data/crsbench/report-data/gce-opencode-shortlist-bugfinding
+
+crs_compose:
+  oss_crs_infra:
+    shared: true
+  crs-bug-finding-opencode:
+    num_cores: 16
+    budget_policy: terminate
+    additional_env:
+      CRS_AGENT: opencode
+      OPENCODE_MODEL: zai-org/GLM-5.1
+
+resources:
+  cores_per_trial: 16
+  memory_per_trial: "64G"
+
+worker:
+  jobs: 14
+  cores_per_job: 16
+  storage:
+    cleanup_after_trial: true
+
+cloud:
+  remote:
+    experiment_root: /data/crsbench/experiment-data
+  defaults:
+    readiness_timeout_sec: 10800
+    crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+    crsbench_git_ref: feat/discovery-all-languages
+    github_deploy_key_path: .crsbench-keys/crsbench-deploy
+  env:
+    HF_TOKEN: os.environ/HF_TOKEN
+    CRSBENCH_LLM_UPSTREAM_BASE_URL: os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL
+    CRSBENCH_LLM_UPSTREAM_MASTER_KEY: os.environ/CRSBENCH_LLM_UPSTREAM_MASTER_KEY
+    CRSBENCH_NOTIFY_APPRISE_URLS: os.environ/CRSBENCH_NOTIFY_APPRISE_URLS
+  bootstrap:
+    prepare_mode: full
+    download_benchmarks: auto
+  providers:
+    gce:
+      project: aixcc-426805
+      ssh_via_iap: true
+      regions:
+        - us-east5
+        - us-east1
+      fallback: true
+      profile_defaults:
+        machine_type: n2d-standard-16
+        boot_disk_size_gb: 512
+        boot_disk_type: pd-ssd
+        image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+        service_account_email: 153298433405-compute@developer.gserviceaccount.com
+        owner_label: crsbench
+      instance_profiles:
+        gce-orchestrator-n2d:
+          machine_type: n2d-standard-128
+          boot_disk_size_gb: 1024
+        gce-worker-n2d:
+          machine_type: n2d-standard-224
+          boot_disk_size_gb: 4096
+        gce-evaluator-n2d: {}
+  orchestrator:
+    instance_profile: gce-orchestrator-n2d
+  workers:
+    defaults:
+      instance_profile: gce-worker-n2d
+    placements:
+      - {} # worker 1
+      - {} # worker 2

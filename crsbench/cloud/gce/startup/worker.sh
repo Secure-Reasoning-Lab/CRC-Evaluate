@@ -485,6 +485,16 @@ __crsbench_prompt_short_host() {
   printf '%s' "${short_host}"
 }
 
+if ! command -v fd >/dev/null 2>&1 && command -v fdfind >/dev/null 2>&1; then
+  alias fd='fdfind'
+fi
+alias ..='cd ..'
+alias ...='cd ../..'
+alias ....='cd ../../..'
+alias ll='ls -alF'
+alias la='ls -A'
+alias l='ls -CF'
+
 __crsbench_prompt_command_installed() {
   local pattern='(^|;[[:space:]]*)__crsbench_update_prompt($|[[:space:]]*;)'
   [[ "${PROMPT_COMMAND:-}" =~ ${pattern} ]]

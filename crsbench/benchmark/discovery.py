@@ -17,6 +17,7 @@ from crsbench.validation.schemas import BenchmarkConfig, FullMode, HarnessFile
 logger = get_logger(__name__)
 
 _REQUIRED_OSS_FUZZ_FILES = ("project.yaml", "Dockerfile", "build.sh")
+DEFAULT_DISCOVERY_BUILD_TIMEOUT = 3600
 
 # Binaries to skip when scanning build output (same as oss-fuzz's _get_fuzz_targets)
 _SKIP_PREFIXES = ("afl-", "jazzer_")
@@ -113,6 +114,8 @@ def _resolve_base_commit(main_repo: str) -> str | None:
 def _build_project_image(
     project_name: str,
     project_path: Path,
+    *,
+    build_timeout: int = DEFAULT_DISCOVERY_BUILD_TIMEOUT,
 ) -> str:
     """Build the Docker image for an OSS-Fuzz project.
 
@@ -128,7 +131,7 @@ def _build_project_image(
         ["docker", "build", "-t", image_tag, str(project_path)],
         capture_output=True,
         text=True,
-        timeout=600,
+        timeout=build_timeout,
     )
     if result.returncode != 0:
         logger.error(f"Docker build stderr:\n{result.stderr[-2000:]}")
@@ -145,6 +148,7 @@ def build_oss_fuzz_project(
     sanitizer: str = "address",
     *,
     cpuset_cpus: str | None = None,
+    build_timeout: int = DEFAULT_DISCOVERY_BUILD_TIMEOUT,
 ) -> Path:
     """Build an OSS-Fuzz project with optional CPU pinning.
 
@@ -156,6 +160,7 @@ def build_oss_fuzz_project(
         oss_fuzz_path: Path to the oss-fuzz checkout.
         sanitizer: Sanitizer to build with (default: address).
         cpuset_cpus: CPU cores to pin the build to (e.g., "0-3", "0,2,4").
+        build_timeout: Timeout for docker build/run steps, in seconds.
 
     Returns:
         Path to the build output directory.
@@ -179,7 +184,11 @@ def build_oss_fuzz_project(
     build_work_dir.mkdir(parents=True, exist_ok=True)
 
     # Build the project Docker image
-    image_tag = _build_project_image(project_name, benchmark_path)
+    image_tag = _build_project_image(
+        project_name,
+        benchmark_path,
+        build_timeout=build_timeout,
+    )
 
     # Run the build container to compile fuzz targets
     # Equivalent to what helper.py build_fuzzers_impl does
@@ -226,7 +235,7 @@ def build_oss_fuzz_project(
         docker_cmd,
         capture_output=True,
         text=True,
-        timeout=600,
+        timeout=build_timeout,
     )
 
     if result.returncode != 0:
@@ -251,6 +260,7 @@ def auto_generate_meta_yaml(
     sanitizer: str = "address",
     *,
     cpuset_cpus: str | None = None,
+    build_timeout: int = DEFAULT_DISCOVERY_BUILD_TIMEOUT,
 ) -> Path:
     """Auto-generate .aixcc/meta.yaml for an OSS-Fuzz project.
 
@@ -262,6 +272,7 @@ def auto_generate_meta_yaml(
         oss_fuzz_path: Path to the oss-fuzz checkout.
         sanitizer: Sanitizer to build with (default: address).
         cpuset_cpus: CPU cores to pin the build to (e.g., "0-3").
+        build_timeout: Timeout for docker build/run steps, in seconds.
 
     Returns:
         Path to the generated meta.yaml file.
@@ -278,7 +289,11 @@ def auto_generate_meta_yaml(
 
     # Build the project
     build_out_dir = build_oss_fuzz_project(
-        benchmark_path, oss_fuzz_path, sanitizer, cpuset_cpus=cpuset_cpus
+        benchmark_path,
+        oss_fuzz_path,
+        sanitizer,
+        cpuset_cpus=cpuset_cpus,
+        build_timeout=build_timeout,
     )
 
     # Discover fuzz targets
