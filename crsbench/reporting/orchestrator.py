@@ -64,7 +64,7 @@ class ReportGenerator:
         self.validator = ExperimentValidator()
         self.json_generator = JSONReportGenerator(output_dir)
         self.html_generator = HTMLReportGenerator(output_dir)
-        self.csv_generator = CSVReportGenerator(output_dir)
+        self.csv_generator = CSVReportGenerator(output_dir, benchmarks_root)
 
     def _get_cpv_info(self, trial_info: TrialInfo) -> tuple[int, list[str]]:
         """Get CPV count and IDs for a trial from ground truth meta.yaml.

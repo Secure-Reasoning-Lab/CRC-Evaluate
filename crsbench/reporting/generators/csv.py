@@ -24,14 +24,24 @@ def _format_budget(budget_usd: float) -> str:
 class CSVReportGenerator:
     """Generate CSV reports from experiment metrics."""
 
-    def __init__(self, output_dir: Path) -> None:
+    def __init__(self, output_dir: Path, benchmarks_root: Path | None = None) -> None:
         """Initialize CSV report generator.
 
         Args:
             output_dir: Directory to write CSV reports
+            benchmarks_root: Optional path to benchmarks root. When provided,
+                ``cpv_analysis.csv`` falls back to each benchmark's
+                ``.aixcc/meta.yaml`` for expected CPV ids when a trial lacks
+                ``povs/snapshot_history.json`` (e.g. died before first
+                snapshot). Without this, such trials are silently dropped
+                from the report.
         """
         self.output_dir = output_dir
+        self.benchmarks_root = benchmarks_root
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        # Cache (benchmark, harness, sanitizer) -> list[str] to avoid
+        # re-parsing meta.yaml across the many trials that share a harness.
+        self._meta_cpv_cache: dict[tuple[str, str, str], list[str]] = {}
 
     def generate_trial_report(
         self, trial_metrics: dict[str, Any], _snapshots: list[Any] | None = None
@@ -381,6 +391,16 @@ class CSVReportGenerator:
                 continue
 
             expected_cpvs = self._load_expected_cpv_ids(paths)
+            if not expected_cpvs:
+                # Trials that die before the first snapshot have no
+                # povs/snapshot_history.json. Fall back to ground-truth
+                # meta.yaml so the trial is still represented in the report
+                # (with all CPVs unmatched) instead of vanishing.
+                expected_cpvs = self._load_expected_cpv_ids_from_benchmark(
+                    benchmark=str(metadata.get("benchmark", "")),
+                    harness=str(metadata.get("harness", "")),
+                    sanitizer=str(metadata.get("sanitizer", "")),
+                )
             cpv_to_first_pov = self._load_cpv_to_first_pov(paths)
 
             # Union of expected and matched ensures we surface unexpected
@@ -631,6 +651,64 @@ class CSVReportGenerator:
             return []
         ids = data.get("expected_cpv_ids") or []
         return [str(x) for x in ids if x]
+
+    def _load_expected_cpv_ids_from_benchmark(
+        self, *, benchmark: str, harness: str, sanitizer: str
+    ) -> list[str]:
+        """Fallback: derive expected CPV ids from the benchmark's meta.yaml.
+
+        Used for trials that died before producing
+        ``povs/snapshot_history.json``. Filters by sanitizer so the result
+        matches what runtime would have recorded — a CPV is included only if
+        it has at least one POV under ``sanitizer`` (or all CPVs when
+        ``sanitizer`` is unknown).
+
+        Returns an empty list when ``benchmarks_root`` was not configured or
+        the benchmark / harness cannot be resolved; the trial then silently
+        drops, preserving prior behavior for callers that don't supply a
+        ground-truth source.
+        """
+        if self.benchmarks_root is None or not benchmark or not harness:
+            return []
+
+        valid_sanitizers = {"address", "memory", "undefined", "thread", "leak"}
+        san = sanitizer if sanitizer in valid_sanitizers else None
+        cache_key = (benchmark, harness, san or "")
+        cached = self._meta_cpv_cache.get(cache_key)
+        if cached is not None:
+            return list(cached)
+
+        # Imported lazily to keep the reporting module importable in
+        # contexts (tests, slim envs) where validation deps are absent.
+        from crsbench.validation.meta_adapter import MetaYamlAdapter
+
+        benchmark_path = self.benchmarks_root / benchmark
+        if not benchmark_path.exists():
+            self._meta_cpv_cache[cache_key] = []
+            return []
+
+        adapter = MetaYamlAdapter.from_benchmark_path(benchmark_path)
+        if adapter is None:
+            self._meta_cpv_cache[cache_key] = []
+            return []
+
+        harness_obj = adapter.get_harness(harness)
+        if harness_obj is None or not harness_obj.vulns:
+            self._meta_cpv_cache[cache_key] = []
+            return []
+
+        cpv_ids: list[str] = []
+        for vuln in harness_obj.vulns:
+            if san is None:
+                cpv_ids.append(str(vuln.vuln_keyword))
+                continue
+            for pov in vuln.povs:
+                if pov.sanitizer == san:
+                    cpv_ids.append(str(vuln.vuln_keyword))
+                    break
+
+        self._meta_cpv_cache[cache_key] = cpv_ids
+        return list(cpv_ids)
 
     @staticmethod
     def _load_cpv_to_first_pov(paths: TrialDir) -> dict[str, dict[str, Any]]:

@@ -1049,7 +1049,8 @@ def test_cpv_analysis_recomputes_time_to_trigger_from_metadata_timestamp(
 
 
 def test_cpv_analysis_skips_trial_without_pov_store(temp_output_dir):
-    """Trials missing both pov_store and expected_cpv_ids produce no rows."""
+    """Without ``benchmarks_root``, trials missing both pov_store and
+    expected_cpv_ids still produce no rows (legacy behavior preserved)."""
     generator = CSVReportGenerator(temp_output_dir)
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1083,6 +1084,94 @@ def test_cpv_analysis_skips_trial_without_pov_store(temp_output_dir):
             rows = list(csv.DictReader(f))
 
     assert rows == []
+
+
+def test_cpv_analysis_falls_back_to_meta_yaml_when_no_pov_store(temp_output_dir):
+    """When ``benchmarks_root`` is supplied, a trial that died before the
+    first snapshot (no ``povs/`` dir) still emits one row per expected CPV
+    from meta.yaml, all marked ``matched=False``. Otherwise the trial
+    silently disappears from the report and skews the denominator.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        experiment_dir = tmp / "exp"
+        benchmarks_root = tmp / "benchmarks"
+
+        # Synthesize a benchmark with two CPVs under sanitizer=address, plus
+        # one CPV under sanitizer=memory that the trial should NOT see.
+        benchmark_dir = benchmarks_root / "afc-x"
+        (benchmark_dir / ".aixcc").mkdir(parents=True, exist_ok=True)
+        (benchmark_dir / ".aixcc" / "meta.yaml").write_text(
+            "delta_mode:\n"
+            "  base_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'\n"
+            "  ref_commit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'\n"
+            "harness_files:\n"
+            "- name: harness_a\n"
+            "  path: $REPO/h.c\n"
+            "  vulns:\n"
+            "  - vuln_keyword: cpv_0\n"
+            "    povs:\n"
+            "    - id: pov_0\n"
+            "      sanitizer: address\n"
+            "      error_token: token0\n"
+            "  - vuln_keyword: cpv_1\n"
+            "    povs:\n"
+            "    - id: pov_0\n"
+            "      sanitizer: address\n"
+            "      error_token: token1\n"
+            "  - vuln_keyword: cpv_2\n"
+            "    povs:\n"
+            "    - id: pov_0\n"
+            "      sanitizer: memory\n"
+            "      error_token: token2\n"
+        )
+        (benchmark_dir / "project.yaml").write_text(
+            "main_repo: 'git@example.com:x.git'\nlanguage: c\n"
+        )
+
+        # Trial died before first snapshot: only metadata.json exists.
+        trial_dir = (
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "afc-x"
+            / "harness_a"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        trial_dir.mkdir(parents=True, exist_ok=True)
+        (trial_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "trial_num": 1,
+                    "crs": "crs-bug-finding-claude-code",
+                    "benchmark": "afc-x",
+                    "harness": "harness_a",
+                    "mode": "bug_finding",
+                    "build_mode": "delta",
+                    "sanitizer": "address",
+                }
+            )
+        )
+
+        generator = CSVReportGenerator(temp_output_dir, benchmarks_root)
+        out_path = generator.generate_cpv_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    # Two CPVs under sanitizer=address; cpv_2 (memory) must be filtered out.
+    assert {(r["cpv_id"], r["matched"]) for r in rows} == {
+        ("cpv_0", "False"),
+        ("cpv_1", "False"),
+    }
+    for row in rows:
+        assert row["trial_num"] == "1"
+        assert row["benchmark"] == "afc-x"
+        assert row["harness"] == "harness_a"
+        assert row["sanitizer"] == "address"
+        assert row["time_to_trigger"] == ""
+        assert row["pov_hash"] == ""
+        assert row["discovery_ts"] == ""
 
 
 def test_cpv_analysis_surfaces_unexpected_match(temp_output_dir):
