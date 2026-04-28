@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from crsbench.benchmark.discovery import discover_fuzz_targets
 from crsbench.builder.replay_policy import (
     REPLAY_MODE_ENFORCE,
     replay_install_script,
@@ -82,6 +83,19 @@ _CRASH_MARKERS = (
 def _coverage_lock_token(value: str) -> str:
     token = re.sub(r"[^a-zA-Z0-9._-]+", "-", value).strip("-")
     return token or "unknown"
+
+
+def _directory_fingerprint(root: Path) -> str:
+    digest = hashlib.sha256()
+    resolved_root = root.resolve()
+    for path in sorted(p for p in resolved_root.rglob("*") if p.is_file()):
+        rel = path.relative_to(resolved_root)
+        digest.update(str(rel).encode("utf-8"))
+        digest.update(b"\0")
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _is_leak_only_exit(output: str) -> bool:
@@ -470,6 +484,21 @@ class OSSFuzzInfrastructure:
     @contextmanager
     def _acquire_coverage_lock(self, project_name: str):
         lock_path = self._coverage_lock_file_path(project_name)
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("w") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    def _plain_build_lock_file_path(self, project_name: str) -> Path:
+        project = _coverage_lock_token(project_name)
+        return self.oss_fuzz_path / ".crsbench-locks" / f"plain-build-{project}.lock"
+
+    @contextmanager
+    def _acquire_plain_build_lock(self, project_name: str):
+        lock_path = self._plain_build_lock_file_path(project_name)
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("w") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
@@ -907,6 +936,7 @@ class OSSFuzzInfrastructure:
         inc_build: bool = False,
         sanitizer: str = "address",
         fallback_used: bool = False,
+        project_fingerprint: str = "",
     ) -> None:
         """Write build metadata to the build output directory.
 
@@ -918,6 +948,8 @@ class OSSFuzzInfrastructure:
             inc_build: Whether this was an incremental build
             sanitizer: Sanitizer used for the build
             fallback_used: Whether fallback to clean build was used
+            project_fingerprint: Deterministic fingerprint for the project tree
+                used by plain OSS-Fuzz builds
         """
         from datetime import datetime
 
@@ -931,9 +963,10 @@ class OSSFuzzInfrastructure:
             sanitizer=sanitizer,
             timestamp=datetime.now().isoformat(),
             fallback_used=fallback_used,
+            project_fingerprint=project_fingerprint,
         )
 
-        metadata_path = build_path / BUILD_METADATA_FILE
+        metadata_path = self._build_metadata_path(variant_name)
         temp_path = metadata_path.with_suffix(".tmp")
         try:
             # Atomic write: write to temp file, then rename
@@ -956,8 +989,7 @@ class OSSFuzzInfrastructure:
         Returns:
             BuildMetadata if found, None otherwise
         """
-        build_path = self.get_build_output_path(variant_name)
-        metadata_path = build_path / BUILD_METADATA_FILE
+        metadata_path = self._build_metadata_path(variant_name)
 
         if not metadata_path.exists():
             return None
@@ -969,6 +1001,70 @@ class OSSFuzzInfrastructure:
         except Exception as e:
             logger.warning(f"Failed to read build metadata: {e}")
             return None
+
+    def _build_metadata_path(self, variant_name: str) -> Path:
+        return self.get_build_output_path(variant_name) / BUILD_METADATA_FILE
+
+    def _plain_build_project_fingerprint(self, project_name: str) -> str:
+        safe_project = self._validate_variant_name(project_name)
+        project_path = self.projects_base / safe_project
+        if not project_path.exists():
+            return ""
+        return _directory_fingerprint(project_path)
+
+    def _plain_build_is_reusable(
+        self,
+        project_name: str,
+        *,
+        sanitizer: str,
+        project_fingerprint: str | None = None,
+    ) -> bool:
+        safe_project = self._validate_variant_name(project_name)
+        build_path = self.get_build_output_path(safe_project)
+        project_path = self.projects_base / safe_project
+
+        if not build_path.exists() or not project_path.exists():
+            return False
+
+        metadata = self.read_build_metadata(safe_project)
+        if metadata is None:
+            return False
+
+        if metadata.inc_build:
+            logger.debug(
+                f"Plain build cache mismatch for {safe_project}: "
+                "cached build is inc-build metadata"
+            )
+            return False
+
+        if metadata.sanitizer != sanitizer:
+            logger.debug(
+                f"Plain build cache mismatch for {safe_project}: "
+                f"cached sanitizer={metadata.sanitizer}, required={sanitizer}"
+            )
+            return False
+
+        current_project_fingerprint = (
+            project_fingerprint
+            if project_fingerprint is not None
+            else self._plain_build_project_fingerprint(safe_project)
+        )
+        if metadata.project_fingerprint != current_project_fingerprint:
+            logger.debug(
+                f"Plain build cache mismatch for {safe_project}: "
+                "project fingerprint changed"
+            )
+            return False
+
+        targets = self.list_fuzz_targets(safe_project)
+        if not targets:
+            logger.debug(
+                f"Plain build cache incomplete for {safe_project}: "
+                "no valid fuzz targets discovered"
+            )
+            return False
+
+        return True
 
     def has_harness(self, variant_name: str, harness_name: str) -> bool:
         """Check if a specific harness exists in the build output.
@@ -986,6 +1082,10 @@ class OSSFuzzInfrastructure:
 
         harness_path = build_path / harness_name
         return harness_path.exists() and harness_path.is_file()
+
+    def list_fuzz_targets(self, project_name: str) -> list[str]:
+        """List fuzz targets in the build output for a project."""
+        return discover_fuzz_targets(self.get_build_output_path(project_name))
 
     # =========================================================================
     # Cleanup methods (shared by POV, patch, coverage verification)
@@ -1419,6 +1519,65 @@ class OSSFuzzInfrastructure:
             fallback_used=False,
             stdout=result.stdout or "",
             stderr=result.stderr or "",
+        )
+
+    def build_project_fuzzers(
+        self,
+        project_name: str,
+        *,
+        sanitizer: str = "address",
+        timeout: int = 3600,
+    ) -> FuzzerBuildResult:
+        """Build a plain OSS-Fuzz project without CRSBench variant metadata."""
+        safe_project = self._validate_variant_name(project_name)
+        project_fingerprint = self._plain_build_project_fingerprint(safe_project)
+        if self._plain_build_is_reusable(
+            safe_project,
+            sanitizer=sanitizer,
+            project_fingerprint=project_fingerprint,
+        ):
+            logger.debug(f"Reusing existing plain build for {safe_project}")
+            return FuzzerBuildResult(success=True, stdout="", stderr="")
+
+        cmd = [
+            "python3",
+            str(self._helper_script),
+            "build_fuzzers",
+            "--sanitizer",
+            sanitizer,
+            *self._locale_helper_env_args(),
+            safe_project,
+        ]
+        metadata_path = self._build_metadata_path(safe_project)
+
+        with self._acquire_plain_build_lock(safe_project):
+            project_fingerprint = self._plain_build_project_fingerprint(safe_project)
+            if self._plain_build_is_reusable(
+                safe_project,
+                sanitizer=sanitizer,
+                project_fingerprint=project_fingerprint,
+            ):
+                logger.debug(
+                    f"Plain build for {safe_project} completed by another process"
+                )
+                return FuzzerBuildResult(success=True, stdout="", stderr="")
+
+            metadata_path.unlink(missing_ok=True)
+            result = run_with_timeout(cmd, timeout=timeout, cwd=self.oss_fuzz_path)
+            if result.returncode == 0:
+                project_fingerprint = self._plain_build_project_fingerprint(
+                    safe_project
+                )
+                self.write_build_metadata(
+                    safe_project,
+                    inc_build=False,
+                    sanitizer=sanitizer,
+                    project_fingerprint=project_fingerprint,
+                )
+        return FuzzerBuildResult(
+            success=result.returncode == 0,
+            stdout=result.stdout if isinstance(result.stdout, str) else "",
+            stderr=result.stderr if isinstance(result.stderr, str) else "",
         )
 
     def get_patch_superset_map(self, benchmark_path: Path) -> dict[int, int]:
@@ -1864,6 +2023,45 @@ class OSSFuzzInfrastructure:
         self.cleanup_build_outputs(variant_name)
         self.cleanup_source(variant_name)
 
+    def classify_reproduce_result(
+        self,
+        *,
+        exit_code: int,
+        stdout: str,
+        stderr: str,
+    ) -> ReproduceOutput:
+        """Classify helper.py reproduce output with shared crash semantics."""
+        if exit_code == 0:
+            return ReproduceOutput(
+                crashed=False,
+                stdout=stdout,
+                stderr=stderr,
+                exit_code=0,
+            )
+        if exit_code == EXIT_CODE_TIMEOUT:
+            return ReproduceOutput(
+                crashed=False,
+                stdout=stdout,
+                stderr=stderr,
+                exit_code=EXIT_CODE_TIMEOUT,
+            )
+
+        combined_output = f"{stdout}\n{stderr}"
+        if _is_leak_only_exit(combined_output):
+            return ReproduceOutput(
+                crashed=False,
+                stdout=stdout,
+                stderr=stderr,
+                exit_code=exit_code,
+            )
+
+        return ReproduceOutput(
+            crashed=True,
+            stdout=stdout,
+            stderr=stderr,
+            exit_code=exit_code,
+        )
+
     def reproduce(
         self,
         project_name: str,
@@ -1943,59 +2141,32 @@ class OSSFuzzInfrastructure:
             # Decode output with error handling for binary content
             stdout = result.stdout.decode("utf-8", errors="replace")
             stderr = result.stderr.decode("utf-8", errors="replace")
-
-            # Handle exit codes explicitly
-            if result.returncode == 0:
+            classification = self.classify_reproduce_result(
+                exit_code=result.returncode,
+                stdout=stdout,
+                stderr=stderr,
+            )
+            if classification.exit_code == 0:
                 reproduce_logger.debug(
                     f"{req_prefix}{pov_prefix}{project_name}/{harness} did not crash"
                 )
-                return ReproduceOutput(
-                    crashed=False,
-                    stdout=stdout,
-                    stderr=stderr,
-                    exit_code=0,
-                )
-            if result.returncode == EXIT_CODE_TIMEOUT:
+            elif classification.exit_code == EXIT_CODE_TIMEOUT:
                 reproduce_logger.debug(
                     f"{req_prefix}{pov_prefix}{project_name}/{harness} "
                     "timed out (exit code 124)"
                 )
-                return ReproduceOutput(
-                    crashed=False,
-                    stdout=stdout,
-                    stderr=stderr,
-                    exit_code=124,
+            elif classification.crashed:
+                logger.debug(
+                    f"{req_prefix}{pov_prefix}{project_name}/{harness} crashed "
+                    f"(exit code {classification.exit_code})"
                 )
-
-            combined_output = f"{stdout}\n{stderr}"
-
-            # Check for LeakSanitizer-only exit (not a real crash)
-            # -detect_leaks=0 flag may not suppress ASAN_OPTIONS=detect_leaks=1
-            if _is_leak_only_exit(combined_output):
+            else:
                 reproduce_logger.debug(
                     f"{req_prefix}{pov_prefix}{project_name}/{harness} "
-                    f"LeakSanitizer only (exit code {result.returncode}), not a crash"
+                    f"LeakSanitizer only (exit code {classification.exit_code}), "
+                    "not a crash"
                 )
-                return ReproduceOutput(
-                    crashed=False,
-                    stdout=stdout,
-                    stderr=stderr,
-                    exit_code=result.returncode,
-                )
-
-            # Keep origin/main semantics:
-            # any non-zero exit (except 124 and leak-only) is treated as crash.
-            logger.debug(
-                f"{req_prefix}{pov_prefix}{project_name}/{harness} crashed "
-                f"(exit code {result.returncode})"
-            )
-
-            return ReproduceOutput(
-                crashed=True,
-                stdout=stdout,
-                stderr=stderr,
-                exit_code=result.returncode,
-            )
+            return classification
 
         except subprocess.TimeoutExpired:
             # Our subprocess timeout (shouldn't happen with grace period)

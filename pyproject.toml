@@ -55,6 +55,7 @@ include = ["crsbench*"]
 
 [tool.setuptools.package-data]
 "crsbench.cloud.gce" = ["startup/*.sh"]
+"crsbench.evaluation.replay" = ["*.json"]
 
 [tool.uv]
 package = true

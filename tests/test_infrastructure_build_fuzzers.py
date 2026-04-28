@@ -31,6 +31,58 @@ def _make_infra(tmp_path: Path) -> OSSFuzzInfrastructure:
     return OSSFuzzInfrastructure(oss_fuzz)
 
 
+def _write_executable_target(path: Path) -> None:
+    path.write_text("#!/bin/sh\nexit 0\n")
+    path.chmod(0o755)
+
+
+def _seed_project_definition(
+    infra: OSSFuzzInfrastructure,
+    project_name: str,
+    *,
+    contents: str = "language: c\n",
+) -> Path:
+    project_dir = infra.projects_base / project_name
+    project_dir.mkdir(parents=True, exist_ok=True)
+    project_file = project_dir / "project.yaml"
+    project_file.write_text(contents)
+    return project_file
+
+
+def _seed_plain_build(
+    infra: OSSFuzzInfrastructure,
+    project_name: str,
+    *,
+    sanitizer: str = "address",
+    target_name: str = "existing_fuzzer",
+) -> Path:
+    build_out = infra.get_build_output_path(project_name)
+    build_out.mkdir(parents=True, exist_ok=True)
+    _seed_project_definition(infra, project_name)
+    _write_executable_target(build_out / target_name)
+    infra.write_build_metadata(
+        project_name,
+        inc_build=False,
+        sanitizer=sanitizer,
+        project_fingerprint=infra._plain_build_project_fingerprint(project_name),
+    )
+    return build_out
+
+
+def _assert_plain_build_metadata(
+    infra: OSSFuzzInfrastructure, project_name: str, *, sanitizer: str
+) -> None:
+    metadata = infra.read_build_metadata(project_name)
+    assert metadata is not None
+    assert metadata.inc_build is False
+    assert metadata.sanitizer == sanitizer
+    assert metadata.fallback_used is False
+    assert metadata.timestamp
+    assert metadata.project_fingerprint == infra._plain_build_project_fingerprint(
+        project_name
+    )
+
+
 def test_build_fuzzers_fixes_build_output_ownership_on_success(tmp_path: Path) -> None:
     infra = _make_infra(tmp_path)
     config = _make_config(tmp_path)
@@ -65,6 +117,204 @@ def test_build_fuzzers_does_not_fix_source_ownership_on_failure(tmp_path: Path) 
 
     assert result.success is False
     assert mock_fix.call_args_list == []
+
+
+def test_build_project_fuzzers_skips_plain_rebuild_when_matching_metadata_and_valid_targets_exist(
+    tmp_path: Path,
+) -> None:
+    infra = _make_infra(tmp_path)
+    project_name = "plain-project"
+    _seed_plain_build(infra, project_name)
+    assert infra.list_fuzz_targets(project_name) == ["existing_fuzzer"]
+
+    with patch("crsbench.builder.infrastructure.run_with_timeout") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="built", stderr="")
+        result = infra.build_project_fuzzers(project_name, sanitizer="address")
+
+    assert result.success is True
+    assert mock_run.call_count == 0
+
+
+def test_build_project_fuzzers_rebuilds_when_metadata_exists_but_no_valid_targets(
+    tmp_path: Path,
+) -> None:
+    infra = _make_infra(tmp_path)
+    project_name = "plain-project"
+    build_out = infra.get_build_output_path(project_name)
+    build_out.mkdir(parents=True)
+    _seed_project_definition(infra, project_name)
+    (build_out / "not_a_target.txt").write_text("plain text, not executable\n")
+    infra.write_build_metadata(
+        project_name,
+        inc_build=False,
+        sanitizer="address",
+        project_fingerprint=infra._plain_build_project_fingerprint(project_name),
+    )
+    assert infra.list_fuzz_targets(project_name) == []
+
+    def _successful_plain_build(*_args, **_kwargs):
+        _write_executable_target(build_out / "rebuilt_fuzzer")
+        return MagicMock(returncode=0, stdout="rebuilt", stderr="")
+
+    with patch(
+        "crsbench.builder.infrastructure.run_with_timeout",
+        side_effect=_successful_plain_build,
+    ) as mock_run:
+        result = infra.build_project_fuzzers(project_name, sanitizer="address")
+
+    assert result.success is True
+    assert mock_run.call_count == 1
+    assert infra.list_fuzz_targets(project_name) == ["rebuilt_fuzzer"]
+    _assert_plain_build_metadata(infra, project_name, sanitizer="address")
+
+
+def test_build_project_fuzzers_rebuilds_and_refreshes_metadata_on_sanitizer_mismatch(
+    tmp_path: Path,
+) -> None:
+    infra = _make_infra(tmp_path)
+    project_name = "plain-project"
+    _seed_plain_build(infra, project_name, sanitizer="undefined")
+
+    with patch("crsbench.builder.infrastructure.run_with_timeout") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="rebuilt", stderr="")
+        result = infra.build_project_fuzzers(project_name, sanitizer="address")
+
+    assert result.success is True
+    assert mock_run.call_count == 1
+    _assert_plain_build_metadata(infra, project_name, sanitizer="address")
+
+
+def test_build_project_fuzzers_failed_forced_rebuild_does_not_leave_stale_reusable_metadata(
+    tmp_path: Path,
+) -> None:
+    infra = _make_infra(tmp_path)
+    project_name = "plain-project"
+    build_out = _seed_plain_build(infra, project_name, sanitizer="undefined")
+    stale_target = build_out / "existing_fuzzer"
+    assert stale_target.exists()
+
+    run_results = [
+        MagicMock(returncode=1, stdout="", stderr="rebuild failed"),
+        MagicMock(returncode=0, stdout="rebuilt", stderr=""),
+    ]
+
+    def _run_side_effect(*_args, **_kwargs):
+        if len(run_results) == 1:
+            stale_target.unlink(missing_ok=True)
+            _write_executable_target(build_out / "rebuilt_fuzzer")
+        return run_results.pop(0)
+
+    with patch(
+        "crsbench.builder.infrastructure.run_with_timeout",
+        side_effect=_run_side_effect,
+    ) as mock_run:
+        first = infra.build_project_fuzzers(project_name, sanitizer="address")
+        assert first.success is False
+        assert infra.read_build_metadata(project_name) is None
+
+        second = infra.build_project_fuzzers(project_name, sanitizer="address")
+
+    assert second.success is True
+    assert mock_run.call_count == 2
+    assert infra.list_fuzz_targets(project_name) == ["rebuilt_fuzzer"]
+    _assert_plain_build_metadata(infra, project_name, sanitizer="address")
+
+
+def test_build_project_fuzzers_writes_reusable_metadata_after_successful_plain_build(
+    tmp_path: Path,
+) -> None:
+    infra = _make_infra(tmp_path)
+    project_name = "plain-project"
+    build_out = infra.get_build_output_path(project_name)
+    _seed_project_definition(infra, project_name)
+
+    def _successful_plain_build(*_args, **_kwargs):
+        build_out.mkdir(parents=True, exist_ok=True)
+        _write_executable_target(build_out / "built_fuzzer")
+        return MagicMock(returncode=0, stdout="built", stderr="")
+
+    with patch(
+        "crsbench.builder.infrastructure.run_with_timeout",
+        side_effect=_successful_plain_build,
+    ) as mock_run:
+        result = infra.build_project_fuzzers(project_name, sanitizer="address")
+
+    assert result.success is True
+    assert mock_run.call_count == 1
+    assert infra.list_fuzz_targets(project_name) == ["built_fuzzer"]
+    _assert_plain_build_metadata(infra, project_name, sanitizer="address")
+
+
+def test_build_project_fuzzers_rebuilds_when_project_fingerprint_changes(
+    tmp_path: Path,
+) -> None:
+    infra = _make_infra(tmp_path)
+    project_name = "plain-project"
+    _seed_plain_build(infra, project_name)
+    _seed_project_definition(
+        infra,
+        project_name,
+        contents="language: c\nmain_repo: https://example.com/updated.git\n",
+    )
+
+    with patch("crsbench.builder.infrastructure.run_with_timeout") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="rebuilt", stderr="")
+        result = infra.build_project_fuzzers(project_name, sanitizer="address")
+
+    assert result.success is True
+    assert mock_run.call_count == 1
+    _assert_plain_build_metadata(infra, project_name, sanitizer="address")
+
+
+def test_build_project_fuzzers_treats_malformed_metadata_as_non_reusable_and_rebuilds(
+    tmp_path: Path,
+) -> None:
+    infra = _make_infra(tmp_path)
+    project_name = "plain-project"
+    build_out = infra.get_build_output_path(project_name)
+    build_out.mkdir(parents=True)
+    _seed_project_definition(infra, project_name)
+    _write_executable_target(build_out / "existing_fuzzer")
+    (build_out / ".build-meta.json").write_text("{not valid json")
+    assert infra.read_build_metadata(project_name) is None
+
+    def _successful_plain_build(*_args, **_kwargs):
+        return MagicMock(returncode=0, stdout="rebuilt", stderr="")
+
+    with patch(
+        "crsbench.builder.infrastructure.run_with_timeout",
+        side_effect=_successful_plain_build,
+    ) as mock_run:
+        result = infra.build_project_fuzzers(project_name, sanitizer="address")
+
+    assert result.success is True
+    assert mock_run.call_count == 1
+    _assert_plain_build_metadata(infra, project_name, sanitizer="address")
+
+
+def test_build_project_fuzzers_failed_plain_build_does_not_write_reusable_metadata(
+    tmp_path: Path,
+) -> None:
+    infra = _make_infra(tmp_path)
+    project_name = "plain-project"
+    build_out = infra.get_build_output_path(project_name)
+    _seed_project_definition(infra, project_name)
+
+    def _failed_plain_build(*_args, **_kwargs):
+        build_out.mkdir(parents=True, exist_ok=True)
+        _write_executable_target(build_out / "partial_fuzzer")
+        return MagicMock(returncode=1, stdout="", stderr="build failed")
+
+    with patch(
+        "crsbench.builder.infrastructure.run_with_timeout",
+        side_effect=_failed_plain_build,
+    ) as mock_run:
+        result = infra.build_project_fuzzers(project_name, sanitizer="address")
+
+    assert result.success is False
+    assert mock_run.call_count == 1
+    assert infra.list_fuzz_targets(project_name) == ["partial_fuzzer"]
+    assert infra.read_build_metadata(project_name) is None
 
 
 def test_prepare_inc_image_for_variant_uses_plain_variant_inc_tag(
@@ -576,6 +826,49 @@ def test_run_tests_sets_utf8_locale_env(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _child_plain_project_build(
+    oss_fuzz_path: str,
+    project_name: str,
+    barrier_path: str,
+    result_queue: multiprocessing.Queue,
+) -> None:
+    """Entry point for child process that calls build_project_fuzzers()."""
+    from unittest.mock import MagicMock  # noqa: I001
+    from unittest.mock import patch as mock_patch
+
+    infra = OSSFuzzInfrastructure(Path(oss_fuzz_path))
+
+    barrier = Path(barrier_path)
+    barrier.mkdir(parents=True, exist_ok=True)
+    (barrier / str(os.getpid())).touch()
+    deadline = time.monotonic() + 5
+    while len(list(barrier.iterdir())) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    def _fake_build(*_args, **_kwargs):
+        time.sleep(0.5)
+        out_dir = Path(oss_fuzz_path) / "build" / "out" / project_name
+        out_dir.mkdir(parents=True, exist_ok=True)
+        _write_executable_target(out_dir / "plain_fuzzer")
+        (Path(oss_fuzz_path) / "projects" / project_name).mkdir(
+            parents=True, exist_ok=True
+        )
+        return MagicMock(returncode=0, stdout="ok", stderr="")
+
+    with mock_patch(
+        "crsbench.builder.infrastructure.run_with_timeout",
+        side_effect=_fake_build,
+    ) as mock_run:
+        build_result = infra.build_project_fuzzers(project_name, sanitizer="address")
+        result_queue.put(
+            {
+                "pid": os.getpid(),
+                "success": build_result.success,
+                "run_called": mock_run.called,
+            }
+        )
+
+
 def _child_build(
     oss_fuzz_path: str,
     config_kwargs: dict,
@@ -708,6 +1001,56 @@ def test_concurrent_build_fuzzers_serialized_by_lock(tmp_path: Path) -> None:
 
     # One process should have called run_with_timeout (the builder),
     # the other should have skipped via the double-check (no run call).
+    run_calls = [r["run_called"] for r in results]
+    assert True in run_calls, "At least one process must run the build"
+    assert False in run_calls, (
+        "Second process should skip build via double-check after lock, "
+        f"but both called run_with_timeout: {results}"
+    )
+
+
+def test_concurrent_build_project_fuzzers_serialized_by_lock(
+    tmp_path: Path,
+) -> None:
+    """Two processes building the same plain project must not race."""
+    oss_fuzz = tmp_path / "oss-fuzz"
+    (oss_fuzz / "infra").mkdir(parents=True)
+    (oss_fuzz / "projects").mkdir(parents=True)
+    (oss_fuzz / "build" / "out").mkdir(parents=True)
+    (oss_fuzz / "infra" / "helper.py").write_text("#!/usr/bin/env python3\n")
+
+    project_name = "plain-project"
+    barrier_path = str(tmp_path / "plain-barrier")
+    result_queue = multiprocessing.Queue()
+
+    ctx = multiprocessing.get_context("fork")
+    p1 = ctx.Process(
+        target=_child_plain_project_build,
+        args=(str(oss_fuzz), project_name, barrier_path, result_queue),
+    )
+    p2 = ctx.Process(
+        target=_child_plain_project_build,
+        args=(str(oss_fuzz), project_name, barrier_path, result_queue),
+    )
+
+    p1.start()
+    p2.start()
+    p1.join(timeout=20)
+    p2.join(timeout=20)
+
+    assert p1.exitcode == 0, f"Process 1 crashed with exit code {p1.exitcode}"
+    assert p2.exitcode == 0, f"Process 2 crashed with exit code {p2.exitcode}"
+
+    results = []
+    while not result_queue.empty():
+        results.append(result_queue.get_nowait())
+
+    assert len(results) == 2, f"Expected 2 results, got {len(results)}"
+    assert all(r["success"] for r in results), f"Not all builds succeeded: {results}"
+    infra = OSSFuzzInfrastructure(oss_fuzz)
+    assert infra.list_fuzz_targets(project_name) == ["plain_fuzzer"]
+    _assert_plain_build_metadata(infra, project_name, sanitizer="address")
+
     run_calls = [r["run_called"] for r in results]
     assert True in run_calls, "At least one process must run the build"
     assert False in run_calls, (

@@ -320,12 +320,15 @@ class BuildMetadata:
         sanitizer: Sanitizer used for the build
         timestamp: Build timestamp (ISO format)
         fallback_used: Whether fallback to clean build was used (inc-build failed)
+        project_fingerprint: Deterministic fingerprint for the source project tree
+            used by plain OSS-Fuzz project builds
     """
 
     inc_build: bool = False
     sanitizer: str = "address"
     timestamp: str = ""
     fallback_used: bool = False
+    project_fingerprint: str = ""
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -334,6 +337,7 @@ class BuildMetadata:
             "sanitizer": self.sanitizer,
             "timestamp": self.timestamp,
             "fallback_used": self.fallback_used,
+            "project_fingerprint": self.project_fingerprint,
         }
 
     @classmethod
@@ -344,6 +348,7 @@ class BuildMetadata:
             sanitizer=data.get("sanitizer", "address"),
             timestamp=data.get("timestamp", ""),
             fallback_used=data.get("fallback_used", False),
+            project_fingerprint=data.get("project_fingerprint", ""),
         )
 
 

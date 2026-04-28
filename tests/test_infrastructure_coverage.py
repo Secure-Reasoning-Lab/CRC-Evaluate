@@ -49,6 +49,22 @@ class TestHasHarness:
         assert infra.has_harness("proj", "fuzz") is False
 
 
+class TestListFuzzTargets:
+    """Tests for list_fuzz_targets()."""
+
+    def test_matches_helper_target_rules(self, mock_oss_fuzz: Path):
+        out_dir = mock_oss_fuzz / "build" / "out" / "curl"
+        out_dir.mkdir(parents=True)
+        for name in ("curl_fuzzer", "llvm-symbolizer", "jazzer_driver", "afl-temp"):
+            path = out_dir / name
+            path.write_text("x")
+            path.chmod(0o755)
+
+        infra = OSSFuzzInfrastructure(mock_oss_fuzz)
+
+        assert infra.list_fuzz_targets("curl") == ["curl_fuzzer"]
+
+
 class TestRunCoverage:
     """Tests for run_coverage()."""
 

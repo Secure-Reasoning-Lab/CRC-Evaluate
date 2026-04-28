@@ -27,6 +27,7 @@ Use this page as the primary navigation hub.
 - [Experiments Hub](./guides/experiments/README.md)
   - [Single Machine](./guides/experiments/single-machine.md)
   - [Discovery-Only OSS-Fuzz](./guides/experiments/discovery-only.md)
+  - [Replay Historical POVs](./guides/experiments/replay-povs.md)
   - [Distributed](./guides/experiments/distributed.md)
   - [Cloud Orchestration on GCE](./guides/experiments/gce-cloud-orchestration.md)
   - [Local Cloud Rehearsal](./guides/experiments/local-cloud-rehearsal.md)
@@ -61,6 +62,7 @@ Use this page as the primary navigation hub.
 
 - [Design Index](./design/README.md)
 - [Architecture Overview](./design/architecture.md)
+- [Historical POV Replay Contract](./design/evaluation/pov-replay.md)
 
 ## Module Reference
 

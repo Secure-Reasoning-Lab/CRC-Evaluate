@@ -474,6 +474,11 @@ Examples:
 
     add_coverage_subparser(subparsers)
 
+    # 'replay-povs' subcommand - replay discovered POVs against OSS-Fuzz
+    from crsbench.evaluation.replay.cli import add_replay_povs_subparser
+
+    add_replay_povs_subparser(subparsers)
+
     # 'report' subcommand - report generation
     from crsbench.reporting.cli import add_report_subparser
 
@@ -3279,6 +3284,11 @@ def main() -> None:
         from crsbench.evaluation.coverage.cli.coverage_command import run_coverage
 
         sys.exit(run_coverage(args))
+
+    if args.command == "replay-povs":
+        from crsbench.evaluation.replay.cli import run_replay_povs
+
+        sys.exit(run_replay_povs(args))
 
     if args.command == "patch-verify":
         # Handle patch-verify command

@@ -130,6 +130,7 @@ Then re-run the quality gate command above.
 - Install: `docs/getting-started/install.md`
 - Configuration: `docs/getting-started/configuration.md`
 - Discovery-only OSS-Fuzz experiments: `docs/guides/experiments/discovery-only.md`
+- Replay historical POVs: `docs/guides/experiments/replay-povs.md`
 - Normative benchmark spec: `docs/RFC.md`
 - Architecture: `docs/design/architecture.md`
 - Design doc policy: `docs/design/doc-authoring-guidelines.md`
@@ -143,6 +144,7 @@ Then re-run the quality gate command above.
 - Deployment/cloud: `docs/design/distributed/deployment-guide.md`
 - Configless runtime: `docs/design/distributed/configless-runtime.md`
 - Evaluation flow: `docs/design/evaluation/evaluation.md`
+- Historical POV replay contract: `docs/design/evaluation/pov-replay.md`
 - Gen-config TUI YAML round-trip editing: `docs/design/validation/gen-config-tui-yaml-roundtrip.md`
 - Testing setup: `docs/contributors/testing.md`
 - Coding standards: `docs/contributors/coding-standards.md`

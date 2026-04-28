@@ -21,6 +21,7 @@ _REQUIRED_OSS_FUZZ_FILES = ("project.yaml", "Dockerfile", "build.sh")
 # Binaries to skip when scanning build output (same as oss-fuzz's _get_fuzz_targets)
 _SKIP_PREFIXES = ("afl-", "jazzer_")
 _SKIP_NAMES = frozenset({"centipede", "llvm-symbolizer"})
+_SKIP_SUFFIXES = (".jar",)
 
 
 def is_oss_fuzz_project(benchmark_path: Path) -> bool:
@@ -52,6 +53,8 @@ def discover_fuzz_targets(build_out_dir: Path) -> list[str]:
         if any(name.startswith(prefix) for prefix in _SKIP_PREFIXES):
             continue
         if name in _SKIP_NAMES:
+            continue
+        if any(name.endswith(suffix) for suffix in _SKIP_SUFFIXES):
             continue
         if not entry.is_file():
             continue

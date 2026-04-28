@@ -116,6 +116,15 @@ class TestDiscoverFuzzTargets:
 
         assert targets == ["fuzzer"]
 
+    def test_skips_executable_jar_payloads(self, tmp_path):
+        """Skips raw executable jars and keeps runnable harness wrappers only."""
+        self._make_executable(tmp_path / "RealFuzzer")
+        self._make_executable(tmp_path / "real-fuzzer-1.0.jar")
+
+        targets = discover_fuzz_targets(tmp_path)
+
+        assert targets == ["RealFuzzer"]
+
     def test_skips_directories(self, tmp_path):
         """Skips subdirectories."""
         (tmp_path / "subdir").mkdir()
