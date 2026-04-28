@@ -126,6 +126,13 @@ Aggregate analysis across all trials:
 - Cost-effectiveness ranking
 - Success rate statistics
 
+### CPV Analysis
+`cpv_analysis.csv` emits one row per `(trial, CPV)` pair. Matched CPV trigger
+times are computed as `pov_store.discovery_ts - metadata.json:timestamp`; the
+stored `pov_store.relative_time` is only a compatibility fallback for older
+artifacts without a metadata timestamp. This keeps report output stable when
+distributed re-evaluation or post-processing rewrites `crs_run_start_time`.
+
 ## Documentation
 
 - [Report generation design](../design/reporting/report-generation.md)

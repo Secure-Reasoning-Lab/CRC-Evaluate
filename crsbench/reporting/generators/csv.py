@@ -399,6 +399,7 @@ class CSVReportGenerator:
                 "sanitizer": metadata.get("sanitizer", ""),
                 "trial_dir": str(trial_dir),
             }
+            trial_start_epoch = self._metadata_timestamp_epoch(metadata)
 
             time_at_budget: float | None = None
             trial_total_cost: float | None = None
@@ -411,7 +412,7 @@ class CSVReportGenerator:
 
             for cpv_id in cpv_ids:
                 match = cpv_to_first_pov.get(cpv_id)
-                rel_time = match.get("relative_time") if match else None
+                rel_time = self._match_relative_time(match, trial_start_epoch)
 
                 if budget_usd is None:
                     matched = match is not None
@@ -419,6 +420,7 @@ class CSVReportGenerator:
                     matched = self._match_within_budget(
                         match=match,
                         time_at_budget=time_at_budget,
+                        relative_time=rel_time,
                     )
 
                 row = {
@@ -539,7 +541,10 @@ class CSVReportGenerator:
 
     @staticmethod
     def _match_within_budget(
-        *, match: dict[str, Any] | None, time_at_budget: float | None
+        *,
+        match: dict[str, Any] | None,
+        time_at_budget: float | None,
+        relative_time: float | None = None,
     ) -> bool:
         """Return True if ``match`` was discovered within the budget time."""
         if match is None:
@@ -548,13 +553,60 @@ class CSVReportGenerator:
             # Unknown cost-time mapping (no time_series, total cost unknown).
             # Fall back to the recorded match so we do not silently drop data.
             return True
-        rel_time = match.get("relative_time")
+        rel_time = relative_time
+        if rel_time is None:
+            rel_time = match.get("relative_time")
         if rel_time is None:
             return False
         try:
             return float(rel_time) <= time_at_budget
         except (TypeError, ValueError):
             return False
+
+    @staticmethod
+    def _metadata_timestamp_epoch(metadata: dict[str, Any]) -> float | None:
+        """Return metadata.json:timestamp as Unix epoch seconds when available."""
+        ts = metadata.get("timestamp")
+        if ts is None:
+            return None
+        try:
+            if isinstance(ts, (int, float)):
+                return float(ts)
+            text = str(ts)
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            return datetime.fromisoformat(text).timestamp()
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _match_relative_time(
+        match: dict[str, Any] | None, trial_start_epoch: float | None
+    ) -> float | None:
+        """Compute CPV trigger time on the trial metadata timestamp axis.
+
+        ``pov_store.json`` stores ``relative_time`` derived from
+        ``crs_run_start_time``. Reanalysis and distributed re-eval paths can
+        rewrite that anchor, so report generation recomputes the value from
+        the stable pair ``discovery_ts - metadata.json:timestamp`` whenever
+        both inputs are present. The stored value remains a compatibility
+        fallback for older artifacts that lack metadata timestamps.
+        """
+        if not match:
+            return None
+        discovery_ts = match.get("discovery_ts")
+        if discovery_ts is not None and trial_start_epoch is not None:
+            try:
+                return float(discovery_ts) - trial_start_epoch
+            except (TypeError, ValueError):
+                pass
+        stored = match.get("relative_time")
+        if stored is None:
+            return None
+        try:
+            return float(stored)
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _load_total_llm_cost(trial_dir: Path) -> float | None:
