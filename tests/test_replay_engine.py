@@ -14,6 +14,8 @@ from crsbench.evaluation.replay.models import (
 def _asan_stderr(crash_type: str = "heap-buffer-overflow") -> str:
     return (
         f"==1==ERROR: AddressSanitizer: {crash_type} on address 0x1\n"
+        "#0 0xabc in LLVMFuzzerTestOneInput /src/fuzzer.cc:42:7\n"
+        "#1 0xdef in main /src/driver.cc:9:3\n"
         f"SUMMARY: AddressSanitizer: {crash_type} /src/example.c:42:7"
     )
 
@@ -429,6 +431,8 @@ def test_replay_engine_counts_0day_rows_per_source_record_after_dedup(
     assert summary["physical_replay_tasks"] == 1
     assert summary["crash_count"] == 1
     assert summary["0day_count"] == 2
+    assert summary["0day_raw_count"] == 2
+    assert summary["0day_dedup_count"] == 1
     assert summary["crashing_replay_count"] == 2
 
     zero_day = json.loads((tmp_path / "replay-out" / "0day.json").read_text())
@@ -450,6 +454,21 @@ def test_replay_engine_counts_0day_rows_per_source_record_after_dedup(
             "pov_filename": "b.blob",
         },
     }
+
+    deduped = json.loads((tmp_path / "replay-out" / "0day-dedup.json").read_text())
+    assert len(deduped) == 1
+    assert deduped[0]["benchmark"] == "afc-curl-delta-01"
+    assert deduped[0]["mapped_oss_fuzz_project"] == "curl"
+    assert deduped[0]["sanitizer"] == "address"
+    assert deduped[0]["crash_type"] == "heap-buffer-overflow"
+    assert deduped[0]["signature_source"] == "parsed"
+    assert deduped[0]["source_entry_count"] == 2
+    assert deduped[0]["replay_count"] == 2
+    assert {entry["trial_relative_path"] for entry in deduped[0]["entries"]} == {
+        "trial-a",
+        "trial-b",
+    }
+    assert all(len(entry["replays"]) == 1 for entry in deduped[0]["entries"])
 
 
 def test_replay_engine_records_and_logs_throughput_metrics(tmp_path: Path) -> None:
@@ -737,6 +756,32 @@ def test_replay_engine_writes_crash_only_0day_rows_without_stdio_fields(
     assert all("stderr" not in replay for replay in entry["replays"])
     assert all(
         entry["original_pov_relpath"] != "trial-b/output/povs/b.blob" for entry in data
+    )
+
+
+def test_replay_engine_writes_deduplicated_0day_groups_by_crash_signature(
+    tmp_path: Path,
+) -> None:
+    replay_out = _run_0day_replay(tmp_path)
+    dedup_path = replay_out / "0day-dedup.json"
+    assert dedup_path.exists()
+
+    data = json.loads(dedup_path.read_text())
+    assert len(data) == 2
+    assert {(entry["crash_type"], entry["signature_source"]) for entry in data} == {
+        ("heap-buffer-overflow", "parsed"),
+        ("use-after-free", "parsed"),
+    }
+    assert {entry["source_entry_count"] for entry in data} == {1}
+    assert {entry["replay_count"] for entry in data} == {1}
+    assert {entry["mapped_oss_fuzz_project"] for entry in data} == {"curl"}
+    assert {entry["benchmark"] for entry in data} == {"afc-curl-delta-01"}
+    assert all(len(entry["entries"]) == 1 for entry in data)
+    assert all(len(entry["entries"][0]["replays"]) == 1 for entry in data)
+    assert all(
+        "stdout" not in replay and "stderr" not in replay
+        for entry in data
+        for replay in entry["entries"][0]["replays"]
     )
 
 

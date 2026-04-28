@@ -82,9 +82,10 @@ Each artifact directory contains:
 Replay also writes:
 
 - `manifest.json` for command-level inputs and runtime settings
-- `summary.json` for aggregate counters, including `0day_count` and `crashing_replay_count`
+- `summary.json` for aggregate counters, including raw-versus-deduped 0day counters and `crashing_replay_count`
 - `0day.log` for append-only qualifying-crash JSONL rows emitted as individual harness results finish
 - `0day.json` for a qualifying-crash top-level export
+- `0day-dedup.json` for a crash-signature-grouped qualifying-crash export
 - `pov-to-crash-map.json` for the global mapping from original POV provenance to replay artifacts
 - `trials/<source-id>/<trial-relative-path>/pov-index.json` for a per-trial replay index
 - `.state/groups/<mapped-project>/<sanitizer>/group-result.json` for completed replay-group checkpoints
@@ -98,6 +99,29 @@ patterns already recognized by POV verification (`== Java Exception:` or
 from this 0day view. Those rows omit `stdout` and `stderr` but retain
 crash-focused fields such as harness, sanitizer, exit code, duration, artifact
 directory, sanitizer log, session restart, and error message.
+
+`0day-dedup.json` is derived from `0day.json`, not from the full replay index.
+Replay parses each qualifying row's `sanitizer.log` with the shared
+crash-signature parser already used by verification and groups rows by
+`(benchmark, mapped project, sanitizer, crash type, signature hash)`. Each
+group records:
+
+- `benchmark`
+- `mapped_oss_fuzz_project`
+- `sanitizer`
+- `crash_type`
+- `signature_hash`
+- `raw_summary`
+- `signature_source`
+- `source_entry_count`
+- `replay_count`
+- `entries`
+
+`entries` preserves the original source-level provenance shape from `0day.json`,
+but each entry keeps only the replay rows that belong to that crash signature.
+If a sanitizer log does not parse cleanly enough to produce a structured crash
+signature, replay falls back to an exact raw-log hash so the qualifying row is
+still represented without risking an overly aggressive dedup merge.
 
 ## Runtime Behavior
 
@@ -117,14 +141,21 @@ If another replay process is already building the same OSS-Fuzz project in the
 same checkout, later processes wait on that per-project lock and re-check the
 result after the lock is released instead of rebuilding blindly.
 
-`summary.json` reports `0day_count` and `crashing_replay_count` for the emitted
-qualifying-crash view: source entries included in `0day.json` and replay rows
-kept there, not deduplicated physical replay tasks.
+`summary.json` reports separate raw and deduped counters for the emitted
+qualifying-crash view:
+
+- `0day_count` and `0day_raw_count`: raw source-entry count included in `0day.json`
+- `0day_dedup_count`: crash-signature group count included in `0day-dedup.json`
+- `crashing_replay_count`: raw replay-row count retained in `0day.json`
+
+These are distinct from physical replay-task dedup counters such as
+`physical_replay_tasks` and `deduplicated_replay_tasks_saved`.
 
 `0day.log` is deliberately earlier and more granular than `0day.json`. Each line
 contains one source record plus one qualifying replay row and is flushed to
 disk immediately so operators can tail live results during long scans. The
-final `0day.json` remains the aggregated qualifying-crash export.
+final `0day.json` remains the aggregated raw qualifying-crash export, while
+`0day-dedup.json` is written only during final aggregation.
 
 ### Warm Session Behavior
 

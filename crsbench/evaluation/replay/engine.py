@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from crsbench.builder.infrastructure import OSSFuzzInfrastructure
+from crsbench.evaluation.replay.dedup import build_deduplicated_zero_day_entries
 from crsbench.evaluation.replay.mapping import (
     MappingResolution,
     load_benchmark_project_mapping,
@@ -932,9 +933,14 @@ class ReplayEngine:
             if physical_replay_tasks > 0
             else 0.0
         )
+        deduplicated_zero_day_entries = build_deduplicated_zero_day_entries(
+            zero_day_entries
+        )
         # These counters reflect the emitted crash-only 0day view, not
         # deduplicated physical replay tasks.
         summary["0day_count"] = len(zero_day_entries)
+        summary["0day_raw_count"] = len(zero_day_entries)
+        summary["0day_dedup_count"] = len(deduplicated_zero_day_entries)
         summary["crashing_replay_count"] = sum(
             len(entry["replays"]) for entry in zero_day_entries
         )
@@ -966,6 +972,10 @@ class ReplayEngine:
         )
         (self.output_dir / "0day.json").write_text(
             json.dumps(zero_day_entries, indent=2),
+            encoding="utf-8",
+        )
+        (self.output_dir / "0day-dedup.json").write_text(
+            json.dumps(deduplicated_zero_day_entries, indent=2),
             encoding="utf-8",
         )
         for (source_id, trial_relative_path), entries in sorted(trial_entries.items()):

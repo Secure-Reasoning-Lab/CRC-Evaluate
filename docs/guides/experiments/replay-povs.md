@@ -118,14 +118,16 @@ Replay writes the following under `--output`:
 
 - `manifest.json`: source roots, helper/projects paths, and runtime settings
 - `summary.json`: aggregate counters for mappings, builds, crashes, timeouts,
-  errors, plus `0day_count` and `crashing_replay_count` for the emitted
-  crash-only 0day view
+  errors, plus raw-versus-deduped 0day counters and `crashing_replay_count`
+  for the emitted crash-only 0day view
 - `0day.log`: append-only JSONL stream written as each qualifying
   crash row lands; this is the earliest view during a long scan and is
   deduplicated across `--resume` reruns
 - `0day.json`: additive crash-only export that keeps only source entries with at
   least one qualifying replay, and within those entries keeps only those replay
   rows
+- `0day-dedup.json`: crash-signature-grouped sibling of `0day.json`, built from
+  replay `sanitizer.log` artifacts using the shared crash-signature parser
 - `pov-to-crash-map.json`: full mapping from original POV provenance to replay
   artifacts, including non-crashing replay rows
 - `.state/groups/<project>/<sanitizer>/group-result.json`: completed replay-group
@@ -159,10 +161,26 @@ Those rows omit `stdout` and `stderr`, while keeping crash-focused fields such
 as harness, sanitizer, exit code, duration, artifact directory, sanitizer log,
 session restart, and error message.
 
+`0day-dedup.json` keeps the same source-entry provenance but regroups those raw
+0day rows by crash signature. Each dedup group records the parsed
+`crash_type`, `signature_hash`, `raw_summary`, `signature_source`,
+`source_entry_count`, and `replay_count`, then includes only the source entries
+and replay rows that match that signature. When a sanitizer log does not parse
+cleanly, replay falls back to an exact raw-log hash instead of dropping the row.
+
+`summary.json` now separates the two views explicitly:
+
+- `0day_count` and `0day_raw_count`: raw qualifying source-entry count from
+  `0day.json`
+- `0day_dedup_count`: crash-signature group count from `0day-dedup.json`
+- `crashing_replay_count`: raw qualifying replay-row count retained in
+  `0day.json`
+
 `0day.log` is intentionally more granular than `0day.json`: each line is one
 source POV plus one qualifying replay row, appended immediately after that
 harness finishes. The final `0day.json` later folds those rows back into one
-entry per source POV.
+entry per source POV. `0day-dedup.json` is only written during final
+aggregation after all replay groups finish.
 
 ## Operational Notes
 
