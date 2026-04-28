@@ -105,13 +105,21 @@ def _build_from_experiment_bundle_or_none(
     local: Path,
     remote: str,
     label: str,
+    allowed_benchmarks: list[str] | None = None,
 ) -> _FromExperimentBundle | None:
-    """Validate *local* and build the minimal manifest; log+return None on failure."""
+    """Validate *local* and build the minimal manifest; log+return None on failure.
+
+    ``allowed_benchmarks`` restricts the manifest walk to the current run's
+    suite-resolved benchmark list, so we don't ship phase-1 outputs for
+    benchmarks the fixing run will never read.
+    """
     if not local.is_dir():
         logger.error("{}: path is not a directory: {}", label, local)
         return None
     try:
-        manifest = build_from_experiment_manifest(local)
+        manifest = build_from_experiment_manifest(
+            local, allowed_benchmarks=allowed_benchmarks
+        )
     except ValueError as exc:
         logger.error("{}: manifest error: {}", label, exc)
         return None
@@ -251,12 +259,20 @@ def run_launch(args: argparse.Namespace) -> int:
     from_experiment_remote_by_crs: dict[str, str] | None = None
     single_source = config.inputs.pov.from_experiment
     by_crs_sources = config.inputs.pov.from_experiment_by_crs
+    # Resolve the active benchmark set once (suite -> names) so we can
+    # restrict the manifest walk to phase-1 outputs that this run will
+    # actually read. Phase-1 sources commonly span more benchmarks than the
+    # current suite (e.g. shared finding pool feeding several fixing runs).
+    suite_benchmarks: list[str] | None = None
+    if single_source is not None or by_crs_sources is not None:
+        suite_benchmarks = list(config.get_benchmark_list())
 
     if single_source is not None:
         bundle = _build_from_experiment_bundle_or_none(
             local=single_source,
             remote=_from_experiment_remote_path(config.experiment),
             label="inputs.pov.from_experiment",
+            allowed_benchmarks=suite_benchmarks,
         )
         if bundle is None:
             return 1
@@ -289,6 +305,7 @@ def run_launch(args: argparse.Namespace) -> int:
                 local=local_path,
                 remote=_from_experiment_remote_path_for_crs(config.experiment, crs),
                 label=f"inputs.pov.from_experiment_by_crs[{crs!r}]",
+                allowed_benchmarks=suite_benchmarks,
             )
             if bundle is None:
                 # Path exists (we already validated above) but the bundle is

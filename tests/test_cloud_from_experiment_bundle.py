@@ -159,6 +159,112 @@ def test_manifest_rejects_non_directory(tmp_path: Path) -> None:
         build_from_experiment_manifest(missing)
 
 
+def test_manifest_filters_to_allowed_benchmarks(tmp_path: Path) -> None:
+    """Suite filter only walks listed benchmark subdirs."""
+    keep = _seed_pov_store(
+        tmp_path,
+        benchmark="bench-keep",
+        harness="fuzz_a",
+        mode="delta",
+        sanitizer="address",
+        trial_id=1,
+        entries={
+            "povs": {
+                "abc": {
+                    "hash": "abc",
+                    "status": "cpv",
+                    "cpv_matched": ["CPV-1"],
+                    "crash_signature": "sig",
+                }
+            },
+        },
+    )
+    _write_blob(keep, "CPV-1", "abc")
+
+    drop = _seed_pov_store(
+        tmp_path,
+        benchmark="bench-drop",
+        harness="fuzz_b",
+        mode="delta",
+        sanitizer="address",
+        trial_id=1,
+        entries={
+            "povs": {
+                "def": {
+                    "hash": "def",
+                    "status": "cpv",
+                    "cpv_matched": ["CPV-2"],
+                    "crash_signature": "sig",
+                }
+            },
+        },
+    )
+    _write_blob(drop, "CPV-2", "def")
+
+    manifest = build_from_experiment_manifest(
+        tmp_path, allowed_benchmarks=["bench-keep"]
+    )
+
+    rels = set(manifest)
+    assert any(r.startswith("bench-keep/") for r in rels)
+    assert not any(r.startswith("bench-drop/") for r in rels)
+
+
+def test_manifest_allowed_benchmarks_missing_dirs_are_skipped(tmp_path: Path) -> None:
+    """Listed-but-absent benchmark dirs are silently skipped (phase-1 found nothing)."""
+    store = _seed_pov_store(
+        tmp_path,
+        benchmark="bench-keep",
+        harness="fuzz_a",
+        mode="delta",
+        sanitizer="address",
+        trial_id=1,
+        entries={
+            "povs": {
+                "abc": {
+                    "hash": "abc",
+                    "status": "cpv",
+                    "cpv_matched": ["CPV-1"],
+                    "crash_signature": "sig",
+                }
+            },
+        },
+    )
+    _write_blob(store, "CPV-1", "abc")
+
+    manifest = build_from_experiment_manifest(
+        tmp_path, allowed_benchmarks=["bench-keep", "bench-not-on-disk"]
+    )
+
+    rels = set(manifest)
+    assert any(r.startswith("bench-keep/") for r in rels)
+
+
+def test_manifest_empty_allowed_benchmarks_returns_empty(tmp_path: Path) -> None:
+    """An explicit empty allowlist yields nothing, even if the tree has POVs."""
+    store = _seed_pov_store(
+        tmp_path,
+        benchmark="bench-keep",
+        harness="fuzz_a",
+        mode="delta",
+        sanitizer="address",
+        trial_id=1,
+        entries={
+            "povs": {
+                "abc": {
+                    "hash": "abc",
+                    "status": "cpv",
+                    "cpv_matched": ["CPV-1"],
+                    "crash_signature": "sig",
+                }
+            },
+        },
+    )
+    _write_blob(store, "CPV-1", "abc")
+
+    assert build_from_experiment_manifest(tmp_path, allowed_benchmarks=[]) == []
+
+
 def test_manifest_returns_posix_relative_paths(tmp_path: Path) -> None:
     store = _seed_pov_store(
         tmp_path,
