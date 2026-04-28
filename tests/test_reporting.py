@@ -685,6 +685,125 @@ class TestMetricsAggregator:
         assert metrics.povs_unintended == 1
         assert metrics.unintended_unique_sites == 1
 
+    def test_time_to_first_pov_uses_metadata_anchor(self, temp_dir, sample_llm_usage):
+        """time_to_first_pov should be derived from metadata.json:timestamp +
+        pov_store.json file_mtimes, ignoring a corrupted crs_run_start_time."""
+        from datetime import datetime
+
+        trial_start_iso = "2026-04-26T08:00:00+00:00"
+        trial_start_epoch = datetime.fromisoformat(trial_start_iso).timestamp()
+        # First PoV created exactly 1500s into the trial.
+        first_pov_mtime = trial_start_epoch + 1500.0
+        # Simulate a corrupted re-eval anchor 1 day later, which would make
+        # `relative_time` ~−85000s if reporting trusted it.
+        corrupted_crs_start = trial_start_epoch + 86400.0
+
+        (temp_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "timestamp": trial_start_iso,
+                    "trial_num": 1,
+                    "crs": "test-crs",
+                    "benchmark": "test-bench",
+                    "harness": "h",
+                    "mode": "bug_finding",
+                    "source": {"path": "/x", "commit": None},
+                }
+            )
+        )
+
+        povs_dir = temp_dir / "povs"
+        povs_dir.mkdir()
+        (povs_dir / "pov_store.json").write_text(
+            json.dumps(
+                {
+                    "crs_run_start_time": corrupted_crs_start,
+                    "povs": {
+                        "deadbeef": {
+                            "hash": "deadbeef",
+                            "first_seen_ts": corrupted_crs_start,
+                            "file_mtime": first_pov_mtime,
+                            "file_size": 1,
+                            "status": "cpv",
+                            "cpv_matched": ["cpv_0"],
+                        },
+                    },
+                    "cpv_to_first_pov": {
+                        "cpv_0": {
+                            "pov_hash": "deadbeef",
+                            "discovery_ts": first_pov_mtime,
+                            "relative_time": first_pov_mtime - corrupted_crs_start,
+                        },
+                    },
+                }
+            )
+        )
+
+        trial_info = TrialInfo(
+            trial_dir=temp_dir,
+            trial_num=1,
+            crs="test-crs",
+            benchmark="test-bench",
+            harness="h",
+            mode="bug_finding",
+            status="valid",
+        )
+        # Snapshot reports PoV only at the very end (4000s); the legacy
+        # path would return that, masking a much earlier first PoV.
+        snapshots = [
+            SnapshotData(
+                trial_dir=temp_dir,
+                cycle=1,
+                timestamp=trial_start_epoch + 4000.0,
+                elapsed_time=4000.0,
+                running_elapsed_time=4000.0,
+                snapshot_period=4000,
+                pov_count=1,
+                patch_count=0,
+                pov_names=["pov_001"],
+                patch_names=[],
+                llm_usage=sample_llm_usage,
+            ),
+        ]
+
+        metrics = MetricsAggregator().aggregate_trial(
+            trial_info=trial_info, snapshots=snapshots
+        )
+        assert metrics.time_to_first_pov == pytest.approx(1500.0, abs=1e-3)
+
+    def test_time_to_first_pov_falls_back_to_snapshots(
+        self, temp_dir, sample_llm_usage
+    ):
+        """When pov_store.json is absent, fall back to snapshot.elapsed_time."""
+        trial_info = TrialInfo(
+            trial_dir=temp_dir,
+            trial_num=1,
+            crs="c",
+            benchmark="b",
+            harness="h",
+            mode="bug_finding",
+            status="valid",
+        )
+        snapshots = [
+            SnapshotData(
+                trial_dir=temp_dir,
+                cycle=1,
+                timestamp=1000.0,
+                elapsed_time=900.0,
+                running_elapsed_time=800.0,
+                snapshot_period=900,
+                pov_count=1,
+                patch_count=0,
+                pov_names=["a"],
+                patch_names=[],
+                llm_usage=sample_llm_usage,
+            ),
+        ]
+        metrics = MetricsAggregator().aggregate_trial(
+            trial_info=trial_info, snapshots=snapshots
+        )
+        assert metrics.time_to_first_pov == 900.0
+
 
 class TestExperimentValidator:
     """Tests for ExperimentValidator."""

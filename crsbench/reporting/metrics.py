@@ -2,6 +2,7 @@
 
 import json
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 
 from crsbench.reporting.models import (
@@ -201,7 +202,9 @@ class MetricsAggregator:
 
         # Compute time metrics
         total_time = final_snapshot.elapsed_time
-        time_to_first_pov = self._compute_time_to_first_pov(sorted_snapshots)
+        time_to_first_pov = self._compute_time_to_first_pov(
+            sorted_snapshots, trial_info
+        )
 
         # Compute time-series data
         time_series = self._compute_time_series(sorted_snapshots)
@@ -327,19 +330,126 @@ class MetricsAggregator:
             trial_metrics=trial_metrics_list,
         )
 
-    def _compute_time_to_first_pov(self, snapshots: list[SnapshotData]) -> float | None:
+    def _compute_time_to_first_pov(
+        self,
+        snapshots: list[SnapshotData],
+        trial_info: TrialInfo | None = None,
+    ) -> float | None:
         """Compute time to first POV discovery.
+
+        Preferred path: anchor on ``metadata.json:timestamp`` (the canonical
+        trial start time written by trial preparation) and the per-POV
+        ``file_mtime`` recorded in ``povs/pov_store.json``. This is robust to
+        re-eval pipelines that mutate ``crs_run_start_time`` and yields
+        sub-snapshot precision.
+
+        Fallback: the earliest snapshot whose ``pov_count > 0``. This is
+        snapshot-period coarse but works when pov_store / metadata data is
+        unavailable.
 
         Args:
             snapshots: Sorted list of snapshots
+            trial_info: Optional trial info; required for the precise path
 
         Returns:
-            Time to first POV in seconds, or None if no POVs found
+            Time to first POV in seconds, or None if no POVs are recorded
         """
+        if trial_info is not None:
+            precise = self._first_pov_time_from_pov_store(trial_info)
+            if precise is not None:
+                return precise
+
         for snapshot in snapshots:
             if snapshot.pov_count > 0:
                 return snapshot.elapsed_time
         return None
+
+    @staticmethod
+    def _first_pov_time_from_pov_store(trial_info: TrialInfo) -> float | None:
+        """Compute first-PoV time from pov_store.json anchored on metadata.
+
+        Authoritative trial start: ``trial_info.metadata.timestamp`` (ISO8601);
+        falls back to ``metadata.json:timestamp`` on disk.
+
+        Discovery time per POV: ``file_mtime`` from ``povs/pov_store.json``,
+        which is preserved across re-evals (only ``crs_run_start_time`` was
+        observed to drift). When ``cpv_to_first_pov`` is populated we use
+        those entries (matched-CPV PoVs only); otherwise we fall back to the
+        earliest ``file_mtime`` across all stored POVs.
+
+        Returns None if any required input is missing or the inputs are
+        inconsistent (e.g. file_mtime predates trial start).
+        """
+        trial_start = MetricsAggregator._trial_start_epoch(trial_info)
+        if trial_start is None:
+            return None
+
+        store_path = Path(trial_info.trial_dir) / _POV_STORE_RELPATH
+        if not store_path.is_file():
+            return None
+        try:
+            data = json.loads(store_path.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning(f"Unreadable pov_store.json {store_path}: {e}")
+            return None
+
+        candidates: list[float] = []
+
+        cpv_to_first = data.get("cpv_to_first_pov") or {}
+        for entry in cpv_to_first.values():
+            ts = entry.get("discovery_ts") if isinstance(entry, dict) else None
+            if isinstance(ts, (int, float)):
+                candidates.append(float(ts))
+
+        if not candidates:
+            povs = data.get("povs") or {}
+            for entry in povs.values():
+                if not isinstance(entry, dict):
+                    continue
+                mt = entry.get("file_mtime")
+                if isinstance(mt, (int, float)):
+                    candidates.append(float(mt))
+
+        if not candidates:
+            return None
+
+        first_pov_ts = min(candidates)
+        delta = first_pov_ts - trial_start
+        if delta < 0:
+            # Likely retried/resumed run with a stale metadata timestamp.
+            # Decline to claim a value rather than emit a negative time.
+            logger.warning(
+                f"first PoV mtime predates trial start at {trial_info.trial_dir}; "
+                f"refusing to emit negative time_to_first_pov"
+            )
+            return None
+        return delta
+
+    @staticmethod
+    def _trial_start_epoch(trial_info: TrialInfo) -> float | None:
+        """Return trial start time as a Unix epoch.
+
+        Reads ``metadata.timestamp`` from the loaded TrialInfo if present;
+        otherwise re-reads ``metadata.json`` from disk. Returns None when no
+        usable timestamp can be parsed.
+        """
+        ts = getattr(getattr(trial_info, "metadata", None), "timestamp", None)
+        if ts is None:
+            meta_path = Path(trial_info.trial_dir) / "metadata.json"
+            if not meta_path.is_file():
+                return None
+            try:
+                ts = json.loads(meta_path.read_text()).get("timestamp")
+            except (OSError, json.JSONDecodeError):
+                return None
+        if ts is None:
+            return None
+        try:
+            if isinstance(ts, (int, float)):
+                return float(ts)
+            return datetime.fromisoformat(str(ts)).timestamp()
+        except (ValueError, TypeError):
+            return None
 
     def _compute_time_series(
         self, snapshots: list[SnapshotData]
