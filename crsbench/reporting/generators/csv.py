@@ -13,6 +13,14 @@ from crsbench.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _format_budget(budget_usd: float) -> str:
+    """Format a USD budget as a filesystem-safe suffix (e.g., 5, 7.5, 10.25)."""
+    rounded = round(float(budget_usd), 2)
+    if rounded == int(rounded):
+        return str(int(rounded))
+    return f"{rounded:.2f}".rstrip("0").rstrip(".")
+
+
 class CSVReportGenerator:
     """Generate CSV reports from experiment metrics."""
 
@@ -322,7 +330,13 @@ class CSVReportGenerator:
         logger.debug(f"Generated patch analysis CSV: {out_path}")
         return out_path
 
-    def generate_cpv_analysis_report(self, experiment_dir: Path) -> Path:
+    def generate_cpv_analysis_report(
+        self,
+        experiment_dir: Path,
+        *,
+        budget_usd: float | None = None,
+        trial_time_series: dict[str, list[dict[str, Any]]] | None = None,
+    ) -> Path:
         """Generate per-(trial, cpv) CSV from per-trial pov_store.json.
 
         One row per (trial, expected CPV) pair. Reads authoritative match data
@@ -330,11 +344,27 @@ class CSVReportGenerator:
         this CSV reflects the trial's final state — unlike the per-snapshot
         ``pov_verification.json`` which is sealed before drain completes.
 
-        Columns:
+        When ``budget_usd`` is provided, emits ``cpv_analysis_budget_<X>.csv``
+        instead of ``cpv_analysis.csv`` and re-evaluates each match: a CPV is
+        marked ``matched`` only if its discovery occurred before the trial's
+        cumulative LLM spend reached ``budget_usd``. Cost-vs-time is taken
+        from each trial's snapshot-derived ``time_series`` (passed in via
+        ``trial_time_series``); see ``_compute_time_at_budget`` for the
+        interpolation rules.
+
+        Columns (base):
             trial_num, crs, benchmark, harness, mode, run_mode, sanitizer,
             cpv_id, matched, time_to_trigger, pov_hash, discovery_ts, trial_dir
+        Extra columns when ``budget_usd`` is set:
+            budget_usd, trial_total_cost_usd, trial_time_at_budget
         """
-        out_path = self.output_dir / "cpv_analysis.csv"
+        if budget_usd is None:
+            out_path = self.output_dir / "cpv_analysis.csv"
+        else:
+            out_path = (
+                self.output_dir
+                / f"cpv_analysis_budget_{_format_budget(budget_usd)}.csv"
+            )
         rows: list[dict[str, Any]] = []
 
         for trial_dir in sorted(experiment_dir.rglob("trial-*")):
@@ -370,16 +400,47 @@ class CSVReportGenerator:
                 "trial_dir": str(trial_dir),
             }
 
+            time_at_budget: float | None = None
+            trial_total_cost: float | None = None
+            if budget_usd is not None:
+                ts = (trial_time_series or {}).get(str(trial_dir), [])
+                trial_total_cost = self._load_total_llm_cost(trial_dir)
+                time_at_budget = self._compute_time_at_budget(
+                    ts, total_cost_usd=trial_total_cost, budget_usd=budget_usd
+                )
+
             for cpv_id in cpv_ids:
                 match = cpv_to_first_pov.get(cpv_id)
+                rel_time = match.get("relative_time") if match else None
+
+                if budget_usd is None:
+                    matched = match is not None
+                else:
+                    matched = self._match_within_budget(
+                        match=match,
+                        time_at_budget=time_at_budget,
+                    )
+
                 row = {
                     **base,
                     "cpv_id": cpv_id,
-                    "matched": match is not None,
-                    "time_to_trigger": match.get("relative_time") if match else "",
-                    "pov_hash": match.get("pov_hash") if match else "",
-                    "discovery_ts": match.get("discovery_ts") if match else "",
+                    "matched": matched,
+                    "time_to_trigger": (
+                        rel_time if matched and rel_time is not None else ""
+                    ),
+                    "pov_hash": (match.get("pov_hash") if matched and match else ""),
+                    "discovery_ts": (
+                        match.get("discovery_ts") if matched and match else ""
+                    ),
                 }
+                if budget_usd is not None:
+                    row["budget_usd"] = budget_usd
+                    row["trial_total_cost_usd"] = (
+                        trial_total_cost if trial_total_cost is not None else ""
+                    )
+                    row["trial_time_at_budget"] = (
+                        time_at_budget if time_at_budget is not None else ""
+                    )
                 rows.append(row)
 
         fieldnames = [
@@ -397,9 +458,114 @@ class CSVReportGenerator:
             "discovery_ts",
             "trial_dir",
         ]
+        if budget_usd is not None:
+            fieldnames += [
+                "budget_usd",
+                "trial_total_cost_usd",
+                "trial_time_at_budget",
+            ]
         self._write_csv_rows(out_path, rows, fieldnames)
         logger.debug(f"Generated CPV analysis CSV: {out_path}")
         return out_path
+
+    @staticmethod
+    def _compute_time_at_budget(
+        time_series: list[dict[str, Any]],
+        *,
+        total_cost_usd: float | None,
+        budget_usd: float,
+    ) -> float | None:
+        """Map an LLM-cost budget back onto the trial's run-elapsed-time axis.
+
+        The result is the largest run-elapsed time at which the cumulative
+        LLM spend is ≤ ``budget_usd``. CPV matches whose ``relative_time``
+        is at most this value are considered to have been discovered within
+        the budget.
+
+        Rules:
+            - Empty ``time_series`` and unknown total cost → return ``None``
+              (caller should preserve the original match decision).
+            - Empty ``time_series`` but ``total_cost_usd ≤ budget_usd`` →
+              treat as fully within budget (return ``+inf``); this covers
+              the "no snapshot, fast trial" case.
+            - Final sampled cost ≤ budget AND total trial cost ≤ budget →
+              return ``+inf``: the entire trial fit within budget, so every
+              match is preserved (including POVs verified after the last
+              snapshot during async drain).
+            - Final sampled cost ≤ budget but total cost > budget →
+              we cannot pin an exact time without finer samples, so we
+              conservatively return the last sample's run-elapsed time
+              (avoid over-crediting late discoveries).
+            - Otherwise the budget falls between two samples: linearly
+              interpolate ``running_elapsed_time`` at ``llm_cost ==
+              budget_usd``.
+        """
+        if not time_series:
+            if total_cost_usd is not None and total_cost_usd <= budget_usd:
+                return float("inf")
+            return None
+
+        ordered = sorted(
+            time_series,
+            key=lambda p: float(p.get("running_elapsed_time", 0.0) or 0.0),
+        )
+        last = ordered[-1]
+        last_t = float(last.get("running_elapsed_time", 0.0) or 0.0)
+        last_c = float(last.get("llm_cost", 0.0) or 0.0)
+
+        if last_c <= budget_usd:
+            # Last sample is still within budget. If the final accounted cost
+            # also fits, the entire trial ran within budget — preserve every
+            # match (including POVs verified after the last snapshot, e.g.
+            # during async drain). Otherwise we lack the resolution to pin
+            # the exact crossing, so return the last known-safe time and
+            # avoid over-crediting late discoveries.
+            if total_cost_usd is not None and total_cost_usd <= budget_usd:
+                return float("inf")
+            return last_t
+
+        prev_t, prev_c = 0.0, 0.0
+        for point in ordered:
+            t = float(point.get("running_elapsed_time", 0.0) or 0.0)
+            c = float(point.get("llm_cost", 0.0) or 0.0)
+            if c > budget_usd:
+                if c == prev_c:
+                    return prev_t
+                frac = (budget_usd - prev_c) / (c - prev_c)
+                return prev_t + frac * (t - prev_t)
+            prev_t, prev_c = t, c
+        # Should not reach: last_c > budget guarantees the loop crosses.
+        return prev_t
+
+    @staticmethod
+    def _match_within_budget(
+        *, match: dict[str, Any] | None, time_at_budget: float | None
+    ) -> bool:
+        """Return True if ``match`` was discovered within the budget time."""
+        if match is None:
+            return False
+        if time_at_budget is None:
+            # Unknown cost-time mapping (no time_series, total cost unknown).
+            # Fall back to the recorded match so we do not silently drop data.
+            return True
+        rel_time = match.get("relative_time")
+        if rel_time is None:
+            return False
+        try:
+            return float(rel_time) <= time_at_budget
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _load_total_llm_cost(trial_dir: Path) -> float | None:
+        llm_path = trial_dir / "llm-usage.json"
+        if not llm_path.exists():
+            return None
+        try:
+            data = json.loads(llm_path.read_text())
+            return float(data.get("total_cost_usd", 0.0) or 0.0)
+        except Exception:
+            return None
 
     @staticmethod
     def _load_expected_cpv_ids(paths: TrialDir) -> list[str]:
@@ -416,7 +582,14 @@ class CSVReportGenerator:
 
     @staticmethod
     def _load_cpv_to_first_pov(paths: TrialDir) -> dict[str, dict[str, Any]]:
-        """Read cpv_to_first_pov from pov_store.json (post-drain truth)."""
+        """Read cpv_to_first_pov from pov_store.json (post-drain truth).
+
+        When the denormalized ``cpv_to_first_pov`` map is empty or missing
+        — e.g. because reanalysis rewrote the store without populating it —
+        derive the equivalent map from ``povs`` entries that recorded
+        ``cpv_matched``. The earliest ``file_mtime`` (or ``first_seen_ts``
+        when mtime is absent) per CPV becomes the discovery time.
+        """
         store_path = paths.pov_store_path
         if not store_path.exists():
             return {}
@@ -425,7 +598,42 @@ class CSVReportGenerator:
         except Exception:
             return {}
         first = data.get("cpv_to_first_pov") or {}
-        return {str(k): v for k, v in first.items() if isinstance(v, dict)}
+        result = {str(k): v for k, v in first.items() if isinstance(v, dict)}
+        if result:
+            return result
+
+        povs = data.get("povs") or {}
+        if not isinstance(povs, dict) or not povs:
+            return {}
+        crs_run_start_time = float(data.get("crs_run_start_time", 0.0) or 0.0)
+
+        derived: dict[str, dict[str, Any]] = {}
+        for pov_hash, entry in povs.items():
+            if not isinstance(entry, dict):
+                continue
+            cpv_matched = entry.get("cpv_matched") or []
+            if not cpv_matched:
+                continue
+            mtime = entry.get("file_mtime")
+            seen = entry.get("first_seen_ts")
+            ts_source = mtime if mtime is not None else seen
+            if ts_source is None:
+                continue
+            try:
+                cpv_ts = float(ts_source)
+            except (TypeError, ValueError):
+                continue
+            for cpv_id in cpv_matched:
+                cpv_id_str = str(cpv_id)
+                existing = derived.get(cpv_id_str)
+                if existing is not None and float(existing["discovery_ts"]) <= cpv_ts:
+                    continue
+                derived[cpv_id_str] = {
+                    "pov_hash": str(pov_hash),
+                    "discovery_ts": cpv_ts,
+                    "relative_time": cpv_ts - crs_run_start_time,
+                }
+        return derived
 
     @staticmethod
     def _resolve_trial_status(trial_dir: Path) -> str:

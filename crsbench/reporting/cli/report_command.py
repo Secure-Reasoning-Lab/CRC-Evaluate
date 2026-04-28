@@ -142,6 +142,21 @@ Examples:
     )
 
     report_parser.add_argument(
+        "--cpv-budget-cutoff",
+        type=float,
+        nargs="+",
+        metavar="USD",
+        help=(
+            "One or more LLM-cost budgets (USD). For each value, emit an "
+            "additional cpv_analysis_budget_<X>.csv where each (trial, cpv) "
+            "match is re-evaluated using the cumulative LLM spend at POV "
+            "discovery time. Useful for asking 'how many CPVs would the "
+            "agent have found at $5 / $10 / $15 budget'. Requires --format "
+            "csv or --format all."
+        ),
+    )
+
+    report_parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable debug logging (logs all commands executed with their working directories)",
@@ -251,12 +266,19 @@ def _generate_experiment_report(
 
     # Generate reports
     ci_test = getattr(args, "ci_test", False)
+    cpv_budget_cutoffs = getattr(args, "cpv_budget_cutoff", None)
+    if cpv_budget_cutoffs and args.format not in ("csv", "all"):
+        logger.warning(
+            "--cpv-budget-cutoff is ignored when --format is not 'csv' or 'all'"
+        )
+        cpv_budget_cutoffs = None
     logger.info(f"Generating {args.format} reports...")
     result = generator.generate_experiment_report(
         experiment_dir=experiment_dir,
         format=args.format,
         skip_incomplete=skip_incomplete,
         ci_test=ci_test,
+        cpv_budget_cutoffs=cpv_budget_cutoffs,
     )
 
     # Display results

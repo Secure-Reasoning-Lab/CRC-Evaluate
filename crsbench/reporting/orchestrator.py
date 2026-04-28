@@ -158,6 +158,7 @@ class ReportGenerator:
         format: str = "both",
         skip_incomplete: bool = True,
         ci_test: bool = False,
+        cpv_budget_cutoffs: list[float] | None = None,
     ) -> dict[str, Path | list[Path]]:
         """Generate report for an entire experiment.
 
@@ -165,6 +166,12 @@ class ReportGenerator:
             experiment_dir: Path to experiment directory
             format: Report format ("json", "html", "csv", "both", or "all")
             skip_incomplete: If True, skip incomplete trials
+            ci_test: Generate ci_test_results.csv from patcher logs
+            cpv_budget_cutoffs: Optional list of LLM-cost budgets (USD). For
+                each value, generate an additional ``cpv_analysis_budget_<X>.csv``
+                that re-evaluates each match against the cumulative LLM spend
+                at the time of POV discovery, simulating "what if the agent
+                had only this budget".
 
         Returns:
             Dict mapping report type to file path (or list of paths for CSV)
@@ -389,6 +396,18 @@ class ReportGenerator:
             csv_paths.append(patch_csv)
             cpv_csv = self.csv_generator.generate_cpv_analysis_report(experiment_dir)
             csv_paths.append(cpv_csv)
+            if cpv_budget_cutoffs:
+                trial_time_series = {
+                    str(m.trial_dir): [p.model_dump() for p in m.time_series]
+                    for m in trial_metrics_list
+                }
+                for budget in cpv_budget_cutoffs:
+                    cpv_budget_csv = self.csv_generator.generate_cpv_analysis_report(
+                        experiment_dir,
+                        budget_usd=budget,
+                        trial_time_series=trial_time_series,
+                    )
+                    csv_paths.append(cpv_budget_csv)
             if ci_test:
                 ci_csv = self.csv_generator.generate_ci_test_report(experiment_dir)
                 csv_paths.append(ci_csv)
