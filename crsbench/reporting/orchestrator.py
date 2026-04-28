@@ -387,6 +387,10 @@ class ReportGenerator:
             result["html"] = html_path
 
         if format in ("csv", "all") or ci_test:
+            trial_time_series = {
+                str(m.trial_dir): [p.model_dump() for p in m.time_series]
+                for m in trial_metrics_list
+            }
             csv_paths = self.csv_generator.generate_experiment_report(
                 experiment_metrics.model_dump()
             )
@@ -394,13 +398,12 @@ class ReportGenerator:
                 experiment_dir
             )
             csv_paths.append(patch_csv)
-            cpv_csv = self.csv_generator.generate_cpv_analysis_report(experiment_dir)
+            cpv_csv = self.csv_generator.generate_cpv_analysis_report(
+                experiment_dir,
+                trial_time_series=trial_time_series,
+            )
             csv_paths.append(cpv_csv)
             if cpv_budget_cutoffs:
-                trial_time_series = {
-                    str(m.trial_dir): [p.model_dump() for p in m.time_series]
-                    for m in trial_metrics_list
-                }
                 for budget in cpv_budget_cutoffs:
                     cpv_budget_csv = self.csv_generator.generate_cpv_analysis_report(
                         experiment_dir,

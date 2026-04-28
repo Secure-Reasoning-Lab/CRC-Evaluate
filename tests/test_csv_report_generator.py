@@ -985,7 +985,36 @@ def test_cpv_analysis_emits_row_per_trial_cpv(temp_output_dir):
             },
         )
 
-        out_path = generator.generate_cpv_analysis_report(experiment_dir)
+        time_series = {
+            str(
+                experiment_dir
+                / "crs-bug-finding-claude-code"
+                / "afc-x"
+                / "harness_a"
+                / "delta"
+                / "address"
+                / "trial-1"
+            ): [
+                {"running_elapsed_time": 0.0, "llm_cost": 0.0},
+                {"running_elapsed_time": 100.0, "llm_cost": 2.0},
+            ],
+            str(
+                experiment_dir
+                / "crs-bug-finding-claude-code"
+                / "afc-y"
+                / "harness_b"
+                / "delta"
+                / "address"
+                / "trial-2"
+            ): [
+                {"running_elapsed_time": 0.0, "llm_cost": 0.0},
+                {"running_elapsed_time": 200.0, "llm_cost": 6.0},
+            ],
+        }
+
+        out_path = generator.generate_cpv_analysis_report(
+            experiment_dir, trial_time_series=time_series
+        )
         with out_path.open(newline="") as f:
             rows = list(csv.DictReader(f))
 
@@ -995,17 +1024,20 @@ def test_cpv_analysis_emits_row_per_trial_cpv(temp_output_dir):
     matched = by_key[("afc-x", "cpv_0")]
     assert matched["matched"] == "True"
     assert matched["time_to_trigger"] == "42.5"
+    assert matched["cost_to_trigger_usd"] == "0.85"
     assert matched["pov_hash"] == "abc123"
     assert matched["trial_num"] == "1"
 
     unmatched = by_key[("afc-y", "cpv_0")]
     assert unmatched["matched"] == "False"
     assert unmatched["time_to_trigger"] == ""
+    assert unmatched["cost_to_trigger_usd"] == ""
     assert unmatched["pov_hash"] == ""
 
     matched_y = by_key[("afc-y", "cpv_1")]
     assert matched_y["matched"] == "True"
     assert matched_y["time_to_trigger"] == "100.0"
+    assert matched_y["cost_to_trigger_usd"] == "3.0"
 
 
 def test_cpv_analysis_recomputes_time_to_trigger_from_metadata_timestamp(
@@ -1382,6 +1414,29 @@ def test_compute_time_at_budget_full_run_within_budget():
         ts, total_cost_usd=2.0, budget_usd=5.0
     )
     assert t == float("inf")
+
+
+def test_compute_cost_at_time_linear_interpolation():
+    ts = [
+        {"running_elapsed_time": 0.0, "llm_cost": 0.0},
+        {"running_elapsed_time": 100.0, "llm_cost": 2.0},
+        {"running_elapsed_time": 200.0, "llm_cost": 6.0},
+    ]
+    c = CSVReportGenerator._compute_cost_at_time(
+        ts, total_cost_usd=6.0, relative_time=150.0
+    )
+    assert c == pytest.approx(4.0)
+
+
+def test_compute_cost_at_time_after_last_sample_uses_total_cost():
+    ts = [
+        {"running_elapsed_time": 100.0, "llm_cost": 2.0},
+        {"running_elapsed_time": 200.0, "llm_cost": 4.0},
+    ]
+    c = CSVReportGenerator._compute_cost_at_time(
+        ts, total_cost_usd=7.5, relative_time=500.0
+    )
+    assert c == 7.5
 
 
 def test_compute_time_at_budget_last_sample_fits_but_total_exceeds():

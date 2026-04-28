@@ -364,7 +364,8 @@ class CSVReportGenerator:
 
         Columns (base):
             trial_num, crs, benchmark, harness, mode, run_mode, sanitizer,
-            cpv_id, matched, time_to_trigger, pov_hash, discovery_ts, trial_dir
+            cpv_id, matched, time_to_trigger, cost_to_trigger_usd, pov_hash,
+            discovery_ts, trial_dir
         Extra columns when ``budget_usd`` is set:
             budget_usd, trial_total_cost_usd, trial_time_at_budget
         """
@@ -423,11 +424,14 @@ class CSVReportGenerator:
 
             time_at_budget: float | None = None
             trial_total_cost: float | None = None
-            if budget_usd is not None:
-                ts = (trial_time_series or {}).get(str(trial_dir), [])
+            trial_ts = (trial_time_series or {}).get(str(trial_dir), [])
+            if trial_ts:
                 trial_total_cost = self._load_total_llm_cost(trial_dir)
+            if budget_usd is not None:
                 time_at_budget = self._compute_time_at_budget(
-                    ts, total_cost_usd=trial_total_cost, budget_usd=budget_usd
+                    trial_ts,
+                    total_cost_usd=trial_total_cost,
+                    budget_usd=budget_usd,
                 )
 
             for cpv_id in cpv_ids:
@@ -449,6 +453,15 @@ class CSVReportGenerator:
                     "matched": matched,
                     "time_to_trigger": (
                         rel_time if matched and rel_time is not None else ""
+                    ),
+                    "cost_to_trigger_usd": (
+                        self._compute_cost_at_time(
+                            trial_ts,
+                            total_cost_usd=trial_total_cost,
+                            relative_time=rel_time,
+                        )
+                        if matched
+                        else ""
                     ),
                     "pov_hash": (match.get("pov_hash") if matched and match else ""),
                     "discovery_ts": (
@@ -476,6 +489,7 @@ class CSVReportGenerator:
             "cpv_id",
             "matched",
             "time_to_trigger",
+            "cost_to_trigger_usd",
             "pov_hash",
             "discovery_ts",
             "trial_dir",
@@ -558,6 +572,54 @@ class CSVReportGenerator:
             prev_t, prev_c = t, c
         # Should not reach: last_c > budget guarantees the loop crosses.
         return prev_t
+
+    @staticmethod
+    def _compute_cost_at_time(
+        time_series: list[dict[str, Any]],
+        *,
+        total_cost_usd: float | None,
+        relative_time: float | None,
+    ) -> float | None:
+        """Map a trigger time onto the cumulative LLM-cost axis.
+
+        Rules:
+            - Unknown ``relative_time`` → ``None``.
+            - No samples → fall back to ``total_cost_usd`` when available.
+            - Time before the first sample → interpolate from the origin.
+            - Time between two samples → linearly interpolate ``llm_cost``.
+            - Time after the last sample → fall back to ``total_cost_usd``
+              when available, else the last sampled cost.
+        """
+        if relative_time is None:
+            return None
+        try:
+            trigger_t = float(relative_time)
+        except (TypeError, ValueError):
+            return None
+        if trigger_t <= 0:
+            return 0.0
+        if not time_series:
+            return total_cost_usd
+
+        ordered = sorted(
+            time_series,
+            key=lambda p: float(p.get("running_elapsed_time", 0.0) or 0.0),
+        )
+
+        prev_t, prev_c = 0.0, 0.0
+        for point in ordered:
+            t = float(point.get("running_elapsed_time", 0.0) or 0.0)
+            c = float(point.get("llm_cost", 0.0) or 0.0)
+            if trigger_t <= t:
+                if t == prev_t:
+                    return c
+                frac = (trigger_t - prev_t) / (t - prev_t)
+                return prev_c + frac * (c - prev_c)
+            prev_t, prev_c = t, c
+
+        if total_cost_usd is not None:
+            return total_cost_usd
+        return prev_c
 
     @staticmethod
     def _match_within_budget(
