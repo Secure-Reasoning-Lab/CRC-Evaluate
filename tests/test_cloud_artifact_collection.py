@@ -844,10 +844,22 @@ class TestStagingAndPublish:
             "staged linked log\n",
             encoding="utf-8",
         )
+        (staged_dir / "root-linked-staged.log").write_text(
+            "staged root linked log\n",
+            encoding="utf-8",
+        )
         kept_dir = workdir_out / "kept"
         kept_dir.mkdir(parents=True)
         (kept_dir / "artifact.txt").symlink_to(
             Path("..") / ".." / ".." / "staged" / "curl-delta-01" / "README.txt"
+        )
+        (workdir_out / "logs" / "root-linked-staged.log").symlink_to(
+            Path("..")
+            / ".."
+            / ".."
+            / "staged"
+            / "curl-delta-01"
+            / "root-linked-staged.log"
         )
         (workdir_out / "logs" / "services" / "linked-staged.log").symlink_to(
             Path("..")
@@ -955,6 +967,7 @@ class TestStagingAndPublish:
         assert (
             trial_output / "logs" / "services" / "crs-codex_inc-builder-asan.stderr.log"
         ).exists()
+        assert (trial_output / "logs" / "root-linked-staged.log").exists()
         assert (trial_output / "logs" / "services" / "linked-staged.log").exists()
         assert not (
             trial_output / "logs" / "services" / "crs-codex_inc-builder-asan.json"
@@ -2076,11 +2089,18 @@ class TestStagingAndPublish:
         (staged_dir / "linked_patcher.stdout.log").write_text(
             "[drop] staged-linked log\n", encoding="utf-8"
         )
+        (staged_dir / "root-linked.log").write_text(
+            "[drop] staged root log\n",
+            encoding="utf-8",
+        )
         staged_log_dir = staged_dir / "staged-sidecar" / "log_dir"
         staged_log_dir.mkdir(parents=True)
         (staged_log_dir / "verify_patch_timing.json").write_text(
             json.dumps({"rebuild": 10.0, "status": "drop"}),
             encoding="utf-8",
+        )
+        (trial_dir / "output" / "logs" / "root-linked.log").symlink_to(
+            Path("..") / ".." / "staged" / "curl-delta-01" / "root-linked.log"
         )
         (report_logs / "linked_patcher.stdout.log").symlink_to(
             Path("..")
@@ -2172,6 +2192,7 @@ class TestStagingAndPublish:
             / "verify_patch_timing.json"
         ).exists()
         assert (trial_output / "logs" / "root.log").exists()
+        assert (trial_output / "logs" / "root-linked.log").exists()
         assert (trial_output / "logs" / "services" / "service.log").exists()
         assert (
             trial_output / "logs" / "services" / "crs-codex_inc-builder-asan.stderr.log"
