@@ -30,7 +30,7 @@ import secrets
 import shutil
 import string
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 
@@ -1579,7 +1579,17 @@ def _write_orchestrator_marker(
     # (local worker already wrote full metadata)
     metadata_path = trial_dir / "metadata.json"
     if not metadata_path.exists():
+        metadata_timestamp_unix = (
+            trial_result.metadata.timestamp_unix
+            if trial_result.metadata.timestamp_unix is not None
+            else trial_result.metadata.timestamp_start
+        )
+        metadata_timestamp = (
+            trial_result.metadata.timestamp
+            or datetime.fromtimestamp(metadata_timestamp_unix, timezone.utc).isoformat()
+        )
         metadata_dict = {
+            "timestamp": metadata_timestamp,
             "crs": trial_result.crs,
             "benchmark": trial_result.benchmark,
             "harness": trial_result.harness,
@@ -1591,11 +1601,7 @@ def _write_orchestrator_marker(
             "execution_time": trial_result.execution_time,
             "timestamp_start": trial_result.metadata.timestamp_start,
             "timestamp_end": trial_result.metadata.timestamp_end,
-            "timestamp_unix": (
-                trial_result.metadata.timestamp_unix
-                if trial_result.metadata.timestamp_unix is not None
-                else trial_result.metadata.timestamp_start
-            ),
+            "timestamp_unix": metadata_timestamp_unix,
             "build_time": trial_result.metadata.build_time,
             "run_time": trial_result.metadata.run_time,
             "build_start_time": trial_result.metadata.build_start_time,

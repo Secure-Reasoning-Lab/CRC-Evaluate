@@ -335,6 +335,7 @@ class TrialMetadata(BaseModel):
     experiment_filestore: Optional[str] = None
     max_total_time: Optional[int] = None
     difficulty_level: Optional[int] = None
+    timestamp: Optional[str] = None
     timestamp_start: float
     timestamp_end: float
     timestamp_unix: Optional[float] = None

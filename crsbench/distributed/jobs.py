@@ -971,7 +971,10 @@ def _reconstruct_trial_result_from_success(
     patches_valid = 0
     build_time = None
     run_time = None
+    timestamp = None
     timestamp_unix = None
+    timestamp_start = 0.0
+    timestamp_end = 0.0
     build_start_time = None
     build_end_time = None
     run_start_time = None
@@ -996,7 +999,23 @@ def _reconstruct_trial_result_from_success(
             patches_valid = metadata.get("patches_valid", 0)
             build_time = metadata.get("build_time")
             run_time = metadata.get("run_time")
+            timestamp = metadata.get("timestamp")
             timestamp_unix = metadata.get("timestamp_unix")
+            if timestamp_unix is None and isinstance(timestamp, str):
+                try:
+                    timestamp_unix = datetime.fromisoformat(
+                        timestamp.replace("Z", "+00:00")
+                    ).timestamp()
+                except ValueError:
+                    logger.warning(
+                        "Could not parse metadata timestamp for trial "
+                        f"{trial_num}: {timestamp!r}"
+                    )
+            timestamp_start = metadata.get(
+                "timestamp_start",
+                timestamp_unix if timestamp_unix is not None else 0.0,
+            )
+            timestamp_end = metadata.get("timestamp_end", timestamp_start)
             build_start_time = metadata.get("build_start_time")
             build_end_time = metadata.get("build_end_time")
             run_start_time = metadata.get("run_start_time")
@@ -1033,8 +1052,9 @@ def _reconstruct_trial_result_from_success(
         patches_valid=patches_valid,
         report={},
         metadata=TrialMetadata(
-            timestamp_start=0.0,
-            timestamp_end=0.0,
+            timestamp=timestamp,
+            timestamp_start=timestamp_start,
+            timestamp_end=timestamp_end,
             timestamp_unix=timestamp_unix,
             build_time=build_time,
             run_time=run_time,
@@ -1664,9 +1684,12 @@ def run_crs_trial(
             if crs_type == "bug-fixing"
             else TrialMode.bug_finding
         )
+        metadata_timestamp = datetime.now(timezone.utc)
+        metadata_timestamp_iso = metadata_timestamp.isoformat()
+        metadata_timestamp_unix = metadata_timestamp.timestamp()
         file_metadata = TrialMetadataFile(
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            timestamp_unix=start_time,
+            timestamp=metadata_timestamp_iso,
+            timestamp_unix=metadata_timestamp_unix,
             trial_num=trial_num,
             crs=crs,
             benchmark=benchmark,
@@ -1768,9 +1791,10 @@ def run_crs_trial(
         metadata = TrialMetadata(
             experiment_filestore=str(config.experiment_filestore),
             max_total_time=config.max_total_time,
+            timestamp=metadata_timestamp_iso,
             timestamp_start=start_time,
             timestamp_end=time.time(),
-            timestamp_unix=start_time,
+            timestamp_unix=metadata_timestamp_unix,
             build_time=build_time,
             run_time=run_time,
             build_start_time=build_start_time,
