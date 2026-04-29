@@ -2152,6 +2152,50 @@ class TestOssCrsAdapterBugFindFull:
         assert result.run_start_time == pytest.approx(2000.0)
         assert result.run_end_time == pytest.approx(2007.25)
 
+    @patch("crsbench.evaluation.adapter.oss_crs.time")
+    @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_run_passes_authoritative_run_start_time_to_callback(
+        self,
+        mock_subprocess: MagicMock,
+        mock_rwgt: MagicMock,
+        mock_time_module: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        mock_rwgt.return_value = ("output", "", 0, False)
+        mock_time_module.time.side_effect = [1000.0, 1010.75, 2000.0, 2007.25]
+        mock_time_module.monotonic.side_effect = [
+            10.0,
+            12.0,
+            12.0,
+            15.5,
+            15.5,
+            20.75,
+            30.0,
+            37.25,
+            38.0,
+        ]
+
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        trial = tmp_path / "trial"
+        trial.mkdir()
+
+        adapter.build(bench, trial)
+        harness = MagicMock()
+        harness.name = "fuzz_target"
+        on_run_start = MagicMock()
+
+        result = adapter.run(bench, harness, trial, on_run_start=on_run_start)
+
+        on_run_start.assert_called_once_with(2000.0)
+        assert result.run_start_time == pytest.approx(2000.0)
+
     @patch("crsbench.evaluation.adapter.oss_crs.generate_run_id")
     @patch("crsbench.evaluation.adapter.oss_crs.run_oss_crs_artifacts")
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
@@ -3404,6 +3448,77 @@ class TestCollectResultsWiring:
         assert harness_result.build_end_time == pytest.approx(1010.75)
         assert harness_result.run_start_time == pytest.approx(2000.0)
         assert harness_result.run_end_time == pytest.approx(2007.25)
+
+    def test_runner_uses_adapter_run_start_time_for_managed_timing_consumers(
+        self, tmp_path: Path
+    ) -> None:
+        adapter_run_start = 4321.25
+        adapter = MagicMock()
+        adapter.collect_results.return_value = {"type": "bug-finding"}
+
+        snapshot_manager = MagicMock()
+        coverage_manager = MagicMock()
+        coverage_manager.collector = MagicMock()
+        pov_verification_manager = MagicMock()
+
+        def run_adapter(*_args: object, **kwargs: object) -> CRSExecutionResult:
+            on_run_start = kwargs["on_run_start"]
+            on_run_start(adapter_run_start)
+            return CRSExecutionResult(
+                harness_name="fuzz_target",
+                execution_time=1.0,
+                success=True,
+                output="ok",
+                run_start_time=adapter_run_start,
+                run_end_time=adapter_run_start + 5.0,
+            )
+
+        adapter.run.side_effect = run_adapter
+
+        runner = BenchmarkRunner(adapter=adapter, snapshot_period=60)
+        trial_dir = tmp_path / "trial"
+        trial_dir.mkdir()
+        harness = self._make_harness()
+
+        with (
+            patch.object(runner, "_prepare_runtime_inputs"),
+            patch.object(
+                runner,
+                "_start_coverage_manager",
+                return_value=(coverage_manager, None, None),
+            ),
+            patch.object(
+                runner,
+                "_start_pov_verification_manager",
+                return_value=(pov_verification_manager, None),
+            ),
+            patch.object(
+                runner, "_start_patch_verification_manager", return_value=None
+            ),
+            patch.object(
+                runner,
+                "_start_snapshot_manager",
+                return_value=(snapshot_manager, None),
+            ),
+            patch.object(runner, "_stop_managers", return_value=None),
+        ):
+            harness_result, _, _, _ = runner._execute_crs_with_managers(
+                harness=harness,
+                benchmark_path=tmp_path,
+                trial_output_dir=trial_dir,
+                trial_start_time=0.0,
+            )
+
+        snapshot_manager.set_crs_run_start_time.assert_called_once_with(
+            adapter_run_start
+        )
+        coverage_manager.collector.set_run_start_time.assert_called_once_with(
+            adapter_run_start
+        )
+        pov_verification_manager.set_crs_run_start_time.assert_called_once_with(
+            adapter_run_start
+        )
+        assert harness_result.run_start_time == pytest.approx(adapter_run_start)
 
     def test_collect_results_failure_does_not_fail_trial(self, tmp_path: Path) -> None:
         adapter = MagicMock()

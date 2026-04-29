@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import inspect
 import os
 import re
 import shutil
@@ -48,6 +49,35 @@ if TYPE_CHECKING:
     from crsbench.validation.schemas import ExperimentConfig, HarnessFile
 
 logger = get_logger(__name__)
+
+
+def _invoke_run_start_callback(
+    callback: "Callable[..., None]",
+    run_start_time: float,
+) -> None:
+    """Invoke run-start callbacks with timestamp when supported.
+
+    Existing callers may still provide zero-argument callbacks, so fall back to
+    the older shape when the callable declares no positional parameters.
+    """
+    try:
+        signature = inspect.signature(callback)
+    except (TypeError, ValueError):
+        callback(run_start_time)
+        return
+
+    for parameter in signature.parameters.values():
+        if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
+            callback(run_start_time)
+            return
+        if parameter.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        ):
+            callback(run_start_time)
+            return
+
+    callback()
 
 
 def _normalize_optional_text(value: Any) -> Optional[str]:
@@ -1339,8 +1369,8 @@ class OssCrsAdapter:
         harness: HarnessFile,
         trial_output_dir: Path,
         *,
-        on_build_start: Optional[Callable[[], None]] = None,
-        on_run_start: Optional[Callable[[], None]] = None,
+        on_build_start: Optional[Callable[..., None]] = None,
+        on_run_start: Optional[Callable[..., None]] = None,
         stop_event: Optional[threading.Event] = None,
     ) -> CRSExecutionResult:
         """Execute CRS against a harness via oss-crs run.
@@ -1354,8 +1384,6 @@ class OssCrsAdapter:
 
         if on_build_start is not None:
             on_build_start()
-        if on_run_start is not None:
-            on_run_start()
 
         # Stage benchmark to exclude ground truth dotfiles
         staged_path = self._stage_benchmark(benchmark_path, trial_output_dir)
@@ -1402,6 +1430,8 @@ class OssCrsAdapter:
             inc_build = (rts_active or benchmark_inc_build) and self._inc_build_enabled
 
             run_start_time = time.time()
+            if on_run_start is not None:
+                _invoke_run_start_callback(on_run_start, run_start_time)
             stdout, stderr, rc, timed_out = run_oss_crs_run(
                 compose_file,
                 work_dir,
