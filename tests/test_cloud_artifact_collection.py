@@ -2853,6 +2853,11 @@ class TestRemoteLogCollection:
         )
         nested_crs_log.parent.mkdir(parents=True, exist_ok=True)
         nested_crs_log.write_text("nested crs log\n", encoding="utf-8")
+        trial_root_log = trial_dir / "misc.log"
+        trial_root_log.write_text("trial root log\n", encoding="utf-8")
+        workdir_log = trial_dir / "oss-crs-workdir" / "result.log"
+        workdir_log.parent.mkdir(parents=True, exist_ok=True)
+        workdir_log.write_text("workdir result log\n", encoding="utf-8")
         staged_log = trial_dir / "staged" / "debug.log"
         staged_log.parent.mkdir(parents=True, exist_ok=True)
         staged_log.write_text("staged log should stay remote\n", encoding="utf-8")
@@ -2932,6 +2937,12 @@ class TestRemoteLogCollection:
             / "step-1"
             / "run.log"
         ).read_text(encoding="utf-8") == "nested crs log\n"
+        assert (trial_artifacts_dir / "misc.log").read_text(
+            encoding="utf-8"
+        ) == "trial root log\n"
+        assert (trial_artifacts_dir / "oss-crs-workdir" / "result.log").read_text(
+            encoding="utf-8"
+        ) == "workdir result log\n"
         assert not (trial_artifacts_dir / "staged").exists()
 
     def test_collect_logs_writes_service_and_trial_logs(

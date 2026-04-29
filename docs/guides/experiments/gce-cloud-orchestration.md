@@ -1237,8 +1237,8 @@ Diagnostics collected under `.crsbench-cloud/remote-logs/<experiment>/`:
 - `runtime-summary.txt` with timezone, Docker cgroup driver, user-bus, linger,
   and Redis listener state
 - Lightweight per-trial observability files including all collected `*.log`
-  files, `metadata.json`, `.success`, `.fail`, and the orchestrator
-  `trial_matrix.json`
+  files across the trial tree, not only `output/logs/`, plus `metadata.json`,
+  `.success`, `.fail`, and the orchestrator `trial_matrix.json`
 
 ## Listing Instances
 
