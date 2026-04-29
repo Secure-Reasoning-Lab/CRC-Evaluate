@@ -863,57 +863,41 @@ def test_replay_engine_partial_replay_failure_counts_completed_work_in_summary(
     group_summary = json.loads(
         (tmp_path / "replay-out" / "group-summary.json").read_text()
     )
+    assert summary["naive_replay_tasks"] == 1
     assert summary["physical_replay_tasks"] == 1
+    assert summary["deduplicated_replay_tasks_saved"] == 0
+    assert summary["dedup_multiplier"] == 1.0
     assert summary["current_run"]["physical_replay_tasks_executed"] == 1
     assert summary["current_run"]["timing"]["task_duration_seconds_sum"] == 1.25
-    assert group_summary == [
-        {
-            "mapped_project": "curl",
-            "sanitizer": "address",
-            "source_pov_instances": 1,
-            "checkpoint_reused": False,
-            "naive_replay_tasks": 2,
-            "physical_replay_tasks": 1,
-            "summary_updates": {
-                "projects_built": 1,
-                "unique_replay_tasks_executed": 2,
-                "error_count": 1,
-                "crash_count": 1,
-            },
-            "timing": {
-                "group_wall_seconds": group_summary[0]["timing"]["group_wall_seconds"],
-                "lock_wait_wall_seconds": group_summary[0]["timing"][
-                    "lock_wait_wall_seconds"
-                ],
-                "build_and_prepare_wall_seconds": group_summary[0]["timing"][
-                    "build_and_prepare_wall_seconds"
-                ],
-                "session_pool_setup_wall_seconds": group_summary[0]["timing"][
-                    "session_pool_setup_wall_seconds"
-                ],
-                "replay_wall_seconds": group_summary[0]["timing"][
-                    "replay_wall_seconds"
-                ],
-                "result_aggregation_wall_seconds": 0.0,
-                "task_duration_seconds_sum": 1.25,
-                "task_duration_seconds_max": 1.25,
-                "task_duration_seconds_avg": 1.25,
-                "session_count": 1,
-            },
-            "phase_intervals": {
-                "project_lock_wait": group_summary[0]["phase_intervals"][
-                    "project_lock_wait"
-                ],
-                "build_and_prepare": group_summary[0]["phase_intervals"][
-                    "build_and_prepare"
-                ],
-                "session_pool_setup": group_summary[0]["phase_intervals"][
-                    "session_pool_setup"
-                ],
-                "replay": group_summary[0]["phase_intervals"]["replay"],
-            },
-        }
-    ]
+    assert len(group_summary) == 1
+    group = group_summary[0]
+    assert group["mapped_project"] == "curl"
+    assert group["sanitizer"] == "address"
+    assert group["source_pov_instances"] == 1
+    assert group["checkpoint_reused"] is False
+    assert group["naive_replay_tasks"] == 1
+    assert group["physical_replay_tasks"] == 1
+    assert group["summary_updates"] == {
+        "projects_built": 1,
+        "unique_replay_tasks_executed": 1,
+        "error_count": 1,
+        "crash_count": 1,
+    }
+    assert group["timing"]["session_count"] == 1
+    assert group["timing"]["task_duration_seconds_sum"] == 1.25
+    assert group["timing"]["task_duration_seconds_max"] == 1.25
+    assert group["timing"]["task_duration_seconds_avg"] == 1.25
+    assert group["timing"]["result_aggregation_wall_seconds"] > 0.0
+    assert (
+        group["timing"]["group_wall_seconds"] >= group["timing"]["replay_wall_seconds"]
+    )
+    assert set(group["phase_intervals"]) == {
+        "project_lock_wait",
+        "build_and_prepare",
+        "session_pool_setup",
+        "replay",
+        "result_aggregation",
+    }
 
 
 def test_replay_engine_empty_harness_groups_include_post_build_wall_time(
@@ -1351,6 +1335,101 @@ def test_replay_engine_resume_ignores_legacy_group_checkpoints(tmp_path: Path) -
     )
 
     engine.run([record], source_dirs=[source_dir])
+
+    assert resume_infra.build_calls == [("curl", "address")]
+
+
+def test_replay_engine_resume_ignores_version_3_group_checkpoints(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "exp-a"
+    latest_projects = tmp_path / "latest-projects"
+    (latest_projects / "curl").mkdir(parents=True)
+    pov = source_dir / "trial-a" / "output" / "povs" / "a.blob"
+    pov.parent.mkdir(parents=True, exist_ok=True)
+    pov.write_bytes(b"A")
+    record = _record(source_dir, "trial-a", pov, "cd" * 32)
+
+    checkpoint_path = (
+        tmp_path
+        / "replay-out"
+        / ".state"
+        / "groups"
+        / "curl"
+        / "address"
+        / "group-result.json"
+    )
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    engine = ReplayEngine(
+        oss_fuzz_path=tmp_path / "oss-fuzz",
+        projects_root=latest_projects,
+        output_dir=tmp_path / "replay-out",
+        jobs=1,
+        per_pov_timeout=5,
+        infra=FakeInfra(),
+        mapping={"afc-curl-delta-01": "curl"},
+        session_pool_factory=lambda **_kwargs: FakeSessionPool(
+            _session_result(
+                exit_code=0,
+                stdout="ok",
+                stderr="",
+                duration_seconds=0.1,
+                crashed=False,
+            )
+        ),
+    )
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "format_version": 3,
+                "input_signature": engine._group_input_signature([record]),
+                "outcome": {
+                    "entries": [],
+                    "zero_day_entries": [],
+                    "trial_entries": [],
+                    "summary_updates": {},
+                    "naive_replay_tasks": 0,
+                    "physical_replay_tasks": 0,
+                    "timing": {
+                        "group_wall_seconds": 0.5,
+                        "lock_wait_wall_seconds": 0.0,
+                        "build_and_prepare_wall_seconds": 0.5,
+                        "session_pool_setup_wall_seconds": 0.0,
+                        "replay_wall_seconds": 0.0,
+                        "result_aggregation_wall_seconds": 0.0,
+                        "task_duration_seconds_sum": 0.0,
+                        "task_duration_seconds_max": 0.0,
+                        "task_duration_seconds_avg": 0.0,
+                        "session_count": 0,
+                    },
+                },
+            },
+            indent=2,
+        )
+    )
+
+    resume_infra = FakeInfra()
+    resume_engine = ReplayEngine(
+        oss_fuzz_path=tmp_path / "oss-fuzz",
+        projects_root=latest_projects,
+        output_dir=tmp_path / "replay-out",
+        jobs=1,
+        per_pov_timeout=5,
+        infra=resume_infra,
+        resume=True,
+        mapping={"afc-curl-delta-01": "curl"},
+        session_pool_factory=lambda **_kwargs: FakeSessionPool(
+            _session_result(
+                exit_code=0,
+                stdout="ok",
+                stderr="",
+                duration_seconds=0.1,
+                crashed=False,
+            )
+        ),
+    )
+
+    resume_engine.run([record], source_dirs=[source_dir])
 
     assert resume_infra.build_calls == [("curl", "address")]
 

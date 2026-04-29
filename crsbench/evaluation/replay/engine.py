@@ -32,7 +32,7 @@ from crsbench.utils.logger import get_logger
 SessionPoolFactory = Callable[..., WarmReplaySessionPool]
 logger = get_logger(__name__)
 
-_GROUP_CHECKPOINT_FORMAT_VERSION = 3
+_GROUP_CHECKPOINT_FORMAT_VERSION = 4
 _REPLAY_OUTPUT_FORMAT_VERSION = 3
 _ZERO_DAY_REQUIRED_MARKER = "AddressSanitizer"
 _ZERO_DAY_JAVA_EXCEPTION_MARKERS = (
@@ -194,10 +194,14 @@ class ReplayEngine:
         *,
         summary_updates: dict[str, int],
         timing: dict[str, float | int],
-    ) -> int:
+    ) -> tuple[int, int]:
+        naive_replay_tasks = sum(
+            len(task.source_records) for task in replay_results_by_task
+        )
         physical_replay_tasks = len(replay_results_by_task)
         for replay_result in replay_results_by_task.values():
             summary_updates[replay_result.outcome + "_count"] += 1
+        summary_updates["unique_replay_tasks_executed"] += physical_replay_tasks
         if physical_replay_tasks > 0:
             task_duration_sum = sum(
                 replay_result.duration_seconds
@@ -215,7 +219,7 @@ class ReplayEngine:
                 task_duration_sum / physical_replay_tasks,
                 6,
             )
-        return physical_replay_tasks
+        return naive_replay_tasks, physical_replay_tasks
 
     def _artifact_dir(self, task: ReplayTask) -> Path:
         return (
@@ -683,6 +687,55 @@ class ReplayEngine:
             phase_intervals=dict(phase_intervals or {}),
         )
 
+    def _timed_group_status_outcome(
+        self,
+        records: list[SourcePovRecord],
+        *,
+        mapped_project: str,
+        status: str,
+        summary_counter: str,
+        group_started: float,
+        run_started_at: float,
+        summary_updates: dict[str, int] | None = None,
+        error_message: str | None = None,
+        naive_replay_tasks: int = 0,
+        physical_replay_tasks: int = 0,
+        timing: dict[str, float | int] | None = None,
+        phase_intervals: dict[str, dict[str, float]] | None = None,
+    ) -> GroupReplayOutcome:
+        timing_payload = self._group_timing_payload(timing)
+        phase_payload = dict(phase_intervals or {})
+        result_aggregation_started = self._monotonic()
+        outcome = self._group_status_outcome(
+            records,
+            mapped_project=mapped_project,
+            status=status,
+            summary_counter=summary_counter,
+            summary_updates=summary_updates,
+            error_message=error_message,
+            naive_replay_tasks=naive_replay_tasks,
+            physical_replay_tasks=physical_replay_tasks,
+            timing=timing_payload,
+            phase_intervals=phase_payload,
+        )
+        result_aggregation_ended = self._monotonic()
+        timing_payload["result_aggregation_wall_seconds"] = round(
+            result_aggregation_ended - result_aggregation_started,
+            6,
+        )
+        timing_payload["group_wall_seconds"] = round(
+            result_aggregation_ended - group_started,
+            6,
+        )
+        phase_payload["result_aggregation"] = self._phase_interval(
+            result_aggregation_started,
+            result_aggregation_ended,
+            run_started_at=run_started_at,
+        )
+        outcome.timing = timing_payload
+        outcome.phase_intervals = phase_payload
+        return outcome
+
     def _run_group(
         self,
         mapped_project: str,
@@ -784,7 +837,7 @@ class ReplayEngine:
             tasks = self._build_replay_tasks(
                 mapped_project, sanitizer, harnesses, records
             )
-            summary_updates["unique_replay_tasks_executed"] += len(tasks)
+            summary_updates["unique_replay_tasks_executed"] += 0
             timing["session_count"] = max(1, min(self.jobs, len(tasks))) if tasks else 0
 
             if not tasks:
@@ -937,20 +990,21 @@ class ReplayEngine:
                 run_started_at=run_started_at,
             )
             if replay_error is not None:
-                physical_replay_tasks = self._update_completed_replay_metrics(
+                (
+                    naive_replay_tasks,
+                    physical_replay_tasks,
+                ) = self._update_completed_replay_metrics(
                     replay_results_by_task,
                     summary_updates=summary_updates,
                     timing=timing,
                 )
-                timing["group_wall_seconds"] = round(
-                    replay_ended - group_started,
-                    6,
-                )
-                return self._group_status_outcome(
+                return self._timed_group_status_outcome(
                     records,
                     mapped_project=mapped_project,
                     status="error",
                     summary_counter="error_count",
+                    group_started=group_started,
+                    run_started_at=run_started_at,
                     summary_updates=dict(summary_updates),
                     error_message=replay_error,
                     naive_replay_tasks=naive_replay_tasks,
@@ -969,7 +1023,10 @@ class ReplayEngine:
                     )
                     record_task_result(task, session_result)
 
-            physical_replay_tasks = self._update_completed_replay_metrics(
+            (
+                naive_replay_tasks,
+                physical_replay_tasks,
+            ) = self._update_completed_replay_metrics(
                 replay_results_by_task,
                 summary_updates=summary_updates,
                 timing=timing,
