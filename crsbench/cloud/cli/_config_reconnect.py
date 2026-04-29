@@ -341,12 +341,20 @@ def _reconstruct_launch_state_from_live_orchestrator(
             launch_plan=launch_plan,
             role="worker",
             base_fleets=derived_worker_fleets,
+            template_fleets=[
+                *derived_worker_fleets,
+                *derived_evaluator_fleets,
+            ],
         ),
         evaluator_fleet_configs=_append_live_instance_fleet_records(
             adapter=adapter,
             launch_plan=launch_plan,
             role="evaluator",
             base_fleets=derived_evaluator_fleets,
+            template_fleets=[
+                *derived_evaluator_fleets,
+                *derived_worker_fleets,
+            ],
         ),
     )
     try:
@@ -390,6 +398,7 @@ def _append_live_instance_fleet_records(
     launch_plan: CloudLaunchPlan,
     role: str,
     base_fleets: list["CloudFleetPlacementRecord"],
+    template_fleets: Sequence["CloudFleetPlacementRecord"],
 ) -> list["CloudFleetPlacementRecord"]:
     """Append synthetic runtime-added fleet records for live VMs outside config."""
     list_by_role = getattr(adapter, "list_instances_by_role", None)
@@ -405,9 +414,10 @@ def _append_live_instance_fleet_records(
         )
         return list(base_fleets)
 
-    covered_names = _expected_instance_names(base_fleets)
     missing_instances = [
-        instance for instance in live_instances if instance.name not in covered_names
+        instance
+        for instance in live_instances
+        if not _instance_is_covered_by_fleets(instance, base_fleets)
     ]
     if not missing_instances:
         return list(base_fleets)
@@ -415,18 +425,49 @@ def _append_live_instance_fleet_records(
     synthetic_fleets = _synthetic_fleets_for_live_instances(
         role=role,
         instances=missing_instances,
-        templates=base_fleets,
+        templates=template_fleets,
     )
     return [*base_fleets, *synthetic_fleets]
 
 
-def _expected_instance_names(fleets: list["CloudFleetPlacementRecord"]) -> set[str]:
-    names: set[str] = set()
+def _instance_is_covered_by_fleets(
+    instance: "CloudInstanceLike",
+    fleets: Sequence["CloudFleetPlacementRecord"],
+) -> bool:
+    project = _instance_project(instance)
     for fleet in fleets:
-        start = fleet.name_start_index
-        for index in range(start, start + fleet.count):
-            names.add(f"{fleet.name_prefix}-{index:03d}")
-    return names
+        if project and fleet.project != project:
+            continue
+        if instance.name not in _expected_instance_names(fleet):
+            continue
+        if not _fleet_location_covers_instance(fleet, instance):
+            continue
+        return True
+    return False
+
+
+def _expected_instance_names(fleet: "CloudFleetPlacementRecord") -> set[str]:
+    start = fleet.name_start_index
+    return {
+        f"{fleet.name_prefix}-{index:03d}"
+        for index in range(start, start + fleet.count)
+    }
+
+
+def _fleet_location_covers_instance(
+    fleet: "CloudFleetPlacementRecord",
+    instance: "CloudInstanceLike",
+) -> bool:
+    if fleet.zones:
+        return instance.zone in set(fleet.zones)
+    if fleet.zone:
+        return instance.zone == fleet.zone
+    region = region_for_provider_zone(fleet.provider, instance.zone)
+    if fleet.regions:
+        return region in set(fleet.regions)
+    if fleet.region:
+        return region == fleet.region
+    return True
 
 
 def _synthetic_fleets_for_live_instances(
@@ -487,7 +528,12 @@ def _synthetic_fleets_for_live_instances(
         zones = sorted({instance.zone for _index, instance in indexed_instances})
         start_index = min(indexes)
         count = max(indexes) - start_index + 1
-        provider_metadata = dict(template.provider_metadata) if template else {}
+        provider_metadata = _synthetic_provider_metadata(
+            template=template,
+            indexed_instances=indexed_instances,
+            project=project,
+            zones=zones,
+        )
         provider_metadata.update(
             {
                 "project": project,
@@ -549,7 +595,63 @@ def _matching_template_for_instance(
         for template in templates:
             if str(template.project) == project:
                 return template
+    if templates:
+        return templates[0]
     return None
+
+
+def _synthetic_provider_metadata(
+    *,
+    template: "CloudFleetPlacementRecord | None",
+    indexed_instances: Sequence[tuple[int, "CloudInstanceLike"]],
+    project: str,
+    zones: Sequence[str],
+) -> dict[str, Any]:
+    if template is not None:
+        return dict(template.provider_metadata)
+
+    instance = indexed_instances[0][1] if indexed_instances else None
+    service_account_email = (
+        getattr(instance, "service_account_email", None)
+        if instance is not None
+        else None
+    )
+    if not isinstance(service_account_email, str) or not service_account_email:
+        service_account_email = f"reconstructed-live@{project}.iam.gserviceaccount.com"
+    return {
+        "project": project,
+        "zone": zones[0] if zones else None,
+        "zones": list(zones),
+        "machine_type": _instance_machine_type(instance),
+        "boot_disk_size_gb": _instance_boot_disk_size_gb(instance),
+        "image": "reconstructed-live-placeholder",
+        "service_account_email": service_account_email,
+    }
+
+
+def _instance_machine_type(instance: "CloudInstanceLike | None") -> str:
+    raw = getattr(instance, "raw", {}) if instance is not None else {}
+    if isinstance(raw, Mapping):
+        machine_type = raw.get("machineType")
+        if isinstance(machine_type, str) and machine_type:
+            return machine_type.rstrip("/").split("/")[-1]
+    return "n2d-standard-2"
+
+
+def _instance_boot_disk_size_gb(instance: "CloudInstanceLike | None") -> int:
+    raw = getattr(instance, "raw", {}) if instance is not None else {}
+    if isinstance(raw, Mapping):
+        disks = raw.get("disks")
+        if isinstance(disks, Sequence):
+            for disk in disks:
+                if not isinstance(disk, Mapping):
+                    continue
+                size = disk.get("diskSizeGb")
+                if isinstance(size, int):
+                    return max(size, 10)
+                if isinstance(size, str) and size.isdigit():
+                    return max(int(size), 10)
+    return 10
 
 
 def _instance_ssh_via_iap(

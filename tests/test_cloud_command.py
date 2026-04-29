@@ -1814,6 +1814,30 @@ class TestReconnect:
                         },
                     },
                 ),
+                GceWorkerRecord(
+                    name="crsbench-test-exp-work-001",
+                    instance_id="worker-runtime-001",
+                    status="RUNNING",
+                    zone="us-west1-b",
+                    internal_ip="10.0.1.1",
+                    service_account_email="runtime@test-project.iam.gserviceaccount.com",
+                    labels={
+                        "crsbench-experiment": "test-exp",
+                        "crsbench-role": "worker",
+                        "owner": "duplicate-name-team",
+                        "capacity": "duplicate-name",
+                    },
+                    raw={
+                        "project": "runtime-project",
+                        "machineType": "https://www.googleapis.com/compute/v1/projects/runtime-project/zones/us-west1-b/machineTypes/n2d-standard-224",
+                        "disks": [{"diskSizeGb": "1024"}],
+                        "metadata": {
+                            "items": [
+                                {"key": "crsbench-ssh-via-iap", "value": "TRUE"},
+                            ]
+                        },
+                    },
+                ),
             ]
 
         mock_list_instances_by_role.side_effect = _list_instances_by_role
@@ -1828,7 +1852,7 @@ class TestReconnect:
             for fleet in context.launch_state.worker_fleet_configs
             if fleet.placement_source == "reconstructed_live"
         ]
-        assert len(reconstructed) == 3
+        assert len(reconstructed) == 4
         by_region_and_labels = {
             (fleet.region, tuple(sorted(fleet.labels.items()))): fleet
             for fleet in reconstructed
@@ -1836,6 +1860,9 @@ class TestReconnect:
         runtime_us_west = by_region_and_labels[("us-west1", (("capacity", "runtime"),))]
         other_us_west = by_region_and_labels[
             ("us-west1", (("capacity", "other-runtime"),))
+        ]
+        duplicate_name = by_region_and_labels[
+            ("us-west1", (("capacity", "duplicate-name"),))
         ]
         east = by_region_and_labels[("us-east1", (("capacity", "runtime"),))]
         assert runtime_us_west.name_prefix == "crsbench-test-exp-work"
@@ -1849,6 +1876,14 @@ class TestReconnect:
         assert other_us_west.count == 1
         assert other_us_west.zones == ["us-west1-c"]
         assert other_us_west.owner_label == "other-runtime-team"
+        assert duplicate_name.name_start_index == 1
+        assert duplicate_name.count == 1
+        assert duplicate_name.project == "runtime-project"
+        assert duplicate_name.owner_label == "duplicate-name-team"
+        assert duplicate_name.provider_metadata["service_account_email"]
+        from crsbench.cloud.gce.provider import GceProviderAdapter
+
+        GceProviderAdapter().worker_fleet_from_cloud_placement_record(duplicate_name)
         assert east.name_start_index == 252
         assert east.count == 1
         assert east.zones == ["us-east1-b"]
