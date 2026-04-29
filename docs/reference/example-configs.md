@@ -10,6 +10,8 @@ Use these example files as reference inputs:
 
 Discovery-only example configs live under
 [`experiment-configs/discovery-testing/`](../../experiment-configs/discovery-testing/).
+Managed-cloud discovery configs live under
+[`experiment-configs/discovery/`](../../experiment-configs/discovery/).
 Discovery smoke configs live under
 [`experiment-configs/discovery-smoke-testing/`](../../experiment-configs/discovery-smoke-testing/).
 The local shortlist smoke configs in that directory use extracted
@@ -24,6 +26,12 @@ Concrete discovery smoke examples:
 - [`opencode-clear-shortlist3-bugfinding.yaml`](../../experiment-configs/discovery-smoke-testing/opencode-clear-shortlist3-bugfinding.yaml)
 - [`opencode-clear-shortlist4-bugfinding.yaml`](../../experiment-configs/discovery-smoke-testing/opencode-clear-shortlist4-bugfinding.yaml)
 - [`gce-opencode-go-yaml-bugfinding.yaml`](../../experiment-configs/discovery-smoke-testing/gce-opencode-go-yaml-bugfinding.yaml)
+
+Concrete managed-cloud discovery examples:
+- [`gce-opencode-shortlist-bugfinding.yaml`](../../experiment-configs/discovery/gce-opencode-shortlist-bugfinding.yaml)
+- [`gce-opencode-clear-shortlist2-bugfinding.yaml`](../../experiment-configs/discovery/gce-opencode-clear-shortlist2-bugfinding.yaml)
+- [`gce-opencode-clear-shortlist3-bugfinding.yaml`](../../experiment-configs/discovery/gce-opencode-clear-shortlist3-bugfinding.yaml)
+- [`gce-opencode-clear-shortlist4-bugfinding.yaml`](../../experiment-configs/discovery/gce-opencode-clear-shortlist4-bugfinding.yaml)
 
 The grouped distributed experiment config is the primary contract reference for
 experiment YAML structure.

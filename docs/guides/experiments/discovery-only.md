@@ -121,6 +121,10 @@ Repository examples:
 - [`experiment-configs/discovery-smoke-testing/opencode-clear-shortlist3-bugfinding.yaml`](../../../experiment-configs/discovery-smoke-testing/opencode-clear-shortlist3-bugfinding.yaml)
 - [`experiment-configs/discovery-smoke-testing/opencode-clear-shortlist4-bugfinding.yaml`](../../../experiment-configs/discovery-smoke-testing/opencode-clear-shortlist4-bugfinding.yaml)
 - [`experiment-configs/discovery-smoke-testing/gce-opencode-go-yaml-bugfinding.yaml`](../../../experiment-configs/discovery-smoke-testing/gce-opencode-go-yaml-bugfinding.yaml)
+- [`experiment-configs/discovery/gce-opencode-shortlist-bugfinding.yaml`](../../../experiment-configs/discovery/gce-opencode-shortlist-bugfinding.yaml)
+- [`experiment-configs/discovery/gce-opencode-clear-shortlist2-bugfinding.yaml`](../../../experiment-configs/discovery/gce-opencode-clear-shortlist2-bugfinding.yaml)
+- [`experiment-configs/discovery/gce-opencode-clear-shortlist3-bugfinding.yaml`](../../../experiment-configs/discovery/gce-opencode-clear-shortlist3-bugfinding.yaml)
+- [`experiment-configs/discovery/gce-opencode-clear-shortlist4-bugfinding.yaml`](../../../experiment-configs/discovery/gce-opencode-clear-shortlist4-bugfinding.yaml)
 
 ## Initialize The Benchmarks
 
@@ -203,6 +207,11 @@ and evaluator workflows documented in [Distributed](./distributed.md).
 
 For a managed GCE smoke example pinned to `us-central1`, see
 [`gce-opencode-go-yaml-bugfinding.yaml`](../../../experiment-configs/discovery-smoke-testing/gce-opencode-go-yaml-bugfinding.yaml).
+For managed-cloud shortlist campaigns, see
+[`gce-opencode-shortlist-bugfinding.yaml`](../../../experiment-configs/discovery/gce-opencode-shortlist-bugfinding.yaml),
+[`gce-opencode-clear-shortlist3-bugfinding.yaml`](../../../experiment-configs/discovery/gce-opencode-clear-shortlist3-bugfinding.yaml),
+and
+[`gce-opencode-clear-shortlist4-bugfinding.yaml`](../../../experiment-configs/discovery/gce-opencode-clear-shortlist4-bugfinding.yaml).
 
 ## Limits And Expectations
 
