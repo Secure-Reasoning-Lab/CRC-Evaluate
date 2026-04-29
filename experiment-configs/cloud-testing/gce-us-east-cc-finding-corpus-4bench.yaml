@@ -1,0 +1,110 @@
+# GCE config: Claude Code bug-finding with seed corpus on 4 targeted benchmarks.
+#
+# Fleet: 1 orchestrator (n2d-standard-16) + 1 worker (n2d-standard-224).
+# Shape: 1 trial, CPV-only harness selection, 1 hour CRS run timeout.
+#
+# Prerequisites:
+#   1. gcloud auth login && gcloud auth application-default login
+#   2. uv run crsbench cloud keygen (add public key to GitHub deploy keys)
+#   3. HF_TOKEN in .env or environment
+#
+# Usage:
+#   CONFIG=experiment-configs/cloud-testing/gce-us-east-cc-finding-corpus-4bench.yaml
+#   uv run crsbench cloud launch --config "$CONFIG"
+#   uv run crsbench cloud --config "$CONFIG" monitor
+#   uv run crsbench cloud --config "$CONFIG" collect --force
+#   uv run crsbench cloud --config "$CONFIG" teardown --force
+
+experiment:
+  name: gce-us-east-cc-finding-corpus-4bench
+  task: bugfinding
+  benchmarks:
+    - afc-apache-commons-compress-delta-02
+    - afc-dav1d-full-01
+    - afc-libxml2-full-01
+    - atlanta-wireshark-delta-01
+  sanitizers:
+    - address
+  mode: auto
+  only_cpv_harnesses: true
+runtime:
+  trials: 1
+  max_total_time: 25200
+  build_timeout: 21600
+  run_timeout: 3600
+  verify_timeout: 900
+  per_pov_verify_timeout: 300
+  skip_verification: true
+  redis_host: redis-server:6379
+  source_mode: pkgs
+  rts_enabled: false
+  inc_build_enabled: false
+  pov_early_stop: true
+  inputs:
+    seed: {}
+  litellm:
+    mode: external
+    cost_budget: 10.0
+storage:
+  experiment_filestore: /data/crsbench/experiment-data/gce-us-east-cc-finding-corpus-4bench
+  report_filestore: /data/crsbench/report-data/gce-us-east-cc-finding-corpus-4bench
+resources:
+  cores_per_trial: 16
+  memory_per_trial: "64G"
+crs_compose:
+  oss_crs_infra:
+    shared: true
+  crs-bug-finding-claude-code:
+    num_cores: 16
+    budget_policy: terminate
+    additional_env:
+      CRS_AGENT: claude_code
+      ANTHROPIC_MODEL: claude-opus-4-6
+      CLAUDE_CODE_CLI_VERSION: 2.1.92
+worker:
+  jobs: 1
+  cores_per_job: 16
+  storage:
+    cleanup_after_trial: true
+cloud:
+  remote:
+    experiment_root: /data/crsbench/experiment-data
+  defaults:
+    readiness_timeout_sec: 1200
+    crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
+    crsbench_git_ref: main
+    github_deploy_key_path: .crsbench-keys/crsbench-deploy
+  env:
+    HF_TOKEN: os.environ/HF_TOKEN
+    CRSBENCH_LLM_UPSTREAM_BASE_URL: os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL
+    CRSBENCH_LLM_UPSTREAM_MASTER_KEY: os.environ/CRSBENCH_LLM_UPSTREAM_MASTER_KEY
+    CRSBENCH_NOTIFY_APPRISE_URLS: os.environ/CRSBENCH_NOTIFY_APPRISE_URLS
+  bootstrap:
+    prepare_mode: full
+    download_benchmarks: auto
+  providers:
+    gce:
+      project: aixcc-426805
+      ssh_via_iap: true
+      regions:
+        - us-east1
+      fallback: false
+      profile_defaults:
+        machine_type: n2d-standard-16
+        boot_disk_size_gb: 1024
+        boot_disk_type: pd-ssd
+        image: projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64
+        service_account_email: 153298433405-compute@developer.gserviceaccount.com
+        owner_label: crsbench
+      instance_profiles:
+        gce-orchestrator-n2d: {} # n2d-standard-16, 1 TB pd-ssd
+        gce-worker-n2d:
+          machine_type: n2d-standard-224 # oversized by request
+          boot_disk_size_gb: 2048
+  orchestrator:
+    instance_profile: gce-orchestrator-n2d
+  workers:
+    defaults:
+      instance_profile: gce-worker-n2d
+    placements:
+      - {} # 1 worker
