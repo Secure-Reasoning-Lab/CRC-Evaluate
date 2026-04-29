@@ -211,9 +211,12 @@ class OssCrsAdapter:
         self._litellm_mode = litellm_mode
         self._mode = mode
         self._built_projects: set[str] = set()
+        self._build_times_by_project: dict[str, float] = {}
+        self._build_times_trial_output_dir: Optional[Path] = None
 
         self._compose_file: Optional[Path] = None
         self._work_dir: Optional[Path] = None
+        self._work_dir_is_explicit: bool = False
         self._oss_crs_cmd: str = "oss-crs"
         self._docker_registry: str = ""
         self._oss_crs_infra_cpuset: Optional[str] = None
@@ -319,9 +322,11 @@ class OssCrsAdapter:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("w") as lock_file:
             logger.info(f"Acquiring {description}: {lock_path}")
+            wait_start = time.monotonic()
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            lock_wait = time.monotonic() - wait_start
             try:
-                yield
+                yield lock_wait
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
@@ -332,8 +337,8 @@ class OssCrsAdapter:
         with self._acquire_lock(
             lock_path,
             f"prepare lock for {self._crs_config_name}",
-        ):
-            yield
+        ) as lock_wait:
+            yield lock_wait
 
     @contextmanager
     def _acquire_build_lock(self, project_name: str):
@@ -342,8 +347,8 @@ class OssCrsAdapter:
         with self._acquire_lock(
             lock_path,
             f"build lock for {self._crs_config_name}/{project_name} ({self._sanitizer})",
-        ):
-            yield
+        ) as lock_wait:
+            yield lock_wait
 
     @property
     def mode(self) -> str:
@@ -754,7 +759,15 @@ class OssCrsAdapter:
                 service_env.update(merged)
                 service["additional_env"] = service_env
         if "work_dir" in config and config["work_dir"] is not None:
-            self._work_dir = Path(config["work_dir"])
+            new_work_dir = Path(config["work_dir"])
+            if new_work_dir != self._work_dir:
+                self._compose_file = None
+                self._resolved_artifacts = None
+                self._built_projects.clear()
+                self._build_times_by_project.clear()
+                self._build_times_trial_output_dir = None
+            self._work_dir = new_work_dir
+            self._work_dir_is_explicit = True
         if "sanitizer" in config:
             new_sanitizer = str(config["sanitizer"])
             if new_sanitizer != self._sanitizer:
@@ -766,9 +779,12 @@ class OssCrsAdapter:
                 self._compose_file = None
                 if "work_dir" not in config or config["work_dir"] is None:
                     self._work_dir = None
+                    self._work_dir_is_explicit = False
                 self._resolved_artifacts = None
                 self._cleanup_build_done_markers()
                 self._built_projects.clear()
+                self._build_times_by_project.clear()
+                self._build_times_trial_output_dir = None
                 self._prepared = False
         if "skip_litellm" in config:
             self._skip_litellm = bool(config["skip_litellm"])
@@ -1120,18 +1136,32 @@ class OssCrsAdapter:
         self._run_id = self._configured_run_id
         self._resolved_artifacts = None
         self._runtime_run_logs_base_dir = None
+        if self._build_times_trial_output_dir != trial_output_dir:
+            self._compose_file = None
+            self._build_times_by_project.clear()
+            if not self._work_dir_is_explicit:
+                self._built_projects.clear()
+                self._work_dir = None
+            self._build_times_trial_output_dir = trial_output_dir
 
-        project_name = benchmark_path.name
-        if project_name in self._built_projects:
-            logger.debug(f"Project {project_name} already built, skipping")
-            return
+        build_start = time.monotonic()
 
         if self._compose_file is None:
             self._generate_compose_yaml(trial_output_dir)
 
         if self._work_dir is None:
             self._work_dir = trial_output_dir / "oss-crs-workdir"
+            self._work_dir_is_explicit = False
         self._work_dir.mkdir(parents=True, exist_ok=True)
+
+        project_name = benchmark_path.name
+        staged_path = trial_output_dir / "staged" / project_name
+        if project_name in self._built_projects:
+            if not staged_path.exists():
+                self._stage_benchmark(benchmark_path, trial_output_dir)
+            logger.debug(f"Project {project_name} already built, skipping")
+            return
+        lock_wait = 0.0
 
         compose_file, work_dir = self._ensure_compose_state()
 
@@ -1147,7 +1177,8 @@ class OssCrsAdapter:
         # adapter instance has already prepared (e.g. second benchmark on the
         # same worker).
         if not self._prepared:
-            with self._acquire_prepare_lock():
+            with self._acquire_prepare_lock() as prepare_lock_wait:
+                lock_wait += prepare_lock_wait
                 if not self._prepared:
                     logger.info(f"oss-crs prepare for {self._crs_config_name}")
                     stdout, stderr, rc = run_oss_crs_prepare(
@@ -1190,7 +1221,8 @@ class OssCrsAdapter:
             )
             return
 
-        with self._acquire_build_lock(project_name):
+        with self._acquire_build_lock(project_name) as build_lock_wait:
+            lock_wait += build_lock_wait
             # Re-check after lock in case another actor finished first.
             if project_name in self._built_projects:
                 logger.debug(
@@ -1236,7 +1268,9 @@ class OssCrsAdapter:
                 if not build_succeeded:
                     docker_compose_down_cleanup(work_dir)
 
+            total_build_time = max(time.monotonic() - build_start - lock_wait, 0.0)
             self._built_projects.add(project_name)
+            self._build_times_by_project[project_name] = total_build_time
             logger.info(f"Build complete for {project_name}")
 
     def _find_pov_dir(self, trial_output_dir: Path) -> Optional[Path]:
@@ -1326,7 +1360,9 @@ class OssCrsAdapter:
             bug_candidate_path if bug_candidate_path.exists() else None
         )
 
-        start_time = time.time()
+        project_name = benchmark_path.name
+        execution_start = time.monotonic()
+        run_start = execution_start
         stdout = ""
         stderr = ""
         rc = -1
@@ -1367,6 +1403,7 @@ class OssCrsAdapter:
                 bug_candidate_dir=bug_candidate_dir,
                 incremental_build=inc_build,
             )
+            run_time = time.monotonic() - run_start
         finally:
             # GH #182: run force_cleanup unconditionally so non-timeout
             # failure paths (e.g., oss-crs exits non-zero with dangling
@@ -1378,7 +1415,7 @@ class OssCrsAdapter:
             # concurrent trials on the same worker are unaffected.
             force_cleanup_work_dir_containers(work_dir)
 
-        execution_time = time.time() - start_time
+        execution_time = time.monotonic() - execution_start
 
         return CRSExecutionResult(
             harness_name=harness.name,
@@ -1387,6 +1424,12 @@ class OssCrsAdapter:
             output=stdout,
             error=stderr if rc != 0 else None,
             timed_out=timed_out,
+            build_time=(
+                self._build_times_by_project.get(project_name)
+                if self._build_times_trial_output_dir == trial_output_dir
+                else None
+            ),
+            run_time=run_time,
         )
 
     def collect_results(
