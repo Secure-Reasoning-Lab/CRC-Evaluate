@@ -2767,6 +2767,110 @@ class TestCollectFullTrialTree:
 class TestRemoteLogCollection:
     """Best-effort remote log collection should land under the local cloud state dir."""
 
+    def test_collect_logs_includes_nested_trial_log_files(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worker = _make_worker()
+        fleet = _make_fleet(ssh_via_iap=False)
+        config_path = tmp_path / "config.yaml"
+        experiment_filestore = tmp_path / "filestore"
+        experiment_filestore.mkdir()
+        collector = ArtifactCollector(base_path=config_path)
+
+        source_root = tmp_path / "worker-local"
+        source_root.mkdir()
+        trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
+        nested_service_log = (
+            trial_dir / "output" / "logs" / "services" / "builder-sidecar.log"
+        )
+        nested_service_log.parent.mkdir(parents=True, exist_ok=True)
+        nested_service_log.write_text("builder sidecar output\n", encoding="utf-8")
+        nested_crs_log = (
+            trial_dir / "output" / "logs" / "crs" / "agent" / "step-1" / "run.log"
+        )
+        nested_crs_log.parent.mkdir(parents=True, exist_ok=True)
+        nested_crs_log.write_text("nested crs log\n", encoding="utf-8")
+        staged_log = trial_dir / "staged" / "debug.log"
+        staged_log.parent.mkdir(parents=True, exist_ok=True)
+        staged_log.write_text("staged log should stay remote\n", encoding="utf-8")
+
+        def _fake_remote_command(*args, **kwargs):
+            del args
+            command = str(kwargs["command"])
+            if command.startswith("sudo python3 -c "):
+                return _run_local_remote_command_from_cloud_cmd(
+                    command,
+                    source_root=source_root,
+                    experiment_name="exp-42",
+                )
+            return subprocess.CompletedProcess(
+                args=["ssh"],
+                returncode=0,
+                stdout="remote output\n",
+                stderr="",
+            )
+
+        def _fake_subprocess_run(cmd, *_args, **_kwargs):
+            if cmd and cmd[:3] == ["gcloud", "compute", "os-login"]:
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout="test-user\n",
+                    stderr="",
+                )
+
+            if cmd and cmd[0] in {"ssh-keygen", "ssh-keyscan"}:
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout="ssh-ed25519 AAAATESTKEY\n",
+                    stderr="",
+                )
+
+            if cmd and cmd[0] == "rsync":
+                return _run_local_rsync_from_cloud_cmd(
+                    cmd,
+                    source_root=source_root,
+                    experiment_name="exp-42",
+                )
+
+            raise AssertionError(f"unexpected subprocess invocation: {cmd!r}")
+
+        monkeypatch.setattr(collector, "_run_remote_command", _fake_remote_command)
+        with patch("subprocess.run", side_effect=_fake_subprocess_run):
+            logs_dir = collector.collect_logs(
+                worker=worker,
+                fleet=fleet,
+                experiment_name="exp-42",
+                experiment_filestore=experiment_filestore,
+                remote_experiment_dir="/data/experiments/exp-42",
+            )
+
+        trial_artifacts_dir = (
+            logs_dir
+            / worker.name
+            / "trial-artifacts"
+            / "oss-crs"
+            / "curl-delta-01"
+            / "fuzz_http"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        assert (
+            trial_artifacts_dir / "output" / "logs" / "services" / "builder-sidecar.log"
+        ).read_text(encoding="utf-8") == "builder sidecar output\n"
+        assert (
+            trial_artifacts_dir
+            / "output"
+            / "logs"
+            / "crs"
+            / "agent"
+            / "step-1"
+            / "run.log"
+        ).read_text(encoding="utf-8") == "nested crs log\n"
+        assert not (trial_artifacts_dir / "staged").exists()
+
     def test_collect_logs_writes_service_and_trial_logs(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

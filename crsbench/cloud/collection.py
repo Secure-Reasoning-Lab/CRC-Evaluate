@@ -1561,6 +1561,7 @@ class ArtifactCollector:
                 for pattern in _rsync_exact_path_excludes(excluded_relpaths or [])
             ],
             "--include=*/",
+            "--include=*.log",
             "--include=trial_matrix.json",
             "--include=metadata.json",
             "--include=worker.log",
