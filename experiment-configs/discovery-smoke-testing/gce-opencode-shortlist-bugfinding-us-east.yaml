@@ -12,9 +12,6 @@
 #   uv run crsbench cloud --config "$CONFIG" collect --force
 #   uv run crsbench cloud --config "$CONFIG" teardown --force
 #
-# This smoke config is pinned to the feature branch until the raw OSS-Fuzz
-# cloud-bootstrap support is fully tested and merged back to main.
-
 description: 'GCE discovery smoke: opencode bug-finding on an OSS-Fuzz shortlist (us-east)'
 
 experiment:
@@ -117,7 +114,7 @@ cloud:
   defaults:
     readiness_timeout_sec: 10800
     crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
-    crsbench_git_ref: feat/discovery-all-languages
+    crsbench_git_ref: main
     github_deploy_key_path: .crsbench-keys/crsbench-deploy
   env:
     HF_TOKEN: os.environ/HF_TOKEN

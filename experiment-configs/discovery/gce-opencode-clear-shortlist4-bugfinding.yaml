@@ -1,67 +1,72 @@
-# GCE discovery run: opencode bug-finding against a curated OSS-Fuzz
-# shortlist.
+# GCE discovery run: opencode-clear bug-finding against OSS-Fuzz
+# shortlist 4 refill (28 harnesses across 10 projects).
+#
+# Selection rationale (2026-04-28):
+#   - Refill shortlist 4 with OSS-Fuzz projects that are NOT already in
+#     CRSBench/benchmark-suites/ and are NOT present in shortlist 1-3.
+#   - Favor projects with several current native fuzz targets so the shortlist
+#     stays balanced across multiple projects instead of depending on one large
+#     parser target.
+#   - Harness names below come from the current OSS-Fuzz `build.sh` outputs and
+#     were locally validated before the GCE run.
 #
 # Managed cloud bootstrap materializes the selected OSS-Fuzz projects from the
 # sparse third_party/oss-fuzz checkout and generates .aixcc/meta.yaml on each
 # VM before the run starts.
 #
 # Usage:
-#   CONFIG=experiment-configs/discovery/gce-opencode-shortlist-bugfinding.yaml
+#   CONFIG=experiment-configs/discovery/gce-opencode-clear-shortlist4-bugfinding.yaml
 #   uv run crsbench cloud launch --config "$CONFIG"
 #   uv run crsbench cloud --config "$CONFIG" monitor
 #   uv run crsbench cloud --config "$CONFIG" collect --force
 #   uv run crsbench cloud --config "$CONFIG" teardown --force
-#
-description: 'GCE discovery run: opencode bug-finding on an OSS-Fuzz shortlist'
+
+description: 'GCE discovery run: opencode-clear bug-finding on OSS-Fuzz shortlist 4'
 
 experiment:
-  name: gce-discovery-opencode-shortlist
+  name: gce-discovery-opencode-clear-shortlist4
   task: bugfinding
   mode: full
   benchmarks:
-    - gpac
-    - mpv:
-        - fuzzer_json
-        # - fuzzer_load_config_file
-        - fuzzer_load_input_conf
-        - fuzzer_loadfile
-        # - fuzzer_loadfile_direct
-        # - fuzzer_loadfile_mkv
-        - fuzzer_options_parser
-        # - fuzzer_protocol_dvb
-        # - fuzzer_protocol_edl
-        - fuzzer_protocol_file
-        - fuzzer_protocol_lavf
-        # - fuzzer_protocol_memory
-        # - fuzzer_set_property_MPV_FORMAT_DOUBLE_0
-        # - fuzzer_set_property_MPV_FORMAT_DOUBLE_1
-        # - fuzzer_set_property_MPV_FORMAT_FLAG_0
-        # - fuzzer_set_property_MPV_FORMAT_FLAG_1
-        # - fuzzer_set_property_MPV_FORMAT_INT64_0
-        # - fuzzer_set_property_MPV_FORMAT_INT64_1
-        # - fuzzer_set_property_MPV_FORMAT_STRING_0
-        # - fuzzer_set_property_MPV_FORMAT_STRING_1
-    - kamailio
-    - wamr
-    - tinyusb
-    - open5gs
-    - apache-logging-log4cxx:
-        - DOMConfiguratorFuzzer-utf-8
-        # - DOMConfiguratorFuzzer-wchar_t
-        - HTMLLayoutFuzzer-utf-8
-        # - HTMLLayoutFuzzer-wchar_t
-        - JSONLayoutFuzzer-utf-8
-        # - JSONLayoutFuzzer-wchar_t
-        - PatternConverterFuzzer-utf-8
-        # - PatternConverterFuzzer-wchar_t
-        - PatternLayoutFuzzer-utf-8
-        # - PatternLayoutFuzzer-wchar_t
-        - PatternParserFuzzer-utf-8
-        # - PatternParserFuzzer-wchar_t
-        # - TimeBasedRollingPolicyFuzzer-utf-8
-        # - TimeBasedRollingPolicyFuzzer-wchar_t
-        - XMLLayoutFuzzer-utf-8
-        # - XMLLayoutFuzzer-wchar_t
+    # === C / C++ ===
+    - hpn-ssh:
+        - pubkey_fuzz
+        - privkey_fuzz
+        - sig_fuzz
+        - authopt_fuzz
+        - sshsig_fuzz
+        - sshsigopt_fuzz
+        - kex_fuzz
+        - agent_fuzz
+    - libyang:
+        - lyd_parse_mem_json
+        - lyd_parse_mem_xml
+        - lys_parse_mem
+    - kamailio:
+        - fuzz_parse_msg
+        - fuzz_uri
+    - giflib:
+        - dgif_target
+        - egif_target
+        - dgif_protobuf_target
+    - skcms:
+        - iccprofile_info
+        - iccprofile_atf
+        - iccprofile_transform
+    - http-parser:
+        - fuzz_parser
+        - fuzz_url
+    - highwayhash:
+        - highwayhash_fuzzer
+        - sip_hash_fuzzer
+    - mpg123:
+        - read_fuzzer
+        - decode_fuzzer
+    - capstone:
+        - fuzz_disasmnext
+        - fuzz_disasmv5
+    - cmark:
+        - cmark_fuzzer
   only_cpv_harnesses: false
   sanitizers:
     - address
@@ -85,13 +90,13 @@ runtime:
     cost_budget: 30.0
 
 storage:
-  experiment_filestore: /data/crsbench/experiment-data/gce-opencode-shortlist-bugfinding
-  report_filestore: /data/crsbench/report-data/gce-opencode-shortlist-bugfinding
+  experiment_filestore: /data/crsbench/experiment-data/gce-opencode-clear-shortlist4-bugfinding
+  report_filestore: /data/crsbench/report-data/gce-opencode-clear-shortlist4-bugfinding
 
 crs_compose:
   oss_crs_infra:
     shared: true
-  crs-bug-finding-opencode:
+  crs-bug-finding-opencode-clear:
     num_cores: 16
     budget_policy: terminate
     additional_env:
@@ -129,6 +134,8 @@ cloud:
       project: aixcc-426805
       ssh_via_iap: true
       regions:
+        - us-central1
+        - us-south1
         - us-east5
         - us-east1
       fallback: true

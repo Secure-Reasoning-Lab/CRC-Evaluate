@@ -29,6 +29,13 @@ Important:
   is used as the helper/build-output checkout.
 - It does not populate `projects/<name>/` by default, so `benchmarks_root`
   usually needs to point at a separate OSS-Fuzz projects checkout.
+- For local smoke configs that use a curated OSS-Fuzz shortlist, extract the
+  selected `projects/<name>/` directories into a `.run/.../projects` mirror
+  and point `benchmarks_root` at that mirror instead of
+  `third_party/oss-fuzz/projects`.
+- Keep `oss_fuzz_path: third_party/oss-fuzz` for those local mirror setups so
+  CRSBench still uses the repository-managed OSS-Fuzz checkout for helper
+  scripts and build outputs.
 - Managed cloud launches can use `benchmarks_root: third_party/oss-fuzz/projects`
   for raw OSS-Fuzz project names. VM bootstrap materializes the selected
   `projects/<name>/` directories from the managed checkout and generates
@@ -110,6 +117,9 @@ Repository examples:
 - [`experiment-configs/discovery-testing/atlantis-multilang-wo-concolic-full-10min-5usd.yaml`](../../../experiment-configs/discovery-testing/atlantis-multilang-wo-concolic-full-10min-5usd.yaml)
 - [`experiment-configs/discovery-smoke-testing/opencode-go-yaml-bugfinding.yaml`](../../../experiment-configs/discovery-smoke-testing/opencode-go-yaml-bugfinding.yaml)
 - [`experiment-configs/discovery-smoke-testing/opencode-shortlist-bugfinding.yaml`](../../../experiment-configs/discovery-smoke-testing/opencode-shortlist-bugfinding.yaml)
+- [`experiment-configs/discovery-smoke-testing/opencode-clear-shortlist2-bugfinding.yaml`](../../../experiment-configs/discovery-smoke-testing/opencode-clear-shortlist2-bugfinding.yaml)
+- [`experiment-configs/discovery-smoke-testing/opencode-clear-shortlist3-bugfinding.yaml`](../../../experiment-configs/discovery-smoke-testing/opencode-clear-shortlist3-bugfinding.yaml)
+- [`experiment-configs/discovery-smoke-testing/opencode-clear-shortlist4-bugfinding.yaml`](../../../experiment-configs/discovery-smoke-testing/opencode-clear-shortlist4-bugfinding.yaml)
 - [`experiment-configs/discovery-smoke-testing/gce-opencode-go-yaml-bugfinding.yaml`](../../../experiment-configs/discovery-smoke-testing/gce-opencode-go-yaml-bugfinding.yaml)
 
 ## Initialize The Benchmarks
@@ -120,6 +130,11 @@ setups:
 ```bash
 uv run crsbench benchmark init --experiment-config config.yaml
 ```
+
+For the repository's local shortlist smoke examples, first run the prep block
+at the top of the config to extract the selected OSS-Fuzz project directories
+into `.run/discovery-smoke-testing/oss-fuzz-shortlist*/projects`. That mirror
+becomes `benchmarks_root` for `benchmark init`.
 
 To pin the discovery build to specific CPUs:
 
@@ -146,6 +161,11 @@ per-job slices before calling the underlying OSS-Fuzz build path. Without an
 explicit cpuset, parallel init uses the current process affinity envelope.
 The init build and the equivalent managed cloud bootstrap build both honor
 `runtime.build_timeout` from the experiment config.
+
+If you run multiple `crsbench benchmark init` commands concurrently, give each
+command a disjoint `--cpuset-cpus` envelope. CRSBench only slices CPUs within
+one init command; it does not coordinate CPU allocation across separate CLI
+invocations.
 
 `benchmark init` does the following for each selected benchmark:
 
