@@ -56,6 +56,25 @@ def test_harness_result_carries_detailed_timing_fields() -> None:
     assert result.run_end_time == pytest.approx(2012.5)
 
 
+def test_existing_build_and_run_duration_fields_remain_available() -> None:
+    """Existing duration fields should remain available alongside phase timestamps."""
+    result = CRSExecutionResult(
+        harness_name="example",
+        execution_time=12.5,
+        success=True,
+        output="ok",
+        build_time=3.5,
+        run_time=9.0,
+        build_start_time=1000.0,
+        run_end_time=1012.5,
+    )
+
+    assert result.build_time == pytest.approx(3.5)
+    assert result.run_time == pytest.approx(9.0)
+    assert result.build_start_time == pytest.approx(1000.0)
+    assert result.run_end_time == pytest.approx(1012.5)
+
+
 def test_evaluation_trial_metadata_serialization_includes_unix_and_stage_times() -> (
     None
 ):
@@ -86,6 +105,23 @@ def test_evaluation_trial_metadata_serialization_includes_unix_and_stage_times()
     assert loaded["run_end_time"] == pytest.approx(3015.0)
 
 
+def test_existing_build_and_run_durations_still_serialize_in_trial_metadata() -> None:
+    """Existing duration fields should still serialize on shared TrialMetadata."""
+    metadata = EvaluationTrialMetadata(
+        timestamp_start=3000.0,
+        timestamp_end=3015.0,
+        build_time=4.0,
+        run_time=11.0,
+        timestamp_unix=3000.25,
+    )
+
+    data = metadata.model_dump()
+
+    assert data["build_time"] == pytest.approx(4.0)
+    assert data["run_time"] == pytest.approx(11.0)
+    assert data["timestamp_unix"] == pytest.approx(3000.25)
+
+
 def test_file_trial_metadata_accepts_unix_and_stage_times_without_changing_iso_timestamp() -> (
     None
 ):
@@ -113,3 +149,34 @@ def test_file_trial_metadata_accepts_unix_and_stage_times_without_changing_iso_t
     assert data["build_end_time"] == pytest.approx(4004.0)
     assert data["run_start_time"] == pytest.approx(4004.5)
     assert data["run_end_time"] == pytest.approx(4010.0)
+
+
+def test_build_and_run_durations_flow_from_execution_result_to_metadata() -> None:
+    """Existing duration fields should still flow through shared result models."""
+    execution_result = CRSExecutionResult(
+        harness_name="example",
+        execution_time=12.5,
+        success=True,
+        output="ok",
+        build_time=3.5,
+        run_time=9.0,
+    )
+
+    harness_result = HarnessResult(
+        name=execution_result.harness_name,
+        path="/src/example.c",
+        execution_time=execution_result.execution_time,
+        build_time=execution_result.build_time,
+        run_time=execution_result.run_time,
+    )
+    metadata = EvaluationTrialMetadata(
+        timestamp_start=5000.0,
+        timestamp_end=5012.5,
+        build_time=harness_result.build_time,
+        run_time=harness_result.run_time,
+    )
+
+    assert harness_result.build_time == pytest.approx(3.5)
+    assert harness_result.run_time == pytest.approx(9.0)
+    assert metadata.build_time == pytest.approx(3.5)
+    assert metadata.run_time == pytest.approx(9.0)
