@@ -2152,57 +2152,6 @@ class TestOssCrsAdapterBugFindFull:
         assert result.run_start_time == pytest.approx(2000.0)
         assert result.run_end_time == pytest.approx(2007.25)
 
-    @patch("crsbench.evaluation.adapter.oss_crs.time")
-    @patch("crsbench.evaluation.adapter.oss_crs.logger")
-    @patch("crsbench.evaluation.adapter.oss_crs.run_oss_crs_run")
-    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
-    def test_run_exception_still_returns_phase_timestamps(
-        self,
-        mock_subprocess: MagicMock,
-        mock_run_oss_crs_run: MagicMock,
-        mock_logger: MagicMock,
-        mock_time_module: MagicMock,
-        tmp_path: Path,
-    ) -> None:
-        mock_subprocess.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="ok", stderr=""
-        )
-        mock_run_oss_crs_run.side_effect = RuntimeError("run exploded")
-        mock_time_module.time.side_effect = [1000.0, 1010.75, 2000.0, 2001.5]
-        mock_time_module.monotonic.side_effect = [
-            10.0,
-            12.0,
-            12.0,
-            15.5,
-            15.5,
-            20.75,
-            30.0,
-            31.5,
-            32.0,
-        ]
-
-        adapter = self._make_adapter(tmp_path)
-        adapter.configure({"docker_registry": "ghcr.io/t"})
-        bench = tmp_path / "benchmarks" / "proj1"
-        bench.mkdir(parents=True)
-        trial = tmp_path / "trial"
-        trial.mkdir()
-
-        adapter.build(bench, trial)
-        harness = MagicMock()
-        harness.name = "fuzz_target"
-
-        result = adapter.run(bench, harness, trial)
-
-        assert result.success is False
-        assert result.output == "Error: run exploded"
-        assert result.error == "run exploded"
-        assert result.build_start_time == pytest.approx(1000.0)
-        assert result.build_end_time == pytest.approx(1010.75)
-        assert result.run_start_time == pytest.approx(2000.0)
-        assert result.run_end_time == pytest.approx(2001.5)
-        assert result.run_time == pytest.approx(1.5)
-
     @patch("crsbench.evaluation.adapter.oss_crs.generate_run_id")
     @patch("crsbench.evaluation.adapter.oss_crs.run_oss_crs_artifacts")
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")

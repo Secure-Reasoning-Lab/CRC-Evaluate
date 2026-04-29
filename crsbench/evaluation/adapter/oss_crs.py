@@ -1402,26 +1402,21 @@ class OssCrsAdapter:
             inc_build = (rts_active or benchmark_inc_build) and self._inc_build_enabled
 
             run_start_time = time.time()
-            try:
-                stdout, stderr, rc, timed_out = run_oss_crs_run(
-                    compose_file,
-                    work_dir,
-                    staged_path,
-                    harness.name,
-                    timeout=self._run_timeout,
-                    oss_crs_cmd=self._oss_crs_cmd,
-                    run_id=self._run_id,
-                    stop_event=stop_event,
-                    pov_dir=pov_dir,
-                    diff=diff,
-                    seed_dir=seed_dir,
-                    bug_candidate_dir=bug_candidate_dir,
-                    incremental_build=inc_build,
-                )
-            except RuntimeError as err:
-                stdout = f"Error: {err}"
-                stderr = str(err)
-                rc = -1
+            stdout, stderr, rc, timed_out = run_oss_crs_run(
+                compose_file,
+                work_dir,
+                staged_path,
+                harness.name,
+                timeout=self._run_timeout,
+                oss_crs_cmd=self._oss_crs_cmd,
+                run_id=self._run_id,
+                stop_event=stop_event,
+                pov_dir=pov_dir,
+                diff=diff,
+                seed_dir=seed_dir,
+                bug_candidate_dir=bug_candidate_dir,
+                incremental_build=inc_build,
+            )
             run_end_time = time.time()
             run_time = time.monotonic() - run_start
         finally:
