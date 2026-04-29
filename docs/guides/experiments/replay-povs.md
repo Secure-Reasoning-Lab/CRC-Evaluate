@@ -209,6 +209,10 @@ current invocation:
 - `phase_intervals` with current-run offsets for the measured phases when the
   group executed in this invocation
 
+Rows with `checkpoint_reused: true` keep the checkpointed `summary_updates` and
+`timing` totals from the original execution. Filter on
+`checkpoint_reused: false` when you need only current-invocation group totals.
+
 `0day.log` is intentionally more granular than `0day.json`: each line is one
 source POV plus one qualifying replay row, appended immediately after that
 harness finishes. The final `0day.json` later folds those rows back into one

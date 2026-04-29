@@ -56,7 +56,7 @@ class FakeInfra:
         harnesses: list[str] | None = None,
     ) -> None:
         self.build_success = build_success
-        self.harnesses = harnesses or ["fuzz-a"]
+        self.harnesses = harnesses if harnesses is not None else ["fuzz-a"]
         self.build_calls: list[tuple[str, str]] = []
 
     def build_project_fuzzers(
@@ -825,6 +825,194 @@ def test_replay_engine_writes_incremental_0day_log_before_group_completes(
 
     data = json.loads((tmp_path / "replay-out" / "pov-to-crash-map.json").read_text())
     assert data[0]["status"] == "error"
+
+
+def test_replay_engine_partial_replay_failure_counts_completed_work_in_summary(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "exp-a"
+    latest_projects = tmp_path / "latest-projects"
+    (latest_projects / "curl").mkdir(parents=True)
+    pov = source_dir / "trial-a" / "output" / "povs" / "a.blob"
+    pov.parent.mkdir(parents=True, exist_ok=True)
+    pov.write_bytes(b"CRASH")
+    record = _record(source_dir, "trial-a", pov, "dd" * 32)
+    engine = ReplayEngine(
+        oss_fuzz_path=tmp_path / "oss-fuzz",
+        projects_root=latest_projects,
+        output_dir=tmp_path / "replay-out",
+        jobs=1,
+        group_jobs=1,
+        per_pov_timeout=5,
+        infra=FakeInfra(harnesses=["fuzz-a", "fuzz-b"]),
+        mapping={"afc-curl-delta-01": "curl"},
+        session_pool_factory=lambda **_kwargs: PartialResultPool(
+            _session_result(
+                exit_code=77,
+                stdout="stdout crash",
+                stderr=_asan_stderr(),
+                crashed=True,
+                duration_seconds=1.25,
+            )
+        ),
+    )
+
+    engine.run([record], source_dirs=[source_dir])
+
+    summary = json.loads((tmp_path / "replay-out" / "summary.json").read_text())
+    group_summary = json.loads(
+        (tmp_path / "replay-out" / "group-summary.json").read_text()
+    )
+    assert summary["physical_replay_tasks"] == 1
+    assert summary["current_run"]["physical_replay_tasks_executed"] == 1
+    assert summary["current_run"]["timing"]["task_duration_seconds_sum"] == 1.25
+    assert group_summary == [
+        {
+            "mapped_project": "curl",
+            "sanitizer": "address",
+            "source_pov_instances": 1,
+            "checkpoint_reused": False,
+            "naive_replay_tasks": 2,
+            "physical_replay_tasks": 1,
+            "summary_updates": {
+                "projects_built": 1,
+                "unique_replay_tasks_executed": 2,
+                "error_count": 1,
+                "crash_count": 1,
+            },
+            "timing": {
+                "group_wall_seconds": group_summary[0]["timing"]["group_wall_seconds"],
+                "lock_wait_wall_seconds": group_summary[0]["timing"][
+                    "lock_wait_wall_seconds"
+                ],
+                "build_and_prepare_wall_seconds": group_summary[0]["timing"][
+                    "build_and_prepare_wall_seconds"
+                ],
+                "session_pool_setup_wall_seconds": group_summary[0]["timing"][
+                    "session_pool_setup_wall_seconds"
+                ],
+                "replay_wall_seconds": group_summary[0]["timing"][
+                    "replay_wall_seconds"
+                ],
+                "result_aggregation_wall_seconds": 0.0,
+                "task_duration_seconds_sum": 1.25,
+                "task_duration_seconds_max": 1.25,
+                "task_duration_seconds_avg": 1.25,
+                "session_count": 1,
+            },
+            "phase_intervals": {
+                "project_lock_wait": group_summary[0]["phase_intervals"][
+                    "project_lock_wait"
+                ],
+                "build_and_prepare": group_summary[0]["phase_intervals"][
+                    "build_and_prepare"
+                ],
+                "session_pool_setup": group_summary[0]["phase_intervals"][
+                    "session_pool_setup"
+                ],
+                "replay": group_summary[0]["phase_intervals"]["replay"],
+            },
+        }
+    ]
+
+
+def test_replay_engine_empty_harness_groups_include_post_build_wall_time(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "exp-a"
+    latest_projects = tmp_path / "latest-projects"
+    (latest_projects / "curl").mkdir(parents=True)
+    pov = source_dir / "trial-a" / "output" / "povs" / "a.blob"
+    pov.parent.mkdir(parents=True, exist_ok=True)
+    pov.write_bytes(b"A")
+    record = _record(source_dir, "trial-a", pov, "ee" * 32)
+    engine = ReplayEngine(
+        oss_fuzz_path=tmp_path / "oss-fuzz",
+        projects_root=latest_projects,
+        output_dir=tmp_path / "replay-out",
+        jobs=1,
+        group_jobs=1,
+        per_pov_timeout=5,
+        infra=FakeInfra(harnesses=[]),
+        mapping={"afc-curl-delta-01": "curl"},
+        session_pool_factory=lambda **_kwargs: FakeSessionPool(
+            _session_result(
+                exit_code=0,
+                stdout="ok",
+                stderr="",
+                duration_seconds=0.1,
+                crashed=False,
+            )
+        ),
+    )
+
+    with patch.object(engine, "_monotonic") as mock_monotonic:
+        mock_monotonic.side_effect = [
+            100.0,  # run start
+            100.1,  # planning end / group execution start
+            100.2,  # group start
+            100.2,  # lock wait start
+            100.25,  # lock acquired
+            100.25,  # build+prepare start
+            100.75,  # build+prepare end
+            100.75,  # empty-result aggregation start
+            101.5,  # empty-result aggregation end
+            101.7,  # group execution end / finalization start
+            102.0,  # finalization end
+        ]
+        engine.run([record], source_dirs=[source_dir])
+
+    summary = json.loads((tmp_path / "replay-out" / "summary.json").read_text())
+    group_summary = json.loads(
+        (tmp_path / "replay-out" / "group-summary.json").read_text()
+    )
+    assert summary["physical_replay_tasks"] == 0
+    assert summary["current_run"]["timing"][
+        "result_aggregation_active_wall_seconds"
+    ] == (0.75)
+    assert group_summary == [
+        {
+            "mapped_project": "curl",
+            "sanitizer": "address",
+            "source_pov_instances": 1,
+            "checkpoint_reused": False,
+            "naive_replay_tasks": 0,
+            "physical_replay_tasks": 0,
+            "summary_updates": {
+                "projects_built": 1,
+                "unique_replay_tasks_executed": 0,
+            },
+            "timing": {
+                "group_wall_seconds": 1.3,
+                "lock_wait_wall_seconds": 0.05,
+                "build_and_prepare_wall_seconds": 0.5,
+                "session_pool_setup_wall_seconds": 0.0,
+                "replay_wall_seconds": 0.0,
+                "result_aggregation_wall_seconds": 0.75,
+                "task_duration_seconds_sum": 0.0,
+                "task_duration_seconds_max": 0.0,
+                "task_duration_seconds_avg": 0.0,
+                "session_count": 0,
+            },
+            "phase_intervals": {
+                "project_lock_wait": {
+                    "started_offset_seconds": 0.2,
+                    "ended_offset_seconds": 0.25,
+                    "wall_seconds": 0.05,
+                },
+                "build_and_prepare": {
+                    "started_offset_seconds": 0.25,
+                    "ended_offset_seconds": 0.75,
+                    "wall_seconds": 0.5,
+                },
+                "result_aggregation": {
+                    "started_offset_seconds": 0.75,
+                    "ended_offset_seconds": 1.5,
+                    "wall_seconds": 0.75,
+                },
+            },
+        }
+    ]
 
 
 def test_replay_engine_tracks_0day_entries_separately_from_crashing_replays(

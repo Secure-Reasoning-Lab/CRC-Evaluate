@@ -171,7 +171,9 @@ current invocation:
 aggregates. Each row records the mapped project, sanitizer, source POV count,
 checkpoint reuse state, replay-task counts, summary counters, per-group timing
 totals, and current-run phase offsets when the group executed in the present
-invocation.
+invocation. Rows with `checkpoint_reused: true` retain the checkpointed
+`summary_updates` and `timing` totals from their original execution; filter on
+`checkpoint_reused: false` when you want only current-invocation group totals.
 
 `0day.log` is deliberately earlier and more granular than `0day.json`. Each line
 contains one source record plus one qualifying replay row and is flushed to

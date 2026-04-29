@@ -188,6 +188,35 @@ class ReplayEngine:
         total += merged_end - merged_start
         return round(total, 6)
 
+    @staticmethod
+    def _update_completed_replay_metrics(
+        replay_results_by_task: dict[ReplayTask, ReplayResult],
+        *,
+        summary_updates: dict[str, int],
+        timing: dict[str, float | int],
+    ) -> int:
+        physical_replay_tasks = len(replay_results_by_task)
+        for replay_result in replay_results_by_task.values():
+            summary_updates[replay_result.outcome + "_count"] += 1
+        if physical_replay_tasks > 0:
+            task_duration_sum = sum(
+                replay_result.duration_seconds
+                for replay_result in replay_results_by_task.values()
+            )
+            timing["task_duration_seconds_sum"] = round(task_duration_sum, 6)
+            timing["task_duration_seconds_max"] = round(
+                max(
+                    replay_result.duration_seconds
+                    for replay_result in replay_results_by_task.values()
+                ),
+                6,
+            )
+            timing["task_duration_seconds_avg"] = round(
+                task_duration_sum / physical_replay_tasks,
+                6,
+            )
+        return physical_replay_tasks
+
     def _artifact_dir(self, task: ReplayTask) -> Path:
         return (
             self.output_dir
@@ -759,6 +788,7 @@ class ReplayEngine:
             timing["session_count"] = max(1, min(self.jobs, len(tasks))) if tasks else 0
 
             if not tasks:
+                result_aggregation_started = self._monotonic()
                 entries: list[dict] = []
                 trial_entries: dict[tuple[str, str], list[dict]] = defaultdict(list)
                 for record in records:
@@ -772,6 +802,16 @@ class ReplayEngine:
                     trial_entries[
                         (record.source_id, record.trial_relative_path)
                     ].append(entry)
+                result_aggregation_ended = self._monotonic()
+                timing["result_aggregation_wall_seconds"] = round(
+                    result_aggregation_ended - result_aggregation_started,
+                    6,
+                )
+                phase_intervals["result_aggregation"] = self._phase_interval(
+                    result_aggregation_started,
+                    result_aggregation_ended,
+                    run_started_at=run_started_at,
+                )
                 outcome = GroupReplayOutcome(
                     entries=entries,
                     zero_day_entries=[],
@@ -783,7 +823,7 @@ class ReplayEngine:
                     phase_intervals=phase_intervals,
                 )
                 outcome.timing["group_wall_seconds"] = round(
-                    build_prepare_ended - group_started,
+                    result_aggregation_ended - group_started,
                     6,
                 )
                 self._write_group_checkpoint(
@@ -897,6 +937,11 @@ class ReplayEngine:
                 run_started_at=run_started_at,
             )
             if replay_error is not None:
+                physical_replay_tasks = self._update_completed_replay_metrics(
+                    replay_results_by_task,
+                    summary_updates=summary_updates,
+                    timing=timing,
+                )
                 timing["group_wall_seconds"] = round(
                     replay_ended - group_started,
                     6,
@@ -909,6 +954,7 @@ class ReplayEngine:
                     summary_updates=dict(summary_updates),
                     error_message=replay_error,
                     naive_replay_tasks=naive_replay_tasks,
+                    physical_replay_tasks=physical_replay_tasks,
                     timing=timing,
                     phase_intervals=phase_intervals,
                 )
@@ -923,26 +969,11 @@ class ReplayEngine:
                     )
                     record_task_result(task, session_result)
 
-            physical_replay_tasks = len(replay_results_by_task)
-            for replay_result in replay_results_by_task.values():
-                summary_updates[replay_result.outcome + "_count"] += 1
-            if physical_replay_tasks > 0:
-                task_duration_sum = sum(
-                    replay_result.duration_seconds
-                    for replay_result in replay_results_by_task.values()
-                )
-                timing["task_duration_seconds_sum"] = round(task_duration_sum, 6)
-                timing["task_duration_seconds_max"] = round(
-                    max(
-                        replay_result.duration_seconds
-                        for replay_result in replay_results_by_task.values()
-                    ),
-                    6,
-                )
-                timing["task_duration_seconds_avg"] = round(
-                    task_duration_sum / physical_replay_tasks,
-                    6,
-                )
+            physical_replay_tasks = self._update_completed_replay_metrics(
+                replay_results_by_task,
+                summary_updates=summary_updates,
+                timing=timing,
+            )
 
             result_aggregation_started = self._monotonic()
             entries: list[dict] = []
