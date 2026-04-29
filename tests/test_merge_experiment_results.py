@@ -529,6 +529,49 @@ class TestMergeTrials:
             copied_trial / "llm-usage.json"
         ).stat().st_mtime_ns == llm_usage_mtime_ns
 
+    def test_merge_trials_preserves_dir_mtime_after_pruning_build_artifacts(
+        self, tmp_path
+    ):
+        """Default merge mode should preserve trial dir mtime after crs-build prune."""
+        trial_dir = (
+            tmp_path
+            / "src"
+            / "experiment-data"
+            / "crs1"
+            / "bench1"
+            / "harness1"
+            / "bugfinding"
+            / "address"
+            / "trial-1"
+        )
+        trial_dir.mkdir(parents=True)
+        (trial_dir / ".success").touch()
+        crs_build = trial_dir / "crs-build"
+        crs_build.mkdir()
+        (crs_build / "artifact").write_text("large build output", encoding="utf-8")
+
+        trial_dir_mtime_ns = 1_700_000_004_000_000_000
+        os.utime(trial_dir, ns=(trial_dir_mtime_ns, trial_dir_mtime_ns))
+
+        trial = TrialInfo(
+            path=trial_dir,
+            relative_path=Path("crs1/bench1/harness1/bugfinding/address/trial-1"),
+            status="success",
+            crs="crs1",
+            benchmark="bench1",
+            harness="harness1",
+            mode="bugfinding",
+            sanitizer="address",
+            trial_num=1,
+        )
+        output_dir = tmp_path / "output" / "experiment-data"
+
+        merge_trials([trial], output_dir, renumber_trials=False)
+
+        copied_trial = output_dir / trial.relative_path
+        assert not (copied_trial / "crs-build").exists()
+        assert copied_trial.stat().st_mtime_ns == trial_dir_mtime_ns
+
     def test_merge_trials_renumbers_llm_trial_id_with_token_boundaries(self):
         """Renumbering trial IDs should not rewrite trial10 as trial20."""
         from scripts.merge_experiment_results import _renumber_trial_id
