@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import subprocess
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1028,6 +1029,162 @@ class TestOssCrsAdapterBugFindFull:
         mock_run.assert_not_called()
 
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_explicit_work_dir_is_preserved_across_trial_switches(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        adapter = self._make_adapter(tmp_path)
+        shared_work_dir = tmp_path / "shared-workdir"
+        adapter.configure(
+            {
+                "docker_registry": "ghcr.io/t",
+                "work_dir": str(shared_work_dir),
+            }
+        )
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        trial1 = tmp_path / "trial1"
+        trial2 = tmp_path / "trial2"
+        trial1.mkdir()
+        trial2.mkdir()
+
+        adapter.build(bench, trial1)
+
+        assert adapter._work_dir == shared_work_dir
+        assert adapter._compose_file == trial1 / "crs-compose.yaml"
+
+        adapter.build(bench, trial2)
+
+        build_phase_cmds = [
+            call[0][0][1]
+            for call in mock_run.call_args_list
+            if call[0] and len(call[0][0]) > 1
+        ]
+        assert build_phase_cmds == ["prepare", "build-target"]
+        assert adapter._work_dir == shared_work_dir
+        assert adapter._compose_file == trial2 / "crs-compose.yaml"
+        assert adapter._compose_file.exists()
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_explicit_work_dir_change_rebuilds_target(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        adapter = self._make_adapter(tmp_path)
+        work_dir_a = tmp_path / "shared-workdir-a"
+        work_dir_b = tmp_path / "shared-workdir-b"
+        adapter.configure(
+            {
+                "docker_registry": "ghcr.io/t",
+                "work_dir": str(work_dir_a),
+            }
+        )
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        trial = tmp_path / "trial"
+        trial.mkdir()
+
+        adapter.build(bench, trial)
+        adapter.configure({"work_dir": str(work_dir_b)})
+        adapter.build(bench, trial)
+
+        build_phase_cmds = [
+            call[0][0][1]
+            for call in mock_run.call_args_list
+            if call[0] and len(call[0][0]) > 1
+        ]
+        assert build_phase_cmds == ["prepare", "build-target", "build-target"]
+        assert adapter._work_dir == work_dir_b
+        assert work_dir_b.exists()
+
+    @patch("crsbench.evaluation.adapter.oss_crs.run_oss_crs_artifacts")
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_explicit_work_dir_reuse_restages_for_resolve_artifacts(
+        self,
+        mock_subprocess: MagicMock,
+        mock_artifacts: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        mock_artifacts.return_value = {
+            "exchange_dir": {"base": str(tmp_path / "exchange")},
+        }
+
+        adapter = self._make_adapter(tmp_path)
+        shared_work_dir = tmp_path / "shared-workdir"
+        adapter.configure(
+            {
+                "docker_registry": "ghcr.io/t",
+                "work_dir": str(shared_work_dir),
+            }
+        )
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        trial1 = tmp_path / "trial1"
+        trial2 = tmp_path / "trial2"
+        trial1.mkdir()
+        trial2.mkdir()
+
+        adapter.build(bench, trial1)
+        adapter.build(bench, trial2)
+        adapter.resolve_artifacts(bench, "fuzz_target", trial2)
+
+        staged_path = trial2 / "staged" / "proj1"
+        build_phase_cmds = [
+            call[0][0][1]
+            for call in mock_subprocess.call_args_list
+            if call[0] and len(call[0][0]) > 1
+        ]
+        assert build_phase_cmds == ["prepare", "build-target"]
+        assert staged_path.exists()
+        assert mock_artifacts.call_args.args[2] == staged_path
+
+    @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_explicit_work_dir_reuse_does_not_report_prior_trial_build_time(
+        self,
+        mock_subprocess: MagicMock,
+        mock_rwgt: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        mock_rwgt.return_value = ("output", "", 0, False)
+
+        adapter = self._make_adapter(tmp_path)
+        shared_work_dir = tmp_path / "shared-workdir"
+        adapter.configure(
+            {
+                "docker_registry": "ghcr.io/t",
+                "work_dir": str(shared_work_dir),
+            }
+        )
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        harness = MagicMock()
+        harness.name = "fuzz_target"
+        trial1 = tmp_path / "trial1"
+        trial2 = tmp_path / "trial2"
+        trial1.mkdir()
+        trial2.mkdir()
+
+        adapter.build(bench, trial1)
+        result1 = adapter.run(bench, harness, trial1)
+
+        adapter.build(bench, trial2)
+        result2 = adapter.run(bench, harness, trial2)
+
+        assert result1.build_time is not None
+        assert result2.build_time is None
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
     def test_build_raises_when_prepare_fails(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
@@ -1943,7 +2100,17 @@ class TestOssCrsAdapterBugFindFull:
             args=[], returncode=0, stdout="ok", stderr=""
         )
         mock_rwgt.return_value = ("output", "", 0, False)
-        mock_monotonic.side_effect = [10.0, 13.5, 20.0, 27.25, 28.0]
+        mock_monotonic.side_effect = [
+            10.0,
+            12.0,
+            12.0,
+            15.5,
+            15.5,
+            20.75,
+            30.0,
+            37.25,
+            38.0,
+        ]
 
         adapter = self._make_adapter(tmp_path)
         adapter.configure({"docker_registry": "ghcr.io/t"})
@@ -1958,7 +2125,7 @@ class TestOssCrsAdapterBugFindFull:
 
         result = adapter.run(bench, harness, trial)
 
-        assert result.build_time == pytest.approx(3.5)
+        assert result.build_time == pytest.approx(10.75)
         assert result.run_time == pytest.approx(7.25)
 
     @patch("crsbench.evaluation.adapter.oss_crs.generate_run_id")
@@ -2076,7 +2243,24 @@ class TestOssCrsAdapterBugFindFull:
             args=[], returncode=0, stdout="ok", stderr=""
         )
         mock_rwgt.return_value = ("output", "", 0, False)
-        mock_monotonic.side_effect = [10.0, 13.5, 20.0, 27.25, 28.0, 30.0, 31.5, 32.0]
+        mock_monotonic.side_effect = [
+            10.0,
+            12.0,
+            12.0,
+            15.5,
+            15.5,
+            20.75,
+            30.0,
+            37.25,
+            38.0,
+            40.0,
+            40.5,
+            40.5,
+            41.5,
+            50.0,
+            51.5,
+            52.0,
+        ]
 
         adapter = self._make_adapter(tmp_path)
         adapter.configure({"docker_registry": "ghcr.io/t"})
@@ -2096,9 +2280,75 @@ class TestOssCrsAdapterBugFindFull:
         adapter.build(bench, trial2)
         result2 = adapter.run(bench, harness, trial2)
 
-        assert result1.build_time == pytest.approx(3.5)
-        assert result2.build_time is None
+        build_phase_cmds = [
+            call.args[0][1]
+            for call in mock_subprocess.call_args_list
+            if call.args
+            and len(call.args[0]) > 1
+            and call.args[0][1] in {"prepare", "build-target"}
+        ]
+        assert build_phase_cmds == ["prepare", "build-target", "build-target"]
+        assert result1.build_time == pytest.approx(10.75)
+        assert result2.build_time == pytest.approx(1.5)
         assert result2.run_time == pytest.approx(1.5)
+
+    @patch("crsbench.evaluation.adapter.oss_crs.time.monotonic")
+    @patch("crsbench.evaluation.adapter.oss_crs.yaml.safe_load")
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_build_time_excludes_lock_wait_but_keeps_in_lock_setup(
+        self,
+        mock_subprocess: MagicMock,
+        mock_safe_load: MagicMock,
+        mock_monotonic: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        monotonic_values = iter([0.0, 1.0, 1.5, 2.5, 2.5, 5.0, 10.0, 10.0, 11.0, 16.75])
+        last_monotonic = 16.75
+
+        def monotonic_side_effect() -> float:
+            nonlocal last_monotonic
+            try:
+                last_monotonic = next(monotonic_values)
+            except StopIteration:
+                pass
+            return last_monotonic
+
+        mock_monotonic.side_effect = monotonic_side_effect
+
+        def timed_safe_load(payload: object) -> object:
+            if isinstance(payload, str) and "inc_build" in payload:
+                mock_monotonic()
+            return yaml.load(payload, Loader=yaml.SafeLoader)
+
+        mock_safe_load.side_effect = timed_safe_load
+
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        (bench / "project.yaml").write_text("inc_build: false\n")
+        trial = tmp_path / "trial"
+        trial.mkdir()
+
+        @contextmanager
+        def waited_prepare_lock():
+            mock_monotonic()
+            yield
+
+        @contextmanager
+        def waited_build_lock(_project_name: str):
+            mock_monotonic()
+            yield
+
+        adapter._acquire_prepare_lock = waited_prepare_lock  # type: ignore[method-assign]
+        adapter._acquire_build_lock = waited_build_lock  # type: ignore[method-assign]
+
+        adapter.build(bench, trial)
+
+        assert adapter._build_times_by_project["proj1"] == pytest.approx(10.75)
 
     @patch("crsbench.evaluation.adapter.oss_crs.generate_run_id")
     @patch("crsbench.evaluation.adapter.oss_crs.run_oss_crs_artifacts")
