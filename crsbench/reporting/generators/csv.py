@@ -425,7 +425,7 @@ class CSVReportGenerator:
             time_at_budget: float | None = None
             trial_total_cost: float | None = None
             trial_ts = (trial_time_series or {}).get(str(trial_dir), [])
-            if trial_ts:
+            if trial_ts or budget_usd is not None:
                 trial_total_cost = self._load_total_llm_cost(trial_dir)
             if budget_usd is not None:
                 time_at_budget = self._compute_time_at_budget(
