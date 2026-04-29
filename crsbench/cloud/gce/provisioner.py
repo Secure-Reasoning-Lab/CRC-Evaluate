@@ -11,6 +11,7 @@ from crsbench.cloud.errors import CloudProvisioningError
 from crsbench.cloud.gce.metadata import (
     build_evaluator_labels,
     build_evaluator_metadata,
+    build_experiment_role_labels,
     build_instance_metadata,
     build_orchestrator_labels,
     build_orchestrator_metadata,
@@ -95,6 +96,13 @@ class GceApiClient(Protocol):
         *,
         project: str,
         region: str,
+        label_selector: dict[str, str],
+    ) -> list[dict[str, object]]: ...
+
+    def list_instances_in_project(
+        self,
+        *,
+        project: str,
         label_selector: dict[str, str],
     ) -> list[dict[str, object]]: ...
 
@@ -330,6 +338,30 @@ class GoogleComputeClient:
             if not zone or ("/zones/" not in scope and not scope.startswith("zones/")):
                 continue
             if not zone.startswith(f"{region}-"):
+                continue
+            scoped_mapping = self._coerce_mapping(scoped_list)
+            raw_instances = scoped_mapping.get("instances")
+            if not isinstance(raw_instances, Sequence):
+                continue
+            for instance in raw_instances:
+                instances.append(self._coerce_mapping(instance))
+        return instances
+
+    def list_instances_in_project(
+        self,
+        *,
+        project: str,
+        label_selector: dict[str, str],
+    ) -> list[dict[str, object]]:
+        instances: list[dict[str, object]] = []
+        for scope, scoped_list in self._instances().aggregated_list(
+            request={
+                "project": project,
+                "filter": _build_label_filter(label_selector),
+            }
+        ):
+            zone = _zone_name_from_self_link(scope)
+            if not zone or ("/zones/" not in scope and not scope.startswith("zones/")):
                 continue
             scoped_mapping = self._coerce_mapping(scoped_list)
             raw_instances = scoped_mapping.get("instances")
@@ -1208,6 +1240,58 @@ class GceProvisioner:
                 ):
                     workers[(worker.zone, worker.name)] = worker
         return list(workers.values())
+
+    def list_instances_by_role(
+        self,
+        *,
+        experiment_name: str,
+        project: str,
+        role: str,
+        regions: Sequence[str] = (),
+        zones: Sequence[str] = (),
+    ) -> list[GceWorkerRecord]:
+        """List all experiment instances with one CRSBench role label."""
+        label_selector = build_experiment_role_labels(
+            experiment_name=experiment_name,
+            role=role,
+        )
+        records: dict[tuple[str, str], GceWorkerRecord] = {}
+        if not regions and not zones:
+            for instance in self._client.list_instances_in_project(
+                project=project,
+                label_selector=label_selector,
+            ):
+                worker = _normalize_instance(instance)
+                if all(
+                    worker.labels.get(key) == value
+                    for key, value in label_selector.items()
+                ):
+                    worker.raw["project"] = project
+                    records[(worker.zone, worker.name)] = worker
+            return list(records.values())
+        for region in regions:
+            for worker in self._list_records_in_region(
+                project=project,
+                region=region,
+                label_selector=label_selector,
+                allowed_zones=[],
+            ):
+                worker.raw["project"] = project
+                records[(worker.zone, worker.name)] = worker
+        for zone in zones:
+            for instance in self._client.list_instances(
+                project=project,
+                zone=zone,
+                label_selector=label_selector,
+            ):
+                worker = _normalize_instance(instance)
+                if all(
+                    worker.labels.get(key) == value
+                    for key, value in label_selector.items()
+                ):
+                    worker.raw["project"] = project
+                    records[(worker.zone, worker.name)] = worker
+        return list(records.values())
 
     def delete_workers(
         self,

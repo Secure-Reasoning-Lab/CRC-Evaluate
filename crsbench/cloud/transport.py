@@ -87,6 +87,8 @@ class CloudTransport(Protocol):
 
     def resolve_direct_ssh_user(self, project: str) -> str: ...
 
+    def ensure_os_login_ssh_key(self, project: str) -> Path: ...
+
     def prepare_known_hosts(
         self,
         *,

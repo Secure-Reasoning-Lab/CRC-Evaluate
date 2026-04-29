@@ -156,6 +156,7 @@ class GceCloudTransport:
         return " ".join(parts)
 
     def resolve_direct_ssh_user(self, project: str) -> str:
+        self.ensure_os_login_ssh_key(project)
         result = subprocess.run(
             [
                 "gcloud",
@@ -175,6 +176,56 @@ class GceCloudTransport:
                 f"Unable to resolve OS Login username for project {project}"
             )
         return username
+
+    def ensure_os_login_ssh_key(self, project: str) -> Path:
+        """Ensure a local gcloud SSH key exists and is imported into OS Login."""
+        key_path = self._gcloud_ssh_key_file_path()
+        public_key_path = key_path.with_suffix(key_path.suffix + ".pub")
+
+        if not key_path.is_file():
+            key_path.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(
+                [
+                    "ssh-keygen",
+                    "-t",
+                    "rsa",
+                    "-f",
+                    str(key_path),
+                    "-N",
+                    "",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            if key_path.is_file():
+                key_path.chmod(0o600)
+
+        if not public_key_path.is_file():
+            public_key = subprocess.run(
+                ["ssh-keygen", "-y", "-f", str(key_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            public_key_path.write_text(public_key.stdout, encoding="utf-8")
+            public_key_path.chmod(0o644)
+
+        subprocess.run(
+            [
+                "gcloud",
+                "compute",
+                "os-login",
+                "ssh-keys",
+                "add",
+                f"--key-file={public_key_path}",
+                f"--project={project}",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return key_path
 
     def prepare_known_hosts(
         self,
@@ -219,6 +270,9 @@ class GceCloudTransport:
     def detect_ssh_key_file(self) -> Path | None:
         return self._detect_ssh_key_file(prefer_gcloud_config=True)
 
+    def _gcloud_ssh_key_file_path(self) -> Path:
+        return Path.home() / ".ssh" / "google_compute_engine"
+
     def _detect_ssh_key_file(self, *, prefer_gcloud_config: bool) -> Path | None:
         configured = (
             self._configured_gcloud_ssh_key_file() if prefer_gcloud_config else None
@@ -238,6 +292,10 @@ class GceCloudTransport:
         return candidates[0] if candidates else None
 
     def _configured_gcloud_ssh_key_file(self) -> Path | None:
+        candidate = self._configured_gcloud_ssh_key_file_path()
+        return candidate if candidate is not None and candidate.is_file() else None
+
+    def _configured_gcloud_ssh_key_file_path(self) -> Path | None:
         result = subprocess.run(
             ["gcloud", "config", "get-value", "compute/ssh_key_file"],
             check=False,
@@ -249,8 +307,7 @@ class GceCloudTransport:
         value = result.stdout.strip()
         if not value or value == "(unset)":
             return None
-        candidate = Path(value).expanduser()
-        return candidate if candidate.is_file() else None
+        return Path(value).expanduser()
 
     def _base_ssh_command(
         self,

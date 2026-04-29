@@ -100,7 +100,10 @@ flows, continue with the rest of this guide.
 4. **OS Login** available for operator SSH access. Project-level OS Login
    metadata is a common setup (`gcloud compute project-info add-metadata
    --metadata enable-oslogin=TRUE`), and CRSBench also enables OS Login on the
-   VMs it provisions.
+   VMs it provisions. On reconnect paths that use raw SSH under the hood,
+   CRSBench creates the local gcloud SSH key with an empty passphrase when it is
+   missing and imports the public key into OS Login before opening the SSH
+   connection.
 5. **IAP** configured if using `ssh_via_iap: true`:
    - firewall rule allowing TCP port 22 from IAP range `35.235.240.0/20`
      (for example, `gcloud compute firewall-rules create allow-ssh-from-iap
