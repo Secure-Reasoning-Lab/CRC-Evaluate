@@ -88,6 +88,10 @@ cloud:
         - us-south1
         - us-east5
         - us-east1
+        - us-west1
+        - us-west2
+        - us-west3
+        - us-west4
       fallback: true
       profile_defaults:
         machine_type: n2d-standard-16
