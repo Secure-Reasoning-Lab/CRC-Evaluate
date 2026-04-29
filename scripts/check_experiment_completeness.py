@@ -165,6 +165,7 @@ def main(argv: list[str] | None = None) -> int:
         sys.exit(f"error: not a directory: {crs_dir}")
 
     expected = args.trials
+    expected_trial_nums = set(range(1, expected + 1))
     trial_keys_root = (
         _resolve_self_named_wrapped_root(crs_dir)
         if args.trial_keys_output is not None
@@ -205,20 +206,27 @@ def main(argv: list[str] | None = None) -> int:
                 present_trial_nums.add(int(t.name.removeprefix("trial-")))
             except ValueError:
                 continue
-        if len(trials) != expected:
+        if len(trials) != expected or present_trial_nums != expected_trial_nums:
             bad_trial_count += 1
             issues.append(f"[trials={len(trials)} expected={expected}] {rel}")
             if trial_keys_root is not None and trials:
                 reference_trial = trials[0]
-                for missing_trial_num in range(1, expected + 1):
-                    if missing_trial_num not in present_trial_nums:
-                        remember_problem_key(
-                            _trial_key_from_reference_trial(
-                                reference_trial,
-                                trial_keys_root,
-                                trial_num=missing_trial_num,
-                            )
+                for missing_trial_num in sorted(expected_trial_nums - present_trial_nums):
+                    remember_problem_key(
+                        _trial_key_from_reference_trial(
+                            reference_trial,
+                            trial_keys_root,
+                            trial_num=missing_trial_num,
                         )
+                    )
+                for extra_trial_num in sorted(present_trial_nums - expected_trial_nums):
+                    remember_problem_key(
+                        _trial_key_from_reference_trial(
+                            reference_trial,
+                            trial_keys_root,
+                            trial_num=extra_trial_num,
+                        )
+                    )
         for t in trials:
             n_trials += 1
             problems: list[str] = []

@@ -83,3 +83,36 @@ def test_main_writes_canonical_trial_keys_for_problem_trials_when_flag_is_set(
         "crs-a:bench-a:harness-a:delta:address:1:-\n"
         "crs-a:bench-a:harness-a:delta:address:3:-\n"
     )
+
+
+def test_main_writes_keys_for_extra_trials_when_count_exceeds_expected(
+    tmp_path: Path, capsys
+) -> None:
+    module = _load_script_module()
+    experiment_root = _build_wrapped_experiment_root(tmp_path)
+    extra_trial = (
+        experiment_root
+        / "exp-audit"
+        / "exp-audit"
+        / "crs-a"
+        / "bench-a"
+        / "harness-a"
+        / "delta"
+        / "address"
+        / "trial-4"
+    )
+    _write_trial(extra_trial, total_cost_usd=2.0)
+    selector_path = tmp_path / "extra-bad-trials.txt"
+
+    exit_code = module.main(
+        [str(experiment_root), "--trial-keys-output", str(selector_path)]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "trials seen:    3  (expected per leaf: 3)" in captured.out
+    assert selector_path.read_text(encoding="utf-8") == (
+        "crs-a:bench-a:harness-a:delta:address:1:-\n"
+        "crs-a:bench-a:harness-a:delta:address:3:-\n"
+        "crs-a:bench-a:harness-a:delta:address:4:-\n"
+    )
