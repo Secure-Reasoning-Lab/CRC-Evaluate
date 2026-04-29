@@ -29,7 +29,7 @@ experiment:
   only_cpv_harnesses: true
 runtime:
   trials: 1
-  max_total_time: 25200
+  max_total_time: 27000
   build_timeout: 21600
   run_timeout: 3600
   verify_timeout: 900
