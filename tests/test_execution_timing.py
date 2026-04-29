@@ -180,3 +180,34 @@ def test_build_and_run_durations_flow_from_execution_result_to_metadata() -> Non
     assert harness_result.run_time == pytest.approx(9.0)
     assert metadata.build_time == pytest.approx(3.5)
     assert metadata.run_time == pytest.approx(9.0)
+
+
+def test_partial_duration_availability_remains_supported() -> None:
+    """Duration fields should remain optional across shared models."""
+    execution_result = CRSExecutionResult(
+        harness_name="example",
+        execution_time=3.5,
+        success=False,
+        output="failed during run",
+        build_time=3.5,
+        run_time=None,
+    )
+
+    harness_result = HarnessResult(
+        name=execution_result.harness_name,
+        path="/src/example.c",
+        execution_time=execution_result.execution_time,
+        build_time=execution_result.build_time,
+        run_time=execution_result.run_time,
+    )
+    metadata = EvaluationTrialMetadata(
+        timestamp_start=6000.0,
+        timestamp_end=6003.5,
+        build_time=harness_result.build_time,
+        run_time=harness_result.run_time,
+    )
+
+    assert harness_result.build_time == pytest.approx(3.5)
+    assert harness_result.run_time is None
+    assert metadata.build_time == pytest.approx(3.5)
+    assert metadata.run_time is None
