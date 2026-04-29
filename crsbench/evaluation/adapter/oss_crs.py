@@ -51,6 +51,14 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+_RUN_START_CALLBACK_PARAMETER_NAMES = {
+    "run_start_time",
+    "run_start",
+    "crs_run_start_time",
+    "timestamp",
+}
+
+
 def _invoke_run_start_callback(
     callback: "Callable[..., None]",
     run_start_time: float,
@@ -58,21 +66,25 @@ def _invoke_run_start_callback(
     """Invoke run-start callbacks with timestamp when supported.
 
     Existing callers may still provide zero-argument callbacks, so fall back to
-    the older shape when the callable declares no positional parameters.
+    the older shape unless the callable clearly opts into receiving a timestamp.
     """
     try:
         signature = inspect.signature(callback)
     except (TypeError, ValueError):
-        callback(run_start_time)
+        callback()
         return
 
     for parameter in signature.parameters.values():
         if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
             callback(run_start_time)
             return
-        if parameter.kind in (
-            inspect.Parameter.POSITIONAL_ONLY,
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        if (
+            parameter.kind
+            in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+            and parameter.name in _RUN_START_CALLBACK_PARAMETER_NAMES
         ):
             callback(run_start_time)
             return

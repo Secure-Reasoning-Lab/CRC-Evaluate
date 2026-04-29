@@ -51,24 +51,36 @@ from crsbench.validation.schemas import BenchmarkConfig, BenchmarkHarness, Harne
 logger = get_logger(__name__)
 
 
+_RUN_START_CALLBACK_PARAMETER_NAMES = {
+    "run_start_time",
+    "run_start",
+    "crs_run_start_time",
+    "timestamp",
+}
+
+
 def _invoke_run_start_callback(
     callback: Callable[..., None],
     run_start_time: float,
 ) -> None:
-    """Invoke run-start callbacks with timestamp when supported."""
+    """Invoke run-start callbacks with timestamp when clearly supported."""
     try:
         signature = inspect.signature(callback)
     except (TypeError, ValueError):
-        callback(run_start_time)
+        callback()
         return
 
     for parameter in signature.parameters.values():
         if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
             callback(run_start_time)
             return
-        if parameter.kind in (
-            inspect.Parameter.POSITIONAL_ONLY,
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        if (
+            parameter.kind
+            in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+            and parameter.name in _RUN_START_CALLBACK_PARAMETER_NAMES
         ):
             callback(run_start_time)
             return

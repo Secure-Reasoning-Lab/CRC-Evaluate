@@ -2243,6 +2243,53 @@ class TestOssCrsAdapterBugFindFull:
         assert legacy_calls == ["called"]
         assert result.run_start_time == pytest.approx(2000.0)
 
+    @patch("crsbench.evaluation.adapter.oss_crs.time")
+    @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_run_does_not_pass_timestamp_to_unrelated_default_callback_parameter(
+        self,
+        mock_subprocess: MagicMock,
+        mock_rwgt: MagicMock,
+        mock_time_module: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        mock_rwgt.return_value = ("output", "", 0, False)
+        mock_time_module.time.side_effect = [1000.0, 1010.75, 2000.0, 2007.25]
+        mock_time_module.monotonic.side_effect = [
+            10.0,
+            12.0,
+            12.0,
+            15.5,
+            15.5,
+            20.75,
+            30.0,
+            37.25,
+            38.0,
+        ]
+
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        trial = tmp_path / "trial"
+        trial.mkdir()
+
+        adapter.build(bench, trial)
+        harness = MagicMock()
+        harness.name = "fuzz_target"
+        observed_values: list[object] = []
+
+        def on_run_start(mode: str = "legacy") -> None:
+            observed_values.append(mode)
+
+        result = adapter.run(bench, harness, trial, on_run_start=on_run_start)
+
+        assert observed_values == ["legacy"]
+        assert result.run_start_time == pytest.approx(2000.0)
+
     @patch("crsbench.evaluation.adapter.oss_crs.generate_run_id")
     @patch("crsbench.evaluation.adapter.oss_crs.run_oss_crs_artifacts")
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
@@ -3635,6 +3682,85 @@ class TestCollectResultsWiring:
             )
 
         assert legacy_calls == ["called"]
+        snapshot_manager.set_crs_run_start_time.assert_called_once_with(
+            adapter_run_start
+        )
+        coverage_manager.collector.set_run_start_time.assert_called_once_with(
+            adapter_run_start
+        )
+        pov_verification_manager.set_crs_run_start_time.assert_called_once_with(
+            adapter_run_start
+        )
+        assert harness_result.run_start_time == pytest.approx(adapter_run_start)
+
+    def test_runner_does_not_pass_timestamp_to_unrelated_default_external_callback_parameter(
+        self, tmp_path: Path
+    ) -> None:
+        adapter_run_start = 4321.25
+        adapter = MagicMock()
+        adapter.collect_results.return_value = {"type": "bug-finding"}
+
+        snapshot_manager = MagicMock()
+        coverage_manager = MagicMock()
+        coverage_manager.collector = MagicMock()
+        pov_verification_manager = MagicMock()
+        observed_values: list[object] = []
+
+        def run_adapter(*_args: object, **kwargs: object) -> CRSExecutionResult:
+            kwargs["on_run_start"](adapter_run_start)
+            return CRSExecutionResult(
+                harness_name="fuzz_target",
+                execution_time=1.0,
+                success=True,
+                output="ok",
+                run_start_time=adapter_run_start,
+                run_end_time=adapter_run_start + 5.0,
+            )
+
+        def legacy_on_run_start(mode: str = "legacy") -> None:
+            observed_values.append(mode)
+
+        adapter.run.side_effect = run_adapter
+
+        runner = BenchmarkRunner(
+            adapter=adapter,
+            snapshot_period=60,
+            on_run_start=legacy_on_run_start,
+        )
+        trial_dir = tmp_path / "trial"
+        trial_dir.mkdir()
+        harness = self._make_harness()
+
+        with (
+            patch.object(runner, "_prepare_runtime_inputs"),
+            patch.object(
+                runner,
+                "_start_coverage_manager",
+                return_value=(coverage_manager, None, None),
+            ),
+            patch.object(
+                runner,
+                "_start_pov_verification_manager",
+                return_value=(pov_verification_manager, None),
+            ),
+            patch.object(
+                runner, "_start_patch_verification_manager", return_value=None
+            ),
+            patch.object(
+                runner,
+                "_start_snapshot_manager",
+                return_value=(snapshot_manager, None),
+            ),
+            patch.object(runner, "_stop_managers", return_value=None),
+        ):
+            harness_result, _, _, _ = runner._execute_crs_with_managers(
+                harness=harness,
+                benchmark_path=tmp_path,
+                trial_output_dir=trial_dir,
+                trial_start_time=0.0,
+            )
+
+        assert observed_values == ["legacy"]
         snapshot_manager.set_crs_run_start_time.assert_called_once_with(
             adapter_run_start
         )
