@@ -1929,6 +1929,38 @@ class TestOssCrsAdapterBugFindFull:
         assert isinstance(result, CRSExecutionResult)
         assert result.success is True
 
+    @patch("crsbench.evaluation.adapter.oss_crs.time.monotonic")
+    @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_run_returns_build_and_run_timings(
+        self,
+        mock_subprocess: MagicMock,
+        mock_rwgt: MagicMock,
+        mock_monotonic: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        mock_rwgt.return_value = ("output", "", 0, False)
+        mock_monotonic.side_effect = [10.0, 13.5, 20.0, 27.25, 28.0]
+
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        trial = tmp_path / "trial"
+        trial.mkdir()
+
+        adapter.build(bench, trial)
+        harness = MagicMock()
+        harness.name = "fuzz_target"
+
+        result = adapter.run(bench, harness, trial)
+
+        assert result.build_time == pytest.approx(3.5)
+        assert result.run_time == pytest.approx(7.25)
+
     @patch("crsbench.evaluation.adapter.oss_crs.generate_run_id")
     @patch("crsbench.evaluation.adapter.oss_crs.run_oss_crs_artifacts")
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
@@ -2029,6 +2061,44 @@ class TestOssCrsAdapterBugFindFull:
         assert mock_generate_run_id.call_count == 2
         assert "run-A" in mock_rwgt.call_args_list[0][0][0]
         assert "run-B" in mock_rwgt.call_args_list[1][0][0]
+
+    @patch("crsbench.evaluation.adapter.oss_crs.time.monotonic")
+    @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_adapter_reuse_does_not_reuse_build_time_across_trials(
+        self,
+        mock_subprocess: MagicMock,
+        mock_rwgt: MagicMock,
+        mock_monotonic: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        mock_rwgt.return_value = ("output", "", 0, False)
+        mock_monotonic.side_effect = [10.0, 13.5, 20.0, 27.25, 28.0, 30.0, 31.5, 32.0]
+
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        harness = MagicMock()
+        harness.name = "fuzz_target"
+
+        trial1 = tmp_path / "trial1"
+        trial2 = tmp_path / "trial2"
+        trial1.mkdir()
+        trial2.mkdir()
+
+        adapter.build(bench, trial1)
+        result1 = adapter.run(bench, harness, trial1)
+
+        adapter.build(bench, trial2)
+        result2 = adapter.run(bench, harness, trial2)
+
+        assert result1.build_time == pytest.approx(3.5)
+        assert result2.build_time is None
+        assert result2.run_time == pytest.approx(1.5)
 
     @patch("crsbench.evaluation.adapter.oss_crs.generate_run_id")
     @patch("crsbench.evaluation.adapter.oss_crs.run_oss_crs_artifacts")

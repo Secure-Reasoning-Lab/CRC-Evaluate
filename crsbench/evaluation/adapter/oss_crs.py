@@ -211,6 +211,8 @@ class OssCrsAdapter:
         self._litellm_mode = litellm_mode
         self._mode = mode
         self._built_projects: set[str] = set()
+        self._build_times_by_project: dict[str, float] = {}
+        self._build_times_trial_output_dir: Optional[Path] = None
 
         self._compose_file: Optional[Path] = None
         self._work_dir: Optional[Path] = None
@@ -769,6 +771,8 @@ class OssCrsAdapter:
                 self._resolved_artifacts = None
                 self._cleanup_build_done_markers()
                 self._built_projects.clear()
+                self._build_times_by_project.clear()
+                self._build_times_trial_output_dir = None
                 self._prepared = False
         if "skip_litellm" in config:
             self._skip_litellm = bool(config["skip_litellm"])
@@ -1120,11 +1124,15 @@ class OssCrsAdapter:
         self._run_id = self._configured_run_id
         self._resolved_artifacts = None
         self._runtime_run_logs_base_dir = None
+        if self._build_times_trial_output_dir != trial_output_dir:
+            self._build_times_by_project.clear()
+            self._build_times_trial_output_dir = trial_output_dir
 
         project_name = benchmark_path.name
         if project_name in self._built_projects:
             logger.debug(f"Project {project_name} already built, skipping")
             return
+        build_start = time.monotonic()
 
         if self._compose_file is None:
             self._generate_compose_yaml(trial_output_dir)
@@ -1237,6 +1245,7 @@ class OssCrsAdapter:
                     docker_compose_down_cleanup(work_dir)
 
             self._built_projects.add(project_name)
+            self._build_times_by_project[project_name] = time.monotonic() - build_start
             logger.info(f"Build complete for {project_name}")
 
     def _find_pov_dir(self, trial_output_dir: Path) -> Optional[Path]:
@@ -1326,7 +1335,9 @@ class OssCrsAdapter:
             bug_candidate_path if bug_candidate_path.exists() else None
         )
 
-        start_time = time.time()
+        project_name = benchmark_path.name
+        execution_start = time.monotonic()
+        run_start = execution_start
         stdout = ""
         stderr = ""
         rc = -1
@@ -1367,6 +1378,7 @@ class OssCrsAdapter:
                 bug_candidate_dir=bug_candidate_dir,
                 incremental_build=inc_build,
             )
+            run_time = time.monotonic() - run_start
         finally:
             # GH #182: run force_cleanup unconditionally so non-timeout
             # failure paths (e.g., oss-crs exits non-zero with dangling
@@ -1378,7 +1390,7 @@ class OssCrsAdapter:
             # concurrent trials on the same worker are unaffected.
             force_cleanup_work_dir_containers(work_dir)
 
-        execution_time = time.time() - start_time
+        execution_time = time.monotonic() - execution_start
 
         return CRSExecutionResult(
             harness_name=harness.name,
@@ -1387,6 +1399,12 @@ class OssCrsAdapter:
             output=stdout,
             error=stderr if rc != 0 else None,
             timed_out=timed_out,
+            build_time=(
+                self._build_times_by_project.get(project_name)
+                if self._build_times_trial_output_dir == trial_output_dir
+                else None
+            ),
+            run_time=run_time,
         )
 
     def collect_results(
