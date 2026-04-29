@@ -8,6 +8,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 
 from crsbench.cloud.bootstrap import build_download_delay_schedule
+from crsbench.cloud.gce.metadata import CRSBENCH_BEST_EFFORT_WORKERS_COMPLETE_KEY
 from crsbench.cloud.gce.provisioner import GceProvisioner
 from crsbench.cloud.gce.quota import (
     GceRegionalQuotaClient,
@@ -865,6 +866,21 @@ class GceProviderAdapter:
             redis_password=redis_password,
             from_experiment_remote_path=from_experiment_remote_path,
             from_experiment_remote_by_crs=from_experiment_remote_by_crs,
+        )
+
+    def mark_best_effort_workers_complete(
+        self,
+        *,
+        plan: CloudLaunchPlan,
+        orchestrator: "GceWorkerRecord",
+    ) -> None:
+        """Signal the orchestrator that best-effort worker creation is complete."""
+        orchestrator_config = self.build_orchestrator_config(plan)
+        self._provisioner.update_instance_metadata(
+            project=orchestrator_config.project,
+            zone=orchestrator.zone,
+            instance_name=orchestrator.name,
+            updates={CRSBENCH_BEST_EFFORT_WORKERS_COMPLETE_KEY: "1"},
         )
 
     def create_workers(

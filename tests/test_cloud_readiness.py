@@ -505,6 +505,58 @@ def test_observe_existing_workers_returns_after_instances_exist_without_ready() 
     )
 
 
+def test_observe_best_effort_existing_workers_uses_listed_workers_only() -> None:
+    """Best-effort pre-provisioned observe should not require every planned worker."""
+    from crsbench.cloud.readiness import CloudReadinessStore, CloudWorkerState
+    from crsbench.cloud.status import CloudFleetStatusManager
+
+    worker_1 = _make_worker()
+    worker_2 = replace(
+        _make_worker(),
+        name="gce-worker-003",
+        instance_id="1003",
+        zone="us-east1-b",
+    )
+    listed_workers = iter([[], [worker_1, worker_2], [worker_1, worker_2]])
+
+    class _Adapter:
+        def expected_worker_names(self, *, plan) -> list[str]:
+            del plan
+            raise AssertionError("best-effort observe must not use expected names")
+
+        def max_worker_readiness_timeout(self, *, plan) -> int:
+            del plan
+            return 900
+
+        def list_workers(self, *, plan) -> list[GceWorkerRecord]:
+            del plan
+            return next(listed_workers)
+
+    timestamps = iter([0.0, 0.0, 1.0, 1.0])
+    manager = CloudFleetStatusManager(
+        readiness_store=CloudReadinessStore(_FakeRedis()),
+        provisioner=None,
+        clock=lambda: next(timestamps),
+        sleep=lambda _seconds: None,
+        poll_interval_sec=0.0,
+    )
+
+    snapshot = manager.observe_best_effort_existing_workers(
+        plan=SimpleNamespace(experiment_name="exp-cloud-42"),
+        adapter=_Adapter(),
+    )
+
+    assert snapshot.requested_count == 2
+    assert snapshot.ready_count == 0
+    assert {worker.instance_name for worker in snapshot.pending_workers} == {
+        "gce-worker-001",
+        "gce-worker-003",
+    }
+    assert {worker.state for worker in snapshot.pending_workers} == {
+        CloudWorkerState.BOOTING,
+    }
+
+
 def test_observe_existing_instances_returns_after_instances_exist_without_ready() -> (
     None
 ):

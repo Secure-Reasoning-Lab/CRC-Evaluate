@@ -106,6 +106,16 @@ class GceApiClient(Protocol):
         instance: str,
     ) -> dict[str, object]: ...
 
+    def set_instance_metadata(
+        self,
+        *,
+        project: str,
+        zone: str,
+        instance: str,
+        fingerprint: str,
+        metadata: dict[str, str],
+    ) -> dict[str, object]: ...
+
 
 class _InstancesClientProtocol(Protocol):
     def insert(
@@ -142,6 +152,12 @@ class _InstancesClientProtocol(Protocol):
         project: str,
         zone: str,
         instance: str,
+    ) -> object: ...
+
+    def set_metadata(
+        self,
+        request: object | None = None,
+        **kwargs,
     ) -> object: ...
 
 
@@ -334,6 +350,37 @@ class GoogleComputeClient:
             project=project,
             zone=zone,
             instance=instance,
+        )
+        return self._coerce_mapping(operation)
+
+    def set_instance_metadata(
+        self,
+        *,
+        project: str,
+        zone: str,
+        instance: str,
+        fingerprint: str,
+        metadata: dict[str, str],
+    ) -> dict[str, object]:
+        from google.cloud import compute_v1
+
+        operation = self._instances().set_metadata(
+            request=compute_v1.SetMetadataInstanceRequest(
+                {
+                    "project": project,
+                    "zone": zone,
+                    "instance": instance,
+                    "metadata_resource": compute_v1.Metadata(
+                        {
+                            "fingerprint": fingerprint,
+                            "items": [
+                                {"key": key, "value": value}
+                                for key, value in sorted(metadata.items())
+                            ],
+                        }
+                    ),
+                }
+            )
         )
         return self._coerce_mapping(operation)
 
@@ -1052,6 +1099,61 @@ class GceProvisioner:
                 instance=instance_name,
             )
         )
+
+    def update_instance_metadata(
+        self,
+        *,
+        project: str,
+        zone: str,
+        instance_name: str,
+        updates: Mapping[str, str],
+    ) -> None:
+        """Merge metadata attributes onto an existing GCE instance."""
+        instance = self._client.get_instance(
+            project=project,
+            zone=zone,
+            instance=instance_name,
+        )
+        metadata_block = instance.get("metadata")
+        if not isinstance(metadata_block, Mapping):
+            raise GceProvisioningError(
+                f"Instance {instance_name} is missing metadata fingerprint"
+            )
+        metadata_block = cast("Mapping[str, object]", metadata_block)
+        fingerprint = metadata_block.get("fingerprint")
+        if not isinstance(fingerprint, str) or not fingerprint:
+            raise GceProvisioningError(
+                f"Instance {instance_name} is missing metadata fingerprint"
+            )
+        merged_metadata: dict[str, str] = {}
+        raw_items = metadata_block.get("items", [])
+        if isinstance(raw_items, Sequence):
+            for item in raw_items:
+                if not isinstance(item, Mapping):
+                    continue
+                item = cast("Mapping[str, object]", item)
+                key = item.get("key")
+                value = item.get("value")
+                if isinstance(key, str) and isinstance(value, str):
+                    merged_metadata[key] = value
+        merged_metadata.update({str(key): str(value) for key, value in updates.items()})
+        operation = self._client.set_instance_metadata(
+            project=project,
+            zone=zone,
+            instance=instance_name,
+            fingerprint=fingerprint,
+            metadata=merged_metadata,
+        )
+        result = self._client.wait_for_zone_operation(
+            project=project,
+            zone=zone,
+            operation=_extract_operation_name(operation),
+        )
+        errors = _extract_operation_errors(result)
+        if errors:
+            raise GceProvisioningError(
+                f"Failed to update metadata for {instance_name}: {'; '.join(errors)}"
+            )
 
     def list_workers(
         self,

@@ -422,6 +422,8 @@ def run_launch(args: argparse.Namespace) -> int:
             validator.validate(launch_plan)
         orchestrator_env = dict(preflight.orchestrator_env or {})
         orchestrator_env.update(selector_env)
+        if best_effort_workers:
+            orchestrator_env["CRSBENCH_CLOUD_BEST_EFFORT_WORKERS"] = "1"
 
         orchestrator_record = adapter.create_orchestrator(
             plan=provisioning_plan,
@@ -495,6 +497,16 @@ def run_launch(args: argparse.Namespace) -> int:
                 experiment_name=config.experiment,
                 records=worker_created_records,
             )
+
+        if best_effort_workers:
+            mark_workers_complete = getattr(
+                adapter, "mark_best_effort_workers_complete", None
+            )
+            if callable(mark_workers_complete):
+                mark_workers_complete(
+                    plan=provisioning_plan,
+                    orchestrator=orchestrator_record,
+                )
 
         evaluators = adapter.create_evaluators(
             plan=provisioning_plan,

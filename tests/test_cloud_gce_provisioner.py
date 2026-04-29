@@ -87,6 +87,7 @@ class _RecordingClient:
         self.bulk_inserted: list[tuple[str, str, dict[str, object], str | None]] = []
         self.region_waited: list[tuple[str, str, str]] = []
         self.deleted: list[tuple[str, str, str]] = []
+        self.metadata_updates: list[tuple[str, str, str, str, dict[str, str]]] = []
         self.instances_by_name: dict[str, dict[str, object]] = {}
         self.listed_instances: list[dict[str, object]] = []
         self.region_listed_instances: dict[str, list[dict[str, object]]] = {}
@@ -123,6 +124,20 @@ class _RecordingClient:
         instance: str,
     ) -> dict[str, object]:
         return self.instances_by_name[instance]
+
+    def set_instance_metadata(
+        self,
+        *,
+        project: str,
+        zone: str,
+        instance: str,
+        fingerprint: str,
+        metadata: dict[str, str],
+    ) -> dict[str, object]:
+        self.metadata_updates.append(
+            (project, zone, instance, fingerprint, dict(metadata))
+        )
+        return {"name": f"op-set-metadata-{instance}"}
 
     def list_instances(
         self,
@@ -822,6 +837,32 @@ def test_gce_provider_adapter_best_effort_workers_keeps_successful_fleets() -> N
     assert [worker.zone for worker in workers] == ["us-east5-b"]
     assert provisioner.create_workers.call_count == 2
     provisioner.delete_workers.assert_not_called()
+
+
+def test_gce_provider_adapter_marks_best_effort_workers_complete() -> None:
+    from crsbench.cloud.gce.metadata import CRSBENCH_BEST_EFFORT_WORKERS_COMPLETE_KEY
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+
+    plan = build_cloud_launch_plan(_make_provider_neutral_experiment_config())
+    provisioner = MagicMock()
+    adapter = GceProviderAdapter(provisioner=provisioner)
+
+    adapter.mark_best_effort_workers_complete(
+        plan=plan,
+        orchestrator=GceWorkerRecord(
+            name="gce-orchestrator-exp-cloud-42",
+            instance_id="orch-1",
+            status="RUNNING",
+            zone="us-east5-b",
+        ),
+    )
+
+    provisioner.update_instance_metadata.assert_called_once_with(
+        project="test-project",
+        zone="us-east5-b",
+        instance_name="gce-orchestrator-exp-cloud-42",
+        updates={CRSBENCH_BEST_EFFORT_WORKERS_COMPLETE_KEY: "1"},
+    )
 
 
 def test_gce_provider_adapter_rolls_back_created_fleets_in_parallel() -> None:
@@ -1981,6 +2022,49 @@ def test_delete_orchestrators_ignores_missing_instance() -> None:
     )
 
     assert [worker.name for worker in deleted] == ["gce-orchestrator-exp-cloud-42"]
+
+
+def test_update_instance_metadata_merges_existing_items_and_waits() -> None:
+    from crsbench.cloud.gce.metadata import CRSBENCH_BEST_EFFORT_WORKERS_COMPLETE_KEY
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+
+    client = _RecordingClient()
+    client.instances_by_name["gce-orchestrator-exp-cloud-42"] = {
+        "id": "1001",
+        "name": "gce-orchestrator-exp-cloud-42",
+        "status": "RUNNING",
+        "zone": "zones/us-central1-a",
+        "metadata": {
+            "fingerprint": "metadata-fp",
+            "items": [{"key": "existing-key", "value": "existing-value"}],
+        },
+    }
+    provisioner = GceProvisioner(client=client)
+
+    provisioner.update_instance_metadata(
+        project="test-project",
+        zone="us-central1-a",
+        instance_name="gce-orchestrator-exp-cloud-42",
+        updates={CRSBENCH_BEST_EFFORT_WORKERS_COMPLETE_KEY: "1"},
+    )
+
+    assert client.metadata_updates == [
+        (
+            "test-project",
+            "us-central1-a",
+            "gce-orchestrator-exp-cloud-42",
+            "metadata-fp",
+            {
+                "existing-key": "existing-value",
+                CRSBENCH_BEST_EFFORT_WORKERS_COMPLETE_KEY: "1",
+            },
+        )
+    ]
+    assert client.waited[-1] == (
+        "test-project",
+        "us-central1-a",
+        "op-set-metadata-gce-orchestrator-exp-cloud-42",
+    )
 
 
 def test_google_compute_client_accepts_extended_operation_objects() -> None:

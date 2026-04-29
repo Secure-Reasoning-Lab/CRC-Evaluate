@@ -30,6 +30,9 @@ import secrets
 import shutil
 import string
 import sys
+import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
@@ -40,6 +43,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel
 
 from crsbench.cloud.bootstrap import CloudVmBootstrapInputs
+from crsbench.cloud.gce.metadata import CRSBENCH_BEST_EFFORT_WORKERS_COMPLETE_KEY
 from crsbench.cloud.readiness import CloudWorkerState
 from crsbench.distributed.job_lifecycle import JobLifecycleRecord, JobState
 from crsbench.distributed.jobs import (
@@ -95,6 +99,10 @@ load_dotenv()
 
 # Get logger instance
 logger = get_logger(__name__)
+
+_METADATA_BASE_URL = "http://metadata.google.internal/computeMetadata/v1"
+_BEST_EFFORT_WORKER_SIGNAL_TIMEOUT_SEC = 900
+_BEST_EFFORT_WORKER_SIGNAL_POLL_SEC = 5.0
 
 
 def _rich_console_available() -> bool:
@@ -1691,6 +1699,47 @@ def _build_cloud_liveness_checker(readiness_store, experiment_name: str):
     return _is_alive
 
 
+def _read_instance_metadata_attribute(name: str) -> str | None:
+    """Return one GCE instance metadata attribute from metadata server or test files."""
+    metadata_root = os.environ.get("CRSBENCH_METADATA_ROOT_DIR")
+    relative_path = Path("instance") / "attributes" / name
+    if metadata_root:
+        path = Path(metadata_root) / relative_path
+        if not path.is_file():
+            return None
+        return path.read_text(encoding="utf-8").strip()
+
+    base_url = os.environ.get("CRSBENCH_METADATA_BASE_URL", _METADATA_BASE_URL)
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}/instance/attributes/{name}",
+        headers={"Metadata-Flavor": "Google"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=2.0) as response:
+            return response.read().decode("utf-8").strip()
+    except (OSError, urllib.error.URLError, urllib.error.HTTPError):
+        return None
+
+
+def _wait_for_best_effort_worker_launch_complete() -> None:
+    """Wait until local cloud launch has finished best-effort worker creation."""
+    if os.environ.get("CRSBENCH_CLOUD_BEST_EFFORT_WORKERS_COMPLETE") == "1":
+        return
+
+    deadline = time.monotonic() + _BEST_EFFORT_WORKER_SIGNAL_TIMEOUT_SEC
+    while True:
+        value = _read_instance_metadata_attribute(
+            CRSBENCH_BEST_EFFORT_WORKERS_COMPLETE_KEY
+        )
+        if value == "1":
+            return
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                "timed out waiting for best-effort worker launch completion signal"
+            )
+        time.sleep(_BEST_EFFORT_WORKER_SIGNAL_POLL_SEC)
+
+
 def _build_artifact_checker(config: ExperimentConfig):
     """Return a checker for published terminal markers on orchestrator storage."""
 
@@ -2959,7 +3008,26 @@ def run_experiment_distributed(
                     "Waiting for pre-provisioned cloud instances because "
                     "CRSBENCH_CLOUD_PREPROVISIONED_WORKERS=1"
                 )
-                if has_evaluator_placements:
+                best_effort_preprovisioned_workers = (
+                    os.environ.get("CRSBENCH_CLOUD_BEST_EFFORT_WORKERS") == "1"
+                )
+                if best_effort_preprovisioned_workers and has_evaluator_placements:
+                    _wait_for_best_effort_worker_launch_complete()
+                    fleet_status = (
+                        fleet_status_manager.observe_best_effort_existing_instances(
+                            plan=launch_plan,
+                            adapter=adapter,
+                        )
+                    )
+                elif best_effort_preprovisioned_workers:
+                    _wait_for_best_effort_worker_launch_complete()
+                    fleet_status = (
+                        fleet_status_manager.observe_best_effort_existing_workers(
+                            plan=launch_plan,
+                            adapter=adapter,
+                        )
+                    )
+                elif has_evaluator_placements:
                     fleet_status = fleet_status_manager.observe_existing_instances(
                         plan=launch_plan,
                         adapter=adapter,

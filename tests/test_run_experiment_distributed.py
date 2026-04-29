@@ -4681,3 +4681,51 @@ def test_cloud_fleet_bringup_is_skipped_for_preprovisioned_remote_orchestrator(
 
     manager.bring_up_workers.assert_not_called()
     manager.observe_existing_workers.assert_called_once()
+
+
+def test_best_effort_preprovisioned_remote_orchestrator_observes_listed_workers(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Best-effort remote orchestrators should not wait for skipped worker names."""
+    monkeypatch.setenv("CRSBENCH_CLOUD_PREPROVISIONED_WORKERS", "1")
+    monkeypatch.setenv("CRSBENCH_CLOUD_BEST_EFFORT_WORKERS", "1")
+    config = _make_provider_neutral_run_config(tmp_path)
+
+    session = MagicMock()
+    queue = MagicMock()
+    session.trial_queue = queue
+    session.cloud_readiness = MagicMock()
+    session.register_or_raise.return_value = None
+
+    def _enqueue(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("stop after enqueue")
+
+    queue.enqueue.side_effect = _enqueue
+    manager = MagicMock()
+
+    with (
+        patch(
+            "crsbench.distributed.runtime_session.DistributedRuntimeSession.for_run",
+            return_value=session,
+        ),
+        patch(
+            "crsbench.distributed.queue.get_existing_trials",
+            return_value={"queued": {}, "started": {}, "failed": {}, "finished": {}},
+        ),
+        patch("crsbench.run_experiment.dump_trial_matrix"),
+        patch("crsbench.run_experiment._wait_for_best_effort_worker_launch_complete"),
+        patch(
+            "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
+        ),
+        patch(
+            "crsbench.cloud.status.CloudFleetStatusManager",
+            return_value=manager,
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="stop after enqueue"):
+            run_experiment_distributed("exp-test", config, [_make_trial(None)])
+
+    manager.bring_up_workers.assert_not_called()
+    manager.observe_existing_workers.assert_not_called()
+    manager.observe_best_effort_existing_workers.assert_called_once()

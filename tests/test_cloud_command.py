@@ -4822,6 +4822,13 @@ class TestLaunch:
             bootstrap_inputs=mock.ANY,
             env_passthrough_by_placement=[],
         )
+        assert mock_adapter.create_orchestrator.call_args.kwargs["env_passthrough"] == {
+            "CRSBENCH_CLOUD_BEST_EFFORT_WORKERS": "1"
+        }
+        mock_adapter.mark_best_effort_workers_complete.assert_called_once_with(
+            plan=resolved_plan,
+            orchestrator=orchestrator_record,
+        )
         assert mock_append_instances.call_count == 2
         mock_save_state.assert_called_once()
 

@@ -235,6 +235,30 @@ class CloudFleetStatusManager:
             },
         )
 
+    def observe_best_effort_existing_instances(
+        self,
+        *,
+        plan: "CloudLaunchPlan",
+        adapter: "CloudProviderAdapterLike",
+    ) -> CloudFleetSnapshot:
+        """Return readiness for the actual listed workers plus expected evaluators."""
+        resolved_workers, remaining_timeout = self._resolve_listed_workers(
+            plan=plan,
+            adapter=adapter,
+        )
+        resolved_evaluators, _remaining_timeout = self._resolve_existing_evaluators(
+            plan=plan,
+            adapter=adapter,
+            timeout_sec=remaining_timeout,
+        )
+        return self._snapshot_instances(
+            experiment_name=plan.experiment_name,
+            workers_by_role={
+                CloudInstanceRole.WORKER: resolved_workers,
+                CloudInstanceRole.EVALUATOR: resolved_evaluators,
+            },
+        )
+
     def wait_for_added_instances(
         self,
         *,
@@ -407,6 +431,22 @@ class CloudFleetStatusManager:
             expected_instance_ids=[worker.instance_id for worker in expected_workers],
         )
 
+    def observe_best_effort_existing_workers(
+        self,
+        *,
+        plan: "CloudLaunchPlan",
+        adapter: "CloudProviderAdapterLike",
+    ) -> CloudFleetSnapshot:
+        """Return readiness for the actual listed pre-provisioned workers."""
+        expected_workers, _remaining_timeout = self._resolve_listed_workers(
+            plan=plan,
+            adapter=adapter,
+        )
+        return self._readiness_store.snapshot(
+            experiment_name=plan.experiment_name,
+            expected_instance_ids=[worker.instance_id for worker in expected_workers],
+        )
+
     def _max_readiness_timeout(
         self,
         adapter: "CloudProviderAdapterLike",
@@ -490,6 +530,52 @@ class CloudFleetStatusManager:
                 )
             self._sleep(self._poll_interval_sec)
 
+    def _resolve_existing_evaluators(
+        self,
+        *,
+        plan: "CloudLaunchPlan",
+        adapter: "CloudProviderAdapterLike",
+        timeout_sec: int | None = None,
+    ) -> tuple[list[CloudInstanceRecord], int]:
+        expected_names = adapter.expected_evaluator_names(plan=plan)
+        timeout_sec = timeout_sec or self._max_instance_readiness_timeout(adapter, plan)
+
+        deadline = self._clock() + timeout_sec
+        while True:
+            evaluators = _normalize_cloud_instances(
+                adapter.list_evaluators(plan=plan),
+                role=CloudInstanceRole.EVALUATOR,
+            )
+            evaluators_by_name = {worker.name: worker for worker in evaluators}
+            missing_names = [
+                evaluator_name
+                for evaluator_name in expected_names
+                if evaluator_name not in evaluators_by_name
+            ]
+            if not missing_names:
+                expected_evaluators = [
+                    evaluators_by_name[evaluator_name]
+                    for evaluator_name in expected_names
+                ]
+                self._clear_failed_records_for_instances(
+                    experiment_name=plan.experiment_name,
+                    workers=expected_evaluators,
+                    role=CloudInstanceRole.EVALUATOR,
+                )
+                self._record_initial_workers(
+                    experiment_name=plan.experiment_name,
+                    workers=expected_evaluators,
+                    role=CloudInstanceRole.EVALUATOR,
+                )
+                return expected_evaluators, max(int(deadline - self._clock()), 1)
+
+            if self._clock() >= deadline:
+                raise CloudFleetBringupError(
+                    "timed out waiting for pre-provisioned cloud evaluators: "
+                    + ", ".join(missing_names)
+                )
+            self._sleep(self._poll_interval_sec)
+
     def _resolve_existing_workers(
         self,
         *,
@@ -526,6 +612,35 @@ class CloudFleetStatusManager:
                 raise CloudFleetBringupError(
                     "timed out waiting for pre-provisioned cloud workers: "
                     + ", ".join(missing_names)
+                )
+            self._sleep(self._poll_interval_sec)
+
+    def _resolve_listed_workers(
+        self,
+        *,
+        plan: "CloudLaunchPlan",
+        adapter: "CloudProviderAdapterLike",
+    ) -> tuple[list[CloudInstanceRecord], int]:
+        timeout_sec = self._max_readiness_timeout(adapter, plan)
+
+        deadline = self._clock() + timeout_sec
+        while True:
+            workers = _normalize_cloud_instances(adapter.list_workers(plan=plan))
+            if workers:
+                workers.sort(key=lambda worker: worker.name)
+                self._clear_failed_records_for_instances(
+                    experiment_name=plan.experiment_name,
+                    workers=workers,
+                )
+                self._record_initial_workers(
+                    experiment_name=plan.experiment_name,
+                    workers=workers,
+                )
+                return workers, max(int(deadline - self._clock()), 1)
+
+            if self._clock() >= deadline:
+                raise CloudFleetBringupError(
+                    "timed out waiting for best-effort pre-provisioned cloud workers"
                 )
             self._sleep(self._poll_interval_sec)
 

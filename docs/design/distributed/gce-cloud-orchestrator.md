@@ -107,7 +107,7 @@ Happy path:
 2. local control plane validates config and creates an orchestrator VM
 3. local control plane waits until the orchestrator VM has a usable internal address
 4. local control plane creates the worker fleet with Redis host/password metadata targeting the orchestrator VM
-5. orchestrator VM bootstraps CRSBench, starts Valkey, rewrites/derives the experiment config for remote-orchestrator mode, waits for the pre-provisioned worker/evaluator fleet to exist in provider inventory, snapshots the current readiness state, and runs `crsbench run`
+5. orchestrator VM bootstraps CRSBench, starts Valkey, rewrites/derives the experiment config for remote-orchestrator mode, waits for the pre-provisioned worker/evaluator fleet to exist in provider inventory, snapshots the current readiness state, and runs `crsbench run`; for best-effort worker launches, the worker side of this inventory snapshot is the actually listed subset rather than the full declared worker set
 6. workers bootstrap, connect to the orchestrator-hosted Redis, and process trial jobs
 7. operator uses local `cloud status`, `cloud collect`, and `cloud teardown`
 

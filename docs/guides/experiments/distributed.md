@@ -158,8 +158,10 @@ Phase 1 contract notes:
   of joining the shared configless worker pool.
 - In pre-provisioned cloud mode, `crsbench run` waits for the declared fleet
   to exist, then enqueues jobs even if some workers or evaluators are still
-  booting. Explicit readiness remains a health/reporting signal rather than a
-  hard enqueue gate.
+  booting. With `cloud launch --best-effort-workers`, the remote orchestrator
+  observes the worker instances that were actually created instead of waiting
+  for skipped worker names from failed placements. Explicit readiness remains a
+  health/reporting signal rather than a hard enqueue gate.
 - A VM in GCE `RUNNING` state is still non-ready until CRSBench records
   `ready`.
 - Bootstrap failures are surfaced through per-instance startup evidence, so
