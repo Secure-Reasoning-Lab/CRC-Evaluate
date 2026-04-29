@@ -1,4 +1,4 @@
-# 1 trial x CRSBench suite excluding AFC final benchmarks, Claude Code bug-finding, 16 cores per trial, seed corpus enabled.
+# Remaining 2 trials x CRSBench suite excluding AFC final benchmarks, Claude Code bug-finding, 16 cores per trial, seed corpus enabled.
 #
 # Prerequisites:
 #   1. gcloud auth login && gcloud auth application-default login
@@ -6,14 +6,14 @@
 #   3. HF_TOKEN in .env or environment
 #
 # Usage:
-#   CONFIG=experiment-configs/ccs-bugfinding/gce-cc-finding-original-except-afc-final-corpus-rerun.yaml
+#   CONFIG=experiment-configs/ccs-bugfinding/gce-cc-finding-original-except-afc-final-corpus-rerun-remaining2.yaml
 #   uv run crsbench cloud launch --config "$CONFIG"
 #   uv run crsbench cloud --config "$CONFIG" monitor
 #   uv run crsbench cloud --config "$CONFIG" collect --force
 #   uv run crsbench cloud --config "$CONFIG" teardown --force
 
 experiment:
-  name: cc-find-except-afc-final-corpus-rerun-1trial
+  name: cc-find-except-afc-final-corpus-rerun-rem2
   task: bugfinding
   benchmark_suite: crsbench-except-afc-final
   sanitizers:
@@ -21,7 +21,7 @@ experiment:
     - undefined
   mode: auto
 runtime:
-  trials: 1
+  trials: 2
   max_total_time: 91200
   build_timeout: 21600
   run_timeout: 28800
@@ -39,8 +39,8 @@ runtime:
     mode: external
     cost_budget: 30.0
 storage:
-  experiment_filestore: /data/crsbench/experiment-data/cc-find-except-afc-final-corpus-rerun-1trial
-  report_filestore: /data/crsbench/report-data/cc-find-except-afc-final-corpus-rerun-1trial
+  experiment_filestore: /data/crsbench/experiment-data/cc-find-except-afc-final-corpus-rerun-rem2
+  report_filestore: /data/crsbench/report-data/cc-find-except-afc-final-corpus-rerun-rem2
 resources:
   cores_per_trial: 16
   memory_per_trial: "64G"
@@ -64,7 +64,7 @@ evaluator:
   cores_per_job: 16
 cloud:
   remote:
-    experiment_root: /data/crsbench/experiment-data/cc-find-except-afc-final-corpus-rerun-1trial
+    experiment_root: /data/crsbench/experiment-data/cc-find-except-afc-final-corpus-rerun-rem2
   defaults:
     readiness_timeout_sec: 1200
     crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
