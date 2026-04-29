@@ -1,6 +1,7 @@
 """Tests for merge_experiment_results.py script."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -460,6 +461,73 @@ class TestMergeTrials:
             == "exp-crs1-bench1-trial2-abc"
         )
         assert llm_usage["raw_response"]["info"]["metadata"]["trial_num"] == 2
+
+    def test_merge_trials_renumbering_preserves_copied_mtimes(self, tmp_path):
+        """Renumbering should not disturb mtimes used by downstream scripts."""
+        src_dir = tmp_path / "src" / "experiment-data"
+        trial_dir = (
+            src_dir
+            / "crs1"
+            / "bench1"
+            / "harness1"
+            / "bugfinding"
+            / "address"
+            / "trial-1"
+        )
+        trial_dir.mkdir(parents=True)
+        (trial_dir / ".success").touch()
+        metadata_path = trial_dir / "metadata.json"
+        metadata_path.write_text(json.dumps({"trial_num": 1}), encoding="utf-8")
+        llm_usage_path = trial_dir / "llm-usage.json"
+        llm_usage_path.write_text(
+            json.dumps(
+                {
+                    "trial_id": "exp-crs1-bench1-trial1-abc",
+                    "key_alias": "exp-crs1-bench1-trial1-abc",
+                }
+            ),
+            encoding="utf-8",
+        )
+        crs_build = trial_dir / "crs-build"
+        crs_build.mkdir()
+        (crs_build / "artifact").write_text("large build output", encoding="utf-8")
+
+        metadata_mtime_ns = 1_700_000_001_000_000_000
+        llm_usage_mtime_ns = 1_700_000_002_000_000_000
+        trial_dir_mtime_ns = 1_700_000_003_000_000_000
+        os.utime(metadata_path, ns=(metadata_mtime_ns, metadata_mtime_ns))
+        os.utime(llm_usage_path, ns=(llm_usage_mtime_ns, llm_usage_mtime_ns))
+        os.utime(trial_dir, ns=(trial_dir_mtime_ns, trial_dir_mtime_ns))
+
+        trial = TrialInfo(
+            path=trial_dir,
+            relative_path=Path("crs1/bench1/harness1/bugfinding/address/trial-1"),
+            status="success",
+            crs="crs1",
+            benchmark="bench1",
+            harness="harness1",
+            mode="bugfinding",
+            sanitizer="address",
+            trial_num=1,
+        )
+        output_dir = tmp_path / "output" / "experiment-data"
+
+        merge_trials([trial], output_dir, renumber_trials=True)
+
+        copied_trial = (
+            output_dir
+            / "crs1"
+            / "bench1"
+            / "harness1"
+            / "bugfinding"
+            / "address"
+            / "trial-1"
+        )
+        assert copied_trial.stat().st_mtime_ns == trial_dir_mtime_ns
+        assert (copied_trial / "metadata.json").stat().st_mtime_ns == metadata_mtime_ns
+        assert (
+            copied_trial / "llm-usage.json"
+        ).stat().st_mtime_ns == llm_usage_mtime_ns
 
     def test_merge_trials_renumbers_llm_trial_id_with_token_boundaries(self):
         """Renumbering trial IDs should not rewrite trial10 as trial20."""

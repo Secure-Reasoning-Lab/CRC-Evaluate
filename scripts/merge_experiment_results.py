@@ -19,6 +19,7 @@ Usage:
 
 import argparse
 import json
+import os
 import re
 import shutil
 import sys
@@ -290,6 +291,7 @@ def copy_trial(trial_path: Path, dest_path: Path) -> bool:
     if crs_build.exists():
         shutil.rmtree(crs_build)
         logger.debug(f"Removed crs-build/ from {dest_path}")
+    shutil.copystat(trial_path, dest_path)
     return True
 
 
@@ -319,6 +321,7 @@ def _renumber_trial_id(value: str, old_trial_num: int, new_trial_num: int) -> st
 def _rewrite_json_object(path: Path, rewrite) -> None:
     if not path.exists():
         return
+    original_stat = path.stat()
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
@@ -328,6 +331,7 @@ def _rewrite_json_object(path: Path, rewrite) -> None:
         return
     updated = rewrite(payload)
     path.write_text(json.dumps(updated, indent=2) + "\n", encoding="utf-8")
+    os.utime(path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
 
 
 def _rewrite_copied_trial_metadata(dest_path: Path, *, new_trial_num: int) -> None:
@@ -408,6 +412,7 @@ def merge_trials(
                 old_trial_num=trial.trial_num,
                 new_trial_num=destination_trial_num,
             )
+            shutil.copystat(trial.path, dest_path)
         merged_count += 1
 
     return MergeResult(

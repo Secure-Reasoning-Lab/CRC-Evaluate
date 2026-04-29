@@ -131,6 +131,7 @@ Then re-run the quality gate command above.
 - Configuration: `docs/getting-started/configuration.md`
 - Discovery-only OSS-Fuzz experiments: `docs/guides/experiments/discovery-only.md`
 - Replay historical POVs: `docs/guides/experiments/replay-povs.md`
+- Merge experiment results: `docs/guides/experiments/merge-results.md`
 - Normative benchmark spec: `docs/RFC.md`
 - Architecture: `docs/design/architecture.md`
 - Design doc policy: `docs/design/doc-authoring-guidelines.md`

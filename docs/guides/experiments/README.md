@@ -8,6 +8,7 @@ Start here based on what you need:
 - [Discovery-only OSS-Fuzz experiments](./discovery-only.md)
 - [Replay historical POVs on latest OSS-Fuzz](./replay-povs.md)
 - [Distributed experiments](./distributed.md)
+- [Merge experiment results](./merge-results.md)
 - [Queue cleanup and recovery](./queue-and-recovery.md)
 - [Cloud orchestration on GCE](./gce-cloud-orchestration.md) for `cloud preflight`, launch, collect, and teardown
 - [Local cloud rehearsal](./local-cloud-rehearsal.md)
