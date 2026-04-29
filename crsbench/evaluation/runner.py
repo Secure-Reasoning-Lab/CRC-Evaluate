@@ -900,6 +900,10 @@ class BenchmarkRunner:
                 run_output=crs_result.output,
                 build_time=crs_result.build_time,
                 run_time=crs_result.run_time,
+                build_start_time=crs_result.build_start_time,
+                build_end_time=crs_result.build_end_time,
+                run_start_time=crs_result.run_start_time,
+                run_end_time=crs_result.run_end_time,
             )
 
             # Collect adapter results (copies SUBMIT_DIR artifacts to trial_output_dir/output/)

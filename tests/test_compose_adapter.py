@@ -2103,21 +2103,24 @@ class TestOssCrsAdapterBugFindFull:
         assert isinstance(result, CRSExecutionResult)
         assert result.success is True
 
-    @patch("crsbench.evaluation.adapter.oss_crs.time.monotonic")
+    @patch("crsbench.evaluation.adapter.oss_crs.time")
+    @patch("crsbench.evaluation.adapter.oss_crs.logger")
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
     def test_run_returns_build_and_run_timings(
         self,
         mock_subprocess: MagicMock,
         mock_rwgt: MagicMock,
-        mock_monotonic: MagicMock,
+        mock_logger: MagicMock,
+        mock_time_module: MagicMock,
         tmp_path: Path,
     ) -> None:
         mock_subprocess.return_value = subprocess.CompletedProcess(
             args=[], returncode=0, stdout="ok", stderr=""
         )
         mock_rwgt.return_value = ("output", "", 0, False)
-        mock_monotonic.side_effect = [
+        mock_time_module.time.side_effect = [1000.0, 1010.75, 2000.0, 2007.25]
+        mock_time_module.monotonic.side_effect = [
             10.0,
             12.0,
             12.0,
@@ -2144,6 +2147,10 @@ class TestOssCrsAdapterBugFindFull:
 
         assert result.build_time == pytest.approx(10.75)
         assert result.run_time == pytest.approx(7.25)
+        assert result.build_start_time == pytest.approx(1000.0)
+        assert result.build_end_time == pytest.approx(1010.75)
+        assert result.run_start_time == pytest.approx(2000.0)
+        assert result.run_end_time == pytest.approx(2007.25)
 
     @patch("crsbench.evaluation.adapter.oss_crs.generate_run_id")
     @patch("crsbench.evaluation.adapter.oss_crs.run_oss_crs_artifacts")
@@ -3362,6 +3369,41 @@ class TestCollectResultsWiring:
         )
 
         adapter.collect_results.assert_called_once_with(trial_dir, "fuzz_target")
+
+    def test_runner_threads_phase_timestamps_into_harness_result(
+        self, tmp_path: Path
+    ) -> None:
+        adapter = MagicMock()
+        adapter.run.return_value = CRSExecutionResult(
+            harness_name="fuzz_target",
+            execution_time=1.0,
+            success=True,
+            output="ok",
+            build_time=10.75,
+            run_time=7.25,
+            build_start_time=1000.0,
+            build_end_time=1010.75,
+            run_start_time=2000.0,
+            run_end_time=2007.25,
+        )
+        adapter.collect_results.return_value = {"type": "bug-finding"}
+
+        runner = self._make_runner_with_adapter(adapter)
+        trial_dir = tmp_path / "trial"
+        trial_dir.mkdir()
+        harness = self._make_harness()
+
+        harness_result, _, _, _ = runner._execute_crs_with_managers(
+            harness=harness,
+            benchmark_path=tmp_path,
+            trial_output_dir=trial_dir,
+            trial_start_time=0.0,
+        )
+
+        assert harness_result.build_start_time == pytest.approx(1000.0)
+        assert harness_result.build_end_time == pytest.approx(1010.75)
+        assert harness_result.run_start_time == pytest.approx(2000.0)
+        assert harness_result.run_end_time == pytest.approx(2007.25)
 
     def test_collect_results_failure_does_not_fail_trial(self, tmp_path: Path) -> None:
         adapter = MagicMock()
