@@ -98,6 +98,7 @@ class CloudLaunchPlan:
     orchestrator: CloudOrchestratorPlan
     worker_placements: list[CloudPlacementPlan] = field(default_factory=list)
     evaluator_placements: list[CloudPlacementPlan] = field(default_factory=list)
+    inventory_profiles: list[ResolvedInstanceProfile] = field(default_factory=list)
 
 
 def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
@@ -175,6 +176,15 @@ def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
         specific_regions=config.cloud.orchestrator.regions,
     )
 
+    inventory_profiles = [
+        _resolve_provider_profile(
+            config=config,
+            profile_name=profile_name,
+            field_path=f"cloud.providers.gce.instance_profiles.{profile_name}",
+        )
+        for profile_name in config.cloud.providers.gce.instance_profiles
+    ]
+
     return CloudLaunchPlan(
         experiment_name=config.experiment,
         orchestrator=CloudOrchestratorPlan(
@@ -202,6 +212,7 @@ def build_cloud_launch_plan(config: ExperimentConfig) -> CloudLaunchPlan:
         ),
         worker_placements=worker_placements,
         evaluator_placements=evaluator_placements,
+        inventory_profiles=inventory_profiles,
     )
 
 

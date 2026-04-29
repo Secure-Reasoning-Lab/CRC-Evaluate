@@ -192,6 +192,15 @@ class _RecordingClient:
         del project, label_selector
         return list(self.region_listed_instances.get(region, []))
 
+    def list_instances_in_project(
+        self,
+        *,
+        project: str,
+        label_selector: dict[str, str],
+    ) -> list[dict[str, object]]:
+        del project, label_selector
+        return list(self.listed_instances)
+
 
 class _ExtendedOperation:
     def __init__(self, name: str) -> None:
@@ -2410,6 +2419,76 @@ def test_google_compute_client_lists_region_instances_from_aggregated_list() -> 
     )
 
     assert instances == [{"id": "1001", "name": "gce-worker-001"}]
+    assert instances_client.requests == [
+        {
+            "project": "test-project",
+            "filter": (
+                '(labels.crsbench-experiment = "exp-cloud-42") '
+                '(labels.crsbench-role = "worker")'
+            ),
+        }
+    ]
+
+
+def test_google_compute_client_lists_project_instances_from_aggregated_list() -> None:
+    """Project-scoped listing should include matching aggregated results from any zone."""
+    from crsbench.cloud.gce.provisioner import GoogleComputeClient
+
+    class _InstancesClient:
+        def __init__(self) -> None:
+            self.requests: list[object] = []
+
+        def insert(self, **_kwargs) -> object:
+            raise AssertionError("insert not used")
+
+        def get(self, **_kwargs) -> object:
+            raise AssertionError("get not used")
+
+        def list(self, **_kwargs) -> list[object]:
+            raise AssertionError("list not used")
+
+        def aggregated_list(self, request: object | None = None, **_kwargs) -> object:
+            self.requests.append(request)
+            return [
+                (
+                    "zones/us-east5-b",
+                    {
+                        "instances": [
+                            {"id": "1001", "name": "gce-worker-001"},
+                        ]
+                    },
+                ),
+                (
+                    "zones/europe-west1-b",
+                    {
+                        "instances": [
+                            {"id": "2001", "name": "gce-worker-002"},
+                        ]
+                    },
+                ),
+            ]
+
+        def delete(self, **_kwargs) -> object:
+            raise AssertionError("delete not used")
+
+    instances_client = _InstancesClient()
+    client = GoogleComputeClient(
+        instances_client=instances_client,
+        zone_operations_client=None,
+    )
+
+    instances = client.list_instances_in_project(
+        project="test-project",
+        label_selector={
+            "crsbench-experiment": "exp-cloud-42",
+            "crsbench-role": "worker",
+        },
+    )
+
+    assert instances == [
+        {"id": "1001", "name": "gce-worker-001"},
+        {"id": "2001", "name": "gce-worker-002"},
+    ]
     assert instances_client.requests == [
         {
             "project": "test-project",

@@ -963,6 +963,26 @@ class GceProviderAdapter:
                 workers[(worker.zone, worker.name)] = worker
         return list(workers.values())
 
+    def list_instances_by_role(
+        self,
+        *,
+        plan: CloudLaunchPlan,
+        role: str,
+    ) -> list["GceWorkerRecord"]:
+        """List all live GCE instances for one CRSBench role label."""
+        projects, _regions, _zones = self._inventory_scopes(plan)
+        workers: dict[tuple[str, str, str], GceWorkerRecord] = {}
+        for project in projects:
+            for worker in self._provisioner.list_instances_by_role(
+                experiment_name=plan.experiment_name,
+                project=project,
+                role=role,
+                regions=(),
+                zones=(),
+            ):
+                workers[(project, worker.zone, worker.name)] = worker
+        return list(workers.values())
+
     def list_orchestrators(self, *, plan: CloudLaunchPlan) -> list["GceWorkerRecord"]:
         """List orchestrators belonging to a provider-neutral launch plan."""
         if plan.orchestrator.provider is not CloudProvider.GCE:
@@ -971,6 +991,61 @@ class GceProviderAdapter:
             experiment_name=plan.experiment_name,
             orchestrator=self.build_orchestrator_config(plan),
         )
+
+    def _inventory_scopes(
+        self,
+        plan: CloudLaunchPlan,
+    ) -> tuple[set[str], set[str], set[str]]:
+        projects: set[str] = set()
+        regions: set[str] = set()
+        zones: set[str] = set()
+
+        def add_scope_from_profile(profile: ResolvedInstanceProfile) -> None:
+            project = profile.provider_config.get("project")
+            if isinstance(project, str) and project:
+                projects.add(project)
+            region = profile.provider_config.get("region")
+            if isinstance(region, str) and region:
+                regions.add(region)
+            profile_regions = profile.provider_config.get("regions")
+            if isinstance(profile_regions, Sequence):
+                regions.update(str(value) for value in profile_regions if value)
+            profile_zones = profile.provider_config.get("zones")
+            if isinstance(profile_zones, Sequence):
+                for value in profile_zones:
+                    zone = str(value)
+                    if zone:
+                        zones.add(zone)
+                        region_for_zone = zone_to_region(zone)
+                        if region_for_zone:
+                            regions.add(region_for_zone)
+
+        add_scope_from_profile(plan.orchestrator.instance_profile)
+        for profile in plan.inventory_profiles:
+            add_scope_from_profile(profile)
+        for placement in [*plan.worker_placements, *plan.evaluator_placements]:
+            add_scope_from_profile(placement.instance_profile)
+            if placement.region:
+                regions.add(placement.region)
+            regions.update(placement.regions)
+            zones.update(placement.zones)
+            for zone in placement.zones:
+                region_for_zone = zone_to_region(zone)
+                if region_for_zone:
+                    regions.add(region_for_zone)
+
+        orchestrator = self.build_orchestrator_config(plan)
+        projects.add(orchestrator.project)
+        zones.update(orchestrator.zones)
+        regions.update(orchestrator.regions)
+        if orchestrator.region:
+            regions.add(orchestrator.region)
+        if orchestrator.zone:
+            zones.add(orchestrator.zone)
+            region_for_zone = zone_to_region(orchestrator.zone)
+            if region_for_zone:
+                regions.add(region_for_zone)
+        return projects, regions, zones
 
     def delete_workers(self, *, plan: CloudLaunchPlan) -> list["GceWorkerRecord"]:
         """Delete workers across all placements in a provider-neutral launch plan."""

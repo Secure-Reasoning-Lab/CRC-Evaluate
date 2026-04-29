@@ -1640,6 +1640,282 @@ class TestReconnect:
         assert context.launch_state is None
         assert context.redis_host == "localhost:6379"
 
+    @patch("crsbench.cloud.gce.provider.GceProviderAdapter.list_instances_by_role")
+    @patch("crsbench.cloud.gce.provider.GceProviderAdapter.list_orchestrators")
+    @patch("crsbench.cloud.cli._config_reconnect.load_launch_state", return_value=None)
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_resolve_cloud_context_reconstructs_state_from_live_orchestrator(
+        self,
+        mock_load,
+        mock_state,
+        mock_list_orchestrators,
+        mock_list_instances_by_role,
+        tmp_path,
+    ):
+        """Operational commands should be recoverable from config plus GCE inventory."""
+        del mock_state
+        from crsbench.cloud.gce.metadata import CRSBENCH_REDIS_PASSWORD_KEY
+        from crsbench.cloud.gce.models import GceWorkerRecord
+        from crsbench.cloud.launch_state import load_launch_state
+
+        config = _make_provider_neutral_experiment_config()
+        mock_load.return_value = config
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("experiment: test-exp\n", encoding="utf-8")
+        mock_list_instances_by_role.return_value = []
+        mock_list_orchestrators.return_value = [
+            GceWorkerRecord(
+                name="crsbench-test-exp-orch",
+                instance_id="orch-1",
+                status="RUNNING",
+                zone="us-east5-b",
+                internal_ip="10.0.0.50",
+                external_ip="34.1.2.50",
+                raw={
+                    "metadata": {
+                        "items": [
+                            {
+                                "key": CRSBENCH_REDIS_PASSWORD_KEY,
+                                "value": "shared-secret",
+                            },
+                            {
+                                "key": "crsbench-ssh-via-iap",
+                                "value": "TRUE",
+                            },
+                        ]
+                    }
+                },
+            )
+        ]
+
+        from crsbench.cloud.cli._config_reconnect import resolve_cloud_context
+
+        context = resolve_cloud_context(str(config_path), "test-exp")
+
+        assert context.launch_state is not None
+        assert context.launch_state.orchestrator_name == "crsbench-test-exp-orch"
+        assert context.launch_state.orchestrator_project == "test-project"
+        assert context.launch_state.orchestrator_zone == "us-east5-b"
+        assert context.launch_state.orchestrator_ssh_via_iap is True
+        assert context.launch_state.redis_host == "10.0.0.50:6379"
+        assert context.launch_state.redis_password == "shared-secret"
+        assert context.launch_state.worker_fleet_configs
+        assert context.redis_host == "10.0.0.50:6379"
+        persisted = load_launch_state(config_path, "test-exp")
+        assert persisted is not None
+        assert persisted.orchestrator_name == "crsbench-test-exp-orch"
+
+    @patch("crsbench.cloud.gce.provider.GceProviderAdapter.list_instances_by_role")
+    @patch("crsbench.cloud.gce.provider.GceProviderAdapter.list_orchestrators")
+    @patch("crsbench.cloud.cli._config_reconnect.load_launch_state", return_value=None)
+    @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
+    def test_resolve_cloud_context_reconstructs_runtime_added_worker_fleets(
+        self,
+        mock_load,
+        mock_state,
+        mock_list_orchestrators,
+        mock_list_instances_by_role,
+        tmp_path,
+    ):
+        """Takeover should include live workers added after the original launch."""
+        del mock_state
+        from crsbench.cloud.gce.metadata import CRSBENCH_REDIS_PASSWORD_KEY
+        from crsbench.cloud.gce.models import GceWorkerRecord
+
+        config = _make_provider_neutral_experiment_config()
+        mock_load.return_value = config
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("experiment: test-exp\n", encoding="utf-8")
+        mock_list_orchestrators.return_value = [
+            GceWorkerRecord(
+                name="crsbench-test-exp-orch",
+                instance_id="orch-1",
+                status="RUNNING",
+                zone="us-east5-b",
+                internal_ip="10.0.0.50",
+                raw={
+                    "metadata": {
+                        "items": [
+                            {
+                                "key": CRSBENCH_REDIS_PASSWORD_KEY,
+                                "value": "shared-secret",
+                            }
+                        ]
+                    }
+                },
+            )
+        ]
+
+        def _list_instances_by_role(*, plan, role):
+            del plan
+            if role == "evaluator":
+                return []
+            return [
+                GceWorkerRecord(
+                    name="crsbench-test-exp-work-251",
+                    instance_id="worker-251",
+                    status="RUNNING",
+                    zone="us-west1-b",
+                    internal_ip="10.0.1.251",
+                    labels={
+                        "crsbench-experiment": "test-exp",
+                        "crsbench-role": "worker",
+                        "owner": "runtime-team",
+                        "capacity": "runtime",
+                    },
+                    raw={
+                        "project": "runtime-project",
+                        "metadata": {
+                            "items": [
+                                {"key": "crsbench-ssh-via-iap", "value": "TRUE"},
+                            ]
+                        },
+                    },
+                ),
+                GceWorkerRecord(
+                    name="crsbench-test-exp-work-252",
+                    instance_id="worker-252",
+                    status="RUNNING",
+                    zone="us-east1-b",
+                    internal_ip="10.0.2.252",
+                    labels={
+                        "crsbench-experiment": "test-exp",
+                        "crsbench-role": "worker",
+                        "owner": "runtime-team",
+                        "capacity": "runtime",
+                    },
+                    raw={
+                        "project": "runtime-project",
+                        "metadata": {
+                            "items": [
+                                {"key": "crsbench-ssh-via-iap", "value": "TRUE"},
+                            ]
+                        },
+                    },
+                ),
+                GceWorkerRecord(
+                    name="crsbench-test-exp-work-253",
+                    instance_id="worker-253",
+                    status="RUNNING",
+                    zone="us-west1-c",
+                    internal_ip="10.0.1.253",
+                    labels={
+                        "crsbench-experiment": "test-exp",
+                        "crsbench-role": "worker",
+                        "owner": "other-runtime-team",
+                        "capacity": "other-runtime",
+                    },
+                    raw={
+                        "project": "runtime-project",
+                        "metadata": {
+                            "items": [
+                                {"key": "crsbench-ssh-via-iap", "value": "TRUE"},
+                            ]
+                        },
+                    },
+                ),
+            ]
+
+        mock_list_instances_by_role.side_effect = _list_instances_by_role
+
+        from crsbench.cloud.cli._config_reconnect import resolve_cloud_context
+
+        context = resolve_cloud_context(str(config_path), "test-exp")
+
+        assert context.launch_state is not None
+        reconstructed = [
+            fleet
+            for fleet in context.launch_state.worker_fleet_configs
+            if fleet.placement_source == "reconstructed_live"
+        ]
+        assert len(reconstructed) == 3
+        by_region_and_labels = {
+            (fleet.region, tuple(sorted(fleet.labels.items()))): fleet
+            for fleet in reconstructed
+        }
+        runtime_us_west = by_region_and_labels[("us-west1", (("capacity", "runtime"),))]
+        other_us_west = by_region_and_labels[
+            ("us-west1", (("capacity", "other-runtime"),))
+        ]
+        east = by_region_and_labels[("us-east1", (("capacity", "runtime"),))]
+        assert runtime_us_west.name_prefix == "crsbench-test-exp-work"
+        assert runtime_us_west.name_start_index == 251
+        assert runtime_us_west.count == 1
+        assert runtime_us_west.project == "runtime-project"
+        assert runtime_us_west.ssh_via_iap is True
+        assert runtime_us_west.zones == ["us-west1-b"]
+        assert runtime_us_west.owner_label == "runtime-team"
+        assert other_us_west.name_start_index == 253
+        assert other_us_west.count == 1
+        assert other_us_west.zones == ["us-west1-c"]
+        assert other_us_west.owner_label == "other-runtime-team"
+        assert east.name_start_index == 252
+        assert east.count == 1
+        assert east.zones == ["us-east1-b"]
+
+    def test_gce_live_role_discovery_scans_whole_configured_project(self):
+        """Takeover should find runtime-added capacity outside launch regions."""
+        from crsbench.cloud.gce.provider import GceProviderAdapter
+        from crsbench.cloud.models import build_cloud_launch_plan
+
+        plan = build_cloud_launch_plan(_make_provider_neutral_experiment_config())
+
+        class _FakeProvisioner:
+            def __init__(self):
+                self.calls = []
+
+            def list_instances_by_role(self, **kwargs):
+                self.calls.append(kwargs)
+                return []
+
+        provisioner = _FakeProvisioner()
+        adapter = GceProviderAdapter(provisioner=provisioner)
+
+        adapter.list_instances_by_role(plan=plan, role="worker")
+
+        assert [call["project"] for call in provisioner.calls] == ["test-project"]
+        assert all(call["regions"] == () for call in provisioner.calls)
+        assert all(call["zones"] == () for call in provisioner.calls)
+
+    def test_gce_live_role_discovery_dedupes_by_project_zone_and_name(self):
+        """Identical deterministic names in different projects must not collapse."""
+        from crsbench.cloud.gce.models import GceWorkerRecord
+        from crsbench.cloud.gce.provider import GceProviderAdapter
+        from crsbench.cloud.models import build_cloud_launch_plan
+
+        plan = build_cloud_launch_plan(_make_provider_neutral_experiment_config())
+
+        class _FakeProvisioner:
+            def list_instances_by_role(self, **kwargs):
+                project = kwargs["project"]
+                return [
+                    GceWorkerRecord(
+                        name="crsbench-test-exp-work-001",
+                        instance_id=f"{project}-worker",
+                        status="RUNNING",
+                        zone="us-east5-b",
+                        labels={
+                            "crsbench-experiment": "test-exp",
+                            "crsbench-role": "worker",
+                        },
+                        raw={"project": project},
+                    )
+                ]
+
+        adapter = GceProviderAdapter(provisioner=_FakeProvisioner())
+        adapter._inventory_scopes = lambda _plan: (  # type: ignore[method-assign]
+            {"project-a", "project-b"},
+            set(),
+            set(),
+        )
+
+        workers = adapter.list_instances_by_role(plan=plan, role="worker")
+
+        assert sorted(worker.instance_id for worker in workers) == [
+            "project-a-worker",
+            "project-b-worker",
+        ]
+
     @patch("crsbench.cloud.cli._config_reconnect.load_launch_state")
     @patch("crsbench.cloud.cli._config_reconnect.load_experiment_config")
     def test_resolve_cloud_context_preserves_all_provider_neutral_worker_fleets(

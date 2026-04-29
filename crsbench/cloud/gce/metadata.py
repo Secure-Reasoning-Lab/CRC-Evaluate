@@ -30,6 +30,7 @@ CRSBENCH_EXPERIMENT_METADATA_KEY = "crsbench-experiment"
 CRSBENCH_BEST_EFFORT_WORKERS_COMPLETE_KEY = "crsbench-best-effort-workers-complete"
 CRSBENCH_WORKER_NAME_METADATA_KEY = "crsbench-worker-name"
 CRSBENCH_READINESS_TIMEOUT_METADATA_KEY = "crsbench-readiness-timeout-sec"
+CRSBENCH_SSH_VIA_IAP_METADATA_KEY = "crsbench-ssh-via-iap"
 GCE_ENABLE_OSLOGIN_KEY = "enable-oslogin"
 GCE_SERIAL_PORT_ENABLE_KEY = "serial-port-enable"
 GCE_STARTUP_SCRIPT_KEY = "startup-script"
@@ -109,6 +110,14 @@ def build_evaluator_labels(
         fleet=fleet,
         role="evaluator",
     )
+
+
+def build_experiment_role_labels(*, experiment_name: str, role: str) -> dict[str, str]:
+    """Render the minimal CRSBench role labels shared by all GCE VM roles."""
+    return {
+        "crsbench-experiment": _sanitize_label_value(experiment_name),
+        "crsbench-role": role,
+    }
 
 
 def build_orchestrator_labels(
@@ -273,7 +282,7 @@ def _apply_access_metadata(
     metadata[GCE_SERIAL_PORT_ENABLE_KEY] = "TRUE"
     metadata["block-project-ssh-keys"] = "TRUE"
     if config.ssh_via_iap:
-        metadata["crsbench-ssh-via-iap"] = "TRUE"
+        metadata[CRSBENCH_SSH_VIA_IAP_METADATA_KEY] = "TRUE"
 
 
 def _apply_install_metadata(
