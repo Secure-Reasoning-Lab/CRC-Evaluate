@@ -23,6 +23,7 @@ from crsbench.cloud.models import (
 from crsbench.cloud.records import CloudFleetPlacementRecord, CloudInstanceRecord
 from crsbench.cloud.secret_refs import resolve_secret_path
 from crsbench.cloud.types import CloudProvider
+from crsbench.utils.logger import get_logger
 from crsbench.validation.schemas import GceOrchestratorConfig, GceWorkerFleetConfig
 
 if TYPE_CHECKING:
@@ -58,6 +59,7 @@ class ResolvedGceInstanceProfile:
 
 
 _MAX_PARALLEL_GCE_FLEET_CREATE_OPERATIONS = 8
+logger = get_logger(__name__)
 
 
 class GceProviderAdapter:
@@ -77,6 +79,7 @@ class GceProviderAdapter:
         *,
         fleets: Sequence[GceWorkerFleetConfig],
         create_fleet: "Callable[[int, GceWorkerFleetConfig], list[GceWorkerRecord]]",
+        rollback_on_error: bool = True,
     ) -> list["GceWorkerRecord"]:
         if not fleets:
             return []
@@ -99,7 +102,7 @@ class GceProviderAdapter:
                 except Exception as exc:
                     exceptions.append(exc)
 
-        if exceptions:
+        if exceptions and rollback_on_error:
             self._rollback_created_fleets(
                 fleets=fleets,
                 created_by_index=created_by_index,
@@ -107,6 +110,14 @@ class GceProviderAdapter:
             if len(exceptions) == 1:
                 raise exceptions[0]
             raise exceptions[0]
+        if exceptions:
+            for exc in exceptions:
+                logger.warning(
+                    "Best-effort cloud worker placement failed; keeping {} "
+                    "successfully created placement(s): {}",
+                    len(created_by_index),
+                    exc,
+                )
 
         created: list[GceWorkerRecord] = []
         for index in range(len(fleets)):
@@ -873,6 +884,41 @@ class GceProviderAdapter:
                 ),
                 download_delay_by_name=download_delay_schedule,
             ),
+        )
+
+    def create_workers_best_effort(
+        self,
+        *,
+        plan: CloudLaunchPlan,
+        redis_host: str,
+        redis_password: str | None,
+        registration: "RuntimeRegistration",
+        bootstrap_inputs: "CloudVmBootstrapInputs | None" = None,
+        env_passthrough_by_placement: Sequence[dict[str, str]] | None = None,
+    ) -> list["GceWorkerRecord"]:
+        """Create workers and keep successful placements when other placements fail."""
+        fleets = self.build_worker_fleets(plan)
+        download_delay_schedule = self.download_delay_schedule(plan=plan)
+        _validate_env_passthrough_count(
+            role="worker",
+            fleets=fleets,
+            env_passthrough_by_placement=env_passthrough_by_placement,
+        )
+        return self._create_fleets_in_parallel(
+            fleets=fleets,
+            create_fleet=lambda index, fleet: self._provisioner.create_workers(
+                experiment_name=plan.experiment_name,
+                fleet=fleet,
+                redis_host=redis_host,
+                redis_password=redis_password,
+                registration=registration,
+                bootstrap_inputs=bootstrap_inputs,
+                env_passthrough=_env_passthrough_for_placement(
+                    env_passthrough_by_placement, index
+                ),
+                download_delay_by_name=download_delay_schedule,
+            ),
+            rollback_on_error=False,
         )
 
     def list_workers(self, *, plan: CloudLaunchPlan) -> list["GceWorkerRecord"]:

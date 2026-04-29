@@ -2046,6 +2046,17 @@ class TestArgParsing:
         assert args.only_trial_keys_file is None
         assert args.only_unfinished_from is None
         assert args.rerun_failed_trials is False
+        assert args.best_effort_workers is False
+
+    def test_parse_launch_with_best_effort_workers(self):
+        parser = self._build_parser()
+        args = parser.parse_args(
+            ["cloud", "launch", "--config", "c.yaml", "--best-effort-workers"]
+        )
+        assert args.command == "cloud"
+        assert args.cloud_command == "launch"
+        assert args.config == "c.yaml"
+        assert args.best_effort_workers is True
 
     def test_parse_launch_with_global_config(self):
         parser = self._build_parser()
@@ -2458,12 +2469,14 @@ def _make_launch_args(
     only_trial_keys_file: str | None = None,
     only_unfinished_from: str | None = None,
     rerun_failed_trials: bool = False,
+    best_effort_workers: bool = False,
 ):
     return argparse.Namespace(
         config=config,
         only_trial_keys_file=only_trial_keys_file,
         only_unfinished_from=only_unfinished_from,
         rerun_failed_trials=rerun_failed_trials,
+        best_effort_workers=best_effort_workers,
         cloud_command="launch",
     )
 
@@ -4745,6 +4758,72 @@ class TestLaunch:
         assert mock_save_state.call_args.args[0] == Path("/tmp/config.yaml")
         saved_state = mock_save_state.call_args.args[1]
         assert saved_state.worker_fleet_configs == [redacted_fleet]
+
+    @patch(
+        "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"
+    )
+    @patch("crsbench.cloud.cli._launch.append_created_instance_records")
+    @patch("crsbench.cloud.cli._launch.save_launch_state")
+    @patch("crsbench.cloud.cli._launch.prepare_launch_inputs")
+    @patch("crsbench.cloud.cli._launch.provider_adapter_for_launch_plan")
+    @patch("crsbench.cloud.cli._launch.QuotaValidator")
+    @patch("crsbench.cloud.cli._launch.build_cloud_launch_plan")
+    @patch("crsbench.cloud.cli._launch.load_experiment_config")
+    def test_launch_best_effort_workers_skips_quota_and_uses_partial_worker_create(
+        self,
+        mock_load,
+        mock_build_plan,
+        mock_validator_cls,
+        mock_adapter_cls,
+        mock_preflight,
+        mock_save_state,
+        mock_append_instances,
+        mock_secret,
+    ):
+        del mock_secret
+        mock_load.return_value = _make_launch_config()
+        launch_plan = MagicMock(experiment_name="test-exp")
+        resolved_plan = MagicMock(experiment_name="test-exp")
+        mock_build_plan.return_value = launch_plan
+        redacted_fleet = _make_launch_state().worker_fleet_configs[0]
+        mock_preflight.return_value = MagicMock(
+            resolved_plan=resolved_plan,
+            redacted_worker_fleets=[redacted_fleet],
+            redacted_evaluator_fleets=[],
+            orchestrator_env={},
+            worker_placement_envs=[],
+            evaluator_placement_envs=[],
+        )
+
+        orchestrator_record = _make_gce_worker(
+            "gce-orchestrator-test-exp", ip="10.0.0.50"
+        )
+        worker_record = _make_gce_worker("w-1")
+        mock_adapter = MagicMock()
+        mock_adapter.build_orchestrator_config.return_value.project = "test-project"
+        mock_adapter.build_orchestrator_config.return_value.ssh_via_iap = True
+        mock_adapter.create_orchestrator.return_value = orchestrator_record
+        mock_adapter.create_workers_best_effort.return_value = [worker_record]
+        mock_adapter.create_evaluators.return_value = []
+        mock_adapter_cls.return_value = mock_adapter
+
+        from crsbench.cloud.cli._launch import run_launch
+
+        rc = run_launch(_make_launch_args(best_effort_workers=True))
+
+        assert rc == 0
+        mock_validator_cls.assert_not_called()
+        mock_adapter.create_workers.assert_not_called()
+        mock_adapter.create_workers_best_effort.assert_called_once_with(
+            plan=resolved_plan,
+            redis_host="10.0.0.50:6379",
+            redis_password="shared-secret",
+            registration=mock.ANY,
+            bootstrap_inputs=mock.ANY,
+            env_passthrough_by_placement=[],
+        )
+        assert mock_append_instances.call_count == 2
+        mock_save_state.assert_called_once()
 
     @patch(
         "crsbench.cloud.cli._launch.secrets.token_urlsafe", return_value="shared-secret"

@@ -411,8 +411,15 @@ def run_launch(args: argparse.Namespace) -> int:
                 f"Experiment {config.experiment!r} already has cloud launch state; "
                 f"{'; '.join(conflicts)}. Tear it down before launching again."
             )
-        validator = QuotaValidator(adapters={"gce": adapter})
-        validator.validate(launch_plan)
+        best_effort_workers = bool(getattr(args, "best_effort_workers", False))
+        if best_effort_workers:
+            logger.warning(
+                "Best-effort worker launch enabled: skipping quota preflight and "
+                "keeping successfully created worker placements if later placements fail"
+            )
+        else:
+            validator = QuotaValidator(adapters={"gce": adapter})
+            validator.validate(launch_plan)
         orchestrator_env = dict(preflight.orchestrator_env or {})
         orchestrator_env.update(selector_env)
 
@@ -450,14 +457,24 @@ def run_launch(args: argparse.Namespace) -> int:
 
         redis_host = f"{orchestrator_record.internal_ip}:6379"
         assert adapter is not None
-        workers = adapter.create_workers(
-            plan=provisioning_plan,
-            redis_host=redis_host,
-            redis_password=redis_password,
-            registration=registration,
-            bootstrap_inputs=bootstrap_inputs,
-            env_passthrough_by_placement=preflight.worker_placement_envs,
-        )
+        if best_effort_workers and hasattr(adapter, "create_workers_best_effort"):
+            workers = adapter.create_workers_best_effort(
+                plan=provisioning_plan,
+                redis_host=redis_host,
+                redis_password=redis_password,
+                registration=registration,
+                bootstrap_inputs=bootstrap_inputs,
+                env_passthrough_by_placement=preflight.worker_placement_envs,
+            )
+        else:
+            workers = adapter.create_workers(
+                plan=provisioning_plan,
+                redis_host=redis_host,
+                redis_password=redis_password,
+                registration=registration,
+                bootstrap_inputs=bootstrap_inputs,
+                env_passthrough_by_placement=preflight.worker_placement_envs,
+            )
 
         if workers:
             worker_created_records = [

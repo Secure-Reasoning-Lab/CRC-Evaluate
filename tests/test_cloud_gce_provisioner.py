@@ -789,6 +789,40 @@ def test_gce_provider_adapter_creates_worker_fleets_in_parallel() -> None:
     assert provisioner.create_workers.call_count == len(fleets)
 
 
+def test_gce_provider_adapter_best_effort_workers_keeps_successful_fleets() -> None:
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+
+    plan = build_cloud_launch_plan(_make_provider_neutral_experiment_config())
+    provisioner = MagicMock()
+    adapter = GceProviderAdapter(provisioner=provisioner)
+
+    def _create_workers(**kwargs):
+        fleet = kwargs["fleet"]
+        if fleet.zone == "us-east1-b":
+            raise RuntimeError("capacity exhausted")
+        return [
+            GceWorkerRecord(
+                name=f"{fleet.worker_name_prefix}-001",
+                instance_id=f"id-{fleet.worker_name_prefix}",
+                status="RUNNING",
+                zone=fleet.zone or fleet.zones[0],
+            )
+        ]
+
+    provisioner.create_workers.side_effect = _create_workers
+
+    workers = adapter.create_workers_best_effort(
+        plan=plan,
+        redis_host="redis.internal:6380",
+        redis_password="shared-secret",
+        registration=_make_registration(),
+    )
+
+    assert [worker.zone for worker in workers] == ["us-east5-b"]
+    assert provisioner.create_workers.call_count == 2
+    provisioner.delete_workers.assert_not_called()
+
+
 def test_gce_provider_adapter_passes_conservative_download_delay_schedule_to_provisioner() -> (
     None
 ):

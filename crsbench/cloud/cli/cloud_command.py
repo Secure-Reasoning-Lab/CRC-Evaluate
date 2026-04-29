@@ -251,6 +251,15 @@ Examples:
         default=False,
         help="Include failed trials when deriving unfinished keys from collected results",
     )
+    launch_p.add_argument(
+        "--best-effort-workers",
+        action="store_true",
+        default=False,
+        help=(
+            "Skip launch quota preflight and keep successfully created worker "
+            "placements if later placements fail"
+        ),
+    )
 
     # re-eval
     reeval_p = cloud_subparsers.add_parser(
