@@ -322,9 +322,11 @@ class OssCrsAdapter:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("w") as lock_file:
             logger.info(f"Acquiring {description}: {lock_path}")
+            wait_start = time.monotonic()
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            lock_wait = time.monotonic() - wait_start
             try:
-                yield
+                yield lock_wait
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
@@ -335,8 +337,8 @@ class OssCrsAdapter:
         with self._acquire_lock(
             lock_path,
             f"prepare lock for {self._crs_config_name}",
-        ):
-            yield
+        ) as lock_wait:
+            yield lock_wait
 
     @contextmanager
     def _acquire_build_lock(self, project_name: str):
@@ -345,8 +347,8 @@ class OssCrsAdapter:
         with self._acquire_lock(
             lock_path,
             f"build lock for {self._crs_config_name}/{project_name} ({self._sanitizer})",
-        ):
-            yield
+        ) as lock_wait:
+            yield lock_wait
 
     @property
     def mode(self) -> str:
@@ -1175,9 +1177,8 @@ class OssCrsAdapter:
         # adapter instance has already prepared (e.g. second benchmark on the
         # same worker).
         if not self._prepared:
-            prepare_lock_wait_start = time.monotonic()
-            with self._acquire_prepare_lock():
-                lock_wait += time.monotonic() - prepare_lock_wait_start
+            with self._acquire_prepare_lock() as prepare_lock_wait:
+                lock_wait += prepare_lock_wait
                 if not self._prepared:
                     logger.info(f"oss-crs prepare for {self._crs_config_name}")
                     stdout, stderr, rc = run_oss_crs_prepare(
@@ -1220,9 +1221,8 @@ class OssCrsAdapter:
             )
             return
 
-        build_lock_wait_start = time.monotonic()
-        with self._acquire_build_lock(project_name):
-            lock_wait += time.monotonic() - build_lock_wait_start
+        with self._acquire_build_lock(project_name) as build_lock_wait:
+            lock_wait += build_lock_wait
             # Re-check after lock in case another actor finished first.
             if project_name in self._built_projects:
                 logger.debug(

@@ -1250,6 +1250,23 @@ class TestOssCrsAdapterBugFindFull:
 
         assert path_asan == path_ubsan
 
+    @patch("crsbench.evaluation.adapter.oss_crs.time.monotonic")
+    @patch("crsbench.evaluation.adapter.oss_crs.fcntl.flock")
+    def test_acquire_lock_yields_only_flock_wait_time(
+        self,
+        mock_flock: MagicMock,
+        mock_monotonic: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_monotonic.side_effect = [10.0, 12.5]
+        adapter = self._make_adapter(tmp_path)
+        lock_path = tmp_path / "locks" / "prepare.lock"
+
+        with adapter._acquire_lock(lock_path, "test lock") as lock_wait:
+            assert lock_wait == pytest.approx(2.5)
+
+        assert mock_flock.call_count == 2
+
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
     def test_prepare_runs_once_across_two_benchmarks_same_adapter(
         self, mock_run: MagicMock, tmp_path: Path
@@ -2305,7 +2322,7 @@ class TestOssCrsAdapterBugFindFull:
         mock_subprocess.return_value = subprocess.CompletedProcess(
             args=[], returncode=0, stdout="ok", stderr=""
         )
-        monotonic_values = iter([0.0, 1.0, 1.5, 2.5, 2.5, 5.0, 10.0, 10.0, 11.0, 16.75])
+        monotonic_values = iter([0.0, 1.0, 11.0, 16.75])
         last_monotonic = 16.75
 
         def monotonic_side_effect() -> float:
@@ -2335,13 +2352,11 @@ class TestOssCrsAdapterBugFindFull:
 
         @contextmanager
         def waited_prepare_lock():
-            mock_monotonic()
-            yield
+            yield 1.0
 
         @contextmanager
         def waited_build_lock(_project_name: str):
-            mock_monotonic()
-            yield
+            yield 5.0
 
         adapter._acquire_prepare_lock = waited_prepare_lock  # type: ignore[method-assign]
         adapter._acquire_build_lock = waited_build_lock  # type: ignore[method-assign]
