@@ -252,6 +252,82 @@ class TestWriteOrchestratorMarker:
         assert metadata["worker_machine"] == "worker-7"
         assert metadata["worker_trial_dir"] == "/remote/trial"
 
+    def test_metadata_contains_phase_timestamp_fields(self, tmp_path: Path):
+        config = _make_experiment_config(tmp_path)
+        result = _make_trial_result()
+        result.metadata.timestamp = "2026-04-29T12:00:00+00:00"
+        result.metadata.timestamp_unix = 1777464000.0
+        result.metadata.build_start_time = 1001.0
+        result.metadata.build_end_time = 1010.0
+        result.metadata.run_start_time = 1011.0
+        result.metadata.run_end_time = 1042.0
+
+        _write_orchestrator_marker(result, config)
+
+        trial_dir = _build_trial_output_path(
+            filestore=config.experiment_filestore.resolve(),
+            experiment_name=config.experiment,
+            crs=result.crs,
+            benchmark=result.benchmark,
+            harness=result.harness,
+            mode=result.mode,
+            sanitizer=result.sanitizer,
+            trial_num=result.trial_num,
+        )
+        metadata = json.loads((trial_dir / "metadata.json").read_text())
+        assert metadata["timestamp"] == "2026-04-29T12:00:00+00:00"
+        assert metadata["timestamp_unix"] == 1777464000.0
+        assert metadata["build_start_time"] == 1001.0
+        assert metadata["build_end_time"] == 1010.0
+        assert metadata["run_start_time"] == 1011.0
+        assert metadata["run_end_time"] == 1042.0
+
+    def test_metadata_fallback_writes_iso_timestamp_from_unix(self, tmp_path: Path):
+        config = _make_experiment_config(tmp_path)
+        result = _make_trial_result()
+        result.metadata.timestamp_unix = 1777464000.0
+
+        _write_orchestrator_marker(result, config)
+
+        trial_dir = _build_trial_output_path(
+            filestore=config.experiment_filestore.resolve(),
+            experiment_name=config.experiment,
+            crs=result.crs,
+            benchmark=result.benchmark,
+            harness=result.harness,
+            mode=result.mode,
+            sanitizer=result.sanitizer,
+            trial_num=result.trial_num,
+        )
+        metadata = json.loads((trial_dir / "metadata.json").read_text())
+        assert metadata["timestamp"] == "2026-04-29T12:00:00+00:00"
+        assert metadata["timestamp_unix"] == 1777464000.0
+
+    def test_metadata_fallback_derives_unix_from_existing_iso_timestamp(
+        self, tmp_path: Path
+    ):
+        config = _make_experiment_config(tmp_path)
+        result = _make_trial_result()
+        result.metadata.timestamp = "2026-04-29T12:00:00+00:00"
+        result.metadata.timestamp_unix = None
+        result.metadata.timestamp_start = 0.0
+
+        _write_orchestrator_marker(result, config)
+
+        trial_dir = _build_trial_output_path(
+            filestore=config.experiment_filestore.resolve(),
+            experiment_name=config.experiment,
+            crs=result.crs,
+            benchmark=result.benchmark,
+            harness=result.harness,
+            mode=result.mode,
+            sanitizer=result.sanitizer,
+            trial_num=result.trial_num,
+        )
+        metadata = json.loads((trial_dir / "metadata.json").read_text())
+        assert metadata["timestamp"] == "2026-04-29T12:00:00+00:00"
+        assert metadata["timestamp_unix"] == 1777464000.0
+
     def test_metadata_contains_sanitizer(self, tmp_path: Path):
         config = _make_experiment_config(tmp_path)
         result = _make_trial_result(sanitizer="memory")
@@ -420,6 +496,24 @@ class TestDiskBasedFiltering:
         assert result is not None
         assert result.success is True
         assert result.povs_found == 99
+
+    def test_reconstructs_timestamp_unix_from_legacy_iso_metadata(self, tmp_path: Path):
+        config = _make_experiment_config(tmp_path)
+        trial_dir = self._trial_dir(config, config.experiment_filestore.resolve())
+        trial_dir.mkdir(parents=True)
+        (trial_dir / ".success").touch()
+        metadata = {
+            "timestamp": "2026-04-29T12:00:00+00:00",
+            "mode": "bug_finding",
+        }
+        (trial_dir / "metadata.json").write_text(json.dumps(metadata))
+
+        result = self._call_check(config)
+
+        assert result is not None
+        assert result.metadata.timestamp == "2026-04-29T12:00:00+00:00"
+        assert result.metadata.timestamp_unix == 1777464000.0
+        assert result.metadata.timestamp_start == 1777464000.0
 
 
 # ===================================================================

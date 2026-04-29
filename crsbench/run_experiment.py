@@ -30,7 +30,7 @@ import secrets
 import shutil
 import string
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 
@@ -1532,6 +1532,29 @@ def run_experiment_local(
         _cleanup_experiment_artifacts(experiment_name, config)
 
 
+def _resolve_metadata_timestamp_pair(metadata: TrialMetadata) -> tuple[str, float]:
+    """Return matching ISO and Unix metadata timestamps."""
+    if metadata.timestamp:
+        try:
+            timestamp_unix = datetime.fromisoformat(
+                metadata.timestamp.replace("Z", "+00:00")
+            ).timestamp()
+            return metadata.timestamp, timestamp_unix
+        except ValueError:
+            logger.warning(
+                "Could not parse trial metadata timestamp; "
+                f"falling back to Unix value: {metadata.timestamp!r}"
+            )
+
+    timestamp_unix = (
+        metadata.timestamp_unix
+        if metadata.timestamp_unix is not None
+        else metadata.timestamp_start
+    )
+    timestamp = datetime.fromtimestamp(timestamp_unix, timezone.utc).isoformat()
+    return timestamp, timestamp_unix
+
+
 def _write_orchestrator_marker(
     trial_result: TrialResult, config: ExperimentConfig
 ) -> None:
@@ -1579,7 +1602,11 @@ def _write_orchestrator_marker(
     # (local worker already wrote full metadata)
     metadata_path = trial_dir / "metadata.json"
     if not metadata_path.exists():
+        metadata_timestamp, metadata_timestamp_unix = _resolve_metadata_timestamp_pair(
+            trial_result.metadata
+        )
         metadata_dict = {
+            "timestamp": metadata_timestamp,
             "crs": trial_result.crs,
             "benchmark": trial_result.benchmark,
             "harness": trial_result.harness,
@@ -1591,8 +1618,13 @@ def _write_orchestrator_marker(
             "execution_time": trial_result.execution_time,
             "timestamp_start": trial_result.metadata.timestamp_start,
             "timestamp_end": trial_result.metadata.timestamp_end,
+            "timestamp_unix": metadata_timestamp_unix,
             "build_time": trial_result.metadata.build_time,
             "run_time": trial_result.metadata.run_time,
+            "build_start_time": trial_result.metadata.build_start_time,
+            "build_end_time": trial_result.metadata.build_end_time,
+            "run_start_time": trial_result.metadata.run_start_time,
+            "run_end_time": trial_result.metadata.run_end_time,
             "worker_machine": trial_result.metadata.worker_machine,
             "worker_trial_dir": trial_result.metadata.worker_trial_dir,
             "povs_found": trial_result.povs_found,

@@ -89,6 +89,20 @@ Timeline origin depends on the entry point:
 single job; CRSBench splits the seed set into that many shards and runs each
 shard sequentially inside its own warm runner.
 
+### Trial Timing Metadata
+
+CRSBench preserves both duration and Unix-time phase-boundary metadata in
+`metadata.json`:
+
+- `timestamp` remains an ISO-8601 string in worker-written metadata for
+  compatibility.
+- `timestamp_unix` records trial metadata creation time in Unix seconds.
+- `build_time` and `run_time` remain duration fields in seconds.
+- `build_start_time` and `build_end_time` record OSS-CRS build phase
+  boundaries in Unix seconds.
+- `run_start_time` and `run_end_time` record OSS-CRS run phase boundaries in
+  Unix seconds.
+
 ### LiteLLM Runtime Contract
 
 CRSBench currently supports only the external LiteLLM model when a run needs

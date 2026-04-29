@@ -1,6 +1,7 @@
 """Main benchmark runner for CRS evaluation."""
 
 import hashlib
+import inspect
 import re
 import shutil
 import threading
@@ -48,6 +49,43 @@ from crsbench.validation.schemas import BenchmarkConfig, BenchmarkHarness, Harne
 
 # Set up logging
 logger = get_logger(__name__)
+
+
+_RUN_START_CALLBACK_PARAMETER_NAMES = {
+    "run_start_time",
+    "run_start",
+    "crs_run_start_time",
+    "timestamp",
+}
+
+
+def _invoke_run_start_callback(
+    callback: Callable[..., None],
+    run_start_time: float,
+) -> None:
+    """Invoke run-start callbacks with timestamp when clearly supported."""
+    try:
+        signature = inspect.signature(callback)
+    except (TypeError, ValueError):
+        callback()
+        return
+
+    for parameter in signature.parameters.values():
+        if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
+            callback(run_start_time)
+            return
+        if (
+            parameter.kind
+            in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+            and parameter.name in _RUN_START_CALLBACK_PARAMETER_NAMES
+        ):
+            callback(run_start_time)
+            return
+
+    callback()
 
 
 def _load_benchmark_language(benchmark_path: Path) -> str:
@@ -133,9 +171,9 @@ class BenchmarkRunner:
         per_pov_verify_timeout: int = 180,
         verify_timeout: int = 7200,
         oss_fuzz_path: Optional[Path] = None,
-        on_build_start: Optional[Callable[[], None]] = None,
-        on_run_start: Optional[Callable[[], None]] = None,
-        on_verification_start: Optional[Callable[[], None]] = None,
+        on_build_start: Optional[Callable[..., None]] = None,
+        on_run_start: Optional[Callable[..., None]] = None,
+        on_verification_start: Optional[Callable[..., None]] = None,
         llm_tracker: Optional["LiteLLMTracker"] = None,
         llm_api_key: Optional[str] = None,
         llm_trial_id: Optional[str] = None,
@@ -862,10 +900,12 @@ class BenchmarkRunner:
             )
 
             # Create callback for run start
-            def on_run_start() -> None:
+            def on_run_start(run_start_time: Optional[float] = None) -> None:
                 nonlocal crs_run_started
                 crs_run_started = True
-                run_start = time.time()
+                run_start = (
+                    run_start_time if run_start_time is not None else time.time()
+                )
                 if snapshot_manager:
                     snapshot_manager.set_crs_run_start_time(run_start)
                 if coverage_manager:
@@ -874,7 +914,7 @@ class BenchmarkRunner:
                     pov_verification_manager.set_crs_run_start_time(run_start)
                 # Call external callback for job metadata tracking
                 if self.on_run_start:
-                    self.on_run_start()
+                    _invoke_run_start_callback(self.on_run_start, run_start)
 
             # Run CRS
             try:
@@ -900,6 +940,10 @@ class BenchmarkRunner:
                 run_output=crs_result.output,
                 build_time=crs_result.build_time,
                 run_time=crs_result.run_time,
+                build_start_time=crs_result.build_start_time,
+                build_end_time=crs_result.build_end_time,
+                run_start_time=crs_result.run_start_time,
+                run_end_time=crs_result.run_end_time,
             )
 
             # Collect adapter results (copies SUBMIT_DIR artifacts to trial_output_dir/output/)

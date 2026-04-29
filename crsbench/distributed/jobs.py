@@ -971,6 +971,14 @@ def _reconstruct_trial_result_from_success(
     patches_valid = 0
     build_time = None
     run_time = None
+    timestamp = None
+    timestamp_unix = None
+    timestamp_start = 0.0
+    timestamp_end = 0.0
+    build_start_time = None
+    build_end_time = None
+    run_start_time = None
+    run_end_time = None
 
     if metadata_file.exists():
         try:
@@ -991,6 +999,27 @@ def _reconstruct_trial_result_from_success(
             patches_valid = metadata.get("patches_valid", 0)
             build_time = metadata.get("build_time")
             run_time = metadata.get("run_time")
+            timestamp = metadata.get("timestamp")
+            timestamp_unix = metadata.get("timestamp_unix")
+            if timestamp_unix is None and isinstance(timestamp, str):
+                try:
+                    timestamp_unix = datetime.fromisoformat(
+                        timestamp.replace("Z", "+00:00")
+                    ).timestamp()
+                except ValueError:
+                    logger.warning(
+                        "Could not parse metadata timestamp for trial "
+                        f"{trial_num}: {timestamp!r}"
+                    )
+            timestamp_start = metadata.get(
+                "timestamp_start",
+                timestamp_unix if timestamp_unix is not None else 0.0,
+            )
+            timestamp_end = metadata.get("timestamp_end", timestamp_start)
+            build_start_time = metadata.get("build_start_time")
+            build_end_time = metadata.get("build_end_time")
+            run_start_time = metadata.get("run_start_time")
+            run_end_time = metadata.get("run_end_time")
 
         except Exception as e:
             logger.warning(
@@ -1023,10 +1052,16 @@ def _reconstruct_trial_result_from_success(
         patches_valid=patches_valid,
         report={},
         metadata=TrialMetadata(
-            timestamp_start=0.0,
-            timestamp_end=0.0,
+            timestamp=timestamp,
+            timestamp_start=timestamp_start,
+            timestamp_end=timestamp_end,
+            timestamp_unix=timestamp_unix,
             build_time=build_time,
             run_time=run_time,
+            build_start_time=build_start_time,
+            build_end_time=build_end_time,
+            run_start_time=run_start_time,
+            run_end_time=run_end_time,
             target_cpv_id=target_cpv_id,
         ),
     )
@@ -1649,8 +1684,12 @@ def run_crs_trial(
             if crs_type == "bug-fixing"
             else TrialMode.bug_finding
         )
+        metadata_timestamp = datetime.now(timezone.utc)
+        metadata_timestamp_iso = metadata_timestamp.isoformat()
+        metadata_timestamp_unix = metadata_timestamp.timestamp()
         file_metadata = TrialMetadataFile(
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=metadata_timestamp_iso,
+            timestamp_unix=metadata_timestamp_unix,
             trial_num=trial_num,
             crs=crs,
             benchmark=benchmark,
@@ -1735,19 +1774,33 @@ def run_crs_trial(
         # Extract build/run timing from harness result (single harness per trial)
         build_time = None
         run_time = None
+        build_start_time = None
+        build_end_time = None
+        run_start_time = None
+        run_end_time = None
         if result.report.harness_results:
             harness_result = result.report.harness_results[0]
             build_time = harness_result.build_time
             run_time = harness_result.run_time
+            build_start_time = harness_result.build_start_time
+            build_end_time = harness_result.build_end_time
+            run_start_time = harness_result.run_start_time
+            run_end_time = harness_result.run_end_time
 
         # Create trial metadata
         metadata = TrialMetadata(
             experiment_filestore=str(config.experiment_filestore),
             max_total_time=config.max_total_time,
+            timestamp=metadata_timestamp_iso,
             timestamp_start=start_time,
             timestamp_end=time.time(),
+            timestamp_unix=metadata_timestamp_unix,
             build_time=build_time,
             run_time=run_time,
+            build_start_time=build_start_time,
+            build_end_time=build_end_time,
+            run_start_time=run_start_time,
+            run_end_time=run_end_time,
             experiment_name=config.experiment,
             litellm_budget=config.litellm_cost_budget,
             cores_per_trial=config.resources.cores_per_trial
@@ -1791,6 +1844,14 @@ def run_crs_trial(
                 file_metadata.build_time = build_time
             if run_time is not None:
                 file_metadata.run_time = run_time
+            if build_start_time is not None:
+                file_metadata.build_start_time = build_start_time
+            if build_end_time is not None:
+                file_metadata.build_end_time = build_end_time
+            if run_start_time is not None:
+                file_metadata.run_start_time = run_start_time
+            if run_end_time is not None:
+                file_metadata.run_end_time = run_end_time
             with metadata_file.open("w") as f:
                 json.dump(file_metadata.model_dump(mode="json"), f, indent=2)
 

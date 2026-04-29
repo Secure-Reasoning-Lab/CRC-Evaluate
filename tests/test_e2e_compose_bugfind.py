@@ -607,6 +607,7 @@ class TestResultFormatInterchangeability:
         # Verify all required fields exist
         required_fields = [
             "timestamp",
+            "timestamp_unix",
             "trial_num",
             "crs",
             "benchmark",
@@ -617,11 +618,17 @@ class TestResultFormatInterchangeability:
             "worker_machine",
             "worker_trial_dir",
             "experiment_name",
+            "build_start_time",
+            "build_end_time",
+            "run_start_time",
+            "run_end_time",
         ]
         for field in required_fields:
             assert field in metadata, f"Missing required field: {field}"
 
         # Verify field values
+        assert isinstance(metadata["timestamp"], str)
+        assert isinstance(metadata["timestamp_unix"], float)
         assert metadata["crs"] == "test-crs"
         assert metadata["benchmark"] == "test-project"
         assert metadata["harness"] == "fuzz_target"
@@ -630,3 +637,5 @@ class TestResultFormatInterchangeability:
         assert metadata["mode"] == "bug_finding"
         assert isinstance(metadata["source"], dict)
         assert isinstance(metadata["config"], dict)
+        assert metadata["build_start_time"] <= metadata["build_end_time"]
+        assert metadata["run_start_time"] <= metadata["run_end_time"]

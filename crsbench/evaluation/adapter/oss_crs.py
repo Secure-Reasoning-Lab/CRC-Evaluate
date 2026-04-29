@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import inspect
 import os
 import re
 import shutil
@@ -48,6 +49,47 @@ if TYPE_CHECKING:
     from crsbench.validation.schemas import ExperimentConfig, HarnessFile
 
 logger = get_logger(__name__)
+
+
+_RUN_START_CALLBACK_PARAMETER_NAMES = {
+    "run_start_time",
+    "run_start",
+    "crs_run_start_time",
+    "timestamp",
+}
+
+
+def _invoke_run_start_callback(
+    callback: "Callable[..., None]",
+    run_start_time: float,
+) -> None:
+    """Invoke run-start callbacks with timestamp when supported.
+
+    Existing callers may still provide zero-argument callbacks, so fall back to
+    the older shape unless the callable clearly opts into receiving a timestamp.
+    """
+    try:
+        signature = inspect.signature(callback)
+    except (TypeError, ValueError):
+        callback()
+        return
+
+    for parameter in signature.parameters.values():
+        if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
+            callback(run_start_time)
+            return
+        if (
+            parameter.kind
+            in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+            and parameter.name in _RUN_START_CALLBACK_PARAMETER_NAMES
+        ):
+            callback(run_start_time)
+            return
+
+    callback()
 
 
 def _normalize_optional_text(value: Any) -> Optional[str]:
@@ -212,6 +254,8 @@ class OssCrsAdapter:
         self._mode = mode
         self._built_projects: set[str] = set()
         self._build_times_by_project: dict[str, float] = {}
+        self._build_start_times_by_project: dict[str, float] = {}
+        self._build_end_times_by_project: dict[str, float] = {}
         self._build_times_trial_output_dir: Optional[Path] = None
 
         self._compose_file: Optional[Path] = None
@@ -765,6 +809,8 @@ class OssCrsAdapter:
                 self._resolved_artifacts = None
                 self._built_projects.clear()
                 self._build_times_by_project.clear()
+                self._build_start_times_by_project.clear()
+                self._build_end_times_by_project.clear()
                 self._build_times_trial_output_dir = None
             self._work_dir = new_work_dir
             self._work_dir_is_explicit = True
@@ -784,6 +830,8 @@ class OssCrsAdapter:
                 self._cleanup_build_done_markers()
                 self._built_projects.clear()
                 self._build_times_by_project.clear()
+                self._build_start_times_by_project.clear()
+                self._build_end_times_by_project.clear()
                 self._build_times_trial_output_dir = None
                 self._prepared = False
         if "skip_litellm" in config:
@@ -1139,12 +1187,15 @@ class OssCrsAdapter:
         if self._build_times_trial_output_dir != trial_output_dir:
             self._compose_file = None
             self._build_times_by_project.clear()
+            self._build_start_times_by_project.clear()
+            self._build_end_times_by_project.clear()
             if not self._work_dir_is_explicit:
                 self._built_projects.clear()
                 self._work_dir = None
             self._build_times_trial_output_dir = trial_output_dir
 
         build_start = time.monotonic()
+        build_start_time = time.time()
 
         if self._compose_file is None:
             self._generate_compose_yaml(trial_output_dir)
@@ -1271,6 +1322,8 @@ class OssCrsAdapter:
             total_build_time = max(time.monotonic() - build_start - lock_wait, 0.0)
             self._built_projects.add(project_name)
             self._build_times_by_project[project_name] = total_build_time
+            self._build_start_times_by_project[project_name] = build_start_time
+            self._build_end_times_by_project[project_name] = time.time()
             logger.info(f"Build complete for {project_name}")
 
     def _find_pov_dir(self, trial_output_dir: Path) -> Optional[Path]:
@@ -1328,8 +1381,8 @@ class OssCrsAdapter:
         harness: HarnessFile,
         trial_output_dir: Path,
         *,
-        on_build_start: Optional[Callable[[], None]] = None,
-        on_run_start: Optional[Callable[[], None]] = None,
+        on_build_start: Optional[Callable[..., None]] = None,
+        on_run_start: Optional[Callable[..., None]] = None,
         stop_event: Optional[threading.Event] = None,
     ) -> CRSExecutionResult:
         """Execute CRS against a harness via oss-crs run.
@@ -1343,8 +1396,6 @@ class OssCrsAdapter:
 
         if on_build_start is not None:
             on_build_start()
-        if on_run_start is not None:
-            on_run_start()
 
         # Stage benchmark to exclude ground truth dotfiles
         staged_path = self._stage_benchmark(benchmark_path, trial_output_dir)
@@ -1363,6 +1414,8 @@ class OssCrsAdapter:
         project_name = benchmark_path.name
         execution_start = time.monotonic()
         run_start = execution_start
+        run_start_time: Optional[float] = None
+        run_end_time: Optional[float] = None
         stdout = ""
         stderr = ""
         rc = -1
@@ -1388,6 +1441,9 @@ class OssCrsAdapter:
                     pass
             inc_build = (rts_active or benchmark_inc_build) and self._inc_build_enabled
 
+            run_start_time = time.time()
+            if on_run_start is not None:
+                _invoke_run_start_callback(on_run_start, run_start_time)
             stdout, stderr, rc, timed_out = run_oss_crs_run(
                 compose_file,
                 work_dir,
@@ -1403,6 +1459,7 @@ class OssCrsAdapter:
                 bug_candidate_dir=bug_candidate_dir,
                 incremental_build=inc_build,
             )
+            run_end_time = time.time()
             run_time = time.monotonic() - run_start
         finally:
             # GH #182: run force_cleanup unconditionally so non-timeout
@@ -1430,6 +1487,18 @@ class OssCrsAdapter:
                 else None
             ),
             run_time=run_time,
+            build_start_time=(
+                self._build_start_times_by_project.get(project_name)
+                if self._build_times_trial_output_dir == trial_output_dir
+                else None
+            ),
+            build_end_time=(
+                self._build_end_times_by_project.get(project_name)
+                if self._build_times_trial_output_dir == trial_output_dir
+                else None
+            ),
+            run_start_time=run_start_time,
+            run_end_time=run_end_time,
         )
 
     def collect_results(
