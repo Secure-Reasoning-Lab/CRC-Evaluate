@@ -252,6 +252,34 @@ class TestWriteOrchestratorMarker:
         assert metadata["worker_machine"] == "worker-7"
         assert metadata["worker_trial_dir"] == "/remote/trial"
 
+    def test_metadata_contains_phase_timestamp_fields(self, tmp_path: Path):
+        config = _make_experiment_config(tmp_path)
+        result = _make_trial_result()
+        result.metadata.timestamp_unix = 1000.0
+        result.metadata.build_start_time = 1001.0
+        result.metadata.build_end_time = 1010.0
+        result.metadata.run_start_time = 1011.0
+        result.metadata.run_end_time = 1042.0
+
+        _write_orchestrator_marker(result, config)
+
+        trial_dir = _build_trial_output_path(
+            filestore=config.experiment_filestore.resolve(),
+            experiment_name=config.experiment,
+            crs=result.crs,
+            benchmark=result.benchmark,
+            harness=result.harness,
+            mode=result.mode,
+            sanitizer=result.sanitizer,
+            trial_num=result.trial_num,
+        )
+        metadata = json.loads((trial_dir / "metadata.json").read_text())
+        assert metadata["timestamp_unix"] == 1000.0
+        assert metadata["build_start_time"] == 1001.0
+        assert metadata["build_end_time"] == 1010.0
+        assert metadata["run_start_time"] == 1011.0
+        assert metadata["run_end_time"] == 1042.0
+
     def test_metadata_contains_sanitizer(self, tmp_path: Path):
         config = _make_experiment_config(tmp_path)
         result = _make_trial_result(sanitizer="memory")

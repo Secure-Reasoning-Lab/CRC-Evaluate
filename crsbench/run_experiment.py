@@ -1591,8 +1591,17 @@ def _write_orchestrator_marker(
             "execution_time": trial_result.execution_time,
             "timestamp_start": trial_result.metadata.timestamp_start,
             "timestamp_end": trial_result.metadata.timestamp_end,
+            "timestamp_unix": (
+                trial_result.metadata.timestamp_unix
+                if trial_result.metadata.timestamp_unix is not None
+                else trial_result.metadata.timestamp_start
+            ),
             "build_time": trial_result.metadata.build_time,
             "run_time": trial_result.metadata.run_time,
+            "build_start_time": trial_result.metadata.build_start_time,
+            "build_end_time": trial_result.metadata.build_end_time,
+            "run_start_time": trial_result.metadata.run_start_time,
+            "run_end_time": trial_result.metadata.run_end_time,
             "worker_machine": trial_result.metadata.worker_machine,
             "worker_trial_dir": trial_result.metadata.worker_trial_dir,
             "povs_found": trial_result.povs_found,
