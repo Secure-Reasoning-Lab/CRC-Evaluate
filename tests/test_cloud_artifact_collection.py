@@ -714,6 +714,7 @@ class TestStagingAndPublish:
     """test_staging_and_publish — ARTF-03: staged tree published to final path."""
 
     def test_is_report_log_file_matches_all_output_logs(self) -> None:
+        assert _is_report_log_file("trial-1/output/logs/root.log")
         assert _is_report_log_file("trial-1/output/logs/services/service.log")
         assert _is_report_log_file(
             "trial-1/output/logs/services/crs-codex_inc-builder-asan.stdout.log"
@@ -1686,6 +1687,10 @@ class TestStagingAndPublish:
         trial_dir = _build_trial_tree(source_root, experiment_name="exp-42")
         logs_dir = trial_dir / "output" / "logs" / "services"
         logs_dir.mkdir(parents=True)
+        (trial_dir / "output" / "logs" / "root.log").write_text(
+            "root log\n",
+            encoding="utf-8",
+        )
         (logs_dir / "service.log").write_text("service log\n")
         (logs_dir / "crs-codex_inc-builder-asan.stderr.log").write_text(
             "stderr log\n",
@@ -1749,6 +1754,7 @@ class TestStagingAndPublish:
             / "output"
         )
         assert (trial_output / "seeds" / "seed-0001").exists()
+        assert (trial_output / "logs" / "root.log").exists()
         assert (trial_output / "logs" / "services" / "service.log").exists()
         assert (
             trial_output / "logs" / "services" / "crs-codex_inc-builder-asan.stderr.log"
@@ -2039,6 +2045,10 @@ class TestStagingAndPublish:
 
         report_logs = trial_dir / "output" / "logs" / "services"
         report_logs.mkdir(parents=True, exist_ok=True)
+        (trial_dir / "output" / "logs" / "root.log").write_text(
+            "[keep] root log\n",
+            encoding="utf-8",
+        )
         (report_logs / "service.log").write_text("[keep] service log\n")
         (report_logs / "builder-sidecar-lite_patcher.stdout.log").write_text(
             "[keep] legit log\n"
@@ -2161,6 +2171,7 @@ class TestStagingAndPublish:
             / "log_dir"
             / "verify_patch_timing.json"
         ).exists()
+        assert (trial_output / "logs" / "root.log").exists()
         assert (trial_output / "logs" / "services" / "service.log").exists()
         assert (
             trial_output / "logs" / "services" / "crs-codex_inc-builder-asan.stderr.log"
