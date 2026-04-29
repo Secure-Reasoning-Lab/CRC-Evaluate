@@ -713,7 +713,8 @@ class TestRsyncPreservesMtimes:
 class TestStagingAndPublish:
     """test_staging_and_publish — ARTF-03: staged tree published to final path."""
 
-    def test_is_report_log_file_matches_allowlist(self) -> None:
+    def test_is_report_log_file_matches_all_output_logs(self) -> None:
+        assert _is_report_log_file("trial-1/output/logs/services/service.log")
         assert _is_report_log_file(
             "trial-1/output/logs/services/crs-codex_inc-builder-asan.stdout.log"
         )
@@ -726,7 +727,7 @@ class TestStagingAndPublish:
         assert _is_report_log_file(
             "trial-1/output/logs/crs/foo/log_dir/verify_patch_timing.json"
         )
-        assert not _is_report_log_file(
+        assert _is_report_log_file(
             "trial-1/output/logs/services/crs-codex_inc-builder-asan.stderr.log"
         )
         assert not _is_report_log_file(
@@ -838,10 +839,23 @@ class TestStagingAndPublish:
         staged_dir = trial_dir / "staged" / "curl-delta-01"
         staged_dir.mkdir(parents=True)
         (staged_dir / "README.txt").write_text("staged leak target\n", encoding="utf-8")
+        (staged_dir / "linked-staged.log").write_text(
+            "staged linked log\n",
+            encoding="utf-8",
+        )
         kept_dir = workdir_out / "kept"
         kept_dir.mkdir(parents=True)
         (kept_dir / "artifact.txt").symlink_to(
             Path("..") / ".." / ".." / "staged" / "curl-delta-01" / "README.txt"
+        )
+        (workdir_out / "logs" / "services" / "linked-staged.log").symlink_to(
+            Path("..")
+            / ".."
+            / ".."
+            / ".."
+            / "staged"
+            / "curl-delta-01"
+            / "linked-staged.log"
         )
         (trial_dir / "result.log").symlink_to(Path("oss-crs-workdir") / "result.log")
         (trial_dir / "log-echo.txt").symlink_to(
@@ -927,7 +941,7 @@ class TestStagingAndPublish:
             / "trial-1"
             / "log-echo.txt"
         ).exists()
-        assert not (trial_output / "logs" / "services" / "service.log").exists()
+        assert (trial_output / "logs" / "services" / "service.log").exists()
         assert (
             trial_output
             / "logs"
@@ -937,9 +951,10 @@ class TestStagingAndPublish:
         assert (
             trial_output / "logs" / "services" / "crs-codex_inc-builder-asan.stdout.log"
         ).exists()
-        assert not (
+        assert (
             trial_output / "logs" / "services" / "crs-codex_inc-builder-asan.stderr.log"
         ).exists()
+        assert (trial_output / "logs" / "services" / "linked-staged.log").exists()
         assert not (
             trial_output / "logs" / "services" / "crs-codex_inc-builder-asan.json"
         ).exists()
@@ -1656,10 +1671,10 @@ class TestStagingAndPublish:
             / "builder-sidecar-lite_patcher.stdout.log"
         ).exists()
 
-    def test_staging_and_publish_excludes_output_logs_from_real_output_tree(
+    def test_staging_and_publish_keeps_all_output_logs_from_real_output_tree(
         self, tmp_path: Path
     ) -> None:
-        """Collection should keep reporting logs while dropping unrelated output/log bulk."""
+        """Collection should keep all ``output/logs/**/*.log`` files from real output trees."""
         if shutil.which("rsync") is None:
             pytest.skip("rsync is required for output/log regression coverage")
 
@@ -1672,6 +1687,10 @@ class TestStagingAndPublish:
         logs_dir = trial_dir / "output" / "logs" / "services"
         logs_dir.mkdir(parents=True)
         (logs_dir / "service.log").write_text("service log\n")
+        (logs_dir / "crs-codex_inc-builder-asan.stderr.log").write_text(
+            "stderr log\n",
+            encoding="utf-8",
+        )
         (logs_dir / "builder-sidecar-lite_patcher.stdout.log").write_text(
             "  [test] 12.3s\n"
         )
@@ -1730,7 +1749,10 @@ class TestStagingAndPublish:
             / "output"
         )
         assert (trial_output / "seeds" / "seed-0001").exists()
-        assert not (trial_output / "logs" / "services" / "service.log").exists()
+        assert (trial_output / "logs" / "services" / "service.log").exists()
+        assert (
+            trial_output / "logs" / "services" / "crs-codex_inc-builder-asan.stderr.log"
+        ).exists()
         assert (
             trial_output
             / "logs"
@@ -2001,10 +2023,10 @@ class TestStagingAndPublish:
         assert (refreshed_trial / "output" / "seeds" / "seed-0001").exists()
         assert other_trial.exists()
 
-    def test_report_log_rsync_skips_internal_workdir_files(
+    def test_report_log_rsync_keeps_all_logs_but_skips_internal_workdir_files(
         self, tmp_path: Path
     ) -> None:
-        """Report-log copy should not restore oss-crs-workdir artifacts."""
+        """Report-log copy should keep all ``*.log`` files without restoring oss-crs-workdir artifacts."""
         if shutil.which("rsync") is None:
             pytest.skip("rsync is required for output/log regression coverage")
 
@@ -2017,11 +2039,16 @@ class TestStagingAndPublish:
 
         report_logs = trial_dir / "output" / "logs" / "services"
         report_logs.mkdir(parents=True, exist_ok=True)
+        (report_logs / "service.log").write_text("[keep] service log\n")
         (report_logs / "builder-sidecar-lite_patcher.stdout.log").write_text(
             "[keep] legit log\n"
         )
         (report_logs / "crs-codex_inc-builder-asan.stdout.log").write_text(
             "[keep] legit log\n"
+        )
+        (report_logs / "crs-codex_inc-builder-asan.stderr.log").write_text(
+            "[keep] stderr log\n",
+            encoding="utf-8",
         )
         real_timing_dir = trial_dir / "output" / "real-timing"
         real_timing_dir.mkdir(parents=True)
@@ -2134,10 +2161,14 @@ class TestStagingAndPublish:
             / "log_dir"
             / "verify_patch_timing.json"
         ).exists()
-        assert not (
+        assert (trial_output / "logs" / "services" / "service.log").exists()
+        assert (
+            trial_output / "logs" / "services" / "crs-codex_inc-builder-asan.stderr.log"
+        ).exists()
+        assert (
             trial_output / "logs" / "services" / "linked_patcher.stdout.log"
         ).exists()
-        assert not (
+        assert (
             trial_output
             / "logs"
             / "crs"

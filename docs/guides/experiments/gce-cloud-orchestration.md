@@ -1081,9 +1081,9 @@ that entry so the local result tree remains
 usable. Trials with `.success` keep that normal collected artifact tree. Trials
 with `.fail` are compacted before publish so the collected trial keeps only
 `metadata.json`, `.fail`, `worker.log`, and the reporting subset restored under
-`output/logs/`. After the main rsync, collect restores only the small
-reporting subset under `output/logs/`: `verify_patch_timing.json`,
-`*_patcher.stdout.log`, and `*inc-builder-*.stdout.log`. Runtime and VM
+`output/logs/`. After the main rsync, collect restores all `*.log` paths under
+`output/logs/` plus `verify_patch_timing.json`, including staged-backed log
+paths reached through the trial output tree. Runtime and VM
 diagnostics remain available under
 `.crsbench-cloud/remote-logs/<experiment>/`.
 
@@ -1238,7 +1238,7 @@ Diagnostics collected under `.crsbench-cloud/remote-logs/<experiment>/`:
   and Redis listener state
 - Lightweight per-trial observability files including all collected `*.log`
   files, `metadata.json`, `.success`, `.fail`, and the orchestrator
-  `trial_matrix.json` (trial-local `staged/` trees remain excluded)
+  `trial_matrix.json`
 
 ## Listing Instances
 

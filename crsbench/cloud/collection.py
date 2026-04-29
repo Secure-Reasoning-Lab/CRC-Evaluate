@@ -64,11 +64,9 @@ _DROP_EXCLUDED_TOPLEVEL_DIRS = frozenset({"staged"})
 _REPORT_LOG_RSYNC_EXCLUDES: tuple[str, ...] = ("oss-crs-workdir/",)
 _LOG_RSYNC_EXCLUDES: tuple[str, ...] = ()
 _REPORT_LOG_RSYNC_INCLUDES: tuple[str, ...] = (
-    "output/logs/services/*_patcher.stdout.log",
-    "output/logs/services/*inc-builder-*.stdout.log",
-    "output/logs/crs/*/log_dir/verify_patch_timing.json",
-    "output/logs/crs/**/*_patcher.stdout.log",
-    "output/logs/crs/**/*inc-builder-*.stdout.log",
+    "output/logs/*.log",
+    "output/logs/**/*.log",
+    "output/logs/**/verify_patch_timing.json",
 )
 _TRIAL_DIR_NAME_RE = re.compile(r"^trial-\d+$")
 _TRIAL_ROOT_MODES = frozenset({"delta", "full", "all"})
@@ -100,19 +98,11 @@ def _is_report_log_file(relpath: str) -> bool:
         if parts[index : index + 2] != ("output", "logs"):
             continue
         tail = parts[index + 2 :]
-        if len(tail) == 2 and tail[0] == "services":
-            name = tail[-1]
-            return name.endswith("_patcher.stdout.log") or (
-                name.endswith(".stdout.log") and "inc-builder-" in name
-            )
-        if len(tail) >= 2 and tail[0] == "crs":
-            name = tail[-1]
-            if name.endswith("_patcher.stdout.log") or (
-                name.endswith(".stdout.log") and "inc-builder-" in name
-            ):
-                return True
-            if tail[-2] == "log_dir" and name == "verify_patch_timing.json":
-                return True
+        name = tail[-1]
+        if name.endswith(".log"):
+            return True
+        if tail[-2:] == ("log_dir", "verify_patch_timing.json"):
+            return True
     return False
 
 
@@ -1347,10 +1337,7 @@ class ArtifactCollector:
                     {
                         "root": (output_relpath / "logs").as_posix(),
                         "exclude_prefixes": [],
-                        "exclude_actual_prefixes": [
-                            (output_relpath.parent / name).as_posix()
-                            for name in _DROP_EXCLUDED_TOPLEVEL_DIRS
-                        ],
+                        "exclude_actual_prefixes": [],
                     }
                 ],
                 ssh_command=ssh_command,
