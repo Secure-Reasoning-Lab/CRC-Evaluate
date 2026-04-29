@@ -115,7 +115,11 @@ cloud:
       - {}
       - {}
       - {}
-      - {} # 6 workers
+      - {}
+      - {}
+      - {}
+      - {}
+      - {} # 10 workers
   # evaluators:
   #   defaults:
   #     instance_profile: gce-evaluator-n2d
