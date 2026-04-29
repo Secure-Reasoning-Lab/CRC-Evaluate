@@ -62,7 +62,7 @@ crs_compose:
       ANTHROPIC_MODEL: claude-opus-4-6
       CLAUDE_CODE_CLI_VERSION: 2.1.92
 worker:
-  jobs: 1
+  jobs: 14
   cores_per_job: 16
   storage:
     cleanup_after_trial: true
