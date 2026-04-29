@@ -121,6 +121,7 @@ class TrialMetadata(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     timestamp: str
+    timestamp_unix: float | None = None
     trial_num: int
     crs: str
     benchmark: str
@@ -139,6 +140,10 @@ class TrialMetadata(BaseModel):
     run_time: float | None = Field(
         default=None, description="CRS run time in seconds (written after trial)"
     )
+    build_start_time: float | None = None
+    build_end_time: float | None = None
+    run_start_time: float | None = None
+    run_end_time: float | None = None
 
     # Worker identification (for distributed execution)
     worker_machine: Optional[str] = None

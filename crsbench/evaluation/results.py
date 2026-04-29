@@ -29,6 +29,10 @@ class CRSExecutionResult:
     timed_out: bool = False
     build_time: Optional[float] = None  # Time spent building CRS (seconds)
     run_time: Optional[float] = None  # Time spent running CRS (seconds)
+    build_start_time: Optional[float] = None
+    build_end_time: Optional[float] = None
+    run_start_time: Optional[float] = None
+    run_end_time: Optional[float] = None
 
 
 @dataclass
@@ -42,6 +46,10 @@ class HarnessResult:
     run_output: Optional[str] = None
     build_time: Optional[float] = None  # Time spent building CRS (seconds)
     run_time: Optional[float] = None  # Time spent running CRS (seconds)
+    build_start_time: Optional[float] = None
+    build_end_time: Optional[float] = None
+    run_start_time: Optional[float] = None
+    run_end_time: Optional[float] = None
 
     # CI verification status, populated when the CRS emits a structured
     # verify_patch result file (builder-sidecar-lite and similar sidecar
@@ -329,8 +337,13 @@ class TrialMetadata(BaseModel):
     difficulty_level: Optional[int] = None
     timestamp_start: float
     timestamp_end: float
+    timestamp_unix: Optional[float] = None
     build_time: Optional[float] = None  # Time spent building CRS (seconds)
     run_time: Optional[float] = None  # Time spent running CRS (seconds)
+    build_start_time: Optional[float] = None
+    build_end_time: Optional[float] = None
+    run_start_time: Optional[float] = None
+    run_end_time: Optional[float] = None
 
     # Experiment-level fields
     experiment_name: Optional[str] = None
