@@ -1532,6 +1532,29 @@ def run_experiment_local(
         _cleanup_experiment_artifacts(experiment_name, config)
 
 
+def _resolve_metadata_timestamp_pair(metadata: TrialMetadata) -> tuple[str, float]:
+    """Return matching ISO and Unix metadata timestamps."""
+    if metadata.timestamp:
+        try:
+            timestamp_unix = datetime.fromisoformat(
+                metadata.timestamp.replace("Z", "+00:00")
+            ).timestamp()
+            return metadata.timestamp, timestamp_unix
+        except ValueError:
+            logger.warning(
+                "Could not parse trial metadata timestamp; "
+                f"falling back to Unix value: {metadata.timestamp!r}"
+            )
+
+    timestamp_unix = (
+        metadata.timestamp_unix
+        if metadata.timestamp_unix is not None
+        else metadata.timestamp_start
+    )
+    timestamp = datetime.fromtimestamp(timestamp_unix, timezone.utc).isoformat()
+    return timestamp, timestamp_unix
+
+
 def _write_orchestrator_marker(
     trial_result: TrialResult, config: ExperimentConfig
 ) -> None:
@@ -1579,14 +1602,8 @@ def _write_orchestrator_marker(
     # (local worker already wrote full metadata)
     metadata_path = trial_dir / "metadata.json"
     if not metadata_path.exists():
-        metadata_timestamp_unix = (
-            trial_result.metadata.timestamp_unix
-            if trial_result.metadata.timestamp_unix is not None
-            else trial_result.metadata.timestamp_start
-        )
-        metadata_timestamp = (
-            trial_result.metadata.timestamp
-            or datetime.fromtimestamp(metadata_timestamp_unix, timezone.utc).isoformat()
+        metadata_timestamp, metadata_timestamp_unix = _resolve_metadata_timestamp_pair(
+            trial_result.metadata
         )
         metadata_dict = {
             "timestamp": metadata_timestamp,

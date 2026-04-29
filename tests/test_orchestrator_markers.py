@@ -303,6 +303,31 @@ class TestWriteOrchestratorMarker:
         assert metadata["timestamp"] == "2026-04-29T12:00:00+00:00"
         assert metadata["timestamp_unix"] == 1777464000.0
 
+    def test_metadata_fallback_derives_unix_from_existing_iso_timestamp(
+        self, tmp_path: Path
+    ):
+        config = _make_experiment_config(tmp_path)
+        result = _make_trial_result()
+        result.metadata.timestamp = "2026-04-29T12:00:00+00:00"
+        result.metadata.timestamp_unix = None
+        result.metadata.timestamp_start = 0.0
+
+        _write_orchestrator_marker(result, config)
+
+        trial_dir = _build_trial_output_path(
+            filestore=config.experiment_filestore.resolve(),
+            experiment_name=config.experiment,
+            crs=result.crs,
+            benchmark=result.benchmark,
+            harness=result.harness,
+            mode=result.mode,
+            sanitizer=result.sanitizer,
+            trial_num=result.trial_num,
+        )
+        metadata = json.loads((trial_dir / "metadata.json").read_text())
+        assert metadata["timestamp"] == "2026-04-29T12:00:00+00:00"
+        assert metadata["timestamp_unix"] == 1777464000.0
+
     def test_metadata_contains_sanitizer(self, tmp_path: Path):
         config = _make_experiment_config(tmp_path)
         result = _make_trial_result(sanitizer="memory")
