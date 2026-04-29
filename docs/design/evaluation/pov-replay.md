@@ -82,7 +82,8 @@ Each artifact directory contains:
 Replay also writes:
 
 - `manifest.json` for command-level inputs and runtime settings
-- `summary.json` for aggregate counters, including raw-versus-deduped 0day counters and `crashing_replay_count`
+- `summary.json` for aggregate counters, including raw-versus-deduped 0day counters, `crashing_replay_count`, explicit original-POV totals, and a `current_run` timing block
+- `group-summary.json` for per-`(mapped-project, sanitizer)` workload and timing rows, including `--resume` reuse state
 - `0day.log` for append-only qualifying-crash JSONL rows emitted as individual harness results finish
 - `0day.json` for a qualifying-crash top-level export
 - `0day-dedup.json` for a crash-signature-grouped qualifying-crash export
@@ -151,6 +152,27 @@ qualifying-crash view:
 These are distinct from physical replay-task dedup counters such as
 `physical_replay_tasks` and `deduplicated_replay_tasks_saved`.
 
+`summary.json` also reports the full discovered workload separately from the
+current invocation:
+
+- `original_pov_instances_total`: total discovered source POV instances
+- `current_run.group_count_total`: replay groups represented in the output
+- `current_run.group_count_executed`: groups executed in this invocation
+- `current_run.group_count_reused`: groups satisfied by `--resume`
+- `current_run.physical_replay_tasks_executed`: physical replay tasks executed
+  in this invocation
+- `current_run.physical_replay_tasks_reused`: physical replay tasks represented
+  only by reused checkpoints
+- `current_run.timing.*`: current-run wall-clock breakdown for planning, group
+  execution, finalization, and per-phase active/summed wall time across lock
+  wait, build/prepare, session-pool setup, replay, and result aggregation
+
+`group-summary.json` exposes the per-group view behind those current-run
+aggregates. Each row records the mapped project, sanitizer, source POV count,
+checkpoint reuse state, replay-task counts, summary counters, per-group timing
+totals, and current-run phase offsets when the group executed in the present
+invocation.
+
 `0day.log` is deliberately earlier and more granular than `0day.json`. Each line
 contains one source record plus one qualifying replay row and is flushed to
 disk immediately so operators can tail live results during long scans. The
@@ -171,6 +193,10 @@ final `0day.json` remains the aggregated raw qualifying-crash export, while
 - a missing latest project directory produces `target_project_missing`
 - build failures produce `build_error` for every record in that `(mapped_project, sanitizer)` group
 - interrupted or erroring groups do not write a resume checkpoint, so `--resume` reruns them completely on the next invocation while preserving any previously appended `0day.log` crash lines
+- `physical_replay_tasks_per_second` and `original_pov_instances_per_second`
+  remain output-level effective throughput metrics over `elapsed_seconds`; use
+  `current_run` plus `group-summary.json` when operators need replay-only wall
+  time or must separate newly executed work from checkpoint-reused work
 - when a rebuild is required, stale plain-build metadata is discarded before the build starts so a failed rebuild cannot leave a false reusable cache marker behind
 - session start or replay runtime failures produce `error`
 - one group's failure must not abort replay for unrelated groups

@@ -505,13 +505,32 @@ def test_replay_engine_records_and_logs_throughput_metrics(tmp_path: Path) -> No
     )
 
     with (
-        patch("crsbench.evaluation.replay.engine.time.monotonic") as mock_monotonic,
+        patch.object(engine, "_monotonic") as mock_monotonic,
         patch("crsbench.evaluation.replay.engine.logger.info") as mock_info,
     ):
-        mock_monotonic.side_effect = [100.0, 104.0]
+        mock_monotonic.side_effect = [
+            100.0,  # run start
+            100.2,  # planning end / group execution start
+            100.3,  # group start
+            100.3,  # lock wait start
+            100.4,  # lock acquired
+            100.4,  # build+prepare start
+            101.2,  # build+prepare end
+            101.2,  # session pool setup start
+            101.5,  # session pool setup end
+            101.5,  # replay start
+            103.0,  # replay end
+            103.0,  # result aggregation start
+            103.6,  # result aggregation end
+            103.7,  # group execution end / finalization start
+            104.0,  # finalization end
+        ]
         engine.run(records, source_dirs=[source_dir])
 
     summary = json.loads((tmp_path / "replay-out" / "summary.json").read_text())
+    group_summary = json.loads(
+        (tmp_path / "replay-out" / "group-summary.json").read_text()
+    )
     assert summary["elapsed_seconds"] == 4.0
     assert summary["naive_replay_tasks"] == 2
     assert summary["physical_replay_tasks"] == 1
@@ -519,6 +538,85 @@ def test_replay_engine_records_and_logs_throughput_metrics(tmp_path: Path) -> No
     assert summary["physical_replay_tasks_per_second"] == 0.25
     assert summary["original_pov_instances_per_second"] == 0.5
     assert summary["dedup_multiplier"] == 2.0
+    assert summary["original_pov_instances_total"] == 2
+    assert summary["current_run"] == {
+        "group_count_total": 1,
+        "group_count_executed": 1,
+        "group_count_reused": 0,
+        "physical_replay_tasks_executed": 1,
+        "physical_replay_tasks_reused": 0,
+        "timing": {
+            "planning_wall_seconds": 0.2,
+            "group_execution_wall_seconds": 3.5,
+            "finalization_wall_seconds": 0.3,
+            "lock_wait_active_wall_seconds": 0.1,
+            "build_and_prepare_active_wall_seconds": 0.8,
+            "session_pool_setup_active_wall_seconds": 0.3,
+            "replay_active_wall_seconds": 1.5,
+            "result_aggregation_active_wall_seconds": 0.6,
+            "lock_wait_wall_seconds_sum": 0.1,
+            "build_and_prepare_wall_seconds_sum": 0.8,
+            "session_pool_setup_wall_seconds_sum": 0.3,
+            "replay_wall_seconds_sum": 1.5,
+            "result_aggregation_wall_seconds_sum": 0.6,
+            "task_duration_seconds_sum": 1.0,
+            "task_duration_seconds_max": 1.0,
+        },
+    }
+    assert group_summary == [
+        {
+            "mapped_project": "curl",
+            "sanitizer": "address",
+            "source_pov_instances": 2,
+            "checkpoint_reused": False,
+            "naive_replay_tasks": 2,
+            "physical_replay_tasks": 1,
+            "summary_updates": {
+                "projects_built": 1,
+                "unique_replay_tasks_executed": 1,
+                "crash_count": 1,
+            },
+            "timing": {
+                "group_wall_seconds": 3.3,
+                "lock_wait_wall_seconds": 0.1,
+                "build_and_prepare_wall_seconds": 0.8,
+                "session_pool_setup_wall_seconds": 0.3,
+                "replay_wall_seconds": 1.5,
+                "result_aggregation_wall_seconds": 0.6,
+                "task_duration_seconds_sum": 1.0,
+                "task_duration_seconds_max": 1.0,
+                "task_duration_seconds_avg": 1.0,
+                "session_count": 1,
+            },
+            "phase_intervals": {
+                "project_lock_wait": {
+                    "started_offset_seconds": 0.3,
+                    "ended_offset_seconds": 0.4,
+                    "wall_seconds": 0.1,
+                },
+                "build_and_prepare": {
+                    "started_offset_seconds": 0.4,
+                    "ended_offset_seconds": 1.2,
+                    "wall_seconds": 0.8,
+                },
+                "session_pool_setup": {
+                    "started_offset_seconds": 1.2,
+                    "ended_offset_seconds": 1.5,
+                    "wall_seconds": 0.3,
+                },
+                "replay": {
+                    "started_offset_seconds": 1.5,
+                    "ended_offset_seconds": 3.0,
+                    "wall_seconds": 1.5,
+                },
+                "result_aggregation": {
+                    "started_offset_seconds": 3.0,
+                    "ended_offset_seconds": 3.6,
+                    "wall_seconds": 0.6,
+                },
+            },
+        }
+    ]
     mock_info.assert_called_once()
     assert "throughput" in mock_info.call_args.args[0]
     assert "dedup_multiplier=2.000" in mock_info.call_args.args[0]
@@ -666,7 +764,24 @@ def test_replay_engine_resume_skips_completed_groups(tmp_path: Path) -> None:
     resume_engine.run([record_a, record_b], source_dirs=[source_dir])
 
     assert resume_infra.build_calls == [("zlib", "address")]
+    summary = json.loads((tmp_path / "replay-out" / "summary.json").read_text())
+    group_summary = json.loads(
+        (tmp_path / "replay-out" / "group-summary.json").read_text()
+    )
     data = json.loads((tmp_path / "replay-out" / "pov-to-crash-map.json").read_text())
+    assert summary["original_pov_instances_total"] == 2
+    assert summary["current_run"]["group_count_total"] == 2
+    assert summary["current_run"]["group_count_executed"] == 1
+    assert summary["current_run"]["group_count_reused"] == 1
+    assert summary["current_run"]["physical_replay_tasks_executed"] == 1
+    assert summary["current_run"]["physical_replay_tasks_reused"] == 1
+    assert {
+        (entry["mapped_project"], entry["checkpoint_reused"]) for entry in group_summary
+    } == {("curl", True), ("zlib", False)}
+    assert any(
+        entry["mapped_project"] == "curl" and entry["phase_intervals"] == {}
+        for entry in group_summary
+    )
     assert {entry["mapped_oss_fuzz_project"] for entry in data} == {"curl", "zlib"}
 
 

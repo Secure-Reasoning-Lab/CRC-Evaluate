@@ -32,8 +32,8 @@ from crsbench.utils.logger import get_logger
 SessionPoolFactory = Callable[..., WarmReplaySessionPool]
 logger = get_logger(__name__)
 
-_GROUP_CHECKPOINT_FORMAT_VERSION = 2
-_REPLAY_OUTPUT_FORMAT_VERSION = 2
+_GROUP_CHECKPOINT_FORMAT_VERSION = 3
+_REPLAY_OUTPUT_FORMAT_VERSION = 3
 _ZERO_DAY_REQUIRED_MARKER = "AddressSanitizer"
 _ZERO_DAY_JAVA_EXCEPTION_MARKERS = (
     "== Java Exception:",
@@ -54,6 +54,9 @@ class GroupReplayOutcome:
     summary_updates: dict[str, int] = field(default_factory=dict)
     naive_replay_tasks: int = 0
     physical_replay_tasks: int = 0
+    timing: dict[str, float | int] = field(default_factory=dict)
+    phase_intervals: dict[str, dict[str, float]] = field(default_factory=dict)
+    checkpoint_reused: bool = False
 
 
 class ReplayEngine:
@@ -114,6 +117,76 @@ class ReplayEngine:
             for index in range(session_count)
         ]
         return WarmReplaySessionPool(sessions)
+
+    def _monotonic(self) -> float:
+        return time.monotonic()
+
+    @staticmethod
+    def _empty_group_timing() -> dict[str, float | int]:
+        return {
+            "group_wall_seconds": 0.0,
+            "lock_wait_wall_seconds": 0.0,
+            "build_and_prepare_wall_seconds": 0.0,
+            "session_pool_setup_wall_seconds": 0.0,
+            "replay_wall_seconds": 0.0,
+            "result_aggregation_wall_seconds": 0.0,
+            "task_duration_seconds_sum": 0.0,
+            "task_duration_seconds_max": 0.0,
+            "task_duration_seconds_avg": 0.0,
+            "session_count": 0,
+        }
+
+    @classmethod
+    def _group_timing_payload(
+        cls,
+        timing: dict[str, float | int] | None = None,
+    ) -> dict[str, float | int]:
+        payload = cls._empty_group_timing()
+        if isinstance(timing, dict):
+            payload.update(timing)
+        return payload
+
+    @staticmethod
+    def _phase_interval(
+        started_at: float,
+        ended_at: float,
+        *,
+        run_started_at: float,
+    ) -> dict[str, float]:
+        wall_seconds = max(0.0, ended_at - started_at)
+        started_offset = max(0.0, started_at - run_started_at)
+        ended_offset = max(started_offset, ended_at - run_started_at)
+        return {
+            "started_offset_seconds": round(started_offset, 6),
+            "ended_offset_seconds": round(ended_offset, 6),
+            "wall_seconds": round(wall_seconds, 6),
+        }
+
+    @staticmethod
+    def _merged_interval_duration(
+        intervals: list[dict[str, float] | None],
+    ) -> float:
+        spans = sorted(
+            (
+                interval["started_offset_seconds"],
+                interval["ended_offset_seconds"],
+            )
+            for interval in intervals
+            if interval is not None
+        )
+        if not spans:
+            return 0.0
+
+        merged_start, merged_end = spans[0]
+        total = 0.0
+        for start, end in spans[1:]:
+            if start <= merged_end:
+                merged_end = max(merged_end, end)
+                continue
+            total += merged_end - merged_start
+            merged_start, merged_end = start, end
+        total += merged_end - merged_start
+        return round(total, 6)
 
     def _artifact_dir(self, task: ReplayTask) -> Path:
         return (
@@ -201,6 +274,7 @@ class ReplayEngine:
             "summary_updates": outcome.summary_updates,
             "naive_replay_tasks": outcome.naive_replay_tasks,
             "physical_replay_tasks": outcome.physical_replay_tasks,
+            "timing": outcome.timing,
         }
 
     @staticmethod
@@ -216,7 +290,27 @@ class ReplayEngine:
             summary_updates=data.get("summary_updates", {}),
             naive_replay_tasks=data.get("naive_replay_tasks", 0),
             physical_replay_tasks=data.get("physical_replay_tasks", 0),
+            timing=ReplayEngine._group_timing_payload(data.get("timing")),
         )
+
+    @staticmethod
+    def _serialize_group_summary(
+        mapped_project: str,
+        sanitizer: str,
+        records: list[SourcePovRecord],
+        outcome: GroupReplayOutcome,
+    ) -> dict:
+        return {
+            "mapped_project": mapped_project,
+            "sanitizer": sanitizer,
+            "source_pov_instances": len(records),
+            "checkpoint_reused": outcome.checkpoint_reused,
+            "naive_replay_tasks": outcome.naive_replay_tasks,
+            "physical_replay_tasks": outcome.physical_replay_tasks,
+            "summary_updates": outcome.summary_updates,
+            "timing": outcome.timing,
+            "phase_intervals": outcome.phase_intervals,
+        }
 
     def _load_group_checkpoint(
         self,
@@ -531,6 +625,8 @@ class ReplayEngine:
         error_message: str | None = None,
         naive_replay_tasks: int = 0,
         physical_replay_tasks: int = 0,
+        timing: dict[str, float | int] | None = None,
+        phase_intervals: dict[str, dict[str, float]] | None = None,
     ) -> GroupReplayOutcome:
         entries: list[dict] = []
         trial_entries: dict[tuple[str, str], list[dict]] = defaultdict(list)
@@ -554,6 +650,8 @@ class ReplayEngine:
             summary_updates=updates,
             naive_replay_tasks=naive_replay_tasks,
             physical_replay_tasks=physical_replay_tasks,
+            timing=self._group_timing_payload(timing),
+            phase_intervals=dict(phase_intervals or {}),
         )
 
     def _run_group(
@@ -561,6 +659,8 @@ class ReplayEngine:
         mapped_project: str,
         sanitizer: str,
         records: list[SourcePovRecord],
+        *,
+        run_started_at: float,
     ) -> GroupReplayOutcome:
         project_dir = self.projects_root / mapped_project
         if not project_dir.exists():
@@ -574,8 +674,24 @@ class ReplayEngine:
         summary_updates: dict[str, int] = defaultdict(int)
         naive_replay_tasks = 0
         physical_replay_tasks = 0
+        timing = self._group_timing_payload()
+        phase_intervals: dict[str, dict[str, float]] = {}
 
+        group_started = self._monotonic()
+        lock_wait_started = self._monotonic()
         with self._project_lock(mapped_project):
+            lock_wait_ended = self._monotonic()
+            timing["lock_wait_wall_seconds"] = round(
+                lock_wait_ended - lock_wait_started,
+                6,
+            )
+            phase_intervals["project_lock_wait"] = self._phase_interval(
+                lock_wait_started,
+                lock_wait_ended,
+                run_started_at=run_started_at,
+            )
+
+            build_prepare_started = self._monotonic()
             try:
                 ensure_project_link(
                     self.oss_fuzz_path, self.projects_root, mapped_project
@@ -585,20 +701,52 @@ class ReplayEngine:
                     sanitizer=sanitizer,
                 )
             except Exception as exc:
+                build_prepare_ended = self._monotonic()
+                timing["build_and_prepare_wall_seconds"] = round(
+                    build_prepare_ended - build_prepare_started,
+                    6,
+                )
+                timing["group_wall_seconds"] = round(
+                    build_prepare_ended - group_started,
+                    6,
+                )
+                phase_intervals["build_and_prepare"] = self._phase_interval(
+                    build_prepare_started,
+                    build_prepare_ended,
+                    run_started_at=run_started_at,
+                )
                 return self._group_status_outcome(
                     records,
                     mapped_project=mapped_project,
                     status="error",
                     summary_counter="error_count",
                     error_message=str(exc),
+                    timing=timing,
+                    phase_intervals=phase_intervals,
                 )
+            build_prepare_ended = self._monotonic()
+            timing["build_and_prepare_wall_seconds"] = round(
+                build_prepare_ended - build_prepare_started,
+                6,
+            )
+            phase_intervals["build_and_prepare"] = self._phase_interval(
+                build_prepare_started,
+                build_prepare_ended,
+                run_started_at=run_started_at,
+            )
 
             if not build_result.success:
+                timing["group_wall_seconds"] = round(
+                    build_prepare_ended - group_started,
+                    6,
+                )
                 return self._group_status_outcome(
                     records,
                     mapped_project=mapped_project,
                     status="build_error",
                     summary_counter="build_error_count",
+                    timing=timing,
+                    phase_intervals=phase_intervals,
                 )
 
             summary_updates["projects_built"] += 1
@@ -608,6 +756,7 @@ class ReplayEngine:
                 mapped_project, sanitizer, harnesses, records
             )
             summary_updates["unique_replay_tasks_executed"] += len(tasks)
+            timing["session_count"] = max(1, min(self.jobs, len(tasks))) if tasks else 0
 
             if not tasks:
                 entries: list[dict] = []
@@ -630,6 +779,12 @@ class ReplayEngine:
                     summary_updates=dict(summary_updates),
                     naive_replay_tasks=naive_replay_tasks,
                     physical_replay_tasks=0,
+                    timing=timing,
+                    phase_intervals=phase_intervals,
+                )
+                outcome.timing["group_wall_seconds"] = round(
+                    build_prepare_ended - group_started,
+                    6,
                 )
                 self._write_group_checkpoint(
                     mapped_project,
@@ -639,6 +794,7 @@ class ReplayEngine:
                 )
                 return outcome
 
+            session_setup_started = self._monotonic()
             try:
                 pool = self.session_pool_factory(
                     project_name=mapped_project,
@@ -646,6 +802,20 @@ class ReplayEngine:
                     session_count=max(1, min(self.jobs, len(tasks))),
                 )
             except Exception as exc:
+                session_setup_ended = self._monotonic()
+                timing["session_pool_setup_wall_seconds"] = round(
+                    session_setup_ended - session_setup_started,
+                    6,
+                )
+                timing["group_wall_seconds"] = round(
+                    session_setup_ended - group_started,
+                    6,
+                )
+                phase_intervals["session_pool_setup"] = self._phase_interval(
+                    session_setup_started,
+                    session_setup_ended,
+                    run_started_at=run_started_at,
+                )
                 return self._group_status_outcome(
                     records,
                     mapped_project=mapped_project,
@@ -654,7 +824,19 @@ class ReplayEngine:
                     summary_updates=dict(summary_updates),
                     error_message=str(exc),
                     naive_replay_tasks=naive_replay_tasks,
+                    timing=timing,
+                    phase_intervals=phase_intervals,
                 )
+            session_setup_ended = self._monotonic()
+            timing["session_pool_setup_wall_seconds"] = round(
+                session_setup_ended - session_setup_started,
+                6,
+            )
+            phase_intervals["session_pool_setup"] = self._phase_interval(
+                session_setup_started,
+                session_setup_ended,
+                run_started_at=run_started_at,
+            )
 
             replay_results_by_record: dict[SourcePovRecord, list[ReplayResult]] = (
                 defaultdict(list)
@@ -691,6 +873,8 @@ class ReplayEngine:
                 for record in crash_records:
                     self._append_zero_day_log(record, replay_result)
 
+            replay_started = self._monotonic()
+            replay_error: str | None = None
             try:
                 session_results = pool.run_many(
                     tasks,
@@ -698,17 +882,36 @@ class ReplayEngine:
                     on_result=record_task_result,
                 )
             except Exception as exc:
+                replay_error = str(exc)
+                session_results = {}
+            finally:
+                pool.close()
+            replay_ended = self._monotonic()
+            timing["replay_wall_seconds"] = round(
+                replay_ended - replay_started,
+                6,
+            )
+            phase_intervals["replay"] = self._phase_interval(
+                replay_started,
+                replay_ended,
+                run_started_at=run_started_at,
+            )
+            if replay_error is not None:
+                timing["group_wall_seconds"] = round(
+                    replay_ended - group_started,
+                    6,
+                )
                 return self._group_status_outcome(
                     records,
                     mapped_project=mapped_project,
                     status="error",
                     summary_counter="error_count",
                     summary_updates=dict(summary_updates),
-                    error_message=str(exc),
+                    error_message=replay_error,
                     naive_replay_tasks=naive_replay_tasks,
+                    timing=timing,
+                    phase_intervals=phase_intervals,
                 )
-            finally:
-                pool.close()
 
             for task in tasks:
                 if task not in replay_results_by_task:
@@ -723,7 +926,25 @@ class ReplayEngine:
             physical_replay_tasks = len(replay_results_by_task)
             for replay_result in replay_results_by_task.values():
                 summary_updates[replay_result.outcome + "_count"] += 1
+            if physical_replay_tasks > 0:
+                task_duration_sum = sum(
+                    replay_result.duration_seconds
+                    for replay_result in replay_results_by_task.values()
+                )
+                timing["task_duration_seconds_sum"] = round(task_duration_sum, 6)
+                timing["task_duration_seconds_max"] = round(
+                    max(
+                        replay_result.duration_seconds
+                        for replay_result in replay_results_by_task.values()
+                    ),
+                    6,
+                )
+                timing["task_duration_seconds_avg"] = round(
+                    task_duration_sum / physical_replay_tasks,
+                    6,
+                )
 
+            result_aggregation_started = self._monotonic()
             entries: list[dict] = []
             zero_day_entries: list[dict] = []
             trial_entries: dict[tuple[str, str], list[dict]] = defaultdict(list)
@@ -755,6 +976,20 @@ class ReplayEngine:
                             ],
                         )
                     )
+            result_aggregation_ended = self._monotonic()
+            timing["result_aggregation_wall_seconds"] = round(
+                result_aggregation_ended - result_aggregation_started,
+                6,
+            )
+            timing["group_wall_seconds"] = round(
+                result_aggregation_ended - group_started,
+                6,
+            )
+            phase_intervals["result_aggregation"] = self._phase_interval(
+                result_aggregation_started,
+                result_aggregation_ended,
+                run_started_at=run_started_at,
+            )
 
             outcome = GroupReplayOutcome(
                 entries=entries,
@@ -763,6 +998,8 @@ class ReplayEngine:
                 summary_updates=dict(summary_updates),
                 naive_replay_tasks=naive_replay_tasks,
                 physical_replay_tasks=physical_replay_tasks,
+                timing=timing,
+                phase_intervals=phase_intervals,
             )
             self._write_group_checkpoint(
                 mapped_project,
@@ -779,7 +1016,7 @@ class ReplayEngine:
         discovery_stats: dict[str, int] | None = None,
         source_dirs: list[Path] | None = None,
     ) -> None:
-        started_at = time.monotonic()
+        started_at = self._monotonic()
         self.output_dir.mkdir(parents=True, exist_ok=True)
         discovery_stats = discovery_stats or {}
         input_source_dirs = (
@@ -876,20 +1113,29 @@ class ReplayEngine:
                         "Reusing checkpointed replay group "
                         f"project={key[0]} sanitizer={key[1]}"
                     )
+                    checkpoint.checkpoint_reused = True
                     group_outcomes[key] = checkpoint
                     continue
             pending_group_items.append((key, records))
 
+        planning_ended = self._monotonic()
         if self.group_jobs == 1:
             for (mapped_project, sanitizer), records in pending_group_items:
                 group_outcomes[(mapped_project, sanitizer)] = self._run_group(
-                    mapped_project, sanitizer, records
+                    mapped_project,
+                    sanitizer,
+                    records,
+                    run_started_at=started_at,
                 )
         elif pending_group_items:
             with ThreadPoolExecutor(max_workers=self.group_jobs) as executor:
                 future_to_key = {
                     executor.submit(
-                        self._run_group, mapped_project, sanitizer, records
+                        self._run_group,
+                        mapped_project,
+                        sanitizer,
+                        records,
+                        run_started_at=started_at,
                     ): (
                         mapped_project,
                         sanitizer,
@@ -908,6 +1154,7 @@ class ReplayEngine:
                             summary_counter="error_count",
                             error_message=str(exc),
                         )
+        group_execution_ended = self._monotonic()
 
         for key, _records in group_items:
             outcome = group_outcomes[key]
@@ -920,13 +1167,7 @@ class ReplayEngine:
             for summary_key, value in outcome.summary_updates.items():
                 summary[summary_key] += value
 
-        elapsed_seconds = round(time.monotonic() - started_at, 6)
-        physical_replay_tasks_per_second = (
-            physical_replay_tasks / elapsed_seconds if elapsed_seconds > 0 else 0.0
-        )
-        original_pov_instances_per_second = (
-            len(source_records) / elapsed_seconds if elapsed_seconds > 0 else 0.0
-        )
+        finalization_started = group_execution_ended
         deduplicated_replay_tasks_saved = naive_replay_tasks - physical_replay_tasks
         dedup_multiplier = (
             naive_replay_tasks / physical_replay_tasks
@@ -936,6 +1177,132 @@ class ReplayEngine:
         deduplicated_zero_day_entries = build_deduplicated_zero_day_entries(
             zero_day_entries
         )
+        executed_group_outcomes = [
+            outcome
+            for outcome in group_outcomes.values()
+            if not outcome.checkpoint_reused
+        ]
+        current_run_group_count_executed = len(executed_group_outcomes)
+        current_run_group_count_reused = (
+            len(group_items) - current_run_group_count_executed
+        )
+        current_run_physical_replay_tasks_executed = sum(
+            outcome.physical_replay_tasks for outcome in executed_group_outcomes
+        )
+        current_run_physical_replay_tasks_reused = (
+            physical_replay_tasks - current_run_physical_replay_tasks_executed
+        )
+
+        def active_wall_seconds(phase_name: str) -> float:
+            return self._merged_interval_duration(
+                [
+                    outcome.phase_intervals.get(phase_name)
+                    for outcome in executed_group_outcomes
+                ]
+            )
+
+        finalization_ended = self._monotonic()
+        elapsed_seconds = round(finalization_ended - started_at, 6)
+        physical_replay_tasks_per_second = (
+            physical_replay_tasks / elapsed_seconds if elapsed_seconds > 0 else 0.0
+        )
+        original_pov_instances_per_second = (
+            len(source_records) / elapsed_seconds if elapsed_seconds > 0 else 0.0
+        )
+        current_run = {
+            "group_count_total": len(group_items),
+            "group_count_executed": current_run_group_count_executed,
+            "group_count_reused": current_run_group_count_reused,
+            "physical_replay_tasks_executed": (
+                current_run_physical_replay_tasks_executed
+            ),
+            "physical_replay_tasks_reused": current_run_physical_replay_tasks_reused,
+            "timing": {
+                "planning_wall_seconds": round(planning_ended - started_at, 6),
+                "group_execution_wall_seconds": round(
+                    group_execution_ended - planning_ended,
+                    6,
+                ),
+                "finalization_wall_seconds": round(
+                    finalization_ended - finalization_started,
+                    6,
+                ),
+                "lock_wait_active_wall_seconds": active_wall_seconds(
+                    "project_lock_wait"
+                ),
+                "build_and_prepare_active_wall_seconds": active_wall_seconds(
+                    "build_and_prepare"
+                ),
+                "session_pool_setup_active_wall_seconds": active_wall_seconds(
+                    "session_pool_setup"
+                ),
+                "replay_active_wall_seconds": active_wall_seconds("replay"),
+                "result_aggregation_active_wall_seconds": active_wall_seconds(
+                    "result_aggregation"
+                ),
+                "lock_wait_wall_seconds_sum": round(
+                    sum(
+                        float(outcome.timing["lock_wait_wall_seconds"])
+                        for outcome in executed_group_outcomes
+                    ),
+                    6,
+                ),
+                "build_and_prepare_wall_seconds_sum": round(
+                    sum(
+                        float(outcome.timing["build_and_prepare_wall_seconds"])
+                        for outcome in executed_group_outcomes
+                    ),
+                    6,
+                ),
+                "session_pool_setup_wall_seconds_sum": round(
+                    sum(
+                        float(outcome.timing["session_pool_setup_wall_seconds"])
+                        for outcome in executed_group_outcomes
+                    ),
+                    6,
+                ),
+                "replay_wall_seconds_sum": round(
+                    sum(
+                        float(outcome.timing["replay_wall_seconds"])
+                        for outcome in executed_group_outcomes
+                    ),
+                    6,
+                ),
+                "result_aggregation_wall_seconds_sum": round(
+                    sum(
+                        float(outcome.timing["result_aggregation_wall_seconds"])
+                        for outcome in executed_group_outcomes
+                    ),
+                    6,
+                ),
+                "task_duration_seconds_sum": round(
+                    sum(
+                        float(outcome.timing["task_duration_seconds_sum"])
+                        for outcome in executed_group_outcomes
+                    ),
+                    6,
+                ),
+                "task_duration_seconds_max": round(
+                    max(
+                        (
+                            float(outcome.timing["task_duration_seconds_max"])
+                            for outcome in executed_group_outcomes
+                        ),
+                        default=0.0,
+                    ),
+                    6,
+                ),
+            },
+        }
+        group_summary = [
+            self._serialize_group_summary(
+                key[0],
+                key[1],
+                records,
+                group_outcomes[key],
+            )
+            for key, records in group_items
+        ]
         # These counters reflect the emitted crash-only 0day view, not
         # deduplicated physical replay tasks.
         summary["0day_count"] = len(zero_day_entries)
@@ -947,6 +1314,7 @@ class ReplayEngine:
         summary.update(
             {
                 "elapsed_seconds": elapsed_seconds,
+                "original_pov_instances_total": len(source_records),
                 "naive_replay_tasks": naive_replay_tasks,
                 "physical_replay_tasks": physical_replay_tasks,
                 "deduplicated_replay_tasks_saved": deduplicated_replay_tasks_saved,
@@ -959,11 +1327,16 @@ class ReplayEngine:
                     6,
                 ),
                 "dedup_multiplier": round(dedup_multiplier, 6),
+                "current_run": current_run,
             }
         )
 
         (self.output_dir / "summary.json").write_text(
             json.dumps(summary, indent=2),
+            encoding="utf-8",
+        )
+        (self.output_dir / "group-summary.json").write_text(
+            json.dumps(group_summary, indent=2),
             encoding="utf-8",
         )
         (self.output_dir / "pov-to-crash-map.json").write_text(

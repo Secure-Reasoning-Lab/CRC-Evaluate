@@ -118,8 +118,11 @@ Replay writes the following under `--output`:
 
 - `manifest.json`: source roots, helper/projects paths, and runtime settings
 - `summary.json`: aggregate counters for mappings, builds, crashes, timeouts,
-  errors, plus raw-versus-deduped 0day counters and `crashing_replay_count`
-  for the emitted crash-only 0day view
+  errors, plus raw-versus-deduped 0day counters, `crashing_replay_count`,
+  explicit original-POV totals, and a `current_run` timing breakdown for the
+  emitted crash-only 0day view
+- `group-summary.json`: per-`(project, sanitizer)` workload and timing rows,
+  including whether a group was reused from `--resume`
 - `0day.log`: append-only JSONL stream written as each qualifying
   crash row lands; this is the earliest view during a long scan and is
   deduplicated across `--resume` reruns
@@ -176,6 +179,36 @@ cleanly, replay falls back to an exact raw-log hash instead of dropping the row.
 - `crashing_replay_count`: raw qualifying replay-row count retained in
   `0day.json`
 
+It also distinguishes the full replay workload from the work done in the
+current invocation:
+
+- `original_pov_instances_total`: total discovered source POV instances used as
+  the numerator for `original_pov_instances_per_second`
+- `current_run.group_count_total`: all replay groups represented in the output
+- `current_run.group_count_executed`: groups actually executed in this
+  invocation
+- `current_run.group_count_reused`: groups satisfied by `--resume`
+- `current_run.physical_replay_tasks_executed`: physical replay tasks executed
+  in this invocation
+- `current_run.physical_replay_tasks_reused`: physical replay tasks represented
+  only by reused checkpoints
+- `current_run.timing.*`: current-run wall-clock breakdown, including
+  `planning_wall_seconds`, `group_execution_wall_seconds`,
+  `finalization_wall_seconds`, plus per-phase active-wall and summed-wall
+  totals for lock wait, build/prepare, session-pool setup, replay, and result
+  aggregation
+
+`group-summary.json` complements that top-level view. Each row records:
+
+- `mapped_project` and `sanitizer`
+- `source_pov_instances`
+- `checkpoint_reused`
+- `naive_replay_tasks` and `physical_replay_tasks`
+- `summary_updates` for that group
+- `timing` with per-group phase durations and per-task duration aggregates
+- `phase_intervals` with current-run offsets for the measured phases when the
+  group executed in this invocation
+
 `0day.log` is intentionally more granular than `0day.json`: each line is one
 source POV plus one qualifying replay row, appended immediately after that
 harness finishes. The final `0day.json` later folds those rows back into one
@@ -192,6 +225,11 @@ aggregation after all replay groups finish.
 - `--resume` only reuses groups that finished cleanly and whose discovered input
   signature still matches the current source records. Interrupted or erroring
   groups rerun from scratch on the next invocation.
+- `physical_replay_tasks_per_second` and
+  `original_pov_instances_per_second` remain output-level effective throughput
+  metrics over `elapsed_seconds`; use `current_run` plus `group-summary.json`
+  when you need to isolate replay-only wall time or understand `--resume`
+  reuse effects.
 - Replay checkpoints are format-versioned, so incompatible older group
   checkpoints are ignored instead of being reused under newer replay semantics.
 - `--cache-root` is persistent by design. If you need to discard the cached
