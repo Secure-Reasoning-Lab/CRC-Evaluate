@@ -42,6 +42,10 @@ class CSVReportGenerator:
         # Cache (benchmark, harness, sanitizer) -> list[str] to avoid
         # re-parsing meta.yaml across the many trials that share a harness.
         self._meta_cpv_cache: dict[tuple[str, str, str], list[str]] = {}
+        # Cache (benchmark, harness) -> collected-seed file count so the
+        # cpv_analysis report does not stat the same corpus directory
+        # repeatedly across trials of the same harness.
+        self._seed_count_cache: dict[tuple[str, str], int] = {}
 
     def generate_trial_report(
         self, trial_metrics: dict[str, Any], _snapshots: list[Any] | None = None
@@ -367,7 +371,11 @@ class CSVReportGenerator:
             cpv_id, matched, time_to_trigger, cost_to_trigger_usd, pov_hash,
             discovery_ts, trial_dir
         Extra columns when ``budget_usd`` is set:
-            budget_usd, trial_total_cost_usd, trial_time_at_budget
+            budget_usd, trial_time_at_budget
+
+        ``trial_total_cost_usd`` is the trial-level (= one harness run) LLM
+        spend from ``llm-usage.json``; the same value is repeated across CPV
+        rows of the same trial since cost cannot be attributed per CPV.
         """
         if budget_usd is None:
             out_path = self.output_dir / "cpv_analysis.csv"
@@ -402,7 +410,14 @@ class CSVReportGenerator:
                     harness=str(metadata.get("harness", "")),
                     sanitizer=str(metadata.get("sanitizer", "")),
                 )
-            cpv_to_first_pov = self._load_cpv_to_first_pov(paths)
+            # FDP-style benchmarks expose the same vulnerability through
+            # multiple harnesses, so verification can record cross-harness
+            # ``cpv_matched`` entries (e.g. a POV in the OripaOneFDP trial
+            # that also fits OripaOne's cpv_0). Pass the trial's expected
+            # CPVs as the allow-list so the report attributes each row only
+            # to the harness that actually owns the CPV in meta.yaml.
+            allowed_cpvs = set(expected_cpvs)
+            cpv_to_first_pov = self._load_cpv_to_first_pov(paths, allowed=allowed_cpvs)
 
             # Union of expected and matched ensures we surface unexpected
             # matches as well as expected-but-unmatched gaps.
@@ -420,13 +435,18 @@ class CSVReportGenerator:
                 "sanitizer": metadata.get("sanitizer", ""),
                 "trial_dir": str(trial_dir),
             }
-            trial_start_epoch = self._metadata_timestamp_epoch(metadata)
+            trial_start_epoch, anchor_source = self._resolve_trial_anchor(
+                paths, metadata
+            )
+            trial_total_cost = self._load_total_llm_cost(trial_dir)
+            trial_total_time = self._load_trial_total_time(trial_dir)
+            seed_count = self._count_collected_seeds(
+                str(metadata.get("benchmark", "")),
+                str(metadata.get("harness", "")),
+            )
 
             time_at_budget: float | None = None
-            trial_total_cost: float | None = None
             trial_ts = (trial_time_series or {}).get(str(trial_dir), [])
-            if trial_ts or budget_usd is not None:
-                trial_total_cost = self._load_total_llm_cost(trial_dir)
             if budget_usd is not None:
                 time_at_budget = self._compute_time_at_budget(
                     trial_ts,
@@ -467,12 +487,17 @@ class CSVReportGenerator:
                     "discovery_ts": (
                         match.get("discovery_ts") if matched and match else ""
                     ),
+                    "trial_total_cost_usd": (
+                        trial_total_cost if trial_total_cost is not None else ""
+                    ),
+                    "trial_total_time_seconds": (
+                        trial_total_time if trial_total_time is not None else ""
+                    ),
+                    "anchor_source": anchor_source or "",
+                    "seed_count": seed_count,
                 }
                 if budget_usd is not None:
                     row["budget_usd"] = budget_usd
-                    row["trial_total_cost_usd"] = (
-                        trial_total_cost if trial_total_cost is not None else ""
-                    )
                     row["trial_time_at_budget"] = (
                         time_at_budget if time_at_budget is not None else ""
                     )
@@ -492,12 +517,15 @@ class CSVReportGenerator:
             "cost_to_trigger_usd",
             "pov_hash",
             "discovery_ts",
+            "trial_total_cost_usd",
+            "trial_total_time_seconds",
+            "anchor_source",
+            "seed_count",
             "trial_dir",
         ]
         if budget_usd is not None:
             fieldnames += [
                 "budget_usd",
-                "trial_total_cost_usd",
                 "trial_time_at_budget",
             ]
         self._write_csv_rows(out_path, rows, fieldnames)
@@ -661,6 +689,39 @@ class CSVReportGenerator:
         except (TypeError, ValueError):
             return None
 
+    # crs_run_start_time is set after build, so the gap from
+    # metadata.timestamp is at most the build phase. One hour covers all
+    # observed cases; values outside this window indicate the anchor was
+    # rewritten by re-eval and must be discarded.
+    _CRS_START_VALID_AHEAD = 60.0
+    _CRS_START_VALID_BEHIND = 3600.0
+
+    @classmethod
+    def _resolve_trial_start_epoch(
+        cls, paths: TrialDir, metadata: dict[str, Any]
+    ) -> float | None:
+        """Resolve the trial start epoch (legacy single-value entry point)."""
+        epoch, _ = cls._resolve_trial_anchor(paths, metadata)
+        return epoch
+
+    @classmethod
+    def _resolve_trial_anchor(
+        cls, paths: TrialDir, metadata: dict[str, Any]
+    ) -> tuple[float | None, str | None]:
+        """Resolve the trial-start anchor and surface its provenance.
+
+        Delegates to ``crsbench.reporting.metrics.resolve_trial_anchor`` so
+        report generation and trial-level metrics stay aligned on the same
+        fallback chain (pre-reeval backup -> worker.log anchor line ->
+        live POV store -> worker.log run/build line -> metadata.timestamp).
+        """
+        from crsbench.reporting.metrics import resolve_trial_anchor
+
+        return resolve_trial_anchor(
+            paths.path,
+            metadata_epoch=cls._metadata_timestamp_epoch(metadata),
+        )
+
     @staticmethod
     def _match_relative_time(
         match: dict[str, Any] | None, trial_start_epoch: float | None
@@ -700,6 +761,20 @@ class CSVReportGenerator:
             return float(data.get("total_cost_usd", 0.0) or 0.0)
         except Exception:
             return None
+
+    @staticmethod
+    def _load_trial_total_time(trial_dir: Path) -> float | None:
+        """Wall-clock seconds for the trial, derived from worker.log.
+
+        Surfacing time in the cpv_analysis row (alongside the existing
+        ``trial_total_cost_usd`` column) lets downstream statistics include
+        trials that died before any snapshot was written. Worker log
+        timestamps are present whenever the trial got far enough to start
+        logging, which covers nearly all real failure modes.
+        """
+        from crsbench.reporting.metrics import _worker_log_wall_elapsed
+
+        return _worker_log_wall_elapsed(trial_dir)
 
     @staticmethod
     def _load_expected_cpv_ids(paths: TrialDir) -> list[str]:
@@ -772,8 +847,42 @@ class CSVReportGenerator:
         self._meta_cpv_cache[cache_key] = cpv_ids
         return list(cpv_ids)
 
+    def _count_collected_seeds(self, benchmark: str, harness: str) -> int:
+        """Return the number of seeds collected for a (benchmark, harness).
+
+        Reads ``<benchmarks_root>/<benchmark>/.aixcc/<harness>/corpus/`` —
+        the canonical corpus location populated by the seed-collection
+        pipeline — and counts regular files, excluding ``manifest.json``
+        and dotfiles. Returns 0 when ``benchmarks_root`` is unset or the
+        corpus directory does not exist (no corpus collected for this
+        harness, or non-corpus run).
+        """
+        if self.benchmarks_root is None or not benchmark or not harness:
+            return 0
+        cache_key = (benchmark, harness)
+        cached = self._seed_count_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        corpus_dir = self.benchmarks_root / benchmark / ".aixcc" / harness / "corpus"
+        if not corpus_dir.is_dir():
+            self._seed_count_cache[cache_key] = 0
+            return 0
+        count = 0
+        for entry in corpus_dir.iterdir():
+            if not entry.is_file():
+                continue
+            if entry.name.startswith(".") or entry.name == "manifest.json":
+                continue
+            count += 1
+        self._seed_count_cache[cache_key] = count
+        return count
+
     @staticmethod
-    def _load_cpv_to_first_pov(paths: TrialDir) -> dict[str, dict[str, Any]]:
+    def _load_cpv_to_first_pov(
+        paths: TrialDir,
+        *,
+        allowed: set[str] | None = None,
+    ) -> dict[str, dict[str, Any]]:
         """Read cpv_to_first_pov from pov_store.json (post-drain truth).
 
         When the denormalized ``cpv_to_first_pov`` map is empty or missing
@@ -781,6 +890,15 @@ class CSVReportGenerator:
         derive the equivalent map from ``povs`` entries that recorded
         ``cpv_matched``. The earliest ``file_mtime`` (or ``first_seen_ts``
         when mtime is absent) per CPV becomes the discovery time.
+
+        Args:
+            paths: Trial directory paths.
+            allowed: Optional set of CPV ids that legitimately belong to the
+                trial's harness. When provided, both the denormalized map
+                and the ``cpv_matched``-derived map are filtered against it
+                so cross-harness matches recorded by verification (FDP-style
+                benchmarks expose the same vulnerability through multiple
+                harnesses) do not leak into the report.
         """
         store_path = paths.pov_store_path
         if not store_path.exists():
@@ -790,7 +908,11 @@ class CSVReportGenerator:
         except Exception:
             return {}
         first = data.get("cpv_to_first_pov") or {}
-        result = {str(k): v for k, v in first.items() if isinstance(v, dict)}
+        result = {
+            str(k): v
+            for k, v in first.items()
+            if isinstance(v, dict) and (allowed is None or str(k) in allowed)
+        }
         if result:
             return result
 
@@ -817,6 +939,8 @@ class CSVReportGenerator:
                 continue
             for cpv_id in cpv_matched:
                 cpv_id_str = str(cpv_id)
+                if allowed is not None and cpv_id_str not in allowed:
+                    continue
                 existing = derived.get(cpv_id_str)
                 if existing is not None and float(existing["discovery_ts"]) <= cpv_ts:
                     continue
@@ -995,6 +1119,7 @@ class CSVReportGenerator:
             "total_llm_output_tokens": trial_metrics.get("total_llm_output_tokens", 0),
             "total_time": trial_metrics.get("total_time", 0.0),
             "time_to_first_pov": trial_metrics.get("time_to_first_pov", ""),
+            "anchor_source": trial_metrics.get("anchor_source", "") or "",
             "snapshot_count": trial_metrics.get("snapshot_count", 0),
             # Early stop analysis
             "total_cpvs": trial_metrics.get("total_cpvs", 0),

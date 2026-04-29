@@ -597,6 +597,58 @@ class TestMetricsAggregator:
         assert metrics.povs_error == 0
         assert metrics.unintended_unique_sites == 0
 
+    def test_aggregate_trial_no_snapshot_recovers_cost_and_time(self, temp_dir):
+        """Trials that died before any snapshot still report cost and time.
+
+        ``llm-usage.json`` and ``worker.log`` are written outside the
+        snapshot path, so failed runs leave them on disk even when no
+        ``snapshot-NNNN.tar.gz`` was produced. Using both as a fallback
+        avoids 0/0 entries diluting cost / time averages.
+        """
+        (temp_dir / "llm-usage.json").write_text(json.dumps({"total_cost_usd": 12.5}))
+        # Worker.log spans 1m23s = 83s. The naive subtraction is exact
+        # because both lines come from the same host timezone.
+        (temp_dir / "worker.log").write_text(
+            "2026-04-19 13:14:22 | INFO | wkr | [d] | Per-trial logging enabled\n"
+            "2026-04-19 13:14:25 | INFO | wkr | [evaluation] | Build started\n"
+            "2026-04-19 13:15:45 | INFO | wkr | [d] | Job done\n"
+        )
+
+        trial_info = TrialInfo(
+            trial_dir=temp_dir,
+            trial_num=1,
+            crs="crs-bug-finding-claude-code",
+            benchmark="afc-x",
+            harness="h",
+            mode="bug_finding",
+            status="valid",
+        )
+
+        metrics = MetricsAggregator().aggregate_trial(
+            trial_info=trial_info, snapshots=[]
+        )
+        assert metrics.total_llm_cost == 12.5
+        assert metrics.total_time == pytest.approx(83.0, abs=1.0)
+
+    def test_aggregate_trial_no_snapshot_zero_when_sources_missing(self, temp_dir):
+        """When neither llm-usage.json nor worker.log exists the values
+        stay at the prior 0.0 default — no spurious values invented."""
+        trial_info = TrialInfo(
+            trial_dir=temp_dir,
+            trial_num=1,
+            crs="crs-bug-finding-claude-code",
+            benchmark="afc-x",
+            harness="h",
+            mode="bug_finding",
+            status="valid",
+        )
+
+        metrics = MetricsAggregator().aggregate_trial(
+            trial_info=trial_info, snapshots=[]
+        )
+        assert metrics.total_llm_cost == 0.0
+        assert metrics.total_time == 0.0
+
     def test_pov_status_breakdown_from_store(self, temp_dir):
         """Counts POVs by verification status from pov_store.json.
 

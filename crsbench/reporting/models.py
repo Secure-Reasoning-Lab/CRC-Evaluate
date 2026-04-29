@@ -211,6 +211,12 @@ class TrialMetrics(BaseModel):
     total_time: float = 0.0
     time_to_first_pov: float | None = None
 
+    # Provenance for the trial-start epoch used when computing
+    # ``time_to_first_pov`` and CPV trigger times. See
+    # ``crsbench.reporting.metrics.resolve_trial_anchor`` for the source
+    # labels and their relative precision.
+    anchor_source: str | None = None
+
     # Time-series data
     time_series: list[TimeSeriesPoint] = Field(default_factory=list)
 
