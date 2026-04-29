@@ -45,6 +45,7 @@ from crsbench.statistics.collector import (
 from crsbench.statistics.exporters import (
     export_benchmarks_csv,
     export_summary_csv,
+    export_vuln_index_yaml,
     print_summary,
 )
 from crsbench.statistics.models import (
@@ -66,6 +67,7 @@ __all__ = [
     # Exporters
     "export_benchmarks_csv",
     "export_summary_csv",
+    "export_vuln_index_yaml",
     "print_summary",
     # Utils (from collector)
     "count_files_in_dir",

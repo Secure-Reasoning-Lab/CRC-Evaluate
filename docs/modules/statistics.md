@@ -19,7 +19,10 @@ statistics/
 |--------|-------------|
 | `--summary-only` | Print summary only, no CSV export |
 | `--output`, `-o` | Output CSV file path (default: benchmark_stats.csv) |
+| `--vuln-index-output` | Output merged vuln lookup YAML keyed by benchmark/harness/cpv |
 | `--benchmarks` | Specific benchmarks to analyze (space-separated) |
+| `--benchmark-suite` | Benchmark suite name or path to suite YAML |
+| `--benchmark-suites-root` | Root directory containing suite YAML files |
 | `--benchmarks-dir` | Path to benchmarks directory |
 | `--include-no-vulns` | Include benchmarks with no vulnerabilities |
 | `--verbose`, `-v` | Enable verbose logging |

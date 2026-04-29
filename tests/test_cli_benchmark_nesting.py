@@ -97,6 +97,33 @@ class TestBenchmarkStatsNesting:
         args = parser.parse_args(["benchmark", "stats", "--output", "benchmarks.csv"])
         assert str(args.output) == "benchmarks.csv"
 
+    def test_benchmark_stats_suite_parses(self):
+        parser = _make_parser()
+        args = parser.parse_args(
+            [
+                "benchmark",
+                "stats",
+                "--benchmark-suite",
+                "crsbench-all",
+                "--benchmark-suites-root",
+                "benchmark-suites",
+            ]
+        )
+        assert args.benchmark_suite == "crsbench-all"
+        assert str(args.benchmark_suites_root) == "benchmark-suites"
+
+    def test_benchmark_stats_vuln_index_output_parses(self):
+        parser = _make_parser()
+        args = parser.parse_args(
+            [
+                "benchmark",
+                "stats",
+                "--vuln-index-output",
+                "vulns.yaml",
+            ]
+        )
+        assert str(args.vuln_index_output) == "vulns.yaml"
+
     def test_benchmark_stats_dispatch_routes_to_handler(self):
         parser = _make_parser()
         args = parser.parse_args(["benchmark", "stats", "--summary-only"])

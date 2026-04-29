@@ -2,9 +2,11 @@
 """CLI entry point for benchmark statistics collection."""
 
 import argparse
+import fnmatch
 import sys
 from pathlib import Path
 
+from crsbench.benchmark_ci.cli.discovery import load_benchmark_suite
 from crsbench.statistics.collector import (
     collect_benchmark_stats,
     get_default_benchmarks_dir,
@@ -12,6 +14,7 @@ from crsbench.statistics.collector import (
 from crsbench.statistics.exporters import (
     export_benchmarks_csv,
     export_summary_csv,
+    export_vuln_index_yaml,
     print_summary,
 )
 from crsbench.utils.logger import configure_logger, get_logger
@@ -36,6 +39,7 @@ Examples:
   crsbench benchmark stats --summary-only
   crsbench benchmark stats --output benchmarks.csv
   crsbench benchmark stats --benchmarks atlanta-curl-delta-01 afc-libxml2-delta-01
+  crsbench benchmark stats --benchmark-suite crsbench-all
   crsbench benchmark stats --filter "afc-*"
         """,
     )
@@ -59,11 +63,29 @@ Examples:
         help="Specific benchmark names to process",
     )
     parser.add_argument(
+        "--benchmark-suite",
+        type=str,
+        dest="benchmark_suite",
+        help="Benchmark suite name or path to a suite YAML file",
+    )
+    parser.add_argument(
+        "--benchmark-suites-root",
+        type=Path,
+        default=None,
+        help="Root directory containing benchmark suite YAML files (default: benchmark-suites)",
+    )
+    parser.add_argument(
         "--output",
         "-o",
         type=Path,
         default=Path("benchmark_stats.csv"),
         help="Output CSV file path (default: benchmark_stats.csv)",
+    )
+    parser.add_argument(
+        "--vuln-index-output",
+        type=Path,
+        default=None,
+        help="Path to write merged vuln.yaml content keyed by benchmark/harness/cpv",
     )
     parser.add_argument(
         "--include-no-vulns",
@@ -96,6 +118,7 @@ Examples:
   crsbench benchmark stats --summary-only
   crsbench benchmark stats --output benchmarks.csv
   crsbench benchmark stats --benchmarks atlanta-curl-delta-01 afc-libxml2-delta-01
+  crsbench benchmark stats --benchmark-suite crsbench-all
   crsbench benchmark stats --filter "afc-*"
         """,
     )
@@ -120,6 +143,18 @@ Examples:
         nargs="+",
         help="Specific benchmark names to process",
     )
+    parser.add_argument(
+        "--benchmark-suite",
+        type=str,
+        dest="benchmark_suite",
+        help="Benchmark suite name or path to a suite YAML file",
+    )
+    parser.add_argument(
+        "--benchmark-suites-root",
+        type=Path,
+        default=None,
+        help="Root directory containing benchmark suite YAML files (default: benchmark-suites)",
+    )
 
     parser.add_argument(
         "--output",
@@ -127,6 +162,12 @@ Examples:
         type=Path,
         default=Path("benchmark_stats.csv"),
         help="Output CSV file path (default: benchmark_stats.csv)",
+    )
+    parser.add_argument(
+        "--vuln-index-output",
+        type=Path,
+        default=None,
+        help="Path to write merged vuln.yaml content keyed by benchmark/harness/cpv",
     )
 
     parser.add_argument(
@@ -167,6 +208,22 @@ def run_stats(args: argparse.Namespace) -> int:
     # Get filter pattern
     filter_pattern = getattr(args, "filter", None)
 
+    if specific_benchmarks and args.benchmark_suite:
+        logger.error("Cannot specify both --benchmarks and --benchmark-suite")
+        return 1
+
+    if args.benchmark_suite:
+        specific_benchmarks = load_benchmark_suite(
+            args.benchmark_suite, suites_root=args.benchmark_suites_root
+        )
+        if filter_pattern:
+            specific_benchmarks = [
+                name
+                for name in specific_benchmarks
+                if fnmatch.fnmatch(name, filter_pattern)
+            ]
+            filter_pattern = None
+
     # Get benchmarks directory (auto-detect if not specified)
     benchmarks_dir = args.benchmarks_dir or get_default_benchmarks_dir()
 
@@ -197,6 +254,9 @@ def run_stats(args: argparse.Namespace) -> int:
         export_summary_csv(benchmarks, summary_path)
         logger.info(f"Summary CSV exported to: {summary_path}")
 
+    if args.vuln_index_output is not None:
+        export_vuln_index_yaml(benchmarks, args.vuln_index_output)
+
     return 0
 
 
@@ -214,6 +274,16 @@ Examples:
   python -m crsbench.statistics.cli \\
     --benchmarks atlanta-curl-delta-01 afc-libxml2-delta-01 \\
     --output selected.csv
+
+  # Export a benchmark suite
+  python -m crsbench.statistics.cli \\
+    --benchmark-suite crsbench-all \\
+    --output suite.csv
+
+  # Export merged vuln.yaml lookup index
+  python -m crsbench.statistics.cli \\
+    --benchmark-suite crsbench-all \\
+    --vuln-index-output vuln-index.yaml
 
   # Summary only (no CSV export)
   python -m crsbench.statistics.cli --summary-only
@@ -240,6 +310,18 @@ Examples:
         nargs="+",
         help="Specific benchmark names to process",
     )
+    parser.add_argument(
+        "--benchmark-suite",
+        type=str,
+        dest="benchmark_suite",
+        help="Benchmark suite name or path to a suite YAML file",
+    )
+    parser.add_argument(
+        "--benchmark-suites-root",
+        type=Path,
+        default=None,
+        help="Root directory containing benchmark suite YAML files (default: benchmark-suites)",
+    )
 
     parser.add_argument(
         "--output",
@@ -247,6 +329,12 @@ Examples:
         type=Path,
         default=Path("benchmark_stats.csv"),
         help="Output CSV file path (default: benchmark_stats.csv)",
+    )
+    parser.add_argument(
+        "--vuln-index-output",
+        type=Path,
+        default=None,
+        help="Path to write merged vuln.yaml content keyed by benchmark/harness/cpv",
     )
 
     parser.add_argument(

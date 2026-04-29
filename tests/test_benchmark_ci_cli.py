@@ -15,6 +15,7 @@ from crsbench.benchmark_ci.cli.common_args import (
 from crsbench.benchmark_ci.cli.discovery import (
     discover_benchmarks,
     get_benchmarks_root,
+    load_benchmark_suite,
     resolve_benchmark_paths,
 )
 from crsbench.benchmark_ci.cli.output import (
@@ -259,6 +260,44 @@ class TestResolveBenchmarkPaths:
         with pytest.raises(SystemExit) as exc_info:
             resolve_benchmark_paths(all_benchmarks=True)
         assert exc_info.value.code == 1
+
+    def test_benchmark_suite(self, tmp_path, monkeypatch):
+        benchmarks_root = tmp_path / "benchmarks"
+        suites_root = tmp_path / "benchmark-suites"
+        monkeypatch.setenv("BENCHMARKS_ROOT", str(benchmarks_root))
+        monkeypatch.setenv("BENCHMARK_SUITES_ROOT", str(suites_root))
+
+        (benchmarks_root / "afc-one").mkdir(parents=True)
+        (benchmarks_root / "afc-two").mkdir(parents=True)
+        suites_root.mkdir()
+        (suites_root / "sample.yaml").write_text(
+            "Name: sample\n"
+            "Description: Sample suite\n"
+            "Release date: 01.01.2026\n"
+            "benchmark_list:\n"
+            "  - afc-one\n"
+            "  - afc-two\n"
+        )
+
+        result = resolve_benchmark_paths(benchmark_suite="sample")
+        assert result == [benchmarks_root / "afc-one", benchmarks_root / "afc-two"]
+
+
+class TestLoadBenchmarkSuite:
+    def test_explicit_suites_root(self, tmp_path):
+        suites_root = tmp_path / "benchmark-suites"
+        suites_root.mkdir()
+        (suites_root / "custom.yaml").write_text(
+            "Name: custom\n"
+            "Description: Custom suite\n"
+            "Release date: 01.01.2026\n"
+            "benchmark_list:\n"
+            "  - afc-one\n"
+            "  - atlanta-two\n"
+        )
+
+        result = load_benchmark_suite("custom", suites_root=suites_root)
+        assert result == ["afc-one", "atlanta-two"]
 
 
 # ===== Tests for output.py =====

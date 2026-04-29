@@ -94,13 +94,16 @@ def get_suites_root() -> Path:
     raise RuntimeError("Could not find benchmark-suites directory")
 
 
-def load_benchmark_suite(suite_name: str) -> list[str]:
+def load_benchmark_suite(
+    suite_name: str, suites_root: Optional[Path] = None
+) -> list[str]:
     """Load benchmark names from a suite file.
 
     Uses BenchmarkSuiteConfig schema for validation.
 
     Args:
         suite_name: Suite name (e.g., 'smoke-test-bug-finding') or path to suite file
+        suites_root: Optional explicit benchmark-suites root directory
 
     Returns:
         List of benchmark names from the suite
@@ -116,8 +119,8 @@ def load_benchmark_suite(suite_name: str) -> list[str]:
             suite_path = suite_path.with_suffix(".yaml")
 
         if not suite_path.exists():
-            suites_root = get_suites_root()
-            suite_path = suites_root / suite_path
+            resolved_suites_root = suites_root or get_suites_root()
+            suite_path = resolved_suites_root / suite_path
 
     if not suite_path.exists():
         logger.error(f"Benchmark suite not found: {suite_path}")
