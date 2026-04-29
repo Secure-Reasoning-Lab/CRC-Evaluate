@@ -18,10 +18,12 @@ Usage:
 """
 
 import argparse
+import json
+import re
 import shutil
 import sys
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from crsbench.utils.logger import get_logger
@@ -58,6 +60,18 @@ class TrialInfo:
             self.trial_num,
         )
 
+    @property
+    def logical_identity(self) -> tuple[str, str, str, str | None, str, str]:
+        """Return trial identity without the trial number."""
+        return (
+            self.crs,
+            self.benchmark,
+            self.harness,
+            self.cpv,
+            self.mode,
+            self.sanitizer,
+        )
+
 
 @dataclass
 class Conflict:
@@ -74,6 +88,7 @@ class MergeResult:
     merged_count: int
     skipped_count: int
     skipped_trials: list[TrialInfo]
+    trial_number_by_source_path: dict[Path, int] = field(default_factory=dict)
 
 
 def find_experiment_data_dirs(input_paths: list[Path]) -> list[Path]:
@@ -89,7 +104,7 @@ def find_experiment_data_dirs(input_paths: list[Path]) -> list[Path]:
             exp_data_dirs.append(path)
         else:
             # Search recursively for experiment-data directories
-            for exp_data in path.rglob("experiment-data"):
+            for exp_data in sorted(path.rglob("experiment-data")):
                 if exp_data.is_dir():
                     exp_data_dirs.append(exp_data)
 
@@ -140,6 +155,15 @@ def parse_trial_path(
     )
 
 
+def _trial_sort_key(trial_path: Path) -> tuple[tuple[str, ...], int, str]:
+    """Sort trial paths by parent path and numeric trial number."""
+    try:
+        trial_num = int(trial_path.name.removeprefix("trial-"))
+    except ValueError:
+        trial_num = -1
+    return trial_path.parent.parts, trial_num, trial_path.name
+
+
 def enumerate_trials(exp_data_dir: Path) -> list[TrialInfo]:
     """List all trial directories with their relative paths and status.
 
@@ -151,7 +175,7 @@ def enumerate_trials(exp_data_dir: Path) -> list[TrialInfo]:
     patterns = ("*/*/*/*/*/trial-*", "*/*/*/*/*/*/trial-*")
     seen: set[Path] = set()
     for pattern in patterns:
-        for trial_path in exp_data_dir.glob(pattern):
+        for trial_path in sorted(exp_data_dir.glob(pattern), key=_trial_sort_key):
             if trial_path in seen or not trial_path.is_dir():
                 continue
             seen.add(trial_path)
@@ -247,7 +271,7 @@ def print_conflict_report(conflicts: list[Conflict]) -> None:
     logger.error("=" * 80)
 
 
-def copy_trial(trial_path: Path, dest_path: Path) -> None:
+def copy_trial(trial_path: Path, dest_path: Path) -> bool:
     """Copy a trial directory, excluding large build artifacts.
 
     Excludes: crs-build/ directory (large build artifacts)
@@ -257,7 +281,7 @@ def copy_trial(trial_path: Path, dest_path: Path) -> None:
     # Copy entire directory first
     if dest_path.exists():
         logger.warning(f"Destination already exists, skipping: {dest_path}")
-        return
+        return False
 
     shutil.copytree(trial_path, dest_path)
 
@@ -266,30 +290,212 @@ def copy_trial(trial_path: Path, dest_path: Path) -> None:
     if crs_build.exists():
         shutil.rmtree(crs_build)
         logger.debug(f"Removed crs-build/ from {dest_path}")
+    return True
 
 
-def merge_trials(trials: list[TrialInfo], output_dir: Path) -> MergeResult:
+def _relative_path_with_trial_num(relative_path: Path, trial_num: int) -> Path:
+    """Return relative path with its final trial directory replaced."""
+    parts = list(relative_path.parts)
+    if not parts:
+        raise ValueError("Cannot renumber empty trial path")
+    parts[-1] = f"trial-{trial_num}"
+    return Path(*parts)
+
+
+def _renumber_trial_id(value: str, old_trial_num: int, new_trial_num: int) -> str:
+    """Best-effort rewrite for LLM trial_id strings."""
+    value = re.sub(
+        rf"(?<![A-Za-z0-9])trial-{old_trial_num}(?![0-9])",
+        f"trial-{new_trial_num}",
+        value,
+    )
+    return re.sub(
+        rf"(?<![A-Za-z0-9])trial{old_trial_num}(?![0-9])",
+        f"trial{new_trial_num}",
+        value,
+    )
+
+
+def _rewrite_json_object(path: Path, rewrite) -> None:
+    if not path.exists():
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        logger.warning(f"Could not parse JSON for renumbering: {path}")
+        return
+    if not isinstance(payload, dict):
+        return
+    updated = rewrite(payload)
+    path.write_text(json.dumps(updated, indent=2) + "\n", encoding="utf-8")
+
+
+def _rewrite_copied_trial_metadata(dest_path: Path, *, new_trial_num: int) -> None:
+    def _rewrite(payload: dict) -> dict:
+        payload["trial_num"] = new_trial_num
+        return payload
+
+    _rewrite_json_object(dest_path / "metadata.json", _rewrite)
+
+
+def _rewrite_copied_llm_usage(
+    dest_path: Path, *, old_trial_num: int, new_trial_num: int
+) -> None:
+    def _rewrite(payload: dict) -> dict:
+        _renumber_llm_identity_fields(payload, old_trial_num, new_trial_num)
+        return payload
+
+    _rewrite_json_object(dest_path / "llm-usage.json", _rewrite)
+
+
+def _renumber_llm_identity_fields(
+    payload: dict, old_trial_num: int, new_trial_num: int
+) -> None:
+    for key, value in list(payload.items()):
+        if key in {"trial_id", "key_alias"} and isinstance(value, str):
+            payload[key] = _renumber_trial_id(value, old_trial_num, new_trial_num)
+        elif key == "trial_num" and value == old_trial_num:
+            payload[key] = new_trial_num
+        elif isinstance(value, dict):
+            _renumber_llm_identity_fields(value, old_trial_num, new_trial_num)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    _renumber_llm_identity_fields(item, old_trial_num, new_trial_num)
+
+
+def merge_trials(
+    trials: list[TrialInfo], output_dir: Path, *, renumber_trials: bool = False
+) -> MergeResult:
     """Filter to successful trials and copy to output directory."""
     merged_count = 0
     skipped_trials = []
+    trial_number_by_source_path: dict[Path, int] = {}
+    next_trial_num_by_identity: defaultdict[
+        tuple[str, str, str, str | None, str, str], int
+    ] = defaultdict(int)
 
     for trial in trials:
         if trial.status != "success":
             skipped_trials.append(trial)
             continue
 
-        # Destination path preserves directory structure
-        dest_path = output_dir / trial.relative_path
+        if renumber_trials:
+            next_trial_num_by_identity[trial.logical_identity] += 1
+            destination_trial_num = next_trial_num_by_identity[trial.logical_identity]
+            relative_path = _relative_path_with_trial_num(
+                trial.relative_path, destination_trial_num
+            )
+        else:
+            destination_trial_num = trial.trial_num
+            relative_path = trial.relative_path
 
-        logger.info(f"Copying {trial.relative_path}")
-        copy_trial(trial.path, dest_path)
+        dest_path = output_dir / relative_path
+
+        logger.info(f"Copying {trial.relative_path} -> {relative_path}")
+        copied = copy_trial(trial.path, dest_path)
+        if not copied:
+            skipped_trials.append(trial)
+            continue
+        trial_number_by_source_path[trial.path] = destination_trial_num
+        if renumber_trials:
+            _rewrite_copied_trial_metadata(
+                dest_path,
+                new_trial_num=destination_trial_num,
+            )
+            _rewrite_copied_llm_usage(
+                dest_path,
+                old_trial_num=trial.trial_num,
+                new_trial_num=destination_trial_num,
+            )
         merged_count += 1
 
     return MergeResult(
         merged_count=merged_count,
         skipped_count=len(skipped_trials),
         skipped_trials=skipped_trials,
+        trial_number_by_source_path=trial_number_by_source_path,
     )
+
+
+def _matrix_entry_trial_path(exp_data_dir: Path, entry: dict) -> Path | None:
+    try:
+        crs = entry["crs"]
+        benchmark = entry["benchmark"]
+        harness = entry["harness"]
+        mode = entry["mode"]
+        sanitizer = entry["sanitizer"]
+        trial_num = int(entry["trial_num"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    parts = [exp_data_dir, crs, benchmark, harness]
+    target_cpv_id = entry.get("target_cpv_id")
+    if target_cpv_id:
+        parts.append(str(target_cpv_id))
+    parts.extend([mode, sanitizer, f"trial-{trial_num}"])
+    return Path(*parts)
+
+
+def merge_trial_matrices(
+    source_dirs: list[Path],
+    output_dir: Path,
+    *,
+    experiment_name: str | None = None,
+    trial_number_by_source_path: dict[Path, int] | None = None,
+) -> Path | None:
+    """Write a merged trial_matrix.json, rewriting copied trial numbers."""
+    filter_to_copied_trials = trial_number_by_source_path is not None
+    trial_number_by_source_path = trial_number_by_source_path or {}
+    merged_entries: list[dict] = []
+    first_experiment_name: str | None = None
+
+    for source_dir in source_dirs:
+        matrix_path = source_dir / "trial_matrix.json"
+        if not matrix_path.exists():
+            continue
+        try:
+            matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            logger.warning(f"Could not parse trial matrix: {matrix_path}")
+            continue
+        if not isinstance(matrix, dict):
+            continue
+        if first_experiment_name is None and isinstance(matrix.get("experiment"), str):
+            first_experiment_name = matrix["experiment"]
+        entries = matrix.get("trials")
+        if not isinstance(entries, list):
+            continue
+
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            source_trial_path = _matrix_entry_trial_path(source_dir, entry)
+            if source_trial_path is None:
+                continue
+            if filter_to_copied_trials:
+                new_trial_num = trial_number_by_source_path.get(source_trial_path)
+                if new_trial_num is None:
+                    continue
+            else:
+                new_trial_num = entry.get("trial_num")
+
+            updated = dict(entry)
+            updated["trial_num"] = new_trial_num
+            merged_entries.append(updated)
+
+    if not merged_entries:
+        return None
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "trial_matrix.json"
+    payload = {
+        "experiment": experiment_name or first_experiment_name or output_dir.name,
+        "total_trials": len(merged_entries),
+        "trials": merged_entries,
+    }
+    output_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return output_path
 
 
 def print_summary(
@@ -346,6 +552,20 @@ def main() -> int:
         required=True,
         help="Output directory for merged results",
     )
+    parser.add_argument(
+        "--renumber-trials",
+        action="store_true",
+        help=(
+            "Allow duplicate successful trial numbers by assigning sequential "
+            "trial numbers per logical CRS/benchmark/harness/mode/sanitizer stream"
+        ),
+    )
+    parser.add_argument(
+        "--experiment-name",
+        type=str,
+        default=None,
+        help="Experiment name to write into the merged trial_matrix.json",
+    )
 
     args = parser.parse_args()
 
@@ -366,10 +586,10 @@ def main() -> int:
                 base_path = Path(*parts) if len(parts) > 1 else Path(parts[0])
                 # Rest is the glob pattern
                 remaining = str(pattern_path.relative_to(base_path))
-                input_paths = list(base_path.glob(remaining))
+                input_paths = sorted(base_path.glob(remaining))
             else:
                 # Pattern starts with wildcard, use current directory
-                input_paths = list(Path().glob(str(pattern_path)))
+                input_paths = sorted(Path().glob(str(pattern_path)))
         else:
             # No wildcards, just a single path
             input_paths = [pattern_path]
@@ -400,19 +620,30 @@ def main() -> int:
 
     logger.info(f"\nTotal trials found: {len(all_trials)}")
 
-    # Detect conflicts
-    logger.info("Checking for conflicts...")
-    conflicts = detect_conflicts(all_trials)
+    if args.renumber_trials:
+        logger.info("Renumber-trials mode enabled; duplicate successes will be kept")
+    else:
+        # Detect conflicts
+        logger.info("Checking for conflicts...")
+        conflicts = detect_conflicts(all_trials)
 
-    if conflicts:
-        print_conflict_report(conflicts)
-        return 1
+        if conflicts:
+            print_conflict_report(conflicts)
+            return 1
 
-    logger.info("No conflicts detected")
+        logger.info("No conflicts detected")
 
     # Merge trials
     logger.info(f"\nMerging trials to {args.output_dir}...")
-    result = merge_trials(all_trials, args.output_dir)
+    result = merge_trials(
+        all_trials, args.output_dir, renumber_trials=args.renumber_trials
+    )
+    merge_trial_matrices(
+        exp_data_dirs,
+        args.output_dir,
+        experiment_name=args.experiment_name,
+        trial_number_by_source_path=result.trial_number_by_source_path,
+    )
 
     # Print summary
     print_summary(result, exp_data_dirs, args.output_dir)
