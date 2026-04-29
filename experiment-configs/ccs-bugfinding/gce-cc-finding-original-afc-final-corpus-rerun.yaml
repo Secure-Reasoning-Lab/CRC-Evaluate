@@ -1,4 +1,4 @@
-# 3 trials x all CRSBench benchmarks, Claude Code bug-finding, 16 cores per trial, seed corpus enabled.
+# 3 trials x AFC final benchmarks, Claude Code bug-finding, 16 cores per trial, seed corpus enabled.
 #
 # Prerequisites:
 #   1. gcloud auth login && gcloud auth application-default login
@@ -6,16 +6,16 @@
 #   3. HF_TOKEN in .env or environment
 #
 # Usage:
-#   CONFIG=experiment-configs/ccs-bugfinding/gce-cc-finding-original-ccs-all-corpus-rerun.yaml
+#   CONFIG=experiment-configs/ccs-bugfinding/gce-cc-finding-original-afc-final-corpus-rerun.yaml
 #   uv run crsbench cloud launch --config "$CONFIG"
 #   uv run crsbench cloud --config "$CONFIG" monitor
 #   uv run crsbench cloud --config "$CONFIG" collect --force
 #   uv run crsbench cloud --config "$CONFIG" teardown --force
 
 experiment:
-  name: cc-finding-original-ccs-all-corpus-rerun
+  name: cc-finding-original-afc-final-corpus-rerun
   task: bugfinding
-  benchmark_suite: ccs-all
+  benchmark_suite: afc-final
   sanitizers:
     - address
     - undefined
@@ -39,8 +39,8 @@ runtime:
     mode: external
     cost_budget: 30.0
 storage:
-  experiment_filestore: /data/crsbench/experiment-data/cc-finding-original-ccs-all-corpus-rerun
-  report_filestore: /data/crsbench/report-data/cc-finding-original-ccs-all-corpus-rerun
+  experiment_filestore: /data/crsbench/experiment-data/cc-finding-original-afc-final-corpus-rerun
+  report_filestore: /data/crsbench/report-data/cc-finding-original-afc-final-corpus-rerun
 resources:
   cores_per_trial: 16
   memory_per_trial: "64G"
@@ -64,7 +64,7 @@ evaluator:
   cores_per_job: 16
 cloud:
   remote:
-    experiment_root: /data/crsbench/experiment-data/cc-finding-original-ccs-all-corpus-rerun
+    experiment_root: /data/crsbench/experiment-data/cc-finding-original-afc-final-corpus-rerun
   defaults:
     readiness_timeout_sec: 1200
     crsbench_install_spec: "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
@@ -122,8 +122,26 @@ cloud:
       - {}
       - {}
       - {}
-      - {}
-      - {} # 10 workers
+      - regions:
+          - us-central1
+          - us-south1
+          - us-west1
+          - us-west2
+          - us-west3
+          - us-west4
+          - us-east5
+          - us-east1
+          - asia-south1
+      - regions: # 10 workers
+          - us-central1
+          - us-south1
+          - us-west1
+          - us-west2
+          - us-west3
+          - us-west4
+          - us-east5
+          - us-east1
+          - asia-south1
   # evaluators:
   #   defaults:
   #     instance_profile: gce-evaluator-n2d
