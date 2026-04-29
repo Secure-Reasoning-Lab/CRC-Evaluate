@@ -8239,6 +8239,62 @@ class TestRemoteAccess:
             "--port=2",
         ]
 
+    def test_gce_transport_ensures_os_login_ssh_key_noninteractively(
+        self, tmp_path, monkeypatch
+    ):
+        from subprocess import CompletedProcess
+
+        from crsbench.cloud.gce.transport import GceCloudTransport
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        calls: list[list[str]] = []
+
+        def fake_run(cmd, **kwargs):
+            del kwargs
+            calls.append(list(cmd))
+            if cmd[0] == "ssh-keygen":
+                key_path = Path(cmd[cmd.index("-f") + 1])
+                key_path.parent.mkdir(parents=True, exist_ok=True)
+                key_path.write_text("private-key", encoding="utf-8")
+                key_path.with_suffix(key_path.suffix + ".pub").write_text(
+                    "ssh-rsa public-key", encoding="utf-8"
+                )
+                return CompletedProcess(cmd, 0, stdout="", stderr="")
+            if cmd[:5] == [
+                "gcloud",
+                "compute",
+                "os-login",
+                "ssh-keys",
+                "add",
+            ]:
+                return CompletedProcess(cmd, 0, stdout="", stderr="")
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        monkeypatch.setattr("crsbench.cloud.gce.transport.subprocess.run", fake_run)
+
+        key_path = GceCloudTransport().ensure_os_login_ssh_key("test-project")
+
+        assert key_path == tmp_path / ".ssh" / "google_compute_engine"
+        assert key_path.read_text(encoding="utf-8") == "private-key"
+        assert [
+            "ssh-keygen",
+            "-t",
+            "rsa",
+            "-f",
+            str(key_path),
+            "-N",
+            "",
+        ] in calls
+        assert [
+            "gcloud",
+            "compute",
+            "os-login",
+            "ssh-keys",
+            "add",
+            f"--key-file={key_path}.pub",
+            "--project=test-project",
+        ] in calls
+
 
 class TestExec:
     """Tests for run_exec() sub-action."""
