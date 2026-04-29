@@ -3,6 +3,7 @@
 import base64
 import json
 import threading
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -821,6 +822,64 @@ def test_gce_provider_adapter_best_effort_workers_keeps_successful_fleets() -> N
     assert [worker.zone for worker in workers] == ["us-east5-b"]
     assert provisioner.create_workers.call_count == 2
     provisioner.delete_workers.assert_not_called()
+
+
+def test_gce_provider_adapter_rolls_back_created_fleets_in_parallel() -> None:
+    from crsbench.cloud.gce.provider import GceProviderAdapter
+
+    config = _make_provider_neutral_experiment_config().model_dump(
+        mode="json", exclude_none=True
+    )
+    config["cloud"]["workers"]["placements"] = [
+        {"zone": "us-east5-b"},
+        {"zone": "us-east1-b"},
+        {"zone": "us-west1-b"},
+    ]
+    plan = build_cloud_launch_plan(ExperimentConfig.model_validate(config))
+    provisioner = MagicMock()
+    adapter = GceProviderAdapter(provisioner=provisioner)
+
+    def _create_workers(**kwargs):
+        fleet = kwargs["fleet"]
+        if fleet.zone == "us-west1-b":
+            raise RuntimeError("capacity exhausted")
+        return [
+            GceWorkerRecord(
+                name=f"{fleet.worker_name_prefix}-{fleet.zone}",
+                instance_id=f"id-{fleet.zone}",
+                status="RUNNING",
+                zone=fleet.zone,
+            )
+        ]
+
+    active_deletes = 0
+    max_active_deletes = 0
+    lock = threading.Lock()
+
+    def _delete_instance(**_kwargs) -> None:
+        nonlocal active_deletes, max_active_deletes
+        with lock:
+            active_deletes += 1
+            max_active_deletes = max(max_active_deletes, active_deletes)
+        try:
+            time.sleep(0.05)
+        finally:
+            with lock:
+                active_deletes -= 1
+
+    provisioner.create_workers.side_effect = _create_workers
+    provisioner.delete_instance.side_effect = _delete_instance
+
+    with pytest.raises(RuntimeError, match="capacity exhausted"):
+        adapter.create_workers(
+            plan=plan,
+            redis_host="redis.internal:6380",
+            redis_password="shared-secret",
+            registration=_make_registration(),
+        )
+
+    assert provisioner.delete_instance.call_count == 2
+    assert max_active_deletes == 2
 
 
 def test_gce_provider_adapter_passes_conservative_download_delay_schedule_to_provisioner() -> (
@@ -1793,6 +1852,97 @@ def test_delete_workers_runs_instance_deletes_in_parallel() -> None:
         "gce-worker-001",
         "gce-worker-002",
     ]
+
+
+def test_rollback_records_runs_deletes_in_parallel() -> None:
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+
+    provisioner = GceProvisioner(client=_RecordingClient())
+    workers = [
+        GceWorkerRecord(
+            name="gce-worker-001",
+            instance_id="1001",
+            status="RUNNING",
+            zone="us-central1-a",
+        ),
+        GceWorkerRecord(
+            name="gce-worker-002",
+            instance_id="1002",
+            status="RUNNING",
+            zone="us-central1-a",
+        ),
+    ]
+    active_deletes = 0
+    max_active_deletes = 0
+    lock = threading.Lock()
+
+    def _delete_instance(**_kwargs) -> None:
+        nonlocal active_deletes, max_active_deletes
+        with lock:
+            active_deletes += 1
+            max_active_deletes = max(max_active_deletes, active_deletes)
+        try:
+            time.sleep(0.05)
+        finally:
+            with lock:
+                active_deletes -= 1
+
+    provisioner.delete_instance = _delete_instance  # type: ignore[method-assign]
+
+    provisioner._rollback_records(project="test-project", workers=workers)
+
+    assert max_active_deletes == 2
+
+
+def test_rollback_requests_runs_deletes_in_parallel() -> None:
+    from crsbench.cloud.gce.models import GceInstanceRequest
+    from crsbench.cloud.gce.provisioner import GceProvisioner
+
+    client = _RecordingClient()
+    provisioner = GceProvisioner(client=client)
+    requests = [
+        GceInstanceRequest(
+            project="test-project",
+            zone="us-central1-a",
+            name="gce-worker-001",
+            labels={},
+            metadata={},
+            service_account_email="worker@test-project.iam.gserviceaccount.com",
+            ssh_via_iap=True,
+            assign_external_ip=False,
+        ),
+        GceInstanceRequest(
+            project="test-project",
+            zone="us-central1-a",
+            name="gce-worker-002",
+            labels={},
+            metadata={},
+            service_account_email="worker@test-project.iam.gserviceaccount.com",
+            ssh_via_iap=True,
+            assign_external_ip=False,
+        ),
+    ]
+    active_waits = 0
+    max_active_waits = 0
+    lock = threading.Lock()
+
+    def _wait_for_zone_operation(**kwargs) -> dict[str, object]:
+        nonlocal active_waits, max_active_waits
+        with lock:
+            active_waits += 1
+            max_active_waits = max(max_active_waits, active_waits)
+        try:
+            time.sleep(0.05)
+            return _RecordingClient.wait_for_zone_operation(client, **kwargs)
+        finally:
+            with lock:
+                active_waits -= 1
+
+    client.wait_for_zone_operation = _wait_for_zone_operation
+
+    provisioner._rollback_requests(requests)
+
+    assert max_active_waits == 2
 
 
 def test_delete_orchestrators_ignores_missing_instance() -> None:

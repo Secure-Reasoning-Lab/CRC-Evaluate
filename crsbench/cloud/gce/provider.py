@@ -130,15 +130,30 @@ class GceProviderAdapter:
         fleets: Sequence[GceWorkerFleetConfig],
         created_by_index: Mapping[int, Sequence["GceWorkerRecord"]],
     ) -> None:
-        for index in sorted(created_by_index, reverse=True):
-            fleet = fleets[index]
-            for worker in reversed(list(created_by_index[index])):
+        rollback_targets = [
+            (fleets[index], worker)
+            for index in sorted(created_by_index, reverse=True)
+            for worker in reversed(list(created_by_index[index]))
+        ]
+        if not rollback_targets:
+            return
+
+        max_workers = min(
+            _MAX_PARALLEL_GCE_FLEET_CREATE_OPERATIONS, len(rollback_targets)
+        )
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [
+                executor.submit(
+                    self._provisioner.delete_instance,
+                    project=fleet.project,
+                    zone=worker.zone,
+                    instance_name=worker.name,
+                )
+                for fleet, worker in rollback_targets
+            ]
+            for future in as_completed(futures):
                 try:
-                    self._provisioner.delete_instance(
-                        project=fleet.project,
-                        zone=worker.zone,
-                        instance_name=worker.name,
-                    )
+                    future.result()
                 except Exception:
                     continue
 

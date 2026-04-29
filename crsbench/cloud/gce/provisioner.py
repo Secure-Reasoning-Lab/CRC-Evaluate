@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 
 from crsbench.cloud.errors import CloudProvisioningError
 from crsbench.cloud.gce.metadata import (
@@ -34,6 +34,7 @@ class GceProvisioningError(CloudProvisioningError):
 
 _MAX_PARALLEL_GCE_CREATE_OPERATIONS = 16
 _MAX_PARALLEL_GCE_DELETE_OPERATIONS = 16
+_RollbackDeleteItem = TypeVar("_RollbackDeleteItem")
 
 
 class GceApiClient(Protocol):
@@ -1532,21 +1533,23 @@ class GceProvisioner:
         return _validate_gce_instance_name(name)
 
     def _rollback_requests(self, requests: list[GceInstanceRequest]) -> None:
-        for request in reversed(requests):
-            try:
-                zone = _require_request_zone(request)
-                operation = self._client.delete_instance(
-                    project=request.project,
-                    zone=zone,
-                    instance=request.name,
-                )
-                self._client.wait_for_zone_operation(
-                    project=request.project,
-                    zone=zone,
-                    operation=_extract_operation_name(operation),
-                )
-            except Exception:
-                continue
+        def _delete_request(request: GceInstanceRequest) -> None:
+            zone = _require_request_zone(request)
+            operation = self._client.delete_instance(
+                project=request.project,
+                zone=zone,
+                instance=request.name,
+            )
+            self._client.wait_for_zone_operation(
+                project=request.project,
+                zone=zone,
+                operation=_extract_operation_name(operation),
+            )
+
+        self._run_rollback_deletes_in_parallel(
+            list(reversed(requests)),
+            delete_one=_delete_request,
+        )
 
     def _rollback_records(
         self,
@@ -1554,15 +1557,35 @@ class GceProvisioner:
         project: str,
         workers: Sequence[GceWorkerRecord],
     ) -> None:
-        for worker in reversed(list(workers)):
-            try:
-                self.delete_instance(
-                    project=project,
-                    zone=worker.zone,
-                    instance_name=worker.name,
-                )
-            except Exception:
-                continue
+        def _delete_worker(worker: GceWorkerRecord) -> None:
+            self.delete_instance(
+                project=project,
+                zone=worker.zone,
+                instance_name=worker.name,
+            )
+
+        self._run_rollback_deletes_in_parallel(
+            list(reversed(list(workers))),
+            delete_one=_delete_worker,
+        )
+
+    def _run_rollback_deletes_in_parallel(
+        self,
+        items: Sequence[_RollbackDeleteItem],
+        *,
+        delete_one: Callable[[_RollbackDeleteItem], None],
+    ) -> None:
+        """Run rollback deletes concurrently and ignore per-delete failures."""
+        if not items:
+            return
+        max_workers = min(_MAX_PARALLEL_GCE_DELETE_OPERATIONS, len(items))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(delete_one, item) for item in items]
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception:
+                    continue
 
     def _build_bulk_insert_request(
         self,
