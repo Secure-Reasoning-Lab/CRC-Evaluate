@@ -602,6 +602,10 @@ uv run crsbench re-eval -c config.yaml --force-rebuild --per-pov-verify-timeout 
 
 # Write to separate output directory
 uv run crsbench re-eval -c config.yaml --output /tmp/reeval-results
+
+# Resume-style re-evaluation: skip bug-finding trials whose existing output
+# already matched every expected CPV for that harness/sanitizer
+uv run crsbench re-eval -c config.yaml --output /tmp/reeval-results --skip-complete-cpvs
 ```
 
 Re-eval preserves `metadata.json` and relative POV discovery times, but re-runs verification and collects crash logs.
@@ -622,6 +626,7 @@ Bug-finding re-eval duplicate handling:
 | `--redis-host` | Override `redis_host` from config for distributed re-eval |
 | `--per-pov-verify-timeout` | Timeout per POV verification (seconds) |
 | `--output`, `-o` | Output directory (default: write to trial dirs) |
+| `--skip-complete-cpvs` | For bug-finding trials, skip re-eval when the existing output already has matches for every expected CPV for the harness/sanitizer |
 | `--jobs` | Number of parallel verification jobs |
 | `--cores-per-job` | CPUs per verification job |
 | `-v`, `--verbose` | Enable verbose logging |

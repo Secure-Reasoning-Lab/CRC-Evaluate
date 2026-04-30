@@ -18,7 +18,9 @@ from crsbench.evaluation.reeval.cli import (
     _drain_all_async_results,
     _enqueue_trial_povs,
     _get_reeval_pov_sample_size,
+    _load_expected_cpv_ids_for_trial,
     _load_experiment_config,
+    _load_found_cpv_ids_from_pov_store,
     _load_target_cpv_id_from_trial_metadata,
     _maybe_subset_pov_dir,
     _prepare_async_pov_build_prereqs,
@@ -30,6 +32,7 @@ from crsbench.evaluation.reeval.cli import (
     _resolve_trial_sanitizer,
     _save_patch_results,
     _save_pov_results,
+    _should_skip_complete_cpv_trial,
     _stratified_sample_pov_files,
     _write_async_patch_logs,
     add_reeval_subparser,
@@ -79,6 +82,7 @@ class TestAddReevalSubparser:
         assert args.local is False
         assert args.redis_host is None
         assert args.output is None
+        assert args.skip_complete_cpvs is False
         assert args.verbose is False
 
     def test_all_flags(self) -> None:
@@ -106,6 +110,7 @@ class TestAddReevalSubparser:
                 "--local",
                 "--output",
                 "/tmp/out",
+                "--skip-complete-cpvs",
                 "-v",
             ]
         )
@@ -117,6 +122,7 @@ class TestAddReevalSubparser:
         assert args.mode == "full"
         assert args.local is True
         assert args.output == Path("/tmp/out")
+        assert args.skip_complete_cpvs is True
         assert args.verbose is True
 
     def test_redis_host_override_flag(self) -> None:
@@ -247,6 +253,133 @@ class TestResolveOutputDir:
 
         result = _resolve_output_dir(trial_dir, output_base, experiment_dir)
         assert result == Path("/tmp/reeval/crs/bench/trial-0")
+
+
+class TestSkipCompleteCpvs:
+    """Tests for skipping bug-finding trials with complete CPV coverage."""
+
+    def _make_benchmark(self, tmp_path: Path) -> Path:
+        from crsbench.validation.schemas import (
+            POV,
+            BenchmarkConfig,
+            FullMode,
+            HarnessFile,
+            Vulnerability,
+        )
+
+        benchmark_path = tmp_path / "benchmarks" / "test-benchmark"
+        aixcc_dir = benchmark_path / ".aixcc"
+        aixcc_dir.mkdir(parents=True)
+        config = BenchmarkConfig(
+            harness_files=[
+                HarnessFile(
+                    name="test_harness",
+                    path="/src/test_harness.c",
+                    vulns=[
+                        Vulnerability(
+                            vuln_keyword="cpv_0",
+                            povs=[POV(id="pov_0", sanitizer="address")],
+                        ),
+                        Vulnerability(
+                            vuln_keyword="cpv_1",
+                            povs=[POV(id="pov_1", sanitizer="undefined")],
+                        ),
+                        Vulnerability(
+                            vuln_keyword="cpv_2",
+                            povs=[
+                                POV(id="pov_2_asan", sanitizer="address"),
+                                POV(id="pov_2_ubsan", sanitizer="undefined"),
+                            ],
+                        ),
+                    ],
+                )
+            ],
+            full_mode=FullMode(base_commit="abc123def456"),
+        )
+        config.to_yaml(aixcc_dir / "meta.yaml")
+        return benchmark_path
+
+    def test_expected_cpvs_are_filtered_by_sanitizer(self, tmp_path: Path) -> None:
+        benchmark_path = self._make_benchmark(tmp_path)
+
+        assert _load_expected_cpv_ids_for_trial(
+            benchmark_path, "test_harness", "address"
+        ) == {"cpv_0", "cpv_2"}
+        assert _load_expected_cpv_ids_for_trial(
+            benchmark_path, "test_harness", "undefined"
+        ) == {"cpv_1", "cpv_2"}
+        assert _load_expected_cpv_ids_for_trial(
+            benchmark_path, "test_harness", None
+        ) == {"cpv_0", "cpv_1", "cpv_2"}
+
+    def test_found_cpvs_loads_store_summary_and_entries(self, tmp_path: Path) -> None:
+        dest_dir = tmp_path / "out" / "trial-1"
+        povs_dir = dest_dir / "povs"
+        povs_dir.mkdir(parents=True)
+        (povs_dir / "pov_store.json").write_text(
+            json.dumps(
+                {
+                    "cpv_to_first_pov": {"cpv_0": {"pov_hash": "abc"}},
+                    "povs": {
+                        "def": {"cpv_matched": ["cpv_2"]},
+                        "ghi": {"cpv_matched": []},
+                    },
+                }
+            )
+        )
+
+        assert _load_found_cpv_ids_from_pov_store(dest_dir) == {"cpv_0", "cpv_2"}
+
+    def test_should_skip_when_existing_output_found_all_expected_cpvs(
+        self, tmp_path: Path
+    ) -> None:
+        benchmark_path = self._make_benchmark(tmp_path)
+        dest_dir = tmp_path / "out" / "trial-1"
+        povs_dir = dest_dir / "povs"
+        povs_dir.mkdir(parents=True)
+        (povs_dir / "pov_store.json").write_text(
+            json.dumps(
+                {
+                    "cpv_to_first_pov": {
+                        "cpv_0": {"pov_hash": "abc"},
+                        "cpv_2": {"pov_hash": "def"},
+                    }
+                }
+            )
+        )
+
+        should_skip, expected, found = _should_skip_complete_cpv_trial(
+            benchmark_path=benchmark_path,
+            harness_name="test_harness",
+            sanitizer="address",
+            dest_dir=dest_dir,
+        )
+
+        assert should_skip is True
+        assert expected == {"cpv_0", "cpv_2"}
+        assert found == {"cpv_0", "cpv_2"}
+
+    def test_should_not_skip_when_existing_output_misses_cpv(
+        self, tmp_path: Path
+    ) -> None:
+        benchmark_path = self._make_benchmark(tmp_path)
+        dest_dir = tmp_path / "out" / "trial-1"
+        povs_dir = dest_dir / "povs"
+        povs_dir.mkdir(parents=True)
+        (povs_dir / "pov_store.json").write_text(
+            json.dumps({"cpv_to_first_pov": {"cpv_0": {"pov_hash": "abc"}}})
+        )
+
+        should_skip, expected, found = _should_skip_complete_cpv_trial(
+            benchmark_path=benchmark_path,
+            harness_name="test_harness",
+            sanitizer="address",
+            dest_dir=dest_dir,
+        )
+
+        assert should_skip is False
+        assert expected == {"cpv_0", "cpv_2"}
+        assert found == {"cpv_0"}
 
 
 class TestSavePovResults:
@@ -631,6 +764,36 @@ class TestRunReeval:
             input_povs.mkdir(parents=True, exist_ok=True)
             (input_povs / "cpv_0.blob").write_bytes(b"pov")
 
+    @staticmethod
+    def _create_benchmark_meta(bench_dir: Path, harness: str = "test-harness") -> None:
+        """Create benchmark meta.yaml with one address-sanitizer CPV."""
+        from crsbench.validation.schemas import (
+            POV,
+            BenchmarkConfig,
+            FullMode,
+            HarnessFile,
+            Vulnerability,
+        )
+
+        aixcc_dir = bench_dir / ".aixcc"
+        aixcc_dir.mkdir(parents=True, exist_ok=True)
+        config = BenchmarkConfig(
+            harness_files=[
+                HarnessFile(
+                    name=harness,
+                    path="/src/test_harness.c",
+                    vulns=[
+                        Vulnerability(
+                            vuln_keyword="cpv_0",
+                            povs=[POV(id="pov_0", sanitizer="address")],
+                        )
+                    ],
+                )
+            ],
+            full_mode=FullMode(base_commit="abc123def456"),
+        )
+        config.to_yaml(aixcc_dir / "meta.yaml")
+
     def test_dispatches_bug_finding(self, tmp_path: Path) -> None:
         """Should dispatch to _reeval_bug_finding for bug_finding trials."""
         # Setup experiment dir with a trial
@@ -669,6 +832,49 @@ class TestRunReeval:
             assert call_kwargs.kwargs["harness"] == "test-harness"
             assert call_kwargs.kwargs["sanitizer"] == "address"
             assert result == 0
+
+    def test_skip_complete_cpvs_avoids_bug_finding_dispatch(
+        self, tmp_path: Path
+    ) -> None:
+        """Should skip bug-finding trials whose existing output found all CPVs."""
+        experiment_dir = tmp_path / "my-exp"
+        trial_dir = (
+            experiment_dir / "crs" / "bench" / "harness" / "bug_finding" / "trial-0"
+        )
+        trial_dir.mkdir(parents=True)
+        (trial_dir / "metadata.json").write_text(
+            json.dumps(self._make_trial_metadata(0))
+        )
+        self._create_minimal_reeval_outputs(trial_dir, mode="bug_finding")
+
+        bench_dir = tmp_path / "benchmarks" / "test-bench"
+        self._create_benchmark_meta(bench_dir)
+
+        output_dir = tmp_path / "reeval-out"
+        mirrored_trial = output_dir / trial_dir.relative_to(experiment_dir)
+        povs_dir = mirrored_trial / "povs"
+        povs_dir.mkdir(parents=True)
+        (povs_dir / "pov_store.json").write_text(
+            json.dumps({"cpv_to_first_pov": {"cpv_0": {"pov_hash": "abc"}}})
+        )
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "experiment: my-exp\n"
+            f"experiment_filestore: {tmp_path}\n"
+            f"benchmarks_root: {tmp_path / 'benchmarks'}\n"
+        )
+        oss_fuzz = tmp_path / "oss-fuzz"
+        oss_fuzz.mkdir()
+
+        args = self._make_args(config_path, oss_fuzz, output=output_dir)
+        args.skip_complete_cpvs = True
+
+        with patch("crsbench.evaluation.reeval.cli._reeval_bug_finding") as mock_bf:
+            result = run_reeval(args)
+
+        mock_bf.assert_not_called()
+        assert result == 0
 
     def test_bug_finding_uses_config_source_mode_when_cli_omits_override(
         self, tmp_path: Path

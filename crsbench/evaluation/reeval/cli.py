@@ -196,6 +196,9 @@ Examples:
   # Force local mode even if the experiment config enables Redis/distributed queues
   crsbench re-eval -c experiment-config.yaml --local
 
+  # Skip bug-finding trials whose prior output already matched every expected CPV
+  crsbench re-eval -c experiment-config.yaml --output /tmp/reeval-results --skip-complete-cpvs
+
   # Re-evaluate with verbose logging
   crsbench re-eval -c experiment-config.yaml -v
         """,
@@ -274,6 +277,14 @@ Examples:
         type=Path,
         default=None,
         help="Output directory (default: write results to trial dirs)",
+    )
+    parser.add_argument(
+        "--skip-complete-cpvs",
+        action="store_true",
+        help=(
+            "Skip bug-finding trials when the existing re-eval output already "
+            "contains matches for every expected CPV for that harness/sanitizer"
+        ),
     )
     parser.add_argument(
         "--verbose",
@@ -361,6 +372,79 @@ def _resolve_output_dir(
         Path to write results
     """
     return ExperimentDir(experiment_dir).mirror_trial_dir(trial_dir, output_base)
+
+
+def _load_expected_cpv_ids_for_trial(
+    benchmark_path: Path,
+    harness_name: str,
+    sanitizer: Optional[str],
+) -> set[str]:
+    """Return expected CPV IDs for a trial's harness, filtered by sanitizer."""
+    from crsbench.validation.meta_adapter import MetaYamlAdapter
+
+    adapter = MetaYamlAdapter.from_benchmark_path(benchmark_path)
+    if adapter is None:
+        return set()
+    harness = adapter.get_harness(harness_name)
+    if harness is None or not harness.vulns:
+        return set()
+
+    expected: set[str] = set()
+    for vuln in harness.vulns:
+        if sanitizer is None:
+            expected.add(vuln.vuln_keyword)
+            continue
+        if any(pov.sanitizer == sanitizer for pov in vuln.povs):
+            expected.add(vuln.vuln_keyword)
+    return expected
+
+
+def _load_found_cpv_ids_from_pov_store(dest_dir: Path) -> set[str]:
+    """Return CPV IDs already matched in a re-eval output POV store."""
+    pov_store_path = dest_dir / "povs" / "pov_store.json"
+    if not pov_store_path.exists():
+        return set()
+    try:
+        data = json.loads(pov_store_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning(
+            f"Failed to read existing re-eval POV store {pov_store_path}: {exc}"
+        )
+        return set()
+
+    found: set[str] = set()
+    cpv_to_first_pov = data.get("cpv_to_first_pov")
+    if isinstance(cpv_to_first_pov, dict):
+        found.update(str(cpv) for cpv in cpv_to_first_pov if str(cpv))
+
+    povs = data.get("povs")
+    if isinstance(povs, dict):
+        for entry in povs.values():
+            if not isinstance(entry, dict):
+                continue
+            cpv_matched = entry.get("cpv_matched")
+            if isinstance(cpv_matched, list):
+                found.update(str(cpv) for cpv in cpv_matched if str(cpv))
+
+    return found
+
+
+def _should_skip_complete_cpv_trial(
+    *,
+    benchmark_path: Path,
+    harness_name: str,
+    sanitizer: Optional[str],
+    dest_dir: Path,
+) -> tuple[bool, set[str], set[str]]:
+    """Return whether existing re-eval output already covers all expected CPVs."""
+    expected_cpvs = _load_expected_cpv_ids_for_trial(
+        benchmark_path, harness_name, sanitizer
+    )
+    if not expected_cpvs:
+        return False, expected_cpvs, set()
+
+    found_cpvs = _load_found_cpv_ids_from_pov_store(dest_dir)
+    return expected_cpvs <= found_cpvs, expected_cpvs, found_cpvs
 
 
 def _load_crs_run_start_time(store_dir: Path) -> Optional[float]:
@@ -1807,6 +1891,31 @@ def run_reeval(args: argparse.Namespace) -> int:
             try:
                 if mode == TrialMode.bug_finding:
                     trial_sanitizer = _resolve_trial_sanitizer(trial, trial_dir)
+                    if getattr(args, "skip_complete_cpvs", False):
+                        should_skip, expected_cpvs, found_cpvs = (
+                            _should_skip_complete_cpv_trial(
+                                benchmark_path=benchmark_path,
+                                harness_name=harness,
+                                sanitizer=trial_sanitizer,
+                                dest_dir=dest_dir,
+                            )
+                        )
+                        if should_skip:
+                            logger.info(
+                                "Skipping re-eval for {}: existing output already "
+                                "matched all {} expected CPV(s): {}",
+                                trial_dir,
+                                len(expected_cpvs),
+                                ", ".join(sorted(expected_cpvs)),
+                            )
+                            continue
+                        if expected_cpvs:
+                            missing_cpvs = expected_cpvs - found_cpvs
+                            logger.debug(
+                                "Re-eval required for {}: missing CPV(s): {}",
+                                trial_dir,
+                                ", ".join(sorted(missing_cpvs)) or "<none>",
+                            )
 
                     if verify_queue and redis_host:
                         # Phase 1: enqueue only, defer polling
