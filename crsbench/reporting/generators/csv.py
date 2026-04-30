@@ -13,17 +13,39 @@ from crsbench.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _format_budget(budget_usd: float) -> str:
+    """Format a USD budget as a filesystem-safe suffix (e.g., 5, 7.5, 10.25)."""
+    rounded = round(float(budget_usd), 2)
+    if rounded == int(rounded):
+        return str(int(rounded))
+    return f"{rounded:.2f}".rstrip("0").rstrip(".")
+
+
 class CSVReportGenerator:
     """Generate CSV reports from experiment metrics."""
 
-    def __init__(self, output_dir: Path) -> None:
+    def __init__(self, output_dir: Path, benchmarks_root: Path | None = None) -> None:
         """Initialize CSV report generator.
 
         Args:
             output_dir: Directory to write CSV reports
+            benchmarks_root: Optional path to benchmarks root. When provided,
+                ``cpv_analysis.csv`` falls back to each benchmark's
+                ``.aixcc/meta.yaml`` for expected CPV ids when a trial lacks
+                ``povs/snapshot_history.json`` (e.g. died before first
+                snapshot). Without this, such trials are silently dropped
+                from the report.
         """
         self.output_dir = output_dir
+        self.benchmarks_root = benchmarks_root
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        # Cache (benchmark, harness, sanitizer) -> list[str] to avoid
+        # re-parsing meta.yaml across the many trials that share a harness.
+        self._meta_cpv_cache: dict[tuple[str, str, str], list[str]] = {}
+        # Cache (benchmark, harness) -> collected-seed file count so the
+        # cpv_analysis report does not stat the same corpus directory
+        # repeatedly across trials of the same harness.
+        self._seed_count_cache: dict[tuple[str, str], int] = {}
 
     def generate_trial_report(
         self, trial_metrics: dict[str, Any], _snapshots: list[Any] | None = None
@@ -322,6 +344,613 @@ class CSVReportGenerator:
         logger.debug(f"Generated patch analysis CSV: {out_path}")
         return out_path
 
+    def generate_cpv_analysis_report(
+        self,
+        experiment_dir: Path,
+        *,
+        budget_usd: float | None = None,
+        trial_time_series: dict[str, list[dict[str, Any]]] | None = None,
+    ) -> Path:
+        """Generate per-(trial, cpv) CSV from per-trial pov_store.json.
+
+        One row per (trial, expected CPV) pair. Reads authoritative match data
+        from ``povs/pov_store.json`` (populated after async verdict drain), so
+        this CSV reflects the trial's final state — unlike the per-snapshot
+        ``pov_verification.json`` which is sealed before drain completes.
+
+        When ``budget_usd`` is provided, emits ``cpv_analysis_budget_<X>.csv``
+        instead of ``cpv_analysis.csv`` and re-evaluates each match: a CPV is
+        marked ``matched`` only if its discovery occurred before the trial's
+        cumulative LLM spend reached ``budget_usd``. Cost-vs-time is taken
+        from each trial's snapshot-derived ``time_series`` (passed in via
+        ``trial_time_series``); see ``_compute_time_at_budget`` for the
+        interpolation rules.
+
+        Columns (base):
+            trial_num, crs, benchmark, harness, mode, run_mode, sanitizer,
+            cpv_id, matched, time_to_trigger, cost_to_trigger_usd, pov_hash,
+            discovery_ts, trial_dir
+        Extra columns when ``budget_usd`` is set:
+            budget_usd, trial_time_at_budget
+
+        ``trial_total_cost_usd`` is the trial-level (= one harness run) LLM
+        spend from ``llm-usage.json``; the same value is repeated across CPV
+        rows of the same trial since cost cannot be attributed per CPV.
+        """
+        if budget_usd is None:
+            out_path = self.output_dir / "cpv_analysis.csv"
+        else:
+            out_path = (
+                self.output_dir
+                / f"cpv_analysis_budget_{_format_budget(budget_usd)}.csv"
+            )
+        rows: list[dict[str, Any]] = []
+
+        for trial_dir in sorted(experiment_dir.rglob("trial-*")):
+            if not trial_dir.is_dir():
+                continue
+            paths = TrialDir(trial_dir)
+
+            metadata_path = paths.metadata_path
+            if not metadata_path.exists():
+                continue
+            try:
+                metadata = json.loads(metadata_path.read_text())
+            except Exception:
+                continue
+
+            expected_cpvs = self._load_expected_cpv_ids(paths)
+            if not expected_cpvs:
+                # Trials that die before the first snapshot have no
+                # povs/snapshot_history.json. Fall back to ground-truth
+                # meta.yaml so the trial is still represented in the report
+                # (with all CPVs unmatched) instead of vanishing.
+                expected_cpvs = self._load_expected_cpv_ids_from_benchmark(
+                    benchmark=str(metadata.get("benchmark", "")),
+                    harness=str(metadata.get("harness", "")),
+                    sanitizer=str(metadata.get("sanitizer", "")),
+                )
+            # FDP-style benchmarks expose the same vulnerability through
+            # multiple harnesses, so verification can record cross-harness
+            # ``cpv_matched`` entries (e.g. a POV in the OripaOneFDP trial
+            # that also fits OripaOne's cpv_0). Pass the trial's expected
+            # CPVs as the allow-list so the report attributes each row only
+            # to the harness that actually owns the CPV in meta.yaml.
+            allowed_cpvs = set(expected_cpvs)
+            cpv_to_first_pov = self._load_cpv_to_first_pov(paths, allowed=allowed_cpvs)
+
+            # Union of expected and matched ensures we surface unexpected
+            # matches as well as expected-but-unmatched gaps.
+            cpv_ids = sorted(set(expected_cpvs) | set(cpv_to_first_pov.keys()))
+            if not cpv_ids:
+                continue
+
+            base = {
+                "trial_num": metadata.get("trial_num", ""),
+                "crs": metadata.get("crs", ""),
+                "benchmark": metadata.get("benchmark", ""),
+                "harness": metadata.get("harness", ""),
+                "mode": metadata.get("mode", ""),
+                "run_mode": metadata.get("build_mode", ""),
+                "sanitizer": metadata.get("sanitizer", ""),
+                "trial_dir": str(trial_dir),
+            }
+            trial_start_epoch, anchor_source = self._resolve_trial_anchor(
+                paths, metadata
+            )
+            trial_total_cost = self._load_total_llm_cost(trial_dir)
+            trial_total_time = self._load_trial_total_time(trial_dir)
+            seed_count = self._count_collected_seeds(
+                str(metadata.get("benchmark", "")),
+                str(metadata.get("harness", "")),
+            )
+
+            time_at_budget: float | None = None
+            trial_ts = (trial_time_series or {}).get(str(trial_dir), [])
+            if budget_usd is not None:
+                time_at_budget = self._compute_time_at_budget(
+                    trial_ts,
+                    total_cost_usd=trial_total_cost,
+                    budget_usd=budget_usd,
+                )
+
+            for cpv_id in cpv_ids:
+                match = cpv_to_first_pov.get(cpv_id)
+                rel_time = self._match_relative_time(match, trial_start_epoch)
+
+                if budget_usd is None:
+                    matched = match is not None
+                else:
+                    matched = self._match_within_budget(
+                        match=match,
+                        time_at_budget=time_at_budget,
+                        relative_time=rel_time,
+                    )
+
+                row = {
+                    **base,
+                    "cpv_id": cpv_id,
+                    "matched": matched,
+                    "time_to_trigger": (
+                        rel_time if matched and rel_time is not None else ""
+                    ),
+                    "cost_to_trigger_usd": (
+                        self._compute_cost_at_time(
+                            trial_ts,
+                            total_cost_usd=trial_total_cost,
+                            relative_time=rel_time,
+                        )
+                        if matched
+                        else ""
+                    ),
+                    "pov_hash": (match.get("pov_hash") if matched and match else ""),
+                    "discovery_ts": (
+                        match.get("discovery_ts") if matched and match else ""
+                    ),
+                    "trial_total_cost_usd": (
+                        trial_total_cost if trial_total_cost is not None else ""
+                    ),
+                    "trial_total_time_seconds": (
+                        trial_total_time if trial_total_time is not None else ""
+                    ),
+                    "anchor_source": anchor_source or "",
+                    "seed_count": seed_count,
+                }
+                if budget_usd is not None:
+                    row["budget_usd"] = budget_usd
+                    row["trial_time_at_budget"] = (
+                        time_at_budget if time_at_budget is not None else ""
+                    )
+                rows.append(row)
+
+        fieldnames = [
+            "trial_num",
+            "crs",
+            "benchmark",
+            "harness",
+            "mode",
+            "run_mode",
+            "sanitizer",
+            "cpv_id",
+            "matched",
+            "time_to_trigger",
+            "cost_to_trigger_usd",
+            "pov_hash",
+            "discovery_ts",
+            "trial_total_cost_usd",
+            "trial_total_time_seconds",
+            "anchor_source",
+            "seed_count",
+            "trial_dir",
+        ]
+        if budget_usd is not None:
+            fieldnames += [
+                "budget_usd",
+                "trial_time_at_budget",
+            ]
+        self._write_csv_rows(out_path, rows, fieldnames)
+        logger.debug(f"Generated CPV analysis CSV: {out_path}")
+        return out_path
+
+    @staticmethod
+    def _compute_time_at_budget(
+        time_series: list[dict[str, Any]],
+        *,
+        total_cost_usd: float | None,
+        budget_usd: float,
+    ) -> float | None:
+        """Map an LLM-cost budget back onto the trial's run-elapsed-time axis.
+
+        The result is the largest run-elapsed time at which the cumulative
+        LLM spend is ≤ ``budget_usd``. CPV matches whose ``relative_time``
+        is at most this value are considered to have been discovered within
+        the budget.
+
+        Rules:
+            - Empty ``time_series`` and unknown total cost → return ``None``
+              (caller should preserve the original match decision).
+            - Empty ``time_series`` but ``total_cost_usd ≤ budget_usd`` →
+              treat as fully within budget (return ``+inf``); this covers
+              the "no snapshot, fast trial" case.
+            - Final sampled cost ≤ budget AND total trial cost ≤ budget →
+              return ``+inf``: the entire trial fit within budget, so every
+              match is preserved (including POVs verified after the last
+              snapshot during async drain).
+            - Final sampled cost ≤ budget but total cost > budget →
+              we cannot pin an exact time without finer samples, so we
+              conservatively return the last sample's run-elapsed time
+              (avoid over-crediting late discoveries).
+            - Otherwise the budget falls between two samples: linearly
+              interpolate ``running_elapsed_time`` at ``llm_cost ==
+              budget_usd``.
+        """
+        if not time_series:
+            if total_cost_usd is not None and total_cost_usd <= budget_usd:
+                return float("inf")
+            return None
+
+        ordered = sorted(
+            time_series,
+            key=lambda p: float(p.get("running_elapsed_time", 0.0) or 0.0),
+        )
+        last = ordered[-1]
+        last_t = float(last.get("running_elapsed_time", 0.0) or 0.0)
+        last_c = float(last.get("llm_cost", 0.0) or 0.0)
+
+        if last_c <= budget_usd:
+            # Last sample is still within budget. If the final accounted cost
+            # also fits, the entire trial ran within budget — preserve every
+            # match (including POVs verified after the last snapshot, e.g.
+            # during async drain). Otherwise we lack the resolution to pin
+            # the exact crossing, so return the last known-safe time and
+            # avoid over-crediting late discoveries.
+            if total_cost_usd is not None and total_cost_usd <= budget_usd:
+                return float("inf")
+            return last_t
+
+        prev_t, prev_c = 0.0, 0.0
+        for point in ordered:
+            t = float(point.get("running_elapsed_time", 0.0) or 0.0)
+            c = float(point.get("llm_cost", 0.0) or 0.0)
+            if c > budget_usd:
+                if c == prev_c:
+                    return prev_t
+                frac = (budget_usd - prev_c) / (c - prev_c)
+                return prev_t + frac * (t - prev_t)
+            prev_t, prev_c = t, c
+        # Should not reach: last_c > budget guarantees the loop crosses.
+        return prev_t
+
+    @staticmethod
+    def _compute_cost_at_time(
+        time_series: list[dict[str, Any]],
+        *,
+        total_cost_usd: float | None,
+        relative_time: float | None,
+    ) -> float | None:
+        """Map a trigger time onto the cumulative LLM-cost axis.
+
+        Rules:
+            - Unknown ``relative_time`` → ``None``.
+            - No samples → fall back to ``total_cost_usd`` when available.
+            - Time before the first sample → interpolate from the origin.
+            - Time between two samples → linearly interpolate ``llm_cost``.
+            - Time after the last sample → fall back to ``total_cost_usd``
+              when available, else the last sampled cost.
+        """
+        if relative_time is None:
+            return None
+        try:
+            trigger_t = float(relative_time)
+        except (TypeError, ValueError):
+            return None
+        if trigger_t <= 0:
+            return 0.0
+        if not time_series:
+            return total_cost_usd
+
+        ordered = sorted(
+            time_series,
+            key=lambda p: float(p.get("running_elapsed_time", 0.0) or 0.0),
+        )
+
+        prev_t, prev_c = 0.0, 0.0
+        for point in ordered:
+            t = float(point.get("running_elapsed_time", 0.0) or 0.0)
+            c = float(point.get("llm_cost", 0.0) or 0.0)
+            if trigger_t <= t:
+                if t == prev_t:
+                    return c
+                frac = (trigger_t - prev_t) / (t - prev_t)
+                return prev_c + frac * (c - prev_c)
+            prev_t, prev_c = t, c
+
+        if total_cost_usd is not None:
+            return total_cost_usd
+        return prev_c
+
+    @staticmethod
+    def _match_within_budget(
+        *,
+        match: dict[str, Any] | None,
+        time_at_budget: float | None,
+        relative_time: float | None = None,
+    ) -> bool:
+        """Return True if ``match`` was discovered within the budget time."""
+        if match is None:
+            return False
+        if time_at_budget is None:
+            # Unknown cost-time mapping (no time_series, total cost unknown).
+            # Fall back to the recorded match so we do not silently drop data.
+            return True
+        rel_time = relative_time
+        if rel_time is None:
+            rel_time = match.get("relative_time")
+        if rel_time is None:
+            return False
+        try:
+            return float(rel_time) <= time_at_budget
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _metadata_timestamp_epoch(metadata: dict[str, Any]) -> float | None:
+        """Return metadata.json:timestamp as Unix epoch seconds when available."""
+        ts = metadata.get("timestamp")
+        if ts is None:
+            return None
+        try:
+            if isinstance(ts, (int, float)):
+                return float(ts)
+            text = str(ts)
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            return datetime.fromisoformat(text).timestamp()
+        except (TypeError, ValueError):
+            return None
+
+    # crs_run_start_time is set after build, so the gap from
+    # metadata.timestamp is at most the build phase. One hour covers all
+    # observed cases; values outside this window indicate the anchor was
+    # rewritten by re-eval and must be discarded.
+    _CRS_START_VALID_AHEAD = 60.0
+    _CRS_START_VALID_BEHIND = 3600.0
+
+    @classmethod
+    def _resolve_trial_start_epoch(
+        cls, paths: TrialDir, metadata: dict[str, Any]
+    ) -> float | None:
+        """Resolve the trial start epoch (legacy single-value entry point)."""
+        epoch, _ = cls._resolve_trial_anchor(paths, metadata)
+        return epoch
+
+    @classmethod
+    def _resolve_trial_anchor(
+        cls, paths: TrialDir, metadata: dict[str, Any]
+    ) -> tuple[float | None, str | None]:
+        """Resolve the trial-start anchor and surface its provenance.
+
+        Delegates to ``crsbench.reporting.metrics.resolve_trial_anchor`` so
+        report generation and trial-level metrics stay aligned on the same
+        fallback chain (pre-reeval backup -> worker.log anchor line ->
+        live POV store -> worker.log run/build line -> metadata.timestamp).
+        """
+        from crsbench.reporting.metrics import resolve_trial_anchor
+
+        return resolve_trial_anchor(
+            paths.path,
+            metadata_epoch=cls._metadata_timestamp_epoch(metadata),
+        )
+
+    @staticmethod
+    def _match_relative_time(
+        match: dict[str, Any] | None, trial_start_epoch: float | None
+    ) -> float | None:
+        """Compute CPV trigger time on the trial metadata timestamp axis.
+
+        ``pov_store.json`` stores ``relative_time`` derived from
+        ``crs_run_start_time``. Reanalysis and distributed re-eval paths can
+        rewrite that anchor, so report generation recomputes the value from
+        the stable pair ``discovery_ts - metadata.json:timestamp`` whenever
+        both inputs are present. The stored value remains a compatibility
+        fallback for older artifacts that lack metadata timestamps.
+        """
+        if not match:
+            return None
+        discovery_ts = match.get("discovery_ts")
+        if discovery_ts is not None and trial_start_epoch is not None:
+            try:
+                return float(discovery_ts) - trial_start_epoch
+            except (TypeError, ValueError):
+                pass
+        stored = match.get("relative_time")
+        if stored is None:
+            return None
+        try:
+            return float(stored)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _load_total_llm_cost(trial_dir: Path) -> float | None:
+        llm_path = trial_dir / "llm-usage.json"
+        if not llm_path.exists():
+            return None
+        try:
+            data = json.loads(llm_path.read_text())
+            return float(data.get("total_cost_usd", 0.0) or 0.0)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _load_trial_total_time(trial_dir: Path) -> float | None:
+        """Wall-clock seconds for the trial, derived from worker.log.
+
+        Surfacing time in the cpv_analysis row (alongside the existing
+        ``trial_total_cost_usd`` column) lets downstream statistics include
+        trials that died before any snapshot was written. Worker log
+        timestamps are present whenever the trial got far enough to start
+        logging, which covers nearly all real failure modes.
+        """
+        from crsbench.reporting.metrics import _worker_log_wall_elapsed
+
+        return _worker_log_wall_elapsed(trial_dir)
+
+    @staticmethod
+    def _load_expected_cpv_ids(paths: TrialDir) -> list[str]:
+        """Read expected CPV ids from snapshot_history.json (authoritative)."""
+        history_path = paths.pov_snapshot_history_path
+        if not history_path.exists():
+            return []
+        try:
+            data = json.loads(history_path.read_text())
+        except Exception:
+            return []
+        ids = data.get("expected_cpv_ids") or []
+        return [str(x) for x in ids if x]
+
+    def _load_expected_cpv_ids_from_benchmark(
+        self, *, benchmark: str, harness: str, sanitizer: str
+    ) -> list[str]:
+        """Fallback: derive expected CPV ids from the benchmark's meta.yaml.
+
+        Used for trials that died before producing
+        ``povs/snapshot_history.json``. Filters by sanitizer so the result
+        matches what runtime would have recorded — a CPV is included only if
+        it has at least one POV under ``sanitizer`` (or all CPVs when
+        ``sanitizer`` is unknown).
+
+        Returns an empty list when ``benchmarks_root`` was not configured or
+        the benchmark / harness cannot be resolved; the trial then silently
+        drops, preserving prior behavior for callers that don't supply a
+        ground-truth source.
+        """
+        if self.benchmarks_root is None or not benchmark or not harness:
+            return []
+
+        valid_sanitizers = {"address", "memory", "undefined", "thread", "leak"}
+        san = sanitizer if sanitizer in valid_sanitizers else None
+        cache_key = (benchmark, harness, san or "")
+        cached = self._meta_cpv_cache.get(cache_key)
+        if cached is not None:
+            return list(cached)
+
+        # Imported lazily to keep the reporting module importable in
+        # contexts (tests, slim envs) where validation deps are absent.
+        from crsbench.validation.meta_adapter import MetaYamlAdapter
+
+        benchmark_path = self.benchmarks_root / benchmark
+        if not benchmark_path.exists():
+            self._meta_cpv_cache[cache_key] = []
+            return []
+
+        adapter = MetaYamlAdapter.from_benchmark_path(benchmark_path)
+        if adapter is None:
+            self._meta_cpv_cache[cache_key] = []
+            return []
+
+        harness_obj = adapter.get_harness(harness)
+        if harness_obj is None or not harness_obj.vulns:
+            self._meta_cpv_cache[cache_key] = []
+            return []
+
+        cpv_ids: list[str] = []
+        for vuln in harness_obj.vulns:
+            if san is None:
+                cpv_ids.append(str(vuln.vuln_keyword))
+                continue
+            for pov in vuln.povs:
+                if pov.sanitizer == san:
+                    cpv_ids.append(str(vuln.vuln_keyword))
+                    break
+
+        self._meta_cpv_cache[cache_key] = cpv_ids
+        return list(cpv_ids)
+
+    def _count_collected_seeds(self, benchmark: str, harness: str) -> int:
+        """Return the number of seeds collected for a (benchmark, harness).
+
+        Reads ``<benchmarks_root>/<benchmark>/.aixcc/<harness>/corpus/`` —
+        the canonical corpus location populated by the seed-collection
+        pipeline — and counts regular files, excluding ``manifest.json``
+        and dotfiles. Returns 0 when ``benchmarks_root`` is unset or the
+        corpus directory does not exist (no corpus collected for this
+        harness, or non-corpus run).
+        """
+        if self.benchmarks_root is None or not benchmark or not harness:
+            return 0
+        cache_key = (benchmark, harness)
+        cached = self._seed_count_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        corpus_dir = self.benchmarks_root / benchmark / ".aixcc" / harness / "corpus"
+        if not corpus_dir.is_dir():
+            self._seed_count_cache[cache_key] = 0
+            return 0
+        count = 0
+        for entry in corpus_dir.iterdir():
+            if not entry.is_file():
+                continue
+            if entry.name.startswith(".") or entry.name == "manifest.json":
+                continue
+            count += 1
+        self._seed_count_cache[cache_key] = count
+        return count
+
+    @staticmethod
+    def _load_cpv_to_first_pov(
+        paths: TrialDir,
+        *,
+        allowed: set[str] | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        """Read cpv_to_first_pov from pov_store.json (post-drain truth).
+
+        When the denormalized ``cpv_to_first_pov`` map is empty or missing
+        — e.g. because reanalysis rewrote the store without populating it —
+        derive the equivalent map from ``povs`` entries that recorded
+        ``cpv_matched``. The earliest ``file_mtime`` (or ``first_seen_ts``
+        when mtime is absent) per CPV becomes the discovery time.
+
+        Args:
+            paths: Trial directory paths.
+            allowed: Optional set of CPV ids that legitimately belong to the
+                trial's harness. When provided, both the denormalized map
+                and the ``cpv_matched``-derived map are filtered against it
+                so cross-harness matches recorded by verification (FDP-style
+                benchmarks expose the same vulnerability through multiple
+                harnesses) do not leak into the report.
+        """
+        store_path = paths.pov_store_path
+        if not store_path.exists():
+            return {}
+        try:
+            data = json.loads(store_path.read_text())
+        except Exception:
+            return {}
+        first = data.get("cpv_to_first_pov") or {}
+        result = {
+            str(k): v
+            for k, v in first.items()
+            if isinstance(v, dict) and (allowed is None or str(k) in allowed)
+        }
+        if result:
+            return result
+
+        povs = data.get("povs") or {}
+        if not isinstance(povs, dict) or not povs:
+            return {}
+        crs_run_start_time = float(data.get("crs_run_start_time", 0.0) or 0.0)
+
+        derived: dict[str, dict[str, Any]] = {}
+        for pov_hash, entry in povs.items():
+            if not isinstance(entry, dict):
+                continue
+            cpv_matched = entry.get("cpv_matched") or []
+            if not cpv_matched:
+                continue
+            mtime = entry.get("file_mtime")
+            seen = entry.get("first_seen_ts")
+            ts_source = mtime if mtime is not None else seen
+            if ts_source is None:
+                continue
+            try:
+                cpv_ts = float(ts_source)
+            except (TypeError, ValueError):
+                continue
+            for cpv_id in cpv_matched:
+                cpv_id_str = str(cpv_id)
+                if allowed is not None and cpv_id_str not in allowed:
+                    continue
+                existing = derived.get(cpv_id_str)
+                if existing is not None and float(existing["discovery_ts"]) <= cpv_ts:
+                    continue
+                derived[cpv_id_str] = {
+                    "pov_hash": str(pov_hash),
+                    "discovery_ts": cpv_ts,
+                    "relative_time": cpv_ts - crs_run_start_time,
+                }
+        return derived
+
     @staticmethod
     def _resolve_trial_status(trial_dir: Path) -> str:
         if (trial_dir / ".success").exists():
@@ -475,16 +1104,22 @@ class CSVReportGenerator:
             "mode": trial_metrics.get("mode", ""),
             "run_mode": trial_metrics.get("run_mode", ""),
             "sanitizer": trial_metrics.get("sanitizer", ""),
-            "total_povs": trial_metrics.get("total_povs", 0),
-            "unique_povs": trial_metrics.get("unique_povs", 0),
-            "total_patches": trial_metrics.get("total_patches", 0),
-            "unique_patches": trial_metrics.get("unique_patches", 0),
+            "total_povs": trial_metrics.get("total_povs_discovered", 0),
+            "unique_povs": len(trial_metrics.get("unique_pov_names", [])),
+            "povs_cpv": trial_metrics.get("povs_cpv", 0),
+            "povs_unintended": trial_metrics.get("povs_unintended", 0),
+            "povs_not_vulnerable": trial_metrics.get("povs_not_vulnerable", 0),
+            "povs_error": trial_metrics.get("povs_error", 0),
+            "unintended_unique_sites": trial_metrics.get("unintended_unique_sites", 0),
+            "total_patches": trial_metrics.get("total_patches_generated", 0),
+            "unique_patches": len(trial_metrics.get("unique_patch_names", [])),
             "total_llm_cost": trial_metrics.get("total_llm_cost", 0.0),
             "total_llm_tokens": trial_metrics.get("total_llm_tokens", 0),
             "total_llm_input_tokens": trial_metrics.get("total_llm_input_tokens", 0),
             "total_llm_output_tokens": trial_metrics.get("total_llm_output_tokens", 0),
             "total_time": trial_metrics.get("total_time", 0.0),
             "time_to_first_pov": trial_metrics.get("time_to_first_pov", ""),
+            "anchor_source": trial_metrics.get("anchor_source", "") or "",
             "snapshot_count": trial_metrics.get("snapshot_count", 0),
             # Early stop analysis
             "total_cpvs": trial_metrics.get("total_cpvs", 0),

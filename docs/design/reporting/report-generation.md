@@ -52,6 +52,13 @@ Reports may aggregate:
 
 Metric definitions must remain stable across output formats.
 
+CPV trigger-time metrics use the trial metadata timestamp as the canonical
+start anchor. When `povs/pov_store.json` contains a CPV match with
+`discovery_ts`, report generation computes `time_to_trigger` from
+`discovery_ts - metadata.json:timestamp`; any stored `relative_time` is a
+fallback for older artifacts only. Budget-filtered CPV reports use the same
+metadata-anchored trigger time for match decisions.
+
 ## Runtime Behavior
 
 1. discover experiment/trial scope

@@ -64,6 +64,14 @@ class TrialDir:
         return self.path / "metadata.json"
 
     @property
+    def pov_store_path(self) -> Path:
+        return self.path / "povs" / "pov_store.json"
+
+    @property
+    def pov_snapshot_history_path(self) -> Path:
+        return self.path / "povs" / "snapshot_history.json"
+
+    @property
     def patch_verification_results_path(self) -> Path:
         return self.path / "patch_verification_results.json"
 

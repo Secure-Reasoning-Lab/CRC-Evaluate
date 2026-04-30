@@ -211,6 +211,8 @@ not accept an `--oss-fuzz-path` override.
 crsbench report    --experiment my-exp
 crsbench dashboard --base-dir ./experiments
 crsbench benchmark stats --output stats.csv
+crsbench benchmark stats --benchmark-suite crsbench-all --output stats.csv
+crsbench benchmark stats --benchmark-suite crsbench-all --vuln-index-output vuln-index.yaml
 ```
 
 ### Dataset

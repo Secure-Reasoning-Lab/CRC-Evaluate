@@ -591,6 +591,270 @@ class TestMetricsAggregator:
 
         assert metrics.total_povs_discovered == 0
         assert metrics.total_patches_generated == 0
+        assert metrics.povs_cpv == 0
+        assert metrics.povs_unintended == 0
+        assert metrics.povs_not_vulnerable == 0
+        assert metrics.povs_error == 0
+        assert metrics.unintended_unique_sites == 0
+
+    def test_aggregate_trial_no_snapshot_recovers_cost_and_time(self, temp_dir):
+        """Trials that died before any snapshot still report cost and time.
+
+        ``llm-usage.json`` and ``worker.log`` are written outside the
+        snapshot path, so failed runs leave them on disk even when no
+        ``snapshot-NNNN.tar.gz`` was produced. Using both as a fallback
+        avoids 0/0 entries diluting cost / time averages.
+        """
+        (temp_dir / "llm-usage.json").write_text(json.dumps({"total_cost_usd": 12.5}))
+        # Worker.log spans 1m23s = 83s. The naive subtraction is exact
+        # because both lines come from the same host timezone.
+        (temp_dir / "worker.log").write_text(
+            "2026-04-19 13:14:22 | INFO | wkr | [d] | Per-trial logging enabled\n"
+            "2026-04-19 13:14:25 | INFO | wkr | [evaluation] | Build started\n"
+            "2026-04-19 13:15:45 | INFO | wkr | [d] | Job done\n"
+        )
+
+        trial_info = TrialInfo(
+            trial_dir=temp_dir,
+            trial_num=1,
+            crs="crs-bug-finding-claude-code",
+            benchmark="afc-x",
+            harness="h",
+            mode="bug_finding",
+            status="valid",
+        )
+
+        metrics = MetricsAggregator().aggregate_trial(
+            trial_info=trial_info, snapshots=[]
+        )
+        assert metrics.total_llm_cost == 12.5
+        assert metrics.total_time == pytest.approx(83.0, abs=1.0)
+
+    def test_aggregate_trial_no_snapshot_zero_when_sources_missing(self, temp_dir):
+        """When neither llm-usage.json nor worker.log exists the values
+        stay at the prior 0.0 default — no spurious values invented."""
+        trial_info = TrialInfo(
+            trial_dir=temp_dir,
+            trial_num=1,
+            crs="crs-bug-finding-claude-code",
+            benchmark="afc-x",
+            harness="h",
+            mode="bug_finding",
+            status="valid",
+        )
+
+        metrics = MetricsAggregator().aggregate_trial(
+            trial_info=trial_info, snapshots=[]
+        )
+        assert metrics.total_llm_cost == 0.0
+        assert metrics.total_time == 0.0
+
+    def test_pov_status_breakdown_from_store(self, temp_dir):
+        """Counts POVs by verification status from pov_store.json.
+
+        Validates that unintended (zero-day) entries are deduped by
+        ``crash_signature``: two entries sharing a signature collapse to a
+        single unique site, while a third entry without a signature is
+        counted on its own (cannot be deduped).
+        """
+        povs_dir = temp_dir / "povs"
+        povs_dir.mkdir()
+        store = {
+            "crs_run_start_time": 0.0,
+            "povs": {
+                "h1": {"status": "cpv", "cpv_matched": ["cpv_0"]},
+                "h2": {"status": "cpv", "cpv_matched": ["cpv_0"]},
+                "h3": {
+                    "status": "unintended_crash",
+                    "cpv_matched": [],
+                    "crash_signature": "sig_a",
+                },
+                "h4": {
+                    "status": "unintended_crash",
+                    "cpv_matched": [],
+                    "crash_signature": "sig_a",
+                },
+                "h5": {
+                    "status": "unintended_crash",
+                    "cpv_matched": [],
+                    "crash_signature": None,
+                },
+                "h6": {"status": "not_vulnerable", "cpv_matched": []},
+                "h7": {"status": "error", "cpv_matched": []},
+            },
+        }
+        (povs_dir / "pov_store.json").write_text(json.dumps(store))
+
+        breakdown = MetricsAggregator._load_pov_status_breakdown(temp_dir)
+        assert breakdown == {
+            "povs_cpv": 2,
+            "povs_unintended": 3,
+            "povs_not_vulnerable": 1,
+            "povs_error": 1,
+            "unintended_unique_sites": 2,
+        }
+
+    def test_pov_status_breakdown_missing_file(self, temp_dir):
+        """Returns zeros when no pov_store.json exists."""
+        breakdown = MetricsAggregator._load_pov_status_breakdown(temp_dir)
+        assert breakdown == {
+            "povs_cpv": 0,
+            "povs_unintended": 0,
+            "povs_not_vulnerable": 0,
+            "povs_error": 0,
+            "unintended_unique_sites": 0,
+        }
+
+    def test_aggregate_trial_includes_pov_breakdown(self, temp_dir):
+        """``aggregate_trial`` propagates pov_store.json counts to TrialMetrics."""
+        povs_dir = temp_dir / "povs"
+        povs_dir.mkdir()
+        store = {
+            "povs": {
+                "h1": {"status": "cpv", "cpv_matched": ["cpv_0"]},
+                "h2": {
+                    "status": "unintended_crash",
+                    "cpv_matched": [],
+                    "crash_signature": "sig",
+                },
+            },
+        }
+        (povs_dir / "pov_store.json").write_text(json.dumps(store))
+
+        trial_info = TrialInfo(
+            trial_dir=temp_dir,
+            trial_num=1,
+            crs="ensemble-c",
+            benchmark="json-c",
+            harness="fuzz_harness",
+            mode="bug_finding",
+            status="valid",
+        )
+
+        aggregator = MetricsAggregator()
+        metrics = aggregator.aggregate_trial(trial_info=trial_info, snapshots=[])
+        assert metrics.povs_cpv == 1
+        assert metrics.povs_unintended == 1
+        assert metrics.unintended_unique_sites == 1
+
+    def test_time_to_first_pov_uses_metadata_anchor(self, temp_dir, sample_llm_usage):
+        """time_to_first_pov should be derived from metadata.json:timestamp +
+        pov_store.json file_mtimes, ignoring a corrupted crs_run_start_time."""
+        from datetime import datetime
+
+        trial_start_iso = "2026-04-26T08:00:00+00:00"
+        trial_start_epoch = datetime.fromisoformat(trial_start_iso).timestamp()
+        # First PoV created exactly 1500s into the trial.
+        first_pov_mtime = trial_start_epoch + 1500.0
+        # Simulate a corrupted re-eval anchor 1 day later, which would make
+        # `relative_time` ~−85000s if reporting trusted it.
+        corrupted_crs_start = trial_start_epoch + 86400.0
+
+        (temp_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "timestamp": trial_start_iso,
+                    "trial_num": 1,
+                    "crs": "test-crs",
+                    "benchmark": "test-bench",
+                    "harness": "h",
+                    "mode": "bug_finding",
+                    "source": {"path": "/x", "commit": None},
+                }
+            )
+        )
+
+        povs_dir = temp_dir / "povs"
+        povs_dir.mkdir()
+        (povs_dir / "pov_store.json").write_text(
+            json.dumps(
+                {
+                    "crs_run_start_time": corrupted_crs_start,
+                    "povs": {
+                        "deadbeef": {
+                            "hash": "deadbeef",
+                            "first_seen_ts": corrupted_crs_start,
+                            "file_mtime": first_pov_mtime,
+                            "file_size": 1,
+                            "status": "cpv",
+                            "cpv_matched": ["cpv_0"],
+                        },
+                    },
+                    "cpv_to_first_pov": {
+                        "cpv_0": {
+                            "pov_hash": "deadbeef",
+                            "discovery_ts": first_pov_mtime,
+                            "relative_time": first_pov_mtime - corrupted_crs_start,
+                        },
+                    },
+                }
+            )
+        )
+
+        trial_info = TrialInfo(
+            trial_dir=temp_dir,
+            trial_num=1,
+            crs="test-crs",
+            benchmark="test-bench",
+            harness="h",
+            mode="bug_finding",
+            status="valid",
+        )
+        # Snapshot reports PoV only at the very end (4000s); the legacy
+        # path would return that, masking a much earlier first PoV.
+        snapshots = [
+            SnapshotData(
+                trial_dir=temp_dir,
+                cycle=1,
+                timestamp=trial_start_epoch + 4000.0,
+                elapsed_time=4000.0,
+                running_elapsed_time=4000.0,
+                snapshot_period=4000,
+                pov_count=1,
+                patch_count=0,
+                pov_names=["pov_001"],
+                patch_names=[],
+                llm_usage=sample_llm_usage,
+            ),
+        ]
+
+        metrics = MetricsAggregator().aggregate_trial(
+            trial_info=trial_info, snapshots=snapshots
+        )
+        assert metrics.time_to_first_pov == pytest.approx(1500.0, abs=1e-3)
+
+    def test_time_to_first_pov_falls_back_to_snapshots(
+        self, temp_dir, sample_llm_usage
+    ):
+        """When pov_store.json is absent, fall back to snapshot.elapsed_time."""
+        trial_info = TrialInfo(
+            trial_dir=temp_dir,
+            trial_num=1,
+            crs="c",
+            benchmark="b",
+            harness="h",
+            mode="bug_finding",
+            status="valid",
+        )
+        snapshots = [
+            SnapshotData(
+                trial_dir=temp_dir,
+                cycle=1,
+                timestamp=1000.0,
+                elapsed_time=900.0,
+                running_elapsed_time=800.0,
+                snapshot_period=900,
+                pov_count=1,
+                patch_count=0,
+                pov_names=["a"],
+                patch_names=[],
+                llm_usage=sample_llm_usage,
+            ),
+        ]
+        metrics = MetricsAggregator().aggregate_trial(
+            trial_info=trial_info, snapshots=snapshots
+        )
+        assert metrics.time_to_first_pov == 900.0
 
 
 class TestExperimentValidator:

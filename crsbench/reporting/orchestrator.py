@@ -64,7 +64,7 @@ class ReportGenerator:
         self.validator = ExperimentValidator()
         self.json_generator = JSONReportGenerator(output_dir)
         self.html_generator = HTMLReportGenerator(output_dir)
-        self.csv_generator = CSVReportGenerator(output_dir)
+        self.csv_generator = CSVReportGenerator(output_dir, benchmarks_root)
 
     def _get_cpv_info(self, trial_info: TrialInfo) -> tuple[int, list[str]]:
         """Get CPV count and IDs for a trial from ground truth meta.yaml.
@@ -158,6 +158,7 @@ class ReportGenerator:
         format: str = "both",
         skip_incomplete: bool = True,
         ci_test: bool = False,
+        cpv_budget_cutoffs: list[float] | None = None,
     ) -> dict[str, Path | list[Path]]:
         """Generate report for an entire experiment.
 
@@ -165,6 +166,12 @@ class ReportGenerator:
             experiment_dir: Path to experiment directory
             format: Report format ("json", "html", "csv", "both", or "all")
             skip_incomplete: If True, skip incomplete trials
+            ci_test: Generate ci_test_results.csv from patcher logs
+            cpv_budget_cutoffs: Optional list of LLM-cost budgets (USD). For
+                each value, generate an additional ``cpv_analysis_budget_<X>.csv``
+                that re-evaluates each match against the cumulative LLM spend
+                at the time of POV discovery, simulating "what if the agent
+                had only this budget".
 
         Returns:
             Dict mapping report type to file path (or list of paths for CSV)
@@ -380,6 +387,10 @@ class ReportGenerator:
             result["html"] = html_path
 
         if format in ("csv", "all") or ci_test:
+            trial_time_series = {
+                str(m.trial_dir): [p.model_dump() for p in m.time_series]
+                for m in trial_metrics_list
+            }
             csv_paths = self.csv_generator.generate_experiment_report(
                 experiment_metrics.model_dump()
             )
@@ -387,6 +398,19 @@ class ReportGenerator:
                 experiment_dir
             )
             csv_paths.append(patch_csv)
+            cpv_csv = self.csv_generator.generate_cpv_analysis_report(
+                experiment_dir,
+                trial_time_series=trial_time_series,
+            )
+            csv_paths.append(cpv_csv)
+            if cpv_budget_cutoffs:
+                for budget in cpv_budget_cutoffs:
+                    cpv_budget_csv = self.csv_generator.generate_cpv_analysis_report(
+                        experiment_dir,
+                        budget_usd=budget,
+                        trial_time_series=trial_time_series,
+                    )
+                    csv_paths.append(cpv_budget_csv)
             if ci_test:
                 ci_csv = self.csv_generator.generate_ci_test_report(experiment_dir)
                 csv_paths.append(ci_csv)
@@ -661,6 +685,11 @@ class ReportGenerator:
                         "mode",
                         "total_povs",
                         "unique_povs",
+                        "povs_cpv",
+                        "povs_unintended",
+                        "povs_not_vulnerable",
+                        "povs_error",
+                        "unintended_unique_sites",
                         "total_patches",
                         "unique_patches",
                         "total_llm_cost",
@@ -717,6 +746,11 @@ class ReportGenerator:
                         "mode",
                         "total_povs",
                         "unique_povs",
+                        "povs_cpv",
+                        "povs_unintended",
+                        "povs_not_vulnerable",
+                        "povs_error",
+                        "unintended_unique_sites",
                         "total_patches",
                         "unique_patches",
                         "total_llm_cost",

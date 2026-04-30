@@ -4,11 +4,47 @@ import csv
 from collections.abc import Sequence
 from pathlib import Path
 
+import yaml
+
 from crsbench.statistics.cwe_utils import CWE_TOP_25_2025, get_pillar_name
 from crsbench.statistics.models import BenchmarkInfo, BenchmarkStats
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def export_vuln_index_yaml(
+    benchmarks: Sequence[BenchmarkInfo], output_path: Path
+) -> None:
+    """Export merged vuln.yaml content keyed by benchmark, harness, and CPV.
+
+    Args:
+        benchmarks: List of BenchmarkInfo objects
+        output_path: Path to output YAML file
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload: dict[str, dict] = {"benchmarks": {}}
+
+    for info in benchmarks:
+        benchmark_payload = payload["benchmarks"].setdefault(info.name, {})
+        for vuln in info.vulns:
+            vuln_yaml_path = (
+                info.path / ".aixcc" / vuln.harness_name / vuln.vuln_id / "vuln.yaml"
+            )
+            if not vuln_yaml_path.exists():
+                continue
+
+            with vuln_yaml_path.open(encoding="utf-8") as f:
+                vuln_data = yaml.safe_load(f) or {}
+
+            harness_payload = benchmark_payload.setdefault(vuln.harness_name, {})
+            harness_payload[vuln.vuln_id] = vuln_data
+
+    with output_path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(payload, f, sort_keys=False, allow_unicode=True)
+
+    logger.info(f"Exported merged vulnerability index to: {output_path}")
 
 
 def export_benchmarks_csv(

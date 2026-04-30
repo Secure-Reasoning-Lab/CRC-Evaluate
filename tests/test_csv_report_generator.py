@@ -28,10 +28,15 @@ def sample_trial_metrics():
         "mode": "bug_finding",
         "run_mode": "full",
         "sanitizer": "address",
-        "total_povs": 5,
-        "unique_povs": 3,
-        "total_patches": 0,
-        "unique_patches": 0,
+        "total_povs_discovered": 5,
+        "unique_pov_names": ["pov_a", "pov_b", "pov_c"],
+        "povs_cpv": 2,
+        "povs_unintended": 1,
+        "povs_not_vulnerable": 0,
+        "povs_error": 0,
+        "unintended_unique_sites": 1,
+        "total_patches_generated": 0,
+        "unique_patch_names": [],
         "total_llm_cost": 1.23,
         "total_llm_tokens": 1000,
         "total_llm_input_tokens": 750,
@@ -78,10 +83,15 @@ def sample_experiment_metrics():
                 "mode": "bug_finding",
                 "run_mode": "full",
                 "sanitizer": "address",
-                "total_povs": 5,
-                "unique_povs": 3,
-                "total_patches": 0,
-                "unique_patches": 0,
+                "total_povs_discovered": 5,
+                "unique_pov_names": ["pov_a", "pov_b", "pov_c"],
+                "povs_cpv": 2,
+                "povs_unintended": 1,
+                "povs_not_vulnerable": 0,
+                "povs_error": 0,
+                "unintended_unique_sites": 1,
+                "total_patches_generated": 0,
+                "unique_patch_names": [],
                 "total_llm_cost": 1.23,
                 "total_llm_tokens": 1000,
                 "total_llm_input_tokens": 750,
@@ -110,10 +120,15 @@ def sample_experiment_metrics():
                 "mode": "bug_finding",
                 "run_mode": "delta",
                 "sanitizer": "undefined",
-                "total_povs": 2,
-                "unique_povs": 2,
-                "total_patches": 0,
-                "unique_patches": 0,
+                "total_povs_discovered": 2,
+                "unique_pov_names": ["pov_x", "pov_y"],
+                "povs_cpv": 0,
+                "povs_unintended": 2,
+                "povs_not_vulnerable": 0,
+                "povs_error": 0,
+                "unintended_unique_sites": 2,
+                "total_patches_generated": 0,
+                "unique_patch_names": [],
                 "total_llm_cost": 0.80,
                 "total_llm_tokens": 600,
                 "total_llm_input_tokens": 450,
@@ -266,8 +281,76 @@ def test_format_trial_row(temp_output_dir, sample_trial_metrics):
     assert row["mode"] == "bug_finding"
     assert row["total_povs"] == 5
     assert row["unique_povs"] == 3
+    # Per-status breakdown surfaced from pov_store.json.
+    assert row["povs_cpv"] == 2
+    assert row["povs_unintended"] == 1
+    assert row["povs_not_vulnerable"] == 0
+    assert row["povs_error"] == 0
+    assert row["unintended_unique_sites"] == 1
     assert row["total_llm_cost"] == 1.23
     assert row["snapshot_count"] == 2
+
+
+def test_format_trial_row_breakdown_defaults_when_missing(temp_output_dir):
+    """Trials with no pov_store.json yield zero counts, not KeyErrors."""
+    generator = CSVReportGenerator(temp_output_dir)
+    minimal = {
+        "trial_dir": "experiment/x/y/full/address/trial-1",
+        "trial_num": "trial-1",
+        "crs": "x",
+        "benchmark": "y",
+        "harness": "h",
+        "mode": "bug_finding",
+        "total_povs_discovered": 0,
+        "unique_pov_names": [],
+        "total_patches_generated": 0,
+        "unique_patch_names": [],
+    }
+    row = generator._format_trial_row(minimal)
+    assert row["povs_cpv"] == 0
+    assert row["povs_unintended"] == 0
+    assert row["povs_not_vulnerable"] == 0
+    assert row["povs_error"] == 0
+    assert row["unintended_unique_sites"] == 0
+
+
+def test_format_trial_row_consumes_trial_metrics_model_dump(temp_output_dir):
+    """Regression: CSV row must read POV/patch counts from model_dump() keys.
+
+    ``TrialMetrics.unique_povs``/``unique_patches`` are plain ``@property``,
+    so Pydantic ``model_dump()`` does not include them. The CSV generator
+    must derive counts from the actual fields (``total_povs_discovered``,
+    ``unique_pov_names``, etc.) — not from the absent property keys, which
+    previously caused ``total_povs``/``unique_povs`` columns to render as 0
+    even when ``pov_names`` listed many entries.
+    """
+    from crsbench.reporting.models import TrialMetrics, TrialMode
+
+    trial = TrialMetrics(
+        trial_dir="experiment/json-c__ensemble-c/fuzz_json/full/address/trial-1",
+        trial_num=1,
+        crs="ensemble-c",
+        benchmark="json-c",
+        harness="fuzz_json",
+        mode=TrialMode.bug_finding,
+        total_povs_discovered=21,
+        unique_pov_names=[f"pov_{i}" for i in range(21)],
+        total_patches_generated=4,
+        unique_patch_names=[f"patch_{i}" for i in range(4)],
+    )
+    dumped = trial.model_dump()
+    assert "unique_povs" not in dumped
+    assert "unique_patches" not in dumped
+
+    generator = CSVReportGenerator(temp_output_dir)
+    row = generator._format_trial_row(dumped)
+
+    assert row["total_povs"] == 21
+    assert row["unique_povs"] == 21
+    assert row["total_patches"] == 4
+    assert row["unique_patches"] == 4
+    assert row["pov_names"].count(";") == 20
+    assert row["patch_names"].count(";") == 3
 
 
 def test_format_crs_row(temp_output_dir):
@@ -815,3 +898,1503 @@ def test_ci_test_report_structured_build_failure_classified(temp_output_dir):
     assert len(rows) == 1
     assert rows[0]["ci_status"] == "BUILD_FAILED"
     assert rows[0]["failure_reason"] == "Patched build failed (exit=1)"
+
+
+def _write_cpv_trial(
+    trial_dir: Path,
+    *,
+    trial_num: int,
+    benchmark: str,
+    harness: str,
+    expected_cpv_ids: list[str],
+    cpv_to_first_pov: dict,
+    timestamp: str | float | None = None,
+    crs_run_start_time: float | None = None,
+    backup_crs_run_start_time: float | None = None,
+    backup_suffix: str = "20260428T101050Z",
+) -> None:
+    """Helper to scaffold a trial dir with metadata + pov_store + history."""
+    trial_dir.mkdir(parents=True, exist_ok=True)
+    metadata = {
+        "trial_num": trial_num,
+        "crs": "crs-bug-finding-claude-code",
+        "benchmark": benchmark,
+        "harness": harness,
+        "mode": "bug_finding",
+        "build_mode": "delta",
+        "sanitizer": "address",
+    }
+    if timestamp is not None:
+        metadata["timestamp"] = timestamp
+    (trial_dir / "metadata.json").write_text(json.dumps(metadata))
+    pov_dir = trial_dir / "povs"
+    pov_dir.mkdir(parents=True, exist_ok=True)
+    (pov_dir / "snapshot_history.json").write_text(
+        json.dumps({"expected_cpv_ids": expected_cpv_ids})
+    )
+    pov_store: dict = {"cpv_to_first_pov": cpv_to_first_pov}
+    if crs_run_start_time is not None:
+        pov_store["crs_run_start_time"] = crs_run_start_time
+    (pov_dir / "pov_store.json").write_text(json.dumps(pov_store))
+    if backup_crs_run_start_time is not None:
+        backup = pov_dir / f"pov_store.json.pre-reeval-{backup_suffix}"
+        backup.write_text(json.dumps({"crs_run_start_time": backup_crs_run_start_time}))
+
+
+def test_cpv_analysis_emits_row_per_trial_cpv(temp_output_dir):
+    """One row per (trial, cpv) pair, matched flag reflects pov_store."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+
+        # Trial with one expected CPV that was matched.
+        _write_cpv_trial(
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "afc-x"
+            / "harness_a"
+            / "delta"
+            / "address"
+            / "trial-1",
+            trial_num=1,
+            benchmark="afc-x",
+            harness="harness_a",
+            expected_cpv_ids=["cpv_0"],
+            cpv_to_first_pov={
+                "cpv_0": {
+                    "pov_hash": "abc123",
+                    "discovery_ts": 1000.0,
+                    "relative_time": 42.5,
+                }
+            },
+        )
+
+        # Trial with two expected CPVs, one matched one not.
+        _write_cpv_trial(
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "afc-y"
+            / "harness_b"
+            / "delta"
+            / "address"
+            / "trial-2",
+            trial_num=2,
+            benchmark="afc-y",
+            harness="harness_b",
+            expected_cpv_ids=["cpv_0", "cpv_1"],
+            cpv_to_first_pov={
+                "cpv_1": {
+                    "pov_hash": "def456",
+                    "discovery_ts": 2000.0,
+                    "relative_time": 100.0,
+                }
+            },
+        )
+
+        time_series = {
+            str(
+                experiment_dir
+                / "crs-bug-finding-claude-code"
+                / "afc-x"
+                / "harness_a"
+                / "delta"
+                / "address"
+                / "trial-1"
+            ): [
+                {"running_elapsed_time": 0.0, "llm_cost": 0.0},
+                {"running_elapsed_time": 100.0, "llm_cost": 2.0},
+            ],
+            str(
+                experiment_dir
+                / "crs-bug-finding-claude-code"
+                / "afc-y"
+                / "harness_b"
+                / "delta"
+                / "address"
+                / "trial-2"
+            ): [
+                {"running_elapsed_time": 0.0, "llm_cost": 0.0},
+                {"running_elapsed_time": 200.0, "llm_cost": 6.0},
+            ],
+        }
+
+        out_path = generator.generate_cpv_analysis_report(
+            experiment_dir, trial_time_series=time_series
+        )
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    by_key = {(r["benchmark"], r["cpv_id"]): r for r in rows}
+    assert len(rows) == 3
+
+    matched = by_key[("afc-x", "cpv_0")]
+    assert matched["matched"] == "True"
+    assert matched["time_to_trigger"] == "42.5"
+    assert matched["cost_to_trigger_usd"] == "0.85"
+    assert matched["pov_hash"] == "abc123"
+    assert matched["trial_num"] == "1"
+
+    unmatched = by_key[("afc-y", "cpv_0")]
+    assert unmatched["matched"] == "False"
+    assert unmatched["time_to_trigger"] == ""
+    assert unmatched["cost_to_trigger_usd"] == ""
+    assert unmatched["pov_hash"] == ""
+
+    matched_y = by_key[("afc-y", "cpv_1")]
+    assert matched_y["matched"] == "True"
+    assert matched_y["time_to_trigger"] == "100.0"
+    assert matched_y["cost_to_trigger_usd"] == "3.0"
+
+
+def test_cpv_analysis_recomputes_time_to_trigger_from_metadata_timestamp(
+    temp_output_dir,
+):
+    """Do not trust pov_store.relative_time when crs_run_start_time drifted."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+        _write_cpv_trial(
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "afc-x"
+            / "harness_a"
+            / "delta"
+            / "address"
+            / "trial-1",
+            trial_num=1,
+            benchmark="afc-x",
+            harness="harness_a",
+            expected_cpv_ids=["cpv_0"],
+            timestamp="2026-04-26T08:00:00Z",
+            cpv_to_first_pov={
+                "cpv_0": {
+                    "pov_hash": "abc123",
+                    "discovery_ts": 1777191900.0,
+                    # Stale/corrupted value from a shifted crs_run_start_time.
+                    "relative_time": -84900.0,
+                }
+            },
+        )
+
+        out_path = generator.generate_cpv_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert len(rows) == 1
+    assert rows[0]["matched"] == "True"
+    assert rows[0]["time_to_trigger"] == "1500.0"
+
+
+def test_cpv_analysis_prefers_pre_reeval_backup_over_current_anchor(
+    temp_output_dir,
+):
+    """``pre-reeval-*`` backup is the most authoritative source.
+
+    A trial whose live ``crs_run_start_time`` was clobbered (e.g. by re-eval
+    falling back to ``time.time()``) should still produce the correct
+    ``time_to_trigger`` when the backup is present, regardless of whether
+    metadata.timestamp is also available.
+    """
+    generator = CSVReportGenerator(temp_output_dir)
+
+    # Trial scheduled at 1777190400 (2026-04-26T08:00 UTC). The original CRS
+    # ran ~3 minutes later (1777190580). Re-eval later overwrote the live
+    # crs_run_start_time to 1777277076 (~24h later). The backup retains the
+    # original anchor.
+    discovery_ts = 1777192080.0  # 1500s after the original CRS start.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+        _write_cpv_trial(
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "afc-x"
+            / "harness_a"
+            / "delta"
+            / "address"
+            / "trial-1",
+            trial_num=1,
+            benchmark="afc-x",
+            harness="harness_a",
+            expected_cpv_ids=["cpv_0"],
+            timestamp="2026-04-26T08:00:00Z",
+            crs_run_start_time=1777277076.0,
+            backup_crs_run_start_time=1777190580.0,
+            cpv_to_first_pov={
+                "cpv_0": {
+                    "pov_hash": "abc123",
+                    "discovery_ts": discovery_ts,
+                    "relative_time": -84996.0,
+                }
+            },
+        )
+
+        out_path = generator.generate_cpv_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert rows[0]["matched"] == "True"
+    assert rows[0]["time_to_trigger"] == "1500.0"
+
+
+def test_cpv_analysis_uses_live_crs_start_when_close_to_metadata(
+    temp_output_dir,
+):
+    """A live ``crs_run_start_time`` close to metadata.timestamp wins.
+
+    The build phase can take several minutes between trial scheduling
+    (metadata.timestamp) and the actual CRS start. When pov_store has a
+    sane anchor we prefer it over metadata.timestamp so the reported
+    relative time excludes that build duration.
+    """
+    generator = CSVReportGenerator(temp_output_dir)
+
+    metadata_epoch = 1777190400.0  # 2026-04-26T08:00 UTC
+    crs_run_start = metadata_epoch + 180.0  # 3-minute build
+    discovery_ts = crs_run_start + 750.0
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+        _write_cpv_trial(
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "afc-x"
+            / "harness_a"
+            / "delta"
+            / "address"
+            / "trial-1",
+            trial_num=1,
+            benchmark="afc-x",
+            harness="harness_a",
+            expected_cpv_ids=["cpv_0"],
+            timestamp="2026-04-26T08:00:00Z",
+            crs_run_start_time=crs_run_start,
+            cpv_to_first_pov={
+                "cpv_0": {
+                    "pov_hash": "abc123",
+                    "discovery_ts": discovery_ts,
+                    "relative_time": 750.0,
+                }
+            },
+        )
+
+        out_path = generator.generate_cpv_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert rows[0]["matched"] == "True"
+    assert rows[0]["time_to_trigger"] == "750.0"
+
+
+def test_cpv_analysis_falls_back_to_metadata_when_live_anchor_drifted(
+    temp_output_dir,
+):
+    """Drifted ``crs_run_start_time`` (>1h after metadata) is rejected.
+
+    Without a backup, the only safe fallback is ``metadata.timestamp``.
+    The reported time is then inflated by the build duration but never
+    negative.
+    """
+    generator = CSVReportGenerator(temp_output_dir)
+
+    metadata_epoch = 1777190400.0
+    discovery_ts = metadata_epoch + 1500.0
+    drifted_anchor = metadata_epoch + 86400.0  # +24h: clearly bogus
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+        _write_cpv_trial(
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "afc-x"
+            / "harness_a"
+            / "delta"
+            / "address"
+            / "trial-1",
+            trial_num=1,
+            benchmark="afc-x",
+            harness="harness_a",
+            expected_cpv_ids=["cpv_0"],
+            timestamp="2026-04-26T08:00:00Z",
+            crs_run_start_time=drifted_anchor,
+            cpv_to_first_pov={
+                "cpv_0": {
+                    "pov_hash": "abc123",
+                    "discovery_ts": discovery_ts,
+                    "relative_time": -84900.0,
+                }
+            },
+        )
+
+        out_path = generator.generate_cpv_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert rows[0]["matched"] == "True"
+    assert rows[0]["time_to_trigger"] == "1500.0"
+
+
+def test_cpv_analysis_skips_trial_without_pov_store(temp_output_dir):
+    """Without ``benchmarks_root``, trials missing both pov_store and
+    expected_cpv_ids still produce no rows (legacy behavior preserved)."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+        trial_dir = (
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "afc-x"
+            / "harness_a"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        trial_dir.mkdir(parents=True, exist_ok=True)
+        (trial_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "trial_num": 1,
+                    "crs": "crs-bug-finding-claude-code",
+                    "benchmark": "afc-x",
+                    "harness": "harness_a",
+                    "mode": "bug_finding",
+                    "build_mode": "delta",
+                    "sanitizer": "address",
+                }
+            )
+        )
+
+        out_path = generator.generate_cpv_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert rows == []
+
+
+def test_cpv_analysis_falls_back_to_meta_yaml_when_no_pov_store(temp_output_dir):
+    """When ``benchmarks_root`` is supplied, a trial that died before the
+    first snapshot (no ``povs/`` dir) still emits one row per expected CPV
+    from meta.yaml, all marked ``matched=False``. Otherwise the trial
+    silently disappears from the report and skews the denominator.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        experiment_dir = tmp / "exp"
+        benchmarks_root = tmp / "benchmarks"
+
+        # Synthesize a benchmark with two CPVs under sanitizer=address, plus
+        # one CPV under sanitizer=memory that the trial should NOT see.
+        benchmark_dir = benchmarks_root / "afc-x"
+        (benchmark_dir / ".aixcc").mkdir(parents=True, exist_ok=True)
+        (benchmark_dir / ".aixcc" / "meta.yaml").write_text(
+            "delta_mode:\n"
+            "  base_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'\n"
+            "  ref_commit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'\n"
+            "harness_files:\n"
+            "- name: harness_a\n"
+            "  path: $REPO/h.c\n"
+            "  vulns:\n"
+            "  - vuln_keyword: cpv_0\n"
+            "    povs:\n"
+            "    - id: pov_0\n"
+            "      sanitizer: address\n"
+            "      error_token: token0\n"
+            "  - vuln_keyword: cpv_1\n"
+            "    povs:\n"
+            "    - id: pov_0\n"
+            "      sanitizer: address\n"
+            "      error_token: token1\n"
+            "  - vuln_keyword: cpv_2\n"
+            "    povs:\n"
+            "    - id: pov_0\n"
+            "      sanitizer: memory\n"
+            "      error_token: token2\n"
+        )
+        (benchmark_dir / "project.yaml").write_text(
+            "main_repo: 'git@example.com:x.git'\nlanguage: c\n"
+        )
+
+        # Trial died before first snapshot: only metadata.json exists.
+        trial_dir = (
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "afc-x"
+            / "harness_a"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        trial_dir.mkdir(parents=True, exist_ok=True)
+        (trial_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "trial_num": 1,
+                    "crs": "crs-bug-finding-claude-code",
+                    "benchmark": "afc-x",
+                    "harness": "harness_a",
+                    "mode": "bug_finding",
+                    "build_mode": "delta",
+                    "sanitizer": "address",
+                }
+            )
+        )
+
+        generator = CSVReportGenerator(temp_output_dir, benchmarks_root)
+        out_path = generator.generate_cpv_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    # Two CPVs under sanitizer=address; cpv_2 (memory) must be filtered out.
+    assert {(r["cpv_id"], r["matched"]) for r in rows} == {
+        ("cpv_0", "False"),
+        ("cpv_1", "False"),
+    }
+    for row in rows:
+        assert row["trial_num"] == "1"
+        assert row["benchmark"] == "afc-x"
+        assert row["harness"] == "harness_a"
+        assert row["sanitizer"] == "address"
+        assert row["time_to_trigger"] == ""
+        assert row["pov_hash"] == ""
+        assert row["discovery_ts"] == ""
+
+
+def test_cpv_analysis_filters_match_outside_expected_set(temp_output_dir):
+    """CPV matches outside the trial's ``expected_cpv_ids`` are filtered out.
+
+    Verification can record cross-harness ``cpv_matched`` entries in
+    FDP-style benchmarks where the same vulnerability is reachable through
+    multiple harnesses. The report attributes each row to the harness that
+    legitimately owns the CPV in meta.yaml, so a match against a CPV that
+    is not in the trial's expected set is dropped instead of producing a
+    misleading row under the wrong harness."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+        _write_cpv_trial(
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "afc-z"
+            / "harness_c"
+            / "delta"
+            / "address"
+            / "trial-1",
+            trial_num=1,
+            benchmark="afc-z",
+            harness="harness_c",
+            expected_cpv_ids=["cpv_0"],
+            cpv_to_first_pov={
+                "cpv_0": {
+                    "pov_hash": "h0",
+                    "discovery_ts": 1.0,
+                    "relative_time": 10.0,
+                },
+                "cpv_extra": {
+                    "pov_hash": "h1",
+                    "discovery_ts": 2.0,
+                    "relative_time": 20.0,
+                },
+            },
+        )
+
+        out_path = generator.generate_cpv_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    cpv_ids = sorted(r["cpv_id"] for r in rows)
+    assert cpv_ids == ["cpv_0"]
+    assert rows[0]["matched"] == "True"
+    assert rows[0]["time_to_trigger"] == "10.0"
+
+
+def _write_cpv_trial_from_povs(
+    trial_dir: Path,
+    *,
+    trial_num: int,
+    benchmark: str,
+    harness: str,
+    expected_cpv_ids: list[str],
+    crs_run_start_time: float,
+    povs: dict[str, dict],
+) -> None:
+    """Helper to scaffold a trial whose pov_store has empty cpv_to_first_pov.
+
+    Mirrors the reanalysis-rewritten layout where matches live only inside
+    ``povs[hash].cpv_matched`` and the denormalized top-level map is empty.
+    """
+    trial_dir.mkdir(parents=True, exist_ok=True)
+    (trial_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "trial_num": trial_num,
+                "crs": "crs-bug-finding-claude-code",
+                "benchmark": benchmark,
+                "harness": harness,
+                "mode": "bug_finding",
+                "build_mode": "delta",
+                "sanitizer": "address",
+            }
+        )
+    )
+    pov_dir = trial_dir / "povs"
+    pov_dir.mkdir(parents=True, exist_ok=True)
+    (pov_dir / "snapshot_history.json").write_text(
+        json.dumps({"expected_cpv_ids": expected_cpv_ids})
+    )
+    (pov_dir / "pov_store.json").write_text(
+        json.dumps(
+            {
+                "crs_run_start_time": crs_run_start_time,
+                "povs": povs,
+                "cpv_to_first_pov": {},
+            }
+        )
+    )
+
+
+def test_cpv_analysis_derives_first_pov_from_povs_when_map_empty(temp_output_dir):
+    """When pov_store top-level cpv_to_first_pov is empty (e.g. after
+    reanalysis rewrite), derive matches from ``povs[].cpv_matched``."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+        _write_cpv_trial_from_povs(
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "atlanta-q"
+            / "harness_a"
+            / "delta"
+            / "address"
+            / "trial-1",
+            trial_num=1,
+            benchmark="atlanta-q",
+            harness="harness_a",
+            expected_cpv_ids=["cpv_0", "cpv_1"],
+            crs_run_start_time=1000.0,
+            povs={
+                # cpv_0: two povs, earlier file_mtime should win
+                "h_late": {
+                    "cpv_matched": ["cpv_0"],
+                    "file_mtime": 1200.0,
+                    "first_seen_ts": 1205.0,
+                    "status": "cpv",
+                },
+                "h_early": {
+                    "cpv_matched": ["cpv_0", "cpv_1"],
+                    "file_mtime": 1050.0,
+                    "first_seen_ts": 1060.0,
+                    "status": "cpv",
+                },
+                # POVs without cpv_matched should be ignored
+                "h_unintended": {
+                    "cpv_matched": [],
+                    "file_mtime": 1100.0,
+                    "first_seen_ts": 1100.0,
+                    "status": "unintended",
+                },
+            },
+        )
+
+        out_path = generator.generate_cpv_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    by_cpv = {r["cpv_id"]: r for r in rows}
+    assert set(by_cpv) == {"cpv_0", "cpv_1"}
+    # cpv_0 picks the earlier mtime POV (h_early)
+    assert by_cpv["cpv_0"]["matched"] == "True"
+    assert by_cpv["cpv_0"]["pov_hash"] == "h_early"
+    assert by_cpv["cpv_0"]["time_to_trigger"] == "50.0"
+    # cpv_1 only matched by h_early
+    assert by_cpv["cpv_1"]["matched"] == "True"
+    assert by_cpv["cpv_1"]["pov_hash"] == "h_early"
+
+
+def test_cpv_analysis_falls_back_to_first_seen_ts_when_mtime_missing(
+    temp_output_dir,
+):
+    """If file_mtime is absent, derivation uses first_seen_ts."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+        _write_cpv_trial_from_povs(
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "atlanta-r"
+            / "harness_b"
+            / "delta"
+            / "address"
+            / "trial-1",
+            trial_num=1,
+            benchmark="atlanta-r",
+            harness="harness_b",
+            expected_cpv_ids=["cpv_0"],
+            crs_run_start_time=1000.0,
+            povs={
+                "h_only": {
+                    "cpv_matched": ["cpv_0"],
+                    "file_mtime": None,
+                    "first_seen_ts": 1075.0,
+                    "status": "cpv",
+                },
+            },
+        )
+
+        out_path = generator.generate_cpv_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert len(rows) == 1
+    assert rows[0]["matched"] == "True"
+    assert rows[0]["time_to_trigger"] == "75.0"
+
+
+# ---------------------------------------------------------------------------
+# Budget-cutoff variant of cpv_analysis
+# ---------------------------------------------------------------------------
+
+
+def _write_llm_usage(trial_dir: Path, total_cost_usd: float) -> None:
+    (trial_dir / "llm-usage.json").write_text(
+        json.dumps({"total_cost_usd": total_cost_usd})
+    )
+
+
+def test_compute_time_at_budget_full_run_within_budget():
+    """Total cost ≤ budget → +inf so async-drain matches stay preserved."""
+    ts = [
+        {"running_elapsed_time": 100.0, "llm_cost": 1.0},
+        {"running_elapsed_time": 200.0, "llm_cost": 2.0},
+    ]
+    t = CSVReportGenerator._compute_time_at_budget(
+        ts, total_cost_usd=2.0, budget_usd=5.0
+    )
+    assert t == float("inf")
+
+
+def test_compute_cost_at_time_linear_interpolation():
+    ts = [
+        {"running_elapsed_time": 0.0, "llm_cost": 0.0},
+        {"running_elapsed_time": 100.0, "llm_cost": 2.0},
+        {"running_elapsed_time": 200.0, "llm_cost": 6.0},
+    ]
+    c = CSVReportGenerator._compute_cost_at_time(
+        ts, total_cost_usd=6.0, relative_time=150.0
+    )
+    assert c == pytest.approx(4.0)
+
+
+def test_compute_cost_at_time_after_last_sample_uses_total_cost():
+    ts = [
+        {"running_elapsed_time": 100.0, "llm_cost": 2.0},
+        {"running_elapsed_time": 200.0, "llm_cost": 4.0},
+    ]
+    c = CSVReportGenerator._compute_cost_at_time(
+        ts, total_cost_usd=7.5, relative_time=500.0
+    )
+    assert c == 7.5
+
+
+def test_compute_time_at_budget_last_sample_fits_but_total_exceeds():
+    """Last sample ≤ budget but total > budget → fall back to last_t."""
+    ts = [
+        {"running_elapsed_time": 100.0, "llm_cost": 1.0},
+        {"running_elapsed_time": 200.0, "llm_cost": 4.0},
+    ]
+    t = CSVReportGenerator._compute_time_at_budget(
+        ts, total_cost_usd=7.0, budget_usd=5.0
+    )
+    assert t == 200.0
+
+
+def test_match_after_last_snapshot_preserved_when_trial_within_budget(
+    temp_output_dir,
+):
+    """A POV verified after the final snapshot still counts when the trial
+    finished within budget (async-drain edge case observed in
+    finding_all_cc-finding-original/atlanta-faad2 trial-2)."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+        trial_dir = (
+            experiment_dir / "crs" / "afc-z" / "h" / "delta" / "address" / "trial-1"
+        )
+        _write_cpv_trial(
+            trial_dir,
+            trial_num=1,
+            benchmark="afc-z",
+            harness="h",
+            expected_cpv_ids=["cpv_0"],
+            cpv_to_first_pov={
+                "cpv_0": {
+                    "pov_hash": "h0",
+                    "discovery_ts": 1.0,
+                    "relative_time": 13996.0,
+                }
+            },
+        )
+        _write_llm_usage(trial_dir, total_cost_usd=30.22)
+
+        # Last snapshot at 10827s, well before the POV's relative_time.
+        time_series = {
+            str(trial_dir): [
+                {"running_elapsed_time": 0.0, "llm_cost": 0.0},
+                {"running_elapsed_time": 5000.0, "llm_cost": 15.0},
+                {"running_elapsed_time": 10827.0, "llm_cost": 28.0},
+            ]
+        }
+
+        out_path = generator.generate_cpv_analysis_report(
+            experiment_dir, budget_usd=50.0, trial_time_series=time_series
+        )
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert len(rows) == 1
+    assert rows[0]["matched"] == "True"
+    assert rows[0]["time_to_trigger"] == "13996.0"
+
+
+def test_compute_time_at_budget_linear_interpolation():
+    """Budget falls between two samples → interpolate run-elapsed time."""
+    ts = [
+        {"running_elapsed_time": 0.0, "llm_cost": 0.0},
+        {"running_elapsed_time": 100.0, "llm_cost": 2.0},
+        {"running_elapsed_time": 200.0, "llm_cost": 6.0},
+    ]
+    # Budget $4 falls halfway between $2 (t=100) and $6 (t=200) → t=150.
+    t = CSVReportGenerator._compute_time_at_budget(
+        ts, total_cost_usd=6.0, budget_usd=4.0
+    )
+    assert t == pytest.approx(150.0)
+
+
+def test_compute_time_at_budget_first_sample_already_over():
+    """First sample exceeds budget → interpolate from origin (0,0)."""
+    ts = [
+        {"running_elapsed_time": 1000.0, "llm_cost": 10.0},
+    ]
+    # Budget $2.5 → 25% of the way from (0,0) to (1000, 10).
+    t = CSVReportGenerator._compute_time_at_budget(
+        ts, total_cost_usd=10.0, budget_usd=2.5
+    )
+    assert t == pytest.approx(250.0)
+
+
+def test_compute_time_at_budget_no_snapshot_falls_back_to_total_cost():
+    """No time_series but total_cost ≤ budget → treat as fully within budget."""
+    t = CSVReportGenerator._compute_time_at_budget(
+        [], total_cost_usd=0.5, budget_usd=5.0
+    )
+    assert t == float("inf")
+
+
+def test_compute_time_at_budget_no_data_returns_none():
+    """No time_series and unknown total cost → None (preserve original match)."""
+    t = CSVReportGenerator._compute_time_at_budget(
+        [], total_cost_usd=None, budget_usd=5.0
+    )
+    assert t is None
+
+
+def test_cpv_analysis_budget_filters_late_discoveries(temp_output_dir):
+    """CPVs discovered after the budget runs out are marked unmatched."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+        trial_dir = (
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "afc-x"
+            / "harness_a"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        # cpv_0 found at 50s (early); cpv_1 found at 1500s (late).
+        _write_cpv_trial(
+            trial_dir,
+            trial_num=1,
+            benchmark="afc-x",
+            harness="harness_a",
+            expected_cpv_ids=["cpv_0", "cpv_1"],
+            cpv_to_first_pov={
+                "cpv_0": {
+                    "pov_hash": "h0",
+                    "discovery_ts": 1.0,
+                    "relative_time": 50.0,
+                },
+                "cpv_1": {
+                    "pov_hash": "h1",
+                    "discovery_ts": 2.0,
+                    "relative_time": 1500.0,
+                },
+            },
+        )
+        _write_llm_usage(trial_dir, total_cost_usd=20.0)
+
+        # Cost timeline: $0 at t=0, $5 at t=600, $20 at t=2400.
+        # Budget $5 → t_b = 600s. cpv_0 (50s) within; cpv_1 (1500s) outside.
+        time_series = {
+            str(trial_dir): [
+                {"running_elapsed_time": 0.0, "llm_cost": 0.0},
+                {"running_elapsed_time": 600.0, "llm_cost": 5.0},
+                {"running_elapsed_time": 2400.0, "llm_cost": 20.0},
+            ]
+        }
+
+        out_path = generator.generate_cpv_analysis_report(
+            experiment_dir, budget_usd=5.0, trial_time_series=time_series
+        )
+
+        assert out_path.name == "cpv_analysis_budget_5.csv"
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    by_cpv = {r["cpv_id"]: r for r in rows}
+    assert by_cpv["cpv_0"]["matched"] == "True"
+    assert by_cpv["cpv_0"]["time_to_trigger"] == "50.0"
+    assert by_cpv["cpv_0"]["pov_hash"] == "h0"
+    assert by_cpv["cpv_0"]["budget_usd"] == "5.0"
+    assert by_cpv["cpv_0"]["trial_total_cost_usd"] == "20.0"
+    assert by_cpv["cpv_0"]["trial_time_at_budget"] == "600.0"
+
+    assert by_cpv["cpv_1"]["matched"] == "False"
+    assert by_cpv["cpv_1"]["time_to_trigger"] == ""
+    assert by_cpv["cpv_1"]["pov_hash"] == ""
+
+
+def test_cpv_analysis_budget_uses_metadata_recomputed_trigger_time(
+    temp_output_dir,
+):
+    """Budget filtering uses the same metadata-anchored CPV time as CSV output."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+        trial_dir = (
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "afc-x"
+            / "harness_a"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        _write_cpv_trial(
+            trial_dir,
+            trial_num=1,
+            benchmark="afc-x",
+            harness="harness_a",
+            expected_cpv_ids=["cpv_0"],
+            timestamp="2026-04-26T08:00:00+00:00",
+            cpv_to_first_pov={
+                "cpv_0": {
+                    "pov_hash": "h0",
+                    "discovery_ts": 1777191900.0,
+                    "relative_time": -84900.0,
+                },
+            },
+        )
+        _write_llm_usage(trial_dir, total_cost_usd=20.0)
+        time_series = {
+            str(trial_dir): [
+                {"running_elapsed_time": 0.0, "llm_cost": 0.0},
+                {"running_elapsed_time": 1000.0, "llm_cost": 5.0},
+                {"running_elapsed_time": 2000.0, "llm_cost": 10.0},
+            ]
+        }
+
+        out_path = generator.generate_cpv_analysis_report(
+            experiment_dir, budget_usd=5.0, trial_time_series=time_series
+        )
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert len(rows) == 1
+    assert rows[0]["matched"] == "False"
+    assert rows[0]["time_to_trigger"] == ""
+    assert rows[0]["discovery_ts"] == ""
+
+
+def test_cpv_analysis_budget_keeps_match_when_total_cost_below_budget(
+    temp_output_dir,
+):
+    """Trials whose total LLM spend is below the budget keep all matches."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+        trial_dir = (
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "afc-y"
+            / "harness_b"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        _write_cpv_trial(
+            trial_dir,
+            trial_num=1,
+            benchmark="afc-y",
+            harness="harness_b",
+            expected_cpv_ids=["cpv_0"],
+            cpv_to_first_pov={
+                "cpv_0": {
+                    "pov_hash": "h0",
+                    "discovery_ts": 1.0,
+                    "relative_time": 800.0,
+                }
+            },
+        )
+        # Trial finished cheap (under $1), no time-series sampled.
+        _write_llm_usage(trial_dir, total_cost_usd=0.5)
+
+        out_path = generator.generate_cpv_analysis_report(
+            experiment_dir, budget_usd=5.0, trial_time_series={}
+        )
+
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert len(rows) == 1
+    assert rows[0]["matched"] == "True"
+    assert rows[0]["time_to_trigger"] == "800.0"
+    assert rows[0]["budget_usd"] == "5.0"
+    assert rows[0]["trial_total_cost_usd"] == "0.5"
+
+
+def test_cpv_analysis_budget_filename_decimal(temp_output_dir):
+    """Decimal budgets render with stripped trailing zeros (e.g. 7.5)."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+        trial_dir = (
+            experiment_dir / "crs" / "afc-x" / "h" / "delta" / "address" / "trial-1"
+        )
+        _write_cpv_trial(
+            trial_dir,
+            trial_num=1,
+            benchmark="afc-x",
+            harness="h",
+            expected_cpv_ids=["cpv_0"],
+            cpv_to_first_pov={
+                "cpv_0": {
+                    "pov_hash": "h0",
+                    "discovery_ts": 1.0,
+                    "relative_time": 5.0,
+                }
+            },
+        )
+        _write_llm_usage(trial_dir, total_cost_usd=0.0)
+
+        out_path = generator.generate_cpv_analysis_report(
+            experiment_dir, budget_usd=7.5, trial_time_series={}
+        )
+        assert out_path.name == "cpv_analysis_budget_7.5.csv"
+
+
+# ---------------------------------------------------------------------------
+# resolve_trial_anchor: worker.log fallback paths
+# ---------------------------------------------------------------------------
+
+
+def _write_worker_log(trial_dir: Path, lines: list[str]) -> None:
+    (trial_dir / "worker.log").write_text("\n".join(lines) + "\n")
+
+
+def test_resolve_trial_anchor_prefers_pre_reeval_backup(tmp_path):
+    from crsbench.reporting.metrics import (
+        ANCHOR_SOURCE_BACKUP,
+        resolve_trial_anchor,
+    )
+
+    trial_dir = tmp_path / "trial-1"
+    pov_dir = trial_dir / "povs"
+    pov_dir.mkdir(parents=True)
+    (trial_dir / "metadata.json").write_text(
+        json.dumps({"timestamp": "2026-04-26T08:00:00Z"})
+    )
+    (pov_dir / "pov_store.json").write_text(
+        json.dumps({"crs_run_start_time": 1777277076.0})  # drifted by re-eval
+    )
+    (pov_dir / "pov_store.json.pre-reeval-20260426T0900Z").write_text(
+        json.dumps({"crs_run_start_time": 1777190580.0})
+    )
+
+    epoch, source = resolve_trial_anchor(trial_dir)
+    assert source == ANCHOR_SOURCE_BACKUP
+    assert epoch == 1777190580.0
+
+
+def test_resolve_trial_anchor_uses_worker_log_anchor_line(tmp_path):
+    """Without a backup, the verification-manager log line gives the exact
+    original ``crs_run_start_time`` even when the live store was rewritten."""
+    from crsbench.reporting.metrics import (
+        ANCHOR_SOURCE_LOG_ANCHOR,
+        resolve_trial_anchor,
+    )
+
+    trial_dir = tmp_path / "trial-1"
+    (trial_dir / "povs").mkdir(parents=True)
+    (trial_dir / "metadata.json").write_text(
+        json.dumps({"timestamp": "2026-04-19T17:14:22Z"})
+    )
+    # Live POV store rewritten by re-eval (24h late) — should be ignored.
+    (trial_dir / "povs" / "pov_store.json").write_text(
+        json.dumps({"crs_run_start_time": 1776705379.0})
+    )
+    _write_worker_log(
+        trial_dir,
+        [
+            "2026-04-19 13:14:22 | INFO | wkr | [d] | Per-trial logging enabled: x",
+            "2026-04-19 13:16:18 | INFO | wkr | [evaluation] | Build complete for x",
+            "2026-04-19 13:16:19 | INFO | wkr | [evaluation] | "
+            "POV store crs_run_start_time updated: 1776618979.10",
+            "2026-04-19 13:16:19 | DEBUG| wkr | [evaluation] | Running oss-crs run: ...",
+        ],
+    )
+
+    epoch, source = resolve_trial_anchor(trial_dir)
+    assert source == ANCHOR_SOURCE_LOG_ANCHOR
+    assert epoch == 1776618979.10
+
+
+def test_resolve_trial_anchor_uses_run_launch_line_with_tz_offset(tmp_path):
+    """For trials where verification was skipped (no anchor log line), the
+    run-launch timestamp recovers the CRS start within ~1s after applying the
+    per-trial timezone offset derived from metadata.timestamp."""
+    from crsbench.reporting.metrics import (
+        ANCHOR_SOURCE_LOG_RUN_LAUNCH,
+        resolve_trial_anchor,
+    )
+
+    trial_dir = tmp_path / "trial-1"
+    trial_dir.mkdir(parents=True)
+    # 2026-04-19T17:14:22 UTC. Worker host runs at UTC-4 (EDT).
+    (trial_dir / "metadata.json").write_text(
+        json.dumps({"timestamp": "2026-04-19T17:14:22Z"})
+    )
+    _write_worker_log(
+        trial_dir,
+        [
+            "2026-04-19 13:14:22 | INFO | wkr | [d] | Per-trial logging enabled: x",
+            "2026-04-19 13:16:18 | INFO | wkr | [evaluation] | Build complete for x",
+            "2026-04-19 13:16:19 | DEBUG| wkr | [evaluation] | Running oss-crs run: ...",
+        ],
+    )
+
+    epoch, source = resolve_trial_anchor(trial_dir)
+    assert source == ANCHOR_SOURCE_LOG_RUN_LAUNCH
+    # 17:16:19 UTC = epoch 1776618979.
+    assert epoch == pytest.approx(1776618979.0, abs=1.0)
+
+
+def test_resolve_trial_anchor_falls_back_to_build_complete(tmp_path):
+    """When the run-launch line is missing, build-complete fills in (still
+    converted via the metadata-derived timezone offset)."""
+    from crsbench.reporting.metrics import (
+        ANCHOR_SOURCE_LOG_BUILD_COMPLETE,
+        resolve_trial_anchor,
+    )
+
+    trial_dir = tmp_path / "trial-1"
+    trial_dir.mkdir(parents=True)
+    (trial_dir / "metadata.json").write_text(
+        json.dumps({"timestamp": "2026-04-19T17:14:22Z"})
+    )
+    _write_worker_log(
+        trial_dir,
+        [
+            "2026-04-19 13:14:22 | INFO | wkr | [d] | Per-trial logging enabled: x",
+            "2026-04-19 13:16:18 | INFO | wkr | [evaluation] | Build complete for x",
+        ],
+    )
+
+    epoch, source = resolve_trial_anchor(trial_dir)
+    assert source == ANCHOR_SOURCE_LOG_BUILD_COMPLETE
+    assert epoch == pytest.approx(1776618978.0, abs=1.0)
+
+
+def test_resolve_trial_anchor_falls_back_to_metadata_when_no_log(tmp_path):
+    """No backup, no worker.log, no live anchor -> metadata.timestamp."""
+    from crsbench.reporting.metrics import (
+        ANCHOR_SOURCE_METADATA,
+        resolve_trial_anchor,
+    )
+
+    trial_dir = tmp_path / "trial-1"
+    trial_dir.mkdir(parents=True)
+    (trial_dir / "metadata.json").write_text(
+        json.dumps({"timestamp": "2026-04-19T17:14:22Z"})
+    )
+
+    epoch, source = resolve_trial_anchor(trial_dir)
+    assert source == ANCHOR_SOURCE_METADATA
+    assert epoch == pytest.approx(1776618862.0, abs=1.0)
+
+
+def test_resolve_trial_anchor_prefers_live_pov_store_over_log_run_launch(tmp_path):
+    """When the live POV store passes the sanity check, it beats the
+    timezone-converted log lines (same accuracy, simpler/cheaper source)."""
+    from crsbench.reporting.metrics import (
+        ANCHOR_SOURCE_CURRENT,
+        resolve_trial_anchor,
+    )
+
+    trial_dir = tmp_path / "trial-1"
+    (trial_dir / "povs").mkdir(parents=True)
+    (trial_dir / "metadata.json").write_text(
+        json.dumps({"timestamp": "2026-04-19T17:14:22Z"})
+    )
+    (trial_dir / "povs" / "pov_store.json").write_text(
+        json.dumps({"crs_run_start_time": 1776618979.5})  # +117s vs metadata
+    )
+    _write_worker_log(
+        trial_dir,
+        [
+            "2026-04-19 13:14:22 | INFO | wkr | [d] | Per-trial logging enabled: x",
+            # No 'POV store crs_run_start_time updated' line so this trial
+            # exercises the live-store-over-run-launch precedence.
+            "2026-04-19 13:16:19 | DEBUG| wkr | [evaluation] | Running oss-crs run: ...",
+        ],
+    )
+
+    epoch, source = resolve_trial_anchor(trial_dir)
+    assert source == ANCHOR_SOURCE_CURRENT
+    assert epoch == 1776618979.5
+
+
+def test_cpv_analysis_filters_cross_harness_cpv_matched(temp_output_dir):
+    """Cross-harness ``cpv_matched`` entries (FDP-style) are filtered out.
+
+    OripaOneFDP harness only owns ``cpv_1`` per meta.yaml. The verification
+    engine, however, sees the same crash signature when the POV is run
+    against the native OripaOne build, so ``cpv_matched`` ends up as
+    ``[cpv_0, cpv_1]``. The report must attribute the row only to the CPV
+    that legitimately belongs to the trial's harness.
+    """
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+        trial_dir = (
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "atlanta-oripa-delta-01"
+            / "OripaOneFDP"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        trial_dir.mkdir(parents=True)
+        (trial_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "trial_num": 1,
+                    "crs": "crs-bug-finding-claude-code",
+                    "benchmark": "atlanta-oripa-delta-01",
+                    "harness": "OripaOneFDP",
+                    "mode": "bug_finding",
+                    "build_mode": "delta",
+                    "sanitizer": "address",
+                    "timestamp": "2026-04-19T17:14:22Z",
+                }
+            )
+        )
+        povs_dir = trial_dir / "povs"
+        povs_dir.mkdir(parents=True)
+        # snapshot_history declares only cpv_1 as expected for this harness.
+        (povs_dir / "snapshot_history.json").write_text(
+            json.dumps({"expected_cpv_ids": ["cpv_1"]})
+        )
+        # pov_store carries cross-harness cpv_matched ([cpv_0, cpv_1]). Empty
+        # cpv_to_first_pov forces the cpv_matched-derived fallback path.
+        (povs_dir / "pov_store.json").write_text(
+            json.dumps(
+                {
+                    "crs_run_start_time": 1776618979.0,
+                    "cpv_to_first_pov": {},
+                    "povs": {
+                        "h0": {
+                            "cpv_matched": ["cpv_0", "cpv_1"],
+                            "file_mtime": 1776619559.0,
+                        }
+                    },
+                }
+            )
+        )
+
+        out_path = generator.generate_cpv_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert len(rows) == 1
+    assert rows[0]["cpv_id"] == "cpv_1"
+    assert rows[0]["matched"] == "True"
+    assert rows[0]["pov_hash"] == "h0"
+
+
+def test_cpv_analysis_filters_cross_harness_in_denormalized_map(temp_output_dir):
+    """Same filtering applies when the denormalized ``cpv_to_first_pov``
+    map carries cross-harness entries (live POV store path, not fallback)."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+        trial_dir = (
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "atlanta-oripa-delta-01"
+            / "OripaOneFDP"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        _write_cpv_trial(
+            trial_dir,
+            trial_num=1,
+            benchmark="atlanta-oripa-delta-01",
+            harness="OripaOneFDP",
+            expected_cpv_ids=["cpv_1"],
+            timestamp="2026-04-19T17:14:22Z",
+            crs_run_start_time=1776618979.0,
+            cpv_to_first_pov={
+                "cpv_0": {
+                    "pov_hash": "h0",
+                    "discovery_ts": 1776619559.0,
+                    "relative_time": 580.0,
+                },
+                "cpv_1": {
+                    "pov_hash": "h0",
+                    "discovery_ts": 1776619559.0,
+                    "relative_time": 580.0,
+                },
+            },
+        )
+
+        out_path = generator.generate_cpv_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert len(rows) == 1
+    assert rows[0]["cpv_id"] == "cpv_1"
+
+
+def test_cpv_analysis_emits_total_time_from_worker_log(temp_output_dir):
+    """``trial_total_time_seconds`` reflects worker.log wall-clock elapsed.
+
+    Surfacing time alongside the existing ``trial_total_cost_usd`` column
+    lets downstream stats include trials that died before any snapshot
+    was written; otherwise those failed trials drop out of time-based
+    averages because the field would be empty."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+        trial_dir = (
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "afc-x"
+            / "h"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        _write_cpv_trial(
+            trial_dir,
+            trial_num=1,
+            benchmark="afc-x",
+            harness="h",
+            expected_cpv_ids=["cpv_0"],
+            cpv_to_first_pov={},  # failed-trial: no CPV ever matched
+        )
+        _write_worker_log(
+            trial_dir,
+            [
+                "2026-04-19 13:14:22 | INFO | wkr | [d] | Per-trial logging enabled",
+                "2026-04-19 13:14:25 | INFO | wkr | [evaluation] | Build started",
+                "2026-04-19 13:15:45 | INFO | wkr | [d] | Job done",
+            ],
+        )
+
+        out_path = generator.generate_cpv_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert len(rows) == 1
+    assert rows[0]["matched"] == "False"
+    # 13:15:45 - 13:14:22 = 83s; tz offset cancels in the subtraction.
+    assert rows[0]["trial_total_time_seconds"] == "83.0"
+
+
+def test_cpv_analysis_total_time_empty_without_worker_log(temp_output_dir):
+    """No worker.log -> column is empty (not invented as 0)."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+        trial_dir = (
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "afc-x"
+            / "h"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        _write_cpv_trial(
+            trial_dir,
+            trial_num=1,
+            benchmark="afc-x",
+            harness="h",
+            expected_cpv_ids=["cpv_0"],
+            cpv_to_first_pov={},
+        )
+
+        out_path = generator.generate_cpv_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert len(rows) == 1
+    assert rows[0]["trial_total_time_seconds"] == ""
+
+
+def test_cpv_analysis_emits_seed_count_from_benchmarks_root(temp_output_dir, tmp_path):
+    """``seed_count`` reflects collected corpus files for the harness.
+
+    Counts regular files under
+    ``<benchmarks_root>/<benchmark>/.aixcc/<harness>/corpus/`` excluding
+    ``manifest.json`` and dotfiles. Same value for every (trial, cpv) row
+    of the same harness."""
+    benchmarks_root = tmp_path / "benchmarks"
+    corpus_dir = benchmarks_root / "afc-x" / ".aixcc" / "h" / "corpus"
+    corpus_dir.mkdir(parents=True)
+    (corpus_dir / "seed_a").write_bytes(b"a")
+    (corpus_dir / "seed_b").write_bytes(b"b")
+    (corpus_dir / "seed_c").write_bytes(b"c")
+    (corpus_dir / "manifest.json").write_text("{}")
+    (corpus_dir / ".hidden").write_bytes(b"x")
+
+    generator = CSVReportGenerator(temp_output_dir, benchmarks_root=benchmarks_root)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+        _write_cpv_trial(
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "afc-x"
+            / "h"
+            / "delta"
+            / "address"
+            / "trial-1",
+            trial_num=1,
+            benchmark="afc-x",
+            harness="h",
+            expected_cpv_ids=["cpv_0"],
+            cpv_to_first_pov={
+                "cpv_0": {
+                    "pov_hash": "h0",
+                    "discovery_ts": 1.0,
+                    "relative_time": 10.0,
+                }
+            },
+        )
+
+        out_path = generator.generate_cpv_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert len(rows) == 1
+    assert rows[0]["seed_count"] == "3"  # excludes manifest.json and dotfiles
+
+
+def test_cpv_analysis_seed_count_zero_without_benchmarks_root(temp_output_dir):
+    """When ``benchmarks_root`` is not configured the column emits 0."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+        _write_cpv_trial(
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "afc-x"
+            / "h"
+            / "delta"
+            / "address"
+            / "trial-1",
+            trial_num=1,
+            benchmark="afc-x",
+            harness="h",
+            expected_cpv_ids=["cpv_0"],
+            cpv_to_first_pov={
+                "cpv_0": {"pov_hash": "h0", "discovery_ts": 1.0, "relative_time": 10.0}
+            },
+        )
+
+        out_path = generator.generate_cpv_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert rows[0]["seed_count"] == "0"
+
+
+def test_cpv_analysis_emits_anchor_source_column(temp_output_dir):
+    """``anchor_source`` is exported on every cpv_analysis row so downstream
+    analysis can filter by anchor precision."""
+    from crsbench.reporting.metrics import ANCHOR_SOURCE_LOG_ANCHOR
+
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "exp"
+        trial_dir = (
+            experiment_dir
+            / "crs-bug-finding-claude-code"
+            / "afc-x"
+            / "h"
+            / "delta"
+            / "address"
+            / "trial-1"
+        )
+        # discovery_ts is 1500s past the original CRS start (1776618979.10).
+        _write_cpv_trial(
+            trial_dir,
+            trial_num=1,
+            benchmark="afc-x",
+            harness="h",
+            expected_cpv_ids=["cpv_0"],
+            timestamp="2026-04-19T17:14:22Z",
+            crs_run_start_time=1776705379.0,  # drifted re-eval value
+            cpv_to_first_pov={
+                "cpv_0": {
+                    "pov_hash": "h0",
+                    "discovery_ts": 1776620479.10,
+                    "relative_time": -84900.0,
+                }
+            },
+        )
+        _write_worker_log(
+            trial_dir,
+            [
+                "2026-04-19 13:14:22 | INFO | wkr | [d] | Per-trial logging enabled",
+                "2026-04-19 13:16:19 | INFO | wkr | [evaluation] | "
+                "POV store crs_run_start_time updated: 1776618979.10",
+            ],
+        )
+
+        out_path = generator.generate_cpv_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert len(rows) == 1
+    assert rows[0]["anchor_source"] == ANCHOR_SOURCE_LOG_ANCHOR
+    # 1776620479.10 - 1776618979.10 = 1500.0
+    assert rows[0]["time_to_trigger"] == "1500.0"
