@@ -14,11 +14,20 @@ For a local preflight of the same startup scripts before touching GCE, use
 
 If you just want to prove the remote-orchestrator path works end to end, use
 the checked-in multilang smoke config below. This assumes the prerequisites in
-the next section are already satisfied.
+the next section are already satisfied. The operator machine for CRSBench
+commands must be Linux.
 
 ```bash
 CONFIG=experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval-multilang-given-fuzzer.yaml
 EXPERIMENT=gce-sanity-mgf-1o2w1e
+```
+
+If the selected config downloads gated HuggingFace benchmark data on the VMs,
+export a HuggingFace token with access to
+`sslab-gatech/crsbench-dataset` before launch:
+
+```bash
+export HF_TOKEN=hf_your_token_here
 ```
 
 1. Create the deploy key used by VM bootstrap for the top-level CRSBench clone:
@@ -87,8 +96,8 @@ flows, continue with the rest of this guide.
 2. **gcloud CLI** installed and authenticated:
    - Install it for your platform using the official Google Cloud CLI guide:
      <https://cloud.google.com/sdk/docs/install>
-   - For archive-based installs on Linux or macOS, download the matching
-     package from that guide and run `./google-cloud-sdk/install.sh`
+   - For archive-based installs on Linux, download the matching package from
+     that guide and run `./google-cloud-sdk/install.sh`
    - Run `gcloud init` after installation to set your default project and
      config
    - `gcloud auth login` for operator CLI use
@@ -1581,13 +1590,10 @@ sudo -iu crsbench env \
 | Docker network pool exhaustion (`all predefined network addresses are exhausted`) | Too many concurrent Docker compose networks on one VM | CRSBench configures Docker with an expanded address pool (`172.16.0.0/12` with `/24` subnets, up to 4096 networks) automatically via the startup script |
 | HF download fails with 401 Unauthorized | Missing `HF_TOKEN` for gated HuggingFace datasets | Add `HF_TOKEN: os.environ/HF_TOKEN` to `cloud.env` and export `HF_TOKEN` locally before launching |
 | Quota exceeded on first region | All placements attempt the first region in the fallback list | Pin placements to specific regions using `region:` on each placement entry; CRSBench preflight now warns about greedy first-region overcommit |
-| Workers stuck at "registering" | Worker supervisor did not report ready state | Ensure the deployed ref includes the readiness fix (commit `16e4d584`); `main` is the normal launch ref and workers with `--cpuset` now report ready before entering the supervisor loop |
+| Workers stuck at "registering" | Worker supervisor did not report ready state | Use a current CRSBench ref, then inspect startup evidence with `cloud status --json` and worker logs |
 | Collect fails with Permission denied on `/data` | OS Login user cannot read crsbench-owned experiment data | CRSBench uses `--rsync-path="sudo rsync"` on the remote side; ensure the crsbench user has passwordless sudo |
 
 ## See Also
 
 - [Distributed Experiments](./distributed.md) -- full distributed experiment guide
 - [Configuration Reference](./config-reference.md) -- all experiment config fields
-- [Design: Cloud Orchestration](../../design/distributed/cloud-orchestration.md) -- shared cloud contract
-- [Design: GCE Cloud Orchestration](../../design/distributed/gce-cloud-orchestration.md) -- GCE-specific implementation details
-- [Design: GCE Cloud Orchestrator Launch](../../design/distributed/gce-cloud-orchestrator.md) -- remote-orchestrator launch contract

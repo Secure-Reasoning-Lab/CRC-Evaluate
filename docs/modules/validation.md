@@ -6,7 +6,6 @@ benchmark suites and experiment configuration.
 This page is intentionally reference-oriented. Use it to understand the module
 boundary and the result contract. Detailed validation workflow, contributor
 procedures, and deeper rationale belong in:
-- [Validation Design](../design/validation/validation.md)
 - [Framework Developer Guide](../contributors/framework-developer-guide.md)
 - [Benchmark Developer Guide](../contributors/benchmark-developer-guide.md)
 
@@ -96,7 +95,6 @@ problem, not as a runtime execution result.
 
 ## Canonical References
 
-- [Validation Design](../design/validation/validation.md)
 - [Experiment Config Reference](../guides/experiments/config-reference.md)
 - [Distributed Example Config](../experiment-config-distributed-example.yaml)
 - [Benchmark RFC](../RFC.md)

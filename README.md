@@ -6,58 +6,81 @@ Unlike traditional fuzzing benchmarks (e.g., FuzzBench) that only report coverag
 
 ## Quick Start
 
-First-time users should start with [docs/getting-started/first-experiment.md](docs/getting-started/first-experiment.md).
+First-time users should start with the smallest local queue-backed run. The
+commands below install CRSBench, prepare the managed dependencies, download the
+small `sanity` benchmark suite, and then run one experiment with a local worker.
+CRSBench is supported on Linux hosts only; the public quick start is intended
+for a Linux machine or VM with Docker available.
 
 ```bash
-# Install
 git clone https://github.com/sslab-gatech/CRSBench.git && cd CRSBench
 uv sync
-./scripts/setup-third-party.sh             # clone managed oss-fuzz + Atlantis checkouts
-uv run crsbench prepare                    # pull OSS-Fuzz + AIxCC base images
-uv run crsbench prepare --coverage         # pull Atlantis GHCR coverage images (or build locally as fallback)
+./scripts/setup-third-party.sh
+uv run crsbench prepare
+# Required by the bundled Atlantis given-fuzzer starter CRS and by coverage workflows.
+uv run crsbench prepare --coverage
 
 # Download benchmarks from HuggingFace (gated — requires access)
 #   1. Create a token at https://huggingface.co/settings/tokens
 #   2. Accept the Data Use Agreement at https://huggingface.co/datasets/sslab-gatech/crsbench-dataset
 #   3. Log in:
 uv run hf auth login
-crsbench download --all                     # all 134 benchmarks (~12GB)
-crsbench download --all --no-ground-truth   # skip .aixcc/ ground truth
-crsbench download --benchmark-suite sanity  # small test suite
+uv run crsbench download --benchmark-suite sanity
 ```
 
-Production-style single-machine distributed example (128 cores, AFC bugfixing):
+Create a first-run config at `first-run.yaml`:
+
+Expected local resources for this sanity run: Linux, Docker, 4 or more CPU
+cores, enough disk for Docker images plus the sanity benchmark data, and a run
+window on the order of minutes after the initial image pulls.
+
+```yaml
+experiment:
+  name: first-run
+  task: bugfinding
+  mode: full
+  benchmark_suite: sanity
+  sanitizers: [address]
+
+runtime:
+  trials: 1
+  max_total_time: 3600
+  build_timeout: 900
+  run_timeout: 1800
+  verify_timeout: 900
+  redis_host: localhost:6379
+  litellm:
+    skip: true
+
+storage:
+  experiment_filestore: ./results/experiment-data
+  report_filestore: ./results/report-data
+
+crs_compose:
+  atlantis-multilang-given_fuzzer:
+    num_cores: 4
+```
+
+`atlantis-multilang-given_fuzzer` selects the bundled Atlantis multi-language
+given-fuzzer CRS adapter. With `runtime.litellm.skip: true`, this starter run
+does not require external LLM credentials.
+
+Then run it:
 
 ```bash
 uv run python scripts/valkey-helper.py start
 
-# Terminal 1: orchestrator
-uv run crsbench run \
-  --experiment-config experiment-configs/afc-final-bugfixing/crs-codex-gpt-5-4-full.yaml \
-  --distributed
+# Terminal 1
+uv run crsbench worker --experiment-config first-run.yaml
 
-# Terminal 2: configless worker
-uv run crsbench worker \
-  --jobs 12 \
-  --cores-per-job 8 \
-  --cpuset 0-95
-
-# Terminal 3: configless evaluator (optional; use for real-time build/verify processing)
-uv run crsbench evaluator \
-  --jobs 4 \
-  --cores-per-job 8 \
-  --cpuset 96-127
-
-# Clean stale queue state for one experiment (use the `experiment:` name from config)
-uv run crsbench queue clean --experiment afc-all-crs-codex-gpt-5-4-full --yes
+# Terminal 2
+uv run crsbench run --experiment-config first-run.yaml
 ```
 
-Notes:
-- In this example, `run --distributed` registers experiment metadata in Redis, and the configless worker/evaluator pick up queue and resource requirements from that registry.
-- For `experiment-configs/afc-final-bugfixing/crs-codex-gpt-5-4-full.yaml`, `resources.cores_per_trial` is `8`, so the worker should use `--cores-per-job 8`.
-- `crsbench worker` is continuous by default. Use `--no-continuous` only when you want it to exit after the current backlog drains.
-- `crsbench evaluator --jobs N --cores-per-job M` is the primary CLI. Split `--build-*` / `--verify-*` flags remain available only for advanced asymmetric setups.
-- Add `--queue-mode fresh` to the `run` command when you want a clean rerun and do not want to resume stale queued or started jobs.
+For a guided version of this flow, see
+[docs/getting-started/first-experiment.md](docs/getting-started/first-experiment.md).
+For multi-machine and production-style runs, see
+[docs/guides/experiments/distributed.md](docs/guides/experiments/distributed.md).
 
 `crsbench prepare` typical duration:
 - warm cache: ~10-60s
@@ -71,15 +94,14 @@ base images used by RTS-enabled benchmarks. If RTS prebuild cannot complete,
 `crsbench prepare` fails so a successful run still means the RTS image set is
 ready in advance.
 
-`crsbench prepare --coverage` prepares the separate Atlantis/given_fuzzer
-coverage pipeline used by `crsbench coverage`. It reads the checkout from
+`crsbench prepare --coverage` prepares the Atlantis/given_fuzzer runtime used
+by the starter CRS above and by `crsbench coverage`. It reads the checkout from
 `third_party/atlantis-multilang-given_fuzzer`, prefers the published Team
 Atlanta GHCR `1.0.0` images, retags them onto the canonical local Atlantis
 image names, and falls back to local `oss-crs prepare` only when those images
 are unavailable.
 
-If your virtual environment is not activated, prefix CLI commands with `uv run`
-(for example, `uv run crsbench download --all`).
+If your virtual environment is activated, you may omit the `uv run` prefix.
 
 For experiment config authoring, CRSBench provides both
 `crsbench gen-config` for the prompt-driven wizard and
@@ -172,13 +194,13 @@ fish and other shell setup instructions.
 ### Verification (Standalone)
 
 ```bash
-crsbench verify       benchmarks/project --pov-dir ./povs/ --jobs 4 --cores-per-job 2
-crsbench patch-verify benchmarks/project --patch-dir ./patches --pov-dir ./povs --jobs 4 --cores-per-job 2
-crsbench coverage     --experiment-config ./experiment.yaml      # seed coverage over time
-crsbench coverage     --experiment-dir ./experiment-filestore/experiment-name       # seed coverage over time
-crsbench coverage     --experiment-dir ./experiment-filestore/experiment-name --output-dir ./coverage-out
-crsbench coverage     --seed-dir ./seeds --benchmark project --harness fuzz_target --output-dir ./coverage-out
-crsbench coverage     --seed-dir ./seeds --experiment-start-time 1710000000 --benchmark project --harness fuzz_target --output-dir ./coverage-out
+uv run crsbench verify       benchmarks/project --pov-dir ./povs/ --jobs 4 --cores-per-job 2
+uv run crsbench patch-verify benchmarks/project --patch-dir ./patches --pov-dir ./povs --jobs 4 --cores-per-job 2
+uv run crsbench coverage     --experiment-config ./experiment.yaml      # seed coverage over time
+uv run crsbench coverage     --experiment-dir ./experiment-filestore/experiment-name       # seed coverage over time
+uv run crsbench coverage     --experiment-dir ./experiment-filestore/experiment-name --output-dir ./coverage-out
+uv run crsbench coverage     --seed-dir ./seeds --benchmark project --harness fuzz_target --output-dir ./coverage-out
+uv run crsbench coverage     --seed-dir ./seeds --experiment-start-time 1710000000 --benchmark project --harness fuzz_target --output-dir ./coverage-out
 ```
 
 For standalone `verify` / `patch-verify`, `--jobs` and `--cores-per-job`
@@ -208,20 +230,20 @@ not accept an `--oss-fuzz-path` override.
 ### Results
 
 ```bash
-crsbench report    --experiment my-exp
-crsbench dashboard --base-dir ./experiments
-crsbench benchmark stats --output stats.csv
-crsbench benchmark stats --benchmark-suite crsbench-all --output stats.csv
-crsbench benchmark stats --benchmark-suite crsbench-all --vuln-index-output vuln-index.yaml
+uv run crsbench report    --experiment my-exp
+uv run crsbench dashboard --base-dir ./experiments
+uv run crsbench benchmark stats --output stats.csv
+uv run crsbench benchmark stats --benchmark-suite crsbench-all --output stats.csv
+uv run crsbench benchmark stats --benchmark-suite crsbench-all --vuln-index-output vuln-index.yaml
 ```
 
 ### Dataset
 
 ```bash
-crsbench download --all                                        # all benchmarks
-crsbench download --all --no-ground-truth                      # skip .aixcc/ ground truth
-crsbench download --dataset crsbench --benchmarks afc-curl-delta-01  # specific
-crsbench download --benchmark-suite sanity                     # suite
+uv run crsbench download --all                                        # all benchmarks
+uv run crsbench download --all --no-ground-truth                      # skip .aixcc/ ground truth
+uv run crsbench download --dataset crsbench --benchmarks afc-curl-delta-01  # specific
+uv run crsbench download --benchmark-suite sanity                     # suite
 ```
 
 Each benchmark is stored as two tarballs: `benchmark.tar.gz` (project files, build scripts,
@@ -252,8 +274,7 @@ CRSBench/
 ├── oss-crs/                 # CRS runtime and registry (submodule)
 ├── third_party/oss-fuzz/    # Official OSS-Fuzz (sparse checkout, managed by `crsbench prepare`)
 ├── third_party/patches/     # Local upstream patch sets consumed during prepare/build
-├── docs/                    # Documentation hub (user + design docs)
-└── docs/design/             # Internal architecture docs
+└── docs/                    # Documentation hub
 ```
 
 ## Documentation
@@ -273,8 +294,7 @@ CRSBench/
 - Contributor tracks:
   - [Framework Developer Guide](docs/contributors/framework-developer-guide.md)
   - [Benchmark Developer Guide](docs/contributors/benchmark-developer-guide.md)
-- Architecture and modules:
-  - [Design Docs](docs/design/README.md)
+- Module reference:
   - [Module Docs](docs/modules/README.md)
 
 ## Contributing

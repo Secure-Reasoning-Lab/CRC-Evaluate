@@ -37,14 +37,14 @@ artifact, not a policy source of truth.
 | Overview | `README.md`, `docs/README.md` |
 | Setup and operations | `docs/getting-started/**`, `docs/guides/**` |
 | Contributor workflows | `CONTRIBUTING.md`, `docs/contributors/**` |
-| Architecture and rationale | `docs/design/README.md`, `docs/design/architecture.md`, `docs/design/**` |
 | Module reference | `docs/modules/README.md`, `docs/modules/**` |
 | Specifications/contracts | `docs/RFC.md`, config examples under `docs/*.yaml` |
 
 ## Findings: Staleness, Contradictions, Overlap
 
 ### Confirmed stale or inconsistent items
-- `docs/design/architecture.md` previously referenced legacy incremental-build internals and older install flow details not aligned with current repository and root quick-start.
+- The former design-doc section was removed from public navigation because it no
+  longer had tracked public design pages.
 
 ### Overlap candidates
 - Root `README.md` and `docs/guides/**` both describe runtime commands.
@@ -63,12 +63,12 @@ artifact, not a policy source of truth.
 
 1. Root README remains summary-only for setup and runtime links.
 2. `docs/README.md` is the canonical navigation hub.
-3. Design rationale is anchored in `docs/design/README.md`, with `docs/design/architecture.md` as a primary architecture entry within that tree.
-4. Legacy pointer pages were removed after references were updated to canonical paths.
-5. Documentation governance is anchored in `docs/governance/documentation-taxonomy.md`.
+3. Legacy pointer pages were removed after references were updated to canonical paths.
+4. Documentation governance is anchored in `docs/governance/documentation-taxonomy.md`.
 
 ## Remaining Follow-up Candidates
 
 - Sweep adjacent component READMEs to ensure they point to canonical docs and avoid duplicating global setup instructions.
 - Extend docs contract coverage only when a concrete stale-doc regression appears.
-- Continue reducing procedure-heavy content under `docs/design/**` when a user-facing guide/reference page is the better canonical owner.
+- Keep architecture-level notes in the nearest relevant guide, reference page,
+  or module page unless a new public design section is intentionally restored.

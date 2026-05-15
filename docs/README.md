@@ -57,22 +57,14 @@ Use this page as the primary navigation hub.
 - [Testing](./contributors/testing.md)
 - [Coding Standards](./contributors/coding-standards.md)
 - [Manual Validation](./contributors/manual-validation.md)
-
-## Design and Internals
-
-- [Design Index](./design/README.md)
-- [Architecture Overview](./design/architecture.md)
-- [Historical POV Replay Contract](./design/evaluation/pov-replay.md)
+- Maintainer documentation policy:
+  [Governance Hub](./governance/README.md),
+  [Documentation Taxonomy](./governance/documentation-taxonomy.md), and
+  [Documentation Inventory](./governance/documentation-inventory.md)
 
 ## Module Reference
 
 - [Module Index](./modules/README.md)
-
-## Governance
-
-- [Governance Hub](./governance/README.md)
-- [Documentation Taxonomy](./governance/documentation-taxonomy.md)
-- [Documentation Inventory](./governance/documentation-inventory.md)
 
 ## Adjacent Repositories and Components
 

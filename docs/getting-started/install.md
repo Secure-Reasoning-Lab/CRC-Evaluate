@@ -5,6 +5,7 @@ deployment scenarios, see [configuration.md](./configuration.md).
 
 ## Prerequisites
 
+- Linux host or Linux VM. CRSBench is not supported on macOS or Windows hosts.
 - Python 3.12+
 - `uv`
 - Docker
@@ -13,11 +14,11 @@ deployment scenarios, see [configuration.md](./configuration.md).
 ## Bootstrap
 
 ```bash
-git clone <repo>
-cd CRSBench
+git clone https://github.com/sslab-gatech/CRSBench.git && cd CRSBench
 uv sync
 ./scripts/setup-third-party.sh
 uv run crsbench prepare
+# Required by the bundled Atlantis given-fuzzer starter CRS and by coverage workflows.
 uv run crsbench prepare --coverage
 ```
 
@@ -32,11 +33,12 @@ run means the RTS image set is already available.
 `third_party/atlantis-multilang-given_fuzzer` alongside the managed
 `third_party/oss-fuzz` checkout.
 
-`crsbench prepare --coverage` prepares the Atlantis/given_fuzzer coverage
-backend from that fixed checkout. It first pulls the canonical Team Atlanta
-GHCR `1.0.0` prepare/runtime images, retags them onto the canonical local
-Atlantis image names, and falls back to local `oss-crs prepare` only if those
-images are unavailable. Benchmark-specific coverage builds remain lazy;
+`crsbench prepare --coverage` prepares the Atlantis/given_fuzzer backend used
+by the bundled starter CRS and coverage workflows. It first pulls the canonical
+Team Atlanta GHCR `1.0.0` prepare/runtime images, retags them onto the
+canonical local Atlantis image names, and falls back to local `oss-crs prepare`
+only if those images are unavailable. Benchmark-specific coverage builds remain
+lazy;
 `crsbench coverage` runs Atlantis `oss-crs build-target` on first use and
 reuses the normalized build output afterward.
 

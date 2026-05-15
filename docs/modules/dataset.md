@@ -48,7 +48,3 @@ Upload CLI is wired through the benchmark packaging command layer in
 ## Dependency
 
 `huggingface_hub` is a core dependency, installed automatically with `crsbench`.
-
-## Design Doc
-
-See `../design/dataset/dataset.md` for architecture details.

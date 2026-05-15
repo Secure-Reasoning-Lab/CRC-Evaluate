@@ -57,8 +57,20 @@ directly runnable from a fresh clone.
   - `crsbench_{experiment}_build`
   - `crsbench_{experiment}_verify`
 
-For canonical queue-model behavior and configless details, see
-[`docs/design/distributed/configless-runtime.md`](../../design/distributed/configless-runtime.md).
+## Queue and Configless Runtime
+
+The orchestrator records experiment metadata in Redis/Valkey when it starts a
+queue-backed run. Configless workers and evaluators can then join by reading
+that metadata from the queue backend instead of requiring a local copy of the
+experiment config. This is useful for fleets where the operator wants to start
+workers with only queue connectivity, CPU sizing, and role-specific runtime
+environment.
+
+Workers execute CRS trial jobs and write trial artifacts to the configured
+experiment storage. Evaluators process build and verification queues. In
+single-host runs, those paths can be local directories. In multi-machine runs,
+the paths must either be shared storage or be collected back from workers after
+the run.
 
 ## Prerequisites
 
@@ -106,6 +118,17 @@ Managed cloud config uses a provider-neutral `cloud.*` layout. Today the only
 implemented managed backend is GCE, so declare provider-native details in
 `cloud.providers.gce`, then place workers with `cloud.workers.placements`
 instead of relying on host maps or ad hoc SSH setup scripts.
+
+Managed GCE runs use this control-plane model:
+
+- the local Linux operator machine launches the fleet
+- the remote orchestrator VM owns Valkey and submits the experiment
+- worker and evaluator VMs join that orchestrator
+- `cloud collect` pulls artifacts and diagnostics back
+- `cloud teardown` removes the fleet
+
+Operator SSH/IAP access is still required for management commands, and some
+status commands need network reachability to the orchestrator's Redis endpoint.
 
 ```yaml
 cloud:
@@ -508,7 +531,7 @@ cloud worker contract. For GCE-backed fleets, declare workers in
 `cloud.providers.gce` plus `cloud.workers.placements` instead of encoding
 hostnames into scripts.
 
-### Option A: Password Auth (recommended)
+### Option A: Password Auth (operator-managed)
 
 **Machine A** (Valkey + Orchestrator + Evaluator):
 ```bash
@@ -544,9 +567,9 @@ After all trials complete, collect experiment data back to the orchestrator:
 scripts/orchestrate-workers.sh collect
 ```
 
-> **TODO**: Generalize `scripts/orchestrate-workers.sh setup` and `collect` into
-> a standalone `crsbench` subcommand or reusable script that works across
-> different machine configurations without hard-coded hostnames.
+`scripts/orchestrate-workers.sh` is a repository helper for known machine
+layouts. For arbitrary host inventories, prefer the managed cloud flow or an
+explicit deployment script that sets Redis and storage paths for each worker.
 
 ### Option B: SSH Tunnels
 
@@ -708,13 +731,10 @@ Smoke bug-fixing suites currently run with LiteLLM tracking enabled in the sanit
 ## See Also
 
 - [Experiment Config Example](../../experiment-config-distributed-example.yaml) — full configuration reference
-- [Design: Distributed Job Queue](../../design/distributed/distributed-job-queue.md) — job queue architecture
-- [Design: Distributed Evaluation](../../design/distributed/distributed-evaluation.md) — evaluator architecture
 - [Configuration](../../getting-started/configuration.md) — environment variables and .env configuration
 - [Snapshots](../../reference/snapshots.md) — progress monitoring during trials
 
 ## Upstream OSS-CRS References
 
 - [oss-crs/README.md](../../../oss-crs/README.md) — lifecycle and command overview
-- [oss-crs/docs/design/parallel.md](../../../oss-crs/docs/design/parallel.md) — build/run IDs and artifact path model
 - [oss-crs/docs/config/crs-compose.md](../../../oss-crs/docs/config/crs-compose.md) — compose configuration fields

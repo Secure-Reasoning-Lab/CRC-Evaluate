@@ -23,7 +23,5 @@ Snapshots are written per trial under the experiment output directory as
 
 ## What To Read
 
-- Full design and archive format:
-  - [docs/design/evaluation/snapshots.md](../design/evaluation/snapshots.md)
 - Runtime workflow context:
   - [docs/guides/experiments/distributed.md](../guides/experiments/distributed.md)

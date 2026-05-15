@@ -12,7 +12,6 @@ This is especially useful for:
 
 Related references:
 
-- [Historical POV replay contract](../../design/evaluation/pov-replay.md)
 - [Discovery-only OSS-Fuzz experiments](./discovery-only.md)
 
 ## Prerequisites

@@ -14,8 +14,7 @@ and examples.
 - `storage`: experiment/report/result storage paths
 - `crs_compose`: CRS services and per-CRS runtime resources, including
   per-CRS `budget_policy` (`continue` | `terminate`) governing behavior when
-  the trial LLM budget is exceeded — see
-  [Evaluation design: Trial Budget Policy](../../design/evaluation/evaluation.md#trial-budget-policy)
+  the trial LLM budget is exceeded
 - `worker` and `evaluator`: machine-local execution defaults
 - `resources`: fallback per-trial resource defaults
 - `cloud`: optional provider-neutral cloud placement contract

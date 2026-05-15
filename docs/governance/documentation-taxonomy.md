@@ -35,14 +35,7 @@ documentation-governance source of truth.
   - `docs/contributors/manual-validation.md`
   - `docs/contributors/testing.md`
 
-### 4. Architecture and Design Rationale
-- Goal: Capture system intent, tradeoffs, and internals.
-- Canonical entries:
-  - `docs/design/README.md`
-  - `docs/design/architecture.md`
-  - `docs/design/**`
-
-### 5. Module Reference
+### 4. Module Reference
 - Goal: Keep module-scoped reference and short operational notes concise and discoverable.
 - Scope:
   - one subsystem at a time
@@ -56,7 +49,7 @@ documentation-governance source of truth.
   - `docs/modules/README.md`
   - `docs/modules/**`
 
-### 6. Specification and Data Contracts
+### 5. Specification and Data Contracts
 - Goal: Define normative benchmark requirements and example schema data.
 - Canonical entries:
   - `docs/RFC.md`
@@ -64,7 +57,7 @@ documentation-governance source of truth.
   - `docs/experiment-config-distributed-example.yaml`
   - `docs/meta-example.yaml`
 
-### 7. Governance
+### 6. Governance
 - Goal: Keep documentation policy visible but separate from reader workflows.
 - Canonical entries:
   - `docs/governance/documentation-taxonomy.md`
@@ -83,8 +76,7 @@ documentation-governance source of truth.
 | First experiment walkthrough | `docs/getting-started/first-experiment.md` | Workflow summaries in `docs/guides/experiments/README.md`, root `README.md` |
 | Experiment workflow section hub | `docs/guides/experiments/README.md` | Command examples in `README.md` |
 | Benchmark CI workflow section hub | `docs/guides/benchmark-ci/README.md` | Command examples in `README.md` |
-| Module reference hub | `docs/modules/README.md` | Module-scoped notes in `docs/modules/**`, deep implementation detail in design docs |
-| Architecture decisions and rationale | `docs/design/README.md` | `docs/design/architecture.md`, relevant `docs/design/**`, intro summaries in module docs |
+| Module reference hub | `docs/modules/README.md` | Module-scoped notes in `docs/modules/**`; deeper workflow detail belongs in guides/reference pages |
 
 ## Placement Rules
 
@@ -102,7 +94,6 @@ documentation-governance source of truth.
   - `docs/reference/`
   - `docs/contributors/`
   - `docs/governance/`
-  - `docs/design/`
   - `docs/modules/`
 - Treat `docs/modules/` as module-scoped reference and short operational notes only.
 - Do not place first-time-user onboarding or primary cross-cutting workflows in `docs/modules/`; those belong in `docs/getting-started/` or `docs/guides/`.
@@ -114,8 +105,8 @@ documentation-governance source of truth.
 
 1. Add new user-facing prose docs under the grouped `docs/**` subdirectories unless the file is a root-level hub, normative spec, or high-visibility example artifact.
 2. Keep repository entry-point content in `README.md` or `CONTRIBUTING.md`; do not duplicate full workflows there.
-3. Put architecture or implementation internals in `docs/design/`.
-4. Put reader-facing operational docs in `docs/getting-started/`, `docs/guides/`, or `docs/reference/`.
+3. Put reader-facing operational docs in `docs/getting-started/`, `docs/guides/`, or `docs/reference/`.
+4. Keep module-scoped architecture notes in `docs/modules/` only when they are concise and tied to one subsystem.
 5. Keep `docs/modules/` concise, module-scoped, and secondary; do not use it as a parallel primary navigation tree.
 6. Keep each topic owned by one canonical page.
 7. Avoid copying large command blocks to multiple pages; link to canonical setup/workflow pages.
@@ -130,7 +121,6 @@ documentation-governance source of truth.
 ## Ownership and Update Triggers
 
 - Root docs owner: repository maintainers.
-- Design docs owners: maintainers touching corresponding subsystems.
 - Module docs owners: module maintainers and contributors changing those modules.
 - Repository maintainers explicitly own `README.md`, `docs/README.md`, and this
   governance policy.

@@ -5,10 +5,8 @@ SARIF-based hints derived from benchmark vulnerability metadata.
 
 This page is intentionally reference-oriented. Use it to understand module
 boundaries, supported hint surfaces, and how the module fits into CRSBench.
-Detailed runtime semantics and configuration behavior belong in:
-- [Hint Levels Design](../design/evaluation/hint-levels.md)
-- [Evaluation Design](../design/evaluation/evaluation.md)
-- [Experiment Config Reference](../guides/experiments/config-reference.md)
+Detailed runtime semantics and configuration behavior belong in the
+[Experiment Config Reference](../guides/experiments/config-reference.md).
 
 ## Responsibilities
 
@@ -171,8 +169,6 @@ runtime paths later stage and deliver.
 
 ## Canonical References
 
-- [Hint Levels Design](../design/evaluation/hint-levels.md)
-- [Evaluation Design](../design/evaluation/evaluation.md)
 - [Experiment Config Reference](../guides/experiments/config-reference.md)
 - [Benchmark RFC](../RFC.md)
 

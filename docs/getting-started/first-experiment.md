@@ -20,9 +20,25 @@ uv run python scripts/valkey-helper.py start
 If your CRS needs LiteLLM, configure `.env` first using
 [configuration.md](./configuration.md).
 
-## 2. Pick a Config
+## 2. Download the Sanity Suite
+
+The public dataset is gated. Accept the Data Use Agreement for
+`sslab-gatech/crsbench-dataset` at
+<https://huggingface.co/datasets/sslab-gatech/crsbench-dataset>, then log in
+and download the small suite:
+
+```bash
+uv run hf auth login
+uv run crsbench download --benchmark-suite sanity
+```
+
+## 3. Pick a Config
 
 For a first local run, create a small config like this:
+
+Expected local resources: Linux, Docker, 4 or more CPU cores, enough disk for
+Docker images plus the sanity benchmark data, and a run window on the order of
+minutes after the initial image pulls.
 
 ```yaml
 experiment:
@@ -51,22 +67,26 @@ crs_compose:
     num_cores: 4
 ```
 
+`atlantis-multilang-given_fuzzer` selects the bundled Atlantis multi-language
+given-fuzzer CRS adapter. With `runtime.litellm.skip: true`, this starter run
+does not require external LLM credentials.
+
 If you want a fuller starting point, use:
 - [Distributed experiment config example](../experiment-config-distributed-example.yaml)
 - [Example configs index](../reference/example-configs.md)
 
-## 3. Start a Worker
+## 4. Start a Worker
 
 In a separate terminal, start at least one worker before submitting the run:
 
 ```bash
-uv run crsbench worker --experiment-config path/to/config.yaml
+uv run crsbench worker --experiment-config first-run.yaml
 ```
 
-## 4. Submit the Experiment
+## 5. Submit the Experiment
 
 ```bash
-uv run crsbench run --experiment-config path/to/config.yaml
+uv run crsbench run --experiment-config first-run.yaml
 ```
 
 `uv run crsbench run` submits work to Valkey and waits for worker-completed results.
@@ -77,7 +97,7 @@ Do not start `uv run crsbench evaluator` for this first-run path. The evaluator
 is for build/verify queues and benchmark-CI-style workflows, not the minimal
 CRS trial queue.
 
-## 5. Go Deeper
+## 6. Go Deeper
 
 - Single-machine workflow details: [../guides/experiments/single-machine.md](../guides/experiments/single-machine.md)
 - Distributed workflow: [../guides/experiments/distributed.md](../guides/experiments/distributed.md)

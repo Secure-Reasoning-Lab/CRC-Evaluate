@@ -86,6 +86,5 @@ For experiment coverage, concurrency is split across two axes:
 
 ## Documentation
 
-- Design: `../../design/benchmark/benchmark-lifecycle.md`
 - Generation plan: `./generation.md`
 - Contributor workflow: `../../contributors/benchmark-developer-guide.md`
