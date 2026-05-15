@@ -1,0 +1,68 @@
+# Local multi-CRS full-pipeline phase 1 (bug-finding) across agentic CLIs.
+#
+# Each finding agent's POVs are consumed by the matching fixing agent in
+# full-pipeline-fixing.yaml. Pairing:
+#   crs-bug-finding-claude-code  -> crs-claude-code
+#   crs-bug-finding-codex        -> crs-codex
+#   crs-bug-finding-copilot-cli  -> crs-copilot-cli
+#   crs-bug-finding-gemini-cli   -> crs-gemini-cli
+#   crs-bug-finding-opencode     -> crs-opencode
+
+experiment:
+  name: agentic-cli-full-pipeline-finding
+  task: bugfinding
+  benchmark_suite: smoke/sanity
+  mode: delta
+
+runtime:
+  trials: 1
+  max_total_time: 7200
+  build_timeout: 2400
+  run_timeout: 2400
+  verify_timeout: 1800
+  redis_host: localhost
+  pov_early_stop: true
+  litellm:
+    mode: external
+    cost_budget: 20.0
+
+storage:
+  experiment_filestore: .run/agentic-cli/experiment-data/agentic-cli-full-pipeline-finding
+  report_filestore: .run/agentic-cli/report-data/agentic-cli-full-pipeline-finding
+
+resources:
+  memory_per_trial: "64G"
+
+crs_compose:
+  oss_crs_infra:
+    shared: true
+  crs-bug-finding-claude-code:
+    num_cores: 8
+    budget_policy: terminate
+    additional_env:
+      CRS_AGENT: claude_code
+      ANTHROPIC_MODEL: claude-opus-4-6
+  crs-bug-finding-codex:
+    num_cores: 8
+    budget_policy: terminate
+    additional_env:
+      CRS_AGENT: codex
+      OPENAI_MODEL: gpt-5-4
+  crs-bug-finding-copilot-cli:
+    num_cores: 8
+    budget_policy: terminate
+    additional_env:
+      CRS_AGENT: copilot_cli
+      COPILOT_MODEL: gpt-5-4
+  crs-bug-finding-gemini-cli:
+    num_cores: 8
+    budget_policy: terminate
+    additional_env:
+      CRS_AGENT: gemini_cli
+      GEMINI_MODEL: gemini-3-1-pro-preview
+  crs-bug-finding-opencode:
+    num_cores: 8
+    budget_policy: terminate
+    additional_env:
+      CRS_AGENT: opencode
+      OPENCODE_MODEL: zai-org/GLM-5.1

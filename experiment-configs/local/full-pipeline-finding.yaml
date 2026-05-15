@@ -1,0 +1,43 @@
+# Local full-pipeline phase 1 (bug-finding) with Claude Code CRS.
+#
+# Output is consumed by full-pipeline-fixing.yaml via inputs.pov.from_experiment_by_crs.
+#
+# Usage:
+#   uv run crsbench run --config experiment-configs/local/full-pipeline-finding.yaml
+#   # then:
+#   uv run crsbench run --config experiment-configs/local/full-pipeline-fixing.yaml
+
+experiment:
+  name: local-full-pipeline-finding
+  task: bugfinding
+  benchmark_suite: smoke/sanity
+  mode: delta
+
+runtime:
+  trials: 1
+  max_total_time: 4800
+  build_timeout: 1800
+  run_timeout: 1200
+  verify_timeout: 600
+  redis_host: localhost
+  pov_early_stop: true
+  litellm:
+    mode: external
+    cost_budget: 5.0
+
+storage:
+  experiment_filestore: .run/local/experiment-data/local-full-pipeline-finding
+  report_filestore: .run/local/report-data/local-full-pipeline-finding
+
+resources:
+  memory_per_trial: "64G"
+
+crs_compose:
+  oss_crs_infra:
+    shared: true
+  crs-bug-finding-claude-code:
+    num_cores: 8
+    budget_policy: terminate
+    additional_env:
+      CRS_AGENT: claude_code
+      ANTHROPIC_MODEL: claude-opus-4-6

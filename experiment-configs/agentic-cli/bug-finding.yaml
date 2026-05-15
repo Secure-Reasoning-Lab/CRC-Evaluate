@@ -1,0 +1,69 @@
+# Local multi-CRS bug-finding benchmark across agentic CLIs.
+#
+# Runs claude-code, codex, copilot-cli, gemini-cli, and opencode side-by-side
+# on the same benchmarks so the report can compare them directly.
+#
+# Required env: provider API keys / LLM proxy creds for whichever agents are enabled.
+# Comment out any CRS under `crs_compose` you don't have credentials for.
+#
+# Usage:
+#   uv run crsbench run --config experiment-configs/agentic-cli/bug-finding.yaml
+
+experiment:
+  name: agentic-cli-bug-finding
+  task: bugfinding
+  benchmark_suite: smoke/sanity
+  mode: delta
+
+runtime:
+  trials: 1
+  max_total_time: 7200
+  build_timeout: 2400
+  run_timeout: 2400
+  verify_timeout: 1800
+  redis_host: localhost
+  pov_early_stop: true
+  litellm:
+    mode: external
+    cost_budget: 20.0
+
+storage:
+  experiment_filestore: .run/agentic-cli/experiment-data/agentic-cli-bug-finding
+  report_filestore: .run/agentic-cli/report-data/agentic-cli-bug-finding
+
+resources:
+  memory_per_trial: "64G"
+
+crs_compose:
+  oss_crs_infra:
+    shared: true
+  crs-bug-finding-claude-code:
+    num_cores: 8
+    budget_policy: terminate
+    additional_env:
+      CRS_AGENT: claude_code
+      ANTHROPIC_MODEL: claude-opus-4-6
+  crs-bug-finding-codex:
+    num_cores: 8
+    budget_policy: terminate
+    additional_env:
+      CRS_AGENT: codex
+      OPENAI_MODEL: gpt-5-4
+  crs-bug-finding-copilot-cli:
+    num_cores: 8
+    budget_policy: terminate
+    additional_env:
+      CRS_AGENT: copilot_cli
+      COPILOT_MODEL: gpt-5-4
+  crs-bug-finding-gemini-cli:
+    num_cores: 8
+    budget_policy: terminate
+    additional_env:
+      CRS_AGENT: gemini_cli
+      GEMINI_MODEL: gemini-3-1-pro-preview
+  crs-bug-finding-opencode:
+    num_cores: 8
+    budget_policy: terminate
+    additional_env:
+      CRS_AGENT: opencode
+      OPENCODE_MODEL: zai-org/GLM-5.1
