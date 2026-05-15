@@ -24,5 +24,5 @@ uv run crsbench benchmark ci all --all --distributed --mode snapshot --output-di
 
 ## See Also
 
-- Full CLI/options reference: [reference.md](./reference.md)
+- Full CLI/options reference: [reference.md](../reference/benchmark-ci.md)
 - CI distributed topology: [distributed.md](./distributed.md)

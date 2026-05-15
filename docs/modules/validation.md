@@ -95,7 +95,7 @@ problem, not as a runtime execution result.
 
 ## Canonical References
 
-- [Experiment Config Reference](../guides/experiments/config-reference.md)
+- [Experiment Config Reference](../reference/experiment-config.md)
 - [Distributed Example Config](../experiment-config-distributed-example.yaml)
 - [Benchmark RFC](../RFC.md)
 

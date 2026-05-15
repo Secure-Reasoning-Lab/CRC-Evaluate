@@ -6,7 +6,7 @@ SARIF-based hints derived from benchmark vulnerability metadata.
 This page is intentionally reference-oriented. Use it to understand module
 boundaries, supported hint surfaces, and how the module fits into CRSBench.
 Detailed runtime semantics and configuration behavior belong in the
-[Experiment Config Reference](../guides/experiments/config-reference.md).
+[Experiment Config Reference](../reference/experiment-config.md).
 
 ## Responsibilities
 
@@ -169,8 +169,9 @@ runtime paths later stage and deliver.
 
 ## Canonical References
 
-- [Experiment Config Reference](../guides/experiments/config-reference.md)
+- [Experiment Config Reference](../reference/experiment-config.md)
 - [Benchmark RFC](../RFC.md)
+- [Vulnerability Metadata RFC](../reference/vuln-yaml.md)
 
 ## Implementation Pointers
 

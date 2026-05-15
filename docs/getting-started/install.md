@@ -58,8 +58,23 @@ Coverage runtime notes:
 - `--build-workers` and `--verify-workers` remain hidden compatibility aliases
   in the `verify` and `patch-verify` commands only.
 
+## Shell Completion
+
+Enable tab-completion for all `crsbench` subcommands and options:
+
+```bash
+# Bash
+activate-global-python-argcomplete --user   # then restart shell or source ~/.bashrc
+
+# Zsh — add to ~/.zshrc
+eval "$(register-python-argcomplete crsbench)"
+```
+
+See the [argcomplete docs](https://github.com/kislyuk/argcomplete#installation) for
+fish and other shell setup instructions.
+
 ## Next Steps
 
 1. Configure environment and LiteLLM: [configuration.md](./configuration.md)
 2. Run a first experiment: [first-experiment.md](./first-experiment.md)
-3. Author or inspect config files: [../guides/experiments/config-reference.md](../guides/experiments/config-reference.md)
+3. Author or inspect config files: [../reference/experiment-config.md](../reference/experiment-config.md)

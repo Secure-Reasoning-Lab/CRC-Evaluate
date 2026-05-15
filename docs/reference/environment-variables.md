@@ -134,7 +134,7 @@ They are consumed by OSS-Fuzz helper Docker runs and CRSBench direct Docker runs
 ## Component-Specific References
 
 - Setup and practical examples: [Getting Started Configuration](../getting-started/configuration.md)
-- Distributed workflow and CI notes: [Distributed Experiments](../guides/experiments/distributed.md)
+- Distributed workflow and CI notes: [Distributed Experiments](../deployment/distributed.md)
 - LiteLLM service details: [`services/litellm/README.md`](../../services/litellm/README.md)
 - Valkey service details: [`services/valkey/README.md`](../../services/valkey/README.md)
 - Template env file: [`.env.example`](../../.env.example)

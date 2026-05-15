@@ -79,15 +79,15 @@ scripts/cloud-rehearsal/run-local-rehearsal.sh down -v
 
 Default rehearsal config:
 
-- [`scripts/cloud-rehearsal/local-experiment.yaml`](../../../scripts/cloud-rehearsal/local-experiment.yaml)
+- [`scripts/cloud-rehearsal/local-experiment.yaml`](../../scripts/cloud-rehearsal/local-experiment.yaml)
   - mirrors the checked-in GCE smoke path with `crs-libfuzzer` and the same
     longer build window used for cloud testing
-- [`scripts/cloud-rehearsal/local-experiment-sanity-always.yaml`](../../../scripts/cloud-rehearsal/local-experiment-sanity-always.yaml)
+- [`scripts/cloud-rehearsal/local-experiment-sanity-always.yaml`](../../scripts/cloud-rehearsal/local-experiment-sanity-always.yaml)
   - forces `download_benchmarks: always` for the `sanity` suite so the startup
     scripts rehearse the explicit-download override
-- [`scripts/cloud-rehearsal/local-experiment-hf-download.yaml`](../../../scripts/cloud-rehearsal/local-experiment-hf-download.yaml)
+- [`scripts/cloud-rehearsal/local-experiment-hf-download.yaml`](../../scripts/cloud-rehearsal/local-experiment-hf-download.yaml)
   - uses the 3-benchmark
-    [`smoke-test-bug-finding-hf-download`](../../../benchmark-suites/smoke-test-bug-finding-hf-download.yaml)
+    [`smoke/hf-download`](../../benchmark-suites/smoke/hf-download.yaml)
     suite with `download_benchmarks: auto` plus `cloud.env.HF_TOKEN` to rehearse
     gated Hugging Face benchmark download
 - the checked-in cloud rehearsal configs also set `cloud.remote.experiment_root`

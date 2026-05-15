@@ -24,4 +24,4 @@ Snapshots are written per trial under the experiment output directory as
 ## What To Read
 
 - Runtime workflow context:
-  - [docs/guides/experiments/distributed.md](../guides/experiments/distributed.md)
+  - [docs/deployment/distributed.md](../deployment/distributed.md)

@@ -273,7 +273,7 @@ experiment:
   name: my-exp
   task: bugfixing
   mode: delta
-  benchmark_suite: afc-final
+  benchmark_suite: afc/final
   sanitizers: [address, undefined]
 
 runtime:
@@ -417,7 +417,7 @@ worker:
 CPU placement is operator-side in distributed mode (CLI on worker/evaluator):
 `--cpuset` and `--skip-cpuset`.
 
-See [experiment-config-distributed-example.yaml](../../experiment-config-distributed-example.yaml) for the concise contract.
+See [experiment-config-distributed-example.yaml](../experiment-config-distributed-example.yaml) for the concise contract.
 
 If worker machines do not mount benchmarks at the same path as the orchestrator,
 set `worker.benchmarks_root` to the machine-local path used on that worker.
@@ -730,11 +730,11 @@ Smoke bug-fixing suites currently run with LiteLLM tracking enabled in the sanit
 
 ## See Also
 
-- [Experiment Config Example](../../experiment-config-distributed-example.yaml) — full configuration reference
-- [Configuration](../../getting-started/configuration.md) — environment variables and .env configuration
-- [Snapshots](../../reference/snapshots.md) — progress monitoring during trials
+- [Experiment Config Example](../experiment-config-distributed-example.yaml) — full configuration reference
+- [Configuration](../getting-started/configuration.md) — environment variables and .env configuration
+- [Snapshots](../reference/snapshots.md) — progress monitoring during trials
 
 ## Upstream OSS-CRS References
 
-- [oss-crs/README.md](../../../oss-crs/README.md) — lifecycle and command overview
-- [oss-crs/docs/config/crs-compose.md](../../../oss-crs/docs/config/crs-compose.md) — compose configuration fields
+- [oss-crs/README.md](../../oss-crs/README.md) — lifecycle and command overview
+- [oss-crs/docs/config/crs-compose.md](../../oss-crs/docs/config/crs-compose.md) — compose configuration fields

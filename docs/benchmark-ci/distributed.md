@@ -31,5 +31,5 @@ uv run crsbench benchmark ci all --all \
 
 ## Related
 
-- Full CI reference: [reference.md](./reference.md)
-- Experiment queue behavior: [../experiments/queue-and-recovery.md](../experiments/queue-and-recovery.md)
+- Full CI reference: [reference.md](../reference/benchmark-ci.md)
+- Experiment queue behavior: [../experiments/queue-and-recovery.md](../operations/queue-and-recovery.md)

@@ -6,7 +6,7 @@ For contribution tracks and development workflows, start with:
 
 - Framework development: [docs/contributors/framework-developer-guide.md](docs/contributors/framework-developer-guide.md)
 - Benchmark development: [docs/contributors/benchmark-developer-guide.md](docs/contributors/benchmark-developer-guide.md)
-- Experiment/runtime usage: [docs/guides/experiments/README.md](docs/guides/experiments/README.md)
+- Experiment/runtime usage: [docs/experiments/README.md](docs/experiments/README.md)
 - Documentation index: [docs/README.md](docs/README.md)
 
 ## Governance
@@ -66,9 +66,6 @@ For commit messages, use Conventional Commits where possible:
 - Design/implementation docs: `docs/design/`
 - Module docs: `docs/modules/`
 - Keep docs updated in the same PR when behavior changes.
-- Use canonical ownership and placement rules in `docs/governance/documentation-taxonomy.md`.
-- For substantial doc changes, request review across multiple lanes (onboarding,
-  runtime/ops, architecture, and module maintenance at minimum).
 
 ## Repository Scope
 

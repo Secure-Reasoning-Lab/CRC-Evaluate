@@ -41,7 +41,7 @@ Upload CLI is wired through the benchmark packaging command layer in
 
 ## Operational Boundaries
 
-- user-facing dataset download workflows are documented in `docs/guides/`
+- user-facing dataset download workflows are documented in `docs/experiments/` and `docs/getting-started/`
 - maintainer-facing upload workflows are documented in contributor/runtime docs
 - this page only defines the module surface and backend layout
 

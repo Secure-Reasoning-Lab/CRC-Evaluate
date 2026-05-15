@@ -36,5 +36,5 @@ and CRS service sizing.
 ## Canonical References
 
 - Full operational workflow: [distributed.md](./distributed.md)
-- Queue behavior and retries: [queue-and-recovery.md](./queue-and-recovery.md)
-- Config contract: [config-reference.md](./config-reference.md)
+- Queue behavior and retries: [queue-and-recovery.md](../operations/queue-and-recovery.md)
+- Config contract: [config-reference.md](../reference/experiment-config.md)

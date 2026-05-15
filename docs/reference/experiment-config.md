@@ -2,7 +2,7 @@
 
 The grouped experiment YAML contract is documented in:
 
-- [Distributed experiment config example](../../experiment-config-distributed-example.yaml)
+- [Distributed experiment config example](../experiment-config-distributed-example.yaml)
 
 Use that file as the configuration source of truth for field layout, comments,
 and examples.
@@ -92,23 +92,13 @@ For GCE in v1:
   user-configured layers and wins last
 - generated GCE instance names are deterministic and zone-independent:
   `crsbench-<experiment>-orch`, `-work-001`, `-eval-001`
-- the checked-in examples are
-  `experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml`
-  and
-  `experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval-multilang-given-fuzzer.yaml`
-  and
-  `experiment-configs/cloud-testing/gce-usenix-r1-1orch-2worker-1eval-multilang-given-fuzzer.yaml`
-  and
-  `experiment-configs/cloud-testing/gce-hf-download-1orch-2worker-1eval.yaml`
-  and
-  `experiment-configs/cloud-testing/gce-sanity-zone-fallback-1orch-1worker-1eval.yaml`
-  and
-  `experiment-configs/cloud-testing/gce-sanity-zone-1orch-2worker-1eval.yaml`
+- the checked-in examples are under `experiment-configs/gcp/` (`bug-finding.yaml`,
+  `bug-fixing.yaml`, `full-pipeline-finding.yaml`, `full-pipeline-fixing.yaml`)
 
 ## Discovery-Only Mode
 
 For the full workflow, see
-[Discovery-Only OSS-Fuzz Experiments](./discovery-only.md).
+[Discovery-Only OSS-Fuzz Experiments](../experiments/discovery-only.md).
 
 Use this mode for OSS-Fuzz-format projects that do not have CRSBench ground
 truth under `.aixcc/`.
@@ -254,7 +244,7 @@ Notes:
 ## Compatibility Notes
 
 - `runtime.inputs.seed` replaces the older seed-corpus knobs documented in
-  [Seed Corpus Reference](../../reference/seed-corpus.md).
+  [Seed Corpus Reference](./seed-corpus.md).
 - `runtime.inputs.sarif` replaces the older hint-level knobs. Generated SARIF
   artifacts still come from benchmark-owned `level_N.sarif` files.
 - `runtime.litellm.*` replaces the old flat LiteLLM flags.
@@ -280,5 +270,5 @@ location for large-scale runs.
 
 ## Related
 
-- Distributed workflow: [distributed.md](./distributed.md)
-- First experiment: [../../getting-started/first-experiment.md](../../getting-started/first-experiment.md)
+- Distributed workflow: [distributed.md](../deployment/distributed.md)
+- First experiment: [../../getting-started/first-experiment.md](../getting-started/first-experiment.md)

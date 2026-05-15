@@ -10,7 +10,7 @@ relevant to CRSBench workflows.
 - `test_litellm.py` - sanity checks for LiteLLM integration
 - `cpv_report.py` - CPV report generation from experiment data
 - `merge_experiment_results.py` - merge distributed result shards; see
-  [Merge Experiment Results](../docs/guides/experiments/merge-results.md)
+  [Merge Experiment Results](../docs/experiments/merge-results.md)
 - `orchestrate-workers.sh` - remote worker orchestration
 - `setup-remote-worker.sh` - remote worker bootstrap helper
 - `setup-third-party.sh` - fetch managed `third_party/oss-fuzz` and the pinned Atlantis `third_party/atlantis-multilang-given_fuzzer` checkout; reruns normalize the managed `oss-fuzz` checkout back to the configured repo and pinned commit, clean helper-source drift under `infra/`, preserve `build/*` artifacts, and then reapply CRSBench helper patches
@@ -22,6 +22,6 @@ relevant to CRSBench workflows.
 
 ## See Also
 
-- [Distributed Experiments](../docs/guides/experiments/distributed.md)
+- [Distributed Experiments](../docs/deployment/distributed.md)
 - [Configuration](../docs/getting-started/configuration.md)
 - [Valkey Service](../services/valkey/README.md)

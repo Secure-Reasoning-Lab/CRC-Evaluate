@@ -7,9 +7,9 @@ Canonical variable index: [Environment Variables Reference](../reference/environ
 
 For full experiment-config structure, use:
 - [Distributed Experiment Config Example](../experiment-config-distributed-example.yaml)
-- [Experiment Config Reference](../guides/experiments/config-reference.md)
-- [Distributed Experiments Guide](../guides/experiments/distributed.md)
-- [GCE Cloud Orchestration Guide](../guides/experiments/gce-cloud-orchestration.md)
+- [Experiment Config Reference](../reference/experiment-config.md)
+- [Distributed Experiments Guide](../deployment/distributed.md)
+- [GCE Cloud Orchestration Guide](../deployment/gce-cloud-orchestration.md)
 
 Managed cloud config uses a provider-neutral `cloud.*` layout. Today the only
 implemented managed backend is GCE via `cloud.providers.gce`.
@@ -97,9 +97,9 @@ uv run python scripts/test_notification.py
 
 That helper validates the operator environment only. To rehearse the
 `cloud.orchestrator.env` path before a managed launch, use the cloud rehearsal
-flow in [Local Cloud Rehearsal](../guides/experiments/local-cloud-rehearsal.md)
+flow in [Local Cloud Rehearsal](../deployment/local-cloud-rehearsal.md)
 or the GCE-specific preflight notes in
-[GCE Cloud Orchestration Guide](../guides/experiments/gce-cloud-orchestration.md).
+[GCE Cloud Orchestration Guide](../deployment/gce-cloud-orchestration.md).
 
 5. Validate the local helper services you depend on:
 
@@ -141,10 +141,10 @@ Use the advanced guides when you need:
 - full experiment-config authoring rules
 
 Canonical advanced entry points:
-- [Distributed Experiments Guide](../guides/experiments/distributed.md)
-- [GCE Cloud Orchestration Guide](../guides/experiments/gce-cloud-orchestration.md)
-- [Local Cloud Rehearsal](../guides/experiments/local-cloud-rehearsal.md)
-- [Experiment Config Reference](../guides/experiments/config-reference.md)
+- [Distributed Experiments Guide](../deployment/distributed.md)
+- [GCE Cloud Orchestration Guide](../deployment/gce-cloud-orchestration.md)
+- [Local Cloud Rehearsal](../deployment/local-cloud-rehearsal.md)
+- [Experiment Config Reference](../reference/experiment-config.md)
 - [Environment Variables Reference](../reference/environment-variables.md)
 
 ## Deployment Scenarios

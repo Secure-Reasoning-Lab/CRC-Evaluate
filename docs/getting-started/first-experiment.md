@@ -8,8 +8,8 @@ This page assumes the queue-backed runtime on a single host:
 - `uv run crsbench evaluator` is not part of the minimal first-run path
 
 If you want the fuller queue topology, CPU partitioning, or real-time
-build/verify processing, use [Single-Machine Experiments](../guides/experiments/single-machine.md)
-or [Distributed Experiments](../guides/experiments/distributed.md).
+build/verify processing, use [Single-Machine Experiments](../deployment/single-machine.md)
+or [Distributed Experiments](../deployment/distributed.md).
 
 ## 1. Start Services
 
@@ -45,7 +45,7 @@ experiment:
   name: first-run
   task: bugfinding
   mode: full
-  benchmark_suite: sanity
+  benchmark_suite: smoke/sanity
   sanitizers: [address]
 
 runtime:
@@ -99,6 +99,6 @@ CRS trial queue.
 
 ## 6. Go Deeper
 
-- Single-machine workflow details: [../guides/experiments/single-machine.md](../guides/experiments/single-machine.md)
-- Distributed workflow: [../guides/experiments/distributed.md](../guides/experiments/distributed.md)
-- Queue cleanup and recovery: [../guides/experiments/queue-and-recovery.md](../guides/experiments/queue-and-recovery.md)
+- Single-machine workflow details: [../deployment/single-machine.md](../deployment/single-machine.md)
+- Distributed workflow: [../deployment/distributed.md](../deployment/distributed.md)
+- Queue cleanup and recovery: [../operations/queue-and-recovery.md](../operations/queue-and-recovery.md)

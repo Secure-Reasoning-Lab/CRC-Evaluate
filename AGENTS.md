@@ -41,9 +41,8 @@ When instructions conflict, prioritize in this order:
 
 - When behavior, interfaces, or workflows change, update the nearest relevant docs under `docs/`.
 - If doc entry points change, update the `Docs Index (Agent Jump List)` in this file.
-- Follow `docs/governance/documentation-taxonomy.md` for canonical doc placement.
 - Keep `docs/` root reserved for the docs hub, top-level normative specs, and high-value example/reference artifacts.
-- Put prose docs under grouped subdirectories such as `docs/getting-started/`, `docs/guides/`, `docs/reference/`, `docs/contributors/`, `docs/governance/`, `docs/design/`, and `docs/modules/`.
+- Put prose docs under grouped subdirectories such as `docs/getting-started/`, `docs/experiments/`, `docs/deployment/`, `docs/operations/`, `docs/benchmark-ci/`, `docs/reference/`, `docs/contributors/`, `docs/design/`, and `docs/modules/`.
 - Do not add root-level moved-page shims or duplicate canonical docs under `docs/`.
 
 ## Design Doc Authoring Policy (Subagents)
@@ -126,13 +125,14 @@ Then re-run the quality gate command above.
 ## Docs Index (Agent Jump List)
 
 - Start here: `docs/README.md`
-- Documentation taxonomy: `docs/governance/documentation-taxonomy.md`
 - Install: `docs/getting-started/install.md`
 - Configuration: `docs/getting-started/configuration.md`
-- Discovery-only OSS-Fuzz experiments: `docs/guides/experiments/discovery-only.md`
-- Replay historical POVs: `docs/guides/experiments/replay-povs.md`
-- Merge experiment results: `docs/guides/experiments/merge-results.md`
+- Discovery-only OSS-Fuzz experiments: `docs/experiments/discovery-only.md`
+- Replay historical POVs: `docs/experiments/replay-povs.md`
+- Merge experiment results: `docs/experiments/merge-results.md`
 - Normative benchmark spec: `docs/RFC.md`
+- Benchmark statistics: `docs/reference/benchmark-statistics.md`
+- Vulnerability metadata spec: `docs/reference/vuln-yaml.md`
 - Architecture: `docs/design/architecture.md`
 - Design doc policy: `docs/design/doc-authoring-guidelines.md`
 - Cloud orchestration: `docs/design/distributed/cloud-orchestration.md`

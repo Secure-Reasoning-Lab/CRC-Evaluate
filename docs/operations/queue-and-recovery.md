@@ -71,5 +71,5 @@ crsbench run --experiment-config config.yaml --queue-mode continue --retry-faile
 
 ## Related
 
-- Full experiment workflow: [distributed.md](./distributed.md)
+- Full experiment workflow: [distributed.md](../deployment/distributed.md)
 - Benchmark CI queue topology: [../benchmark-ci/distributed.md](../benchmark-ci/distributed.md)

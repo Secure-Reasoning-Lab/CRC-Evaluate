@@ -35,7 +35,7 @@ uv run pytest tests/ -v
 
 For Redis/Valkey setup and multi-process runs (`run`, `worker`, `evaluator`):
 
-- [Distributed Experiments](../guides/experiments/distributed.md)
+- [Distributed Experiments](../deployment/distributed.md)
 - [Configuration](../getting-started/configuration.md)
 - [services/valkey/README.md](../../services/valkey/README.md)
 

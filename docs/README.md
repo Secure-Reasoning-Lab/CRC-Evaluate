@@ -11,37 +11,55 @@ Use this page as the primary navigation hub.
 2. Run your first experiment
    [First Experiment](./getting-started/first-experiment.md)
 3. Run distributed experiments
-   [Experiment Guides](./guides/experiments/README.md) and
-   [Distributed Experiments](./guides/experiments/distributed.md)
+   [Distributed Deployment](./deployment/distributed.md)
 4. Run managed cloud experiments on GCE
-   [GCE Cloud Orchestration](./guides/experiments/gce-cloud-orchestration.md) for
+   [GCE Cloud Orchestration](./deployment/gce-cloud-orchestration.md) for
    `cloud preflight`, `cloud launch`, `cloud collect`, and `cloud teardown`, and
-   [Local Cloud Rehearsal](./guides/experiments/local-cloud-rehearsal.md)
+   [Local Cloud Rehearsal](./deployment/local-cloud-rehearsal.md)
 5. Run benchmark CI
-   [Benchmark CI Guides](./guides/benchmark-ci/README.md) and
-   [Benchmark CI Quickstart](./guides/benchmark-ci/quickstart.md)
+   [Benchmark CI Quickstart](./benchmark-ci/quickstart.md)
 
-## Guides
+## Experiments
 
-- [Guides Hub](./guides/README.md)
-- [Experiments Hub](./guides/experiments/README.md)
-  - [Single Machine](./guides/experiments/single-machine.md)
-  - [Discovery-Only OSS-Fuzz](./guides/experiments/discovery-only.md)
-  - [Replay Historical POVs](./guides/experiments/replay-povs.md)
-  - [Distributed](./guides/experiments/distributed.md)
-  - [Cloud Orchestration on GCE](./guides/experiments/gce-cloud-orchestration.md)
-  - [Local Cloud Rehearsal](./guides/experiments/local-cloud-rehearsal.md)
-  - [Queue and Recovery](./guides/experiments/queue-and-recovery.md)
-  - [Config Reference](./guides/experiments/config-reference.md)
-- [Benchmark CI Hub](./guides/benchmark-ci/README.md)
-  - [Quickstart](./guides/benchmark-ci/quickstart.md)
-  - [Distributed](./guides/benchmark-ci/distributed.md)
-  - [Reference](./guides/benchmark-ci/reference.md)
+What to run.
+
+- [Experiments Hub](./experiments/README.md)
+- [Discovery-Only OSS-Fuzz](./experiments/discovery-only.md)
+- [Replay Historical POVs](./experiments/replay-povs.md)
+- [Merge Experiment Results](./experiments/merge-results.md)
+
+## Deployment
+
+Where to run it.
+
+- [Deployment Hub](./deployment/README.md)
+- [Single Machine](./deployment/single-machine.md)
+- [Distributed](./deployment/distributed.md)
+- [GCE Cloud Orchestration](./deployment/gce-cloud-orchestration.md)
+- [Local Cloud Rehearsal](./deployment/local-cloud-rehearsal.md)
+
+## Operations
+
+Day-2 ops.
+
+- [Operations Hub](./operations/README.md)
+- [Queue Cleanup and Recovery](./operations/queue-and-recovery.md)
+
+## Benchmark CI
+
+- [Benchmark CI Hub](./benchmark-ci/README.md)
+- [Quickstart](./benchmark-ci/quickstart.md)
+- [Distributed Topology](./benchmark-ci/distributed.md)
 
 ## Reference
 
 - [Reference Hub](./reference/README.md)
 - [Benchmark RFC](./RFC.md)
+- [Benchmark Statistics](./reference/benchmark-statistics.md)
+- [Vulnerability Metadata RFC](./reference/vuln-yaml.md)
+- [Experiment Config](./reference/experiment-config.md)
+- [Benchmark CI Config](./reference/benchmark-ci.md)
+- [Standalone Verification and Coverage](./reference/standalone-verification.md)
 - [Environment Variables](./reference/environment-variables.md)
 - [Logging Reference](./reference/logging.md)
 - [OSS-CRS Interface](./reference/oss-crs-interface.md)
@@ -57,10 +75,6 @@ Use this page as the primary navigation hub.
 - [Testing](./contributors/testing.md)
 - [Coding Standards](./contributors/coding-standards.md)
 - [Manual Validation](./contributors/manual-validation.md)
-- Maintainer documentation policy:
-  [Governance Hub](./governance/README.md),
-  [Documentation Taxonomy](./governance/documentation-taxonomy.md), and
-  [Documentation Inventory](./governance/documentation-inventory.md)
 
 ## Module Reference
 

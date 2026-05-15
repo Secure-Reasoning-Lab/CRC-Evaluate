@@ -170,7 +170,7 @@ cloud:
 
 Use the stock rehearsal command when you want to rehearse the checked-in
 `cloud.orchestrator.env` notification path in
-[`scripts/cloud-rehearsal/local-experiment-notification.yaml`](../../../scripts/cloud-rehearsal/local-experiment-notification.yaml):
+[`scripts/cloud-rehearsal/local-experiment-notification.yaml`](../../scripts/cloud-rehearsal/local-experiment-notification.yaml):
 
 ```bash
 export CRSBENCH_NOTIFY_APPRISE_URLS='discord://token/chat-id'
@@ -184,7 +184,7 @@ rehearsal harness described in
 [`local-cloud-rehearsal.md`](./local-cloud-rehearsal.md), so the same Docker
 prerequisites apply. This stock command validates the checked-in
 `CRSBENCH_NOTIFY_APPRISE_URLS` orchestrator passthrough path in
-[`scripts/cloud-rehearsal/local-experiment-notification.yaml`](../../../scripts/cloud-rehearsal/local-experiment-notification.yaml).
+[`scripts/cloud-rehearsal/local-experiment-notification.yaml`](../../scripts/cloud-rehearsal/local-experiment-notification.yaml).
 It is a cloud launch rehearsal, not a worker or evaluator notification path.
 
 If operator-side `cloud monitor` Apprise is enabled and the cloud launch env
@@ -520,7 +520,7 @@ remote orchestrator is counted as ready:
 - `gitcache: false | true`
 
 Cloud VMs always run `crsbench prepare`. `download_benchmarks: auto` skips the
-VM-side download only when `benchmark_suite: sanity`; other suites download
+VM-side download only when `benchmark_suite: smoke/sanity`; other suites download
 before the worker joins Redis.
 
 When the experiment config sets `runtime.rts_enabled: false`, cloud bootstrap
@@ -1596,4 +1596,4 @@ sudo -iu crsbench env \
 ## See Also
 
 - [Distributed Experiments](./distributed.md) -- full distributed experiment guide
-- [Configuration Reference](./config-reference.md) -- all experiment config fields
+- [Configuration Reference](../reference/experiment-config.md) -- all experiment config fields

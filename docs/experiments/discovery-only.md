@@ -113,18 +113,18 @@ Key settings:
 
 Repository examples:
 
-- [`experiment-configs/discovery-testing/oss-fuzz-given-fuzzer-8core.yaml`](../../../experiment-configs/discovery-testing/oss-fuzz-given-fuzzer-8core.yaml)
-- [`experiment-configs/discovery-testing/atlantis-multilang-wo-concolic-full-10min-5usd.yaml`](../../../experiment-configs/discovery-testing/atlantis-multilang-wo-concolic-full-10min-5usd.yaml)
-- [`experiment-configs/discovery-smoke-testing/opencode-go-yaml-bugfinding.yaml`](../../../experiment-configs/discovery-smoke-testing/opencode-go-yaml-bugfinding.yaml)
-- [`experiment-configs/discovery-smoke-testing/opencode-shortlist-bugfinding.yaml`](../../../experiment-configs/discovery-smoke-testing/opencode-shortlist-bugfinding.yaml)
-- [`experiment-configs/discovery-smoke-testing/opencode-clear-shortlist2-bugfinding.yaml`](../../../experiment-configs/discovery-smoke-testing/opencode-clear-shortlist2-bugfinding.yaml)
-- [`experiment-configs/discovery-smoke-testing/opencode-clear-shortlist3-bugfinding.yaml`](../../../experiment-configs/discovery-smoke-testing/opencode-clear-shortlist3-bugfinding.yaml)
-- [`experiment-configs/discovery-smoke-testing/opencode-clear-shortlist4-bugfinding.yaml`](../../../experiment-configs/discovery-smoke-testing/opencode-clear-shortlist4-bugfinding.yaml)
-- [`experiment-configs/discovery-smoke-testing/gce-opencode-go-yaml-bugfinding.yaml`](../../../experiment-configs/discovery-smoke-testing/gce-opencode-go-yaml-bugfinding.yaml)
-- [`experiment-configs/discovery/gce-opencode-shortlist-bugfinding.yaml`](../../../experiment-configs/discovery/gce-opencode-shortlist-bugfinding.yaml)
-- [`experiment-configs/discovery/gce-opencode-clear-shortlist2-bugfinding.yaml`](../../../experiment-configs/discovery/gce-opencode-clear-shortlist2-bugfinding.yaml)
-- [`experiment-configs/discovery/gce-opencode-clear-shortlist3-bugfinding.yaml`](../../../experiment-configs/discovery/gce-opencode-clear-shortlist3-bugfinding.yaml)
-- [`experiment-configs/discovery/gce-opencode-clear-shortlist4-bugfinding.yaml`](../../../experiment-configs/discovery/gce-opencode-clear-shortlist4-bugfinding.yaml)
+- [`experiment-configs/discovery-testing/oss-fuzz-given-fuzzer-8core.yaml`](../../experiment-configs/discovery-testing/oss-fuzz-given-fuzzer-8core.yaml)
+- [`experiment-configs/discovery-testing/atlantis-multilang-wo-concolic-full-10min-5usd.yaml`](../../experiment-configs/discovery-testing/atlantis-multilang-wo-concolic-full-10min-5usd.yaml)
+- [`experiment-configs/discovery-smoke-testing/opencode-go-yaml-bugfinding.yaml`](../../experiment-configs/discovery-smoke-testing/opencode-go-yaml-bugfinding.yaml)
+- [`experiment-configs/discovery-smoke-testing/opencode-shortlist-bugfinding.yaml`](../../experiment-configs/discovery-smoke-testing/opencode-shortlist-bugfinding.yaml)
+- [`experiment-configs/discovery-smoke-testing/opencode-clear-shortlist2-bugfinding.yaml`](../../experiment-configs/discovery-smoke-testing/opencode-clear-shortlist2-bugfinding.yaml)
+- [`experiment-configs/discovery-smoke-testing/opencode-clear-shortlist3-bugfinding.yaml`](../../experiment-configs/discovery-smoke-testing/opencode-clear-shortlist3-bugfinding.yaml)
+- [`experiment-configs/discovery-smoke-testing/opencode-clear-shortlist4-bugfinding.yaml`](../../experiment-configs/discovery-smoke-testing/opencode-clear-shortlist4-bugfinding.yaml)
+- [`experiment-configs/discovery-smoke-testing/gce-opencode-go-yaml-bugfinding.yaml`](../../experiment-configs/discovery-smoke-testing/gce-opencode-go-yaml-bugfinding.yaml)
+- [`experiment-configs/discovery/gce-opencode-shortlist-bugfinding.yaml`](../../experiment-configs/discovery/gce-opencode-shortlist-bugfinding.yaml)
+- [`experiment-configs/discovery/gce-opencode-clear-shortlist2-bugfinding.yaml`](../../experiment-configs/discovery/gce-opencode-clear-shortlist2-bugfinding.yaml)
+- [`experiment-configs/discovery/gce-opencode-clear-shortlist3-bugfinding.yaml`](../../experiment-configs/discovery/gce-opencode-clear-shortlist3-bugfinding.yaml)
+- [`experiment-configs/discovery/gce-opencode-clear-shortlist4-bugfinding.yaml`](../../experiment-configs/discovery/gce-opencode-clear-shortlist4-bugfinding.yaml)
 
 ## Initialize The Benchmarks
 
@@ -203,15 +203,15 @@ uv run crsbench run --experiment-config config.yaml --local-only
 ```
 
 The same initialized benchmarks can also be used with the distributed worker
-and evaluator workflows documented in [Distributed](./distributed.md).
+and evaluator workflows documented in [Distributed](../deployment/distributed.md).
 
 For a managed GCE smoke example pinned to `us-central1`, see
-[`gce-opencode-go-yaml-bugfinding.yaml`](../../../experiment-configs/discovery-smoke-testing/gce-opencode-go-yaml-bugfinding.yaml).
+[`gce-opencode-go-yaml-bugfinding.yaml`](../../experiment-configs/discovery-smoke-testing/gce-opencode-go-yaml-bugfinding.yaml).
 For managed-cloud shortlist campaigns, see
-[`gce-opencode-shortlist-bugfinding.yaml`](../../../experiment-configs/discovery/gce-opencode-shortlist-bugfinding.yaml),
-[`gce-opencode-clear-shortlist3-bugfinding.yaml`](../../../experiment-configs/discovery/gce-opencode-clear-shortlist3-bugfinding.yaml),
+[`gce-opencode-shortlist-bugfinding.yaml`](../../experiment-configs/discovery/gce-opencode-shortlist-bugfinding.yaml),
+[`gce-opencode-clear-shortlist3-bugfinding.yaml`](../../experiment-configs/discovery/gce-opencode-clear-shortlist3-bugfinding.yaml),
 and
-[`gce-opencode-clear-shortlist4-bugfinding.yaml`](../../../experiment-configs/discovery/gce-opencode-clear-shortlist4-bugfinding.yaml).
+[`gce-opencode-clear-shortlist4-bugfinding.yaml`](../../experiment-configs/discovery/gce-opencode-clear-shortlist4-bugfinding.yaml).
 
 ## Limits And Expectations
 

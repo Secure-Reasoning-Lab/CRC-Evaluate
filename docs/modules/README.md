@@ -2,8 +2,8 @@
 
 Module-specific documentation moved from `crsbench/*/README.md` into this folder.
 This subtree is for module-scoped reference and short operational notes only.
-Primary onboarding and cross-cutting workflows belong under `docs/getting-started/`
-or `docs/guides/`.
+Primary onboarding and cross-cutting workflows belong under `docs/getting-started/`,
+`docs/experiments/`, `docs/deployment/`, or `docs/operations/`.
 
 ## Available Modules
 
@@ -23,5 +23,5 @@ or `docs/guides/`.
   - linked outward to canonical guides or reference pages where needed
 - Keep deep architecture/mechanism details out of module pages unless they are
   necessary to understand the module's public contract.
-- Put first-time-user and cross-module workflows in `docs/getting-started/` or `docs/guides/`.
+- Put first-time-user and cross-module workflows in `docs/getting-started/`, `docs/experiments/`, `docs/deployment/`, or `docs/operations/`.
 - Do not use module pages for onboarding, cross-module workflows, primary CLI tutorials, or implementation tracking.

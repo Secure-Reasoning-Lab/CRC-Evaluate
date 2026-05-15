@@ -230,5 +230,5 @@ Additional notes for bug-finding re-eval:
 ## Related CRSBench Docs
 
 - [Repository README](../../README.md)
-- [Distributed Experiments](../guides/experiments/distributed.md)
+- [Distributed Experiments](../deployment/distributed.md)
 - [Experiment Config Example](../experiment-config-distributed-example.yaml)

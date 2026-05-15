@@ -10,7 +10,7 @@ Defines required benchmark structure, metadata, and validation rules.
 2. [Module Docs: Benchmark](../modules/benchmark/README.md)  
 Benchmark packaging/runtime workflow and CLI usage.
 
-3. [Benchmark CI Guide](../guides/benchmark-ci/reference.md)  
+3. [Benchmark CI Guide](../reference/benchmark-ci.md)  
 How to validate build/POV/patch/test/coverage in CI.
 
 4. [Testing Setup](./testing.md)  
@@ -44,4 +44,4 @@ Use this flow when preparing datasets for release:
 
 Reference:
 - [Dataset Module](../modules/dataset.md)
-- [Benchmark CI Guide](../guides/benchmark-ci/reference.md)
+- [Benchmark CI Guide](../reference/benchmark-ci.md)

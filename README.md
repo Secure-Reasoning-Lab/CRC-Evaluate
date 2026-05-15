@@ -1,8 +1,33 @@
 # CRSBench - Cyber Reasoning System Benchmark Suite
 
-A benchmark suite for evaluating AI-powered Cyber Reasoning Systems (CRS) across vulnerability discovery, program repair, and evaluation.
+CRSBench is the benchmark suite for [OSS-CRS](https://github.com/ossf/oss-crs),
+the open-source orchestration framework for LLM-based autonomous bug-finding
+and bug-fixing systems (Cyber Reasoning Systems). It provides curated
+benchmarks and an evaluation harness for measuring any OSS-CRS-compatible CRS
+on vulnerability discovery and program repair.
 
-Unlike traditional fuzzing benchmarks (e.g., FuzzBench) that only report coverage/crashes, CRSBench stores complete ground truth to track whether vulnerabilities are actually found and correctly patched.
+Unlike traditional fuzzing benchmarks (e.g., FuzzBench) that only report
+coverage/crashes, CRSBench stores complete ground truth to track whether
+vulnerabilities are actually found and correctly patched.
+
+## Benchmark Statistics
+
+The released benchmark suite contains:
+
+| Metric | Value |
+| --- | --- |
+| Benchmarks | **124** (87 Delta + 37 Full) |
+| Upstream projects | **82** |
+| Vulnerabilities (CPVs) | **315** |
+| C / C++ | 63 benchmarks, 123 vulnerabilities |
+| JVM (Java) | 61 benchmarks, 192 vulnerabilities |
+| Distinct CWEs | **91** (covers 21 of the 2025 CWE Top 25) |
+| Vulnerabilities per harness | 1.65 average, 12 max |
+| PoV variants per vulnerability | 3.89 average |
+
+See [docs/reference/benchmark-statistics.md](docs/reference/benchmark-statistics.md)
+for the full breakdown (origins, CWE distribution, and how to regenerate the
+numbers from the shipped benchmarks).
 
 ## Quick Start
 
@@ -39,7 +64,7 @@ experiment:
   name: first-run
   task: bugfinding
   mode: full
-  benchmark_suite: sanity
+  benchmark_suite: smoke/sanity
   sanitizers: [address]
 
 runtime:
@@ -80,7 +105,7 @@ uv run crsbench run --experiment-config first-run.yaml
 For a guided version of this flow, see
 [docs/getting-started/first-experiment.md](docs/getting-started/first-experiment.md).
 For multi-machine and production-style runs, see
-[docs/guides/experiments/distributed.md](docs/guides/experiments/distributed.md).
+[docs/deployment/distributed.md](docs/deployment/distributed.md).
 
 `crsbench prepare` typical duration:
 - warm cache: ~10-60s
@@ -152,80 +177,24 @@ Machine B/C/...               Machine D (single evaluator)
 - Real-time POV/patch collection is tied to resolved `EXCHANGE_DIR` paths
 - Additional POV dedup strategy `stack-based` is available via `pov_dedup_strategy` in experiment config
 
-See [Distributed Experiments](docs/guides/experiments/distributed.md) for multi-machine setup, core pinning, and
+See [Distributed Experiments](docs/deployment/distributed.md) for multi-machine setup, core pinning, and
 production deployment. See [Configuration](docs/getting-started/configuration.md) for `.env` configuration.
 
-### CRS Config Resolution (Important)
+### CRS Config Resolution
 
-CRS services are declared under `crs_compose` in experiment YAML.
+CRS services are declared under `crs_compose` in experiment YAML. Each key
+resolves to a registry entry under `./oss-crs/registry/<crs>.yaml` that
+defines source and runtime defaults. For the full CRS interface and registry
+schema, see the [OSS-CRS documentation](https://github.com/ossf/oss-crs).
 
-Resolution flow:
-1. Add one or more CRS service keys under `crs_compose` (for example `crs-codex`)
-2. Each CRS key resolves to `./oss-crs/registry/<crs>.yaml` by default
-3. Registry YAML defines source (git or `local_path`) and runtime defaults
+LiteLLM credentials required for `runtime.litellm.mode: external` are
+documented in [docs/getting-started/configuration.md](docs/getting-started/configuration.md).
 
-Example:
+For shell tab-completion setup, see
+[docs/getting-started/install.md#shell-completion](docs/getting-started/install.md#shell-completion).
 
-```yaml
-crs_compose:
-  crs-codex:
-    num_cores: 8
-```
-
-For LiteLLM in experiment runtime (`runtime.litellm.mode: external`):
-- Tracking enabled (`runtime.litellm.tracking_enabled: true`) requires `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`
-- Tracking disabled (`runtime.litellm.tracking_enabled: false`) requires either `CRSBENCH_LLM_UPSTREAM_API_KEY` or `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`
-
-### Shell Completion
-
-Enable tab-completion for all `crsbench` subcommands and options:
-
-```bash
-# Bash
-activate-global-python-argcomplete --user   # then restart shell or source ~/.bashrc
-
-# Zsh — add to ~/.zshrc
-eval "$(register-python-argcomplete crsbench)"
-```
-
-See the [argcomplete docs](https://github.com/kislyuk/argcomplete#installation) for
-fish and other shell setup instructions.
-
-### Verification (Standalone)
-
-```bash
-uv run crsbench verify       benchmarks/project --pov-dir ./povs/ --jobs 4 --cores-per-job 2
-uv run crsbench patch-verify benchmarks/project --patch-dir ./patches --pov-dir ./povs --jobs 4 --cores-per-job 2
-uv run crsbench coverage     --experiment-config ./experiment.yaml      # seed coverage over time
-uv run crsbench coverage     --experiment-dir ./experiment-filestore/experiment-name       # seed coverage over time
-uv run crsbench coverage     --experiment-dir ./experiment-filestore/experiment-name --output-dir ./coverage-out
-uv run crsbench coverage     --seed-dir ./seeds --benchmark project --harness fuzz_target --output-dir ./coverage-out
-uv run crsbench coverage     --seed-dir ./seeds --experiment-start-time 1710000000 --benchmark project --harness fuzz_target --output-dir ./coverage-out
-```
-
-For standalone `verify` / `patch-verify`, `--jobs` and `--cores-per-job`
-are the primary parallelism flags. Legacy `--build-workers` and
-`--verify-workers` remain accepted as hidden compatibility aliases.
-
-Timeline coverage mode persists raw per-seed artifacts under the target
-coverage directory's `raw/` subdirectory. Each analyzed seed keeps its
-normalized `.cov` result and any captured crash log alongside the JSON/CSV/PNG
-timeline outputs. `coverage_timeline.json` stores one row per normalized seed,
-`coverage_timeline.csv` emits one row per normalized seed, and
-`coverage_timeline.png` plots cumulative covered lines directly from those
-per-seed replay results. Direct `--seed-dir` mode derives relative time from
-each input seed file's original `mtime` using the first retained seed as the
-origin, unless `--experiment-start-time` is supplied to override the origin
-with an explicit Unix timestamp. `--experiment-dir` and `--experiment-config` instead use
-`povs/pov_store.json.crs_run_start_time` as the origin and clamp the x-axis to
-the recorded trial `run_time` from `metadata.json`. When `--output-dir` is
-supplied for experiment-backed coverage, CRSBench mirrors the experiment under
-`<output-dir>/<experiment-name>/.../trial-N/coverage`; otherwise it writes to
-each source trial's in-place `coverage/` directory. The Atlantis timeline path
-does not run a separate whole-corpus denominator pass, so total-line
-percentages may be reported as unavailable.
-Coverage analysis uses the Atlantis/given_fuzzer warm-runner backend and does
-not accept an `--oss-fuzz-path` override.
+For standalone `verify`, `patch-verify`, and `coverage` usage, see
+[docs/reference/standalone-verification.md](docs/reference/standalone-verification.md).
 
 ### Results
 
@@ -281,15 +250,12 @@ CRSBench/
 
 - Entry point: [docs/README.md](docs/README.md)
 - Benchmark format contract: [docs/RFC.md](docs/RFC.md)
-- Documentation governance:
-  - [Taxonomy and Canonical Map](docs/governance/documentation-taxonomy.md)
-  - [Inventory and Audit](docs/governance/documentation-inventory.md)
 - Setup and runtime:
   - [Install](docs/getting-started/install.md)
   - [Configuration](docs/getting-started/configuration.md)
   - [Environment Variables](docs/reference/environment-variables.md)
   - [First Experiment](docs/getting-started/first-experiment.md)
-  - [Distributed Experiments](docs/guides/experiments/distributed.md)
+  - [Distributed Experiments](docs/deployment/distributed.md)
   - [Distributed Experiment Config Contract (source-of-truth)](docs/experiment-config-distributed-example.yaml)
 - Contributor tracks:
   - [Framework Developer Guide](docs/contributors/framework-developer-guide.md)
