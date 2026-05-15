@@ -12,7 +12,6 @@ or `docs/guides/`. These pages should link to detailed design docs under
 - [Benchmark Generation](./benchmark/generation.md)
 - [Dataset](./dataset.md)
 - [Hint Generation](./hint-generation.md)
-- [Migration](./migration.md)
 - [Reporting](./reporting.md)
 - [Statistics](./statistics.md)
 - [Validation](./validation.md)

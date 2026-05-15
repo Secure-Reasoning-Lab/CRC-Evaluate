@@ -1,7 +1,7 @@
 # Design: Trial Directory Preparation
 - Audience: maintainers working on trial setup and runtime staging
 - Scope: trial-directory contracts, staged artifacts, isolation rules, and failure semantics
-- Related: [Evaluation](./evaluation.md), [Snapshots](./snapshots.md), [Atlanta-to-RFC Migration](../migration/migration-atlanta-to-rfc.md)
+- Related: [Evaluation](./evaluation.md), [Snapshots](./snapshots.md)
 
 ## Goals and Non-goals
 

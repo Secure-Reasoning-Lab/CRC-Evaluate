@@ -42,7 +42,6 @@ CRSBench/
 │   ├── distributed/          # Queue, worker, distributed orchestration
 │   ├── evaluation/           # Trial execution, POV/patch verification
 │   ├── hint_generation/      # Hint/corpus difficulty controls
-│   ├── migration/            # Format migration tooling
 │   ├── reporting/            # Reports and dashboard outputs
 │   ├── statistics/           # Benchmark and experiment stats
 │   ├── validation/           # Schema + semantic validation

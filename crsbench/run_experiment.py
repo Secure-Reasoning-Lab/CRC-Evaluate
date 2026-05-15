@@ -381,7 +381,7 @@ Examples:
   %(prog)s report --experiment my-experiment
   %(prog)s dashboard --base-dir ./experiments
 
-  # Benchmark management (validate, bundle, CI, stats, migrate)
+  # Benchmark management (validate, bundle, CI, stats)
   %(prog)s benchmark validate ./benchmarks/afc-curl-delta-01
   %(prog)s benchmark ci all --all
   %(prog)s benchmark stats --summary-only
@@ -502,7 +502,7 @@ Examples:
 
     add_reeval_subparser(subparsers)
 
-    # 'benchmark' subcommand - benchmark management including migrate, stats, ci
+    # 'benchmark' subcommand - benchmark management including stats and CI
     from crsbench.benchmark.packaging.cli import add_benchmark_subparser
 
     add_benchmark_subparser(subparsers)

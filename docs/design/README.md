@@ -31,7 +31,6 @@ belongs in `docs/modules/`.
 - [Benchmark Lifecycle Contract](./benchmark/benchmark-lifecycle.md)
 - [Cloud Orchestration](./distributed/cloud-orchestration.md)
 - [GCE Cloud Orchestration](./distributed/gce-cloud-orchestration.md)
-- [Migration Design](./migration/migration-validation.md)
 - [Logging Contract](./logging/logging-architecture.md)
 - [Services Contract](./services/litellm.md)
 - [GCE Cloud Orchestrator Launch](./distributed/gce-cloud-orchestrator.md)

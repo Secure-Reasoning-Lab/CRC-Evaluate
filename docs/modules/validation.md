@@ -20,7 +20,6 @@ The validation module is responsible for:
 
 The module is not responsible for:
 - mutating benchmark content
-- executing migrations
 - running experiments
 - owning contributor workflow or CLI tutorials
 
@@ -91,9 +90,9 @@ The validation module should remain:
 
 ## Integration Notes
 
-CRSBench uses the validation module before running migrations, experiments, and
-benchmark operations. Callers should treat validation failure as an input or
-configuration problem, not as a runtime execution result.
+CRSBench uses the validation module before running experiments and benchmark
+operations. Callers should treat validation failure as an input or configuration
+problem, not as a runtime execution result.
 
 ## Canonical References
 

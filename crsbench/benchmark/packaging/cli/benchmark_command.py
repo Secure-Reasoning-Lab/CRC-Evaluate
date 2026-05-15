@@ -678,11 +678,6 @@ Examples:
     )
     init_parser.set_defaults(func=handle_init)
 
-    # crsbench benchmark migrate (nested subparser group)
-    from crsbench.migration.cli.converter_command import register_migrate_subcommands
-
-    register_migrate_subcommands(benchmark_subparsers)
-
     # crsbench benchmark stats (leaf subparser)
     from crsbench.statistics.cli import register_stats_subcommand
 

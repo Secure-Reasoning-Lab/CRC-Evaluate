@@ -244,7 +244,6 @@ CRSBench/
 │   ├── benchmark/           #   Packaging, canary, seed tools
 │   ├── dataset/             #   HuggingFace upload/download
 │   ├── validation/          #   Format validation & schemas
-│   ├── migration/           #   Format migration tools
 │   ├── hint_generation/     #   Progressive hint generation
 │   ├── reporting/           #   Reports & dashboard
 │   ├── statistics/          #   Benchmark statistics

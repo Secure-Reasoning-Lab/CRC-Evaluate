@@ -260,6 +260,6 @@ uv run python scripts/valkey-helper.py status
 uv run python scripts/test_litellm.py --mock-only
 ```
 
-- If source preparation or migration flows clone external repositories, set
-  `PROJECT_REPOS_DIR` explicitly when you need those clones to live outside the
-  default `.crsbench-repos/` cache directory.
+- If source preparation flows clone external repositories, set `PROJECT_REPOS_DIR`
+  explicitly when you need those clones to live outside the default
+  `.crsbench-repos/` cache directory.
