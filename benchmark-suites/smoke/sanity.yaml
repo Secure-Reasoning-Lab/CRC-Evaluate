@@ -1,4 +1,4 @@
-Name: sanity
+Name: smoke/sanity
 Description: Lightweight mock benchmarks for sanity testing (C and Java)
 Release date: 02.11.2026
 benchmark_list:

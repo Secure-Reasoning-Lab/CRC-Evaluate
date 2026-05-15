@@ -22,7 +22,7 @@ def minimal_answers():
         "name": "test-experiment",
         "task": "bugfinding",
         "mode": "delta",
-        "benchmark_suite": "sanity",
+        "benchmark_suite": "smoke/sanity",
         "crs_services": {"crs-libfuzzer": {"num_cores": 4}},
         "trials": 1,
         "max_total_time": 28800,
@@ -94,7 +94,7 @@ class TestBuildConfig:
         assert config["experiment"]["name"] == "test-experiment"
         assert config["experiment"]["task"] == "bugfinding"
         assert config["experiment"]["mode"] == "delta"
-        assert config["experiment"]["benchmark_suite"] == "sanity"
+        assert config["experiment"]["benchmark_suite"] == "smoke/sanity"
         assert "benchmarks" not in config["experiment"]
         assert config["crs_compose"] == {"crs-libfuzzer": {"num_cores": 4}}
         assert config["runtime"]["trials"] == 1

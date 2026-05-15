@@ -1,4 +1,4 @@
-Name: crsbench-except-afc-final
+Name: crsbench/except-afc-final
 Description: All CRSBench benchmarks except those in the AFC final round (afc-final suite).
 Release date: 04.03.2026
 benchmark_list:

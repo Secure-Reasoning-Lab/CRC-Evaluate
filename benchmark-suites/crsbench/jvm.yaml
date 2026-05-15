@@ -1,4 +1,4 @@
-Name: crsbench-all-jvm
+Name: crsbench/jvm
 Description: All JVM benchmarks across AFC and Atlanta suites.
 Release date: 04.07.2026
 benchmark_list:

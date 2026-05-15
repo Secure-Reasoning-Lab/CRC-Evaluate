@@ -1,58 +1,38 @@
 # Benchmark Suites
 
-This directory contains YAML files defining benchmark suites for CRSBench evaluation.
+YAML files defining named subsets of benchmarks for CRSBench evaluation.
+Reference a suite from an experiment config with `experiment.benchmark_suite:
+<path>` (e.g. `afc/final`); the loader resolves `<path>` relative to this
+directory and appends `.yaml`.
 
-## AFC (DARPA AIxCC) Benchmark Suites
+## Layout
 
-The AFC benchmarks are organized by competition round:
+```
+benchmark-suites/
+├── afc/                     # DARPA AIxCC Final Competition (AFC) benchmarks
+│   ├── all.yaml             # union of all rounds (61)
+│   ├── r2.yaml              # round 2 (13)
+│   ├── r3.yaml              # round 3 (14)
+│   ├── final.yaml           # final round (36)
+│   ├── c.yaml               # C/C++ subset (38)
+│   └── jvm.yaml             # JVM subset (23)
+├── asc/
+│   └── all.yaml             # ASC benchmarks (1)
+├── atlanta/
+│   └── all.yaml             # Atlanta team benchmarks (62)
+├── crsbench/                # combined CRSBench (AFC + Atlanta + ASC)
+│   ├── all.yaml             # everything except sanity (123)
+│   ├── c.yaml               # C/C++ across all sources (62)
+│   ├── jvm.yaml             # JVM across all sources (61)
+│   └── except-afc-final.yaml  # crsbench minus afc/final (81)
+└── smoke/
+    ├── sanity.yaml          # 2 tiny mocks — fastest possible run
+    ├── bug-finding.yaml     # 7-benchmark smoke suite for bug-finding
+    ├── bug-fixing.yaml      # 6-benchmark smoke suite for bug-fixing
+    └── hf-download.yaml     # 3-benchmark cloud download rehearsal
+```
 
-| Suite | Description | Count |
-|-------|-------------|-------|
-| `afc-r2.yaml` | Round 2 benchmarks | 13 |
-| `afc-r3.yaml` | Round 3 benchmarks | 14 |
-| `afc-final.yaml` | Final round benchmarks | 36 |
-| `afc-final-variants.yaml` | Final round benchmarks (only CPVs with POV variants, scoped by harness) | 17 |
-| `afc-all.yaml` | All unique AFC benchmarks | 61 |
-
-**Note:** Round suites may have overlapping projects (e.g., some R3 projects also appear in Final).
-
-### Why no R1 suite?
-
-Round 1 projects (`afc-oss-r1-projects/`) only contained "ex1" (example/exercise) variants:
-- `afc-libxml2-lx-ex1-delta-01`
-- `afc-zookeeper-zk-ex1-delta-01`
-
-These were preliminary example challenges used for initial testing and are not included in CRSBench benchmarks. The actual competition benchmarks started from Round 2.
-
-### AFC benchmarks NOT yet in CRSBench
-
-The following 15 AFC competition projects have not been migrated to CRSBench:
-
-| Round | Project |
-|-------|---------|
-| R2 | dropbear-full-01 |
-| R3 | libpostal-full-01 |
-| Final | curl-delta-06, dav1d-full-01, dcm4che-full-01, dicoogle-full-01, freerdp-delta-04, healthcare-data-harmonization-full-01, hertzbeat-full-01, jsoup-full-01, libavif-delta-03, lcms-delta-01, mongoose-delta-03, ndpi-full-01, openssl |
-
-**Why are these missing?** These projects don't have POV blobs or vulns directories in their `.aixcc/` folders - they lack the ground truth data needed for the benchmark.
-
-### Language-specific suites
-
-| Suite | Description |
-|-------|-------------|
-| `crsbench-afc-c.yaml` | C/C++ AFC benchmarks |
-| `crsbench-afc-jvm.yaml` | JVM (Java) AFC benchmarks |
-
-## Suite Format
-
-## Smoke Suites
-
-| Suite | Description | Count |
-|-------|-------------|-------|
-| `smoke-test-bug-finding.yaml` | Bug-finding smoke suite | 7 |
-| `smoke-test-bug-finding-2.yaml` | Alternate bug-finding smoke suite | 7 |
-| `smoke-test-bug-finding-hf-download.yaml` | 3-benchmark cloud download rehearsal subset | 3 |
-| `smoke-test-bug-fixing.yaml` | Bug-fixing smoke suite | 6 |
+## Suite file format
 
 ```yaml
 Name: suite-name
@@ -76,8 +56,28 @@ Selector forms:
 - `benchmark-name`: include all harnesses
 - `benchmark-name: [harness-a, harness-b]`: include specific harnesses
 - `benchmark-name: {harness-a: [cpv_0, cpv_1]}`: include specific CPVs per harness
-- A benchmark ID can appear only once in `benchmark_list`.
+- A benchmark ID may appear only once in `benchmark_list`.
 
-Variant-focused suite notes:
-- `afc-final-variants.yaml` uses the CPV-scoped form (`benchmark -> harness -> cpv list`).
-- Inline comments like `# variants: N` indicate the number of POV blobs under `.aixcc/{harness}/{cpv}/blobs`.
+`Name` is documentation-only; the suite identifier used by configs is the path
+under `benchmark-suites/` without the `.yaml` extension (e.g.
+`afc/final` for `afc/final.yaml`).
+
+## Adding a new suite
+
+1. Drop a YAML file in the appropriate subdirectory (or create one).
+2. Reference it from an experiment config: `benchmark_suite: <subdir>/<name>`.
+3. Suite content is validated by `BenchmarkSuiteConfig` in
+   `crsbench/validation/schemas.py`.
+
+## AFC benchmarks not yet in CRSBench
+
+The following 15 AFC competition projects do not have POV blobs or `vulns/`
+directories under `.aixcc/` and so cannot be used as ground-truth benchmarks:
+
+| Round | Project |
+|-------|---------|
+| R2 | dropbear-full-01 |
+| R3 | libpostal-full-01 |
+| Final | curl-delta-06, dav1d-full-01, dcm4che-full-01, dicoogle-full-01, freerdp-delta-04, healthcare-data-harmonization-full-01, hertzbeat-full-01, jsoup-full-01, libavif-delta-03, lcms-delta-01, mongoose-delta-03, ndpi-full-01, openssl |
+
+Round 1 was an example/exercise round (`*-ex1`) and is intentionally excluded.

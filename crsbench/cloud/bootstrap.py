@@ -209,7 +209,7 @@ def should_download_benchmarks(inputs: CloudVmBootstrapInputs) -> bool:
         return True
     if policy == "never":
         return False
-    if inputs.selector.benchmark_suite == "sanity":
+    if inputs.selector.benchmark_suite == "smoke/sanity":
         return False
     return True
 

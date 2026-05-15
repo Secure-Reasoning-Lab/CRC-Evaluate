@@ -1,5 +1,5 @@
-Name: afc-final-no-wireshark
-Description: AFC Final round benchmarks excluding wireshark (delta-01..05, delta-07, full-01). Use when wireshark builds are too costly or run separately.
+Name: afc/final
+Description: AFC Final round benchmarks from DARPA AIxCC competition (all projects in final round).
 Release date: 12.21.2025
 benchmark_list:
   # C/C++ benchmarks
@@ -20,6 +20,13 @@ benchmark_list:
   - afc-mongoose-full-01
   - afc-shadowsocks-full-01
   - afc-systemd-full-01
+  - afc-wireshark-delta-01
+  - afc-wireshark-delta-02
+  - afc-wireshark-delta-03
+  - afc-wireshark-delta-04
+  - afc-wireshark-delta-05
+  - afc-wireshark-delta-07
+  - afc-wireshark-full-01
   - afc-xz-full-01
   # JVM benchmarks
   - afc-apache-commons-compress-delta-01

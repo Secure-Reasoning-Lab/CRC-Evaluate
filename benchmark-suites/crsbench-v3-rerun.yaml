@@ -1,9 +1,0 @@
-Name: crsbench-v3-rerun
-Description: Narrowed v3 — only partial v2 benchmarks with 1 incomplete trial each (FD collateral, not FD leakers). Excludes atlanta-jenkins-delta-01 (confirmed jazzer FD leaker with async-drain-timeout evidence) and all "completely-incomplete" benchmarks (no recoverable v2 data, JVM FD-leak class).
-Release date: "04.16.2026"
-benchmark_list:
-  - afc-apache-commons-compress-full-01
-  - afc-tika-delta-02
-  - afc-tika-delta-04
-  - atlanta-spring-framework-full-01
-  - atlanta-tika-delta-01

@@ -2609,7 +2609,7 @@ def _make_provider_neutral_run_config(tmp_path: Path) -> ExperimentConfig:
         {
             "experiment": "exp-test",
             "task": "bugfinding",
-            "benchmark_suite": "sanity",
+            "benchmark_suite": "smoke/sanity",
             "mode": "delta",
             "trials": 1,
             "max_total_time": 20000,
@@ -3891,7 +3891,7 @@ def test_provider_neutral_cloud_workers_validate_quota_before_bringup(
         bootstrap_inputs = kwargs["bootstrap_inputs"]
         assert bootstrap_inputs.prepare_mode == "skip_base_images"
         assert bootstrap_inputs.download_benchmarks == "always"
-        assert bootstrap_inputs.benchmark_suite == "sanity"
+        assert bootstrap_inputs.benchmark_suite == "smoke/sanity"
         call_order.append("bringup")
         return MagicMock(ready_count=3, requested_count=3)
 

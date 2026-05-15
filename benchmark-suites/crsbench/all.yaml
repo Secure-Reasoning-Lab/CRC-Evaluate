@@ -1,7 +1,63 @@
-Name: given-fuzzer-success
-Description: CRSBench benchmarks with successful Atlantis given_fuzzer runs.
-Release date: 04.20.2026
+Name: crsbench/all
+Description: All non-sanity benchmarks for comprehensive CRS evaluation.
+Release date: 02.01.2026
 benchmark_list:
+  # === AFC benchmarks (61) ===
+  # C/C++ benchmarks
+  # curl
+  - afc-curl-delta-01
+  - afc-curl-delta-02
+  - afc-curl-delta-03
+  - afc-curl-delta-04
+  - afc-curl-delta-05
+  - afc-curl-full-01
+  # dav1d
+  - afc-dav1d-full-01
+  # freerdp
+  - afc-freerdp-delta-01
+  - afc-freerdp-delta-02
+  - afc-freerdp-delta-03
+  - afc-freerdp-full-01
+  # lcms
+  - afc-lcms-full-01
+  # libavif
+  - afc-libavif-delta-02
+  # libexif
+  - afc-libexif-delta-01
+  - afc-libexif-delta-02
+  - afc-libexif-delta-03
+  # libpng
+  - afc-libpng-delta-01
+  # libxml2
+  - afc-libxml2-delta-01
+  - afc-libxml2-delta-02
+  - afc-libxml2-delta-03
+  - afc-libxml2-full-01
+  # mongoose
+  - afc-mongoose-delta-01
+  - afc-mongoose-delta-02
+  - afc-mongoose-full-01
+  # shadowsocks
+  - afc-shadowsocks-full-01
+  # sqlite3
+  - afc-sqlite3-delta-01
+  - afc-sqlite3-delta-02
+  - afc-sqlite3-delta-03
+  - afc-sqlite3-full-01
+  # systemd
+  - afc-systemd-full-01
+  # wireshark
+  - afc-wireshark-delta-01
+  - afc-wireshark-delta-02
+  - afc-wireshark-delta-03
+  - afc-wireshark-delta-04
+  - afc-wireshark-delta-05
+  - afc-wireshark-delta-07
+  - afc-wireshark-full-01
+  # xz
+  - afc-xz-full-01
+  # JVM benchmarks
+  # apache-commons-compress
   - afc-apache-commons-compress-delta-01
   - afc-apache-commons-compress-delta-02
   - afc-apache-commons-compress-delta-03
@@ -10,40 +66,15 @@ benchmark_list:
   - afc-apache-commons-compress-delta-06
   - afc-apache-commons-compress-delta-07
   - afc-apache-commons-compress-full-01
+  # apache-poi
   - afc-apache-poi-delta-01
   - afc-apache-poi-full-01
-  - afc-curl-delta-02
-  - afc-curl-delta-03
-  - afc-curl-delta-04
-  - afc-curl-delta-05
-  - afc-curl-full-01
-  - afc-dav1d-full-01
-  - afc-freerdp-delta-01
-  - afc-freerdp-delta-02
-  - afc-freerdp-delta-03
-  - afc-freerdp-full-01
-  - afc-lcms-full-01
-  - afc-libavif-delta-02
-  - afc-libexif-delta-01
-  - afc-libexif-delta-02
-  - afc-libexif-delta-03
-  - afc-libpng-delta-01
-  - afc-libxml2-delta-01
-  - afc-libxml2-delta-02
-  - afc-libxml2-delta-03
-  - afc-libxml2-full-01
+  # log4j2
   - afc-log4j2-delta-01
-  - afc-mongoose-delta-01
-  - afc-mongoose-delta-02
-  - afc-mongoose-full-01
+  # pdfbox
   - afc-pdfbox-delta-01
   - afc-pdfbox-full-01
-  - afc-shadowsocks-full-01
-  - afc-sqlite3-delta-01
-  - afc-sqlite3-delta-02
-  - afc-sqlite3-delta-03
-  - afc-sqlite3-full-01
-  - afc-systemd-full-01
+  # tika
   - afc-tika-delta-01
   - afc-tika-delta-02
   - afc-tika-delta-03
@@ -51,45 +82,23 @@ benchmark_list:
   - afc-tika-delta-05
   - afc-tika-delta-06
   - afc-tika-full-01
-  - afc-wireshark-delta-01
-  - afc-wireshark-delta-02
-  - afc-wireshark-delta-03
-  - afc-wireshark-delta-04
-  - afc-wireshark-delta-05
-  - afc-wireshark-delta-07
-  - afc-wireshark-full-01
-  - afc-xz-full-01
+  # zookeeper
   - afc-zookeeper-delta-01
   - afc-zookeeper-delta-02
   - afc-zookeeper-full-01
+
+  # === ASC benchmarks (1) ===
   - asc-nginx-delta-01
-  - atlanta-activemq-delta-01
-  - atlanta-activemq-var-delta-01
-  - atlanta-apache-commons-validator-delta-01
-  - atlanta-apache-commons-validator-full-01
-  - atlanta-apache-poi-full-01
-  - atlanta-batik-delta-01
-  - atlanta-bcel-delta-01
-  - atlanta-beanutils-full-01
+
+  # === Atlanta benchmarks (64) ===
+  # C/C++ benchmarks
   - atlanta-binutils-delta-01
-  - atlanta-cron-utils-delta-01
   - atlanta-curl-delta-01
-  - atlanta-cxf-full-01
   - atlanta-faad2-delta-01
   - atlanta-file-delta-01
-  - atlanta-fuzzy-delta-01
-  - atlanta-geonetwork-delta-01
+  - atlanta-freetype2-delta-01
   - atlanta-gpac-delta-01
-  - atlanta-htmlunit-delta-01
-  - atlanta-imaging-delta-01
-  - atlanta-jackson-databind-delta-01
-  - atlanta-jackson-databind-full-01
-  - atlanta-jakarta-mail-api-delta-01
-  - atlanta-jenkins-delta-01
   - atlanta-jq-delta-01
-  - atlanta-json-java-full-01
-  - atlanta-jsoup-full-01
-  - atlanta-keycloak-delta-01
   - atlanta-libavc-full-01
   - atlanta-libcue-delta-01
   - atlanta-libjpeg-full-01
@@ -99,25 +108,50 @@ benchmark_list:
   - atlanta-mongoose-delta-01
   - atlanta-mosquitto-delta-01
   - atlanta-nasm-delta-01
+  - atlanta-pcre2-full-01
+  - atlanta-php-delta-01
+  - atlanta-sleuthkit-delta-01
+  - atlanta-tmux-delta-01
+  - atlanta-user-nginx-full-01
+  - atlanta-wireshark-delta-01
+  # JVM benchmarks
+  - atlanta-activemq-delta-01
+  - atlanta-activemq-var-delta-01
+  - atlanta-apache-commons-validator-delta-01
+  - atlanta-apache-commons-validator-full-01
+  - atlanta-apache-poi-full-01
+  - atlanta-batik-delta-01
+  - atlanta-bcel-delta-01
+  - atlanta-beanutils-full-01
+  - atlanta-cron-utils-delta-01
+  - atlanta-cxf-full-01
+  - atlanta-feign-full-01
+  - atlanta-fuzzy-delta-01
+  - atlanta-geonetwork-delta-01
+  - atlanta-htmlunit-delta-01
+  - atlanta-imaging-delta-01
+  - atlanta-jackson-databind-delta-01
+  - atlanta-jackson-databind-full-01
+  - atlanta-jakarta-mail-api-delta-01
+  - atlanta-jenkins-delta-01
+  - atlanta-json-java-full-01
+  - atlanta-jsoup-full-01
+  - atlanta-keycloak-delta-01
+  - atlanta-kylin-delta-01
   - atlanta-netty-delta-01
   - atlanta-olingo-delta-01
   - atlanta-oripa-delta-01
   - atlanta-pac4j-full-01
-  - atlanta-pcre2-full-01
   - atlanta-pdfbox-full-01
-  - atlanta-php-delta-01
   - atlanta-rdf4j-full-01
   - atlanta-shiro-full-01
-  - atlanta-sleuthkit-delta-01
   - atlanta-snappy-java-delta-01
   - atlanta-spring-framework-full-01
   - atlanta-sqlite-jdbc-delta-01
   - atlanta-struts-delta-01
   - atlanta-tika-delta-01
-  - atlanta-tkctf-rpn-calculator-delta-01
-  - atlanta-tmux-delta-01
-  - atlanta-user-nginx-full-01
   - atlanta-widoco-delta-01
-  - atlanta-wireshark-delta-01
   - atlanta-xstream-full-01
   - atlanta-ztzip-full-01
+  # Other
+  - atlanta-tkctf-rpn-calculator-delta-01

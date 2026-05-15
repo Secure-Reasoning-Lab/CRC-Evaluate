@@ -1,4 +1,4 @@
-Name: smoke-test-bug-fixing
+Name: smoke/bug-fixing
 Description: A benchmark suite for smoke testing bug fixing
 Release date: 01.07.2026
 benchmark_list:

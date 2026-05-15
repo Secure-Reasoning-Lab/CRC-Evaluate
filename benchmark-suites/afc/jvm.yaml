@@ -1,4 +1,4 @@
-Name: crsbench-afc-jvm
+Name: afc/jvm
 Description: A benchmark suite for evaluating JVM-based CRS with official AFC benchmarks.
 Release date: 10.13.2025
 benchmark_list:

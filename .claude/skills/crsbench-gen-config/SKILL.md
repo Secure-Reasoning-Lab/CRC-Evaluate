@@ -33,7 +33,7 @@ Extract what you can from the user's message, then use **AskUserQuestion** to co
 
 **Round 1** — Task and benchmarks (skip if already known):
 1. **Task**: bugfinding or bugfixing?
-2. **Benchmarks**: Show all discovered suite names in the description. Pick 3-4 most common as selectable options (e.g., sanity, smoke-test-bug-finding, afc-final).
+2. **Benchmarks**: Show all discovered suite names in the description. Pick 3-4 most common as selectable options (e.g., sanity, smoke/bug-finding, afc/final).
 
 **Round 2** — CRS selection (after task is known):
 
@@ -62,7 +62,7 @@ answers = {
     "name": "my-experiment",
     "task": "bugfinding",
     "mode": "delta",
-    "benchmark_suite": "sanity",
+    "benchmark_suite": "smoke/sanity",
     "crs_services": {"crs-libfuzzer": {"num_cores": 8}},
     # ... other fields as needed (see schema below)
 }
@@ -148,18 +148,18 @@ Only `name` and `crs_services` are truly required — everything else has defaul
 {
     "name": "sanity-libfuzzer",
     "task": "bugfinding",
-    "benchmark_suite": "sanity",
+    "benchmark_suite": "smoke/sanity",
     "crs_services": {"crs-libfuzzer": {"num_cores": 8}},
     "skip_litellm": True,  # crs-libfuzzer is a pure fuzzer
 }
 ```
 
-**User says:** "bugfixing with crs-codex on afc-final, 3 trials, 16G memory, $10 budget"
+**User says:** "bugfixing with crs-codex on afc/final, 3 trials, 16G memory, $10 budget"
 ```python
 {
     "name": "afc-final-codex-bugfix",
     "task": "bugfixing",
-    "benchmark_suite": "afc-final",
+    "benchmark_suite": "afc/final",
     "crs_services": {"crs-codex": {"num_cores": 8, "mem_limit": "16G"}},
     "trials": 3,
     "litellm_mode": "external",  # crs-codex is LLM-based
@@ -167,11 +167,11 @@ Only `name` and `crs_services` are truly required — everything else has defaul
 }
 ```
 
-**User says:** "distributed run with crs-codex and crs-libfuzzer on smoke-test-bug-finding, 4 worker jobs"
+**User says:** "distributed run with crs-codex and crs-libfuzzer on smoke/bug-finding, 4 worker jobs"
 ```python
 {
     "name": "smoke-multi-crs",
-    "benchmark_suite": "smoke-test-bug-finding",
+    "benchmark_suite": "smoke/bug-finding",
     "crs_services": {
         "crs-codex": {"num_cores": 8, "mem_limit": "16G"},
         "crs-libfuzzer": {"num_cores": 8},

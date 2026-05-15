@@ -735,7 +735,7 @@ class TestExperimentConfigSchema:
                 "experiment": {
                     "name": "test-grouped",
                     "task": "bugfixing",
-                    "benchmark_suite": "afc-final",
+                    "benchmark_suite": "afc/final",
                     "sanitizers": ["address", "undefined"],
                     "mode": "full",
                     "only_cpv_harnesses": False,
@@ -761,7 +761,7 @@ class TestExperimentConfigSchema:
         )
         assert config.experiment == "test-grouped"
         assert config.task == "bugfixing"
-        assert config.benchmark_suite == "afc-final"
+        assert config.benchmark_suite == "afc/final"
         assert [s.value for s in config.sanitizers] == ["address", "undefined"]
         assert config.mode == EvaluationMode.FULL
         assert config.only_cpv_harnesses is False
@@ -802,7 +802,7 @@ class TestExperimentConfigSchema:
         with pytest.raises(PydanticValidationError, match="Conflicting values"):
             ExperimentConfig.model_validate(
                 {
-                    "experiment": {"name": "test", "benchmark_suite": "afc-final"},
+                    "experiment": {"name": "test", "benchmark_suite": "afc/final"},
                     "benchmark_suite": "sanity",
                     "runtime": {
                         "trials": 1,
@@ -2498,7 +2498,7 @@ class TestIntegrationAllConfigs:
         assert result.is_valid is True
         assert config.task == "bugfixing"
         assert config.mode == EvaluationMode.DELTA
-        assert config.benchmark_suite == "afc-final"
+        assert config.benchmark_suite == "afc/final"
         assert config.trials == 3
         assert config.max_total_time == 28800
         assert config.redis_host == "localhost:6379"

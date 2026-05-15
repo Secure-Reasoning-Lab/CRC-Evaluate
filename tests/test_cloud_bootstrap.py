@@ -23,13 +23,13 @@ from crsbench.validation.schemas import ExperimentConfig
 
 
 def test_auto_skips_download_for_sanity_suite():
-    inputs = CloudVmBootstrapInputs(benchmark_suite="sanity")
+    inputs = CloudVmBootstrapInputs(benchmark_suite="smoke/sanity")
 
     assert should_download_benchmarks(inputs) is False
 
 
 def test_auto_downloads_for_non_sanity_suite():
-    inputs = CloudVmBootstrapInputs(benchmark_suite="afc-final")
+    inputs = CloudVmBootstrapInputs(benchmark_suite="afc/final")
 
     assert should_download_benchmarks(inputs) is True
 
@@ -49,7 +49,7 @@ def test_explicit_download_policy_overrides_auto(
 ):
     inputs = CloudVmBootstrapInputs(
         download_benchmarks=download_benchmarks,
-        benchmark_suite="sanity",
+        benchmark_suite="smoke/sanity",
     )
 
     assert should_download_benchmarks(inputs) is expected
@@ -57,10 +57,10 @@ def test_explicit_download_policy_overrides_auto(
 
 def test_selector_shape_for_suite_backed_inputs_uses_suite_name():
     selector = CloudBenchmarkSelector.from_inputs(
-        CloudVmBootstrapInputs(benchmark_suite="afc-final")
+        CloudVmBootstrapInputs(benchmark_suite="afc/final")
     )
 
-    assert selector.benchmark_suite == "afc-final"
+    assert selector.benchmark_suite == "afc/final"
     assert selector.benchmarks is None
     assert selector.benchmarks_root is None
     assert selector.benchmark_suites_root is None
@@ -86,7 +86,7 @@ def test_selector_shape_for_explicit_benchmarks_preserves_raw_list():
 def test_selector_shape_omits_repo_default_roots():
     selector = CloudBenchmarkSelector.from_inputs(
         CloudVmBootstrapInputs(
-            benchmark_suite="afc-final",
+            benchmark_suite="afc/final",
             benchmarks_root=Path("benchmarks"),
             benchmark_suites_root=Path("benchmark-suites"),
         )
@@ -99,7 +99,7 @@ def test_selector_shape_omits_repo_default_roots():
 def test_selector_shape_preserves_non_default_roots():
     selector = CloudBenchmarkSelector.from_inputs(
         CloudVmBootstrapInputs(
-            benchmark_suite="afc-final",
+            benchmark_suite="afc/final",
             benchmarks_root=Path("custom-benchmarks"),
             benchmark_suites_root=Path("/srv/custom-suites"),
         )
@@ -115,7 +115,7 @@ def test_bootstrap_inputs_from_payload_restores_defaults_and_explicit_fields():
             "prepare_mode": "skip_base_images",
             "skip_rts_images": True,
             "download_benchmarks": "always",
-            "benchmark_suite": "afc-final",
+            "benchmark_suite": "afc/final",
             "gitcache": True,
             "build_timeout": 4321,
             "benchmark_init_jobs": 5,
@@ -129,7 +129,7 @@ def test_bootstrap_inputs_from_payload_restores_defaults_and_explicit_fields():
     assert inputs.prepare_mode == "skip_base_images"
     assert inputs.skip_rts_images is True
     assert inputs.download_benchmarks == "always"
-    assert inputs.benchmark_suite == "afc-final"
+    assert inputs.benchmark_suite == "afc/final"
     assert inputs.gitcache is True
     assert inputs.build_timeout == 4321
     assert inputs.benchmark_init_jobs == 5
@@ -249,7 +249,7 @@ def test_run_benchmark_download_with_delay_sleeps_before_download(monkeypatch) -
     monkeypatch.setattr(bootstrap_module.time, "sleep", fake_sleep)
 
     selector = CloudBenchmarkSelector.from_inputs(
-        CloudVmBootstrapInputs(benchmark_suite="afc-final")
+        CloudVmBootstrapInputs(benchmark_suite="afc/final")
     )
 
     result = run_benchmark_download_with_delay(
@@ -259,7 +259,7 @@ def test_run_benchmark_download_with_delay_sleeps_before_download(monkeypatch) -
     )
 
     assert sleep_calls == [310]
-    assert download_calls == ["afc-final"]
+    assert download_calls == ["afc/final"]
     assert result == [Path("/tmp/benchmarks")]
 
 
@@ -304,12 +304,12 @@ def test_run_cloud_vm_bootstrap_reads_download_delay_from_env(
     )
 
     result = run_cloud_vm_bootstrap(
-        CloudVmBootstrapInputs(benchmark_suite="afc-final"),
+        CloudVmBootstrapInputs(benchmark_suite="afc/final"),
         cwd=tmp_path,
     )
 
     assert prepare_calls == [("full", False, tmp_path)]
-    assert download_calls == [("afc-final", 20, True)]
+    assert download_calls == [("afc/final", 20, True)]
     assert result == [Path("/tmp/benchmarks")]
 
 
@@ -536,7 +536,7 @@ def test_run_benchmark_download_uses_suite_download(monkeypatch):
 
     selector = CloudBenchmarkSelector.from_inputs(
         CloudVmBootstrapInputs(
-            benchmark_suite="afc-final",
+            benchmark_suite="afc/final",
             benchmarks_root=Path("benchmarks-local"),
             benchmark_suites_root=Path("benchmark-suites-local"),
         )
@@ -546,7 +546,7 @@ def test_run_benchmark_download_uses_suite_download(monkeypatch):
 
     assert calls == [
         (
-            "afc-final",
+            "afc/final",
             Path("benchmarks-local"),
             Path("benchmark-suites-local"),
             False,
@@ -874,7 +874,7 @@ def test_from_experiment_config_restores_repo_default_roots() -> None:
         inputs={"pov": {"enabled": True, "max_variants_per_cpv": 1}},
         experiment_filestore="/tmp/exp",
         report_filestore="/tmp/rep",
-        benchmark_suite="sanity",
+        benchmark_suite="smoke/sanity",
         crs_compose={"test-crs": {"num_cores": 1}},
         cloud={
             "bootstrap": {

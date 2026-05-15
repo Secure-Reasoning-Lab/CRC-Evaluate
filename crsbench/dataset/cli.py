@@ -46,7 +46,7 @@ Examples:
         "--benchmark-suite",
         type=str,
         dest="benchmark_suite",
-        help="Download benchmarks from a suite file (e.g., 'sanity', 'afc-all')",
+        help="Download benchmarks from a suite file (e.g., 'sanity', 'afc/all')",
     )
     group.add_argument(
         "--all",

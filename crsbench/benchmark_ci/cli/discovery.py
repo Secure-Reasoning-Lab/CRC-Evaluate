@@ -102,7 +102,7 @@ def load_benchmark_suite(
     Uses BenchmarkSuiteConfig schema for validation.
 
     Args:
-        suite_name: Suite name (e.g., 'smoke-test-bug-finding') or path to suite file
+        suite_name: Suite name (e.g., 'sanity', 'smoke/bug-finding') or path to suite file
         suites_root: Optional explicit benchmark-suites root directory
 
     Returns:

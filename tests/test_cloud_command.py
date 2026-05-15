@@ -568,7 +568,7 @@ def _make_provider_neutral_experiment_config() -> ExperimentConfig:
         {
             "experiment": "test-exp",
             "task": "bugfinding",
-            "benchmark_suite": "sanity",
+            "benchmark_suite": "smoke/sanity",
             "mode": "delta",
             "trials": 2,
             "max_total_time": 20000,
@@ -5490,7 +5490,7 @@ class TestLaunch:
             bootstrap_inputs = kwargs["bootstrap_inputs"]
             assert bootstrap_inputs.prepare_mode == "skip_base_images"
             assert bootstrap_inputs.download_benchmarks == "always"
-            assert bootstrap_inputs.benchmark_suite == "sanity"
+            assert bootstrap_inputs.benchmark_suite == "smoke/sanity"
             assert kwargs["env_passthrough_by_placement"] == []
             call_order.append("create-workers")
             return [_make_gce_worker("worker-east5"), _make_gce_worker("worker-east1")]

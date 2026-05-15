@@ -1,4 +1,4 @@
-Name: smoke-test-bug-finding-hf-download
+Name: smoke/hf-download
 Description: A 3-benchmark smoke suite for cloud download rehearsal.
 Release date: 03.19.2026
 benchmark_list:

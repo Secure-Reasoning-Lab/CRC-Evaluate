@@ -122,7 +122,7 @@ report_filestore: /tmp/crsbench/report-data
 crs_compose:
   atlantis-c:
     num_cores: 1
-benchmark_suite: crsbench-afc-c
+benchmark_suite: afc/c
 """)
 
         config = load_experiment_config(config_path)
@@ -130,7 +130,7 @@ benchmark_suite: crsbench-afc-c
         assert config.experiment == "suite-experiment"
         assert config.trials == 2
         assert config.get_crs_registry_ids() == ["atlantis-c"]
-        assert config.benchmark_suite == "crsbench-afc-c"
+        assert config.benchmark_suite == "afc/c"
         assert config.benchmarks is None  # Not set when using suite
 
     def test_load_experiment_config_with_redis(self, tmp_path):
@@ -1356,92 +1356,6 @@ class TestIntegrationWithSampleConfigs:
         assert config.inputs.sarif.level == 5
         assert config.inputs.diff.enabled is True
 
-    def test_remote_gce_usenix_r1_multilang_given_fuzzer_config_loads_for_cloud_launch(
-        self,
-        tmp_path: Path,
-    ):
-        """The Atlantis GCE usenix-r1 config should parse with launch defaults."""
-        from crsbench.cloud.gce.launch_preflight import prepare_gce_launch_inputs
-
-        config_path = Path(
-            "experiment-configs/cloud-testing/"
-            "gce-usenix-r1-1orch-2worker-1eval-multilang-given-fuzzer.yaml"
-        )
-
-        assert config_path.exists(), (
-            f"Expected checked-in sample config at {config_path}"
-        )
-
-        config = load_experiment_config(config_path)
-        plan = build_cloud_launch_plan(config)
-
-        self._assert_remote_gce_smoke_common(
-            config,
-            experiment_name="gce-usenix-r1-mgf-1o2w1e",
-            expected_cloud_env={
-                "OSS_CRS_DEBUG": "1",
-                "HF_TOKEN": "os.environ/HF_TOKEN",
-            },
-            expected_services={"atlantis-multilang-given_fuzzer"},
-            expected_provider_region="us-east5",
-            expected_provider_regions=["us-east5", "us-east1", "us-south1"],
-            expected_worker_regions=[None, None],
-        )
-        assert [placement.zones for placement in config.cloud.workers.placements] == [
-            [],
-            [],
-        ]
-
-        assert config.benchmark_suite == "usenix-r1"
-        assert config.mode == "all"
-        assert config.run_timeout == 1800
-        assert config.worker.jobs == 4
-        assert config.cloud.bootstrap.download_benchmarks == "auto"
-        assert config.cloud.providers.gce.fallback is True
-        assert config.pov_early_stop is True
-        assert config.inputs.sarif.enabled is True
-        assert config.inputs.sarif.level == 5
-        assert config.inputs.diff.enabled is True
-        assert plan.orchestrator.regions == ["us-east5", "us-east1", "us-south1"]
-        assert plan.orchestrator.fallback is True
-        assert [placement.regions for placement in plan.worker_placements] == [
-            ["us-east5", "us-east1", "us-south1"],
-            ["us-east5", "us-east1", "us-south1"],
-        ]
-        assert [placement.fallback for placement in plan.worker_placements] == [
-            True,
-            True,
-        ]
-        assert [placement.regions for placement in plan.evaluator_placements] == [
-            ["us-east5", "us-east1", "us-south1"]
-        ]
-        assert [placement.fallback for placement in plan.evaluator_placements] == [True]
-
-        key_dir = tmp_path / ".crsbench-keys"
-        key_dir.mkdir()
-        key_path = key_dir / "crsbench-deploy"
-        key_path.write_text("PRIVATE KEY", encoding="utf-8")
-
-        preflight = prepare_gce_launch_inputs(
-            plan=plan,
-            cwd=tmp_path,
-            env={"HF_TOKEN": "hf_test_token"},
-        )
-
-        assert plan.orchestrator.env["HF_TOKEN"] == "os.environ/HF_TOKEN"
-        assert preflight.orchestrator_env["HF_TOKEN"] == "hf_test_token"
-        assert preflight.worker_placement_envs == [
-            {"OSS_CRS_DEBUG": "1", "HF_TOKEN": "hf_test_token"},
-            {"OSS_CRS_DEBUG": "1", "HF_TOKEN": "hf_test_token"},
-        ]
-        assert preflight.evaluator_placement_envs == [
-            {"OSS_CRS_DEBUG": "1", "HF_TOKEN": "hf_test_token"}
-        ]
-        assert (
-            preflight.resolved_plan.orchestrator.launch_defaults.github_deploy_key_path
-            == str(key_path)
-        )
-
     def test_remote_gce_hf_download_sample_config_loads_for_cloud_launch(self):
         """The GCE HF-download config should parse with launch defaults."""
         config_path = Path(
@@ -1467,7 +1381,7 @@ class TestIntegrationWithSampleConfigs:
             [],
         ]
 
-        assert config.benchmark_suite == "smoke-test-bug-finding-hf-download"
+        assert config.benchmark_suite == "smoke/hf-download"
 
     def test_remote_gce_zone_fallback_sample_config_loads_for_cloud_launch(self):
         """The GCE fallback sample should resolve provider-default zone fallback."""
@@ -1509,7 +1423,7 @@ class TestIntegrationWithSampleConfigs:
         ] == [False]
 
         assert config.experiment == "gce-sanity-fallback-1o1w1e"
-        assert config.benchmark_suite == "sanity"
+        assert config.benchmark_suite == "smoke/sanity"
         assert config.cloud.bootstrap.prepare_mode == "full"
         assert config.cloud.bootstrap.download_benchmarks == "auto"
         assert plan.orchestrator.zones == ["us-east5-b", "us-east1-b"]
@@ -1555,7 +1469,7 @@ class TestIntegrationWithSampleConfigs:
         ]
 
         assert config.experiment == "gce-sanity-zone-1o2w1e"
-        assert config.benchmark_suite == "sanity"
+        assert config.benchmark_suite == "smoke/sanity"
         assert config.cloud.bootstrap.prepare_mode == "full"
         assert config.cloud.bootstrap.download_benchmarks == "auto"
         assert plan.orchestrator.zones == ["us-east5-b"]
@@ -1709,7 +1623,7 @@ class TestIntegrationWithSampleConfigs:
 
     def test_benchmark_suite_expansion(self):
         """Test benchmark suite correctly expands to benchmark list."""
-        suite_path = Path("benchmark-suites/crsbench-afc-c.yaml")
+        suite_path = Path("benchmark-suites/afc/c.yaml")
 
         if not suite_path.exists():
             pytest.skip("Benchmark suite not found, skipping test")

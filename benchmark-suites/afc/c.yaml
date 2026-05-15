@@ -1,4 +1,4 @@
-Name: crsbench-afc-c
+Name: afc/c
 Description: A benchmark suite for evaluating C/C++ CRS with official AFC benchmarks.
 Release date: 10.13.2025
 benchmark_list:

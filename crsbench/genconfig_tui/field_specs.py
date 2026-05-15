@@ -66,7 +66,7 @@ SECTION_SPECS: dict[str, SectionSpec] = {
                     FieldOption("Bugfixing", "bugfixing"),
                 ),
             ),
-            FieldSpec("benchmark_suite", "Benchmark suite", "text", "sanity"),
+            FieldSpec("benchmark_suite", "Benchmark suite", "text", "smoke/sanity"),
             FieldSpec(
                 "benchmarks",
                 "Specific benchmarks",

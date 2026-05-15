@@ -12,7 +12,7 @@ experiment:
   mode: delta
   # Optional (default: true): skip harnesses with no CPVs.
   # only_cpv_harnesses: true
-  benchmark_suite: afc-final
+  benchmark_suite: afc/final
   # Use exactly one of benchmark_suite or benchmarks.
   # benchmarks:
   #   - libjpeg-turbo                 # all harnesses
