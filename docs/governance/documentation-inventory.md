@@ -14,7 +14,6 @@ artifact, not a policy source of truth.
   - `scripts/README.md`
   - `benchmark-suites/README.md`
   - `experiment-configs/README.md`
-  - `snapshot-examples/README.md`
   - `dashboard/README.md`
 - In-repo integrated upstream docs:
   - `oss-crs/README.md`
@@ -28,7 +27,7 @@ artifact, not a policy source of truth.
 
 - `docs/` markdown and yaml documents: 88
 - Root canonical docs: 2
-- Adjacent local component README files: 9
+- Adjacent local component README files: 8
 - In-repo integrated upstream entry docs: 2
 
 ## Classification
