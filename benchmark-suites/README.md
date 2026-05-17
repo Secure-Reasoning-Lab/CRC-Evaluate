@@ -27,8 +27,9 @@ benchmark-suites/
 │   └── except-afc-final.yaml  # crsbench minus afc/final (81)
 └── smoke/
     ├── sanity.yaml          # 2 tiny mocks — fastest possible run
-    ├── bug-finding.yaml     # 7-benchmark smoke suite for bug-finding
-    ├── bug-fixing.yaml      # 6-benchmark smoke suite for bug-fixing
+    ├── c.yaml               # 8-benchmark C/C++ smoke suite
+    ├── jvm.yaml             # 8-benchmark JVM smoke suite
+    ├── all.yaml             # union of smoke/c and smoke/jvm (16)
     └── hf-download.yaml     # 3-benchmark cloud download rehearsal
 ```
 

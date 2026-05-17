@@ -1,6 +1,6 @@
 Name: smoke/hf-download
 Description: A 3-benchmark smoke suite for cloud download rehearsal.
-Release date: 03.19.2026
+Release date: 05.18.2026
 benchmark_list:
   - afc-curl-delta-05
   - afc-libexif-delta-03

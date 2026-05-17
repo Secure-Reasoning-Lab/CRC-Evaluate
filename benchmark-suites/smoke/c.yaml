@@ -1,11 +1,12 @@
-Name: smoke/bug-finding
-Description: A benchmark suite for smoke testing bug finding
-Release date: 01.08.2026
+Name: smoke/c
+Description: 8-benchmark C/C++ smoke suite drawn from the AFC pool.
+Release date: 05.18.2026
 benchmark_list:
   - afc-curl-delta-05
+  - afc-freerdp-delta-01
   - afc-libexif-delta-03
   - afc-libxml2-delta-03
   - afc-mongoose-delta-02
   - afc-shadowsocks-full-01
+  - afc-sqlite3-delta-01
   - afc-wireshark-delta-01
-  - afc-xz-full-01
