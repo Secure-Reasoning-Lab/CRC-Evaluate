@@ -14,6 +14,9 @@ Analyze a CRSBench experiment-data directory to provide a comprehensive summary 
 The skill receives `experiment_dir` as an argument:
 - Usage: `/experiment-analyzer /path/to/experiment-data/experiment-name`
 - The argument should be the full path to an experiment directory containing `trial_matrix.json`
+- Typical locations (per `experiment-configs/*/`):
+  - Local runs: `./experiment-data/<experiment-name>` or `.run/<kind>/experiment-data/<experiment-name>`
+  - GCP runs: `/data/crsbench/experiment-data/<experiment-name>`
 
 **If no argument provided**: Ask the user for the experiment directory path before proceeding.
 
@@ -22,72 +25,79 @@ The skill receives `experiment_dir` as an argument:
 ### Step 1: Load Trial Matrix
 Read `{experiment_dir}/trial_matrix.json` to get the full list of trials:
 - Total trial count
-- CRS/benchmark/harness combinations
+- CRS / benchmark / harness / mode / sanitizer combinations
+- For bug-fixing trials, `target_cpv_id` identifies which CPV the trial targets
 
 ### Step 2: Scan All Trial Directories
-For each trial directory under `{experiment_dir}` (`<crs>/<benchmark>/<harness>/<mode>/<sanitizer>/trial-<N>/`):
-1. Check for `.success` file (existence = **normal termination**, NOT successful patch)
-2. Read `execution.json` for execution details (returncode, duration)
-3. Read `patch_verification_results.json` for **actual success** (valid patches generated)
-4. Collect `llm-usage.json` data
+The trial directory layout depends on trial mode:
+- **Bug-finding** (CRS name starts with `crs-bug-finding-`, e.g. `crs-bug-finding-claude-code`):
+  `<crs>/<benchmark>/<harness>/<mode>/<sanitizer>/trial-<N>/`
+- **Bug-fixing / patch-generation** (e.g. `crs-claude-code`, `crs-codex`, `crs-opencode`):
+  `<crs>/<benchmark>/<harness>/<cpv>/<mode>/<sanitizer>/trial-<N>/`
+- **Pure fuzzers** (`crs-libfuzzer`, `crs-jazzer`, `atlantis-*`) follow the bug-finding layout.
 
-**IMPORTANT**: `.success` marker only means the CRS process completed without crashing. It does NOT mean:
+For each trial directory:
+1. Check for `.success` / `.fail` markers (existence = **normal termination**, NOT successful patch).
+2. Read `metadata.json` for trial metadata (mode, sanitizer, timestamps, `build_time`, `run_time`, `worker_machine`). Schema: `TrialMetadata` in `crsbench/validation/schemas.py`.
+3. Read `patch_verification_results.json` for **actual patch success** (only present for bug-fixing trials).
+4. Collect `llm-usage.json` data (`LLMUsage` / `ModelUsage` schema).
+5. Optionally read `llm-summary.json` for per-trial cost summary (includes `total_cost_usd_from_key`).
+
+**IMPORTANT**: `.success` marker only means the CRS process completed normally. It does NOT mean:
 - Patches were generated
 - Patches are valid
 - The vulnerability was fixed
 
-**Actual success** is determined by `patch_verification_results.json`:
-- `summary.valid > 0` = at least one valid patch exists
+**Actual patch success** (bug-fixing): `patch_verification_results.json` shows `summary.valid > 0`.
+
+**Actual bug-finding success**: At least one POV file in `output/povs/` reproduces a CPV (`povs/pov_store.json` records the reproduction state).
 
 ### Step 3: Categorize Results
-Group trials by outcome (based on `patch_verification_results.json`):
 
 **Success**:
-- **Valid Patches**: `summary.valid > 0` - At least one patch fixes the vulnerability
+- **Bug-finding**: At least one valid POV recorded in `povs/pov_store.json`.
+- **Bug-fixing**: `patch_verification_results.json` shows `summary.valid > 0`.
 
-**Failures** (no valid patches):
-- **CRS Crash**: No `.success` marker, CRS process crashed
-- **Build Failure**: CRS build failed (check `worker.log` for "Build command failed")
-- **CRS Error**: Non-zero returncode with internal error (check `crs-logs/crs_run_*.log`)
-- **No Patches**: Completed but 0 patches generated (`summary.patches_generated == 0`)
-- **Empty Patches**: Patch file exists but is empty (check `worker.log` for "Empty patch for cpv_X")
-  - This counts as patch generation failure, NOT as a generated patch
-  - Often results in `build_failed` during verification (patch cannot be applied)
-- **Build Failed Patches**: Patches generated but failed to apply/build (`summary.build_failed > 0`)
-- **POV Still Triggers**: Patches applied but vulnerability still exists (`summary.pov_still_triggers > 0`)
+**Failures** (bug-fixing, no valid patches):
+- **CRS Crash**: `.fail` marker present (or neither marker present after run completed).
+- **Build Failure**: CRS build failed (check `worker.log` and `output/logs/services/oss-crs-builder-sidecar.*.log`).
+- **CRS Error**: Run finished but with internal error (check `output/logs/crs/<crs-name>/*.log`).
+- **No Patches**: Completed but 0 patches generated (`summary.patches_generated == 0`).
+- **Empty Patches**: Patch file exists but is empty (`worker.log` line `Empty patch for <pov_id>`, emitted by `crsbench/evaluation/verification/patch/engine.py`).
+  - Counts as patch generation failure, NOT as a generated patch.
+  - Verification logs `Failed to apply patch: ...` and the row is reported under `build_failed`.
+- **Build Failed Patches**: Patches generated but failed to apply/build (`summary.build_failed > 0`).
+- **POV Still Triggers**: Patches applied but vulnerability still exists (`summary.pov_still_triggers > 0`).
+- **Test Failed**: Patch broke regression tests (`summary.test_failed > 0`).
 
-**Note on Empty Patches**: When CRS logs show `Empty patch for cpv_X`, the patch file may exist but contains no actual diff content. This is a **patch generation failure** - the CRS failed to produce a meaningful fix. These are often misreported as `patches_generated=1` but will fail verification with "Failed to apply patch".
+**Note on Empty Patches**: When CRS logs show `Empty patch for <pov_id>`, the patch file may exist but contains no diff content. This is a **patch generation failure** — the CRS failed to produce a meaningful fix. The verification engine logs `Failed to apply patch` and the result is counted under `build_failed`.
 
 ### Step 4: Analyze Error Patterns (Use Subagents)
 **IMPORTANT**: Log files can be very large. Use Task tool with subagents to analyze logs in parallel.
 
 For failed trials, launch subagents to analyze:
-- `crs-logs/crs_run_*.log`: Look for ERROR, FAIL, AssertionError, Exception
-- `worker.log`: Build failures, timeout messages, "Empty patch for cpv_X"
+- `worker.log` — orchestrator + verification messages (`Empty patch for ...`, `Failed to apply patch`, timeout/cancellation messages).
+- `output/logs/crs/<crs-name>/*.log` and `output/logs/crs/<crs-name>/log_dir/` — CRS-internal logs (ERROR, FAIL, AssertionError, Exception, agent traces).
+- `output/logs/services/*.stderr.log` — sidecar / exchange container logs (build errors, exchange errors).
+- `output/docker-compose.stdout.log` / `output/docker-compose.stderr.log` — compose-level failures.
 
 **Detecting Empty Patches**:
-- Check `worker.log` for: `WARNING  | grapple-1 | [evaluation] | Empty patch for cpv_X`
-- Check patch file size: `output/patches/cpv_X/patch.diff` with 0 or minimal bytes
-- Verification result shows: "Failed to apply patch" with `build_failed=1`
+- Check `worker.log` for: `Empty patch for <pov_id>` (logged by `engine.py::_apply_patch`).
+- Check patch file size: files under `output/patches/*.diff` with 0 or minimal bytes.
+- Verification result shows `Failed to apply patch` and the row is recorded with `status: "build_failed"`.
 
 **Strategy**:
-- Launch up to 3 Explore subagents in parallel for different failed benchmarks
-- Each subagent analyzes one trial's logs and returns a summary
-- Aggregate subagent results into the final report
-
-Example:
-```
-Use Task tool with subagent_type="Explore" to analyze:
-- Trial 1: atlanta-pac4j-full-01 failure
-- Trial 2: atlanta-curl-delta-01 failure
-- Trial 3: atlanta-file-delta-01 failure
-```
+- Launch up to 3 Explore subagents in parallel for different failed benchmarks.
+- Each subagent analyzes one trial's logs and returns a summary.
+- Aggregate subagent results into the final report.
 
 ### Step 5: Aggregate LLM Costs
-Sum up from all `llm-usage.json`:
-- Total cost
-- Total API calls
-- By-model breakdown
+Sum up from all `llm-usage.json` (`LLMUsage` schema):
+- `total_cost_usd`
+- `total_input_tokens`, `total_output_tokens`, `total_cached_tokens`
+- `by_model` breakdown (`ModelUsage` per model name)
+
+Cross-check with `llm-summary.json` (`total_cost_usd_from_key` reflects LiteLLM key-level spend, which is authoritative when per-call logging is suppressed).
 
 ## Output Format
 
@@ -110,6 +120,7 @@ Sum up from all `llm-usage.json`:
 | Empty Patches | N | crs-bug | ... |
 | Build Failed Patches | N | crs-limitation | ... |
 | POV Still Triggers | N | crs-limitation | ... |
+| Test Failed | N | crs-limitation | ... |
 
 ## Common Error Patterns
 ### Pattern 1: [Error Type]
@@ -139,13 +150,20 @@ Sum up from all `llm-usage.json`:
 
 ## Key Files to Read
 
-1. `trial_matrix.json` - Trial list
-2. `*/trial-*/execution.json` - Execution results (returncode, duration)
-3. `*/trial-*/patch_verification_results.json` - **Actual success** (valid patches count)
-4. `*/trial-*/llm-usage.json` - LLM costs
-5. `*/trial-*/.success` - Normal termination marker (NOT patch success!)
-6. `*/trial-*/crs-logs/crs_run_*.log` - CRS errors (**use subagent for large files**)
-7. `*/trial-*/worker.log` - Worker errors (**use subagent for large files**)
+Per-trial (resolved by `crsbench/evaluation/trial_paths.py::TrialDir`):
+
+1. `trial_matrix.json` — trial list (at experiment root).
+2. `<trial>/metadata.json` — trial metadata (`TrialMetadata` schema).
+3. `<trial>/patch_verification_results.json` — **actual patch success** (bug-fixing only).
+4. `<trial>/llm-usage.json` — LLM costs and tokens (`LLMUsage` schema).
+5. `<trial>/llm-summary.json` — per-trial cost summary (key-level spend).
+6. `<trial>/.success` / `<trial>/.fail` — normal termination marker (NOT patch success).
+7. `<trial>/worker.log` — orchestrator + verification log (**use subagent for large files**).
+8. `<trial>/output/logs/crs/<crs-name>/` — CRS-internal logs (**use subagent for large files**).
+9. `<trial>/output/logs/services/*.log` — sidecar / exchange logs.
+10. `<trial>/output/patches/*.diff` — generated patch diffs (flat layout).
+11. `<trial>/output/povs/` and `<trial>/povs/pov_store.json` — discovered POVs.
+12. `<trial>/snapshot-*.tar.gz` — periodic snapshots (see `docs/reference/snapshots.md`).
 
 ## Log Analysis with Subagents
 
@@ -155,12 +173,12 @@ Sum up from all `llm-usage.json`:
 For each failed benchmark that needs detailed log analysis:
 1. Launch Task tool with subagent_type="Explore"
 2. Prompt: "Analyze the CRS logs for [benchmark] trial at [path].
-   Read crs-logs/crs_run_*.log and worker.log.
+   Read worker.log and the files under output/logs/crs/<crs-name>/ and output/logs/services/.
    Extract: error type, error message, stack trace.
    Classify root cause as one of:
    - crsbench-bug: CRSBench framework bug
-   - oss-crs-bug: oss-bugfix-crs wrapper bug
-   - crs-bug: CRS implementation bug (Atlantis/Grapple)
+   - oss-crs-bug: oss-crs wrapper bug (builder-sidecar / runner-sidecar / exchange)
+   - crs-bug: CRS implementation bug (claude-code, codex, opencode, atlantis-*, etc.)
    - crs-limitation: CRS couldn't handle this case
    - benchmark-issue: Benchmark itself has problems
    - infra-issue: Infrastructure problem (disk/memory/network)
@@ -181,22 +199,25 @@ CRSBench framework itself has a bug
 - Snapshot capture failures
 
 ### `oss-crs-bug`
-oss-bugfix-crs or oss-bugfind-crs wrapper issues
+oss-crs wrapper / sidecar issues (`oss-crs-builder-sidecar`, `oss-crs-runner-sidecar`, `oss-crs-exchange`)
 - Docker build/run failures from wrapper
 - Command argument parsing errors
 - Container mounting issues
 
 ### `crs-bug`
-CRS implementation bugs (Atlantis, Grapple, etc.)
-- Traceback in `/app/packages/` or CRS-specific paths
-- AssertionError in CRS code
+CRS implementation bugs. Real CRS names live under `oss-crs/registry/` and follow:
+- `crs-bug-finding-<agent>` — LLM-driven bug-finding (`crs-bug-finding-claude-code`, `crs-bug-finding-codex`, ...)
+- `crs-<agent>` — LLM-driven bug-fixing (`crs-claude-code`, `crs-codex`, `crs-opencode`, ...)
+- `crs-libfuzzer`, `crs-jazzer`, `atlantis-*` — pure fuzzers
+Indicators:
+- Traceback / AssertionError inside `output/logs/crs/<crs-name>/`
 - Agent crashes
 - **Empty patch generation**: CRS produced empty patch file (no actual diff content)
-  - Log pattern: `Empty patch for cpv_X` in worker.log
+  - Log pattern: `Empty patch for <pov_id>` in `worker.log`
 
 ### `crs-limitation`
 CRS worked but couldn't solve the problem
-- Zero patches generated (returncode=0)
+- Zero patches generated (normal termination, no crash)
 - All patches invalid
 - No exploit found
 
@@ -215,20 +236,41 @@ Infrastructure/resource problems
 
 ## Directory Structure Reference
 
+Bug-finding experiment:
 ```
 experiment-data/<experiment-name>/
-├── trial_matrix.json                    # Trial metadata
-├── worker-logs/                         # Global worker logs
-│   └── <worker-name>.log
-└── <crs-name>/<benchmark>/<harness>/<mode>/<sanitizer>/trial-<N>/
-    ├── metadata.json                    # Trial metadata
-    ├── execution.json                   # Execution result
-    ├── worker.log                       # Per-trial worker log
-    ├── llm-usage.json                   # LLM cost/tokens
-    ├── llm-logs.json                    # LLM API call logs
-    ├── .success                         # Normal termination marker (NOT patch success!)
-    ├── crs-logs/crs_run_*.log          # CRS internal logs (CRITICAL)
-    ├── output/patches/                  # Generated patches
-    ├── patches/snapshots/               # Snapshot patch states
-    └── patch_verification_results.json  # Patch verification results
+├── trial_matrix.json                                  # Trial list
+└── <crs>/<benchmark>/<harness>/<mode>/<sanitizer>/trial-<N>/
+    ├── metadata.json                                  # TrialMetadata
+    ├── worker.log                                     # Orchestrator + verification log
+    ├── llm-usage.json                                 # LLM cost/tokens (LLMUsage)
+    ├── llm-summary.json                               # Per-trial cost summary
+    ├── llm-logs.json                                  # LLM API call logs
+    ├── .success | .fail                               # Normal termination marker (NOT patch success!)
+    ├── crs-compose.yaml                               # Generated docker-compose for the trial
+    ├── crs-input/                                     # Inputs handed to the CRS (povs, sarif, seeds, diff)
+    ├── output/
+    │   ├── povs/                                      # Discovered POVs (CRITICAL for bug-finding)
+    │   ├── patches/*.diff                             # Generated patches (flat layout)
+    │   ├── logs/crs/<crs-name>/                       # CRS internal logs (CRITICAL)
+    │   ├── logs/services/*.{stdout,stderr}.log        # Sidecar / exchange logs
+    │   ├── docker-compose.stdout.log
+    │   └── docker-compose.stderr.log
+    ├── povs/                                          # POV verification results (pov_store.json, snapshot_history.json)
+    ├── patches/                                       # Patch verification work dir (incl. logs/)
+    ├── patch_verification_results.json                # Patch verification results (bug-fixing trials)
+    └── snapshot-*.tar.gz                              # Periodic snapshots (see docs/reference/snapshots.md)
 ```
+
+Bug-fixing experiment adds a CPV directory: `<crs>/<benchmark>/<harness>/<cpv>/<mode>/<sanitizer>/trial-<N>/`.
+
+## See Also
+
+- `docs/experiments/full-pipeline.md` — full-pipeline finding + fixing runs
+- `docs/experiments/discovery-only.md` — bug-finding only
+- `docs/experiments/replay-povs.md` — replaying historical POVs
+- `docs/reference/experiment-config.md` — experiment config schema
+- `docs/reference/snapshots.md` — snapshot semantics and layout
+- `crsbench/evaluation/trial_paths.py` — canonical trial artifact paths
+- `crsbench/validation/schemas.py` — `TrialMetadata`, `LLMUsage`, `ModelUsage`, `SnapshotMetadata`
+- `oss-crs/registry/` — authoritative list of CRS names
