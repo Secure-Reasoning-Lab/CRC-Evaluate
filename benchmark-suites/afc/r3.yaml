@@ -1,6 +1,6 @@
 Name: afc/r3
 Description: AFC Round 3 benchmarks from DARPA AIxCC competition.
-Release date: 12.21.2025
+Release date: 05.18.2026
 benchmark_list:
   # C/C++ benchmarks
   - afc-curl-delta-01

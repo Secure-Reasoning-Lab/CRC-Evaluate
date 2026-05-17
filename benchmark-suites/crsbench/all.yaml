@@ -1,6 +1,6 @@
 Name: crsbench/all
 Description: All non-sanity benchmarks for comprehensive CRS evaluation.
-Release date: 02.01.2026
+Release date: 05.18.2026
 benchmark_list:
   # === AFC benchmarks (61) ===
   # C/C++ benchmarks

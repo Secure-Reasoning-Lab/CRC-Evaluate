@@ -1,6 +1,6 @@
 Name: crsbench/c
 Description: All C/C++ benchmarks across AFC, ASC, and Atlanta suites.
-Release date: 04.07.2026
+Release date: 05.18.2026
 benchmark_list:
   # === AFC C/C++ benchmarks ===
   # curl

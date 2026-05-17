@@ -1,6 +1,6 @@
 Name: afc/c
 Description: A benchmark suite for evaluating C/C++ CRS with official AFC benchmarks.
-Release date: 10.13.2025
+Release date: 05.18.2026
 benchmark_list:
   # curl
   - afc-curl-delta-01

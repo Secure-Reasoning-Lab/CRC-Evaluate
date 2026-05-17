@@ -1,6 +1,6 @@
 Name: afc/final
 Description: AFC Final round benchmarks from DARPA AIxCC competition (all projects in final round).
-Release date: 12.21.2025
+Release date: 05.18.2026
 benchmark_list:
   # C/C++ benchmarks
   - afc-dav1d-full-01
