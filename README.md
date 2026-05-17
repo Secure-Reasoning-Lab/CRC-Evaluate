@@ -200,11 +200,16 @@ For standalone `verify`, `patch-verify`, and `coverage` usage, see
 
 ```bash
 uv run crsbench report    --experiment my-exp
-uv run crsbench dashboard --base-dir ./experiments
+uv run crsbench dashboard --base-dir ./experiments  # experimental
 uv run crsbench benchmark stats --output stats.csv
 uv run crsbench benchmark stats --benchmark-suite crsbench-all --output stats.csv
 uv run crsbench benchmark stats --benchmark-suite crsbench-all --vuln-index-output vuln-index.yaml
 ```
+
+> **Note:** `crsbench dashboard` is an experimental Next.js viewer for
+> already-generated reports. Routes, JSON contracts, and CLI flags may change
+> without notice; it binds to `localhost` only. See
+> [`dashboard/README.md`](dashboard/README.md) for details.
 
 ### Dataset
 

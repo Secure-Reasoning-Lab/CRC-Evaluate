@@ -377,9 +377,9 @@ Examples:
   # Collect code coverage timelines
   %(prog)s coverage --experiment-config ./experiment.yaml
 
-  # Generate reports and start dashboard
+  # Generate reports and start dashboard (dashboard is experimental)
   %(prog)s report --experiment my-experiment
-  %(prog)s dashboard --base-dir ./experiments
+  %(prog)s dashboard --base-dir ./experiments  # [experimental]
 
   # Benchmark management (validate, bundle, CI, stats)
   %(prog)s benchmark validate ./benchmarks/afc-curl-delta-01
