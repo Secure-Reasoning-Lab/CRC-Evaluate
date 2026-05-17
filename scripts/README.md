@@ -17,7 +17,6 @@ relevant to CRSBench workflows.
 - `sync-upstream-models.py` - sync upstream LiteLLM model catalog
 - `check_patch_overlap.py` - patch overlap/debug utility
 - `cleanup-failed-trials.sh` - cleanup helper for failed trial artifacts
-- `cpv_assignment.py` - CPV assignment/debug utility
 - `snapshot-utils.py` - snapshot inspect/validate/extract helper
 
 ## See Also
