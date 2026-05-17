@@ -1,20 +1,30 @@
 # GCP full-pipeline phase 2 (bug-fixing) with Claude Code CRS.
 #
-# Consumes POVs produced by full-pipeline-finding.yaml. Run that config first
-# and `cloud collect` its results before launching phase 2.
+# Consumes POVs produced by bug-finding.yaml. Run that config first and
+# `cloud collect` its results before launching phase 2.
+#
+# Usage:
+#   CONFIG_FIND=experiment-configs/gcp/bug-finding.yaml
+#   CONFIG_FIX=experiment-configs/gcp/full-pipeline-fixing.yaml
+#   uv run crsbench cloud launch --config "$CONFIG_FIND"
+#   uv run crsbench cloud monitor --config "$CONFIG_FIND"
+#   uv run crsbench cloud collect --config "$CONFIG_FIND" --force
+#   uv run crsbench cloud teardown --config "$CONFIG_FIND" --force
+#   uv run crsbench cloud launch --config "$CONFIG_FIX"
 
 experiment:
   name: gcp-full-pipeline-fixing
   task: bugfixing
-  benchmark_suite: smoke/sanity
+  benchmark_suite: smoke/all
   mode: auto
 
 runtime:
   trials: 1
-  max_total_time: 28800
-  build_timeout: 10800
-  run_timeout: 10800
-  verify_timeout: 5400
+  max_total_time: 43200
+  build_timeout: 21600
+  run_timeout: 7200
+  verify_timeout: 10800
+  per_pov_verify_timeout: 300
   redis_host: redis-server:6379
   source_mode: pkgs
   rts_enabled: true
@@ -23,7 +33,7 @@ runtime:
     pov:
       max_variants_per_cpv: 1
       from_experiment_by_crs:
-        crs-claude-code: /data/crsbench/experiment-data/gcp-full-pipeline-finding/gcp-full-pipeline-finding/gcp-full-pipeline-finding/crs-bug-finding-claude-code
+        crs-claude-code: /data/crsbench/experiment-data/gcp-bug-finding/gcp-bug-finding/gcp-bug-finding/crs-bug-finding-claude-code
   litellm:
     mode: external
     cost_budget: 10.0

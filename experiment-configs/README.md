@@ -11,24 +11,32 @@ experiment-configs/
 ├── local/              # Single-machine runs, 1 CRS (Claude Code)
 │   ├── bug-finding.yaml
 │   ├── bug-fixing.yaml
-│   ├── full-pipeline-finding.yaml
 │   └── full-pipeline-fixing.yaml
 ├── gcp/                # GCE-hosted runs, 1 CRS (Claude Code)
 │   ├── bug-finding.yaml
 │   ├── bug-fixing.yaml
-│   ├── full-pipeline-finding.yaml
 │   └── full-pipeline-fixing.yaml
 ├── smoke-testing/      # Tiny single-CRS smoke run
 │   └── smoke.yaml
-└── agentic-cli/        # Multi-CRS comparison across agentic CLIs
-    ├── bug-finding.yaml
-    ├── bug-fixing.yaml
-    ├── full-pipeline-finding.yaml
-    └── full-pipeline-fixing.yaml
+├── agentic-cli/        # Multi-CRS comparison across agentic CLIs
+│   ├── bug-finding.yaml
+│   ├── bug-fixing.yaml
+│   └── full-pipeline-fixing.yaml
+└── discovery/          # Discovery-only OSS-Fuzz (no CRSBench ground truth)
+    └── discovery-libyang.yaml
 ```
 
-Older preset/AFC/sanity configs live under `experiment-configs.bak/` and are
-retained only for reference.
+`full-pipeline-fixing.yaml` runs the bug-fixing phase against POVs produced by
+a prior `bug-finding.yaml` run in the same subdir. See
+[docs/experiments/full-pipeline.md](../docs/experiments/full-pipeline.md) for
+how the two phases are chained.
+
+Timing fields (`max_total_time`, `build_timeout`, `run_timeout`,
+`verify_timeout`, `per_pov_verify_timeout`) are **per (benchmark × trial)**
+wall-clock budgets, not per-experiment totals. They are intentionally the same
+across tiers so the same benchmark gets the same budget regardless of where
+it runs. What changes across tiers is `benchmark_suite`, `trials`,
+`cost_budget`, `num_cores`, and `worker.jobs` / `cloud.*`.
 
 ## Required fields
 
@@ -66,10 +74,12 @@ uv run crsbench cloud collect  --config "$CONFIG" --force
 uv run crsbench cloud teardown --config "$CONFIG" --force
 ```
 
-Full-pipeline two-phase chaining: launch `full-pipeline-finding.yaml` first;
-once results are collected, launch `full-pipeline-fixing.yaml`. The fixing
-config references the finding output via `inputs.pov.from_experiment_by_crs` —
-adjust the path if you ran phase 1 with a different `storage.experiment_filestore`.
+Full-pipeline two-phase chaining: launch `bug-finding.yaml` first; once
+results are collected, launch `full-pipeline-fixing.yaml`. The fixing config
+references the finding output via `inputs.pov.from_experiment_by_crs` — adjust
+the path if you ran phase 1 with a different `storage.experiment_filestore`.
+Background on the chaining mechanism is in
+[docs/experiments/full-pipeline.md](../docs/experiments/full-pipeline.md).
 
 ## Validation
 

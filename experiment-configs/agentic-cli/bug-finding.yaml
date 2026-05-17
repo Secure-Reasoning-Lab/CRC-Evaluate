@@ -12,15 +12,16 @@
 experiment:
   name: agentic-cli-bug-finding
   task: bugfinding
-  benchmark_suite: smoke/sanity
+  benchmark_suite: afc/all
   mode: delta
 
 runtime:
   trials: 1
-  max_total_time: 7200
-  build_timeout: 2400
-  run_timeout: 2400
-  verify_timeout: 1800
+  max_total_time: 76800
+  build_timeout: 21600
+  run_timeout: 28800
+  verify_timeout: 14400
+  per_pov_verify_timeout: 300
   redis_host: localhost
   pov_early_stop: true
   litellm:

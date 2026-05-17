@@ -6,15 +6,16 @@
 experiment:
   name: agentic-cli-bug-fixing
   task: bugfixing
-  benchmark_suite: smoke/sanity
+  benchmark_suite: afc/all
   mode: delta
 
 runtime:
   trials: 1
-  max_total_time: 10800
-  build_timeout: 3600
-  run_timeout: 3600
-  verify_timeout: 2400
+  max_total_time: 43200
+  build_timeout: 21600
+  run_timeout: 7200
+  verify_timeout: 10800
+  per_pov_verify_timeout: 300
   redis_host: localhost
   inputs:
     pov:

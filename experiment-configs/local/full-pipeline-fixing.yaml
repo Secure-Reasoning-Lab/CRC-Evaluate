@@ -1,26 +1,31 @@
 # Local full-pipeline phase 2 (bug-fixing) with Claude Code CRS.
 #
-# Consumes POVs produced by full-pipeline-finding.yaml. Run that config first
-# and confirm POVs exist under the path referenced by inputs.pov.from_experiment_by_crs.
+# Consumes POVs produced by bug-finding.yaml. Run that config first and confirm
+# POVs exist under the path referenced by inputs.pov.from_experiment_by_crs.
+#
+# Usage:
+#   uv run crsbench run --config experiment-configs/local/bug-finding.yaml
+#   uv run crsbench run --config experiment-configs/local/full-pipeline-fixing.yaml
 
 experiment:
   name: local-full-pipeline-fixing
   task: bugfixing
-  benchmark_suite: smoke/sanity
+  benchmark_suite: smoke/all
   mode: delta
 
 runtime:
   trials: 1
-  max_total_time: 9000
-  build_timeout: 1800
-  run_timeout: 1800
-  verify_timeout: 1200
+  max_total_time: 43200
+  build_timeout: 21600
+  run_timeout: 7200
+  verify_timeout: 10800
+  per_pov_verify_timeout: 300
   redis_host: localhost
   inputs:
     pov:
       max_variants_per_cpv: 1
       from_experiment_by_crs:
-        crs-claude-code: .run/local/experiment-data/local-full-pipeline-finding/local-full-pipeline-finding/local-full-pipeline-finding/crs-bug-finding-claude-code
+        crs-claude-code: .run/local/experiment-data/local-bug-finding/local-bug-finding/local-bug-finding/crs-bug-finding-claude-code
   litellm:
     mode: external
     cost_budget: 5.0

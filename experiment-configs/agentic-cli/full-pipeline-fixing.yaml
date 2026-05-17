@@ -1,30 +1,35 @@
 # Local multi-CRS full-pipeline phase 2 (bug-fixing) across agentic CLIs.
 #
-# Consumes per-CRS POVs produced by full-pipeline-finding.yaml. Each fixing CRS
-# only sees POVs from its matching finding counterpart.
+# Consumes per-CRS POVs produced by bug-finding.yaml. Each fixing CRS only sees
+# POVs from its matching finding counterpart (same CLI/model on the finding side).
+#
+# Usage:
+#   uv run crsbench run --config experiment-configs/agentic-cli/bug-finding.yaml
+#   uv run crsbench run --config experiment-configs/agentic-cli/full-pipeline-fixing.yaml
 
 experiment:
   name: agentic-cli-full-pipeline-fixing
   task: bugfixing
-  benchmark_suite: smoke/sanity
+  benchmark_suite: afc/all
   mode: delta
 
 runtime:
   trials: 1
-  max_total_time: 10800
-  build_timeout: 3600
-  run_timeout: 3600
-  verify_timeout: 2400
+  max_total_time: 43200
+  build_timeout: 21600
+  run_timeout: 7200
+  verify_timeout: 10800
+  per_pov_verify_timeout: 300
   redis_host: localhost
   inputs:
     pov:
       max_variants_per_cpv: 1
       from_experiment_by_crs:
-        crs-claude-code: .run/agentic-cli/experiment-data/agentic-cli-full-pipeline-finding/agentic-cli-full-pipeline-finding/agentic-cli-full-pipeline-finding/crs-bug-finding-claude-code
-        crs-codex:       .run/agentic-cli/experiment-data/agentic-cli-full-pipeline-finding/agentic-cli-full-pipeline-finding/agentic-cli-full-pipeline-finding/crs-bug-finding-codex
-        crs-copilot-cli: .run/agentic-cli/experiment-data/agentic-cli-full-pipeline-finding/agentic-cli-full-pipeline-finding/agentic-cli-full-pipeline-finding/crs-bug-finding-copilot-cli
-        crs-gemini-cli:  .run/agentic-cli/experiment-data/agentic-cli-full-pipeline-finding/agentic-cli-full-pipeline-finding/agentic-cli-full-pipeline-finding/crs-bug-finding-gemini-cli
-        crs-opencode:    .run/agentic-cli/experiment-data/agentic-cli-full-pipeline-finding/agentic-cli-full-pipeline-finding/agentic-cli-full-pipeline-finding/crs-bug-finding-opencode
+        crs-claude-code: .run/agentic-cli/experiment-data/agentic-cli-bug-finding/agentic-cli-bug-finding/agentic-cli-bug-finding/crs-bug-finding-claude-code
+        crs-codex:       .run/agentic-cli/experiment-data/agentic-cli-bug-finding/agentic-cli-bug-finding/agentic-cli-bug-finding/crs-bug-finding-codex
+        crs-copilot-cli: .run/agentic-cli/experiment-data/agentic-cli-bug-finding/agentic-cli-bug-finding/agentic-cli-bug-finding/crs-bug-finding-copilot-cli
+        crs-gemini-cli:  .run/agentic-cli/experiment-data/agentic-cli-bug-finding/agentic-cli-bug-finding/agentic-cli-bug-finding/crs-bug-finding-gemini-cli
+        crs-opencode:    .run/agentic-cli/experiment-data/agentic-cli-bug-finding/agentic-cli-bug-finding/agentic-cli-bug-finding/crs-bug-finding-opencode
   litellm:
     mode: external
     cost_budget: 20.0

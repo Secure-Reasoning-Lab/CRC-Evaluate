@@ -15,15 +15,16 @@
 experiment:
   name: gcp-bug-fixing
   task: bugfixing
-  benchmark_suite: smoke/sanity
+  benchmark_suite: smoke/all
   mode: auto
 
 runtime:
   trials: 1
-  max_total_time: 28800
-  build_timeout: 10800
-  run_timeout: 10800
-  verify_timeout: 5400
+  max_total_time: 43200
+  build_timeout: 21600
+  run_timeout: 7200
+  verify_timeout: 10800
+  per_pov_verify_timeout: 300
   redis_host: redis-server:6379
   source_mode: pkgs
   rts_enabled: true
