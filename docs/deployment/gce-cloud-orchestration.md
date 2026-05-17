@@ -13,13 +13,13 @@ For a local preflight of the same startup scripts before touching GCE, use
 ## TL;DR Smoke Test
 
 If you just want to prove the remote-orchestrator path works end to end, use
-the checked-in multilang smoke config below. This assumes the prerequisites in
-the next section are already satisfied. The operator machine for CRSBench
-commands must be Linux.
+the checked-in `gcp/bug-finding.yaml` template below. This assumes the
+prerequisites in the next section are already satisfied. The operator machine
+for CRSBench commands must be Linux.
 
 ```bash
-CONFIG=experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval-multilang-given-fuzzer.yaml
-EXPERIMENT=gce-sanity-mgf-1o2w1e
+CONFIG=experiment-configs/gcp/bug-finding.yaml
+EXPERIMENT=gcp-bug-finding
 ```
 
 If the selected config downloads gated HuggingFace benchmark data on the VMs,
@@ -55,7 +55,7 @@ uv run crsbench cloud launch --config "$CONFIG"
 ```
 
 This provisions 1 orchestrator, 2 workers, and 1 evaluator, then starts
-experiment `gce-sanity-mgf-1o2w1e`.
+experiment `gcp-bug-finding`.
 
 4. Monitor the live queue from the operator machine:
 

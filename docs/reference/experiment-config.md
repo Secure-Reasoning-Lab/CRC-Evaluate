@@ -92,8 +92,10 @@ For GCE in v1:
   user-configured layers and wins last
 - generated GCE instance names are deterministic and zone-independent:
   `crsbench-<experiment>-orch`, `-work-001`, `-eval-001`
-- the checked-in examples are under `experiment-configs/gcp/` (`bug-finding.yaml`,
-  `bug-fixing.yaml`, `full-pipeline-finding.yaml`, `full-pipeline-fixing.yaml`)
+- the checked-in examples are under `experiment-configs/gcp/`
+  (`bug-finding.yaml`, `bug-fixing.yaml`, `full-pipeline-fixing.yaml`);
+  full-pipeline chaining is described in
+  [docs/experiments/full-pipeline.md](../experiments/full-pipeline.md)
 
 ## Discovery-Only Mode
 

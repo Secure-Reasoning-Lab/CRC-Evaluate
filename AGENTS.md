@@ -129,6 +129,7 @@ Then re-run the quality gate command above.
 - Configuration: `docs/getting-started/configuration.md`
 - Discovery-only OSS-Fuzz experiments: `docs/experiments/discovery-only.md`
 - Replay historical POVs: `docs/experiments/replay-povs.md`
+- Full-pipeline (finding → fixing) chaining: `docs/experiments/full-pipeline.md`
 - Merge experiment results: `docs/experiments/merge-results.md`
 - Normative benchmark spec: `docs/RFC.md`
 - Benchmark statistics: `docs/reference/benchmark-statistics.md`

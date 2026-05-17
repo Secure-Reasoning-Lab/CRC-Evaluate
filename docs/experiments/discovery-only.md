@@ -111,20 +111,12 @@ Key settings:
 - `benchmarks_root` and `oss_fuzz_path` must match the checkout you want to run
   against.
 
-Repository examples:
+Checked-in template:
 
-- [`experiment-configs/discovery-testing/oss-fuzz-given-fuzzer-8core.yaml`](../../experiment-configs/discovery-testing/oss-fuzz-given-fuzzer-8core.yaml)
-- [`experiment-configs/discovery-testing/atlantis-multilang-wo-concolic-full-10min-5usd.yaml`](../../experiment-configs/discovery-testing/atlantis-multilang-wo-concolic-full-10min-5usd.yaml)
-- [`experiment-configs/discovery-smoke-testing/opencode-go-yaml-bugfinding.yaml`](../../experiment-configs/discovery-smoke-testing/opencode-go-yaml-bugfinding.yaml)
-- [`experiment-configs/discovery-smoke-testing/opencode-shortlist-bugfinding.yaml`](../../experiment-configs/discovery-smoke-testing/opencode-shortlist-bugfinding.yaml)
-- [`experiment-configs/discovery-smoke-testing/opencode-clear-shortlist2-bugfinding.yaml`](../../experiment-configs/discovery-smoke-testing/opencode-clear-shortlist2-bugfinding.yaml)
-- [`experiment-configs/discovery-smoke-testing/opencode-clear-shortlist3-bugfinding.yaml`](../../experiment-configs/discovery-smoke-testing/opencode-clear-shortlist3-bugfinding.yaml)
-- [`experiment-configs/discovery-smoke-testing/opencode-clear-shortlist4-bugfinding.yaml`](../../experiment-configs/discovery-smoke-testing/opencode-clear-shortlist4-bugfinding.yaml)
-- [`experiment-configs/discovery-smoke-testing/gce-opencode-go-yaml-bugfinding.yaml`](../../experiment-configs/discovery-smoke-testing/gce-opencode-go-yaml-bugfinding.yaml)
-- [`experiment-configs/discovery/gce-opencode-shortlist-bugfinding.yaml`](../../experiment-configs/discovery/gce-opencode-shortlist-bugfinding.yaml)
-- [`experiment-configs/discovery/gce-opencode-clear-shortlist2-bugfinding.yaml`](../../experiment-configs/discovery/gce-opencode-clear-shortlist2-bugfinding.yaml)
-- [`experiment-configs/discovery/gce-opencode-clear-shortlist3-bugfinding.yaml`](../../experiment-configs/discovery/gce-opencode-clear-shortlist3-bugfinding.yaml)
-- [`experiment-configs/discovery/gce-opencode-clear-shortlist4-bugfinding.yaml`](../../experiment-configs/discovery/gce-opencode-clear-shortlist4-bugfinding.yaml)
+- [`experiment-configs/discovery/discovery-libyang.yaml`](../../experiment-configs/discovery/discovery-libyang.yaml)
+  — minimal single-machine discovery run against the OSS-Fuzz `libyang`
+  project. Point `benchmarks_root` at your OSS-Fuzz `projects/` checkout
+  before running.
 
 ## Initialize The Benchmarks
 
@@ -135,10 +127,10 @@ setups:
 uv run crsbench benchmark init --experiment-config config.yaml
 ```
 
-For the repository's local shortlist smoke examples, first run the prep block
-at the top of the config to extract the selected OSS-Fuzz project directories
-into `.run/discovery-smoke-testing/oss-fuzz-shortlist*/projects`. That mirror
-becomes `benchmarks_root` for `benchmark init`.
+If you keep your OSS-Fuzz projects outside the managed
+`third_party/oss-fuzz/projects` sparse checkout, materialize a mirror
+directory holding only the projects you care about and point
+`benchmarks_root` at that mirror before calling `benchmark init`.
 
 To pin the discovery build to specific CPUs:
 
@@ -205,13 +197,12 @@ uv run crsbench run --experiment-config config.yaml --local-only
 The same initialized benchmarks can also be used with the distributed worker
 and evaluator workflows documented in [Distributed](../deployment/distributed.md).
 
-For a managed GCE smoke example pinned to `us-central1`, see
-[`gce-opencode-go-yaml-bugfinding.yaml`](../../experiment-configs/discovery-smoke-testing/gce-opencode-go-yaml-bugfinding.yaml).
-For managed-cloud shortlist campaigns, see
-[`gce-opencode-shortlist-bugfinding.yaml`](../../experiment-configs/discovery/gce-opencode-shortlist-bugfinding.yaml),
-[`gce-opencode-clear-shortlist3-bugfinding.yaml`](../../experiment-configs/discovery/gce-opencode-clear-shortlist3-bugfinding.yaml),
-and
-[`gce-opencode-clear-shortlist4-bugfinding.yaml`](../../experiment-configs/discovery/gce-opencode-clear-shortlist4-bugfinding.yaml).
+For managed GCE runs, base your discovery config on the cloud shape used by
+[`experiment-configs/gcp/bug-finding.yaml`](../../experiment-configs/gcp/bug-finding.yaml)
+and overlay the discovery-only fields from
+[`experiment-configs/discovery/discovery-libyang.yaml`](../../experiment-configs/discovery/discovery-libyang.yaml)
+(`benchmarks_root`, `oss_fuzz_path`, `experiment.mode: full`,
+`runtime.skip_verification: true`).
 
 ## Limits And Expectations
 

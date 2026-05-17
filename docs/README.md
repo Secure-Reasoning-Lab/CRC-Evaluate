@@ -26,6 +26,7 @@ What to run.
 - [Experiments Hub](./experiments/README.md)
 - [Discovery-Only OSS-Fuzz](./experiments/discovery-only.md)
 - [Replay Historical POVs](./experiments/replay-povs.md)
+- [Full-Pipeline (Finding → Fixing)](./experiments/full-pipeline.md)
 - [Merge Experiment Results](./experiments/merge-results.md)
 
 ## Deployment

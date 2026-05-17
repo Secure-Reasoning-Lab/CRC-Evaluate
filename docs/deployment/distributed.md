@@ -252,7 +252,7 @@ uv run crsbench evaluator \
     --cpuset 112-127
 
 # 4. Run orchestrator (enqueues jobs, monitors progress)
-uv run crsbench run --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml
+uv run crsbench run --experiment-config experiment-configs/local/bug-finding.yaml
 
 # 5. (After completion) Generate CPV report
 uv run python scripts/cpv_report.py /path/to/experiment-data --csv
@@ -701,7 +701,7 @@ For GitHub smoke workflow (`ci.yml`) using bug-fixing CRS in external mode, conf
 
 If your suite sets `runtime.litellm.tracking_enabled: false`, `CRSBENCH_LLM_UPSTREAM_API_KEY` can be enough for basic runtime requests.
 
-Smoke bug-fixing suites currently run with LiteLLM tracking enabled in the sanity bug-fixing smoke config (`experiment-configs/sanity-bugfixing/...`), so provide the upstream key expected by your LiteLLM deployment.
+The checked-in smoke and bug-fixing configs (`experiment-configs/smoke-testing/smoke.yaml`, `experiment-configs/local/bug-fixing.yaml`) run with LiteLLM tracking enabled, so provide the upstream key expected by your LiteLLM deployment.
 
 ## Troubleshooting
 
@@ -726,7 +726,7 @@ Smoke bug-fixing suites currently run with LiteLLM tracking enabled in the sanit
 | `crsbench verify` | Standalone POV verification |
 | `crsbench patch-verify` | Standalone patch verification |
 | `crsbench coverage` | Collect code coverage (experimental) |
-| `crsbench dashboard` | Launch web dashboard |
+| `crsbench dashboard` | Launch web dashboard (experimental) |
 
 ## See Also
 

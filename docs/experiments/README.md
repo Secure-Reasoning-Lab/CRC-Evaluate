@@ -5,6 +5,7 @@ What kind of experiment to run. For where to run it, see
 
 - [Discovery-only OSS-Fuzz experiments](./discovery-only.md)
 - [Replay historical POVs on latest OSS-Fuzz](./replay-povs.md)
+- [Full-pipeline (finding → fixing) chaining](./full-pipeline.md)
 - [Merge experiment results](./merge-results.md)
 
 For the canonical experiment config schema, see
