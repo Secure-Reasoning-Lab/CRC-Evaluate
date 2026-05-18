@@ -40,54 +40,37 @@ uv run crsbench prepare
 uv run crsbench prepare --coverage   # for the bundled starter CRS
 ```
 
-Download the sanity suite from HuggingFace (gated — accept the Data Use
-Agreement at <https://huggingface.co/datasets/sslab-gatech/crsbench-dataset>
-first):
+Configure environment variables. CRSBench auto-loads `.env` from the repo root;
+edit it for distributed Redis, LiteLLM credentials, etc. See
+[docs/getting-started/configuration.md](docs/getting-started/configuration.md)
+for the full reference.
 
 ```bash
-uv run hf auth login
-uv run crsbench download --benchmark-suite sanity
+cp .env.example .env
 ```
 
-Save the following as `first-run.yaml`:
+Request access to the HuggingFace dataset (gated). Open
+<https://huggingface.co/datasets/sslab-gatech/crsbench-dataset> and accept the
+Data Use Agreement - access is granted after manual approval. Once approved,
+authenticate (either set `HF_TOKEN=hf_...` in `.env`, or run `hf auth login`)
+and download the sanity suite:
 
-```yaml
-experiment:
-  name: first-run
-  task: bugfinding
-  mode: full
-  benchmark_suite: smoke/sanity
-  sanitizers: [address]
-
-runtime:
-  trials: 1
-  max_total_time: 3600
-  build_timeout: 900
-  run_timeout: 1800
-  verify_timeout: 900
-  redis_host: localhost:6379
-  litellm:
-    skip: true
-
-storage:
-  experiment_filestore: ./results/experiment-data
-  report_filestore: ./results/report-data
-
-crs_compose:
-  atlantis-multilang-given_fuzzer:
-    num_cores: 4
+```bash
+uv run hf auth login   # or set HF_TOKEN in .env
+uv run crsbench download --benchmark-suite smoke/sanity
 ```
 
-Run it:
+Run the bundled quick-start config
+[experiment-configs/smoke-testing/first-run.yaml](experiment-configs/smoke-testing/first-run.yaml).
+It targets the `smoke/sanity` suite (2 benchmarks, 3 harnesses) with the
+bundled `atlantis-multilang-given_fuzzer` CRS, runs 3 trial jobs in parallel,
+and does not need external LLM credentials (`runtime.litellm.skip: true`):
 
 ```bash
 uv run python scripts/valkey-helper.py start
-uv run crsbench worker --experiment-config first-run.yaml   # terminal 1
-uv run crsbench run    --experiment-config first-run.yaml   # terminal 2
+uv run crsbench worker --experiment-config experiment-configs/smoke-testing/first-run.yaml   # terminal 1
+uv run crsbench run    --experiment-config experiment-configs/smoke-testing/first-run.yaml   # terminal 2
 ```
-
-`atlantis-multilang-given_fuzzer` is the bundled starter CRS. With
-`runtime.litellm.skip: true` it does not need external LLM credentials.
 
 ## Documentation
 
@@ -96,8 +79,8 @@ Start with **[Getting Started](docs/getting-started/README.md)**:
 1. [Install](docs/getting-started/install.md)
 2. [Configuration](docs/getting-started/configuration.md)
 3. [First Experiment](docs/getting-started/first-experiment.md)
-4. [Experiments](docs/getting-started/experiments.md) — bug-finding, bug-fixing, discovery, replay, merge
-5. [Deployment](docs/getting-started/deployment.md) — single-machine, multi-machine, GCE cloud
+4. [Experiments](docs/getting-started/experiments.md) - bug-finding, bug-fixing, discovery, replay, merge
+5. [Deployment](docs/getting-started/deployment.md) - single-machine, multi-machine, GCE cloud
 
 Other entry points:
 
@@ -127,10 +110,10 @@ CRSBench/
 ## License
 
 CRSBench is licensed under [MIT](LICENSE). Bundled upstream source code retains
-its original license — see [LICENSE-THIRD-PARTY.md](LICENSE-THIRD-PARTY.md).
+its original license - see [LICENSE-THIRD-PARTY.md](LICENSE-THIRD-PARTY.md).
 
 ## Related Projects
 
-- [FuzzBench](https://github.com/google/fuzzbench) — fuzzer evaluation platform
-- [OSS-Fuzz](https://github.com/google/oss-fuzz) — continuous fuzzing for open source
-- [AIxCC](https://aicyberchallenge.com/) — AI Cyber Challenge
+- [FuzzBench](https://github.com/google/fuzzbench) - fuzzer evaluation platform
+- [OSS-Fuzz](https://github.com/google/oss-fuzz) - continuous fuzzing for open source
+- [AIxCC](https://aicyberchallenge.com/) - AI Cyber Challenge

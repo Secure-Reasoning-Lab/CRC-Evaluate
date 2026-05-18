@@ -1,0 +1,47 @@
+# Quick-start local smoke run for the sanity suite.
+#
+# Pairs with the README Quick Start. The `smoke/sanity` suite contains
+# 2 benchmarks with 3 harnesses total (2 C harnesses + 1 JVM harness),
+# so the experiment expands to 3 trial jobs and runs them concurrently
+# via `worker.jobs: 3`.
+#
+# Uses the bundled `atlantis-multilang-given_fuzzer` CRS with
+# `litellm.skip: true`, so no external LLM credentials are required.
+#
+# Usage:
+#   uv run python scripts/valkey-helper.py start
+#   uv run crsbench worker --experiment-config experiment-configs/smoke-testing/first-run.yaml   # terminal 1
+#   uv run crsbench run    --experiment-config experiment-configs/smoke-testing/first-run.yaml   # terminal 2
+
+experiment:
+  name: first-run
+  task: bugfinding
+  mode: full
+  benchmark_suite: smoke/sanity
+  sanitizers: [address]
+
+runtime:
+  trials: 1
+  max_total_time: 5400
+  build_timeout: 900
+  run_timeout: 1800
+  verify_timeout: 900
+  redis_host: localhost:6379
+  litellm:
+    skip: true
+
+storage:
+  experiment_filestore: ./results/experiment-data
+  report_filestore: ./results/report-data
+
+crs_compose:
+  atlantis-multilang-given_fuzzer:
+    num_cores: 4
+
+worker:
+  jobs: 3
+  cores_per_job: 4
+
+evaluator:
+  jobs: 1
+  cores_per_job: 4

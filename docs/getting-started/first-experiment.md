@@ -24,52 +24,26 @@ If your CRS needs LiteLLM, configure `.env` first using
 
 The public dataset is gated. Accept the Data Use Agreement for
 `sslab-gatech/crsbench-dataset` at
-<https://huggingface.co/datasets/sslab-gatech/crsbench-dataset>, then log in
+<https://huggingface.co/datasets/sslab-gatech/crsbench-dataset>, then
+authenticate (either set `HF_TOKEN=hf_...` in `.env`, or run `hf auth login`)
 and download the small suite:
 
 ```bash
-uv run hf auth login
-uv run crsbench download --benchmark-suite sanity
+uv run hf auth login   # or set HF_TOKEN in .env
+uv run crsbench download --benchmark-suite smoke/sanity
 ```
 
 ## 3. Pick a Config
 
-For a first local run, create a small config like this:
+For a first local run, use the bundled
+[`experiment-configs/smoke-testing/first-run.yaml`](../../experiment-configs/smoke-testing/first-run.yaml).
+It targets the `smoke/sanity` suite with the bundled
+`atlantis-multilang-given_fuzzer` CRS, runs 3 trial jobs in parallel, and
+needs no external LLM credentials (`runtime.litellm.skip: true`).
 
 Expected local resources: Linux, Docker, 4 or more CPU cores, enough disk for
 Docker images plus the sanity benchmark data, and a run window on the order of
 minutes after the initial image pulls.
-
-```yaml
-experiment:
-  name: first-run
-  task: bugfinding
-  mode: full
-  benchmark_suite: smoke/sanity
-  sanitizers: [address]
-
-runtime:
-  trials: 1
-  max_total_time: 3600
-  build_timeout: 900
-  run_timeout: 1800
-  verify_timeout: 900
-  redis_host: localhost:6379
-  litellm:
-    skip: true
-
-storage:
-  experiment_filestore: ./results/experiment-data
-  report_filestore: ./results/report-data
-
-crs_compose:
-  atlantis-multilang-given_fuzzer:
-    num_cores: 4
-```
-
-`atlantis-multilang-given_fuzzer` selects the bundled Atlantis multi-language
-given-fuzzer CRS adapter. With `runtime.litellm.skip: true`, this starter run
-does not require external LLM credentials.
 
 If you want a fuller starting point, use:
 - [Distributed experiment config example](../experiment-config-distributed-example.yaml)
@@ -77,16 +51,18 @@ If you want a fuller starting point, use:
 
 ## 4. Start a Worker
 
-In a separate terminal, start at least one worker before submitting the run:
+In a separate terminal, start at least one worker before submitting the run.
+The config sets `worker.jobs: 3`, so this single command spawns 3 worker
+processes that pick up the 3 trial jobs in parallel:
 
 ```bash
-uv run crsbench worker --experiment-config first-run.yaml
+uv run crsbench worker --experiment-config experiment-configs/smoke-testing/first-run.yaml
 ```
 
 ## 5. Submit the Experiment
 
 ```bash
-uv run crsbench run --experiment-config first-run.yaml
+uv run crsbench run --experiment-config experiment-configs/smoke-testing/first-run.yaml
 ```
 
 `uv run crsbench run` submits work to Valkey and waits for worker-completed results.
