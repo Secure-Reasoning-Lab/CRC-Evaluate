@@ -141,7 +141,7 @@ def test_build_instance_metadata_includes_vm_bootstrap_policy_and_selector():
             download_benchmarks="always",
             gitcache=True,
             build_timeout=4321,
-            benchmark_suite="afc-final",
+            benchmark_suite="afc/final",
             benchmarks_root=Path("/srv/benchmarks"),
             benchmark_suites_root=Path("/srv/benchmark-suites"),
             oss_fuzz_path=Path("/srv/oss-fuzz"),
@@ -161,7 +161,7 @@ def test_build_instance_metadata_includes_vm_bootstrap_policy_and_selector():
     assert payload["build_timeout"] == 4321
     assert payload["benchmark_init_jobs"] == 3
     assert payload["benchmark_init_cores_per_job"] == 6
-    assert payload["benchmark_suite"] == "afc-final"
+    assert payload["benchmark_suite"] == "afc/final"
     assert payload["benchmarks_root"] == "/srv/benchmarks"
     assert payload["benchmark_suites_root"] == "/srv/benchmark-suites"
     assert payload["oss_fuzz_path"] == "/srv/oss-fuzz"
@@ -411,7 +411,7 @@ def test_build_evaluator_metadata_embeds_startup_script_and_config_payload(tmp_p
         redis_host="redis.internal:6380",
         registration=_make_registration(),
         bootstrap_inputs=CloudVmBootstrapInputs(
-            benchmark_suite="sanity",
+            benchmark_suite="smoke/sanity",
             gitcache=True,
             build_timeout=4321,
             skip_rts_images=True,

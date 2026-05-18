@@ -1,8 +1,8 @@
-"""Tests that migrate, stats, ci are correctly nested under benchmark.
+"""Tests that stats and ci are correctly nested under benchmark.
 
 Verifies the CLI restructuring: these commands moved from top-level
-(crsbench migrate, crsbench stats, crsbench ci) to nested under benchmark
-(crsbench benchmark migrate, crsbench benchmark stats, crsbench benchmark ci).
+(crsbench stats, crsbench ci) to nested under benchmark
+(crsbench benchmark stats, crsbench benchmark ci).
 """
 
 import argparse
@@ -189,79 +189,6 @@ class TestBenchmarkSeedImportNesting:
         assert "--all" in help_text
 
 
-class TestBenchmarkMigrateNesting:
-    """Tests for 'crsbench benchmark migrate' nested subcommand."""
-
-    def test_benchmark_migrate_atlanta_to_rfc_parses(self):
-        parser = _make_parser()
-        args = parser.parse_args(
-            [
-                "benchmark",
-                "migrate",
-                "atlanta-to-rfc",
-                "--source-dir",
-                "/tmp/src",
-                "--target-dir",
-                "/tmp/dst",
-            ]
-        )
-        assert args.migrate_subcommand == "atlanta-to-rfc"
-
-    def test_benchmark_migrate_rfc_to_atlanta_parses(self):
-        parser = _make_parser()
-        args = parser.parse_args(
-            [
-                "benchmark",
-                "migrate",
-                "rfc-to-atlanta",
-                "--source-dir",
-                "/tmp/src",
-                "--target-dir",
-                "/tmp/dst",
-            ]
-        )
-        assert args.migrate_subcommand == "rfc-to-atlanta"
-
-    def test_benchmark_migrate_dispatch_routes_to_handler(self):
-        parser = _make_parser()
-        args = parser.parse_args(
-            [
-                "benchmark",
-                "migrate",
-                "atlanta-to-rfc",
-                "--source-dir",
-                "/tmp/src",
-                "--target-dir",
-                "/tmp/dst",
-            ]
-        )
-        assert hasattr(args, "func")
-        assert callable(args.func)
-        assert args.func.__name__ == "run_migrate"
-
-    def test_benchmark_migrate_all_subcommands_registered(self):
-        parser = _make_parser()
-        subcommand_args = {
-            "atlanta-to-rfc": [
-                "--source-dir",
-                "/tmp/src",
-                "--target-dir",
-                "/tmp/dst",
-            ],
-            "rfc-to-atlanta": [
-                "--source-dir",
-                "/tmp/src",
-                "--target-dir",
-                "/tmp/dst",
-            ],
-            "generate-test-sh": ["--benchmark", "test-bench"],
-            "generate-vuln-yaml": [],
-        }
-        for sub, extra in subcommand_args.items():
-            args = parser.parse_args(["benchmark", "migrate", sub, *extra])
-            assert args.migrate_subcommand == sub
-
-
 class TestBenchmarkCommandDispatch:
     """Tests for run_benchmark_command dispatching to nested commands."""
 
@@ -286,7 +213,7 @@ class TestBenchmarkCommandDispatch:
 
 
 class TestOldTopLevelCommandsRemoved:
-    """Verify migrate, stats, ci are NOT registered as top-level commands.
+    """Verify stats and ci are NOT registered as top-level commands.
 
     We build the full parser the same way parse_arguments() does,
     but stop before calling parse_args() (which would consume sys.argv).
@@ -342,10 +269,6 @@ class TestOldTopLevelCommandsRemoved:
             if isinstance(action, argparse._SubParsersAction):
                 return set(action.choices.keys())
         return set()
-
-    def test_no_top_level_migrate(self):
-        commands = self._get_top_level_commands()
-        assert "migrate" not in commands
 
     def test_no_top_level_stats(self):
         commands = self._get_top_level_commands()

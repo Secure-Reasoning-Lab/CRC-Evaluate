@@ -1,0 +1,33 @@
+Name: afc/jvm
+Description: A benchmark suite for evaluating JVM-based CRS with official AFC benchmarks.
+Release date: 05.18.2026
+benchmark_list:
+  # apache-commons-compress
+  - afc-apache-commons-compress-delta-01
+  - afc-apache-commons-compress-delta-02
+  - afc-apache-commons-compress-delta-03
+  - afc-apache-commons-compress-delta-04
+  - afc-apache-commons-compress-delta-05
+  - afc-apache-commons-compress-delta-06
+  - afc-apache-commons-compress-delta-07
+  - afc-apache-commons-compress-full-01
+  # apache-poi
+  - afc-apache-poi-delta-01
+  - afc-apache-poi-full-01
+  # log4j2
+  - afc-log4j2-delta-01
+  # pdfbox
+  - afc-pdfbox-delta-01
+  - afc-pdfbox-full-01
+  # tika
+  - afc-tika-delta-01
+  - afc-tika-delta-02
+  - afc-tika-delta-03
+  - afc-tika-delta-04
+  - afc-tika-delta-05
+  - afc-tika-delta-06
+  - afc-tika-full-01
+  # zookeeper
+  - afc-zookeeper-delta-01
+  - afc-zookeeper-delta-02
+  - afc-zookeeper-full-01

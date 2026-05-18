@@ -23,17 +23,5 @@ Snapshots are written per trial under the experiment output directory as
 
 ## What To Read
 
-- User-facing examples and generator tooling:
-  - [snapshot-examples/README.md](../../snapshot-examples/README.md)
-- Full design and archive format:
-  - [docs/design/evaluation/snapshots.md](../design/evaluation/snapshots.md)
 - Runtime workflow context:
-  - [docs/guides/experiments/distributed.md](../guides/experiments/distributed.md)
-
-## Common Commands
-
-```bash
-python snapshot-examples/generate_snapshot.py --list <trial_dir>
-python snapshot-examples/generate_snapshot.py --list-snapshot <snapshot.tar.gz>
-python snapshot-examples/generate_snapshot.py --validate <trial_dir>
-```
+  - [docs/deployment/distributed.md](../deployment/distributed.md)

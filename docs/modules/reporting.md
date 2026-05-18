@@ -135,5 +135,4 @@ distributed re-evaluation or post-processing rewrites `crs_run_start_time`.
 
 ## Documentation
 
-- [Report generation design](../design/reporting/report-generation.md)
-- [Experiment guides](../guides/experiments/README.md)
+- [Experiment guides](../experiments/README.md)

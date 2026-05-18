@@ -9,7 +9,6 @@ This module provides utilities for:
 
 Used by:
 - crsbench.benchmark_ci: For CI testing
-- crsbench.migration: For test.sh generation (MCP server)
 """
 
 import os

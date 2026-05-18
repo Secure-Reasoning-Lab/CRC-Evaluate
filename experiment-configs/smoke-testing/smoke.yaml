@@ -1,0 +1,56 @@
+# Local smoke test for a single CRS (Claude Code bug-finding).
+#
+# Tiny scope: one CPV per harness across a handful of small benchmarks. Used to
+# verify the full pipeline (build -> run -> verify -> report) without committing
+# to a long run.
+#
+# Usage:
+#   uv run crsbench run --config experiment-configs/smoke-testing/smoke.yaml
+
+experiment:
+  name: smoke
+  task: bugfinding
+  mode: auto
+  benchmarks:
+    - afc-curl-delta-05: [curl_fuzzer_dict]
+    - afc-libxml2-delta-03: [html]
+    - afc-mongoose-delta-02: [fuzz]
+
+runtime:
+  trials: 1
+  max_total_time: 2400
+  build_timeout: 1200
+  run_timeout: 600
+  verify_timeout: 300
+  per_pov_verify_timeout: 120
+  redis_host: localhost
+  pov_early_stop: true
+  litellm:
+    mode: external
+    cost_budget: 2.0
+
+storage:
+  experiment_filestore: .run/smoke-testing/experiment-data/smoke
+  report_filestore: .run/smoke-testing/report-data/smoke
+  cleanup_after_trial: true
+
+resources:
+  memory_per_trial: "32G"
+
+crs_compose:
+  oss_crs_infra:
+    shared: true
+  crs-bug-finding-claude-code:
+    num_cores: 8
+    budget_policy: terminate
+    additional_env:
+      CRS_AGENT: claude_code
+      ANTHROPIC_MODEL: claude-opus-4-6
+
+worker:
+  jobs: 2
+  cores_per_job: 8
+
+evaluator:
+  jobs: 1
+  cores_per_job: 4

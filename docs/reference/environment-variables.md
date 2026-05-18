@@ -13,10 +13,31 @@ This page is the canonical index for CRSBench environment variables.
 | `CRSBENCH_LLM_UPSTREAM_BASE_URL` | Upstream/forwarding LiteLLM endpoint. |
 | `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` | Upstream LiteLLM key-management/tracking credential (`external` mode preferred). |
 | `CRSBENCH_LLM_UPSTREAM_API_KEY` | Upstream LiteLLM runtime API key (`external` mode preferred). |
-| `CRSBENCH_NOTIFY_APPRISE_URLS` | Apprise notification URLs for queue-backed distributed runs with tracked jobs only. Build URLs with https://appriseit.com/tools/url-builder/. CRSBench uses these URLs for operator-side `cloud monitor` notifications and for completion/failure notifications after distributed cleanup or orchestrator/cleanup failures while tracked jobs exist. In an attached `cloud monitor` session, CRSBench sends one operator-side terminal notification after it first observes the live queue transition from non-empty to empty. When failed jobs remain at that drain point, the terminal message reports a failure instead of a completion. Attaching while the queue is already idle does not emit a notification for that initial idle state, but a later active-to-idle transition in the same session still can. Delivery is best-effort: send failures are logged and do not fail the run. For managed cloud launches, pass this through `cloud.orchestrator.env` and reference `os.environ/CRSBENCH_NOTIFY_APPRISE_URLS` from the checked-in config so only the orchestrator VM receives it. If operator-side `cloud monitor` Apprise and orchestrator-side Apprise are both enabled, terminal notifications can duplicate. |
+| `CRSBENCH_NOTIFY_APPRISE_URLS` | Apprise notification URLs for queue-backed distributed and managed-cloud notifications. |
 | `CRSBENCH_NOTIFY_APPRISE_TITLE` | Optional Apprise notification title prefix. Defaults to `CRSBench`. |
 | `CRSBENCH_NOTIFY_APPRISE_TAG` | Optional Apprise tag applied to all configured notification URLs. |
-| `PROJECT_REPOS_DIR` | Optional cache directory for cloned upstream project repositories used by migration/source-preparation flows (default: `.crsbench-repos/`). |
+| `PROJECT_REPOS_DIR` | Optional cache directory for cloned upstream project repositories used by source-preparation flows (default: `.crsbench-repos/`). |
+
+### Apprise Notifications
+
+Build notification URLs with <https://appriseit.com/tools/url-builder/>.
+CRSBench uses `CRSBENCH_NOTIFY_APPRISE_URLS` for operator-side `cloud monitor`
+notifications and for completion or failure notifications after distributed
+cleanup or orchestrator failures while tracked jobs exist.
+
+In an attached `cloud monitor` session, CRSBench sends one terminal
+notification after it first observes the live queue transition from non-empty
+to empty. If failed jobs remain at that point, the notification reports
+failure instead of completion. Attaching while the queue is already idle does
+not emit a notification for that initial state, but a later active-to-idle
+transition in the same session can still notify.
+
+Delivery is best-effort: send failures are logged and do not fail the run. For
+managed cloud launches, pass the value through `cloud.orchestrator.env` and
+reference `os.environ/CRSBENCH_NOTIFY_APPRISE_URLS` from the checked-in config
+so only the orchestrator VM receives it. If operator-side `cloud monitor`
+Apprise and orchestrator-side Apprise are both enabled, terminal notifications
+can duplicate.
 
 ## Cloud Startup Overrides (Advanced)
 
@@ -113,7 +134,7 @@ They are consumed by OSS-Fuzz helper Docker runs and CRSBench direct Docker runs
 ## Component-Specific References
 
 - Setup and practical examples: [Getting Started Configuration](../getting-started/configuration.md)
-- Distributed workflow and CI notes: [Distributed Experiments](../guides/experiments/distributed.md)
+- Distributed workflow and CI notes: [Distributed Experiments](../deployment/distributed.md)
 - LiteLLM service details: [`services/litellm/README.md`](../../services/litellm/README.md)
 - Valkey service details: [`services/valkey/README.md`](../../services/valkey/README.md)
 - Template env file: [`.env.example`](../../.env.example)

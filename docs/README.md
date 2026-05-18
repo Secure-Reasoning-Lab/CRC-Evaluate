@@ -1,80 +1,60 @@
 # CRSBench Documentation
 
-Use this page as the primary navigation hub.
+**Start here:** [Getting Started](./getting-started/README.md) covers install,
+configuration, the first experiment, experiment workflows, and deployment
+modes — that's everything most users need.
 
-## Primary Paths
+1. [Install](./getting-started/install.md)
+2. [Configuration](./getting-started/configuration.md)
+3. [First Experiment](./getting-started/first-experiment.md)
+4. [Experiments](./getting-started/experiments.md)
+5. [Deployment](./getting-started/deployment.md)
 
-1. Install and configure CRSBench
-   [Getting Started](./getting-started/README.md),
-   [Install](./getting-started/install.md), and
-   [Configuration](./getting-started/configuration.md)
-2. Run your first experiment
-   [First Experiment](./getting-started/first-experiment.md)
-3. Run distributed experiments
-   [Experiment Guides](./guides/experiments/README.md) and
-   [Distributed Experiments](./guides/experiments/distributed.md)
-4. Run managed cloud experiments on GCE
-   [GCE Cloud Orchestration](./guides/experiments/gce-cloud-orchestration.md) for
-   `cloud preflight`, `cloud launch`, `cloud collect`, and `cloud teardown`, and
-   [Local Cloud Rehearsal](./guides/experiments/local-cloud-rehearsal.md)
-5. Run benchmark CI
-   [Benchmark CI Guides](./guides/benchmark-ci/README.md) and
-   [Benchmark CI Quickstart](./guides/benchmark-ci/quickstart.md)
+## Deep Dives
 
-## Guides
+For specific workflows or topologies, jump to:
 
-- [Guides Hub](./guides/README.md)
-- [Experiments Hub](./guides/experiments/README.md)
-  - [Single Machine](./guides/experiments/single-machine.md)
-  - [Discovery-Only OSS-Fuzz](./guides/experiments/discovery-only.md)
-  - [Replay Historical POVs](./guides/experiments/replay-povs.md)
-  - [Distributed](./guides/experiments/distributed.md)
-  - [Cloud Orchestration on GCE](./guides/experiments/gce-cloud-orchestration.md)
-  - [Local Cloud Rehearsal](./guides/experiments/local-cloud-rehearsal.md)
-  - [Queue and Recovery](./guides/experiments/queue-and-recovery.md)
-  - [Config Reference](./guides/experiments/config-reference.md)
-- [Benchmark CI Hub](./guides/benchmark-ci/README.md)
-  - [Quickstart](./guides/benchmark-ci/quickstart.md)
-  - [Distributed](./guides/benchmark-ci/distributed.md)
-  - [Reference](./guides/benchmark-ci/reference.md)
+- Experiment workflows: [`experiments/`](./experiments/README.md)
+  ([discovery-only](./experiments/discovery-only.md),
+  [replay POVs](./experiments/replay-povs.md),
+  [full-pipeline](./experiments/full-pipeline.md),
+  [merge results](./experiments/merge-results.md))
+- Deployment topologies: [`deployment/`](./deployment/README.md)
+  ([distributed](./deployment/distributed.md),
+  [GCE cloud](./deployment/gce-cloud-orchestration.md),
+  [local cloud rehearsal](./deployment/local-cloud-rehearsal.md))
+- Operations: [`operations/`](./operations/README.md)
+  ([queue & recovery](./operations/queue-and-recovery.md))
+- Benchmark CI: [`benchmark-ci/`](./benchmark-ci/README.md)
 
 ## Reference
 
-- [Reference Hub](./reference/README.md)
-- [Benchmark RFC](./RFC.md)
+- [Benchmark RFC](./RFC.md) — normative benchmark format
+- [Vulnerability Metadata RFC](./reference/vuln-yaml.md)
+- [Experiment Config Reference](./reference/experiment-config.md)
+- [Benchmark CI Config](./reference/benchmark-ci.md)
 - [Environment Variables](./reference/environment-variables.md)
-- [Logging Reference](./reference/logging.md)
+- [Benchmark Statistics](./reference/benchmark-statistics.md)
+- [Standalone Verification and Coverage](./reference/standalone-verification.md)
 - [OSS-CRS Interface](./reference/oss-crs-interface.md)
 - [Seed Corpus](./reference/seed-corpus.md)
 - [Snapshots](./reference/snapshots.md)
+- [Logging](./reference/logging.md)
 - [Example Configs](./reference/example-configs.md)
 
 ## Contributors
 
-- [Contributor Guides Hub](./contributors/README.md)
 - [Framework Developer Guide](./contributors/framework-developer-guide.md)
 - [Benchmark Developer Guide](./contributors/benchmark-developer-guide.md)
 - [Testing](./contributors/testing.md)
 - [Coding Standards](./contributors/coding-standards.md)
 - [Manual Validation](./contributors/manual-validation.md)
 
-## Design and Internals
-
-- [Design Index](./design/README.md)
-- [Architecture Overview](./design/architecture.md)
-- [Historical POV Replay Contract](./design/evaluation/pov-replay.md)
-
 ## Module Reference
 
 - [Module Index](./modules/README.md)
 
-## Governance
-
-- [Governance Hub](./governance/README.md)
-- [Documentation Taxonomy](./governance/documentation-taxonomy.md)
-- [Documentation Inventory](./governance/documentation-inventory.md)
-
-## Adjacent Repositories and Components
+## Adjacent Repositories
 
 - [experiment-configs/README.md](../experiment-configs/README.md)
 - [scripts/README.md](../scripts/README.md)

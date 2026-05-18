@@ -31,8 +31,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
-SMOKE_BUGFINDING_CONFIG_DEFAULT="$ROOT_DIR/experiment-configs/sanity-bugfinding/atlantis-multilang-given_fuzzer-default-delta.yaml"
-SMOKE_BUGFIXING_CONFIG_DEFAULT="$ROOT_DIR/experiment-configs/sanity-bugfixing/crs-claude-code-delta-sanity-smoke.yaml"
+SMOKE_BUGFINDING_CONFIG_DEFAULT="$ROOT_DIR/experiment-configs/smoke-testing/ci-bug-finding.yaml"
+SMOKE_BUGFIXING_CONFIG_DEFAULT="$ROOT_DIR/experiment-configs/smoke-testing/ci-bug-fixing.yaml"
 
 cd "$ROOT_DIR"
 

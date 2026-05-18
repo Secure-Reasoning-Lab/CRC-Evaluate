@@ -1,0 +1,12 @@
+Name: smoke/jvm
+Description: 8-benchmark JVM smoke suite drawn from the AFC pool.
+Release date: 05.18.2026
+benchmark_list:
+  - afc-apache-commons-compress-delta-01
+  - afc-apache-commons-compress-full-01
+  - afc-apache-poi-delta-01
+  - afc-log4j2-delta-01
+  - afc-pdfbox-delta-01
+  - afc-tika-delta-01
+  - afc-tika-full-01
+  - afc-zookeeper-delta-01

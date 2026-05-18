@@ -32,7 +32,7 @@ def test_build_local_rehearsal_layout_writes_file_backed_metadata(tmp_path) -> N
         """
 experiment: local-cloud-rehearsal
 task: bugfinding
-benchmark_suite: sanity
+benchmark_suite: smoke/sanity
 mode: delta
 runtime:
   trials: 1
@@ -90,7 +90,7 @@ crs_compose:
         ).decode("utf-8")
     )
     assert payload["redis_host"] == "orchestrator:6379"
-    assert payload["benchmark_suite"] == "sanity"
+    assert payload["benchmark_suite"] == "smoke/sanity"
     assert payload["prepare_mode"] == "full"
     assert payload["download_benchmarks"] == "auto"
     assert (worker_root / "id").read_text(encoding="utf-8").startswith("local-worker-")
@@ -166,7 +166,7 @@ def test_sanity_always_rehearsal_config_is_valid() -> None:
     )
 
     assert config.experiment == "local-cloud-rehearsal-sanity-always"
-    assert config.benchmark_suite == "sanity"
+    assert config.benchmark_suite == "smoke/sanity"
     assert config.cloud is not None
     assert config.cloud.bootstrap.download_benchmarks == "always"
 
@@ -180,7 +180,7 @@ def test_hf_download_rehearsal_config_is_valid() -> None:
     )
 
     assert config.experiment == "local-cloud-rehearsal-hf-download"
-    assert config.benchmark_suite == "smoke-test-bug-finding-hf-download"
+    assert config.benchmark_suite == "smoke/hf-download"
     assert config.cloud is not None
     assert config.cloud.bootstrap.download_benchmarks == "auto"
     assert config.cloud.env["HF_TOKEN"] == "os.environ/HF_TOKEN"
@@ -195,7 +195,7 @@ def test_notification_rehearsal_config_is_valid() -> None:
     )
 
     assert config.experiment == "local-cloud-rehearsal-notification"
-    assert config.benchmark_suite == "sanity"
+    assert config.benchmark_suite == "smoke/sanity"
     assert config.cloud is not None
     assert (
         config.cloud.orchestrator.env["CRSBENCH_NOTIFY_APPRISE_URLS"]
@@ -267,7 +267,7 @@ def test_build_local_rehearsal_layout_resolves_cloud_env_passthrough(
             ).read_text(encoding="utf-8")
         ).decode("utf-8")
     )
-    assert worker_payload["benchmark_suite"] == "smoke-test-bug-finding-hf-download"
+    assert worker_payload["benchmark_suite"] == "smoke/hf-download"
     assert worker_payload["download_benchmarks"] == "auto"
 
 
@@ -346,7 +346,7 @@ def test_build_local_rehearsal_layout_preserves_sanity_always_download_policy(
         ).decode("utf-8")
     )
 
-    assert worker_payload["benchmark_suite"] == "sanity"
+    assert worker_payload["benchmark_suite"] == "smoke/sanity"
     assert worker_payload["download_benchmarks"] == "always"
 
 
@@ -362,7 +362,7 @@ def test_build_local_rehearsal_layout_preserves_gitcache_bootstrap_flag(
 experiment:
   name: local-cloud-rehearsal-gitcache
   task: bugfinding
-  benchmark_suite: sanity
+  benchmark_suite: smoke/sanity
   mode: delta
 runtime:
   trials: 1

@@ -10,7 +10,7 @@ def test_canonical_experiment_docs_reference_existing_configs() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     doc_paths = [
         repo_root / "docs" / "getting-started" / "first-experiment.md",
-        repo_root / "docs" / "guides" / "experiments" / "config-reference.md",
+        repo_root / "docs" / "reference" / "experiment-config.md",
         repo_root / "docs" / "README.md",
     ]
 

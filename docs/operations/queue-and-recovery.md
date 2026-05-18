@@ -1,0 +1,75 @@
+# Queue and Recovery
+
+Use this page for queue cleanup, continue-vs-fresh behavior, and retry flows.
+
+## Snapshot Versus Live Attach
+
+For launched cloud experiments, these commands follow the shared cloud reconnect
+contract: `status`, `events`, and `monitor` talk to the experiment control
+plane, while collection and teardown can fall back to persisted launch state.
+Today that managed-cloud path is implemented for GCE launches.
+
+- `crsbench cloud --config <config.yaml> status <experiment>` prints a one-shot
+  fleet, job, and recovery snapshot. In remote-orchestrator mode it waits for
+  the Redis tunnel during bootstrap and falls back to the live queue view if
+  lifecycle rows have not been populated yet.
+- `crsbench cloud --config <config.yaml> monitor <experiment>` attaches to a
+  launched remote orchestrator and keeps refreshing the live trial-queue view.
+  When the terminal is too short to show every running-job row, the Rich view
+  keeps the queue summary visible, shows a page indicator in the running-job
+  caption, reports whether `n`/`p` page hotkeys are active for that session,
+  lets you switch running-job pages manually when they are, lets `Space`
+  pause or resume auto-rotation, exits immediately on `q`, and after manual
+  `n`/`p` page changes resumes auto-rotation when the monitor sits idle
+  instead of pinning the same top rows forever.
+  Cloud worker names in the monitor use the same short aliases as other cloud
+  commands, so prefixes like `crsbench-<experiment>-` are hidden and workers
+  appear as `work-001`, `work-002`, and so on.
+
+When Apprise URLs are configured in the operator environment, `cloud monitor`
+sends one operator-side terminal notification after it first observes the queue
+transition from non-empty to empty during that attached session. When failed
+jobs remain at that drain point, the terminal message reports a failure instead
+of a completion. Attaching while the queue is already idle does not emit a
+terminal notification for that initial idle state, but a later active-to-idle
+transition in the same session still can. If operator-side `cloud monitor`
+Apprise and orchestrator-side Apprise are both enabled, terminal notifications
+can duplicate.
+
+## Cleaning an Experiment Queue
+
+```bash
+crsbench queue clean --experiment <experiment-name> --yes
+```
+
+Optional scoped cleanup:
+
+```bash
+crsbench queue clean --experiment <experiment-name> --queues trial,verify --yes
+```
+
+## `crsbench run` Existing-Queue Behavior
+
+- TTY: prompts for `fresh`, `continue`, or `quit`
+- non-TTY: defaults to `continue`
+- `continue`: skips completed work and handles orphaned started jobs
+- failed jobs requeue only with explicit opt-in
+- Collected-artifact partial reruns are separate from queue recovery:
+  `cloud derive-unfinished-trial-keys` plus `cloud launch --only-unfinished-from`
+  or `cloud launch --only-trial-keys-file` starts a new launch constrained by
+  explicit logical trial selectors (selector files are newline-delimited logical
+  trial keys). The default derive path now follows the normal collect/teardown
+  publish layout automatically, including nested wrapper directories named after
+  the experiment. If collection used `--dest` or `--timestamp`, point derivation
+  at that exact collected root (`--from` / `--only-unfinished-from`). Stale or
+  mismatched selector keys fail instead of being silently ignored. By contrast,
+  `crsbench run --retry-failed` retries failed jobs in the current queue state.
+
+```bash
+crsbench run --experiment-config config.yaml --queue-mode continue --retry-failed
+```
+
+## Related
+
+- Full experiment workflow: [distributed.md](../deployment/distributed.md)
+- Benchmark CI queue topology: [../benchmark-ci/distributed.md](../benchmark-ci/distributed.md)

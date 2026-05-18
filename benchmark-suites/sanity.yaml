@@ -1,6 +1,0 @@
-Name: sanity
-Description: Lightweight mock benchmarks for sanity testing (C and Java)
-Release date: 02.11.2026
-benchmark_list:
-  - sanity-mock-c-delta-01
-  - sanity-mock-java-delta-01

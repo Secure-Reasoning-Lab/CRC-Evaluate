@@ -39,7 +39,7 @@ Examples:
   crsbench benchmark stats --summary-only
   crsbench benchmark stats --output benchmarks.csv
   crsbench benchmark stats --benchmarks atlanta-curl-delta-01 afc-libxml2-delta-01
-  crsbench benchmark stats --benchmark-suite crsbench-all
+  crsbench benchmark stats --benchmark-suite crsbench/all
   crsbench benchmark stats --filter "afc-*"
         """,
     )
@@ -118,7 +118,7 @@ Examples:
   crsbench benchmark stats --summary-only
   crsbench benchmark stats --output benchmarks.csv
   crsbench benchmark stats --benchmarks atlanta-curl-delta-01 afc-libxml2-delta-01
-  crsbench benchmark stats --benchmark-suite crsbench-all
+  crsbench benchmark stats --benchmark-suite crsbench/all
   crsbench benchmark stats --filter "afc-*"
         """,
     )
@@ -277,12 +277,12 @@ Examples:
 
   # Export a benchmark suite
   python -m crsbench.statistics.cli \\
-    --benchmark-suite crsbench-all \\
+    --benchmark-suite crsbench/all \\
     --output suite.csv
 
   # Export merged vuln.yaml lookup index
   python -m crsbench.statistics.cli \\
-    --benchmark-suite crsbench-all \\
+    --benchmark-suite crsbench/all \\
     --vuln-index-output vuln-index.yaml
 
   # Summary only (no CSV export)

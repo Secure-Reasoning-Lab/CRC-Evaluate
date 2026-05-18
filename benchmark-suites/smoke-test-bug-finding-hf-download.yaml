@@ -1,7 +1,0 @@
-Name: smoke-test-bug-finding-hf-download
-Description: A 3-benchmark smoke suite for cloud download rehearsal.
-Release date: 03.19.2026
-benchmark_list:
-  - afc-curl-delta-05
-  - afc-libexif-delta-03
-  - afc-libxml2-delta-03

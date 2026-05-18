@@ -1,7 +1,7 @@
 experiment:
   name: local-cloud-rehearsal-hf-download
   task: bugfinding
-  benchmark_suite: smoke-test-bug-finding-hf-download
+  benchmark_suite: smoke/hf-download
   mode: delta
 runtime:
   trials: 1

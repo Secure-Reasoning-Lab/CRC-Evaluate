@@ -26,7 +26,7 @@ def test_run_cli_accepts_queue_modes() -> None:
                 "crsbench",
                 "run",
                 "--experiment-config",
-                "experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml",
+                "experiment-configs/local/bug-finding.yaml",
                 "--queue-mode",
                 mode,
             ]
@@ -42,7 +42,7 @@ def test_run_cli_rejects_legacy_queue_mode_values() -> None:
                 "crsbench",
                 "run",
                 "--experiment-config",
-                "experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml",
+                "experiment-configs/local/bug-finding.yaml",
                 "--queue-mode",
                 "resume",
             ]
@@ -55,7 +55,7 @@ def test_run_cli_retry_failed_flag_parsing() -> None:
             "crsbench",
             "run",
             "--experiment-config",
-            "experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml",
+            "experiment-configs/local/bug-finding.yaml",
             "--retry-failed",
         ]
     )

@@ -84,7 +84,6 @@ The logger automatically formats module names hierarchically:
 |-------------------------------|-----------------------------|
 | `crsbench.distributed.worker` | `[distributed/worker]`      |
 | `crsbench.evaluation.runner`  | `[evaluation/runner]`       |
-| `crsbench.migration.repo_manager` | `[migration/repo_manager]` |
 | `crsbench.run_experiment`     | `[run_experiment]`          |
 
 This makes it easy to identify which component is generating each log message.

@@ -39,9 +39,8 @@ Recommended order: tests -> typecheck -> lint/format.
 ## Development References
 
 - Coding standards: [Coding Standards](./coding-standards.md)
-- Distributed runtime: [Distributed Experiments](../guides/experiments/distributed.md)
+- Distributed runtime: [Distributed Experiments](../deployment/distributed.md)
 - CRS runtime interface: [OSS-CRS Interface](../reference/oss-crs-interface.md)
-- Design docs: [Design Index](../design/README.md)
 - Module docs: [Module Index](../modules/README.md)
 
 ## Pull Request Expectations

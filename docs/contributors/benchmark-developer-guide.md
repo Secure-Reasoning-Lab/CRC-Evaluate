@@ -10,7 +10,7 @@ Defines required benchmark structure, metadata, and validation rules.
 2. [Module Docs: Benchmark](../modules/benchmark/README.md)  
 Benchmark packaging/runtime workflow and CLI usage.
 
-3. [Benchmark CI Guide](../guides/benchmark-ci/reference.md)  
+3. [Benchmark CI Guide](../reference/benchmark-ci.md)  
 How to validate build/POV/patch/test/coverage in CI.
 
 4. [Testing Setup](./testing.md)  
@@ -43,10 +43,5 @@ Use this flow when preparing datasets for release:
    - `crsbench benchmark upload --dataset crsbench`
 
 Reference:
-- [Benchmark Data Protection and AI Contamination](../design/benchmark-protection-and-contamination.md)
 - [Dataset Module](../modules/dataset.md)
-
-## Related Design Docs
-
-- [Benchmark Lifecycle Design](../design/benchmark/benchmark-lifecycle.md)
-- [Benchmark CI Design](../design/benchmark-ci/benchmark-ci.md)
+- [Benchmark CI Guide](../reference/benchmark-ci.md)

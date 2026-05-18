@@ -1,5 +1,0 @@
-Name: usenix-r2
-Description: All atlanta + asc benchmarks that cannot find by naive fuzzers
-Release date: 02.01.2026
-benchmark_list:
-  - TBD

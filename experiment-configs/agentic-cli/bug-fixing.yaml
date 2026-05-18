@@ -1,0 +1,65 @@
+# Local multi-CRS bug-fixing benchmark across agentic CLIs.
+#
+# Each agent fixes the same ground-truth POVs from the benchmark suite.
+# Comment out any CRS you don't have credentials for.
+
+experiment:
+  name: agentic-cli-bug-fixing
+  task: bugfixing
+  benchmark_suite: afc/all
+  mode: delta
+
+runtime:
+  trials: 1
+  max_total_time: 43200
+  build_timeout: 21600
+  run_timeout: 7200
+  verify_timeout: 10800
+  per_pov_verify_timeout: 300
+  redis_host: localhost
+  inputs:
+    pov:
+      max_variants_per_cpv: 1
+  litellm:
+    mode: external
+    cost_budget: 20.0
+
+storage:
+  experiment_filestore: .run/agentic-cli/experiment-data/agentic-cli-bug-fixing
+  report_filestore: .run/agentic-cli/report-data/agentic-cli-bug-fixing
+
+worker:
+  jobs: 8
+  cores_per_job: 8
+
+resources:
+  memory_per_trial: "64G"
+
+crs_compose:
+  oss_crs_infra:
+    shared: true
+  crs-claude-code:
+    num_cores: 8
+    additional_env:
+      CRS_AGENT: claude_code
+      ANTHROPIC_MODEL: claude-opus-4-6
+  crs-codex:
+    num_cores: 8
+    additional_env:
+      CRS_AGENT: codex
+      OPENAI_MODEL: gpt-5-4
+  crs-copilot-cli:
+    num_cores: 8
+    additional_env:
+      CRS_AGENT: copilot_cli
+      COPILOT_MODEL: gpt-5-4
+  crs-gemini-cli:
+    num_cores: 8
+    additional_env:
+      CRS_AGENT: gemini_cli
+      GEMINI_MODEL: gemini-3-1-pro-preview
+  crs-opencode:
+    num_cores: 8
+    additional_env:
+      CRS_AGENT: opencode
+      OPENCODE_MODEL: zai-org/GLM-5.1

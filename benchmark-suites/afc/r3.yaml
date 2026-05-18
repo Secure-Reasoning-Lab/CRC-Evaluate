@@ -1,0 +1,20 @@
+Name: afc/r3
+Description: AFC Round 3 benchmarks from DARPA AIxCC competition.
+Release date: 05.18.2026
+benchmark_list:
+  # C/C++ benchmarks
+  - afc-curl-delta-01
+  - afc-curl-full-01
+  - afc-libexif-delta-01
+  - afc-sqlite3-delta-02
+  - afc-sqlite3-delta-03
+  # JVM benchmarks
+  - afc-apache-commons-compress-delta-04
+  - afc-apache-commons-compress-delta-05
+  - afc-tika-delta-01
+  - afc-tika-delta-02
+  - afc-tika-delta-03
+  - afc-tika-delta-04
+  - afc-tika-delta-05
+  - afc-tika-full-01
+  - afc-zookeeper-delta-02

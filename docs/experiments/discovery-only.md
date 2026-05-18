@@ -1,0 +1,228 @@
+# Discovery-Only OSS-Fuzz Experiments
+
+Use this workflow when you want to run CRSBench against OSS-Fuzz-format
+projects that do not have CRSBench ground truth under `.aixcc/`.
+
+This mode is intended for discovery and improvement pipelines on arbitrary
+OSS-Fuzz projects:
+
+- benchmark directories come from an OSS-Fuzz `projects/` tree
+- project language comes from `project.yaml` and is not limited to C/C++ or JVM
+- CRSBench generates a minimal `.aixcc/meta.yaml` by discovering fuzz targets
+- harnesses without CPVs are still scheduled when
+  `experiment.only_cpv_harnesses: false`
+
+## Prerequisites
+
+- The target project directory contains `project.yaml`, `Dockerfile`, and
+  `build.sh`.
+- `oss_fuzz_path` points at an OSS-Fuzz checkout.
+- `benchmarks_root` points at the directory containing the project
+  subdirectories, typically a separate OSS-Fuzz `projects/` checkout or mirror
+  such as `/path/to/oss-fuzz/projects`.
+- Docker is available locally, because `crsbench benchmark init` builds the
+  target project image and runs the project build to discover fuzzers.
+
+Important:
+
+- The managed `third_party/oss-fuzz` checkout in this repository is sparse and
+  is used as the helper/build-output checkout.
+- It does not populate `projects/<name>/` by default, so `benchmarks_root`
+  usually needs to point at a separate OSS-Fuzz projects checkout.
+- For local smoke configs that use a curated OSS-Fuzz shortlist, extract the
+  selected `projects/<name>/` directories into a `.run/.../projects` mirror
+  and point `benchmarks_root` at that mirror instead of
+  `third_party/oss-fuzz/projects`.
+- Keep `oss_fuzz_path: third_party/oss-fuzz` for those local mirror setups so
+  CRSBench still uses the repository-managed OSS-Fuzz checkout for helper
+  scripts and build outputs.
+- Managed cloud launches can use `benchmarks_root: third_party/oss-fuzz/projects`
+  for raw OSS-Fuzz project names. VM bootstrap materializes the selected
+  `projects/<name>/` directories from the managed checkout and generates
+  `.aixcc/meta.yaml` automatically on each VM before the run starts.
+
+## Minimal Config
+
+Use `full` mode for these benchmarks. `crsbench benchmark init` generates
+`full_mode` metadata only.
+
+```yaml
+experiment:
+  name: discovery-libyang
+  task: bugfinding
+  mode: full
+  benchmarks:
+    - libyang
+  only_cpv_harnesses: false
+  sanitizers:
+    - address
+
+benchmarks_root: /path/to/oss-fuzz/projects
+oss_fuzz_path: third_party/oss-fuzz
+
+runtime:
+  trials: 1
+  max_total_time: 5400
+  build_timeout: 3600
+  run_timeout: 600
+  verify_timeout: 60
+  skip_verification: true
+  source_mode: main_repo
+  redis_host: localhost
+
+storage:
+  experiment_filestore: /tmp/discovery-exp
+  report_filestore: /tmp/discovery-report
+
+crs_compose:
+  atlantis-multilang-given_fuzzer:
+    num_cores: 8
+
+resources:
+  cores_per_trial: 8
+  memory_per_trial: "32G"
+```
+
+Key settings:
+
+- `experiment.only_cpv_harnesses: false` keeps harnesses even when there are no
+  CPVs in metadata.
+- Discovery mode also supports explicit harness selectors:
+  ```yaml
+  experiment:
+    benchmarks:
+      - libyang:
+          - fuzz_yang
+          - fuzz_xpath
+  ```
+  Harness names are resolved from `.aixcc/meta.yaml` after
+  `crsbench benchmark init`. If a selected harness is not present in the
+  generated metadata, CRSBench logs a warning and skips that harness instead of
+  failing the whole run.
+- `runtime.skip_verification: true` is recommended because there is no
+  benchmark ground truth to verify against.
+- `runtime.build_timeout` is reused by both `crsbench benchmark init` and
+  managed cloud bootstrap when they build OSS-Fuzz projects to discover
+  harnesses. Increase it for large upstream projects instead of relying on a
+  fixed short discovery-build timeout.
+- `runtime.source_mode: main_repo` is recommended for raw OSS-Fuzz projects,
+  because their sources usually come from `project.yaml:main_repo` rather than
+  CRSBench-style `pkgs/` tarballs.
+- `benchmarks_root` and `oss_fuzz_path` must match the checkout you want to run
+  against.
+
+Checked-in template:
+
+- [`experiment-configs/discovery/discovery-libyang.yaml`](../../experiment-configs/discovery/discovery-libyang.yaml)
+  — minimal single-machine discovery run against the OSS-Fuzz `libyang`
+  project. Point `benchmarks_root` at your OSS-Fuzz `projects/` checkout
+  before running.
+
+## Initialize The Benchmarks
+
+Run initialization before `crsbench run` for local or manually managed worker
+setups:
+
+```bash
+uv run crsbench benchmark init --experiment-config config.yaml
+```
+
+If you keep your OSS-Fuzz projects outside the managed
+`third_party/oss-fuzz/projects` sparse checkout, materialize a mirror
+directory holding only the projects you care about and point
+`benchmarks_root` at that mirror before calling `benchmark init`.
+
+To pin the discovery build to specific CPUs:
+
+```bash
+uv run crsbench benchmark init \
+  --experiment-config config.yaml \
+  --cpuset-cpus 0-7
+```
+
+To initialize multiple benchmarks in parallel while keeping each OSS-Fuzz build
+inside a disjoint CPU slice:
+
+```bash
+uv run crsbench benchmark init \
+  --experiment-config config.yaml \
+  --jobs 4 \
+  --cpuset-cpus 0-31
+```
+
+`--jobs` parallelizes benchmark initialization across multiple OSS-Fuzz
+projects. When `--cpuset-cpus` is also set and `--jobs > 1`, CRSBench treats
+that cpuset as the total CPU envelope for the init command and splits it into
+per-job slices before calling the underlying OSS-Fuzz build path. Without an
+explicit cpuset, parallel init uses the current process affinity envelope.
+The init build and the equivalent managed cloud bootstrap build both honor
+`runtime.build_timeout` from the experiment config.
+
+If you run multiple `crsbench benchmark init` commands concurrently, give each
+command a disjoint `--cpuset-cpus` envelope. CRSBench only slices CPUs within
+one init command; it does not coordinate CPU allocation across separate CLI
+invocations.
+
+`benchmark init` does the following for each selected benchmark:
+
+- checks that the project looks like an OSS-Fuzz project
+- builds the project and discovers fuzz target binaries
+- writes `.aixcc/meta.yaml` with discovered `harness_files`
+- records a `full_mode.base_commit` from `project.yaml:main_repo`
+
+If `.aixcc/meta.yaml` already exists, `benchmark init` skips that benchmark.
+
+Managed cloud launches using
+`benchmarks_root: third_party/oss-fuzz/projects` do this automatically during
+VM bootstrap for raw OSS-Fuzz project names, so you do not need a separate
+pre-initialized benchmark checkout on the VMs. When cloud worker/evaluator
+sizing is configured, bootstrap reuses that sizing to initialize multiple
+OSS-Fuzz benchmarks in parallel under disjoint CPU slices instead of building
+them strictly one by one.
+
+## Run The Experiment
+
+After initialization, run the experiment normally:
+
+```bash
+uv run crsbench run --experiment-config config.yaml
+```
+
+For the smallest one-machine validation without Valkey or a worker:
+
+```bash
+uv run crsbench run --experiment-config config.yaml --local-only
+```
+
+The same initialized benchmarks can also be used with the distributed worker
+and evaluator workflows documented in [Distributed](../deployment/distributed.md).
+
+For managed GCE runs, base your discovery config on the cloud shape used by
+[`experiment-configs/gcp/bug-finding.yaml`](../../experiment-configs/gcp/bug-finding.yaml)
+and overlay the discovery-only fields from
+[`experiment-configs/discovery/discovery-libyang.yaml`](../../experiment-configs/discovery/discovery-libyang.yaml)
+(`benchmarks_root`, `oss_fuzz_path`, `experiment.mode: full`,
+`runtime.skip_verification: true`).
+
+## Limits And Expectations
+
+- `crsbench run` expects `.aixcc/meta.yaml` to already exist for these
+  benchmarks. The initialization step is explicit; it is not created during the
+  run command.
+- Discovery initialization creates `full_mode` metadata only. If
+  `experiment.mode: delta` is set, these benchmarks will not be eligible.
+- If `project.yaml:main_repo` cannot be resolved to a real HEAD commit,
+  initialization can fall back to a placeholder commit in `.aixcc/meta.yaml`.
+  Update that commit before running, or source checkout will fail later.
+- Discovery-only runs collect raw POV and patch artifacts, but with
+  `skip_verification: true` they are not scored against benchmark ground truth.
+- `only_cpv_harnesses: false` applies to both bug-finding and bug-fixing CRS
+  types. For bug-fixing workflows, you still need a POV source such as a prior
+  finding experiment.
+- Discovery-mode initialization and trial orchestration work with arbitrary
+  OSS-Fuzz benchmark languages such as C/C++, JVM, Go, Rust, and Python, as
+  long as the selected CRS can run that target language.
+- Coverage and RTS remain language-specific subsystems. Coverage currently
+  supports C/C++ and JVM only; if enabled for an unsupported benchmark
+  language, CRSBench skips coverage for that benchmark with a warning instead
+  of failing the discovery run.

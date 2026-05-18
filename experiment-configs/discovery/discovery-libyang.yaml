@@ -1,0 +1,58 @@
+# Discovery-only OSS-Fuzz experiment (minimal single-machine template).
+#
+# Runs a CRS against a raw OSS-Fuzz project that has no CRSBench ground truth
+# under .aixcc/. POVs and patches are collected as artifacts; verification and
+# CPV-based scoring are skipped.
+#
+# Workflow:
+#   1. Point `benchmarks_root` at an OSS-Fuzz `projects/` checkout that
+#      contains the selected project(s).
+#   2. uv run crsbench benchmark init --experiment-config <this file>
+#      (generates .aixcc/meta.yaml by building the project and discovering
+#      harnesses)
+#   3. uv run crsbench run --config <this file>
+#
+# See docs/experiments/discovery-only.md for the full workflow.
+
+experiment:
+  name: discovery-libyang
+  task: bugfinding
+  mode: full
+  benchmarks:
+    - libyang
+  only_cpv_harnesses: false
+  sanitizers:
+    - address
+
+benchmarks_root: /path/to/oss-fuzz/projects
+oss_fuzz_path: third_party/oss-fuzz
+
+runtime:
+  trials: 1
+  max_total_time: 3600
+  build_timeout: 3600
+  run_timeout: 600
+  verify_timeout: 60
+  skip_verification: true
+  source_mode: main_repo
+  redis_host: localhost
+  litellm:
+    skip: true
+
+storage:
+  experiment_filestore: .run/discovery/experiment-data/discovery-libyang
+  report_filestore: .run/discovery/report-data/discovery-libyang
+
+worker:
+  jobs: 8
+  cores_per_job: 8
+
+resources:
+  cores_per_trial: 8
+  memory_per_trial: "32G"
+
+crs_compose:
+  oss_crs_infra:
+    shared: true
+  atlantis-multilang-given_fuzzer:
+    num_cores: 8

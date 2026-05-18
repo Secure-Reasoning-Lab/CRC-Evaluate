@@ -108,7 +108,6 @@ extend-exclude = [
     "oss-fuzz/",
     "oss-crs/",
     "oss-crs-registry/",
-    "snapshot-examples/",
     "scripts/",
 ]
 

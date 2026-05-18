@@ -1,0 +1,5 @@
+Name: asc/all
+Description: ASC benchmarks.
+Release date: 05.18.2026
+benchmark_list:
+  - asc-nginx-delta-01

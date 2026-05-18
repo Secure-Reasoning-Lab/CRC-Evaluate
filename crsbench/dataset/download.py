@@ -44,7 +44,7 @@ def _load_suite(suite_name: str, suites_root: Path) -> list[str]:
     """Load benchmark names from a suite YAML file.
 
     Args:
-        suite_name: Suite name (e.g., "afc-all", "sanity")
+        suite_name: Suite name (e.g., "smoke/sanity", "afc/all")
         suites_root: Root directory containing suite YAML files
 
     Returns:
@@ -540,7 +540,7 @@ def download_suite(
     """Download benchmarks specified in a benchmark suite.
 
     Args:
-        suite_name: Suite name (e.g., "afc-all", "sanity")
+        suite_name: Suite name (e.g., "smoke/sanity", "afc/all")
         output_dir: Directory to download benchmarks into
         suites_root: Root directory containing suite YAML files
         no_ground_truth: If True, skip downloading ground-truth.tar.gz

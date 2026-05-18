@@ -24,7 +24,6 @@ This page does not define:
 
 ## Canonical References
 
-- [Benchmark Lifecycle Design](../../design/benchmark/benchmark-lifecycle.md)
 - [Benchmark Developer Guide](../../contributors/benchmark-developer-guide.md)
 - [Benchmark RFC](../../RFC.md)
 

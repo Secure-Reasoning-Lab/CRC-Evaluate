@@ -5,6 +5,7 @@ deployment scenarios, see [configuration.md](./configuration.md).
 
 ## Prerequisites
 
+- Linux host or Linux VM. CRSBench is not supported on macOS or Windows hosts.
 - Python 3.12+
 - `uv`
 - Docker
@@ -13,11 +14,11 @@ deployment scenarios, see [configuration.md](./configuration.md).
 ## Bootstrap
 
 ```bash
-git clone <repo>
-cd CRSBench
+git clone https://github.com/sslab-gatech/CRSBench.git && cd CRSBench
 uv sync
 ./scripts/setup-third-party.sh
 uv run crsbench prepare
+# Required by the bundled Atlantis given-fuzzer starter CRS and by coverage workflows.
 uv run crsbench prepare --coverage
 ```
 
@@ -32,11 +33,12 @@ run means the RTS image set is already available.
 `third_party/atlantis-multilang-given_fuzzer` alongside the managed
 `third_party/oss-fuzz` checkout.
 
-`crsbench prepare --coverage` prepares the Atlantis/given_fuzzer coverage
-backend from that fixed checkout. It first pulls the canonical Team Atlanta
-GHCR `1.0.0` prepare/runtime images, retags them onto the canonical local
-Atlantis image names, and falls back to local `oss-crs prepare` only if those
-images are unavailable. Benchmark-specific coverage builds remain lazy;
+`crsbench prepare --coverage` prepares the Atlantis/given_fuzzer backend used
+by the bundled starter CRS and coverage workflows. It first pulls the canonical
+Team Atlanta GHCR `1.0.0` prepare/runtime images, retags them onto the
+canonical local Atlantis image names, and falls back to local `oss-crs prepare`
+only if those images are unavailable. Benchmark-specific coverage builds remain
+lazy;
 `crsbench coverage` runs Atlantis `oss-crs build-target` on first use and
 reuses the normalized build output afterward.
 
@@ -56,8 +58,23 @@ Coverage runtime notes:
 - `--build-workers` and `--verify-workers` remain hidden compatibility aliases
   in the `verify` and `patch-verify` commands only.
 
+## Shell Completion
+
+Enable tab-completion for all `crsbench` subcommands and options:
+
+```bash
+# Bash
+activate-global-python-argcomplete --user   # then restart shell or source ~/.bashrc
+
+# Zsh — add to ~/.zshrc
+eval "$(register-python-argcomplete crsbench)"
+```
+
+See the [argcomplete docs](https://github.com/kislyuk/argcomplete#installation) for
+fish and other shell setup instructions.
+
 ## Next Steps
 
 1. Configure environment and LiteLLM: [configuration.md](./configuration.md)
 2. Run a first experiment: [first-experiment.md](./first-experiment.md)
-3. Author or inspect config files: [../guides/experiments/config-reference.md](../guides/experiments/config-reference.md)
+3. Author or inspect config files: [../reference/experiment-config.md](../reference/experiment-config.md)

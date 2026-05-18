@@ -1,85 +1,88 @@
 # Experiment Configs
 
-## Directory Contract
+User-facing templates. Each YAML carries only the fields required by the
+[ExperimentConfig schema](../crsbench/validation/schemas.py); every other knob
+falls back to its in-code default. Edit a copy to customize.
 
-- Maximum depth is one subdirectory level:
-  - allowed: `experiment-configs/<file>.yaml`
-  - allowed: `experiment-configs/<group>/<file>.yaml`
-  - not allowed: `experiment-configs/<group>/<subgroup>/<file>.yaml`
-- AFC final canonical groups:
-  - `afc-final-bugfinding/`
-  - `afc-final-bugfixing/`
-  - `sanity-bugfinding/`
-  - `sanity-bugfixing/`
-  - `cloud-testing/`
-- Additional workflow examples:
-  - `discovery-testing/` for discovery-only runs against OSS-Fuzz projects
-    without CRSBench ground truth
-  - `discovery-smoke-testing/` for small discovery-only smoke runs against
-    OSS-Fuzz projects using one CRS / one benchmark
+## Layout
 
-## Naming Convention
+```
+experiment-configs/
+├── local/              # Single-machine runs, 1 CRS (Claude Code)
+│   ├── bug-finding.yaml
+│   ├── bug-fixing.yaml
+│   └── full-pipeline-fixing.yaml
+├── gcp/                # GCE-hosted runs, 1 CRS (Claude Code)
+│   ├── bug-finding.yaml
+│   ├── bug-fixing.yaml
+│   └── full-pipeline-fixing.yaml
+├── smoke-testing/      # Tiny single-CRS smoke run
+│   └── smoke.yaml
+├── agentic-cli/        # Multi-CRS comparison across agentic CLIs
+│   ├── bug-finding.yaml
+│   ├── bug-fixing.yaml
+│   └── full-pipeline-fixing.yaml
+└── discovery/          # Discovery-only OSS-Fuzz (no CRSBench ground truth)
+    └── discovery-libyang.yaml
+```
 
-- Filenames in this directory are a readability convention only.
-- CRSBench does not enforce filename schemas; only YAML content is validated.
-- Keep names descriptive and stable for operators (for example `{crs}-{model}-{mode}-...`).
+`full-pipeline-fixing.yaml` runs the bug-fixing phase against POVs produced by
+a prior `bug-finding.yaml` run in the same subdir. See
+[docs/experiments/full-pipeline.md](../docs/experiments/full-pipeline.md) for
+how the two phases are chained.
 
-Examples:
-- `afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run-1.yaml`
-- `afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-distributed-localhost.yaml`
-- `afc-final-bugfixing/crs-codex-gpt-5-4-full.yaml`
-- `afc-final-bugfixing/crs-claude-code-claude-sonnet-4-20250514-full.yaml`
-- `cloud-testing/gce-usenix-r1-1orch-2worker-1eval-multilang-given-fuzzer.yaml`
-- `sanity-bugfinding/atlantis-multilang-given_fuzzer-default-delta.yaml`
-- `sanity-bugfixing/crs-copilot-cli-gpt-5-3-codex-delta-sanity-mock-c.yaml`
+Timing fields (`max_total_time`, `build_timeout`, `run_timeout`,
+`verify_timeout`, `per_pov_verify_timeout`) are **per (benchmark × trial)**
+wall-clock budgets, not per-experiment totals. They are intentionally the same
+across tiers so the same benchmark gets the same budget regardless of where
+it runs. What changes across tiers is `benchmark_suite`, `trials`,
+`cost_budget`, `num_cores`, and `worker.jobs` / `cloud.*`.
 
-## Legacy Files
+## Required fields
 
-- Legacy top-level AFC presets (`experiment-config-afc*.yaml`) and `paper-eval/*.yaml` were removed.
-- New AFC/sanity experiments should use only:
-  - `afc-final-bugfinding/`
-  - `afc-final-bugfixing/`
-  - `sanity-bugfinding/`
-  - `sanity-bugfixing/`
+Every config must set the following (defaults handle everything else):
 
-## Config Schema Contract
+- `experiment.name` — unique identifier
+- `experiment.task` — `bugfinding` or `bugfixing`
+- `experiment.mode` — `delta`, `full`, `all`, or `auto`
+- `experiment.benchmark_suite` **or** `experiment.benchmarks` — exactly one
+- `runtime.trials` — integer ≥ 1
+- `runtime.max_total_time` — seconds per trial
+- `storage.experiment_filestore` — output directory
+- `storage.report_filestore` — report output directory
+- `crs_compose.oss_crs_infra` — `{shared: true}` or `{num_cores: N}`
+- At least one `crs_compose.<crs-name>` entry with `num_cores`
 
-- Use `crs_compose` CRS service keys as the CRS source-of-truth.
-- Use `crs_compose` (do not use `crs_overrides`).
-- Use either `benchmarks` or `benchmark_suite` (mutually exclusive).
-- Set `experiment.task` explicitly:
-  - `bugfinding`
-  - `bugfixing`
-- Keep shared templates machine-agnostic when possible.
-- Use explicit `runtime.inputs` knobs (no implicit difficulty-based behavior):
-  - `runtime.inputs.pov`
-  - `runtime.inputs.sarif`
-  - `runtime.inputs.seed`
-  - `runtime.inputs.diff`
-- Task constraints:
-  - `task: bugfinding` should declare `runtime.inputs.pov`
-  - `runtime.inputs.sarif/seed/diff` are optional and may be enabled when the
-    selected CRS flow consumes them
+`cloud:` is additionally required for GCE runs and must declare `providers`,
+`orchestrator`, and `workers`.
 
-Preferred `crs_compose` shape:
-- `crs_compose.oss_crs_infra` with exactly one CPU mode:
-  - `num_cores`
-  - `shared: true`
-- Optional per-CRS overrides:
-  - `crs_compose.<crs-name>` where `<crs-name>` is the registry ID key
-- Optional fields:
-  - `mem_limit`
-  - `additional_env`
+## Common usage
 
-Smoke/CI bug-finding presets may explicitly set `runtime.pov_early_stop: true`
-to terminate once all expected CPVs for a harness are confirmed. Keep the
-global/default behavior `false` for non-smoke experiment configs.
+Local:
+
+```bash
+uv run crsbench run --config experiment-configs/local/bug-finding.yaml
+```
+
+GCP (requires `gcloud auth login`, `cloud keygen`, and HF/LLM env vars):
+
+```bash
+CONFIG=experiment-configs/gcp/bug-finding.yaml
+uv run crsbench cloud launch   --config "$CONFIG"
+uv run crsbench cloud monitor  --config "$CONFIG"
+uv run crsbench cloud collect  --config "$CONFIG" --force
+uv run crsbench cloud teardown --config "$CONFIG" --force
+```
+
+Full-pipeline two-phase chaining: launch `bug-finding.yaml` first; once
+results are collected, launch `full-pipeline-fixing.yaml`. The fixing config
+references the finding output via `inputs.pov.from_experiment_by_crs` — adjust
+the path if you ran phase 1 with a different `storage.experiment_filestore`.
+Background on the chaining mechanism is in
+[docs/experiments/full-pipeline.md](../docs/experiments/full-pipeline.md).
 
 ## Validation
 
-- Validate config schema via local checks:
-  - `scripts/ci-tests/run-local.sh checks`
-- Smoke selected scenarios:
-  - `scripts/ci-tests/run-local.sh smoke`
-  - successful smoke suites also rerun top-level `verify` / `patch-verify`
-    against the generated trial outputs before the suite is marked passed
+```bash
+scripts/ci-tests/run-local.sh checks
+```

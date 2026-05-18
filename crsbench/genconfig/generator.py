@@ -36,8 +36,9 @@ def discover_benchmark_suites(
     if not suites_root.is_dir():
         return []
     suites = []
-    for p in sorted(suites_root.glob("*.yaml")):
-        meta: Dict[str, Any] = {"name": p.stem, "description": "", "count": 0}
+    for p in sorted(suites_root.rglob("*.yaml")):
+        rel = p.relative_to(suites_root).with_suffix("")
+        meta: Dict[str, Any] = {"name": str(rel), "description": "", "count": 0}
         try:
             data = yaml.safe_load(p.read_text(encoding="utf-8"))
             if isinstance(data, dict):

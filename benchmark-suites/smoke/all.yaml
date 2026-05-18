@@ -1,0 +1,22 @@
+Name: smoke/all
+Description: Combined C + JVM smoke suite (union of smoke/c and smoke/jvm).
+Release date: 05.18.2026
+benchmark_list:
+  # C/C++
+  - afc-curl-delta-05
+  - afc-freerdp-delta-01
+  - afc-libexif-delta-03
+  - afc-libxml2-delta-03
+  - afc-mongoose-delta-02
+  - afc-shadowsocks-full-01
+  - afc-sqlite3-delta-01
+  - afc-wireshark-delta-01
+  # JVM
+  - afc-apache-commons-compress-delta-01
+  - afc-apache-commons-compress-full-01
+  - afc-apache-poi-delta-01
+  - afc-log4j2-delta-01
+  - afc-pdfbox-delta-01
+  - afc-tika-delta-01
+  - afc-tika-full-01
+  - afc-zookeeper-delta-01

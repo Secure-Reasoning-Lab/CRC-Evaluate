@@ -18,10 +18,14 @@ def add_dashboard_subparser(subparsers: argparse._SubParsersAction) -> None:
     """
     dashboard_parser = subparsers.add_parser(
         "dashboard",
-        help="Start the web dashboard for visualizing experiment results",
+        help="[experimental] Start the web dashboard for visualizing experiment results",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="""
-Start an interactive web dashboard to visualize CRS experiment results.
+[EXPERIMENTAL] Start an interactive web dashboard to visualize CRS experiment results.
+
+This command is an experimental feature. Interfaces, URL layout, JSON contracts,
+and CLI flags may change without notice, and the dashboard has not been hardened
+for multi-user or remote deployment (binds to localhost only).
 
 The dashboard reads from a base directory containing experiment directories.
 Each experiment directory should have experiment-data/ and report-data/ subdirectories.
@@ -129,6 +133,10 @@ def run_dashboard(args: argparse.Namespace) -> int:
     env["BASE_DIR"] = str(base_dir)
     env["PORT"] = str(port)
 
+    logger.warning(
+        "The 'crsbench dashboard' command is an experimental feature; "
+        "interfaces and data contracts may change without notice."
+    )
     logger.info("Starting dashboard server...")
     logger.info(f"  Base directory: {base_dir}")
     logger.info(f"  Port: {port}")

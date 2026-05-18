@@ -19,7 +19,6 @@ from unittest.mock import patch
 
 import pytest
 import yaml
-from crsbench.cloud.models import build_cloud_launch_plan
 from crsbench.run_experiment import (
     Trial,
     generate_trial_matrix,
@@ -122,7 +121,7 @@ report_filestore: /tmp/crsbench/report-data
 crs_compose:
   atlantis-c:
     num_cores: 1
-benchmark_suite: crsbench-afc-c
+benchmark_suite: afc/c
 """)
 
         config = load_experiment_config(config_path)
@@ -130,7 +129,7 @@ benchmark_suite: crsbench-afc-c
         assert config.experiment == "suite-experiment"
         assert config.trials == 2
         assert config.get_crs_registry_ids() == ["atlantis-c"]
-        assert config.benchmark_suite == "crsbench-afc-c"
+        assert config.benchmark_suite == "afc/c"
         assert config.benchmarks is None  # Not set when using suite
 
     def test_load_experiment_config_with_redis(self, tmp_path):
@@ -1174,398 +1173,13 @@ benchmarks:
 class TestIntegrationWithSampleConfigs:
     """Test integration with actual sample configs from experiment-configs/."""
 
-    def _assert_remote_gce_smoke_common(
-        self,
-        config,
-        *,
-        experiment_name: str,
-        expected_cloud_env: dict[str, str],
-        expected_services: set[str],
-        expected_provider_region: str | None = "us-east5",
-        expected_provider_regions: list[str] | None = None,
-        expected_worker_regions: list[str | None] | None = None,
-    ) -> None:
-        """Checked-in remote GCE smoke configs should keep the same launch topology."""
-        assert config.cloud is not None
-        assert config.build_timeout == 3600
-        assert config.max_total_time > (
-            config.build_timeout + config.run_timeout + config.verify_timeout
-        )
-        assert config.crs_compose is not None
-        assert set(config.crs_compose.services) == expected_services
-        assert config.cloud.bootstrap.prepare_mode == "full"
-        assert config.cloud.bootstrap.download_benchmarks == "auto"
-        assert config.cloud.env is not None
-        assert dict(config.cloud.env) == expected_cloud_env
-        assert config.cloud.providers is not None
-        assert config.cloud.providers.gce is not None
-        assert config.cloud.defaults is not None
-        assert config.cloud.providers.gce.profile_defaults is not None
-        assert config.cloud.providers.gce.region == expected_provider_region
-        assert config.cloud.providers.gce.regions == (
-            expected_provider_regions
-            if expected_provider_regions is not None
-            else (["us-east5"] if expected_provider_region is not None else [])
-        )
-        assert config.cloud.workers is not None
-        assert config.cloud.evaluators is not None
-        assert config.cloud.orchestrator is not None
-        assert config.experiment == experiment_name
-        assert (
-            config.cloud.defaults.crsbench_install_spec
-            == "git+ssh://git@github.com/sslab-gatech/CRSBench.git"
-        )
-        assert (
-            config.cloud.defaults.github_deploy_key_path
-            == ".crsbench-keys/crsbench-deploy"
-        )
-        assert config.cloud.workers.defaults is not None
-        assert config.cloud.workers.defaults.instance_profile == "gce-worker-n2d"
-        assert config.cloud.workers.defaults.count == 1
-        assert [
-            placement.region for placement in config.cloud.evaluators.placements
-        ] == [None]
-        assert [
-            placement.zones for placement in config.cloud.evaluators.placements
-        ] == [[]]
-        assert config.cloud.evaluators.defaults is not None
-        assert [
-            placement.instance_profile
-            for placement in config.cloud.evaluators.placements
-        ] == ["gce-evaluator-n2d"]
-        assert [
-            placement.count for placement in config.cloud.evaluators.placements
-        ] == [1]
-        assert config.cloud.defaults.readiness_timeout_sec == 1200
-        assert (
-            config.cloud.providers.gce.instance_profiles[
-                "gce-worker-n2d"
-            ].boot_disk_size_gb
-            == 100
-        )
-        assert (
-            config.cloud.providers.gce.instance_profiles[
-                "gce-orchestrator-n2d"
-            ].boot_disk_size_gb
-            == 100
-        )
-        assert (
-            config.cloud.providers.gce.instance_profiles[
-                "gce-worker-n2d"
-            ].service_account_email
-            == "153298433405-compute@developer.gserviceaccount.com"
-        )
-        assert (
-            config.cloud.providers.gce.instance_profiles[
-                "gce-orchestrator-n2d"
-            ].service_account_email
-            == "153298433405-compute@developer.gserviceaccount.com"
-        )
-        assert config.cloud.orchestrator.region is None
-        assert config.cloud.orchestrator.zones == []
-        assert [placement.region for placement in config.cloud.workers.placements] == (
-            expected_worker_regions or [None, "us-east1"]
-        )
-        assert [placement.count for placement in config.cloud.workers.placements] == [
-            1,
-            1,
-        ]
-
     def test_sanity_bugfinding_smoke_config_enables_pov_early_stop(self):
         """Smoke bug-finding preset should enable POV early termination explicitly."""
         config = load_experiment_config(
-            Path(
-                "experiment-configs/sanity-bugfinding/"
-                "atlantis-multilang-given_fuzzer-default-delta.yaml"
-            )
+            Path("experiment-configs/smoke-testing/smoke.yaml")
         )
 
         assert config.pov_early_stop is True
-
-    def test_sanity_bugfixing_smoke_config_relies_on_compose_cpu_limit(self):
-        """Smoke bug-fixing preset should not inject a trial CPU fallback."""
-        config = load_experiment_config(
-            Path(
-                "experiment-configs/sanity-bugfixing/"
-                "crs-copilot-cli-gpt-5-3-codex-delta-sanity-mock-c.yaml"
-            )
-        )
-
-        assert config.resources is None or config.resources.cores_per_trial is None
-        assert config.crs_compose is not None
-        assert config.crs_compose.services["crs-copilot-cli"].num_cores == 8
-
-    def test_remote_gce_sample_config_loads_for_cloud_launch(self):
-        """The checked-in GCE sanity config should parse with launch defaults."""
-        config_path = Path(
-            "experiment-configs/cloud-testing/gce-sanity-1orch-2worker-1eval.yaml"
-        )
-
-        assert config_path.exists(), (
-            f"Expected checked-in sample config at {config_path}"
-        )
-
-        config = load_experiment_config(config_path)
-
-        self._assert_remote_gce_smoke_common(
-            config,
-            experiment_name="gce-sanity-1o2w1e",
-            expected_cloud_env={
-                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL",
-                "CRSBENCH_LLM_MASTER_KEY": "os.environ/CRSBENCH_LLM_MASTER_KEY",
-                "HF_TOKEN": "os.environ/HF_TOKEN",
-            },
-            expected_services={"crs-libfuzzer"},
-        )
-        assert [placement.zones for placement in config.cloud.workers.placements] == [
-            [],
-            [],
-        ]
-
-    def test_remote_gce_multilang_given_fuzzer_sample_config_loads_for_cloud_launch(
-        self,
-    ):
-        """The Atlantis GCE sanity config should parse with launch defaults."""
-        config_path = Path(
-            "experiment-configs/cloud-testing/"
-            "gce-sanity-1orch-2worker-1eval-multilang-given-fuzzer.yaml"
-        )
-
-        assert config_path.exists(), (
-            f"Expected checked-in sample config at {config_path}"
-        )
-
-        config = load_experiment_config(config_path)
-
-        self._assert_remote_gce_smoke_common(
-            config,
-            experiment_name="gce-sanity-mgf-1o2w1e",
-            expected_cloud_env={"OSS_CRS_DEBUG": "1"},
-            expected_services={"atlantis-multilang-given_fuzzer"},
-            expected_provider_region="us-east5",
-            expected_provider_regions=["us-east5", "us-east1", "us-south1"],
-            expected_worker_regions=[None, None],
-        )
-        assert [placement.zones for placement in config.cloud.workers.placements] == [
-            [],
-            [],
-        ]
-
-        assert config.pov_early_stop is True
-        assert config.inputs.sarif.enabled is True
-        assert config.inputs.sarif.level == 5
-        assert config.inputs.diff.enabled is True
-
-    def test_remote_gce_usenix_r1_multilang_given_fuzzer_config_loads_for_cloud_launch(
-        self,
-        tmp_path: Path,
-    ):
-        """The Atlantis GCE usenix-r1 config should parse with launch defaults."""
-        from crsbench.cloud.gce.launch_preflight import prepare_gce_launch_inputs
-
-        config_path = Path(
-            "experiment-configs/cloud-testing/"
-            "gce-usenix-r1-1orch-2worker-1eval-multilang-given-fuzzer.yaml"
-        )
-
-        assert config_path.exists(), (
-            f"Expected checked-in sample config at {config_path}"
-        )
-
-        config = load_experiment_config(config_path)
-        plan = build_cloud_launch_plan(config)
-
-        self._assert_remote_gce_smoke_common(
-            config,
-            experiment_name="gce-usenix-r1-mgf-1o2w1e",
-            expected_cloud_env={
-                "OSS_CRS_DEBUG": "1",
-                "HF_TOKEN": "os.environ/HF_TOKEN",
-            },
-            expected_services={"atlantis-multilang-given_fuzzer"},
-            expected_provider_region="us-east5",
-            expected_provider_regions=["us-east5", "us-east1", "us-south1"],
-            expected_worker_regions=[None, None],
-        )
-        assert [placement.zones for placement in config.cloud.workers.placements] == [
-            [],
-            [],
-        ]
-
-        assert config.benchmark_suite == "usenix-r1"
-        assert config.mode == "all"
-        assert config.run_timeout == 1800
-        assert config.worker.jobs == 4
-        assert config.cloud.bootstrap.download_benchmarks == "auto"
-        assert config.cloud.providers.gce.fallback is True
-        assert config.pov_early_stop is True
-        assert config.inputs.sarif.enabled is True
-        assert config.inputs.sarif.level == 5
-        assert config.inputs.diff.enabled is True
-        assert plan.orchestrator.regions == ["us-east5", "us-east1", "us-south1"]
-        assert plan.orchestrator.fallback is True
-        assert [placement.regions for placement in plan.worker_placements] == [
-            ["us-east5", "us-east1", "us-south1"],
-            ["us-east5", "us-east1", "us-south1"],
-        ]
-        assert [placement.fallback for placement in plan.worker_placements] == [
-            True,
-            True,
-        ]
-        assert [placement.regions for placement in plan.evaluator_placements] == [
-            ["us-east5", "us-east1", "us-south1"]
-        ]
-        assert [placement.fallback for placement in plan.evaluator_placements] == [True]
-
-        key_dir = tmp_path / ".crsbench-keys"
-        key_dir.mkdir()
-        key_path = key_dir / "crsbench-deploy"
-        key_path.write_text("PRIVATE KEY", encoding="utf-8")
-
-        preflight = prepare_gce_launch_inputs(
-            plan=plan,
-            cwd=tmp_path,
-            env={"HF_TOKEN": "hf_test_token"},
-        )
-
-        assert plan.orchestrator.env["HF_TOKEN"] == "os.environ/HF_TOKEN"
-        assert preflight.orchestrator_env["HF_TOKEN"] == "hf_test_token"
-        assert preflight.worker_placement_envs == [
-            {"OSS_CRS_DEBUG": "1", "HF_TOKEN": "hf_test_token"},
-            {"OSS_CRS_DEBUG": "1", "HF_TOKEN": "hf_test_token"},
-        ]
-        assert preflight.evaluator_placement_envs == [
-            {"OSS_CRS_DEBUG": "1", "HF_TOKEN": "hf_test_token"}
-        ]
-        assert (
-            preflight.resolved_plan.orchestrator.launch_defaults.github_deploy_key_path
-            == str(key_path)
-        )
-
-    def test_remote_gce_hf_download_sample_config_loads_for_cloud_launch(self):
-        """The GCE HF-download config should parse with launch defaults."""
-        config_path = Path(
-            "experiment-configs/cloud-testing/gce-hf-download-1orch-2worker-1eval.yaml"
-        )
-
-        assert config_path.exists(), (
-            f"Expected checked-in sample config at {config_path}"
-        )
-
-        config = load_experiment_config(config_path)
-
-        self._assert_remote_gce_smoke_common(
-            config,
-            experiment_name="gce-hf-download-1o2w1e",
-            expected_cloud_env={
-                "HF_TOKEN": "os.environ/HF_TOKEN",
-            },
-            expected_services={"crs-libfuzzer"},
-        )
-        assert [placement.zones for placement in config.cloud.workers.placements] == [
-            [],
-            [],
-        ]
-
-        assert config.benchmark_suite == "smoke-test-bug-finding-hf-download"
-
-    def test_remote_gce_zone_fallback_sample_config_loads_for_cloud_launch(self):
-        """The GCE fallback sample should resolve provider-default zone fallback."""
-        config_path = Path(
-            "experiment-configs/cloud-testing/gce-sanity-zone-fallback-1orch-1worker-1eval.yaml"
-        )
-
-        assert config_path.exists(), (
-            f"Expected checked-in sample config at {config_path}"
-        )
-
-        config = load_experiment_config(config_path)
-        plan = build_cloud_launch_plan(config)
-
-        assert config.cloud is not None
-        assert config.cloud.providers is not None
-        assert config.cloud.providers.gce is not None
-        assert config.cloud.providers.gce.zones == [
-            "us-east5-b",
-            "us-east1-b",
-        ]
-        assert config.cloud.providers.gce.fallback is True
-        assert config.cloud.orchestrator is not None
-        assert config.cloud.orchestrator.zones == []
-        assert config.cloud.orchestrator.fallback is None
-        assert config.cloud.workers is not None
-        assert config.cloud.evaluators is not None
-        assert [placement.zones for placement in config.cloud.workers.placements] == [
-            []
-        ]
-        assert [
-            placement.fallback for placement in config.cloud.workers.placements
-        ] == [None]
-        assert [
-            placement.zones for placement in config.cloud.evaluators.placements
-        ] == [["us-east1-b"]]
-        assert [
-            placement.fallback for placement in config.cloud.evaluators.placements
-        ] == [False]
-
-        assert config.experiment == "gce-sanity-fallback-1o1w1e"
-        assert config.benchmark_suite == "sanity"
-        assert config.cloud.bootstrap.prepare_mode == "full"
-        assert config.cloud.bootstrap.download_benchmarks == "auto"
-        assert plan.orchestrator.zones == ["us-east5-b", "us-east1-b"]
-        assert plan.orchestrator.fallback is True
-        assert [placement.zones for placement in plan.worker_placements] == [
-            ["us-east5-b", "us-east1-b"]
-        ]
-        assert [placement.fallback for placement in plan.worker_placements] == [True]
-        assert [placement.zones for placement in plan.evaluator_placements] == [
-            ["us-east1-b"]
-        ]
-        assert [placement.fallback for placement in plan.evaluator_placements] == [
-            False
-        ]
-
-    def test_remote_gce_zone_sample_config_loads_for_cloud_launch(self):
-        """The explicit zone sample should preserve the original zonal 1/2/1 layout."""
-        config_path = Path(
-            "experiment-configs/cloud-testing/gce-sanity-zone-1orch-2worker-1eval.yaml"
-        )
-
-        assert config_path.exists(), (
-            f"Expected checked-in sample config at {config_path}"
-        )
-
-        config = load_experiment_config(config_path)
-        plan = build_cloud_launch_plan(config)
-
-        assert config.cloud is not None
-        assert config.cloud.providers is not None
-        assert config.cloud.providers.gce is not None
-        assert config.cloud.providers.gce.region is None
-        assert config.cloud.orchestrator is not None
-        assert config.cloud.orchestrator.zone == "us-east5-b"
-        assert config.cloud.workers is not None
-        assert config.cloud.evaluators is not None
-        assert [placement.zone for placement in config.cloud.workers.placements] == [
-            "us-east5-b",
-            "us-east1-b",
-        ]
-        assert [placement.zone for placement in config.cloud.evaluators.placements] == [
-            "us-east5-b"
-        ]
-
-        assert config.experiment == "gce-sanity-zone-1o2w1e"
-        assert config.benchmark_suite == "sanity"
-        assert config.cloud.bootstrap.prepare_mode == "full"
-        assert config.cloud.bootstrap.download_benchmarks == "auto"
-        assert plan.orchestrator.zones == ["us-east5-b"]
-        assert [placement.zones for placement in plan.worker_placements] == [
-            ["us-east5-b"],
-            ["us-east1-b"],
-        ]
-        assert [placement.zones for placement in plan.evaluator_placements] == [
-            ["us-east5-b"]
-        ]
 
     def test_e2e_with_sample_config_single_crs(self, tmp_path):
         """Test end-to-end workflow with a sample single-CRS config."""
@@ -1709,7 +1323,7 @@ class TestIntegrationWithSampleConfigs:
 
     def test_benchmark_suite_expansion(self):
         """Test benchmark suite correctly expands to benchmark list."""
-        suite_path = Path("benchmark-suites/crsbench-afc-c.yaml")
+        suite_path = Path("benchmark-suites/afc/c.yaml")
 
         if not suite_path.exists():
             pytest.skip("Benchmark suite not found, skipping test")
