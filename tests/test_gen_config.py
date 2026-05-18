@@ -75,7 +75,7 @@ class TestDiscovery:
         if Path("benchmark-suites").is_dir():
             assert len(suites) > 0
             names = [s["name"] for s in suites]
-            assert "sanity" in names
+            assert "smoke/sanity" in names
 
     def test_discover_real_crs_names(self):
         """Verify discovery works with the actual repo CRS registry."""
