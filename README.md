@@ -33,6 +33,7 @@ queue-backed single-host experiment against the `sanity` suite.
 
 ```bash
 git clone https://github.com/sslab-gatech/CRSBench.git && cd CRSBench
+git submodule update --init --recursive
 uv sync
 ./scripts/setup-third-party.sh
 uv run crsbench prepare
