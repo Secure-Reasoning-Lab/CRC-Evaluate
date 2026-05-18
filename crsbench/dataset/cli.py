@@ -28,7 +28,7 @@ Examples:
   crsbench download --all
   crsbench download --dataset crsbench
   crsbench download --dataset crsbench --benchmarks afc-curl-delta-01
-  crsbench download --benchmark-suite sanity
+  crsbench download --benchmark-suite smoke/sanity
   crsbench download --all --no-ground-truth  # skip .aixcc/ ground truth
   crsbench download --all --no-corpus        # skip .aixcc/{{harness}}/corpus/
   crsbench download --all --output-dir /tmp/benchmarks
@@ -46,7 +46,7 @@ Examples:
         "--benchmark-suite",
         type=str,
         dest="benchmark_suite",
-        help="Download benchmarks from a suite file (e.g., 'sanity', 'afc/all')",
+        help="Download benchmarks from a suite file (e.g., 'smoke/sanity', 'afc/all')",
     )
     group.add_argument(
         "--all",

@@ -1,7 +1,7 @@
 # Benchmark Statistics
 
 This page summarizes the headline statistics of the CRSBench benchmark suite
-(`crsbench-all`) as released with the paper. The numbers below match the
+(`crsbench/all`) as released with the paper. The numbers below match the
 companion paper and can be regenerated locally with the CRSBench CLI.
 
 > The figures here exclude the small `sanity` suite, which is intended for
@@ -80,12 +80,12 @@ the same per-benchmark fields used to produce the tables above:
 ```bash
 # Per-benchmark CSV + suite-level summary CSV for the published suite
 uv run crsbench benchmark stats \
-  --benchmark-suite crsbench-all \
+  --benchmark-suite crsbench/all \
   --output benchmark_stats.csv
 
 # Merged vuln.yaml index (CPV-level metadata across all benchmarks)
 uv run crsbench benchmark stats \
-  --benchmark-suite crsbench-all \
+  --benchmark-suite crsbench/all \
   --vuln-index-output vuln-index.yaml
 ```
 

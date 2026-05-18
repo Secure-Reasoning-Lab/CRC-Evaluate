@@ -42,7 +42,7 @@ def create_benchmark_selection_parent() -> argparse.ArgumentParser:
         "-s",
         type=str,
         dest="benchmark_suite",
-        help="Load benchmarks from a suite file (e.g., 'sanity', 'smoke/all')",
+        help="Load benchmarks from a suite file (e.g., 'smoke/sanity', 'smoke/all')",
     )
     parser.add_argument(
         "--all",
