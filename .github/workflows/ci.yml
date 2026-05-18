@@ -299,8 +299,8 @@ jobs:
       - name: Run smoke suites (worker + evaluator + orchestrator)
         env:
           # Source-of-truth smoke configs:
-          SMOKE_BUGFINDING_CONFIG: experiment-configs/sanity-bugfinding/atlantis-multilang-given_fuzzer-default-delta.yaml
-          SMOKE_BUGFIXING_CONFIG: experiment-configs/sanity-bugfixing/crs-claude-code-delta-sanity-smoke.yaml
+          SMOKE_BUGFINDING_CONFIG: experiment-configs/smoke-testing/ci-bug-finding.yaml
+          SMOKE_BUGFIXING_CONFIG: experiment-configs/smoke-testing/ci-bug-fixing.yaml
           # run-local.sh manages an isolated temporary Valkey on a random port.
           # GitHub self-hosted runners may use Docker's systemd cgroup driver.
           # Smoke must avoid cpuset/cgroup mode unless the runner is explicitly

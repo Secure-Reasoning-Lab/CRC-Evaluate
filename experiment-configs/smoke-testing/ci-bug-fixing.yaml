@@ -1,0 +1,41 @@
+experiment:
+  name: sanity-test
+  task: bugfixing
+  benchmarks:
+  - sanity-mock-c-delta-01
+  - sanity-mock-java-delta-01
+  mode: delta
+runtime:
+  trials: 1
+  max_total_time: 3600
+  build_timeout: 1200
+  run_timeout: 900
+  verify_timeout: 1200
+  per_pov_verify_timeout: 600
+  redis_host: localhost
+  inputs:
+    pov:
+      max_variants_per_cpv: 1
+    sarif:
+      level: 5
+    diff: {}
+  litellm:
+    cost_budget: 2
+    mode: external
+    tracking_enabled: true
+storage:
+  experiment_filestore: /tmp/crsbench/sanity/experiment-data/sanity-test
+  report_filestore: /tmp/crsbench/sanity/report-data/sanity-test
+resources:
+  memory_per_trial: "64G"
+crs_compose:
+  crs-claude-code:
+    num_cores: 8
+worker:
+  jobs: 3
+  cores_per_job: 8
+  storage:
+    cleanup_after_trial: false
+evaluator:
+  jobs: 1
+  cores_per_job: 8
