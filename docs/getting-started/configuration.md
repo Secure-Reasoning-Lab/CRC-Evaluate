@@ -21,6 +21,12 @@ see [Environment Variables Reference](../reference/environment-variables.md).
    # CRSBENCH_LLM_UPSTREAM_MASTER_KEY=sk-your-master-key
    ```
 
+   CRSBench currently does not manage LiteLLM for you. You need to stand up
+   your own LiteLLM instance (for example via `scripts/litellm-helper.py`
+   locally, or an externally-hosted proxy) and point the variables above at
+   it. For provider keys, routing, fallbacks, and other LiteLLM-side
+   settings, refer to the upstream [LiteLLM docs](https://docs.litellm.ai/).
+
    When the experiment config sets `runtime.litellm.skip: true`, this step is
    not needed.
 
@@ -47,6 +53,11 @@ see [Environment Variables Reference](../reference/environment-variables.md).
    ```
 
 ## LiteLLM Runtime Contract
+
+CRSBench expects an externally-managed LiteLLM endpoint and only owns the
+client-side wiring documented here. For configuring the LiteLLM server
+itself (providers, model aliases, routing, fallbacks, key management, cost
+tracking), see the upstream [LiteLLM docs](https://docs.litellm.ai/).
 
 CRSBench uses canonical `CRSBENCH_LLM_*` names.
 

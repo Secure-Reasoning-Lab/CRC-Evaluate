@@ -41,9 +41,13 @@ uv run crsbench prepare --coverage   # for the bundled starter CRS
 ```
 
 Configure environment variables. CRSBench auto-loads `.env` from the repo root;
-edit it for distributed Redis, LiteLLM credentials, etc. See
+edit it for distributed Redis, LiteLLM credentials, etc. CRSBench currently
+requires you to bring your own LiteLLM endpoint, either via the local helper
+at `scripts/litellm-helper.py` or an external proxy. Refer to the
+[LiteLLM docs](https://docs.litellm.ai/) for configuring providers, routing,
+and keys. See
 [docs/getting-started/configuration.md](docs/getting-started/configuration.md)
-for the full reference.
+for the CRSBench-side wiring.
 
 ```bash
 cp .env.example .env
