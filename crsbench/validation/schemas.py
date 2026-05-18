@@ -3520,19 +3520,22 @@ class ExperimentConfig(BaseModel):
         default=False,
         description="Skip POV verification after CRS execution (default: False, verification enabled)",
     )
-    rts_enabled: bool = Field(
-        default=True,
+    rts_enabled: Optional[bool] = Field(
+        default=None,
         description="Enable RTS (Regression Test Selection) for benchmarks that declare "
         "rts_mode in project.yaml. When False, RTS is disabled even if benchmarks "
-        "support it. When True (default), RTS is activated for eligible benchmarks "
-        "(those with rts_mode != 'none' and inc_build = true).",
+        "support it. When unset, defaults to True for bug-fixing and False for "
+        "bug-finding (RTS only matters when patches are applied, so bug-finding "
+        "runs would just pay the regression-test overhead for no signal).",
     )
-    inc_build_enabled: bool = Field(
-        default=True,
+    inc_build_enabled: Optional[bool] = Field(
+        default=None,
         description="Enable incremental build (--incremental-build flag for oss-crs "
         "build-target and run). When False, every trial does a full rebuild from "
-        "scratch regardless of project.yaml inc_build setting. Useful for ablation "
-        "studies comparing incremental vs full build performance.",
+        "scratch regardless of project.yaml inc_build setting. When unset, "
+        "defaults to True for bug-fixing and False for bug-finding (bug-finding "
+        "trials don't modify source, so inc-build state-carry buys nothing). "
+        "Useful for ablation studies comparing incremental vs full build performance.",
     )
     oss_fuzz_path: Path = Field(
         default=Path("third_party/oss-fuzz"),
@@ -3972,6 +3975,25 @@ class ExperimentConfig(BaseModel):
             # Any from_experiment source implies we must stage POVs; enforce explicitly.
             self.inputs.pov.enabled = True
 
+        return self
+
+    @model_validator(mode="after")
+    def resolve_build_caching_defaults(self):
+        """Default rts_enabled / inc_build_enabled by task when left unset.
+
+        Bug-finding trials don't apply patches, so neither RTS nor incremental
+        build state-carry produce any signal — they just add startup overhead
+        and a layer of caching-related failure modes. Bug-fixing, on the other
+        hand, mutates source between trials and benefits from both.
+
+        Explicit values in the config always win; this only fills in the
+        ``None`` left by an unspecified field.
+        """
+        task_default = self.task != "bugfinding"
+        if self.rts_enabled is None:
+            self.rts_enabled = task_default
+        if self.inc_build_enabled is None:
+            self.inc_build_enabled = task_default
         return self
 
     @model_validator(mode="after")
