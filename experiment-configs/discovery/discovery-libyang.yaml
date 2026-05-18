@@ -43,6 +43,10 @@ storage:
   experiment_filestore: .run/discovery/experiment-data/discovery-libyang
   report_filestore: .run/discovery/report-data/discovery-libyang
 
+worker:
+  jobs: 8
+  cores_per_job: 8
+
 resources:
   cores_per_trial: 8
   memory_per_trial: "32G"
