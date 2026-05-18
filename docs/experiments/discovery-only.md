@@ -62,7 +62,7 @@ oss_fuzz_path: third_party/oss-fuzz
 
 runtime:
   trials: 1
-  max_total_time: 3600
+  max_total_time: 5400
   build_timeout: 3600
   run_timeout: 600
   verify_timeout: 60

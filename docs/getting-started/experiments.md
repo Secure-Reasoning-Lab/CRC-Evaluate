@@ -20,7 +20,7 @@ experiment:
 
 runtime:
   trials: 1
-  max_total_time: 3600
+  max_total_time: 5400
   build_timeout: 900
   run_timeout: 1800
   verify_timeout: 900
