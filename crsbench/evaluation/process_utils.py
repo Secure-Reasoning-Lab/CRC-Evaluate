@@ -118,8 +118,7 @@ def run_with_graceful_timeout(
                 process.wait(timeout=sig_grace_period)
             except subprocess.TimeoutExpired:
                 logger.warning(
-                    "Process did not exit after %ss grace period, sending SIGKILL...",
-                    sig_grace_period,
+                    f"Process did not exit after {sig_grace_period}s grace period, sending SIGKILL..."
                 )
                 _signal_process_group(process, signal.SIGKILL)
                 process.wait()
