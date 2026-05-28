@@ -83,7 +83,51 @@ def run_with_graceful_timeout(
             )
             stdout, stderr, returncode = _graceful_terminate(process, grace_period)
     else:
-        # Poll-based approach to support early stop
+        # Poll-based approach to support early stop.
+        # Background reader threads drain stdout/stderr to prevent pipe deadlock:
+        # the subprocess may generate large output (e.g. docker build progress in
+        # headless mode) that fills the OS pipe buffer (up to 1 MB), causing it to
+        # block on pipe_write while the poll loop sleeps without reading.
+        stdout_chunks: list[str] = []
+        stderr_chunks: list[str] = []
+
+        def _drain_stdout() -> None:
+            if process.stdout:
+                for chunk in process.stdout:
+                    stdout_chunks.append(chunk)
+
+        def _drain_stderr() -> None:
+            if process.stderr:
+                for chunk in process.stderr:
+                    stderr_chunks.append(chunk)
+
+        stdout_reader = threading.Thread(target=_drain_stdout, daemon=True)
+        stderr_reader = threading.Thread(target=_drain_stderr, daemon=True)
+        stdout_reader.start()
+        stderr_reader.start()
+
+        def _signal_and_wait(sig_grace_period: int) -> int:
+            """Send SIGTERM, wait for exit, SIGKILL if needed. Return exit code.
+
+            Does NOT read from pipes (background reader threads handle that).
+            When the process exits its write-end of the pipes closes, causing
+            the reader threads to see EOF and stop naturally.
+            """
+            _signal_process_group(process, signal.SIGTERM)
+            try:
+                process.wait(timeout=sig_grace_period)
+            except subprocess.TimeoutExpired:
+                logger.warning(
+                    "Process did not exit after %ss grace period, sending SIGKILL...",
+                    sig_grace_period,
+                )
+                _signal_process_group(process, signal.SIGKILL)
+                process.wait()
+            # Join reader threads so all pipe data is collected before returning
+            stdout_reader.join(timeout=10)
+            stderr_reader.join(timeout=10)
+            return process.returncode
+
         start_time = time.time()
         poll_interval = 1.0  # Check every second
 
@@ -91,11 +135,11 @@ def run_with_graceful_timeout(
             # Check if process completed
             retcode = process.poll()
             if retcode is not None:
-                # Process finished normally
-                stdout_bytes = process.stdout.read() if process.stdout else ""
-                stderr_bytes = process.stderr.read() if process.stderr else ""
-                stdout = stdout_bytes if isinstance(stdout_bytes, str) else ""
-                stderr = stderr_bytes if isinstance(stderr_bytes, str) else ""
+                # Process finished normally; wait for readers to drain remaining output
+                stdout_reader.join()
+                stderr_reader.join()
+                stdout = "".join(stdout_chunks)
+                stderr = "".join(stderr_chunks)
                 returncode = retcode
                 break
 
@@ -106,7 +150,9 @@ def run_with_graceful_timeout(
                 logger.info(
                     f"Timeout reached after {timeout}s, sending SIGTERM for graceful shutdown..."
                 )
-                stdout, stderr, returncode = _graceful_terminate(process, grace_period)
+                returncode = _signal_and_wait(grace_period)
+                stdout = "".join(stdout_chunks)
+                stderr = "".join(stderr_chunks)
                 break
 
             # Check for early stop signal
@@ -116,7 +162,9 @@ def run_with_graceful_timeout(
                 logger.info(
                     "Early stop signal received, sending SIGTERM for graceful shutdown..."
                 )
-                stdout, stderr, returncode = _graceful_terminate(process, grace_period)
+                returncode = _signal_and_wait(grace_period)
+                stdout = "".join(stdout_chunks)
+                stderr = "".join(stderr_chunks)
                 break
 
             # Sleep briefly before next poll
