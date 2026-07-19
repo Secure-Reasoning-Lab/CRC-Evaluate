@@ -127,6 +127,7 @@ Then re-run the quality gate command above.
 - Start here: `docs/README.md`
 - Install: `docs/getting-started/install.md`
 - Configuration: `docs/getting-started/configuration.md`
+- Evaluating submissions: `docs/getting-started/evaluating-submissions.md`
 - Discovery-only OSS-Fuzz experiments: `docs/experiments/discovery-only.md`
 - Replay historical POVs: `docs/experiments/replay-povs.md`
 - Full-pipeline (finding → fixing) chaining: `docs/experiments/full-pipeline.md`

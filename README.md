@@ -85,6 +85,7 @@ Start with **[Getting Started](docs/getting-started/README.md)**:
 3. [First Experiment](docs/getting-started/first-experiment.md)
 4. [Experiments](docs/getting-started/experiments.md) - bug-finding, bug-fixing, discovery, replay, merge
 5. [Deployment](docs/getting-started/deployment.md) - single-machine, multi-machine, GCE cloud
+6. [Evaluating Submissions](docs/getting-started/evaluating-submissions.md) - validate and register submitted CRSes
 
 Other entry points:
 

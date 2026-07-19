@@ -9,6 +9,7 @@ modes — that's everything most users need.
 3. [First Experiment](./getting-started/first-experiment.md)
 4. [Experiments](./getting-started/experiments.md)
 5. [Deployment](./getting-started/deployment.md)
+6. [Evaluating Submissions](./getting-started/evaluating-submissions.md)
 
 ## Deep Dives
 

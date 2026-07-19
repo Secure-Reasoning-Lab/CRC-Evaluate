@@ -402,6 +402,10 @@ Examples:
 
     add_prepare_subparser(subparsers)
 
+    from crsbench.submission.cli import add_submission_subparser
+
+    add_submission_subparser(subparsers)
+
     # 'gen-config' subcommand - interactive config scaffolding
     from crsbench.genconfig.cli import add_gen_config_subparser
 
@@ -3379,6 +3383,11 @@ def main() -> None:
         from crsbench.genconfig.cli import run_gen_config
 
         sys.exit(run_gen_config(args))
+
+    if args.command == "submission":
+        from crsbench.submission.cli import run_submission
+
+        sys.exit(run_submission(args))
 
     if args.command == "gen-config-tui":
         sys.exit(run_gen_config_tui(args))
