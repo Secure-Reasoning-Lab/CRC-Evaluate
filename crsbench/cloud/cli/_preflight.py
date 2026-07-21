@@ -21,6 +21,7 @@ from crsbench.cloud.providers import (
     provider_adapter_for_launch_plan,
 )
 from crsbench.cloud.quota import QuotaValidator
+from crsbench.utils.litellm_config import read_internal_litellm_config_snapshot
 from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -47,6 +48,12 @@ def run_preflight(args: argparse.Namespace) -> int:
 
     if config.cloud is None:
         logger.error("Experiment config must define cloud configuration for preflight")
+        return 2
+
+    try:
+        read_internal_litellm_config_snapshot(config_path)
+    except Exception as exc:
+        logger.error("Cloud preflight failed: {}", exc)
         return 2
 
     try:

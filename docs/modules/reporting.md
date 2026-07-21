@@ -8,7 +8,7 @@ Generate comprehensive reports from trial snapshots after experiment completion,
 
 - **Performance Analysis**: Evaluate CRS effectiveness across benchmarks
 - **Time-Series Analysis**: Track POV/patch discovery over time
-- **Resource Analysis**: Understand LLM token usage and cost patterns
+- **Resource Analysis**: Analyze LLM cost and any available token, request, and model metrics
 - **Comparative Analysis**: Compare different CRS implementations
 
 ## Operational Surface
@@ -116,7 +116,7 @@ print(validator.generate_completeness_report(result))
 Individual trial analysis including:
 - POV discovery timeline
 - Patch generation summary
-- LLM usage breakdown
+- LLM usage breakdown when token, request, or model metrics are available
 - Cost analysis
 
 ### Experiment Report

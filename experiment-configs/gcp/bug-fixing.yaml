@@ -3,7 +3,7 @@
 # Prerequisites:
 #   1. gcloud auth login && gcloud auth application-default login
 #   2. uv run crsbench cloud keygen
-#   3. HF_TOKEN, CRSBENCH_LLM_UPSTREAM_BASE_URL, CRSBENCH_LLM_UPSTREAM_MASTER_KEY in env
+#   3. HF_TOKEN, LITELLM_UPSTREAM_BASE_URL, CRSBENCH_LLM_UPSTREAM_MASTER_KEY in env
 #
 # Usage:
 #   CONFIG=experiment-configs/gcp/bug-fixing.yaml
@@ -73,7 +73,7 @@ cloud:
     github_deploy_key_path: .crsbench-keys/crsbench-deploy
   env:
     HF_TOKEN: os.environ/HF_TOKEN
-    CRSBENCH_LLM_UPSTREAM_BASE_URL: os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL
+    LITELLM_UPSTREAM_BASE_URL: os.environ/LITELLM_UPSTREAM_BASE_URL
     CRSBENCH_LLM_UPSTREAM_MASTER_KEY: os.environ/CRSBENCH_LLM_UPSTREAM_MASTER_KEY
   bootstrap:
     prepare_mode: full

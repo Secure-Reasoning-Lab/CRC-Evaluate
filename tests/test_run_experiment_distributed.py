@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
 import pytest
+import yaml
 from crsbench.cloud.models import build_cloud_launch_plan
 from crsbench.distributed.job_lifecycle import JobLifecycleRecord, JobState
 from crsbench.distributed.jobs import _build_trial_output_path
@@ -15,6 +16,7 @@ from crsbench.run_experiment import (
     Trial,
     _build_artifact_checker,
     _build_monitor_callbacks,
+    _build_trial_config_payload,
     _collect_monitored_results,
     _dedupe_results_by_logical_trial,
     _get_experiment_queue_stats,
@@ -40,6 +42,61 @@ from crsbench.validation.schemas import (
     ExperimentConfig,
     HarnessFile,
 )
+
+
+def test_internal_litellm_config_is_snapshotted_for_trial_transport(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "litellm.yaml"
+    config_path.write_text(
+        "model_list:\n"
+        "  - model_name: claude-opus-4-8\n"
+        "    litellm_params:\n"
+        "      api_key: os.environ/LITELLM_UPSTREAM_API_KEY\n"
+    )
+    config = ExperimentConfig(
+        experiment="test-exp",
+        trials=1,
+        mode="delta",
+        max_total_time=21600,
+        experiment_filestore=tmp_path / "exp",
+        report_filestore=tmp_path / "reports",
+        crs_compose={
+            "litellm_config_path": config_path,
+            "test-crs": {"num_cores": 1},
+        },
+        benchmarks=["test-bench"],
+        litellm_mode="internal",
+        litellm_cost_budget=10,
+    )
+
+    payload, config_yaml = _build_trial_config_payload(config)
+
+    assert yaml.safe_load(config_yaml) == yaml.safe_load(config_path.read_text())
+    assert payload["crs_compose"]["litellm_config_path"] == "litellm-config.yaml"
+    assert "os.environ/LITELLM_UPSTREAM_API_KEY" in config_yaml
+
+
+def test_skipped_internal_litellm_does_not_require_transport_config(
+    tmp_path: Path,
+) -> None:
+    config = ExperimentConfig(
+        experiment="test-exp",
+        trials=1,
+        mode="delta",
+        max_total_time=21600,
+        experiment_filestore=tmp_path / "exp",
+        report_filestore=tmp_path / "reports",
+        crs_compose={"test-crs": {"num_cores": 1}},
+        benchmarks=["test-bench"],
+        litellm_mode="internal",
+        skip_litellm=True,
+    )
+
+    payload, config_yaml = _build_trial_config_payload(config)
+
+    assert config_yaml is None
+    assert payload["skip_litellm"] is True
 
 
 def test_build_artifact_checker_recognizes_success_and_fail_markers(
@@ -1547,9 +1604,11 @@ def test_queue_mode_quit_exits_without_registration(tmp_path: Path) -> None:
         patch(
             "crsbench.distributed.registry.RuntimeRegistration.from_experiment_config"
         ),
+        patch("crsbench.run_experiment._build_trial_config_payload") as build_payload,
     ):
         run_experiment_distributed("exp-test", config, [], queue_mode="quit")
 
+    build_payload.assert_not_called()
     session.register_or_raise.assert_not_called()
     session.cleanup.assert_called_once()
 
@@ -4221,11 +4280,11 @@ def test_provider_neutral_cloud_workers_pass_layered_env_payloads(
     def _bring_up_workers(**kwargs):
         assert kwargs["env_passthrough_by_placement"] == [
             {
-                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
                 "OPENAI_API_KEY": "openai-key",
             },
             {
-                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
                 "OPENAI_API_KEY": "openai-key",
             },
         ]
@@ -4237,7 +4296,7 @@ def test_provider_neutral_cloud_workers_pass_layered_env_payloads(
         patch.dict(
             os.environ,
             {
-                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
                 "CRSBENCH_LLM_MASTER_KEY": "master-key",
                 "OPENAI_API_KEY": "openai-key",
             },
@@ -4266,11 +4325,11 @@ def test_provider_neutral_cloud_workers_pass_layered_env_payloads(
                 resolved_plan=resolved_plan,
                 worker_placement_envs=[
                     {
-                        "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                        "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
                         "OPENAI_API_KEY": "openai-key",
                     },
                     {
-                        "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                        "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
                         "OPENAI_API_KEY": "openai-key",
                     },
                 ],
@@ -4323,21 +4382,21 @@ def test_provider_neutral_cloud_instances_with_evaluators_pass_layered_env_paylo
     def _bring_up_instances(**kwargs):
         assert kwargs["worker_env_passthrough_by_placement"] == [
             {
-                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
                 "OPENAI_API_KEY": "openai-key",
             },
             {
-                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
                 "OPENAI_API_KEY": "openai-key",
             },
         ]
         assert kwargs["evaluator_env_passthrough_by_placement"] == [
             {
-                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
                 "ANTHROPIC_API_KEY": "anthropic-key",
             },
             {
-                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
                 "ANTHROPIC_API_KEY": "anthropic-key",
             },
         ]
@@ -4349,7 +4408,7 @@ def test_provider_neutral_cloud_instances_with_evaluators_pass_layered_env_paylo
         patch.dict(
             os.environ,
             {
-                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
                 "CRSBENCH_LLM_MASTER_KEY": "master-key",
                 "OPENAI_API_KEY": "openai-key",
                 "ANTHROPIC_API_KEY": "anthropic-key",
@@ -4379,21 +4438,21 @@ def test_provider_neutral_cloud_instances_with_evaluators_pass_layered_env_paylo
                 resolved_plan=resolved_plan,
                 worker_placement_envs=[
                     {
-                        "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                        "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
                         "OPENAI_API_KEY": "openai-key",
                     },
                     {
-                        "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                        "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
                         "OPENAI_API_KEY": "openai-key",
                     },
                 ],
                 evaluator_placement_envs=[
                     {
-                        "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                        "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
                         "ANTHROPIC_API_KEY": "anthropic-key",
                     },
                     {
-                        "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                        "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
                         "ANTHROPIC_API_KEY": "anthropic-key",
                     },
                 ],

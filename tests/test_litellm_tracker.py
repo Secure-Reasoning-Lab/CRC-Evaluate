@@ -65,7 +65,7 @@ class TestLiteLLMTracker:
         ):
             with pytest.raises(
                 LiteLLMTrackerError,
-                match="CRSBENCH_LLM_BASE_URL/CRSBENCH_LLM_UPSTREAM_BASE_URL not set",
+                match="LITELLM_UPSTREAM_BASE_URL or CRSBENCH_LLM_BASE_URL",
             ):
                 LiteLLMTracker()
 
@@ -1144,11 +1144,11 @@ class TestIsTrackingAvailable:
             assert is_tracking_available() is True
 
     def test_available_with_upstream_base_url(self):
-        """Test returns True when CRSBENCH_LLM_UPSTREAM_BASE_URL is used."""
+        """Test returns True when LITELLM_UPSTREAM_BASE_URL is used."""
         with patch.dict(
             os.environ,
             {
-                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "http://upstream:4000",
+                "LITELLM_UPSTREAM_BASE_URL": "http://upstream:4000",
                 "CRSBENCH_LLM_UPSTREAM_MASTER_KEY": "sk-key",
             },
             clear=True,
@@ -1185,9 +1185,9 @@ class TestSetupLlmTrackingBudget:
             os.environ,
             {
                 "CRSBENCH_LLM_BASE_URL": "http://litellm:4000",
-                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "http://litellm:4000",
+                "LITELLM_UPSTREAM_BASE_URL": "http://litellm:4000",
                 "CRSBENCH_LLM_UPSTREAM_MASTER_KEY": "sk-master-key-123",
-                "CRSBENCH_LLM_UPSTREAM_API_KEY": "sk-api-key-123",
+                "LITELLM_UPSTREAM_API_KEY": "sk-api-key-123",
             },
             clear=False,
         ):
@@ -1249,6 +1249,145 @@ class TestSetupLlmTrackingBudget:
             sanitizer="address",
             max_budget=50.0,
         )
+        mock_tracker.get_key_info.assert_not_called()
+
+    @patch("crsbench.distributed.jobs.LiteLLMTracker")
+    def test_terminate_policy_fails_when_tracking_setup_fails(
+        self, mock_tracker_class, base_config_dict
+    ):
+        """Require a working accounting source for terminate policy."""
+        from crsbench.distributed.jobs import _setup_llm_tracking
+        from crsbench.validation.schemas import ExperimentConfig
+
+        mock_tracker = MagicMock()
+        mock_tracker.generate_key.side_effect = LiteLLMTrackerError("unavailable")
+        mock_tracker_class.return_value = mock_tracker
+        base_config_dict["crs_compose"]["test-crs"]["budget_policy"] = "terminate"
+        config = ExperimentConfig(**base_config_dict, litellm_cost_budget=10)
+
+        with pytest.raises(RuntimeError, match="Cannot enforce budget_policy"):
+            _setup_llm_tracking(
+                config=config,
+                crs="test-crs",
+                benchmark="test-bench",
+                harness_name="fuzz_test",
+                trial_num=1,
+                mode="delta",
+                sanitizer="address",
+            )
+
+    @patch("crsbench.distributed.jobs.LiteLLMTracker")
+    def test_terminate_policy_deletes_key_when_budget_verification_fails(
+        self, mock_tracker_class, base_config_dict
+    ):
+        """Delete a generated key when its terminate budget cannot be verified."""
+        from crsbench.distributed.jobs import _setup_llm_tracking
+        from crsbench.validation.schemas import ExperimentConfig
+
+        mock_tracker = MagicMock()
+        mock_tracker.generate_key.return_value = "sk-test-key"
+        mock_tracker.get_key_info.side_effect = LiteLLMTrackerError("unavailable")
+        mock_tracker_class.return_value = mock_tracker
+        base_config_dict["crs_compose"]["test-crs"]["budget_policy"] = "terminate"
+        config = ExperimentConfig(**base_config_dict, litellm_cost_budget=10)
+
+        with pytest.raises(RuntimeError, match="budget could not be verified"):
+            _setup_llm_tracking(
+                config=config,
+                crs="test-crs",
+                benchmark="test-bench",
+                harness_name="fuzz_test",
+                trial_num=1,
+                mode="delta",
+                sanitizer="address",
+            )
+
+        mock_tracker.delete_key.assert_called_once_with("sk-test-key")
+
+    @patch("crsbench.distributed.jobs.LiteLLMTracker")
+    def test_terminate_policy_deletes_key_when_budget_does_not_match(
+        self, mock_tracker_class, base_config_dict
+    ):
+        """Delete a generated key when LiteLLM reports a different budget."""
+        from crsbench.distributed.jobs import _setup_llm_tracking
+        from crsbench.validation.schemas import ExperimentConfig
+
+        mock_tracker = MagicMock()
+        mock_tracker.generate_key.return_value = "sk-test-key"
+        mock_tracker.get_key_info.return_value = {"info": {"max_budget": 5}}
+        mock_tracker_class.return_value = mock_tracker
+        base_config_dict["crs_compose"]["test-crs"]["budget_policy"] = "terminate"
+        config = ExperimentConfig(**base_config_dict, litellm_cost_budget=10)
+
+        with pytest.raises(RuntimeError, match="budget does not match"):
+            _setup_llm_tracking(
+                config=config,
+                crs="test-crs",
+                benchmark="test-bench",
+                harness_name="fuzz_test",
+                trial_num=1,
+                mode="delta",
+                sanitizer="address",
+            )
+
+        mock_tracker.delete_key.assert_called_once_with("sk-test-key")
+
+    @patch("crsbench.distributed.jobs.LiteLLMTracker")
+    def test_terminate_policy_deletes_key_for_null_budget_info(
+        self, mock_tracker_class, base_config_dict
+    ):
+        """Delete a generated key when LiteLLM returns null key information."""
+        from crsbench.distributed.jobs import _setup_llm_tracking
+        from crsbench.validation.schemas import ExperimentConfig
+
+        mock_tracker = MagicMock()
+        mock_tracker.generate_key.return_value = "sk-test-key"
+        mock_tracker.get_key_info.return_value = {"info": None}
+        mock_tracker_class.return_value = mock_tracker
+        base_config_dict["crs_compose"]["test-crs"]["budget_policy"] = "terminate"
+        config = ExperimentConfig(**base_config_dict, litellm_cost_budget=10)
+
+        with pytest.raises(RuntimeError, match="budget could not be verified"):
+            _setup_llm_tracking(
+                config=config,
+                crs="test-crs",
+                benchmark="test-bench",
+                harness_name="fuzz_test",
+                trial_num=1,
+                mode="delta",
+                sanitizer="address",
+            )
+
+        mock_tracker.delete_key.assert_called_once_with("sk-test-key")
+
+    @patch("crsbench.distributed.jobs.LiteLLMTracker")
+    def test_terminate_policy_accepts_verified_budget(
+        self, mock_tracker_class, base_config_dict
+    ):
+        """Return the generated key when LiteLLM confirms the terminate budget."""
+        from crsbench.distributed.jobs import _setup_llm_tracking
+        from crsbench.validation.schemas import ExperimentConfig
+
+        mock_tracker = MagicMock()
+        mock_tracker.generate_key.return_value = "sk-test-key"
+        mock_tracker.get_key_info.return_value = {"info": {"max_budget": 10}}
+        mock_tracker_class.return_value = mock_tracker
+        base_config_dict["crs_compose"]["test-crs"]["budget_policy"] = "terminate"
+        config = ExperimentConfig(**base_config_dict, litellm_cost_budget=10)
+
+        tracker, api_key = _setup_llm_tracking(
+            config=config,
+            crs="test-crs",
+            benchmark="test-bench",
+            harness_name="fuzz_test",
+            trial_num=1,
+            mode="delta",
+            sanitizer="address",
+        )
+
+        assert tracker is mock_tracker
+        assert api_key == "sk-test-key"
+        mock_tracker.delete_key.assert_not_called()
 
     @patch("crsbench.distributed.jobs.LiteLLMTracker")
     def test_no_budget_when_resources_not_configured(

@@ -13,6 +13,33 @@ from crsbench.genconfig_tui.core import (
 from crsbench.genconfig_tui.schema_bridge import validate_grouped_config
 
 
+def _cloud_env_state() -> dict:
+    return {
+        "experiment": {
+            "name": "cloud-env-exp",
+            "task": "bugfinding",
+            "benchmark_suite": "sanity",
+            "mode": "delta",
+        },
+        "runtime": {
+            "trials": 1,
+            "max_total_time": 7201,
+            "build_timeout": 3600,
+            "run_timeout": 600,
+            "verify_timeout": 600,
+        },
+        "storage": {
+            "experiment_filestore": "/tmp/exp",
+            "report_filestore": "/tmp/report",
+        },
+        "crs_compose": {
+            "service_name": "crs-codex",
+            "service_num_cores": 2,
+        },
+        "cloud": {"enabled": True, "provider_project": "demo-project"},
+    }
+
+
 def test_build_grouped_config_omits_empty_optional_sections():
     state = {
         "experiment": {
@@ -177,6 +204,84 @@ def test_load_state_from_grouped_config_round_trips_nested_litellm_block():
     assert "skip_litellm" not in rebuilt["runtime"]
 
 
+def test_load_state_round_trips_internal_litellm_config_path():
+    grouped = {
+        "experiment": {
+            "name": "internal-exp",
+            "task": "bugfinding",
+            "benchmarks": ["sanity"],
+            "mode": "delta",
+        },
+        "runtime": {
+            "max_total_time": 7201,
+            "build_timeout": 3600,
+            "run_timeout": 600,
+            "verify_timeout": 600,
+            "litellm": {"mode": "internal", "cost_budget": 30},
+        },
+        "storage": {
+            "experiment_filestore": "/tmp/exp",
+            "report_filestore": "/tmp/report",
+        },
+        "crs_compose": {
+            "litellm_config_path": "configs/litellm-config.yaml",
+            "crs-codex": {"num_cores": 2},
+        },
+    }
+
+    state, extras = load_state_from_grouped_config(grouped)
+    rebuilt = build_grouped_config(state, section_extras=extras)
+
+    assert state["runtime"]["litellm_mode"] == "internal"
+    assert state["crs_compose"]["litellm_config_path"] == "configs/litellm-config.yaml"
+    assert rebuilt["runtime"]["litellm"]["mode"] == "internal"
+    assert (
+        rebuilt["crs_compose"]["litellm_config_path"] == "configs/litellm-config.yaml"
+    )
+
+
+def test_cloud_env_uses_internal_runtime_credential_only():
+    state = _cloud_env_state()
+    state["runtime"].update({"skip_litellm": False, "litellm_mode": "internal"})
+    state["cloud"].update(
+        {
+            "enabled": True,
+            "env_LITELLM_UPSTREAM_BASE_URL": "os.environ/LITELLM_UPSTREAM_BASE_URL",
+            "env_LITELLM_UPSTREAM_API_KEY": "os.environ/LITELLM_UPSTREAM_API_KEY",
+            "env_CRSBENCH_LLM_UPSTREAM_MASTER_KEY": "os.environ/CRSBENCH_LLM_UPSTREAM_MASTER_KEY",
+        }
+    )
+
+    env = build_grouped_config(state)["cloud"]["env"]
+
+    assert "LITELLM_UPSTREAM_API_KEY" in env
+    assert "CRSBENCH_LLM_UPSTREAM_MASTER_KEY" not in env
+
+
+def test_cloud_env_uses_external_tracking_credential_only():
+    state = _cloud_env_state()
+    state["runtime"].update(
+        {
+            "skip_litellm": False,
+            "litellm_mode": "external",
+            "llm_tracking_enabled": True,
+        }
+    )
+    state["cloud"].update(
+        {
+            "enabled": True,
+            "env_LITELLM_UPSTREAM_BASE_URL": "os.environ/LITELLM_UPSTREAM_BASE_URL",
+            "env_LITELLM_UPSTREAM_API_KEY": "os.environ/LITELLM_UPSTREAM_API_KEY",
+            "env_CRSBENCH_LLM_UPSTREAM_MASTER_KEY": "os.environ/CRSBENCH_LLM_UPSTREAM_MASTER_KEY",
+        }
+    )
+
+    env = build_grouped_config(state)["cloud"]["env"]
+
+    assert "LITELLM_UPSTREAM_API_KEY" not in env
+    assert "CRSBENCH_LLM_UPSTREAM_MASTER_KEY" in env
+
+
 def test_load_state_from_grouped_config_maps_cloud_fields_and_preserves_unknowns():
     grouped = {
         "experiment": {
@@ -201,6 +306,11 @@ def test_load_state_from_grouped_config_maps_cloud_fields_and_preserves_unknowns
             "crs-libfuzzer": {"num_cores": 2},
         },
         "cloud": {
+            "env": {
+                "LITELLM_UPSTREAM_BASE_URL": "os.environ/LITELLM_UPSTREAM_BASE_URL",
+                "LITELLM_UPSTREAM_API_KEY": "os.environ/LITELLM_UPSTREAM_API_KEY",
+                "CRSBENCH_LLM_UPSTREAM_MASTER_KEY": "os.environ/CRSBENCH_LLM_UPSTREAM_MASTER_KEY",
+            },
             "providers": {
                 "gce": {
                     "project": "demo-project",
@@ -233,6 +343,15 @@ def test_load_state_from_grouped_config_maps_cloud_fields_and_preserves_unknowns
     assert state["cloud"]["profile_boot_disk_type"] == "pd-balanced"
     assert state["cloud"]["worker_count"] == 2
     assert state["cloud"]["worker_region"] == "us-east1"
+    assert state["cloud"]["env_LITELLM_UPSTREAM_BASE_URL"] == (
+        "os.environ/LITELLM_UPSTREAM_BASE_URL"
+    )
+    assert state["cloud"]["env_LITELLM_UPSTREAM_API_KEY"] == (
+        "os.environ/LITELLM_UPSTREAM_API_KEY"
+    )
+    assert state["cloud"]["env_CRSBENCH_LLM_UPSTREAM_MASTER_KEY"] == (
+        "os.environ/CRSBENCH_LLM_UPSTREAM_MASTER_KEY"
+    )
     assert extras == {"cloud": {"custom_block": {"keep": "me"}}}
 
 

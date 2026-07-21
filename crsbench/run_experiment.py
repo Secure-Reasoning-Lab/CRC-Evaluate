@@ -84,6 +84,7 @@ from crsbench.utils.benchmark_utils import (
     filter_benchmarks_by_mode,
     get_available_modes_for_benchmark,
 )
+from crsbench.utils.litellm_config import normalize_internal_litellm_config
 from crsbench.utils.logger import configure_logger, get_logger
 from crsbench.utils.storage_warning import warn_for_persisted_storage_roots
 from crsbench.validation.ground_truth_paths import GroundTruthPaths
@@ -1456,6 +1457,33 @@ def _send_distributed_failure_notification(
     send_apprise_message(notification_config, body=body)
 
 
+def _build_trial_config_payload(
+    config: ExperimentConfig,
+) -> tuple[dict, str | None]:
+    """Build a portable trial config and snapshot the internal LiteLLM YAML."""
+    payload = config.model_dump()
+    if config.skip_litellm or config.litellm_mode != "internal":
+        return payload, None
+
+    crs_compose = config.crs_compose
+    if crs_compose is None:
+        raise ValueError("crs_compose is required for internal LiteLLM mode")
+    config_path = crs_compose.litellm_config_path
+    if config_path is None or not config_path.is_file():
+        raise FileNotFoundError(
+            f"Internal LiteLLM config file not found: {config_path}"
+        )
+    config_yaml = normalize_internal_litellm_config(
+        config_path.read_text(encoding="utf-8")
+    )
+
+    compose_payload = payload.get("crs_compose")
+    if not isinstance(compose_payload, dict):
+        raise ValueError("crs_compose is required for internal LiteLLM mode")
+    compose_payload["litellm_config_path"] = "litellm-config.yaml"
+    return payload, config_yaml
+
+
 def run_experiment_local(
     experiment_name: str,
     config,
@@ -1478,12 +1506,18 @@ def run_experiment_local(
     logger.info(f"Total trials to execute: {len(trials)}")
     logger.info("=" * 60)
 
+    if not trials:
+        logger.info("No local trial work remains")
+        return
+
     log_section("Executing Trials", width=60)
 
     # Generate 6-char random alphanumeric suffix (shared by all trials)
     trial_suffix = "_" + "".join(
         secrets.choice(string.ascii_lowercase + string.digits) for _ in range(6)
     )
+
+    config_payload, litellm_config_yaml = _build_trial_config_payload(config)
 
     # Execute trials sequentially
     results = []
@@ -1500,8 +1534,6 @@ def run_experiment_local(
 
         trial_id = build_trial_id(experiment_name, trial, trial_suffix)
 
-        config_payload = config.model_dump()
-
         result = run_crs_trial(
             crs=trial.crs,
             benchmark=bh.name,
@@ -1513,6 +1545,7 @@ def run_experiment_local(
             mode=trial.mode,
             sanitizer=trial.sanitizer,
             target_cpv_id=trial.target_cpv_id,
+            litellm_config_yaml=litellm_config_yaml,
         )
 
         results.append(result)
@@ -2695,6 +2728,8 @@ def run_experiment_distributed(
     resume_jobs: List = []
     jobs: List = []
     tracked_jobs: list[object] = []
+    config_payload: dict | None = None
+    litellm_config_yaml: str | None = None
     cleanup_exc: Exception | None = None
     main_exc: Exception | None = None
     should_send_completion = False
@@ -2731,7 +2766,43 @@ def run_experiment_distributed(
         if normalized_queue_mode is None:
             normalized_queue_mode = "fresh"
 
-        # TODO: too later to purge queue; as the old jobs are already taken by workers
+        if normalized_queue_mode == "quit":
+            logger.info("Aborted by queue-mode=quit")
+            return
+
+        payload_trials = list(trials)
+        if normalized_queue_mode == "continue" and has_resume_existing:
+            payload_existing_keys = {
+                key for status_dict in existing.values() for key in status_dict
+            }
+            payload_trials = [
+                trial
+                for trial in payload_trials
+                if (
+                    f"{trial.crs}:{trial.benchmark_harness.name}:"
+                    f"{trial.benchmark_harness.harness.name}:{trial.mode}:"
+                    f"{trial.sanitizer}:{trial.trial_num}:{trial.target_cpv_id or '-'}"
+                )
+                not in payload_existing_keys
+            ]
+        payload_trials = [
+            trial
+            for trial in payload_trials
+            if _check_existing_trial(
+                config,
+                trial.crs,
+                trial.benchmark_harness.name,
+                trial.benchmark_harness.harness.name,
+                trial.mode,
+                trial.sanitizer,
+                trial.trial_num,
+                trial.target_cpv_id,
+            )
+            is None
+        ]
+        if payload_trials:
+            config_payload, litellm_config_yaml = _build_trial_config_payload(config)
+
         # Handle queue based on mode
         if normalized_queue_mode == "fresh":
             if has_physical_existing:
@@ -3103,13 +3174,13 @@ def run_experiment_distributed(
 
         jobs = []
         for trial in trials:
+            if config_payload is None:
+                raise RuntimeError("Trial configuration payload was not prepared")
             bh = trial.benchmark_harness
             cpu_count = crs_cpu_counts.get(trial.crs)
             memory_limit = crs_memory_limits.get(trial.crs)
 
             trial_id = build_trial_id(experiment_name, trial, trial_suffix)
-
-            config_payload = config.model_dump()
 
             job = queue.enqueue(
                 "crsbench.distributed.jobs.run_crs_trial",
@@ -3124,6 +3195,7 @@ def run_experiment_distributed(
                 sanitizer=trial.sanitizer,
                 target_cpv_id=trial.target_cpv_id,
                 results_timestamp=results_timestamp,
+                litellm_config_yaml=litellm_config_yaml,
                 job_timeout=config.max_total_time,
                 result_ttl=-1,  # Persist results forever
                 meta={

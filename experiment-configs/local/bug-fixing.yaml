@@ -6,7 +6,7 @@
 # Usage:
 #   uv run crsbench run --config experiment-configs/local/bug-fixing.yaml
 #
-# Required env: CRSBENCH_LLM_UPSTREAM_BASE_URL, CRSBENCH_LLM_UPSTREAM_MASTER_KEY
+# Required env: LITELLM_UPSTREAM_BASE_URL, CRSBENCH_LLM_UPSTREAM_MASTER_KEY
 
 experiment:
   name: local-bug-fixing

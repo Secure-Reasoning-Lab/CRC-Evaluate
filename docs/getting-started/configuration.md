@@ -1,8 +1,7 @@
 # Configuration
 
-Use this page to get a CRSBench install into a runnable state. For deployment
-topologies, see [deployment.md](./deployment.md). For the full variable index,
-see [Environment Variables Reference](../reference/environment-variables.md).
+Use this page to get a CRSBench install into a runnable state.
+See [Deployment](./deployment.md) for deployment topologies and [Environment Variables Reference](../reference/environment-variables.md) for the full variable index.
 
 ## First-Run Setup
 
@@ -12,23 +11,17 @@ see [Environment Variables Reference](../reference/environment-variables.md).
    cp .env.example .env
    ```
 
-2. If the CRS you will run needs LiteLLM, edit `.env`:
+2. If the CRS needs LiteLLM, add the upstream endpoint and credential to `.env`:
 
    ```bash
-   CRSBENCH_LLM_UPSTREAM_BASE_URL=http://your-litellm:4000
-   CRSBENCH_LLM_UPSTREAM_API_KEY=sk-your-api-key
-   # Required only when runtime.litellm.tracking_enabled: true
+   LITELLM_UPSTREAM_BASE_URL=http://your-litellm:4000
+   LITELLM_UPSTREAM_API_KEY=sk-your-api-key
+   # Required only for external mode with runtime.litellm.tracking_enabled: true
    # CRSBENCH_LLM_UPSTREAM_MASTER_KEY=sk-your-master-key
    ```
 
-   CRSBench currently does not manage LiteLLM for you. You need to stand up
-   your own LiteLLM instance (for example via `scripts/litellm-helper.py`
-   locally, or an externally-hosted proxy) and point the variables above at
-   it. For provider keys, routing, fallbacks, and other LiteLLM-side
-   settings, refer to the upstream [LiteLLM docs](https://docs.litellm.ai/).
-
-   When the experiment config sets `runtime.litellm.skip: true`, this step is
-   not needed.
+   Internal mode uses these variables from its model-routing file, while external mode uses them as the CRS-facing endpoint and credential.
+   This step is not needed when the experiment sets `runtime.litellm.skip: true`.
 
 3. Prepare OSS-Fuzz and base images:
 
@@ -42,8 +35,7 @@ see [Environment Variables Reference](../reference/environment-variables.md).
    uv run python scripts/valkey-helper.py start
    ```
 
-   For multi-machine setups, use `--password start` instead. See
-   [deployment.md](./deployment.md).
+   For multi-machine setups, use `--password start` instead and see [Deployment](./deployment.md).
 
 5. Validate the dependencies you actually use:
 
@@ -54,32 +46,66 @@ see [Environment Variables Reference](../reference/environment-variables.md).
 
 ## LiteLLM Runtime Contract
 
-CRSBench expects an externally-managed LiteLLM endpoint and only owns the
-client-side wiring documented here. For configuring the LiteLLM server
-itself (providers, model aliases, routing, fallbacks, key management, cost
-tracking), see the upstream [LiteLLM docs](https://docs.litellm.ai/).
+CRSBench supports trial-scoped `internal` LiteLLM and an existing `external` LiteLLM endpoint.
+Set `runtime.litellm.skip: true` for a CRS that does not use an LLM.
 
-CRSBench uses canonical `CRSBENCH_LLM_*` names.
+### Internal mode
 
-Required when `runtime.litellm.mode: external`:
+Internal mode asks OSS-CRS to start one LiteLLM proxy for the trial and loads its routes from `crs_compose.litellm_config_path`.
 
-- `CRSBENCH_LLM_UPSTREAM_BASE_URL`
-- one of `CRSBENCH_LLM_UPSTREAM_API_KEY` or `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`
+```yaml
+runtime:
+  litellm:
+    mode: internal
+    tracking_enabled: true
+    cost_budget: 30
 
-Additionally required when `runtime.litellm.tracking_enabled: true`:
+crs_compose:
+  litellm_config_path: configs/litellm-config.yaml
+  crs-bug-finding-claude-code:
+    num_cores: 8
+```
 
-- `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`
+The LiteLLM file maps every model alias required by the selected CRS to an upstream model.
 
-Support status:
+```yaml
+model_list:
+  - model_name: claude-opus-4-8
+    litellm_params:
+      model: openai/gpt-5.5
+      api_base: os.environ/LITELLM_UPSTREAM_BASE_URL
+      api_key: os.environ/LITELLM_UPSTREAM_API_KEY
+    model_info:
+      input_cost_per_token: 0.000005
+      cache_read_input_token_cost: 0.0000005
+      output_cost_per_token: 0.00003
+```
 
-- supported: `runtime.litellm.mode: external`
-- supported: `runtime.litellm.skip: true`
-- planned, not implemented: `runtime.litellm.mode: self_hosted`
+Each `os.environ/NAME` reference in the LiteLLM file must resolve in the trial worker environment.
+CRSBench snapshots the LiteLLM file for local and distributed trials, transports it to managed GCE orchestrators and RQ workers, and keeps credential values in the worker environment.
+When `tracking_enabled` is true, internal mode records the cumulative cost reported by OSS-CRS in the trial `llm-usage.json`; token, request, and per-model metrics are not available from this report.
+An internal `cost_budget` must be a positive whole-dollar value because OSS-CRS applies it to each trial-scoped key.
+
+### External mode
+
+External mode connects each CRS directly to an existing LiteLLM-compatible endpoint.
+
+```yaml
+runtime:
+  litellm:
+    mode: external
+    tracking_enabled: true
+    cost_budget: 10.0
+```
+
+Set `LITELLM_UPSTREAM_BASE_URL` and either `LITELLM_UPSTREAM_API_KEY` or `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`.
+Use the LiteLLM proxy root for `LITELLM_UPSTREAM_BASE_URL` because tracking calls management endpoints such as `/key/info`.
+When `tracking_enabled` is true, `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` is required so CRSBench can create and inspect a per-trial virtual key.
+See the upstream [LiteLLM documentation](https://docs.litellm.ai/) for provider routing, aliases, fallbacks, and key management.
 
 ## Troubleshooting
 
-- `.env` is loaded from the repository root. If runtime credentials look
-  missing, confirm the file location first.
+- `.env` is loaded from the repository root, so confirm the file location when runtime credentials are missing.
 - Check Valkey connectivity:
 
   ```bash

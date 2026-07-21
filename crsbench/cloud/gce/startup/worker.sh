@@ -1107,6 +1107,7 @@ CRSBENCH_DOWNLOAD_DELAY_SEC="$(metadata_get_optional "crsbench-download-delay-se
 export CRSBENCH_DOWNLOAD_DELAY_SEC="${CRSBENCH_DOWNLOAD_DELAY_SEC:-0}"
 if [[ "${CRSBENCH_STARTUP_MODE}" == "evaluator" ]]; then
   metadata_get_optional "crsbench-experiment-config-b64" | base64 --decode > "${EXPERIMENT_CONFIG_PATH}"
+  chmod 0600 "${EXPERIMENT_CONFIG_PATH}"
 fi
 
 export CRSBENCH_REDIS_HOST="${REDIS_HOST}"
@@ -1178,6 +1179,7 @@ setup_user_systemd_runtime
 setup_oss_crs_for_crsbench
 
 : > "${ENV_PATH}"
+chmod 0600 "${ENV_PATH}"
 write_passthrough_env_vars "${ENV_PASSTHROUGH_B64}"
 write_env_var "CRSBENCH_REDIS_HOST" "${REDIS_HOST}"
 if [[ -n "${REDIS_PASSWORD}" ]]; then

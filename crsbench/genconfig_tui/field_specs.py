@@ -128,7 +128,10 @@ SECTION_SPECS: dict[str, SectionSpec] = {
                 "LiteLLM mode",
                 "select",
                 "external",
-                options=(FieldOption("External", "external"),),
+                options=(
+                    FieldOption("Internal", "internal"),
+                    FieldOption("External", "external"),
+                ),
                 visible_when=_when_false("skip_litellm"),
             ),
             FieldSpec(
@@ -255,6 +258,12 @@ SECTION_SPECS: dict[str, SectionSpec] = {
             FieldSpec("infra_mem_limit", "Infra mem limit", "text", ""),
             FieldSpec("oss_crs_cmd", "oss-crs command", "text", ""),
             FieldSpec("work_dir", "Work dir", "text", ""),
+            FieldSpec(
+                "litellm_config_path",
+                "Internal LiteLLM config path",
+                "text",
+                "",
+            ),
         ),
     ),
     "cloud": SectionSpec(
@@ -488,17 +497,24 @@ SECTION_SPECS: dict[str, SectionSpec] = {
                 visible_when=_when_true("enabled"),
             ),
             FieldSpec(
-                "env_CRSBENCH_LLM_UPSTREAM_BASE_URL",
+                "env_LITELLM_UPSTREAM_BASE_URL",
                 "LLM upstream base URL env ref",
                 "text",
-                "os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL",
+                "os.environ/LITELLM_UPSTREAM_BASE_URL",
                 visible_when=_when_true("enabled"),
             ),
             FieldSpec(
-                "env_CRSBENCH_LLM_MASTER_KEY",
-                "LLM master key env ref",
+                "env_LITELLM_UPSTREAM_API_KEY",
+                "LLM upstream API key env ref",
                 "text",
-                "os.environ/CRSBENCH_LLM_MASTER_KEY",
+                "os.environ/LITELLM_UPSTREAM_API_KEY",
+                visible_when=_when_true("enabled"),
+            ),
+            FieldSpec(
+                "env_CRSBENCH_LLM_UPSTREAM_MASTER_KEY",
+                "LLM management key env ref",
+                "text",
+                "os.environ/CRSBENCH_LLM_UPSTREAM_MASTER_KEY",
                 visible_when=_when_true("enabled"),
             ),
             FieldSpec(

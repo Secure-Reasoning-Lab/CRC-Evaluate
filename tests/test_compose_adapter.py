@@ -874,7 +874,9 @@ class TestForceCleanupOnTimeout:
 class TestOssCrsAdapterBugFindFull:
     """Comprehensive tests for OssCrsAdapter (bug-finding) lifecycle."""
 
-    def _make_adapter(self, tmp_path: Path) -> OssCrsAdapter:
+    def _make_adapter(
+        self, tmp_path: Path, *, litellm_mode: str = "external"
+    ) -> OssCrsAdapter:
         """Create adapter with registry dir containing a valid oss-crs YAML."""
         registry = tmp_path / "registry"
         registry.mkdir(parents=True)
@@ -903,6 +905,7 @@ class TestOssCrsAdapterBugFindFull:
             oss_fuzz_path=tmp_path / "oss-fuzz",
             registry_dir=registry,
             benchmarks_root=tmp_path / "benchmarks",
+            litellm_mode=litellm_mode,
             mode="bug-finding",
         )
         adapter.configure(
@@ -1960,7 +1963,7 @@ class TestOssCrsAdapterBugFindFull:
 
         data = yaml.safe_load(compose_path.read_text())
         env = data["test-crs"].get("additional_env", {})
-        assert "CRSBENCH_LLM_UPSTREAM_BASE_URL" not in env
+        assert "LITELLM_UPSTREAM_BASE_URL" not in env
         assert "CRSBENCH_LLM_API_KEY" not in env
 
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
@@ -1985,6 +1988,65 @@ class TestOssCrsAdapterBugFindFull:
             == "https://litellm.example"
         )
         assert data["llm_config"]["litellm"]["external"]["key"] == "sk-test-key"
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_generate_compose_yaml_includes_internal_litellm_config_and_budget(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        adapter = self._make_adapter(tmp_path, litellm_mode="internal")
+        registry_path = tmp_path / "registry" / "test-crs.yaml"
+        registry_data = yaml.safe_load(registry_path.read_text())
+        registry_data["required_llms"] = ["claude-opus-4-8", "claude-sonnet-5"]
+        registry_path.write_text(yaml.safe_dump(registry_data))
+        litellm_path = tmp_path / "litellm.yaml"
+        litellm_path.write_text(
+            yaml.safe_dump(
+                {
+                    "model_list": [
+                        {"model_name": "claude-opus-4-8"},
+                        {"model_name": "claude-sonnet-5"},
+                    ]
+                }
+            )
+        )
+        adapter.configure(
+            {
+                "litellm_config_path": litellm_path,
+                "litellm_cost_budget": 30,
+            }
+        )
+
+        compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
+        data = yaml.safe_load(compose_path.read_text())
+
+        assert data["llm_config"]["litellm"] == {
+            "mode": "internal",
+            "model_check": True,
+            "internal": {"config_path": str(litellm_path.resolve())},
+        }
+        assert data["test-crs"]["llm_budget"] == 30
+
+        from oss_crs.src.config.crs_compose import CRSComposeConfig
+
+        upstream_config = CRSComposeConfig.from_yaml(compose_path.read_text())
+        assert upstream_config.llm_config.litellm.mode.value == "internal"
+        assert upstream_config.crs_entries["test-crs"].llm_budget == 30
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_generate_compose_yaml_rejects_missing_internal_alias(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        adapter = self._make_adapter(tmp_path, litellm_mode="internal")
+        registry_path = tmp_path / "registry" / "test-crs.yaml"
+        registry_data = yaml.safe_load(registry_path.read_text())
+        registry_data["required_llms"] = ["claude-opus-4-8"]
+        registry_path.write_text(yaml.safe_dump(registry_data))
+        litellm_path = tmp_path / "litellm.yaml"
+        litellm_path.write_text("model_list: []\n")
+        adapter.configure({"litellm_config_path": litellm_path})
+
+        with pytest.raises(RuntimeError, match="claude-opus-4-8"):
+            adapter._generate_compose_yaml(tmp_path / "trial")
 
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
     def test_generate_compose_yaml_skips_required_llm_validation_when_skip_litellm(
@@ -2028,7 +2090,7 @@ class TestOssCrsAdapterBugFindFull:
         compose_data = yaml.safe_load(compose_path.read_text())
         env = compose_data["test-crs"]["additional_env"]
         assert env["ANTHROPIC_MODEL"] == "claude-sonnet-4-5-20250929"
-        assert "CRSBENCH_LLM_UPSTREAM_BASE_URL" not in env
+        assert "LITELLM_UPSTREAM_BASE_URL" not in env
         assert "CRSBENCH_LLM_API_KEY" not in env
 
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
@@ -2066,7 +2128,9 @@ class TestOssCrsAdapterBugFindFull:
             }
         )
 
-        with pytest.raises(RuntimeError, match="requires explicit runtime URL/API key"):
+        with pytest.raises(
+            RuntimeError, match="requires explicit runtime URL and API key"
+        ):
             adapter._generate_compose_yaml(tmp_path / "trial")
 
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
@@ -2323,6 +2387,46 @@ class TestOssCrsAdapterBugFindFull:
         assert kwargs["oss_crs_cmd"] == adapter._oss_crs_cmd
         assert kwargs["sanitizer"] == adapter._sanitizer
         mock_generate_run_id.assert_not_called()
+
+    @patch("crsbench.evaluation.adapter.oss_crs.run_oss_crs_artifacts")
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_litellm_spend_report_uses_resolved_run_metadata_path(
+        self,
+        mock_subprocess: MagicMock,
+        mock_artifacts: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        resolved_run_dir = (
+            tmp_path
+            / "trial"
+            / "oss-crs-workdir"
+            / "crs_compose"
+            / "compose-hash"
+            / "address"
+            / "runs"
+            / "trial-run-id-ab0e73"
+        )
+        mock_artifacts.return_value = {
+            "run_id": "trial-run-id-ab0e73",
+            "meta": {"path": str(resolved_run_dir / "meta.json")},
+        }
+
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"run_id": "trial-run-id"})
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        trial = tmp_path / "trial"
+        trial.mkdir()
+        adapter.build(bench, trial)
+
+        adapter.resolve_artifacts(bench, "fuzz_target", trial)
+
+        assert adapter.get_litellm_spend_report_path() == (
+            resolved_run_dir / "litellm-spend-report.json"
+        )
 
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
@@ -3384,6 +3488,7 @@ class TestExperimentConfigComposeValidation:
 
         cfg = self._base_config()
         cfg["snapshot_period"] = 0
+        cfg["litellm_cost_budget"] = 10
         cfg["crs_compose"] = {
             "oss_crs_infra": {"num_cores": 1, "mem_limit": "8G"},
             "crs1": {
@@ -3421,6 +3526,7 @@ class TestExperimentConfigComposeValidation:
 
         cfg = self._base_config()
         cfg["snapshot_period"] = 900
+        cfg["litellm_cost_budget"] = 10
         cfg["crs_compose"] = {
             "oss_crs_infra": {"num_cores": 1, "mem_limit": "8G"},
             "crs1": {

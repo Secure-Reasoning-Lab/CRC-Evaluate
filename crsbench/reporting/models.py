@@ -101,6 +101,12 @@ class SnapshotData(BaseModel):
     cpvs_remaining: list[str] = Field(default_factory=list)
     early_stop_triggered: bool = False
 
+    # Patch discovery data (from patch_verification.json)
+    patches_total: int | None = None
+    patches_new: int | None = None
+    cpvs_with_patches: list[str] = Field(default_factory=list)
+    input_cpvs_total: int | None = None
+
     # Flags indicating what was captured
     has_config: bool = False
     has_execution_metadata: bool = False

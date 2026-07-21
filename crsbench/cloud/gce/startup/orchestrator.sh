@@ -33,6 +33,7 @@ CRSBENCH_VALKEY_IMAGE="${CRSBENCH_VALKEY_IMAGE:-valkey/valkey:8.0-alpine}"
 STATE_DIR="${CRSBENCH_STATE_DIR:-/var/lib/crsbench}"
 LOG_PATH="${STATE_DIR}/orchestrator.log"
 CONFIG_PATH="${STATE_DIR}/experiment-config.yaml"
+LITELLM_CONFIG_PATH="${STATE_DIR}/litellm-config.yaml"
 LAUNCHER_PATH="${STATE_DIR}/launch-orchestrator.sh"
 ENV_PATH="${STATE_DIR}/orchestrator.env"
 CLONE_DIR="${CRSBENCH_CLONE_DIR:-/opt/crsbench}"
@@ -1075,12 +1076,19 @@ on_error() {
 
 require_cmd curl
 
-mkdir -p "${STATE_DIR}"
-
 # --- Install system packages ---
 ensure_system_packages
+
 ENV_PASSTHROUGH_B64="$(metadata_get_optional "crsbench-env-passthrough-b64")"
 export_passthrough_env "${ENV_PASSTHROUGH_B64}"
+STATE_DIR="${CRSBENCH_STATE_DIR:-/var/lib/crsbench}"
+LOG_PATH="${STATE_DIR}/orchestrator.log"
+CONFIG_PATH="${STATE_DIR}/experiment-config.yaml"
+LITELLM_CONFIG_PATH="${STATE_DIR}/litellm-config.yaml"
+LAUNCHER_PATH="${STATE_DIR}/launch-orchestrator.sh"
+ENV_PATH="${STATE_DIR}/orchestrator.env"
+mkdir -p "${STATE_DIR}"
+
 ensure_timezone
 ensure_docker_ready
 ensure_crsbench_user
@@ -1097,6 +1105,7 @@ ensure_user_systemd_support_packages
 INSTALL_SPEC="$(metadata_get_optional "crsbench-install-spec")"
 GIT_REF="$(metadata_get_optional "crsbench-git-ref")"
 EXPERIMENT_CONFIG_B64="$(metadata_get "crsbench-experiment-config-b64")"
+LITELLM_CONFIG_B64="$(metadata_get_optional "crsbench-litellm-config-b64")"
 REDIS_PASSWORD="$(metadata_get "crsbench-redis-password")"
 GITHUB_DEPLOY_KEY="$(metadata_get_optional "crsbench-github-deploy-key")"
 REDIS_BIND_HOST="$(discover_redis_bind_host)"
@@ -1107,6 +1116,11 @@ CRSBENCH_DOWNLOAD_DELAY_SEC="$(metadata_get_optional "crsbench-download-delay-se
 export CRSBENCH_DOWNLOAD_DELAY_SEC="${CRSBENCH_DOWNLOAD_DELAY_SEC:-0}"
 
 printf '%s' "${EXPERIMENT_CONFIG_B64}" | base64 --decode > "${CONFIG_PATH}"
+chmod 0600 "${CONFIG_PATH}"
+if [[ -n "${LITELLM_CONFIG_B64}" ]]; then
+  printf '%s' "${LITELLM_CONFIG_B64}" | base64 --decode > "${LITELLM_CONFIG_PATH}"
+  chmod 0600 "${LITELLM_CONFIG_PATH}"
+fi
 EXPERIMENT_NAME="$(
   python3 - "${CONFIG_PATH}" <<'PY'
 import sys
@@ -1232,6 +1246,7 @@ setup_user_systemd_runtime
 setup_oss_crs_for_crsbench
 
 : > "${ENV_PATH}"
+chmod 0600 "${ENV_PATH}"
 write_env_var "CRSBENCH_REDIS_PASSWORD" "${REDIS_PASSWORD}"
 write_env_var "CRSBENCH_REDIS_BIND_HOST" "${REDIS_BIND_HOST}"
 write_env_var "CRSBENCH_CLOUD_PREPROVISIONED_WORKERS" "1"
@@ -1370,6 +1385,9 @@ esac
 EOF
 chmod +x "${LAUNCHER_PATH}"
 chown "${CRSBENCH_USER}:${CRSBENCH_USER}" "${ENV_PATH}" "${CONFIG_PATH}" "${LAUNCHER_PATH}"
+if [[ -f "${LITELLM_CONFIG_PATH}" ]]; then
+  chown "${CRSBENCH_USER}:${CRSBENCH_USER}" "${LITELLM_CONFIG_PATH}"
+fi
 touch "${LOG_PATH}"
 chown "${CRSBENCH_USER}:${CRSBENCH_USER}" "${LOG_PATH}"
 

@@ -27,6 +27,7 @@ from crsbench.utils.logger import get_logger
 if TYPE_CHECKING:
     from crsbench.evaluation.coverage.manager import CoverageManager
     from crsbench.evaluation.litellm_tracker import LiteLLMTracker
+    from crsbench.evaluation.oss_crs_spend import OssCrsSpendReport
     from crsbench.evaluation.verification.patch.manager import PatchVerificationManager
     from crsbench.evaluation.verification.pov.manager import POVVerificationManager
 
@@ -57,6 +58,7 @@ class SnapshotManager:
         llm_tracker: Optional["LiteLLMTracker"] = None,
         llm_api_key: Optional[str] = None,
         llm_trial_id: Optional[str] = None,
+        oss_crs_spend_report: Optional["OssCrsSpendReport"] = None,
         budget_policy: str = "continue",
         budget_stop_event: Optional[threading.Event] = None,
     ):
@@ -74,13 +76,9 @@ class SnapshotManager:
             llm_tracker: Optional LiteLLMTracker for querying LLM usage
             llm_api_key: Optional trial-specific API key for LLM tracking
             llm_trial_id: Optional trial identifier for LLM usage file
-            budget_policy: Behavior when the trial LLM budget is exceeded.
-                'continue' (default) logs the event once and keeps running; LiteLLM
-                revokes the key so no further cost is incurred. 'terminate' signals
-                budget_stop_event (if provided) so the trial shuts down early.
-            budget_stop_event: Optional event the snapshot loop sets when the
-                trial's LLM key has exceeded its ``max_budget``. Only consulted
-                when ``budget_policy == "terminate"``.
+            oss_crs_spend_report: Optional OSS-CRS internal LiteLLM spend reader
+            budget_policy: Behavior when observed cumulative spend reaches the configured trial budget; 'continue' logs the event and 'terminate' signals budget_stop_event.
+            budget_stop_event: Optional event used to stop the trial when budget_policy is 'terminate'.
 
         Raises:
             ValueError: If snapshot_period <= 0 or trial_dir doesn't exist
@@ -103,6 +101,7 @@ class SnapshotManager:
         self.llm_tracker = llm_tracker
         self.llm_api_key = llm_api_key
         self.llm_trial_id = llm_trial_id
+        self.oss_crs_spend_report = oss_crs_spend_report
 
         # Budget enforcement
         if budget_policy not in ("continue", "terminate"):
@@ -124,6 +123,8 @@ class SnapshotManager:
         )
         if llm_tracker and llm_api_key:
             logger.info("LLM tracking enabled for snapshots")
+        elif oss_crs_spend_report is not None:
+            logger.info("OSS-CRS LiteLLM accounting enabled for snapshots")
 
     def run(self):
         """Main snapshot loop (runs in separate thread).
@@ -401,7 +402,15 @@ class SnapshotManager:
         Returns:
             True if LLM usage was captured, False otherwise
         """
-        # If LLM tracker is available, query API directly
+        if self.oss_crs_spend_report is not None:
+            try:
+                output_path = temp_dir / "llm-usage.json"
+                if self.oss_crs_spend_report.write_usage_file(output_path):
+                    logger.debug("Captured LLM usage from OSS-CRS spend report")
+                    return True
+            except Exception as e:
+                logger.warning(f"Failed to capture OSS-CRS LLM usage: {e}")
+
         if self.llm_tracker and self.llm_api_key and self.llm_trial_id:
             try:
                 output_path = temp_dir / "llm-usage.json"
@@ -428,36 +437,29 @@ class SnapshotManager:
         return False
 
     def _check_budget(self, elapsed_time: float) -> None:
-        """Detect trial LLM budget exhaustion and apply the configured policy.
-
-        Piggybacks on the snapshot cadence: reads ``spend``/``max_budget`` from
-        LiteLLM's ``/key/info`` and, on the first observed overshoot, either
-        logs ("continue") or signals ``budget_stop_event`` ("terminate").
-
-        Polling failures are logged and ignored; budget enforcement must never
-        take the trial down on its own.
-        """
+        """Detect trial LLM budget exhaustion and apply the configured policy."""
         if self.budget_exceeded:
             return
-        if not (self.llm_tracker and self.llm_api_key):
+        budget_state: Optional[tuple[float, float]] = None
+        if self.oss_crs_spend_report is not None:
+            budget_state = self.oss_crs_spend_report.budget_state()
+        elif self.llm_tracker and self.llm_api_key:
+            try:
+                key_info = self.llm_tracker.get_key_info(self.llm_api_key)
+            except Exception as e:
+                logger.debug(f"Budget check: get_key_info failed, skipping ({e})")
+                return
+            info = key_info.get("info", {}) if isinstance(key_info, dict) else {}
+            max_budget = info.get("max_budget")
+            spend = info.get("spend")
+            if max_budget is not None and spend is not None:
+                try:
+                    budget_state = (float(spend), float(max_budget))
+                except (TypeError, ValueError):
+                    budget_state = None
+        if budget_state is None:
             return
-
-        try:
-            key_info = self.llm_tracker.get_key_info(self.llm_api_key)
-        except Exception as e:
-            logger.debug(f"Budget check: get_key_info failed, skipping ({e})")
-            return
-
-        info = key_info.get("info", {}) if isinstance(key_info, dict) else {}
-        max_budget = info.get("max_budget")
-        spend = info.get("spend")
-        if max_budget is None or spend is None:
-            return
-        try:
-            max_budget_f = float(max_budget)
-            spend_f = float(spend)
-        except (TypeError, ValueError):
-            return
+        spend_f, max_budget_f = budget_state
         if max_budget_f <= 0 or spend_f < max_budget_f:
             return
 
@@ -487,8 +489,7 @@ class SnapshotManager:
         else:
             logger.warning(
                 f"Trial LLM budget exceeded (spend=${spend_f:.4f} / "
-                f"cap=${max_budget_f:.4f}) — continuing per budget_policy=continue; "
-                "LiteLLM has revoked the key so no further cost will accrue"
+                f"cap=${max_budget_f:.4f}) — continuing per budget_policy=continue"
             )
 
     def _update_llm_logs(self) -> None:

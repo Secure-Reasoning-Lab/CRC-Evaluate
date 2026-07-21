@@ -1017,7 +1017,7 @@ class CrsComposeConfig(BaseModel):
     )
     litellm_config_path: Optional[Path] = Field(
         default=None,
-        description="Deprecated LiteLLM config path override. Ignored for litellm_mode='external'.",
+        description="LiteLLM proxy configuration used when runtime.litellm.mode is 'internal'.",
     )
     oss_crs_infra: "CrsComposeInfraConfig" = Field(
         default_factory=lambda: CrsComposeInfraConfig(shared=True),
@@ -1099,14 +1099,7 @@ class CrsComposeServiceConfig(BaseModel):
     )
     budget_policy: Literal["continue", "terminate"] = Field(
         default="continue",
-        description=(
-            "Per-CRS behavior when the trial LLM budget (runtime.litellm.cost_budget) "
-            "is exceeded. 'continue' (default) lets the CRS keep running even though "
-            "LiteLLM has revoked the key; 'terminate' stops the CRS early and writes "
-            "a structured budget-exceeded log entry. Enforcement piggybacks on the "
-            "snapshot cadence, so 'terminate' requires runtime.snapshot_period > 0 "
-            "(config validation rejects the combination with snapshots disabled)."
-        ),
+        description="Action when observed cumulative LiteLLM spend reaches runtime.litellm.cost_budget. 'continue' keeps the CRS running, while 'terminate' stops the trial and writes budget-exceeded.json. Termination requires tracking, a positive budget, and runtime.snapshot_period > 0.",
     )
 
 
@@ -3461,38 +3454,27 @@ class ExperimentConfig(BaseModel):
         default=Path("oss-crs/registry"),
         description="Path to CRS registry directory (default: oss-crs/registry)",
     )
-    litellm_mode: Optional[Literal["external", "self_hosted"]] = Field(
+    litellm_mode: Optional[Literal["external", "internal"]] = Field(
         default="external",
-        description="LiteLLM mode: 'external' uses an external LiteLLM endpoint "
-        "(CRSBENCH_LLM_UPSTREAM_BASE_URL/CRSBENCH_LLM_BASE_URL + CRSBENCH_LLM_UPSTREAM_API_KEY or CRSBENCH_LLM_UPSTREAM_MASTER_KEY), "
-        "'self_hosted' is reserved and not implemented yet, "
-        "null skips LiteLLM entirely (for CRS that don't need LLM). "
-        "Default is 'external'.",
+        description="LiteLLM mode: 'external' connects each CRS to an existing LiteLLM endpoint, 'internal' starts a trial-scoped LiteLLM proxy from crs_compose.litellm_config_path, and null disables LiteLLM.",
     )
     skip_litellm: bool = Field(
         default=False,
-        description="Skip LiteLLM/Postgres deployment entirely inside oss-crs containers. "
-        "Use when CRS does not need LLM access (e.g., pure fuzzer). "
-        "Passed as --skip-litellm to oss-bugfind-crs.",
+        description="Disable OSS-CRS LiteLLM services for trials whose CRSes do not require model access.",
     )
     llm_tracking_enabled: bool = Field(
         default=True,
-        description="Enable LLM usage tracking via LiteLLM Virtual Keys. "
-        "Requires canonical runtime envs (CRSBENCH_LLM_*). "
-        "Set to false to explicitly disable. "
-        "Generates llm-usage.json with per-trial cost and token metrics.",
+        description="Write per-trial LiteLLM accounting artifacts. External mode uses LiteLLM management APIs, while internal mode uses OSS-CRS spend reports.",
     )
     litellm_cost_budget: Optional[float] = Field(
         default=None,
         ge=0,
-        description="Optional LiteLLM cost budget in USD for per-trial virtual keys.",
+        description="Optional per-trial LiteLLM budget in USD; internal mode requires a positive whole-dollar value, and external mode requires tracking.",
     )
     llm_accounting_settle_seconds: int = Field(
         default=60,
         ge=0,
-        description="Minimum wait after CRS run end before final LLM usage/log "
-        "capture. Helps LiteLLM key/info and spend/log aggregates converge. "
-        "Set to 0 to disable.",
+        description="External tracking wait after the CRS run ends before final usage and log capture; set to 0 to disable.",
     )
     project_image_prefix: str = Field(
         default="crsbench",
@@ -3780,13 +3762,17 @@ class ExperimentConfig(BaseModel):
 
         return v
 
-    @field_validator("litellm_mode")
+    @field_validator("litellm_mode", mode="before")
     @classmethod
     def validate_litellm_mode(cls, v):
         """Validate LiteLLM mode."""
-        if v is not None and v not in ("external", "self_hosted"):
+        if v == "self_hosted":
             raise ValueError(
-                f"Invalid litellm_mode: {v}. Must be 'external' or 'self_hosted'"
+                "litellm_mode='self_hosted' has been replaced by 'internal'"
+            )
+        if v is not None and v not in ("external", "internal"):
+            raise ValueError(
+                f"Invalid litellm_mode: {v}. Must be 'external' or 'internal'"
             )
         return v
 
@@ -3818,16 +3804,8 @@ class ExperimentConfig(BaseModel):
 
     @model_validator(mode="after")
     def check_budget_policy_requires_snapshots(self):
-        """Reject ``budget_policy: terminate`` when snapshots are disabled.
-
-        Budget overshoot detection piggybacks on the snapshot cadence; with
-        ``snapshot_period: 0`` the snapshot manager is never started, so a
-        ``terminate`` policy would silently never fire. Fail fast at config
-        load rather than run a trial that ignores its own budget policy.
-        """
+        """Validate runtime requirements for budget termination."""
         if not self.crs_compose or not self.crs_compose.services:
-            return self
-        if self.snapshot_period and self.snapshot_period > 0:
             return self
 
         offenders = sorted(
@@ -3835,7 +3813,23 @@ class ExperimentConfig(BaseModel):
             for name, service in self.crs_compose.services.items()
             if getattr(service, "budget_policy", "continue") == "terminate"
         )
-        if offenders:
+        if not offenders:
+            return self
+        if (
+            self.skip_litellm
+            or self.litellm_mode is None
+            or not self.llm_tracking_enabled
+        ):
+            raise ValueError(
+                "crs_compose services with budget_policy='terminate' require an "
+                "enabled LiteLLM mode with runtime.litellm.tracking_enabled=true"
+            )
+        if self.litellm_cost_budget is None or self.litellm_cost_budget <= 0:
+            raise ValueError(
+                "crs_compose services with budget_policy='terminate' require "
+                "runtime.litellm.cost_budget > 0"
+            )
+        if not self.snapshot_period or self.snapshot_period <= 0:
             raise ValueError(
                 "crs_compose services with budget_policy='terminate' require "
                 "snapshot_period > 0 because budget enforcement runs on the "
@@ -3873,26 +3867,47 @@ class ExperimentConfig(BaseModel):
 
     @model_validator(mode="after")
     def check_skip_litellm_overrides(self):
-        """When skip_litellm is true, disable litellm_mode and tracking."""
-        if self.skip_litellm:
+        """Normalize either LiteLLM disable form to a skipped runtime."""
+        if self.skip_litellm or self.litellm_mode is None:
+            self.skip_litellm = True
             self.litellm_mode = None
             self.llm_tracking_enabled = False
         return self
 
     @model_validator(mode="after")
     def check_litellm_runtime_contract(self):
-        """Fail fast when mode-required LiteLLM runtime env inputs are missing."""
+        """Validate mode-specific LiteLLM configuration."""
         if self.skip_litellm or self.litellm_mode is None:
             return self
 
-        if self.litellm_mode == "self_hosted":
+        config_path = self.crs_compose.litellm_config_path if self.crs_compose else None
+        if self.litellm_mode == "internal" and config_path is None:
             raise ValueError(
-                "litellm_mode='self_hosted' is not implemented yet. "
-                "Use litellm_mode='external'."
+                "runtime.litellm.mode='internal' requires "
+                "crs_compose.litellm_config_path"
             )
+        if self.litellm_mode == "external" and config_path is not None:
+            raise ValueError(
+                "crs_compose.litellm_config_path is valid only when "
+                "runtime.litellm.mode='internal'"
+            )
+        if (
+            self.litellm_mode == "external"
+            and not self.llm_tracking_enabled
+            and self.litellm_cost_budget is not None
+        ):
+            raise ValueError(
+                "runtime.litellm.cost_budget in external mode requires "
+                "runtime.litellm.tracking_enabled=true"
+            )
+        if self.litellm_mode == "internal" and self.litellm_cost_budget is not None:
+            budget = self.litellm_cost_budget
+            if budget <= 0 or not float(budget).is_integer():
+                raise ValueError(
+                    "runtime.litellm.cost_budget must be a positive whole-dollar "
+                    "amount in internal mode"
+                )
 
-        # Runtime environment secrets are validated during execution preflight,
-        # not schema parsing, so configs remain portable across machines.
         return self
 
     @model_validator(mode="after")

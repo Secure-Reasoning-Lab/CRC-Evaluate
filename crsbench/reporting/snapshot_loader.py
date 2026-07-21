@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from crsbench.evaluation.trial_paths import (
     TrialDir,
 )
+from crsbench.evaluation.verification.patch.models import PatchSnapshot
 from crsbench.reporting.errors import SnapshotLoadError
 from crsbench.reporting.models import (
     LLMUsageFile,
@@ -199,16 +200,22 @@ class SnapshotLoader:
                 if not item.name.startswith("."):
                     pov_names.append(item.name)
 
-        # Count and collect patch names
+        # Count and collect patch identities using the same layouts accepted by patch verification: top-level flat *.diff files and CPV-scoped patches/<cpv_id>/*.diff files.
         patches_dir = extract_dir / "patches"
         patch_names: list[str] = []
         if patches_dir.exists():
-            # Patches are organized by POV ID: patches/<pov_id>/patch.diff
-            for item in patches_dir.iterdir():
-                if item.is_dir() and not item.name.startswith("."):
-                    patch_file = item / "patch.diff"
-                    if patch_file.exists():
-                        patch_names.append(item.name)
+            for patch_file in sorted(patches_dir.glob("*.diff")):
+                if patch_file.is_file() and not patch_file.name.startswith("."):
+                    patch_names.append(patch_file.name)
+
+            for cpv_dir in sorted(patches_dir.iterdir()):
+                if not cpv_dir.is_dir() or cpv_dir.name.startswith("."):
+                    continue
+                for patch_file in sorted(cpv_dir.glob("*.diff")):
+                    if patch_file.is_file() and not patch_file.name.startswith("."):
+                        patch_names.append(
+                            patch_file.relative_to(patches_dir).as_posix()
+                        )
 
         # Count corpus files
         corpus_dir = extract_dir / "seeds"
@@ -241,6 +248,24 @@ class SnapshotLoader:
             except (json.JSONDecodeError, ValidationError) as e:
                 logger.warning(f"Invalid pov_verification.json in snapshot: {e}")
 
+        # Parse patch discovery data. The patch files may not have reached the collected output directory yet when a periodic snapshot is captured, so this metadata is authoritative for cumulative discovery counts.
+        patches_total: int | None = None
+        patches_new: int | None = None
+        cpvs_with_patches: list[str] = []
+        input_cpvs_total: int | None = None
+
+        patch_verification_path = extract_dir / "patch_verification.json"
+        if patch_verification_path.exists():
+            try:
+                patch_data = json.loads(patch_verification_path.read_text())
+                patch_snapshot = PatchSnapshot.model_validate(patch_data)
+                patches_total = patch_snapshot.patches_total
+                patches_new = patch_snapshot.patches_new
+                cpvs_with_patches = patch_snapshot.cpvs_with_patches
+                input_cpvs_total = patch_snapshot.input_cpvs_total
+            except (json.JSONDecodeError, ValidationError) as e:
+                logger.warning(f"Invalid patch_verification.json in snapshot: {e}")
+
         # Check for optional files
         has_config = (extract_dir / "config.yaml").exists()
         has_execution = (extract_dir / "execution.json").exists()
@@ -265,6 +290,10 @@ class SnapshotLoader:
             cpvs_found=cpvs_found,
             cpvs_remaining=cpvs_remaining,
             early_stop_triggered=early_stop_triggered,
+            patches_total=patches_total,
+            patches_new=patches_new,
+            cpvs_with_patches=cpvs_with_patches,
+            input_cpvs_total=input_cpvs_total,
             has_config=has_config,
             has_execution_metadata=has_execution,
             has_crs_log=has_crs_log,

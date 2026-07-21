@@ -1,9 +1,4 @@
-"""CRS-compose YAML configuration generation.
-
-Pydantic models mirroring the crs-compose.yaml schema. The to_yaml() method
-serializes CRS entries as top-level keys (NOT nested under a ``crs_entries``
-key), matching the format that oss-crs expects.
-"""
+"""Generate CRS Compose YAML with the structure expected by OSS-CRS."""
 
 from __future__ import annotations
 
@@ -46,7 +41,7 @@ class CrsComposeInfra(BaseModel):
 
 
 class CrsComposeLlmConfig(BaseModel):
-    """Legacy LLM config path (internal mode)."""
+    """LiteLLM config path for the compatibility compose schema."""
 
     litellm_config: str
 
@@ -82,11 +77,7 @@ class CrsComposeLLMConfig(BaseModel):
 
 
 class CrsComposeYaml(BaseModel):
-    """Full crs-compose.yaml schema for generation.
-
-    CRS entries are stored internally in ``crs_entries`` but serialized as
-    top-level keys in the output YAML (not nested under ``crs_entries:``).
-    """
+    """Full CRS Compose schema with CRS entries serialized as top-level keys."""
 
     run_env: str = Field(default="local")
     docker_registry: str
@@ -95,23 +86,19 @@ class CrsComposeYaml(BaseModel):
     llm_config: Optional[CrsComposeLLMConfig] = None
 
     def to_yaml(self, path: Path) -> None:
-        """Write to YAML file in crs-compose format.
-
-        CRS entries become top-level keys alongside reserved keys
-        (run_env, docker_registry, oss_crs_infra, llm_config).
-        """
+        """Write a CRS Compose YAML file with CRS entries alongside the reserved keys."""
         data: dict[str, object] = {
             "run_env": self.run_env,
             "docker_registry": self.docker_registry,
             "oss_crs_infra": self.oss_crs_infra.model_dump(exclude_none=True),
         }
 
-        # CRS entries as top-level keys (NOT nested under "crs_entries")
+        # CRS entries are top-level keys rather than members of a crs_entries mapping.
         for name, entry in self.crs_entries.items():
             data[name] = entry.model_dump(exclude_none=True)
 
         if self.llm_config:
-            data["llm_config"] = self.llm_config.model_dump()
+            data["llm_config"] = self.llm_config.model_dump(exclude_none=True)
 
         path.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
         logger.debug(f"Wrote crs-compose config to {path}")

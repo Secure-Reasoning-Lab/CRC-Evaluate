@@ -144,7 +144,8 @@ cloud:
         owner_label: team-crs
         readiness_timeout_sec: 900
         env:
-          CRSBENCH_LLM_UPSTREAM_BASE_URL: os.environ/LITELLM_BASE_URL
+          LITELLM_UPSTREAM_BASE_URL: os.environ/LITELLM_BASE_URL
+          LITELLM_UPSTREAM_API_KEY: os.environ/LITELLM_API_KEY
       instance_profiles:
         gce-worker-n2d: {}
   orchestrator:
@@ -158,10 +159,12 @@ cloud:
       - zone: us-east5-b
         count: 3
         env:
-          CRSBENCH_LLM_MASTER_KEY: os.environ/LITELLM1_MASTER_KEY
+          LITELLM_UPSTREAM_BASE_URL: os.environ/LITELLM1_BASE_URL
+          LITELLM_UPSTREAM_API_KEY: os.environ/LITELLM1_API_KEY
       - zone: us-east1-b
         env:
-          CRSBENCH_LLM_MASTER_KEY: os.environ/LITELLM2_MASTER_KEY
+          LITELLM_UPSTREAM_BASE_URL: os.environ/LITELLM2_BASE_URL
+          LITELLM_UPSTREAM_API_KEY: os.environ/LITELLM2_API_KEY
 ```
 
 Phase 1 contract notes:
@@ -424,13 +427,15 @@ set `worker.benchmarks_root` to the machine-local path used on that worker.
 Use this only for heterogeneous filesystem layouts; keep shared-storage paths
 uniform when possible.
 
-## Centralized LiteLLM / Proxy Mode
+## LiteLLM on Distributed Workers
 
-When LiteLLM runs centrally and experiment machines proxy through it:
+Internal mode transports the LiteLLM routing file as a per-experiment snapshot and stages a private copy for each trial.
+Every `os.environ/NAME` reference in that file must resolve in the worker service environment.
+External mode passes an existing LiteLLM endpoint and credential directly to the CRS runtime.
 
-- central LiteLLM keeps the provider keys
-- trial hosts set only the upstream LiteLLM endpoint and upstream key
-- worker and evaluator hosts do not need provider API keys in that model
+- Set `LITELLM_UPSTREAM_BASE_URL` and `LITELLM_UPSTREAM_API_KEY` on every worker for internal routing through an OpenAI-compatible upstream endpoint.
+- Set `LITELLM_UPSTREAM_BASE_URL` and `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` for external mode with per-trial tracking.
+- Keep provider credentials on a central LiteLLM host when the routing file forwards through that host.
 
 If your workflow depends on the upstream-model synchronization helper:
 
@@ -696,10 +701,10 @@ Always clean queues before re-running an experiment with the same name or after 
 
 For GitHub smoke workflow (`ci.yml`) using bug-fixing CRS in external mode, configure these repository secrets:
 
-- `CRSBENCH_LLM_UPSTREAM_BASE_URL`
+- `LITELLM_UPSTREAM_BASE_URL`
 - `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`
 
-If your suite sets `runtime.litellm.tracking_enabled: false`, `CRSBENCH_LLM_UPSTREAM_API_KEY` can be enough for basic runtime requests.
+If your suite sets `runtime.litellm.tracking_enabled: false`, `LITELLM_UPSTREAM_API_KEY` can be enough for basic runtime requests.
 
 The checked-in smoke and bug-fixing configs (`experiment-configs/smoke-testing/smoke.yaml`, `experiment-configs/local/bug-fixing.yaml`) run with LiteLLM tracking enabled, so provide the upstream key expected by your LiteLLM deployment.
 
@@ -711,7 +716,7 @@ The checked-in smoke and bug-fixing configs (`experiment-configs/smoke-testing/s
 | "Redis not available" | Valkey not running or wrong host | `uv run python scripts/valkey-helper.py status`; check `redis_host` in config |
 | Workers exit immediately | Worker was started with `--no-continuous` and the queue drained | Omit `--no-continuous` for the default continuous mode |
 | Stale jobs from previous run | Queue not cleaned | `uv run python scripts/valkey-helper.py clean <experiment>` |
-| `CRSBENCH_LLM_UPSTREAM_BASE_URL not set` | LiteLLM env contract is incomplete for this trial | Set `skip_litellm: true` when LLM is not needed, or provide required `CRSBENCH_LLM_*` vars |
+| `LITELLM_UPSTREAM_BASE_URL not set` | The external LiteLLM contract is incomplete for this trial | Set `runtime.litellm.skip: true` when no LLM is needed, or provide `LITELLM_UPSTREAM_BASE_URL` and the required credential |
 | `verification drain incomplete (...)` during smoke post-verify | Async POV/patch verification hit `runtime.verify_timeout`; the worker preserved artifacts but wrote `.verification-undrained.json` | Treat smoke as failed, inspect the worker/evaluator logs for the stalled verify queue, then re-run `crsbench re-eval` on the completed trial outputs once the evaluator path is fixed |
 
 ## CLI Reference

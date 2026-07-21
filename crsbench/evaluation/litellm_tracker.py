@@ -1,13 +1,4 @@
-"""LiteLLM usage tracking via Virtual Keys API.
-
-This module provides functionality to track LLM usage per trial using
-LiteLLM's Virtual Keys feature. Each trial gets a unique API key, enabling
-accurate per-trial cost and token tracking.
-
-Reference:
-    - LiteLLM Virtual Keys: https://docs.litellm.ai/docs/proxy/virtual_keys
-    - LiteLLM Spend Tracking: https://docs.litellm.ai/docs/proxy/cost_tracking
-"""
+"""Track external LiteLLM usage through the Virtual Keys API."""
 
 import json
 import os
@@ -136,18 +127,7 @@ class LiteLLMTrackerError(Exception):
 
 
 class LiteLLMTracker:
-    """Tracks LLM usage per trial via LiteLLM Virtual Keys API.
-
-    This class manages the lifecycle of trial-specific API keys:
-    1. Generate a unique key at trial start
-    2. Query spend/usage during snapshots or at trial end
-    3. Delete the key after trial completion
-
-    Environment Variables:
-        CRSBENCH_LLM_BASE_URL / CRSBENCH_LLM_UPSTREAM_BASE_URL:
-            LiteLLM URL(s) used for runtime and/or forwarding.
-        CRSBENCH_LLM_UPSTREAM_MASTER_KEY: Master key for key management APIs
-    """
+    """Track one external-mode trial through LiteLLM virtual-key APIs."""
 
     def __init__(
         self,
@@ -158,20 +138,7 @@ class LiteLLMTracker:
         max_retries: int = 3,
         max_backoff: float = 60.0,
     ):
-        """Initialize LiteLLM tracker.
-
-        Args:
-            base_url: LiteLLM proxy URL. Defaults to resolved CRSBench runtime
-                URL for current mode.
-            master_key: Master key for API. Defaults to resolved CRSBench
-                runtime key.
-            timeout: Per-attempt request timeout in seconds.
-            max_retries: Maximum number of retry attempts for transient failures.
-            max_backoff: Maximum total backoff time in seconds across all retries.
-
-        Raises:
-            LiteLLMTrackerError: If required environment variables are not set.
-        """
+        """Initialize an external LiteLLM tracker from explicit values or the runtime environment."""
         runtime_env = resolve_litellm_runtime_env(
             os.environ.get("CRSBENCH_LLM_MODE", "external")
         )
@@ -183,8 +150,7 @@ class LiteLLMTracker:
 
         if not self.base_url:
             raise LiteLLMTrackerError(
-                "CRSBENCH_LLM_BASE_URL/CRSBENCH_LLM_UPSTREAM_BASE_URL not set. "
-                "Required for LLM tracking."
+                "LITELLM_UPSTREAM_BASE_URL or CRSBENCH_LLM_BASE_URL must be set for external LLM tracking."
             )
         if not self.master_key:
             raise LiteLLMTrackerError(

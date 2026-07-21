@@ -1,46 +1,31 @@
-# LiteLLM Proxy Mode Configuration
-#
-# This configuration forwards all requests to an upstream LiteLLM instance.
-# Useful for multi-tier setups, centralized model management, or cost tracking.
-#
-# Environment Variables Required:
-#   CRSBENCH_LLM_UPSTREAM_BASE_URL - URL of upstream LiteLLM (e.g., http://central-litellm:4000)
-#   CRSBENCH_LLM_UPSTREAM_API_KEY          - API key for upstream LiteLLM (reuses existing env var)
+# LiteLLM proxy configuration that forwards requests to an OpenAI-compatible upstream endpoint.
+# Required environment variables:
+#   LITELLM_UPSTREAM_BASE_URL - URL of the upstream endpoint.
+#   LITELLM_UPSTREAM_API_KEY - API key for the upstream endpoint.
 #
 # Usage:
 #   docker run -d \
 #     -p 4000:4000 \
 #     -v $(pwd)/proxy-mode.yaml:/app/config.yaml:ro \
-#     -e CRSBENCH_LLM_UPSTREAM_BASE_URL=http://central-litellm:4000 \
-#     -e CRSBENCH_LLM_UPSTREAM_API_KEY=sk-your-key \
+#     -e LITELLM_UPSTREAM_BASE_URL=http://central-litellm:4000 \
+#     -e LITELLM_UPSTREAM_API_KEY=sk-your-key \
 #     ghcr.io/berriai/litellm:main-stable \
 #     --config /app/config.yaml
 
 model_list:
-  # Forward all models to upstream LiteLLM
-  # The wildcard "*" matches any model name requested
+  # The wildcard route forwards every requested model name to the upstream endpoint.
   - model_name: "*"
     litellm_params:
-      # Use OpenAI format to forward requests
       model: openai/*
-      api_base: os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL
-      api_key: os.environ/CRSBENCH_LLM_UPSTREAM_API_KEY
+      api_base: os.environ/LITELLM_UPSTREAM_BASE_URL
+      api_key: os.environ/LITELLM_UPSTREAM_API_KEY
 
-# LiteLLM Settings
 litellm_settings:
-  # Enable JSON logging for this proxy layer
   json_logs: true
-
-  # Log full request/response at proxy layer
   log_responses: true
-
-  # Don't use database
   store_model_in_db: false
-
-  # Disable telemetry
   telemetry: false
-
-  # Optional: Add custom headers to upstream requests
+  # Optional headers added to every upstream request.
   # default_headers:
   #   X-Proxy-Layer: "trial-litellm"
   #   X-Experiment-ID: "experiment-123"

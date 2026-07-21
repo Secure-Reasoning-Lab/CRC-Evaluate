@@ -35,11 +35,13 @@ from crsbench.evaluation.adapter.config_gen import (
     CrsComposeInfra,
     CrsComposeLiteLLMConfig,
     CrsComposeLiteLLMExternalConfig,
+    CrsComposeLiteLLMInternalConfig,
     CrsComposeLLMConfig,
     CrsComposeYaml,
 )
 from crsbench.evaluation.results import CRSExecutionResult
 from crsbench.utils.cpu_pool import format_cpuset, parse_cpuset
+from crsbench.utils.litellm_config import parse_internal_litellm_config
 from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -286,6 +288,7 @@ class OssCrsAdapter:
         self._litellm_runtime_url: str = ""
         self._litellm_runtime_api_key: str = ""
         self._litellm_config_path: str = ""
+        self._litellm_cost_budget: Optional[int] = None
 
         # Artifacts resolved via `oss-crs artifacts`
         self._resolved_artifacts: Optional[dict[str, Any]] = None
@@ -418,6 +421,23 @@ class OssCrsAdapter:
         service = self._crs_service_configs.get(self._crs_config_name, {})
         policy = service.get("budget_policy", "continue")
         return policy if policy in ("continue", "terminate") else "continue"
+
+    @property
+    def litellm_mode(self) -> str:
+        """Return the configured LiteLLM mode."""
+        return self._litellm_mode
+
+    def get_litellm_spend_report_path(self) -> Optional[Path]:
+        """Return the run-scoped OSS-CRS LiteLLM spend report path."""
+        if not isinstance(self._resolved_artifacts, dict):
+            return None
+        meta = self._resolved_artifacts.get("meta")
+        if not isinstance(meta, dict):
+            return None
+        meta_path = meta.get("path")
+        if not isinstance(meta_path, str) or not meta_path.strip():
+            return None
+        return Path(meta_path).parent / "litellm-spend-report.json"
 
     def _get_crs_artifact_path(self, key: str) -> Optional[Path]:
         """Look up a single path from resolved artifacts for the current CRS.
@@ -734,6 +754,7 @@ class OssCrsAdapter:
                 "litellm_runtime_url",
                 "litellm_runtime_api_key",
                 "litellm_config_path",
+                "litellm_cost_budget",
                 "run_id",
             }
             flat = {
@@ -844,6 +865,11 @@ class OssCrsAdapter:
             normalized = _normalize_optional_text(config["litellm_config_path"])
             if normalized is not None:
                 self._litellm_config_path = normalized
+        if "litellm_cost_budget" in config:
+            raw_budget = config["litellm_cost_budget"]
+            self._litellm_cost_budget = (
+                int(raw_budget) if raw_budget is not None else None
+            )
         if "run_id" in config:
             self._configured_run_id = _normalize_optional_text(config["run_id"])
             # Keep adapter run-id aligned with explicit trial-scoped config.
@@ -979,16 +1005,25 @@ class OssCrsAdapter:
     @staticmethod
     def _load_litellm_aliases(litellm_config_path: Path) -> set[str]:
         """Load LiteLLM model aliases from config file."""
-        with litellm_config_path.open("r") as f:
-            cfg = yaml.safe_load(f) or {}
+        try:
+            cfg = parse_internal_litellm_config(
+                litellm_config_path.read_text(encoding="utf-8")
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid LiteLLM configuration: {litellm_config_path}"
+            ) from exc
         model_list = cfg.get("model_list", [])
+        if not isinstance(model_list, list):
+            raise ValueError(
+                f"LiteLLM model_list must be a list: {litellm_config_path}"
+            )
         aliases: set[str] = set()
-        if isinstance(model_list, list):
-            for model in model_list:
-                if isinstance(model, dict):
-                    alias = model.get("model_name")
-                    if isinstance(alias, str) and alias.strip():
-                        aliases.add(alias.strip())
+        for model in model_list:
+            if isinstance(model, dict):
+                alias = model.get("model_name")
+                if isinstance(alias, str) and alias.strip():
+                    aliases.add(alias.strip())
         return aliases
 
     @staticmethod
@@ -1080,42 +1115,69 @@ class OssCrsAdapter:
                 f"skip_litellm=true; disabling LiteLLM for CRSs: {', '.join(crs_names)}"
             )
         else:
-            if self._litellm_mode != "external":
+            if self._litellm_mode == "internal":
+                if litellm_config_path is None:
+                    raise RuntimeError(
+                        "LiteLLM internal mode requires litellm_config_path"
+                    )
+                if not litellm_config_path.is_file():
+                    raise RuntimeError(
+                        "LiteLLM internal config file does not exist: "
+                        f"{litellm_config_path}"
+                    )
+                configured_aliases = self._load_litellm_aliases(litellm_config_path)
+                missing_aliases = sorted(set(required_llms) - configured_aliases)
+                if missing_aliases:
+                    raise RuntimeError(
+                        "LiteLLM internal config is missing required model aliases: "
+                        + ", ".join(missing_aliases)
+                    )
+                llm_config = CrsComposeLLMConfig(
+                    litellm=CrsComposeLiteLLMConfig(
+                        mode="internal",
+                        model_check=True,
+                        internal=CrsComposeLiteLLMInternalConfig(
+                            config_path=str(litellm_config_path.resolve())
+                        ),
+                    )
+                )
+                logger.info(
+                    "Configured oss-crs LiteLLM internal mode for CRSs: "
+                    f"{', '.join(crs_names)}"
+                )
+            elif self._litellm_mode == "external":
+                if litellm_config_path is not None:
+                    raise RuntimeError(
+                        "litellm_config_path is valid only in internal mode"
+                    )
+                if not self._litellm_runtime_url or not self._litellm_runtime_api_key:
+                    raise RuntimeError(
+                        "LiteLLM external mode requires explicit runtime URL and API key"
+                    )
+                llm_config = CrsComposeLLMConfig(
+                    litellm=CrsComposeLiteLLMConfig(
+                        mode="external",
+                        model_check=True,
+                        external=CrsComposeLiteLLMExternalConfig(
+                            url=self._litellm_runtime_url,
+                            key=self._litellm_runtime_api_key,
+                        ),
+                    )
+                )
+                logger.info(
+                    "Configured oss-crs LiteLLM external mode for CRSs: "
+                    f"{', '.join(crs_names)}"
+                )
+            else:
                 raise RuntimeError(
                     f"Unsupported litellm_mode='{self._litellm_mode}'. "
-                    "CRSBench currently supports only litellm_mode='external'."
-                )
-            if litellm_config_path is not None:
-                logger.info(
-                    "litellm_config_path is ignored in external mode: "
-                    f"{litellm_config_path}"
+                    "Expected 'external' or 'internal'."
                 )
 
-            llm_config = CrsComposeLLMConfig(
-                litellm=CrsComposeLiteLLMConfig(
-                    mode="external",
-                    model_check=True,
-                    external=CrsComposeLiteLLMExternalConfig(
-                        url=self._litellm_runtime_url,
-                        key=self._litellm_runtime_api_key,
-                    ),
-                )
-            )
-            if not self._litellm_runtime_url or not self._litellm_runtime_api_key:
-                raise RuntimeError(
-                    "LiteLLM external mode requires explicit runtime URL/API key from "
-                    "CRSBench (litellm_runtime_url, litellm_runtime_api_key)."
-                )
-            logger.info(
-                "Configured oss-crs LiteLLM external mode for CRSs: "
-                f"{', '.join(crs_names)}"
-            )
-
-        # Keep CRS-level required_llms information visible in logs.
         if required_llms and not self._skip_litellm:
             logger.info(
                 "Required LLM aliases from CRS metadata "
-                f"(validated by oss-crs in external mode): {', '.join(required_llms)} "
+                f"(validated by oss-crs): {', '.join(required_llms)} "
                 f"[sources: {', '.join(required_sources)}]"
             )
 
@@ -1150,6 +1212,11 @@ class OssCrsAdapter:
                 source=source,
                 cpuset=service_cpusets[crs_name],
                 memory=service_memory,
+                llm_budget=(
+                    self._litellm_cost_budget
+                    if self._litellm_mode == "internal" and not self._skip_litellm
+                    else None
+                ),
                 additional_env=additional_env or None,
             )
 

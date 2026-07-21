@@ -258,6 +258,7 @@ def _build_crs_compose_section(state: Mapping[str, Any]) -> dict[str, Any]:
 def _build_cloud_section(
     state: Mapping[str, Any],
     storage_state: Mapping[str, Any],
+    runtime_state: Mapping[str, Any],
 ) -> dict[str, Any]:
     if not state or state.get("enabled") is False:
         return {}
@@ -280,15 +281,27 @@ def _build_cloud_section(
         fallback_region=evaluator_region,
     )
 
-    env = {}
-    for env_key in (
-        "CRSBENCH_LLM_UPSTREAM_BASE_URL",
-        "CRSBENCH_LLM_MASTER_KEY",
-        "HF_TOKEN",
-    ):
+    env: dict[str, Any] = {}
+    for env_key in ("HF_TOKEN",):
         value = state.get(f"env_{env_key}")
         if not _is_blank(value):
             env[env_key] = value
+    if not runtime_state.get("skip_litellm"):
+        base_url = state.get("env_LITELLM_UPSTREAM_BASE_URL")
+        api_key = state.get("env_LITELLM_UPSTREAM_API_KEY")
+        master_key = state.get("env_CRSBENCH_LLM_UPSTREAM_MASTER_KEY")
+        if not _is_blank(base_url):
+            env["LITELLM_UPSTREAM_BASE_URL"] = base_url
+        if runtime_state.get("litellm_mode") == "internal":
+            if not _is_blank(api_key):
+                env["LITELLM_UPSTREAM_API_KEY"] = api_key
+        elif runtime_state.get("llm_tracking_enabled", True):
+            if not _is_blank(master_key):
+                env["CRSBENCH_LLM_UPSTREAM_MASTER_KEY"] = master_key
+        elif not _is_blank(api_key):
+            env["LITELLM_UPSTREAM_API_KEY"] = api_key
+        elif not _is_blank(master_key):
+            env["CRSBENCH_LLM_UPSTREAM_MASTER_KEY"] = master_key
 
     provider_scope = {
         "project": state.get("provider_project"),
@@ -512,7 +525,9 @@ def build_grouped_config(
         "worker": _section(state, "worker"),
         "evaluator": _section(state, "evaluator"),
         "crs_compose": _build_crs_compose_section(_section(state, "crs_compose")),
-        "cloud": _build_cloud_section(_section(state, "cloud"), storage_state),
+        "cloud": _build_cloud_section(
+            _section(state, "cloud"), storage_state, runtime_state
+        ),
     }
     return merge_section_extras(grouped, section_extras)
 
@@ -534,7 +549,7 @@ def dump_section_yaml(section_name: str, state: Mapping[str, Any]) -> str:
 def load_state_from_grouped_config(
     grouped: Mapping[str, Any],
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
-    grouped_dict = dict(grouped)
+    grouped_dict = deepcopy(dict(grouped))
     extras: dict[str, dict[str, Any]] = {}
 
     experiment = deepcopy(dict(grouped_dict.get("experiment", {})))
@@ -664,11 +679,16 @@ def load_state_from_grouped_config(
                 "defaults_github_deploy_key_path": defaults_cfg.get(
                     "github_deploy_key_path"
                 ),
-                "env_CRSBENCH_LLM_UPSTREAM_BASE_URL": cloud_env.get(
-                    "CRSBENCH_LLM_UPSTREAM_BASE_URL"
+                "env_LITELLM_UPSTREAM_BASE_URL": _pop_known(
+                    cloud_env, "LITELLM_UPSTREAM_BASE_URL"
                 ),
-                "env_CRSBENCH_LLM_MASTER_KEY": cloud_env.get("CRSBENCH_LLM_MASTER_KEY"),
-                "env_HF_TOKEN": cloud_env.get("HF_TOKEN"),
+                "env_LITELLM_UPSTREAM_API_KEY": _pop_known(
+                    cloud_env, "LITELLM_UPSTREAM_API_KEY"
+                ),
+                "env_CRSBENCH_LLM_UPSTREAM_MASTER_KEY": _pop_known(
+                    cloud_env, "CRSBENCH_LLM_UPSTREAM_MASTER_KEY"
+                ),
+                "env_HF_TOKEN": _pop_known(cloud_env, "HF_TOKEN"),
                 "bootstrap_prepare_mode": bootstrap_cfg.get("prepare_mode"),
                 "bootstrap_download_benchmarks": bootstrap_cfg.get(
                     "download_benchmarks"
@@ -710,6 +730,18 @@ def load_state_from_grouped_config(
             }
         ),
     }
+
+    grouped_cloud = grouped_dict.get("cloud")
+    if isinstance(grouped_cloud, dict):
+        grouped_cloud_env = grouped_cloud.get("env")
+        if isinstance(grouped_cloud_env, dict):
+            for env_key in (
+                "LITELLM_UPSTREAM_BASE_URL",
+                "LITELLM_UPSTREAM_API_KEY",
+                "CRSBENCH_LLM_UPSTREAM_MASTER_KEY",
+                "HF_TOKEN",
+            ):
+                grouped_cloud_env.pop(env_key, None)
 
     generated_known = build_grouped_config(state)
 

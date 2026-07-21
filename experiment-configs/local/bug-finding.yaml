@@ -4,7 +4,7 @@
 #   uv run crsbench run --config experiment-configs/local/bug-finding.yaml
 #
 # Required env (claude-code via external LiteLLM proxy):
-#   CRSBENCH_LLM_UPSTREAM_BASE_URL, CRSBENCH_LLM_UPSTREAM_MASTER_KEY
+#   LITELLM_UPSTREAM_BASE_URL, CRSBENCH_LLM_UPSTREAM_MASTER_KEY
 
 experiment:
   name: local-bug-finding

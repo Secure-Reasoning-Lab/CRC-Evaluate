@@ -105,16 +105,10 @@ CRSBench preserves both duration and Unix-time phase-boundary metadata in
 
 ### LiteLLM Runtime Contract
 
-CRSBench currently supports only the external LiteLLM model when a run needs
-LLM access.
-
-- supported today: `runtime.litellm.mode: external`
-- supported today: `runtime.litellm.skip: true`
-- not implemented yet: `runtime.litellm.mode: self_hosted`
-
-CRSBench resolves the external LiteLLM endpoint and credentials from the
-canonical `CRSBENCH_LLM_*` environment contract, then passes the resolved
-runtime settings through the generated `oss-crs` execution environment.
+`runtime.litellm.mode: internal` starts an OSS-CRS-managed LiteLLM proxy from `crs_compose.litellm_config_path`, while `runtime.litellm.mode: external` connects the CRS to an existing endpoint.
+`runtime.litellm.skip: true` disables LiteLLM for CRSes that do not require model access.
+Internal mode transports the model-routing YAML to the worker and imports cumulative OSS-CRS spend into the trial accounting artifact when tracking is enabled.
+External mode resolves `LITELLM_UPSTREAM_BASE_URL` and its runtime or management credential from the worker environment before generating the OSS-CRS configuration.
 
 ### Expected CRS Outputs
 

@@ -8,11 +8,11 @@ This page is the canonical index for CRSBench environment variables.
 |---|---|
 | `CRSBENCH_REDIS_HOST` | Sets the Redis/Valkey queue backend host (`host` or `host:port`; default port is `6379`) for queue-backed worker/evaluator/configless flows and as a runtime default where applicable. |
 | `CRSBENCH_REDIS_PASSWORD` | Password for Redis/Valkey auth (if enabled). |
-| `CRSBENCH_LLM_MASTER_KEY` | Local/self-hosted LiteLLM auth key used by CRS-facing trial services or centralized proxy deployments. |
-| `CRSBENCH_LLM_BASE_URL` | Immediate LiteLLM endpoint called directly. |
-| `CRSBENCH_LLM_UPSTREAM_BASE_URL` | Upstream/forwarding LiteLLM endpoint. |
-| `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` | Upstream LiteLLM key-management/tracking credential (`external` mode preferred). |
-| `CRSBENCH_LLM_UPSTREAM_API_KEY` | Upstream LiteLLM runtime API key (`external` mode preferred). |
+| `LITELLM_MASTER_KEY` | Authentication key for a standalone LiteLLM server started with the local helper. |
+| `CRSBENCH_LLM_BASE_URL` | Immediate LiteLLM endpoint used as an external-mode endpoint when `LITELLM_UPSTREAM_BASE_URL` is unset. |
+| `LITELLM_UPSTREAM_BASE_URL` | Upstream endpoint used by internal routing files; external mode requires the LiteLLM proxy root that exposes its management APIs. |
+| `LITELLM_UPSTREAM_API_KEY` | Runtime credential for `LITELLM_UPSTREAM_BASE_URL`. |
+| `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` | LiteLLM management credential used to create and inspect per-trial virtual keys in external mode. |
 | `CRSBENCH_NOTIFY_APPRISE_URLS` | Apprise notification URLs for queue-backed distributed and managed-cloud notifications. |
 | `CRSBENCH_NOTIFY_APPRISE_TITLE` | Optional Apprise notification title prefix. Defaults to `CRSBench`. |
 | `CRSBENCH_NOTIFY_APPRISE_TAG` | Optional Apprise tag applied to all configured notification URLs. |
@@ -38,6 +38,29 @@ reference `os.environ/CRSBENCH_NOTIFY_APPRISE_URLS` from the checked-in config
 so only the orchestrator VM receives it. If operator-side `cloud monitor`
 Apprise and orchestrator-side Apprise are both enabled, terminal notifications
 can duplicate.
+
+## LiteLLM Runtime Contract
+
+### Internal Mode
+
+`runtime.litellm.mode: internal` starts a trial-scoped LiteLLM proxy through OSS-CRS and loads its routes from `crs_compose.litellm_config_path`.
+Set `LITELLM_UPSTREAM_BASE_URL` and `LITELLM_UPSTREAM_API_KEY` when the routing file references those names.
+For managed cloud runs, pass every referenced variable through `cloud.env` or the worker-specific environment layers.
+When `runtime.litellm.tracking_enabled` is true, internal accounting reads cumulative cost from the OSS-CRS spend report and writes it to the trial `llm-usage.json`.
+
+### External Mode
+
+`runtime.litellm.mode: external` connects each CRS directly to an existing LiteLLM-compatible endpoint.
+
+- With `runtime.litellm.tracking_enabled: true`, set `LITELLM_UPSTREAM_BASE_URL` and `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`.
+- With `runtime.litellm.tracking_enabled: false`, set `LITELLM_UPSTREAM_BASE_URL` and either `LITELLM_UPSTREAM_API_KEY` or `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`.
+
+`LITELLM_MASTER_KEY` authenticates a standalone LiteLLM server and is not the external tracking credential.
+
+### Centralized LiteLLM Proxy
+
+For a central LiteLLM deployment, keep provider credentials on the central host and configure trial workers with `LITELLM_UPSTREAM_BASE_URL` plus the appropriate runtime or management credential.
+An internal routing file can expose CRS-required aliases while forwarding them to different upstream model names.
 
 ## Cloud Startup Overrides (Advanced)
 
@@ -67,38 +90,6 @@ editing the VM manually after launch.
 | `CRSBENCH_VALKEY_IMAGE` | Valkey container image used by the managed orchestrator bootstrap (default `valkey/valkey:8.0-alpine`). For managed GCE launches, prefer setting it through `cloud.orchestrator.env`. |
 | `CRSBENCH_STATE_DIR` | Override the startup-script state directory (default `/var/lib/crsbench`). |
 | `CRSBENCH_CLONE_DIR` | Override the checkout target directory used during startup (default `/opt/crsbench`). |
-
-### LiteLLM External Mode Contract
-
-`runtime.litellm.mode: external` is the supported experiment-runtime path.
-
-`runtime.litellm.mode: self_hosted` is reserved but not implemented yet.
-
-- When `runtime.litellm.tracking_enabled: true`, set:
-  - `CRSBENCH_LLM_UPSTREAM_BASE_URL` (or `CRSBENCH_LLM_BASE_URL`)
-  - `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`
-- When `runtime.litellm.tracking_enabled: false`, set:
-  - `CRSBENCH_LLM_UPSTREAM_BASE_URL` (or `CRSBENCH_LLM_BASE_URL`)
-  - one of `CRSBENCH_LLM_UPSTREAM_API_KEY` or `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`
-
-`CRSBENCH_LLM_MASTER_KEY` is for local or centrally managed LiteLLM auth
-surfaces and is not the external-mode tracking control-plane key used by
-CRSBench experiment runtime.
-
-### Centralized LiteLLM / Proxy Mode
-
-When a central LiteLLM instance fronts all provider accounts:
-
-- the central LiteLLM host keeps provider keys such as `OPENAI_API_KEY`,
-  `ANTHROPIC_API_KEY`, and `GOOGLE_API_KEY`
-- trial or worker hosts set only:
-  - `CRSBENCH_LLM_UPSTREAM_BASE_URL`
-  - one of:
-    - `CRSBENCH_LLM_UPSTREAM_API_KEY`
-    - `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`
-
-That split keeps provider credentials off experiment runners while preserving
-external-mode tracking and runtime auth.
 
 ## Evaluator Resource Propagation (Advanced)
 

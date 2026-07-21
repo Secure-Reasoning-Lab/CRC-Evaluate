@@ -128,8 +128,12 @@ _MODE_CHOICES = [
 
 _LITELLM_MODE_CHOICES = [
     Choice(
+        value="internal",
+        name="internal — start a trial-scoped LiteLLM proxy from a config file",
+    ),
+    Choice(
         value="external",
-        name="external — use an external LiteLLM proxy (most common)",
+        name="external — connect directly to an existing LiteLLM proxy",
     ),
     Choice(
         value="skip",
@@ -375,32 +379,52 @@ def prompt_config_interactive(
         message="LiteLLM mode:",
         choices=_LITELLM_MODE_CHOICES,
         default="external",
-        long_instruction="LLM-based CRS need 'external'. Pure fuzzers can 'skip'",
+        long_instruction="Choose internal, external, or skip for CRSs without LLM access",
     ).execute()
 
     skip_litellm = litellm_selection == "skip"
     litellm_mode: Optional[str] = None if skip_litellm else litellm_selection
+    litellm_config_path: Optional[str] = None
     llm_tracking_enabled = True
     litellm_cost_budget: Optional[float] = None
 
     if not skip_litellm:
+        if litellm_mode == "internal":
+            litellm_config_path = inquirer.text(
+                message="Internal LiteLLM config path:",
+                long_instruction="YAML file containing model aliases, routes, and prices",
+                validate=lambda value: Path(value).expanduser().is_file(),
+                invalid_message="Enter the path to an existing YAML file",
+            ).execute()
         llm_tracking_enabled = inquirer.confirm(
             message="Enable LLM usage tracking?",
             default=True,
-            long_instruction="Track per-trial cost and token metrics via LiteLLM Virtual Keys",
+            long_instruction=(
+                "Record cumulative cost from the OSS-CRS spend report"
+                if litellm_mode == "internal"
+                else "Track cost and usage metrics through LiteLLM virtual keys"
+            ),
         ).execute()
 
-        if inquirer.confirm(
+        if (litellm_mode == "internal" or llm_tracking_enabled) and inquirer.confirm(
             message="Set a per-trial LLM cost budget?",
             default=False,
-            long_instruction="When budget is exceeded, the CRS LLM key is revoked",
+            long_instruction="Set the maximum spend for the trial's LiteLLM key",
         ).execute():
             budget_str = inquirer.text(
                 message="Cost budget (USD):",
-                default="10.0",
-                long_instruction="Maximum LLM spend in USD per trial",
-                validate=lambda val: _is_positive_float(val),
-                invalid_message="Enter a positive number",
+                default="10" if litellm_mode == "internal" else "10.0",
+                long_instruction="Maximum LLM spend in USD for this trial",
+                validate=(
+                    lambda val: val.isdigit() and int(val) > 0
+                    if litellm_mode == "internal"
+                    else _is_positive_float(val)
+                ),
+                invalid_message=(
+                    "Enter a positive whole-dollar amount"
+                    if litellm_mode == "internal"
+                    else "Enter a positive number"
+                ),
             ).execute()
             litellm_cost_budget = float(budget_str)
 
@@ -497,6 +521,7 @@ def prompt_config_interactive(
         skip_litellm=skip_litellm,
         llm_tracking_enabled=llm_tracking_enabled,
         litellm_cost_budget=litellm_cost_budget,
+        litellm_config_path=litellm_config_path,
     )
 
 
@@ -571,6 +596,7 @@ def _assemble_config(
     skip_litellm: bool = False,
     llm_tracking_enabled: bool = True,
     litellm_cost_budget: Optional[float] = None,
+    litellm_config_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Assemble the grouped config dict from individual values."""
     experiment_block: Dict[str, Any] = {"name": name, "task": task, "mode": mode}
@@ -611,7 +637,9 @@ def _assemble_config(
     if description:
         config["description"] = description
     config["experiment"] = experiment_block
-    config["crs_compose"] = crs_services
+    config["crs_compose"] = dict(crs_services)
+    if litellm_config_path:
+        config["crs_compose"]["litellm_config_path"] = litellm_config_path
     config["runtime"] = runtime_block
     config["storage"] = {
         "experiment_filestore": experiment_filestore,
@@ -659,6 +687,7 @@ def build_config_from_answers(answers: Dict[str, Any]) -> Dict[str, Any]:
             - evaluator (dict|None)
             - pov_early_stop (bool, default: False)
             - litellm_mode (str|None, default: None)
+            - litellm_config_path (str|None)
             - skip_litellm (bool, default: False)
             - llm_tracking_enabled (bool, default: True)
             - litellm_cost_budget (float|None)
@@ -690,6 +719,7 @@ def build_config_from_answers(answers: Dict[str, Any]) -> Dict[str, Any]:
         skip_litellm=answers.get("skip_litellm", False),
         llm_tracking_enabled=answers.get("llm_tracking_enabled", True),
         litellm_cost_budget=answers.get("litellm_cost_budget"),
+        litellm_config_path=answers.get("litellm_config_path"),
     )
 
 

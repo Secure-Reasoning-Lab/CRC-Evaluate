@@ -26,6 +26,8 @@ experiment:
   sanitizers: [address, undefined]
 
 crs_compose:
+  # Required for internal LiteLLM mode; CRSBench snapshots and transports this file to each worker.
+  # litellm_config_path: configs/litellm-config.yaml
   # Optional: path to oss-crs executable (default: "oss-crs" on PATH).
   # oss_crs_cmd: oss-crs
   # Optional infra allocation override.
@@ -55,14 +57,11 @@ crs_compose:
     # additional_env:
     #   OPENAI_DEFAULT_MODEL: gpt-5.4
     #   OPENAI_REASONING_EFFORT: high
-    # Optional per-CRS behavior when the trial LLM budget
-    # (runtime.litellm.cost_budget) is exceeded.
-    #   continue (default): keep the CRS running; LiteLLM has revoked the key
-    #     so no further cost accrues
-    #   terminate: stop the CRS early and persist a budget-exceeded.json record
-    # Detection piggybacks on runtime.snapshot_period, so termination may be
-    # delayed by up to one snapshot cycle. Requires runtime.litellm.cost_budget
-    # to be set; without it this knob is inert.
+    # Optional per-CRS action when cumulative spend reaches runtime.litellm.cost_budget.
+    #   continue (default): keep the CRS running while LiteLLM enforces its configured budget.
+    #   terminate: stop the CRS and persist a budget-exceeded.json record.
+    # Detection runs on runtime.snapshot_period and may be delayed by one snapshot cycle.
+    # budget_policy: terminate requires runtime.litellm.cost_budget and tracking_enabled: true.
     # budget_policy: continue
 
 runtime:
@@ -82,14 +81,13 @@ runtime:
   # pov_dedup_strategy: patch-based
   # Stop trial early when all CPVs for a harness are confirmed.
   pov_early_stop: false
-  # LiteLLM wiring (usually external proxy in production).
+  # External mode connects to an existing endpoint; internal mode starts an OSS-CRS-managed trial proxy from crs_compose.litellm_config_path.
   litellm:
     mode: external
     tracking_enabled: true
-    # Optional per-trial default budget for LiteLLM key generation/accounting.
+    # Internal mode requires a positive whole-dollar value; external mode accepts any non-negative value.
     cost_budget: 10.0
-  # Wait time after run-end before final LLM usage settlement/log capture.
-  # Helps LiteLLM spend/log aggregates converge. Set 0 to disable.
+  # External tracking wait after run-end before final usage and log capture; set 0 to disable.
   # llm_accounting_settle_seconds: 60
   # Optional: include all POV variants during patch verification.
   # patch_verify_variants: false

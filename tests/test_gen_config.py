@@ -203,6 +203,25 @@ class TestBuildConfig:
         assert config["runtime"]["litellm"]["mode"] == "external"
         assert config["runtime"]["litellm"]["cost_budget"] == 10.0
 
+    def test_litellm_internal_with_config_path(self):
+        config = build_config_from_answers(
+            {
+                "name": "llm-internal",
+                "crs_services": {"crs-codex": {"num_cores": 4}},
+                "litellm_mode": "internal",
+                "litellm_config_path": "configs/litellm-config.yaml",
+                "litellm_cost_budget": 10,
+            }
+        )
+        assert config["runtime"]["litellm"] == {
+            "mode": "internal",
+            "cost_budget": 10,
+        }
+        assert (
+            config["crs_compose"]["litellm_config_path"]
+            == "configs/litellm-config.yaml"
+        )
+
     def test_litellm_tracking_disabled(self):
         config = build_config_from_answers(
             {

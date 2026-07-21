@@ -1,442 +1,99 @@
-# LiteLLM Service
+# LiteLLM Routing
 
-LiteLLM provides an OpenAI-compatible proxy for CRSBench, enabling unified access to multiple LLM providers with built-in logging and cost tracking.
+This directory contains LiteLLM routing examples and helper assets for CRSBench.
+CRSBench supports a trial-scoped internal proxy managed by OSS-CRS and an external LiteLLM-compatible endpoint managed outside the trial.
 
-## Quick Start
+## Internal Mode
 
-### 1. Set API Keys
-
-Create a `.env` file in the project root:
-
-```bash
-# Required
-CRSBENCH_LLM_MASTER_KEY=your-master-key-here
-
-# Provider API Keys (at least one required)
-OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
-GOOGLE_API_KEY=...
-# Add other providers as needed
-```
-
-### 2. Start LiteLLM
-
-Using the helper script:
-
-```bash
-python scripts/litellm-helper.py start --port 4000
-```
-
-Or manually with docker-compose:
-
-```bash
-cd services/litellm
-docker-compose up -d
-```
-
-### 3. Test Connection
-
-```bash
-curl http://localhost:4000/health
-```
-
-### 4. Use in CRS
-
-```python
-import openai
-
-client = openai.OpenAI(
-    base_url="http://localhost:4000",
-    api_key="your-master-key"
-)
-
-response = client.chat.completions.create(
-    model="gpt-4o-mini",
-    messages=[{"role": "user", "content": "Hello!"}]
-)
-```
-
-## Configuration
-
-### Default Models
-
-The `default-models.yaml` file defines available models. To customize:
-
-1. Copy `default-models.yaml` to your trial directory
-2. Edit the model list as needed
-3. Mount the custom config in docker-compose
-
-### Supported Providers
-
-| Provider | Models | API Key Variable |
-|----------|--------|------------------|
-| OpenAI | gpt-4o, gpt-4o-mini, gpt-4-turbo | `OPENAI_API_KEY` |
-| Anthropic | claude-sonnet-4, claude-3-5-sonnet, claude-3-5-haiku | `ANTHROPIC_API_KEY` |
-| Google | gemini-2.0-flash, gemini-1.5-pro | `GOOGLE_API_KEY` |
-| Mistral | mistral-large, mistral-small | `MISTRAL_API_KEY` |
-| Groq | llama-3.3-70b-versatile | `GROQ_API_KEY` |
-| Together AI | meta-llama-3.1-70b-instruct-turbo | `TOGETHER_API_KEY` |
-| DeepSeek | deepseek-chat | `DEEPSEEK_API_KEY` |
-
-### Azure OpenAI
-
-For Azure OpenAI, set additional environment variables:
-
-```bash
-AZURE_API_KEY=your-azure-key
-AZURE_API_BASE=https://your-resource.openai.azure.com
-AZURE_API_VERSION=2024-02-15-preview
-```
-
-### Proxy Mode
-
-LiteLLM can forward requests to another LiteLLM instance (upstream proxy). This is useful for:
-
-- **Multi-tier setups**: Trial-level proxies forward to centralized proxy
-- **Cost tracking**: Centralized proxy tracks all LLM usage and costs
-- **Rate limiting**: Apply organization-wide rate limits
-- **Model routing**: Centralized proxy handles complex routing logic
-
-**Enable proxy mode:**
-
-1. Set environment variables:
-```bash
-# Master key passed to CRS containers (for trial LiteLLM authentication)
-CRSBENCH_LLM_MASTER_KEY=sk-trial-master-key
-
-# Proxy configuration
-CRSBENCH_LLM_UPSTREAM_BASE_URL=http://central-litellm:4000
-CRSBENCH_LLM_UPSTREAM_API_KEY=sk-central-master-key  # Central LiteLLM's master key
-```
-
-2. Use the proxy mode config:
-```bash
-python scripts/litellm-helper.py start --config services/litellm/proxy-mode.yaml
-```
-
-**Architecture:**
-```
-CRS Container → Trial LiteLLM (Proxy) → Central LiteLLM → LLM Providers
-   (uses          (forwards with           (connects to
-CRSBENCH_LLM_MASTER_KEY) CRSBENCH_LLM_UPSTREAM_API_KEY)        providers)
-                    ↓ logs                  ↓ logs
-              trial-logs/              central-logs/
-```
-
-**Key Configuration:**
-- **CRS containers**: Use `CRSBENCH_LLM_MASTER_KEY` to authenticate with trial LiteLLM
-- **Trial LiteLLM**: Uses `CRSBENCH_LLM_UPSTREAM_API_KEY` to authenticate with central LiteLLM
-- **Central LiteLLM**: Connects to providers with provider API keys
-
-**Benefits:**
-- Trial-level logging for debugging
-- Central billing and cost tracking
-- Simplified API key management (only central instance needs provider keys)
-- Fine-grained access control per trial
-
-**Sync models from upstream:**
-
-Use the sync script to automatically fetch and configure models from upstream.
-The script automatically loads environment variables from `.env` file.
-
-```bash
-# List available models from upstream (uses .env settings)
-python scripts/sync-upstream-models.py --list-only
-
-# Sync models to default-models.yaml (uses .env settings)
-python scripts/sync-upstream-models.py
-
-# Override with command line arguments
-python scripts/sync-upstream-models.py \
-  --upstream-url http://central-litellm:4000 \
-  --api-key sk-central-master-key
-
-# Skip confirmation prompt
-python scripts/sync-upstream-models.py -y
-```
-
-**Manual configuration:**
-
-Edit your config YAML to add proxy models:
+Internal mode is the preferred way to expose CRS-required model aliases while routing requests to a different OpenAI-compatible model.
+Create a LiteLLM YAML file whose `model_name` values cover the aliases declared by the selected CRS metadata.
 
 ```yaml
 model_list:
-  # Forward specific models to upstream
-  - model_name: gpt-4o
+  - model_name: claude-opus-4-8
     litellm_params:
-      model: litellm_proxy/gpt-4o
-      api_base: os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL
-      api_key: os.environ/CRSBENCH_LLM_UPSTREAM_API_KEY
-
-  - model_name: claude-sonnet-4
-    litellm_params:
-      model: litellm_proxy/claude-sonnet-4
-      api_base: os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL
-      api_key: os.environ/CRSBENCH_LLM_UPSTREAM_API_KEY
+      model: openai/gpt-5.5
+      api_base: os.environ/LITELLM_UPSTREAM_BASE_URL
+      api_key: os.environ/LITELLM_UPSTREAM_API_KEY
+    model_info:
+      input_cost_per_token: 0.000005
+      cache_read_input_token_cost: 0.0000005
+      output_cost_per_token: 0.00003
 ```
 
-## Logging
-
-LiteLLM logs all requests/responses as JSON files in the mounted logs directory.
-
-### Log Location
-
-When using with CRSBench trials:
-```
-{experiment_filestore}/{experiment}/{crs}/{benchmark}/{trial_id}/litellm-logs/
-```
-
-### Log Format
-
-Each request creates a JSON file named `{timestamp}_{request_id}.json`:
-
-```json
-{
-  "id": "chatcmpl-abc123",
-  "timestamp": "2024-01-15T10:30:45.123Z",
-  "model": "gpt-4o-mini",
-  "request": {
-    "messages": [...],
-    "temperature": 0.7
-  },
-  "response": {
-    "choices": [...],
-    "usage": {
-      "prompt_tokens": 150,
-      "completion_tokens": 200,
-      "total_tokens": 350
-    }
-  },
-  "latency_ms": 1234,
-  "cost_usd": 0.00025
-}
-```
-
-## Helper Scripts
-
-### litellm-helper.py
-
-The `scripts/litellm-helper.py` script provides convenient management of LiteLLM instances:
-
-### Start Instance
-
-```bash
-python scripts/litellm-helper.py start --port 4000 --config default-models.yaml
-```
-
-### Stop Instance
-
-```bash
-python scripts/litellm-helper.py stop
-```
-
-### Check Status
-
-```bash
-python scripts/litellm-helper.py status
-```
-
-### View Logs
-
-```bash
-python scripts/litellm-helper.py logs
-python scripts/litellm-helper.py logs -f  # follow logs
-```
-
-### Health Check
-
-```bash
-python scripts/litellm-helper.py health
-```
-
-### sync-upstream-models.py
-
-The `scripts/sync-upstream-models.py` script syncs model configurations from an upstream LiteLLM instance:
-
-**List upstream models:**
-```bash
-# Uses .env file settings
-python scripts/sync-upstream-models.py --list-only
-
-# Or override with command line
-python scripts/sync-upstream-models.py --list-only \
-  --upstream-url http://central-litellm:4000 \
-  --api-key sk-central-master-key
-```
-
-**Sync models with confirmation:**
-```bash
-# Uses .env file settings (CRSBENCH_LLM_UPSTREAM_BASE_URL and CRSBENCH_LLM_UPSTREAM_API_KEY)
-python scripts/sync-upstream-models.py
-
-# Skip confirmation prompt
-python scripts/sync-upstream-models.py -y
-```
-
-**Custom output file:**
-```bash
-python scripts/sync-upstream-models.py \
-  --output services/litellm/proxy-models.yaml
-```
-
-The script will:
-1. Fetch all available models from upstream LiteLLM
-2. Display models in a formatted list
-3. Ask for confirmation before overwriting (unless `-y` flag)
-4. Backup existing config to `.backup` file
-5. Generate new proxy configuration with all upstream models
-
-## Integration with CRSBench
-
-CRSBench automatically manages LiteLLM instances for each trial when enabled in the experiment configuration.
-
-### Enable in Experiment Config
+Configure the experiment to pass that file to OSS-CRS.
 
 ```yaml
-litellm:
-  enabled: true
-  port: 4000  # Base port (incremented per trial)
-  models_config: services/litellm/default-models.yaml
+runtime:
+  litellm:
+    mode: internal
+    tracking_enabled: true
+    cost_budget: 30
+
+crs_compose:
+  litellm_config_path: /path/to/litellm-config.yaml
+  crs-bug-finding-claude-code:
+    num_cores: 8
 ```
 
-### Automatic Management
+Set `LITELLM_UPSTREAM_BASE_URL` and `LITELLM_UPSTREAM_API_KEY` in every worker environment referenced by the routing file.
+The internal budget must be a positive whole-dollar value.
+OSS-CRS starts and stops the proxy with the trial, and CRSBench writes the reported cumulative cost to `llm-usage.json`.
+Internal spend reports do not contain token, request, or per-model usage metrics.
 
-CRSBench will:
-1. Start a LiteLLM instance for each trial on a unique port
-2. Pass the LiteLLM URL to CRS executors via `--litellm-base`
-3. Mount trial-specific logs directory
-4. Clean up instances after trial completion
+For RQ workers, CRSBench snapshots the routing YAML when submitting the experiment and stages a private copy for each trial.
+For managed GCE runs, CRSBench transports the snapshot to the remote orchestrator before adding it to RQ trial payloads.
+Keep credentials in worker environment layers and use `os.environ/NAME` references in the routing file.
 
-## Testing
+## External Mode
 
-### Quick Test (No API Calls)
+External mode connects each CRS directly to an existing LiteLLM-compatible endpoint.
 
-Test LiteLLM with mock responses (no real API costs):
+```yaml
+runtime:
+  litellm:
+    mode: external
+    tracking_enabled: true
+    cost_budget: 10.0
+```
+
+Set `LITELLM_UPSTREAM_BASE_URL` and either `LITELLM_UPSTREAM_API_KEY` or `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`.
+Use the LiteLLM proxy root rather than a provider `/v1` path when external tracking is enabled.
+When tracking is enabled, `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` is required so CRSBench can create and inspect a per-trial virtual key.
+
+## Standalone Proxy Helper
+
+The helper starts a standalone LiteLLM container from a routing file and loads environment variables from the repository `.env` file.
 
 ```bash
-python scripts/test_litellm.py --port 4000 --mock-only
+uv run python scripts/litellm-helper.py start \
+  --port 4000 \
+  --config /path/to/litellm-config.yaml
+uv run python scripts/litellm-helper.py health
+uv run python scripts/litellm-helper.py logs -f
+uv run python scripts/litellm-helper.py stop
 ```
 
-This tests:
-- Health endpoint
-- Models listing
-- Mock completions (no API calls)
-- Streaming responses
+This helper is separate from internal mode, where OSS-CRS owns the trial proxy lifecycle.
 
-### Full Test (With Real API Calls)
+## Upstream Model Synchronization
 
-⚠️ **Warning: This makes real API calls and may incur costs!**
+The synchronization helper reads `LITELLM_UPSTREAM_BASE_URL` and `LITELLM_UPSTREAM_API_KEY`, lists models exposed by the upstream endpoint, and writes explicit proxy routes to `services/litellm/default-models.yaml`.
 
 ```bash
-python scripts/test_litellm.py --port 4000
+uv run python scripts/sync-upstream-models.py --list-only
+uv run python scripts/sync-upstream-models.py
+uv run python scripts/sync-upstream-models.py -y
 ```
 
-Tests all features including real LLM API calls.
+Review the generated aliases before using the file with internal mode because every alias required by the selected CRS must be present.
 
-### Manual Testing with cURL
+## Validation
 
-**Health check:**
+The mock-only check exercises a running standalone proxy without making a provider request.
+
 ```bash
-curl http://localhost:4000/health
+uv run python scripts/test_litellm.py --port 4000 --mock-only
 ```
 
-**List models:**
-```bash
-curl -X GET http://localhost:4000/models \
-  -H "Authorization: Bearer $CRSBENCH_LLM_MASTER_KEY"
-```
-
-**Mock completion (no API call):**
-```bash
-curl -X POST http://localhost:4000/chat/completions \
-  -H "Authorization: Bearer $CRSBENCH_LLM_MASTER_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-4o-mini",
-    "messages": [{"role": "user", "content": "Hello"}],
-    "mock_response": "Hello! This is a mock response."
-  }'
-```
-
-**Real completion (makes API call):**
-```bash
-curl -X POST http://localhost:4000/chat/completions \
-  -H "Authorization: Bearer $CRSBENCH_LLM_MASTER_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-4o-mini",
-    "messages": [{"role": "user", "content": "Hello"}]
-  }'
-```
-
-### Testing with Python
-
-```python
-import openai
-
-# Configure client
-client = openai.OpenAI(
-    base_url="http://localhost:4000",
-    api_key="your-master-key"
-)
-
-# Test with mock response (no API call)
-response = client.chat.completions.create(
-    model="gpt-4o-mini",
-    messages=[{"role": "user", "content": "test"}],
-    extra_body={"mock_response": "Test successful!"}
-)
-print(response.choices[0].message.content)
-
-# Test with real API call
-response = client.chat.completions.create(
-    model="gpt-4o-mini",
-    messages=[{"role": "user", "content": "Hello!"}]
-)
-print(response.choices[0].message.content)
-```
-
-## Troubleshooting
-
-### Container Won't Start
-
-Check API keys are set:
-```bash
-docker logs litellm
-```
-
-### Models Not Available
-
-Verify the API key for that provider is set and valid:
-```bash
-curl -X GET http://localhost:4000/models \
-  -H "Authorization: Bearer $CRSBENCH_LLM_MASTER_KEY"
-```
-
-### Port Already in Use
-
-Change the port in docker-compose or use `--port` flag:
-```bash
-python scripts/litellm-helper.py start --port 4001
-```
-
-### High Costs
-
-Monitor usage through logs:
-```bash
-# Sum total costs from logs
-cat litellm-logs/*.json | jq '.cost_usd' | paste -sd+ | bc
-```
-
-## Security
-
-- **Never commit `.env` files** - API keys should stay private
-- **Master key required** - All requests must authenticate
-- **Port binding** - By default, only bound to localhost
-- **Per-trial isolation** - Each trial gets its own instance
-
-## References
-
-- [LiteLLM Documentation](https://docs.litellm.ai/)
-- [Supported Providers](https://docs.litellm.ai/docs/providers)
-- [LiteLLM Proxy](https://docs.litellm.ai/docs/proxy/quick_start)
+Running the same command without `--mock-only` sends real provider requests and can incur cost.

@@ -5554,16 +5554,16 @@ class TestLaunch:
             resolved_plan=resolved_plan,
             redacted_worker_fleets=expected_worker_fleets,
             orchestrator_env={
-                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
                 "CRSBENCH_LLM_MASTER_KEY": "master-key",
             },
             worker_placement_envs=[
                 {
-                    "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                    "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
                     "OPENAI_API_KEY": "openai-key",
                 },
                 {
-                    "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                    "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
                     "OPENAI_API_KEY": "openai-key",
                 },
             ],
@@ -5590,18 +5590,18 @@ class TestLaunch:
             cwd=Path.cwd(),
         )
         assert mock_adapter.create_orchestrator.call_args.kwargs["env_passthrough"] == {
-            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+            "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
             "CRSBENCH_LLM_MASTER_KEY": "master-key",
         }
         assert mock_adapter.create_workers.call_args.kwargs[
             "env_passthrough_by_placement"
         ] == [
             {
-                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
                 "OPENAI_API_KEY": "openai-key",
             },
             {
-                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
                 "OPENAI_API_KEY": "openai-key",
             },
         ]
@@ -5648,7 +5648,7 @@ class TestLaunch:
             redacted_worker_fleets=expected_worker_fleets,
             redacted_evaluator_fleets=[],
             orchestrator_env={
-                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+                "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
             },
             worker_placement_envs=[],
             evaluator_placement_envs=[],
@@ -5670,7 +5670,7 @@ class TestLaunch:
         assert rc == 0
         mock_load_trial_key_file.assert_called_once_with("/tmp/trial-keys.txt")
         assert mock_adapter.create_orchestrator.call_args.kwargs["env_passthrough"] == {
-            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+            "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
             TRIAL_KEY_ALLOWLIST_ENV_VAR: encode_trial_key_allowlist(
                 ["trial-key-2", "trial-key-1"]
             ),
@@ -6322,6 +6322,29 @@ class TestPreflight:
         rc = run_preflight(_make_preflight_args())
 
         assert rc == 2
+        mock_build_launch_plan.assert_not_called()
+
+    @patch("crsbench.cloud.cli._preflight.build_cloud_launch_plan")
+    @patch(
+        "crsbench.cloud.cli._preflight.read_internal_litellm_config_snapshot",
+        side_effect=FileNotFoundError("Internal LiteLLM config file not found"),
+    )
+    @patch("crsbench.cloud.cli._preflight.load_experiment_config")
+    def test_preflight_rejects_invalid_internal_litellm_config(
+        self,
+        mock_load_config,
+        mock_read_litellm,
+        mock_build_launch_plan,
+    ):
+        config = _make_provider_neutral_experiment_config()
+        mock_load_config.return_value = config
+
+        from crsbench.cloud.cli._preflight import run_preflight
+
+        rc = run_preflight(_make_preflight_args())
+
+        assert rc == 2
+        mock_read_litellm.assert_called_once_with(Path("/tmp/config.yaml"))
         mock_build_launch_plan.assert_not_called()
 
     @patch("crsbench.cloud.cli._preflight.save_launch_state", create=True)

@@ -246,6 +246,9 @@ def create_snapshot_archive(temp_dir):
         *,
         complete: bool = True,
         include_coverage_json: bool = False,
+        flat_patch_names: list[str] | None = None,
+        structured_patch_names: dict[str, list[str]] | None = None,
+        patch_verification: dict | None = None,
     ) -> Path:
         """Create a snapshot archive with test data."""
         # Create snapshot directory
@@ -271,10 +274,24 @@ def create_snapshot_archive(temp_dir):
         # Create patches directory (organized by POV ID)
         patches_dir = snapshot_dir / "patches"
         patches_dir.mkdir()
-        for i in range(patch_count):
-            patch_pov_dir = patches_dir / f"pov_{i:03d}"
-            patch_pov_dir.mkdir()
-            (patch_pov_dir / "patch.diff").write_text("--- a/file.c\n+++ b/file.c\n")
+        if flat_patch_names is None and structured_patch_names is None:
+            structured_patch_names = {
+                f"pov_{i:03d}": ["patch.diff"] for i in range(patch_count)
+            }
+        for patch_name in flat_patch_names or []:
+            (patches_dir / patch_name).write_text("--- a/file.c\n+++ b/file.c\n")
+        for cpv_id, patch_names in (structured_patch_names or {}).items():
+            patch_cpv_dir = patches_dir / cpv_id
+            patch_cpv_dir.mkdir()
+            for patch_name in patch_names:
+                (patch_cpv_dir / patch_name).write_text(
+                    "--- a/file.c\n+++ b/file.c\n"
+                )
+
+        if patch_verification is not None:
+            (snapshot_dir / "patch_verification.json").write_text(
+                json.dumps(patch_verification)
+            )
 
         # Create llm-usage.json (matches LLMUsageFile)
         llm_usage = {
@@ -363,6 +380,57 @@ class TestSnapshotLoader:
         assert snapshot.patch_count == 1
         assert len(snapshot.pov_names) == 2
         assert len(snapshot.patch_names) == 1
+
+    def test_load_snapshot_supports_flat_and_multi_patch_structured_layouts(
+        self, temp_dir, create_snapshot_archive
+    ):
+        archive_path = create_snapshot_archive(
+            cycle=1,
+            patch_count=0,
+            flat_patch_names=["flat-a.diff", "flat-b.diff"],
+            structured_patch_names={
+                "cpv_0": ["patch-a.diff", "patch-b.diff"],
+                "cpv_1": ["patch.diff"],
+            },
+        )
+
+        snapshot = SnapshotLoader().load_snapshot(archive_path, temp_dir)
+
+        assert snapshot.patch_count == 5
+        assert snapshot.patch_names == [
+            "flat-a.diff",
+            "flat-b.diff",
+            "cpv_0/patch-a.diff",
+            "cpv_0/patch-b.diff",
+            "cpv_1/patch.diff",
+        ]
+
+    def test_load_snapshot_reads_authoritative_patch_discovery_metadata(
+        self, temp_dir, create_snapshot_archive
+    ):
+        archive_path = create_snapshot_archive(
+            cycle=3,
+            patch_count=0,
+            patch_verification={
+                "cycle": 3,
+                "timestamp": 1234567890.0,
+                "elapsed_time": 180.0,
+                "harness_name": "fuzz_parser",
+                "cpvs_with_patches": ["cpv_0", "cpv_1"],
+                "patches_total": 3,
+                "patches_new": 2,
+                "input_cpvs_total": 2,
+            },
+        )
+
+        snapshot = SnapshotLoader().load_snapshot(archive_path, temp_dir)
+
+        assert snapshot.patch_count == 0
+        assert snapshot.patch_names == []
+        assert snapshot.patches_total == 3
+        assert snapshot.patches_new == 2
+        assert snapshot.cpvs_with_patches == ["cpv_0", "cpv_1"]
+        assert snapshot.input_cpvs_total == 2
 
     def test_load_trial_snapshots(self, temp_dir, create_snapshot_archive):
         """Test loading all snapshots for a trial."""
@@ -541,6 +609,56 @@ class TestMetricsAggregator:
         assert metrics.total_patches_generated == 1  # 0 + 1
         assert metrics.total_llm_cost == 0.50  # From final snapshot
         assert metrics.time_to_first_pov == 900.0
+
+    def test_aggregate_trial_uses_cumulative_patch_discovery_metadata(
+        self, temp_dir
+    ):
+        trial_info = TrialInfo(
+            trial_dir=temp_dir,
+            trial_num=1,
+            crs="patcher",
+            benchmark="benchmark",
+            harness="fuzz_harness",
+            mode="patch_generation",
+            status="valid",
+        )
+        snapshots = [
+            SnapshotData(
+                trial_dir=temp_dir,
+                cycle=1,
+                timestamp=1000.0,
+                elapsed_time=60.0,
+                running_elapsed_time=60.0,
+                snapshot_period=60,
+                patch_count=0,
+                patch_names=[],
+                patches_total=1,
+                patches_new=1,
+                cpvs_with_patches=["cpv_0"],
+            ),
+            SnapshotData(
+                trial_dir=temp_dir,
+                cycle=2,
+                timestamp=1060.0,
+                elapsed_time=120.0,
+                running_elapsed_time=120.0,
+                snapshot_period=60,
+                patch_count=1,
+                patch_names=["flat-patch.diff"],
+                patches_total=1,
+                patches_new=0,
+                cpvs_with_patches=["cpv_0"],
+            ),
+        ]
+
+        metrics = MetricsAggregator().aggregate_trial(
+            trial_info=trial_info,
+            snapshots=snapshots,
+        )
+
+        assert metrics.total_patches_generated == 1
+        assert metrics.unique_patch_names == ["flat-patch.diff"]
+        assert [point.cumulative_patches for point in metrics.time_series] == [1, 1]
 
     def test_aggregate_experiment(self, sample_trial_metrics):
         """Test aggregating metrics for an experiment."""

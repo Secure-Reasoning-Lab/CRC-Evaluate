@@ -4,24 +4,26 @@ The grouped experiment YAML contract is documented in:
 
 - [Distributed experiment config example](../experiment-config-distributed-example.yaml)
 
-Use that file as the configuration source of truth for field layout, comments,
-and examples.
+Use that file as the configuration source of truth for field layout, comments, and examples.
 
 ## Core Contract
 
 - `experiment`: task, mode, suite/benchmarks, sanitizers
 - `runtime`: trials, timeouts, Redis host, LiteLLM settings, inputs
 - `storage`: experiment/report/result storage paths
-- `crs_compose`: CRS services and per-CRS runtime resources, including
-  per-CRS `budget_policy` (`continue` | `terminate`) governing behavior when
-  the trial LLM budget is exceeded
+- `crs_compose`: CRS services, per-CRS runtime resources, internal LiteLLM config path, and per-CRS `budget_policy` (`continue` or `terminate`)
 - `worker` and `evaluator`: machine-local execution defaults
 - `resources`: fallback per-trial resource defaults
 - `cloud`: optional provider-neutral cloud placement contract
 
-The `cloud` section is intentionally provider-neutral so future managed backends
-can share one top-level shape. Today the only implemented managed backend is
-GCE, so current launchable configs use `cloud.providers.gce`.
+The `cloud` section is provider-neutral, and managed GCE launch settings use `cloud.providers.gce`.
+
+## LiteLLM Contract
+
+- `runtime.litellm.mode: internal` starts a trial-scoped LiteLLM proxy and requires `crs_compose.litellm_config_path`.
+- `runtime.litellm.mode: external` connects each CRS directly to an existing endpoint.
+- `runtime.litellm.tracking_enabled` writes `llm-usage.json` from OSS-CRS spend reports in internal mode or LiteLLM management APIs in external mode.
+- `runtime.litellm.skip: true` disables LiteLLM for CRSes that do not require model access.
 
 ## Cloud Contract
 

@@ -89,7 +89,6 @@ def test_local_markdown_links_resolve() -> None:
     markdown_files = list((repo_root / "docs").rglob("*.md")) + [
         repo_root / "README.md",
         repo_root / "CONTRIBUTING.md",
-        repo_root / "AGENTS.md",
         repo_root / "scripts" / "README.md",
         repo_root / "experiment-configs" / "README.md",
     ]
@@ -117,7 +116,6 @@ def test_docs_do_not_reference_removed_legacy_doc_paths() -> None:
     markdown_files = list((repo_root / "docs").rglob("*.md")) + [
         repo_root / "README.md",
         repo_root / "CONTRIBUTING.md",
-        repo_root / "AGENTS.md",
         repo_root / "scripts" / "README.md",
         repo_root / "experiment-configs" / "README.md",
     ]

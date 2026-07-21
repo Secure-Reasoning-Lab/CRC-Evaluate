@@ -1,14 +1,9 @@
 # CRSBench - Cyber Reasoning System Benchmark Suite
 
-CRSBench is the benchmark suite for [OSS-CRS](https://github.com/ossf/oss-crs),
-the open-source orchestration framework for LLM-based autonomous bug-finding
-and bug-fixing systems (Cyber Reasoning Systems). It provides curated
-benchmarks and an evaluation harness for measuring any OSS-CRS-compatible CRS
-on vulnerability discovery and program repair.
+CRSBench is the benchmark suite for [OSS-CRS](https://github.com/ossf/oss-crs), the open-source orchestration framework for LLM-based autonomous bug-finding and bug-fixing systems (Cyber Reasoning Systems).
+It provides curated benchmarks and an evaluation harness for measuring any OSS-CRS-compatible CRS on vulnerability discovery and program repair.
 
-Unlike traditional fuzzing benchmarks (e.g., FuzzBench) that only report
-coverage/crashes, CRSBench stores complete ground truth to track whether
-vulnerabilities are actually found and correctly patched.
+Unlike traditional fuzzing benchmarks such as FuzzBench that only report coverage and crashes, CRSBench stores complete ground truth to track whether vulnerabilities are actually found and correctly patched.
 
 ## Benchmark Statistics
 
@@ -23,13 +18,12 @@ vulnerabilities are actually found and correctly patched.
 | Vulnerabilities per harness | 1.65 average, 12 max |
 | PoV variants per vulnerability | 3.89 average |
 
-Full breakdown and regeneration steps:
-[docs/reference/benchmark-statistics.md](docs/reference/benchmark-statistics.md).
+See [Benchmark Statistics](docs/reference/benchmark-statistics.md) for the full breakdown and regeneration steps.
 
 ## Quick Start
 
-CRSBench is Linux-only and requires Docker. The smallest first run is a
-queue-backed single-host experiment against the `sanity` suite.
+CRSBench is Linux-only and requires Docker.
+The smallest first run is a queue-backed single-host experiment against the `sanity` suite.
 
 ```bash
 git clone https://github.com/sslab-gatech/CRSBench.git && cd CRSBench
@@ -40,14 +34,9 @@ uv run crsbench prepare
 uv run crsbench prepare --coverage   # for the bundled starter CRS
 ```
 
-Configure environment variables. CRSBench auto-loads `.env` from the repo root;
-edit it for distributed Redis, LiteLLM credentials, etc. CRSBench currently
-requires you to bring your own LiteLLM endpoint, either via the local helper
-at `scripts/litellm-helper.py` or an external proxy. Refer to the
-[LiteLLM docs](https://docs.litellm.ai/) for configuring providers, routing,
-and keys. See
-[docs/getting-started/configuration.md](docs/getting-started/configuration.md)
-for the CRSBench-side wiring.
+Configure environment variables in `.env`, which CRSBench loads from the repository root.
+LiteLLM can run as a trial-scoped internal proxy from a model-routing YAML file or as an external endpoint managed outside the trial.
+See [Configuration](docs/getting-started/configuration.md) for both runtime modes and the [LiteLLM documentation](https://docs.litellm.ai/) for provider-specific routing options.
 
 ```bash
 cp .env.example .env

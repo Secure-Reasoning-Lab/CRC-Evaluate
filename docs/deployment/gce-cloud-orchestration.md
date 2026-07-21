@@ -661,13 +661,13 @@ checkout source. The VM bootstrap clones CRSBench into `/opt/crsbench`,
 changes into that checkout, runs `crsbench prepare`, optionally downloads
 benchmarks, and only then starts the orchestrator, worker, or evaluator runtime.
 
-If remote VMs need API keys or upstream URLs from the operator environment,
-prefer first-class layered `env` maps:
+If remote VMs need API keys or upstream URLs from the operator environment, use the layered `env` maps:
 
 ```yaml
 cloud:
   env:
-    CRSBENCH_LLM_UPSTREAM_BASE_URL: os.environ/LITELLM_BASE_URL
+    LITELLM_UPSTREAM_BASE_URL: os.environ/LITELLM_BASE_URL
+    LITELLM_UPSTREAM_API_KEY: os.environ/LITELLM_API_KEY
     CRSBENCH_GIT_SSH_HOST: github.example.com
     CRSBENCH_TIMEZONE: America/Los_Angeles
 
@@ -679,9 +679,7 @@ cloud:
       defaults:
         crsbench_install_spec: "git+https://github.com/sslab-gatech/CRSBench.git"
       instance_profiles:
-        gce-orchestrator-n2d:
-          env:
-            CRSBENCH_LLM_MASTER_KEY: os.environ/LITELLM_ORCH_MASTER_KEY
+        gce-orchestrator-n2d: {}
         gce-worker-n2d:
           env:
             OPENAI_API_KEY: os.environ/DEFAULT_OPENAI_API_KEY
@@ -690,7 +688,6 @@ cloud:
     zone: us-east5-b
     instance_profile: gce-orchestrator-n2d
     env:
-      CRSBENCH_LLM_MASTER_KEY: os.environ/LITELLM_ORCH_MASTER_KEY
       CRSBENCH_VALKEY_IMAGE: us-docker.pkg.dev/example/platform/valkey:8.0-alpine
 
   workers:
@@ -702,13 +699,16 @@ cloud:
     placements:
       - zone: us-east5-b
         env:
-          CRSBENCH_LLM_UPSTREAM_BASE_URL: os.environ/LITELLM1_BASE_URL
-          CRSBENCH_LLM_MASTER_KEY: os.environ/LITELLM1_MASTER_KEY
+          LITELLM_UPSTREAM_BASE_URL: os.environ/LITELLM1_BASE_URL
+          LITELLM_UPSTREAM_API_KEY: os.environ/LITELLM1_API_KEY
       - zone: us-east1-b
         env:
-          CRSBENCH_LLM_UPSTREAM_BASE_URL: os.environ/LITELLM2_BASE_URL
-          CRSBENCH_LLM_MASTER_KEY: os.environ/LITELLM2_MASTER_KEY
+          LITELLM_UPSTREAM_BASE_URL: os.environ/LITELLM2_BASE_URL
+          LITELLM_UPSTREAM_API_KEY: os.environ/LITELLM2_API_KEY
 ```
+
+For internal mode, `crsbench cloud launch` transports the file selected by `crs_compose.litellm_config_path` to the remote orchestrator, which snapshots it into each RQ trial payload.
+Keep actual credentials in the cloud environment layers and use only `os.environ/NAME` references in the transported LiteLLM file.
 
 Semantics:
 

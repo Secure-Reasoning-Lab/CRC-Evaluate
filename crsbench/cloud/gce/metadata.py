@@ -5,10 +5,15 @@ from __future__ import annotations
 import base64
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Protocol
 
 import yaml
+
+from crsbench.utils.litellm_config import (
+    internal_litellm_config_path,
+    read_internal_litellm_config_snapshot,
+)
 
 if TYPE_CHECKING:
     from crsbench.cloud.bootstrap import CloudVmBootstrapInputs
@@ -25,6 +30,7 @@ CRSBENCH_GITHUB_DEPLOY_KEY = "crsbench-github-deploy-key"
 CRSBENCH_ENV_PASSTHROUGH_B64_KEY = "crsbench-env-passthrough-b64"
 CRSBENCH_REDIS_PASSWORD_KEY = "crsbench-redis-password"
 CRSBENCH_EXPERIMENT_CONFIG_B64_KEY = "crsbench-experiment-config-b64"
+CRSBENCH_LITELLM_CONFIG_B64_KEY = "crsbench-litellm-config-b64"
 CRSBENCH_DOWNLOAD_DELAY_SEC_KEY = "crsbench-download-delay-sec"
 CRSBENCH_EXPERIMENT_METADATA_KEY = "crsbench-experiment"
 CRSBENCH_BEST_EFFORT_WORKERS_COMPLETE_KEY = "crsbench-best-effort-workers-complete"
@@ -42,6 +48,7 @@ _ORCHESTRATOR_STARTUP_SCRIPT_PATH = (
 )
 _LABEL_PATTERN = re.compile(r"[^a-z0-9_-]+")
 _REMOTE_CONFIG_SECRET_PATH_KEYS = frozenset({"github_deploy_key_path"})
+_REMOTE_LITELLM_CONFIG_PATH = "/var/lib/crsbench/litellm-config.yaml"
 
 
 class _InstallMetadataConfig(Protocol):
@@ -335,6 +342,7 @@ def _render_transported_config_bytes(
     *,
     from_experiment_remote_path: str | None = None,
     from_experiment_remote_by_crs: dict[str, str] | None = None,
+    internal_litellm_remote_path: str = _REMOTE_LITELLM_CONFIG_PATH,
 ) -> bytes:
     """Return the experiment config YAML as bytes, ready to be base64-encoded.
 
@@ -360,7 +368,26 @@ def _render_transported_config_bytes(
         sanitized = _rewrite_from_experiment_by_crs(
             sanitized, from_experiment_remote_by_crs
         )
+    sanitized = _rewrite_internal_litellm_config_path(
+        sanitized, internal_litellm_remote_path
+    )
     return yaml.safe_dump(sanitized, sort_keys=False).encode("utf-8")
+
+
+def _rewrite_internal_litellm_config_path(value: Any, remote_path: str) -> Any:
+    """Rewrite the internal LiteLLM path for the remote orchestrator."""
+    if internal_litellm_config_path(value) is None:
+        return value
+    crs_compose = value["crs_compose"]
+    crs_compose["litellm_config_path"] = remote_path
+    return value
+
+
+def _remote_litellm_config_path(
+    env_passthrough: dict[str, str] | None,
+) -> str:
+    state_dir = (env_passthrough or {}).get("CRSBENCH_STATE_DIR") or "/var/lib/crsbench"
+    return str(PurePosixPath(state_dir) / "litellm-config.yaml")
 
 
 def _strip_remote_only_secret_paths(value: object) -> object:
@@ -527,6 +554,7 @@ def build_evaluator_metadata(
             experiment_config_path,
             from_experiment_remote_path=from_experiment_remote_path,
             from_experiment_remote_by_crs=from_experiment_remote_by_crs,
+            internal_litellm_remote_path=_remote_litellm_config_path(env_passthrough),
         )
     ).decode("ascii")
     if redis_password:
@@ -569,8 +597,14 @@ def build_orchestrator_metadata(
             experiment_config_path,
             from_experiment_remote_path=from_experiment_remote_path,
             from_experiment_remote_by_crs=from_experiment_remote_by_crs,
+            internal_litellm_remote_path=_remote_litellm_config_path(env_passthrough),
         )
     ).decode("ascii")
+    litellm_config = read_internal_litellm_config_snapshot(experiment_config_path)
+    if litellm_config is not None:
+        metadata[CRSBENCH_LITELLM_CONFIG_B64_KEY] = base64.b64encode(
+            litellm_config
+        ).decode("ascii")
 
     _apply_access_metadata(metadata=metadata, config=orchestrator)
     _apply_install_metadata(

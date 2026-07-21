@@ -1172,7 +1172,7 @@ def test_build_orchestrator_metadata_embeds_config_payload_and_redis_password(tm
         orchestrator=_make_orchestrator(),
         experiment_config_path=config_path,
         env_passthrough={
-            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+            "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
             "OPENAI_API_KEY": "openai-key",
         },
         download_delay_sec=0,
@@ -1190,9 +1190,98 @@ def test_build_orchestrator_metadata_embeds_config_payload_and_redis_password(tm
         base64.b64decode(metadata[CRSBENCH_ENV_PASSTHROUGH_B64_KEY]).decode("utf-8")
     )
     assert passthrough == {
-        "CRSBENCH_LLM_UPSTREAM_BASE_URL": "https://llm.example.test",
+        "LITELLM_UPSTREAM_BASE_URL": "https://llm.example.test",
         "OPENAI_API_KEY": "openai-key",
     }
+
+
+@pytest.mark.parametrize(
+    "mode_config",
+    [
+        {"runtime": {"litellm": {"mode": "internal"}}},
+        {"runtime": {"litellm_mode": "internal"}},
+        {"litellm_mode": "internal"},
+    ],
+)
+def test_build_orchestrator_metadata_transports_internal_litellm_config(
+    tmp_path, mode_config
+):
+    from crsbench.cloud.gce.metadata import (
+        CRSBENCH_EXPERIMENT_CONFIG_B64_KEY,
+        CRSBENCH_LITELLM_CONFIG_B64_KEY,
+        build_orchestrator_metadata,
+    )
+
+    litellm_path = tmp_path / "litellm.yaml"
+    litellm_path.write_text("model_list: []\n")
+    config_path = tmp_path / "config.yaml"
+    config = {
+        "experiment": {"name": "exp-42"},
+        "crs_compose": {
+            "litellm_config_path": "litellm.yaml",
+            "test-crs": {"num_cores": 1},
+        },
+        **mode_config,
+    }
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False))
+
+    metadata = build_orchestrator_metadata(
+        experiment_name="exp-42",
+        orchestrator=_make_orchestrator(),
+        experiment_config_path=config_path,
+        redis_password="shared-secret",
+        startup_script="#!/usr/bin/env bash\necho boot\n",
+    )
+
+    transported_config = yaml.safe_load(
+        base64.b64decode(metadata[CRSBENCH_EXPERIMENT_CONFIG_B64_KEY])
+    )
+    assert transported_config["crs_compose"]["litellm_config_path"] == (
+        "/var/lib/crsbench/litellm-config.yaml"
+    )
+    assert (
+        base64.b64decode(metadata[CRSBENCH_LITELLM_CONFIG_B64_KEY]).decode()
+        == litellm_path.read_text()
+    )
+
+
+def test_build_orchestrator_metadata_uses_configured_remote_state_dir(tmp_path):
+    from crsbench.cloud.gce.metadata import (
+        CRSBENCH_EXPERIMENT_CONFIG_B64_KEY,
+        build_orchestrator_metadata,
+    )
+
+    (tmp_path / "litellm.yaml").write_text("model_list: []\n")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "experiment": {"name": "exp-42"},
+                "runtime": {"litellm": {"mode": "internal"}},
+                "crs_compose": {
+                    "litellm_config_path": "litellm.yaml",
+                    "test-crs": {"num_cores": 1},
+                },
+            },
+            sort_keys=False,
+        )
+    )
+
+    metadata = build_orchestrator_metadata(
+        experiment_name="exp-42",
+        orchestrator=_make_orchestrator(),
+        experiment_config_path=config_path,
+        env_passthrough={"CRSBENCH_STATE_DIR": "/srv/crsbench-state"},
+        redis_password="shared-secret",
+        startup_script="#!/usr/bin/env bash\necho boot\n",
+    )
+
+    transported_config = yaml.safe_load(
+        base64.b64decode(metadata[CRSBENCH_EXPERIMENT_CONFIG_B64_KEY])
+    )
+    assert transported_config["crs_compose"]["litellm_config_path"] == (
+        "/srv/crsbench-state/litellm-config.yaml"
+    )
 
 
 def test_build_orchestrator_metadata_strips_secret_path_fields_from_config_payload(
@@ -1260,6 +1349,16 @@ def test_orchestrator_startup_script_consumes_config_payload_and_preprovisioned_
     assert "PermitRootLogin no" in script
     assert "serial-getty@ttyS0.service" in script
     assert "crsbench-experiment-config-b64" in script
+    assert "crsbench-litellm-config-b64" in script
+    assert 'chmod 0600 "${LITELLM_CONFIG_PATH}"' in script
+    assert 'chmod 0600 "${ENV_PATH}"' in script
+    assert (
+        'export_passthrough_env "${ENV_PASSTHROUGH_B64}"\n'
+        'STATE_DIR="${CRSBENCH_STATE_DIR:-/var/lib/crsbench}"' in script
+    )
+    assert script.rindex("ensure_system_packages") < script.index(
+        'export_passthrough_env "${ENV_PASSTHROUGH_B64}"'
+    )
     assert "crsbench-env-passthrough-b64" in script
     assert "CRSBENCH_CLOUD_PREPROVISIONED_WORKERS" in script
     assert 'local bashrc_path="${CRSBENCH_USER_HOME}/.bashrc"' in script
@@ -1285,6 +1384,13 @@ def test_orchestrator_startup_script_consumes_config_payload_and_preprovisioned_
     assert "if ! __crsbench_prompt_command_installed; then" in script
     assert 'PROMPT_COMMAND="__crsbench_update_prompt;${PROMPT_COMMAND}"' in script
     assert "\\\\]%*s\\\\[\\\\e[0;36m\\\\]%s\\\\[\\\\e[0m\\\\]\\\\n\\\\$ " in script
+
+
+def test_worker_startup_uses_private_service_environment_file() -> None:
+    from crsbench.cloud.gce.metadata import load_startup_script
+
+    script = load_startup_script()
+    assert ': > "${ENV_PATH}"\nchmod 0600 "${ENV_PATH}"' in script
 
 
 def test_orchestrator_startup_script_waits_for_from_experiment_sentinel_before_run():

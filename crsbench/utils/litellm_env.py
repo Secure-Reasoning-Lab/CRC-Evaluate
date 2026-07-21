@@ -26,7 +26,7 @@ def _first_non_empty(
 
 @dataclass(frozen=True)
 class LiteLLMRuntimeEnv:
-    """Resolved LiteLLM runtime inputs from canonical CRSBench env vars."""
+    """Resolved LiteLLM runtime inputs."""
 
     mode: str
     base_url: str | None
@@ -52,8 +52,8 @@ class LiteLLMRuntimeEnv:
 def resolve_litellm_runtime_env(
     mode: str, environ: Mapping[str, str] | None = None
 ) -> LiteLLMRuntimeEnv:
-    """Resolve canonical CRSBench LiteLLM env vars."""
-    env = environ or os.environ
+    """Resolve LiteLLM runtime environment variables."""
+    env = os.environ if environ is None else environ
     return LiteLLMRuntimeEnv(
         mode=mode,
         base_url=_first_non_empty(
@@ -62,11 +62,11 @@ def resolve_litellm_runtime_env(
         ),
         upstream_base_url=_first_non_empty(
             env,
-            "CRSBENCH_LLM_UPSTREAM_BASE_URL",
+            "LITELLM_UPSTREAM_BASE_URL",
         ),
         api_key=_first_non_empty(
             env,
-            "CRSBENCH_LLM_UPSTREAM_API_KEY",
+            "LITELLM_UPSTREAM_API_KEY",
         ),
         master_key=_first_non_empty(
             env,
@@ -85,25 +85,20 @@ def required_env_errors_for_mode(
     if mode == "external":
         if runtime_env.direct_base_url is None:
             errors.append(
-                "CRSBENCH_LLM_UPSTREAM_BASE_URL (preferred for external BASE endpoint) "
+                "LITELLM_UPSTREAM_BASE_URL (preferred for the external endpoint) "
                 "or CRSBENCH_LLM_BASE_URL must be set"
             )
         if runtime_env.api_key is None and runtime_env.master_key is None:
             errors.append(
-                "CRSBENCH_LLM_UPSTREAM_API_KEY "
+                "LITELLM_UPSTREAM_API_KEY "
                 "or CRSBENCH_LLM_UPSTREAM_MASTER_KEY must be set"
             )
-    elif mode == "self_hosted":
-        errors.append(
-            "litellm_mode='self_hosted' is not implemented yet; use litellm_mode='external'"
-        )
-
-    if tracking_enabled:
-        if runtime_env.tracking_base_url is None:
-            errors.append(
-                "Tracking requires CRSBENCH_LLM_BASE_URL semantics to resolve"
-            )
-        if runtime_env.master_key is None:
-            errors.append("Tracking requires CRSBENCH_LLM_UPSTREAM_MASTER_KEY")
+        if tracking_enabled:
+            if runtime_env.tracking_base_url is None:
+                errors.append("Tracking requires an external LiteLLM endpoint")
+            if runtime_env.master_key is None:
+                errors.append("Tracking requires CRSBENCH_LLM_UPSTREAM_MASTER_KEY")
+    elif mode != "internal":
+        errors.append(f"Unsupported LiteLLM mode: {mode}")
 
     return errors

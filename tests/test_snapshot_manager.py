@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from crsbench.evaluation.oss_crs_spend import OssCrsSpendReport
 from crsbench.evaluation.snapshot import list_snapshots, load_snapshot_metadata
 from crsbench.evaluation.snapshot_manager import SnapshotManager
 
@@ -582,6 +583,29 @@ class TestLLMTrackingIntegration:
         assert snapshot.has_llm_usage is True
         mock_tracker.write_llm_usage_file.assert_called_once()
 
+    def test_capture_llm_usage_from_oss_crs_spend_report(self, tmp_path):
+        report_path = tmp_path / "litellm-spend-report.json"
+        report_path.write_text(
+            json.dumps(
+                {
+                    "totals": {"credits_used": 3.5},
+                    "crs": {"test-crs": {"credits_used": 3.5}},
+                }
+            )
+        )
+        report = OssCrsSpendReport(report_path, trial_id="trial-1")
+        manager = SnapshotManager(
+            trial_dir=tmp_path,
+            snapshot_period=60,
+            oss_crs_spend_report=report,
+        )
+        temp_dir = tmp_path / "temp_snapshot"
+        temp_dir.mkdir()
+
+        assert manager._capture_llm_usage(temp_dir) is True
+        usage = json.loads((temp_dir / "llm-usage.json").read_text())
+        assert usage["total_cost_usd"] == 3.5
+
 
 class TestBudgetPolicy:
     """Test budget_policy enforcement in SnapshotManager."""
@@ -620,6 +644,35 @@ class TestBudgetPolicy:
         assert record["policy"] == "terminate"
         assert record["spend_usd"] == 12.5
         assert record["max_budget_usd"] == 10.0
+
+    def test_internal_report_terminate_sets_stop_event(self, tmp_path):
+        report_path = tmp_path / "litellm-spend-report.json"
+        report_path.write_text(
+            json.dumps(
+                {
+                    "totals": {"credits_used": 12.5},
+                    "crs": {"test-crs": {"credits_used": 12.5}},
+                }
+            )
+        )
+        report = OssCrsSpendReport(
+            report_path,
+            trial_id="trial-1",
+            max_budget_usd=10,
+        )
+        stop_event = threading.Event()
+        manager = SnapshotManager(
+            trial_dir=tmp_path,
+            snapshot_period=60,
+            oss_crs_spend_report=report,
+            budget_policy="terminate",
+            budget_stop_event=stop_event,
+        )
+
+        manager._check_budget(elapsed_time=42.0)
+
+        assert stop_event.is_set() is True
+        assert manager.budget_exceeded is True
 
     def test_continue_does_not_set_stop_event(self, tmp_path):
         """Continue policy logs overshoot but leaves stop_event untouched."""

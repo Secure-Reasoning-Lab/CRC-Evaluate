@@ -8,8 +8,8 @@ Set `snapshot_period` in experiment config:
 
 ```yaml
 snapshot_period: 900  # seconds; 0 disables snapshots
-# Optional: wait after CRS run before final LLM accounting capture
-llm_accounting_settle_seconds: 60  # default; 0 disables settle wait
+# Optional external-tracking wait before final accounting capture.
+llm_accounting_settle_seconds: 60  # Default; 0 disables the wait.
 ```
 
 Run experiment normally:

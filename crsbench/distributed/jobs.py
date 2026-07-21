@@ -5,8 +5,10 @@ job queue system. Jobs are enqueued by the orchestrator and executed by workers.
 """
 
 import json
+import math
 import os
 import socket
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -37,6 +39,7 @@ from crsbench.evaluation.trial_paths import (
 from crsbench.evaluation.trial_paths import (
     trial_relative_to_experiment,
 )
+from crsbench.utils.litellm_config import normalize_internal_litellm_config
 from crsbench.utils.litellm_env import (
     required_env_errors_for_mode,
     resolve_litellm_runtime_env,
@@ -623,13 +626,25 @@ def _setup_llm_tracking(
     Returns:
         Tuple of (tracker, api_key) if tracking enabled, (None, None) otherwise
     """
-    if not config.llm_tracking_enabled:
+    if not config.llm_tracking_enabled or config.litellm_mode != "external":
         return None, None
+
+    service_config = (
+        config.crs_compose.services.get(crs) if config.crs_compose else None
+    )
+    terminate_on_budget = bool(
+        service_config is not None and service_config.budget_policy == "terminate"
+    )
 
     runtime_env = resolve_litellm_runtime_env(config.litellm_mode or "external")
     contract_errors = required_env_errors_for_mode(runtime_env, tracking_enabled=True)
     if contract_errors:
         joined = "; ".join(contract_errors)
+        if terminate_on_budget:
+            raise RuntimeError(
+                "Cannot enforce budget_policy='terminate' because external "
+                f"LiteLLM tracking is unavailable: {joined}"
+            )
         logger.warning(
             "LLM tracking enabled but canonical runtime inputs are missing. "
             f"{joined}. Skipping tracking."
@@ -642,10 +657,11 @@ def _setup_llm_tracking(
             master_key=runtime_env.master_key,
         )
 
-        # Extract cost budget from runtime LiteLLM config if present
         max_budget = config.litellm_cost_budget
-
-        # TODO(team-tracking): Re-enable team budget tracking once LiteLLM team API is integrated
+        if terminate_on_budget and max_budget is None:
+            raise RuntimeError(
+                "Cannot enforce budget_policy='terminate' without runtime.litellm.cost_budget"
+            )
 
         api_key = tracker.generate_key(
             experiment=config.experiment,
@@ -659,18 +675,89 @@ def _setup_llm_tracking(
         )
         budget_info = f" (budget: ${max_budget})" if max_budget else ""
         logger.info(f"Generated LLM tracking key for trial {trial_num}{budget_info}")
-
-        # Debug: verify budget was actually set by fetching key info
-        key_info = tracker.get_key_info(api_key)
-        info = key_info.get("info", {})
-        actual_budget = info.get("max_budget")
-        logger.info(
-            f"Key info after creation - max_budget: {actual_budget}, spend: {info.get('spend', 0)}"
-        )
+        if terminate_on_budget:
+            try:
+                key_info = tracker.get_key_info(api_key)
+                raw_info = (
+                    key_info.get("info", {}) if isinstance(key_info, dict) else {}
+                )
+                info = raw_info if isinstance(raw_info, dict) else {}
+                raw_budget = info.get("max_budget")
+                if isinstance(raw_budget, bool) or not isinstance(
+                    raw_budget, (int, float, str)
+                ):
+                    raise ValueError("LiteLLM key budget is not numeric")
+                actual_budget = float(raw_budget)
+                assert max_budget is not None
+                expected_budget = float(max_budget)
+                budget_matches = (
+                    math.isfinite(actual_budget)
+                    and actual_budget > 0
+                    and math.isclose(actual_budget, expected_budget)
+                )
+            except (LiteLLMTrackerError, TypeError, ValueError) as verification_error:
+                try:
+                    tracker.delete_key(api_key)
+                except Exception as cleanup_error:
+                    logger.warning(
+                        "Failed to delete tracking key after budget verification error: {}",
+                        cleanup_error,
+                    )
+                raise RuntimeError(
+                    "Cannot enforce budget_policy='terminate' because the external "
+                    "LiteLLM key budget could not be verified"
+                ) from verification_error
+            if not budget_matches:
+                try:
+                    tracker.delete_key(api_key)
+                except Exception as cleanup_error:
+                    logger.warning(
+                        "Failed to delete tracking key after budget mismatch: {}",
+                        cleanup_error,
+                    )
+                raise RuntimeError(
+                    "Cannot enforce budget_policy='terminate' because the external "
+                    "LiteLLM key budget does not match runtime.litellm.cost_budget"
+                )
         return tracker, api_key
     except LiteLLMTrackerError as e:
         logger.error(f"Failed to set up LLM tracking: {e}")
+        if terminate_on_budget:
+            raise RuntimeError(
+                "Cannot enforce budget_policy='terminate' because external "
+                "LiteLLM tracking setup failed"
+            ) from e
         return None, None
+
+
+def _stage_internal_litellm_config(
+    config: ExperimentConfig,
+    config_yaml: Optional[str],
+) -> tuple[Optional[tempfile.TemporaryDirectory], Optional[Path]]:
+    """Stage an internal LiteLLM configuration in a worker-local directory."""
+    if config.skip_litellm or config.litellm_mode != "internal":
+        return None, None
+
+    if config_yaml is None:
+        crs_compose = config.crs_compose
+        if crs_compose is None:
+            raise ValueError("crs_compose is required for internal LiteLLM mode")
+        source_path = crs_compose.litellm_config_path
+        if source_path is None or not source_path.is_file():
+            raise FileNotFoundError(
+                f"Internal LiteLLM config file not found: {source_path}"
+            )
+        config_yaml = source_path.read_text(encoding="utf-8")
+
+    config_yaml = normalize_internal_litellm_config(config_yaml)
+
+    runtime_dir = tempfile.TemporaryDirectory(prefix="crsbench-litellm-")
+    runtime_path = Path(runtime_dir.name)
+    runtime_path.chmod(0o700)
+    config_path = runtime_path / "litellm-config.yaml"
+    config_path.write_text(config_yaml, encoding="utf-8")
+    config_path.chmod(0o600)
+    return runtime_dir, config_path
 
 
 def _cleanup_llm_tracking_sync(
@@ -1284,6 +1371,7 @@ def run_crs_trial(
     sanitizer: str = "address",
     results_timestamp: Optional[str] = None,
     target_cpv_id: str | None = None,
+    litellm_config_yaml: Optional[str] = None,
 ) -> TrialResult:
     """
     Execute a single CRS trial.
@@ -1306,6 +1394,7 @@ def run_crs_trial(
         mode: Evaluation mode ('delta', 'full', or 'all')
         sanitizer: Sanitizer type ('address', 'memory', or 'undefined')
         target_cpv_id: Target CPV ID for per-CPV bug-fixing trials
+        litellm_config_yaml: Internal LiteLLM configuration transported with the job
 
     Returns:
         TrialResult: Trial results including POVs found, success rate, and metadata
@@ -1322,8 +1411,6 @@ def run_crs_trial(
         ... )
         >>> assert result.povs_found >= 0
     """
-    # Reconstruct ExperimentConfig from dict - Pydantic will convert strings to Paths.
-    # Strip internal transport-only markers before schema validation.
     config_parse_dict = dict(config_dict)
     config = ExperimentConfig(**config_parse_dict)
     effective_inputs = _resolve_effective_input_settings(
@@ -1370,6 +1457,8 @@ def run_crs_trial(
         runtime_worker_name=runtime_worker_name,
     )
     heartbeat_runtime = _start_job_lifecycle_heartbeat(lifecycle_runtime)
+    litellm_runtime_dir: Optional[tempfile.TemporaryDirectory] = None
+    staged_litellm_config_path: Optional[Path] = None
 
     # Update runtime job metadata for monitoring (RQ 2.x)
     # Note: Static fields (crs, benchmark, harness, mode, trial_num) are set at enqueue time
@@ -1389,6 +1478,10 @@ def run_crs_trial(
         logger.warning(f"Failed to update job metadata: {e}")
 
     try:
+        litellm_runtime_dir, staged_litellm_config_path = (
+            _stage_internal_litellm_config(config, litellm_config_yaml)
+        )
+
         # Get snapshot configuration
         snapshot_period = config.snapshot_period
 
@@ -1485,6 +1578,8 @@ def run_crs_trial(
                     for name, service in config.crs_compose.services.items()
                 }
             )
+        if staged_litellm_config_path is not None:
+            compose_config["litellm_config_path"] = staged_litellm_config_path
 
         adapter_config = {
             "build_timeout": config.build_timeout,
@@ -1507,6 +1602,7 @@ def run_crs_trial(
             "run_id": trial_id,
             "source_mode": config.source_mode,
             "skip_litellm": config.skip_litellm,
+            "litellm_cost_budget": config.litellm_cost_budget,
             **compose_config,
         }
         adapter_config["fuzzing_language"] = benchmark_language
@@ -1566,33 +1662,29 @@ def run_crs_trial(
                     set_key(llm_api_key)
                     logger.info("Configured adapter with trial-specific LLM API key")
 
-            runtime_env = resolve_litellm_runtime_env(config.litellm_mode or "external")
-            runtime_errors = required_env_errors_for_mode(
-                runtime_env, tracking_enabled=config.llm_tracking_enabled
-            )
-            if runtime_errors:
-                raise RuntimeError(
-                    "Invalid LiteLLM runtime configuration: "
-                    + "; ".join(runtime_errors)
+            if config.litellm_mode == "external":
+                runtime_env = resolve_litellm_runtime_env("external")
+                runtime_errors = required_env_errors_for_mode(
+                    runtime_env, tracking_enabled=config.llm_tracking_enabled
                 )
+                if runtime_errors:
+                    raise RuntimeError(
+                        "Invalid LiteLLM runtime configuration: "
+                        + "; ".join(runtime_errors)
+                    )
 
-            # Pass resolved runtime URL/key to oss-crs for all LiteLLM modes.
-            # Prefer per-trial virtual key when tracking is enabled.
-            litellm_runtime_key = (
-                llm_api_key or runtime_env.api_key or runtime_env.master_key
-            )
-            litellm_runtime_url = runtime_env.direct_base_url
-            if litellm_runtime_url and litellm_runtime_key:
-                adapter.configure(
-                    {
-                        "litellm_runtime_url": litellm_runtime_url,
-                        "litellm_runtime_api_key": litellm_runtime_key,
-                    }
+                litellm_runtime_key = (
+                    llm_api_key or runtime_env.api_key or runtime_env.master_key
                 )
-                logger.info(
-                    "Configured compose adapter for LiteLLM runtime "
-                    f"(mode={config.litellm_mode or 'external'})"
-                )
+                litellm_runtime_url = runtime_env.direct_base_url
+                if litellm_runtime_url and litellm_runtime_key:
+                    adapter.configure(
+                        {
+                            "litellm_runtime_url": litellm_runtime_url,
+                            "litellm_runtime_api_key": litellm_runtime_key,
+                        }
+                    )
+                    logger.info("Configured adapter for external LiteLLM")
         else:
             logger.debug(
                 "skip_litellm=true; skipping LiteLLM runtime and tracking setup"
@@ -1614,6 +1706,12 @@ def run_crs_trial(
             llm_tracker=llm_tracker,
             llm_api_key=llm_api_key,
             llm_trial_id=trial_id,
+            oss_crs_llm_tracking_enabled=(
+                not config.skip_litellm
+                and config.litellm_mode == "internal"
+                and config.llm_tracking_enabled
+            ),
+            oss_crs_llm_budget=config.litellm_cost_budget,
             llm_accounting_settle_seconds=config.llm_accounting_settle_seconds,
             max_pov_variants_per_cpv=effective_inputs.max_pov_variants_per_cpv,
             patch_verify_variants=effective_inputs.patch_verify_variants,
@@ -1996,6 +2094,8 @@ def run_crs_trial(
         )
 
     finally:
+        if litellm_runtime_dir is not None:
+            litellm_runtime_dir.cleanup()
         # Clean up per-trial logging on ALL code paths
         if "trial_log_handler" in locals() and trial_log_handler is not None:
             remove_file_handler(trial_log_handler)

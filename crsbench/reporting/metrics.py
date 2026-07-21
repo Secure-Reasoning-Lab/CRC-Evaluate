@@ -499,7 +499,15 @@ class MetricsAggregator:
 
         # Count unique POVs and patches
         total_povs = len(all_pov_names)
-        total_patches = len(all_patch_names)
+        reported_patch_totals = [
+            snapshot.patches_total
+            for snapshot in sorted_snapshots
+            if snapshot.patches_total is not None
+        ]
+        total_patches = max(
+            len(all_patch_names),
+            max(reported_patch_totals, default=0),
+        )
 
         # Get final snapshot for cumulative LLM usage
         final_snapshot = sorted_snapshots[-1]
@@ -823,10 +831,23 @@ class MetricsAggregator:
         time_series: list[TimeSeriesPoint] = []
         cumulative_povs = 0
         cumulative_patches = 0
+        seen_patch_names: set[str] = set()
 
         for snapshot in snapshots:
             cumulative_povs += snapshot.pov_count
-            cumulative_patches += snapshot.patch_count
+            seen_patch_names.update(snapshot.patch_names)
+            if snapshot.patches_total is not None:
+                cumulative_patches = max(
+                    cumulative_patches,
+                    snapshot.patches_total,
+                    len(seen_patch_names),
+                )
+            else:
+                cumulative_patches = max(
+                    cumulative_patches,
+                    snapshot.patch_count,
+                    len(seen_patch_names),
+                )
 
             # Only create time series point for filtered snapshots
             if snapshot.cycle in filtered_cycles:

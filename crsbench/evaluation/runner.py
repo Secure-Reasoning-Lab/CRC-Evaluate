@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from crsbench.evaluation.adapter import OssCrsAdapter
+from crsbench.evaluation.oss_crs_spend import OssCrsSpendReport
 from crsbench.evaluation.trial_identity import build_trial_uid
 from crsbench.evaluation.trial_paths import count_visible_files
 from crsbench.evaluation.verification.drain_marker import (
@@ -177,6 +178,8 @@ class BenchmarkRunner:
         llm_tracker: Optional["LiteLLMTracker"] = None,
         llm_api_key: Optional[str] = None,
         llm_trial_id: Optional[str] = None,
+        oss_crs_llm_tracking_enabled: bool = False,
+        oss_crs_llm_budget: Optional[float] = None,
         llm_accounting_settle_seconds: int = 60,
         max_pov_variants_per_cpv: Optional[int] = 1,
         patch_verify_variants: bool = False,
@@ -217,6 +220,8 @@ class BenchmarkRunner:
             llm_tracker: Optional LiteLLMTracker for querying LLM usage during snapshots
             llm_api_key: Optional trial-specific API key for LLM tracking
             llm_trial_id: Optional trial identifier for LLM usage files
+            oss_crs_llm_tracking_enabled: Read internal LiteLLM accounting from OSS-CRS
+            oss_crs_llm_budget: Trial budget reported with internal LiteLLM accounting
             llm_accounting_settle_seconds: Minimum time to wait after CRS run end
                 before final LLM usage/log capture. Remaining wait is computed after
                 manager shutdown work; set to 0 to disable.
@@ -258,6 +263,8 @@ class BenchmarkRunner:
         self.llm_tracker = llm_tracker
         self.llm_api_key = llm_api_key
         self.llm_trial_id = llm_trial_id
+        self.oss_crs_llm_tracking_enabled = oss_crs_llm_tracking_enabled
+        self.oss_crs_llm_budget = oss_crs_llm_budget
         if llm_accounting_settle_seconds < 0:
             raise ValueError(
                 "llm_accounting_settle_seconds must be >= 0, "
@@ -807,6 +814,7 @@ class BenchmarkRunner:
         crs_run_started = False
         crs_run_returned = False
         crs_run_end_monotonic: Optional[float] = None
+        oss_crs_spend_report: Optional[OssCrsSpendReport] = None
 
         try:
             # Pre-resolve artifact paths so exchange_dir is available
@@ -814,6 +822,18 @@ class BenchmarkRunner:
             self.adapter.resolve_artifacts(
                 benchmark_path, harness.name, trial_output_dir
             )
+            if (
+                self.oss_crs_llm_tracking_enabled
+                and self.adapter.litellm_mode == "internal"
+                and self.llm_trial_id is not None
+            ):
+                report_path = self.adapter.get_litellm_spend_report_path()
+                if report_path is not None:
+                    oss_crs_spend_report = OssCrsSpendReport(
+                        report_path,
+                        trial_id=self.llm_trial_id,
+                        max_budget_usd=self.oss_crs_llm_budget,
+                    )
 
             # Stage configured runtime inputs from benchmark .aixcc into
             # the trial directory before managers are initialized.
@@ -875,10 +895,7 @@ class BenchmarkRunner:
             else:
                 combined_stop_event = None
 
-            # Per-CRS budget policy decides whether a trial shuts down when the
-            # LiteLLM trial budget is exhausted. 'continue' (default) keeps the
-            # adapter running after LiteLLM revokes the key; 'terminate' signals
-            # the existing trial stop event so the trial exits early.
+            # Per-CRS budget policy determines whether the trial stops when recorded LiteLLM spend reaches its configured budget.
             get_budget_policy = getattr(self.adapter, "get_budget_policy", None)
             budget_policy: str = "continue"
             if callable(get_budget_policy):
@@ -895,6 +912,7 @@ class BenchmarkRunner:
                 coverage_manager=coverage_manager,
                 pov_verification_manager=pov_verification_manager,
                 patch_verification_manager=patch_verification_manager,
+                oss_crs_spend_report=oss_crs_spend_report,
                 budget_policy=budget_policy,
                 budget_stop_event=combined_stop_event,
             )
@@ -976,6 +994,15 @@ class BenchmarkRunner:
             )
 
         finally:
+            if oss_crs_spend_report is not None:
+                try:
+                    oss_crs_spend_report.write_usage_file(
+                        trial_output_dir / "llm-usage.json"
+                    )
+                except Exception as exc:
+                    self.logger.warning(
+                        "Failed to write OSS-CRS LiteLLM usage: {}", exc
+                    )
             cleanup_issue = self._stop_managers(
                 snapshot_manager=snapshot_manager,
                 snapshot_thread=snapshot_thread,
@@ -1725,6 +1752,7 @@ class BenchmarkRunner:
         coverage_manager: Any,
         pov_verification_manager: Optional[POVVerificationManager] = None,
         patch_verification_manager: Optional[PatchVerificationManager] = None,
+        oss_crs_spend_report: Optional[OssCrsSpendReport] = None,
         budget_policy: str = "continue",
         budget_stop_event: Optional[threading.Event] = None,
     ) -> tuple[Optional[SnapshotManager], Optional[threading.Thread]]:
@@ -1747,6 +1775,7 @@ class BenchmarkRunner:
             llm_tracker=self.llm_tracker,
             llm_api_key=self.llm_api_key,
             llm_trial_id=self.llm_trial_id,
+            oss_crs_spend_report=oss_crs_spend_report,
             budget_policy=budget_policy,
             budget_stop_event=budget_stop_event,
         )

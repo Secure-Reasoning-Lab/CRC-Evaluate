@@ -17,6 +17,7 @@ from crsbench.distributed.jobs import (
     _lifecycle_runtime_is_current_owner,
     _load_benchmark_rts_env,
     _publish_trial_terminal_artifacts,
+    _stage_internal_litellm_config,
     run_crs_trial,
 )
 from crsbench.validation.schemas import EvaluationMode, ExperimentConfig
@@ -51,6 +52,61 @@ class _FakeRedis:
             del self._lists[key]
             removed += 1
         return removed
+
+
+def test_stage_internal_litellm_config_uses_private_worker_file(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "organizer-litellm.yaml"
+    source_path.write_text("model_list: []\n")
+    config = ExperimentConfig(
+        experiment="test-exp",
+        trials=1,
+        mode=EvaluationMode.DELTA,
+        max_total_time=21600,
+        experiment_filestore=tmp_path / "exp",
+        report_filestore=tmp_path / "reports",
+        crs_compose={
+            "litellm_config_path": source_path,
+            "test-crs": {"num_cores": 1},
+        },
+        benchmarks=["test-bench"],
+        litellm_mode="internal",
+        litellm_cost_budget=10,
+    )
+
+    runtime_dir, staged_path = _stage_internal_litellm_config(
+        config,
+        "model_list:\n  - model_name: claude-opus-4-8\n",
+    )
+    assert runtime_dir is not None
+    assert staged_path is not None
+    assert staged_path.read_text().startswith("model_list:")
+    assert staged_path.stat().st_mode & 0o777 == 0o600
+    assert staged_path.parent.stat().st_mode & 0o777 == 0o700
+
+    runtime_path = staged_path.parent
+    runtime_dir.cleanup()
+    assert not runtime_path.exists()
+
+
+def test_stage_internal_litellm_config_is_disabled_when_litellm_is_skipped(
+    tmp_path: Path,
+) -> None:
+    config = ExperimentConfig(
+        experiment="test-exp",
+        trials=1,
+        mode=EvaluationMode.DELTA,
+        max_total_time=21600,
+        experiment_filestore=tmp_path / "exp",
+        report_filestore=tmp_path / "reports",
+        crs_compose={"test-crs": {"num_cores": 1}},
+        benchmarks=["test-bench"],
+        litellm_mode="internal",
+        skip_litellm=True,
+    )
+
+    assert _stage_internal_litellm_config(config, None) == (None, None)
 
 
 def test_apply_worker_overrides_uses_grouped_storage(tmp_path: Path):

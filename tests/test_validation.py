@@ -989,7 +989,7 @@ class TestExperimentConfigSchema:
         data["cloud"]["bootstrap"] = {
             "env_passthrough": {
                 "common": [
-                    "CRSBENCH_LLM_UPSTREAM_BASE_URL",
+                    "LITELLM_UPSTREAM_BASE_URL",
                     "CRSBENCH_LLM_MASTER_KEY",
                 ],
             }
@@ -1852,8 +1852,8 @@ class TestExperimentConfigSchema:
         self, monkeypatch
     ):
         monkeypatch.delenv("CRSBENCH_LLM_BASE_URL", raising=False)
-        monkeypatch.delenv("CRSBENCH_LLM_UPSTREAM_BASE_URL", raising=False)
-        monkeypatch.delenv("CRSBENCH_LLM_UPSTREAM_API_KEY", raising=False)
+        monkeypatch.delenv("LITELLM_UPSTREAM_BASE_URL", raising=False)
+        monkeypatch.delenv("LITELLM_UPSTREAM_API_KEY", raising=False)
         monkeypatch.delenv("CRSBENCH_LLM_UPSTREAM_MASTER_KEY", raising=False)
 
         data = self._base_kwargs()
@@ -1863,8 +1863,8 @@ class TestExperimentConfigSchema:
 
     def test_skip_litellm_disables_runtime_interface_validation(self, monkeypatch):
         monkeypatch.delenv("CRSBENCH_LLM_BASE_URL", raising=False)
-        monkeypatch.delenv("CRSBENCH_LLM_UPSTREAM_BASE_URL", raising=False)
-        monkeypatch.delenv("CRSBENCH_LLM_UPSTREAM_API_KEY", raising=False)
+        monkeypatch.delenv("LITELLM_UPSTREAM_BASE_URL", raising=False)
+        monkeypatch.delenv("LITELLM_UPSTREAM_API_KEY", raising=False)
         monkeypatch.delenv("CRSBENCH_LLM_UPSTREAM_MASTER_KEY", raising=False)
 
         data = self._base_kwargs()
@@ -1874,10 +1874,111 @@ class TestExperimentConfigSchema:
         assert config.litellm_mode is None
         assert config.llm_tracking_enabled is False
 
-    def test_self_hosted_mode_not_implemented(self):
+    def test_null_litellm_mode_disables_litellm(self):
+        data = self._base_kwargs()
+        data["litellm_mode"] = None
+        config = ExperimentConfig(**data)
+
+        assert config.skip_litellm is True
+        assert config.litellm_mode is None
+        assert config.llm_tracking_enabled is False
+
+    @pytest.mark.parametrize(
+        "disable_fields",
+        [
+            {"skip_litellm": True},
+            {"litellm_mode": None},
+            {"llm_tracking_enabled": False},
+        ],
+    )
+    def test_terminate_budget_policy_requires_enabled_tracking(self, disable_fields):
+        data = self._base_kwargs()
+        data.update(disable_fields)
+        data["litellm_cost_budget"] = 10
+        data["crs_compose"]["test-crs"]["budget_policy"] = "terminate"
+
+        with pytest.raises(
+            PydanticValidationError, match="require an enabled LiteLLM mode"
+        ):
+            ExperimentConfig(**data)
+
+    def test_terminate_budget_policy_requires_positive_budget(self):
+        data = self._base_kwargs()
+        data["litellm_cost_budget"] = 0
+        data["crs_compose"]["test-crs"]["budget_policy"] = "terminate"
+
+        with pytest.raises(PydanticValidationError, match="cost_budget > 0"):
+            ExperimentConfig(**data)
+
+    def test_self_hosted_mode_points_to_internal(self):
         data = self._base_kwargs()
         data["litellm_mode"] = "self_hosted"
-        with pytest.raises(PydanticValidationError, match="not implemented yet"):
+        with pytest.raises(PydanticValidationError, match="replaced by 'internal'"):
+            ExperimentConfig(**data)
+
+    def test_internal_litellm_requires_config_path(self):
+        data = self._base_kwargs()
+        data["litellm_mode"] = "internal"
+        with pytest.raises(
+            PydanticValidationError, match="requires crs_compose.litellm_config_path"
+        ):
+            ExperimentConfig(**data)
+
+    def test_internal_litellm_requires_crs_compose_config(self):
+        data = self._base_kwargs()
+        data["litellm_mode"] = "internal"
+        data["crs_compose"] = None
+
+        with pytest.raises(PydanticValidationError, match="crs_compose is required"):
+            ExperimentConfig(**data)
+
+    def test_internal_litellm_accepts_config_path_and_integer_budget(
+        self, tmp_path: Path
+    ):
+        config_path = tmp_path / "litellm.yaml"
+        config_path.write_text("model_list: []\n")
+        data = self._base_kwargs()
+        data["litellm_mode"] = "internal"
+        data["litellm_cost_budget"] = 30
+        data["crs_compose"]["litellm_config_path"] = config_path
+
+        config = ExperimentConfig(**data)
+
+        assert config.litellm_mode == "internal"
+        assert config.litellm_cost_budget == 30
+        assert config.crs_compose.litellm_config_path == config_path
+
+    @pytest.mark.parametrize(
+        ("budget", "message"),
+        [
+            (0, "positive whole-dollar amount"),
+            (-1, "greater than or equal to 0"),
+            (1.5, "positive whole-dollar amount"),
+        ],
+    )
+    def test_internal_litellm_rejects_invalid_budget(
+        self, tmp_path: Path, budget: float, message: str
+    ):
+        config_path = tmp_path / "litellm.yaml"
+        config_path.write_text("model_list: []\n")
+        data = self._base_kwargs()
+        data["litellm_mode"] = "internal"
+        data["litellm_cost_budget"] = budget
+        data["crs_compose"]["litellm_config_path"] = config_path
+
+        with pytest.raises(PydanticValidationError, match=message):
+            ExperimentConfig(**data)
+
+    def test_external_litellm_budget_requires_tracking(self):
+        data = self._base_kwargs()
+        data["litellm_mode"] = "external"
+        data["llm_tracking_enabled"] = False
+        data["litellm_cost_budget"] = 10
+
+        with pytest.raises(
+            PydanticValidationError,
+            match="external mode requires.*tracking_enabled=true",
+        ):
             ExperimentConfig(**data)
 
 
@@ -2470,9 +2571,9 @@ class TestIntegrationAllConfigs:
     def test_validate_experiment_example_yaml(self, monkeypatch):
         """Test validation of tests/assets/experiment-config-example.yaml."""
         monkeypatch.setenv("CRSBENCH_LLM_BASE_URL", "http://litellm:4000")
-        monkeypatch.setenv("CRSBENCH_LLM_UPSTREAM_BASE_URL", "http://litellm:4000")
+        monkeypatch.setenv("LITELLM_UPSTREAM_BASE_URL", "http://litellm:4000")
         monkeypatch.setenv("CRSBENCH_LLM_UPSTREAM_MASTER_KEY", "sk-test")
-        monkeypatch.setenv("CRSBENCH_LLM_UPSTREAM_API_KEY", "sk-test")
+        monkeypatch.setenv("LITELLM_UPSTREAM_API_KEY", "sk-test")
         # Use Path to construct path relative to test file
         test_dir = Path(__file__).parent
         exp_path = test_dir / "assets" / "experiment-config-example.yaml"
@@ -2486,9 +2587,9 @@ class TestIntegrationAllConfigs:
     def test_validate_distributed_source_of_truth_example_yaml(self, monkeypatch):
         """Validate docs distributed example as the canonical grouped config."""
         monkeypatch.setenv("CRSBENCH_LLM_BASE_URL", "http://litellm:4000")
-        monkeypatch.setenv("CRSBENCH_LLM_UPSTREAM_BASE_URL", "http://litellm:4000")
+        monkeypatch.setenv("LITELLM_UPSTREAM_BASE_URL", "http://litellm:4000")
         monkeypatch.setenv("CRSBENCH_LLM_UPSTREAM_MASTER_KEY", "sk-test")
-        monkeypatch.setenv("CRSBENCH_LLM_UPSTREAM_API_KEY", "sk-test")
+        monkeypatch.setenv("LITELLM_UPSTREAM_API_KEY", "sk-test")
 
         repo_root = Path(__file__).resolve().parents[1]
         exp_path = repo_root / "docs" / "experiment-config-distributed-example.yaml"
