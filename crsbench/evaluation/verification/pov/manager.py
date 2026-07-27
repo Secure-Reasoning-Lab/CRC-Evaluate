@@ -88,6 +88,7 @@ class POVVerificationManager:
         trial_id: Optional[str] = None,
         exchange_pov_dir: Optional[Path] = None,
         sanitizer: Optional[str] = None,
+        verify_timeout: int = 7200,
     ):
         """Initialize POV verification manager.
 
@@ -108,6 +109,7 @@ class POVVerificationManager:
             trial_id: Trial identifier for async result correlation
             exchange_pov_dir: Pre-resolved EXCHANGE_DIR pov path for real-time scanning
             sanitizer: Trial sanitizer to scope async verification builds
+            verify_timeout: Overall inline POV verification budget in seconds
 
         Raises:
             ValueError: If trial_dir doesn't exist
@@ -123,6 +125,7 @@ class POVVerificationManager:
         self.expected_cpv_ids = set(expected_cpv_ids)
         self.trial_start_time = trial_start_time or time.time()
         self._adapter = adapter
+        self._verify_timeout = verify_timeout
 
         # POV store for persistence (pass trial_start_time as crs_run_start_time)
         pov_store_dir = trial_dir / "povs"
@@ -147,6 +150,12 @@ class POVVerificationManager:
         self._duplicates_count = 0
         self._errors_count = 0
         self._unintended_crashes_count = 0
+        self._verification_timeouts = 0
+
+        # Inline verification happens inside snapshot callbacks, so unlike the
+        # async queue drain it needs its own end-to-end deadline.
+        self._inline_verification_deadline: Optional[float] = None
+        self._inline_verification_timed_out = False
 
         # Early stop state
         self._early_stop_triggered = False
@@ -715,6 +724,26 @@ class POVVerificationManager:
 
         return self.all_cpvs_found
 
+    def _inline_verification_budget_expired(self) -> bool:
+        """Return whether the inline verification budget has been exhausted."""
+        if self._inline_verification_timed_out:
+            return True
+
+        if self._inline_verification_deadline is None:
+            return False
+
+        if time.monotonic() < self._inline_verification_deadline:
+            return False
+
+        self._inline_verification_timed_out = True
+        self._verification_timeouts += 1
+        logger.warning(
+            "Inline POV verification time budget exhausted after %ss; "
+            "leaving remaining candidates unverified",
+            self._verify_timeout,
+        )
+        return True
+
     def on_snapshot(self, cycle: int) -> POVSnapshot:
         """Create POV verification snapshot for a given cycle.
 
@@ -732,8 +761,14 @@ class POVVerificationManager:
         timestamp = time.time()
         elapsed_time = timestamp - self.trial_start_time
 
-        # Discover new POVs (returns tuples of path, hash)
-        new_povs = self._discover_new_povs()
+        # Discover new POVs (returns tuples of path, hash). Once an inline
+        # verification budget is exhausted, avoid repeatedly rescanning a
+        # potentially large candidate directory on later snapshots.
+        new_povs = (
+            []
+            if not self._async_mode and self._inline_verification_timed_out
+            else self._discover_new_povs()
+        )
         povs_new = 0
 
         if self._async_mode:
@@ -758,7 +793,13 @@ class POVVerificationManager:
             self._poll_pending_verdicts()
         else:
             # Inline mode: verify POVs synchronously
+            if new_povs and self._inline_verification_deadline is None:
+                self._inline_verification_deadline = (
+                    time.monotonic() + self._verify_timeout
+                )
             for pov_path, pov_hash in new_povs:
+                if self._inline_verification_budget_expired():
+                    break
                 result = self._verify_pov(pov_path)
                 self._update_state(pov_path, result, pov_hash=pov_hash)
                 povs_new += 1
@@ -834,6 +875,7 @@ class POVVerificationManager:
                 "duplicates_count": self._duplicates_count,
                 "unintended_crashes_count": self._unintended_crashes_count,
                 "errors_count": self._errors_count,
+                "verification_timeouts": self._verification_timeouts,
                 "cpvs_remaining": self.total_expected_cpvs - len(self.found_cpvs),
                 "all_cpvs_found": self.all_cpvs_found,
             }
@@ -865,7 +907,7 @@ class POVVerificationManager:
                 unintended_crashes=self._unintended_crashes_count,
                 unique_unintended_crash_sites=unique_crash_sites,
                 verification_errors=self._errors_count,
-                verification_timeouts=0,  # Not tracked separately
+                verification_timeouts=self._verification_timeouts,
                 early_stopped=self._early_stop_triggered,
                 early_stop_time=self._early_stop_time,
                 total_duration_seconds=total_duration,

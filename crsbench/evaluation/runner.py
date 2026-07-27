@@ -1671,6 +1671,7 @@ class BenchmarkRunner:
                 trial_id=trial_id,
                 exchange_pov_dir=exchange_pov_dir,
                 sanitizer=sanitizer,
+                verify_timeout=self.verify_timeout,
             )
 
             self.logger.info(

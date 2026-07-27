@@ -611,6 +611,45 @@ class TestOnSnapshot:
 
         assert set(snapshot.cpvs_found) == {"cpv_0", "cpv_1"}
 
+    def test_inline_verification_stops_at_overall_timeout(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Inline verification must honor the overall verification budget."""
+        from crsbench.evaluation.verification.pov.manager import (
+            POVVerificationManager,
+        )
+
+        trial_dir = tmp_path / "trial-1"
+        trial_dir.mkdir()
+        pov_output_dir = trial_dir / "pov_output"
+        pov_output_dir.mkdir()
+        (pov_output_dir / "first.blob").write_bytes(b"first")
+        (pov_output_dir / "second.blob").write_bytes(b"second")
+
+        manager = POVVerificationManager(
+            trial_dir=trial_dir,
+            pov_output_dir=pov_output_dir,
+            config=POVVerificationConfig(),
+            harness_name="fuzz_parser",
+            benchmark_id="test-benchmark",
+            expected_cpv_ids=["cpv_0"],
+            verify_timeout=1,
+        )
+        manager._verify_pov = MagicMock(return_value=None)
+
+        monotonic_times = iter([10.0, 10.0, 11.0])
+        monkeypatch.setattr(
+            "crsbench.evaluation.verification.pov.manager.time.monotonic",
+            lambda: next(monotonic_times),
+        )
+
+        snapshot = manager.on_snapshot(cycle=1)
+
+        assert manager._verify_pov.call_count == 1
+        assert snapshot.povs_new == 1
+        assert manager.get_state()["verification_timeouts"] == 1
+        assert manager.get_report().verification_timeouts == 1
+
 
 class TestGetState:
     """Tests for get_state thread-safe getter."""
