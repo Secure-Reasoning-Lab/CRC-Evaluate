@@ -1,9 +1,14 @@
-# Evaluating Submissions
+# Submission Validation and Registration
 
-CRSBench can validate a CRC-Template-compatible submission and register its selected Finder and Patcher under evaluator-owned names.
-The evaluator then uses those registry names in standard experiment configurations.
+CRC-Evaluate validates CRC-Template-compatible submissions and registers the selected Finder and Patcher under the names used by experiment configurations. Run all commands from the CRC-Evaluate repository root.
 
-## Submission Contract
+## Submission Directory
+
+Clone the team submission into the public sanity directory:
+
+```bash
+git clone --recurse-submodules https://github.com/your-team/your-crc-template.git .run/sanity/team-01/submission
+```
 
 The submission root must contain `submission.yaml`:
 
@@ -20,65 +25,47 @@ crs:
     path: crs/example-patcher
 ```
 
-Each path is relative to the submission root and must identify a distinct OSS-CRS-compatible source directory containing `oss-crs/crs.yaml`.
-The Finder must declare `type: [bug-finding]`, and the Patcher must declare `type: [bug-fixing]`.
-Each CRS declares its model dependencies through `required_llms` in its own `oss-crs/crs.yaml`.
+Each path is relative to the submission root and must identify a distinct OSS-CRS-compatible source directory containing `oss-crs/crs.yaml`. The Finder must declare `type: [bug-finding]`, the Patcher must declare `type: [bug-fixing]`, and each component must list its model aliases in `required_llms`.
 
-The manifest selects submitted components.
-`submission.name` is display metadata; the evaluator's `--team-id` determines the registry namespace.
-Repository-local launch configurations are not imported when a submission is registered.
+`submission.name` is display metadata. The `--team-id` passed during registration determines the registry namespace, and repository-local launch configurations are not imported.
 
-## Validate a Submission
-
-Run validation before preparing images or scheduling trials:
+## Validate the Submission
 
 ```bash
-uv run crsbench submission validate /data/submissions/team-001
+uv run crsbench submission validate .run/sanity/team-01/submission
 ```
 
 Validation checks the manifest schema, confines selected paths to the submission root, reads each selected `oss-crs/crs.yaml`, and verifies the CRS roles and model declarations.
 
-## Register the Selected CRSes
+## Register the Finder and Patcher
 
-Generate namespaced entries in an evaluator-managed registry directory:
-
-```bash
-uv run crsbench submission register /data/submissions/team-001 \
-  --team-id team-001 \
-  --registry-dir /data/crs-registry
-```
-
-This creates `team-001-finder.yaml` and `team-001-patcher.yaml` with registry IDs `team-001-finder` and `team-001-patcher`.
-Existing entries are preserved by default.
-Use `--force` only when intentionally replacing both entries for the same team ID.
-
-The generated entries use absolute local source paths.
-On a distributed deployment, the submission and generated registry directory must be mounted at the same absolute paths on every worker, or the registry entries must be deployed with equivalent source locations before workers start.
-
-## Run Evaluator-Owned Experiments
-
-Set `registry_dir` to the generated registry and use the generated ID as the flat service key under `crs_compose`.
-A bug-finding configuration contains:
-
-```yaml
-registry_dir: /data/crs-registry
-
-crs_compose:
-  oss_crs_infra:
-    shared: true
-  team-001-finder:
-    num_cores: 8
-    mem_limit: 64G
-    budget_policy: terminate
-```
-
-Use `team-001-patcher` in a `task: bugfixing` configuration.
-All remaining experiment fields—including suites, modes, time limits, LLM policy, storage, and worker topology—come from the evaluator's standard configuration.
-Start workers and submit the experiment with that same configuration:
+The public sanity configurations use the `team-01` namespace:
 
 ```bash
-uv run crsbench worker --experiment-config evaluator-finding.yaml
-uv run crsbench run --experiment-config evaluator-finding.yaml
+uv run crsbench submission register .run/sanity/team-01/submission \
+  --team-id team-01 \
+  --registry-dir .run/sanity/registry
 ```
 
-For a two-stage evaluation, run the Finder first and pass its verified POV outputs to the Patcher by following the [full-pipeline workflow](../experiments/full-pipeline.md).
+Registration creates `.run/sanity/registry/team-01-finder.yaml` and `.run/sanity/registry/team-01-patcher.yaml` with registry IDs `team-01-finder` and `team-01-patcher`. Existing entries are preserved by default.
+
+Use `--force` when intentionally replacing both entries for the same team ID:
+
+```bash
+uv run crsbench submission register .run/sanity/team-01/submission \
+  --team-id team-01 \
+  --registry-dir .run/sanity/registry \
+  --force
+```
+
+Registry entries contain absolute paths to the selected CRS directories. Do not move the submission checkout after registration; register it again if either selected path changes.
+
+## Run the Public Sanity Workflow
+
+Configure the LLM endpoint and aliases as described in the [participant guide](../../README.md), then run:
+
+```bash
+./.run/sanity/team-01/run-sanity.sh
+```
+
+The launcher runs the Finder first and starts the Patcher only after the Finder completes successfully. The tracked Patcher configuration consumes the verified Finder outputs.

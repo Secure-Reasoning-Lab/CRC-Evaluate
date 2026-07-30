@@ -201,7 +201,7 @@ those instance profiles from the provider-neutral `cloud.orchestrator`,
 cloud:
   defaults:
     readiness_timeout_sec: 900
-    crsbench_install_spec: "git+https://github.com/sslab-gatech/CRSBench.git"
+    crsbench_install_spec: "git+https://github.com/Secure-Reasoning-Lab/CRC-Evaluate.git"
     crsbench_git_ref: main
   bootstrap:
     prepare_mode: full
@@ -677,7 +677,7 @@ cloud:
         env:
           HTTPS_PROXY: os.environ/HTTPS_PROXY
       defaults:
-        crsbench_install_spec: "git+https://github.com/sslab-gatech/CRSBench.git"
+        crsbench_install_spec: "git+https://github.com/Secure-Reasoning-Lab/CRC-Evaluate.git"
       instance_profiles:
         gce-orchestrator-n2d: {}
         gce-worker-n2d:
@@ -754,7 +754,7 @@ public key. Add it to your GitHub repository:
 ```yaml
 cloud:
   defaults:
-    crsbench_install_spec: "git+https://github.com/sslab-gatech/CRSBench.git"
+    crsbench_install_spec: "git+https://github.com/Secure-Reasoning-Lab/CRC-Evaluate.git"
   env:
     HF_TOKEN: os.environ/HF_TOKEN
   providers:

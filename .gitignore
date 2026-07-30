@@ -297,6 +297,14 @@ ci-results*
 benchmark_stats_summary.csv
 benchmark_stats.csv
 
-.run
+.run/*
+!.run/sanity/
+.run/sanity/*
+!.run/sanity/litellm-config.yaml
+!.run/sanity/team-01/
+.run/sanity/team-01/*
+!.run/sanity/team-01/finder-runtime.yaml
+!.run/sanity/team-01/patcher-runtime.yaml
+!.run/sanity/team-01/run-sanity.sh
 
 ci-output

@@ -1,10 +1,10 @@
 # Experiment Config Reference
 
-The grouped experiment YAML contract is documented in:
+CRC-Evaluate teams should use the tracked [Finder](../../.run/sanity/team-01/finder-runtime.yaml) and [Patcher](../../.run/sanity/team-01/patcher-runtime.yaml) configurations as the executable public sanity examples. Competition resource and time limits are defined in the [participant guide](../../README.md).
+
+This page documents the complete grouped CRSBench experiment YAML contract for advanced configuration and operator workflows. The distributed example illustrates the full field layout:
 
 - [Distributed experiment config example](../experiment-config-distributed-example.yaml)
-
-Use that file as the configuration source of truth for field layout, comments, and examples.
 
 ## Core Contract
 

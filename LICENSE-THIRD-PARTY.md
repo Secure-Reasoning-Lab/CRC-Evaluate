@@ -95,4 +95,4 @@ license and copyright files are preserved within each tarball.
 | Component | License | Source |
 |-----------|---------|--------|
 | OSS-Fuzz | Apache-2.0 | https://github.com/google/oss-fuzz |
-| oss-crs | MIT | https://github.com/gts3-org/oss-crs |
+| oss-crs | MIT | https://github.com/Secure-Reasoning-Lab/oss-crs (fork of https://github.com/ossf/oss-crs) |

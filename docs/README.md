@@ -1,15 +1,22 @@
-# CRSBench Documentation
+# CRC-Evaluate Documentation
 
-**Start here:** [Getting Started](./getting-started/README.md) covers install,
-configuration, the first experiment, experiment workflows, and deployment
-modes — that's everything most users need.
+Teams should start with the [CRC-Evaluate participant guide](../README.md), which defines the public sanity workflow, runtime configuration, and competition resource limits.
 
-1. [Install](./getting-started/install.md)
+## Participant Documentation
+
+1. [Participant guide](../README.md)
+2. [Submission validation and registration](./getting-started/evaluating-submissions.md)
+
+## Inherited CRSBench Framework Documentation
+
+Except for the participant documents above, every guide and reference below describes the underlying CRSBench framework or an advanced operator workflow. These documents are not the source of CRC-Evaluate competition limits or public sanity commands.
+
+1. [Framework installation](./getting-started/install.md)
 2. [Configuration](./getting-started/configuration.md)
-3. [First Experiment](./getting-started/first-experiment.md)
-4. [Experiments](./getting-started/experiments.md)
-5. [Deployment](./getting-started/deployment.md)
-6. [Evaluating Submissions](./getting-started/evaluating-submissions.md)
+3. [First experiment](./getting-started/first-experiment.md)
+4. [Experiment workflows](./getting-started/experiments.md)
+5. [Advanced deployment](./getting-started/deployment.md)
+6. [Experiment configuration reference](./reference/experiment-config.md)
 
 ## Deep Dives
 
@@ -30,7 +37,6 @@ For specific workflows or topologies, jump to:
 
 ## Reference
 
-- [Benchmark RFC](./RFC.md) — normative benchmark format
 - [Vulnerability Metadata RFC](./reference/vuln-yaml.md)
 - [Experiment Config Reference](./reference/experiment-config.md)
 - [Benchmark CI Config](./reference/benchmark-ci.md)

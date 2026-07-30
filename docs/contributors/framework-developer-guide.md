@@ -14,7 +14,7 @@ Framework work includes changes under:
 ## Setup
 
 ```bash
-git clone https://github.com/sslab-gatech/CRSBench.git && cd CRSBench
+git clone --recurse-submodules https://github.com/Secure-Reasoning-Lab/CRC-Evaluate.git && cd CRC-Evaluate
 uv sync --extra dev
 pre-commit install
 ```

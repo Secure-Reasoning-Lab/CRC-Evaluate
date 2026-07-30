@@ -1,4 +1,4 @@
-# Install CRSBench
+# Install CRC-Evaluate
 
 Use this page for the first-time bootstrap path. For environment variables and
 deployment scenarios, see [configuration.md](./configuration.md).
@@ -14,7 +14,7 @@ deployment scenarios, see [configuration.md](./configuration.md).
 ## Bootstrap
 
 ```bash
-git clone https://github.com/sslab-gatech/CRSBench.git && cd CRSBench
+git clone --recurse-submodules https://github.com/Secure-Reasoning-Lab/CRC-Evaluate.git && cd CRC-Evaluate
 uv sync
 ./scripts/setup-third-party.sh
 uv run crsbench prepare

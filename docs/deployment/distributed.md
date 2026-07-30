@@ -557,7 +557,7 @@ uv run crsbench worker --experiment-config config.yaml --cpuset 0-111
 **Machine B..N** (Remote Workers):
 ```bash
 # Copy .env from Machine A (contains CRSBENCH_REDIS_PASSWORD)
-scp user@machine-a:/path/to/CRSBench/.env /path/to/CRSBench/.env
+scp user@machine-a:/path/to/CRC-Evaluate/.env /path/to/CRC-Evaluate/.env
 
 # Setup: bundle packages and prepare environment
 scripts/orchestrate-workers.sh setup

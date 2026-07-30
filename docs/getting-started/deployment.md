@@ -1,13 +1,12 @@
-# Deployment
+# Advanced CRSBench Deployment
 
-CRSBench uses a queue-backed model: an **orchestrator** (`crsbench run`)
-enqueues trial jobs to Valkey/Redis, **workers** (`crsbench worker`) execute
-CRS trials, and an optional **evaluator** (`crsbench evaluator`) processes
-build/verify queues. Pick the topology that matches your hardware.
+Teams running the public CRC-Evaluate sanity workflow should use the tracked launcher in the [participant guide](../../README.md). This page documents optional queue-backed, multi-machine, and managed-cloud CRSBench deployments.
+
+CRSBench uses a queue-backed model: an **orchestrator** (`crsbench run`) enqueues trial jobs to Valkey/Redis, **workers** (`crsbench worker`) execute CRS trials, and an optional **evaluator** (`crsbench evaluator`) processes build/verify queues.
 
 ## Single Machine
 
-Orchestrator + worker on one host. The default for first-time users.
+Run the orchestrator and worker on one host when using the queue-backed topology on a single machine.
 
 ```bash
 uv run python scripts/valkey-helper.py start
@@ -42,7 +41,7 @@ uv run crsbench run    --experiment-config config.yaml
 Machine A, then:
 
 ```bash
-scp user@machine-a:/path/to/CRSBench/.env /path/to/CRSBench/.env
+scp user@machine-a:/path/to/CRC-Evaluate/.env /path/to/CRC-Evaluate/.env
 uv run crsbench worker --experiment-config config.yaml
 ```
 

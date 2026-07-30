@@ -1,0 +1,62 @@
+experiment:
+  name: team-01-patcher-sanity
+  task: bugfixing
+  benchmarks:
+    - sanity-mock-c-delta-01:
+        fuzz_parse_buffer_section:
+          - cpv_1
+  mode: delta
+
+runtime:
+  trials: 1
+  max_total_time: 43200
+  build_timeout: 21600
+  run_timeout: 7200
+  verify_timeout: 10800
+  per_pov_verify_timeout: 300
+  snapshot_period: 900
+  redis_host: null
+  coverage_enabled: false
+  rts_enabled: true
+  inc_build_enabled: true
+  patch_verify_variants: false
+  litellm:
+    mode: internal
+    tracking_enabled: true
+    cost_budget: 50
+  inputs:
+    pov:
+      enabled: true
+      max_variants_per_cpv: 1
+      from_experiment_by_crs:
+        team-01-patcher: .run/sanity/team-01/results/experiment-data/team-01-finder-sanity/team-01-finder
+    diff:
+      enabled: true
+
+llm_accounting_settle_seconds: 0
+benchmarks_root: benchmarks
+registry_dir: .run/sanity/registry
+oss_fuzz_path: third_party/oss-fuzz
+source_mode: pkgs
+
+storage:
+  experiment_filestore: .run/sanity/team-01/results/experiment-data
+  report_filestore: .run/sanity/team-01/results/report-data
+
+worker:
+  jobs: 1
+  cores_per_job: 16
+
+resources:
+  cores_per_trial: 16
+  memory_per_trial: "64G"
+
+crs_compose:
+  litellm_config_path: .run/sanity/litellm-config.yaml
+  oss_crs_infra:
+    shared: true
+  team-01-patcher:
+    num_cores: 16
+    mem_limit: "64G"
+    additional_env:
+      CLAUDE_CODE_OAUTH_TOKEN: ""

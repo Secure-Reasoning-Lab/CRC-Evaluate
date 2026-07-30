@@ -227,7 +227,7 @@ python scripts/valkey-helper.py start
 
 # Multi-machine setup (0.0.0.0:6379, password auth)
 python scripts/valkey-helper.py --password start
-# Copy .env to evaluator machine(s): scp .env user@evaluator:/path/to/CRSBench/.env
+# Copy .env to evaluator machine(s): scp .env user@evaluator:/path/to/CRC-Evaluate/.env
 
 # Check status
 python scripts/valkey-helper.py status
